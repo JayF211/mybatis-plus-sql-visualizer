@@ -17,6 +17,10 @@
   - **文案清理**：gutter 开关去掉「（M10）」后缀
   - **布局优化**：设置页行距紧凑化 + 底部 weighty 占位，消除内容区上方空白
   - **默认快捷键调整**：`Ctrl+Alt+S`（与 IDE 打开 Settings 冲突）→ 先改 `Ctrl+Alt+Q` → 最终定为 **`Alt+Shift+Q`**（macOS `Option+Shift+Q`，Q=Query；已核对 IDEA 默认 Keymap 未占用），可在 Keymap 或插件设置页录制修改
+- M14.6「替换 ? 占位符」开关接通：
+  - `replaceParams` 配置此前为"死配置"（仅 UI/持久化，转换链路未读取）——现已接通：关闭时 `ArgResolver` 跳过 `ExpressionEvaluator` 变量追踪，**可静态求值的变量也渲染为 `?`**（左栏输入框可手动填值）；**字面量恒内联**（代码直接写的常量不受开关影响）
+  - 参数透传：`WrapperLocator.locateWithTable(resolveVariables)` → `ArgResolver.toWrapperCall/resolve`；`WrapperCache` 缓存键增加配置维度（开关切换后不命中旧结果）
+  - 测试：`testReplaceParamsOffKeepsVariablePlaceholder`（变量 → `?`、字面量 → 内联）
 
 ### Changed
 - M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：

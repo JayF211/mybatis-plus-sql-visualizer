@@ -42,9 +42,18 @@ object ArgResolver {
      * @param entityClass    外层实体类名（嵌套链填充用，可为 null）
      * @param asAlias        true 表示该位置是 MPJ selectAs 的目标 VO 字段（方法引用 → [WrapperArg.AliasArg]，
      *                       保留驼峰属性名作别名，不做 snake_case 列名转换）
+     * @param resolveVariables 变量求值开关（M14.6「替换 ? 占位符」配置）：false 时跳过
+     *                         [ExpressionEvaluator] 变量追踪，可静态求值的变量也渲染为 `?`；
+     *                         字面量（代码直接写的常量）恒内联，不受此开关影响
      * @return WrapperArg 模型
      */
-    fun resolve(expression: PsiExpression, table: TableInfo?, entityClass: String?, asAlias: Boolean = false): WrapperArg {
+    fun resolve(
+        expression: PsiExpression,
+        table: TableInfo?,
+        entityClass: String?,
+        asAlias: Boolean = false,
+        resolveVariables: Boolean = true,
+    ): WrapperArg {
         // selectAs(Entity::getX, VO::getY)：第二参方法引用 → 目标 VO 属性名（别名）
         if (asAlias && expression is PsiMethodReferenceExpression) {
             val name = expression.referenceName ?: return WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
@@ -61,9 +70,9 @@ object ArgResolver {
             WrapperArg.ColumnArg(resolveLambdaColumn(expression, table))
 
         // MPJ on(col1, col2)：两列比较实参（F-11）
-        is PsiMethodCallExpression -> resolveMethodCallArg(expression, table)
+        is PsiMethodCallExpression -> resolveMethodCallArg(expression, table, resolveVariables)
 
-        // 字面量：直接求值
+        // 字面量：直接求值（不受「替换 ? 占位符」开关影响，代码常量恒内联）
         is PsiLiteralExpression ->
             WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expression))
 
@@ -71,17 +80,26 @@ object ArgResolver {
         is PsiLambdaExpression ->
             WrapperArg.NestedArg(resolveNestedLambda(expression, table, entityClass))
 
-        // 变量 / 算术 / new 表达式：求值为占位符
+        // 变量 / 算术 / new 表达式：求值为字面量或占位符（开关关闭时恒为占位符）
         else ->
-            WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expression))
+            resolveValueArg(expression, resolveVariables)
         }
     }
 
     /**
-     * 解析方法调用实参：MPJ 的 `on(col1, col2)` → [WrapperArg.OnConditionArg]。
-     * 其他方法调用（如集合工具调用）→ 占位符。
+     * 非字面量实参求值（M14.6）：resolveVariables=false 时跳过变量追踪，直接渲染 `?`（保留表达式原文作 source）。
      */
-    private fun resolveMethodCallArg(call: PsiMethodCallExpression, table: TableInfo?): WrapperArg {
+    private fun resolveValueArg(expression: PsiExpression, resolveVariables: Boolean): WrapperArg =
+        WrapperArg.ValueArg(
+            if (resolveVariables) ExpressionEvaluator.evaluate(expression)
+            else SqlValue.Placeholder(expression.text),
+        )
+
+    /**
+     * 解析方法调用实参：MPJ 的 `on(col1, col2)` → [WrapperArg.OnConditionArg]。
+     * 其他方法调用（如集合工具调用）→ 占位符（受 resolveVariables 开关控制）。
+     */
+    private fun resolveMethodCallArg(call: PsiMethodCallExpression, table: TableInfo?, resolveVariables: Boolean): WrapperArg {
         val methodName = call.methodExpression.referenceName
         if (methodName == ON_METHOD) {
             val args = call.argumentList.expressions
@@ -93,7 +111,7 @@ object ArgResolver {
                 }
             }
         }
-        return WrapperArg.ValueArg(ExpressionEvaluator.evaluate(call))
+        return resolveValueArg(call, resolveVariables)
     }
 
     /** MPJ on 函数名。 */
@@ -214,17 +232,22 @@ object ArgResolver {
      *  - `selectFunc(模板, func -> func.accept(列).values(值), 别名)` 第二参按「聚合函数」解析（[WrapperArg.FuncArg]）
      * 其余参数按常规实参解析。
      */
-    internal fun toWrapperCall(call: PsiMethodCallExpression, table: TableInfo?, entityClass: String?): WrapperCall {
+    internal fun toWrapperCall(
+        call: PsiMethodCallExpression,
+        table: TableInfo?,
+        entityClass: String?,
+        resolveVariables: Boolean = true,
+    ): WrapperCall {
         val methodName = call.methodExpression.referenceName ?: call.methodExpression.text
         val args = call.argumentList.expressions.mapIndexed { index, expr ->
             when {
                 methodName in JOIN_METHODS && index == 0 ->
-                    resolveJoinClass(expr)
+                    resolveJoinClass(expr, resolveVariables)
                 methodName in ALIAS_SECOND_ARG_METHODS && index == 1 ->
-                    resolve(expr, table, entityClass, asAlias = true)
+                    resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 methodName == SELECT_FUNC && index == 1 ->
                     resolveFuncLambda(expr, table)
-                else -> resolve(expr, table, entityClass)
+                else -> resolve(expr, table, entityClass, resolveVariables = resolveVariables)
             }
         }
         return WrapperCall(methodName, args)
@@ -237,13 +260,13 @@ object ArgResolver {
      * 解析 join 的关联实体引用：`leftJoin(XxxEntity.class, ...)` → [WrapperArg.EntityRefArg]（F-13 关联实体注解解析）。
      * 无法解析为实体类时降级为类名字面量（converter 按命名策略兜底）。
      */
-    private fun resolveJoinClass(expr: PsiExpression): WrapperArg {
+    private fun resolveJoinClass(expr: PsiExpression, resolveVariables: Boolean): WrapperArg {
         val classAccess = expr as? PsiClassObjectAccessExpression
         val psiClass = (classAccess?.operand?.type as? PsiClassType)?.resolve() as? PsiClass
         return if (psiClass != null) {
             WrapperArg.EntityRefArg(EntityResolver().resolve(psiClass))
         } else {
-            WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expr))
+            resolveValueArg(expr, resolveVariables)
         }
     }
 

@@ -64,7 +64,11 @@ class SqlPreviewService(private val project: Project) {
     fun preview(anchor: PsiElement): PreviewResult? {
         val file = anchor.containingFile ?: return null
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
-        val located = cache.getOrCompute(file, anchor.textRange.startOffset) { WrapperLocator.locateWithTable(anchor) }
+        // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果
+        val resolveVariables = settings?.state?.replaceParams ?: true
+        val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables) {
+            WrapperLocator.locateWithTable(anchor, resolveVariables)
+        }
 
         // 1. Wrapper 转换（优先）
         located?.let { located ->

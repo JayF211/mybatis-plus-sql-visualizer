@@ -178,6 +178,39 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         assertEquals(listOf("methodParam"), generated.unresolvedParams)
     }
 
+    fun testReplaceParamsOffKeepsVariablePlaceholder() {
+        // M14.6「替换 ? 占位符」开关关闭：可静态求值的变量也渲染为 ?；字面量恒内联
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    Long deviceId = 1001L;
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, deviceId)
+                        .eq(DeviceInfoEntity::getStationId, 5L);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Long stationId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor(), resolveVariables = false)!!
+        val statement = QueryWrapperParser(located.table!!).parse(located.chain)
+        val generated = SqlGenerator.generateWithParams(statement)
+
+        // 变量 deviceId（可静态求值 1001）→ 不内联，渲染 ?；字面量 5L → 恒内联
+        val whereLine = generated.sql.substringAfter("WHERE ").substringBefore("\n").trim()
+        assertEquals("id = ?", whereLine)
+        assertTrue("字面量应恒内联: " + generated.sql, generated.sql.contains("station_id = 5"))
+        assertEquals(listOf("deviceId"), generated.unresolvedParams)
+    }
+
     fun testVariableTracingMultiLevel() {
         myFixture.configureByText(
             "Demo.java",

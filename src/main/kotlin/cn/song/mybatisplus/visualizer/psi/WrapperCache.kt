@@ -17,8 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class WrapperCache {
 
-    /** 缓存键：文件 + 锚点起始偏移（同文件不同锚点独立缓存）。 */
-    private data class CacheKey(val file: PsiFile, val anchorOffset: Int)
+    /** 缓存键：文件 + 锚点起始偏移 + 配置维度（同文件不同锚点独立缓存；解析开关变化也独立缓存，M14.6）。 */
+    private data class CacheKey(val file: PsiFile, val anchorOffset: Int, val resolveVariables: Boolean)
 
     /** 缓存条目：文件修改戳 + 解析结果。 */
     private data class Entry(val stamp: Long, val value: Any?)
@@ -29,14 +29,15 @@ class WrapperCache {
     /**
      * 获取或计算缓存。
      *
-     * @param file         当前文件
-     * @param anchorOffset 锚点元素起始偏移（定位结果依赖锚点，同文件多 Wrapper 必须区分）
-     * @param compute      解析函数（仅在缓存未命中时调用）
+     * @param file             当前文件
+     * @param anchorOffset     锚点元素起始偏移（定位结果依赖锚点，同文件多 Wrapper 必须区分）
+     * @param resolveVariables 「替换 ? 占位符」开关（M14.6）：作为缓存维度，开关切换后不命中旧结果
+     * @param compute          解析函数（仅在缓存未命中时调用）
      * @return 解析结果（可能为 null，表示该锚点未找到 Wrapper）
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T> getOrCompute(file: PsiFile, anchorOffset: Int, compute: () -> T?): T? {
-        val key = CacheKey(file, anchorOffset)
+    fun <T> getOrCompute(file: PsiFile, anchorOffset: Int, resolveVariables: Boolean, compute: () -> T?): T? {
+        val key = CacheKey(file, anchorOffset, resolveVariables)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return entry.value as T?

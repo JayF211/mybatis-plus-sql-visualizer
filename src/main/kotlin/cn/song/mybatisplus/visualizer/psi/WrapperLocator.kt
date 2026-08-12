@@ -63,10 +63,10 @@ object WrapperLocator {
      *  - 变量声明（`LambdaQueryWrapper<X> w = ...`，含分步续链）
      *  - 内联 new 表达式（`list(new MPJLambdaQueryWrapper<X>().select(...).eq(...))`，无变量）
      */
-    fun locateWithTable(anchor: PsiElement): LocatedWrapper? {
-        findWrapperVariable(anchor)?.let { return buildChain(it) }
-        findWrapperNewExpression(anchor)?.let { return buildChainFromNew(it) }
-        findWrapperFactoryCall(anchor)?.let { return buildChainFromFactory(it) }
+    fun locateWithTable(anchor: PsiElement, resolveVariables: Boolean = true): LocatedWrapper? {
+        findWrapperVariable(anchor)?.let { return buildChain(it, resolveVariables) }
+        findWrapperNewExpression(anchor)?.let { return buildChainFromNew(it, resolveVariables) }
+        findWrapperFactoryCall(anchor)?.let { return buildChainFromFactory(it, resolveVariables) }
         return null
     }
 
@@ -164,7 +164,7 @@ object WrapperLocator {
      * 收集以该 new 表达式为链起点的所有链式调用（`new W().select(...).eq(...)`），
      * 按源码结束位置排序。
      */
-    private fun buildChainFromNew(newExpr: PsiNewExpression): LocatedWrapper? {
+    private fun buildChainFromNew(newExpr: PsiNewExpression, resolveVariables: Boolean): LocatedWrapper? {
         val wrapperType = detectWrapperType(newExpr.type) ?: return null
         val (entityClass, typeArgName) = entityInfoFromType(newExpr.type)
         val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
@@ -185,7 +185,7 @@ object WrapperLocator {
             }
             .distinctBy { it.textRange.endOffset }
             .sortedBy { it.textRange.endOffset }
-            .map { ArgResolver.toWrapperCall(it, table, entityClass?.name) }
+            .map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
         // 消费识别：wrapper 作为实参传给删除/计数方法（`service.remove(new W()...)` / `service.count(new W()...)`）
         val consumingCall = newExpr.consumingCall()
@@ -227,7 +227,7 @@ object WrapperLocator {
      * 收集以该工厂调用为链起点的所有链式调用（`Wrappers.<T>lambdaQuery().select(...).eq(...)`），
      * 按源码结束位置排序；工厂调用自身（非 Wrapper 操作）不入链。
      */
-    private fun buildChainFromFactory(factoryCall: PsiMethodCallExpression): LocatedWrapper? {
+    private fun buildChainFromFactory(factoryCall: PsiMethodCallExpression, resolveVariables: Boolean): LocatedWrapper? {
         val wrapperType = factoryWrapperType(factoryCall) ?: return null
         // 实体类优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()`），失败时用类名按命名策略兜底
         val typeArg = factoryCall.typeArguments.firstOrNull() as? PsiClassType
@@ -250,7 +250,7 @@ object WrapperLocator {
             }
             .distinctBy { it.textRange.endOffset }
             .sortedBy { it.textRange.endOffset }
-            .map { ArgResolver.toWrapperCall(it, table, entityClass?.name) }
+            .map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
         // 消费识别：wrapper 作为实参传给删除/计数方法（`service.remove(Wrappers.<T>lambdaQuery()...)` 等）
         val consumingCall = factoryCall.consumingCall()
@@ -299,7 +299,7 @@ object WrapperLocator {
      *  - 变量初始化表达式中的链式调用（new W().eq(...)）
      *  - 变量后续引用上的方法调用（wrapper.eq(...)）
      */
-    private fun buildChain(variable: PsiVariable): LocatedWrapper? {
+    private fun buildChain(variable: PsiVariable, resolveVariables: Boolean): LocatedWrapper? {
         // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）
         val wrapperType = detectWrapperType(variable.type)
             ?: detectWrapperTypeFromInitializer(variable.initializer)
@@ -341,7 +341,7 @@ object WrapperLocator {
             .distinctBy { it.textRange.endOffset }
             .sortedBy { it.textRange.endOffset }
 
-        val wrapperCalls = sortedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name) }
+        val wrapperCalls = sortedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
         return LocatedWrapper(
             chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed),
             table = table,
