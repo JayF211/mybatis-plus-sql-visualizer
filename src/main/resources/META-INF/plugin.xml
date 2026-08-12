@@ -69,9 +69,10 @@
                 icon="/META-INF/pluginIcon.svg">
             <!-- 右键菜单：编辑器弹出菜单 -->
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
-            <!-- 快捷键：Windows/Linux 与 macOS 各注册一份（默认值，可在 Keymap 自定义） -->
-            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt S"/>
-            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt S"/>
+            <!-- 快捷键（M14.1 更换默认值）：原 Ctrl+Alt+S 与 IDE 打开 Settings 冲突；
+                 改用 Ctrl+Alt+Q（Q=Query，IDEA 默认 Keymap 未占用）；Windows/Linux 与 macOS 各注册一份，可在 Keymap 或插件设置页修改 -->
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt Q"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt Q"/>
         </action>
     </actions>
 </idea-plugin>

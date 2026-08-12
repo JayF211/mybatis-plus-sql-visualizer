@@ -16,6 +16,7 @@
   - **快捷键内嵌修改**：设置页「快捷键」行改为录制式编辑器（显示当前快捷键 + 修改弹窗捕获按键组合），保存时直接写入 IDE 当前 Keymap（移除旧 KeyboardShortcut + 添加新组合，立即生效并持久化）；替代原「跳转 Keymap 设置」方案
   - **文案清理**：gutter 开关去掉「（M10）」后缀
   - **布局优化**：设置页行距紧凑化 + 底部 weighty 占位，消除内容区上方空白
+  - **默认快捷键调整**：`Ctrl+Alt+S`（与 IDE 打开 Settings 冲突）→ **`Ctrl+Alt+Q`**（macOS `Cmd+Option+Q`，Q=Query；已核对 IDEA 默认 Keymap 未占用），可在 Keymap 或插件设置页录制修改
 
 ### Changed
 - M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：
