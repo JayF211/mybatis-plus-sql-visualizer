@@ -188,7 +188,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                         else -> {
                             val stroke = KeyStroke.getKeyStrokeForEvent(e)
                             val newShortcut = KeyboardShortcut(stroke, null)
-                            // M14.2 冲突检测：被其他 action 占用时提示（如 IDE 折叠类快捷键）
+                            // M14.2/14.3 冲突检测：被其他 action 占用时提示；确认后保存将**抢占**（移除占用者绑定），保证始终生效
                             val conflict = conflictActionName(newShortcut)
                             if (conflict != null) {
                                 val proceed = Messages.showYesNoDialog(
@@ -232,14 +232,29 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             .firstOrNull()
     }.getOrNull()
 
-    /** 将编辑后的快捷键写入当前 Keymap（移除旧的 KeyboardShortcut，添加新的；保存即生效并持久化）。 */
+    /**
+     * 抢占式应用快捷键（M14.3）：保存时从**所有其他 action**（含 IDE 默认 keymap 继承绑定）
+     * 移除该组合，使本插件独占并始终生效。
+     *
+     * 原理：IDEA keymap 支持"负绑定"——[Keymap.removeShortcut] 对继承自父级 keymap（$default）的
+     * 快捷键会在当前（用户级）keymap 写入禁用覆盖，与 IDE Keymap 设置页"绑定冲突键时自动移除旧绑定"一致。
+     */
     private fun applyShortcut() {
         runCatching {
             val keymap = KeymapManager.getInstance().activeKeymap
-            keymap.getShortcuts(ConvertToSqlAction.ACTION_ID)
-                .filterIsInstance<KeyboardShortcut>()
-                .forEach { keymap.removeShortcut(ConvertToSqlAction.ACTION_ID, it) }
-            shortcutEditor.shortcut?.let { keymap.addShortcut(ConvertToSqlAction.ACTION_ID, it) }
+            val actionId = ConvertToSqlAction.ACTION_ID
+            // 1) 清理本 action 的旧键盘快捷键
+            keymap.getShortcuts(actionId).filterIsInstance<KeyboardShortcut>()
+                .forEach { keymap.removeShortcut(actionId, it) }
+            // 2) 抢占：新组合从所有其他 action 移除（含默认继承绑定），再绑定给本插件
+            val newShortcut = shortcutEditor.shortcut
+            if (newShortcut != null) {
+                keymap.getActionIds().filter { it != actionId }.forEach { other ->
+                    keymap.getShortcuts(other).filter { it == newShortcut }
+                        .forEach { keymap.removeShortcut(other, it) }
+                }
+                keymap.addShortcut(actionId, newShortcut)
+            }
         }
     }
 
