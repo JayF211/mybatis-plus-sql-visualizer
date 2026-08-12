@@ -38,6 +38,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 悬停延迟（毫秒，F-16 配置项）。 */
         var hoverDelay: Int = DEFAULT_HOVER_DELAY,
+
+        /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */
+        var showGutterIcon: Boolean = true,
     )
 
     private var state = State()

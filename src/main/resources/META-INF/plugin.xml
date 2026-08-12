@@ -51,6 +51,10 @@
         <!-- 悬停预览（F-06）：光标悬停显示 SQL 文档弹层 -->
         <documentationProvider implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewDocumentationProvider"/>
 
+        <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
+
         <!-- M9 工具窗口：编辑器跟随实时预览（光标移动防抖转换推送） -->
         <editorFactoryListener implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewEditorTracker"/>
 

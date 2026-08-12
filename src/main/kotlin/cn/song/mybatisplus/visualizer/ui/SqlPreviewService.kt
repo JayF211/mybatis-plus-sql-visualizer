@@ -2,8 +2,11 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
+import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
+import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
@@ -15,9 +18,11 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethodCallExpression
@@ -55,12 +60,30 @@ class SqlPreviewService(private val project: Project) {
      */
     fun preview(anchor: PsiElement): PreviewResult? {
         val file = anchor.containingFile ?: return null
-        val located = cache.getOrCompute(file) { WrapperLocator.locateWithTable(anchor) }
+        // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
+        val located = cache.getOrCompute(file, anchor.textRange.startOffset) { WrapperLocator.locateWithTable(anchor) }
 
         // 1. Wrapper 转换（优先）
-        located?.let {
-            val statement = ConverterRegistry.convert(it.chain, it.table ?: return null) ?: return null
-            return buildPreviewResult(it.chain.wrapperType, it.table!!, statement)
+        located?.let { located ->
+            val table = located.table ?: return null
+            val statement = when {
+                // 计数消费：service.count(wrapper) / selectJoinCount(wrapper) → SELECT COUNT(*) FROM ...（保留联表与条件）
+                located.chain.countConsumed && located.chain.wrapperType.isQueryLike() -> {
+                    val parsed = QueryWrapperParser(table).parse(located.chain)
+                    SelectStatement(
+                        table,
+                        selectColumns = listOf(ColumnRef(columnName = "*", function = "COUNT")),
+                        tableAlias = parsed.tableAlias,
+                        joins = parsed.joins,
+                        conditions = parsed.conditions,
+                    )
+                }
+                // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，`service.remove(wrapper)` / `mapper.delete(wrapper)` 消费
+                located.chain.deleteConsumed && located.chain.wrapperType.isQueryLike() ->
+                    DeleteStatement(table, QueryWrapperParser(table).parse(located.chain).conditions)
+                else -> ConverterRegistry.convert(located.chain, table) ?: return null
+            }
+            return buildPreviewResult(located.chain.wrapperType, table, statement)
         }
 
         // 2. 批量操作识别（anchor 或其父链上的方法调用）
@@ -126,11 +149,46 @@ class SqlPreviewService(private val project: Project) {
     }
 
     /**
+     * 查询类 Wrapper 类型（可能被删除类消费方法 `remove(wrapper)`/`delete(wrapper)` 复用为删除条件，M10）。
+     */
+    private fun WrapperType.isQueryLike(): Boolean = this in setOf(
+        WrapperType.LAMBDA_QUERY,
+        WrapperType.QUERY,
+        WrapperType.MPJ_LAMBDA,
+        WrapperType.MPJ_QUERY,
+        WrapperType.MPJ_LAMBDA_QUERY,
+    )
+
+    /**
      * 清空缓存（编辑器文件切换/项目关闭时由持有方调用）。
      */
     fun clearCache() = cache.clear()
 
     companion object {
+        /**
+         * 统一展示入口（M10-03）：按显示方式配置（F-16）展示预览结果，
+         * 供 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 与 gutter 图标点击共用。
+         *
+         * @param result null 表示未找到可转换的 Wrapper → 弹友好提示（不抛异常）
+         */
+        fun showResult(project: Project, result: PreviewResult?) {
+            if (result == null) {
+                Messages.showInfoMessage(
+                    project,
+                    MpSqlVisualizerBundle.message("action.notFound.message"),
+                    MpSqlVisualizerBundle.message("action.notFound.title"),
+                )
+                return
+            }
+            val mode = project.getService(SqlPreviewService::class.java).displayMode()
+            if (mode != PluginSettings.DISPLAY_TOOL_WINDOW) {
+                SqlPreviewDialog(project, result).show()
+            }
+            if (mode != PluginSettings.DISPLAY_DIALOG) {
+                SqlToolWindow.showResult(project, result)
+            }
+        }
+
         /**
          * 后台线程 + 读操作执行转换，EDT 回调结果。
          *

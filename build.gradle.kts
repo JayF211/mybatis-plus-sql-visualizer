@@ -46,3 +46,12 @@ intellijPlatform {
 kotlin {
     jvmToolchain(17)
 }
+
+// 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：
+// LightPlatform 测试沙盒会无条件加载所有 bundled 插件，Vue 的 LSP 扩展（VueLspServerSupportProvider）
+// 在无 node 的测试环境初始化失败，被 TestLogger 计入断言失败（随机污染测试结果）。
+// 已知问题：https://github.com/JetBrains/intellij-platform-gradle-plugin/issues/1887（disabledPlugins 对测试无效）。
+// 本插件不依赖 Vue，排除其 jar 安全。
+tasks.withType<Test>().configureEach {
+    classpath = classpath.filter { !it.name.contains("vue", ignoreCase = true) }
+}

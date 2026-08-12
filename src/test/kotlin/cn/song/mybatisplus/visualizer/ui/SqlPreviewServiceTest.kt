@@ -9,6 +9,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 
 /**
  * SqlPreviewService 集成测试（M3-01 整合层）：验证"PSI 元素 → PreviewResult"完整链路。
@@ -63,6 +64,278 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         // 无未解析参数（均为字面量/命名策略）
         assertEquals(emptyList<String>(), result.unresolvedParams)
         assertNull(result.paramTable)
+    }
+
+    fun testQueryWrapperConsumedByRemoveRendersDelete() {
+        // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，service.remove(wrapper) 消费 → 应转 DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void remove() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    service.remove(w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出预览结果", result)
+        assertTrue("删除消费的查询 wrapper 应转 DELETE", result!!.sql.startsWith("DELETE FROM"))
+        assertEquals("DELETE FROM device_info_entity WHERE id = 1001", result.compactSql.trim())
+    }
+
+    fun testQueryWrapperConsumedByListStaysQuery() {
+        // 查询消费（service.list(w)）→ 保持 SELECT
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void list() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    service.list(w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出预览结果", result)
+        assertTrue("查询消费应保持 SELECT", result!!.sql.startsWith("SELECT"))
+    }
+
+    fun testBaseTypeWrapperVariableRendersQuery() {
+        // 基类型声明 `Wrapper<X> w = new LambdaQueryWrapper<X>()...`：定位 + 转换应为 SELECT
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.Wrapper;
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    Wrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("基类型声明的 wrapper 应能定位并转换", result)
+        assertTrue("基类型声明应转 SELECT", result!!.sql.startsWith("SELECT"))
+        assertEquals("SELECT id FROM device_info_entity WHERE id = 1001", result.compactSql.trim())
+    }
+
+    fun testInlineRemoveNewWrapperRendersDelete() {
+        // 内联删除：service.remove(new LambdaQueryWrapper<X>().eq(...)) → 应转 DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void remove() {
+                    service.remove(new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L));
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("内联删除应产出预览结果", result)
+        assertTrue("内联删除应转 DELETE", result!!.sql.startsWith("DELETE FROM"))
+        assertEquals("DELETE FROM device_info_entity WHERE id = 1001", result.compactSql.trim())
+    }
+
+    fun testMethodParameterWrapperRemoveRendersDelete() {
+        // 方法参数 wrapper 被 remove 消费：`void del(LambdaQueryWrapper<X> wrapper) { ...; service.remove(wrapper); }` → DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void del(LambdaQueryWrapper<DeviceInfoEntity> wrapper) {
+                    wrapper.eq(DeviceInfoEntity::getId, 1001L);
+                    service.remove(wrapper);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("方法参数 wrapper 应能定位并转换", result)
+        assertTrue("方法参数 wrapper + remove 应转 DELETE", result!!.sql.startsWith("DELETE FROM"))
+        assertEquals("DELETE FROM device_info_entity WHERE id = 1001", result.compactSql.trim())
+    }
+
+    fun testBatchOperationPreview() {
+        // 批量操作调用锚点点击 → 批量 SQL 模板（UPDATE）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import java.util.List;
+
+            public class Demo {
+                public void update(List<DeviceInfoEntity> list) {
+                    service.updateBatchById(list);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("批量操作应产出预览结果", result)
+        assertTrue("批量更新应转 UPDATE 模板", result!!.sql.startsWith("UPDATE"))
+    }
+
+    fun testInlineRemoveWrappersFactoryRendersDelete() {
+        // 用户场景：service.remove(Wrappers.<X>lambdaQuery().eq(...)) 内联工厂 → 应转 DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void remove(Long id) {
+                    service.remove(Wrappers.<DeviceInfoEntity>lambdaQuery()
+                        .eq(DeviceInfoEntity::getStationId, id));
+                }
+
+                static class DeviceInfoEntity { private Long stationId; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("内联工厂 remove 应产出预览结果", result)
+        assertTrue("内联工厂 remove 应转 DELETE", result!!.sql.startsWith("DELETE FROM"))
+    }
+
+    fun testInlineUpdateNewWrapperRendersUpdate() {
+        // 用户场景：service.update(new LambdaUpdateWrapper<X>().eq(...).set(...)) → 应转 UPDATE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+
+            public class Demo {
+                public void update(Long productId, Integer dicProtocolType) {
+                    service.update(new LambdaUpdateWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getProductId, productId)
+                        .set(DeviceInfoEntity::getDicProtocolType, dicProtocolType));
+                }
+
+                static class DeviceInfoEntity {
+                    private Long productId;
+                    private Integer dicProtocolType;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("内联 update 应产出预览结果", result)
+        assertTrue("内联 update 应转 UPDATE", result!!.sql.startsWith("UPDATE"))
+    }
+
+    fun testMultipleWrappersInOneFileDoNotCrossContaminate() {
+        // 回归：同一文件多个 wrapper（查询 + 删除），各锚点必须返回各自结果，不得串缓存
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query(Long id) {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, id);
+                    service.list(w);
+                }
+
+                public void remove(Long id) {
+                    service.remove(Wrappers.<DeviceInfoEntity>lambdaQuery()
+                        .eq(DeviceInfoEntity::getId, id));
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        // 先转换查询 wrapper（会写入文件级缓存）
+        val queryVar = PsiTreeUtil.findChildOfType(myFixture.file, PsiLocalVariable::class.java)!!
+        val queryResult = newService().preview(queryVar)
+        assertNotNull(queryResult)
+        assertTrue("查询应转 SELECT", queryResult!!.sql.startsWith("SELECT"))
+
+        // 再转换同一文件里的删除 wrapper —— 必须 DELETE，不能命中查询缓存
+        val removeCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "remove" }
+        val removeResult = newService().preview(removeCall)
+        assertNotNull("删除 wrapper 应产出预览结果", removeResult)
+        assertTrue("同一文件多个 wrapper 不得串缓存：应转 DELETE", removeResult!!.sql.startsWith("DELETE FROM"))
+    }
+
+    fun testCountConsumedRendersCountStar() {
+        // 用户场景：service.count(wrapper)（变量声明）→ SELECT COUNT(*) FROM ...，而非多列
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void count(Long id) {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, id);
+                    service.count(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Long stationId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("count 消费应产出预览结果", result)
+        assertEquals("SELECT COUNT(*) FROM device_info_entity WHERE id = ?", result!!.compactSql.trim())
+    }
+
+    fun testInlineCountNewWrapperRendersCountStar() {
+        // 内联：service.count(new LambdaQueryWrapper<X>().eq(...)) → COUNT(*)
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void count(Long id) {
+                    service.count(new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, id));
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("内联 count 应产出预览结果", result)
+        assertTrue("内联 count 应转 COUNT(*)", result!!.compactSql.contains("COUNT(*)"))
     }
 
     fun testPreviewWithUnresolvedParam() {

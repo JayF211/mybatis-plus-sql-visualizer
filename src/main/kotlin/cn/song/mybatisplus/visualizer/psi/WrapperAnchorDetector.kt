@@ -1,0 +1,115 @@
+package cn.song.mybatisplus.visualizer.psi
+
+import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiIdentifier
+import com.intellij.psi.PsiKeyword
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiNewExpression
+import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiVariable
+
+/**
+ * Wrapper 锚点判定器（M10-01，gutter 预览图标用）。
+ *
+ * 职责：判断单个叶子元素是否为「可转换为 SQL 的 Wrapper 调用链」的锚点，供
+ * [cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider] 在 Line marker
+ * 快速路径（daemon 高亮 pass，逐元素回调）中使用。
+ *
+ * **性能红线（见 M10 开发计划 §2.4）**：本判定器只允许 O(1) 纯语法判断——
+ * 仅访问 `element.parent` 与 `type.canonicalText` / `referenceName` 文本匹配，**禁止** PSI resolve、
+ * `PsiTreeUtil` 遍历、文件级扫描、任何转换/解析。负例（非 Wrapper 元素）必须零成本返回 null。
+ *
+ * 支持的锚点形态（与 [WrapperLocator] 的三种写法对应）：
+ *  - 场景 A（链式 / 内联 new）：`new LambdaQueryWrapper<X>()...` 的 **`new` 关键字**；
+ *  - 场景 B（分步变量）：`LambdaQueryWrapper<X> w = ...` 的**变量名 `PsiIdentifier`**；
+ *  - 场景 C（内联 Wrappers 工厂）：`Wrappers.<X>lambdaQuery()...` 的**方法名 `PsiIdentifier`**
+ *    （qualifier 文本为 `Wrappers`，语法级匹配，不 resolve）。
+ *  - 去重：A/C 的表达式若同时是某 Wrapper 变量的初始化表达式（同行声明 + 构造/工厂），
+ *    只标变量声明（它是调用链的根），避免同行双图标。
+ */
+object WrapperAnchorDetector {
+
+    /**
+     * 元素是否为 Wrapper 锚点；是则返回作为 gutter marker 的叶子元素（即元素自身），否则 null。
+     *
+     * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
+     */
+    fun anchorElement(element: PsiElement?): PsiElement? {
+        // 场景 B 优先：变量名（PsiLocalVariable / PsiField / PsiParameter 的 nameIdentifier）
+        if (element is PsiIdentifier && element.parent is PsiVariable) {
+            val variable = element.parent as PsiVariable
+            if (WrapperLocator.detectWrapperType(variable.type) != null) return element
+            // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
+            // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明
+            val init = variable.initializer ?: return null
+            if (initializerHeadIsWrapper(init)) return element
+            return null
+        }
+
+        // 场景 A：wrapper 构造的 new 关键字
+        if (element is PsiKeyword && element.text == "new") {
+            val newExpr = element.parent as? PsiNewExpression ?: return null
+            if (WrapperLocator.detectWrapperType(newExpr.type) == null) return null
+            // 该 new 位于某 Wrapper 变量初始化表达式内（`w = new W()...`）→ 去重，只标变量声明
+            return if (isInsideWrapperVariableInitializer(newExpr)) null else element
+        }
+
+        // 场景 C：内联 Wrappers 静态工厂调用（`Wrappers.<X>lambdaQuery()...`，无变量、无 new）
+        if (element is PsiIdentifier) {
+            val ref = element.parent as? PsiReferenceExpression ?: return null
+            if (ref.referenceNameElement !== element) return null
+            if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
+                val qualifier = ref.qualifierExpression as? PsiReferenceExpression ?: return null
+                if (qualifier.referenceName != "Wrappers") return null
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                // 该工厂调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
+                return if (isInsideWrapperVariableInitializer(call)) null else element
+            }
+            // 场景 D：批量操作调用（`service.updateBatchById(list)` 等，F-15/M6）
+            if (ref.referenceName in BatchOperationConverter.batchOperationMethodNames) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (call.argumentList.expressions.isEmpty()) return null
+                return element
+            }
+            return null
+        }
+
+        return null
+    }
+
+    /**
+     * 初始化表达式链首是否为具体 Wrapper（语法级）：沿 `methodExpression.qualifierExpression`
+     * 回溯到链起点，判断是 wrapper 构造（new）或 `Wrappers.<T>lambdaQuery()` 等工厂调用。
+     */
+    private fun initializerHeadIsWrapper(init: PsiElement): Boolean {
+        var expr: PsiElement = init
+        while (expr is PsiMethodCallExpression) {
+            val qualifier = expr.methodExpression.qualifierExpression ?: break
+            expr = qualifier
+        }
+        return when (expr) {
+            is PsiNewExpression -> WrapperLocator.detectWrapperType(expr.type) != null
+            is PsiMethodCallExpression -> expr.methodExpression.referenceName in WrapperLocator.wrapperFactoryMethodNames
+            else -> false
+        }
+    }
+
+    /**
+     * 判定表达式（new 构造或工厂调用）是否位于某 **Wrapper 变量**的初始化表达式内。
+     *
+     * 沿表达式链向上：全为 `PsiExpression` 直到 `PsiVariable` → 在初始化内（去重）；
+     * 中途遇到语句/方法/类边界（内联场景，如 `list(...)`）→ 不在（应标该表达式锚点）。
+     */
+    private fun isInsideWrapperVariableInitializer(expr: PsiElement): Boolean {
+        var cursor: PsiElement? = expr.parent
+        while (cursor != null) {
+            when (cursor) {
+                is PsiVariable -> return true
+                is PsiExpression -> cursor = cursor.parent
+                else -> return false
+            }
+        }
+        return false
+    }
+}

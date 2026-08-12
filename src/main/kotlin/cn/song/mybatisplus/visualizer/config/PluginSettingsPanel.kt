@@ -46,6 +46,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 自动预览（悬停）开关。 */
     private val autoPreviewCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.autoPreview"))
 
+    /** gutter 预览 SQL 图标开关（M10）。 */
+    private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
+
     /** 悬停延迟（毫秒）。 */
     private val hoverDelaySpinner = JSpinner(SpinnerNumberModel(500, 100, 5000, 100))
 
@@ -89,6 +92,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         addRow("", formatCheck)
         addRow(MpSqlVisualizerBundle.message("settings.displayMode"), displayCombo)
         addRow("", autoPreviewCheck)
+        addRow("", gutterIconCheck)
         addRow(MpSqlVisualizerBundle.message("settings.hoverDelay"), hoverDelaySpinner)
 
         // 补充说明
@@ -118,6 +122,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || formatCheck.isSelected != s.formatSql
             || displayCombo.selectedIndex != displayOptions.indexOfFirst { it.first == s.displayMode }
             || autoPreviewCheck.isSelected != s.autoPreview
+            || gutterIconCheck.isSelected != s.showGutterIcon
             || hoverDelaySpinner.value != s.hoverDelay
     }
 
@@ -131,6 +136,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.formatSql = formatCheck.isSelected
         s.displayMode = displayOptions.getOrNull(displayCombo.selectedIndex)?.first ?: PluginSettings.DISPLAY_BOTH
         s.autoPreview = autoPreviewCheck.isSelected
+        s.showGutterIcon = gutterIconCheck.isSelected
         s.hoverDelay = hoverDelaySpinner.value as? Int ?: PluginSettings.DEFAULT_HOVER_DELAY
     }
 
@@ -144,6 +150,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         formatCheck.isSelected = s.formatSql
         displayCombo.selectedIndex = displayOptions.indexOfFirst { it.first == s.displayMode }.coerceAtLeast(0)
         autoPreviewCheck.isSelected = s.autoPreview
+        gutterIconCheck.isSelected = s.showGutterIcon
         hoverDelaySpinner.value = s.hoverDelay
     }
 }

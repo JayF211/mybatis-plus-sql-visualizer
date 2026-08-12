@@ -1,15 +1,10 @@
 package cn.song.mybatisplus.visualizer.actions
 
-import cn.song.mybatisplus.visualizer.config.PluginSettings
-import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
-import cn.song.mybatisplus.visualizer.ui.SqlToolWindow
-import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiJavaFile
 
 /**
@@ -35,22 +30,9 @@ class ConvertToSqlAction : AnAction() {
         SqlPreviewService.previewAsync(project, {
             project.getService(SqlPreviewService::class.java).preview(element)
         }) { result ->
-            if (result == null) {
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("action.notFound.message"),
-                    MpSqlVisualizerBundle.message("action.notFound.title"),
-                )
-                return@previewAsync
-            }
-            // 按显示方式（F-16）：弹窗 / 工具窗口 / 两者
-            val mode = project.getService(SqlPreviewService::class.java).displayMode()
-            if (mode != PluginSettings.DISPLAY_TOOL_WINDOW) {
-                SqlPreviewDialog(project, result).show()
-            }
-            if (mode != PluginSettings.DISPLAY_DIALOG) {
-                SqlToolWindow.showResult(project, result)
-            }
+            // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者；
+            // result 为 null 时弹友好提示
+            SqlPreviewService.showResult(project, result)
         }
     }
 

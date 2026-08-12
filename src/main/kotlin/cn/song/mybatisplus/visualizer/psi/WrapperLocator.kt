@@ -8,6 +8,7 @@ import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiExpressionList
 import com.intellij.psi.PsiField
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -15,8 +16,10 @@ import com.intellij.psi.PsiLambdaExpression
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiNewExpression
+import com.intellij.psi.PsiParameter
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiReturnStatement
+import com.intellij.psi.PsiStatement
 import com.intellij.psi.PsiType
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.search.searches.ReferencesSearch
@@ -82,12 +85,13 @@ object WrapperLocator {
         var current: PsiElement? = anchor
         while (current != null) {
             when (current) {
-                is PsiLocalVariable -> if (detectWrapperType(current.type) != null) return current
-                is PsiField -> if (detectWrapperType(current.type) != null) return current
+                is PsiLocalVariable -> if (isWrapperVariable(current)) return current
+                is PsiField -> if (isWrapperVariable(current)) return current
+                is PsiParameter -> if (isWrapperVariable(current)) return current
                 is PsiMethodCallExpression -> {
                     val qualifier = current.methodExpression.qualifierExpression as? PsiReferenceExpression
                     val resolved = qualifier?.resolve() as? PsiVariable
-                    if (resolved != null && detectWrapperType(resolved.type) != null) return resolved
+                    if (resolved != null && isWrapperVariable(resolved)) return resolved
                 }
             }
             current = current.parent
@@ -96,17 +100,58 @@ object WrapperLocator {
     }
 
     /**
+     * 变量是否为 Wrapper（含基类型降级）：类型直接是具体 Wrapper，或类型为抽象基类
+     * （`Wrapper<X>` / `AbstractWrapper<X>`）但初始化表达式链首是具体 Wrapper 构造 / Wrappers 工厂。
+     */
+    private fun isWrapperVariable(variable: PsiVariable): Boolean =
+        detectWrapperType(variable.type) != null || detectWrapperTypeFromInitializer(variable.initializer) != null
+
+    /**
+     * 从初始化表达式链首推断 Wrapper 类型（基类型声明降级用）：
+     * 沿 `methodExpression.qualifierExpression` 回溯到链起点，返回其 wrapper 类型。
+     */
+    private fun detectWrapperTypeFromInitializer(init: PsiElement?): WrapperType? {
+        var expr: PsiElement? = init ?: return null
+        while (expr is PsiMethodCallExpression) {
+            expr = expr.methodExpression.qualifierExpression
+        }
+        return when (expr) {
+            is PsiNewExpression -> detectWrapperType(expr.type)
+            is PsiMethodCallExpression -> factoryWrapperType(expr)
+            else -> null
+        }
+    }
+
+    /**
+     * 表达式链首的最近消费调用：向上找到第一个实参列表（`PsiExpressionList`）的父方法调用。
+     * 用于判断 wrapper 作为实参传给了哪个方法（`service.remove(new W()...)` 取 remove 而非更外层）。
+     */
+    private fun PsiElement.consumingCall(): PsiMethodCallExpression? {
+        var cursor: PsiElement? = parent
+        while (cursor != null) {
+            when (cursor) {
+                is PsiExpressionList -> return cursor.parent as? PsiMethodCallExpression
+                is PsiStatement, is PsiMethod, is PsiClass -> return null
+            }
+            cursor = cursor.parent
+        }
+        return null
+    }
+
+    /**
      * 从锚点查找内联 Wrapper 构造表达式（`list(new MPJLambdaQueryWrapper<X>().eq(...))`，清单 P17）。
-     * 锚点可能在 new 表达式链内（向上命中），也可能在包裹它的外层调用上（向下检查子树）。
+     *
+     * 定位策略（防跨方法误命中）：
+     *  - 向下扫锚点**子树**只在锚点初始位置执行一次（锚点可能是包裹调用，如 `list(new W()...)`）；
+     *  - 沿祖先链只检查元素**自身**是否为 wrapper new 表达式——绝不能每层都向下扫，
+     *    否则走到 PsiClass 级别会命中类内其他方法的 wrapper（回归：删除/修改被串成查询，2026-08-12）。
      */
     private fun findWrapperNewExpression(anchor: PsiElement): PsiNewExpression? {
+        PsiTreeUtil.findChildOfType(anchor, PsiNewExpression::class.java)?.let { newExpr ->
+            if (detectWrapperType(newExpr.type) != null) return newExpr
+        }
         var current: PsiElement? = anchor
         while (current != null) {
-            // 向下：锚点子树中的 wrapper new 表达式（如 list(new Wrapper<X>()...))
-            PsiTreeUtil.findChildOfType(current, PsiNewExpression::class.java)?.let { newExpr ->
-                if (detectWrapperType(newExpr.type) != null) return newExpr
-            }
-            // 向上：锚点自身为 wrapper new 表达式（或在 new 链的调用上）
             if (current is PsiNewExpression && detectWrapperType(current.type) != null) return current
             current = current.parent
         }
@@ -142,8 +187,13 @@ object WrapperLocator {
             .sortedBy { it.textRange.endOffset }
             .map { ArgResolver.toWrapperCall(it, table, entityClass?.name) }
 
+        // 消费识别：wrapper 作为实参传给删除/计数方法（`service.remove(new W()...)` / `service.count(new W()...)`）
+        val consumingCall = newExpr.consumingCall()
+        val deleteConsumed = consumingCall?.let { it.methodExpression.referenceName in deleteConsumerMethodNames } == true
+        val countConsumed = consumingCall?.let { it.methodExpression.referenceName in countConsumerMethodNames } == true
+
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias),
+            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed),
             table = table,
         )
     }
@@ -155,18 +205,16 @@ object WrapperLocator {
     /**
      * 从锚点查找内联 Wrapper 工厂调用（`getOne(Wrappers.<T>lambdaQuery().select(...).eq(...))`）。
      *
-     * `Wrappers.<T>lambdaQuery()` 是静态工厂调用，不产生 `new` 表达式、也不一定绑定 Wrapper 类型变量，
-     * 需单独识别。查找路径与 [findWrapperNewExpression] 相同：向下扫锚点子树、向上逐层检查。
+     * `Wrappers.<T>lambdaQuery()` 是静态工厂调用，不产生 `new` 表达式、也不一定绑定 Wrapper 类型变量。
+     * 定位策略同 [findWrapperNewExpression]：向下扫子树只在锚点初始位置一次，向上只检查元素自身，
+     * 避免走到类级别时误命中其他方法的工厂调用。
      */
     private fun findWrapperFactoryCall(anchor: PsiElement): PsiMethodCallExpression? {
+        PsiTreeUtil.collectElementsOfType(anchor, PsiMethodCallExpression::class.java)
+            .firstOrNull { isWrapperFactoryCall(it) }
+            ?.let { return it }
         var current: PsiElement? = anchor
         while (current != null) {
-            // 向下：扫锚点子树内全部方法调用（工厂调用可能在嵌套链内部，
-            // 如 getOne(Wrappers.<T>lambdaQuery()...)，findChildOfType 只会命中最外层调用）
-            PsiTreeUtil.collectElementsOfType(current, PsiMethodCallExpression::class.java)
-                .firstOrNull { isWrapperFactoryCall(it) }
-                ?.let { return it }
-            // 向上：锚点自身为工厂调用（或链上的调用）
             if (current is PsiMethodCallExpression && isWrapperFactoryCall(current)) return current
             current = current.parent
         }
@@ -204,8 +252,13 @@ object WrapperLocator {
             .sortedBy { it.textRange.endOffset }
             .map { ArgResolver.toWrapperCall(it, table, entityClass?.name) }
 
+        // 消费识别：wrapper 作为实参传给删除/计数方法（`service.remove(Wrappers.<T>lambdaQuery()...)` 等）
+        val consumingCall = factoryCall.consumingCall()
+        val deleteConsumed = consumingCall?.let { it.methodExpression.referenceName in deleteConsumerMethodNames } == true
+        val countConsumed = consumingCall?.let { it.methodExpression.referenceName in countConsumerMethodNames } == true
+
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias = null),
+            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias = null, deleteConsumed = deleteConsumed, countConsumed = countConsumed),
             table = table,
         )
     }
@@ -215,7 +268,7 @@ object WrapperLocator {
      */
     private fun isWrapperFactoryCall(call: PsiMethodCallExpression): Boolean {
         val methodName = call.methodExpression.referenceName
-        if (methodName !in WRAPPER_FACTORY_METHODS) return false
+        if (methodName !in wrapperFactoryMethodNames) return false
         val qualifier = call.methodExpression.qualifierExpression as? PsiReferenceExpression ?: return false
         val resolved = qualifier.resolve()
         return when (resolved) {
@@ -247,12 +300,17 @@ object WrapperLocator {
      *  - 变量后续引用上的方法调用（wrapper.eq(...)）
      */
     private fun buildChain(variable: PsiVariable): LocatedWrapper? {
-        val wrapperType = detectWrapperType(variable.type) ?: return null
+        // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）
+        val wrapperType = detectWrapperType(variable.type)
+            ?: detectWrapperTypeFromInitializer(variable.initializer)
+            ?: return null
         val (entityClass, typeArgName) = entityInfoFromType(variable.type)
         val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
         val constructorAlias = extractConstructorAlias(variable.initializer)
 
         val callElements = mutableListOf<PsiMethodCallExpression>()
+        var deleteConsumed = false
+        var countConsumed = false
 
         // 1. 初始化表达式中的链式调用；若链首为工厂方法调用（baseJoinWrapper()），展开其方法体内的 wrapper 链（P03）；
         //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除
@@ -261,9 +319,11 @@ object WrapperLocator {
             callElements += expandFactoryCalls(initCalls)
         }
 
-        // 2. 变量引用上的方法调用（分步写法）
+        // 2. 变量引用上的方法调用（分步写法）+ 消费识别（`service.remove(wrapper)` / `service.count(wrapper)` 等）
         ReferencesSearch.search(variable).forEach { ref ->
             val refExpression = ref.element as? PsiReferenceExpression ?: return@forEach
+            if (isConsumerArgument(refExpression, deleteConsumerMethodNames)) deleteConsumed = true
+            if (isConsumerArgument(refExpression, countConsumerMethodNames)) countConsumed = true
             // w 引用的 PSI 结构：w.eq(...) 中 w 引用 → methodExpression(eq 引用) → PsiMethodCallExpression
             // 向上遍历找最近的调用表达式
             val call = generateSequence(refExpression.parent) { it.parent }
@@ -283,9 +343,30 @@ object WrapperLocator {
 
         val wrapperCalls = sortedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name) }
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias),
+            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed),
             table = table,
         )
+    }
+
+    /**
+     * 判断引用是否作为**实参**传给指定消费方法集合（`service.remove(wrapper)` / `service.count(wrapper)` 等）。
+     *
+     * 引用是方法调用 qualifier（`wrapper.eq(...)` 的链调用）或位于其他上下文时返回 false。
+     */
+    private fun isConsumerArgument(ref: PsiReferenceExpression, consumerMethods: Set<String>): Boolean {
+        var cursor: PsiElement? = ref.parent
+        while (cursor != null) {
+            when (cursor) {
+                is PsiExpressionList -> {
+                    val call = cursor.parent as? PsiMethodCallExpression ?: return false
+                    return call.methodExpression.referenceName in consumerMethods
+                }
+                // 引用是链调用的 qualifier / 语句 / 方法 / 类边界，不是消费实参
+                is PsiMethodCallExpression, is PsiStatement, is PsiMethod, is PsiClass -> return false
+            }
+            cursor = cursor.parent
+        }
+        return false
     }
 
     /**
@@ -343,14 +424,30 @@ object WrapperLocator {
     // 类型识别
     // ------------------------------------------------------------------
 
-    /** Wrappers 静态工厂方法名（`Wrappers.<T>lambdaQuery()` 等）。 */
-    private val WRAPPER_FACTORY_METHODS = setOf("lambdaQuery", "lambdaUpdate", "lambdaDelete", "query", "update")
+    /** Wrappers 静态工厂方法名（`Wrappers.<T>lambdaQuery()` 等）。M10 起 internal 供 [WrapperAnchorDetector] 复用。 */
+    internal val wrapperFactoryMethodNames: Set<String> = setOf(
+        "lambdaQuery", "lambdaUpdate", "lambdaDelete", "query", "update",
+    )
+
+    /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法）。 */
+    internal val deleteConsumerMethodNames: Set<String> = setOf("remove", "delete")
+
+    /** 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。 */
+    internal val countConsumerMethodNames: Set<String> = setOf("count", "selectJoinCount")
 
     /**
      * 识别 PsiType 对应的 Wrapper 类型（按简单类名匹配）。
+     *
+     * 注意：不能用 `canonicalText.substringAfterLast('.')` 提取类名——当泛型实参带包名时
+     * （真实项目常态，如 `LambdaQueryWrapper<com.biz.BikeDeviceProductInfoEntity>`），
+     * 最后一个 `.` 会落在泛型参数内导致提取错误（回归：M10 gutter 图标 + WrapperLocator 定位）。
+     * `PsiClassType.getClassName()` 在第一个 `<` 之前取末段，语义正确且无需 resolve（快速路径安全）。
+     *
+     * M10 起为 internal：供 [WrapperAnchorDetector] 复用（gutter 锚点判定，快速路径
+     * 只做 canonicalText 文本匹配，不 resolve），保证 Wrapper 类名集合单一来源。
      */
-    private fun detectWrapperType(type: PsiType?): WrapperType? {
-        val simpleName = type?.canonicalText?.substringAfterLast('.')?.substringBefore('<') ?: return null
+    internal fun detectWrapperType(type: PsiType?): WrapperType? {
+        val simpleName = (type as? PsiClassType)?.className ?: return null
         return when (simpleName) {
             "LambdaQueryWrapper" -> WrapperType.LAMBDA_QUERY
             "LambdaUpdateWrapper" -> WrapperType.LAMBDA_UPDATE

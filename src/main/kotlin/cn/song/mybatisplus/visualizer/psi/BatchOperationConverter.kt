@@ -33,6 +33,9 @@ object BatchOperationConverter {
         "removeByIds" to Operation.DELETE,
     )
 
+    /** 批量操作方法名集合（M10 起 internal 供 [WrapperAnchorDetector] gutter 锚点复用）。 */
+    internal val batchOperationMethodNames: Set<String> = BATCH_OPERATIONS.keys
+
     /**
      * 转换批量方法调用。
      *

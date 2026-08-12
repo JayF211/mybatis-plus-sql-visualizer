@@ -1,0 +1,10 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 表格主体（数据库表） -->
+    <rect x="2" y="3" width="8" height="10" rx="1" stroke="#40B6E0" stroke-width="1.2"/>
+    <line x1="2" y1="6" x2="10" y2="6" stroke="#40B6E0" stroke-width="1.2"/>
+    <line x1="2" y1="9" x2="10" y2="9" stroke="#40B6E0" stroke-width="1.2"/>
+    <line x1="6" y1="6" x2="6" y2="13" stroke="#40B6E0" stroke-width="1.2"/>
+    <!-- 放大镜（预览） -->
+    <circle cx="11" cy="10" r="3" stroke="#B48EFF" stroke-width="1.3"/>
+    <line x1="13.2" y1="12.2" x2="14.6" y2="13.6" stroke="#B48EFF" stroke-width="1.3"/>
+</svg>

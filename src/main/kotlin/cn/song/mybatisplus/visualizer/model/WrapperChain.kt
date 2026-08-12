@@ -10,12 +10,18 @@ package cn.song.mybatisplus.visualizer.model
  * @param entityClass     泛型实体类名（如 DeviceInfoEntity），可能为 null（无法解析时）
  * @param calls           按源码顺序的方法调用（wrapper.eq(...) 等）
  * @param constructorAlias 表别名构造（`new MPJLambdaWrapper<>(Class, "apply_info")` 第二参，清单 C4/P11）；null 表示默认
+ * @param deleteConsumed  wrapper 作为实参传给删除类消费方法（`service.remove(wrapper)` / `mapper.delete(wrapper)`，
+ *                        MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造）；true 时即使类型为查询类也应转 DELETE
+ * @param countConsumed   wrapper 作为实参传给计数消费方法（`service.count(wrapper)` / `selectJoinCount(wrapper)`）；
+ *                        true 时查询类 wrapper 转 `SELECT COUNT(*) FROM ...`
  */
 data class WrapperChain(
     val wrapperType: WrapperType,
     val entityClass: String?,
     val calls: List<WrapperCall>,
     val constructorAlias: String? = null,
+    val deleteConsumed: Boolean = false,
+    val countConsumed: Boolean = false,
 )
 
 /**
