@@ -15,6 +15,8 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -127,4 +129,28 @@ class SqlPreviewService(private val project: Project) {
      * 清空缓存（编辑器文件切换/项目关闭时由持有方调用）。
      */
     fun clearCache() = cache.clear()
+
+    companion object {
+        /**
+         * 后台线程 + 读操作执行转换，EDT 回调结果。
+         *
+         * PSI 定位/解析（含注解解析）在 IDEA 2025.3+ 属于"慢操作"，禁止在 EDT 上执行；
+         * 按钮/快捷键/编辑器跟随等 UI 触发方统一走此入口，避免
+         * "Slow operations are prohibited on EDT"。
+         *
+         * @param project  项目
+         * @param compute  在 ReadAction 内执行转换（锚点元素可先在 EDT 捕获，块内读取）
+         * @param onResult 在 EDT 上回调转换结果（未找到 Wrapper 时为 null）
+         */
+        fun previewAsync(project: Project, compute: () -> PreviewResult?, onResult: (PreviewResult?) -> Unit) {
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val result = try {
+                    ReadAction.compute<PreviewResult?, Throwable> { compute() }
+                } catch (e: Throwable) {
+                    null
+                }
+                ApplicationManager.getApplication().invokeLater { onResult(result) }
+            }
+        }
+    }
 }

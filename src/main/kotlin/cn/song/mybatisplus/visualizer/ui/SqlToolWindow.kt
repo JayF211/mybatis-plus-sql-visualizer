@@ -13,6 +13,10 @@ object SqlToolWindow {
 
     const val ID = "MP SQL Visualizer"
 
+    /** 是否跟随编辑器光标实时转换（工具栏开关，默认开）。 */
+    @Volatile
+    var isFollowEditor: Boolean = true
+
     /** 查找工具窗口内容面板（未创建时返回 null）。 */
     fun findPanel(project: Project): SqlPreviewToolWindowPanel? {
         val tw = ToolWindowManager.getInstance(project).getToolWindow(ID) ?: return null

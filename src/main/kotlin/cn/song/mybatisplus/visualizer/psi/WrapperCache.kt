@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import com.intellij.psi.PsiFile
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Wrapper 解析缓存（F-20）：按 PsiFile + modificationStamp 缓存解析结果。
@@ -9,6 +10,8 @@ import com.intellij.psi.PsiFile
  * 策略：
  *  - 键为 PsiFile（弱引用持有，避免阻止文件 GC）
  *  - 文件内容变更（modificationStamp 变化）即失效重建
+ *  - 线程安全（UI 触发方经 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService.previewAsync]
+ *    在后台线程 + EDT 并发调用）
  *
  * M1 为文件级缓存（一个文件通常一个 Wrapper 查询场景）；M3 接入 UI 层后按需演进。
  */
@@ -18,7 +21,7 @@ class WrapperCache {
     private data class Entry(val stamp: Long, val value: Any?)
 
     /** PsiFile → 条目（弱引用键，文件释放时条目可被回收）。 */
-    private val cache = mutableMapOf<PsiFile, Entry>()
+    private val cache = ConcurrentHashMap<PsiFile, Entry>()
 
     /**
      * 获取或计算缓存。

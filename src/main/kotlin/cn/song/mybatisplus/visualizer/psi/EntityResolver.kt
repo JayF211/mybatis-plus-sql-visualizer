@@ -54,16 +54,29 @@ class EntityResolver {
     // ------------------------------------------------------------------
 
     private fun hasAnnotation(psi: PsiClass, qualifiedName: String): Boolean =
-        psi.hasAnnotation(qualifiedName)
+        findAnnotation(psi, qualifiedName) != null
 
     private fun hasAnnotation(field: PsiField, qualifiedName: String): Boolean =
-        field.hasAnnotation(qualifiedName)
+        findAnnotation(field, qualifiedName) != null
 
-    private fun findAnnotation(psi: PsiClass, qualifiedName: String): PsiAnnotation? =
-        psi.modifierList?.findAnnotation(qualifiedName)
+    /**
+     * 按注解查找：优先全限定名；粘贴片段/测试环境注解类不可解析时，
+     * 按短名兜底匹配（`@TableName` → TableName），保证 `@TableName("t_user")` 可识别。
+     */
+    private fun findAnnotation(psi: PsiClass, qualifiedName: String): PsiAnnotation? {
+        psi.modifierList?.findAnnotation(qualifiedName)?.let { return it }
+        return findAnnotationByShortName(psi.modifierList?.annotations, qualifiedName)
+    }
 
-    private fun findAnnotation(field: PsiField, qualifiedName: String): PsiAnnotation? =
-        field.modifierList?.findAnnotation(qualifiedName)
+    private fun findAnnotation(field: PsiField, qualifiedName: String): PsiAnnotation? {
+        field.modifierList?.findAnnotation(qualifiedName)?.let { return it }
+        return findAnnotationByShortName(field.modifierList?.annotations, qualifiedName)
+    }
+
+    private fun findAnnotationByShortName(annotations: Array<PsiAnnotation>?, qualifiedName: String): PsiAnnotation? {
+        val simpleName = qualifiedName.substringAfterLast('.')
+        return annotations?.firstOrNull { it.nameReferenceElement?.referenceName == simpleName }
+    }
 
     /**
      * 读取注解的 value 属性字符串值（如 @TableName("t_user") → t_user）。

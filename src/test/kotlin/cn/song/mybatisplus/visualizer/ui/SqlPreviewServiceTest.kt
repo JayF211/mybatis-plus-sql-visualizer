@@ -473,6 +473,38 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, result.wrapperType)
     }
 
+    fun testPreviewPastedSnippetWithTableNameAnnotation() {
+        // 粘贴片段含实体 + @TableName 注解：注解类不可解析，走短名兜底（M9 工具窗口反馈）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            @com.baomidou.mybatisplus.annotation.TableName("t_user")
+            public class UserEntity {
+                private Long id;
+            }
+
+            public class Demo {
+                public void query() {
+                    merchantService.getOne(Wrappers.<UserEntity>lambdaQuery()
+                            .eq(UserEntity::getId, 1L));
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(myFixture.file)
+        assertNotNull("应识别 @TableName 注解（短名兜底）", result)
+        assertEquals(
+            """
+            SELECT id
+            FROM t_user
+            WHERE id = 1
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     fun testPreviewPastedSnippetWithoutEntityClass() {
         // 模拟工具窗口粘贴：片段无实体类定义，按类型参数类名命名策略兜底表名（M9 增强）
         myFixture.configureByText(

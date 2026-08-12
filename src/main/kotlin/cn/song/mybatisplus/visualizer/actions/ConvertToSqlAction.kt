@@ -31,24 +31,26 @@ class ConvertToSqlAction : AnAction() {
         val offset = editor.caretModel.offset
         val element = file.findElementAt(offset) ?: return
 
-        val service = project.getService(SqlPreviewService::class.java)
-        val result = service.preview(element)
-        if (result == null) {
-            Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("action.notFound.message"),
-                MpSqlVisualizerBundle.message("action.notFound.title"),
-            )
-            return
-        }
-
-        // 按显示方式（F-16）：弹窗 / 工具窗口 / 两者
-        val mode = service.displayMode()
-        if (mode != PluginSettings.DISPLAY_TOOL_WINDOW) {
-            SqlPreviewDialog(project, result).show()
-        }
-        if (mode != PluginSettings.DISPLAY_DIALOG) {
-            SqlToolWindow.showResult(project, result)
+        // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
+        SqlPreviewService.previewAsync(project, {
+            project.getService(SqlPreviewService::class.java).preview(element)
+        }) { result ->
+            if (result == null) {
+                Messages.showInfoMessage(
+                    project,
+                    MpSqlVisualizerBundle.message("action.notFound.message"),
+                    MpSqlVisualizerBundle.message("action.notFound.title"),
+                )
+                return@previewAsync
+            }
+            // 按显示方式（F-16）：弹窗 / 工具窗口 / 两者
+            val mode = project.getService(SqlPreviewService::class.java).displayMode()
+            if (mode != PluginSettings.DISPLAY_TOOL_WINDOW) {
+                SqlPreviewDialog(project, result).show()
+            }
+            if (mode != PluginSettings.DISPLAY_DIALOG) {
+                SqlToolWindow.showResult(project, result)
+            }
         }
     }
 
