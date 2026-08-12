@@ -1,10 +1,9 @@
 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <!-- 表格主体（数据库表） -->
-    <rect x="2" y="3" width="8" height="10" rx="1" stroke="#40B6E0" stroke-width="1.2"/>
-    <line x1="2" y1="6" x2="10" y2="6" stroke="#40B6E0" stroke-width="1.2"/>
-    <line x1="2" y1="9" x2="10" y2="9" stroke="#40B6E0" stroke-width="1.2"/>
-    <line x1="6" y1="6" x2="6" y2="13" stroke="#40B6E0" stroke-width="1.2"/>
-    <!-- 放大镜（预览） -->
-    <circle cx="11" cy="10" r="3" stroke="#B48EFF" stroke-width="1.3"/>
-    <line x1="13.2" y1="12.2" x2="14.6" y2="13.6" stroke="#B48EFF" stroke-width="1.3"/>
+    <!-- 压缩上下高度，整体变扁，中点固定y=8居中 -->
+    <path d="M4.6 5.6 L2.6 8 L4.6 10.4" stroke="#4FB477" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="5.6" y1="10.6" x2="7.8" y2="5.4" stroke="#4FB477" stroke-width="1.3" stroke-linecap="round"/>
+    <path d="M8.6 5.6 L10.6 8 L8.6 10.4" stroke="#4FB477" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- 放大镜维持原有大小与叠压位置 -->
+    <circle cx="11.8" cy="11.8" r="3.6" stroke="#B48EFF" stroke-width="1.5"/>
+    <line x1="14.2" y1="14.2" x2="15.1" y2="15.1" stroke="#B48EFF" stroke-width="1.5" stroke-linecap="round"/>
 </svg>

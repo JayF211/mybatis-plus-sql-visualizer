@@ -1,4 +1,4 @@
-# MP SQL Visualizer
+# MyBatis-Plus SQL Visualizer
 
 **MyBatis-Plus SQL Visualizer** —— 一个 IntelliJ IDEA 插件，将 MyBatis-Plus（含 MyBatis-Plus-Join）的
 Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**，解决调试困难、参数不可见、联表验证繁琐等痛点。
@@ -50,7 +50,7 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 
 ### 配置
 
-`Settings → Tools → MP SQL Visualizer`：数据库方言、参数替换、格式化、
+`Settings → Tools → MyBatis-Plus SQL Visualizer`：数据库方言、参数替换、格式化、
 自动预览、悬停延迟。
 
 ## 📁 文档

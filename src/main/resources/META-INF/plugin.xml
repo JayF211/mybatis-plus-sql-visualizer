@@ -3,8 +3,11 @@
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
-    <!-- 插件显示名称 -->
-    <name>MP SQL Visualizer</name>
+    <!-- 插件显示名称（M13.1 统一为完整名） -->
+    <name>MyBatis-Plus SQL Visualizer</name>
+
+    <!-- 插件图标（亮/暗主题自动切换：pluginIcon.svg + pluginIcon_dark.svg，M13.1） -->
+    <icon>/icons/pluginIcon.svg</icon>
 
     <!-- 插件厂商（发布前请替换为真实信息） -->
     <vendor url="https://gitee.com/SongRenShuo">SongRenShuo</vendor>
@@ -36,10 +39,10 @@
         <!-- SQL 预览服务（project-level，统一转换入口） -->
         <projectService serviceImplementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewService"/>
 
-        <!-- 设置页：Settings → Tools → MP SQL Visualizer -->
+        <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer -->
         <configurable parentId="tools"
                       id="cn.song.mybatisplus.visualizer.settings"
-                      displayName="MP SQL Visualizer"
+                      displayName="MyBatis-Plus SQL Visualizer"
                       instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
         <!-- 悬停预览（F-06）：光标悬停显示 SQL 文档弹层 -->
@@ -61,12 +64,13 @@
         <supportsKotlinPluginMode supportsK2="true"/>
     </extensions>
 
-    <!-- Action 注册（F-04 右键菜单 + F-05 快捷键） -->
+    <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
     <actions>
         <action id="cn.song.mybatisplus.visualizer.ConvertToSql"
                 class="cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction"
                 text="Convert to SQL"
-                description="将光标处的 MyBatis-Plus Wrapper 转换为 SQL">
+                description="将光标处的 MyBatis-Plus Wrapper 转换为 SQL"
+                icon="/icons/pluginIcon.svg">
             <!-- 右键菜单：编辑器弹出菜单 -->
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <!-- 快捷键：Windows/Linux 与 macOS 各注册一份（默认值，可在 Keymap 自定义） -->

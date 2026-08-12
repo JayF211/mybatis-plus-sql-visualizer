@@ -218,6 +218,49 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testSelectAllNoneTogglesAllConditions() {
+        // 全选/全不选（M13.1）：c0 默认勾选、c1 默认不勾选 → 全选两者都在、全不选两者都移除
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
+                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "id = 1", "true", true, null),
+                    ConditionView("c1", "station_id = 2", "false", false, null),
+                ),
+            ),
+        )
+        // 初始：仅 c0
+        assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = 1"))
+        assertFalse(panel.editorForTest()!!.document.text.contains("station_id = 2"))
+
+        // 全选 → 两个条件都在，复选框状态同步
+        panel.selectAllButtonForTest()!!.doClick()
+        assertTrue(panel.editorForTest()!!.document.text.contains("AND station_id = 2"))
+        assertTrue(panel.conditionCheckboxForTest(0)!!.isSelected)
+        assertTrue(panel.conditionCheckboxForTest(1)!!.isSelected)
+
+        // 全不选 → 动态条件全部移除（无 WHERE），复选框状态同步
+        panel.selectNoneButtonForTest()!!.doClick()
+        assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
+        assertFalse(panel.conditionCheckboxForTest(0)!!.isSelected)
+        assertFalse(panel.conditionCheckboxForTest(1)!!.isSelected)
+        assertTrue(panel.enabledIdsForTest().isEmpty())
+
+        // 全选后再取消单个勾选 → 另一个保留
+        panel.selectAllButtonForTest()!!.doClick()
+        panel.conditionCheckboxForTest(1)!!.doClick()
+        val sql = panel.editorForTest()!!.document.text
+        assertTrue(sql.contains("id = 1"))
+        assertFalse(sql.contains("station_id = 2"))
+        panel.clear()
+    }
+
     fun testDynamicConditionValueBlankKeepsChecked() {
         // M13 复选框纯手动：值空不联动勾选态——默认勾选保留 `?`，填写拼接，清空仍勾选，手动取消才排除
         val panel = SqlPreviewPanel(project)

@@ -63,6 +63,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val paramFields = mutableListOf<JBTextField>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
     private val conditionValueFields = mutableListOf<JBTextField>()
+    private var selectAllButton: JButton? = null
+    private var selectNoneButton: JButton? = null
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -228,6 +230,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramFields.clear()
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
+        selectAllButton = null
+        selectNoneButton = null
         paramPanel.removeAll()
         releaseEditor()
         editorHolder.removeAll()
@@ -322,7 +326,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         val viewSources = views.mapNotNull { it.valueSource }.toSet()
         if (views.isNotEmpty()) {
-            paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.condition.section")))
+            paramPanel.add(conditionSectionHeader())
             views.forEach { paramPanel.add(buildConditionRow(it)) }
         }
         // 普通参数行：未解析参数中不属于任何动态条件值输入框的来源（去重，同一 source 共享一个输入框）
@@ -338,6 +342,35 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 分区标题行。 */
     private fun sectionLabel(text: String): JBLabel = JBLabel(text).apply {
         border = JBUI.Borders.empty(6, 8, 2, 8)
+    }
+
+    /** 动态条件分区标题行：分区名 + 全选/全不选按钮（M13.1）。 */
+    private fun conditionSectionHeader(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        add(sectionLabel(MpSqlVisualizerBundle.message("panel.condition.section")), BorderLayout.WEST)
+        add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 4)).apply {
+            selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
+            selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+            add(selectAllButton)
+            add(selectNoneButton)
+        }, BorderLayout.EAST)
+    }
+
+    /** 左栏分区内的紧凑按钮（比工具栏按钮更小，避免挤压复选框行）。 */
+    private fun compactButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
+        font = font.deriveFont(10.5f)
+        margin = JBUI.insets(0, 6, 0, 6)
+        addActionListener { action() }
+    }
+
+    /**
+     * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
+     * 同步复选框 UI 与 SQL 重渲染。
+     */
+    private fun setAllConditions(enabled: Boolean) {
+        val views = current?.previewModel?.conditionViews.orEmpty()
+        views.forEach { if (enabled) enabledIds.add(it.id) else enabledIds.remove(it.id) }
+        conditionCheckBoxes.forEach { it.isSelected = enabled }
+        renderSql()
     }
 
     /** 动态条件行：复选框（勾选开关）+（有值来源时）值输入框。 */
@@ -495,6 +528,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
+    internal fun selectAllButtonForTest(): JButton? = selectAllButton
+    internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
