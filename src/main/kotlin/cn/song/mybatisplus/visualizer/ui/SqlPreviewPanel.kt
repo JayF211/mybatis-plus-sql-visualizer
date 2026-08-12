@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.ConditionView
+import cn.song.mybatisplus.visualizer.model.EmptyValueRule
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
@@ -31,6 +34,7 @@ import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JSplitPane
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -51,11 +55,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     private val metaLabel = JBLabel()
 
-    // 左：参数值输入区（每个未解析参数一行）
+    // 左：动态条件复选框 + 参数值输入区
     private val paramPanel = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
     }
     private val paramFields = mutableListOf<JBTextField>()
+    private val conditionCheckBoxes = mutableListOf<JCheckBox>()
+    private val conditionValueFields = mutableListOf<JBTextField>()
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -64,7 +70,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     private var current: PreviewResult? = null
     private var compactMode = false
-    private var paramValues = mutableListOf<String>()
+
+    // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
+    private val enabledIds = mutableSetOf<String>()
+    private val paramValues = mutableMapOf<String, String>()
 
     init {
         // 顶部元信息行 + 工具栏
@@ -129,8 +138,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     fun showResult(result: PreviewResult) {
         current = result
-        paramValues = MutableList(result.unresolvedParams.size) { "" }
-        rebuildParamPanel(result)
+        // 参数值按 source 初始化（空字符串；多条件复用同一 source 共享一个值）
+        paramValues.clear()
+        result.unresolvedParams.forEach { source -> paramValues.putIfAbsent(source, "") }
+        result.previewModel?.conditionViews.orEmpty().forEach { view -> view.valueSource?.let { paramValues.putIfAbsent(it, "") } }
+        // 动态条件启用集合初始化：默认按 defaultEnabled，并应用空值联动——判空（SKIP_ON_BLANK/UNKNOWN）
+        // 条件值输入框为空 → 初始不勾选（不拼接）；判非 null（SKIP_ON_NULL）空值仍勾选（拼接 ''）
+        enabledIds.clear()
+        result.previewModel?.conditionViews.orEmpty().forEach { view ->
+            val valueBlank = view.valueSource?.let { paramValues[it].isNullOrBlank() } ?: false
+            val skippedByBlank = valueBlank && view.emptyRule != EmptyValueRule.SKIP_ON_NULL
+            if (view.defaultEnabled && !skippedByBlank) enabledIds.add(view.id)
+        }
+        // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
+        result.previewModel?.let { compactMode = !it.formatSql }
+        modeButton.text = modeButtonText()
+        rebuildLeftPanel(result)
         refreshCompletionContext()
         renderSql()
         updateMeta(result)
@@ -149,10 +172,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         )
     }
 
-    /** 按当前单行/多行模式 + 参数回填重渲染 SQL 编辑器。 */
+    /** 按当前单行/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
-        val base = current?.let { if (compactMode) it.compactSql else it.sql } ?: return
-        showSql(backfillParams(base, paramValues))
+        val result = current ?: return
+        val model = result.previewModel
+        if (model != null) {
+            // 模型级重生成：按动态条件启用集合重新生成 SQL，再按 source 回填参数
+            val generated = SqlGenerator.generateWithParams(
+                statement = model.statement,
+                compact = compactMode,
+                dialect = model.dialect,
+                enabledConditionIds = enabledIds.toSet(),
+            )
+            showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams))
+        } else {
+            // 旧文本路径（无可勾选动态条件，如批量操作）
+            val base = if (compactMode) result.compactSql else result.sql
+            showSql(backfillParamsBySource(base, result.unresolvedParams))
+        }
     }
 
     /** 刷新视图（保留参数与模式，重渲染编辑器）。 */
@@ -188,8 +225,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 清空展示区。 */
     fun clear() {
         current = null
+        enabledIds.clear()
         paramValues.clear()
         paramFields.clear()
+        conditionCheckBoxes.clear()
+        conditionValueFields.clear()
         paramPanel.removeAll()
         releaseEditor()
         editorHolder.removeAll()
@@ -262,67 +302,150 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     // ------------------------------------------------------------------
-    // 参数输入与回填
+    // 参数输入与回填（M12：动态条件复选框行 + 按 source 绑定 + 空值语义）
     // ------------------------------------------------------------------
 
-    /** 重建左侧参数输入区：`#<source>` 标签 + 值输入框。 */
-    private fun rebuildParamPanel(result: PreviewResult) {
+    /** 重建左侧面板：动态条件复选框行 + 普通参数值输入行。 */
+    private fun rebuildLeftPanel(result: PreviewResult) {
         paramPanel.removeAll()
         paramFields.clear()
-        val params = result.unresolvedParams
-        if (params.isEmpty()) {
+        conditionCheckBoxes.clear()
+        conditionValueFields.clear()
+        val views = result.previewModel?.conditionViews.orEmpty()
+
+        if (views.isEmpty() && result.unresolvedParams.isEmpty()) {
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
-        } else {
-            params.forEachIndexed { index, source ->
-                val field = JBTextField(8).apply {
-                    toolTipText = "#$source"
-                    document.addDocumentListener(object : DocumentListener {
-                        override fun insertUpdate(e: DocumentEvent?) = onParamChanged(index, this@apply.text)
-                        override fun removeUpdate(e: DocumentEvent?) = onParamChanged(index, this@apply.text)
-                        override fun changedUpdate(e: DocumentEvent?) = onParamChanged(index, this@apply.text)
-                    })
-                }
-                // FlowLayout：字段按 preferred 宽度（不随行拉伸），行紧凑
-                val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-                    add(JBLabel("#$source").apply {
-                        preferredSize = Dimension(140, preferredSize.height)
-                    })
-                    add(field)
-                    border = JBUI.Borders.empty(0, 8, 2, 8)
-                }
-                paramPanel.add(row)
-                paramFields += field
-            }
+            paramPanel.revalidate()
+            paramPanel.repaint()
+            return
+        }
+
+        val viewSources = views.mapNotNull { it.valueSource }.toSet()
+        if (views.isNotEmpty()) {
+            paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.condition.section")))
+            views.forEach { paramPanel.add(buildConditionRow(it)) }
+        }
+        // 普通参数行：未解析参数中不属于任何动态条件值输入框的来源（去重，同一 source 共享一个输入框）
+        val ordinarySources = result.unresolvedParams.distinct().filter { it !in viewSources }
+        if (ordinarySources.isNotEmpty()) {
+            if (views.isNotEmpty()) paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.param.section")))
+            ordinarySources.forEach { paramPanel.add(buildParamRow(it)) }
         }
         paramPanel.revalidate()
         paramPanel.repaint()
     }
 
-    /** 参数值变更：更新回填表并重渲染 SQL。 */
-    private fun onParamChanged(index: Int, value: String) {
-        if (index in paramValues.indices) {
-            paramValues[index] = value
-            renderSql()
+    /** 分区标题行。 */
+    private fun sectionLabel(text: String): JBLabel = JBLabel(text).apply {
+        border = JBUI.Borders.empty(6, 8, 2, 8)
+    }
+
+    /** 动态条件行：复选框（勾选开关）+（有值来源时）值输入框。 */
+    private fun buildConditionRow(view: ConditionView): JBPanel<JBPanel<*>> {
+        val checkBox = JCheckBox(view.label, view.id in enabledIds).apply {
+            toolTipText = conditionTooltip(view)
+            addActionListener {
+                if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
+                renderSql()
+            }
+        }
+        conditionCheckBoxes += checkBox
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            add(checkBox)
+            if (view.valueSource != null) {
+                val field = conditionValueField(view)
+                add(field)
+                paramFields += field
+                conditionValueFields += field
+            }
+            border = JBUI.Borders.empty(0, 8, 2, 8)
         }
     }
 
+    /** 动态条件值输入框：值变更联动勾选态与 SQL 重渲染。 */
+    private fun conditionValueField(view: ConditionView): JBTextField = JBTextField(8).apply {
+        toolTipText = "#${view.valueSource}"
+        text = paramValues[view.valueSource] ?: ""
+        document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onConditionValueChanged(view, this@apply.text)
+            override fun removeUpdate(e: DocumentEvent?) = onConditionValueChanged(view, this@apply.text)
+            override fun changedUpdate(e: DocumentEvent?) = onConditionValueChanged(view, this@apply.text)
+        })
+    }
+
+    /** 动态条件复选框 tooltip：布尔条件源码 + 空值语义提示。 */
+    private fun conditionTooltip(view: ConditionView): String = buildList {
+        view.flagSource?.let { add(MpSqlVisualizerBundle.message("panel.condition.flag", it)) }
+        if (view.emptyRule == EmptyValueRule.SKIP_ON_NULL) {
+            add(MpSqlVisualizerBundle.message("panel.condition.skipNull"))
+        }
+    }.joinToString("   ")
+
     /**
-     * 按顺序把 SQL 中的 `?` 替换为用户输入的参数值。
-     * 字符串加单引号（转义 `''`）、数字原样、空值保留 `?`。
+     * 动态条件值变更（M12）：更新按 source 绑定的参数值，并按判空语义联动勾选态。
+     *  - SKIP_ON_BLANK / UNKNOWN：空值 → 自动取消勾选（不拼接）；填写 → 勾选（拼接）
+     *  - SKIP_ON_NULL：空值仍拼接（渲染 `''`），勾选态仅由手动切换决定
      */
-    private fun backfillParams(sql: String, values: List<String>): String {
-        if (values.isEmpty()) return sql
+    private fun onConditionValueChanged(view: ConditionView, text: String) {
+        val source = view.valueSource ?: return
+        paramValues[source] = text
+        if (view.emptyRule != EmptyValueRule.SKIP_ON_NULL) {
+            if (text.isBlank()) enabledIds.remove(view.id) else enabledIds.add(view.id)
+        }
+        renderSql()
+    }
+
+    /** 普通参数行：`#<source>` 标签 + 值输入框。 */
+    private fun buildParamRow(source: String): JBPanel<JBPanel<*>> {
+        val field = JBTextField(8).apply {
+            toolTipText = "#$source"
+            text = paramValues[source] ?: ""
+            document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
+                override fun removeUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
+                override fun changedUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
+            })
+        }
+        paramFields += field
+        // FlowLayout：字段按 preferred 宽度（不随行拉伸），行紧凑
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            add(JBLabel("#$source").apply {
+                preferredSize = Dimension(140, preferredSize.height)
+            })
+            add(field)
+            border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    /** 普通参数值变更：更新回填表并重渲染 SQL。 */
+    private fun onParamChanged(source: String, value: String) {
+        paramValues[source] = value
+        renderSql()
+    }
+
+    /**
+     * 按出现顺序把 SQL 中的 `?` 替换为用户输入（按 source 定位参数值，取代位置绑定，见 M12-R2）。
+     * 字符串加单引号（转义 `''`）、数字原样、空值保留 `?`；
+     * 判非 null 动态条件（SKIP_ON_NULL）的 source 空值渲染为 `''`（空字符串是合法值，M12）。
+     */
+    private fun backfillParamsBySource(sql: String, sources: List<String>): String {
+        if (sources.isEmpty()) return sql
+        val blankAsEmpty = current?.previewModel?.conditionViews.orEmpty()
+            .filter { it.emptyRule == EmptyValueRule.SKIP_ON_NULL && it.valueSource != null }
+            .mapNotNull { it.valueSource }
+            .toSet()
         val sb = StringBuilder(sql.length + 32)
-        var valueIndex = 0
+        var paramIndex = 0
         var i = 0
         while (i < sql.length) {
             val c = sql[i]
             if (c == '?') {
-                val v = values.getOrNull(valueIndex)
-                sb.append(if (v.isNullOrBlank()) "?" else renderParamValue(v))
-                valueIndex++
+                val source = sources.getOrNull(paramIndex)
+                val v = source?.let { paramValues[it] }
+                sb.append(renderParamValue(v, source, blankAsEmpty))
+                paramIndex++
             } else {
                 sb.append(c)
             }
@@ -331,9 +454,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return sb.toString()
     }
 
-    private fun renderParamValue(value: String): String {
-        val trimmed = value.trim()
-        return if (NUMBER_REGEX.matches(trimmed)) trimmed else "'" + value.replace("'", "''") + "'"
+    private fun renderParamValue(v: String?, source: String?, blankAsEmpty: Set<String>): String {
+        if (v.isNullOrBlank()) {
+            return if (source != null && source in blankAsEmpty) "''" else "?"
+        }
+        val trimmed = v.trim()
+        return if (NUMBER_REGEX.matches(trimmed)) trimmed else "'" + v.replace("'", "''") + "'"
     }
 
     // ------------------------------------------------------------------
@@ -364,6 +490,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
+    internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
+    internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
+    internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")

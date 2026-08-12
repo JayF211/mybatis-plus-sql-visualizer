@@ -4,9 +4,12 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.model.ColumnRef
+import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SqlPreviewModel
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
@@ -112,6 +115,8 @@ class SqlPreviewService(private val project: Project) {
         val dialect = currentDialect()
         val compact = !formatSql()
         val generated = SqlGenerator.generateWithParams(statement, compact = compact, dialect = dialect)
+        // 动态条件视图（扁平化，含嵌套组内）；无动态条件时 previewModel 为 null → 面板走旧文本渲染路径
+        val views = collectConditionViews(statement)
         return PreviewResult(
             sql = generated.sql,
             compactSql = SqlGenerator.generate(statement, compact = true, dialect = dialect),
@@ -121,7 +126,27 @@ class SqlPreviewService(private val project: Project) {
             tableName = table.tableName,
             warning = buildWarning(statement),
             columns = table.allColumnNames,
+            previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
         )
+    }
+
+    /** 收集语句中的动态条件行（M12）：遍历 WHERE 条件树，扁平化 toggle 元数据（含嵌套 Group 内）。 */
+    private fun collectConditionViews(statement: SqlStatement): List<ConditionView> = when (statement) {
+        is SelectStatement -> statement.conditions.flatMap { it.toConditionViews() }
+        is UpdateStatement -> statement.conditions.flatMap { it.toConditionViews() }
+        is DeleteStatement -> statement.conditions.flatMap { it.toConditionViews() }
+    }
+
+    /** 单个条件节点 → 条件视图（自身 toggle + 嵌套 Group 子节点递归）。 */
+    private fun Condition.toConditionViews(): List<ConditionView> {
+        val own = toggle?.let {
+            ConditionView(it.id, it.label, it.flagSource, it.defaultEnabled, it.emptyRule, it.valueSource)
+        }
+        val nested = when (this) {
+            is Condition.Group -> children.flatMap { it.toConditionViews() }
+            else -> emptyList()
+        }
+        return listOfNotNull(own) + nested
     }
 
     /**

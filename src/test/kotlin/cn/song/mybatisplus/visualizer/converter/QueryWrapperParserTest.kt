@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.Connector
+import cn.song.mybatisplus.visualizer.model.EmptyValueRule
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SqlValue
@@ -14,6 +15,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -326,6 +329,177 @@ class QueryWrapperParserTest {
         val statement = parser.parse(chain)
         // 未知方法不抛异常且不影响后续条件
         assertEquals(1, statement.conditions.size)
+    }
+
+    // ------------------------------------------------------------------
+    // M12：动态条件（布尔重载 → toggle 元数据 + 判空语义 + 静态求值 + 启用过滤）
+    // ------------------------------------------------------------------
+
+    /** 便捷构造：eq(布尔标志占位符, name, 值) 动态条件。 */
+    private fun flaggedEq(flag: String, value: SqlValue) = WrapperChain(
+        WrapperType.LAMBDA_QUERY, "E",
+        listOf(WrapperCall("eq", listOf(
+            WrapperArg.ValueArg(SqlValue.Placeholder(flag)),
+            WrapperArg.ColumnArg(ColumnRef(columnName = "name")),
+            WrapperArg.ValueArg(value),
+        ))),
+    )
+
+    @Test
+    fun `布尔条件重载_toggle元数据`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("true")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1")),
+                )),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("false")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("2")),
+                )),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("isActive")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "name")),
+                    WrapperArg.ValueArg(SqlValue.Placeholder("nameVar")),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals(3, statement.conditions.size)
+
+        val t0 = (statement.conditions[0] as Condition.Simple).toggle!!
+        assertEquals("c0", t0.id)
+        assertEquals("true", t0.flagSource)
+        assertTrue(t0.defaultEnabled)
+        assertEquals(EmptyValueRule.UNKNOWN, t0.emptyRule)
+        assertNull(t0.valueSource)
+        assertEquals("id = 1", t0.label)
+
+        val t1 = (statement.conditions[1] as Condition.Simple).toggle!!
+        assertEquals("c1", t1.id)
+        assertEquals("false", t1.flagSource)
+        assertFalse(t1.defaultEnabled)
+        assertEquals("station_id = 2", t1.label)
+
+        val t2 = (statement.conditions[2] as Condition.Simple).toggle!!
+        assertEquals("c2", t2.id)
+        assertEquals("isActive", t2.flagSource)
+        assertTrue(t2.defaultEnabled)
+        assertEquals("nameVar", t2.valueSource)
+        assertEquals("name = ?", t2.label)
+    }
+
+    @Test
+    fun `判空语义识别`() {
+        fun toggle(flag: String) =
+            parser.parse(flaggedEq(flag, SqlValue.Literal("'x'", "x"))).conditions[0].toggle!!
+
+        // 判空/空白 → SKIP_ON_BLANK
+        assertEquals(EmptyValueRule.SKIP_ON_BLANK, toggle("StringUtils.isNotBlank(name)").emptyRule)
+        assertEquals(EmptyValueRule.SKIP_ON_BLANK, toggle("StrUtil.isNotEmpty(name)").emptyRule)
+        assertEquals(EmptyValueRule.SKIP_ON_BLANK, toggle("hasText(name)").emptyRule)
+        // 判非 null → SKIP_ON_NULL
+        assertEquals(EmptyValueRule.SKIP_ON_NULL, toggle("Objects.nonNull(name)").emptyRule)
+        assertEquals(EmptyValueRule.SKIP_ON_NULL, toggle("name != null").emptyRule)
+        assertEquals(EmptyValueRule.SKIP_ON_NULL, toggle("null != name").emptyRule)
+        // 纯布尔变量 → UNKNOWN
+        assertEquals(EmptyValueRule.UNKNOWN, toggle("isActive").emptyRule)
+    }
+
+    @Test
+    fun `判空静态求值_默认勾选态`() {
+        // isNotBlank("") → false：默认排除（空字符串不拼接）
+        val blank = parser.parse(flaggedEq("StringUtils.isNotBlank(name)", SqlValue.Literal("''", ""))).conditions[0].toggle!!
+        assertFalse("空字符串判空应默认排除", blank.defaultEnabled)
+
+        // "" != null → true：默认拼接（空字符串是合法值）
+        val notNull = parser.parse(flaggedEq("name != null", SqlValue.Literal("''", ""))).conditions[0].toggle!!
+        assertTrue("空字符串判非 null 应默认拼接", notNull.defaultEnabled)
+
+        // null != null → false：null 值判非 null 默认排除
+        val nullValue = parser.parse(flaggedEq("name != null", SqlValue.Literal("NULL"))).conditions[0].toggle!!
+        assertFalse("null 判非 null 应默认排除", nullValue.defaultEnabled)
+
+        // 值不可静态求值（运行时占位符）→ 默认启用
+        val runtime = parser.parse(flaggedEq("StringUtils.isNotBlank(name)", SqlValue.Placeholder("name"))).conditions[0].toggle!!
+        assertTrue("运行时值应默认启用", runtime.defaultEnabled)
+    }
+
+    @Test
+    fun `生成层_enabledIds过滤`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("true")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1")),
+                )),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "name")),
+                    WrapperArg.ValueArg(SqlValue.Literal("'张三'", "张三")),
+                )),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("false")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("2")),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+
+        // 默认（enabledIds=null）：eq(true) 保留、eq(false) 排除、普通条件保留 → 与 M11 基线一致
+        val base = SqlGenerator.generate(statement)
+        assertTrue(base.contains("WHERE id = 1"))
+        assertTrue(base.contains("AND name = '张三'"))
+        assertFalse("false 条件默认不应拼接", base.contains("station_id = 2"))
+
+        // 显式启用 c0+c1 → 三个条件都在
+        val all = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0", "c1"))
+        assertTrue(all.contains("AND station_id = 2"))
+
+        // 全禁用（空集合）→ 仅普通条件（SELECT 列清单仍含 station_id，仅条件不出现）
+        val none = SqlGenerator.generate(statement, compact = false, enabledConditionIds = emptySet())
+        assertFalse(none.contains("id = 1"))
+        assertTrue(none.contains("name = '张三'"))
+        assertFalse(none.contains("station_id = 2"))
+    }
+
+    @Test
+    fun `嵌套组内动态条件_toggle与整组跳过`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("true")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1")),
+                )),
+                WrapperCall("and", listOf(
+                    WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, "E", listOf(
+                        WrapperCall("eq", listOf(
+                            WrapperArg.ValueArg(SqlValue.Literal("false")),
+                            WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                            WrapperArg.ValueArg(SqlValue.Literal("2")),
+                        )),
+                    ))),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals(2, statement.conditions.size)
+        val group = statement.conditions[1] as Condition.Group
+        val nested = group.children[0] as Condition.Simple
+        assertEquals("c1", nested.toggle!!.id)
+        assertFalse(nested.toggle!!.defaultEnabled)
+
+        // 默认渲染：组内 false 条件排除 → 组空 → 整组不渲染（无空括号）
+        val sql = SqlGenerator.generate(statement)
+        assertTrue(sql.contains("WHERE id = 1"))
+        assertFalse(sql.contains("("))
     }
 
     @Test

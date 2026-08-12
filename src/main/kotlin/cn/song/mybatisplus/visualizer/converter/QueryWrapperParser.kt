@@ -2,7 +2,9 @@ package cn.song.mybatisplus.visualizer.converter
 
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.ConditionToggle
 import cn.song.mybatisplus.visualizer.model.Connector
+import cn.song.mybatisplus.visualizer.model.EmptyValueRule
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -12,6 +14,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
+import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 
 /**
  * LambdaQueryWrapper → SelectStatement 转换器（M1 核心，F-01）。
@@ -32,6 +35,9 @@ class QueryWrapperParser(
     private val columnPrefix: String? = null,
 ) {
 
+    /** 动态条件 toggle id 序号（M12，pre-order 递增，同一 parse 树内稳定）。 */
+    private var toggleSeq = 0
+
     /**
      * 解析调用链为 SELECT 语句模型。
      *
@@ -39,6 +45,12 @@ class QueryWrapperParser(
      * @return 可直接交给 SqlGenerator 的语句模型
      */
     fun parse(chain: WrapperChain): SelectStatement {
+        toggleSeq = 0
+        return parseInternal(chain)
+    }
+
+    /** 递归解析体：顶层 parse 重置 toggleSeq，嵌套调用走本方法（id 延续同一序列）。 */
+    private fun parseInternal(chain: WrapperChain): SelectStatement {
         val selectColumns = mutableListOf<ColumnRef>()
         val conditions = mutableListOf<Condition>()
         val groupBy = mutableListOf<ColumnRef>()
@@ -49,8 +61,10 @@ class QueryWrapperParser(
         var orPending = false
 
         for (rawCall in chain.calls) {
-            // 布尔条件重载（P02）：eq(boolean, col, val) 首参为条件标志；字面量 false → 整体忽略
-            val call = if (rawCall.methodName in CONDITION_METHODS) rawCall.skipConditionFlag() else rawCall
+            // 布尔条件重载（P02/M12）：eq(boolean, col, val) 首参为布尔标志 →
+            // 剥离标志并固化为动态条件 toggle 元数据（不再丢弃 false 条件，改由生成层默认排除）
+            val analysis = rawCall.analyzeFlag()
+            val call = analysis?.call ?: rawCall
             if (call.args.isEmpty() && call.methodName in CONDITION_METHODS) continue
 
             when (call.methodName) {
@@ -62,28 +76,28 @@ class QueryWrapperParser(
                 "distinct" -> distinct = true
 
                 // ---------- 二元比较 ----------
-                "eq" -> orPending = addConditionFlagged(conditions, simple(call, "="), orPending)
-                "ne" -> orPending = addConditionFlagged(conditions, simple(call, "!="), orPending)
-                "gt" -> orPending = addConditionFlagged(conditions, simple(call, ">"), orPending)
-                "ge" -> orPending = addConditionFlagged(conditions, simple(call, ">="), orPending)
-                "lt" -> orPending = addConditionFlagged(conditions, simple(call, "<"), orPending)
-                "le" -> orPending = addConditionFlagged(conditions, simple(call, "<="), orPending)
+                "eq" -> orPending = addConditionFlagged(conditions, simple(call, "=").flagged(analysis), orPending)
+                "ne" -> orPending = addConditionFlagged(conditions, simple(call, "!=").flagged(analysis), orPending)
+                "gt" -> orPending = addConditionFlagged(conditions, simple(call, ">").flagged(analysis), orPending)
+                "ge" -> orPending = addConditionFlagged(conditions, simple(call, ">=").flagged(analysis), orPending)
+                "lt" -> orPending = addConditionFlagged(conditions, simple(call, "<").flagged(analysis), orPending)
+                "le" -> orPending = addConditionFlagged(conditions, simple(call, "<=").flagged(analysis), orPending)
 
                 // ---------- 模糊 ----------
-                "like" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.ANYWHERE), orPending)
-                "notLike" -> orPending = addConditionFlagged(conditions, like(call, negated = true, LikePosition.ANYWHERE), orPending)
-                "likeLeft" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.LEFT), orPending)
-                "likeRight" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.RIGHT), orPending)
+                "like" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.ANYWHERE).flagged(analysis), orPending)
+                "notLike" -> orPending = addConditionFlagged(conditions, like(call, negated = true, LikePosition.ANYWHERE).flagged(analysis), orPending)
+                "likeLeft" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.LEFT).flagged(analysis), orPending)
+                "likeRight" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.RIGHT).flagged(analysis), orPending)
 
                 // ---------- 范围 ----------
-                "in" -> orPending = addConditionFlagged(conditions, inList(call, negated = false), orPending)
-                "notIn" -> orPending = addConditionFlagged(conditions, inList(call, negated = true), orPending)
-                "between" -> orPending = addConditionFlagged(conditions, between(call, negated = false), orPending)
-                "notBetween" -> orPending = addConditionFlagged(conditions, between(call, negated = true), orPending)
+                "in" -> orPending = addConditionFlagged(conditions, inList(call, negated = false).flagged(analysis), orPending)
+                "notIn" -> orPending = addConditionFlagged(conditions, inList(call, negated = true).flagged(analysis), orPending)
+                "between" -> orPending = addConditionFlagged(conditions, between(call, negated = false).flagged(analysis), orPending)
+                "notBetween" -> orPending = addConditionFlagged(conditions, between(call, negated = true).flagged(analysis), orPending)
 
                 // ---------- 空值 ----------
-                "isNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NULL"), orPending)
-                "isNotNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NOT NULL"), orPending)
+                "isNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NULL").flagged(analysis), orPending)
+                "isNotNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NOT NULL").flagged(analysis), orPending)
 
                 // ---------- 自定义片段 ----------
                 "apply" -> orPending = addConditionFlagged(conditions, parseApply(call), orPending)
@@ -212,8 +226,8 @@ class QueryWrapperParser(
     private fun parseGroup(call: WrapperCall): Condition? {
         val connector = if (call.methodName == "or") Connector.OR else Connector.AND
         val nested = call.args.firstOrNull() as? WrapperArg.NestedArg ?: return null
-        // 递归解析嵌套链的条件列表，按连接符组装为分组
-        val children = parse(nested.chain).conditions
+        // 递归解析嵌套链的条件列表，按连接符组装为分组（parseInternal 延续 toggle id 序列）
+        val children = parseInternal(nested.chain).conditions
         if (children.isEmpty()) return null
         return Condition.Group(connector, children)
     }
@@ -221,7 +235,7 @@ class QueryWrapperParser(
     /** HAVING：M1 支持单条件（取嵌套链/条件的第一个条件）。 */
     private fun parseHaving(call: WrapperCall): Condition? {
         val nested = call.args.firstOrNull() as? WrapperArg.NestedArg
-        return nested?.let { parse(it.chain).conditions.firstOrNull() }
+        return nested?.let { parseInternal(it.chain).conditions.firstOrNull() }
     }
 
     /** ORDER BY 项列表；支持 `orderByAsc("alias", Entity::getX)` 字符串别名前缀（清单 P11）。 */
@@ -276,28 +290,121 @@ class QueryWrapperParser(
         "isNull", "isNotNull",
     )
 
+    /** 一元条件方法（isNull/isNotNull 布尔重载形态为 [flag, col] 2 参，区别于 3 参二元方法）。 */
+    private val UNARY_METHODS = setOf("isNull", "isNotNull")
+
+    /** 单值占位符条件方法（判空方法静态求值仅对这些方法安全；in/between 多值不参与）。 */
+    private val SINGLE_VALUE_METHODS = setOf("eq", "ne", "gt", "ge", "lt", "le", "like", "notLike", "likeLeft", "likeRight")
+
+    /** 判非 null 形态：`isNotNull(` / `nonNull(` / `!= null` / `null !=`。 */
+    private val NULL_CHECK_REGEX = Regex("""(?i)(isNotNull|nonNull)\s*\(|!=\s*null\b|\bnull\s*!=""")
+
+    /** 判空/空白方法名：`isNotBlank(` / `isNotEmpty(` / `hasText(` / `isBlank(`。 */
+    private val BLANK_CHECK_REGEX = Regex("""\b(isNotBlank|isNotEmpty|hasText|isBlank)\s*\(""")
+
+    /** 反向判空方法名：`isNull(` / `isEmpty(` / `isNullOrEmpty(`（值空才拼接，第一版按 SKIP_ON_BLANK 兜底，见 M12-R7）。 */
+    private val REVERSE_CHECK_REGEX = Regex("""\b(isNull|isEmpty|isNullOrEmpty)\s*\(""")
+
     /**
-     * 处理条件布尔重载（清单 P02）：`eq(boolean, col, val)` / `like(boolean, col, val)` 等。
-     *
-     * 首参为布尔条件标志时移除（converter 无法静态求值运行时布尔 → 默认保留条件）；
-     * 首参为字面量 `false` 时整体忽略该条件。
+     * 布尔条件重载分析结果：剥离布尔标志后的调用 + 动态条件 toggle 预置信息（值来源/标签由条件构建后补填）。
      */
-    private fun WrapperCall.skipConditionFlag(): WrapperCall {
+    private data class FlagAnalysis(
+        val call: WrapperCall,
+        val flagSource: String?,
+        val defaultEnabled: Boolean,
+        val emptyRule: EmptyValueRule,
+    )
+
+    /**
+     * 分析条件调用的布尔条件重载（P02/M12）：首参为布尔标志 → 剥离并固化动态条件元数据。
+     * 非布尔重载（普通条件/其他方法）返回 null。
+     *
+     * 标志判定：一元方法（isNull/isNotNull）标志形态为 [flag, col]（2 参）；
+     * 其余为 [flag, col, val...]（≥3 参）。首参为 ColumnArg 等列引用时恒非标志。
+     */
+    private fun WrapperCall.analyzeFlag(): FlagAnalysis? {
+        if (methodName !in CONDITION_METHODS) return null
         val first = args.getOrNull(0)
-        if (args.size < 3) return this
-        if (first is WrapperArg.ColumnArg || first is WrapperArg.NestedArg || first is WrapperArg.OnConditionArg) {
-            return this
+        if (first is WrapperArg.ColumnArg || first is WrapperArg.NestedArg || first is WrapperArg.OnConditionArg) return null
+        val firstValue = first.asValue() ?: return null
+        val flaggedArity = if (methodName in UNARY_METHODS) args.size == 2 else args.size >= 3
+        if (!flaggedArity) return null
+
+        val flagText = when (firstValue) {
+            is SqlValue.Literal -> firstValue.unquoted
+            is SqlValue.Placeholder -> firstValue.source
         }
-        if (first is WrapperArg.ValueArg) {
-            val text = (first.value as? SqlValue.Literal)?.unquoted
-            return if (text == "false") {
-                WrapperCall(methodName, emptyList())
-            } else {
-                WrapperCall(methodName, args.drop(1))
-            }
+        val literalFlag = (firstValue as? SqlValue.Literal)?.unquoted
+        val emptyRule = detectEmptyRule(flagText)
+        val value = args.getOrNull(2).asValue()
+        val defaultEnabled = when {
+            literalFlag == "true" -> true
+            literalFlag == "false" -> false
+            // 运行时布尔：判空方法可静态求值（值已知字面量）→ 按语义求出；否则默认启用
+            methodName in SINGLE_VALUE_METHODS -> evaluateCheck(flagText, value) ?: true
+            else -> true
         }
-        // 运行时布尔表达式（变量/方法调用等）→ 保留条件，移除标志位
-        return WrapperCall(methodName, args.drop(1))
+        return FlagAnalysis(WrapperCall(methodName, args.drop(1)), flagText, defaultEnabled, emptyRule)
+    }
+
+    /**
+     * 为条件挂载动态条件元数据（值来源/标签由条件模型计算，id 按 pre-order 递增）。
+     */
+    private fun Condition.bindToggle(analysis: FlagAnalysis): Condition {
+        val toggle = ConditionToggle(
+            id = "c${toggleSeq++}",
+            flagSource = analysis.flagSource,
+            defaultEnabled = analysis.defaultEnabled,
+            label = SqlGenerator.renderConditionText(this),
+            emptyRule = analysis.emptyRule,
+            valueSource = valueSourceOf(this),
+        )
+        return withToggle(toggle)
+    }
+
+    /** 条件挂载动态条件元数据（M12）：分析结果非 null 且条件非 null 时挂载。 */
+    private fun Condition?.flagged(analysis: FlagAnalysis?): Condition? =
+        if (analysis == null) this else this?.bindToggle(analysis)
+
+    /**
+     * 条件关联的未解析参数来源：单值占位符条件（Simple/Like）取占位符 source，供面板值输入框绑定与空值联动；
+     * 多值/无值条件（in/between/一元/raw/分组）第一版无独立值输入框（checkbox-only）。
+     */
+    private fun valueSourceOf(condition: Condition): String? = when (condition) {
+        is Condition.Simple -> (condition.value as? SqlValue.Placeholder)?.source
+        is Condition.Like -> (condition.pattern as? SqlValue.Placeholder)?.source
+        else -> null
+    }
+
+    /**
+     * 判空语义识别（M12，用户补充）：从布尔实参源码文本判定空字符串是否拼接。
+     * 仅匹配方法调用形态（限定名.方法名(）与 `!= null`/`null !=` 二元比较，避免误判（M12-R8）。
+     */
+    private fun detectEmptyRule(flagSource: String?): EmptyValueRule {
+        if (flagSource == null) return EmptyValueRule.UNKNOWN
+        val s = flagSource.trim()
+        return when {
+            NULL_CHECK_REGEX.containsMatchIn(s) -> EmptyValueRule.SKIP_ON_NULL
+            BLANK_CHECK_REGEX.containsMatchIn(s) -> EmptyValueRule.SKIP_ON_BLANK
+            REVERSE_CHECK_REGEX.containsMatchIn(s) -> EmptyValueRule.SKIP_ON_BLANK // 反向判空第一版兜底（M12-R7）
+            else -> EmptyValueRule.UNKNOWN
+        }
+    }
+
+    /**
+     * 判空方法静态求值（M12）：布尔实参为已知判空方法调用且值可静态求值时，求出默认勾选态。
+     * 值不可静态求值（运行时占位符）返回 null。
+     */
+    private fun evaluateCheck(flagText: String, value: SqlValue?): Boolean? {
+        val literal = value as? SqlValue.Literal ?: return null
+        val isNull = literal.unquoted.equals("null", ignoreCase = true) || literal.raw == "NULL"
+        val s = flagText.trim()
+        return when {
+            NULL_CHECK_REGEX.containsMatchIn(s) -> !isNull
+            BLANK_CHECK_REGEX.containsMatchIn(s) -> if (isNull) false else literal.unquoted.isNotBlank()
+            REVERSE_CHECK_REGEX.containsMatchIn(s) -> if (isNull) true else literal.unquoted.isEmpty()
+            else -> null
+        }
     }
 
     /**
@@ -331,28 +438,49 @@ class QueryWrapperParser(
      *  - `apply("1 = 0")` → 原样 SQL 片段
      *  - `apply(condition, "(rel.a, rel.id) > ({0}, {1})", a, b)` → 布尔前缀 + `{i}` 参数替换
      *  - `apply(sql)`（sql 为运行时变量）→ 无法静态渲染，忽略
+     *
+     * M12：布尔前缀不再丢弃 false 条件，而是固化为动态条件 toggle（默认排除，生成层过滤）。
      */
     private fun parseApply(call: WrapperCall): Condition? {
         val args = call.args
         if (args.isEmpty()) return null
         val first = args[0]
-        val firstLiteral = (first.asValue() as? SqlValue.Literal)?.unquoted
-        // 布尔条件前缀：args>=2 且首参为布尔字面量或运行时表达式（非字符串字面量）
-        val startIndex = if (args.size >= 2 && (firstLiteral == "true" || firstLiteral == "false" || first !is WrapperArg.ValueArg)) {
-            1
-        } else {
-            0
+        // 布尔条件前缀：args>=2 且首参为布尔字面量（true/false）或运行时布尔表达式（占位符/非值实参）
+        val flagValue = first.asValue()
+        val hasFlag = args.size >= 2 && when {
+            flagValue is SqlValue.Literal -> flagValue.unquoted == "true" || flagValue.unquoted == "false"
+            flagValue is SqlValue.Placeholder -> true
+            first !is WrapperArg.ValueArg -> true
+            else -> false
         }
+        val startIndex = if (hasFlag) 1 else 0
         if (args.size <= startIndex) return null
         val template = (args.getOrNull(startIndex).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-        // 布尔前缀为字面量 false → 条件整体禁用
-        if (startIndex == 1 && firstLiteral == "false") return null
         val values = args.drop(startIndex + 1).mapNotNull { it.asValue() }
         var sql = template
         for ((index, value) in values.withIndex()) {
             sql = sql.replace("{$index}", renderFuncValue(value))
         }
-        return Condition.Raw(sql)
+        val toggle = if (hasFlag) {
+            val flagSource = when (val f = first) {
+                is WrapperArg.ValueArg -> when (val v = f.value) {
+                    is SqlValue.Literal -> v.unquoted
+                    is SqlValue.Placeholder -> v.source
+                    else -> null
+                }
+                else -> null
+            }
+            ConditionToggle(
+                id = "c${toggleSeq++}",
+                flagSource = flagSource,
+                defaultEnabled = flagSource != "false",
+                label = SqlGenerator.renderConditionText(Condition.Raw(sql)),
+                emptyRule = detectEmptyRule(flagSource),
+            )
+        } else {
+            null
+        }
+        return Condition.Raw(sql, toggle = toggle)
     }
 
     /** 取调用中所有列实参（带主表别名前缀）。 */

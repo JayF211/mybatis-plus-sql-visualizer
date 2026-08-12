@@ -8,6 +8,21 @@ package cn.song.mybatisplus.visualizer.model
  */
 sealed class Condition {
 
+    /** 动态条件元数据（M12）：布尔条件重载的解析产物，null 表示该条件不可勾选（非动态）。 */
+    abstract val toggle: ConditionToggle?
+
+    /** 复制并挂载/替换动态条件元数据（M12）。非动态条件传 null 保持原样。 */
+    fun withToggle(toggle: ConditionToggle?): Condition = when (this) {
+        is Simple -> copy(toggle = toggle)
+        is Unary -> copy(toggle = toggle)
+        is In -> copy(toggle = toggle)
+        is Between -> copy(toggle = toggle)
+        is Like -> copy(toggle = toggle)
+        is Group -> copy(toggle = toggle)
+        is ColumnComparison -> copy(toggle = toggle)
+        is Raw -> copy(toggle = toggle)
+    }
+
     /**
      * 二元比较条件：`column op value`。
      *
@@ -17,6 +32,7 @@ sealed class Condition {
         val column: ColumnRef,
         val op: String,
         val value: SqlValue,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -25,6 +41,7 @@ sealed class Condition {
     data class Unary(
         val column: ColumnRef,
         val op: String, // "IS NULL" 或 "IS NOT NULL"
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -34,6 +51,7 @@ sealed class Condition {
         val column: ColumnRef,
         val negated: Boolean,
         val values: List<SqlValue>,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -44,6 +62,7 @@ sealed class Condition {
         val negated: Boolean,
         val lo: SqlValue,
         val hi: SqlValue,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -54,6 +73,7 @@ sealed class Condition {
         val negated: Boolean,
         val pattern: SqlValue,
         val position: LikePosition,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -65,6 +85,7 @@ sealed class Condition {
     data class Group(
         val connector: Connector,
         val children: List<Condition>,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -75,6 +96,7 @@ sealed class Condition {
     data class ColumnComparison(
         val left: ColumnRef,
         val right: ColumnRef,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 
     /**
@@ -82,6 +104,7 @@ sealed class Condition {
      */
     data class Raw(
         val sqlText: String,
+        override val toggle: ConditionToggle? = null,
     ) : Condition()
 }
 
