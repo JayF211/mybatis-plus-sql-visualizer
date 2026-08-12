@@ -198,8 +198,8 @@ class SqlLexer : LexerBase() {
     private fun cAt(index: Int): Char = if (index < myEnd) myBuffer[index] else '\u0000'
 
     companion object {
-        /** SQL 关键字（大写，去重）。 */
-        private val KEYWORDS = setOf(
+        /** SQL 关键字（大写，去重；补全器复用）。 */
+        internal val KEYWORDS = setOf(
             "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "NULL", "IS", "IN", "BETWEEN", "LIKE", "EXISTS",
             "GROUP", "BY", "ORDER", "ASC", "DESC", "HAVING", "LIMIT", "OFFSET", "DISTINCT", "ALL",
             "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "ON", "AS", "USING", "UNION",

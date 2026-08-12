@@ -50,6 +50,14 @@
 
         <!-- 悬停预览（F-06）：光标悬停显示 SQL 文档弹层 -->
         <documentationProvider implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewDocumentationProvider"/>
+
+        <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
+        <lang.parserDefinition language="MP_SQL_Preview"
+                               implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlParserDefinition"/>
+        <completion.contributor language="MP_SQL_Preview"
+                               implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
+        <fileType name="MP_SQL_Preview" extensions="mpsql" language="MP_SQL_Preview"
+                  implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewFileType"/>
     </extensions>
     <extensions defaultExtensionNs="org.jetbrains.kotlin">
         <supportsKotlinPluginMode supportsK2="true"/>

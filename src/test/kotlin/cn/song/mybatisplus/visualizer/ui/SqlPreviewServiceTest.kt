@@ -473,6 +473,34 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, result.wrapperType)
     }
 
+    fun testPreviewPastedSnippetWithoutEntityClass() {
+        // 模拟工具窗口粘贴：片段无实体类定义，按类型参数类名命名策略兜底表名（M9 增强）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query() {
+                    merchantService.getOne(Wrappers.<MerchantEntity>lambdaQuery()
+                            .select(MerchantEntity::getId)
+                            .eq(MerchantEntity::getPhone, "138"));
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(myFixture.file)
+        assertNotNull("无实体类定义也应产出预览（命名策略兜底）", result)
+        assertEquals(
+            """
+            SELECT id
+            FROM merchant_entity
+            WHERE phone = '138'
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     fun testPreviewBatchUpdate() {
         myFixture.configureByText(
             "Demo.java",

@@ -95,6 +95,7 @@ class SqlPreviewService(private val project: Project) {
             wrapperType = wrapperType,
             tableName = table.tableName,
             warning = buildWarning(statement),
+            columns = table.allColumnNames,
         )
     }
 

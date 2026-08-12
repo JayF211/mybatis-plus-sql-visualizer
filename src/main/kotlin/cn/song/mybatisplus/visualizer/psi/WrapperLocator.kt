@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.psi
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
@@ -120,8 +121,8 @@ object WrapperLocator {
      */
     private fun buildChainFromNew(newExpr: PsiNewExpression): LocatedWrapper? {
         val wrapperType = detectWrapperType(newExpr.type) ?: return null
-        val entityClass = resolveEntityClass(newExpr.type)
-        val table: TableInfo? = entityClass?.let { EntityResolver().resolve(it) }
+        val (entityClass, typeArgName) = entityInfoFromType(newExpr.type)
+        val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
         val constructorAlias = extractConstructorAlias(newExpr)
 
         // 宿主 = 包含该 new 表达式的最外层表达式（如 list(new W().select(...).eq(...)) 的整个调用）
@@ -180,8 +181,11 @@ object WrapperLocator {
      */
     private fun buildChainFromFactory(factoryCall: PsiMethodCallExpression): LocatedWrapper? {
         val wrapperType = factoryWrapperType(factoryCall) ?: return null
-        val entityClass = resolveFactoryEntityClass(factoryCall)
-        val table: TableInfo? = entityClass?.let { EntityResolver().resolve(it) }
+        // 实体类优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()`），失败时用类名按命名策略兜底
+        val typeArg = factoryCall.typeArguments.firstOrNull() as? PsiClassType
+        val entityClass = typeArg?.resolve() ?: resolveEntityClass(factoryCall.type)
+        val typeArgName = typeArg?.className
+        val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
 
         // 宿主 = 包含该工厂调用的最外层表达式（如 getOne(Wrappers.<T>lambdaQuery()...) 的整个调用）
         var host: PsiElement = factoryCall
@@ -231,15 +235,6 @@ object WrapperLocator {
             else -> null
         }
 
-    /**
-     * 解析工厂调用的实体类：优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()` 的 `<MerchantEntity>`），
-     * 失败时回退调用返回类型（真实项目 Wrappers 可解析时）。
-     */
-    private fun resolveFactoryEntityClass(call: PsiMethodCallExpression): PsiClass? {
-        (call.typeArguments.firstOrNull() as? PsiClassType)?.let { return it.resolve() }
-        return resolveEntityClass(call.type)
-    }
-
     // ------------------------------------------------------------------
     // 构建调用链
     // ------------------------------------------------------------------
@@ -253,8 +248,8 @@ object WrapperLocator {
      */
     private fun buildChain(variable: PsiVariable): LocatedWrapper? {
         val wrapperType = detectWrapperType(variable.type) ?: return null
-        val entityClass = resolveEntityClass(variable.type)
-        val table: TableInfo? = entityClass?.let { EntityResolver().resolve(it) }
+        val (entityClass, typeArgName) = entityInfoFromType(variable.type)
+        val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
         val constructorAlias = extractConstructorAlias(variable.initializer)
 
         val callElements = mutableListOf<PsiMethodCallExpression>()
@@ -378,5 +373,31 @@ object WrapperLocator {
         if (parameters.isEmpty()) return null
         val entityType = parameters[0] as? PsiClassType ?: return null
         return entityType.resolve()
+    }
+
+    /**
+     * 从 Wrapper 类型解析 (实体类, 类型参数类名)。
+     *
+     * 实体类可能不可解析（如粘贴片段无实体类定义）：此时类型参数类名仍可获取，
+     * 供 [resolveTableInfo] 按命名策略兜底推断表名。
+     */
+    private fun entityInfoFromType(type: PsiType?): Pair<PsiClass?, String?> {
+        val classType = type as? PsiClassType ?: return null to null
+        val param = classType.parameters.firstOrNull() as? PsiClassType
+        return param?.resolve() to param?.className
+    }
+
+    /**
+     * 解析实体表信息；实体类不可解析时，用类型参数类名按命名策略推断表名
+     * （列名由 getter → 命名策略兜底，见 [cn.song.mybatisplus.visualizer.psi.ArgResolver.resolveLambdaColumn]）。
+     */
+    private fun resolveTableInfo(entityClass: PsiClass?, typeArgName: String?): TableInfo? {
+        entityClass?.let { return EntityResolver().resolve(it) }
+        val name = typeArgName ?: return null
+        return TableInfo(
+            entityClassName = name,
+            tableName = NamingStrategy.toSnakeCase(name),
+            columns = emptyList(),
+        )
     }
 }

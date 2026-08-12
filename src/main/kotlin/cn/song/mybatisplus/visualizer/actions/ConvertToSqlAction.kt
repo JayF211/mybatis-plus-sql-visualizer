@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.SqlToolWindow
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -40,7 +42,14 @@ class ConvertToSqlAction : AnAction() {
             return
         }
 
-        SqlPreviewDialog(project, result).show()
+        // 按显示方式（F-16）：弹窗 / 工具窗口 / 两者
+        val mode = service.displayMode()
+        if (mode != PluginSettings.DISPLAY_TOOL_WINDOW) {
+            SqlPreviewDialog(project, result).show()
+        }
+        if (mode != PluginSettings.DISPLAY_DIALOG) {
+            SqlToolWindow.showResult(project, result)
+        }
     }
 
     // update() 读取 PSI，必须在后台线程执行（EDT 上请求 PSI_FILE 会抛异常）
