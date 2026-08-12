@@ -10,7 +10,7 @@ import com.intellij.openapi.components.Storage
  * 插件配置状态（T-M5-01，F-16 配置项持久化）。
  *
  * application-level service（全局配置，跨项目共享），经 XmlSerializer 持久化
- * 到 `MP SQL Visualizer` 配置目录。修改后由 [PluginSettingsConfigurable.apply] 写回即生效。
+ * 到 `MyBatis-Plus SQL Visualizer` 配置目录。修改后由 [PluginSettingsConfigurable.apply] 写回即生效。
  */
 @State(name = "MpSqlVisualizerSettings", storages = [Storage("mp-sql-visualizer.xml")])
 @Service(Service.Level.APP)
@@ -38,6 +38,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */
         var showGutterIcon: Boolean = true,
+
+        /** 插件界面语言（M14）：默认 `zh`（简体中文）；`en`=English；`AUTO`=跟随 IDE。 */
+        var language: String = DEFAULT_LANGUAGE,
     )
 
     private var state = State()
@@ -51,6 +54,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
         const val DEFAULT_HOVER_DELAY = 500
+
+        /** 默认界面语言（M14，用户要求默认中文）。 */
+        const val DEFAULT_LANGUAGE = "zh"
 
         /**
          * 获取全局配置实例。

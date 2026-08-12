@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+- M14 设置页增强 + 弹窗自适应 + 插件名统一（v1.8）：
+  - **界面语言切换**：`PluginSettings.language`（**默认简体中文**，用户要求）；`MpSqlVisualizerBundle` 由 DynamicBundle 改为自管理 ResourceBundle（UTF-8 Control 读取，zh/en/AUTO 三态，测试环境兜底中文）；设置页「界面语言」下拉，保存后重建表单即时生效（弹窗/tooltip 天然即时）
+  - **快捷键入口**：设置页展示 Convert to SQL 当前快捷键（KeymapUtil）+「修改快捷键…」按钮一键跳转 IDE Keymap 设置
+  - **弹窗自适应**：`SqlPreviewDialog` 默认尺寸按屏幕比例（宽 62%/高 65%，下限 900×600、上限 85%，小屏不超屏），`getDimensionServiceKey` 记忆用户拉伸尺寸，最小尺寸 640×420
+  - **插件名全局统一**：`MyBatis-Plus SQL Visualizer`（bundle 3 键 ×2 语言、代码注释、CHANGELOG/开发计划/需求文档全量替换；内部标识 plugin id/Storage/类名不变）
+  - **构建自检**：`PluginDistributionSelfCheckTest`（plugin.xml configurable 注册、META-INF 图标约定路径、插件名、bundle 默认中文断言）+ `SqlPreviewDialogSizeTest`（尺寸策略 mock 屏幕）；插件图标改为主 JAR `META-INF/pluginIcon.svg` 官方规范位置（详见《20260813-0000-设置页修复与弹窗自适应-开发计划.md》）
+
 ### Changed
 - M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：
   - 模型：删除 `EmptyValueRule` 枚举与 `ConditionToggle.emptyRule`/`ConditionView.emptyRule`（判空语义识别下线）；`ColumnInfo` 新增 `fieldType`（实体字段类型，`EntityResolver` 记录）；新增 `sql/ParamHint`（引号/LIKE 位置回填提示），`GeneratedSql.paramHints`/`PreviewResult.paramHints` 与 `unresolvedParams` 并行
@@ -79,7 +87,7 @@
   - SqlPreviewService 全类型分发 + 无 WHERE 红色警示
 - M5 配置系统（F-16/F-14）：
   - PluginSettings（PersistentStateComponent，持久化到 mp-sql-visualizer.xml）
-  - PluginSettingsConfigurable（Settings → Tools → MP SQL Visualizer）
+  - PluginSettingsConfigurable（Settings → Tools → MyBatis-Plus SQL Visualizer）
   - Dialect SPI（MySQL/PostgreSQL/Oracle 分页与标识符差异）
 - M6 高级特性与发布（F-15）：
   - 批量操作识别：updateBatchById/saveBatch/insertBatchSomeColumn/removeByIds → 批量 SQL 模板 + 参数组

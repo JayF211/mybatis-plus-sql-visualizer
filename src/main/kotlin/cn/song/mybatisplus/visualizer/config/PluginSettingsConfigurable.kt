@@ -23,7 +23,12 @@ class PluginSettingsConfigurable : Configurable {
 
     override fun isModified(): Boolean = panel.isModified()
 
-    override fun apply() = panel.apply()
+    /**
+     * 保存配置；界面语言变化时重建表单（设置页自身文案即时切换，M14）。
+     */
+    override fun apply() {
+        if (panel.apply()) panel.rebuild()
+    }
 
     override fun reset() = panel.reset()
 }

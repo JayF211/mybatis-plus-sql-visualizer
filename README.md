@@ -51,7 +51,13 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 ### 配置
 
 `Settings → Tools → MyBatis-Plus SQL Visualizer`：数据库方言、参数替换、格式化、
-自动预览、悬停延迟。
+自动预览、悬停延迟、**界面语言**（默认简体中文，可切 English / 跟随系统）、
+**快捷键**（展示当前快捷键 + 一键跳转 Keymap 修改）。
+
+### SQL 预览弹窗
+
+弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸，
+**尺寸自动记忆**（下次打开保持）；左侧动态条件复选框 + 参数输入，右侧 SQL 可编辑。
 
 ## 📁 文档
 
