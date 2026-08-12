@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionToggle
 import cn.song.mybatisplus.visualizer.model.Connector
-import cn.song.mybatisplus.visualizer.model.EmptyValueRule
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -293,26 +292,13 @@ class QueryWrapperParser(
     /** 一元条件方法（isNull/isNotNull 布尔重载形态为 [flag, col] 2 参，区别于 3 参二元方法）。 */
     private val UNARY_METHODS = setOf("isNull", "isNotNull")
 
-    /** 单值占位符条件方法（判空方法静态求值仅对这些方法安全；in/between 多值不参与）。 */
-    private val SINGLE_VALUE_METHODS = setOf("eq", "ne", "gt", "ge", "lt", "le", "like", "notLike", "likeLeft", "likeRight")
-
-    /** 判非 null 形态：`isNotNull(` / `nonNull(` / `!= null` / `null !=`。 */
-    private val NULL_CHECK_REGEX = Regex("""(?i)(isNotNull|nonNull)\s*\(|!=\s*null\b|\bnull\s*!=""")
-
-    /** 判空/空白方法名：`isNotBlank(` / `isNotEmpty(` / `hasText(` / `isBlank(`。 */
-    private val BLANK_CHECK_REGEX = Regex("""\b(isNotBlank|isNotEmpty|hasText|isBlank)\s*\(""")
-
-    /** 反向判空方法名：`isNull(` / `isEmpty(` / `isNullOrEmpty(`（值空才拼接，第一版按 SKIP_ON_BLANK 兜底，见 M12-R7）。 */
-    private val REVERSE_CHECK_REGEX = Regex("""\b(isNull|isEmpty|isNullOrEmpty)\s*\(""")
-
     /**
-     * 布尔条件重载分析结果：剥离布尔标志后的调用 + 动态条件 toggle 预置信息（值来源/标签由条件构建后补填）。
+     * 布尔条件重载分析结果：剥离布尔标志后的调用 + 动态条件 toggle 预置信息（默认勾选态/标志来源）。
      */
     private data class FlagAnalysis(
         val call: WrapperCall,
         val flagSource: String?,
         val defaultEnabled: Boolean,
-        val emptyRule: EmptyValueRule,
     )
 
     /**
@@ -321,6 +307,9 @@ class QueryWrapperParser(
      *
      * 标志判定：一元方法（isNull/isNotNull）标志形态为 [flag, col]（2 参）；
      * 其余为 [flag, col, val...]（≥3 参）。首参为 ColumnArg 等列引用时恒非标志。
+     *
+     * M13 简化：不再识别判空语义（isNotBlank/isNotNull 等）、不做静态求值，
+     * 默认勾选态仅按字面量 true/false 判定，运行时布尔一律默认勾选（复选框纯手动）。
      */
     private fun WrapperCall.analyzeFlag(): FlagAnalysis? {
         if (methodName !in CONDITION_METHODS) return null
@@ -334,17 +323,8 @@ class QueryWrapperParser(
             is SqlValue.Literal -> firstValue.unquoted
             is SqlValue.Placeholder -> firstValue.source
         }
-        val literalFlag = (firstValue as? SqlValue.Literal)?.unquoted
-        val emptyRule = detectEmptyRule(flagText)
-        val value = args.getOrNull(2).asValue()
-        val defaultEnabled = when {
-            literalFlag == "true" -> true
-            literalFlag == "false" -> false
-            // 运行时布尔：判空方法可静态求值（值已知字面量）→ 按语义求出；否则默认启用
-            methodName in SINGLE_VALUE_METHODS -> evaluateCheck(flagText, value) ?: true
-            else -> true
-        }
-        return FlagAnalysis(WrapperCall(methodName, args.drop(1)), flagText, defaultEnabled, emptyRule)
+        val defaultEnabled = (firstValue as? SqlValue.Literal)?.unquoted != "false"
+        return FlagAnalysis(WrapperCall(methodName, args.drop(1)), flagText, defaultEnabled)
     }
 
     /**
@@ -356,7 +336,6 @@ class QueryWrapperParser(
             flagSource = analysis.flagSource,
             defaultEnabled = analysis.defaultEnabled,
             label = SqlGenerator.renderConditionText(this),
-            emptyRule = analysis.emptyRule,
             valueSource = valueSourceOf(this),
         )
         return withToggle(toggle)
@@ -367,44 +346,13 @@ class QueryWrapperParser(
         if (analysis == null) this else this?.bindToggle(analysis)
 
     /**
-     * 条件关联的未解析参数来源：单值占位符条件（Simple/Like）取占位符 source，供面板值输入框绑定与空值联动；
+     * 条件关联的未解析参数来源：单值占位符条件（Simple/Like）取占位符 source，供面板值输入框绑定；
      * 多值/无值条件（in/between/一元/raw/分组）第一版无独立值输入框（checkbox-only）。
      */
     private fun valueSourceOf(condition: Condition): String? = when (condition) {
         is Condition.Simple -> (condition.value as? SqlValue.Placeholder)?.source
         is Condition.Like -> (condition.pattern as? SqlValue.Placeholder)?.source
         else -> null
-    }
-
-    /**
-     * 判空语义识别（M12，用户补充）：从布尔实参源码文本判定空字符串是否拼接。
-     * 仅匹配方法调用形态（限定名.方法名(）与 `!= null`/`null !=` 二元比较，避免误判（M12-R8）。
-     */
-    private fun detectEmptyRule(flagSource: String?): EmptyValueRule {
-        if (flagSource == null) return EmptyValueRule.UNKNOWN
-        val s = flagSource.trim()
-        return when {
-            NULL_CHECK_REGEX.containsMatchIn(s) -> EmptyValueRule.SKIP_ON_NULL
-            BLANK_CHECK_REGEX.containsMatchIn(s) -> EmptyValueRule.SKIP_ON_BLANK
-            REVERSE_CHECK_REGEX.containsMatchIn(s) -> EmptyValueRule.SKIP_ON_BLANK // 反向判空第一版兜底（M12-R7）
-            else -> EmptyValueRule.UNKNOWN
-        }
-    }
-
-    /**
-     * 判空方法静态求值（M12）：布尔实参为已知判空方法调用且值可静态求值时，求出默认勾选态。
-     * 值不可静态求值（运行时占位符）返回 null。
-     */
-    private fun evaluateCheck(flagText: String, value: SqlValue?): Boolean? {
-        val literal = value as? SqlValue.Literal ?: return null
-        val isNull = literal.unquoted.equals("null", ignoreCase = true) || literal.raw == "NULL"
-        val s = flagText.trim()
-        return when {
-            NULL_CHECK_REGEX.containsMatchIn(s) -> !isNull
-            BLANK_CHECK_REGEX.containsMatchIn(s) -> if (isNull) false else literal.unquoted.isNotBlank()
-            REVERSE_CHECK_REGEX.containsMatchIn(s) -> if (isNull) true else literal.unquoted.isEmpty()
-            else -> null
-        }
     }
 
     /**
@@ -466,7 +414,6 @@ class QueryWrapperParser(
                 is WrapperArg.ValueArg -> when (val v = f.value) {
                     is SqlValue.Literal -> v.unquoted
                     is SqlValue.Placeholder -> v.source
-                    else -> null
                 }
                 else -> null
             }
@@ -475,7 +422,6 @@ class QueryWrapperParser(
                 flagSource = flagSource,
                 defaultEnabled = flagSource != "false",
                 label = SqlGenerator.renderConditionText(Condition.Raw(sql)),
-                emptyRule = detectEmptyRule(flagSource),
             )
         } else {
             null

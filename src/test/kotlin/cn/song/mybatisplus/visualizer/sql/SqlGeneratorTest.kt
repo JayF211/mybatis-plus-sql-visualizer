@@ -213,4 +213,78 @@ class SqlGeneratorTest {
             sql,
         )
     }
+
+    // ------------------------------------------------------------------
+    // M13：回填提示（paramHints 与 unresolvedParams 并行；SQL 文本不变）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `占位符参数_回填提示按列类型与LIKE位置`() {
+        // id 数值列、name 字符串列、code 无类型（未知）
+        val typedTable = TableInfo(
+            entityClassName = "DeviceInfoEntity",
+            tableName = "car_device_info",
+            columns = listOf(
+                ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
+                ColumnInfo("name", "name", fieldType = "java.lang.String"),
+                ColumnInfo("code", "code"),
+            ),
+        )
+        val statement = SelectStatement(
+            table = typedTable,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar")),
+                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Placeholder("idVar")),
+                Condition.Simple(ColumnRef(columnName = "code"), "=", SqlValue.Placeholder("codeVar")),
+                Condition.Like(ColumnRef(columnName = "name"), negated = false, pattern = SqlValue.Placeholder("likeVar"), position = LikePosition.ANYWHERE),
+                Condition.Like(ColumnRef(columnName = "name"), negated = false, pattern = SqlValue.Placeholder("likeLeftVar"), position = LikePosition.LEFT),
+                Condition.Like(ColumnRef(columnName = "name"), negated = false, pattern = SqlValue.Placeholder("likeRightVar"), position = LikePosition.RIGHT),
+            ),
+        )
+        val generated = SqlGenerator.generateWithParams(statement)
+
+        // SQL 文本与 M12 基线一致（`?` 无引号/百分号，提示为附加信息）
+        assertEquals(
+            """
+            SELECT id, name, code
+            FROM car_device_info
+            WHERE name = ?
+                AND id = ?
+                AND code = ?
+                AND name LIKE ?
+                AND name LIKE ?
+                AND name LIKE ?
+            """.trimIndent(),
+            generated.sql,
+        )
+        // hints 与 unresolvedParams 一一对应
+        assertEquals(
+            listOf("nameVar", "idVar", "codeVar", "likeVar", "likeLeftVar", "likeRightVar"),
+            generated.unresolvedParams,
+        )
+        assertEquals(
+            listOf(
+                ParamHint(quote = true),                          // String 列恒引号
+                ParamHint(quote = false),                         // 数值列恒原样
+                ParamHint(quote = null),                          // 类型未知
+                ParamHint(quote = true, likePosition = LikePosition.ANYWHERE), // LIKE 恒引号 + %位置
+                ParamHint(quote = true, likePosition = LikePosition.LEFT),
+                ParamHint(quote = true, likePosition = LikePosition.RIGHT),
+            ),
+            generated.paramHints,
+        )
+    }
+
+    @Test
+    fun `无占位符_无回填提示`() {
+        val statement = SelectStatement(
+            table = table,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1001")),
+            ),
+        )
+        val generated = SqlGenerator.generateWithParams(statement)
+        assertEquals(emptyList<String>(), generated.unresolvedParams)
+        assertEquals(emptyList<ParamHint>(), generated.paramHints)
+    }
 }

@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.Connector
-import cn.song.mybatisplus.visualizer.model.EmptyValueRule
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SqlValue
@@ -374,7 +373,6 @@ class QueryWrapperParserTest {
         assertEquals("c0", t0.id)
         assertEquals("true", t0.flagSource)
         assertTrue(t0.defaultEnabled)
-        assertEquals(EmptyValueRule.UNKNOWN, t0.emptyRule)
         assertNull(t0.valueSource)
         assertEquals("id = 1", t0.label)
 
@@ -393,39 +391,29 @@ class QueryWrapperParserTest {
     }
 
     @Test
-    fun `判空语义识别`() {
+    fun `布尔重载_defaultEnabled三态_运行时布尔一律默认勾选`() {
         fun toggle(flag: String) =
-            parser.parse(flaggedEq(flag, SqlValue.Literal("'x'", "x"))).conditions[0].toggle!!
+            parser.parse(flaggedEq(flag, SqlValue.Placeholder("name"))).conditions[0].toggle!!
 
-        // 判空/空白 → SKIP_ON_BLANK
-        assertEquals(EmptyValueRule.SKIP_ON_BLANK, toggle("StringUtils.isNotBlank(name)").emptyRule)
-        assertEquals(EmptyValueRule.SKIP_ON_BLANK, toggle("StrUtil.isNotEmpty(name)").emptyRule)
-        assertEquals(EmptyValueRule.SKIP_ON_BLANK, toggle("hasText(name)").emptyRule)
-        // 判非 null → SKIP_ON_NULL
-        assertEquals(EmptyValueRule.SKIP_ON_NULL, toggle("Objects.nonNull(name)").emptyRule)
-        assertEquals(EmptyValueRule.SKIP_ON_NULL, toggle("name != null").emptyRule)
-        assertEquals(EmptyValueRule.SKIP_ON_NULL, toggle("null != name").emptyRule)
-        // 纯布尔变量 → UNKNOWN
-        assertEquals(EmptyValueRule.UNKNOWN, toggle("isActive").emptyRule)
-    }
+        // M13 简化：不再识别判空语义——判空/判非 null 的运行时布尔表达式一律默认勾选（复选框纯手动）
+        assertTrue(toggle("isActive").defaultEnabled)
+        assertTrue(toggle("StringUtils.isNotBlank(name)").defaultEnabled)
+        assertTrue(toggle("StrUtil.isNotEmpty(name)").defaultEnabled)
+        assertTrue(toggle("name != null").defaultEnabled)
+        assertTrue(toggle("Objects.nonNull(name)").defaultEnabled)
+        assertTrue("判空方法表达式默认勾选", toggle("hasText(name)").defaultEnabled)
 
-    @Test
-    fun `判空静态求值_默认勾选态`() {
-        // isNotBlank("") → false：默认排除（空字符串不拼接）
-        val blank = parser.parse(flaggedEq("StringUtils.isNotBlank(name)", SqlValue.Literal("''", ""))).conditions[0].toggle!!
-        assertFalse("空字符串判空应默认排除", blank.defaultEnabled)
-
-        // "" != null → true：默认拼接（空字符串是合法值）
-        val notNull = parser.parse(flaggedEq("name != null", SqlValue.Literal("''", ""))).conditions[0].toggle!!
-        assertTrue("空字符串判非 null 应默认拼接", notNull.defaultEnabled)
-
-        // null != null → false：null 值判非 null 默认排除
-        val nullValue = parser.parse(flaggedEq("name != null", SqlValue.Literal("NULL"))).conditions[0].toggle!!
-        assertFalse("null 判非 null 应默认排除", nullValue.defaultEnabled)
-
-        // 值不可静态求值（运行时占位符）→ 默认启用
-        val runtime = parser.parse(flaggedEq("StringUtils.isNotBlank(name)", SqlValue.Placeholder("name"))).conditions[0].toggle!!
-        assertTrue("运行时值应默认启用", runtime.defaultEnabled)
+        // 字面量 true/false 仍按字面量定默认勾选态
+        fun literalEq(flag: String) = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(WrapperCall("eq", listOf(
+                WrapperArg.ValueArg(SqlValue.Literal(flag)),
+                WrapperArg.ColumnArg(ColumnRef(columnName = "name")),
+                WrapperArg.ValueArg(SqlValue.Literal("1")),
+            ))),
+        )
+        assertTrue(parser.parse(literalEq("true")).conditions[0].toggle!!.defaultEnabled)
+        assertFalse(parser.parse(literalEq("false")).conditions[0].toggle!!.defaultEnabled)
     }
 
     @Test
@@ -493,8 +481,8 @@ class QueryWrapperParserTest {
         assertEquals(2, statement.conditions.size)
         val group = statement.conditions[1] as Condition.Group
         val nested = group.children[0] as Condition.Simple
-        assertEquals("c1", nested.toggle!!.id)
-        assertFalse(nested.toggle!!.defaultEnabled)
+        assertEquals("c1", nested.toggle?.id)
+        assertFalse(nested.toggle?.defaultEnabled!!)
 
         // 默认渲染：组内 false 条件排除 → 组空 → 整组不渲染（无空括号）
         val sql = SqlGenerator.generate(statement)

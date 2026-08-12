@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.model
 import cn.song.mybatisplus.visualizer.sql.Dialect
 
 /**
- * SQL 预览模型（M12）：供预览面板做**模型级重生成**（动态条件勾选 / 空值联动）。
+ * SQL 预览模型（M12）：供预览面板做**模型级重生成**（动态条件勾选）。
  *
  * @param statement      语句模型（含动态条件 toggle 元数据）
  * @param dialect        方言（重生成分页子句用）
@@ -24,7 +24,6 @@ data class SqlPreviewModel(
  * @param label          人读条件文本（复选框标签）
  * @param flagSource     布尔条件实参源码（tooltip），null 表示非布尔重载
  * @param defaultEnabled 默认勾选态
- * @param emptyRule      空值语义（驱动输入框空值行为）
  * @param valueSource    关联值输入框来源；null 表示 checkbox-only（无输入框）
  */
 data class ConditionView(
@@ -32,6 +31,5 @@ data class ConditionView(
     val label: String,
     val flagSource: String?,
     val defaultEnabled: Boolean,
-    val emptyRule: EmptyValueRule,
     val valueSource: String?,
 )

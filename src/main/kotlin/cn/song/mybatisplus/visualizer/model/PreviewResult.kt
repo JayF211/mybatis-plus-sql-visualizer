@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.ParamHint
+
 /**
  * 预览结果（M3-01 整合层产物）：一次 Wrapper 转换的完整展示数据。
  *
@@ -11,8 +13,10 @@ package cn.song.mybatisplus.visualizer.model
  * @param tableName        目标表名（UI 可展示）
  * @param warning          风险警示（如 UPDATE/DELETE 无 WHERE 条件），null 表示无
  * @param columns          实体列名（snake_case，M9 补全上下文用）
- * @param previewModel     预览模型（M12）：语句模型 + 动态条件行，供面板勾选/空值联动时模型级重生成；
+ * @param previewModel     预览模型（M12）：语句模型 + 动态条件行，供面板勾选时模型级重生成；
  *                         null 表示无可勾选动态条件（批量操作等走旧文本渲染路径）
+ * @param paramHints       与 [unresolvedParams] 并行的回填提示（M13）：引号/LIKE 百分号，
+ *                         旧文本路径（previewModel=null）回填用
  */
 data class PreviewResult(
     val sql: String,
@@ -24,4 +28,5 @@ data class PreviewResult(
     val warning: String? = null,
     val columns: List<String> = emptyList(),
     val previewModel: SqlPreviewModel? = null,
+    val paramHints: List<ParamHint> = emptyList(),
 )

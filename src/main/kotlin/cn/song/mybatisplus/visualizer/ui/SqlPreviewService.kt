@@ -127,6 +127,7 @@ class SqlPreviewService(private val project: Project) {
             warning = buildWarning(statement),
             columns = table.allColumnNames,
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+            paramHints = generated.paramHints,
         )
     }
 
@@ -140,7 +141,7 @@ class SqlPreviewService(private val project: Project) {
     /** 单个条件节点 → 条件视图（自身 toggle + 嵌套 Group 子节点递归）。 */
     private fun Condition.toConditionViews(): List<ConditionView> {
         val own = toggle?.let {
-            ConditionView(it.id, it.label, it.flagSource, it.defaultEnabled, it.emptyRule, it.valueSource)
+            ConditionView(it.id, it.label, it.flagSource, it.defaultEnabled, it.valueSource)
         }
         val nested = when (this) {
             is Condition.Group -> children.flatMap { it.toConditionViews() }

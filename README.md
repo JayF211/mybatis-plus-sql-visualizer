@@ -7,8 +7,8 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 
 - **Wrapper 全覆盖**：`LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper` /
   `MPJLambdaWrapper` / `MPJQueryWrapper`
-- **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）
-- **动态条件**：布尔重载 `.eq(true, "name", val)` 在预览左栏提供**复选框开关**；判空条件（`isNotBlank` 等）空值不拼接、判非 null 条件（`!= null` 等）空值拼接为 `''`
+- **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）；**LIKE 自动拼百分号**（`like` → `'%值%'`）；**字段类型推断引号**（String 列输入数字恒加引号 `'123'`，数值列恒原样）
+- **动态条件**：布尔重载 `.eq(true, "name", val)` 在预览左栏提供**复选框开关**（纯手动勾选：勾选拼接、取消移除；字面量 `false` 默认不勾选）
 - **SQL 格式化**：关键字大写、子句换行缩进，支持格式化/单行两种视图
 - **多种触发方式**：右键菜单 / 快捷键（默认 `Ctrl+Alt+S`）/ 光标悬停 / 代码左侧 gutter 图标，一键复制
 - **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染）

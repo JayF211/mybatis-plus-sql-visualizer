@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
 
 /**
@@ -16,10 +17,13 @@ import cn.song.mybatisplus.visualizer.model.UpdateStatement
  *
  * @param sql              生成的 SQL（未解析参数渲染为 `?`）
  * @param unresolvedParams 按出现顺序的未解析参数来源（变量名/表达式文本）
+ * @param paramHints       与 [unresolvedParams] 并行的回填提示（M13）：引号与 LIKE 百分号，
+ *                         供面板按用户输入值回填渲染；无上下文信息时为空
  */
 data class GeneratedSql(
     val sql: String,
     val unresolvedParams: List<String>,
+    val paramHints: List<ParamHint> = emptyList(),
 )
 
 /**
@@ -65,17 +69,17 @@ object SqlGenerator {
         compact: Boolean,
         dialect: Dialect = MySqlDialect,
         enabledConditionIds: Set<String>? = null,
-    ): String = generateInternal(statement, compact, null, dialect, enabledConditionIds)
+    ): String = generateInternal(statement, compact, null, null, dialect, enabledConditionIds)
 
     /**
-     * 生成 SQL 并收集未解析参数来源（F-02 参数替换与对照表）。
+     * 生成 SQL 并收集未解析参数来源与回填提示（F-02 参数替换与对照表，M13 hints）。
      *
      * @param statement          语句模型
      * @param compact            true=单行模式，false=多行缩进模式
      * @param dialect            数据库方言（影响分页子句）
      * @param enabledConditionIds 动态条件启用集合（M12）：仅渲染 id 在该集合内的动态条件；
      *                             null（默认）→ 按各条件 toggle.defaultEnabled 渲染（与 M11 基线一致）
-     * @return SQL 与参数来源列表
+     * @return SQL、参数来源列表与并行的 [ParamHint] 回填提示
      */
     fun generateWithParams(
         statement: SqlStatement,
@@ -84,15 +88,16 @@ object SqlGenerator {
         enabledConditionIds: Set<String>? = null,
     ): GeneratedSql {
         val params = mutableListOf<String>()
-        val sql = generateInternal(statement, compact, params, dialect, enabledConditionIds)
-        return GeneratedSql(sql, params)
+        val hints = mutableListOf<ParamHint>()
+        val sql = generateInternal(statement, compact, params, hints, dialect, enabledConditionIds)
+        return GeneratedSql(sql, params, hints)
     }
 
     /**
      * 渲染单个条件为文本（占位符渲染为 `?`，不收集参数）。
      * 供动态条件复选框标签 / 条件视图复用（M12）。
      */
-    internal fun renderConditionText(condition: Condition): String = renderCondition(condition, null, null)
+    internal fun renderConditionText(condition: Condition): String = renderCondition(condition)
 
     // ------------------------------------------------------------------
     // 内部渲染
@@ -102,12 +107,13 @@ object SqlGenerator {
         statement: SqlStatement,
         compact: Boolean,
         paramSink: MutableList<String>?,
+        hintSink: MutableList<ParamHint>?,
         dialect: Dialect,
         enabledConditionIds: Set<String>?,
     ): String = when (statement) {
-        is SelectStatement -> generateSelect(statement, compact, paramSink, dialect, enabledConditionIds)
-        is UpdateStatement -> generateUpdate(statement, compact, paramSink, enabledConditionIds)
-        is DeleteStatement -> generateDelete(statement, compact, paramSink, enabledConditionIds)
+        is SelectStatement -> generateSelect(statement, compact, paramSink, hintSink, dialect, enabledConditionIds)
+        is UpdateStatement -> generateUpdate(statement, compact, paramSink, hintSink, enabledConditionIds)
+        is DeleteStatement -> generateDelete(statement, compact, paramSink, hintSink, enabledConditionIds)
     }
 
     /** SELECT 渲染（含 MPJ 主表别名与联表子句）。 */
@@ -115,6 +121,7 @@ object SqlGenerator {
         statement: SelectStatement,
         compact: Boolean,
         paramSink: MutableList<String>?,
+        hintSink: MutableList<ParamHint>?,
         dialect: Dialect,
         enabledConditionIds: Set<String>?,
     ): String {
@@ -137,11 +144,13 @@ object SqlGenerator {
 
         // JOIN 子句
         statement.joins.forEach { join ->
-            sb.append(nl).append(renderJoin(join, compact, paramSink, enabledConditionIds))
+            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds))
         }
 
         // WHERE 条件
-        val whereSql = renderConditionList(statement.conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds)
+        val whereSql = renderConditionList(
+            statement.conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds, hintSink, statement.table,
+        )
         if (whereSql.isNotEmpty()) {
             sb.append(nl).append("WHERE ").append(whereSql)
         }
@@ -155,7 +164,7 @@ object SqlGenerator {
         // HAVING
         statement.having?.let { h ->
             if (h.isConditionVisible(enabledConditionIds)) {
-                val havingSql = renderCondition(h, paramSink, enabledConditionIds)
+                val havingSql = renderCondition(h, paramSink, hintSink, statement.table, enabledConditionIds)
                 if (havingSql.isNotEmpty()) sb.append(nl).append("HAVING ").append(havingSql)
             }
         }
@@ -179,6 +188,7 @@ object SqlGenerator {
         statement: UpdateStatement,
         compact: Boolean,
         paramSink: MutableList<String>?,
+        hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
     ): String {
         val nl = if (compact) " " else "\n"
@@ -189,13 +199,15 @@ object SqlGenerator {
             sb.append(statement.sets.joinToString(", ") { set ->
                 when {
                     set.isRaw -> set.rawSql.orEmpty()
-                    set.column != null -> "${set.column.qualifiedName} = ${renderValue(set.value ?: SqlValue.Placeholder("?"), paramSink)}"
+                    set.column != null -> "${set.column.qualifiedName} = ${renderValue(
+                        set.value ?: SqlValue.Placeholder("?"), paramSink, hintSink, quoteHint(statement.table, set.column),
+                    )}"
                     else -> ""
                 }
             })
         }
 
-        appendWhere(sb, statement.conditions, nl, compact, paramSink, enabledConditionIds)
+        appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table)
         return sb.toString()
     }
 
@@ -204,11 +216,12 @@ object SqlGenerator {
         statement: DeleteStatement,
         compact: Boolean,
         paramSink: MutableList<String>?,
+        hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
     ): String {
         val nl = if (compact) " " else "\n"
         val sb = StringBuilder("DELETE FROM ").append(statement.table.tableName)
-        appendWhere(sb, statement.conditions, nl, compact, paramSink, enabledConditionIds)
+        appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table)
         return sb.toString()
     }
 
@@ -219,9 +232,11 @@ object SqlGenerator {
         nl: String,
         compact: Boolean,
         paramSink: MutableList<String>?,
+        hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
+        table: TableInfo,
     ) {
-        val whereSql = renderConditionList(conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds)
+        val whereSql = renderConditionList(conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds, hintSink, table)
         if (whereSql.isNotEmpty()) {
             sb.append(nl).append("WHERE ").append(whereSql)
         }
@@ -232,6 +247,7 @@ object SqlGenerator {
         join: JoinClause,
         compact: Boolean,
         paramSink: MutableList<String>?,
+        hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
     ): String {
         val typeName = when (join.type) {
@@ -242,7 +258,7 @@ object SqlGenerator {
         val onPart = if (join.onConditions.isEmpty()) {
             ""
         } else {
-            " ON " + renderConditionList(join.onConditions, Connector.AND, indent = false, paramSink, enabledConditionIds)
+            " ON " + renderConditionList(join.onConditions, Connector.AND, indent = false, paramSink, enabledConditionIds, hintSink, null)
         }
         return "$typeName ${join.tableName} ${join.alias}$onPart"
     }
@@ -263,11 +279,13 @@ object SqlGenerator {
         indent: Boolean,
         paramSink: MutableList<String>?,
         enabledIds: Set<String>? = null,
+        hintSink: MutableList<ParamHint>? = null,
+        table: TableInfo? = null,
     ): String {
         // 动态条件按启用集合/defaultEnabled 过滤；组内全空的 Group 渲染为空字符串后剔除
         val rendered = conditions
             .filter { it.isConditionVisible(enabledIds) }
-            .map { renderCondition(it, paramSink, enabledIds) }
+            .map { renderCondition(it, paramSink, hintSink, table, enabledIds) }
             .filter { it.isNotEmpty() }
         if (rendered.isEmpty()) return ""
         return if (indent) {
@@ -290,36 +308,40 @@ object SqlGenerator {
      * 渲染单个条件节点。
      *
      * @param enabledIds 动态条件启用集合（递归传给 Group 子条件；默认 null 按 defaultEnabled）
+     * @param hintSink   回填提示收集器（M13，可为 null）
+     * @param table      主表信息（列类型查询用；join ON 条件等无法匹配时类型未知）
      */
     private fun renderCondition(
         condition: Condition,
         paramSink: MutableList<String>? = null,
+        hintSink: MutableList<ParamHint>? = null,
+        table: TableInfo? = null,
         enabledIds: Set<String>? = null,
     ): String = when (condition) {
         is Condition.Simple ->
-            "${condition.column.qualifiedName} ${condition.op} ${renderValue(condition.value, paramSink)}"
+            "${condition.column.qualifiedName} ${condition.op} ${renderValue(condition.value, paramSink, hintSink, quoteHint(table, condition.column))}"
 
         is Condition.Unary ->
             "${condition.column.qualifiedName} ${condition.op}"
 
         is Condition.In -> {
             val op = if (condition.negated) "NOT IN" else "IN"
-            val values = condition.values.joinToString(", ") { renderValue(it, paramSink) }
+            val values = condition.values.joinToString(", ") { renderValue(it, paramSink, hintSink, quoteHint(table, condition.column)) }
             "${condition.column.qualifiedName} $op ($values)"
         }
 
         is Condition.Between -> {
             val op = if (condition.negated) "NOT BETWEEN" else "BETWEEN"
-            "${condition.column.qualifiedName} $op ${renderValue(condition.lo, paramSink)} AND ${renderValue(condition.hi, paramSink)}"
+            "${condition.column.qualifiedName} $op ${renderValue(condition.lo, paramSink, hintSink, quoteHint(table, condition.column))} AND ${renderValue(condition.hi, paramSink, hintSink, quoteHint(table, condition.column))}"
         }
 
         is Condition.Like -> {
             val op = if (condition.negated) "NOT LIKE" else "LIKE"
-            "${condition.column.qualifiedName} $op ${renderLike(condition.pattern, condition.position, paramSink)}"
+            "${condition.column.qualifiedName} $op ${renderLike(condition.pattern, condition.position, paramSink, hintSink)}"
         }
 
         is Condition.Group -> {
-            val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, enabledIds)
+            val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, enabledIds, hintSink, table)
             if (childrenSql.isEmpty()) "" else "($childrenSql)"
         }
 
@@ -331,23 +353,25 @@ object SqlGenerator {
     }
 
     /**
-     * 渲染参数值：字面量原样输出；占位符输出 `?` 并收集来源。
+     * 渲染参数值：字面量原样输出；占位符输出 `?` 并收集来源与回填提示（M13）。
      */
-    private fun renderValue(value: SqlValue, paramSink: MutableList<String>?): String = when (value) {
+    private fun renderValue(value: SqlValue, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?, quote: Boolean?): String = when (value) {
         is SqlValue.Literal -> value.raw
         is SqlValue.Placeholder -> {
             paramSink?.add(value.source)
+            hintSink?.add(ParamHint(quote = quote))
             "?"
         }
     }
 
     /**
      * 渲染 LIKE 模式：按 [LikePosition] 在字面量两侧拼接 `%`。
-     * 占位符值暂输出 `?`（% 由运行时值决定，静态无法拼接）。
+     * 占位符值输出 `?` 并收集回填提示（M13：按位置拼 `%`、恒引号——LIKE 模式恒为字符串）。
      */
-    private fun renderLike(pattern: SqlValue, position: LikePosition, paramSink: MutableList<String>?): String = when (pattern) {
+    private fun renderLike(pattern: SqlValue, position: LikePosition, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?): String = when (pattern) {
         is SqlValue.Placeholder -> {
             paramSink?.add(pattern.source)
+            hintSink?.add(ParamHint(quote = true, likePosition = position))
             "?"
         }
         is SqlValue.Literal -> {
@@ -359,5 +383,14 @@ object SqlGenerator {
                 LikePosition.NONE -> p
             }
         }
+    }
+
+    /**
+     * 列值引号提示（M13）：按实体字段类型判定 —— String/CharSequence 列恒加引号；
+     * 数值/时间等类型恒原样；列或类型未知返回 null（面板走原数字启发式）。
+     */
+    private fun quoteHint(table: TableInfo?, column: ColumnRef): Boolean? {
+        val type = table?.columns?.firstOrNull { it.columnName == column.columnName }?.fieldType ?: return null
+        return if ("String" in type || "CharSequence" in type) true else false
     }
 }

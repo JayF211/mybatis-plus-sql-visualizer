@@ -27,9 +27,12 @@ data class TableInfo(
  * @param fieldName  实体字段名（如 shareSchemeId）
  * @param columnName 数据库列名（如 share_scheme_id）
  * @param isId       是否主键（@TableId）
+ * @param fieldType  实体字段类型全限定名（M13，如 java.lang.String / java.lang.Long），
+ *                   用于参数回填的引号推断；PSI 解析失败时为 null
  */
 data class ColumnInfo(
     val fieldName: String,
     val columnName: String,
     val isId: Boolean = false,
+    val fieldType: String? = null,
 )

@@ -46,7 +46,9 @@ class EntityResolver {
         val columnName = annotationValue(field, TABLE_FIELD)
             ?: NamingStrategy.toSnakeCase(fieldName)
         val isId = hasAnnotation(field, TABLE_ID)
-        return ColumnInfo(fieldName, columnName, isId)
+        // M13：记录字段类型（参数回填引号推断用）；PSI 类型解析异常时兜底 null
+        val fieldType = runCatching { field.type.canonicalText }.getOrNull()
+        return ColumnInfo(fieldName, columnName, isId, fieldType)
     }
 
     // ------------------------------------------------------------------

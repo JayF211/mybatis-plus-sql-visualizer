@@ -5,7 +5,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionToggle
 import cn.song.mybatisplus.visualizer.model.ConditionView
-import cn.song.mybatisplus.visualizer.model.EmptyValueRule
+import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel
@@ -157,16 +157,16 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // M12：动态条件复选框 + 空值联动（模型级重生成）
+    // M12/M13：动态条件复选框（手动勾选）+ 回填提示（LIKE 百分号 / 字段类型引号）
     // ------------------------------------------------------------------
 
     private fun tableInfo() = TableInfo(
         entityClassName = "DeviceInfoEntity",
         tableName = "car_device_info",
         columns = listOf(
-            ColumnInfo("id", "id", isId = true),
-            ColumnInfo("stationId", "station_id"),
-            ColumnInfo("name", "name"),
+            ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
+            ColumnInfo("stationId", "station_id", fieldType = "java.lang.Long"),
+            ColumnInfo("name", "name", fieldType = "java.lang.String"),
         ),
     )
 
@@ -192,13 +192,13 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             dynamicResult(
                 conditions = listOf(
                     Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1", EmptyValueRule.UNKNOWN)),
+                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
                     Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
-                        toggle = ConditionToggle("c1", "false", false, "station_id = 2", EmptyValueRule.UNKNOWN)),
+                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
                 ),
                 views = listOf(
-                    ConditionView("c0", "id = 1", "true", true, EmptyValueRule.UNKNOWN, null),
-                    ConditionView("c1", "station_id = 2", "false", false, EmptyValueRule.UNKNOWN, null),
+                    ConditionView("c0", "id = 1", "true", true, null),
+                    ConditionView("c1", "station_id = 2", "false", false, null),
                 ),
             ),
         )
@@ -218,61 +218,94 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
-    fun testDynamicConditionBlankCheckEmptySkips() {
-        // eq(isNotBlank(name), name, nameVar)：SKIP_ON_BLANK → 空值不拼接、填写拼接、清空再移除
+    fun testDynamicConditionValueBlankKeepsChecked() {
+        // M13 复选框纯手动：值空不联动勾选态——默认勾选保留 `?`，填写拼接，清空仍勾选，手动取消才排除
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
                 conditions = listOf(
                     Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", EmptyValueRule.SKIP_ON_BLANK, "nameVar")),
+                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
                 ),
                 views = listOf(
-                    ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, EmptyValueRule.SKIP_ON_BLANK, "nameVar"),
+                    ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
                 ),
             ),
         )
-        // 初始：值空 → 条件不拼接（无 WHERE）
-        assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
-        assertFalse(panel.enabledIdsForTest().contains("c0"))
+        // 初始：值空但默认勾选 → 保留 ?（不再按判空语义自动取消勾选）
+        assertTrue(panel.enabledIdsForTest().contains("c0"))
+        assertTrue(panel.editorForTest()!!.document.text.contains("name = ?"))
 
-        // 填写值 → 勾选并拼接
+        // 填写值 → 拼接实际值
         panel.conditionValueFieldForTest(0)!!.text = "张三"
         assertTrue(panel.editorForTest()!!.document.text.contains("name = '张三'"))
-        assertTrue(panel.enabledIdsForTest().contains("c0"))
 
-        // 清空 → 再次取消勾选并不拼接
+        // 清空 → 勾选态不变、保留 ?
         panel.conditionValueFieldForTest(0)!!.text = ""
-        assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
-        assertFalse(panel.enabledIdsForTest().contains("c0"))
-        panel.clear()
-    }
-
-    fun testDynamicConditionNullCheckEmptyStringStillConcatenates() {
-        // eq(name != null, name, nameVar)：SKIP_ON_NULL → 空值仍拼接为 ''（空字符串是合法值）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "name != null", true, "name = ?", EmptyValueRule.SKIP_ON_NULL, "nameVar")),
-                ),
-                views = listOf(
-                    ConditionView("c0", "name = ?", "name != null", true, EmptyValueRule.SKIP_ON_NULL, "nameVar"),
-                ),
-            ),
-        )
-        // 空值 → 拼接 name = ''
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = ''"))
         assertTrue(panel.enabledIdsForTest().contains("c0"))
-
-        // 填写 → 拼接实际值
-        panel.conditionValueFieldForTest(0)!!.text = "张三"
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = '张三'"))
+        assertTrue(panel.editorForTest()!!.document.text.contains("name = ?"))
 
         // 手动取消勾选 → 排除
         panel.conditionCheckboxForTest(0)!!.doClick()
         assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
+        panel.clear()
+    }
+
+    fun testDynamicConditionLikePlaceholderPercentBackfill() {
+        // M13：LIKE 占位符回填自动拼百分号（name 为 String 列）→ name LIKE '%张三%'
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Like(ColumnRef(columnName = "name"), negated = false,
+                        pattern = SqlValue.Placeholder("likeVar"), position = LikePosition.ANYWHERE,
+                        toggle = ConditionToggle("c0", "true", true, "name LIKE ?", "likeVar")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "name LIKE ?", "true", true, "likeVar"),
+                ),
+            ),
+        )
+        panel.conditionValueFieldForTest(0)!!.text = "张三"
+        assertTrue(panel.editorForTest()!!.document.text.contains("name LIKE '%张三%'"))
+        panel.clear()
+    }
+
+    fun testDynamicConditionStringColumnNumericValueQuoted() {
+        // M13：String 列（java.lang.String）输入数字 → 恒加引号（不再被识别成数值）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
+                        toggle = ConditionToggle("c0", "true", true, "name = ?", "nameVar")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "name = ?", "true", true, "nameVar"),
+                ),
+            ),
+        )
+        panel.conditionValueFieldForTest(0)!!.text = "123"
+        assertTrue(panel.editorForTest()!!.document.text.contains("name = '123'"))
+        panel.clear()
+    }
+
+    fun testDynamicConditionNumericColumnValueRaw() {
+        // M13：数值列（java.lang.Long）输入数字 → 原样不带引号
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Placeholder("stationVar"),
+                        toggle = ConditionToggle("c0", "true", true, "station_id = ?", "stationVar")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "station_id = ?", "true", true, "stationVar"),
+                ),
+            ),
+        )
+        panel.conditionValueFieldForTest(0)!!.text = "2"
+        assertTrue(panel.editorForTest()!!.document.text.contains("station_id = 2"))
         panel.clear()
     }
 }

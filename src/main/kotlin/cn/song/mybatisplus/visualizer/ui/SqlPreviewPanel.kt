@@ -1,8 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.ConditionView
-import cn.song.mybatisplus.visualizer.model.EmptyValueRule
+import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
@@ -142,13 +143,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramValues.clear()
         result.unresolvedParams.forEach { source -> paramValues.putIfAbsent(source, "") }
         result.previewModel?.conditionViews.orEmpty().forEach { view -> view.valueSource?.let { paramValues.putIfAbsent(it, "") } }
-        // 动态条件启用集合初始化：默认按 defaultEnabled，并应用空值联动——判空（SKIP_ON_BLANK/UNKNOWN）
-        // 条件值输入框为空 → 初始不勾选（不拼接）；判非 null（SKIP_ON_NULL）空值仍勾选（拼接 ''）
+        // 动态条件启用集合初始化（M13：复选框纯手动）——仅按 defaultEnabled，值空不联动勾选态
         enabledIds.clear()
         result.previewModel?.conditionViews.orEmpty().forEach { view ->
-            val valueBlank = view.valueSource?.let { paramValues[it].isNullOrBlank() } ?: false
-            val skippedByBlank = valueBlank && view.emptyRule != EmptyValueRule.SKIP_ON_NULL
-            if (view.defaultEnabled && !skippedByBlank) enabledIds.add(view.id)
+            if (view.defaultEnabled) enabledIds.add(view.id)
         }
         // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
         result.previewModel?.let { compactMode = !it.formatSql }
@@ -177,18 +175,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val result = current ?: return
         val model = result.previewModel
         if (model != null) {
-            // 模型级重生成：按动态条件启用集合重新生成 SQL，再按 source 回填参数
+            // 模型级重生成：按动态条件启用集合重新生成 SQL（含回填提示），再按 source 回填参数
             val generated = SqlGenerator.generateWithParams(
                 statement = model.statement,
                 compact = compactMode,
                 dialect = model.dialect,
                 enabledConditionIds = enabledIds.toSet(),
             )
-            showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams))
+            showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams, generated.paramHints))
         } else {
             // 旧文本路径（无可勾选动态条件，如批量操作）
             val base = if (compactMode) result.compactSql else result.sql
-            showSql(backfillParamsBySource(base, result.unresolvedParams))
+            showSql(backfillParamsBySource(base, result.unresolvedParams, result.paramHints))
         }
     }
 
@@ -375,25 +373,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         })
     }
 
-    /** 动态条件复选框 tooltip：布尔条件源码 + 空值语义提示。 */
-    private fun conditionTooltip(view: ConditionView): String = buildList {
-        view.flagSource?.let { add(MpSqlVisualizerBundle.message("panel.condition.flag", it)) }
-        if (view.emptyRule == EmptyValueRule.SKIP_ON_NULL) {
-            add(MpSqlVisualizerBundle.message("panel.condition.skipNull"))
-        }
-    }.joinToString("   ")
+    /** 动态条件复选框 tooltip：布尔条件源码提示（M13 起无判空语义提示，复选框纯手动）。 */
+    private fun conditionTooltip(view: ConditionView): String = view.flagSource?.let {
+        MpSqlVisualizerBundle.message("panel.condition.flag", it)
+    } ?: ""
 
     /**
-     * 动态条件值变更（M12）：更新按 source 绑定的参数值，并按判空语义联动勾选态。
-     *  - SKIP_ON_BLANK / UNKNOWN：空值 → 自动取消勾选（不拼接）；填写 → 勾选（拼接）
-     *  - SKIP_ON_NULL：空值仍拼接（渲染 `''`），勾选态仅由手动切换决定
+     * 动态条件值变更（M13：复选框纯手动）：仅更新按 source 绑定的参数值并重渲染，
+     * 勾选态只由用户操作决定（值空保留 `?`，不自动取消勾选）。
      */
     private fun onConditionValueChanged(view: ConditionView, text: String) {
         val source = view.valueSource ?: return
         paramValues[source] = text
-        if (view.emptyRule != EmptyValueRule.SKIP_ON_NULL) {
-            if (text.isBlank()) enabledIds.remove(view.id) else enabledIds.add(view.id)
-        }
         renderSql()
     }
 
@@ -427,15 +418,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * 按出现顺序把 SQL 中的 `?` 替换为用户输入（按 source 定位参数值，取代位置绑定，见 M12-R2）。
-     * 字符串加单引号（转义 `''`）、数字原样、空值保留 `?`；
-     * 判非 null 动态条件（SKIP_ON_NULL）的 source 空值渲染为 `''`（空字符串是合法值，M12）。
+     * 值渲染按回填提示 [ParamHint]（M13）：LIKE 位置拼 `%`、String 列恒引号、数值列恒原样；
+     * 提示缺失/类型未知 → 数字启发式；空值一律保留 `?`（复选框纯手动，不联动勾选态）。
      */
-    private fun backfillParamsBySource(sql: String, sources: List<String>): String {
+    private fun backfillParamsBySource(sql: String, sources: List<String>, hints: List<ParamHint> = emptyList()): String {
         if (sources.isEmpty()) return sql
-        val blankAsEmpty = current?.previewModel?.conditionViews.orEmpty()
-            .filter { it.emptyRule == EmptyValueRule.SKIP_ON_NULL && it.valueSource != null }
-            .mapNotNull { it.valueSource }
-            .toSet()
         val sb = StringBuilder(sql.length + 32)
         var paramIndex = 0
         var i = 0
@@ -444,7 +431,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (c == '?') {
                 val source = sources.getOrNull(paramIndex)
                 val v = source?.let { paramValues[it] }
-                sb.append(renderParamValue(v, source, blankAsEmpty))
+                sb.append(renderParamValue(v, hints.getOrNull(paramIndex)))
                 paramIndex++
             } else {
                 sb.append(c)
@@ -454,12 +441,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return sb.toString()
     }
 
-    private fun renderParamValue(v: String?, source: String?, blankAsEmpty: Set<String>): String {
-        if (v.isNullOrBlank()) {
-            return if (source != null && source in blankAsEmpty) "''" else "?"
+    private fun renderParamValue(v: String?, hint: ParamHint?): String {
+        if (v.isNullOrBlank()) return "?"
+        val escaped = v.replace("'", "''")
+        val like = hint?.likePosition
+        return when {
+            // LIKE 模式：恒引号 + 按位置拼 %（值本身转义）
+            like != null -> when (like) {
+                LikePosition.ANYWHERE -> "'%$escaped%'"
+                LikePosition.LEFT -> "'%$escaped'"
+                LikePosition.RIGHT -> "'$escaped%'"
+                LikePosition.NONE -> "'$escaped'"
+            }
+            // 类型已知：String 列恒引号、数值等列恒原样（M13 字段类型推断）
+            hint?.quote == true -> "'$escaped'"
+            hint?.quote == false -> v.trim()
+            // 类型未知：保留原数字启发式
+            else -> {
+                val trimmed = v.trim()
+                if (NUMBER_REGEX.matches(trimmed)) trimmed else "'$escaped'"
+            }
         }
-        val trimmed = v.trim()
-        return if (NUMBER_REGEX.matches(trimmed)) trimmed else "'" + v.replace("'", "''") + "'"
     }
 
     // ------------------------------------------------------------------
