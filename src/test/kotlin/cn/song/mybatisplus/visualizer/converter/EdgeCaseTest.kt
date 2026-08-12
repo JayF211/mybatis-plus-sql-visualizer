@@ -25,7 +25,7 @@ import org.junit.Test
 class EdgeCaseTest {
 
     private val table = TableInfo(
-        entityClassName = "CarDeviceInfoEntity",
+        entityClassName = "DeviceInfoEntity",
         tableName = "car_device_info",
         columns = listOf(ColumnInfo("id", "id", isId = true), ColumnInfo("name", "name")),
     )
@@ -74,8 +74,9 @@ class EdgeCaseTest {
             ),
         )
         val statement = QueryWrapperParser(table).parse(chain)
-        // 未知方法（apply/not）M1 简化忽略；后续条件正常解析
-        assertEquals(1, statement.conditions.size)
+        // apply 已支持（T-M7-06 → Raw 片段）；not 仍忽略；后续 eq 正常解析
+        assertEquals(2, statement.conditions.size)
+        assertTrue("apply 片段保留", statement.conditions[0] is cn.song.mybatisplus.visualizer.model.Condition.Raw)
     }
 
     @Test

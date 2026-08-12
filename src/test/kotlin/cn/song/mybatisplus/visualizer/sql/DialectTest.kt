@@ -13,7 +13,7 @@ import org.junit.Test
 class DialectTest {
 
     private val table = TableInfo(
-        entityClassName = "CarDeviceInfoEntity",
+        entityClassName = "DeviceInfoEntity",
         tableName = "car_device_info",
         columns = listOf(ColumnInfo("id", "id")),
     )

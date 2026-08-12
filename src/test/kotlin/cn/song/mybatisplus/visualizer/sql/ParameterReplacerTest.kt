@@ -16,7 +16,7 @@ import org.junit.Test
 class ParameterReplacerTest {
 
     private val table = TableInfo(
-        entityClassName = "CarDeviceInfoEntity",
+        entityClassName = "DeviceInfoEntity",
         tableName = "car_device_info",
         columns = listOf(
             ColumnInfo("id", "id", isId = true),

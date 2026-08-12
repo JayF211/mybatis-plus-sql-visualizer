@@ -30,12 +30,12 @@ class WrapperLocatorTest : BasePlatformTestCase() {
 
         public class Demo {
             public void query() {
-                LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                    .eq(CarDeviceInfoEntity::getId, 1001L)
-                    .isNotNull(CarDeviceInfoEntity::getShareSchemeId);
+                LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                    .eq(DeviceInfoEntity::getId, 1001L)
+                    .isNotNull(DeviceInfoEntity::getStationId);
             }
 
-            static class CarDeviceInfoEntity {
+            static class DeviceInfoEntity {
                 private Long id;
                 private Long stationId;
                 private Long shareSchemeId;
@@ -50,7 +50,7 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         val chain = WrapperLocator.locate(anchor())
         assertNotNull("应定位到 Wrapper 调用链", chain)
         assertEquals(WrapperType.LAMBDA_QUERY, chain!!.wrapperType)
-        assertEquals("CarDeviceInfoEntity", chain.entityClass)
+        assertEquals("DeviceInfoEntity", chain.entityClass)
 
         // 调用顺序：eq → isNotNull
         assertEquals(listOf("eq", "isNotNull"), chain.calls.map { it.methodName })
@@ -63,13 +63,13 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         val sql = SqlGenerator.generate(statement)
 
         // 测试内实体类未声明 @TableName（注解类不在测试 classpath），
-        // 按 MP 默认命名策略由类名推断：CarDeviceInfoEntity → car_device_info_entity
+        // 按 MP 默认命名策略由类名推断：DeviceInfoEntity → device_info_entity
         assertEquals(
             """
             SELECT id, station_id, share_scheme_id, sort
-            FROM car_device_info_entity
+            FROM device_info_entity
             WHERE id = 1001
-                AND share_scheme_id IS NOT NULL
+                AND station_id IS NOT NULL
             """.trimIndent(),
             sql,
         )
@@ -83,12 +83,12 @@ class WrapperLocatorTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void query() {
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>();
-                    w.eq(CarDeviceInfoEntity::getId, 1001L);
-                    w.orderByDesc(CarDeviceInfoEntity::getSort);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>();
+                    w.eq(DeviceInfoEntity::getId, 1001L);
+                    w.orderByDesc(DeviceInfoEntity::getSort);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Integer sort;
                 }
@@ -124,14 +124,14 @@ class WrapperLocatorTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void query() {
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                        .eq(CarDeviceInfoEntity::getId, 1L)
-                        .and(x -> x.eq(CarDeviceInfoEntity::getStationId, 101L)
-                                     .or().eq(CarDeviceInfoEntity::getShareSchemeId, 5L))
-                        .orderByAsc(CarDeviceInfoEntity::getSort);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1L)
+                        .and(x -> x.eq(DeviceInfoEntity::getStationId, 101L)
+                                     .or().eq(DeviceInfoEntity::getStationId, 5L))
+                        .orderByAsc(DeviceInfoEntity::getSort);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Long stationId;
                     private Long shareSchemeId;
@@ -156,12 +156,12 @@ class WrapperLocatorTest : BasePlatformTestCase() {
             public class Demo {
                 public void query(Long methodParam) {
                     Long deviceId = 1001L;
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                        .eq(CarDeviceInfoEntity::getId, deviceId)
-                        .eq(CarDeviceInfoEntity::getStationId, methodParam);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, deviceId)
+                        .eq(DeviceInfoEntity::getStationId, methodParam);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Long stationId;
                 }
@@ -188,11 +188,11 @@ class WrapperLocatorTest : BasePlatformTestCase() {
                 public void query() {
                     Long a = 1001L;
                     Long b = a;
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                        .eq(CarDeviceInfoEntity::getId, b);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, b);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                 }
             }
@@ -203,6 +203,32 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         val sql = SqlGenerator.generate(statement)
         // 多级引用链：b → a → 1001L → 内联
         assertTrue("应内联变量值 1001: $sql", sql.contains("WHERE id = 1001"))
+    }
+
+    fun testMpjLambdaQueryWrapperInlineNew() {
+        // P17：list(new MPJLambdaQueryWrapper<X>().select(...).eq(...)) 内联构造（无变量）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.query.MPJLambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    subAccountStationService.list(new MPJLambdaQueryWrapper<SubAccountStationEntity>()
+                        .select(SubAccountStationEntity::getStationId)
+                        .eq(SubAccountStationEntity::getAccountId, 100L));
+                }
+
+                static class SubAccountStationEntity {
+                    private Long stationId;
+                    private Long accountId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("应定位到内联 MPJLambdaQueryWrapper", located)
+        assertEquals(listOf("select", "eq"), located!!.chain.calls.map { it.methodName })
     }
 
     /**

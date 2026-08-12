@@ -27,12 +27,12 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void query() {
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                        .eq(CarDeviceInfoEntity::getId, 1001L)
-                        .isNotNull(CarDeviceInfoEntity::getShareSchemeId);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L)
+                        .isNotNull(DeviceInfoEntity::getStationId);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Long shareSchemeId;
                 }
@@ -46,19 +46,19 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(
             """
             SELECT id, share_scheme_id
-            FROM car_device_info_entity
+            FROM device_info_entity
             WHERE id = 1001
-                AND share_scheme_id IS NOT NULL
+                AND station_id IS NOT NULL
             """.trimIndent(),
             result!!.sql,
         )
         // 单行 SQL
         assertEquals(
-            "SELECT id, share_scheme_id FROM car_device_info_entity WHERE id = 1001 AND share_scheme_id IS NOT NULL",
+            "SELECT id, share_scheme_id FROM device_info_entity WHERE id = 1001 AND station_id IS NOT NULL",
             result.compactSql,
         )
         // 元信息
-        assertEquals("car_device_info_entity", result.tableName)
+        assertEquals("device_info_entity", result.tableName)
         assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, result.wrapperType)
         // 无未解析参数（均为字面量/命名策略）
         assertEquals(emptyList<String>(), result.unresolvedParams)
@@ -73,11 +73,11 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void query(Long deviceId) {
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                        .eq(CarDeviceInfoEntity::getId, deviceId);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, deviceId);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                 }
             }
@@ -99,11 +99,11 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             public class Demo {
                 public void query() {
                     Long stationId = 101L;
-                    LambdaQueryWrapper<CarDeviceInfoEntity> w = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-                        .eq(CarDeviceInfoEntity::getStationId, stationId);
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getStationId, stationId);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long stationId;
                 }
             }
@@ -139,12 +139,12 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void update() {
-                    LambdaUpdateWrapper<CarDeviceInfoEntity> w = new LambdaUpdateWrapper<CarDeviceInfoEntity>()
-                        .set(CarDeviceInfoEntity::getStationId, 101L)
-                        .eq(CarDeviceInfoEntity::getId, 1001L);
+                    LambdaUpdateWrapper<DeviceInfoEntity> w = new LambdaUpdateWrapper<DeviceInfoEntity>()
+                        .set(DeviceInfoEntity::getStationId, 101L)
+                        .eq(DeviceInfoEntity::getId, 1001L);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Long stationId;
                 }
@@ -155,7 +155,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertNotNull("应产出 UPDATE 预览", result)
         assertEquals(
             """
-            UPDATE car_device_info_entity
+            UPDATE device_info_entity
             SET station_id = 101
             WHERE id = 1001
             """.trimIndent(),
@@ -173,10 +173,10 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void delete() {
-                    LambdaDeleteWrapper<CarDeviceInfoEntity> w = new LambdaDeleteWrapper<CarDeviceInfoEntity>();
+                    LambdaDeleteWrapper<DeviceInfoEntity> w = new LambdaDeleteWrapper<DeviceInfoEntity>();
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                 }
             }
@@ -184,7 +184,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull("应产出 DELETE 预览", result)
-        assertEquals("DELETE FROM car_device_info_entity", result!!.sql)
+        assertEquals("DELETE FROM device_info_entity", result!!.sql)
         // 无 WHERE → 红色警示（F-10 全表删除风险）
         assertNotNull("应提示全表删除风险", result.warning)
     }
@@ -197,18 +197,18 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
 
             public class Demo {
                 public void query() {
-                    MPJLambdaWrapper<CarDeviceInfoEntity> w = new MPJLambdaWrapper<CarDeviceInfoEntity>()
-                        .selectAs(CarDeviceInfoEntity::getId, "device_id")
-                        .leftJoin(CarStationShareSchemeMerchantInfo.class, on(CarDeviceInfoEntity::getShareSchemeId, CarStationShareSchemeMerchantInfo::getSchemeId))
-                        .eq(CarDeviceInfoEntity::getId, 1001L);
+                    MPJLambdaWrapper<DeviceInfoEntity> w = new MPJLambdaWrapper<DeviceInfoEntity>()
+                        .selectAs(DeviceInfoEntity::getId, "device_id")
+                        .leftJoin(StationSchemeMerchantInfo.class, on(DeviceInfoEntity::getStationId, StationSchemeMerchantInfo::getSchemeId))
+                        .eq(DeviceInfoEntity::getId, 1001L);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Long shareSchemeId;
                 }
 
-                static class CarStationShareSchemeMerchantInfo {
+                static class StationSchemeMerchantInfo {
                     private Long schemeId;
                 }
             }
@@ -219,9 +219,202 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(
             """
             SELECT t.id AS device_id
-            FROM car_device_info_entity t
-            LEFT JOIN car_station_share_scheme_merchant_info carStationShareSchemeMerchantInfo ON t.share_scheme_id = carStationShareSchemeMerchantInfo.scheme_id
+            FROM device_info_entity t
+            LEFT JOIN station_scheme_merchant_info stationSchemeMerchantInfo ON t.station_id = stationSchemeMerchantInfo.scheme_id
             WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testPreviewMpjJoinSelectAsMethodRef() {
+        // P01 形态：selectAs(Entity::getX, VO::getY) 方法引用别名（第一参为主表字段；关联表列归属在 T-M7-05 覆盖）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<DeviceInfoEntity> w = new MPJLambdaWrapper<DeviceInfoEntity>()
+                        .selectAs(DeviceInfoEntity::getId, DeviceDetailVO::getDeviceId)
+                        .selectAs(DeviceInfoEntity::getStationId, DeviceDetailVO::getStationId)
+                        .leftJoin(StationInfoEntity.class, on(DeviceInfoEntity::getStationId, StationInfoEntity::getId))
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Long stationId;
+                }
+
+                static class StationInfoEntity {
+                    private Long id;
+                }
+
+                static class DeviceDetailVO {
+                    private Long deviceId;
+                    private Long stationId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出 MPJ 联表预览", result)
+        assertEquals(
+            """
+            SELECT t.id AS deviceId, t.station_id AS stationId
+            FROM device_info_entity t
+            LEFT JOIN station_info_entity stationInfoEntity ON t.station_id = stationInfoEntity.id
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testPreviewMpjLambdaAliasConstructor() {
+        // C4/P11 全链路：new MPJLambdaWrapper<>(Class, "apply_info") + 四参带别名 join + 关联实体注解解析
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<InvoiceApplyEntity> w = new MPJLambdaWrapper<>(InvoiceApplyEntity.class, "apply_info")
+                        .innerJoin(InvoiceApplyOrderRelEntity.class, "rel",
+                            InvoiceApplyOrderRelEntity::getApplyId, InvoiceApplyEntity::getId)
+                        .eq(InvoiceApplyEntity::getId, 1001L);
+                }
+
+                static class InvoiceApplyEntity {
+                    private Long id;
+                }
+
+                static class InvoiceApplyOrderRelEntity {
+                    private Long applyId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出带表别名的 MPJ 预览", result)
+        assertEquals(
+            """
+            SELECT apply_info.id
+            FROM invoice_apply_entity apply_info
+            INNER JOIN invoice_apply_order_rel_entity rel ON rel.apply_id = apply_info.id
+            WHERE apply_info.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testPreviewLastLimitConcat() {
+        // P12：last("LIMIT " + N) 字符串拼接表达式 → LIMIT 100
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    int batchSize = 100;
+                    LambdaQueryWrapper<OrderMonitorRecordEntity> w = new LambdaQueryWrapper<OrderMonitorRecordEntity>()
+                        .eq(OrderMonitorRecordEntity::getOrderId, 1L)
+                        .last("LIMIT " + batchSize);
+                }
+
+                static class OrderMonitorRecordEntity {
+                    private Long orderId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出带 LIMIT 的预览", result)
+        assertEquals(
+            """
+            SELECT order_id
+            FROM order_monitor_record_entity
+            WHERE order_id = 1
+            LIMIT 100
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testPreviewMpjFactoryChain() {
+        // P03：baseJoinWrapper() 工厂方法返回 wrapper，调用方继续 .eq() 续链 —— 需跨方法追踪
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<CouponEntity> wrapper = baseJoinWrapper()
+                        .eq(CouponEntity::getCouponCode, "CODE1");
+                }
+
+                private MPJLambdaWrapper<CouponEntity> baseJoinWrapper() {
+                    return new MPJLambdaWrapper<CouponEntity>()
+                        .selectAll(CouponEntity.class)
+                        .leftJoin(MerchantEntity.class, MerchantEntity::getId, CouponEntity::getMerchantId);
+                }
+
+                static class CouponEntity {
+                    private String couponCode;
+                    private Long merchantId;
+                }
+
+                static class MerchantEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出跨方法工厂链的预览", result)
+        assertEquals(
+            """
+            SELECT t.coupon_code, t.merchant_id
+            FROM coupon_entity t
+            LEFT JOIN merchant_entity merchantEntity ON merchantEntity.id = t.merchant_id
+            WHERE t.coupon_code = 'CODE1'
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testPreviewMpjLambdaQueryWrapper() {
+        // P17：IService.list(new MPJLambdaQueryWrapper<...>().select(...).eq(...)) 单表查询
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.query.MPJLambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    subAccountStationService.list(new MPJLambdaQueryWrapper<SubAccountStationEntity>()
+                        .select(SubAccountStationEntity::getStationId)
+                        .eq(SubAccountStationEntity::getAccountId, 100L));
+                }
+
+                static class SubAccountStationEntity {
+                    private Long stationId;
+                    private Long accountId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出 MPJLambdaQueryWrapper 预览", result)
+        assertEquals(
+            """
+            SELECT station_id
+            FROM sub_account_station_entity
+            WHERE account_id = 100
             """.trimIndent(),
             result!!.sql,
         )
@@ -234,19 +427,19 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             import java.util.List;
 
             public class Demo {
-                public void batch(List<CarDeviceInfoEntity> list) {
-                    CarDeviceInfoService service = new CarDeviceInfoService();
+                public void batch(List<DeviceInfoEntity> list) {
+                    DeviceInfoService service = new DeviceInfoService();
                     service.updateBatchById(list);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private Long stationId;
                     private Long shareSchemeId;
                 }
 
-                static class CarDeviceInfoService {
-                    public void updateBatchById(List<CarDeviceInfoEntity> list) {}
+                static class DeviceInfoService {
+                    public void updateBatchById(List<DeviceInfoEntity> list) {}
                 }
             }
             """.trimIndent(),
@@ -255,7 +448,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertNotNull("应识别批量更新调用", result)
         assertEquals(
             """
-            UPDATE car_device_info_entity
+            UPDATE device_info_entity
             SET station_id = ?, share_scheme_id = ?
             WHERE id = ?
             """.trimIndent(),
@@ -272,18 +465,18 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             import java.util.List;
 
             public class Demo {
-                public void batch(List<CarDeviceInfoEntity> list) {
-                    CarDeviceInfoService service = new CarDeviceInfoService();
+                public void batch(List<DeviceInfoEntity> list) {
+                    DeviceInfoService service = new DeviceInfoService();
                     service.saveBatch(list);
                 }
 
-                static class CarDeviceInfoEntity {
+                static class DeviceInfoEntity {
                     private Long id;
                     private String name;
                 }
 
-                static class CarDeviceInfoService {
-                    public void saveBatch(List<CarDeviceInfoEntity> list) {}
+                static class DeviceInfoService {
+                    public void saveBatch(List<DeviceInfoEntity> list) {}
                 }
             }
             """.trimIndent(),
@@ -292,7 +485,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertNotNull("应识别批量插入调用", result)
         assertEquals(
             """
-            INSERT INTO car_device_info_entity (id, name)
+            INSERT INTO device_info_entity (id, name)
             VALUES (?, ?)
             """.trimIndent(),
             result!!.sql,

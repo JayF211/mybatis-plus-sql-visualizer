@@ -19,7 +19,7 @@ class SqlGeneratorTest {
 
     /** 测试用实体表信息（对齐 docs/项目介绍.md 的 car_device_info）。 */
     private val table = TableInfo(
-        entityClassName = "CarDeviceInfoEntity",
+        entityClassName = "DeviceInfoEntity",
         tableName = "car_device_info",
         columns = listOf(
             ColumnInfo("id", "id", isId = true),
