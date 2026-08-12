@@ -1,5 +1,5 @@
 <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <!-- pluginIcon_dark：深底 + </> 三字符等宽等高垂直对齐（y 14~26，中心 y=20）+ 放大镜右下角标（与亮色版同布局） -->
+    <!-- pluginIcon_dark（M14 约定路径）：深底 + </> 三字符等宽等高垂直对齐（y 14~26，中心 y=20）+ 放大镜右下角标（与亮色版同布局） -->
     <rect x="1" y="1" width="38" height="38" rx="9" fill="#3C3F41"/>
     <!-- <（顶点朝左） -->
     <path d="M12 14 L6.5 20 L12 26" stroke="#4FC1FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>

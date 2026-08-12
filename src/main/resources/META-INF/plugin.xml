@@ -68,7 +68,7 @@
                 class="cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction"
                 text="Convert to SQL"
                 description="将光标处的 MyBatis-Plus Wrapper 转换为 SQL"
-                icon="/pluginIcon.svg">
+                icon="/META-INF/pluginIcon.svg">
             <!-- 右键菜单：编辑器弹出菜单 -->
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <!-- 快捷键：Windows/Linux 与 macOS 各注册一份（默认值，可在 Keymap 自定义） -->
