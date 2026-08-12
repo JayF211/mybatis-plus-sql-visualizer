@@ -45,35 +45,48 @@ class QueryWrapperParser(
         var having: Condition? = null
         val orderBy = mutableListOf<OrderByItem>()
         var limit: LimitClause? = null
+        var distinct = false
+        var orPending = false
 
-        for (call in chain.calls) {
+        for (rawCall in chain.calls) {
+            // 布尔条件重载（P02）：eq(boolean, col, val) 首参为条件标志；字面量 false → 整体忽略
+            val call = if (rawCall.methodName in CONDITION_METHODS) rawCall.skipConditionFlag() else rawCall
+            if (call.args.isEmpty() && call.methodName in CONDITION_METHODS) continue
+
             when (call.methodName) {
                 // ---------- SELECT 列 ----------
                 "select" -> selectColumns += columnArgs(call)
+                "selectMax" -> columnArgs(call).firstOrNull()?.let { selectColumns += it.copy(function = "MAX") }
+                "selectCount" -> selectColumns += parseSelectCount(call)
+                "selectFunc" -> selectColumns += parseSelectFunc(call)
+                "distinct" -> distinct = true
 
                 // ---------- 二元比较 ----------
-                "eq" -> conditions.addNotNull(simple(call, "="))
-                "ne" -> conditions.addNotNull(simple(call, "!="))
-                "gt" -> conditions.addNotNull(simple(call, ">"))
-                "ge" -> conditions.addNotNull(simple(call, ">="))
-                "lt" -> conditions.addNotNull(simple(call, "<"))
-                "le" -> conditions.addNotNull(simple(call, "<="))
+                "eq" -> orPending = addConditionFlagged(conditions, simple(call, "="), orPending)
+                "ne" -> orPending = addConditionFlagged(conditions, simple(call, "!="), orPending)
+                "gt" -> orPending = addConditionFlagged(conditions, simple(call, ">"), orPending)
+                "ge" -> orPending = addConditionFlagged(conditions, simple(call, ">="), orPending)
+                "lt" -> orPending = addConditionFlagged(conditions, simple(call, "<"), orPending)
+                "le" -> orPending = addConditionFlagged(conditions, simple(call, "<="), orPending)
 
                 // ---------- 模糊 ----------
-                "like" -> conditions.addNotNull(like(call, negated = false, LikePosition.ANYWHERE))
-                "notLike" -> conditions.addNotNull(like(call, negated = true, LikePosition.ANYWHERE))
-                "likeLeft" -> conditions.addNotNull(like(call, negated = false, LikePosition.LEFT))
-                "likeRight" -> conditions.addNotNull(like(call, negated = false, LikePosition.RIGHT))
+                "like" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.ANYWHERE), orPending)
+                "notLike" -> orPending = addConditionFlagged(conditions, like(call, negated = true, LikePosition.ANYWHERE), orPending)
+                "likeLeft" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.LEFT), orPending)
+                "likeRight" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.RIGHT), orPending)
 
                 // ---------- 范围 ----------
-                "in" -> conditions.addNotNull(inList(call, negated = false))
-                "notIn" -> conditions.addNotNull(inList(call, negated = true))
-                "between" -> conditions.addNotNull(between(call, negated = false))
-                "notBetween" -> conditions.addNotNull(between(call, negated = true))
+                "in" -> orPending = addConditionFlagged(conditions, inList(call, negated = false), orPending)
+                "notIn" -> orPending = addConditionFlagged(conditions, inList(call, negated = true), orPending)
+                "between" -> orPending = addConditionFlagged(conditions, between(call, negated = false), orPending)
+                "notBetween" -> orPending = addConditionFlagged(conditions, between(call, negated = true), orPending)
 
                 // ---------- 空值 ----------
-                "isNull" -> conditions.addNotNull(unary(call, "IS NULL"))
-                "isNotNull" -> conditions.addNotNull(unary(call, "IS NOT NULL"))
+                "isNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NULL"), orPending)
+                "isNotNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NOT NULL"), orPending)
+
+                // ---------- 自定义片段 ----------
+                "apply" -> orPending = addConditionFlagged(conditions, parseApply(call), orPending)
 
                 // ---------- 结构 ----------
                 "groupBy" -> groupBy += columnArgs(call)
@@ -84,21 +97,75 @@ class QueryWrapperParser(
                 "last" -> limit = parseLimit(call)
 
                 // ---------- 逻辑分组 ----------
-                "and", "or" -> conditions.addNotNull(parseGroup(call))
+                // 无参 or()（P14）：与前一条件组成 OR 分组（分隔符）；有参 and/or → 嵌套 lambda 分组
+                "or" -> if (call.args.isEmpty()) {
+                    orPending = true
+                } else {
+                    orPending = addConditionFlagged(conditions, parseGroup(call), orPending)
+                }
+                "and" -> orPending = addConditionFlagged(conditions, parseGroup(call), orPending)
 
-                // 其他方法（apply/not/嵌套条件等）M1 暂忽略，保证健壮性
+                // 其他方法（not/嵌套条件等）暂忽略，保证健壮性
             }
         }
 
         return SelectStatement(
             table = table,
             selectColumns = selectColumns,
+            distinct = distinct,
             conditions = conditions,
             groupBy = groupBy,
             having = having,
             orderBy = orderBy,
             limit = limit,
         )
+    }
+
+    /**
+     * 解析 selectCount(Entity::getX, VO::getY) → COUNT(列) [AS 别名]。
+     *
+     * 第一参为列（带主表前缀）；第二参为 [WrapperArg.AliasArg]（VO 属性名，保留驼峰）或字符串别名。
+     */
+    private fun parseSelectCount(call: WrapperCall): List<ColumnRef> {
+        val column = columnArgs(call).firstOrNull() ?: return emptyList()
+        val alias = when (val arg = call.args.getOrNull(1)) {
+            is WrapperArg.AliasArg -> arg.propertyName
+            is WrapperArg.ValueArg -> (arg.value as? SqlValue.Literal)?.unquoted
+            else -> null
+        }
+        return listOf(if (alias != null) column.copy(function = "COUNT", alias = alias) else column.copy(function = "COUNT"))
+    }
+
+    /**
+     * 解析 selectFunc(模板, func -> func.accept(列).values(值), 别名) → 完整聚合列（清单 P09）。
+     *
+     * 模板规则（对齐 MPJ）：
+     *  - `%s`：列占位符，按 [WrapperArg.FuncArg.columns] 顺序替换（列带主表别名前缀）
+     *  - `{0}`/`{1}`：绑定参数占位符，按 [WrapperArg.FuncArg.values] 顺序替换（字面量原样、运行时值渲染为 `?`）
+     */
+    private fun parseSelectFunc(call: WrapperCall): List<ColumnRef> {
+        val template = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return emptyList()
+        val func = call.args.getOrNull(1) as? WrapperArg.FuncArg ?: return emptyList()
+        val alias = (call.args.getOrNull(2).asValue() as? SqlValue.Literal)?.unquoted
+
+        var expr = template
+        // %s 列占位替换（逐列、带主表别名前缀）
+        for (col in func.columns) {
+            if (!expr.contains("%s")) break
+            expr = expr.replaceFirst("%s", columnPrefix?.let { col.withTableAlias(it) }?.qualifiedName ?: col.qualifiedName)
+        }
+        // {0}/{1} 绑定参数替换
+        for ((index, value) in func.values.withIndex()) {
+            expr = expr.replace("{$index}", renderFuncValue(value))
+        }
+        if (expr.contains("%s")) return emptyList() // 列数不足，无法完整渲染
+        return listOf(ColumnRef(columnName = expr, rawExpr = expr, alias = alias))
+    }
+
+    /** selectFunc 绑定参数渲染：字面量原样（raw），运行时值渲染为 `?`。 */
+    private fun renderFuncValue(value: SqlValue): String = when (value) {
+        is SqlValue.Literal -> value.raw
+        is SqlValue.Placeholder -> "?"
     }
 
     // ------------------------------------------------------------------
@@ -157,9 +224,21 @@ class QueryWrapperParser(
         return nested?.let { parse(it.chain).conditions.firstOrNull() }
     }
 
-    /** ORDER BY 项列表。 */
-    private fun orderItems(call: WrapperCall, asc: Boolean): List<OrderByItem> =
-        columnArgs(call).map { OrderByItem(it, asc) }
+    /** ORDER BY 项列表；支持 `orderByAsc("alias", Entity::getX)` 字符串别名前缀（清单 P11）。 */
+    private fun orderItems(call: WrapperCall, asc: Boolean): List<OrderByItem> {
+        val first = call.args.getOrNull(0)
+        // 形式一：orderByAsc("alias", Entity::getX) —— 第一参为表别名
+        if (first is WrapperArg.ValueArg && call.args.size >= 2) {
+            val alias = (first.value as? SqlValue.Literal)?.unquoted
+            if (!alias.isNullOrEmpty()) {
+                return call.args.drop(1)
+                    .mapNotNull { (it as? WrapperArg.ColumnArg)?.column?.withTableAlias(alias) }
+                    .map { OrderByItem(it, asc) }
+            }
+        }
+        // 形式二：orderByDesc(Entity::getX) / 字符串列
+        return columnArgs(call).map { OrderByItem(it, asc) }
+    }
 
     /** LIMIT 解析：last("limit 10") / last("limit 5, 10")（MP 语义：offset, count）。 */
     private fun parseLimit(call: WrapperCall): LimitClause? {
@@ -183,6 +262,97 @@ class QueryWrapperParser(
     /** 可空条件安全添加辅助（解析失败返回 null 时静默跳过）。 */
     private fun MutableList<Condition>.addNotNull(condition: Condition?) {
         if (condition != null) add(condition)
+    }
+
+    // ------------------------------------------------------------------
+    // 条件布尔重载 / 无参 or() / apply（清单 P02/P10/P14）
+    // ------------------------------------------------------------------
+
+    /** 支持布尔条件重载的方法集合（eq/like/in/between 等）。 */
+    private val CONDITION_METHODS = setOf(
+        "eq", "ne", "gt", "ge", "lt", "le",
+        "like", "notLike", "likeLeft", "likeRight",
+        "in", "notIn", "between", "notBetween",
+        "isNull", "isNotNull",
+    )
+
+    /**
+     * 处理条件布尔重载（清单 P02）：`eq(boolean, col, val)` / `like(boolean, col, val)` 等。
+     *
+     * 首参为布尔条件标志时移除（converter 无法静态求值运行时布尔 → 默认保留条件）；
+     * 首参为字面量 `false` 时整体忽略该条件。
+     */
+    private fun WrapperCall.skipConditionFlag(): WrapperCall {
+        val first = args.getOrNull(0)
+        if (args.size < 3) return this
+        if (first is WrapperArg.ColumnArg || first is WrapperArg.NestedArg || first is WrapperArg.OnConditionArg) {
+            return this
+        }
+        if (first is WrapperArg.ValueArg) {
+            val text = (first.value as? SqlValue.Literal)?.unquoted
+            return if (text == "false") {
+                WrapperCall(methodName, emptyList())
+            } else {
+                WrapperCall(methodName, args.drop(1))
+            }
+        }
+        // 运行时布尔表达式（变量/方法调用等）→ 保留条件，移除标志位
+        return WrapperCall(methodName, args.drop(1))
+    }
+
+    /**
+     * 添加条件并维护 orPending 状态：条件成功加入后 orPending 复位（无参 or() 已被消费），
+     * 条件解析失败（null）时保持 orPending（后续条件仍与 or() 前的条件组合）。
+     */
+    private fun addConditionFlagged(
+        conditions: MutableList<Condition>,
+        condition: Condition?,
+        orPending: Boolean,
+    ): Boolean {
+        if (condition == null) return orPending
+        conditions.addCondition(condition, orPending)
+        return false
+    }
+
+    /**
+     * 添加条件；orPending 为 true 时与上一条件组成 OR 分组（无参 or() 分隔符，清单 P14）。
+     */
+    private fun MutableList<Condition>.addCondition(condition: Condition, orPending: Boolean) {
+        if (orPending && isNotEmpty()) {
+            val prev = removeAt(size - 1)
+            add(Condition.Group(Connector.OR, listOf(prev, condition)))
+        } else {
+            add(condition)
+        }
+    }
+
+    /**
+     * 解析 apply（清单 P10）：
+     *  - `apply("1 = 0")` → 原样 SQL 片段
+     *  - `apply(condition, "(rel.a, rel.id) > ({0}, {1})", a, b)` → 布尔前缀 + `{i}` 参数替换
+     *  - `apply(sql)`（sql 为运行时变量）→ 无法静态渲染，忽略
+     */
+    private fun parseApply(call: WrapperCall): Condition? {
+        val args = call.args
+        if (args.isEmpty()) return null
+        val first = args[0]
+        val firstLiteral = (first.asValue() as? SqlValue.Literal)?.unquoted
+        // 布尔条件前缀：args>=2 且首参为布尔字面量或运行时表达式（非字符串字面量）
+        val startIndex = if (args.size >= 2 && (firstLiteral == "true" || firstLiteral == "false" || first !is WrapperArg.ValueArg)) {
+            1
+        } else {
+            0
+        }
+        if (args.size <= startIndex) return null
+        val template = (args.getOrNull(startIndex).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+        // 布尔前缀为字面量 false → 条件整体禁用
+        if (startIndex == 1 && firstLiteral == "false") return null
+        val values = args.drop(startIndex + 1).mapNotNull { it.asValue() }
+        var sql = template
+        for ((index, value) in values.withIndex()) {
+            sql = sql.replace("{$index}", renderFuncValue(value))
+        }
+        return Condition.Raw(sql)
     }
 
     /** 取调用中所有列实参（带主表别名前缀）。 */

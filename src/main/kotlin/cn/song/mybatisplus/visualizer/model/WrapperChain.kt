@@ -6,14 +6,16 @@ package cn.song.mybatisplus.visualizer.model
  * 从源码中提取出"Wrapper 类型 + 实体类型 + 有序的方法调用列表"，
  * converter 层据此构建 [SqlStatement]。
  *
- * @param wrapperType Wrapper 类型
- * @param entityClass 泛型实体类名（如 CarDeviceInfoEntity），可能为 null（无法解析时）
- * @param calls       按源码顺序的方法调用（wrapper.eq(...) 等）
+ * @param wrapperType     Wrapper 类型
+ * @param entityClass     泛型实体类名（如 DeviceInfoEntity），可能为 null（无法解析时）
+ * @param calls           按源码顺序的方法调用（wrapper.eq(...) 等）
+ * @param constructorAlias 表别名构造（`new MPJLambdaWrapper<>(Class, "apply_info")` 第二参，清单 C4/P11）；null 表示默认
  */
 data class WrapperChain(
     val wrapperType: WrapperType,
     val entityClass: String?,
     val calls: List<WrapperCall>,
+    val constructorAlias: String? = null,
 )
 
 /**
@@ -47,6 +49,18 @@ sealed class WrapperArg {
     /** 嵌套调用链实参（and/or 的 lambda 体）。 */
     data class NestedArg(val chain: WrapperChain) : WrapperArg()
 
+    /** MPJ selectAs 目标 VO 字段引用（`selectAs(Entity::getX, VO::getY)` 第二参）：别名 = VO 属性名（保留驼峰）。 */
+    data class AliasArg(val propertyName: String) : WrapperArg()
+
+    /** MPJ selectFunc 聚合函数实参（`selectFunc("COUNT(%s)", func -> func.accept(列).values(值), "alias")`）。 */
+    data class FuncArg(
+        val columns: List<ColumnRef>,
+        val values: List<SqlValue>,
+    ) : WrapperArg()
+
+    /** MPJ join 的关联实体引用（`leftJoin(XxxEntity.class, ...)` 第一参）：携带实体解析的表信息（F-13 扩展）。 */
+    data class EntityRefArg(val tableInfo: TableInfo) : WrapperArg()
+
     /** MPJ on(col1, col2) 两列比较（left 主表列，right 关联表列，别名由 converter 补充）。 */
     data class OnConditionArg(val left: ColumnRef, val right: ColumnRef) : WrapperArg()
 }
@@ -62,6 +76,7 @@ enum class WrapperType {
     LAMBDA_DELETE,
     MPJ_LAMBDA,
     MPJ_QUERY,
+    MPJ_LAMBDA_QUERY,
     QUERY,
     UPDATE,
     NESTED,

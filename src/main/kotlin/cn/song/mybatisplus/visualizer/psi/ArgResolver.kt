@@ -8,6 +8,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
@@ -38,9 +40,22 @@ object ArgResolver {
      * @param expression     实参（PSI 表达式）
      * @param table          实体表信息（解析 Lambda 列引用用，可为 null）
      * @param entityClass    外层实体类名（嵌套链填充用，可为 null）
+     * @param asAlias        true 表示该位置是 MPJ selectAs 的目标 VO 字段（方法引用 → [WrapperArg.AliasArg]，
+     *                       保留驼峰属性名作别名，不做 snake_case 列名转换）
      * @return WrapperArg 模型
      */
-    fun resolve(expression: PsiExpression, table: TableInfo?, entityClass: String?): WrapperArg = when (expression) {
+    fun resolve(expression: PsiExpression, table: TableInfo?, entityClass: String?, asAlias: Boolean = false): WrapperArg {
+        // selectAs(Entity::getX, VO::getY)：第二参方法引用 → 目标 VO 属性名（别名）
+        if (asAlias && expression is PsiMethodReferenceExpression) {
+            val name = expression.referenceName ?: return WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
+            val property = getterToProperty(name)
+            return if (property != null) {
+                WrapperArg.AliasArg(property)
+            } else {
+                WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
+            }
+        }
+        return when (expression) {
         // Lambda 方法引用：Entity::getXxx → 列引用
         is PsiMethodReferenceExpression ->
             WrapperArg.ColumnArg(resolveLambdaColumn(expression, table))
@@ -59,6 +74,7 @@ object ArgResolver {
         // 变量 / 算术 / new 表达式：求值为占位符
         else ->
             WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expression))
+        }
     }
 
     /**
@@ -103,7 +119,7 @@ object ArgResolver {
     }
 
     /**
-     * getter 方法名转属性名：`getShareSchemeId` → `shareSchemeId`，`isEnabled` → `enabled`。
+     * getter 方法名转属性名：`getStationId` → `shareSchemeId`，`isEnabled` → `enabled`。
      * 非 getter/is 前缀返回 null。
      */
     private fun getterToProperty(methodName: String): String? {
@@ -192,10 +208,75 @@ object ArgResolver {
 
     /**
      * 把 PsiMethodCallExpression 转为模型 [WrapperCall]。
+     *
+     * MPJ 特殊参数位置：
+     *  - `selectAs(Entity::getX, VO::getY)` / `selectCount(...)` 第二参按「目标 VO 字段」解析（[WrapperArg.AliasArg]）
+     *  - `selectFunc(模板, func -> func.accept(列).values(值), 别名)` 第二参按「聚合函数」解析（[WrapperArg.FuncArg]）
+     * 其余参数按常规实参解析。
      */
     internal fun toWrapperCall(call: PsiMethodCallExpression, table: TableInfo?, entityClass: String?): WrapperCall {
         val methodName = call.methodExpression.referenceName ?: call.methodExpression.text
-        val args = call.argumentList.expressions.map { resolve(it, table, entityClass) }
+        val args = call.argumentList.expressions.mapIndexed { index, expr ->
+            when {
+                methodName in JOIN_METHODS && index == 0 ->
+                    resolveJoinClass(expr)
+                methodName in ALIAS_SECOND_ARG_METHODS && index == 1 ->
+                    resolve(expr, table, entityClass, asAlias = true)
+                methodName == SELECT_FUNC && index == 1 ->
+                    resolveFuncLambda(expr, table)
+                else -> resolve(expr, table, entityClass)
+            }
+        }
         return WrapperCall(methodName, args)
+    }
+
+    /** MPJ join 方法名集合（第一参为关联实体类引用）。 */
+    private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin")
+
+    /**
+     * 解析 join 的关联实体引用：`leftJoin(XxxEntity.class, ...)` → [WrapperArg.EntityRefArg]（F-13 关联实体注解解析）。
+     * 无法解析为实体类时降级为类名字面量（converter 按命名策略兜底）。
+     */
+    private fun resolveJoinClass(expr: PsiExpression): WrapperArg {
+        val classAccess = expr as? PsiClassObjectAccessExpression
+        val psiClass = (classAccess?.operand?.type as? PsiClassType)?.resolve() as? PsiClass
+        return if (psiClass != null) {
+            WrapperArg.EntityRefArg(EntityResolver().resolve(psiClass))
+        } else {
+            WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expr))
+        }
+    }
+
+    /** MPJ selectAs 方法名（第二参为别名位置）。 */
+    private const val SELECT_AS = "selectAs"
+
+    /** MPJ selectFunc 方法名（第二参为 func -> func.accept(...).values(...) lambda）。 */
+    private const val SELECT_FUNC = "selectFunc"
+
+    /** MPJ 中第二参为「目标 VO 字段/别名」的方法名集合（selectAs、selectCount 等）。 */
+    private val ALIAS_SECOND_ARG_METHODS = setOf("selectAs", "selectCount")
+
+    /**
+     * 解析 selectFunc 的聚合 lambda：`func -> func.accept(列1, 列2).values(值1, 值2)`。
+     *
+     * 收集 accept 的列引用与 values 的绑定参数值（清单 P09）。
+     * 实参不是 lambda（异常代码）时降级为占位值。
+     */
+    private fun resolveFuncLambda(expression: PsiExpression, table: TableInfo?): WrapperArg {
+        val lambda = expression as? PsiLambdaExpression
+            ?: return WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expression))
+        val body = lambda.body
+        val calls = if (body is PsiMethodCallExpression) collectCallChain(body) else emptyList()
+        var columns = emptyList<ColumnRef>()
+        var values = emptyList<SqlValue>()
+        for (call in calls) {
+            when (call.methodExpression.referenceName) {
+                "accept" -> columns = call.argumentList.expressions.mapNotNull { expr ->
+                    (expr as? PsiMethodReferenceExpression)?.let { resolveLambdaColumn(it, table) }
+                }
+                "values" -> values = call.argumentList.expressions.map { ExpressionEvaluator.evaluate(it) }
+            }
+        }
+        return WrapperArg.FuncArg(columns, values)
     }
 }

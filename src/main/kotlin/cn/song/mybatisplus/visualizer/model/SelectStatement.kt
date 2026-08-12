@@ -41,6 +41,7 @@ enum class JoinType { INNER, LEFT, RIGHT }
  * @param selectColumns SELECT 列；为空表示全部列（`SELECT *` 语义，生成器展开为全列名）
  * @param tableAlias    主表别名（单表查询为 null；MPJ 联表默认 `t`）
  * @param joins         联表子句列表（MPJ）
+ * @param distinct      是否 SELECT DISTINCT（清单 P05）
  * @param groupBy       GROUP BY 列
  * @param having        HAVING 条件（单个）
  * @param orderBy       ORDER BY 项列表
@@ -51,6 +52,7 @@ data class SelectStatement(
     val selectColumns: List<ColumnRef> = emptyList(),
     val tableAlias: String? = null,
     val joins: List<JoinClause> = emptyList(),
+    val distinct: Boolean = false,
     override val conditions: List<Condition> = emptyList(),
     val groupBy: List<ColumnRef> = emptyList(),
     val having: Condition? = null,

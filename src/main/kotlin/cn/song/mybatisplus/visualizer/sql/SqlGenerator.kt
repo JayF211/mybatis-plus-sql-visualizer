@@ -107,6 +107,7 @@ object SqlGenerator {
             statement.selectColumns
         }
         val sb = StringBuilder("SELECT ")
+        if (statement.distinct) sb.append("DISTINCT ")
         sb.append(selectColumns.joinToString(", ") { it.rendered })
 
         // FROM 主表（可带别名）

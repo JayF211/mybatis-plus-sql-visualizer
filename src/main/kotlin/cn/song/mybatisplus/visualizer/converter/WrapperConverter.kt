@@ -43,6 +43,7 @@ object ConverterRegistry {
         LambdaDeleteConverter,
         MpjLambdaConverter,
         MpjQueryConverter,
+        MpjLambdaQueryConverter,
     )
 
     /**
@@ -62,10 +63,11 @@ object ConverterRegistry {
 
 /**
  * 实参转列：ColumnArg 直接取；ValueArg(字面量) 视为字符串列名（MP 字符串字段版）。
+ * 字符串列取 unquoted（如 `t.id AS device_id` 的 `t.id`），避免带引号。
  */
 fun WrapperArg?.asColumn(): ColumnRef? = when (this) {
     is WrapperArg.ColumnArg -> column
-    is WrapperArg.ValueArg -> (value as? SqlValue.Literal)?.let { ColumnRef(columnName = it.raw) }
+    is WrapperArg.ValueArg -> (value as? SqlValue.Literal)?.let { ColumnRef(columnName = it.unquoted) }
     else -> null
 }
 

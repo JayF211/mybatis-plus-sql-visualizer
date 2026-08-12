@@ -1,9 +1,11 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import com.intellij.psi.JavaTokenType
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
 
@@ -30,9 +32,30 @@ object ExpressionEvaluator {
     fun evaluate(expression: PsiExpression): SqlValue = when (expression) {
         is PsiLiteralExpression -> evaluateLiteral(expression)
         is PsiReferenceExpression -> evaluateReference(expression)
-        // `X.class` 类字面量（MPJ join 参数）→ 求值为简单类名（如 CarDeviceInfoEntity）
+        // `X.class` 类字面量（MPJ join 参数）→ 求值为简单类名（如 DeviceInfoEntity）
         is PsiClassObjectAccessExpression -> evaluateClassLiteral(expression)
+        // 字符串拼接表达式（`"LIMIT " + N`、`ALIAS + ".username"`）→ 静态拼接
+        is PsiPolyadicExpression -> evaluatePolyadic(expression)
         else -> SqlValue.Placeholder(expression.text)
+    }
+
+    /**
+     * 求值字符串拼接表达式（清单 P11 `selectAs("alias.col" ...)`、P12 `last("LIMIT " + N)`）。
+     *
+     * 仅当连接符全为 `+` 且所有操作数可静态求值（字面量/可追踪变量/嵌套拼接）时拼接为字符串；
+     * 否则降级为占位符（运行时值）。
+     */
+    private fun evaluatePolyadic(expr: PsiPolyadicExpression): SqlValue {
+        if (expr.operationTokenType != JavaTokenType.PLUS) return SqlValue.Placeholder(expr.text)
+        val parts = mutableListOf<String>()
+        for (operand in expr.operands) {
+            when (val v = evaluate(operand)) {
+                is SqlValue.Literal -> parts += v.unquoted
+                else -> return SqlValue.Placeholder(expr.text)
+            }
+        }
+        val joined = parts.joinToString("")
+        return SqlValue.Literal(raw = "'" + joined.replace("'", "''") + "'", unquoted = joined)
     }
 
     /**

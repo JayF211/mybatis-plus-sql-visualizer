@@ -12,7 +12,7 @@ import com.intellij.psi.PsiLiteralExpression
  * 实体类解析器（F-13）：从实体 [PsiClass] 解析出 [TableInfo]。
  *
  * 规则（对齐 MyBatis-Plus）：
- *  - 表名：优先 `@TableName("xxx")` 注解，否则按命名策略由类名推断（CarDeviceInfoEntity → car_device_info）
+ *  - 表名：优先 `@TableName("xxx")` 注解，否则按命名策略由类名推断（DeviceInfoEntity → device_info）
  *  - 列名：优先 `@TableField("xxx")` 注解，否则按命名策略由字段名推断
  *  - 主键：`@TableId` 标记
  *  - `@TableField(exist = false)` 的字段（非表字段）跳过
@@ -22,7 +22,7 @@ class EntityResolver {
     /**
      * 解析实体类为表信息。
      *
-     * @param entityClass 实体 PsiClass（如 CarDeviceInfoEntity）
+     * @param entityClass 实体 PsiClass（如 DeviceInfoEntity）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     fun resolve(entityClass: PsiClass): TableInfo {

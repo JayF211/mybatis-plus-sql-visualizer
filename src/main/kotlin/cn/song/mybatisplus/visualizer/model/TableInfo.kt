@@ -5,8 +5,8 @@ package cn.song.mybatisplus.visualizer.model
  *
  * 由实体类解析得到：表名（@TableName 注解或命名策略推断）、字段列映射（@TableField 或命名策略）。
  *
- * @param entityClassName 实体类的简单类名（如 CarDeviceInfoEntity）
- * @param tableName       数据库表名（如 car_device_info）
+ * @param entityClassName 实体类的简单类名（如 DeviceInfoEntity）
+ * @param tableName       数据库表名（如 device_info）
  * @param columns         实体字段到列的映射（含主键标记）
  */
 data class TableInfo(
