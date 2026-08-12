@@ -231,6 +231,96 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         assertEquals(listOf("select", "eq"), located!!.chain.calls.map { it.methodName })
     }
 
+    fun testStaticFactoryInlineGetOne() {
+        // 用户反馈：getOne(Wrappers.<T>lambdaQuery().select(多列).eq(列, dto.getPhone()))
+        // 静态工厂调用不产生 new 表达式、也不绑定 Wrapper 变量，需按工厂链定位
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query() {
+                    MerchantEntity merchant = merchantService.getOne(Wrappers.<MerchantEntity>lambdaQuery()
+                            .select(
+                                    MerchantEntity::getId,
+                                    MerchantEntity::getMerchantCode,
+                                    MerchantEntity::getName,
+                                    MerchantEntity::getPhone,
+                                    MerchantEntity::getDicMerchantType,
+                                    MerchantEntity::getPassword,
+                                    MerchantEntity::getDicStatus,
+                                    MerchantEntity::getParentId,
+                                    MerchantEntity::getSubAccountName)
+                            .eq(MerchantEntity::getPhone, dto.getPhone()));
+                }
+
+                static class MerchantEntity {
+                    private Long id;
+                    private String merchantCode;
+                    private String name;
+                    private String phone;
+                    private Integer dicMerchantType;
+                    private String password;
+                    private Integer dicStatus;
+                    private Long parentId;
+                    private String subAccountName;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("应定位到 Wrappers 静态工厂内联链", located)
+        assertEquals(WrapperType.LAMBDA_QUERY, located!!.chain.wrapperType)
+        assertEquals("MerchantEntity", located.chain.entityClass)
+        // 仅 Wrapper 操作（工厂调用 lambdaQuery 本身不入链）
+        assertEquals(listOf("select", "eq"), located.chain.calls.map { it.methodName })
+    }
+
+    fun testStaticFactoryVariableHeld() {
+        // 变量持有：LambdaQueryWrapper<T> w = Wrappers.<T>lambdaQuery().eq(...)
+        // 工厂调用应从链中剔除，只保留 Wrapper 操作
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<MerchantEntity> w = Wrappers.<MerchantEntity>lambdaQuery()
+                            .eq(MerchantEntity::getPhone, "13800000000");
+                }
+
+                static class MerchantEntity {
+                    private Long id;
+                    private String phone;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("应定位到变量持有的 Wrappers 工厂链", located)
+        assertEquals(WrapperType.LAMBDA_QUERY, located!!.chain.wrapperType)
+        assertEquals("MerchantEntity", located.chain.entityClass)
+        assertEquals(listOf("eq"), located.chain.calls.map { it.methodName })
+    }
+
+    fun testStaticFactoryNonWrapperReturnsNull() {
+        // 非 Wrappers 类的同名方法调用（如自定义 lambdaQuery()）不应误识别
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MyHelper.lambdaQuery().eq("a", "b");
+                }
+            }
+            """.trimIndent(),
+        )
+        val chain = WrapperLocator.locate(anchor())
+        assertNull("非 Wrappers 工厂调用应返回 null", chain)
+    }
+
     /**
      * 定位锚点元素：文件内第一个方法调用（最外层链），无调用时回退到字面量。
      */

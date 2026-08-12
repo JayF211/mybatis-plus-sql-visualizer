@@ -420,6 +420,59 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testPreviewStaticFactoryGetOne() {
+        // 用户反馈片段：merchantService.getOne(Wrappers.<T>lambdaQuery().select(9列).eq(列, dto.getPhone()))
+        // 静态工厂内联链（无 new、无 Wrapper 变量）应完整转换
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query() {
+                    MerchantEntity merchant = merchantService.getOne(Wrappers.<MerchantEntity>lambdaQuery()
+                            .select(
+                                    MerchantEntity::getId,
+                                    MerchantEntity::getMerchantCode,
+                                    MerchantEntity::getName,
+                                    MerchantEntity::getPhone,
+                                    MerchantEntity::getDicMerchantType,
+                                    MerchantEntity::getPassword,
+                                    MerchantEntity::getDicStatus,
+                                    MerchantEntity::getParentId,
+                                    MerchantEntity::getSubAccountName)
+                            .eq(MerchantEntity::getPhone, dto.getPhone()));
+                }
+
+                static class MerchantEntity {
+                    private Long id;
+                    private String merchantCode;
+                    private String name;
+                    private String phone;
+                    private Integer dicMerchantType;
+                    private String password;
+                    private Integer dicStatus;
+                    private Long parentId;
+                    private String subAccountName;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出 Wrappers 静态工厂链预览", result)
+        assertEquals(
+            """
+            SELECT id, merchant_code, name, phone, dic_merchant_type, password, dic_status, parent_id, sub_account_name
+            FROM merchant_entity
+            WHERE phone = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+        // dto.getPhone() 为运行时方法调用 → 未解析参数
+        assertEquals(listOf("dto.getPhone()"), result.unresolvedParams)
+        assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, result.wrapperType)
+    }
+
     fun testPreviewBatchUpdate() {
         myFixture.configureByText(
             "Demo.java",
