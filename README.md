@@ -29,22 +29,22 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 
 ```java
 // 查询
-LambdaQueryWrapper<CarDeviceInfoEntity> wrapper = new LambdaQueryWrapper<CarDeviceInfoEntity>()
-    .eq(CarDeviceInfoEntity::getId, 1001L)
-    .isNotNull(CarDeviceInfoEntity::getShareSchemeId);
+LambdaQueryWrapper<DeviceInfoEntity> wrapper = new LambdaQueryWrapper<DeviceInfoEntity>()
+    .eq(DeviceInfoEntity::getId, 1001L)
+    .isNotNull(DeviceInfoEntity::getStationId);
 
 // 生成的 SQL
 SELECT id, station_id, share_scheme_id
-FROM car_device_info_entity
+FROM device_info_entity
 WHERE id = 1001
     AND share_scheme_id IS NOT NULL
 ```
 
 ```java
 // 更新（无 WHERE 时会警示全表更新）
-LambdaUpdateWrapper<CarDeviceInfoEntity> update = new LambdaUpdateWrapper<CarDeviceInfoEntity>()
-    .set(CarDeviceInfoEntity::getStationId, 101L)
-    .eq(CarDeviceInfoEntity::getId, 1001L);
+LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInfoEntity>()
+    .set(DeviceInfoEntity::getStationId, 101L)
+    .eq(DeviceInfoEntity::getId, 1001L);
 ```
 
 ### 配置

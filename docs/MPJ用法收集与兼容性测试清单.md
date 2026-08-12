@@ -1,7 +1,9 @@
 # MyBatis-Plus-Join（MPJ）用法收集与兼容性测试清单
 
-> **文档用途**：为「MyBatis-Plus SQL Visualizer」IDEA 插件提供本项目内**全部 MPJ 真实用法语料**（已跨文件去重），用于插件兼容性测试。
+> **文档用途**：为「MyBatis-Plus SQL Visualizer」IDEA 插件提供一套**完整的 MPJ 用法语料**（已跨文件去重），用于插件兼容性测试。
 > 插件核心目标（F-11 MPJLambdaWrapper 联表、F-12 MPJQueryWrapper 字符串联表、F-02 参数替换、F-03 格式化、F-13 表名列名解析）需覆盖以下清单中的每一种模式。
+>
+> **脱敏说明**：本清单中的实体类名、模块名、方法名、常量名均已替换为通用示例名（如 `DeviceInfoEntity`、`app-admin`、`com.example.platform`），仅为保留 MPJ 语法结构而命名，与任何真实业务系统无关。
 >
 > 配套文档：「MyBatis-Plus SQL Visualizer」插件的《项目介绍》与《功能概览》（插件仓库内，不在本仓库）。
 
@@ -58,12 +60,12 @@
 
 | # | 构造形式 | 示例 | 出现位置 |
 |---|----------|------|----------|
-| C1 | 无参 + 链式启动 | `new MPJLambdaWrapper<CarDeviceInfoEntity>()` | 绝大多数 |
-| C2 | 菱形推断 + 分步 `.` 续链 | `MPJLambdaWrapper<X> w = new MPJLambdaWrapper<>(); w.select(...)` | `StationInfoService`、`BikeStationShareSchemeMerchantInfoServiceImpl` 等 |
-| C3 | 实体类构造 | `new MPJLambdaWrapper<>(MerchantRoleEntity.class)` | `MerchantRoleAppService`、`UserDiscountAppService`、`MerchantTeamInfoServiceImpl` |
-| C4 | **实体类 + 表别名构造** | `new MPJLambdaWrapper<>(OrderInvoiceApplyEntity.class, "apply_info")` | `CarInvoiceAppService.buildOrderRelApplyJoinQuery` |
+| C1 | 无参 + 链式启动 | `new MPJLambdaWrapper<DeviceInfoEntity>()` | 绝大多数 |
+| C2 | 菱形推断 + 分步 `.` 续链 | `MPJLambdaWrapper<X> w = new MPJLambdaWrapper<>(); w.select(...)` | `StationInfoService`、`BikeStationSchemeMerchantInfoServiceImpl` 等 |
+| C3 | 实体类构造 | `new MPJLambdaWrapper<>(RoleEntity.class)` | `RoleAppService`、`UserDiscountAppService`、`TeamInfoServiceImpl` |
+| C4 | **实体类 + 表别名构造** | `new MPJLambdaWrapper<>(InvoiceApplyEntity.class, "apply_info")` | `InvoiceAppService.buildApplyJoinQuery` |
 | C5 | 全限定名构造（无 import） | `new com.github.yulichang.wrapper.MPJLambdaWrapper<X>()` | `AbstractOperationStatsInfoPushService` |
-| C6 | 由私有工厂方法返回再续链 | `baseWrapper().eq(...)` | `GiftFundAppService`、`MerchantWalletSettlementAppService`、merchant-admin 的 `CarDeviceInfoAppService`/`BikeDeviceInfoAppService` 等 |
+| C6 | 由私有工厂方法返回再续链 | `baseWrapper().eq(...)` | `CouponAppService`、`WalletSettlementAppService`、merchant-admin 的 `DeviceInfoAppService`/`BikeDeviceInfoAppService` 等 |
 
 ---
 
@@ -77,17 +79,17 @@
 典型三表联查，`selectAll` 主表全列 + `selectAs` 关联表列映射到 VO。
 
 ```java
-MPJLambdaWrapper<CarDeviceInfoEntity> wrapper = new MPJLambdaWrapper<CarDeviceInfoEntity>()
-        .selectAll(CarDeviceInfoEntity.class)
-        .selectAs(CarDeviceInfoEntity::getId, DeviceDetailVO::getDeviceId)
-        .selectAs(CarStationInfoEntity::getStationName, DeviceDetailVO::getStationName)
-        .leftJoin(CarStationInfoEntity.class, CarStationInfoEntity::getId, CarDeviceInfoEntity::getStationId)
-        .leftJoin(CarDeviceProductInfoEntity.class, CarDeviceProductInfoEntity::getId, CarDeviceInfoEntity::getProductId)
-        .eq(CarDeviceInfoEntity::getId, deviceId);
-DeviceDetailVO vo = carDeviceInfoService.selectJoinOne(DeviceDetailVO.class, wrapper);
+MPJLambdaWrapper<DeviceInfoEntity> wrapper = new MPJLambdaWrapper<DeviceInfoEntity>()
+        .selectAll(DeviceInfoEntity.class)
+        .selectAs(DeviceInfoEntity::getId, DeviceDetailVO::getDeviceId)
+        .selectAs(StationInfoEntity::getStationName, DeviceDetailVO::getStationName)
+        .leftJoin(StationInfoEntity.class, StationInfoEntity::getId, DeviceInfoEntity::getStationId)
+        .leftJoin(ProductInfoEntity.class, ProductInfoEntity::getId, DeviceInfoEntity::getProductId)
+        .eq(DeviceInfoEntity::getId, deviceId);
+DeviceDetailVO vo = deviceInfoService.selectJoinOne(DeviceDetailVO.class, wrapper);
 ```
 
-**出现位置**：`merchant/DeviceManagementService#queryCarDeviceDetail`、`merchant/DeviceManagementService#queryBikeDeviceDetail`、`merchant/ChargingPortManagementService#queryCarChargingPortDetail`（3 个 leftJoin）、`merchant/ChargingPortManagementService#queryBikeChargingPortDetail`、`admin/BikeDeviceInfoAppService#getById`、`admin/CarDeviceInfoAppService#getById`、`admin/IcCardInfoAppService#getDetail`、`admin/UserDiscountAppService#detail`、`modules/IcCardInfoServiceImpl`（2 处）、`modules/MerchantTeamInfoServiceImpl`、`modules/UserVinServiceImpl`、`consumer/CarStationAppService#getDetail`、`bridge/PlatformService#findBasicPushPortDeviceViewByStationIdAndPortId`。
+**出现位置**：`merchant/DeviceManagementService#queryDeviceDetail`、`merchant/DeviceManagementService#queryBikeDeviceDetail`、`merchant/PortManagementService#queryPortDetail`（3 个 leftJoin）、`merchant/PortManagementService#queryBikePortDetail`、`admin/BikeDeviceInfoAppService#getById`、`admin/DeviceInfoAppService#getById`、`admin/IcCardInfoAppService#getDetail`、`admin/UserDiscountAppService#detail`、`modules/IcCardInfoServiceImpl`（2 处）、`modules/TeamInfoServiceImpl`、`modules/UserInfoServiceImpl`、`consumer/StationAppService#getDetail`、`bridge/PlatformService#findBasicPushDeviceViewByStationIdAndPortId`。
 
 **测试要点**：多表 `leftJoin` 顺序、主表与关联表字段混排、`selectJoinOne` 返回值映射。
 
@@ -98,18 +100,18 @@ DeviceDetailVO vo = carDeviceInfoService.selectJoinOne(DeviceDetailVO.class, wra
 条件均带 `condition` 布尔参数（如 `StringUtils.hasText(...)`、`dto.getX()!=null`），未命中时忽略该条件。
 
 ```java
-MPJLambdaWrapper<CarStationInfoEntity> wrapper = new MPJLambdaWrapper<CarStationInfoEntity>()
-        .selectAll(CarStationInfoEntity.class)
-        .selectAs(MerchantEntity::getName, CarStationInfoVO::getManagerName)
-        .like(StringUtils.hasText(dto.getStationCode()), CarStationInfoEntity::getStationCode, dto.getStationCode())
-        .eq(dto.getId()!=null, CarStationInfoEntity::getId, dto.getId())
-        .leftJoin(MerchantEntity.class, MerchantEntity::getId, CarStationInfoEntity::getManagerId)
-        .orderByDesc(CarStationInfoEntity::getCreateTime);
-Page<CarStationInfoVO> page = carStationInfoService.selectJoinListPage(
-        new Page<>(dto.getPageNum(), dto.getPageSize()), CarStationInfoVO.class, wrapper);
+MPJLambdaWrapper<StationInfoEntity> wrapper = new MPJLambdaWrapper<StationInfoEntity>()
+        .selectAll(StationInfoEntity.class)
+        .selectAs(MerchantEntity::getName, StationInfoVO::getManagerName)
+        .like(StringUtils.hasText(dto.getStationCode()), StationInfoEntity::getStationCode, dto.getStationCode())
+        .eq(dto.getId()!=null, StationInfoEntity::getId, dto.getId())
+        .leftJoin(MerchantEntity.class, MerchantEntity::getId, StationInfoEntity::getManagerId)
+        .orderByDesc(StationInfoEntity::getCreateTime);
+Page<StationInfoVO> page = stationInfoService.selectJoinListPage(
+        new Page<>(dto.getPageNum(), dto.getPageSize()), StationInfoVO.class, wrapper);
 ```
 
-**出现位置**：`admin/CarStationInfoAppService#page`、`admin/BikeStationInfoAppService#page`、`admin/CarDeviceInfoAppService#page`、`admin/BikeDeviceInfoAppService#page`、`admin/MerchantWalletSettlementAppService#page`、`admin/MerchantWalletWithdrawAppService#list`、`admin/MerchantShareRecordAppService#page`、`admin/UserDiscountAppService#page`、`admin/IcCardInfoAppService#list`、`admin/UserAppService#carOrder/#bikeOrder/#carOccupyOrder/#walletFlow`、`merchant-admin/CarStationInfoAppService#page`、`merchant-admin/BikeStationInfoAppService#page`、`merchant-admin/BikeDeviceInfoAppService#page`、`merchant-admin/CarDeviceInfoAppService#page`、`merchant/IcCardInfoAppService#page`、`merchant/HomeService#queryCarDevicePorts/#queryBikeDevicePorts`、`merchant/StationInfoService`（部分）、`consumer/CarOccupyAppService#page`、`bridge/PlatformService#pageStationConfig`、`bridge/PlatformService#pageThirdPlatformOrder`、`bridge/PlatformService#pageThirdPlatformByPlatformCode`。
+**出现位置**：`admin/StationInfoAppService#page`、`admin/BikeStationInfoAppService#page`、`admin/DeviceInfoAppService#page`、`admin/BikeDeviceInfoAppService#page`、`admin/WalletSettlementAppService#page`、`admin/WalletWithdrawAppService#list`、`admin/ShareRecordAppService#page`、`admin/UserDiscountAppService#page`、`admin/IcCardInfoAppService#list`、`admin/UserAppService#orderRecord/#bikeOrderRecord/#occupyOrder/#walletFlow`、`merchant-admin/StationInfoAppService#page`、`merchant-admin/BikeStationInfoAppService#page`、`merchant-admin/BikeDeviceInfoAppService#page`、`merchant-admin/DeviceInfoAppService#page`、`merchant/IcCardInfoAppService#page`、`merchant/HomeService#queryDevicePorts/#queryBikeDevicePorts`、`merchant/StationInfoService`（部分）、`consumer/OccupyAppService#page`、`bridge/PlatformService#pageStationConfig`、`bridge/PlatformService#pageThirdPlatformOrder`、`bridge/PlatformService#pageThirdPlatformByPlatformCode`。
 
 **测试要点**：`eq/like/likeRight/ge/le` 的条件参数重载（第一个参数为 boolean）；`selectJoinListPage` 的 `Page` 参数为泛型 `Page<R>`；多条件组合、双 `orderByDesc`。
 
@@ -121,19 +123,19 @@ Wrapper 由 `baseWrapper()` / `buildQueryWrapper(dto)` 等私有方法构建并�
 
 ```java
 // 工厂方法（返回可变 MPJ wrapper）
-private MPJLambdaWrapper<GiftFundEntity> baseJoinWrapper() {
-    return new MPJLambdaWrapper<GiftFundEntity>()
-            .selectAll(GiftFundEntity.class)
-            .selectAs(MerchantEntity::getName, GiftFundVO::getMerchantName)
-            .leftJoin(MerchantEntity.class, MerchantEntity::getId, GiftFundEntity::getMerchantId);
+private MPJLambdaWrapper<CouponEntity> baseJoinWrapper() {
+    return new MPJLambdaWrapper<CouponEntity>()
+            .selectAll(CouponEntity.class)
+            .selectAs(MerchantEntity::getName, CouponVO::getMerchantName)
+            .leftJoin(MerchantEntity.class, MerchantEntity::getId, CouponEntity::getMerchantId);
 }
 // 调用方续链
-MPJLambdaWrapper<GiftFundEntity> wrapper = baseJoinWrapper()
-        .eq(StrUtil.isNotBlank(dto.getGiftFundCode()), GiftFundEntity::getGiftFundCode, dto.getGiftFundCode())
-        .orderByDesc(GiftFundEntity::getCreateTime);
+MPJLambdaWrapper<CouponEntity> wrapper = baseJoinWrapper()
+        .eq(StrUtil.isNotBlank(dto.getCouponCode()), CouponEntity::getCouponCode, dto.getCouponCode())
+        .orderByDesc(CouponEntity::getCreateTime);
 ```
 
-**出现位置**：`admin/GiftFundAppService#baseJoinWrapper/#list/#detail`、`admin/MerchantWalletSettlementAppService#baseWrapper/#page`、`admin/MerchantWalletWithdrawAppService#baseWithdrawJoinWrapper/#buildWithdrawJoinWrapper/#applyWithdrawFilters`、`admin/MerchantShareRecordAppService#buildQueryWrapper/#buildExportWrapper`、`merchant-admin/CarDeviceInfoAppService#baseWrapper/#page/#getById`、`merchant-admin/BikeDeviceInfoAppService#baseWrapper`、`merchant-admin/MerchantShareRecordAppService#buildQueryWrapper`、`admin/CarInvoiceAppService#buildOrderRelApplyJoinQuery`。
+**出现位置**：`admin/CouponAppService#baseJoinWrapper/#list/#detail`、`admin/WalletSettlementAppService#baseWrapper/#page`、`admin/WalletWithdrawAppService#baseWithdrawJoinWrapper/#buildWithdrawJoinWrapper/#applyWithdrawFilters`、`admin/ShareRecordAppService#buildQueryWrapper/#buildExportWrapper`、`merchant-admin/DeviceInfoAppService#baseWrapper/#page/#getById`、`merchant-admin/BikeDeviceInfoAppService#baseWrapper`、`merchant-admin/ShareRecordAppService#buildQueryWrapper`、`admin/InvoiceAppService#buildApplyJoinQuery`。
 
 **测试要点**：Wrapper 在方法间传递仍为**同一可变对象**；`buildExportWrapper` 返回后继续 `.last("LIMIT n")`；一处 wrapper 被 `selectJoinListPage` 与 `selectJoinCount` 复用。
 
@@ -144,13 +146,13 @@ MPJLambdaWrapper<GiftFundEntity> wrapper = baseJoinWrapper()
 无 join，主表 `select(Entity::getId)` + `selectAs(Entity::getName, DropListVO::getValue)`。
 
 ```java
-return bikeDeviceProductInfoService.selectJoinList(DropListVO.class,
-        new MPJLambdaWrapper<BikeDeviceProductInfoEntity>()
-                .select(BikeDeviceProductInfoEntity::getId)
-                .selectAs(BikeDeviceProductInfoEntity::getModel, DropListVO::getValue));
+return bikeProductInfoService.selectJoinList(DropListVO.class,
+        new MPJLambdaWrapper<BikeProductInfoEntity>()
+                .select(BikeProductInfoEntity::getId)
+                .selectAs(BikeProductInfoEntity::getModel, DropListVO::getValue));
 ```
 
-**出现位置**：`admin/BikeDeviceProductInfoAppService#dropAll`、`admin/BikeStationInfoAppService#getDropList`、`admin/CarStationInfoAppService#getDropList`、`admin/CarStationInfoAppService#getDropListMerchant`（含 leftJoin + orderByDesc）、`admin/MerchantRoleAppService#getDropList`、`admin/UserAppService#listAllForDropList`、`admin/HelpCenterInfoAppService#listAllDropList`（含 `ne`）、`merchant-admin/RoleAppService#getDropList`、`consumer/CarStationAppService#listAllEnabledStationTags`、`admin/BikeDeviceInfoAppService#listUnbound`（含 `isNull`）、`admin/CarDeviceInfoAppService#listUnbound`。
+**出现位置**：`admin/BikeProductInfoAppService#dropAll`、`admin/BikeStationInfoAppService#getDropList`、`admin/StationInfoAppService#getDropList`、`admin/StationInfoAppService#getDropListMerchant`（含 leftJoin + orderByDesc）、`admin/RoleAppService#getDropList`、`admin/UserAppService#listAllForDropList`、`admin/HelpCenterInfoAppService#listAllDropList`（含 `ne`）、`merchant-admin/RoleAppService#getDropList`、`consumer/StationAppService#listAllEnabledStationTags`、`admin/BikeDeviceInfoAppService#listUnbound`（含 `isNull`）、`admin/DeviceInfoAppService#listUnbound`。
 
 **测试要点**：`select` varargs（单列/多列）、`selectAs` 别名映射、无 join 的纯单表场景、`isNull`/`ne` 条件。
 
@@ -161,18 +163,18 @@ return bikeDeviceProductInfoService.selectJoinList(DropListVO.class,
 连续两次 `innerJoin` 关联到二级表，`distinct` 去重后取主表外键列；同一链同时被 `selectJoinList(Long.class, ...)` 与 `selectJoinCount(wrapper)` 消费。
 
 ```java
-MPJLambdaWrapper<CarStationShareSchemeMerchantInfoEntity> schemeWrapper = new MPJLambdaWrapper<>();
-schemeWrapper.select(CarStationShareSchemeInfoEntity::getStationId)
+MPJLambdaWrapper<StationSchemeMerchantInfoEntity> schemeWrapper = new MPJLambdaWrapper<>();
+schemeWrapper.select(StationSchemeInfoEntity::getStationId)
         .distinct()
-        .innerJoin(CarStationShareSchemeInfoEntity.class,
-                CarStationShareSchemeInfoEntity::getId, CarStationShareSchemeMerchantInfoEntity::getSchemeId)
-        .innerJoin(CarStationInfoEntity.class,
-                CarStationInfoEntity::getId, CarStationShareSchemeInfoEntity::getStationId)
-        .eq(CarStationShareSchemeMerchantInfoEntity::getMerchantId, merchantId);
-return carStationShareSchemeMerchantInfoService.selectJoinList(Long.class, schemeWrapper);
+        .innerJoin(StationSchemeInfoEntity.class,
+                StationSchemeInfoEntity::getId, StationSchemeMerchantInfoEntity::getSchemeId)
+        .innerJoin(StationInfoEntity.class,
+                StationInfoEntity::getId, StationSchemeInfoEntity::getStationId)
+        .eq(StationSchemeMerchantInfoEntity::getMerchantId, merchantId);
+return stationSchemeMerchantInfoService.selectJoinList(Long.class, schemeWrapper);
 ```
 
-**出现位置**：`merchant/StationInfoService#getCarStationIdsByMerchantId/#getBikeStationIdsByMerchantId/#countCarStationIdsByMerchantId/#countBikeStationIdsByMerchantId`、`modules/CarStationShareSchemeMerchantInfoServiceImpl`、`modules/BikeStationShareSchemeMerchantInfoServiceImpl`。
+**出现位置**：`merchant/StationInfoService#getStationIdsByMerchantId/#getBikeStationIdsByMerchantId/#countStationIdsByMerchantId/#countBikeStationIdsByMerchantId`、`modules/StationSchemeMerchantInfoServiceImpl`、`modules/BikeStationSchemeMerchantInfoServiceImpl`。
 
 **测试要点**：`distinct` 生成 `SELECT DISTINCT`；多级 `innerJoin`；`selectJoinCount` 需忽略 select 列生成 `COUNT(*)`。
 
@@ -183,24 +185,24 @@ return carStationShareSchemeMerchantInfoService.selectJoinList(Long.class, schem
 `selectCollection(子表类, 目标VO::get集合, map -> map.id(...).result(...))` 生成一对多子查询；可与多个 `leftJoin` 叠加。
 
 ```java
-MPJLambdaWrapper<BizCarOccupyRecordEntity> wrapper = new MPJLambdaWrapper<BizCarOccupyRecordEntity>()
-        .selectAll(BizCarOccupyRecordEntity.class)
+MPJLambdaWrapper<OccupyRecordEntity> wrapper = new MPJLambdaWrapper<OccupyRecordEntity>()
+        .selectAll(OccupyRecordEntity.class)
         .selectCollection(
-                BizCarOccupyConsumptionRecordEntity.class,
-                CarOccupyRecordDetailVO::getConsumptions,
+                OccupyConsumptionRecordEntity.class,
+                OccupyRecordDetailVO::getConsumptions,
                 map -> map
-                        .id(BizCarOccupyConsumptionRecordEntity::getId, CarOccupyRecordConsumptionItemVO::getId)
-                        .result(BizCarOccupyConsumptionRecordEntity::getLadder, CarOccupyRecordConsumptionItemVO::getLadder)
-                        .result(BizCarOccupyConsumptionRecordEntity::getFee, CarOccupyRecordConsumptionItemVO::getFee))
-        .leftJoin(BizCarOccupyConsumptionRecordEntity.class,
-                BizCarOccupyConsumptionRecordEntity::getOccupyId, BizCarOccupyRecordEntity::getId)
-        .eq(BizCarOccupyRecordEntity::getId, id)
-        .orderByAsc(BizCarOccupyConsumptionRecordEntity::getLadder);
+                        .id(OccupyConsumptionRecordEntity::getId, OccupyRecordConsumptionItemVO::getId)
+                        .result(OccupyConsumptionRecordEntity::getLadder, OccupyRecordConsumptionItemVO::getLadder)
+                        .result(OccupyConsumptionRecordEntity::getFee, OccupyRecordConsumptionItemVO::getFee))
+        .leftJoin(OccupyConsumptionRecordEntity.class,
+                OccupyConsumptionRecordEntity::getOccupyId, OccupyRecordEntity::getId)
+        .eq(OccupyRecordEntity::getId, id)
+        .orderByAsc(OccupyConsumptionRecordEntity::getLadder);
 ```
 
-**变体**：`selectCollection(类, VO::get集合)` 简写（无子映射）见 `admin/UserAppService#wallet`、`modules/GiftFundServiceImpl`、`modules/MerchantTeamInfoServiceImpl`；单条内两个 `selectCollection` 见 `admin/CarOccupyRecordAppService#detail`、`admin/UserAppService#basic`。
+**变体**：`selectCollection(类, VO::get集合)` 简写（无子映射）见 `admin/UserAppService#wallet`、`modules/CouponServiceImpl`、`modules/TeamInfoServiceImpl`；单条内两个 `selectCollection` 见 `admin/OccupyRecordAppService#detail`、`admin/UserAppService#basic`。
 
-**出现位置**：`admin/CarOccupyRecordAppService#detail`、`admin/CarStationPriceTaskRecordAppService#getById`、`admin/UserAppService#basic`（2 个）、`modules/BizCarStationOccupyInfoServiceImpl`（2 处）、`consumer/CarDeviceAppService#getDetailByDeviceCode`、`consumer/CarOccupyAppService#detail`。
+**出现位置**：`admin/OccupyRecordAppService#detail`、`admin/StationPriceTaskRecordAppService#getById`、`admin/UserAppService#basic`（2 个）、`modules/StationOccupyInfoServiceImpl`（2 处）、`consumer/DeviceAppService#getDetailByDeviceCode`、`consumer/OccupyAppService#detail`。
 
 **测试要点**：`selectCollection` 子映射 `id/result`；多 `selectCollection`；`selectCollection` + `selectAll` + 多 `leftJoin` 组合；一对多结果按 `orderByAsc(子表列)` 排序。
 
@@ -211,15 +213,15 @@ MPJLambdaWrapper<BizCarOccupyRecordEntity> wrapper = new MPJLambdaWrapper<BizCar
 子映射中继续 `.collection(孙表类, 孙VO::get集合)`。
 
 ```java
-.selectCollection(CarStationPriceTaskStationRelEntity.class, CarStationPriceTaskExecutionBO::getStations,
+.selectCollection(StationPriceTaskStationRelEntity.class, StationPriceTaskExecutionBO::getStations,
         stationMap -> stationMap
-                .id(CarStationPriceTaskStationRelEntity::getId, CarStationPriceTaskExecutionStationBO::getRelationId)
-                .result(CarStationPriceTaskStationRelEntity::getStationId, CarStationPriceTaskExecutionStationBO::getStationId)
-                .collection(CarDeviceInfoEntity.class, CarStationPriceTaskExecutionStationBO::getDevices))
-.selectCollection(CarStationPriceTaskItemRecordEntity.class, CarStationPriceTaskExecutionBO::getPriceItems)
+                .id(StationPriceTaskStationRelEntity::getId, StationPriceTaskExecutionStationBO::getRelationId)
+                .result(StationPriceTaskStationRelEntity::getStationId, StationPriceTaskExecutionStationBO::getStationId)
+                .collection(DeviceInfoEntity.class, StationPriceTaskExecutionStationBO::getDevices))
+.selectCollection(StationPriceTaskItemRecordEntity.class, StationPriceTaskExecutionBO::getPriceItems)
 ```
 
-**出现位置**：`modules/CarStationPriceTaskRecordServiceImpl`（同时 `innerJoin` + `leftJoin` + 3 个 `orderByAsc`）。
+**出现位置**：`modules/StationPriceTaskRecordServiceImpl`（同时 `innerJoin` + `leftJoin` + 3 个 `orderByAsc`）。
 
 **测试要点**：两级集合嵌套的 SQL 形态（多级子查询/分组）、`selectCollection` 简写与带映射混用。
 
@@ -228,15 +230,15 @@ MPJLambdaWrapper<BizCarOccupyRecordEntity> wrapper = new MPJLambdaWrapper<BizCar
 ### P08 `selectAssociation` 一对一关联映射
 
 ```java
-MPJLambdaWrapper<CarDeviceInfoEntity> wrapper = new MPJLambdaWrapper<CarDeviceInfoEntity>()
-        .selectAll(CarDeviceInfoEntity.class)
-        .selectAssociation(CarDeviceProductInfoEntity.class, CarDeviceInfoBO::getProductInfo)
-        .leftJoin(CarDeviceProductInfoEntity.class, CarDeviceProductInfoEntity::getId, CarDeviceInfoEntity::getProductId)
-        .eq(CarDeviceInfoEntity::getId, stationId);
-return Optional.ofNullable(selectJoinOne(CarDeviceInfoBO.class, wrapper)).map(this::getDeviceInfoBO);
+MPJLambdaWrapper<DeviceInfoEntity> wrapper = new MPJLambdaWrapper<DeviceInfoEntity>()
+        .selectAll(DeviceInfoEntity.class)
+        .selectAssociation(ProductInfoEntity.class, DeviceInfoBO::getProductInfo)
+        .leftJoin(ProductInfoEntity.class, ProductInfoEntity::getId, DeviceInfoEntity::getProductId)
+        .eq(DeviceInfoEntity::getId, stationId);
+return Optional.ofNullable(selectJoinOne(DeviceInfoBO.class, wrapper)).map(this::getDeviceInfoBO);
 ```
 
-**出现位置**：`bridge/PlatformService#findCarDeviceInfoByStationIds`、`modules/CarDeviceInfoServiceImpl`（4 处：`getById`、按 IDs 列表、按 deviceCode、按 deviceCodes）。
+**出现位置**：`bridge/PlatformService#findDeviceInfoByStationIds`、`modules/DeviceInfoServiceImpl`（4 处：`getById`、按 IDs 列表、按 deviceCode、按 deviceCodes）。
 
 **测试要点**：`selectAssociation` 一对一映射、结果后处理（`stream().map(...).toList()`）。
 
@@ -247,20 +249,20 @@ return Optional.ofNullable(selectJoinOne(CarDeviceInfoBO.class, wrapper)).map(th
 `selectFunc("COUNT(%s)", func -> func.accept(列).values(参数), "别名")`，`%s` 占列、`{0}`/`{1}` 占绑定参数。
 
 ```java
-MPJLambdaWrapper<MerchantWalletWithdrawEntity> wrapper = applyWithdrawFilters(baseWithdrawQueryWrapper(), dto)
-        .selectFunc("COUNT(%s)", func -> func.accept(MerchantWalletWithdrawEntity::getId), "totalCount")
+MPJLambdaWrapper<WalletWithdrawEntity> wrapper = applyWithdrawFilters(baseWithdrawQueryWrapper(), dto)
+        .selectFunc("COUNT(%s)", func -> func.accept(WalletWithdrawEntity::getId), "totalCount")
         .selectFunc("COUNT(CASE WHEN %s = {0} AND %s = {1} THEN 1 END)",
-                func -> func.accept(MerchantWalletWithdrawEntity::getDicAuditStatus,
-                                MerchantWalletWithdrawEntity::getDicWithdrawStatus)
-                        .values(DicConstants.DIC_VALUE_MERCHANT_WALLET_AUDIT_APPROVED,
-                                DicConstants.DIC_VALUE_MERCHANT_WITHDRAW_PROCESSING),
+                func -> func.accept(WalletWithdrawEntity::getDicAuditStatus,
+                                WalletWithdrawEntity::getDicWithdrawStatus)
+                        .values(DicConstants.DIC_VALUE_WALLET_AUDIT_APPROVED,
+                                DicConstants.DIC_VALUE_WITHDRAW_PROCESSING),
                 "paymentProcessingCount")
         .selectFunc("COALESCE(SUM(%s), 0)",
-                func -> func.accept(MerchantWalletWithdrawEntity::getWithdrawAmount), "totalWithdrawAmount");
-return merchantWalletWithdrawService.selectJoinOne(MerchantWalletWithdrawStatisticsVO.class, wrapper);
+                func -> func.accept(WalletWithdrawEntity::getWithdrawAmount), "totalWithdrawAmount");
+return walletWithdrawService.selectJoinOne(WalletWithdrawStatisticsVO.class, wrapper);
 ```
 
-**出现位置**：`admin/MerchantWalletWithdrawAppService#queryStatistics`（共 9 个 `selectFunc`，含 COUNT/CASE WHEN/COALESCE/SUM）。
+**出现位置**：`admin/WalletWithdrawAppService#queryStatistics`（共 9 个 `selectFunc`，含 COUNT/CASE WHEN/COALESCE/SUM）。
 
 **测试要点**：`%s` 列占位符替换、`{0}` 参数替换、`func.accept(...)` 多列、`func.values(...)` 多值、别名列名映射到 VO 字段。
 
@@ -279,7 +281,7 @@ String sql = buildStationIdsFilterSql(columnName, stationIds);  // 如 "(x.stati
 wrapper.apply(sql);
 ```
 
-**出现位置**：`admin/CarInvoiceAppService#applyBusinessOpenInfoFilter`（`apply("1 = 0")` + `in`）、`admin/CarInvoiceAppService#applyStationIdsFilter`、`admin/CarInvoiceAppService#listOrderRelByApplyJoinCursor`（参数化 apply）、`admin/GiftFundAppService#list`（`apply(condition, buildShowStatusCondition(...))`）。
+**出现位置**：`admin/InvoiceAppService#applyBusinessOpenInfoFilter`（`apply("1 = 0")` + `in`）、`admin/InvoiceAppService#applyStationIdsFilter`、`admin/InvoiceAppService#listByApplyJoinCursor`（参数化 apply）、`admin/CouponAppService#list`（`apply(condition, buildShowStatusCondition(...))`）。
 
 **测试要点**：`apply` 原样透传 SQL；`{0}/{1}` 绑定参数替换；带 boolean 条件的重载。
 
@@ -288,19 +290,19 @@ wrapper.apply(sql);
 ### P11 表别名构造 + 字符串列 + 带别名 join
 
 ```java
-MPJLambdaWrapper<OrderInvoiceApplyEntity> wrapper = new MPJLambdaWrapper<>(OrderInvoiceApplyEntity.class, "apply_info")
-        .selectAs(OrderInvoiceApplyOrderRelEntity::getId, CarInvoiceOrderExportJoinRow::getId)
-        .innerJoin(OrderInvoiceApplyOrderRelEntity.class, "rel",
-                OrderInvoiceApplyOrderRelEntity::getApplyId, OrderInvoiceApplyEntity::getId)
-        .likeRight(StrUtil.isNotBlank(dto.getApplyNo()), OrderInvoiceApplyEntity::getApplyNo, dto.getApplyNo())
-        .ge(ObjectUtil.isNotNull(dto.getStartTime()), OrderInvoiceApplyEntity::getCreateTime, dto.getStartTime());
+MPJLambdaWrapper<InvoiceApplyEntity> wrapper = new MPJLambdaWrapper<>(InvoiceApplyEntity.class, "apply_info")
+        .selectAs(InvoiceApplyOrderRelEntity::getId, InvoiceOrderExportJoinRow::getId)
+        .innerJoin(InvoiceApplyOrderRelEntity.class, "rel",
+                InvoiceApplyOrderRelEntity::getApplyId, InvoiceApplyEntity::getId)
+        .likeRight(StrUtil.isNotBlank(dto.getApplyNo()), InvoiceApplyEntity::getApplyNo, dto.getApplyNo())
+        .ge(ObjectUtil.isNotNull(dto.getStartTime()), InvoiceApplyEntity::getCreateTime, dto.getStartTime());
 
 // 字符串列 + 带别名 join（auditAccount）
-.selectAs(AUDIT_ACCOUNT_ALIAS + ".username", MerchantWalletWithdrawVO::getAuditedUsername)
-.leftJoin(AccountEntity.class, AUDIT_ACCOUNT_ALIAS, AccountEntity::getId, MerchantWalletWithdrawEntity::getAuditedBy)
+.selectAs(AUDIT_ACCOUNT_ALIAS + ".username", WalletWithdrawVO::getAuditedUsername)
+.leftJoin(AccountEntity.class, AUDIT_ACCOUNT_ALIAS, AccountEntity::getId, WalletWithdrawEntity::getAuditedBy)
 ```
 
-**出现位置**：`admin/CarInvoiceAppService#buildOrderRelApplyJoinQuery`（别名 `apply_info`）、`admin/MerchantWalletWithdrawAppService#baseWithdrawJoinWrapper/#baseWithdrawQueryWrapper`（别名 `auditAccount`，字符串列 + 别名 join 配合）。
+**出现位置**：`admin/InvoiceAppService#buildApplyJoinQuery`（别名 `apply_info`）、`admin/WalletWithdrawAppService#baseWithdrawJoinWrapper/#baseWithdrawQueryWrapper`（别名 `auditAccount`，字符串列 + 别名 join 配合）。
 
 **测试要点**：带别名构造（`new MPJLambdaWrapper<>(Class, alias)`）、`leftJoin(Class, alias, ...)` 四参重载、`selectAs("alias.column", ...)` 字符串列映射、`orderByAsc("alias", Entity::getX)` 别名排序。
 
@@ -309,14 +311,14 @@ MPJLambdaWrapper<OrderInvoiceApplyEntity> wrapper = new MPJLambdaWrapper<>(Order
 ### P12 `last` 分页 / 游标截断
 
 ```java
-return Optional.ofNullable(carOrderMonitorRecordService.getOne(
-        new MPJLambdaWrapper<CarOrderMonitorRecordEntity>()
-                .eq(CarOrderMonitorRecordEntity::getOrderId, orderId)
-                .orderByDesc(CarOrderMonitorRecordEntity::getTime)
+return Optional.ofNullable(orderMonitorRecordService.getOne(
+        new MPJLambdaWrapper<OrderMonitorRecordEntity>()
+                .eq(OrderMonitorRecordEntity::getOrderId, orderId)
+                .orderByDesc(OrderMonitorRecordEntity::getTime)
                 .last("limit 1")));
 ```
 
-**出现位置**：`bridge/PlatformService`（`last("limit 1")` 4 处：`findActivePushAccountByStationIdAndPlatformCode`、`findPushPortDeviceViewByStationIdAndPortId`、`findBasicPushPortDeviceViewByStationIdAndPortId`、`findLatestThirdOrderMonitorByOrderId`、`findLatestOrderMonitorByOrderCode`）、`consumer/CarOccupyAppService#getLastUnpaid`、`admin/CarInvoiceAppService#listOrderRelByApplyJoinCursor`、`admin/MerchantShareRecordAppService#listNextDetails`、`admin/MerchantWalletWithdrawAppService`（导出批量）、`modules/UserVinServiceImpl`（`last("limit 1")`）。
+**出现位置**：`bridge/PlatformService`（`last("limit 1")` 4 处：`findActivePushAccountByStationIdAndPlatformCode`、`findPushDeviceViewByStationIdAndPortId`、`findBasicPushDeviceViewByStationIdAndPortId`、`findLatestOrderMonitorByOrderId`、`findLatestOrderMonitorByOrderCode`）、`consumer/OccupyAppService#getLastUnpaid`、`admin/InvoiceAppService#listByApplyJoinCursor`、`admin/ShareRecordAppService#listNextDetails`、`admin/WalletWithdrawAppService`（导出批量）、`modules/UserInfoServiceImpl`（`last("limit 1")`）。
 
 **测试要点**：`last` 原样追加到 SQL 末尾（不换行、不改写）；与 `orderByDesc` 组合的"取最新一条"；导出游标 `last("LIMIT " + N)`。
 
@@ -325,16 +327,16 @@ return Optional.ofNullable(carOrderMonitorRecordService.getOne(
 ### P13 `leftJoin` lambda 形式 ON 条件
 
 ```java
-wrapper.leftJoin(GiftFundStationEntity.class, on -> on
-                .eq(GiftFundStationEntity::getGiftFundId, GiftFundEntity::getId)
-                .eq(GiftFundStationEntity::getStationId, stationId)
-                .eq(GiftFundStationEntity::getDicStationCategory, dicStationCategory))
-        .and(w -> w.eq(GiftFundEntity::getDicGiftType, DicConstants.DIC_VALUE_GIFT_FUND_TYPE_GENERAL)
-                .or(t -> t.eq(GiftFundEntity::getDicGiftType, DicConstants.DIC_VALUE_GIFT_FUND_TYPE_TARGETED)
-                        .isNotNull(GiftFundStationEntity::getId)));
+wrapper.leftJoin(CouponStationEntity.class, on -> on
+                .eq(CouponStationEntity::getCouponId, CouponEntity::getId)
+                .eq(CouponStationEntity::getStationId, stationId)
+                .eq(CouponStationEntity::getDicStationCategory, dicStationCategory))
+        .and(w -> w.eq(CouponEntity::getDicCouponType, DicConstants.DIC_VALUE_COUPON_TYPE_GENERAL)
+                .or(t -> t.eq(CouponEntity::getDicCouponType, DicConstants.DIC_VALUE_COUPON_TYPE_TARGETED)
+                        .isNotNull(CouponStationEntity::getId)));
 ```
 
-**出现位置**：`modules/GiftFundServiceImpl`（2 处）。
+**出现位置**：`modules/CouponServiceImpl`（2 处）。
 
 **测试要点**：`leftJoin(Class, on -> on.eq(...))` lambda ON；`on` 内多条件 `eq`；与 `.and(w -> ...or(t -> ...isNotNull(...)))` 叠加。
 
@@ -344,20 +346,20 @@ wrapper.leftJoin(GiftFundStationEntity.class, on -> on
 
 ```java
 wrapper.and(condition -> condition
-        .gt(SysMerchantShareRecordEntity::getDicBizType, cursor.dicBizType)
-        .or(or -> or.eq(SysMerchantShareRecordEntity::getDicBizType, cursor.dicBizType)
-                .gt(SysMerchantShareRecordEntity::getBizId, cursor.bizId))
-        .or(or -> or.eq(SysMerchantShareRecordEntity::getDicBizType, cursor.dicBizType)
-                .eq(SysMerchantShareRecordEntity::getBizId, cursor.bizId)
-                .gt(SysMerchantShareRecordEntity::getMerchantId, cursor.merchantId)));
+        .gt(ShareRecordEntity::getDicBizType, cursor.dicBizType)
+        .or(or -> or.eq(ShareRecordEntity::getDicBizType, cursor.dicBizType)
+                .gt(ShareRecordEntity::getBizId, cursor.bizId))
+        .or(or -> or.eq(ShareRecordEntity::getDicBizType, cursor.dicBizType)
+                .eq(ShareRecordEntity::getBizId, cursor.bizId)
+                .gt(ShareRecordEntity::getMerchantId, cursor.merchantId)));
 
 // 无参 or() 作分隔符（AND ( a = ? OR b = ? )）
-wrapper.and(wr -> wr.eq(UserVinEntity::getVin, vin)
+wrapper.and(wr -> wr.eq(UserInfoEntity::getCode, code)
         .or()
-        .eq(UserVinEntity::getVin, new StringBuilder(vin).reverse().toString()));
+        .eq(UserInfoEntity::getCode, new StringBuilder(code).reverse().toString()));
 ```
 
-**出现位置**：`admin/MerchantShareRecordAppService#appendCursorCondition`（3 层嵌套）、`merchant-admin/MerchantShareRecordAppService#appendCursorCondition`、`merchant/HomeService#applyCarKeywordFilter`（`and(w -> w.like(...).or().like(...).or().like(...))`）、`merchant/HomeService#applyCarDicStatusFilter`（`and(w -> w.eq(...).or().eq(...))`）、`merchant/IcCardInfoAppService#page`、`modules/UserVinServiceImpl`、`modules/GiftFundServiceImpl`。
+**出现位置**：`admin/ShareRecordAppService#appendCursorCondition`（3 层嵌套）、`merchant-admin/ShareRecordAppService#appendCursorCondition`、`merchant/HomeService#applyKeywordFilter`（`and(w -> w.like(...).or().like(...).or().like(...))`）、`merchant/HomeService#applyStatusFilter`（`and(w -> w.eq(...).or().eq(...))`）、`merchant/IcCardInfoAppService#page`、`modules/UserInfoServiceImpl`、`modules/CouponServiceImpl`。
 
 **测试要点**：`and(lambda)` / `or(lambda)` 嵌套、无参 `or()` 分隔符、参数可为 `new StringBuilder(...).reverse()` 表达式。
 
@@ -366,18 +368,18 @@ wrapper.and(wr -> wr.eq(UserVinEntity::getVin, vin)
 ### P15 条件式续链（if/else 分叉）
 
 ```java
-MPJLambdaWrapper<CarDeviceInfoEntity> wrapper = new MPJLambdaWrapper<CarDeviceInfoEntity>()
-        .selectAll(CarDeviceInfoEntity.class)
-        .selectAssociation(CarDeviceProductInfoEntity.class, CarDeviceInfoBO::getProductInfo)
-        .leftJoin(CarDeviceProductInfoEntity.class, CarDeviceProductInfoEntity::getId, CarDeviceInfoEntity::getProductId);
+MPJLambdaWrapper<DeviceInfoEntity> wrapper = new MPJLambdaWrapper<DeviceInfoEntity>()
+        .selectAll(DeviceInfoEntity.class)
+        .selectAssociation(ProductInfoEntity.class, DeviceInfoBO::getProductInfo)
+        .leftJoin(ProductInfoEntity.class, ProductInfoEntity::getId, DeviceInfoEntity::getProductId);
 if (stationIds.size() == 1) {
-    wrapper.eq(CarDeviceInfoEntity::getStationId, stationIds.get(0));
+    wrapper.eq(DeviceInfoEntity::getStationId, stationIds.get(0));
 } else {
-    wrapper.in(CarDeviceInfoEntity::getStationId, stationIds);
+    wrapper.in(DeviceInfoEntity::getStationId, stationIds);
 }
 ```
 
-**出现位置**：`bridge/PlatformService#findCarDeviceInfoByStationIds`（if/else eq vs in）、`modules/GiftFundServiceImpl`（`if (stationId != null && dicStationCategory != null)` 追加 `leftJoin` + `and`）。
+**出现位置**：`bridge/PlatformService#findDeviceInfoByStationIds`（if/else eq vs in）、`modules/CouponServiceImpl`（`if (stationId != null && dicStationCategory != null)` 追加 `leftJoin` + `and`）。
 
 **测试要点**：Wrapper 被局部变量持有后按分支追加条件；分支内 `in(List)` 单元素等价性。
 
@@ -386,15 +388,15 @@ if (stationIds.size() == 1) {
 ### P16 Wrapper 作为方法入参就地修改
 
 ```java
-private void applyWithdrawFilters(MPJLambdaWrapper<MerchantWalletWithdrawEntity> wrapper, DTO dto) {
-    wrapper.like(StrUtil.isNotBlank(dto.getWithdrawCode()), MerchantWalletWithdrawEntity::getWithdrawCode, dto.getWithdrawCode())
-            .eq(dto.getMerchantId() != null, MerchantWalletWithdrawEntity::getMerchantId, dto.getMerchantId())
-            .ge(dto.getStartTime() != null, MerchantWalletWithdrawEntity::getCreateTime, dto.getStartTime())
-            .le(dto.getEndTime() != null, MerchantWalletWithdrawEntity::getCreateTime, dto.getEndTime());
+private void applyWithdrawFilters(MPJLambdaWrapper<WalletWithdrawEntity> wrapper, DTO dto) {
+    wrapper.like(StrUtil.isNotBlank(dto.getWithdrawCode()), WalletWithdrawEntity::getWithdrawCode, dto.getWithdrawCode())
+            .eq(dto.getMerchantId() != null, WalletWithdrawEntity::getMerchantId, dto.getMerchantId())
+            .ge(dto.getStartTime() != null, WalletWithdrawEntity::getCreateTime, dto.getStartTime())
+            .le(dto.getEndTime() != null, WalletWithdrawEntity::getCreateTime, dto.getEndTime());
 }
 ```
 
-**出现位置**：`admin/MerchantWalletWithdrawAppService#applyWithdrawFilters`、`admin/CarInvoiceAppService#applyBusinessOpenInfoFilter/#applyStationIdsFilter`、`admin/MerchantShareRecordAppService#appendCursorCondition`、`merchant-admin/MerchantShareRecordAppService#appendCursorCondition`、`merchant/HomeService#applyCarKeywordFilter/#applyCarDicStatusFilter/#applyBikeKeywordFilter/#applyBikeDicStatusFilter`。
+**出现位置**：`admin/WalletWithdrawAppService#applyWithdrawFilters`、`admin/InvoiceAppService#applyBusinessOpenInfoFilter/#applyStationIdsFilter`、`admin/ShareRecordAppService#appendCursorCondition`、`merchant-admin/ShareRecordAppService#appendCursorCondition`、`merchant/HomeService#applyKeywordFilter/#applyStatusFilter/#applyBikeKeywordFilter/#applyBikeStatusFilter`。
 
 **测试要点**：`MPJLambdaWrapper<T>` 作为入参类型；入参方法内继续链式；与 P03 工厂模式配合。
 
@@ -408,25 +410,25 @@ if (!bikeDevicePortInfoService.remove(new MPJLambdaWrapper<BikeDevicePortInfoEnt
         .eq(BikeDevicePortInfoEntity::getDeviceId, id))) { ... }
 
 // getOne / count（IService 原生）
-Optional.ofNullable(carOrderMonitorRecordService.getOne(
-        new MPJLambdaWrapper<CarOrderMonitorRecordEntity>().eq(...).orderByDesc(...).last("limit 1")));
-long count = carOrderMonitorRecordService.count(new MPJLambdaWrapper<...>().eq(...).ge(...).lt(...));
+Optional.ofNullable(orderMonitorRecordService.getOne(
+        new MPJLambdaWrapper<OrderMonitorRecordEntity>().eq(...).orderByDesc(...).last("limit 1")));
+long count = orderMonitorRecordService.count(new MPJLambdaWrapper<...>().eq(...).ge(...).lt(...));
 
 // BaseMapper.selectList（仅条件场景）
-List<CarStationChargingSummaryDayEntity> list = carStationChargingSummaryDayMapper.selectList(
-        new MPJLambdaWrapper<CarStationChargingSummaryDayEntity>()
+List<StationChargingSummaryDayEntity> list = chargingSummaryDayMapper.selectList(
+        new MPJLambdaWrapper<StationChargingSummaryDayEntity>()
                 .eq(...).ge(...).le(...));
 
 // MPJBaseMapper.selectJoinList 直调
-return carDeviceInfoMapper.selectJoinList(DeviceShareMerchantJoinBO.class, w);
+return deviceInfoMapper.selectJoinList(DeviceShareMerchantJoinBO.class, w);
 
 // IService.list（MPJLambdaQueryWrapper 字符串版）
-merchantSubAccountStationService.list(new MPJLambdaQueryWrapper<MerchantSubAccountStationEntity>()
-        .select(MerchantSubAccountStationEntity::getStationId, ...)
+subAccountStationService.list(new MPJLambdaQueryWrapper<SubAccountStationEntity>()
+        .select(SubAccountStationEntity::getStationId, ...)
         .eq(...))
 ```
 
-**出现位置**：`admin/BikeDeviceInfoAppService#delete`（remove）、`bridge/PlatformService`（getOne 2 处、count 1 处）、`bridge/CommonThirdPlatformOpenApiServiceImpl`（selectList 3 处）、`bridge/AbstractOperationStatsInfoPushService`（selectList 3 处）、`modules/CarChargingSummaryDayServiceImpl`（selectList 2 处）、`modules/SysMerchantShareRecordServiceImpl`（Mapper selectJoinList 2 处）、`merchant/SubAccountAppService#configStationEcho`（list + MPJLambdaQueryWrapper）。
+**出现位置**：`admin/BikeDeviceInfoAppService#delete`（remove）、`bridge/PlatformService`（getOne 2 处、count 1 处）、`bridge/CommonThirdPlatformOpenApiServiceImpl`（selectList 3 处）、`bridge/AbstractOperationStatsInfoPushService`（selectList 3 处）、`modules/ChargingSummaryDayServiceImpl`（selectList 2 处）、`modules/ShareRecordServiceImpl`（Mapper selectJoinList 2 处）、`merchant/SubAccountAppService#configStationEcho`（list + MPJLambdaQueryWrapper）。
 
 **测试要点**：MPJ wrapper 兼容喂给原生 MP 方法；`getOne`+`last("limit 1")` 取首行；`MPJLambdaQueryWrapper` 字符串字段版仅此一处。
 
@@ -436,25 +438,25 @@ merchantSubAccountStationService.list(new MPJLambdaQueryWrapper<MerchantSubAccou
 
 ```java
 // selectMax 单聚合
-MPJLambdaWrapper<CarOrderMonitorRecordEntity> wrapper = new MPJLambdaWrapper<CarOrderMonitorRecordEntity>()
-        .selectMax(CarOrderMonitorRecordEntity::getPower)
-        .eq(CarOrderMonitorRecordEntity::getOrderId, order.getId());
-List<BigDecimal> powerList = carOrderMonitorRecordService.selectJoinList(BigDecimal.class, wrapper);
+MPJLambdaWrapper<OrderMonitorRecordEntity> wrapper = new MPJLambdaWrapper<OrderMonitorRecordEntity>()
+        .selectMax(OrderMonitorRecordEntity::getPower)
+        .eq(OrderMonitorRecordEntity::getOrderId, order.getId());
+List<BigDecimal> powerList = orderMonitorRecordService.selectJoinList(BigDecimal.class, wrapper);
 
 // selectCount + 多 groupBy
-new MPJLambdaWrapper<OrderInvoiceApplyEntity>()
-        .selectCount(OrderInvoiceApplyEntity::getId, InvoiceReloginSmsReminderBO::getApplyCount)
-        .innerJoin(CarHuifuInvoiceBusinessOpenInfoEntity.class,
-                CarHuifuInvoiceBusinessOpenInfoEntity::getHuifuId, OrderInvoiceApplyEntity::getHuifuId)
-        .in(OrderInvoiceApplyEntity::getDicApplyStatus, REMIND_APPLY_STATUSES)
-        .isNotNull(OrderInvoiceApplyEntity::getHuifuId)
-        .ne(OrderInvoiceApplyEntity::getHuifuId, StrUtil.EMPTY)
-        .groupBy(OrderInvoiceApplyEntity::getHuifuId)
-        .groupBy(CarHuifuInvoiceBusinessOpenInfoEntity::getContactName)
-        .orderByAsc(OrderInvoiceApplyEntity::getHuifuId)
+new MPJLambdaWrapper<InvoiceApplyEntity>()
+        .selectCount(InvoiceApplyEntity::getId, InvoiceReminderBO::getApplyCount)
+        .innerJoin(InvoiceBusinessOpenInfoEntity.class,
+                InvoiceBusinessOpenInfoEntity::getPayId, InvoiceApplyEntity::getPayId)
+        .in(InvoiceApplyEntity::getDicApplyStatus, REMIND_APPLY_STATUSES)
+        .isNotNull(InvoiceApplyEntity::getPayId)
+        .ne(InvoiceApplyEntity::getPayId, StrUtil.EMPTY)
+        .groupBy(InvoiceApplyEntity::getPayId)
+        .groupBy(InvoiceBusinessOpenInfoEntity::getContactName)
+        .orderByAsc(InvoiceApplyEntity::getPayId)
 ```
 
-**出现位置**：`merchant/OrderManagementService#buildCarChargeCurveSummary`（selectMax + 映射 BigDecimal）、`integration/HuifuInvoiceReloginSmsReminderService`（selectCount + 3×groupBy + in/isNotNull/ne）。
+**出现位置**：`merchant/OrderManagementService#buildChargeCurveSummary`（selectMax + 映射 BigDecimal）、`integration/InvoiceReminderService`（selectCount + 3×groupBy + in/isNotNull/ne）。
 
 **测试要点**：`selectMax/selectCount` 聚合列生成；`groupBy` 多列；`in(List)` 大集合；`ne(列, StrUtil.EMPTY)` 空串过滤；映射到基本类型 `BigDecimal.class`。
 
@@ -463,10 +465,10 @@ new MPJLambdaWrapper<OrderInvoiceApplyEntity>()
 ### P19 全限定名构造（无 import）
 
 ```java
-carStationChargingSummaryDayMapper.selectList(
-        new com.github.yulichang.wrapper.MPJLambdaWrapper<CarStationChargingSummaryDayEntity>()
-                .eq(CarStationChargingSummaryDayEntity::getStationId, stationId)
-                .eq(CarStationChargingSummaryDayEntity::getStartDate, startDate));
+chargingSummaryDayMapper.selectList(
+        new com.github.yulichang.wrapper.MPJLambdaWrapper<StationChargingSummaryDayEntity>()
+                .eq(StationChargingSummaryDayEntity::getStationId, stationId)
+                .eq(StationChargingSummaryDayEntity::getStartDate, startDate));
 ```
 
 **出现位置**：`bridge/AbstractOperationStatsInfoPushService`（3 处）。
@@ -482,14 +484,14 @@ carStationChargingSummaryDayMapper.selectList(
 List<Long> ids = ...selectJoinList(Long.class, schemeWrapper);
 List<BigDecimal> powers = ...selectJoinList(BigDecimal.class, wrapper);
 // 映射实体本身
-List<MerchantRoleEntity> roles = merchantRoleService.selectJoinList(MerchantRoleEntity.class, wrapper);
-List<GiftFundEntity> funds = selectJoinList(GiftFundEntity.class, wrapper);
+List<RoleEntity> roles = roleService.selectJoinList(RoleEntity.class, wrapper);
+List<CouponEntity> funds = selectJoinList(CouponEntity.class, wrapper);
 // 结果 stream 后处理
-List<CarDeviceInfoBO> list = carDeviceInfoService.selectJoinList(CarDeviceInfoBO.class, wrapper)
+List<DeviceInfoBO> list = deviceInfoService.selectJoinList(DeviceInfoBO.class, wrapper)
         .stream().peek(dto -> {...}).toList();
 ```
 
-**出现位置**：`merchant/StationInfoService`（Long.class 3 处）、`merchant/OrderManagementService`（BigDecimal.class）、`merchant-admin/AuthAppService`（MerchantRoleEntity.class）、`modules/GiftFundServiceImpl`（GiftFundEntity.class 2 处）、`bridge/PlatformService#findCarDeviceInfoByStationIds`（stream().peek）、`modules/CarDeviceInfoServiceImpl`（stream().map）。
+**出现位置**：`merchant/StationInfoService`（Long.class 3 处）、`merchant/OrderManagementService`（BigDecimal.class）、`merchant-admin/AuthAppService`（RoleEntity.class）、`modules/CouponServiceImpl`（CouponEntity.class 2 处）、`bridge/PlatformService#findDeviceInfoByStationIds`（stream().peek）、`modules/DeviceInfoServiceImpl`（stream().map）。
 
 **测试要点**：`Class<R>` 形参可为基本类型包装类、实体类；转换引擎不应假设目标类型必为 VO。
 
@@ -574,7 +576,7 @@ List<CarDeviceInfoBO> list = carDeviceInfoService.selectJoinList(CarDeviceInfoBO
 
 ### 6.3 待补充（本清单之外）
 
-- 实体类 `@TableName` / `@TableField` / `@TableId` 注解清单（F-13 需要）——可另行从 `cyzc-*-domain` 实体类收集。
+- 实体类 `@TableName` / `@TableField` / `@TableId` 注解清单（F-13 需要）——可另行从 `demo-*-domain` 实体类收集。
 - 原生 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`（F-01/09/10）用法——非 MPJ，不在本清单范围。
 - 多数据库方言实测 SQL 输出对比（F-14）——需连接真实数据库验证。
 
@@ -582,28 +584,28 @@ List<CarDeviceInfoBO> list = carDeviceInfoService.selectJoinList(CarDeviceInfoBO
 
 ## 7. 附录：61 个源文件清单
 
-> 路径已省略公共前缀 `src/main/java/com/cyzc/platform/`。
+> 路径已省略公共前缀 `src/main/java/com/example/platform/`。
 
-**cyzc-app/cyzc-app-admin**（20）
-`admin/app/service/BikeDeviceInfoAppService.java`、`BikeDeviceProductInfoAppService.java`、`BikeOrderRecordAppService.java`、`BikeStationInfoAppService.java`、`CarDeviceInfoAppService.java`、`CarInvoiceAppService.java`、`CarOccupyRecordAppService.java`、`CarOrderRecordAppService.java`、`CarStationInfoAppService.java`、`CarStationPriceTaskRecordAppService.java`、`GiftFundAppService.java`、`HelpCenterInfoAppService.java`、`HuifuInvoiceAppService.java`、`IcCardInfoAppService.java`、`MerchantRoleAppService.java`、`MerchantShareRecordAppService.java`、`MerchantWalletSettlementAppService.java`、`MerchantWalletWithdrawAppService.java`、`UserAppService.java`、`UserDiscountAppService.java`
+**app-admin**（20）
+`admin/app/service/BikeDeviceInfoAppService.java`、`BikeProductInfoAppService.java`、`BikeOrderRecordAppService.java`、`BikeStationInfoAppService.java`、`DeviceInfoAppService.java`、`InvoiceAppService.java`、`OccupyRecordAppService.java`、`OrderRecordAppService.java`、`StationInfoAppService.java`、`StationPriceTaskRecordAppService.java`、`CouponAppService.java`、`HelpCenterInfoAppService.java`、`InvoiceReminderAppService.java`、`IcCardInfoAppService.java`、`RoleAppService.java`、`ShareRecordAppService.java`、`WalletSettlementAppService.java`、`WalletWithdrawAppService.java`、`UserAppService.java`、`UserDiscountAppService.java`
 
-**cyzc-app/cyzc-app-merchant**（8）
-`merchant/app/controller/UserController.java`、`merchant/app/service/SubAccountAppService.java`、`ChargingPortManagementService.java`、`DeviceManagementService.java`、`HomeService.java`、`IcCardInfoAppService.java`、`OrderManagementService.java`、`StationInfoService.java`
+**app-merchant**（8）
+`merchant/app/controller/UserController.java`、`merchant/app/service/SubAccountAppService.java`、`PortManagementService.java`、`DeviceManagementService.java`、`HomeService.java`、`IcCardInfoAppService.java`、`OrderManagementService.java`、`StationInfoService.java`
 
-**cyzc-app/cyzc-app-merchant-admin**（11）
-`merchantadmin/app/service/AuthAppService.java`、`BikeDeviceInfoAppService.java`、`BikeOrderRecordAppService.java`、`BikeStationInfoAppService.java`、`CarDeviceInfoAppService.java`、`CarOccupyRecordAppService.java`、`CarOrderRecordAppService.java`、`CarStationInfoAppService.java`、`MerchantShareRecordAppService.java`、`MerchantWalletSettlementAppService.java`、`RoleAppService.java`
+**app-merchant-admin**（11）
+`merchantadmin/app/service/AuthAppService.java`、`BikeDeviceInfoAppService.java`、`BikeOrderRecordAppService.java`、`BikeStationInfoAppService.java`、`DeviceInfoAppService.java`、`OccupyRecordAppService.java`、`OrderRecordAppService.java`、`StationInfoAppService.java`、`ShareRecordAppService.java`、`WalletSettlementAppService.java`、`RoleAppService.java`
 
-**cyzc-app/cyzc-app-consumer**（4）
-`consumer/app/service/BikeOrderAppService.java`、`CarDeviceAppService.java`、`CarOccupyAppService.java`、`CarStationAppService.java`
+**app-consumer**（4）
+`consumer/app/service/BikeOrderAppService.java`、`DeviceAppService.java`、`OccupyAppService.java`、`StationAppService.java`
 
-**cyzc-app/cyzc-app-bridge**（3）
+**app-bridge**（3）
 `bridge/app/service/openapi/impl/CommonThirdPlatformOpenApiServiceImpl.java`、`bridge/app/service/platform/PlatformService.java`、`bridge/app/service/push/business/template/AbstractOperationStatsInfoPushService.java`
 
-**cyzc-integration**（1）
-`integration/service/HuifuInvoiceReloginSmsReminderService.java`
+**integration**（1）
+`integration/service/InvoiceReminderService.java`
 
-**cyzc-modules**（14）
-`modules/service/impl/biz/BikeDevicePortInfoServiceImpl.java`、`BikeStationShareSchemeMerchantInfoServiceImpl.java`、`BizCarStationOccupyInfoServiceImpl.java`、`BizStationBarrierPushConfigRelServiceImpl.java`、`CarChargingSummaryDayServiceImpl.java`、`CarDeviceInfoServiceImpl.java`、`CarDevicePortInfoServiceImpl.java`、`CarStationPriceTaskRecordServiceImpl.java`、`CarStationShareSchemeMerchantInfoServiceImpl.java`、`IcCardInfoServiceImpl.java`；`modules/service/impl/sys/GiftFundServiceImpl.java`、`MerchantTeamInfoServiceImpl.java`、`SysMerchantShareRecordServiceImpl.java`、`UserVinServiceImpl.java`
+**modules**（14）
+`modules/service/impl/biz/BikeDevicePortInfoServiceImpl.java`、`BikeStationSchemeMerchantInfoServiceImpl.java`、`StationOccupyInfoServiceImpl.java`、`StationPushConfigRelServiceImpl.java`、`ChargingSummaryDayServiceImpl.java`、`DeviceInfoServiceImpl.java`、`DevicePortInfoServiceImpl.java`、`StationPriceTaskRecordServiceImpl.java`、`StationSchemeMerchantInfoServiceImpl.java`、`IcCardInfoServiceImpl.java`；`modules/service/impl/sys/CouponServiceImpl.java`、`TeamInfoServiceImpl.java`、`ShareRecordServiceImpl.java`、`UserInfoServiceImpl.java`
 
 ---
 
@@ -612,3 +614,4 @@ List<CarDeviceInfoBO> list = carDeviceInfoService.selectJoinList(CarDeviceInfoBO
 | 日期 | 变更 |
 |------|------|
 | 2026-08-12 | 初版：61 文件、约 150 处用法点、20 个去重模式、API 覆盖矩阵、测试建议 |
+| 2026-08-12 | 脱敏：实体类名/模块名/方法名/常量名替换为通用示例名（见首部脱敏说明），模式编号与结构不变 |
