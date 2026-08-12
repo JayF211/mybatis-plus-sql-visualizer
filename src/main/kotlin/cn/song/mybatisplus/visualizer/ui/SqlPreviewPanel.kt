@@ -344,15 +344,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         border = JBUI.Borders.empty(6, 8, 2, 8)
     }
 
-    /** 动态条件分区标题行：分区名 + 全选/全不选按钮（M13.1）。 */
-    private fun conditionSectionHeader(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-        add(sectionLabel(MpSqlVisualizerBundle.message("panel.condition.section")), BorderLayout.WEST)
-        add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 4)).apply {
-            selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
-            selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
-            add(selectAllButton)
-            add(selectNoneButton)
-        }, BorderLayout.EAST)
+    /** 动态条件分区操作行（M14.2）：全选/全不选按钮（「动态条件」分区标题已移除，避免占用左栏空间）。 */
+    private fun conditionSectionHeader(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
+        selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
+        selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+        add(selectAllButton)
+        add(selectNoneButton)
+        border = JBUI.Borders.empty(0, 8, 2, 8)
     }
 
     /** 左栏分区内的紧凑按钮（比工具栏按钮更小，避免挤压复选框行）。 */

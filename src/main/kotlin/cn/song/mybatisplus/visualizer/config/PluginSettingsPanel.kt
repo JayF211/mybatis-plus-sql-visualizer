@@ -3,9 +3,11 @@ package cn.song.mybatisplus.visualizer.config
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
@@ -174,6 +176,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             dialog.contentPane.add(panel)
             dialog.pack()
             dialog.setLocationRelativeTo(SwingUtilities.getWindowAncestor(this))
+            // M14.2 焦点修复：isVisible=true 为阻塞调用，必须在显示前调度聚焦，
+            // 否则输入框无焦点导致按键捕获不到（第二次修改不生效的根因）
+            SwingUtilities.invokeLater { capture.requestFocusInWindow() }
             capture.addKeyListener(object : KeyAdapter() {
                 override fun keyPressed(e: KeyEvent) {
                     when (e.keyCode) {
@@ -182,15 +187,37 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                         KeyEvent.VK_SHIFT, KeyEvent.VK_CONTROL, KeyEvent.VK_ALT, KeyEvent.VK_META -> Unit // 纯修饰键忽略
                         else -> {
                             val stroke = KeyStroke.getKeyStrokeForEvent(e)
-                            shortcut = KeyboardShortcut(stroke, null)
+                            val newShortcut = KeyboardShortcut(stroke, null)
+                            // M14.2 冲突检测：被其他 action 占用时提示（如 IDE 折叠类快捷键）
+                            val conflict = conflictActionName(newShortcut)
+                            if (conflict != null) {
+                                val proceed = Messages.showYesNoDialog(
+                                    SwingUtilities.getWindowAncestor(this@ShortcutEditor),
+                                    MpSqlVisualizerBundle.message("settings.shortcut.conflict", conflict),
+                                    MpSqlVisualizerBundle.message("settings.shortcut.conflict.title"),
+                                    Messages.getWarningIcon(),
+                                )
+                                if (proceed != Messages.YES) return
+                            }
+                            shortcut = newShortcut
                             dialog.dispose()
                         }
                     }
                 }
             })
             dialog.isVisible = true
-            capture.requestFocusInWindow()
         }
+
+        /** 若新快捷键已被其他 action 占用，返回占用者名称（可读 action 文本；环境异常兜底 null）。 */
+        private fun conflictActionName(newShortcut: KeyboardShortcut): String? = runCatching {
+            val keymap = KeymapManager.getInstance().activeKeymap
+            keymap.getActionIds()
+                .filter { it != ConvertToSqlAction.ACTION_ID }
+                .firstOrNull { actionId -> keymap.getShortcuts(actionId).any { it == newShortcut } }
+                ?.let { actionId ->
+                    ActionManager.getInstance().getAction(actionId)?.templatePresentation?.text ?: actionId
+                }
+        }.getOrNull()
     }
 
     // ------------------------------------------------------------------
