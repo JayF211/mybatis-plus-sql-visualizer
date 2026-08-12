@@ -22,9 +22,6 @@ dependencies {
         // Add plugin dependencies for compilation here:
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
-        bundledPlugin("com.intellij.modules.json")
-        bundledPlugin("org.intellij.plugins.markdown")
-        bundledPlugin("com.intellij.database")
     }
 }
 
@@ -33,6 +30,13 @@ repositories {
     intellijPlatform {
         defaultRepositories()
     }
+}
+
+// 纯 Kotlin 插件：无需 @NotNull 字节码插桩（Kotlin 编译器已处理空安全）。
+// 禁用后可绕开 JDK 环境下 instrumentCode 的 jrt 模块解析问题（Windows 中文环境实测报
+// "java.home/Packages does not exist"）。若后续引入 Java 源码或 GUI Forms 再评估开启。
+intellijPlatform {
+    instrumentCode = false
 }
 
 kotlin {
