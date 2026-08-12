@@ -51,8 +51,13 @@ object MpSqlVisualizerBundle {
      */
     @JvmStatic
     fun message(@PropertyKey(resourceBundle = BUNDLE_NAME) key: String, vararg params: Any?): String {
-        val pattern = ResourceBundle.getBundle(BUNDLE_NAME, currentLocale(), loader, utf8Control).getString(key)
-        return if (params.isEmpty()) pattern else MessageFormat.format(pattern, *params)
+        // 兜底：bundle 加载/key 缺失时返回 key 本身（对齐 IntelliJ BundleBase 行为，避免 UI 抛异常）
+        val pattern = runCatching {
+            ResourceBundle.getBundle(BUNDLE_NAME, currentLocale(), loader, utf8Control).getString(key)
+        }.getOrDefault(key)
+        return if (params.isEmpty()) pattern else runCatching {
+            MessageFormat.format(pattern, *params)
+        }.getOrDefault(pattern)
     }
 
     private val loader: ClassLoader get() = MpSqlVisualizerBundle::class.java.classLoader

@@ -25,9 +25,11 @@ class PluginDistributionSelfCheckTest {
     @Test
     fun `pluginXml_注册设置页configurable`() {
         val xml = resourceText("META-INF/plugin.xml")
-        assertTrue("应注册 PluginSettingsConfigurable", xml.contains("PluginSettingsConfigurable"))
+        // 官方规范：必须用 applicationConfigurable 注册（com.intellij.configurable 为 abstract EP 不可直接注册）
+        assertTrue("应用级设置页应注册 applicationConfigurable", xml.contains("applicationConfigurable"))
         assertTrue("configurable 应挂在 tools 分组", xml.contains("parentId=\"tools\""))
         assertTrue("设置页 id 应存在", xml.contains("cn.song.mybatisplus.visualizer.settings"))
+        assertTrue("不应使用 abstract 的 <configurable> 元素", !xml.contains("<configurable"))
     }
 
     @Test

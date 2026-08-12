@@ -37,11 +37,12 @@
         <!-- SQL 预览服务（project-level，统一转换入口） -->
         <projectService serviceImplementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewService"/>
 
-        <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer -->
-        <configurable parentId="tools"
-                      id="cn.song.mybatisplus.visualizer.settings"
-                      displayName="MyBatis-Plus SQL Visualizer"
-                      instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
+        <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer
+             （官方规范：必须用 applicationConfigurable 注册；com.intellij.configurable 为 abstract EP 不可直接注册） -->
+        <applicationConfigurable parentId="tools"
+                                 id="cn.song.mybatisplus.visualizer.settings"
+                                 displayName="MyBatis-Plus SQL Visualizer"
+                                 instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
         <!-- 悬停预览（F-06）：光标悬停显示 SQL 文档弹层 -->
         <documentationProvider implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewDocumentationProvider"/>
