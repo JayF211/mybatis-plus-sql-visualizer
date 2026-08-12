@@ -25,9 +25,12 @@
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         ]]></description>
 
-    <!-- 插件兼容性声明 -->
+    <!-- 插件兼容性声明
+         （M14.7 动态插件支持）：仅依赖 com.intellij.java（内置模块，常驻加载）；
+         移除 org.jetbrains.kotlin 运行时依赖——本插件不处理 Kotlin PSI，该依赖为模板遗留，
+         且 Kotlin 插件不支持动态卸载（依赖非动态插件会导致本插件也无法免重启安装/更新）；
+         kotlin-stdlib 由构建自动打包进插件 jar，功能不受影响 -->
     <depends>com.intellij.java</depends>
-    <depends>org.jetbrains.kotlin</depends>
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
@@ -55,9 +58,6 @@
                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
         <fileType name="MP_SQL_Preview" extensions="mpsql" language="MP_SQL_Preview"
                   implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewFileType"/>
-    </extensions>
-    <extensions defaultExtensionNs="org.jetbrains.kotlin">
-        <supportsKotlinPluginMode supportsK2="true"/>
     </extensions>
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->

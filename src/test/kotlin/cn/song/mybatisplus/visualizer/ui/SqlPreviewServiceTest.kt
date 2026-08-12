@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -890,5 +891,71 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         if (variable != null) return variable
         return PsiTreeUtil.findChildOfType(file, PsiLiteralExpression::class.java)
             ?: PsiTreeUtil.getDeepestFirst(file)
+    }
+
+    // ------------------------------------------------------------------
+    // M14.7：配置 → 行为集成测试（设置值驱动输出差异）
+    // ------------------------------------------------------------------
+
+    fun testDialectConfigPaginationRendersByDialect() {
+        // 配置方言 PostgreSQL → last("limit 5, 10") 渲染为 PG 语法（LIMIT 10 OFFSET 5）
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.dialect
+        settings.state.dialect = "PostgreSQL"
+        try {
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .last("limit 5, 10");
+                    }
+
+                    static class DeviceInfoEntity {
+                        private Long id;
+                    }
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())!!
+            assertTrue("PG 方言分页应渲染 OFFSET: ${result.sql}", result.sql.contains("LIMIT 10 OFFSET 5"))
+            assertTrue("不应使用 MySQL 写法: ${result.sql}", !result.sql.contains("LIMIT 5, 10"))
+        } finally {
+            settings.state.dialect = old
+        }
+    }
+
+    fun testFormatSqlConfigOffInitialSingleLine() {
+        // formatSql=false → 主展示 SQL 为单行（与 compactSql 一致）
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.formatSql
+        settings.state.formatSql = false
+        try {
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    }
+
+                    static class DeviceInfoEntity {
+                        private Long id;
+                    }
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())!!
+            assertEquals("SELECT id FROM device_info_entity WHERE id = 1001", result.sql)
+            assertEquals(result.sql, result.compactSql)
+        } finally {
+            settings.state.formatSql = old
+        }
     }
 }

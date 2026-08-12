@@ -49,9 +49,19 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 
 ### 配置
 
-`Settings → Tools → MyBatis-Plus SQL Visualizer`：数据库方言、参数替换、格式化、
-**界面语言**（默认简体中文，可切 English / 跟随系统）、**快捷键**（内嵌编辑，
-保存后写入 IDE Keymap，立即生效）。
+`Settings → Tools → MyBatis-Plus SQL Visualizer`：
+
+| 配置项 | 默认值 | 作用 | 生效时机 |
+|--------|--------|------|---------|
+| 数据库方言 | MySQL | 分页子句渲染（MySQL `LIMIT` / PostgreSQL `LIMIT...OFFSET` / Oracle `FETCH FIRST`） | 下次预览 |
+| 替换 ? 占位符 | 开 | 关闭后**可静态求值的变量**也渲染为 `?`（左栏输入框手动填值）；代码字面量恒内联 | 下次预览 |
+| 格式化输出 | 开 | 多行缩进（关 = 单行） | 下次预览 |
+| 代码左侧显示预览 SQL 图标 | 开 | gutter 图标入口（关 = 不显示） | 立即 |
+| 界面语言 | 简体中文 | 插件 UI 语言（English / 跟随系统可选） | 立即 |
+| 快捷键 | `Alt+Shift+Q` | 内嵌录制，保存写入 IDE Keymap（冲突可「强制使用」抢占） | 立即 |
+
+> 设置变更**无需重启 IDE**：重新触发预览（快捷键 / 右键 / gutter）即按新配置生效；
+> 弹窗内「单行/多行」按钮为临时视图切换，不写回「格式化输出」配置。
 
 ### SQL 预览弹窗
 

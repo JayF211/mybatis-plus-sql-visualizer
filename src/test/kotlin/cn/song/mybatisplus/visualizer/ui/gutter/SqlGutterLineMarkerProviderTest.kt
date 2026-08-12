@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.util.IconLoader
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiKeyword
 import com.intellij.psi.PsiLocalVariable
@@ -114,5 +115,28 @@ class SqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
         // 图标资源加载失败会导致 marker 渲染异常，显式断言
         val icon = IconLoader.getIcon("/icons/sqlGutter.svg", SqlGutterLineMarkerProvider::class.java)
         assertNotNull("gutter 图标应可加载", icon)
+    }
+
+    fun testShowGutterIconOffSuppressesMarkers() {
+        // M14.7：配置关闭 gutter 图标 → 不生成 marker（gutterEnabled 快速路径兜底）
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.showGutterIcon
+        settings.state.showGutterIcon = false
+        try {
+            configure(
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceEntity> w = new LambdaQueryWrapper<DeviceEntity>().eq(DeviceEntity::getId, 1L);
+                    }
+                }
+                """.trimIndent(),
+            )
+            assertNull("关闭开关后不应生成 marker", provider.getLineMarkerInfo(firstVariableId()))
+        } finally {
+            settings.state.showGutterIcon = old
+        }
     }
 }

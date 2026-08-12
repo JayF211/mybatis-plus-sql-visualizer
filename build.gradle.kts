@@ -55,3 +55,10 @@ kotlin {
 tasks.withType<Test>().configureEach {
     classpath = classpath.filter { !it.name.contains("vue", ignoreCase = true) }
 }
+
+// M14.7：开发期热重载——runIde 沙盒中修改代码即时生效（要求插件支持动态加载）
+tasks {
+    runIde {
+        autoReload = true
+    }
+}

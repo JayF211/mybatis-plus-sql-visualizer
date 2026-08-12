@@ -40,6 +40,16 @@ class PluginDistributionSelfCheckTest {
     }
 
     @Test
+    fun `pluginXml_不依赖kotlin插件_支持动态加载`() {
+        // M14.7：移除 org.jetbrains.kotlin 运行时依赖（Kotlin 插件非动态 → 依赖它会导致免重启失败）；
+        // 本插件不处理 Kotlin PSI，kotlin-stdlib 由构建自动打包
+        val xml = resourceText("META-INF/plugin.xml")
+        assertTrue("应保留 com.intellij.java 依赖", xml.contains("<depends>com.intellij.java</depends>"))
+        assertTrue("不应依赖 org.jetbrains.kotlin 插件", !xml.contains("<depends>org.jetbrains.kotlin"))
+        assertTrue("不应注册 kotlin 扩展命名空间", !xml.contains("defaultExtensionNs=\"org.jetbrains.kotlin\""))
+    }
+
+    @Test
     fun `插件图标_位于主JAR的META-INF约定路径`() {
         // 官方规范：pluginIcon.svg 须在主 JAR 的 META-INF（无 <icon> 声明）
         assertNotNull("META-INF/pluginIcon.svg 应存在", javaClass.classLoader.getResource("META-INF/pluginIcon.svg"))
