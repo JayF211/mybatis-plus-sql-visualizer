@@ -5,9 +5,7 @@
 
     <!-- 插件显示名称（M13.1 统一为完整名） -->
     <name>MyBatis-Plus SQL Visualizer</name>
-
-    <!-- 插件图标（亮/暗主题自动切换：pluginIcon.svg + pluginIcon_dark.svg，M13.1） -->
-    <icon>/icons/pluginIcon.svg</icon>
+    <!-- 插件图标：不声明 <icon>，走 IDEA 约定路径（jar 根 pluginIcon.svg / pluginIcon_dark.svg，亮暗主题自动切换，M14） -->
 
     <!-- 插件厂商（发布前请替换为真实信息） -->
     <vendor url="https://gitee.com/SongRenShuo">SongRenShuo</vendor>
@@ -70,7 +68,7 @@
                 class="cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction"
                 text="Convert to SQL"
                 description="将光标处的 MyBatis-Plus Wrapper 转换为 SQL"
-                icon="/icons/pluginIcon.svg">
+                icon="/pluginIcon.svg">
             <!-- 右键菜单：编辑器弹出菜单 -->
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <!-- 快捷键：Windows/Linux 与 macOS 各注册一份（默认值，可在 Keymap 自定义） -->
