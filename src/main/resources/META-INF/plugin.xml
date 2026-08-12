@@ -1,40 +1,71 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
-    <!-- Public plugin name should be written in Title Case.
-     Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
-    <name>Mybatis-plus-sql-visualizer</name>
+    <!-- 插件显示名称 -->
+    <name>MP SQL Visualizer</name>
 
-    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+    <!-- 插件厂商（发布前请替换为真实信息） -->
+    <vendor url="https://gitee.com/SongRenShuo">SongRenShuo</vendor>
 
-    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
-         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
+    <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符） -->
     <description><![CDATA[
-        Enter short description for your plugin here.<br>
-        <em>most HTML tags may be used</em>
+        MyBatis-Plus SQL Visualizer converts MyBatis-Plus (and MyBatis-Plus-Join) Wrapper chains into readable, copyable SQL with resolved parameters directly inside IntelliJ IDEA.
+        <br/>
+        <h2>Core capabilities</h2>
+        <ul>
+            <li>LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / MPJLambdaWrapper / MPJQueryWrapper to SQL</li>
+            <li>Replace <code>?</code> placeholders with actual parameter values (primitives, objects, collections)</li>
+            <li>Auto SQL formatting (keyword uppercase, clause indentation)</li>
+            <li>Trigger via context menu / shortcut / hover / tool window, one-click copy</li>
+            <li>Multiple SQL dialects (MySQL / PostgreSQL / Oracle)</li>
+        </ul>
+        <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         ]]></description>
 
-    <!-- Product and plugin compatibility requirements.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
-    <depends>org.intellij.plugins.markdown</depends>
-    <depends>com.intellij.database</depends>
-    <depends>com.intellij.modules.xml</depends>
-    <depends>org.jetbrains.kotlin</depends>
+    <!-- 插件兼容性声明 -->
     <depends>com.intellij.java</depends>
-    <depends>com.intellij.modules.json</depends>
+    <depends>org.jetbrains.kotlin</depends>
 
-    <resource-bundle>messages.MyMessageBundle</resource-bundle>
-
-    <!-- Extensions defined by the plugin.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow id="MyToolWindow" factoryClass="cn.song.mybatisplus.visualizer.MyToolWindowFactory"
-                    icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+        <!-- 全局配置（application-level，F-16） -->
+        <applicationService serviceImplementation="cn.song.mybatisplus.visualizer.config.PluginSettings"/>
+
+        <!-- SQL 预览服务（project-level，统一转换入口） -->
+        <projectService serviceImplementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewService"/>
+
+        <!-- 设置页：Settings → Tools → MP SQL Visualizer -->
+        <configurable parentId="tools"
+                      id="cn.song.mybatisplus.visualizer.settings"
+                      displayName="MP SQL Visualizer"
+                      instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
+
+        <!-- 工具窗口（F-07） -->
+        <toolWindow id="MP SQL Visualizer"
+                    factoryClass="cn.song.mybatisplus.visualizer.ui.SqlPreviewToolWindowFactory"
+                    anchor="right"
+                    icon="AllIcons.Toolwindows.ToolWindowMessages"/>
+
+        <!-- 悬停预览（F-06）：光标悬停显示 SQL 文档弹层 -->
+        <documentationProvider implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewDocumentationProvider"/>
     </extensions>
     <extensions defaultExtensionNs="org.jetbrains.kotlin">
         <supportsKotlinPluginMode supportsK2="true"/>
     </extensions>
+
+    <!-- Action 注册（F-04 右键菜单 + F-05 快捷键） -->
+    <actions>
+        <action id="cn.song.mybatisplus.visualizer.ConvertToSql"
+                class="cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction"
+                text="Convert to SQL"
+                description="将光标处的 MyBatis-Plus Wrapper 转换为 SQL">
+            <!-- 右键菜单：编辑器弹出菜单 -->
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <!-- 快捷键：Windows/Linux 与 macOS 各注册一份（默认值，可在 Keymap 自定义） -->
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt S"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt S"/>
+        </action>
+    </actions>
 </idea-plugin>
