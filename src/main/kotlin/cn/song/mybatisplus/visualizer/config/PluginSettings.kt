@@ -30,12 +30,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 是否格式化输出（true=多行缩进，false=单行）。 */
         var formatSql: Boolean = true,
 
-        /** 自动预览（悬停）开关（F-06）。 */
-        var autoPreview: Boolean = true,
-
-        /** 悬停延迟（毫秒，F-16 配置项）。 */
-        var hoverDelay: Int = DEFAULT_HOVER_DELAY,
-
         /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */
         var showGutterIcon: Boolean = true,
 
@@ -53,7 +47,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
-        const val DEFAULT_HOVER_DELAY = 500
 
         /** 默认界面语言（M14，用户要求默认中文）。 */
         const val DEFAULT_LANGUAGE = "zh"

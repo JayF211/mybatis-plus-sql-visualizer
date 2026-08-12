@@ -11,6 +11,11 @@
   - **弹窗自适应**：`SqlPreviewDialog` 默认尺寸按屏幕比例（宽 62%/高 65%，下限 900×600、上限 85%，小屏不超屏），`getDimensionServiceKey` 记忆用户拉伸尺寸，最小尺寸 640×420
   - **插件名全局统一**：`MyBatis-Plus SQL Visualizer`（bundle 3 键 ×2 语言、代码注释、CHANGELOG/开发计划/需求文档全量替换；内部标识 plugin id/Storage/类名不变）
   - **构建自检**：`PluginDistributionSelfCheckTest`（plugin.xml configurable 注册、META-INF 图标约定路径、插件名、bundle 默认中文断言）+ `SqlPreviewDialogSizeTest`（尺寸策略 mock 屏幕）；插件图标改为主 JAR `META-INF/pluginIcon.svg` 官方规范位置（详见《20260813-0000-设置页修复与弹窗自适应-开发计划.md》）
+- M14.1 设置页优化（用户反馈）：
+  - **移除悬停预览功能**：删除 `SqlPreviewDocumentationProvider`/`SqlHtmlRenderer` 与 plugin.xml `<documentationProvider>` 注册、`PluginSettings.autoPreview`/`hoverDelay` 配置项及设置页对应行、bundle 文案（`settings.autoPreview`/`settings.hoverDelay`/`documentation.title`）
+  - **快捷键内嵌修改**：设置页「快捷键」行改为录制式编辑器（显示当前快捷键 + 修改弹窗捕获按键组合），保存时直接写入 IDE 当前 Keymap（移除旧 KeyboardShortcut + 添加新组合，立即生效并持久化）；替代原「跳转 Keymap 设置」方案
+  - **文案清理**：gutter 开关去掉「（M10）」后缀
+  - **布局优化**：设置页行距紧凑化 + 底部 weighty 占位，消除内容区上方空白
 
 ### Changed
 - M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：

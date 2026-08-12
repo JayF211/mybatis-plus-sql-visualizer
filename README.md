@@ -10,7 +10,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 - **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）；**LIKE 自动拼百分号**（`like` → `'%值%'`）；**字段类型推断引号**（String 列输入数字恒加引号 `'123'`，数值列恒原样）
 - **动态条件**：布尔重载 `.eq(true, "name", val)` 在预览左栏提供**复选框开关**（纯手动勾选：勾选拼接、取消移除；字面量 `false` 默认不勾选）
 - **SQL 格式化**：关键字大写、子句换行缩进，支持格式化/单行两种视图
-- **多种触发方式**：右键菜单 / 快捷键（默认 `Ctrl+Alt+S`）/ 光标悬停 / 代码左侧 gutter 图标，一键复制
+- **多种触发方式**：右键菜单 / 快捷键（默认 `Ctrl+Alt+S`）/ 代码左侧 gutter 图标，一键复制
 - **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染）
 - **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN 预览，批量操作展开（F-15）
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
@@ -22,8 +22,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 | 方式 | 操作 |
 |------|------|
 | 右键菜单 | 光标置于 Wrapper 上 → 右键 → `Convert to SQL` |
-| 快捷键 | 默认 `Ctrl+Alt+S`（macOS `Cmd+Option+S`），可在 Keymap 中自定义 |
-| 光标悬停 | 光标悬停在 Wrapper 调用上，自动弹出 SQL 提示（可配置关闭） |
+| 快捷键 | 默认 `Ctrl+Alt+S`（macOS `Cmd+Option+S`），可在 Keymap 或插件设置页修改 |
 | 代码左侧图标 | Wrapper 锚点行左侧 gutter 显示 SQL 预览图标（可配置关闭），点击弹窗预览 |
 
 ### 示例
@@ -51,8 +50,8 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 ### 配置
 
 `Settings → Tools → MyBatis-Plus SQL Visualizer`：数据库方言、参数替换、格式化、
-自动预览、悬停延迟、**界面语言**（默认简体中文，可切 English / 跟随系统）、
-**快捷键**（展示当前快捷键 + 一键跳转 Keymap 修改）。
+**界面语言**（默认简体中文，可切 English / 跟随系统）、**快捷键**（内嵌编辑，
+保存后写入 IDE Keymap，立即生效）。
 
 ### SQL 预览弹窗
 

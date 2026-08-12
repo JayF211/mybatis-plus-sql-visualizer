@@ -55,12 +55,15 @@ class PluginDistributionSelfCheckTest {
         // 测试环境无 PluginSettings service → runCatching 兜底中文（用户要求默认中文）
         assertEquals("简体中文", MpSqlVisualizerBundle.message("settings.language.zh"))
         assertEquals("界面语言", MpSqlVisualizerBundle.message("settings.language"))
-        assertEquals("修改快捷键…", MpSqlVisualizerBundle.message("settings.shortcut.modify"))
+        assertEquals("快捷键", MpSqlVisualizerBundle.message("settings.shortcut"))
     }
 
     @Test
-    fun `bundle_参数化文案_MessageFormat占位符`() {
-        assertEquals("快捷键：Ctrl+Alt+S", MpSqlVisualizerBundle.message("settings.shortcut.current", "Ctrl+Alt+S"))
-        assertEquals("动态条件: 条件文本", MpSqlVisualizerBundle.message("panel.condition.flag", "条件文本"))
+    fun `bundle_悬停预览配置文案已清理`() {
+        // M14.1：悬停预览功能删除，对应配置文案不残留
+        assertEquals("settings.autoPreview", MpSqlVisualizerBundle.message("settings.autoPreview"))
+        assertEquals("settings.hoverDelay", MpSqlVisualizerBundle.message("settings.hoverDelay"))
+        // gutter 开关文案不再带（M10）
+        assertEquals("在代码左侧显示预览 SQL 图标", MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     }
 }
