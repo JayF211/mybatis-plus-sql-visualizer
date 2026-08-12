@@ -30,9 +30,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 是否格式化输出（true=多行缩进，false=单行）。 */
         var formatSql: Boolean = true,
 
-        /** 显示方式：DIALOG / TOOL_WINDOW / BOTH。 */
-        var displayMode: String = DISPLAY_BOTH,
-
         /** 自动预览（悬停）开关（F-06）。 */
         var autoPreview: Boolean = true,
 
@@ -53,9 +50,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
-        const val DISPLAY_DIALOG = "DIALOG"
-        const val DISPLAY_TOOL_WINDOW = "TOOL_WINDOW"
-        const val DISPLAY_BOTH = "BOTH"
         const val DEFAULT_HOVER_DELAY = 500
 
         /**

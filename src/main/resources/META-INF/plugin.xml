@@ -18,7 +18,7 @@
             <li>LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / MPJLambdaWrapper / MPJQueryWrapper to SQL</li>
             <li>Replace <code>?</code> placeholders with actual parameter values (primitives, objects, collections)</li>
             <li>Auto SQL formatting (keyword uppercase, clause indentation)</li>
-            <li>Trigger via context menu / shortcut / hover / tool window, one-click copy</li>
+            <li>Trigger via context menu / shortcut / hover / gutter icon, one-click copy</li>
             <li>Multiple SQL dialects (MySQL / PostgreSQL / Oracle)</li>
         </ul>
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
@@ -42,21 +42,12 @@
                       displayName="MP SQL Visualizer"
                       instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
-        <!-- 工具窗口（F-07） -->
-        <toolWindow id="MP SQL Visualizer"
-                    factoryClass="cn.song.mybatisplus.visualizer.ui.SqlPreviewToolWindowFactory"
-                    anchor="right"
-                    icon="AllIcons.Toolwindows.ToolWindowMessages"/>
-
         <!-- 悬停预览（F-06）：光标悬停显示 SQL 文档弹层 -->
         <documentationProvider implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewDocumentationProvider"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
-
-        <!-- M9 工具窗口：编辑器跟随实时预览（光标移动防抖转换推送） -->
-        <editorFactoryListener implementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewEditorTracker"/>
 
         <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
         <lang.parserDefinition language="MP_SQL_Preview"

@@ -35,14 +35,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 格式化开关。 */
     private val formatCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.formatSql"))
 
-    /** 显示方式下拉（代码值 → 本地化标签）。 */
-    private val displayOptions = listOf(
-        PluginSettings.DISPLAY_DIALOG to MpSqlVisualizerBundle.message("settings.displayMode.dialog"),
-        PluginSettings.DISPLAY_TOOL_WINDOW to MpSqlVisualizerBundle.message("settings.displayMode.toolWindow"),
-        PluginSettings.DISPLAY_BOTH to MpSqlVisualizerBundle.message("settings.displayMode.both"),
-    )
-    private val displayCombo = JComboBox(displayOptions.map { it.second }.toTypedArray())
-
     /** 自动预览（悬停）开关。 */
     private val autoPreviewCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.autoPreview"))
 
@@ -90,7 +82,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         addRow(MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
         addRow("", replaceParamsCheck)
         addRow("", formatCheck)
-        addRow(MpSqlVisualizerBundle.message("settings.displayMode"), displayCombo)
         addRow("", autoPreviewCheck)
         addRow("", gutterIconCheck)
         addRow(MpSqlVisualizerBundle.message("settings.hoverDelay"), hoverDelaySpinner)
@@ -120,7 +111,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         return dialectCombo.selectedItem != s.dialect
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
-            || displayCombo.selectedIndex != displayOptions.indexOfFirst { it.first == s.displayMode }
             || autoPreviewCheck.isSelected != s.autoPreview
             || gutterIconCheck.isSelected != s.showGutterIcon
             || hoverDelaySpinner.value != s.hoverDelay
@@ -134,7 +124,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.dialect = dialectCombo.selectedItem as? String ?: PluginSettings.DEFAULT_DIALECT
         s.replaceParams = replaceParamsCheck.isSelected
         s.formatSql = formatCheck.isSelected
-        s.displayMode = displayOptions.getOrNull(displayCombo.selectedIndex)?.first ?: PluginSettings.DISPLAY_BOTH
         s.autoPreview = autoPreviewCheck.isSelected
         s.showGutterIcon = gutterIconCheck.isSelected
         s.hoverDelay = hoverDelaySpinner.value as? Int ?: PluginSettings.DEFAULT_HOVER_DELAY
@@ -148,7 +137,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         dialectCombo.selectedItem = s.dialect
         replaceParamsCheck.isSelected = s.replaceParams
         formatCheck.isSelected = s.formatSql
-        displayCombo.selectedIndex = displayOptions.indexOfFirst { it.first == s.displayMode }.coerceAtLeast(0)
         autoPreviewCheck.isSelected = s.autoPreview
         gutterIconCheck.isSelected = s.showGutterIcon
         hoverDelaySpinner.value = s.hoverDelay

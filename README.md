@@ -9,7 +9,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
   `MPJLambdaWrapper` / `MPJQueryWrapper`
 - **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）
 - **SQL 格式化**：关键字大写、子句换行缩进，支持格式化/单行两种视图
-- **多种触发方式**：右键菜单 / 快捷键（默认 `Ctrl+Alt+S`）/ 光标悬停 / 工具窗口，一键复制
+- **多种触发方式**：右键菜单 / 快捷键（默认 `Ctrl+Alt+S`）/ 光标悬停 / 代码左侧 gutter 图标，一键复制
 - **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染）
 - **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN 预览，批量操作展开（F-15）
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
@@ -23,7 +23,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 | 右键菜单 | 光标置于 Wrapper 上 → 右键 → `Convert to SQL` |
 | 快捷键 | 默认 `Ctrl+Alt+S`（macOS `Cmd+Option+S`），可在 Keymap 中自定义 |
 | 光标悬停 | 光标悬停在 Wrapper 调用上，自动弹出 SQL 提示（可配置关闭） |
-| 工具窗口 | 打开右侧 `MP SQL Visualizer` 工具窗口查看最近结果 |
+| 代码左侧图标 | Wrapper 锚点行左侧 gutter 显示 SQL 预览图标（可配置关闭），点击弹窗预览 |
 
 ### 示例
 
@@ -49,7 +49,7 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 
 ### 配置
 
-`Settings → Tools → MP SQL Visualizer`：数据库方言、参数替换、格式化、显示方式、
+`Settings → Tools → MP SQL Visualizer`：数据库方言、参数替换、格式化、
 自动预览、悬停延迟。
 
 ## 📁 文档

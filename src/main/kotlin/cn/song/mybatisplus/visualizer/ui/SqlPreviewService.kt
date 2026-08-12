@@ -135,11 +135,6 @@ class SqlPreviewService(private val project: Project) {
     fun formatSql(): Boolean = settings?.state?.formatSql ?: true
 
     /**
-     * 显示方式（DIALOG / TOOL_WINDOW / BOTH），供 UI 触发方读取。
-     */
-    fun displayMode(): String = settings?.state?.displayMode ?: PluginSettings.DISPLAY_BOTH
-
-    /**
      * 风险警示（F-09/F-10）：UPDATE / DELETE 无 WHERE 条件时提示全表操作。
      */
     private fun buildWarning(statement: SqlStatement): String? = when (statement) {
@@ -166,8 +161,8 @@ class SqlPreviewService(private val project: Project) {
 
     companion object {
         /**
-         * 统一展示入口（M10-03）：按显示方式配置（F-16）展示预览结果，
-         * 供 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 与 gutter 图标点击共用。
+         * 统一展示入口（M10-03）：恒以弹窗（[SqlPreviewDialog]）展示预览结果，
+         * 供 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 与 gutter 图标点击共用（M11 起收敛为弹窗）。
          *
          * @param result null 表示未找到可转换的 Wrapper → 弹友好提示（不抛异常）
          */
@@ -180,13 +175,7 @@ class SqlPreviewService(private val project: Project) {
                 )
                 return
             }
-            val mode = project.getService(SqlPreviewService::class.java).displayMode()
-            if (mode != PluginSettings.DISPLAY_TOOL_WINDOW) {
-                SqlPreviewDialog(project, result).show()
-            }
-            if (mode != PluginSettings.DISPLAY_DIALOG) {
-                SqlToolWindow.showResult(project, result)
-            }
+            SqlPreviewDialog(project, result).show()
         }
 
         /**
