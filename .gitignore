@@ -1,0 +1,59 @@
+.gradle
+.intellijPlatform
+
+target/
+docs/
+logs/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.kotlin
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+rebel.xml
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Trae IDE ###
+.trae/
+
+### AI CODE TOOLS ###
+.claude/
+.codemoss/
+.ccgui/
+AGENTS
+.reasonix/
+reasonix.toml
+
+### Mac OS ###
+.DS_Store
+/.idea/
+.ace-tool/
+/AGENTS.md
+/scripts/**
+/.agents/
+/.codex/
