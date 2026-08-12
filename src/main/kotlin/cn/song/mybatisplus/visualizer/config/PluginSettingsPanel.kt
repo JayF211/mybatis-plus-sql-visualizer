@@ -148,6 +148,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                 textField.text = value?.let { KeymapUtil.getShortcutText(it) } ?: "—"
             }
 
+        /** M14.4：本次录制是否「强制使用」（冲突时抢占移除占用者；保存时消费后复位）。 */
+        var forceOnApply: Boolean = false
+
         private val textField = JBTextField(18).apply {
             isEditable = false
             toolTipText = MpSqlVisualizerBundle.message("settings.shortcut.tip")
@@ -188,19 +191,43 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                         else -> {
                             val stroke = KeyStroke.getKeyStrokeForEvent(e)
                             val newShortcut = KeyboardShortcut(stroke, null)
-                            // M14.2/14.3 冲突检测：被其他 action 占用时提示；确认后保存将**抢占**（移除占用者绑定），保证始终生效
+                            // M14.2/14.4 冲突处理：仅冲突时弹窗，且「强制使用」为独立按钮（与普通确认区分）——
+                            //  使用：绑定但不抢占（保留占用者，可能不生效）
+                            //  强制使用：抢占移除占用者，保证始终生效
                             val conflict = conflictActionName(newShortcut)
                             if (conflict != null) {
-                                val proceed = Messages.showYesNoDialog(
-                                    SwingUtilities.getWindowAncestor(this@ShortcutEditor),
+                                val options = arrayOf(
+                                    MpSqlVisualizerBundle.message("settings.shortcut.conflict.use"),
+                                    MpSqlVisualizerBundle.message("settings.shortcut.conflict.force"),
+                                    MpSqlVisualizerBundle.message("settings.shortcut.conflict.cancel"),
+                                )
+                                val choice = Messages.showDialog(
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict", conflict),
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict.title"),
+                                    options,
+                                    0,
+                                    1,
                                     Messages.getWarningIcon(),
+                                    null,
                                 )
-                                if (proceed != Messages.YES) return
+                                when (choice) {
+                                    0 -> { // 使用（普通）：不抢占
+                                        forceOnApply = false
+                                        shortcut = newShortcut
+                                        dialog.dispose()
+                                    }
+                                    1 -> { // 强制使用：抢占，保证生效
+                                        forceOnApply = true
+                                        shortcut = newShortcut
+                                        dialog.dispose()
+                                    }
+                                    else -> Unit // 取消
+                                }
+                            } else {
+                                forceOnApply = false
+                                shortcut = newShortcut
+                                dialog.dispose()
                             }
-                            shortcut = newShortcut
-                            dialog.dispose()
                         }
                     }
                 }
@@ -233,10 +260,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     }.getOrNull()
 
     /**
-     * 抢占式应用快捷键（M14.3）：保存时从**所有其他 action**（含 IDE 默认 keymap 继承绑定）
-     * 移除该组合，使本插件独占并始终生效。
+     * 应用快捷键（M14.3/14.4）：
+     *  - 普通「使用」：仅绑定给本插件（移除自身旧绑定，不动其他 action）；
+     *  - 「强制使用」：额外从**所有其他 action**（含 IDE 默认 keymap 继承绑定）移除该组合，保证独占始终生效。
      *
-     * 原理：IDEA keymap 支持"负绑定"——[Keymap.removeShortcut] 对继承自父级 keymap（$default）的
+     * 抢占原理：IDEA keymap 支持"负绑定"——[Keymap.removeShortcut] 对继承自父级 keymap（$default）的
      * 快捷键会在当前（用户级）keymap 写入禁用覆盖，与 IDE Keymap 设置页"绑定冲突键时自动移除旧绑定"一致。
      */
     private fun applyShortcut() {
@@ -246,14 +274,17 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             // 1) 清理本 action 的旧键盘快捷键
             keymap.getShortcuts(actionId).filterIsInstance<KeyboardShortcut>()
                 .forEach { keymap.removeShortcut(actionId, it) }
-            // 2) 抢占：新组合从所有其他 action 移除（含默认继承绑定），再绑定给本插件
+            // 2) 绑定新组合；「强制使用」时先抢占（从所有其他 action 移除，含默认继承绑定）
             val newShortcut = shortcutEditor.shortcut
             if (newShortcut != null) {
-                keymap.getActionIds().filter { it != actionId }.forEach { other ->
-                    keymap.getShortcuts(other).filter { it == newShortcut }
-                        .forEach { keymap.removeShortcut(other, it) }
+                if (shortcutEditor.forceOnApply) {
+                    keymap.getActionIds().filter { it != actionId }.forEach { other ->
+                        keymap.getShortcuts(other).filter { it == newShortcut }
+                            .forEach { keymap.removeShortcut(other, it) }
+                    }
                 }
                 keymap.addShortcut(actionId, newShortcut)
+                shortcutEditor.forceOnApply = false
             }
         }
     }
