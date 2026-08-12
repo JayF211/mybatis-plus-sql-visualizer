@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.actions
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
@@ -41,6 +42,9 @@ class ConvertToSqlAction : AnAction() {
 
         SqlPreviewDialog(project, result).show()
     }
+
+    // update() 读取 PSI，必须在后台线程执行（EDT 上请求 PSI_FILE 会抛异常）
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
         // 仅在 Java 文件中可用（M1 聚焦 Java PSI；Kotlin 支持后续里程碑）
