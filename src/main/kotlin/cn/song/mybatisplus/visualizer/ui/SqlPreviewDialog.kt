@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
 import java.awt.Dimension
 import javax.swing.Action
 import javax.swing.JComponent
@@ -20,25 +19,23 @@ class SqlPreviewDialog(
     private val result: PreviewResult,
 ) : DialogWrapper(project, true) {
 
-    private val panel = SqlPreviewPanel()
+    private val panel = SqlPreviewPanel(project)
 
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.showResult(result)
         init()
         // 弹窗默认尺寸
-        setSize(640, 420)
+        setSize(720, 480)
     }
 
     override fun createCenterPanel(): JComponent = panel
 
     override fun createActions(): Array<Action> = arrayOf(
-        // 一键复制（F-08）
+        // 一键复制（F-08，提示由面板统一处理）
         object : DialogWrapperAction(MpSqlVisualizerBundle.message("dialog.copy.button")) {
             override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
-                if (panel.copySql()) {
-                    Messages.showInfoMessage(project, MpSqlVisualizerBundle.message("dialog.copy.done"), MpSqlVisualizerBundle.message("plugin.name"))
-                }
+                panel.copySql()
             }
         },
         // 关闭

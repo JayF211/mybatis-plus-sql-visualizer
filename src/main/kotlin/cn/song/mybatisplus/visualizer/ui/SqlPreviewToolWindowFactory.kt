@@ -5,12 +5,10 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
-import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.content.ContentFactory
@@ -40,17 +38,16 @@ class SqlPreviewToolWindowFactory : ToolWindowFactory {
 }
 
 /**
- * 工具窗口内容面板：SQL 展示 + 工具栏（复制 / 清空）。
+ * 工具窗口内容面板：SQL 展示 + 工具栏（清空；复制/单行多行切换在面板顶部）。
  */
 class SqlPreviewToolWindowPanel(private val project: Project) : JBPanel<SqlPreviewToolWindowPanel>(BorderLayout()) {
 
-    private val previewPanel = SqlPreviewPanel()
+    private val previewPanel = SqlPreviewPanel(project)
     private val statusLabel = JBLabel(MpSqlVisualizerBundle.message("toolwindow.status.hint"))
 
     init {
         // 顶部工具栏
         val group = DefaultActionGroup().apply {
-            add(CopyAction())
             add(ClearAction())
         }
         val toolbar = ActionManager.getInstance()
@@ -83,15 +80,6 @@ class SqlPreviewToolWindowPanel(private val project: Project) : JBPanel<SqlPrevi
     // ------------------------------------------------------------------
     // 工具栏动作
     // ------------------------------------------------------------------
-
-    /** 复制当前 SQL（F-08）。 */
-    private inner class CopyAction : AnAction(MpSqlVisualizerBundle.message("toolwindow.copy")) {
-        override fun actionPerformed(e: AnActionEvent) {
-            if (previewPanel.copySql()) {
-                Messages.showInfoMessage(project, MpSqlVisualizerBundle.message("dialog.copy.done"), MpSqlVisualizerBundle.message("plugin.name"))
-            }
-        }
-    }
 
     /** 清空展示区。 */
     private inner class ClearAction : AnAction(MpSqlVisualizerBundle.message("toolwindow.clear"), null, AllIcons.Actions.GC) {

@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlHtmlRenderer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.lang.documentation.AbstractDocumentationProvider
-import com.intellij.openapi.util.text.StringUtil
 import com.intellij.psi.PsiElement
 
 /**
@@ -21,12 +21,12 @@ class SqlPreviewDocumentationProvider : AbstractDocumentationProvider() {
         val service = project.getService(SqlPreviewService::class.java)
         val result = service.preview(element) ?: return null
 
-        // 以等宽字体 pre 块返回 SQL；HTML 转义避免特殊字符破坏文档弹层
-        val escaped = StringUtil.escapeXmlEntities(result.sql)
+        // 以等宽字体 pre 块返回 SQL；经 SqlHtmlRenderer 做语法高亮（M8-05），颜色随 IDE 主题
+        val highlighted = SqlHtmlRenderer.render(result.sql)
         val title = result.wrapperType?.let { MpSqlVisualizerBundle.message("documentation.title", it.name) } ?: ""
         return """
             <div style='font-family: sans-serif; color: #808080; margin-bottom: 4px;'>$title</div>
-            <pre style='font-family: JetBrains Mono, monospace; font-size: 12px; margin: 0;'>$escaped</pre>
+            <pre style='font-family: JetBrains Mono, monospace; font-size: 12px; margin: 0;'>$highlighted</pre>
         """.trimIndent()
     }
 }
