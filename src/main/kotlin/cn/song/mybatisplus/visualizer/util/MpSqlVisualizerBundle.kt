@@ -41,6 +41,15 @@ object MpSqlVisualizerBundle {
             val stream = loader.getResourceAsStream(resourceName) ?: return null
             return stream.use { PropertyResourceBundle(it.reader(StandardCharsets.UTF_8)) }
         }
+
+        /**
+         * M14.7 修复「中英文切换无效」：禁用 JVM 默认 locale 回退。
+         *
+         * Java ResourceBundle 的 fallback 链默认包含 [Locale.getDefault]（JVM 语言环境）——
+         * 系统为中文时请求 `en` 找不到 `_en` 会回退到系统中文 locale，导致切英文无效。
+         * 返回 null 后 fallback 直达 base（英文），`en`/`zh` 由 [currentLocale] 精确控制。
+         */
+        override fun getFallbackLocale(baseName: String, locale: Locale): Locale? = null
     }
 
     /**

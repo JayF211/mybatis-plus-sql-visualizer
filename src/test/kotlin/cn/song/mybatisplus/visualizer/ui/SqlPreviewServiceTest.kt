@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -957,5 +958,19 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         } finally {
             settings.state.formatSql = old
         }
+    }
+
+    fun testLanguageSwitchEnImmediate() {
+        // M14.7 问题一验证：设置 language=en 后 message 立即返回英文（不依赖重启）；切回中文即时恢复
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.language
+        settings.state.language = "en"
+        try {
+            assertEquals("Interface language", MpSqlVisualizerBundle.message("settings.language"))
+            assertEquals("Shortcut", MpSqlVisualizerBundle.message("settings.shortcut"))
+        } finally {
+            settings.state.language = old
+        }
+        assertEquals("界面语言", MpSqlVisualizerBundle.message("settings.language"))
     }
 }

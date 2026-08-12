@@ -26,6 +26,9 @@
   - **集成测试补齐**：dialect 分页三方言（PG `LIMIT 10 OFFSET 5`）、formatSql 关闭初始单行、showGutterIcon 关闭不生成 marker（防未来回归为死配置）
   - **动态插件支持（免重启安装/更新）**：移除 `<depends>org.jetbrains.kotlin</depends>` 与 kotlin 扩展命名空间（本插件不处理 Kotlin PSI，为模板遗留；Kotlin 插件不支持动态卸载，依赖非动态插件导致无法免重启）；kotlin-stdlib 由 IDEA 平台自带，不打包不影响运行；`runIde { autoReload = true }` 开发期热重载；自检测试断言依赖清单
   - **设置变更生效时机**（文档化）：设置修改后**重新触发预览**即生效（无需重启 IDE）；弹窗内「单行/多行」为临时视图切换、不写回 `formatSql` 配置；`WrapperCache` 缓存键含开关维度（M14.6）
+- M14.7 修复（用户反馈）：
+  - **中英文切换无效**：根因是 Java `ResourceBundle` fallback 链默认包含 JVM 默认 locale——系统中文时请求 `en` 找不到 `_en` 回退到系统中文 locale。修复：自定义 Control 覆写 `getFallbackLocale` 返回 null（fallback 直达 base 英文），`en`/`zh` 由插件配置精确控制；新增 fixture 测试 `testLanguageSwitchEnImmediate`
+  - **gutter 图标开关不即时生效**：line marker 结果被高亮缓存，设置变化不触发重算。修复：设置保存时若开关变化，遍历所有打开项目编辑器文件触发 `DaemonCodeAnalyzer.restart(file)`（图标立即刷新，无需重开文件）
 
 ### Changed
 - M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：

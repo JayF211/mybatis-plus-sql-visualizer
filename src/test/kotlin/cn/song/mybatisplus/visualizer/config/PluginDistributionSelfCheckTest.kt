@@ -76,4 +76,5 @@ class PluginDistributionSelfCheckTest {
         // gutter 开关文案不再带（M10）
         assertEquals("在代码左侧显示预览 SQL 图标", MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     }
+
 }
