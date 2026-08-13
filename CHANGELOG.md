@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### Added
+- M16.1 设置中英文切换失效修复（239 测试全绿）：
+  - **移除 PluginSettings 双重注册**：plugin.xml `<applicationService>` 与 `@Service(APP)` 注解并存（M14.7 引入注解时未移除 XML 遗留）——官方规范禁止，双注册导致持久化绑定错实例、语言切换"即时生效但保存失效"（确定后重开/重启回中文的根因）；保留注解式注册（IDE 自动发现）
+  - **设置页标题跟随语言**：`applicationConfigurable` 移除 `bundle`/`key` 属性，displayName 由 `getDisplayName()` 动态返回（key 属性由 IDE 默认 locale 解析、不跟随插件语言）
+  - **防回归自检**：plugin.xml 无 PluginSettings 的 applicationService 注册 + configurable 无 bundle/key 属性断言
+  - **持久化链路测试**：`PluginSettingsPersistenceTest`（getState→loadState 往返保留 language / Configurable apply-reset 链路 / bundle 即时切换回归）
 - M16 SQL 面板字段补全 + 注释提示（v1.10，237 测试全绿）：
   - **注释读取（四级优先级 + schema 预留）**：`@Schema(description)` / `@ApiModelProperty(value/description)` / `@ExcelProperty(value)` 等注解白名单（排除 MP 注解 value 误取；`@TableField(comment=)` 例外）> javadoc（多行清洗）> 行注释（LightJava textRange 绑定 + 文档扫描双路径）；`CommentSource` 优先级链（SCHEMA 最高，方案 B 接入即自动覆盖）
   - **表/实体注释**：类级注解/javadoc/行注释 → `TableInfo.comment`，表名补全项展示注释

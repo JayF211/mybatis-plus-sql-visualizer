@@ -52,19 +52,18 @@
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
-        <!-- 全局配置（application-level，F-16） -->
-        <applicationService serviceImplementation="cn.song.mybatisplus.visualizer.config.PluginSettings"/>
+        <!-- 全局配置（application-level，F-16）——@Service(Service.Level.APP) 注解式注册（M16.1 移除 XML
+             双注册：官方规范禁止 plugin.xml 与 @Service 并存，双注册导致持久化绑定错实例、语言切换保存失效） -->
 
         <!-- SQL 预览服务（project-level，M16 起为轻服务：@Service(Service.Level.PROJECT) 注解声明，
              IDE 自动发现，无需 XML 注册；获取方式不变 project.getService(SqlPreviewService::class.java)） -->
 
         <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer
              （官方规范：必须用 applicationConfigurable 注册；com.intellij.configurable 为 abstract EP 不可直接注册；
-              M16 i18n：displayName 用 bundle+key 属性本地化，替代硬编码 displayName） -->
+              M16.1：displayName 由 getDisplayName() 动态返回（跟随插件语言切换），不声明 bundle+key——
+              key 属性由 IDE 默认 locale 解析、不跟随插件语言，且与 getDisplayName 双写易冲突） -->
         <applicationConfigurable parentId="tools"
                                  id="cn.song.mybatisplus.visualizer.settings"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->

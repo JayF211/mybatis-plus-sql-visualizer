@@ -61,6 +61,31 @@ class PluginDistributionSelfCheckTest {
     }
 
     @Test
+    fun `pluginXml_PluginSettings无XML双注册`() {
+        // M16.1：@Service(Service.Level.APP) 注解式注册后，plugin.xml 不应再有 applicationService——
+        // 双注册导致持久化绑定错实例（语言切换保存失效的根因）
+        val xml = resourceText("META-INF/plugin.xml")
+        val noComments = xml.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        assertTrue(
+            "不应有 PluginSettings 的 applicationService XML 注册（@Service 注解已声明）",
+            !noComments.contains("applicationService") || !noComments.contains("PluginSettings"),
+        )
+    }
+
+    @Test
+    fun `pluginXml_configurable不声明bundle与key`() {
+        // M16.1：displayName 由 getDisplayName() 动态返回（跟随插件语言）；key 属性由 IDE 默认 locale
+        // 解析、不跟随插件语言，且与 getDisplayName 双写易冲突
+        val xml = resourceText("META-INF/plugin.xml")
+        val noComments = xml.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        val configurableSection = noComments.substringAfter("applicationConfigurable", "")
+        assertTrue(
+            "applicationConfigurable 不应声明 bundle/key 属性",
+            !configurableSection.contains("bundle=") && !configurableSection.contains("key="),
+        )
+    }
+
+    @Test
     fun `bundle_默认中文_环境未注册时兜底简体中文`() {
         // 测试环境无 PluginSettings service → runCatching 兜底中文（用户要求默认中文）
         assertEquals("简体中文", MpSqlVisualizerBundle.message("settings.language.zh"))
