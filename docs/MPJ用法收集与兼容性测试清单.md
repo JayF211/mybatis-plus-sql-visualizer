@@ -1811,7 +1811,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `UpdateJoinWrapper/DeleteJoinWrapper` | ⬜ | 新 wrapper 类型，评估中 |
 | `selectJoinOnePage` | ⬜ | 官方确认不存在此 API |
 
-**已评估暂不支持的边界（⬜）**：`from(子查询主表)`、fill 关联填充、UpdateJoinWrapper/DeleteJoinWrapper 直接构造、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API，如后续需要可单独里程碑实现。
+**已评估暂不支持的边界（⬜）**：`from(子查询主表)`、fill 关联填充、UpdateJoinWrapper/DeleteJoinWrapper 直接构造、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API——**全部 🟡/⬜ 项已排入《低频复杂 API 后期实现计划》（docs/开发计划/20260813-0829-低频复杂API后期实现计划.md，P1/P2/P3 分组 + 实现思路，建议并入 M17/M18 或按需立项）**。
 
 ---
 
