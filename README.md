@@ -108,3 +108,12 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 ## 变更记录
 
 见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 📞 联系作者
+
+扫码添加作者微信或加入交流群（二维码为**限时码**，仓库内图片定期更新）：
+
+| 作者微信 | 交流群 |
+|----------|--------|
+| ![微信](docs/images/wechat-qr.png) | ![交流群](docs/images/group-qr.png) |
+

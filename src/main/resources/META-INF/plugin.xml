@@ -46,6 +46,14 @@
             <li>安全警示：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
+        <!-- M18 联系作者：外链二维码（base64/相对路径在插件描述中不可用，官方推荐外部 URL；
+             图片存于仓库 docs/images/，raw 直链；二维码为限时码，更新图片后重新发布即可，URL 不变） -->
+        <hr/>
+        <h2>Author / 联系作者</h2>
+        <p>Scan to add the author's WeChat / 扫码添加作者微信</p>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/wechat-qr.png" width="220" height="220"/>
+        <p>Scan to join the WeChat group / 扫码加入交流群</p>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/group-qr.png" width="220" height="220"/>
         ]]></description>
 
     <!-- 插件兼容性声明

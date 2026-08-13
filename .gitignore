@@ -8,6 +8,8 @@ docs/*
 !docs/需求文档/*.md
 !docs/开发计划/
 !docs/开发计划/*.md
+!docs/images/
+!docs/images/*.png
 logs/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
