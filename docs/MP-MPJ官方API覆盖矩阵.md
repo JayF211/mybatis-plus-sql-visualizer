@@ -8,6 +8,8 @@
 >
 > **状态说明**：矩阵中「目标状态」为里程碑完成后应达成的最终状态；当前实现快照以《[MPJ 用法收集与兼容性测试清单](./MPJ用法收集与兼容性测试清单.md)》§5.6 为准。**状态随开发计划（[docs/开发计划/20260813-1730-全量API预览支持-开发计划.md](./开发计划/20260813-1730-全量API预览支持-开发计划.md)）各里程碑（M20/M21/M22）交付更新**：交付一项、对应行 🟡/⬜ → ✅ 或标注文档化边界，并同步新增 A 段 fixture 测试（沿用 P/Q/U 编号惯例，新增段建议 **A01~Axx**，测试先行）。
 >
+> **交付记录**：**M20 ✅（2026-08-13，379 测试全绿）**——P0 差距清零（JoinWrappers 工厂/entity 构造/批量族/Map 消费/eqOrIsNull/selectIgnore/逻辑删除六方法/消费全集）；**M21 ✅（2026-08-13，420 测试全绿）**——中等成本补全（allEq/setEntity/selectFilter/枚举 selectFunc/rightAlias/子表 MConsumer/ext/prefix-free/from/around/UpdateJoin+DeleteJoin）。剩余 ⬜（fill、拦截器模拟、方言扩展、Db·SimpleQuery·ActiveRecord、XML customSqlSegment、Kotlin 侧）排 M22 按需立项。
+>
 > 关联文档：《MPJ 用法收集与兼容性测试清单.md》（§5.6 为现状矩阵）、《20260813-0829-低频复杂API后期实现计划.md》（P 分组背景）、《20260813-1730-全量API预览支持-开发计划.md》（M20~M22 任务来源，本矩阵任务编号均出自该文档）。
 
 ---

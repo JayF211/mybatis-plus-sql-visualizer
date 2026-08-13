@@ -1749,7 +1749,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `eqSql/gtSql/geSql/ltSql/leSql` | ✅ | `col op (sql)`（3.4.3.2+/3.5.6） |
 | `isNull/isNotNull` | ✅ | – |
 | `exists/notExists`（含 `{0}` 参数） | ✅ | – |
-| `allEq`（6 重载，Map 参数） | 🟡 | psi 层 Map 实参解析为占位符（近似渲染） |
+| `allEq`（6 重载，Map 参数） | ✅ | T-M21-04（M21）：`Map.of`/`Map.ofEntries` 字面量展开多条 eq、`null2IsNull=true` 且值可判 null → `IS NULL`、变量 Map → 可读占位条件组、boolean 重载 |
 | `and(Consumer)` / `or()` / `or(Consumer)` / `nested` / `not(Consumer)` | ✅ | nested/not 为官方 API 补充；lambda 内 or() 已展平双层括号 |
 | `apply`（raw/`{0}`/boolean） | ✅ | – |
 | `last` / `comment` / `first` | ✅ | 全部支持（M15 增补：rawFirst 前缀 + comment 注释） |
@@ -1757,11 +1757,11 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `orderByAsc/orderByDesc/orderBy(condition, isAsc, cols)` | ✅ | orderBy 双布尔前缀解析（官方 API 补充） |
 | `func(Consumer)` | ✅ | 条件直接展开（官方 API 补充） |
 | `select`（varargs/字符串列/List） | ✅ | – |
-| `select(Class, Predicate)` / `selectFilter` | 🟡 | 谓词 lambda 不可静态求值——按全列近似渲染 |
+| `select(Class, Predicate)` / `selectFilter` | 🟡 | T-M21-01（M21）：白/黑名单静态近似（lambda 体字符串字面量启发式）；复杂谓词回退全列——谓词 lambda 不可精确静态求值 |
 | `set/setSql/setIncrBy/setDecrBy`（UpdateWrapper） | ✅ | setIncrBy/DecrBy 为官方 API 补充 |
-| `setEntity(entity)` | 🟡 | 实体参与 where 的语义未建模（真实项目 0 使用） |
+| `setEntity(entity)` | ✅ | T-M21-05（M21）：实体全列 `= ?` 近似（运行时字段值不可得） |
 | `lambda()` 转换 | ✅ | T-M15-02 |
-| `eqOrIsNull` | ⬜ | 3.5.17 新增，3.5.15 无此方法 |
+| `eqOrIsNull` | ✅ | T-M20-09（M20）：3.5.17 新增——值静态可判 null → `IS NULL`，否则 `= ?`（boolean 重载同） |
 
 **链式调用（ChainWrapper）**：
 
@@ -1784,7 +1784,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `update(entity, wrapper)` 双参 | ✅ | T-M15-04 实体字段展开 |
 | `saveBatch/updateBatchById/saveOrUpdate(Batch)/insertBatchSomeColumn` | ✅ | T-M15-08 |
 | `selectByIds/deleteByIds`（3.5.9+ 新名） | ✅ | P1-02（M19.5）：与 removeByIds 同族；selectByIds 并入 Operation.SELECT（与 getById/listByIds 同模板） |
-| ResultHandler 流式重载 | ⬜ | 消费形态同无 handler 版本，评估中 |
+| ResultHandler 流式重载 | ✅ | T-M20-06（M20）：selectList/selectMaps/selectObjs(w, rh) 消费识别，SQL 形态同无 handler 版本（第二参忽略） |
 
 **MPJLambdaWrapper**：
 
@@ -1796,21 +1796,23 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `selectAsClass(Class, Class)` | ✅ | 属性名交集映射（官方 API 补充） |
 | `selectSum/Max/Min/Avg/Len/Count`（含别名） | ✅ | selectLen → LENGTH |
 | `selectFunc`（String 模板） | ✅ | `%s`/`{0}` 占位 |
-| `selectFunc(BaseFuncEnum)` 8 形态 | 🟡 | enum 形态未建模（真实项目用 String 模板） |
+| `selectFunc(BaseFuncEnum)` 8 形态 | ✅ | T-M21-06（M21）：枚举 → 内置函数模板映射（SUM/COUNT/MAX/MIN/AVG/LEN→LENGTH/CONCAT；未知枚举忽略） |
 | `selectSub`（子查询列） | ✅ | `(SELECT ...) AS alias` 子查询列（M15 增补；子查询内列对列比较近似无别名） |
-| `selectCollection/selectAssociation`（5 形态） | 🟡 | 核心形态已支持；prefix/free 映射形态评估中 |
+| `selectCollection/selectAssociation`（5 形态） | ✅ | T-M21-03（M21）：prefix 别名形态子查询渲染；free 形态（无子表类）按文档化边界不产生子查询（结果映射类调用） |
 | `distinct` | ✅ | – |
-| `leftJoin/innerJoin/rightJoin/fullJoin`（20 重载） | 🟡 | 三参/四参别名/on()/lambda ON/字符串/自定义关键字已支持；5 参 rightAlias、子表 MConsumer（1.5.2+）、ext MFunction 形态评估中 |
+| `leftJoin/innerJoin/rightJoin/fullJoin`（20 重载） | ✅ | T-M21-02（M21）：4/5 参 rightAlias、子表 MConsumer（1.5.2+，`LEFT JOIN (SELECT ...) alias ON ...`）、ext MFunction（ON 追加条件）已实现 |
 | `join(String keyWord, ...)` | ✅ | 自定义关键字（官方 API 补充） |
 | 字符串 SQL join（`leftJoin("sql", args)`） | ✅ | `{i}` 参数替换（官方 API 补充） |
 | `applyFunc` | ✅ | `%s` 列 + `{0}` 参数（官方 API 补充） |
-| `eqIfExists` 等 IfExists 条件族 | ✅ | 归一化为普通条件（官方 API 补充） |
+| `eqIfExists` 等 IfExists 条件族 | ✅ | 归一化为普通条件（官方 API 补充；T-M21-09：inIfNotEmpty/notInIfNotEmpty 后缀归一） |
 | 子查询条件（`eq/ne/gt/ge/lt/le/in/notIn(col, Class, wrapper)`） | ✅ | 独立解析器渲染子查询（M15 增补） |
 | `setAlias` | ✅ | 主表别名方法（M15 增补，优先级：构造别名 > setAlias > 默认 t） |
 | `union/unionAll` | ✅ | `UNION (子查询)`（M15 增补） |
-| `from(子查询主表)` | ⬜ | 评估中 |
-| `disableLogicDel` / `logicDelToOn` | ✅ | P1-01（M19.5）：四形态（disableLogicDel/enableLogicDel/logicDelToOn/logicDelToWhere）按源码顺序求值（enable/logicDelToWhere 恢复注入，logicDelToOn 近似跳过） |
-| `fill` 关联填充 | ⬜ | 评估中 |
+| `from(子查询主表)` | ✅ | T-M21-07（M21）：`FROM (SELECT ...) 主别名`（子查询 setAlias/条件/LIMIT 全支持，对照官方结构） |
+| `disableLogicDel` / `enableLogicDel` / `disableSubLogicDel` / `enableSubLogicDel` / `logicDelToOn` / `logicDelToWhere` | ✅ | T-M20-05（M20）：六方法按源码顺序求值——主表/副表独立开关，logicDelToOn/ToWhere 控制副表 deleted 位置（ON / WHERE 末尾），副表默认 ON 注入（`alias.deleted = 0`） |
+| `around`（1.4.11+） | ✅ | T-M21-09（M21）：对照源码核实为 `around(condition, firstSql, lastSql)` 双段形态——firstSql 置 SQL 起始、lastSql 渲染于 ORDER BY 后 LIMIT 前 |
+| `setTableName(Function)` / `pageByMain()` | ✅ | T-M21-09（M21）：运行时语义静态不可求值 → 文档化 no-op（预览不受影响） |
+| `fill` 关联填充 | ⬜ | 评估中（M22） |
 | Chain 消费 `one(Class)/list(Class)/page(P, Class)/first/map*` | ✅ | – |
 
 **MPJ 其他**：
@@ -1822,10 +1824,10 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `selectJoinList/One/ListPage/Count` | ✅ | – |
 | `selectJoinMap(s)/selectJoinPage/selectJoinMapsPage` | ✅ | 渲染同为 SELECT（实参锚点定位 + 默认 SELECT 消费） |
 | `deleteJoin` / `updateJoin` / `updateJoinAndNull`（消费） | ✅ | deleteJoin(wrapper)→DELETE；updateJoin(entity, wrapper)→实体字段展开 SET（M15 增补） |
-| `UpdateJoinWrapper/DeleteJoinWrapper` | ⬜ | 新 wrapper 类型，评估中 |
+| `UpdateJoinWrapper/DeleteJoinWrapper` | ✅ | T-M21-08（M21）：直接构造 + JoinWrappers.update/delete 工厂 + UpdateJoinConverter/DeleteJoinConverter（`UPDATE t LEFT JOIN t1 SET ... WHERE` / `DELETE t,t1 FROM ...`；delete(Class...)/deleteAll()/setUpdateEntity(AndNull)/updateAndNull 终结点）；全逻辑删除转 UPDATE 为文档化边界 |
 | `selectJoinOnePage` | ⬜ | 官方确认不存在此 API |
 
-**已评估暂不支持的边界（⬜）**：`from(子查询主表)`、fill 关联填充、UpdateJoinWrapper/DeleteJoinWrapper 直接构造、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API——**全部 🟡/⬜ 项已排入《低频复杂 API 后期实现计划》（docs/开发计划/20260813-0829-低频复杂API后期实现计划.md，P1/P2/P3 分组 + 实现思路），M19.5 起与《用户实测两类未识别形态修复》一起开工：P1 全部 + P2-08 并入 M19.5，P2 剩余排 M20，P3 按需立项**。
+**已评估暂不支持的边界（⬜）**：fill 关联填充（M22）、`select(Class, Predicate)` 谓词**精确**求值（静态近似已交付，🟡）、`selectJoinOnePage`（官方不存在）。M20/M21 已交付项见上方矩阵对应行与《全量 API 预览支持开发计划》（docs/开发计划/20260813-1730-全量API预览支持-开发计划.md）——原《低频复杂 API 后期实现计划》P2 全部 + P3-01 已提前完成，P3 剩余（fill/Kotlin 侧/Db·SimpleQuery·ActiveRecord/XML customSqlSegment/拦截器模拟）排 M22 按需立项。
 
 ---
 
@@ -1833,6 +1835,8 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-13 | **M21 交付（420 测试全绿）**：中等成本 API 补全——allEq 6 重载（Map.of 字面量展开/IS NULL）、setEntity、select(Class,Predicate)/selectFilter 黑白名单近似、selectFunc(BaseFuncEnum) 枚举映射、join 4/5 参 rightAlias + 子表 MConsumer + ext MFunction、selectCollection prefix/free 形态、from(子查询主表)、around（对照源码核实双段形态）、setTableName/pageByMain no-op、inIfNotEmpty/setIfNotEmpty/setIfExists、**UpdateJoinWrapper/DeleteJoinWrapper 全链路**（新 converter + 多表 UPDATE/DELETE 渲染）。§5.6 矩阵 🟡/⬜ → ✅（保留 🟡：selectFilter 谓词精确求值；⬜：fill 等 M22 项） |
+| 2026-08-13 | **M20 交付（379 测试全绿）**：P0 差距清零——JoinWrappers/MPJWrappers 工厂识别、MPJ entity 构造、selectIgnore/groupByStr/orderByStr/stringQuery·lambda 互转、逻辑删除六方法精确化（主/副表独立开关 + ON/WHERE 位置）、消费方法全集核对（selectCount/getObj 补注册 + ResultHandler 流式重载）、Map 条件消费（removeByMap/deleteByMap/selectByMap/listByMap）、BaseMapper 批量族（insert/insertOrUpdate）、eqOrIsNull（3.5.17）、getOptById/removeBatchByIds/saveOrUpdate(entity, wrapper)。§5.6 矩阵相应行更新；计数/exists 分支 MPJ 联表保真 |
 | 2026-08-13 | **用户实测延伸：MPJ wrapper + helper 多条件（310 测试全绿）**：`applyWorkflowDataScope(MPJLambdaWrapper)` 内追加 eq(tenantId 字面量)/ge(createdTime 占位)/likeRight(name) 三个条件——M19.6 helper 跨方法续链对 MPJ wrapper 同样生效（并入联表查询 WHERE、主表别名 t. 前缀统一、逻辑顺序在 helper 调用点之后），Scratch 延伸用例测试固化 |
 | 2026-08-13 | **用户实测（Scratch 用例）：on 双字符串 eq 列对列比较（309 测试全绿）**：`eq("t1.workflow_id", "t.id")` 右参字符串含 `.` 被当字符串值渲染（`= 't.id'` 加引号）——修复：`parseOnLambda` 右参 ValueArg 含 `.` 按字符串列引用生成列对列比较（`t1.workflow_id = t.id`），无 `.` 字符串按值（`eq("t2.script_status", "1")` → `= '1'`）。Scratch 用例全链路测试固化（selectAll + 双别名 join + apply 子查询 + CASE WHEN 列 + 布尔条件 + helper 空实现传参），P13 测试要点补充 |
 | 2026-08-13 | **用户实测：getById 实参类型被误当实体（308 测试全绿）**：`getById(dto.getId())` 的 Long 实参在真实 IDE 可解析——`resolveEntityTable` 步骤 2 未限定类型，把 java.lang.Long 当实体解析（`FROM long` + `serialVersionUID/MIN_VALUE/MAX_VALUE` 等字段列，测试环境 Long 不可解析故未暴露）。修复：`isLikelyEntity` 启发式（@TableName 注解 OR 类名含 Entity，排除 java./javax. 前缀）接入步骤 1/2，基础类型跳过走步骤 3 service 泛型；实体参数（save/updateById）不受影响 |
