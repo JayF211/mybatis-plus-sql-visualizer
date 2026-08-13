@@ -515,9 +515,9 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         assertEquals("UserEntity", queryJoin.entityClass)
     }
 
-    fun testJoinWrappersDeleteUpdateReturnNull() {
-        // T-M20-02：JoinWrappers.delete/update 为 DeleteJoinWrapper/UpdateJoinWrapper（M21 补类型），
-        // 本任务定位返回 null（但不误识别为 Wrappers.delete 等）
+    fun testJoinWrappersUpdateDeleteFactoryLocates() {
+        // T-M21-08（原 P3-01 提前）：JoinWrappers.update(Class) → UPDATE_JOIN、delete(Class) → DELETE_JOIN
+        // （Wave 1 占位返回 null，本任务补齐类型映射）；消费方法 updateJoin/deleteJoin 不误识别为链起点
         myFixture.configureByText(
             "Demo.java",
             """
@@ -526,7 +526,7 @@ class WrapperLocatorTest : BasePlatformTestCase() {
             public class Demo {
                 public void query() {
                     mapper.deleteJoin(UserEntity.class, JoinWrappers.delete(UserEntity.class));
-                    mapper.updateJoin(UserEntity.class, JoinWrappers.update(UserEntity.class));
+                    mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class));
                 }
 
                 static class UserEntity {
@@ -536,10 +536,93 @@ class WrapperLocatorTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
-        assertNull("JoinWrappers.delete 当前不产出类型（M21 补），定位应为 null",
-            WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "delete" }))
-        assertNull("JoinWrappers.update 当前不产出类型（M21 补），定位应为 null",
-            WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "update" }))
+        val updateChain = WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "update" })
+        assertNotNull("JoinWrappers.update 应定位为 UPDATE_JOIN 工厂链", updateChain)
+        assertEquals(WrapperType.UPDATE_JOIN, updateChain!!.wrapperType)
+
+        val deleteChain = WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "delete" })
+        assertNotNull("JoinWrappers.delete 应定位为 DELETE_JOIN 工厂链", deleteChain)
+        assertEquals(WrapperType.DELETE_JOIN, deleteChain!!.wrapperType)
+    }
+
+    fun testJoinWrappersUpdateFactoryChainRendersUpdateJoinSql() {
+        // T-M21-08 全链路：JoinWrappers.update(Class).set(...).leftJoin(...).eq(...) →
+        // UPDATE 联表 SQL（WrapperLocator → ConverterRegistry → SqlGenerator；
+        // 实体经 inferEntityFromChain 文本兜底：UserEntity::getName 方法引用 → 类名 + getter 属性）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class)
+                            .set(UserEntity::getName, "x")
+                            .leftJoin(AddressEntity.class, AddressEntity::getUserId, UserEntity::getId)
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                    private String name;
+                }
+
+                static class AddressEntity {
+                    private Long id;
+                    private Long userId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "update" }
+        val located = WrapperLocator.locateWithTable(factoryCall)
+        assertNotNull("JoinWrappers.update 应定位为 UPDATE_JOIN 工厂链", located)
+        assertEquals(WrapperType.UPDATE_JOIN, located!!.chain.wrapperType)
+        assertEquals("UserEntity", located.chain.entityClass)
+        assertEquals(listOf("set", "leftJoin", "eq"), located.chain.calls.map { it.methodName })
+        assertEquals("user_entity", located.table?.tableName)
+
+        val statement = ConverterRegistry.convert(located.chain, located.table!!)!!
+        assertEquals(
+            """
+            UPDATE user_entity t
+            LEFT JOIN address_entity addressEntity ON addressEntity.user_id = t.id
+            SET t.name = 'x'
+            WHERE t.id = 1001
+            """.trimIndent(),
+            SqlGenerator.generate(statement),
+        )
+    }
+
+    fun testJoinWrappersUpdateAndNullTerminalStripped() {
+        // T-M21-08：UpdateJoin 链终结点 updateAndNull()（MPJ 1.4.10+）从链中剔除（非 Wrapper 操作）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class)
+                            .set(UserEntity::getName, "x")
+                            .updateAndNull());
+                }
+
+                static class UserEntity {
+                    private Long id;
+                    private String name;
+                }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "update" }
+        val located = WrapperLocator.locateWithTable(factoryCall)
+        assertNotNull("JoinWrappers.update 应定位为 UPDATE_JOIN 工厂链", located)
+        assertEquals(WrapperType.UPDATE_JOIN, located!!.chain.wrapperType)
+        // 终结点 updateAndNull 剔除，链上仅剩 Wrapper 操作 set
+        assertEquals(listOf("set"), located.chain.calls.map { it.methodName })
     }
 
     // ------------------------------------------------------------------

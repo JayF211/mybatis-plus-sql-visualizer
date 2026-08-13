@@ -4521,4 +4521,91 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals("场站ID（关联 biz_bike_station_info.id）", result.columnComments["station_id"])
         assertEquals("方案名称", result.columnComments["scheme_name"])
     }
+
+    // ------------------------------------------------------------------
+    // T-M21-08：UpdateJoinWrapper / DeleteJoinWrapper（MPJ 官方联表更新/删除，原 P3-01 提前）
+    // ------------------------------------------------------------------
+
+    fun testPreviewUpdateJoinWrapper() {
+        // T-M21-08 端到端：mapper.updateJoin(entity, JoinWrappers.update(Class).set(...).leftJoin(...).eq(...))
+        // → UPDATE 联表 SQL（updateEntityConsumed 守卫放行 → UpdateJoinConverter；
+        // 实体经 inferEntityFromChain 文本兜底 → user_entity；主表别名默认 t）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void update() {
+                    mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class)
+                            .set(UserEntity::getName, "x")
+                            .leftJoin(AddressEntity.class, AddressEntity::getUserId, UserEntity::getId)
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                    private String name;
+                }
+
+                static class AddressEntity {
+                    private Long id;
+                    private Long userId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("updateJoin 消费应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE user_entity t
+            LEFT JOIN address_entity addressEntity ON addressEntity.user_id = t.id
+            SET t.name = 'x'
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.UPDATE_JOIN, result.wrapperType)
+    }
+
+    fun testPreviewDeleteJoinWrapper() {
+        // T-M21-08 端到端：mapper.deleteJoin(Class, JoinWrappers.delete(Class).leftJoin(...).deleteAll().eq(...))
+        // → DELETE 多表目标 SQL（deleteAll → 主别名 + join 别名：DELETE t, addressEntity FROM user_entity t ...）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void delete() {
+                    mapper.deleteJoin(UserEntity.class, JoinWrappers.delete(UserEntity.class)
+                            .leftJoin(AddressEntity.class, AddressEntity::getUserId, UserEntity::getId)
+                            .deleteAll()
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+
+                static class AddressEntity {
+                    private Long id;
+                    private Long userId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("deleteJoin 消费应产出预览结果", result)
+        assertEquals(
+            """
+            DELETE t, addressEntity FROM user_entity t
+            LEFT JOIN address_entity addressEntity ON addressEntity.user_id = t.id
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.DELETE_JOIN, result.wrapperType)
+    }
 }

@@ -140,9 +140,14 @@ object SqlGenerator {
         if (statement.distinct) sb.append("DISTINCT ")
         sb.append(selectColumns.joinToString(", ") { it.rendered })
 
-        // FROM 主表（可带别名）
-        sb.append(nl).append("FROM ").append(statement.table.tableName)
-        statement.tableAlias?.let { sb.append(" ").append(it) }
+        // FROM 主表（可带别名）；T-M21-07：from(子查询主表) 形态 → FROM (子查询SQL) 外层别名
+        // （主表实体表名不再直接出现——在子查询内部）
+        statement.fromSubQuery?.let { (subSql, outerAlias) ->
+            sb.append(nl).append("FROM (").append(subSql).append(") ").append(outerAlias)
+        } ?: run {
+            sb.append(nl).append("FROM ").append(statement.table.tableName)
+            statement.tableAlias?.let { sb.append(" ").append(it) }
+        }
 
         // JOIN 子句
         statement.joins.forEach { join ->
@@ -179,6 +184,10 @@ object SqlGenerator {
                 })
         }
 
+        // around 片段（官方 API，T-M21-09）：渲染于 ORDER BY 之后、LIMIT 之前
+        // （MP 内部 sqlSegments 中 LAST 段位于 ORDER BY 之后、分页 LIMIT 之前，位置对齐）
+        statement.rawAround?.let { sb.append(nl).append(it) }
+
         // LIMIT（分页子句按方言渲染）
         statement.limit?.let { sb.append(nl).append(dialect.renderLimit(it)) }
 
@@ -193,7 +202,13 @@ object SqlGenerator {
         return sb.toString()
     }
 
-    /** UPDATE 渲染：UPDATE 表 SET 列 = 值, ... WHERE ... */
+    /**
+     * UPDATE 渲染：UPDATE 表 [别名] [JOIN ...] SET 列 = 值, ... WHERE ...
+     *
+     * T-M21-08：UpdateJoinWrapper 联表更新形态——tableAlias 非空时 `UPDATE 表名 别名`，
+     * joins 逐行渲染于 FROM 之后、SET 之前（复用 [renderJoin]）：
+     * `UPDATE user t LEFT JOIN address t1 ON (t1.user_id = t.id) SET t.name = ?, t1.tel = ? WHERE ...`。
+     */
     private fun generateUpdate(
         statement: UpdateStatement,
         compact: Boolean,
@@ -203,6 +218,10 @@ object SqlGenerator {
     ): String {
         val nl = if (compact) " " else "\n"
         val sb = StringBuilder("UPDATE ").append(statement.table.tableName)
+        statement.tableAlias?.let { sb.append(" ").append(it) }
+        statement.joins.forEach { join ->
+            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds))
+        }
 
         if (statement.sets.isNotEmpty()) {
             sb.append(nl).append("SET ")
@@ -223,7 +242,13 @@ object SqlGenerator {
         return sb.toString()
     }
 
-    /** DELETE 渲染：DELETE FROM 表 WHERE ... */
+    /**
+     * DELETE 渲染：DELETE FROM 表 WHERE ...；T-M21-08 DeleteJoinWrapper 多表删除形态：
+     * `delete(Class...)/delete(String...)/deleteAll()` 的删除目标列表非空时渲染
+     * `DELETE t, t1 FROM 表名 t`（主表别名拼在 FROM 后）+ joins + WHERE——
+     * `DELETE t,t1 FROM user t LEFT JOIN address t1 ON (t1.user_id = t.id) WHERE (t.id = ?)`。
+     * deleteTargets 为空（单表删除）走既有 `DELETE FROM 表名` 形态，回归不变。
+     */
     private fun generateDelete(
         statement: DeleteStatement,
         compact: Boolean,
@@ -232,7 +257,17 @@ object SqlGenerator {
         enabledConditionIds: Set<String>?,
     ): String {
         val nl = if (compact) " " else "\n"
-        val sb = StringBuilder("DELETE FROM ").append(statement.table.tableName)
+        val sb = StringBuilder()
+        if (statement.deleteTargets.isEmpty()) {
+            sb.append("DELETE FROM ").append(statement.table.tableName)
+        } else {
+            sb.append("DELETE ").append(statement.deleteTargets.joinToString(", "))
+            sb.append(" FROM ").append(statement.table.tableName)
+            statement.tableAlias?.let { sb.append(" ").append(it) }
+        }
+        statement.joins.forEach { join ->
+            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds))
+        }
         appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table)
         return sb.toString()
     }

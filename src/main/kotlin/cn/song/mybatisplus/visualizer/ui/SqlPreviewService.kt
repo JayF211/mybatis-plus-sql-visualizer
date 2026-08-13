@@ -122,7 +122,12 @@ class SqlPreviewService(private val project: Project) {
                     parseQueryLike(located.chain, table)
                 // 实体更新消费：service.update(entity, wrapper) 双参（U07-②，T-M15-04）——
                 // wrapper 无 set 时用实体字段展开 SET 列（值静态不可求值 → 占位）；主键列排除（进 WHERE）
-                located.chain.updateEntityConsumed -> {
+                // T-M21-08：UpdateJoin/DeleteJoin 类型的消费（`mapper.updateJoin(entity, JoinWrappers.update(...))`
+                // / `updateJoinAndNull(entity, ...)`）不走此分支——联表实体 SET 列近似由
+                // UpdateJoinConverter 处理（实体字段静态不可得 → 主表非主键全列 `t.col = ?` 占位），
+                // 走下方 else → ConverterRegistry.convert
+                located.chain.updateEntityConsumed &&
+                    located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES -> {
                     val parsed = QueryWrapperParser(table).parse(located.chain)
                     val sets = table.columns
                         .filter { !it.isId }
@@ -130,9 +135,12 @@ class SqlPreviewService(private val project: Project) {
                     UpdateStatement(table, sets, parsed.conditions)
                 }
                 // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，`service.remove(wrapper)` / `mapper.delete(wrapper)` 消费；
-                // 链式删除 `service.lambdaUpdate()...remove()`（U11-⑤，T-M15-01）同为删除
+                // 链式删除 `service.lambdaUpdate()...remove()`（U11-⑤，T-M15-01）同为删除。
+                // T-M21-08：DeleteJoinWrapper 类型（`mapper.deleteJoin(JoinWrappers.delete(...))`）不走此分支——
+                // 多表删除目标（delete(Class...)/deleteAll()）由 DeleteJoinConverter 处理（下方 else）
                 located.chain.deleteConsumed &&
-                    (located.chain.wrapperType.isQueryLike() || located.chain.wrapperType == WrapperType.LAMBDA_UPDATE) ->
+                    (located.chain.wrapperType.isQueryLike() || located.chain.wrapperType == WrapperType.LAMBDA_UPDATE) &&
+                    located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES ->
                     DeleteStatement(table, QueryWrapperParser(table).parse(located.chain).conditions)
                 else -> ConverterRegistry.convert(located.chain, table) ?: return null
             }
@@ -313,6 +321,17 @@ class SqlPreviewService(private val project: Project) {
         WrapperType.MPJ_LAMBDA,
         WrapperType.MPJ_QUERY,
         WrapperType.MPJ_LAMBDA_QUERY,
+    )
+
+    /**
+     * T-M21-08：联表更新/删除 Wrapper 类型集合——`updateJoin(entity, wrapper)` / `updateJoinAndNull` /
+     * `deleteJoin(wrapper)` 消费由 UpdateJoin/DeleteJoinConverter 处理（实体 SET 列近似、多表删除目标），
+     * 用于 [preview] 的 updateEntityConsumed / deleteConsumed 早退分支类型守卫，新类型走
+     * ConverterRegistry 分派（保留主表别名与 JOIN，不走单表实体展开 / 单表 DeleteStatement 路径）。
+     */
+    private val UPDATE_DELETE_JOIN_TYPES: Set<WrapperType> = setOf(
+        WrapperType.UPDATE_JOIN,
+        WrapperType.DELETE_JOIN,
     )
 
     /**

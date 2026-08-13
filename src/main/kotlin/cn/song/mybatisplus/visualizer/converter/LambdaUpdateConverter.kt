@@ -48,10 +48,11 @@ object LambdaUpdateConverter : WrapperConverter {
     }
 
     /**
-     * 解析 set / setSql / setIncrBy / setDecrBy 调用为赋值子句（T-M15-04 起支持布尔条件前缀与 `{i}` 参数）。
+     * 解析 set / setSql / setIncrBy / setDecrBy / setIfExists 调用为赋值子句（T-M15-04 起支持布尔条件前缀与 `{i}` 参数；
+     * T-M21-09：setIfExists（MPJ 1.4.9+，「值存在才 set」的运行时语义）归一为 set 处理——静态渲染普通赋值）。
      */
     private fun parseSet(call: WrapperCall): SetClause? = when (call.methodName) {
-        SET -> {
+        SET, SET_IF_EXISTS -> {
             val args = call.args
             // 布尔条件前缀剥离（U03）：`set(StrUtil.isNotBlank(x), col, val)` / `set(true, col, val)`
             val startIndex = if (args.size >= 3 && isFlagArgument(args[0])) 1 else 0
@@ -104,8 +105,9 @@ object LambdaUpdateConverter : WrapperConverter {
     private const val SET_SQL = "setSql"
     private const val SET_INCR = "setIncrBy"
     private const val SET_DECR = "setDecrBy"
+    private const val SET_IF_EXISTS = "setIfExists" // T-M21-09：MPJ 1.4.9+，「值存在才 set」→ 归一为 set
     private const val LAST = "last"
 
-    /** SET 类方法全集（set / setSql / setIncrBy / setDecrBy）。 */
-    private val SET_METHODS = setOf(SET, SET_SQL, SET_INCR, SET_DECR)
+    /** SET 类方法全集（set / setSql / setIncrBy / setDecrBy / setIfExists）。 */
+    private val SET_METHODS = setOf(SET, SET_SQL, SET_INCR, SET_DECR, SET_IF_EXISTS)
 }

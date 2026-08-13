@@ -75,12 +75,39 @@ sealed class WrapperArg {
 
     /** MPJ on(col1, col2) 两列比较（left 主表列，right 关联表列，别名由 converter 补充）。 */
     data class OnConditionArg(val left: ColumnRef, val right: ColumnRef) : WrapperArg()
+
+    /**
+     * allEq 的 Map 实参（T-M21-04，MP 官方 API）：
+     * `allEq(Map.of(k1, v1, ...))` / `Map.ofEntries(...)` 调用静态展开的键值对
+     * （String 键 → [ColumnRef]，columnName = 键）；非 Map.of 的 Map 变量 → 空 [entries]（converter 渲染可读占位）。
+     *
+     * @param entries     键（列名）→ 值（字面量/占位符）对
+     * @param null2IsNull allEq(Map, null2IsNull) 语义：true 且值静态可判 null 时渲染 `col IS NULL`
+     */
+    data class MapArg(
+        val entries: List<Pair<ColumnRef, SqlValue>>,
+        val null2IsNull: Boolean,
+    ) : WrapperArg()
+
+    /**
+     * selectFilter / select(Class, Predicate) 的列过滤谓词（T-M21-01，静态白/黑名单近似）：
+     * lambda 体内方法调用实参的字符串字面量（`!t.getProperty().equals("xxx")` 的 "xxx"、
+     * `t.getColumn().equals("col_name")` 等）→ 候选字段名；lambda 体含 `!` 否定 → 黑名单 [exclude]，
+     * 否则白名单 [include]。两者均空 = 谓词无法静态分析（converter 回退全列）。
+     */
+    data class PredicateArg(
+        val include: List<String>,
+        val exclude: List<String>,
+    ) : WrapperArg()
 }
 
 /**
  * 支持的 Wrapper 类型（F-01/09/10/11/12/17）。
  *
  * M1 仅实现 [LAMBDA_QUERY]；[NESTED] 用于 and/or 嵌套 lambda 的内部链标记。
+ * T-M21-08：MPJ 官方 [UPDATE_JOIN]/[DELETE_JOIN]（UpdateJoinWrapper / DeleteJoinWrapper，
+ * 1.4.5+ 联表更新/删除，原 P3-01 提前）——`UPDATE t LEFT JOIN ... ON ... SET ... WHERE ...` /
+ * `DELETE t,t1 FROM ... LEFT JOIN ... WHERE ...` 形态，由 UpdateJoin/DeleteJoinConverter 转换。
  */
 enum class WrapperType {
     LAMBDA_QUERY,
@@ -91,6 +118,10 @@ enum class WrapperType {
     MPJ_LAMBDA_QUERY,
     QUERY,
     UPDATE,
+    /** T-M21-08：UpdateJoinWrapper（MPJ 官方联表更新，1.4.5+）。 */
+    UPDATE_JOIN,
+    /** T-M21-08：DeleteJoinWrapper（MPJ 官方联表删除，1.4.5+）。 */
+    DELETE_JOIN,
     NESTED,
 }
 

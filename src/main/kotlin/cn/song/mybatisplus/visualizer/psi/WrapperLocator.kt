@@ -471,7 +471,7 @@ object WrapperLocator {
      *  - Wrappers / ChainWrappers 静态工厂（P1-05）：lambdaQuery → LAMBDA_QUERY、query → QUERY 等；
      *  - MPJ 工厂（JoinWrappers / MPJWrappers）：`lambda()` / `lambdaJoin()` → MPJ_LAMBDA、
      *    `query()` / `queryJoin()` → MPJ_QUERY；`delete()` / `update()` 返回
-     *    DeleteJoinWrapper / UpdateJoinWrapper（M21 补类型，本任务返回 null）；
+     *    DeleteJoinWrapper / UpdateJoinWrapper（T-M21-08，原 P3-01 提前：UPDATE_JOIN/DELETE_JOIN）；
      *  - 服务链（`service.lambdaQuery()` 等，T-M15-01，qualifier 非工厂类）：按方法名映射。
      * qualifier 取引用文本（referenceName）即可分辨，无需 resolve（LightPlatform 无 MPJ classpath 也生效）。
      */
@@ -484,7 +484,9 @@ object WrapperLocator {
                 "lambdaUpdate" -> WrapperType.LAMBDA_UPDATE
                 "lambdaDelete" -> WrapperType.LAMBDA_DELETE
                 "query" -> if (qualifierName in mpjFactoryClassNames) WrapperType.MPJ_QUERY else WrapperType.QUERY
-                "update" -> if (qualifierName in mpjFactoryClassNames) null else WrapperType.UPDATE
+                // T-M21-08：JoinWrappers.update(Class) → UpdateJoinWrapper（UPDATE_JOIN）；
+                // Wrappers.update()（字符串版 UpdateWrapper 工厂）仍为 UPDATE
+                "update" -> if (qualifierName in mpjFactoryClassNames) WrapperType.UPDATE_JOIN else WrapperType.UPDATE
                 // ChainWrappers 静态工厂（MP 官方 API，P1-05）
                 "queryChain" -> WrapperType.QUERY
                 "lambdaQueryChain" -> WrapperType.LAMBDA_QUERY
@@ -496,8 +498,9 @@ object WrapperLocator {
                 "lambda", "lambdaJoin" ->
                     if (qualifierName in mpjFactoryClassNames) WrapperType.MPJ_LAMBDA else null
                 "queryJoin" -> if (qualifierName in mpjFactoryClassNames) WrapperType.MPJ_QUERY else null
-                // JoinWrappers.delete(Class) / update(Class) → DeleteJoinWrapper / UpdateJoinWrapper（M21 补类型）
-                "delete" -> null
+                // T-M21-08：JoinWrappers.delete(Class) → DeleteJoinWrapper（DELETE_JOIN）；
+                // 非 MPJ 工厂无 delete 静态工厂方法 → null
+                "delete" -> if (qualifierName in mpjFactoryClassNames) WrapperType.DELETE_JOIN else null
                 else -> null
             }
         }
@@ -853,12 +856,14 @@ object WrapperLocator {
      * 官方 API 补充（M15-P0）：MPJ Chain 的 `first`（取首条）与 `mapOne/mapFirst/mapList/mapPage`（Map 结果）。
      * T-M20-06：ChainQuery（MP 3.5.4+）的 `getObj()`（取单条字段值）补注册为终结点——
      * 消费方法全集核对发现缺口（此前按普通链调用入链，被解析器静默忽略）。
+     * T-M21-08：UpdateJoin 链终结点 `updateAndNull()` / `updateAndNull(T)`（MPJ 1.4.10+，
+     * 含 null 字段一并 set 的联表更新）——与 `update`/`update(T)` 同列剔除出链。
      */
     private val chainTerminalMethodNames: Set<String> = setOf(
         "one", "oneOpt", "list", "count", "exists", "page",
         "getOne", "getMap", "listMaps", "listObjs", "getObj", "map",
         "first", "mapOne", "mapFirst", "mapList", "mapPage",
-        "update", "remove",
+        "update", "updateAndNull", "remove",
     )
 
     private const val REMOVE_TERMINAL = "remove"
@@ -903,6 +908,9 @@ object WrapperLocator {
             "MPJLambdaQueryWrapper" -> WrapperType.MPJ_LAMBDA_QUERY
             "QueryWrapper" -> WrapperType.QUERY
             "UpdateWrapper" -> WrapperType.UPDATE
+            // T-M21-08：MPJ 官方联表更新/删除 wrapper（1.4.5+，UpdateJoinWrapper / DeleteJoinWrapper）
+            "UpdateJoinWrapper" -> WrapperType.UPDATE_JOIN
+            "DeleteJoinWrapper" -> WrapperType.DELETE_JOIN
             // 链式 wrapper 显式声明（`LambdaQueryChainWrapper<X> w = lambdaQuery()...`，Q17，T-M15-01）
             "LambdaQueryChainWrapper" -> WrapperType.LAMBDA_QUERY
             "LambdaUpdateChainWrapper" -> WrapperType.LAMBDA_UPDATE

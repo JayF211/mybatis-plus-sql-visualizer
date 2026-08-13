@@ -62,12 +62,15 @@ class QueryWrapperParser(
         var orPending = false
 
         for (rawCall in chain.calls) {
-            // IfExists 条件族（MPJ 官方 API）：eqIfExists/neIfExists/likeIfExists 等——值存在才拼接的
-            // 运行时语义，静态渲染为普通条件（剥离 IfExists 后缀归一化）
-            val effectiveCall = if (rawCall.methodName.endsWith("IfExists")) {
-                rawCall.copy(methodName = rawCall.methodName.removeSuffix("IfExists"))
-            } else {
-                rawCall
+            // IfExists / IfNotEmpty 条件族（MPJ 官方 API）：eqIfExists/neIfExists/likeIfExists、
+            // inIfNotEmpty/notInIfNotEmpty 等——「值存在才拼接」的运行时语义，静态渲染为普通条件
+            // （T-M21-09：inIfNotEmpty/notInIfNotEmpty 与 IfExists 同法剥离后缀归一化）
+            val effectiveCall = when {
+                rawCall.methodName.endsWith("IfExists") ->
+                    rawCall.copy(methodName = rawCall.methodName.removeSuffix("IfExists"))
+                rawCall.methodName.endsWith("IfNotEmpty") ->
+                    rawCall.copy(methodName = rawCall.methodName.removeSuffix("IfNotEmpty"))
+                else -> rawCall
             }
             // 布尔条件重载（P02/M12）：eq(boolean, col, val) 首参为布尔标志 →
             // 剥离标志并固化为动态条件 toggle 元数据（不再丢弃 false 条件，改由生成层默认排除）
@@ -77,7 +80,21 @@ class QueryWrapperParser(
 
             when (call.methodName) {
                 // ---------- SELECT 列 ----------
-                "select" -> selectColumns += columnArgs(call)
+                "select" -> {
+                    // T-M21-01：select(Class, Predicate)（MP 3.4.3.2+）→ 谓词过滤列；其余形态保持原列解析
+                    val classRef = call.args.getOrNull(0) as? WrapperArg.EntityRefArg
+                    val predicate = call.args.getOrNull(1) as? WrapperArg.PredicateArg
+                    selectColumns += if (classRef != null && predicate != null) {
+                        selectColumnsByPredicate(predicate)
+                    } else {
+                        columnArgs(call)
+                    }
+                }
+                // T-M21-01：selectFilter(Class, Predicate<SelectCache>)（MPJ）→ 按谓词白/黑名单过滤列
+                "selectFilter" -> {
+                    val predicate = call.args.firstOrNull { it is WrapperArg.PredicateArg } as? WrapperArg.PredicateArg
+                    selectColumns += if (predicate != null) selectColumnsByPredicate(predicate) else emptyList()
+                }
                 "selectMax" -> selectColumns += parseAggregate(call, "MAX")
                 "selectSum" -> selectColumns += parseAggregate(call, "SUM")
                 "selectMin" -> selectColumns += parseAggregate(call, "MIN")
@@ -102,6 +119,14 @@ class QueryWrapperParser(
                 "geSql" -> orPending = addConditionFlagged(conditions, compareSql(call, ">=").flagged(analysis), orPending)
                 "ltSql" -> orPending = addConditionFlagged(conditions, compareSql(call, "<").flagged(analysis), orPending)
                 "leSql" -> orPending = addConditionFlagged(conditions, compareSql(call, "<=").flagged(analysis), orPending)
+                // T-M21-04：allEq（MP 官方 API，6 重载）——Map 键值对展开为多条 `col = ?` AND 连接
+                "allEq" -> orPending = addConditionFlagged(conditions, parseAllEq(call).flagged(analysis), orPending)
+                // T-M21-05：setEntity(entity)（MP 官方 API）——实体全部列 `col = ?`（静态近似）
+                "setEntity" -> {
+                    parseSetEntity().forEach { cond ->
+                        orPending = addConditionFlagged(conditions, cond.flagged(analysis), orPending)
+                    }
+                }
 
                 // ---------- 模糊 ----------
                 "like" -> orPending = addConditionFlagged(conditions, like(call, negated = false, LikePosition.ANYWHERE).flagged(analysis), orPending)
@@ -221,11 +246,28 @@ class QueryWrapperParser(
      * 模板规则（对齐 MPJ）：
      *  - `%s`：列占位符，按 [WrapperArg.FuncArg.columns] 顺序替换（列带主表别名前缀）
      *  - `{0}`/`{1}`：绑定参数占位符，按 [WrapperArg.FuncArg.values] 顺序替换（字面量原样、运行时值渲染为 `?`）
+     *
+     * T-M21-06：枚举形态 `selectFunc(DefaultFuncEnum.SUM, col, alias)` 与 String 模板形态并存——
+     * 第一参为枚举引用占位（source 形如 "DefaultFuncEnum.SUM" / "SUM"）→ 映射内置函数模板，
+     * 列取 [WrapperArg.FuncArg.columns] 第一列（带主表别名）、别名取第三参（AliasArg/ValueArg）。
      */
     private fun parseSelectFunc(call: WrapperCall): List<ColumnRef> {
-        val template = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return emptyList()
+        val first = call.args.getOrNull(0).asValue()
         val func = call.args.getOrNull(1) as? WrapperArg.FuncArg ?: return emptyList()
-        val alias = (call.args.getOrNull(2).asValue() as? SqlValue.Literal)?.unquoted
+        val alias = when (val arg = call.args.getOrNull(2)) {
+            is WrapperArg.AliasArg -> arg.propertyName
+            is WrapperArg.ValueArg -> (arg.value as? SqlValue.Literal)?.unquoted
+            else -> null
+        }
+        // 枚举形态（T-M21-06）：`SUM(t.col) [AS alias]`
+        if (first is SqlValue.Placeholder) {
+            val fn = enumFunctionOf(first.source) ?: return emptyList()
+            val column = func.columns.firstOrNull() ?: return emptyList()
+            val qualified = columnPrefix?.let { column.withTableAlias(it) }?.qualifiedName ?: column.qualifiedName
+            val expr = "$fn($qualified)"
+            return listOf(ColumnRef(columnName = expr, rawExpr = expr, alias = alias))
+        }
+        val template = (first as? SqlValue.Literal)?.unquoted ?: return emptyList()
 
         var expr = template
         // %s 列占位替换（逐列、带主表别名前缀）
@@ -239,6 +281,24 @@ class QueryWrapperParser(
         }
         if (expr.contains("%s")) return emptyList() // 列数不足，无法完整渲染
         return listOf(ColumnRef(columnName = expr, rawExpr = expr, alias = alias))
+    }
+
+    /**
+     * T-M21-06：MPJ 内置函数枚举名 → SQL 函数名映射（未知枚举返回 null，调用方忽略不崩溃）。
+     * 枚举引用占位 source 形如 `DefaultFuncEnum.SUM` / `SUM`（取点号后末段、大写归一）。
+     */
+    private fun enumFunctionOf(source: String): String? {
+        val enumName = source.substringAfterLast('.').trim().uppercase()
+        return when (enumName) {
+            "SUM" -> "SUM"
+            "COUNT" -> "COUNT"
+            "MAX" -> "MAX"
+            "MIN" -> "MIN"
+            "AVG" -> "AVG"
+            "LEN" -> "LENGTH"
+            "CONCAT" -> "CONCAT"
+            else -> null
+        }
     }
 
     /** selectFunc 绑定参数渲染：字面量原样（raw），运行时值渲染为 `?`。 */
@@ -283,6 +343,45 @@ class QueryWrapperParser(
         } else {
             Condition.Simple(column, "=", value)
         }
+    }
+
+    /**
+     * allEq（T-M21-04，MP 官方 API）：`allEq(Map)` / `allEq(Map, null2IsNull)` /
+     * `allEq(boolean, Map)` / `allEq(boolean, Map, null2IsNull)` / `allEq(Map, BiPredicate)` /
+     * `allEq(boolean, Map, BiPredicate, null2IsNull)` —— Map 键值对展开为多条 `col = ?` AND 连接；
+     * null2IsNull=true 且值静态判 null（[SqlValue.Literal] raw == "NULL"）→ `col IS NULL`。
+     *
+     * Map 变量（[WrapperArg.MapArg.entries] 为空，运行时条目不可知）→ 可读占位条件。
+     * 布尔条件前缀（condition 首参）由 [analyzeFlag] 剥离；null2IsNull 由 psi 层解析进 [WrapperArg.MapArg]。
+     */
+    private fun parseAllEq(call: WrapperCall): Condition? {
+        val mapArg = call.args.firstOrNull { it is WrapperArg.MapArg } as? WrapperArg.MapArg ?: return null
+        if (mapArg.entries.isEmpty()) {
+            // 变量 Map：运行时键值对不可静态展开，渲染可读占位（近似语义）
+            return Condition.Raw("<Map 等值条件: col = ? AND col = ? ...>")
+        }
+        val children = mapArg.entries.mapNotNull { (column, value) ->
+            val qualified = columnPrefix?.let { column.withTableAlias(it) } ?: column
+            if (mapArg.null2IsNull && value is SqlValue.Literal && value.raw == "NULL") {
+                Condition.Unary(qualified, "IS NULL")
+            } else {
+                Condition.Simple(qualified, "=", value)
+            }
+        }
+        if (children.isEmpty()) return null
+        return Condition.Group(Connector.AND, children)
+    }
+
+    /**
+     * setEntity（T-M21-05，MP 官方 API）：`setEntity(entity)` → 实体**非 null 字段**追加 where 等值条件。
+     *
+     * 静态近似：运行时实体字段值不可知（实参变量忽略具体值），实体全部列展开为 `col = ?`
+     * （列带主表别名前缀，与条件渲染一致；注释标注近似，运行时仅非 null 字段生效）。
+     */
+    private fun parseSetEntity(): List<Condition> = table.columns.map { col ->
+        val column = ColumnRef(columnName = col.columnName)
+        val qualified = columnPrefix?.let { column.withTableAlias(it) } ?: column
+        Condition.Simple(qualified, "=", SqlValue.Placeholder("?"))
     }
 
     /**
@@ -437,6 +536,7 @@ class QueryWrapperParser(
         "like", "notLike", "likeLeft", "likeRight",
         "in", "notIn", "between", "notBetween",
         "isNull", "isNotNull",
+        "allEq", // T-M21-04：allEq(boolean, Map[, null2IsNull]) 首布尔参剥离
     )
 
     /** 一元条件方法（isNull/isNotNull 布尔重载形态为 [flag, col] 2 参，区别于 3 参二元方法）。 */
@@ -466,7 +566,12 @@ class QueryWrapperParser(
         val first = args.getOrNull(0)
         if (first is WrapperArg.ColumnArg || first is WrapperArg.NestedArg || first is WrapperArg.OnConditionArg) return null
         val firstValue = first.asValue() ?: return null
-        val flaggedArity = if (methodName in UNARY_METHODS) args.size == 2 else args.size >= 3
+        val flaggedArity = when {
+            methodName in UNARY_METHODS -> args.size == 2
+            // T-M21-04：allEq(boolean, Map) 双参重载的首参布尔即条件标志（3/4 参形态同理）
+            methodName == "allEq" -> args.size >= 2
+            else -> args.size >= 3
+        }
         if (!flaggedArity) return null
 
         val flagText = when (firstValue) {
@@ -668,6 +773,27 @@ class QueryWrapperParser(
     /** 列参数集合：Lambda 列（ColumnArg）与字符串列名（ValueArg，F-17 字符串版）统一经 [argAsColumn] 解析。 */
     private fun columnArgs(call: WrapperCall): List<ColumnRef> =
         call.args.mapNotNull { argAsColumn(it) }
+
+    /**
+     * T-M21-01：按谓词白/黑名单过滤实体列（静态近似，selectFilter / select(Class, Predicate)）。
+     *
+     *  - [WrapperArg.PredicateArg.include] 非空 → 白名单：取 include 中存在于实体表的列（按表列顺序）
+     *  - include 空 → 全列减 [WrapperArg.PredicateArg.exclude]（黑名单）
+     *  - include/exclude 均空（谓词无法静态分析）→ 回退全列
+     * 列均带主表别名前缀（与条件渲染一致）。
+     */
+    private fun selectColumnsByPredicate(predicate: WrapperArg.PredicateArg): List<ColumnRef> {
+        val allColumns = table.allColumnNames
+        val selected = if (predicate.include.isNotEmpty()) {
+            allColumns.filter { it in predicate.include }
+        } else {
+            allColumns.filterNot { it in predicate.exclude }
+        }
+        return selected.map { col ->
+            val ref = ColumnRef(columnName = col)
+            columnPrefix?.let { ref.withTableAlias(it) } ?: ref
+        }
+    }
 
     /** 实参转列：Lambda 列（ColumnArg）补主表别名前缀；字符串列名（ValueArg）原样（MPJQuery 已含别名）。 */
     private fun argAsColumn(arg: WrapperArg?): ColumnRef? = when (arg) {

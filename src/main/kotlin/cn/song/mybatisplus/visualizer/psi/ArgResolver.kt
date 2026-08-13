@@ -13,12 +13,14 @@ import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiExpressionList
 import com.intellij.psi.PsiLambdaExpression
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiMethodReferenceExpression
 import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiPolyadicExpression
+import com.intellij.psi.PsiPrefixExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiType
 import com.intellij.psi.util.PsiTreeUtil
@@ -239,8 +241,22 @@ object ArgResolver {
         resolveVariables: Boolean = true,
     ): WrapperCall {
         val methodName = call.methodExpression.referenceName ?: call.methodExpression.text
-        val args = call.argumentList.expressions.mapIndexed { index, expr ->
+        val expressions = call.argumentList.expressions
+        // T-M21-04：allEq 重载的 null2IsNull 尾参（`allEq(Map, null2IsNull)` / `allEq(boolean, Map, null2IsNull)`
+        // 末位布尔字面量）；运行时布尔（变量）不可静态判定 → 恒 false（仅字面量 true 生效）
+        val allEqNull2IsNull = methodName == "allEq" &&
+            (expressions.lastOrNull() as? PsiLiteralExpression)?.value == true
+        val args = expressions.mapIndexed { index, expr ->
             when {
+                // T-M21-04：allEq 的 Map 实参——Map.of / Map.ofEntries 调用静态展开键值对；
+                // 非布尔/非 lambda 实参（Map 变量、new HashMap 等）→ 空条目 MapArg（converter 渲染占位）
+                methodName == "allEq" && expr !is PsiLambdaExpression && !isBooleanLiteral(expr) ->
+                    resolveMapArg(expr, allEqNull2IsNull, resolveVariables)
+                // T-M21-01：selectFilter(Class, Predicate) 第一参实体类引用、第二参谓词 lambda
+                methodName == SELECT_FILTER && index == 0 ->
+                    resolveJoinClass(expr, resolveVariables)
+                methodName == SELECT_FILTER && index == 1 ->
+                    resolveSelectPredicate(expr)
                 methodName in JOIN_METHODS && index == 0 ->
                     resolveJoinClass(expr, resolveVariables)
                 methodName == SELECT_AS_CLASS ->
@@ -250,8 +266,8 @@ object ArgResolver {
                     resolveJoinClass(expr, resolveVariables)
                 // 子查询条件（官方 sub-query API）：eq(col, SubEntity.class, w -> ...) 的第二参为子表类引用
                 methodName in SUBQUERY_CONDITION_METHODS && index == 1 &&
-                    call.argumentList.expressions.size >= 3 &&
-                    call.argumentList.expressions.getOrNull(2) is PsiLambdaExpression ->
+                    expressions.size >= 3 &&
+                    expressions.getOrNull(2) is PsiLambdaExpression ->
                     resolveJoinClass(expr, resolveVariables)
                 // selectSub 的第三参为结果别名（方法引用 → AliasArg 驼峰属性名）
                 methodName == SELECT_SUB && index == 2 ->
@@ -265,6 +281,10 @@ object ArgResolver {
         }
         return WrapperCall(methodName, args)
     }
+
+    /** T-M21-04：布尔字面量实参（allEq 的条件标志 / null2IsNull 尾参，不做 Map 解析）。 */
+    private fun isBooleanLiteral(expression: PsiExpression): Boolean =
+        (expression as? PsiLiteralExpression)?.value is Boolean
 
     /** MPJ join 方法名集合（第一参为关联实体类引用；join 为自定义关键字形态，第一参为关键字字符串）。 */
     private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin", "fullJoin", "join")
@@ -290,6 +310,9 @@ object ArgResolver {
     private const val SELECT_FUNC = "selectFunc"
     private const val APPLY_FUNC = "applyFunc"
 
+    /** MPJ selectFilter 方法名（T-M21-01：第一参实体类引用、第二参谓词 lambda）。 */
+    private const val SELECT_FILTER = "selectFilter"
+
     /** MPJ selectAsClass 方法名（两个实参均为实体类引用，converter 按字段交集映射）。 */
     private const val SELECT_AS_CLASS = "selectAsClass"
 
@@ -308,12 +331,81 @@ object ArgResolver {
     )
 
     /**
+     * T-M21-04：解析 allEq 的 Map 实参为键值对列表。
+     *
+     *  - `Map.of(k1, v1, k2, v2, ...)`：实参按两两一组解析；
+     *  - `Map.ofEntries(Map.entry(k, v), ...)`：每个实参为 entry 调用，取其前两参；
+     * 键为字符串字面量 → [WrapperArg.MapArg.entries]（[ColumnRef]，columnName = 键）；
+     * 值为字面量/可追踪变量 → [SqlValue]（其余占位符）；非 Map.of 的 Map 变量 → 空条目（converter 渲染占位）。
+     */
+    private fun resolveMapArg(expression: PsiExpression, null2IsNull: Boolean, resolveVariables: Boolean): WrapperArg {
+        val call = expression as? PsiMethodCallExpression ?: return WrapperArg.MapArg(emptyList(), null2IsNull)
+        val methodName = call.methodExpression.referenceName
+        val rawArgs = call.argumentList.expressions
+        val pairs: List<Pair<PsiExpression, PsiExpression>> = if (methodName == "ofEntries") {
+            // Map.ofEntries(Map.entry(k, v), ...)：每个实参为 entry 调用，取其前两参
+            rawArgs.mapNotNull { entry ->
+                val entryCall = entry as? PsiMethodCallExpression ?: return@mapNotNull null
+                val entryArgs = entryCall.argumentList.expressions
+                if (entryArgs.size < 2) null else entryArgs[0] to entryArgs[1]
+            }
+        } else {
+            // Map.of(k1, v1, k2, v2, ...)：实参按两两一组解析
+            val result = mutableListOf<Pair<PsiExpression, PsiExpression>>()
+            var index = 0
+            while (index + 1 < rawArgs.size) {
+                result += rawArgs[index] to rawArgs[index + 1]
+                index += 2
+            }
+            result
+        }
+        val entries = pairs.mapNotNull { (keyExpr, valueExpr) ->
+            val key = (keyExpr as? PsiLiteralExpression)?.value as? String ?: return@mapNotNull null
+            val value = if (resolveVariables) ExpressionEvaluator.evaluate(valueExpr)
+            else SqlValue.Placeholder(valueExpr.text)
+            ColumnRef(columnName = key) to value
+        }
+        return WrapperArg.MapArg(entries, null2IsNull)
+    }
+
+    /**
+     * T-M21-01：解析 selectFilter 的谓词 lambda（`t -> !t.getProperty().equals("xxx")` 黑名单 /
+     * `t -> t.getColumn().equals("col_name")` 白名单）为静态白/黑名单。
+     *
+     * 收集 lambda 体内方法调用实参中的字符串字面量作为候选字段名；
+     * 体内含 `!` 前缀表达式（negated equals）→ 黑名单 [WrapperArg.PredicateArg.exclude]，否则白名单 [include]。
+     * 无法静态分析（无字符串字面量）→ 双空列表（converter 回退全列）。
+     */
+    private fun resolveSelectPredicate(expression: PsiExpression): WrapperArg {
+        val lambda = expression as? PsiLambdaExpression ?: return WrapperArg.PredicateArg(emptyList(), emptyList())
+        val body = lambda.body ?: return WrapperArg.PredicateArg(emptyList(), emptyList())
+        val names = PsiTreeUtil.collectElementsOfType(body, PsiLiteralExpression::class.java)
+            .filter { it.parent is PsiExpressionList } // 仅方法调用实参（排除其他位置的字符串）
+            .mapNotNull { it.value as? String }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        val hasNegation = PsiTreeUtil.collectElementsOfType(body, PsiPrefixExpression::class.java)
+            .any { it.operationSign.text == "!" }
+        return if (hasNegation) {
+            WrapperArg.PredicateArg(include = emptyList(), exclude = names)
+        } else {
+            WrapperArg.PredicateArg(include = names, exclude = emptyList())
+        }
+    }
+
+    /**
      * 解析 selectFunc 的聚合 lambda：`func -> func.accept(列1, 列2).values(值1, 值2)`。
      *
      * 收集 accept 的列引用与 values 的绑定参数值（清单 P09）。
-     * 实参不是 lambda（异常代码）时降级为占位值。
+     * T-M21-06：枚举形态 `selectFunc(DefaultFuncEnum.SUM, Entity::getX, ...)` 的第二参为列方法引用
+     * → 单列 FuncArg（无绑定参数），与 lambda 形态并存。
+     * 实参不是 lambda / 方法引用（异常代码）时降级为占位值。
      */
     private fun resolveFuncLambda(expression: PsiExpression, table: TableInfo?): WrapperArg {
+        if (expression is PsiMethodReferenceExpression) {
+            return WrapperArg.FuncArg(listOf(resolveLambdaColumn(expression, table)), emptyList())
+        }
         val lambda = expression as? PsiLambdaExpression
             ?: return WrapperArg.ValueArg(ExpressionEvaluator.evaluate(expression))
         val body = lambda.body

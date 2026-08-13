@@ -25,12 +25,19 @@ import cn.song.mybatisplus.visualizer.util.NamingStrategy
  *  - `selectCollection`（子查询 JOIN）、`selectAssociation`（T-M7-04）
  *  - `leftJoin/innerJoin/rightJoin`：三参 `(Class, 关联表字段, 主表字段)`、四参带别名、
  *    `on(col1, col2)`、lambda ON `on -> on.eq(...)`（T-M7-05）
+ *  - 联表扩展重载（T-M21-02）：4/5 参右别名 `leftJoin(Class, [别名,] 左列, "右别名", 右列)`、
+ *    ext 函数 `leftJoin(Class, 左列, 右列, ext -> ext.eq(...))`、子表 MConsumer
+ *    `leftJoin(Class, t -> t.setAlias("tt").selectAll()..., 左列, 右列)`（子查询 join）
+ *  - `selectCollection` prefix 形态（T-M21-03）：`selectCollection("别名", Child.class, VO::getX[, map])`
+ *  - `from(子查询主表)`（T-M21-07）、`around`/`setTableName`/`pageByMain`（T-M21-09 部分）
  *  - 表别名构造 `new MPJLambdaWrapper<>(Class, "alias")` → 主表别名可配置（C4/P11）
  *  - `eq` 等条件 / `orderByAsc` 等结构 → 委托 [QueryWrapperParser]（主表别名前缀）
  *
  * 已知简化（R7 待 MPJ 官方输出对照）：
  *  - 关联表别名默认 = 实体类名首字母小写（四参显式别名优先）
  *  - selectCollection 的 ON 复用同子表 leftJoin 的 on 条件；嵌套 collection 外键按约定推断
+ *  - selectCollection free 形态（首参 VO 方法引用、无子表类）不产生子查询（结果映射标记，T-M21-03）
+ *  - setTableName（动态表名函数）静态不可求值 → no-op（T-M21-09）
  */
 object MpjLambdaConverter : WrapperConverter {
 
@@ -47,16 +54,24 @@ object MpjLambdaConverter : WrapperConverter {
             ?: MAIN_ALIAS_DEFAULT
         val selectAsCalls = chain.calls.filter { it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName == SELECT_SUB }
         val joinCalls = chain.calls.filter { it.methodName in JOIN_METHODS }
+        // T-M21-03：selectCollection free 形态（首参 VO 方法引用 ColumnArg/AliasArg、无子表类）→
+        // 结果映射标记不产生 SQL（子表不可知，文档化边界），从 collectionCalls 剔除（与 selectAssociation 同策略）
         val collectionCalls = chain.calls.filter { it.methodName == SELECT_COLLECTION }
+            .filterNot { it.args.getOrNull(0) is WrapperArg.ColumnArg || it.args.getOrNull(0) is WrapperArg.AliasArg }
         val selectAllCalls = chain.calls.filter { it.methodName == SELECT_ALL }
 
         // 其余调用（eq/select/orderBy/distinct/selectMax 等）委托 Query 解析，列自动带主表别名。
         // selectAssociation 不产生额外 SQL（leftJoin 已体现关联，仅作结果映射标记），从解析链中剔除。
+        // T-M21-07/09：from（子查询主表）、around（rawAround）、setTableName/pageByMain（运行时语义
+        // no-op）均从解析链剔除（QueryWrapperParser 分派表无对应方法，剔除避免误解析）。
         val restCalls = chain.calls.filterNot {
             it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName == SELECT_SUB
                 || it.methodName in JOIN_METHODS || it.methodName in UNION_METHODS
                 || it.methodName == SELECT_ALL || it.methodName == SELECT_COLLECTION
                 || it.methodName == SELECT_ASSOCIATION || it.methodName == SET_ALIAS
+                || it.methodName == FROM_METHOD
+                || it.methodName == AROUND_METHOD
+                || it.methodName in NOOP_METHODS
         }
         val base = QueryWrapperParser(table, mainAlias)
             .parse(WrapperChain(chain.wrapperType, chain.entityClass, restCalls))
@@ -78,9 +93,7 @@ object MpjLambdaConverter : WrapperConverter {
         // join + selectCollection 子查询 JOIN（复用同子表 leftJoin 的 ON）；按源码调用顺序合并。
         // T-M15-06：① 此前 join 全在 collection 前，与源码顺序不符；
         //           ② selectCollection 子查询已替代同子表普通 join（P06 两写并存），普通 join 不重复渲染
-        val collectionChildClasses = collectionCalls.mapNotNull { call ->
-            (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted
-        }
+        val collectionChildClasses = collectionCalls.mapNotNull { collectionChildClassOf(it) }
         val joins = mutableListOf<JoinClause>()
         for (call in chain.calls) {
             when (call.methodName) {
@@ -99,11 +112,22 @@ object MpjLambdaConverter : WrapperConverter {
             .filter { it.methodName in UNION_METHODS }
             .mapNotNull { parseUnion(it) }
 
+        // T-M21-07：from(子查询主表)（官方 API）→ 主表替换为 (子查询) 外层别名
+        val fromSubQuery = chain.calls.firstOrNull { it.methodName == FROM_METHOD }
+            ?.let { parseFrom(it, table, mainAlias) }
+
+        // T-M21-09：around(firstSql, lastSql)（MPJ 1.4.11+）→ firstSql 并入 SQL 起始、lastSql 渲染于
+        // ORDER BY 后、LIMIT 前（rawAround）
+        val around = chain.calls.firstOrNull { it.methodName == AROUND_METHOD }?.let { parseAround(it) }
+
         return base.copy(
             tableAlias = mainAlias,
             selectColumns = selectColumns,
             joins = joins,
             unions = unions,
+            fromSubQuery = fromSubQuery,
+            rawAround = around?.second,
+            rawFirst = around?.first?.let { listOfNotNull(base.rawFirst, it).joinToString(" ") } ?: base.rawFirst,
         )
     }
 
@@ -117,6 +141,51 @@ object MpjLambdaConverter : WrapperConverter {
         val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
         val keyword = if (call.methodName == "unionAll") "UNION ALL" else "UNION"
         return UnionClause(keyword, SqlGenerator.generate(subStatement, compact = true))
+    }
+
+    /**
+     * T-M21-07：from(子查询主表)（MPJ 官方 API，JoinAbstractLambdaWrapper.from(MFunction)）：
+     * `from(w -> w.setAlias("tb").selectAll().ge(User::getId, 0).last("LIMIT 10"))`
+     * → 主表替换为子查询，渲染 `FROM (SELECT tb.id, ... FROM user tb WHERE tb.id >= 0 LIMIT 10) t`
+     * （外层别名 = 主表别名 [outerAlias]）。
+     *
+     * 子查询链经 [QueryWrapperParser] 解析（子查询主表别名取链内 setAlias 值，无则 "tb"）：
+     * setAlias 不在 parser 分派表（else 忽略），但子查询主表别名由 statement.tableAlias 输出——
+     * 解析后 copy(tableAlias) 注入，并带子别名前缀解析列与条件（对齐官方 `WHERE tb.id >= 0`）。
+     *
+     * @return Pair(子查询 SQL, 外层别名)——SelectStatement.fromSubQuery
+     */
+    private fun parseFrom(call: WrapperCall, table: TableInfo, outerAlias: String): Pair<String, String>? {
+        val nested = call.args.getOrNull(0) as? WrapperArg.NestedArg ?: return null
+        val subAlias = nested.chain.calls.firstOrNull { it.methodName == SET_ALIAS }
+            ?.args?.firstOrNull()?.asValue()?.let { (it as? SqlValue.Literal)?.unquoted }
+            ?: "tb"
+        val subStatement = QueryWrapperParser(table, subAlias).parse(nested.chain)
+            .copy(tableAlias = subAlias)
+        return SqlGenerator.generate(subStatement, compact = true) to outerAlias
+    }
+
+    /**
+     * T-M21-09：around 解析（MPJ 1.4.11+，Join.around(firstSql, lastSql)——firstSql 拼接 SQL 起始
+     * （等价 first(...)），lastSql 拼接语句末尾；MP 内部 sqlSegments 中 LAST 段位于 ORDER BY 之后、
+     * 分页 LIMIT 之前，本实现据此将 lastSql 渲染于 ORDER BY 后、LIMIT 前（rawAround））。
+     *
+     * 形态：
+     *  - 双字符串字面量 `around("first", "last")`（官方签名）：first=首参（并入 SQL 起始 rawFirst）、
+     *    second=第二参（rawAround）；
+     *  - 模板形态 `around("sql {0}", v, ...)`（任务规约兼容）：模板 + `{i}` 绑定参数替换
+     *    （复用 [renderJoinSql] 思路），first=null、second=替换结果。
+     *
+     * @return Pair(firstSql?, lastSql)——firstSql 并入 rawFirst（可与 first(...) 并存），lastSql 为 rawAround
+     */
+    private fun parseAround(call: WrapperCall): Pair<String?, String>? {
+        val first = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+        // 双字符串字面量形态：模板不含 {i} 占位、双参且第二参为字符串字面量
+        if (!first.contains("{") && call.args.size == 2) {
+            (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted?.let { return first to it }
+        }
+        // 模板形态：模板 + {i} 绑定参数替换
+        return null to renderJoinSql(first, call.args.drop(1))
     }
 
     /**
@@ -228,13 +297,84 @@ object MpjLambdaConverter : WrapperConverter {
         if (className.isEmpty()) return null
 
         // T-M19.4：主表兜底推断走统一入口（策略 + 修饰链，全局语义）
-        val tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className)
+        var tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className)
         var alias = className.replaceFirstChar { it.lowercaseChar() }
         val onConditions = mutableListOf<Condition>()
+        // T-M21-02：子表 MConsumer 子查询形态不携带逻辑删除列（与 selectCollection 子查询族一致——
+        // 子查询内部已含自身过滤条件，外层不注入副表 deleted）
+        var logicDelete = tableInfo?.logicDeleteColumn
 
         val rest = call.args.drop(1)
         val firstRest = rest.getOrNull(0)
         when {
+            // ================= T-M21-02：MPJ 官方重载扩展（QueryJoin.java 每关键字 18 重载中的新形状） =================
+            // 按实参形状优先判定（先于既有形态分派）；不匹配回落既有逻辑。
+            // 5 参右别名：leftJoin(Class, "别名", 左列, "右别名", 右列) → ON 别名.左列 = 右别名.右列
+            // （右别名作用于右列所在表——主表，通常 "t"）
+            args.size == 5 && args[1] is WrapperArg.ValueArg && args[2] is WrapperArg.ColumnArg &&
+                args[3] is WrapperArg.ValueArg && args[4] is WrapperArg.ColumnArg -> {
+                alias = (args[1].asValue() as? SqlValue.Literal)?.unquoted ?: alias
+                onConditions += Condition.ColumnComparison(
+                    left = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(alias),
+                    right = (args[4] as WrapperArg.ColumnArg).column.withTableAlias(
+                        (args[3].asValue() as? SqlValue.Literal)?.unquoted ?: mainAlias,
+                    ),
+                )
+            }
+            // 4 参右别名：leftJoin(Class, 左列, "右别名", 右列) → ON 关联别名.左列 = 右别名.右列
+            // （与既有「四参别名」[EntityRefArg, ValueArg, ColumnArg, ColumnArg] 按第 2 参类型区分：
+            //  ColumnArg=右别名形态，ValueArg=显式别名形态）
+            args.size == 4 && args[1] is WrapperArg.ColumnArg && args[2] is WrapperArg.ValueArg &&
+                args[3] is WrapperArg.ColumnArg -> {
+                onConditions += Condition.ColumnComparison(
+                    left = (args[1] as WrapperArg.ColumnArg).column.withTableAlias(alias),
+                    right = (args[3] as WrapperArg.ColumnArg).column.withTableAlias(
+                        (args[2].asValue() as? SqlValue.Literal)?.unquoted ?: mainAlias,
+                    ),
+                )
+            }
+            // ext 函数：leftJoin(Class, 左列, 右列, ext -> ext.eq(...)) → ON 关联别名.左列 = 主别名.右列
+            // + ext 内条件追加到 ON 条件组（复用 parseOnLambda）
+            args.size == 4 && args[1] is WrapperArg.ColumnArg && args[2] is WrapperArg.ColumnArg &&
+                args[3] is WrapperArg.NestedArg -> {
+                onConditions += Condition.ColumnComparison(
+                    left = (args[1] as WrapperArg.ColumnArg).column.withTableAlias(alias),
+                    right = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(mainAlias),
+                )
+                onConditions += parseOnLambda((args[3] as WrapperArg.NestedArg).chain, alias, mainAlias)
+            }
+            // 别名 + ext：leftJoin(Class, "别名", 左列, 右列, ext -> ...)（QueryJoin 重载族补齐）
+            args.size == 5 && args[1] is WrapperArg.ValueArg && args[2] is WrapperArg.ColumnArg &&
+                args[3] is WrapperArg.ColumnArg && args[4] is WrapperArg.NestedArg -> {
+                alias = (args[1].asValue() as? SqlValue.Literal)?.unquoted ?: alias
+                onConditions += Condition.ColumnComparison(
+                    left = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(alias),
+                    right = (args[3] as WrapperArg.ColumnArg).column.withTableAlias(mainAlias),
+                )
+                onConditions += parseOnLambda((args[4] as WrapperArg.NestedArg).chain, alias, mainAlias)
+            }
+            // 子表 MConsumer：leftJoin(Class, t -> t.setAlias("tt").selectAll().ge(...), 左列, 右列)
+            // → LEFT JOIN (SELECT ... FROM 子表 tt WHERE ...) 子别名 ON 子别名.左列 = 主别名.右列
+            // 子查询用 QueryWrapperParser(子表 TableInfo) 解析嵌套链 compact 单行渲染；
+            // 子别名取 lambda 内 setAlias 值，无则类名首字母小写
+            args.size == 4 && args[1] is WrapperArg.NestedArg && args[2] is WrapperArg.ColumnArg &&
+                args[3] is WrapperArg.ColumnArg -> {
+                val childTable = tableInfo ?: return null // 子查询渲染需子表 TableInfo（列展开/条件前缀）
+                val subChain = (args[1] as WrapperArg.NestedArg).chain
+                val subAlias = subChain.calls.firstOrNull { it.methodName == SET_ALIAS }
+                    ?.args?.firstOrNull()?.asValue()?.let { (it as? SqlValue.Literal)?.unquoted }
+                    ?: className.replaceFirstChar { it.lowercaseChar() }
+                val subStatement = QueryWrapperParser(childTable, subAlias).parse(subChain)
+                    .copy(tableAlias = subAlias)
+                tableName = "(" + SqlGenerator.generate(subStatement, compact = true) + ")"
+                alias = subAlias
+                logicDelete = null
+                onConditions += Condition.ColumnComparison(
+                    left = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(subAlias),
+                    right = (args[3] as WrapperArg.ColumnArg).column.withTableAlias(mainAlias),
+                )
+            }
+            // ================= 既有形态（保持原分派） =================
             // 4. lambda ON：leftJoin(Class, on -> on.eq(...).eq(...))
             firstRest is WrapperArg.NestedArg ->
                 onConditions += parseOnLambda(firstRest.chain, alias, mainAlias)
@@ -281,7 +421,7 @@ object MpjLambdaConverter : WrapperConverter {
 
         // T-M20-05：仅 EntityRefArg（psi 解析实体）携带逻辑删除列；类名兜底/字符串 join/selectCollection
         // 子查询形态 tableInfo 为 null → 不填充（SqlPreviewService 不注入副表 deleted）
-        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = tableInfo?.logicDeleteColumn)
+        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = logicDelete)
     }
 
     /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */
@@ -375,6 +515,19 @@ object MpjLambdaConverter : WrapperConverter {
     private const val SELECT_SUB = "selectSub"
     private const val SET_ALIAS = "setAlias"
 
+    /** T-M21-07：from 子查询主表（MPJ 官方 API，JoinAbstractLambdaWrapper.from(MFunction)）。 */
+    private const val FROM_METHOD = "from"
+
+    /** T-M21-09：around（MPJ 1.4.11+，Join.around(firstSql, lastSql)——firstSql 拼 SQL 起始、lastSql 拼末尾）。 */
+    private const val AROUND_METHOD = "around"
+
+    /**
+     * T-M21-09：无 SQL 形态的 MPJ 官方方法（运行时语义，静态渲染 no-op，从解析链过滤）：
+     *  - `setTableName(Function)`（1.4.4+）：动态表名函数 lambda 静态不可求值 → no-op（文档化边界）；
+     *  - `pageByMain()`：主表分页标记（影响分页 COUNT 逻辑）→ 不影响 SELECT 形态 → no-op。
+     */
+    private val NOOP_METHODS = setOf("setTableName", "pageByMain")
+
     /** UNION 方法（union / unionAll）。 */
     private val UNION_METHODS = setOf("union", "unionAll")
     private const val SELECT_COLLECTION = "selectCollection"
@@ -418,6 +571,28 @@ object MpjLambdaConverter : WrapperConverter {
     }
 
     /**
+     * 实参是否为类名字面量（psi 层 `XxxEntity.class` 经 ExpressionEvaluator 求值为简单类名字面量——
+     * 驼峰首字母大写、无空格/括号；`.class` 后缀形态兼容）。
+     * T-M21-03：selectCollection prefix 形态判定（第 2 参为类名 ValueArg）；普通形态首参同理。
+     */
+    private fun isClassNameArg(arg: WrapperArg?): Boolean {
+        val text = (arg.asValue() as? SqlValue.Literal)?.unquoted ?: return false
+        val trimmed = text.trim()
+        return trimmed.endsWith(".class") ||
+            (trimmed.isNotEmpty() && trimmed[0].isUpperCase() && !trimmed.any { it == ' ' || it == '(' })
+    }
+
+    /**
+     * selectCollection 调用对应的子表类名（T-M21-03：prefix 形态子表类在第 2 参，普通形态在第 1 参）。
+     * 用于「selectCollection 子查询已替代同子表普通 join」的去重判定。
+     */
+    private fun collectionChildClassOf(call: WrapperCall): String? = if (isClassNameArg(call.args.getOrNull(1))) {
+        (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted
+    } else {
+        (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted
+    }
+
+    /**
      * 解析 selectCollection(子表类, VO::get集合[, map -> map.id(...).result(...)]) → LEFT JOIN 子查询（清单 P06/P07）。
      *
      * 形态（对齐 MPJ 一对多子查询语义）：
@@ -428,14 +603,31 @@ object MpjLambdaConverter : WrapperConverter {
      * ```
      * - 子映射 `id/result` → 子查询 SELECT 列；嵌套 `collection` → 子查询内递归 LEFT JOIN（P07 三层关联）
      * - ON 条件复用同链中同子表的 leftJoin（P06 的既有写法），避免重复指定外键
+     *
+     * T-M21-03 prefix 形态（QueryLabel.java）：`selectCollection("prefix", Child.class, VO::getX[, map])`
+     * ——第 2 参为类名 ValueArg（第 3 参为 VO 集合 getter）即判定为 prefix 形态（实现歧义以第 2 参为准）；
+     * 子表类取第 2 参、别名用 prefix（子查询表别名）、列映射 map 位置顺延（索引 3）。
+     * free 形态（首参 VO 方法引用、无子表类）已在 convert 从 collectionCalls 剔除，不产生子查询。
      */
     private fun parseCollection(call: WrapperCall, joinCalls: List<WrapperCall>, mainAlias: String): JoinClause? {
-        val childClass = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+        // T-M21-03：prefix 形态判定——第 2 参为类名字面量（普通形态第 2 参是 VO getter：AliasArg/ColumnArg）
+        val prefixForm = isClassNameArg(call.args.getOrNull(1))
+        val childClass: String
+        val alias: String
+        val mapIndex: Int
+        if (prefixForm) {
+            childClass = (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            alias = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            mapIndex = 3
+        } else {
+            childClass = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            alias = childClass.replaceFirstChar { it.lowercaseChar() }
+            mapIndex = 2
+        }
         // T-M19.4：子表推断走统一入口（策略 + 修饰链，全局语义）
         val childTable = EntityResolver.inferDecoratedTableName(childClass)
-        val alias = childClass.replaceFirstChar { it.lowercaseChar() }
 
-        val subSelect = renderCollectionSubSelect(call, childTable, alias)
+        val subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex)
 
         // ON 条件：复用同链中同子表 leftJoin 的 ON（T-M15-06 修复——四种 join 形态全覆盖）：
         // 三参（ColumnArg 对）/ 四参带别名 / on(col1, col2) / lambda ON，统一经 parseJoin 提取，
@@ -466,11 +658,12 @@ object MpjLambdaConverter : WrapperConverter {
      * @param call        selectCollection 调用（或嵌套 collection 调用）
      * @param childTable  子表名
      * @param alias       子表别名
+     * @param mapIndex    列映射 map 实参索引（T-M21-03 prefix 形态为 3，普通形态为 2；嵌套 collection 无 map）
      */
-    private fun renderCollectionSubSelect(call: WrapperCall, childTable: String, alias: String): String {
+    private fun renderCollectionSubSelect(call: WrapperCall, childTable: String, alias: String, mapIndex: Int = 2): String {
         val subColumns = mutableListOf<String>()
         val nestedJoins = mutableListOf<String>()
-        val mapping = call.args.getOrNull(2) as? WrapperArg.NestedArg
+        val mapping = call.args.getOrNull(mapIndex) as? WrapperArg.NestedArg
         mapping?.chain?.calls?.forEach { c ->
             when (c.methodName) {
                 // 子映射 id/result：子查询 SELECT 列

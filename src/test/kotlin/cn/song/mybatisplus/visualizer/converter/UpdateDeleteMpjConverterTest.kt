@@ -790,4 +790,115 @@ class UpdateDeleteMpjConverterTest {
         val literalStatement = MpjLambdaConverter.convert(literalChain, table) as cn.song.mybatisplus.visualizer.model.SelectStatement
         assertNull("类名字面量形态无 TableInfo → 不填充", literalStatement.joins.single().logicDeleteColumn)
     }
+
+    // ------------------------------------------------------------------
+    // T-M21-09：setIfExists（MPJ 1.4.9+）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `update_setIfExists归一为set`() {
+        // T-M21-09：setIfExists(col, val)（值存在才 set 的运行时语义）→ 归一为 set 处理渲染 SET 子句
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_UPDATE, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("setIfExists", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("101")),
+                )),
+                eqCall("id", "1"),
+            ),
+        )
+        val sql = SqlGenerator.generate(LambdaUpdateConverter.convert(chain, table))
+        assertEquals(
+            """
+            UPDATE car_device_info
+            SET station_id = 101
+            WHERE id = 1
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // T-M21-04 / T-M21-01 / T-M21-06：MPJ 主表别名下的 allEq / selectFilter / selectFunc 枚举
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `mpjLambda_allEq展开等值条件带主表前缀`() {
+        // T-M21-04：allEq(Map) 在 MPJ 联表上下文 → 键列带主表别名前缀（与条件渲染一致）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("allEq", listOf(
+                    WrapperArg.MapArg(
+                        entries = listOf(
+                            ColumnRef(columnName = "station_id") to SqlValue.Literal("1001"),
+                            ColumnRef(columnName = "share_scheme_id") to SqlValue.Literal("5"),
+                        ),
+                        null2IsNull = false,
+                    ),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT t.id, t.station_id, t.share_scheme_id
+            FROM car_device_info t
+            WHERE (t.station_id = 1001 AND t.share_scheme_id = 5)
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `mpjLambda_selectFilter过滤列带主表前缀`() {
+        // T-M21-01：selectFilter(Class, Predicate) 在 MPJ 上下文 → 过滤后列带主表别名前缀
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectFilter", listOf(
+                    WrapperArg.EntityRefArg(table),
+                    WrapperArg.PredicateArg(include = emptyList(), exclude = listOf("share_scheme_id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT t.id, t.station_id
+            FROM car_device_info t
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `mpjLambda_selectFunc枚举形态带主表前缀`() {
+        // T-M21-06：selectFunc(DefaultFuncEnum.SUM, col, alias) 在 MPJ 上下文 → SUM(t.col) AS alias
+        // （第三参 AliasArg 形态：psi 层 VO 方法引用 → 驼峰属性名）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectFunc", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("DefaultFuncEnum.SUM")),
+                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "id")), values = emptyList()),
+                    WrapperArg.AliasArg("totalCount"),
+                )),
+                WrapperCall("selectFunc", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("DefaultFuncEnum.AVG")),
+                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "station_id")), values = emptyList()),
+                    WrapperArg.ValueArg(SqlValue.Literal("avgStation")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT SUM(t.id) AS totalCount, AVG(t.station_id) AS avgStation
+            FROM car_device_info t
+            """.trimIndent(),
+            sql,
+        )
+    }
 }

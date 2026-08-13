@@ -57,8 +57,13 @@ enum class JoinType { INNER, LEFT, RIGHT, FULL }
  * @param orderBy       ORDER BY 项列表
  * @param limit         分页子句（null 表示无 LIMIT）
  * @param rawFirst      SQL 最前片段（`first("...")` 官方 API，M15 增补）；非 null 时置于 SELECT 之前
+ * @param rawAround     around 片段（`around(firstSql, lastSql)` 的 lastSql 段，MPJ 1.4.11+，T-M21-09）；
+ *                      非 null 时渲染于 ORDER BY 之后、LIMIT 之前（MP 内部 LAST 段位置）
  * @param comment       SQL 注释（`comment("...")` 官方 API，M15 增补）；非 null 时追加到语句末尾
  * @param unions        UNION / UNION ALL 子查询（MPJ 官方 API，M15 增补）；按调用顺序追加到主语句之后
+ * @param fromSubQuery  from 子查询主表（`from(w -> ...)`，MPJ 官方 API，T-M21-07）：first=子查询 SQL
+ *                      （compact 单行渲染）、second=外层别名（主表别名）；非 null 时生成器渲染
+ *                      `FROM (子查询SQL) 外层别名`（忽略主表 tableName，主表实体表名在子查询内部）
  */
 data class SelectStatement(
     override val table: TableInfo,
@@ -72,8 +77,10 @@ data class SelectStatement(
     val orderBy: List<OrderByItem> = emptyList(),
     val limit: LimitClause? = null,
     val rawFirst: String? = null,
+    val rawAround: String? = null,
     val comment: String? = null,
     val unions: List<UnionClause> = emptyList(),
+    val fromSubQuery: Pair<String, String>? = null,
 ) : SqlStatement()
 
 /**
