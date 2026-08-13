@@ -12,6 +12,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 - **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）；**LIKE 自动拼百分号**（`like` → `'%值%'`）；**字段类型推断引号**（String 列输入数字恒加引号 `'123'`，数值列恒原样）
 - **动态条件**：布尔重载 `.eq(true, "name", val)` 在预览左栏提供**复选框开关**（纯手动勾选：勾选拼接、取消移除；字面量 `false` 默认不勾选）
 - **SQL 格式化**：关键字大写、子句换行缩进，支持格式化/单行两种视图
+- **字段补全 + 注释提示**：SQL 编辑器输入列名前缀提示实体字段（**位置感知**：FROM/JOIN 后提示表名、WHERE/ON/HAVING/GROUP BY/ORDER BY 后提示列名）；补全项显示**字段注释**（`@Schema`/`@ApiModelProperty` 注解 > JavaDoc > 行注释，四级优先级含数据源 schema 预留），且**输入注释关键词也能检索到对应字段**（如输入"设备名"命中 `name` 列）；表名同样展示表注释
 - **多种触发方式**：右键菜单 / 快捷键（默认 `Alt+Shift+Q`）/ 代码左侧 gutter 图标，一键复制
 - **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染；`saveOrUpdate` 批量按 PG `ON CONFLICT` 渲染 upsert）
 - **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN（含 `selectCollection` 子查询、`selectFunc` 聚合、`exists` 三形态、`apply`/`last` 原生片段透传）预览，批量操作展开（F-15）

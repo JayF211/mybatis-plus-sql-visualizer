@@ -3,6 +3,10 @@
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
+    <!-- 消息 bundle 声明（M16 i18n）：plugin.xml 中 action text/description 按 action.<id>.<prop> 约定、
+         configurable displayName 按 bundle+key 属性，从 messages.MpSqlVisualizerBundle（含 _zh）解析本地化 -->
+    <resource-bundle>messages.MpSqlVisualizerBundle</resource-bundle>
+
     <!-- 插件显示名称（M13.1 统一为完整名） -->
     <name>MyBatis-Plus SQL Visualizer</name>
     <!-- 插件图标：不声明 <icon>，走 IDEA 约定路径（jar 根 pluginIcon.svg / pluginIcon_dark.svg，亮暗主题自动切换，M14） -->
@@ -10,7 +14,7 @@
     <!-- 插件厂商（发布前请替换为真实信息） -->
     <vendor url="https://gitee.com/SongRenShuo">SongRenShuo</vendor>
 
-    <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符） -->
+    <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
         MyBatis-Plus SQL Visualizer converts MyBatis-Plus (and MyBatis-Plus-Join) Wrapper chains into readable, copyable SQL with resolved parameters directly inside IntelliJ IDEA.
         <br/>
@@ -23,6 +27,20 @@
             <li>Multiple SQL dialects (MySQL / PostgreSQL / Oracle)</li>
         </ul>
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
+        <hr/>
+        <h2>核心能力（中文说明）</h2>
+        <ul>
+            <li>将 <code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> / <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 链式代码转换为 SQL</li>
+            <li>参数替换：将 <code>?</code> 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪，LIKE 自动拼百分号）</li>
+            <li>动态条件：布尔重载 <code>.eq(true, col, val)</code> 在预览左栏提供复选框开关，勾选/取消实时重生成 SQL</li>
+            <li>SQL 自动格式化：关键字大写、子句换行缩进，支持多行/单行两种视图</li>
+            <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
+            <li>多数据库方言：MySQL / PostgreSQL / Oracle（分页子句差异化渲染）</li>
+            <li>服务链式调用支持：<code>service.lambdaQuery()</code> / <code>lambdaUpdate()</code> 等约 264 处真实项目用法全覆盖</li>
+            <li>逻辑删除注入：实体含 <code>@TableLogic</code> 时查询/删除自动追加 <code>AND deleted = 0</code>（可配置关闭）</li>
+            <li>安全警示：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险</li>
+        </ul>
+        <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
         ]]></description>
 
     <!-- 插件兼容性声明
@@ -37,14 +55,16 @@
         <!-- 全局配置（application-level，F-16） -->
         <applicationService serviceImplementation="cn.song.mybatisplus.visualizer.config.PluginSettings"/>
 
-        <!-- SQL 预览服务（project-level，统一转换入口） -->
-        <projectService serviceImplementation="cn.song.mybatisplus.visualizer.ui.SqlPreviewService"/>
+        <!-- SQL 预览服务（project-level，M16 起为轻服务：@Service(Service.Level.PROJECT) 注解声明，
+             IDE 自动发现，无需 XML 注册；获取方式不变 project.getService(SqlPreviewService::class.java)） -->
 
         <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer
-             （官方规范：必须用 applicationConfigurable 注册；com.intellij.configurable 为 abstract EP 不可直接注册） -->
+             （官方规范：必须用 applicationConfigurable 注册；com.intellij.configurable 为 abstract EP 不可直接注册；
+              M16 i18n：displayName 用 bundle+key 属性本地化，替代硬编码 displayName） -->
         <applicationConfigurable parentId="tools"
                                  id="cn.song.mybatisplus.visualizer.settings"
-                                 displayName="MyBatis-Plus SQL Visualizer"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
@@ -62,11 +82,14 @@
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
     <actions>
+        <!-- M16 i18n：text/description 引用 bundle 键（action.<id>.<prop> 约定，messages.MpSqlVisualizerBundle）；
+             图标：/icons/sqlGutter.svg（与 gutter 预览图标共用，修复 /META-INF/pluginIcon.svg 无法解析——
+             pluginIcon.svg 为插件图标约定路径，不作为 action 图标使用） -->
         <action id="cn.song.mybatisplus.visualizer.ConvertToSql"
                 class="cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction"
-                text="Convert to SQL"
-                description="将光标处的 MyBatis-Plus Wrapper 转换为 SQL"
-                icon="/META-INF/pluginIcon.svg">
+                text="action.cn.song.mybatisplus.visualizer.ConvertToSql.text"
+                description="action.cn.song.mybatisplus.visualizer.ConvertToSql.description"
+                icon="/icons/sqlGutter.svg">
             <!-- 右键菜单：编辑器弹出菜单 -->
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <!-- 快捷键（M14.5 调整默认值）：Alt+Shift+Q（Q=Query，IDEA 默认 Keymap 未占用）；

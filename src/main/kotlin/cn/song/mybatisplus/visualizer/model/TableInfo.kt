@@ -9,12 +9,14 @@ package cn.song.mybatisplus.visualizer.model
  * @param tableName       数据库表名（如 device_info）
  * @param columns         实体字段到列的映射（含主键标记）
  * @param logicDeleteColumn 逻辑删除列（@TableLogic 标注字段的列名，T-M15-07）；null 表示无逻辑删除
+ * @param comment         表注释（M16：类级注解/javadoc/行注释提取，schema 预留最高优先级）
  */
 data class TableInfo(
     val entityClassName: String,
     val tableName: String,
     val columns: List<ColumnInfo>,
     val logicDeleteColumn: String? = null,
+    val comment: String? = null,
 ) {
     /** 便捷查找：按实体字段名取列信息，找不到返回 null。 */
     fun columnByField(fieldName: String): ColumnInfo? = columns.firstOrNull { it.fieldName == fieldName }
@@ -33,6 +35,7 @@ data class TableInfo(
  *                   用于参数回填的引号推断；PSI 解析失败时为 null
  * @param fill       自动填充标注（@TableField(fill = FieldFill.XXX) 的文本，T-M15-08）：
  *                   INSERT / INSERT_UPDATE 参与插入、UPDATE / INSERT_UPDATE 参与更新；null 表示无填充
+ * @param comment    字段注释（M16：注解 > javadoc > 行注释，四级优先级含 schema 预留）
  */
 data class ColumnInfo(
     val fieldName: String,
@@ -40,4 +43,5 @@ data class ColumnInfo(
     val isId: Boolean = false,
     val fieldType: String? = null,
     val fill: String? = null,
+    val comment: String? = null,
 )

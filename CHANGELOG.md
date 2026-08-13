@@ -5,6 +5,13 @@
 ## [Unreleased]
 
 ### Added
+- M16 SQL 面板字段补全 + 注释提示（v1.10，237 测试全绿）：
+  - **注释读取（四级优先级 + schema 预留）**：`@Schema(description)` / `@ApiModelProperty(value/description)` / `@ExcelProperty(value)` 等注解白名单（排除 MP 注解 value 误取；`@TableField(comment=)` 例外）> javadoc（多行清洗）> 行注释（LightJava textRange 绑定 + 文档扫描双路径）；`CommentSource` 优先级链（SCHEMA 最高，方案 B 接入即自动覆盖）
+  - **表/实体注释**：类级注解/javadoc/行注释 → `TableInfo.comment`，表名补全项展示注释
+  - **注释传递**：`PreviewResult.columnComments/tableComment` + `SqlCompletionContext` 同字段（向后兼容）
+  - **补全展示与检索**：列名/表名 lookup `withTailText` 灰色注释尾缀 + `withLookupString` 注释关键词检索（输入"设备名"命中 `name` 列）
+  - **位置感知补全**：FROM/JOIN 后只提示表名、WHERE/ON/HAVING/GROUP BY/ORDER BY 后只提示列名、SELECT 列位补充聚合函数（COUNT/SUM/MAX/MIN/AVG）；无法判定回退全量
+  - 修复：LightPlatform 行注释不在兄弟链/不随 offset 前缀（textRange 绑定注释）——元素文本首行 + 文档扫描双路径提取
 - M15 官方 API 增补 3（223 测试全绿）：
   - **union / unionAll**：`union(SubClass.class, w -> ...)` → `UNION (SELECT ... FROM sub_entity WHERE ...)` 子查询（独立解析器 + compact 单行渲染）
   - **selectSub**：`selectSub(SubClass.class, w -> ..., alias)` → `(SELECT ...) AS alias` 子查询列（第三参按别名解析，驼峰属性名）

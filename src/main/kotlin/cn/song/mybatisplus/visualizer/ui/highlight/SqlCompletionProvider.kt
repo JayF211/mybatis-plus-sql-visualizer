@@ -19,8 +19,15 @@ interface SqlCompletionProvider {
     /** 列名集合。 */
     fun columns(context: SqlCompletionContext): List<String> = context.columns
 
+    /** 列名 + 注释（M16：补全 tailText 展示与注释关键词检索；无注释列返回 null）。 */
+    fun columnsWithComments(context: SqlCompletionContext): List<Pair<String, String?>> =
+        context.columns.map { it to context.columnComments[it] }
+
     /** 主表别名（可为 null）。 */
     fun tableAlias(context: SqlCompletionContext): String? = context.tableAlias
+
+    /** 表注释（M16：表名补全 tailText 与关键词检索）。 */
+    fun tableComment(context: SqlCompletionContext): String? = context.tableComment
 
     companion object {
         /** 当前提供器（默认方案 A）。 */

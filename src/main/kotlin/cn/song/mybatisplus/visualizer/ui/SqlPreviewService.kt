@@ -26,6 +26,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
@@ -40,8 +41,10 @@ import com.intellij.psi.PsiMethodCallExpression
  * ParameterReplacer 参数对照 → WrapperCache 缓存（F-20）。
  *
  * M5 起读取 [PluginSettings] 配置：方言（分页子句）、格式化开关（多行/单行）。
- * 注册为 project service（见 plugin.xml），生命周期随项目。
+ * 轻服务（M16）：`@Service(Service.Level.PROJECT)` 注解声明，无需 plugin.xml `<projectService>` 注册
+ * （IDE 自动发现；构造函数仅依赖 Project，满足轻服务条件），获取方式不变（project.getService）。
  */
+@Service(Service.Level.PROJECT)
 class SqlPreviewService(private val project: Project) {
 
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
@@ -161,6 +164,11 @@ class SqlPreviewService(private val project: Project) {
             tableName = table.tableName,
             warning = buildWarning(statement),
             columns = table.allColumnNames,
+            // M16：列注释与表注释（补全 tailText / 关键词检索；来自 EntityResolver 的四级优先级提取）
+            columnComments = table.columns.mapNotNull { col ->
+                col.comment?.takeIf { it.isNotBlank() }?.let { col.columnName to it }
+            }.toMap(),
+            tableComment = table.comment,
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
             paramHints = generated.paramHints,
         )

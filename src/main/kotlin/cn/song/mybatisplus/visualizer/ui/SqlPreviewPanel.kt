@@ -168,6 +168,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 tableName = current?.tableName,
                 columns = current?.columns ?: emptyList(),
                 tableAlias = null,
+                columnComments = current?.columnComments ?: emptyMap(),
+                tableComment = current?.tableComment,
             ),
         )
     }
@@ -268,6 +270,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     tableName = current?.tableName,
                     columns = current?.columns ?: emptyList(),
                     tableAlias = null,
+                    columnComments = current?.columnComments ?: emptyMap(),
+                    tableComment = current?.tableComment,
                 ),
             )
             psiFile = psi

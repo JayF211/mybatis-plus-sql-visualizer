@@ -2356,6 +2356,35 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testColumnCommentsInPreviewResult() {
+        // T-M16-02：@Schema 注释实体预览 → PreviewResult.columnComments 含 name→设备名称
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    deviceInfoService.getOne(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    @io.swagger.v3.oas.annotations.media.Schema(description = "设备名称")
+                    private String name;
+                    private Integer dicStatus;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("注释传递应产出预览结果", result)
+        assertEquals("设备名称", result!!.columnComments["name"])
+        assertNull(result.columnComments["id"])
+        assertNull(result.columnComments["dic_status"])
+        assertEquals("name → 设备名称", "设备名称", result.columnComments["name"])
+    }
+
     /**
      * 定位锚点元素：文件内第一个方法调用；无调用时回退到 Wrapper 变量声明 / 字面量 / 任意元素。
      */
