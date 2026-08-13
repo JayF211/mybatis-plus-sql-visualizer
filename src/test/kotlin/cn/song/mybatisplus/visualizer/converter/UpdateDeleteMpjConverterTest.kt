@@ -631,4 +631,114 @@ class UpdateDeleteMpjConverterTest {
         assertEquals("foo", statement.joins[0].alias)
         assertNotNull(statement.joins[0].onConditions.firstOrNull() as Condition.ColumnComparison)
     }
+
+    // ------------------------------------------------------------------
+    // T-M20-04：selectIgnore（selectAll 全列展开后剔除列）+ stringQuery()/lambda() 互转
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `mpjQuery_selectIgnore从全列剔除字符串列`() {
+        // T-M20-04：MPJQueryWrapper（全字符串）selectAll + selectIgnore("t.station_id", "t.share_scheme_id AS s")
+        // → SELECT 全列 - 忽略列（带主表别名 t.；字符串形态剔除 AS 后缀与 t. 前缀后与实体列匹配）
+        val chain = WrapperChain(
+            WrapperType.MPJ_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectAll", listOf(WrapperArg.ValueArg(SqlValue.Literal("DeviceInfoEntity")))),
+                WrapperCall("selectIgnore", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("t.station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t.share_scheme_id AS s")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjQueryConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT t.id
+            FROM car_device_info t
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `mpjLambdaQuery_selectIgnore从全列剔除lambda列`() {
+        // T-M20-04：MPJLambdaQueryWrapper（lambda 列）selectAll + selectIgnore(Entity::getX, "t.share_scheme_id")
+        // → SELECT 全列 - 忽略列（无主表别名）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectAll", listOf(WrapperArg.ValueArg(SqlValue.Literal("DeviceInfoEntity")))),
+                WrapperCall("selectIgnore", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t.share_scheme_id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaQueryConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT id
+            FROM car_device_info
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `mpjLambdaQuery_lambda与stringQuery中间节点不破坏解析`() {
+        // T-M20-04：stringQuery()/lambda() 为链中间节点（psi 层已并入链，WrapperType 保持 MPJ_LAMBDA_QUERY），
+        // 转换器静默忽略——select/条件/orderByStr 解析不受影响
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("select", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "id")))),
+                WrapperCall("lambda", emptyList()),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1001")),
+                )),
+                WrapperCall("stringQuery", emptyList()),
+                WrapperCall("orderByStr", listOf(WrapperArg.ValueArg(SqlValue.Literal("t.create_time")))),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaQueryConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT id
+            FROM car_device_info
+            WHERE id = 1001
+            ORDER BY t.create_time ASC
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `mpjQuery_stringQuery与lambda中间节点不破坏解析`() {
+        // T-M20-04：MPJQueryWrapper 链含 stringQuery()/lambda() 中间节点——restCalls 过滤按方法名进行，
+        // 不受互转节点截断；groupByStr 经字符串链端到端生效
+        val chain = WrapperChain(
+            WrapperType.MPJ_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("select", listOf(WrapperArg.ValueArg(SqlValue.Literal("t.id AS device_id")))),
+                WrapperCall("stringQuery", emptyList()),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("t.id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1001")),
+                )),
+                WrapperCall("lambda", emptyList()),
+                WrapperCall("groupByStr", listOf(WrapperArg.ValueArg(SqlValue.Literal("t.station_id")))),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjQueryConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT t.id AS device_id
+            FROM car_device_info t
+            WHERE t.id = 1001
+            GROUP BY t.station_id
+            """.trimIndent(),
+            sql,
+        )
+    }
 }

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
@@ -386,5 +387,231 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         if (methodCall != null) return methodCall
         return PsiTreeUtil.findChildOfType(file, PsiLiteralExpression::class.java)
             ?: error("测试文件缺少可用的锚点元素")
+    }
+
+    // ------------------------------------------------------------------
+    // T-M20-02：MPJ 官方工厂 JoinWrappers / 旧工厂 MPJWrappers
+    // ------------------------------------------------------------------
+
+    fun testJoinWrappersLambdaFactoryLocatesWithSql() {
+        // T-M20-02：JoinWrappers.lambda(Class) → MPJ_LAMBDA（qualifier 文本匹配，无 MPJ classpath 也生效）；
+        // selectJoinList 消费 + selectAll + eq → 完整联表 SQL（主表默认别名 t）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.selectJoinList(UserEntity.class, JoinWrappers.lambda(UserEntity.class)
+                            .selectAll()
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("应定位到 JoinWrappers.lambda 工厂链", located)
+        assertEquals(WrapperType.MPJ_LAMBDA, located!!.chain.wrapperType)
+        assertEquals("UserEntity", located.chain.entityClass)
+        // 仅 Wrapper 操作（工厂调用 lambda 本身不入链）
+        assertEquals(listOf("selectAll", "eq"), located.chain.calls.map { it.methodName })
+
+        // 完整链路：ConverterRegistry 分发（与 SqlPreviewService 一致）→ SqlGenerator
+        // 实体经 inferEntityFromChain 文本兜底（UserEntity::getId 方法引用 → 类名 + getter 属性）
+        val statement = ConverterRegistry.convert(located.chain, located.table!!)!!
+        assertEquals(
+            """
+            SELECT t.id
+            FROM user_entity t
+            WHERE t.id = 1001
+            """.trimIndent(),
+            SqlGenerator.generate(statement),
+        )
+    }
+
+    fun testJoinWrappersQueryFactoryLocates() {
+        // T-M20-02 关键区分：JoinWrappers.query(Class) → MPJ_QUERY（而 Wrappers.query() → QUERY，见下方回归）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.selectJoinList(UserEntity.class, JoinWrappers.query(UserEntity.class)
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "query" }
+        val chain = WrapperLocator.locate(factoryCall)
+        assertNotNull("JoinWrappers.query 应定位为工厂链", chain)
+        assertEquals(WrapperType.MPJ_QUERY, chain!!.wrapperType)
+        assertEquals("UserEntity", chain.entityClass)
+    }
+
+    fun testWrappersQueryStillMapsToQuery() {
+        // T-M20-02 回归：Wrappers.query() 仍为 QUERY（qualifier 区分后不受 JoinWrappers.query → MPJ_QUERY 影响）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.selectList(Wrappers.query().eq("id", 1001L));
+                }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "query" }
+        val chain = WrapperLocator.locate(factoryCall)
+        assertNotNull("Wrappers.query 应定位为工厂链", chain)
+        assertEquals(WrapperType.QUERY, chain!!.wrapperType)
+    }
+
+    fun testMpjWrappersOldFactoryLocates() {
+        // T-M20-02：旧工厂 MPJWrappers.lambdaJoin(Class) → MPJ_LAMBDA、queryJoin(Class) → MPJ_QUERY
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.MPJWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.selectJoinList(UserEntity.class, MPJWrappers.lambdaJoin(UserEntity.class)
+                            .eq(UserEntity::getId, 1001L));
+                    mapper.selectJoinList(UserEntity.class, MPJWrappers.queryJoin(UserEntity.class)
+                            .eq(UserEntity::getId, 1002L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+        val lambdaJoin = WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "lambdaJoin" })
+        assertNotNull("MPJWrappers.lambdaJoin 应定位为工厂链", lambdaJoin)
+        assertEquals(WrapperType.MPJ_LAMBDA, lambdaJoin!!.wrapperType)
+        assertEquals("UserEntity", lambdaJoin.entityClass)
+
+        val queryJoin = WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "queryJoin" })
+        assertNotNull("MPJWrappers.queryJoin 应定位为工厂链", queryJoin)
+        assertEquals(WrapperType.MPJ_QUERY, queryJoin!!.wrapperType)
+        assertEquals("UserEntity", queryJoin.entityClass)
+    }
+
+    fun testJoinWrappersDeleteUpdateReturnNull() {
+        // T-M20-02：JoinWrappers.delete/update 为 DeleteJoinWrapper/UpdateJoinWrapper（M21 补类型），
+        // 本任务定位返回 null（但不误识别为 Wrappers.delete 等）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.deleteJoin(UserEntity.class, JoinWrappers.delete(UserEntity.class));
+                    mapper.updateJoin(UserEntity.class, JoinWrappers.update(UserEntity.class));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+        assertNull("JoinWrappers.delete 当前不产出类型（M21 补），定位应为 null",
+            WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "delete" }))
+        assertNull("JoinWrappers.update 当前不产出类型（M21 补），定位应为 null",
+            WrapperLocator.locate(calls.first { it.methodExpression.referenceName == "update" }))
+    }
+
+    // ------------------------------------------------------------------
+    // T-M20-03：MPJLambdaWrapper 实体变量构造（菱形 + 实体实例实参）
+    // ------------------------------------------------------------------
+
+    fun testMpjLambdaWrapperDiamondEntityVariable() {
+        // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
+        // entityInfoFromType 解析不到实体）→ 从构造第一参表达式类型解析实体与表名
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    UserEntity userEntity = new UserEntity();
+                    mapper.selectJoinList(UserEntity.class, new MPJLambdaWrapper<>(userEntity)
+                            .selectAll()
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("应定位到菱形实体变量构造链", located)
+        assertEquals(WrapperType.MPJ_LAMBDA, located!!.chain.wrapperType)
+        assertEquals("UserEntity", located.chain.entityClass)
+        assertEquals("user_entity", located.table?.tableName)
+        assertEquals(listOf("selectAll", "eq"), located.chain.calls.map { it.methodName })
+    }
+
+    fun testMpjLambdaWrapperDiamondEntityVariableWithAlias() {
+        // T-M20-03：(T entity, alias) 双参形态——实体变量 + 字符串别名（extractConstructorAlias 复用）：
+        // 实体解析 + 主表别名 u 生效
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    UserEntity userEntity = new UserEntity();
+                    mapper.selectJoinList(UserEntity.class, new MPJLambdaWrapper<>(userEntity, "u")
+                            .selectAll()
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("应定位到菱形实体变量+别名构造链", located)
+        assertEquals("u", located!!.chain.constructorAlias)
+        assertEquals("UserEntity", located.chain.entityClass)
+        assertEquals("user_entity", located.table?.tableName)
+
+        val statement = ConverterRegistry.convert(located.chain, located.table!!)!!
+        assertEquals(
+            """
+            SELECT u.id
+            FROM user_entity u
+            WHERE u.id = 1001
+            """.trimIndent(),
+            SqlGenerator.generate(statement),
+        )
     }
 }

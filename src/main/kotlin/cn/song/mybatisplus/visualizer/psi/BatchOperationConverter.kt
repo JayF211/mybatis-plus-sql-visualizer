@@ -14,13 +14,18 @@ import com.intellij.psi.PsiVariable
  *
  * 支持的批量方法：
  *  - `updateBatchById(list)` / `updateById(entity)`：UPDATE 表 SET 非主键列 = ? WHERE 主键 = ?
- *  - `saveBatch(list)` / `insertBatchSomeColumn(list)` / `save(entity)`（M19.5 补注册，与注释一致化）：
+ *  - `saveBatch(list)` / `insertBatchSomeColumn(list)` / `save(entity)`（M19.5 补注册，与注释一致化）/
+ *    `insert(list)` / `insert(entity)`（T-M20-08，BaseMapper 3.5.7+ 批量族，单实体与集合同 INSERT 模板）：
  *    INSERT INTO 表 (列...) VALUES (?, ...)
- *  - `saveOrUpdate(entity)` / `saveOrUpdateBatch(list)`（U12，T-M15-08）：INSERT + 方言 upsert（PG `ON CONFLICT`）
- *  - `removeByIds(list)` / `removeById(id)` / `deleteByIds(ids)`（U11/P1-02，T-M15-08 + M19.5）：
- *    DELETE FROM 表 WHERE 主键 IN/=
- *  - `getById(id)` / `listByIds(ids)` / `selectByIds(ids)`（M19.5，实体单条查询，P2-08 同点合并）：
- *    SELECT 全列 FROM 表 WHERE 主键 =/IN
+ *  - `saveOrUpdate(entity)` / `saveOrUpdateBatch(list)`（U12，T-M15-08）/ `insertOrUpdate(entity)`（T-M20-08）：
+ *    INSERT + 方言 upsert（PG `ON CONFLICT`）
+ *  - `removeByIds(list)` / `removeById(id)` / `deleteByIds(ids)`（U11/P1-02，T-M15-08 + M19.5）/
+ *    `removeBatchByIds(list)`（T-M20-10 核对补注册）：DELETE FROM 表 WHERE 主键 IN/=
+ *  - `removeByMap(map)` / `deleteByMap(map)`（T-M20-07，MP/MPJ Map 条件删除）与
+ *    `selectByMap(map)` / `listByMap(map)`（T-M20-07 Map 条件查询）：
+ *    WHERE Map 等值条件占位（键值静态不可得，可读占位文本）
+ *  - `getById(id)` / `getOptById(id)`（T-M20-10，IService 3.5.15）/ `listByIds(ids)` / `selectByIds(ids)`
+ *    （M19.5，实体单条查询，P2-08 同点合并）：SELECT 全列 FROM 表 WHERE 主键 =/IN
  *
  * 实体类解析顺序：集合参数泛型（`List<Entity>`）→ 实体参数类型 → service qualifier 泛型
  * （`XxxService extends IService<Entity>` / `ServiceImpl<Mapper, Entity>`，getById/removeById 单参场景）。
@@ -42,16 +47,36 @@ object BatchOperationConverter {
         "updateById" to Operation.UPDATE,
         "saveBatch" to Operation.INSERT,
         "insertBatchSomeColumn" to Operation.INSERT,
+        // T-M20-08：BaseMapper 批量族（MP 3.5.7+）——insert(Collection)/insert(Collection, int)/insert(T)
+        // 同名共用一个 INSERT 模板；insert 为通用 Java 方法名，非实体调用由 [isLikelyEntity] 挡掉
+        "insert" to Operation.INSERT,
         "save" to Operation.INSERT,
         "saveOrUpdate" to Operation.UPSERT,
+        // T-M20-08：BaseMapper.insertOrUpdate（全重载同名，BiPredicate 参数忽略）与 saveOrUpdate 同 upsert 模板
+        "insertOrUpdate" to Operation.UPSERT,
         "saveOrUpdateBatch" to Operation.UPSERT,
         "removeByIds" to Operation.DELETE,
         "removeById" to Operation.DELETE,
         "deleteByIds" to Operation.DELETE,
+        // T-M20-10 核对：IService 3.5.15 便捷重载 removeBatchByIds(Collection)——核对时补注册（与 removeByIds 同模板）
+        "removeBatchByIds" to Operation.DELETE,
+        // T-M20-07：Map 条件消费（MP/MPJ）——DELETE/SELECT WHERE Map 等值条件（独立 builder，见 [buildMapConditionBatch]）
+        "removeByMap" to Operation.DELETE,
+        "deleteByMap" to Operation.DELETE,
         "getById" to Operation.SELECT,
+        // T-M20-10：IService 3.5.15 getOptById(id) → 与 getById 同主键等值模板
+        "getOptById" to Operation.SELECT,
         "listByIds" to Operation.SELECT,
         "selectByIds" to Operation.SELECT,
+        "selectByMap" to Operation.SELECT,
+        "listByMap" to Operation.SELECT,
     )
+
+    /** T-M20-07：Map 等值条件操作方法名（独立 builder，不并入主键等值/IN 分支）。 */
+    private val MAP_CONDITION_METHODS = setOf("removeByMap", "deleteByMap", "selectByMap", "listByMap")
+
+    /** T-M20-10：主键等值单条查询方法名（getById / getOptById，其余批量查询走主键 IN）。 */
+    private val SINGLE_ID_SELECT_METHODS = setOf("getById", "getOptById")
 
     /** 批量操作方法名集合（M10 起 internal 供 [WrapperAnchorDetector] gutter 锚点复用）。 */
     internal val batchOperationMethodNames: Set<String> = BATCH_OPERATIONS.keys
@@ -66,6 +91,8 @@ object BatchOperationConverter {
         val methodName = call.methodExpression.referenceName ?: return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
         val table = resolveEntityTable(call) ?: return null
+        // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 模板）
+        if (methodName in MAP_CONDITION_METHODS) return buildMapConditionBatch(methodName, table)
         return when (operation) {
             Operation.UPDATE -> buildUpdateBatch(methodName, table)
             Operation.INSERT -> buildInsertBatch(methodName, table)
@@ -174,15 +201,32 @@ object BatchOperationConverter {
 
     /**
      * SELECT 模板（M19.5，实体单条查询，P1-02/P2-08 同点合并）：
-     * 全列清单 + 主键等值（getById）/ 主键 IN（listByIds/selectByIds）。
+     * 全列清单 + 主键等值（getById/getOptById，T-M20-10 并入）/ 主键 IN（listByIds/selectByIds）。
      */
     private fun buildSelectBatch(methodName: String, table: TableInfo): BatchPreview {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val selectColumns = table.columns.joinToString(", ") { it.columnName }
-        val sql = if (methodName == "getById") {
+        val sql = if (methodName in SINGLE_ID_SELECT_METHODS) {
             "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE ${idColumn.columnName} = ?"
         } else {
             "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE ${idColumn.columnName} IN (?, ?, ...)"
+        }
+        return BatchPreview(methodName, table.tableName, sql, null)
+    }
+
+    /**
+     * T-M20-07（Map 条件消费）：`removeByMap(Map)` / `deleteByMap(Map)` / `selectByMap(Map)` / `listByMap(Map)`
+     * 的 Map 等值条件模板——Map 键值均为运行时数据，列名与取值静态不可得，WHERE 用可读占位文本
+     * `col = ? AND col = ? ...`；删除/查询由方法名前缀区分。参数组说明置空（Map 键不可静态枚举）。
+     */
+    private fun buildMapConditionBatch(methodName: String, table: TableInfo): BatchPreview {
+        val isDelete = methodName.startsWith("remove") || methodName.startsWith("delete")
+        val condition = "<Map 等值条件: col = ? AND col = ? ...>"
+        val sql = if (isDelete) {
+            "DELETE FROM ${table.tableName}\nWHERE $condition"
+        } else {
+            val selectColumns = table.columns.joinToString(", ") { it.columnName }
+            "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE $condition"
         }
         return BatchPreview(methodName, table.tableName, sql, null)
     }

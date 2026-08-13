@@ -447,4 +447,89 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         val literal = PsiTreeUtil.findChildOfType(myFixture.file, PsiLiteralExpression::class.java)!!
         assertNull(WrapperAnchorDetector.anchorElement(literal))
     }
+
+    fun testJoinWrappersFactoryMethodNameIsAnchor() {
+        // T-M20-02：MPJ 官方工厂 JoinWrappers.lambda(...) 内联链（无变量、无 new）——
+        // 工厂方法名 identifier 应是 gutter 锚点（场景 C isWrappersFactory 文本匹配扩展）
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void query() {
+                    mapper.selectJoinList(UserEntity.class, JoinWrappers.lambda(UserEntity.class)
+                            .selectAll()
+                            .eq(UserEntity::getId, 1L));
+                }
+
+                static class UserEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambda" }
+        assertSame(
+            "内联 JoinWrappers.lambda 工厂方法名应为锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testJoinWrappersFactoryAssignedVariableAnchors() {
+        // T-M20-02：赋值变量形态（MPJLambdaWrapper<UserEntity> w = JoinWrappers.lambda(...)...）——
+        // 变量声明是锚点（场景 B），工厂方法名与变量声明同行去重
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<UserEntity> w = JoinWrappers.lambda(UserEntity.class)
+                            .selectAll()
+                            .eq(UserEntity::getId, 1L);
+                }
+
+                static class UserEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val variable = firstVariable()
+        assertSame(
+            "赋值变量形态的变量名应为锚点",
+            variable.nameIdentifier,
+            WrapperAnchorDetector.anchorElement(variable.nameIdentifier),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambda" }
+        assertNull(
+            "赋值变量形态下工厂方法名应与变量声明同行去重",
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testWrappersLambdaQueryFactoryStillAnchor() {
+        // T-M20-02 回归：wrapperFactoryMethodNames 新增 lambda/delete 后，
+        // Wrappers.<T>lambdaQuery() 旧行为不回归（方法名仍为锚点）
+        configure(
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query() {
+                    list(Wrappers.<DeviceEntity>lambdaQuery().eq(DeviceEntity::getId, 1L));
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaQuery" }
+        assertSame(
+            "Wrappers.lambdaQuery 方法名应仍为锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
 }

@@ -89,6 +89,8 @@ class QueryWrapperParser(
 
                 // ---------- 二元比较 ----------
                 "eq" -> orPending = addConditionFlagged(conditions, simple(call, "=").flagged(analysis), orPending)
+                // eqOrIsNull（MP 3.5.17 官方 API，T-M20-09）：值静态求值为 null → IS NULL，否则 = 值
+                "eqOrIsNull" -> orPending = addConditionFlagged(conditions, eqOrIsNull(call).flagged(analysis), orPending)
                 "ne" -> orPending = addConditionFlagged(conditions, simple(call, "!=").flagged(analysis), orPending)
                 "gt" -> orPending = addConditionFlagged(conditions, simple(call, ">").flagged(analysis), orPending)
                 "ge" -> orPending = addConditionFlagged(conditions, simple(call, ">=").flagged(analysis), orPending)
@@ -131,9 +133,13 @@ class QueryWrapperParser(
 
                 // ---------- 结构 ----------
                 "groupBy" -> groupBy += columnArgs(call)
+                // groupByStr（MPJ 字符串版 groupBy，1.4.x 官方 API，T-M20-04）：字符串列原样（可含表别名）
+                "groupByStr" -> groupBy += columnArgs(call)
                 "having" -> having = parseHaving(call)
                 "orderByAsc" -> orderBy += orderItems(call, asc = true)
                 "orderByDesc" -> orderBy += orderItems(call, asc = false)
+                // orderByStr（MPJ 字符串版 orderBy，T-M20-04）：字符串列原样、默认 ASC（MPJ 语义：orderByStr 恒升序）
+                "orderByStr" -> orderBy += orderByStrItems(call)
                 // orderBy(condition?, isAsc, R...)：condition 布尔前缀（orderBy 不在 CONDITION_METHODS，手动剥离）
                 // + isAsc 布尔字面量（true=ASC，false=DESC）
                 "orderBy" -> {
@@ -262,6 +268,24 @@ class QueryWrapperParser(
     }
 
     /**
+     * eqOrIsNull（MP 3.5.17 官方 API，T-M20-09）：`eqOrIsNull(col, val)` → 值实参静态求值为 null 时
+     * 生成 `col IS NULL`，否则 `col = 值`（与 eq 同语义）；布尔重载（condition 首参）由 analyzeFlag 剥离。
+     *
+     * null 判定：psi 层 Java `null` 字面量经 ExpressionEvaluator 求值为 [SqlValue.Literal]（raw/unquoted
+     * 均为 `NULL`，无引号）——与字符串 `"NULL"`（raw 为带引号的 `'NULL'`）通过 raw 区分。
+     * 占位符（运行时值）恒走 `= ?`（运行时才能确定是否 null）。
+     */
+    private fun eqOrIsNull(call: WrapperCall): Condition? {
+        val column = argAsColumn(call.args.firstOrNull()) ?: return null
+        val value = argAsValue(call.args.getOrNull(1)) ?: return null
+        return if (value is SqlValue.Literal && value.raw == "NULL") {
+            Condition.Unary(column, "IS NULL")
+        } else {
+            Condition.Simple(column, "=", value)
+        }
+    }
+
+    /**
      * 子查询条件（官方 sub-query API，1.5.2+）：`eq(col, SubEntity.class, w -> w.select(...).between(...))`
      * → `col op (SELECT ... FROM sub_entity WHERE ...)`。子查询用**独立解析器**（不继承主表别名前缀），
      * 渲染为单行（compact）嵌入条件。
@@ -368,6 +392,16 @@ class QueryWrapperParser(
         return columnArgs(call).map { OrderByItem(it, asc) }
     }
 
+    /**
+     * orderByStr（MPJ 字符串版 orderBy，1.4.x 官方 API，T-M20-04）：`orderByStr("t.create_time", ...)` →
+     * 字符串列原样（可含表别名）按 ASC 排序（MPJ 语义：orderByStr 恒升序，无 isAsc 参数）。
+     *
+     * 不复用 [orderItems]：其「首参为表别名」形态（orderByAsc("alias", Entity::getX)）会把多字符串列的
+     * 首参误判为别名而静默丢弃（orderByStr 无别名重载，全部实参均为列）。
+     */
+    private fun orderByStrItems(call: WrapperCall): List<OrderByItem> =
+        columnArgs(call).map { OrderByItem(it, asc = true) }
+
     /** LIMIT 解析：last("limit 10") / last("limit 5, 10")（MP 语义：offset, count）。 */
     private fun parseLimit(call: WrapperCall): LimitClause? {
         val value = argAsValue(call.args.firstOrNull()) as? SqlValue.Literal ?: return null
@@ -399,6 +433,7 @@ class QueryWrapperParser(
     /** 支持布尔条件重载的方法集合（eq/like/in/between 等）。 */
     private val CONDITION_METHODS = setOf(
         "eq", "ne", "gt", "ge", "lt", "le",
+        "eqOrIsNull", // T-M20-09：MP 3.5.17，布尔重载形态 eqOrIsNull(condition, col, val)
         "like", "notLike", "likeLeft", "likeRight",
         "in", "notIn", "between", "notBetween",
         "isNull", "isNotNull",

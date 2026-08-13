@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
@@ -215,8 +216,14 @@ object WrapperLocator {
      */
     private fun buildChainFromNew(newExpr: PsiNewExpression, resolveVariables: Boolean): LocatedWrapper? {
         val wrapperType = detectWrapperType(newExpr.type) ?: return null
+        // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
+        // entityInfoFromType 解析不到实体）时，从构造第一参表达式类型解析实体；
+        // (Class) / (Class, alias) 构造（第一参 PsiClassObjectAccessExpression）不受影响
         val (entityClass, typeArgName) = entityInfoFromType(newExpr.type)
-        val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
+        val entityFromArg = if (entityClass == null) entityClassFromConstructorArg(newExpr) else null
+        // 实参解析出的实体（T-M20-03）与类型实参解析结果一致地参与 table/chain 全链路
+        val resolvedEntity = entityClass ?: entityFromArg
+        val table: TableInfo? = resolveTableInfo(resolvedEntity, typeArgName ?: resolvedEntity?.name)
         val constructorAlias = extractConstructorAlias(newExpr)
 
         // 宿主 = 包含该 new 表达式的最外层表达式（如 list(new W().select(...).eq(...)) 的整个调用）
@@ -234,7 +241,7 @@ object WrapperLocator {
             }
             .distinctBy { it.textRange.endOffset }
             .sortedBy { it.textRange.endOffset }
-            .map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
+            .map { ArgResolver.toWrapperCall(it, table, resolvedEntity?.name, resolveVariables) }
 
         // 消费识别：wrapper 作为实参传给删除/计数/exists/实体更新方法（`service.remove(new W()...)` / `service.count(...)` / `service.exists(...)` / `service.update(entity, ...)`）
         val consumingCall = newExpr.consumingCall()
@@ -244,9 +251,9 @@ object WrapperLocator {
         val updateEntityConsumed = isEntityUpdateConsumer(newExpr)
 
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed),
+            chain = WrapperChain(wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed),
             table = table,
-            entityFile = entityClass?.containingFile,
+            entityFile = resolvedEntity?.containingFile,
         )
     }
 
@@ -454,23 +461,55 @@ object WrapperLocator {
     /** 与消费方法名冲突的服务链起点方法（需 [isServiceChainStart] 守卫）。 */
     private val ambiguousServiceChainMethods: Set<String> = setOf("query", "update")
 
-    /** Wrappers 静态工厂方法 → Wrapper 类型映射（P1-05：ChainWrappers 工厂方法一并映射）。 */
-    private fun factoryWrapperType(call: PsiMethodCallExpression): WrapperType? =
-        when (call.methodExpression.referenceName) {
+    /** MPJ 官方/旧工厂类名（T-M20-02）：JoinWrappers（com.github.yulichang.toolkit）与 MPJWrappers——
+     *  query/update/lambda 的映射语义与 Wrappers/ChainWrappers 不同，需按 qualifier 区分。 */
+    private val mpjFactoryClassNames: Set<String> = setOf("JoinWrappers", "MPJWrappers")
+
+    /**
+     * 工厂/链起点调用 → Wrapper 类型映射（T-M20-02 起按 (qualifier 类名, 方法名) 映射，
+     * 不能只按方法名——`Wrappers.query()` → QUERY 而 `JoinWrappers.query()` → MPJ_QUERY）：
+     *  - Wrappers / ChainWrappers 静态工厂（P1-05）：lambdaQuery → LAMBDA_QUERY、query → QUERY 等；
+     *  - MPJ 工厂（JoinWrappers / MPJWrappers）：`lambda()` / `lambdaJoin()` → MPJ_LAMBDA、
+     *    `query()` / `queryJoin()` → MPJ_QUERY；`delete()` / `update()` 返回
+     *    DeleteJoinWrapper / UpdateJoinWrapper（M21 补类型，本任务返回 null）；
+     *  - 服务链（`service.lambdaQuery()` 等，T-M15-01，qualifier 非工厂类）：按方法名映射。
+     * qualifier 取引用文本（referenceName）即可分辨，无需 resolve（LightPlatform 无 MPJ classpath 也生效）。
+     */
+    private fun factoryWrapperType(call: PsiMethodCallExpression): WrapperType? {
+        val methodName = call.methodExpression.referenceName
+        val qualifierName = (call.methodExpression.qualifierExpression as? PsiReferenceExpression)?.referenceName
+        if (qualifierName in wrapperFactoryClassNames) {
+            return when (methodName) {
+                "lambdaQuery" -> WrapperType.LAMBDA_QUERY
+                "lambdaUpdate" -> WrapperType.LAMBDA_UPDATE
+                "lambdaDelete" -> WrapperType.LAMBDA_DELETE
+                "query" -> if (qualifierName in mpjFactoryClassNames) WrapperType.MPJ_QUERY else WrapperType.QUERY
+                "update" -> if (qualifierName in mpjFactoryClassNames) null else WrapperType.UPDATE
+                // ChainWrappers 静态工厂（MP 官方 API，P1-05）
+                "queryChain" -> WrapperType.QUERY
+                "lambdaQueryChain" -> WrapperType.LAMBDA_QUERY
+                "lambdaUpdateChain" -> WrapperType.LAMBDA_UPDATE
+                "lambdaDeleteChain" -> WrapperType.LAMBDA_DELETE
+                "updateChain" -> WrapperType.UPDATE
+                "deleteChain" -> WrapperType.LAMBDA_DELETE
+                // T-M20-02：MPJ 工厂方法（lambda/lambdaJoin/queryJoin 仅 JoinWrappers/MPJWrappers 收录）
+                "lambda", "lambdaJoin" ->
+                    if (qualifierName in mpjFactoryClassNames) WrapperType.MPJ_LAMBDA else null
+                "queryJoin" -> if (qualifierName in mpjFactoryClassNames) WrapperType.MPJ_QUERY else null
+                // JoinWrappers.delete(Class) / update(Class) → DeleteJoinWrapper / UpdateJoinWrapper（M21 补类型）
+                "delete" -> null
+                else -> null
+            }
+        }
+        // 服务链（service.lambdaQuery() / service.lambdaUpdate()，T-M15-01）按方法名映射
+        return when (methodName) {
             "lambdaQuery" -> WrapperType.LAMBDA_QUERY
             "lambdaUpdate" -> WrapperType.LAMBDA_UPDATE
-            "lambdaDelete" -> WrapperType.LAMBDA_DELETE
             "query" -> WrapperType.QUERY
             "update" -> WrapperType.UPDATE
-            // ChainWrappers 静态工厂（MP 官方 API，P1-05）
-            "queryChain" -> WrapperType.QUERY
-            "lambdaQueryChain" -> WrapperType.LAMBDA_QUERY
-            "lambdaUpdateChain" -> WrapperType.LAMBDA_UPDATE
-            "lambdaDeleteChain" -> WrapperType.LAMBDA_DELETE
-            "updateChain" -> WrapperType.UPDATE
-            "deleteChain" -> WrapperType.LAMBDA_DELETE
             else -> null
         }
+    }
 
     // ------------------------------------------------------------------
     // 构建调用链
@@ -672,8 +711,9 @@ object WrapperLocator {
         return args.drop(1).any { arg -> PsiTreeUtil.isAncestor(arg, expr, false) }
     }
 
-    /** 实体更新消费方法名（`service.update(entity, wrapper)` 双参形态；updateJoin/updateJoinAndNull 为 MPJ 官方联表更新，M15 增补）。 */
-    private val UPDATE_CONSUMER_METHODS = setOf("update", "updateJoin", "updateJoinAndNull")
+    /** 实体更新消费方法名（`service.update(entity, wrapper)` 双参形态；updateJoin/updateJoinAndNull 为 MPJ 官方联表更新，M15 增补；
+     *  T-M20-10：`saveOrUpdate(entity, wrapper)` 双参按实体字段展开 UPDATE（近似 MP 先更新语义，upsert 预览以 UPDATE 呈现））。 */
+    private val UPDATE_CONSUMER_METHODS = setOf("update", "updateJoin", "updateJoinAndNull", "saveOrUpdate")
     private fun isConsumerArgument(ref: PsiReferenceExpression, consumerMethods: Set<String>): Boolean {
         var cursor: PsiElement? = ref.parent
         while (cursor != null) {
@@ -703,6 +743,19 @@ object WrapperLocator {
         if (args.size < 2) return null
         val alias = (args[1] as? PsiLiteralExpression)?.value as? String
         return alias?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * 从构造实参第一参解析实体类（T-M20-03）：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参
+     * （无泛型实参，[entityInfoFromType] 解析为 null）时，从第一参表达式类型
+     * （PsiClassType → resolve → PsiClass）解析实体，供 [resolveTableInfo] 走既有流程接表名。
+     * `(Class)` / `(Class, alias)` 构造的第一参是 PsiClassObjectAccessExpression（类字面量，非实体实例）→
+     * 返回 null；字面量实参（字符串等）同理跳过。
+     */
+    private fun entityClassFromConstructorArg(newExpr: PsiNewExpression): PsiClass? {
+        val firstArg = newExpr.argumentList?.expressions?.firstOrNull() ?: return null
+        if (firstArg is PsiClassObjectAccessExpression || firstArg is PsiLiteralExpression) return null
+        return (firstArg.type as? PsiClassType)?.resolve() as? PsiClass
     }
 
     // ------------------------------------------------------------------
@@ -769,17 +822,21 @@ object WrapperLocator {
     // ------------------------------------------------------------------
 
     /** Wrappers 静态工厂方法名（`Wrappers.<T>lambdaQuery()` 等）。M10 起 internal 供 [WrapperAnchorDetector] 复用。
-     *  P1-05（M19.5）：ChainWrappers 工厂方法（queryChain/lambdaQueryChain 等）一并收录。 */
+     *  P1-05（M19.5）：ChainWrappers 工厂方法（queryChain/lambdaQueryChain 等）一并收录。
+     *  T-M20-02：MPJ 官方工厂 JoinWrappers（lambda/delete；query/update 已在集合中，映射按 qualifier 区分）
+     *  与旧工厂 MPJWrappers（lambdaJoin/queryJoin）方法名一并收录。 */
     internal val wrapperFactoryMethodNames: Set<String> = setOf(
         "lambdaQuery", "lambdaUpdate", "lambdaDelete", "query", "update",
         "queryChain", "lambdaQueryChain", "lambdaUpdateChain", "lambdaDeleteChain", "updateChain", "deleteChain",
+        "lambda", "delete", "lambdaJoin", "queryJoin",
     )
 
     /**
-     * Wrappers / ChainWrappers 静态工厂类名（P1-05，M19.5）。
+     * Wrappers / ChainWrappers 静态工厂类名（P1-05，M19.5）；
+     * T-M20-02：MPJ 官方工厂 JoinWrappers（com.github.yulichang.toolkit）与旧工厂 MPJWrappers 一并收录。
      * M10 起 internal 供 [WrapperAnchorDetector] 复用（gutter 锚点快速路径文本匹配）。
      */
-    internal val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers")
+    internal val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers", "JoinWrappers", "MPJWrappers")
 
     /**
      * 服务链起点方法名（`service.lambdaQuery()` / `service.lambdaUpdate()`，T-M15-01；
