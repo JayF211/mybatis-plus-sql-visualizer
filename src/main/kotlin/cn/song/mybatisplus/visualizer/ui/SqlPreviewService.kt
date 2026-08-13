@@ -9,8 +9,10 @@ import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SetClause
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel
 import cn.song.mybatisplus.visualizer.model.SqlStatement
+import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
 import cn.song.mybatisplus.visualizer.model.WrapperType
@@ -74,7 +76,7 @@ class SqlPreviewService(private val project: Project) {
         located?.let { located ->
             val table = located.table ?: return null
             val statement = when {
-                // 计数消费：service.count(wrapper) / selectJoinCount(wrapper) → SELECT COUNT(*) FROM ...（保留联表与条件）
+                // 计数消费：service.count(wrapper) / selectJoinCount(wrapper) / lambdaQuery()...count() → SELECT COUNT(*) FROM ...（保留联表与条件）
                 located.chain.countConsumed && located.chain.wrapperType.isQueryLike() -> {
                     val parsed = QueryWrapperParser(table).parse(located.chain)
                     SelectStatement(
@@ -85,12 +87,39 @@ class SqlPreviewService(private val project: Project) {
                         conditions = parsed.conditions,
                     )
                 }
-                // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，`service.remove(wrapper)` / `mapper.delete(wrapper)` 消费
-                located.chain.deleteConsumed && located.chain.wrapperType.isQueryLike() ->
+                // exists 链式终结点消费：service.lambdaQuery()...exists() → SELECT EXISTS (子查询)（Q14-③，T-M15-01）
+                located.chain.existsConsumed && located.chain.wrapperType.isQueryLike() ->
+                    QueryWrapperParser(table).parse(located.chain)
+                // 实体更新消费：service.update(entity, wrapper) 双参（U07-②，T-M15-04）——
+                // wrapper 无 set 时用实体字段展开 SET 列（值静态不可求值 → 占位）；主键列排除（进 WHERE）
+                located.chain.updateEntityConsumed -> {
+                    val parsed = QueryWrapperParser(table).parse(located.chain)
+                    val sets = table.columns
+                        .filter { !it.isId }
+                        .map { SetClause(column = ColumnRef(columnName = it.columnName), value = SqlValue.Placeholder("?")) }
+                    UpdateStatement(table, sets, parsed.conditions)
+                }
+                // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，`service.remove(wrapper)` / `mapper.delete(wrapper)` 消费；
+                // 链式删除 `service.lambdaUpdate()...remove()`（U11-⑤，T-M15-01）同为删除
+                located.chain.deleteConsumed &&
+                    (located.chain.wrapperType.isQueryLike() || located.chain.wrapperType == WrapperType.LAMBDA_UPDATE) ->
                     DeleteStatement(table, QueryWrapperParser(table).parse(located.chain).conditions)
                 else -> ConverterRegistry.convert(located.chain, table) ?: return null
             }
-            return buildPreviewResult(located.chain.wrapperType, table, statement)
+            // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
+            // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
+            val injectLogicDelete = settings?.state?.injectLogicDelete ?: true
+            val finalStatement = if (injectLogicDelete) injectLogicDeleteCondition(table, statement) else statement
+            val result = buildPreviewResult(located.chain.wrapperType, table, finalStatement)
+            // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
+            return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
+                result.copy(
+                    sql = "SELECT EXISTS (${result.sql})",
+                    compactSql = "SELECT EXISTS (${result.compactSql})",
+                )
+            } else {
+                result
+            }
         }
 
         // 2. 批量操作识别（anchor 或其父链上的方法调用）
@@ -140,6 +169,20 @@ class SqlPreviewService(private val project: Project) {
         is SelectStatement -> statement.conditions.flatMap { it.toConditionViews() }
         is UpdateStatement -> statement.conditions.flatMap { it.toConditionViews() }
         is DeleteStatement -> statement.conditions.flatMap { it.toConditionViews() }
+    }
+
+    /**
+     * 逻辑删除条件注入（T-M15-07）：实体含 @TableLogic 字段时，查询/删除自动追加 `AND deleted = 0`。
+     * 仅 SELECT/DELETE（UPDATE 不注入——更新可能修改 deleted 本身，真实项目发票域显式 `.eq(getDeleted, 0)`）。
+     */
+    private fun injectLogicDeleteCondition(table: TableInfo, statement: SqlStatement): SqlStatement {
+        val column = table.logicDeleteColumn ?: return statement
+        val condition = Condition.Simple(ColumnRef(columnName = column), "=", SqlValue.Literal("0"))
+        return when (statement) {
+            is SelectStatement -> statement.copy(conditions = statement.conditions + condition)
+            is DeleteStatement -> statement.copy(conditions = statement.conditions + condition)
+            else -> statement
+        }
     }
 
     /** 单个条件节点 → 条件视图（自身 toggle + 嵌套 Group 子节点递归）。 */

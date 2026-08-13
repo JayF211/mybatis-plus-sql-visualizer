@@ -81,11 +81,13 @@ sealed class Condition {
      *
      * @param connector 组内子条件的连接符（AND 或 OR）
      * @param children  子条件（按调用顺序）
+     * @param negated   NOT 包裹（`not(consumer)` 官方 API，M15-P0）：渲染为 `NOT (条件)`
      */
     data class Group(
         val connector: Connector,
         val children: List<Condition>,
         override val toggle: ConditionToggle? = null,
+        val negated: Boolean = false,
     ) : Condition()
 
     /**

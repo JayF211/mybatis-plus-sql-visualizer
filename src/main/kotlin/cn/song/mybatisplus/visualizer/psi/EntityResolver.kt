@@ -30,7 +30,11 @@ class EntityResolver {
         val tableName = annotationValue(entityClass, TABLE_NAME) ?: NamingStrategy.toSnakeCase(className)
 
         val columns = entityClass.fields.mapNotNull { field -> resolveColumn(field) }
-        return TableInfo(className, tableName, columns)
+        // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field）
+        val logicDeleteColumn = entityClass.fields
+            .firstOrNull { hasAnnotation(it, TABLE_LOGIC) }
+            ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
+        return TableInfo(className, tableName, columns, logicDeleteColumn)
     }
 
     /**
@@ -48,7 +52,14 @@ class EntityResolver {
         val isId = hasAnnotation(field, TABLE_ID)
         // M13：记录字段类型（参数回填引号推断用）；PSI 类型解析异常时兜底 null
         val fieldType = runCatching { field.type.canonicalText }.getOrNull()
-        return ColumnInfo(fieldName, columnName, isId, fieldType)
+        // T-M15-08：自动填充标注（@TableField(fill = FieldFill.INSERT_UPDATE) 的 fill 属性文本，
+        // 枚举引用非字面量，取 attributeValue 文本；先确认含 FieldFill 再取短名；
+        // 批量 INSERT 模板据此排除 UPDATE 填充列）
+        val fill = tableFieldAnnotation?.findAttributeValue("fill")?.text
+            ?.takeIf { it.contains("FieldFill") }
+            ?.substringAfterLast('.')
+            ?.removePrefix("FieldFill")
+        return ColumnInfo(fieldName, columnName, isId, fieldType, fill)
     }
 
     // ------------------------------------------------------------------
@@ -110,5 +121,6 @@ class EntityResolver {
         private const val TABLE_NAME = "com.baomidou.mybatisplus.annotation.TableName"
         private const val TABLE_FIELD = "com.baomidou.mybatisplus.annotation.TableField"
         private const val TABLE_ID = "com.baomidou.mybatisplus.annotation.TableId"
+        private const val TABLE_LOGIC = "com.baomidou.mybatisplus.annotation.TableLogic"
     }
 }

@@ -880,6 +880,1249 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testServiceLambdaQueryChainRendersSelect() {
+        // Q17：service.lambdaQuery()...one() 服务链（真实项目 35 文件约 177 处）→ SELECT；one() 终结点剔除
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    orderService.lambdaQuery()
+                        .eq(DeviceInfoEntity::getId, 1001L)
+                        .orderByDesc(DeviceInfoEntity::getCreateTime)
+                        .last("limit 1")
+                        .one();
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Long createTime;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("服务链应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, create_time
+            FROM device_info_entity
+            WHERE id = 1001
+            ORDER BY create_time DESC
+            LIMIT 1
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testServiceLambdaQueryChainCountRendersCountStar() {
+        // Q17 终结点 count：service.lambdaQuery()...count() → SELECT COUNT(*)
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void count() {
+                    long total = orderService.lambdaQuery()
+                        .eq(DeviceInfoEntity::getDicStatus, 1)
+                        .count();
+                }
+
+                static class DeviceInfoEntity {
+                    private Integer dicStatus;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("服务链 count 应产出预览结果", result)
+        assertEquals(
+            "SELECT COUNT(*) FROM device_info_entity WHERE dic_status = 1",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testServiceLambdaQueryChainExistsRendersExists() {
+        // Q14-③：service.lambdaQuery()...exists() 链式终结点 → SELECT EXISTS (子查询)（MP 3.5.15 BaseMapper.exists 语义）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void check() {
+                    boolean exists = giftFundDataService.lambdaQuery()
+                        .eq(GiftFundEntity::getId, 1001L)
+                        .exists();
+                }
+
+                static class GiftFundEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("服务链 exists 应产出预览结果", result)
+        assertEquals(
+            "SELECT EXISTS (SELECT id FROM gift_fund_entity WHERE id = 1001)",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testServiceLambdaUpdateChainRendersUpdate() {
+        // U13：service.lambdaUpdate()...update() 链（真实项目 20 文件约 87 处）→ UPDATE；update() 终结点剔除
+        // （set(boolean, ...) 条件 set 的布尔剥离在 T-M15-04 覆盖）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    merchantWalletWithdrawService.lambdaUpdate()
+                        .set(MerchantWalletWithdrawEntity::getDicWithdrawStatus, 2)
+                        .set(MerchantWalletWithdrawEntity::getTransactionId, transactionId)
+                        .eq(MerchantWalletWithdrawEntity::getId, withdraw.getId())
+                        .update();
+                }
+
+                static class MerchantWalletWithdrawEntity {
+                    private Integer dicWithdrawStatus;
+                    private String transactionId;
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("lambdaUpdate 链应产出 UPDATE 预览", result)
+        assertEquals(
+            """
+            UPDATE merchant_wallet_withdraw_entity
+            SET dic_withdraw_status = 2, transaction_id = ?
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testServiceLambdaUpdateChainRemoveRendersDelete() {
+        // U11-⑤：service.lambdaUpdate()...remove() 链式删除（merchant/SubAccountAppService#doConfigStation 真实用例）→ DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void remove() {
+                    merchantSubAccountStationService.lambdaUpdate()
+                        .eq(MerchantSubAccountStationEntity::getMerchantId, parentId)
+                        .eq(MerchantSubAccountStationEntity::getSubMerchantId, subAccountId)
+                        .remove();
+                }
+
+                static class MerchantSubAccountStationEntity {
+                    private Long merchantId;
+                    private Long subMerchantId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("lambdaUpdate remove 链应产出 DELETE 预览", result)
+        assertEquals(
+            "DELETE FROM merchant_sub_account_station_entity WHERE merchant_id = ? AND sub_merchant_id = ?",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testLambdaQueryChainWrapperExplicitTypeDeclaration() {
+        // Q17 显式 ChainWrapper 声明（modules/CarDevicePortInfoServiceImpl 真实用例）：
+        // LambdaQueryChainWrapper<X> w = lambdaQuery()...; 后接 count(w) 查重 + getOne(w)
+        // 从变量声明锚点预览：count(w) 消费识别生效 → SELECT COUNT(*)
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryChainWrapper<CarDevicePortInfoEntity> wrapper = lambdaQuery()
+                        .eq(CarDevicePortInfoEntity::getDeviceCode, deviceCode)
+                        .eq(CarDevicePortInfoEntity::getNumber, number);
+                    if (count(wrapper) > 1) { throw new RuntimeException(); }
+                    return Optional.ofNullable(getOne(wrapper));
+                }
+
+                static class CarDevicePortInfoEntity {
+                    private String deviceCode;
+                    private String number;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("显式 ChainWrapper 声明应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT COUNT(*)
+            FROM car_device_port_info_entity
+            WHERE device_code = ?
+                AND number = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testQueryWrapperStringColumnsAggregation() {
+        // Q03/Q09/Q18（F-17）：字符串版 QueryWrapper 聚合链（merchant/AccountManagementAppService#queryDayAmountSummary 真实用例）：
+        // select(表达式) + eq(字符串列) + between(字符串列) + in(boolean, 字符串列) + groupBy(字符串)
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    QueryWrapper<MerchantWalletFlowEntity> sumQw = Wrappers.<MerchantWalletFlowEntity>query()
+                        .select("DATE(create_time)::timestamp as create_time, amount_direction, SUM(change_available_amount) as change_available_amount")
+                        .eq("merchant_id", merchantId)
+                        .between("create_time", startTime, endTime)
+                        .in(CollUtil.isNotEmpty(flowTypes), "dic_flow_type", flowTypes)
+                        .groupBy("DATE(create_time), amount_direction");
+                    merchantWalletFlowService.list(sumQw);
+                }
+
+                static class MerchantWalletFlowEntity {
+                    private Long merchantId;
+                    private String createTime;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("字符串版 QueryWrapper 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT DATE(create_time)::timestamp as create_time, amount_direction, SUM(change_available_amount) as change_available_amount
+            FROM merchant_wallet_flow_entity
+            WHERE merchant_id = ?
+                AND create_time BETWEEN ? AND ?
+                AND dic_flow_type IN (?)
+            GROUP BY DATE(create_time), amount_direction
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testStringUpdateWrapperSetSqlAndStringColumn() {
+        // U09-①②（F-17）：字符串版 UpdateWrapper——new UpdateWrapper<>() + 字符串列 eq + setSql（原子自增）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    UpdateWrapper<StoreCouponEntity> wrapper = new UpdateWrapper<StoreCouponEntity>()
+                        .eq("id", 1001L)
+                        .setSql("use_total = use_total + 1");
+                    storeCouponService.update(wrapper);
+                }
+
+                static class StoreCouponEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("字符串版 UpdateWrapper 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_entity
+            SET use_total = use_total + 1
+            WHERE id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testStringUpdateWrapperApplyInline() {
+        // U09-②：内联 update(new UpdateWrapper<X>().eq("id", v).apply(...).setSql(...))（防超发上限保护）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    storeCouponService.update(new UpdateWrapper<StoreCouponEntity>()
+                        .eq("id", couponId)
+                        .apply("fission_reward_claim_count < fission_reward_total")
+                        .setSql("fission_reward_claim_count = fission_reward_claim_count + 1"));
+                }
+
+                static class StoreCouponEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("内联字符串 UpdateWrapper 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_entity
+            SET fission_reward_claim_count = fission_reward_claim_count + 1
+            WHERE id = ?
+                AND fission_reward_claim_count < fission_reward_total
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testStringUpdateWrapperLambdaConversion() {
+        // U09-④：wrapper.lambda() 动态转换为 lambda 形态（admin/CouponAppService#updateStatus 真实用例）——
+        // lambda() 返回的续链（eq/set）应并入原链
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    UpdateWrapper<StoreCouponEntity> wrapper = new UpdateWrapper<>();
+                    wrapper.lambda().eq(StoreCouponEntity::getId, id)
+                        .set(StoreCouponEntity::getDicStatus, status);
+                    storeCouponService.update(wrapper);
+                }
+
+                static class StoreCouponEntity {
+                    private Long id;
+                    private Integer dicStatus;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("wrapper.lambda() 转换应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_entity
+            SET dic_status = ?
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testExistsSqlSubqueryCondition() {
+        // Q14-①：链内 exists(boolean, "SELECT ... {0}", v) SQL 子查询条件（admin/CarStationPriceTaskRecordAppService#page 真实用例）：
+        // 布尔首参剥离为动态条件 + {0} 参数替换 + EXISTS (...) 包裹
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void page() {
+                    PriceTaskRecordService.lambdaQuery()
+                        .eq(PriceTaskRecordEntity::getId, 1001L)
+                        .exists(dto.getStationId() != null,
+                            "SELECT 1 FROM rel WHERE rel.task_id = main.id AND rel.station_id = {0}",
+                            dto.getStationId())
+                        .page(new Page<>(1, 10));
+                }
+
+                static class PriceTaskRecordEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("exists SQL 子查询条件应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id
+            FROM price_task_record_entity
+            WHERE id = 1001
+                AND EXISTS (SELECT 1 FROM rel WHERE rel.task_id = main.id AND rel.station_id = ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testServiceExistsWrapperConsumesRendersExists() {
+        // Q14-②：service.exists(wrapper) 消费（admin/MerchantAppService 真实用例）→ SELECT EXISTS (子查询)
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void check() {
+                    boolean exists = merchantService.exists(new LambdaQueryWrapper<MerchantEntity>()
+                        .eq(MerchantEntity::getCode, code));
+                }
+
+                static class MerchantEntity {
+                    private String code;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("service.exists 消费应产出预览结果", result)
+        assertEquals(
+            "SELECT EXISTS (SELECT code FROM merchant_entity WHERE code = ?)",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testUpdateSetBooleanConditionPrefix() {
+        // U03（T-M15-04）：set(boolean, col, val) 条件 set 布尔前缀剥离（真实项目约 25 处）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    orderInvoiceApplyService.update(new LambdaUpdateWrapper<OrderInvoiceApplyEntity>()
+                        .eq(OrderInvoiceApplyEntity::getId, applyId)
+                        .set(StrUtil.isNotBlank(seqId), OrderInvoiceApplyEntity::getSeqId, seqId)
+                        .set(OrderInvoiceApplyEntity::getRespDesc, respDesc)
+                        .set(OrderInvoiceApplyEntity::getDicApplyStatus, 2));
+                }
+
+                static class OrderInvoiceApplyEntity {
+                    private Long id;
+                    private String seqId;
+                    private String respDesc;
+                    private Integer dicApplyStatus;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("条件 set 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE order_invoice_apply_entity
+            SET seq_id = ?, resp_desc = ?, dic_apply_status = 2
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testUpdateSetSqlPlaceholderParams() {
+        // U04-③（T-M15-04）：setSql("...{0}", val) 绑定参数替换（consumer/GiftFundPayService 余额保护真实用例）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    giftFundPayService.lambdaUpdate()
+                        .setSql("frozen_amount = COALESCE(frozen_amount, 0) - {0}", allocated)
+                        .apply("COALESCE(frozen_amount, 0) >= {0}", allocated)
+                        .eq(GiftFundEntity::getId, giftId)
+                        .update();
+                }
+
+                static class GiftFundEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("setSql 参数化应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE gift_fund_entity
+            SET frozen_amount = COALESCE(frozen_amount, 0) - ?
+            WHERE COALESCE(frozen_amount, 0) >= ?
+                AND id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testUpdateLastRawTailPassthrough() {
+        // U05（T-M15-04）：更新 wrapper 上 last("AND (... >= 0)") 防超发兜底（modules/StoreCouponServiceImpl#deduction 真实用例）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    UpdateWrapper<StoreCouponEntity> wrapper = new UpdateWrapper<>();
+                    wrapper.setSql("last_total = last_total - 1");
+                    wrapper.last("AND (last_total - 1 >= 0)");
+                    wrapper.eq("id", id);
+                    update(wrapper);
+                }
+
+                static class StoreCouponEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("last 尾缀透传应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_entity
+            SET last_total = last_total - 1
+            WHERE id = ?
+            AND (last_total - 1 >= 0)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testUpdateEntityWrapperConsumesEntityColumns() {
+        // U07-②（T-M15-04）：service.update(entity, wrapper) 双参 upsert（admin/StationBarrierPushConfigRelAppService 真实用例）
+        // wrapper 无 set → 实体字段展开为 SET 列（值占位），主键列排除
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void saveOrUpdate() {
+                    boolean saved = stationBarrierPushConfigRelService.update(
+                            entity,
+                            Wrappers.<BizStationBarrierPushConfigRelEntity>lambdaUpdate()
+                                .eq(BizStationBarrierPushConfigRelEntity::getStationId, stationId))
+                        || stationBarrierPushConfigRelService.save(entity);
+                }
+
+                static class BizStationBarrierPushConfigRelEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private Long stationId;
+                    private Integer dicStatus;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("update(entity, wrapper) 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE biz_station_barrier_push_config_rel_entity
+            SET station_id = ?, dic_status = ?
+            WHERE station_id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testWrappersLambdaUpdateNoTypeArgInfersEntity() {
+        // U01-③（T-M15-04）：Wrappers.lambdaUpdate() 无显式泛型（真实项目约 25 处）——
+        // 实体从链内 set/eq 首参方法引用推断（T-M15-01 fallback）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    accountService.update(Wrappers.lambdaUpdate()
+                        .set(AccountEntity::getLastLoginTime, now)
+                        .eq(AccountEntity::getId, account.getId()));
+                }
+
+                static class AccountEntity {
+                    private Long id;
+                    private String lastLoginTime;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("无泛型 lambdaUpdate 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE account_entity
+            SET last_login_time = ?
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testIfElseBranchesKeepFirstBranchOnly() {
+        // P15（T-M15-05）：if/else 互斥分支只保留源码序第一个分支（then），
+        // 避免 `if (x) { w.eq(...) } else { w.in(...) }` 合并成 `WHERE id = ? AND id IN (...)` 语义错误
+        // （bridge/PlatformService#findCarDeviceInfoByStationIds 真实用例）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .selectAll(DeviceInfoEntity.class);
+                    if (stationIds.size() == 1) {
+                        w.eq(DeviceInfoEntity::getStationId, stationIds.get(0));
+                    } else {
+                        w.in(DeviceInfoEntity::getStationId, stationIds);
+                    }
+                }
+
+                static class DeviceInfoEntity {
+                    private Long stationId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("if/else 分支应产出预览结果", result)
+        // 仅保留 then 分支 eq；else 分支 in 不并入
+        assertEquals(
+            "SELECT station_id FROM device_info_entity WHERE station_id = ?",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testUpdateArgumentAnchorRendersUpdate() {
+        // U08（T-M15-05）：`baseMapper.update(null, wrapper)` 行的 wrapper 实参锚点 → 回查变量声明完整链
+        // （modules/CouponUserQueryServiceImpl#overdueTask 真实用例：selectCount 预检 + 复用追加 set）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void task() {
+                    LambdaUpdateWrapper<StoreCouponUserEntity> wrapper = new LambdaUpdateWrapper<StoreCouponUserEntity>()
+                        .eq(StoreCouponUserEntity::getCouponId, couponId)
+                        .lt(StoreCouponUserEntity::getExpireTime, now);
+                    Long count = baseMapper.selectCount(wrapper);
+                    if (count <= 0) { return; }
+                    wrapper.set(StoreCouponUserEntity::getDicStatus, 1).set(StoreCouponUserEntity::getUseTime, now);
+                    int updated = baseMapper.update(null, wrapper);
+                }
+
+                static class StoreCouponUserEntity {
+                    private Long couponId;
+                    private String expireTime;
+                    private Integer dicStatus;
+                    private String useTime;
+                }
+            }
+            """.trimIndent(),
+        )
+        // 锚定 update 行（wrapper 作为实参）——T-M15-05 实参锚点支持
+        val updateCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "update" }
+        val result = newService().preview(updateCall)
+        assertNotNull("update 行实参锚点应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_user_entity
+            SET dic_status = 1, use_time = ?
+            WHERE coupon_id = ?
+                AND expire_time < ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testFactoryArgumentThreeLevelChain() {
+        // P03 3 级链（T-M15-05）：applyWithdrawFilters(baseWithdrawQueryWrapper(), dto) ——
+        // 工厂方法 return 链首的 qualifier 是参数 wrapper，实参工厂（baseWithdrawQueryWrapper）的链需前置
+        // （admin/MerchantWalletWithdrawAppService#queryStatistics 真实用例结构）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<WalletWithdrawEntity> wrapper = applyWithdrawFilters(baseWithdrawQueryWrapper(), dto)
+                        .orderByDesc(WalletWithdrawEntity::getCreateTime);
+                }
+
+                private MPJLambdaWrapper<WalletWithdrawEntity> baseWithdrawQueryWrapper() {
+                    return new MPJLambdaWrapper<WalletWithdrawEntity>()
+                        .selectAll(WalletWithdrawEntity.class)
+                        .leftJoin(AccountEntity.class, AccountEntity::getId, WalletWithdrawEntity::getAuditedBy);
+                }
+
+                private MPJLambdaWrapper<WalletWithdrawEntity> applyWithdrawFilters(
+                        MPJLambdaWrapper<WalletWithdrawEntity> wrapper, DTO dto) {
+                    return wrapper
+                        .eq(WalletWithdrawEntity::getMerchantId, dto.getMerchantId())
+                        .ge(WalletWithdrawEntity::getCreateTime, dto.getStartTime());
+                }
+
+                static class WalletWithdrawEntity {
+                    private Long merchantId;
+                    private String createTime;
+                    private Long auditedBy;
+                }
+
+                static class AccountEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("3 级工厂链应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.merchant_id, t.create_time, t.audited_by
+            FROM wallet_withdraw_entity t
+            LEFT JOIN account_entity accountEntity ON accountEntity.id = t.audited_by
+            WHERE t.merchant_id = ?
+                AND t.create_time >= ?
+            ORDER BY t.create_time DESC
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjSelectCollectionWithThreeArgJoinOn() {
+        // P06（T-M15-06）：selectCollection + 三参 leftJoin —— 子查询 LEFT JOIN 必须带 ON
+        // （修复前仅匹配 on(col1,col2) 形态，三参形态下子查询无 ON 产生笛卡尔积）
+        // 真实结构：admin/CarOccupyRecordAppService#detail
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void detail() {
+                    MPJLambdaWrapper<OccupyRecordEntity> wrapper = new MPJLambdaWrapper<OccupyRecordEntity>()
+                        .selectAll(OccupyRecordEntity.class)
+                        .selectCollection(OccupyConsumptionRecordEntity.class, OccupyRecordDetailVO::getConsumptions,
+                            map -> map
+                                .id(OccupyConsumptionRecordEntity::getId, OccupyRecordConsumptionItemVO::getId)
+                                .result(OccupyConsumptionRecordEntity::getLadder, OccupyRecordConsumptionItemVO::getLadder))
+                        .leftJoin(OccupyConsumptionRecordEntity.class,
+                            OccupyConsumptionRecordEntity::getOccupyId, OccupyRecordEntity::getId)
+                        .eq(OccupyRecordEntity::getId, 1001L);
+                }
+
+                static class OccupyRecordEntity {
+                    private Long id;
+                }
+
+                static class OccupyConsumptionRecordEntity {
+                    private Long id;
+                    private Integer ladder;
+                    private Long occupyId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("selectCollection 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id
+            FROM occupy_record_entity t
+            LEFT JOIN (SELECT id, ladder FROM occupy_consumption_record_entity occupyConsumptionRecordEntity) occupyConsumptionRecordEntity ON t.id = occupyConsumptionRecordEntity.occupy_id
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testLogicDeleteInjectedForTableLogicEntity() {
+        // X07（T-M15-07）：@TableLogic 实体查询自动追加 `AND deleted = 0`（对齐全局 logic-delete-field 配置）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderEntity> w = new LambdaQueryWrapper<OrderEntity>()
+                        .eq(OrderEntity::getOrderCode, code);
+                    orderService.getOne(w);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String orderCode;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("逻辑删除实体应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, order_code, deleted
+            FROM order_entity
+            WHERE order_code = ?
+                AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testLogicDeleteInjectionSwitchOff() {
+        // T-M15-07：injectLogicDelete=false → 不追加 deleted 条件（纯 wrapper 语义）
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.injectLogicDelete
+        settings.state.injectLogicDelete = false
+        try {
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<OrderEntity> w = new LambdaQueryWrapper<OrderEntity>()
+                            .eq(OrderEntity::getOrderCode, code);
+                        orderService.getOne(w);
+                    }
+
+                    static class OrderEntity {
+                        private Long id;
+                        private String orderCode;
+                        @com.baomidou.mybatisplus.annotation.TableLogic
+                        private Integer deleted;
+                    }
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())!!
+            assertEquals(
+                "SELECT id, order_code, deleted FROM order_entity WHERE order_code = ?",
+                result.compactSql.trim(),
+            )
+        } finally {
+            settings.state.injectLogicDelete = old
+        }
+    }
+
+    fun testLogicDeleteNotInjectedForUpdate() {
+        // T-M15-07：UPDATE 不注入 deleted 条件（更新可能修改 deleted 本身）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    orderService.lambdaUpdate()
+                        .set(OrderEntity::getDicStatus, 2)
+                        .eq(OrderEntity::getId, 1001L)
+                        .update();
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private Integer dicStatus;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("UPDATE 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE order_entity
+            SET dic_status = 2
+            WHERE id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testRemoveByIdRendersDelete() {
+        // U11（T-M15-08）：service.removeById(id) 单参删除——实体从 service qualifier 泛型解析
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void remove() {
+                    deviceInfoService.removeById(1001L);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class BaseService<T> {}
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("removeById 应产出预览结果", result)
+        assertEquals(
+            """
+            DELETE FROM device_info_entity
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testUpdateByIdRendersUpdate() {
+        // U12（T-M15-08）：service.updateById(entity) 单实体更新（update-strategy: always 全列语义）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void update() {
+                    DeviceInfoEntity entity = new DeviceInfoEntity();
+                    deviceInfoService.updateById(entity);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    private Integer dicStatus;
+                }
+
+                static class DeviceInfoService {
+                    public void updateById(DeviceInfoEntity entity) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("updateById 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE device_info_entity
+            SET name = ?, dic_status = ?
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testSaveOrUpdateRendersPgUpsert() {
+        // U12（T-M15-08）：service.saveOrUpdate(entity) → PG 方言 ON CONFLICT upsert
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private StationOccupyInfoService stationOccupyInfoService;
+
+                public void saveOrUpdate() {
+                    StationOccupyInfoEntity entity = new StationOccupyInfoEntity();
+                    stationOccupyInfoService.saveOrUpdate(entity);
+                }
+
+                static class StationOccupyInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private Long stationId;
+                    private Integer dicStatus;
+                }
+
+                static class StationOccupyInfoService {
+                    public void saveOrUpdate(StationOccupyInfoEntity entity) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("saveOrUpdate 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO station_occupy_info_entity (id, station_id, dic_status)
+            VALUES (?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET station_id = EXCLUDED.station_id, dic_status = EXCLUDED.dic_status
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testInsertBatchSomeColumnExcludesUpdateFill() {
+        // X09（T-M15-08）：insertBatchSomeColumn 排除 FieldFill.UPDATE 填充列（插入不参与）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void batch() {
+                    java.util.List<DeviceInfoEntity> list = new java.util.ArrayList<DeviceInfoEntity>();
+                    deviceInfoMapper.insertBatchSomeColumn(list);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.TableField(fill = com.baomidou.mybatisplus.annotation.FieldFill.UPDATE)
+                    private String updateTime;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("insertBatchSomeColumn 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO device_info_entity (id, name)
+            VALUES (?, ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiCompareAndSqlMethods() {
+        // 官方 API（M15-P0）：notLikeLeft/notLikeRight、inSql/notInSql、eqSql/gtSql 等 SQL 片段比较、
+        // nested/not/func 逻辑、orderBy(condition, isAsc, cols)
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderEntity> w = new LambdaQueryWrapper<OrderEntity>()
+                        .notLikeLeft(OrderEntity::getName, "x")
+                        .notLikeRight(OrderEntity::getCode, "y")
+                        .inSql(OrderEntity::getStationId, "select id from station where deleted = 0")
+                        .notInSql(OrderEntity::getId, "select order_id from rel")
+                        .eqSql(OrderEntity::getTotalAmount, "select sum(amount) from detail")
+                        .gtSql(OrderEntity::getCount, "1")
+                        .nested(wr -> wr.eq(OrderEntity::getDicStatus, 1).or().eq(OrderEntity::getDicStatus, 2))
+                        .not(wr -> wr.eq(OrderEntity::getDeleted, 1))
+                        .func(f -> f.eq(OrderEntity::getParentId, 0))
+                        .orderBy(true, false, OrderEntity::getCreateTime)
+                        .last("limit 5");
+                }
+
+                static class OrderEntity {
+                    private String name;
+                    private String code;
+                    private Long stationId;
+                    private Long id;
+                    private String totalAmount;
+                    private Integer count;
+                    private Integer dicStatus;
+                    private Integer deleted;
+                    private Long parentId;
+                    private String createTime;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("官方 API 组合应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT name, code, station_id, id, total_amount, count, dic_status, deleted, parent_id, create_time
+            FROM order_entity
+            WHERE name NOT LIKE '%x'
+                AND code NOT LIKE 'y%'
+                AND station_id IN (select id from station where deleted = 0)
+                AND id NOT IN (select order_id from rel)
+                AND total_amount = (select sum(amount) from detail)
+                AND count > (1)
+                AND (dic_status = 1 OR dic_status = 2)
+                AND NOT (deleted = 1)
+                AND parent_id = 0
+            ORDER BY create_time DESC
+            LIMIT 5
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiSetIncrDecrBy() {
+        // 官方 API（M15-P0）：setIncrBy/setDecrBy → SET col = col ± val
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    orderService.lambdaUpdate()
+                        .setIncrBy(OrderEntity::getUseCount, 1)
+                        .setDecrBy(OrderEntity::getStock, 5)
+                        .eq(OrderEntity::getId, 1001L)
+                        .update();
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private Integer useCount;
+                    private Integer stock;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("setIncrBy/setDecrBy 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE order_entity
+            SET use_count = use_count + 1, stock = stock - 5
+            WHERE id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiMpjFullJoinAndStringJoin() {
+        // 官方 API（M15-P0）：fullJoin、join(自定义关键字)、字符串 SQL join（{0} 参数）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .fullJoin(RelEntity.class, RelEntity::getOrderId, OrderEntity::getId)
+                        .join("CROSS JOIN", true, "rel t2 on t2.order_id = {0}", 1001L)
+                        .leftJoin("(select * from station where station_id = {0}) st", 1)
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                }
+
+                static class RelEntity {
+                    private Long orderId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("fullJoin/join/字符串 join 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id
+            FROM order_entity t
+            FULL JOIN rel_entity relEntity ON relEntity.order_id = t.id
+            CROSS JOIN rel t2 on t2.order_id = 1001
+            LEFT JOIN (select * from station where station_id = 1) st
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiSelectAllExcludeAndAggregate() {
+        // 官方 API（M15-P0）：selectAll 排除字段 + selectSum/selectMin/selectAvg/selectLen 聚合
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class, OrderEntity::getDeleted)
+                        .selectSum(OrderEntity::getTotalAmount, OrderSumVO::getTotal)
+                        .selectMin(OrderEntity::getTotalAmount)
+                        .selectAvg(OrderEntity::getTotalAmount)
+                        .selectLen(OrderEntity::getOrderCode)
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String orderCode;
+                    private String totalAmount;
+                    private Integer deleted;
+                }
+
+                static class OrderSumVO {
+                    private String total;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("selectAll 排除与聚合应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.order_code, t.total_amount, SUM(t.total_amount) AS total, MIN(t.total_amount), AVG(t.total_amount), LENGTH(t.order_code)
+            FROM order_entity t
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiChainTerminalFirstAndMap() {
+        // 官方 API（M15-P0）：MPJ Chain 终结点 first/mapList（链式剥离，SELECT 渲染）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    userService.lambdaQuery()
+                        .eq(UserEntity::getId, 1001L)
+                        .first();
+                }
+
+                static class UserEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("first 终结点应产出预览结果", result)
+        assertEquals(
+            "SELECT id FROM user_entity WHERE id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testOfficialApiApplyFuncAndIfExists() {
+        // 官方 API（M15-P1）：applyFunc（%s 列 + {0} 参数占位）与 IfExists 条件族（eqIfExists 等）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .applyFunc("concat(%s,%s,{0}) is not null", func -> func.accept(OrderEntity::getOrderCode, OrderEntity::getCode).values("12"))
+                        .eqIfExists(OrderEntity::getDicStatus, status)
+                        .likeRightIfExists(OrderEntity::getName, name)
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private String orderCode;
+                    private String code;
+                    private Integer dicStatus;
+                    private String name;
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("applyFunc/IfExists 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.order_code, t.code, t.dic_status, t.name, t.id
+            FROM order_entity t
+            WHERE concat(t.order_code,t.code,'12') is not null
+                AND t.dic_status = ?
+                AND t.name LIKE ?
+                AND t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiSelectAsClass() {
+        // 官方 API（M15-P1）：selectAsClass(源类, 目标类) —— 属性名交集字段映射
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAsClass(OrderEntity.class, OrderVO.class)
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String orderCode;
+                    private Integer deleted;
+                }
+
+                static class OrderVO {
+                    private Long id;
+                    private String orderCode;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("selectAsClass 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id AS id, t.order_code AS orderCode
+            FROM order_entity t
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     /**
      * 定位锚点元素：文件内第一个方法调用；无调用时回退到 Wrapper 变量声明 / 字面量 / 任意元素。
      */

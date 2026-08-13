@@ -6,13 +6,16 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 ## ✨ 功能特性
 
 - **Wrapper 全覆盖**：`LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper` /
-  `MPJLambdaWrapper` / `MPJQueryWrapper`
+  `MPJLambdaWrapper` / `MPJQueryWrapper` / 字符串版 `QueryWrapper` / `UpdateWrapper`（F-17，含 `wrapper.lambda()` 转换）
+- **链式调用**：`service.lambdaQuery()...one()/.list()/.count()/.exists()/.page()` 与
+  `service.lambdaUpdate()...update()/.remove()` 服务链（M15，终结点消费语义自动识别）
 - **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）；**LIKE 自动拼百分号**（`like` → `'%值%'`）；**字段类型推断引号**（String 列输入数字恒加引号 `'123'`，数值列恒原样）
 - **动态条件**：布尔重载 `.eq(true, "name", val)` 在预览左栏提供**复选框开关**（纯手动勾选：勾选拼接、取消移除；字面量 `false` 默认不勾选）
 - **SQL 格式化**：关键字大写、子句换行缩进，支持格式化/单行两种视图
 - **多种触发方式**：右键菜单 / 快捷键（默认 `Alt+Shift+Q`）/ 代码左侧 gutter 图标，一键复制
-- **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染）
-- **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN 预览，批量操作展开（F-15）
+- **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染；`saveOrUpdate` 批量按 PG `ON CONFLICT` 渲染 upsert）
+- **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN（含 `selectCollection` 子查询、`selectFunc` 聚合、`exists` 三形态、`apply`/`last` 原生片段透传）预览，批量操作展开（F-15）
+- **逻辑删除注入**：实体含 `@TableLogic` 时查询/删除自动追加 `AND deleted = 0`（设置页可关闭）
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
 
 ## 🚀 使用说明

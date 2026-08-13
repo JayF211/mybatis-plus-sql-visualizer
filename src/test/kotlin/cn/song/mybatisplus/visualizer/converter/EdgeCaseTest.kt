@@ -74,9 +74,11 @@ class EdgeCaseTest {
             ),
         )
         val statement = QueryWrapperParser(table).parse(chain)
-        // apply 已支持（T-M7-06 → Raw 片段）；not 仍忽略；后续 eq 正常解析
-        assertEquals(2, statement.conditions.size)
+        // apply 已支持（T-M7-06 → Raw 片段）；not 官方 API 已支持（M15-P0 → NOT 组）；后续 eq 正常解析
+        assertEquals(3, statement.conditions.size)
         assertTrue("apply 片段保留", statement.conditions[0] is cn.song.mybatisplus.visualizer.model.Condition.Raw)
+        assertTrue("not 组保留（NOT 包裹）", statement.conditions[1] is cn.song.mybatisplus.visualizer.model.Condition.Group
+            && (statement.conditions[1] as cn.song.mybatisplus.visualizer.model.Condition.Group).negated)
     }
 
     @Test

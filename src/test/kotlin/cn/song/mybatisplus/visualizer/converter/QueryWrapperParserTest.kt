@@ -76,7 +76,7 @@ class QueryWrapperParserTest {
             SELECT id, station_id, share_scheme_id, name
             FROM car_device_info
             WHERE id = 1
-                AND name LIKE %abc%
+                AND name LIKE '%abc%'
             """.trimIndent(),
             sql,
         )

@@ -38,31 +38,52 @@ object MpjLambdaConverter : WrapperConverter {
 
     override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
         val mainAlias = chain.constructorAlias ?: MAIN_ALIAS_DEFAULT
-        val selectAsCalls = chain.calls.filter { it.methodName == SELECT_AS }
+        val selectAsCalls = chain.calls.filter { it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS }
         val joinCalls = chain.calls.filter { it.methodName in JOIN_METHODS }
         val collectionCalls = chain.calls.filter { it.methodName == SELECT_COLLECTION }
-        val hasSelectAll = chain.calls.any { it.methodName == SELECT_ALL }
+        val selectAllCalls = chain.calls.filter { it.methodName == SELECT_ALL }
 
         // 其余调用（eq/select/orderBy/distinct/selectMax 等）委托 Query 解析，列自动带主表别名。
         // selectAssociation 不产生额外 SQL（leftJoin 已体现关联，仅作结果映射标记），从解析链中剔除。
         val restCalls = chain.calls.filterNot {
-            it.methodName == SELECT_AS || it.methodName in JOIN_METHODS
+            it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName in JOIN_METHODS
                 || it.methodName == SELECT_ALL || it.methodName == SELECT_COLLECTION
                 || it.methodName == SELECT_ASSOCIATION
         }
         val base = QueryWrapperParser(table, mainAlias)
             .parse(WrapperChain(chain.wrapperType, chain.entityClass, restCalls))
 
-        // selectAll(Class)：主表全列（带主表别名前缀）+ selectAs 列追加
-        val selectAsColumns = selectAsCalls.mapNotNull { parseSelectAs(it, mainAlias) }
-        val selectColumns = if (hasSelectAll) {
-            table.allColumnNames.map { ColumnRef(tableAlias = mainAlias, columnName = it) } + selectAsColumns
+        // selectAll(Class[, prefix][, exclude...])：主表全列（带主表别名前缀）+ 聚合列（selectSum 等，委托 base）
+        // + selectAs/selectAsClass 列追加；exclude 排除字段（官方 API）、prefix 列前缀（官方 API）
+        val selectAsColumns = selectAsCalls.flatMap { call ->
+            if (call.methodName == SELECT_AS_CLASS) {
+                parseSelectAsClass(call, mainAlias)
+            } else {
+                listOfNotNull(parseSelectAs(call, mainAlias))
+            }
+        }
+        val selectColumns = if (selectAllCalls.isNotEmpty()) {
+            selectAllCalls.flatMap { parseSelectAll(it, mainAlias, table) } + base.selectColumns + selectAsColumns
         } else {
             base.selectColumns + selectAsColumns
         }
-        // join + selectCollection 子查询 JOIN（复用同子表 leftJoin 的 ON）
-        val joins = joinCalls.mapNotNull { parseJoin(it, mainAlias) } +
-            collectionCalls.mapNotNull { parseCollection(it, joinCalls, mainAlias) }
+        // join + selectCollection 子查询 JOIN（复用同子表 leftJoin 的 ON）；按源码调用顺序合并。
+        // T-M15-06：① 此前 join 全在 collection 前，与源码顺序不符；
+        //           ② selectCollection 子查询已替代同子表普通 join（P06 两写并存），普通 join 不重复渲染
+        val collectionChildClasses = collectionCalls.mapNotNull { call ->
+            (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted
+        }
+        val joins = mutableListOf<JoinClause>()
+        for (call in chain.calls) {
+            when (call.methodName) {
+                in JOIN_METHODS -> {
+                    val join = parseJoin(call, mainAlias) ?: continue
+                    if (collectionChildClasses.any { cls -> NamingStrategy.toSnakeCase(cls) == join.tableName }) continue
+                    joins += join
+                }
+                SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias)?.let { joins += it }
+            }
+        }
 
         return base.copy(
             tableAlias = mainAlias,
@@ -104,13 +125,15 @@ object MpjLambdaConverter : WrapperConverter {
     }
 
     /**
-     * 解析 join → 联表子句（清单 P01/P05/P06/P11/P13/P17/P18）。
+     * 解析 join → 联表子句（清单 P01/P05/P06/P11/P13/P17/P18，官方 API 全覆盖）。
      *
-     * 支持四种 ON 形态：
+     * 支持六种 ON 形态：
      *  1. 三参 `leftJoin(Class, 关联表字段, 主表字段)` → ON alias.左 = mainAlias.右
      *  2. 四参带别名 `leftJoin(Class, "rel", 关联表字段, 主表字段)` → 别名显式指定
      *  3. `leftJoin(Class, on(col1, col2))` → ON mainAlias.col1 = alias.col2
      *  4. lambda ON `leftJoin(Class, on -> on.eq(...).eq(...))` → on 内多条件
+     *  5. 字符串 SQL join `leftJoin("address t1 on t1.user_id = t.id"[, args])` → 原样透传（{i} 参数替换）
+     *  6. 自定义关键字 `join("FULL JOIN", condition, "sql"[, args])` → 关键字 + 原样透传
      *
      * 关联表信息：优先 psi 层解析的 [WrapperArg.EntityRefArg]（F-13 注解），否则按类名 snake_case 兜底。
      */
@@ -118,8 +141,35 @@ object MpjLambdaConverter : WrapperConverter {
         val type = when (call.methodName) {
             "leftJoin" -> JoinType.LEFT
             "innerJoin" -> JoinType.INNER
-            else -> JoinType.RIGHT
+            "rightJoin" -> JoinType.RIGHT
+            "fullJoin" -> JoinType.FULL
+            else -> JoinType.INNER // join(自定义关键字)
         }
+        val args = call.args
+
+        // 6. 自定义关键字 join：join("FULL JOIN", condition, "address t1 on ..."[, args])
+        if (call.methodName == "join") {
+            val keyword = (args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            val joinSql = (args.getOrNull(2).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            return JoinClause(type, "", "", emptyList(), rawSql = renderJoinSql(joinSql, args.drop(3)), customKeyword = keyword)
+        }
+
+        // 5. 字符串 SQL join：leftJoin("address t1 on t1.user_id = t.id"[, args]) /
+        //    leftJoin(condition, "sql"[, args])——首参为含 SQL 结构（空格/括号/{i} 占位）的字符串字面量；
+        //    纯类名（CamelCase，无空格）走下方类名降级（converter 测试手工构造形态）
+        val first = args.getOrNull(0)
+        if (first is WrapperArg.ValueArg) {
+            val literal = first.value as? SqlValue.Literal ?: return null
+            val text = literal.unquoted
+            if (!text.trimEnd().endsWith(".class") &&
+                (text.contains(' ') || text.contains('(') || text.contains('{'))
+            ) {
+                val startIndex = if (args.size >= 2 && isFlagArgument(args[0])) 1 else 0
+                val sql = (args.getOrNull(startIndex).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+                return JoinClause(type, "", "", emptyList(), rawSql = renderJoinSql(sql, args.drop(startIndex + 1)))
+            }
+        }
+
         val (tableInfo, className) = when (val arg = call.args.getOrNull(0)) {
             is WrapperArg.EntityRefArg -> arg.tableInfo to arg.tableInfo.entityClassName
             is WrapperArg.ValueArg -> {
@@ -135,17 +185,17 @@ object MpjLambdaConverter : WrapperConverter {
         val onConditions = mutableListOf<Condition>()
 
         val rest = call.args.drop(1)
-        val first = rest.getOrNull(0)
+        val firstRest = rest.getOrNull(0)
         when {
             // 4. lambda ON：leftJoin(Class, on -> on.eq(...).eq(...))
-            first is WrapperArg.NestedArg ->
-                onConditions += parseOnLambda(first.chain, alias, mainAlias)
+            firstRest is WrapperArg.NestedArg ->
+                onConditions += parseOnLambda(firstRest.chain, alias, mainAlias)
 
             else -> {
                 var index = 0
                 // 2. 四参带别名：leftJoin(Class, "rel", 关联表字段, 主表字段)
-                if (first is WrapperArg.ValueArg) {
-                    val aliasText = (first.value as? SqlValue.Literal)?.unquoted
+                if (firstRest is WrapperArg.ValueArg) {
+                    val aliasText = (firstRest.value as? SqlValue.Literal)?.unquoted
                     if (!aliasText.isNullOrEmpty()) {
                         alias = aliasText
                         index = 1
@@ -178,6 +228,32 @@ object MpjLambdaConverter : WrapperConverter {
         return JoinClause(type, tableName, alias, onConditions)
     }
 
+    /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */
+    private fun renderJoinSql(template: String, values: List<WrapperArg>): String {
+        var sql = template
+        for ((index, value) in values.withIndex()) {
+            sql = sql.replace("{$index}", renderJoinValue(value.asValue() ?: continue))
+        }
+        return sql
+    }
+
+    /** join 绑定参数渲染：字面量原样（raw），运行时值渲染为 `?`。 */
+    private fun renderJoinValue(value: SqlValue): String = when (value) {
+        is SqlValue.Literal -> value.raw
+        is SqlValue.Placeholder -> "?"
+    }
+
+    /** 首参是否为布尔条件前缀（true/false 字面量或运行时布尔表达式占位符）；列引用（ColumnArg）恒为列。 */
+    private fun isFlagArgument(arg: WrapperArg): Boolean {
+        if (arg is WrapperArg.ColumnArg) return false
+        val value = arg.asValue()
+        return when (value) {
+            is SqlValue.Literal -> value.unquoted == "true" || value.unquoted == "false"
+            is SqlValue.Placeholder -> true
+            else -> false
+        }
+    }
+
     /**
      * 解析 leftJoin(Class, on -> on.eq(...)) 的 lambda ON（清单 P13）。
      *
@@ -204,10 +280,47 @@ object MpjLambdaConverter : WrapperConverter {
         }
 
     private const val SELECT_AS = "selectAs"
+    private const val SELECT_AS_CLASS = "selectAsClass"
     private const val SELECT_ALL = "selectAll"
     private const val SELECT_COLLECTION = "selectCollection"
     private const val SELECT_ASSOCIATION = "selectAssociation"
-    private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin")
+
+    /** 联表方法全集（leftJoin/innerJoin/rightJoin/fullJoin + join 自定义关键字，官方 API）。 */
+    private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin", "fullJoin", "join")
+
+    /**
+     * 解析 selectAsClass（MPJ 官方 API）：`selectAsClass(源类, 目标类)` —— 按属性名取两表交集字段，
+     * 生成 `主表列 AS 属性名` 列（目标类同名属性即映射列）。
+     */
+    private fun parseSelectAsClass(call: WrapperCall, mainAlias: String): List<ColumnRef> {
+        val source = (call.args.getOrNull(0) as? WrapperArg.EntityRefArg)?.tableInfo ?: return emptyList()
+        val target = (call.args.getOrNull(1) as? WrapperArg.EntityRefArg)?.tableInfo ?: return emptyList()
+        val targetFields = target.columns.map { it.fieldName }.toSet()
+        return source.columns
+            .filter { it.fieldName in targetFields }
+            .map { ColumnRef(tableAlias = mainAlias, columnName = it.columnName, alias = it.fieldName) }
+    }
+
+    /**
+     * 解析 selectAll 调用（官方 API 全覆盖）：
+     *  - `selectAll(Class)` → 主表全列
+     *  - `selectAll(Class, "prefix")` → 列名加前缀
+     *  - `selectAll(Class, Entity::getX, ...)` → 排除字段（exclude）
+     *  - `selectAll(Class, "prefix", Entity::getX, ...)` → 前缀 + 排除
+     */
+    private fun parseSelectAll(call: WrapperCall, mainAlias: String, table: TableInfo): List<ColumnRef> {
+        val args = call.args
+        // 第二参为字符串字面量（非 .class）→ 列前缀
+        val second = args.getOrNull(1)
+        val prefix = (second.asValue() as? SqlValue.Literal)
+            ?.takeIf { !it.unquoted.trimEnd().endsWith(".class") }
+            ?.unquoted
+        val excludeStart = if (prefix != null) 2 else 1
+        val exclude = args.drop(excludeStart).mapNotNull { it.asColumn()?.columnName }.toSet()
+        return table.allColumnNames
+            .filter { it !in exclude }
+            .map { ColumnRef(tableAlias = mainAlias, columnName = if (prefix != null) prefix + it else it) }
+    }
 
     /**
      * 解析 selectCollection(子表类, VO::get集合[, map -> map.id(...).result(...)]) → LEFT JOIN 子查询（清单 P06/P07）。
@@ -228,18 +341,24 @@ object MpjLambdaConverter : WrapperConverter {
 
         val subSelect = renderCollectionSubSelect(call, childTable, alias)
 
-        // ON 条件：复用同子表 leftJoin 的 on(col1, col2)（left 归主表别名，right 归子表别名，与 parseJoin 一致）
+        // ON 条件：复用同链中同子表 leftJoin 的 ON（T-M15-06 修复——四种 join 形态全覆盖）：
+        // 三参（ColumnArg 对）/ 四参带别名 / on(col1, col2) / lambda ON，统一经 parseJoin 提取，
+        // 并交换左右使主表列在左（与 on(col1, col2) 形态一致；等值比较交换无副作用）。
+        // 修复前仅匹配 on(col1, col2)（OnConditionArg），P06 主形态三参 leftJoin 下子查询无 ON（笛卡尔积）。
         val onConditions = joinCalls
-            .filter { (it.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted == childClass }
-            .flatMap { joinCall ->
-                joinCall.args.drop(1).mapNotNull { arg ->
-                    (arg as? WrapperArg.OnConditionArg)?.let { oc ->
-                        Condition.ColumnComparison(
-                            left = oc.left.withTableAlias(mainAlias),
-                            right = oc.right.withTableAlias(alias),
-                        )
-                    }
+            .filter { joinCall ->
+                val first = joinCall.args.getOrNull(0)
+                when (first) {
+                    is WrapperArg.EntityRefArg -> first.tableInfo.entityClassName == childClass
+                    else -> (first.asValue() as? SqlValue.Literal)?.unquoted == childClass
                 }
+            }
+            .flatMap { joinCall ->
+                parseJoin(joinCall, mainAlias)?.onConditions?.map { cond ->
+                    (cond as? Condition.ColumnComparison)?.let { cc ->
+                        Condition.ColumnComparison(left = cc.right, right = cc.left)
+                    } ?: cond
+                } ?: emptyList()
             }
 
         return JoinClause(JoinType.LEFT, "($subSelect)", alias, onConditions)

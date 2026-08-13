@@ -204,23 +204,46 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
     }
 
-    fun testNonWrappersFactoryCallIsNotAnchor() {
-        // qualifier 不是 Wrappers 的同类方法名 → 不是锚点（语法级文本匹配）
+    fun testServiceChainCallAnchors() {
+        // T-M15-01：service.lambdaQuery() / service.lambdaUpdate() 服务链（qualifier 任意引用，语法级匹配）
         configure(
             """
             public class Demo {
                 public void query() {
-                    service.lambdaQuery();
+                    service.lambdaQuery().eq(DeviceEntity::getId, 1L).one();
                 }
             }
             """,
         )
         val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
             .first { it.methodExpression.referenceName == "lambdaQuery" }
-        assertNull(
-            "非 Wrappers qualifier 的工厂调用不应是锚点",
+        assertSame(
+            "服务链 lambdaQuery 方法名应为锚点",
+            factoryCall.methodExpression.referenceNameElement,
             WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
         )
+    }
+
+    fun testServiceConsumerCallIsNotAnchor() {
+        // 消费调用（service.update(wrapper) / service.count(wrapper)）不是链起点 → 不是锚点（仅 lambdaQuery/lambdaUpdate 放行）
+        configure(
+            """
+            public class Demo {
+                public void query() {
+                    service.update(wrapper);
+                    service.count(wrapper);
+                }
+            }
+            """,
+        )
+        for (name in listOf("update", "count")) {
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == name }
+            assertNull(
+                "消费调用 $name 不应是锚点",
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
     }
 
     fun testBaseTypeVariableAnchors() {

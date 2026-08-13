@@ -18,22 +18,27 @@ sealed class SqlStatement {
 /**
  * 联表子句（MPJ，F-11/F-12）。
  *
- * @param type        联表类型（INNER / LEFT / RIGHT）
+ * @param type        联表类型（INNER / LEFT / RIGHT / FULL）
  * @param tableName   关联表名
  * @param alias       关联表别名（MPJ 惯例：实体类名首字母小写）
  * @param onConditions ON 连接条件（如 `cssm.scheme_id = t.share_scheme_id`）
+ * @param rawSql      原生 join 子句（`leftJoin("address t1 on t1.user_id = t.id", args)`，M15-P0）；
+ *                    非空时整段原样渲染（含别名与 ON），忽略 tableName/alias/onConditions
+ * @param customKeyword 自定义 join 关键字（`join("FULL JOIN", ...)`，M15-P0）；null 时按 type 映射
  */
 data class JoinClause(
     val type: JoinType,
     val tableName: String,
     val alias: String,
     val onConditions: List<Condition>,
+    val rawSql: String? = null,
+    val customKeyword: String? = null,
 )
 
 /**
  * 联表类型。
  */
-enum class JoinType { INNER, LEFT, RIGHT }
+enum class JoinType { INNER, LEFT, RIGHT, FULL }
 
 /**
  * SELECT 语句模型。

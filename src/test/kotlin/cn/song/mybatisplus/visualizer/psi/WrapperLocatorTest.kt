@@ -338,8 +338,10 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         assertEquals(listOf("eq"), located.chain.calls.map { it.methodName })
     }
 
-    fun testStaticFactoryNonWrapperReturnsNull() {
-        // 非 Wrappers 类的同名方法调用（如自定义 lambdaQuery()）不应误识别
+    fun testServiceChainFactoryLocates() {
+        // T-M15-01 行为变更：`MyHelper.lambdaQuery()`（qualifier 任意引用，语法级匹配）按服务链识别。
+        // 快速路径（gutter 锚点）零 resolve 约束下无法区分 service 引用与自定义工具类，宽松匹配是设计决策；
+        // 真实项目 35 文件约 177 处 `service.lambdaQuery()` 依赖此识别。
         myFixture.configureByText(
             "Demo.java",
             """
@@ -350,8 +352,29 @@ class WrapperLocatorTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        val chain = WrapperLocator.locate(anchor())
-        assertNull("非 Wrappers 工厂调用应返回 null", chain)
+        val located = WrapperLocator.locateWithTable(anchor())
+        assertNotNull("lambdaQuery 服务链应被识别（T-M15-01）", located)
+        assertEquals(WrapperType.LAMBDA_QUERY, located!!.chain.wrapperType)
+    }
+
+    fun testConsumerCallIsNotChainStart() {
+        // 消费调用（update/count/remove 等）不是链起点（不在 serviceChainMethodNames）→ 不误识别
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MyHelper.update(wrapper);
+                    MyHelper.count(wrapper);
+                }
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("update", "count")) {
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == name }
+            assertNull("消费调用 $name 不应被识别为链起点", WrapperLocator.locate(call))
+        }
     }
 
     /**

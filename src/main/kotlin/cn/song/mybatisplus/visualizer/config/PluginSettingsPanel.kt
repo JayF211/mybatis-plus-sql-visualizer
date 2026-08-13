@@ -72,6 +72,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
 
+    /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
+    private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
+
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
 
@@ -119,6 +122,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         addRow("", replaceParamsCheck)
         addRow("", formatCheck)
         addRow("", gutterIconCheck)
+        addRow("", injectLogicDeleteCheck)
         addRow(MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
             model = DefaultComboBoxModel(languageOptions())
             // 选中当前配置值（按 value 匹配，zh 兜底）
@@ -318,6 +322,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
             || gutterIconCheck.isSelected != s.showGutterIcon
+            || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
             || shortcutEditor.shortcut != currentShortcut()
     }
@@ -334,6 +339,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.replaceParams = replaceParamsCheck.isSelected
         s.formatSql = formatCheck.isSelected
         s.showGutterIcon = gutterIconCheck.isSelected
+        s.injectLogicDelete = injectLogicDeleteCheck.isSelected
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
         return languageChanged
@@ -348,6 +354,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         replaceParamsCheck.isSelected = s.replaceParams
         formatCheck.isSelected = s.formatSql
         gutterIconCheck.isSelected = s.showGutterIcon
+        injectLogicDeleteCheck.isSelected = s.injectLogicDelete
         languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
         shortcutEditor.shortcut = currentShortcut()
     }

@@ -243,9 +243,11 @@ object ArgResolver {
             when {
                 methodName in JOIN_METHODS && index == 0 ->
                     resolveJoinClass(expr, resolveVariables)
+                methodName == SELECT_AS_CLASS ->
+                    resolveJoinClass(expr, resolveVariables)
                 methodName in ALIAS_SECOND_ARG_METHODS && index == 1 ->
                     resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
-                methodName == SELECT_FUNC && index == 1 ->
+                methodName == SELECT_FUNC || methodName == APPLY_FUNC && index == 1 ->
                     resolveFuncLambda(expr, table)
                 else -> resolve(expr, table, entityClass, resolveVariables = resolveVariables)
             }
@@ -253,8 +255,8 @@ object ArgResolver {
         return WrapperCall(methodName, args)
     }
 
-    /** MPJ join 方法名集合（第一参为关联实体类引用）。 */
-    private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin")
+    /** MPJ join 方法名集合（第一参为关联实体类引用；join 为自定义关键字形态，第一参为关键字字符串）。 */
+    private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin", "fullJoin", "join")
 
     /**
      * 解析 join 的关联实体引用：`leftJoin(XxxEntity.class, ...)` → [WrapperArg.EntityRefArg]（F-13 关联实体注解解析）。
@@ -273,11 +275,17 @@ object ArgResolver {
     /** MPJ selectAs 方法名（第二参为别名位置）。 */
     private const val SELECT_AS = "selectAs"
 
-    /** MPJ selectFunc 方法名（第二参为 func -> func.accept(...).values(...) lambda）。 */
+    /** MPJ selectFunc / applyFunc 方法名（第二参为 func -> func.accept(...).values(...) lambda）。 */
     private const val SELECT_FUNC = "selectFunc"
+    private const val APPLY_FUNC = "applyFunc"
 
-    /** MPJ 中第二参为「目标 VO 字段/别名」的方法名集合（selectAs、selectCount 等）。 */
-    private val ALIAS_SECOND_ARG_METHODS = setOf("selectAs", "selectCount")
+    /** MPJ selectAsClass 方法名（两个实参均为实体类引用，converter 按字段交集映射）。 */
+    private const val SELECT_AS_CLASS = "selectAsClass"
+
+    /** MPJ 中第二参为「目标 VO 字段/别名」的方法名集合（selectAs、selectCount、selectSum/Min/Max/Avg/Len）。 */
+    private val ALIAS_SECOND_ARG_METHODS = setOf(
+        "selectAs", "selectCount", "selectSum", "selectMin", "selectMax", "selectAvg", "selectLen",
+    )
 
     /**
      * 解析 selectFunc 的聚合 lambda：`func -> func.accept(列1, 列2).values(值1, 值2)`。

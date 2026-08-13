@@ -208,6 +208,8 @@ object SqlGenerator {
         }
 
         appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table)
+        // 非 limit 尾缀透传（U05，T-M15-04）：`last("AND (last_total - n >= 0)")` 追加到语句末尾
+        statement.rawTail?.let { sb.append(nl).append(it) }
         return sb.toString()
     }
 
@@ -242,7 +244,7 @@ object SqlGenerator {
         }
     }
 
-    /** JOIN 子句渲染：`INNER JOIN 表 别名 ON 条件1 AND 条件2`。 */
+    /** JOIN 子句渲染：`INNER JOIN 表 别名 ON 条件1 AND 条件2`；rawSql/customKeyword 形态原样透传（M15-P0）。 */
     private fun renderJoin(
         join: JoinClause,
         compact: Boolean,
@@ -250,11 +252,14 @@ object SqlGenerator {
         hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
     ): String {
-        val typeName = when (join.type) {
+        val typeName = join.customKeyword ?: when (join.type) {
             cn.song.mybatisplus.visualizer.model.JoinType.INNER -> "INNER JOIN"
             cn.song.mybatisplus.visualizer.model.JoinType.LEFT -> "LEFT JOIN"
             cn.song.mybatisplus.visualizer.model.JoinType.RIGHT -> "RIGHT JOIN"
+            cn.song.mybatisplus.visualizer.model.JoinType.FULL -> "FULL JOIN"
         }
+        // 原生 join 子句（leftJoin("address t1 on t1.user_id = t.id", args)）：整段原样
+        join.rawSql?.let { return "$typeName $it" }
         val onPart = if (join.onConditions.isEmpty()) {
             ""
         } else {
@@ -342,7 +347,7 @@ object SqlGenerator {
 
         is Condition.Group -> {
             val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, enabledIds, hintSink, table)
-            if (childrenSql.isEmpty()) "" else "($childrenSql)"
+            if (childrenSql.isEmpty()) "" else if (condition.negated) "NOT ($childrenSql)" else "($childrenSql)"
         }
 
         is Condition.ColumnComparison ->
@@ -375,13 +380,14 @@ object SqlGenerator {
             "?"
         }
         is SqlValue.Literal -> {
-            val p = pattern.raw
-            when (position) {
-                LikePosition.ANYWHERE -> "%$p%"
-                LikePosition.LEFT -> "%$p"
-                LikePosition.RIGHT -> "$p%"
-                LikePosition.NONE -> p
+            val v = pattern.unquoted
+            val core = when (position) {
+                LikePosition.ANYWHERE -> "%$v%"
+                LikePosition.LEFT -> "%$v"
+                LikePosition.RIGHT -> "$v%"
+                LikePosition.NONE -> v
             }
+            "'$core'"
         }
     }
 

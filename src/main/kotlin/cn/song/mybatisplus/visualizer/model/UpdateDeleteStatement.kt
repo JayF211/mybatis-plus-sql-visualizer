@@ -5,11 +5,14 @@ package cn.song.mybatisplus.visualizer.model
  *
  * @param sets SET 赋值列表
  * @param conditions WHERE 条件（为空表示全表更新，UI 层需警示）
+ * @param rawTail 语句尾部原生透传（U05，T-M15-04）：更新 wrapper 上 `last("AND (... >= 0)")` 等
+ *                非 limit 形态，原样追加到 SQL 末尾（防超发兜底条件）
  */
 data class UpdateStatement(
     override val table: TableInfo,
     val sets: List<SetClause>,
     override val conditions: List<Condition> = emptyList(),
+    val rawTail: String? = null,
 ) : SqlStatement()
 
 /**

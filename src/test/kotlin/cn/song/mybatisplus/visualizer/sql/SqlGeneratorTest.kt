@@ -132,10 +132,10 @@ class SqlGeneratorTest {
             )
             return SqlGenerator.generate(statement).substringAfter("WHERE ")
         }
-        assertEquals("name LIKE %张%", likeSql(LikePosition.ANYWHERE))
-        assertEquals("name LIKE %张", likeSql(LikePosition.LEFT))
-        assertEquals("name LIKE 张%", likeSql(LikePosition.RIGHT))
-        assertEquals("name NOT LIKE %张%", likeSql(LikePosition.ANYWHERE, negated = true))
+        assertEquals("name LIKE '%张%'", likeSql(LikePosition.ANYWHERE))
+        assertEquals("name LIKE '%张'", likeSql(LikePosition.LEFT))
+        assertEquals("name LIKE '张%'", likeSql(LikePosition.RIGHT))
+        assertEquals("name NOT LIKE '%张%'", likeSql(LikePosition.ANYWHERE, negated = true))
     }
 
     @Test

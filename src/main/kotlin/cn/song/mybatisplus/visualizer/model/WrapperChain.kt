@@ -14,6 +14,10 @@ package cn.song.mybatisplus.visualizer.model
  *                        MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造）；true 时即使类型为查询类也应转 DELETE
  * @param countConsumed   wrapper 作为实参传给计数消费方法（`service.count(wrapper)` / `selectJoinCount(wrapper)`）；
  *                        true 时查询类 wrapper 转 `SELECT COUNT(*) FROM ...`
+ * @param existsConsumed  链式终结点消费（`service.lambdaQuery()...exists()`，Q14-③，T-M15-01）；
+ *                        true 时查询类链转 `SELECT EXISTS (子查询)`
+ * @param updateEntityConsumed 实体更新消费（`service.update(entity, wrapper)` 双参，U07-②，T-M15-04）；
+ *                        true 时用实体字段展开 SET 列（值占位）
  */
 data class WrapperChain(
     val wrapperType: WrapperType,
@@ -22,6 +26,8 @@ data class WrapperChain(
     val constructorAlias: String? = null,
     val deleteConsumed: Boolean = false,
     val countConsumed: Boolean = false,
+    val existsConsumed: Boolean = false,
+    val updateEntityConsumed: Boolean = false,
 )
 
 /**

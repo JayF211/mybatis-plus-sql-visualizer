@@ -5,6 +5,21 @@
 ## [Unreleased]
 
 ### Added
+- M15 官方 API 全覆盖（基于官方文档 + 3.5.15/1.5.6 源码核实的《官方 API 清单》，217 测试全绿）：
+  - **MP 条件方法补齐**：`notLikeLeft`/`notLikeRight`、`inSql`/`notInSql`、`eqSql`/`gtSql`/`geSql`/`ltSql`/`leSql`（SQL 片段比较）、`nested`（独立括号块）、`not(consumer)`（NOT 包裹）、`func(consumer)`（条件展开）、`orderBy(condition, isAsc, cols)`（双布尔前缀解析）；`setIncrBy`/`setDecrBy`（`SET col = col ± val`）
+  - **MPJ 补齐**：`selectSum`/`selectMin`/`selectAvg`/`selectLen`（含别名重载）、`fullJoin`、`join(自定义关键字, ...)`、字符串 SQL join（`leftJoin("sql", args)` 含 `{i}` 参数）、`selectAll(Class, prefix, exclude...)`、`applyFunc`（条件版 selectFunc，`%s`+`{0}` 占位）、`eqIfExists` 等 IfExists 条件族、`selectAsClass`（属性名交集映射）；链式终结点补充 `first`/`mapOne`/`mapFirst`/`mapList`/`mapPage`
+  - **渲染修复**：LIKE 字面量百分号位置（`'%x%'` 引号包裹，原 `%'x'%` 非法）；lambda 内 `or()` 分隔符双层括号展平（`AND ((a OR b))` → `AND (a OR b)`）；聚合列与 selectAll 混用保留
+  - 行为变更：`not`/`nested`/`func` 由"未知方法忽略"变为官方语义支持（既有测试断言更新）
+- M15 真实项目全量语料兼容（v1.9，基于《MPJ 用法收集与兼容性测试清单》2026-08-13 全量复核版）：
+  - **服务链式 wrapper 定位（T-M15-01，Q17/U13/U07-④⑤/U11-⑤）**：`service.lambdaQuery()...one()/.list()/.count()/.exists()/.page()` 与 `service.lambdaUpdate()...update()/.remove()` 链全部可预览（真实项目约 264 处调用）；终结点消费语义（count→COUNT(*)、exists→`SELECT EXISTS(...)`、remove→DELETE）；`LambdaQueryChainWrapper`/`LambdaUpdateChainWrapper` 显式声明支持；gutter 锚点同步（`service.lambdaQuery()` 方法名）
+  - **字符串版 QueryWrapper / UpdateWrapper 转换器（T-M15-02，F-17，Q03/Q09/Q18/U09）**：注册 QUERY/UPDATE 类型；字符串列/`select(表达式)`/`groupBy(字符串)` 原样透传；`wrapper.lambda()` 动态转换（U09-④）；修复 `analyzeFlag` 把字符串列误判为布尔标志（`between("create_time", ...)` 被剥离的缺陷）
+  - **exists 三形态（T-M15-03，Q14）**：链内 `exists(boolean, "SELECT ... {0}", v)` 条件（`{i}` 参数替换 + 布尔剥离 + EXISTS 包裹）、`service.exists(wrapper)` 消费、链式 `lambdaQuery()...exists()`（T-M15-01 已具备）
+  - **更新链路补强（T-M15-04，U01-③/U03/U04-③/U05/U07-②）**：`set(boolean, col, val)` 条件 set 布尔剥离（真实项目约 25 处）；`setSql("...{0}", val)` 绑定参数替换；更新 wrapper 上 `last("AND ...")` 非 limit 尾缀透传（UpdateStatement.rawTail，防超发兜底）；`update(entity, wrapper)` 双参 upsert 实体字段展开 SET（排除主键）；无泛型 `Wrappers.lambdaUpdate()` 从链内方法引用推断实体（约 25 处）
+  - **跨方法追踪补全（T-M15-05，P03/P15/P16/U08）**：if/else 互斥分支只保留源码序第一个分支（修复 `WHERE a = ? AND a IN (...)` 语义错误）；`update(null, wrapper)`/`selectCount(wrapper)` 行实参锚点回查声明链；工厂 3 级链（`applyWithdrawFilters(baseWithdrawQueryWrapper(), dto)` 参数工厂递归展开）；`wrapper.set(a).set(b)` 链式延续收集
+  - **selectCollection ON 修复（T-M15-06，P06/P07）**：子查询 LEFT JOIN 的 ON 复用扩展至三参/四参/on()/lambda ON 四种形态（修复三参形态下无 ON 的笛卡尔积）；joins 按源码顺序合并；同子表普通 join 去重
+  - **逻辑删除与实体注解（T-M15-07，X06/X07）**：`@TableLogic` 读取（TableInfo.logicDeleteColumn）；查询/删除自动追加 `AND deleted = 0`（新增设置项 `injectLogicDelete` 默认开，对齐全局 logic-delete-field；UPDATE 不注入）
+  - **单实体批量方法（T-M15-08，U11/U12/X09）**：`removeById(id)`（实体从 service 泛型解析）；`updateById(entity)`；`saveOrUpdate`/`saveOrUpdateBatch` PG 方言 `ON CONFLICT` upsert；`insertBatchSomeColumn` 排除 `FieldFill.UPDATE` 填充列；`@TableField(fill)` 读取（ColumnInfo.fill）
+  - 行为变更：`service.lambdaQuery()` 等链起点语法级匹配（自定义工具类同名方法也会被识别）；逻辑删除注入改变既有 SELECT/DELETE 输出（可关闭）；if/else 分支语义默认取 then 分支
 - M14 设置页增强 + 弹窗自适应 + 插件名统一（v1.8）：
   - **界面语言切换**：`PluginSettings.language`（**默认简体中文**，用户要求）；`MpSqlVisualizerBundle` 由 DynamicBundle 改为自管理 ResourceBundle（UTF-8 Control 读取，zh/en/AUTO 三态，测试环境兜底中文）；设置页「界面语言」下拉，保存后重建表单即时生效（弹窗/tooltip 天然即时）
   - **快捷键入口**：设置页展示 Convert to SQL 当前快捷键（KeymapUtil）+「修改快捷键…」按钮一键跳转 IDE Keymap 设置

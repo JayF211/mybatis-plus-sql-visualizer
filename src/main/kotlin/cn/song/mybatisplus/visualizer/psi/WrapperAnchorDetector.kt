@@ -30,6 +30,9 @@ import com.intellij.psi.PsiVariable
  */
 object WrapperAnchorDetector {
 
+    /** Wrapper 抽象基类型（基类型声明降级仅限这两类，与 [cn.song.mybatisplus.visualizer.psi.WrapperLocator] 一致）。 */
+    private val WRAPPER_BASE_TYPE_NAMES: Set<String> = setOf("Wrapper", "AbstractWrapper")
+
     /**
      * 元素是否为 Wrapper 锚点；是则返回作为 gutter marker 的叶子元素（即元素自身），否则 null。
      *
@@ -41,7 +44,10 @@ object WrapperAnchorDetector {
             val variable = element.parent as PsiVariable
             if (WrapperLocator.detectWrapperType(variable.type) != null) return element
             // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
-            // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明
+            // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明。
+            // 仅限 Wrapper 基类型（T-M15-01 回归）：`long total = service.lambdaQuery()...` 的 total 不是锚点
+            val typeName = (variable.type as? com.intellij.psi.PsiClassType)?.className
+            if (typeName !in WRAPPER_BASE_TYPE_NAMES) return null
             val init = variable.initializer ?: return null
             if (initializerHeadIsWrapper(init)) return element
             return null
@@ -56,14 +62,18 @@ object WrapperAnchorDetector {
         }
 
         // 场景 C：内联 Wrappers 静态工厂调用（`Wrappers.<X>lambdaQuery()...`，无变量、无 new）
+        //          + 服务链调用（`service.lambdaQuery()...` / `service.lambdaUpdate()...`，T-M15-01，
+        //            qualifier 为任意 service 引用或隐式 this，语法级文本匹配，不 resolve）
         if (element is PsiIdentifier) {
             val ref = element.parent as? PsiReferenceExpression ?: return null
             if (ref.referenceNameElement !== element) return null
             if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
-                val qualifier = ref.qualifierExpression as? PsiReferenceExpression ?: return null
-                if (qualifier.referenceName != "Wrappers") return null
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
-                // 该工厂调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
+                val qualifier = ref.qualifierExpression as? PsiReferenceExpression
+                val isWrappersFactory = qualifier?.referenceName == "Wrappers"
+                val isServiceChain = ref.referenceName in WrapperLocator.serviceChainMethodNames
+                if (!isWrappersFactory && !isServiceChain) return null
+                // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return if (isInsideWrapperVariableInitializer(call)) null else element
             }
             // 场景 D：批量操作调用（`service.updateBatchById(list)` 等，F-15/M6）

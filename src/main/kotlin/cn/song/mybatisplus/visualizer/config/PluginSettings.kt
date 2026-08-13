@@ -35,6 +35,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 插件界面语言（M14）：默认 `zh`（简体中文）；`en`=English；`AUTO`=跟随 IDE。 */
         var language: String = DEFAULT_LANGUAGE,
+
+        /**
+         * 逻辑删除注入（T-M15-07）：实体含 @TableLogic 字段时，查询/删除自动追加 `AND deleted = 0`
+         * （对齐 MyBatis-Plus 全局 `logic-delete-field` 配置）；false 时保持纯 wrapper 语义。
+         */
+        var injectLogicDelete: Boolean = true,
     )
 
     private var state = State()

@@ -44,6 +44,8 @@ object ConverterRegistry {
         MpjLambdaConverter,
         MpjQueryConverter,
         MpjLambdaQueryConverter,
+        QueryWrapperConverter,
+        UpdateWrapperConverter,
     )
 
     /**
