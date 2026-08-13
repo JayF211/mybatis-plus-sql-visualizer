@@ -105,14 +105,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             background = UIUtil.getPanelBackground()
         }
         add(split, BorderLayout.CENTER)
-        // M17.3：右下角按钮栏（执行 SQL | 复制）
-        add(bottomBar(), BorderLayout.SOUTH)
     }
 
     private lateinit var modeButton: JButton
-    private var executeSqlButton: JButton? = null
 
-    /** 顶部工具栏：单行多行切换 / 格式化 / 刷新（复制与执行 SQL 在右下角，M17.3）。 */
+    /** 顶部工具栏：单行多行切换 / 格式化 / 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.X_AXIS)
         modeButton = smallButton(modeButtonText()) {
@@ -124,23 +121,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
     }
 
-    /** 底部栏（M17.3：右下角）——「执行 SQL」在左、「复制 SQL」在右，同一行。 */
-    private fun bottomBar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-        val buttons = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-            executeSqlButton = smallButton(MpSqlVisualizerBundle.message("panel.executeSql")) { executeSql() }
-            add(executeSqlButton)
-            add(smallButton(MpSqlVisualizerBundle.message("panel.copySql")) { copySql() })
-        }
-        add(buttons, BorderLayout.EAST)
-        border = JBUI.Borders.empty(2, 8, 6, 8)
-    }
-
     /**
-     * 执行 SQL（M17）：取当前编辑器 SQL（含参数回填与手动编辑）交给 [cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport]——
-     * 选择数据源 → 自动创建临时文件（Database 控制台绑定）→ 打开可执行。
-     * 无项目/无内容时不动作；Community（无 database 插件）由支持层提示降级。
+     * 执行 SQL（M17，M17.4 由弹窗底部按钮区调用）：取当前编辑器 SQL（含参数回填与手动编辑）
+     * 交给 [cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport]——选择数据源 → 自动创建
+     * 临时文件（Database 控制台绑定）→ 打开可执行。无项目/无内容时不动作；
+     * Community（无 database 插件）由支持层提示降级。
      */
-    private fun executeSql() {
+    internal fun executeSql() {
         val proj = project ?: return
         val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
         ExecuteSqlSupport.execute(proj, sql)
@@ -554,7 +541,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
     internal fun selectAllButtonForTest(): JButton? = selectAllButton
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
-    internal fun executeSqlButtonForTest(): JButton? = executeSqlButton
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")

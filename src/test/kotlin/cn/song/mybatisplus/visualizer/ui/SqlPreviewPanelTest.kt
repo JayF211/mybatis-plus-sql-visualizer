@@ -361,29 +361,31 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // M17：执行 SQL 按钮（Community 降级：测试沙盒无 Database 插件）
+    // M17：执行 SQL（M17.4 起由弹窗底部按钮区调用面板 internal executeSql()；
+    // 测试沙盒无 Database 插件 → Community 降级路径）
     // ------------------------------------------------------------------
 
-    fun testExecuteSqlButtonPresent() {
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
-        assertNotNull("工具栏应有「执行 SQL」按钮", panel.executeSqlButtonForTest())
-        panel.clear()
-    }
-
-    fun testExecuteSqlButtonClickWithoutDatabasePluginNoThrow() {
-        // 测试沙盒无 Database 插件 → 点击走 Community 降级提示（headless 下被兜底吞掉），不抛异常
+    fun testExecuteSqlWithoutDatabasePluginNoThrow() {
+        // 测试沙盒无 Database 插件 → 走 Community 降级提示（headless 下被兜底吞掉），不抛异常
         val panel = SqlPreviewPanel(project)
         panel.showResult(result(sql = "SELECT id FROM tbl", compact = "SELECT id FROM tbl"))
-        panel.executeSqlButtonForTest()!!.doClick()
+        panel.executeSql()
         panel.clear()
     }
 
-    fun testExecuteSqlButtonDisabledWithoutProject() {
-        // 无项目面板（纯组件预览）：按钮点击无动作（project null 直接返回），不抛异常
+    fun testExecuteSqlDisabledWithoutProject() {
+        // 无项目面板（纯组件预览）：执行无动作（project null 直接返回），不抛异常
         val panel = SqlPreviewPanel(null)
         panel.showResult(result())
-        panel.executeSqlButtonForTest()!!.doClick()
+        panel.executeSql()
+        panel.clear()
+    }
+
+    fun testExecuteSqlBlankSqlNoop() {
+        // 空 SQL：不触发执行链路，不抛异常
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result(sql = "   ", compact = "   "))
+        panel.executeSql()
         panel.clear()
     }
 }

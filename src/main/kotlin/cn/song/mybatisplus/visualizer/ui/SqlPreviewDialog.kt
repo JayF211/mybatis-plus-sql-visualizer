@@ -39,8 +39,14 @@ class SqlPreviewDialog(
     override fun createCenterPanel(): JComponent = panel
 
     override fun createActions(): Array<Action> = arrayOf(
-        // 一键复制（F-08，提示由面板统一处理）
-        object : DialogWrapperAction(MpSqlVisualizerBundle.message("dialog.copy.button")) {
+        // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）
+        object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
+            override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+                panel.executeSql()
+            }
+        },
+        // 复制 SQL（F-08，提示由面板统一处理）
+        object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.copySql")) {
             override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
                 panel.copySql()
             }
