@@ -18,6 +18,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 - **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染；`saveOrUpdate` 批量按 PG `ON CONFLICT` 渲染 upsert）
 - **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN（含 `selectCollection` 子查询、`selectFunc` 聚合、`exists` 三形态、`apply`/`last` 原生片段透传）预览，批量操作展开（F-15）
 - **逻辑删除注入**：实体含 `@TableLogic` 时查询/删除自动追加 `AND deleted = 0`（设置页可关闭；父类继承字段如 `BaseEntity.deleted` 同样识别）
+- **执行 SQL**（IntelliJ IDEA Ultimate + Database 插件）：预览面板工具栏「执行 SQL」——选择数据源 → **自动创建临时 .sql 文件**（Database 控制台绑定数据源）→ 打开后可执行（Ctrl+Enter）；Community 版点击提示升级
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
 
 ## 🚀 使用说明
@@ -86,7 +87,8 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 ## 🔧 开发环境
 
 - JDK 17（`jvmToolchain(17)`）
-- IntelliJ IDEA 2025.3.5（平台依赖）
+- **构建平台：IntelliJ IDEA Ultimate 2025.3.5**（`intellijIdeaUltimate("2025.3.5")`——最低支持版本编译；数据源 API 在 `com.intellij.database` 仅 Ultimate 捆绑）
+- **兼容性：强制支持 IDEA 2025.3+**（`<idea-version since-build="253"/>`；公共 API 向后兼容保证 2026.x 可运行；Plugin Verifier 已验证 2025.3.1 / 2025.3.5 / 2026.2.1 三版本 0 问题）
 - Gradle 9.x（Wrapper 内置）
 
 ## 🛠 常用命令

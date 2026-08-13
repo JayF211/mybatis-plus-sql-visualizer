@@ -3,6 +3,11 @@
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
+    <!-- 插件兼容 IDE 版本（M17：强制要求兼容 IDEA 2025.3+）——
+         since-build=253（2025.3 构建号前缀）；不设 until-build（兼容至最新）。
+         构建平台为最低支持版本 Ultimate 2025.3.5，公共 API 向后兼容保证 2026.x 可运行 -->
+    <idea-version since-build="253"/>
+
     <!-- 消息 bundle 声明（M16 i18n）：plugin.xml 中 action text/description 按 action.<id>.<prop> 约定、
          configurable displayName 按 bundle+key 属性，从 messages.MpSqlVisualizerBundle（含 _zh）解析本地化 -->
     <resource-bundle>messages.MpSqlVisualizerBundle</resource-bundle>
@@ -49,6 +54,12 @@
          且 Kotlin 插件不支持动态卸载（依赖非动态插件会导致本插件也无法免重启安装/更新）；
          kotlin-stdlib 由构建自动打包进插件 jar，功能不受影响 -->
     <depends>com.intellij.java</depends>
+
+    <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
+         官方规范（Plugin Dependencies）：可选依赖须声明 optional="true" + config-file，
+         主描述文件不得直接引用可选插件类（本插件经反射隔离调用，Community 下优雅降级）；
+         database-optional.xml 存放可选插件存在时才激活的声明（当前无 EP 注册，为占位） -->
+    <depends optional="true" config-file="database-optional.xml">com.intellij.database</depends>
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">

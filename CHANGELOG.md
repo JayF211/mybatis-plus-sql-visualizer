@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Added
+- M17.3 执行 SQL 按钮位置修正（用户明确要求，260 测试全绿）：
+  - 「执行 SQL」「复制 SQL」两个按钮在**面板右下角同一行**（底部栏右对齐），执行 SQL 在左、复制 SQL 在右；
+  - 顶部工具栏仅保留：单行多行切换 / 格式化 / 刷新（**顶部无复制按钮**）；
+  - bundle：`panel.copy` → `panel.copySql`（复制 SQL / Copy SQL，与执行 SQL 对称）
+- M17.2 执行 SQL 体验修正 2（用户实测反馈，260 测试全绿）：
+  - **数据源枚举健壮化**：`getDataSources()` 泛型擦除——原 `as? List<LocalDataSource>` 强转不检查元素类型，改为 **`filterIsInstance` 元素级过滤**（非 LocalDataSource 元素不再导致后续异常/空列表）
+  - **选择器原生观感**：ChooseByNamePopup 列表自定义 renderer——**数据源类型图标** + 名称（数据库类型），贴近 Database 插件原生数据源下拉
+  - **按钮位置**：回到**顶部工具栏「复制」左边**（与复制同一行，移除底部栏）
+- M17.1 执行 SQL 体验修正（用户实测反馈，260 测试全绿）：
+  - **IDE 原生数据源选择面板**：`Messages.showChooseDialog`（简化列表）→ **`ChooseByNamePopup`**（GotoClass/Search Everywhere 同款原生搜索弹窗——搜索框 + 数据源类型图标 + 列表，`ChooseByNameModel` 2025.3 重构后签名；2025.3/2026.2 双版本核对一致；`Callback` 为抽象类需括号初始化）
+  - **编辑器右上角数据源绑定修复**：原 `newConsole().forFile().fromDataSource().build()` 仅建对象、未注册「文件↔数据源」关联——改为 `DatabaseSessionManager.getSession(project, ds)` → `Builder.useSession(session)` → **`JdbcConsoleProvider.attachConsole(project, session, vf)`** 持久化关联，打开后右上角显示所选数据源、Ctrl+Enter 直接执行
+  - **按钮位置**：顶部工具栏 → **面板底部栏**（SOUTH，右对齐，用户要求）
+- M17 SQL 预览面板「执行 SQL」按钮（260 测试全绿）：
+  - **功能**：预览面板工具栏新增「执行 SQL」——取当前编辑器 SQL（含参数回填与手动编辑）→ 选择数据源（0 个引导创建 / 1 个直用 / 多个弹选择框，名称+数据库类型）→ **自动创建临时 .sql 文件**（`mpsql-exec-*.sql`）→ Database 控制台绑定数据源（`JdbcConsole.newConsole(project).forFile(vf).fromDataSource(ds).build()`）→ 打开编辑器（Ctrl+Enter 执行，IDE 原生控制台行为）
+  - **兼容性（强制 IDEA 2025.3+，官方规范）**：构建平台 `intellijIdeaUltimate("2025.3.5")`（**最低支持版本编译**，公共 API 向后兼容保证 2026.x 可运行）；`<idea-version since-build="253"/>` 声明最低版本；**Plugin Verifier 已验证 2025.3.1 / 2025.3.5 / 2026.2.1 三版本 0 问题**；`com.intellij.database` 按官方 Plugin Dependencies 规范声明 `<depends optional="true" config-file="database-optional.xml">`（可选插件类不得在主描述文件引用）
+  - **Community 兼容（隔离）**：主代码（面板/`ExecuteSqlSupport`）**零直接引用** database 类——运行时 `Class.forName` 探测插件可用性（版本无关，避开 `PluginId` API 迁移）+ 反射加载隔离类 `DatabaseConsoleLauncher`（Community 下永不加载）；按钮点击提示升级 Ultimate；测试沙盒排除 database jar 使降级路径稳定可测
+  - **API 实测（2025.3.5 与 2026.2.1 双版本反编译核对一致）**：`LocalDataSourceManager.getInstance().dataSources`、`JdbcConsole.newConsole/Builder.forFile/fromDataSource`、`Messages.showChooseDialog`（返回下标 int）、`ReadAction.compute<T,E>`、`PluginId` 位于 `com.intellij.openapi.extensions`
+  - 测试：`ExecuteSqlSupportTest`（isAvailable 降级判定 / execute 不抛异常）+ `SqlPreviewPanelTest`（按钮存在 / 点击降级不崩 / 无项目 no-op）——254 → 260 全绿；`buildPlugin` + `verifyPlugin` 成功
+  - 手动验收（Ultimate 2025.3+）：按钮 → 选数据源 → 临时文件打开（绑定数据源）→ Ctrl+Enter 执行出结果；无数据源引导提示；Community 安装不崩溃、点击提示升级
+
 ### Fixed
 - M16.3 用户实测三处缺陷修复（254 测试全绿，反证验证）：
   - **设置语言切换保存失效（根因修正）**：`PluginSettings` 是应用级轻服务（`@Service(Service.Level.APP)`）+ `PersistentStateComponent`——官方规范（SDK Services 文档）要求**必须禁用 roaming**（`roamingType = RoamingType.DISABLED`）；原 `@Storage("mp-sql-visualizer.xml")` 使用默认 `RoamingType.DEFAULT`，状态进入设置同步（Settings Sync）管理通道、与轻服务持久化不兼容 → 切英文确定后重开/重启回中文。修复：`@Storage` 显式声明 `roamingType = RoamingType.DISABLED`（M16.1 移除双注册后仍未生效即此根因）；新增编译期契约测试 `testStorageRoamingDisabledContract` 防回归

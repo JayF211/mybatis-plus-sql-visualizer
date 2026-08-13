@@ -359,4 +359,31 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertTrue(panel.editorForTest()!!.document.text.contains("station_id = 2"))
         panel.clear()
     }
+
+    // ------------------------------------------------------------------
+    // M17：执行 SQL 按钮（Community 降级：测试沙盒无 Database 插件）
+    // ------------------------------------------------------------------
+
+    fun testExecuteSqlButtonPresent() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result())
+        assertNotNull("工具栏应有「执行 SQL」按钮", panel.executeSqlButtonForTest())
+        panel.clear()
+    }
+
+    fun testExecuteSqlButtonClickWithoutDatabasePluginNoThrow() {
+        // 测试沙盒无 Database 插件 → 点击走 Community 降级提示（headless 下被兜底吞掉），不抛异常
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result(sql = "SELECT id FROM tbl", compact = "SELECT id FROM tbl"))
+        panel.executeSqlButtonForTest()!!.doClick()
+        panel.clear()
+    }
+
+    fun testExecuteSqlButtonDisabledWithoutProject() {
+        // 无项目面板（纯组件预览）：按钮点击无动作（project null 直接返回），不抛异常
+        val panel = SqlPreviewPanel(null)
+        panel.showResult(result())
+        panel.executeSqlButtonForTest()!!.doClick()
+        panel.clear()
+    }
 }
