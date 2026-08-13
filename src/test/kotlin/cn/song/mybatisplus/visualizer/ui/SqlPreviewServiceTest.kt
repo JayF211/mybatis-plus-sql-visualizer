@@ -3485,8 +3485,9 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
-    fun testOfficialApiLogicDelToOnSkips() {
-        // P1-01（M19.5）：logicDelToOn() ON 形态超出插件 WHERE 模型 → 跳过注入（M15 既有近似）
+    fun testOfficialApiLogicDelToOnMainTableStillInjects() {
+        // T-M20-05（P1-01 语义修正）：logicDelToOn() 仅控制**副表** deleted 条件位置（ON）——不影响主表注入；
+        // 单表（无 join）场景下主表 deleted 仍注入（旧实现近似为全局关闭已废弃）
         myFixture.configureByText(
             "Demo.java",
             """
@@ -3509,8 +3510,315 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull("logicDelToOn 应产出预览结果", result)
         assertEquals(
-            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001",
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND deleted = 0",
             result!!.compactSql.trim(),
+        )
+    }
+
+    fun testMpjLogicDeleteMainAndSubInjectedByDefault() {
+        // T-M20-05：默认状态——主表（@TableLogic）deleted 注入 WHERE；副表（join 实体 @TableLogic）deleted 注入 ON（默认行为）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .eq(OrderEntity::getId, 1001L);
+                    orderMapper.selectJoinList(OrderVO.class, w);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderVO {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("主表+副表逻辑删除应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
+            WHERE t.id = 1001
+                AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjLogicDeleteDisableMainOnly() {
+        // T-M20-05：disableLogicDel() 仅关闭**主表**注入——副表 deleted 仍在 ON
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .disableLogicDel()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("disableLogicDel 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjLogicDeleteDisableSubOnly() {
+        // T-M20-05：disableSubLogicDel() 仅关闭**副表**注入——主表 deleted 仍在 WHERE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .disableSubLogicDel()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("disableSubLogicDel 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id
+            WHERE t.id = 1001
+                AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjLogicDeleteSubDisableThenEnableRestores() {
+        // T-M20-05：disableSubLogicDel().enableSubLogicDel() 按源码顺序先关后开 → 副表注入恢复
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .disableSubLogicDel()
+                        .enableSubLogicDel()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("enableSubLogicDel 应恢复副表注入", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
+            WHERE t.id = 1001
+                AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjLogicDelToWhereMovesSubConditionToWhereEnd() {
+        // T-M20-05：logicDelToWhere() → 副表 deleted 移到 WHERE 末尾（主表在前、副表在后）；ON 不再包含
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .logicDelToWhere()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("logicDelToWhere 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id
+            WHERE t.id = 1001
+                AND deleted = 0
+                AND orderItemEntity.deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjLogicDelToOnKeepsSubConditionOn() {
+        // T-M20-05：logicDelToOn() → 副表 deleted 在 ON（默认行为等价）；主表不受影响
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .logicDelToOn()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("logicDelToOn 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
+            WHERE t.id = 1001
+                AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testMpjLogicDelToWhereThenToOnRestoresOnBySourceOrder() {
+        // T-M20-05：logicDelToWhere().logicDelToOn() 按源码顺序先移 WHERE 再回 ON → 副表条件回到 ON
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .leftJoin(OrderItemEntity.class, OrderItemEntity::getOrderId, OrderEntity::getId)
+                        .logicDelToWhere()
+                        .logicDelToOn()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class OrderItemEntity {
+                    private Long id;
+                    private Long orderId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("logicDelToWhere 后 logicDelToOn 应恢复 ON 注入", result)
+        assertEquals(
+            """
+            SELECT t.id, t.deleted
+            FROM order_entity t
+            LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
+            WHERE t.id = 1001
+                AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
         )
     }
 

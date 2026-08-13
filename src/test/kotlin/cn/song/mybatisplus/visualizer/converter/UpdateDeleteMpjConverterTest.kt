@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -740,5 +741,53 @@ class UpdateDeleteMpjConverterTest {
             """.trimIndent(),
             sql,
         )
+    }
+
+    // ------------------------------------------------------------------
+    // T-M20-05：parseJoin 填充关联表逻辑删除列（@TableLogic）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `mpjLambda_leftJoin实体引用携带逻辑删除列`() {
+        // T-M20-05：EntityRefArg 形态（psi 解析实体）填充 logicDeleteColumn（@TableLogic 列），
+        // 供 SqlPreviewService 副表注入；类名字面量兜底形态无 TableInfo → 不填充（不注入）
+        val subTable = TableInfo(
+            entityClassName = "CouponEntity",
+            tableName = "coupon_entity",
+            columns = listOf(
+                ColumnInfo("id", "id"),
+                ColumnInfo("merchantId", "merchant_id"),
+                ColumnInfo("deleted", "deleted"),
+            ),
+            logicDeleteColumn = "deleted",
+        )
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(subTable),
+                    WrapperArg.OnConditionArg(
+                        ColumnRef(columnName = "merchant_id"),
+                        ColumnRef(columnName = "id"),
+                    ),
+                )),
+            ),
+        )
+        val statement = MpjLambdaConverter.convert(chain, table) as cn.song.mybatisplus.visualizer.model.SelectStatement
+        assertEquals("EntityRefArg 形态应填充逻辑删除列", "deleted", statement.joins.single().logicDeleteColumn)
+
+        // 类名字面量兜底形态（无 TableInfo）→ logicDeleteColumn 为 null
+        val literalChain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("StationInfoEntity")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                )),
+            ),
+        )
+        val literalStatement = MpjLambdaConverter.convert(literalChain, table) as cn.song.mybatisplus.visualizer.model.SelectStatement
+        assertNull("类名字面量形态无 TableInfo → 不填充", literalStatement.joins.single().logicDeleteColumn)
     }
 }

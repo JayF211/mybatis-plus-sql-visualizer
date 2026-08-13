@@ -108,18 +108,18 @@ class SqlPreviewService(private val project: Project) {
             val statement = when {
                 // 计数消费：service.count(wrapper) / selectJoinCount(wrapper) / lambdaQuery()...count() → SELECT COUNT(*) FROM ...（保留联表与条件）
                 located.chain.countConsumed && located.chain.wrapperType.isQueryLike() -> {
-                    val parsed = QueryWrapperParser(table).parse(located.chain)
+                    val base = parseQueryLike(located.chain, table)
                     SelectStatement(
                         table,
                         selectColumns = listOf(ColumnRef(columnName = "*", function = "COUNT")),
-                        tableAlias = parsed.tableAlias,
-                        joins = parsed.joins,
-                        conditions = parsed.conditions,
+                        tableAlias = base.tableAlias,
+                        joins = base.joins,
+                        conditions = base.conditions,
                     )
                 }
                 // exists 链式终结点消费：service.lambdaQuery()...exists() → SELECT EXISTS (子查询)（Q14-③，T-M15-01）
                 located.chain.existsConsumed && located.chain.wrapperType.isQueryLike() ->
-                    QueryWrapperParser(table).parse(located.chain)
+                    parseQueryLike(located.chain, table)
                 // 实体更新消费：service.update(entity, wrapper) 双参（U07-②，T-M15-04）——
                 // wrapper 无 set 时用实体字段展开 SET 列（值静态不可求值 → 占位）；主键列排除（进 WHERE）
                 located.chain.updateEntityConsumed -> {
@@ -138,10 +138,15 @@ class SqlPreviewService(private val project: Project) {
             }
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
-            // M15 增补：MPJ `disableLogicDel()` 控制开关——链内出现时跳过注入
-            // P1-01（M19.5）：enableLogicDel/logicDelToWhere 等剩余形态按源码顺序求值（见 [logicDeleteActive]）
-            val injectLogicDelete = (settings?.state?.injectLogicDelete ?: true) && logicDeleteActive(located.chain.calls)
-            val finalStatement = if (injectLogicDelete) injectLogicDeleteCondition(table, statement) else statement
+            // T-M20-05（P1-01 语义修正）：MPJ 六方法按源码顺序求值——主表/副表逻辑删除独立开关，
+            // logicDelToOn/logicDelToWhere 仅控制**副表** deleted 条件位置（ON / WHERE 末尾），不再影响主表注入
+            // （旧实现把二者当作全局开关是错误近似，见 [evaluateLogicDeleteState]）
+            val logicDelete = evaluateLogicDeleteState(located.chain.calls)
+            val finalStatement = if (settings?.state?.injectLogicDelete ?: true) {
+                injectLogicDeleteCondition(table, statement, logicDelete)
+            } else {
+                statement
+            }
             val result = buildPreviewResult(located.chain.wrapperType, table, finalStatement)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
@@ -209,15 +214,59 @@ class SqlPreviewService(private val project: Project) {
     }
 
     /**
-     * 逻辑删除条件注入（T-M15-07）：实体含 @TableLogic 字段时，查询/删除自动追加 `AND deleted = 0`。
+     * 逻辑删除条件注入（T-M15-07 + T-M20-05 精确化）：实体含 @TableLogic 字段时，查询/删除自动追加 `deleted = 0`。
      * 仅 SELECT/DELETE（UPDATE 不注入——更新可能修改 deleted 本身，真实项目发票域显式 `.eq(getDeleted, 0)`）。
+     *
+     * 主表/副表注入按 [LogicDeleteState] 独立控制（对齐 MPJ 官方六方法语义）：
+     *  - 主表：mainActive 时 WHERE 追加 `deleted = 0`（保持既有无别名格式）；
+     *  - 副表：对每个带 [JoinClause.logicDeleteColumn] 的 join，subActive 时——
+     *    - subToWhere=false（默认 / `logicDelToOn`）→ ON 条件追加 `alias.deleted = 0`；
+     *    - subToWhere=true（`logicDelToWhere`）→ WHERE 末尾追加带别名的 `alias.deleted = 0`（主表在前、副表在后）。
+     *
+     * 副表仅 SELECT 有 joins；DELETE 无 joins 维持主表注入（受 mainActive 控制）。
      */
-    private fun injectLogicDeleteCondition(table: TableInfo, statement: SqlStatement): SqlStatement {
-        val column = table.logicDeleteColumn ?: return statement
-        val condition = Condition.Simple(ColumnRef(columnName = column), "=", SqlValue.Literal("0"))
+    private fun injectLogicDeleteCondition(
+        table: TableInfo,
+        statement: SqlStatement,
+        state: LogicDeleteState,
+    ): SqlStatement {
         return when (statement) {
-            is SelectStatement -> statement.copy(conditions = statement.conditions + condition)
-            is DeleteStatement -> statement.copy(conditions = statement.conditions + condition)
+            is SelectStatement -> {
+                var conditions = statement.conditions
+                if (state.mainActive) {
+                    table.logicDeleteColumn?.let { column ->
+                        conditions = conditions + Condition.Simple(
+                            ColumnRef(columnName = column), "=", SqlValue.Literal("0"),
+                        )
+                    }
+                }
+                // 副表注入：ON 追加 / WHERE 末尾（子查询形态 tableName 以 '(' 开头无 logicDeleteColumn，天然跳过）
+                val subWhere = mutableListOf<Condition>()
+                val joins = statement.joins.map { join ->
+                    val column = join.logicDeleteColumn ?: return@map join
+                    if (!state.subActive) return@map join
+                    val cond = Condition.Simple(
+                        ColumnRef(tableAlias = join.alias, columnName = column), "=", SqlValue.Literal("0"),
+                    )
+                    if (state.subToWhere) {
+                        subWhere += cond
+                        join
+                    } else {
+                        join.copy(onConditions = join.onConditions + cond)
+                    }
+                }
+                if (subWhere.isNotEmpty()) conditions = conditions + subWhere
+                statement.copy(conditions = conditions, joins = joins)
+            }
+            is DeleteStatement -> {
+                val column = table.logicDeleteColumn ?: return statement
+                if (!state.mainActive) return statement
+                statement.copy(
+                    conditions = statement.conditions + Condition.Simple(
+                        ColumnRef(columnName = column), "=", SqlValue.Literal("0"),
+                    ),
+                )
+            }
             else -> statement
         }
     }
@@ -267,22 +316,52 @@ class SqlPreviewService(private val project: Project) {
     )
 
     /**
-     * 逻辑删除控制求值（P1-01，M19.5）：MPJ 官方四个控制方法的 WHERE 注入语义近似——
-     * 按**源码顺序**扫描链调用维护开关（链上可先 disable 再 enable 精确控制）：
-     *  - `disableLogicDel` → 关闭注入（M15 既有）；
-     *  - `enableLogicDel` → 重新开启注入（官方 API 补充）；
-     *  - `logicDelToOn` → deleted 追加到 ON 而非 WHERE——ON 条件超出插件 WHERE 模型，近似为关闭注入（M15 既有）；
-     *  - `logicDelToWhere` → 明确声明追加到 WHERE，即默认行为，开启注入（官方 API 补充）。
+     * 查询类解析统一入口（T-M20-06 补强）：优先走 [ConverterRegistry] 注册的 converter——
+     * MPJ 类型由此保留**主表别名与 JOIN**（`selectJoinCount`/`exists` 的联表过滤语义：
+     * 单表 QueryWrapperParser 会静默丢弃 join 调用，INNER JOIN 的行数语义会丢失）；
+     * 非 SelectStatement 结果（异常路径）回退单表解析。与 `else -> ConverterRegistry.convert` 分支同源。
      */
-    private fun logicDeleteActive(calls: List<cn.song.mybatisplus.visualizer.model.WrapperCall>): Boolean {
-        var active = true
+    private fun parseQueryLike(chain: cn.song.mybatisplus.visualizer.model.WrapperChain, table: TableInfo): SelectStatement =
+        (ConverterRegistry.convert(chain, table) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
+
+    /**
+     * 逻辑删除注入状态（T-M20-05）：MPJ 官方六方法按源码顺序求值的结果，驱动 [injectLogicDeleteCondition]。
+     *
+     * @param mainActive 主表逻辑删除开关（默认开）；false 时主表 deleted 不注入 WHERE
+     * @param subActive  副表（join 表）逻辑删除开关（默认开）；false 时副表 deleted 不注入
+     * @param subToWhere 副表 deleted 条件位置：true → WHERE 末尾（`logicDelToWhere`）；
+     *                   false（默认 / `logicDelToOn`）→ join ON 条件
+     */
+    data class LogicDeleteState(
+        val mainActive: Boolean = true,
+        val subActive: Boolean = true,
+        val subToWhere: Boolean = false,
+    )
+
+    /**
+     * 逻辑删除控制求值（T-M20-05，对齐 MPJ 官方六方法语义）：
+     * 按**源码顺序**扫描链调用维护三态状态（链上可先关后开 / 先开后关精确控制）：
+     *  - `disableLogicDel` / `enableLogicDel` → 主表逻辑删除开关（默认开）；
+     *  - `disableSubLogicDel` / `enableSubLogicDel` → 副表（join 表）逻辑删除开关（默认开）；
+     *  - `logicDelToOn` / `logicDelToWhere` → 副表 deleted 条件位置（ON / WHERE 末尾），**不影响主表注入**
+     *    （旧实现把二者当作全局开关是错误近似，T-M20-05 已修正）。
+     *
+     * 非 MPJ 链不出现上述方法 → 返回全默认状态（主表/副表均注入，行为与 T-M15-07 基线一致）。
+     */
+    private fun evaluateLogicDeleteState(calls: List<cn.song.mybatisplus.visualizer.model.WrapperCall>): LogicDeleteState {
+        var state = LogicDeleteState()
         for (call in calls) {
-            when (call.methodName) {
-                "disableLogicDel", "logicDelToOn" -> active = false
-                "enableLogicDel", "logicDelToWhere" -> active = true
+            state = when (call.methodName) {
+                METHOD_DISABLE_LOGIC_DEL -> state.copy(mainActive = false)
+                METHOD_ENABLE_LOGIC_DEL -> state.copy(mainActive = true)
+                METHOD_DISABLE_SUB_LOGIC_DEL -> state.copy(subActive = false)
+                METHOD_ENABLE_SUB_LOGIC_DEL -> state.copy(subActive = true)
+                METHOD_LOGIC_DEL_TO_ON -> state.copy(subToWhere = false)
+                METHOD_LOGIC_DEL_TO_WHERE -> state.copy(subToWhere = true)
+                else -> state
             }
         }
-        return active
+        return state
     }
 
     /**
@@ -291,6 +370,14 @@ class SqlPreviewService(private val project: Project) {
     fun clearCache() = cache.clear()
 
     companion object {
+        /** 逻辑删除控制方法名（T-M20-05，MPJ 官方六方法；单一来源，评估逻辑 [evaluateLogicDeleteState] 使用）。 */
+        private const val METHOD_DISABLE_LOGIC_DEL = "disableLogicDel"
+        private const val METHOD_ENABLE_LOGIC_DEL = "enableLogicDel"
+        private const val METHOD_DISABLE_SUB_LOGIC_DEL = "disableSubLogicDel"
+        private const val METHOD_ENABLE_SUB_LOGIC_DEL = "enableSubLogicDel"
+        private const val METHOD_LOGIC_DEL_TO_ON = "logicDelToOn"
+        private const val METHOD_LOGIC_DEL_TO_WHERE = "logicDelToWhere"
+
         /**
          * 统一展示入口（M10-03）：恒以弹窗（[SqlPreviewDialog]）展示预览结果，
          * 供 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 与 gutter 图标点击共用（M11 起收敛为弹窗）。

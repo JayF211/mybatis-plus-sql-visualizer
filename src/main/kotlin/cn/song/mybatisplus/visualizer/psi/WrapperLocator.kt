@@ -851,10 +851,12 @@ object WrapperLocator {
      * `service.lambdaQuery()...one()/.list()/.count()/.exists()/.page()` 与
      * `service.lambdaUpdate()...update()/.remove()`。
      * 官方 API 补充（M15-P0）：MPJ Chain 的 `first`（取首条）与 `mapOne/mapFirst/mapList/mapPage`（Map 结果）。
+     * T-M20-06：ChainQuery（MP 3.5.4+）的 `getObj()`（取单条字段值）补注册为终结点——
+     * 消费方法全集核对发现缺口（此前按普通链调用入链，被解析器静默忽略）。
      */
     private val chainTerminalMethodNames: Set<String> = setOf(
         "one", "oneOpt", "list", "count", "exists", "page",
-        "getOne", "getMap", "listMaps", "listObjs", "map",
+        "getOne", "getMap", "listMaps", "listObjs", "getObj", "map",
         "first", "mapOne", "mapFirst", "mapList", "mapPage",
         "update", "remove",
     )
@@ -869,8 +871,12 @@ object WrapperLocator {
      *  deleteJoin 为 MPJ 官方联表删除，M15 增补）。 */
     internal val deleteConsumerMethodNames: Set<String> = setOf("remove", "delete", "deleteJoin")
 
-    /** 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。 */
-    internal val countConsumerMethodNames: Set<String> = setOf("count", "selectJoinCount")
+    /**
+     * 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。
+     * T-M20-06：BaseMapper.selectCount(wrapper) 补注册（消费方法全集核对缺口——
+     * 此前 selectCount 消费被默认 SELECT 分支吞掉，SQL 形态错误）。
+     */
+    internal val countConsumerMethodNames: Set<String> = setOf("count", "selectJoinCount", "selectCount")
 
     /** exists 消费方法（Q14-②，T-M15-03）：`service.exists(wrapper)` / `mapper.exists(wrapper)` → `SELECT EXISTS (...)`。 */
     private const val EXISTS_CONSUMER = "exists"

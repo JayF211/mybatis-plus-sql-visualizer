@@ -181,6 +181,8 @@ object MpjLambdaConverter : WrapperConverter {
      *  6. 自定义关键字 `join("FULL JOIN", condition, "sql"[, args])` → 关键字 + 原样透传
      *
      * 关联表信息：优先 psi 层解析的 [WrapperArg.EntityRefArg]（F-13 注解），否则按类名 snake_case 兜底。
+     * T-M20-05：EntityRefArg 形态额外携带关联表逻辑删除列（@TableLogic，见 [JoinClause.logicDeleteColumn]），
+     * 供 SqlPreviewService 注入副表 deleted 条件；类名兜底 / 字符串 join 无 TableInfo → null（不注入）。
      */
     private fun parseJoin(call: WrapperCall, mainAlias: String): JoinClause? {
         val type = when (call.methodName) {
@@ -277,7 +279,9 @@ object MpjLambdaConverter : WrapperConverter {
             }
         }
 
-        return JoinClause(type, tableName, alias, onConditions)
+        // T-M20-05：仅 EntityRefArg（psi 解析实体）携带逻辑删除列；类名兜底/字符串 join/selectCollection
+        // 子查询形态 tableInfo 为 null → 不填充（SqlPreviewService 不注入副表 deleted）
+        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = tableInfo?.logicDeleteColumn)
     }
 
     /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */

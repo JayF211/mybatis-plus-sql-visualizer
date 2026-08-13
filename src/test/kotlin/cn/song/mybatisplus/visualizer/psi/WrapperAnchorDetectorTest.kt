@@ -344,6 +344,31 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
     }
 
+    fun testServiceChainGetObjTerminalAnchors() {
+        // T-M20-06：ChainQuery getObj() 终结点链（MP 3.5.4+ 官方 API，消费方法全集核对补注册）——
+        // `service.lambdaQuery()...getObj()` 的 lambdaQuery 方法名仍应为 gutter 锚点（场景 C）
+        configure(
+            """
+            public class Demo {
+                public void query() {
+                    Object obj = service.lambdaQuery()
+                            .eq(DeviceEntity::getId, 1L)
+                            .getObj();
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaQuery" }
+        assertSame(
+            "getObj 终结点链的 lambdaQuery 方法名应为锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
     fun testBaseTypeVariableAnchors() {
         // 变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）→ 变量名仍是锚点
         configure(
