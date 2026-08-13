@@ -80,6 +80,8 @@ tasks {
     // 修复：显式配置 changeNotes（单一来源，与发布内容一致；更新时同步修改此处）。
     patchPluginXml {
         changeNotes = """<ul>
+            <li>M19：修复设置语言切换保存失效（写穿式持久化，选中即生效，不再依赖 Settings 确定链路）+ 执行 SQL 移除数据源弹框（直接创建临时文件，编辑器右上角自选数据源后 Ctrl+Enter 执行）</li>
+            <li>M18.2：修复插件详情页「最新变化」显示（changeNotes 显式配置）</li>
             <li>M18.1：介绍页新增「问题反馈」入口——点击跳转 Gitee 仓库 Issues 页提交反馈</li>
             <li>M18：插件介绍页底部展示作者微信与交流群二维码（IDE 插件管理页与市场页面均可显示）</li>
             <li>M17：「执行 SQL」按钮——预览面板选择数据源后自动创建临时 .sql 文件（Database 控制台绑定数据源），Ctrl+Enter 执行；兼容 IDEA 2025.3+，Community 版自动隐藏</li>

@@ -13,8 +13,8 @@ import com.intellij.openapi.ui.Messages
  * launcher 字节码位于主 jar，但仅当 database 插件已加载时才被 JVM 解析（Community 下永不触碰，
  * 无 NoClassDefFoundError）。
  *
- * 流程（Ultimate）：数据源枚举/选择 → 创建临时 .sql 文件（含当前 SQL）→ Database 控制台绑定
- * 数据源 → 打开编辑器（用户 Ctrl+Enter 执行，IDE 原生控制台行为）。
+ * 流程（Ultimate，M19）：创建临时 .sql 文件（含当前 SQL）→ 打开编辑器（Database 插件
+ * SQL 编辑器右上角**数据源选择器**由用户自行选择数据源，Ctrl+Enter 执行——IDE 原生行为）。
  */
 object ExecuteSqlSupport {
 

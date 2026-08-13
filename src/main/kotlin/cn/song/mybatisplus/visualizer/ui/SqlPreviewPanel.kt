@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.LikePosition
@@ -208,8 +209,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** 刷新视图（保留参数与模式，重渲染编辑器）。 */
-    fun refreshView() = renderSql()
+    /**
+     * 刷新视图（M19.3）：模式**复位为与设置「SQL 格式化输出」对齐**（默认多行）后重渲染编辑器——
+     * 用户实测：点刷新后 SQL 仍停留在单行模式（此前手动切换/设置快照的单行被保留）；
+     * 刷新 = 回到默认状态（参数与回填保留，仅模式复位）。
+     */
+    fun refreshView() {
+        compactMode = !formatSqlSetting()
+        modeButton.text = modeButtonText()
+        renderSql()
+    }
+
+    /** 设置「SQL 格式化输出」（false=单行）；环境异常兜底 true（多行）。 */
+    private fun formatSqlSetting(): Boolean = runCatching {
+        PluginSettings.getInstance().state.formatSql
+    }.getOrDefault(true)
 
     /** 格式化当前编辑器 SQL（关键字大写 / 子句换行 / 条件缩进，[SqlFormatter]）。 */
     fun formatSql() {

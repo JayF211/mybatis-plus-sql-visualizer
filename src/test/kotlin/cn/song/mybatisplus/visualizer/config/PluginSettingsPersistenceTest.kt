@@ -81,6 +81,76 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         }
     }
 
+    fun testLanguageWriteThroughOnSelection() {
+        // M19（用户实测：设置切语言确定后重开仍原样）：平台 Settings 框架 OK 仅对「当前选中页」且
+        // isModified()==true 的 configurable 调用 apply()（反编译 2026.2.1 ConfigurableEditor 验证），
+        // 改完语言切到其他页再确定 → apply 被静默跳过 → 写穿保证选中即持久化、不依赖 apply 链路。
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.language
+        try {
+            settings.state.language = "zh"
+            val panel = PluginSettingsPanel(settings)
+            panel.selectLanguage("en")   // 模拟用户在下拉中选择 English——不调用 apply()
+            assertEquals("写穿后 state.language 应立即为 en（不依赖 apply 链路）", "en", settings.state.language)
+        } finally {
+            settings.state.language = old
+        }
+    }
+
+    fun testLanguageWriteThroughApplyEnabledAndIdempotent() {
+        // M19.1（用户实测：写穿后「应用」按钮灰掉，只能点确定）：
+        // 平台 Apply 按钮启用 = configurable.isModified()——写穿后表单与配置已一致，
+        // 靠 languagePending「待应用」标记保持 isModified()=true；apply() 消费标记后幂等。
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.language
+        try {
+            settings.state.language = "zh"
+            val panel = PluginSettingsPanel(settings)
+            panel.selectLanguage("en")
+            assertEquals("写穿后 state.language 已为 en", "en", settings.state.language)
+            assertTrue("写穿后 Apply 应可用（isModified()=true）", panel.isModified())
+            assertTrue("apply() 应报告语言变更（pending 消费）", panel.apply())
+            assertFalse("再次 apply() 幂等（返回 false）", panel.apply())
+            assertFalse("应用后 isModified() 恢复 false（Apply 灰属正常）", panel.isModified())
+            assertEquals("state.language 保持 en", "en", settings.state.language)
+            panel.selectLanguage("en")   // 重复选同值：写穿守卫应 no-op（不重新置 pending）
+            assertFalse("重复选同值不重新置 pending", panel.isModified())
+        } finally {
+            settings.state.language = old
+        }
+    }
+
+    fun testLanguageWriteThroughRefreshesCheckboxTexts() {
+        // M19.2（用户实测：切换语言后右侧复选框文本仍中文、确定重开才变）：
+        // 复选框为字段实例（构造时按当时语言固化文本），rebuild 重建布局不会更新其文本——
+        // 修复：文本在 buildRows 内每轮重设。本用例验证 zh→en rebuild 后全部复选框为英文。
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.language
+        try {
+            settings.state.language = "zh"
+            val panel = PluginSettingsPanel(settings)
+            // 模拟用户选择 English（写穿）→ 重建表单（invokeLater 在测试环境不保证执行，直接调用）
+            panel.selectLanguage("en")
+            panel.rebuild()
+            val texts = mutableListOf<String>()
+            collectCheckBoxTexts(panel.getRoot(), texts)
+            val hasCjk = { s: String -> s.any { it.code in 0x4E00..0x9FFF } }
+            assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
+            assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
+            assertEquals("复选框总数应为 4", 4, texts.size)
+        } finally {
+            settings.state.language = old
+        }
+    }
+
+    /** 收集组件树中全部 JCheckBox 文本（M19.2 复选框文案刷新断言辅助）。 */
+    private fun collectCheckBoxTexts(component: java.awt.Component, out: MutableList<String>) {
+        if (component is javax.swing.JCheckBox) out += component.text
+        if (component is java.awt.Container) {
+            component.components.forEach { collectCheckBoxTexts(it, out) }
+        }
+    }
+
     fun testStateRoundTripKeepsTablePrefixSuffix() {
         // T-M16.2-03：表前缀/后缀随 State 持久化往返保留（getState → loadState，模拟 IDE 保存/重启加载）
         val settings = PluginSettings.getInstance()

@@ -78,6 +78,21 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testRefreshResetsModeToSettingsDefault() {
+        // M19.3（用户实测：点刷新后 SQL 仍停留在单行模式）：
+        // 刷新 = 模式复位为与设置「SQL 格式化输出」对齐（默认多行）——手动切到单行后刷新应回多行
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result())
+        panel.toggleCompact()   // 切到单行
+        assertTrue(panel.compactForTest())
+        assertEquals("SELECT id FROM tbl", panel.editorForTest()!!.document.text)
+
+        panel.refreshView()
+        assertFalse("刷新后应恢复默认多行模式", panel.compactForTest())
+        assertEquals("SELECT id\nFROM tbl", panel.editorForTest()!!.document.text)
+        panel.clear()
+    }
+
     fun testCopySqlWithContent() {
         // 无 project 时不弹成功提示（测试环境 Messages 对话框会抛异常）
         val panel = SqlPreviewPanel(null)

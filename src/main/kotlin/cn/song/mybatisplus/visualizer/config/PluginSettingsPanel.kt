@@ -48,8 +48,15 @@ import javax.swing.SwingUtilities
  */
 class PluginSettingsPanel(private val settings: PluginSettings) {
 
-    /** 语言选项（值 + 当前语言下的显示文案；rebuild 时按新语言重建）。 */
-    private class LanguageOption(val value: String, val label: String) {
+    /**
+     * 语言选项（值 + 当前语言下的显示文案；rebuild 时按新语言重建）。
+     *
+     * M19 修复：必须为 data class（按 value 判等）——JDK17 `JComboBox.setSelectedItem` 会以
+     * `equals` 在 model 中查找元素，**找不到则静默 return**（选中不生效、ActionEvent 不触发）；
+     * 原无 equals 覆写（身份判等）时 `reset()`/写穿入口传入的新实例全部匹配失败——选中显示与
+     * 写穿监听一并失效。
+     */
+    private data class LanguageOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
 
@@ -87,6 +94,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
 
+    /**
+     * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
+     * 平台 Apply 按钮启用 = `configurable.isModified()`，无此标记则写穿后 Apply 按钮灰掉
+     * （用户实测反馈）；`apply()` 消费后清除。
+     */
+    private var languagePending = false
+
     /** 快捷键内嵌编辑（M14.1：录制式修改 Convert to SQL 的 KeyboardShortcut，保存写入 Keymap）。 */
     private val shortcutEditor = ShortcutEditor()
 
@@ -101,6 +115,22 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     init {
         buildRows(rootPanel)
         reset()
+        // M19（用户实测：设置切语言确定后重开仍原样——平台 Settings 框架 OK 仅对「当前选中页」且
+        // isModified()==true 的 configurable 调用 apply()，改完语言切到其他页再确定即被静默跳过；
+        // M16.3 roaming 修复只覆盖磁盘持久化链路）：
+        // 语言下拉**写穿式持久化**——选中即写入配置（不依赖 OK→apply 链路），并立即重建表单即时切换。
+        languageCombo.addActionListener {
+            val value = (languageCombo.selectedItem as? LanguageOption)?.value
+            if (value != null && value != settings.state.language) {
+                settings.state.language = value
+                // M19.1：写穿后置「待应用」标记——平台 Apply 按钮启用 = isModified()，无标记则
+                // 应用按钮灰掉（用户实测反馈）；标记在 apply() 时清除（应用/确定后恢复灰属正常）
+                languagePending = true
+                // M19.1：**invokeLater 调度重建**——ActionEvent 派发中途同步修改组件树时
+                // UI 刷新不可靠（用户实测：左侧树即时变、右侧面板不变），延后到派发完成再重建
+                SwingUtilities.invokeLater { rebuild() }
+            }
+        }
     }
 
     /**
@@ -127,11 +157,14 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             gbc.gridy++
         }
 
+        // M19.2：复选框/按钮为**字段实例**（构造时按当时语言固化文本）——rebuild 重建布局只重新
+        // add 同一实例，文本不随语言变（用户实测：切换语言后右侧复选框仍中文、确定重开才变）。
+        // 修复：文本在 buildRows 内每轮（重）设置，rebuild 时随语言即时刷新。
         addRow(MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
-        addRow("", replaceParamsCheck)
-        addRow("", formatCheck)
-        addRow("", gutterIconCheck)
-        addRow("", injectLogicDeleteCheck)
+        addRow("", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
+        addRow("", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
+        addRow("", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
+        addRow("", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
         addRow(MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField)
         addRow(MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField)
         addRow(MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
@@ -140,7 +173,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
                 ?: languageOptions().first()
         })
-        addRow(MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor)
+        addRow(MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
 
         // M14.1 布局优化：底部 weighty 占位，把内容顶到顶部（消除内容区上方空白/居中拉伸）
         gbc.gridx = 0
@@ -177,6 +210,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             add(textField, BorderLayout.CENTER)
             add(editButton, BorderLayout.EAST)
             editButton.addActionListener { captureShortcut() }
+        }
+
+        /** M19.2：语言切换后刷新自身文案（tooltip/按钮；buildRows 每轮调用——字段实例文本构造时固化）。 */
+        fun updateTexts() {
+            textField.toolTipText = MpSqlVisualizerBundle.message("settings.shortcut.tip")
+            editButton.text = MpSqlVisualizerBundle.message("settings.shortcut.edit")
         }
 
         /** 弹出模态录制对话框：聚焦输入框后按下组合键即完成，ESC 取消。 */
@@ -315,6 +354,15 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         rootPanel.repaint()
     }
 
+    /**
+     * M19：语言写穿入口（测试用）——选中语言值，触发与用户下拉选择**同一**写穿路径
+     * （ActionListener → 立即写入配置 + 重建表单）。
+     */
+    internal fun selectLanguage(value: String) {
+        languageCombo.selectedItem = languageOptions().firstOrNull { it.value == value } ?: return
+        // selectedItem 变化会同步触发 ActionListener，写穿与 rebuild 由监听统一处理
+    }
+
     // ------------------------------------------------------------------
     // 配置读写
     // ------------------------------------------------------------------
@@ -326,10 +374,14 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
 
     /**
      * 表单值是否与配置不一致（含快捷键编辑状态）。
+     *
+     * M19.1：语言**写穿**后表单与配置一致，但语言变更尚未「应用」——`languagePending`
+     * 使 `isModified()` 保持 true，Apply 按钮在写穿后仍可点击（平台 Apply 启用 = isModified()）。
      */
     fun isModified(): Boolean {
         val s = settings.state
-        return dialectCombo.selectedItem != s.dialect
+        return languagePending
+            || dialectCombo.selectedItem != s.dialect
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
             || gutterIconCheck.isSelected != s.showGutterIcon
@@ -347,7 +399,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      */
     fun apply(): Boolean {
         val s = settings.state
-        val languageChanged = (languageCombo.selectedItem as? LanguageOption)?.value != s.language
+        // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
+        // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
+        val languageChanged = languagePending || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
         s.dialect = dialectCombo.selectedItem as? String ?: PluginSettings.DEFAULT_DIALECT
         s.replaceParams = replaceParamsCheck.isSelected
         s.formatSql = formatCheck.isSelected
@@ -357,6 +411,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.tableSuffix = tableSuffixField.text.trim()
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
+        languagePending = false
         return languageChanged
     }
 
