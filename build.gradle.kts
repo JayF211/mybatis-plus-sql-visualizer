@@ -80,6 +80,7 @@ tasks {
     // 修复：显式配置 changeNotes（单一来源，与发布内容一致；更新时同步修改此处）。
     patchPluginXml {
         changeNotes = """<ul>
+            <li>M19.4：参数面板布局修复（长参数名自适应宽度 + tooltip 全名）+ 表名配置增强（推断策略 SNAKE/CAMEL、忽略字段名、移除表名前缀后缀、表前缀/后缀多值）</li>
             <li>M19：修复设置语言切换保存失效（写穿式持久化，选中即生效，不再依赖 Settings 确定链路）+ 执行 SQL 移除数据源弹框（直接创建临时文件，编辑器右上角自选数据源后 Ctrl+Enter 执行）</li>
             <li>M18.2：修复插件详情页「最新变化」显示（changeNotes 显式配置）</li>
             <li>M18.1：介绍页新增「问题反馈」入口——点击跳转 Gitee 仓库 Issues 页提交反馈</li>

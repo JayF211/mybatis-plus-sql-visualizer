@@ -51,6 +51,23 @@ class SqlPreviewService(private val project: Project) {
     private val cache = WrapperCache()
 
     /**
+     * T-M19.4（用户实测：表名配置修改后预览不生效——缓存按文件戳失效，设置变更不触发）：
+     * 影响解析结果的表相关设置签名，作为 [WrapperCache] 缓存维度。
+     * 字段：推断策略 / 忽略字段名 / 添加表前缀 / 添加表后缀 / 移除表前缀 / 移除表后缀。
+     */
+    private fun tableConfigSignature(): String {
+        val s = settings?.state
+        return listOf(
+            s?.tableNameInference ?: PluginSettings.INFERENCE_SNAKE,
+            s?.ignoredFields ?: "",
+            s?.tablePrefix ?: "",
+            s?.tableSuffix ?: "",
+            s?.removeTablePrefix ?: "",
+            s?.removeTableSuffix ?: "",
+        ).joinToString("|")
+    }
+
+    /**
      * 全局配置（测试环境未注册 service 时为 null，使用默认值）。
      */
     private val settings: PluginSettings? =
@@ -70,13 +87,23 @@ class SqlPreviewService(private val project: Project) {
         val file = anchor.containingFile ?: return null
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
         // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果
+        // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
+        // （文件戳不变的场景）不再命中旧解析结果
         val resolveVariables = settings?.state?.replaceParams ?: true
-        val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables) {
+        val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables, tableConfigSignature()) {
             WrapperLocator.locateWithTable(anchor, resolveVariables)
+        }
+        // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
+        // 实体文件变化不触发）：命中缓存时校验实体文件戳（@TableName/@TableField 注解来源），
+        // 变更则重算（重算结果由下一次 getOrCompute 写回缓存）
+        val effectiveLocated = if (located != null && !located.entityFileValid()) {
+            WrapperLocator.locateWithTable(anchor, resolveVariables)
+        } else {
+            located
         }
 
         // 1. Wrapper 转换（优先）
-        located?.let { located ->
+        effectiveLocated?.let { located ->
             val table = located.table ?: return null
             val statement = when {
                 // 计数消费：service.count(wrapper) / selectJoinCount(wrapper) / lambdaQuery()...count() → SELECT COUNT(*) FROM ...（保留联表与条件）

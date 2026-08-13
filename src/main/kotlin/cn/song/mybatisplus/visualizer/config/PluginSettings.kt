@@ -60,8 +60,36 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /**
          * 表后缀（T-M16.2-03）：统一加在所有表名**后**（如 device_info + `_log` → `device_info_log`）。
          * 全局语义——`@TableName` 显式表名同样被修饰（文档说明）；空字符串表示不修饰（"清除"即置空）。
+         * T-M19.4：多值升级——`;` 分隔**按序拼接**（`_log;_bak` → `xxx_log_bak`）。
          */
         var tableSuffix: String = "",
+
+        /**
+         * 表名推断策略（T-M19.4）：无 `@TableName` 时实体类名 → 表名的推断方式。
+         * [INFERENCE_SNAKE]（默认，对齐 MP）= 驼峰转下划线；[INFERENCE_CAMEL] = **纯保留驼峰**——
+         * 仅首字母小写、**不去 Entity 后缀**（用户反馈：文案「保留驼峰」与行为一致，
+         * BikeDeviceInfoEntity → bikeDeviceInfoEntity，BikeDeviceInfo → bikeDeviceInfo）。
+         * 仅作用于**无注解推断**——`@TableName` 显式表名不受影响（M19.4-R1）。
+         */
+        var tableNameInference: String = INFERENCE_SNAKE,
+
+        /**
+         * 忽略字段名（T-M19.4）：`;` 分隔的 **Java 字段名**列表——命中字段不进 SELECT 全列展开、
+         * 参数对照、补全列集合（`@TableField(exist=false)` 之外的自行排除手段；两者并存，注解优先）。
+         */
+        var ignoredFields: String = "",
+
+        /**
+         * 移除表名前缀（T-M19.4）：`;` 分隔，最终表名以哪个开头就移除哪个（首个匹配、大小写敏感）。
+         * 作用于**最终表名**（含 `@TableName` 显式表名，M19.4-R1 全局语义）；空字符串不修饰。
+         */
+        var removeTablePrefix: String = "",
+
+        /**
+         * 移除表名后缀（T-M19.4）：`;` 分隔，最终表名以哪个结尾就移除哪个（首个匹配、大小写敏感）。
+         * 作用于**最终表名**（含 `@TableName` 显式表名，M19.4-R1 全局语义）；空字符串不修饰。
+         */
+        var removeTableSuffix: String = "",
     )
 
     private var state = State()
@@ -77,6 +105,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 默认界面语言（M14，用户要求默认中文）。 */
         const val DEFAULT_LANGUAGE = "zh"
+
+        /** 表名推断策略：驼峰转下划线（默认，对齐 MP，`BikeDeviceInfoEntity` → `bike_device_info`）。 */
+        const val INFERENCE_SNAKE = "SNAKE"
+
+        /** 表名推断策略：纯保留驼峰——仅首字母小写、不去 Entity 后缀（`BikeDeviceInfoEntity` → `bikeDeviceInfoEntity`）。 */
+        const val INFERENCE_CAMEL = "CAMEL"
 
         /**
          * 获取全局配置实例。

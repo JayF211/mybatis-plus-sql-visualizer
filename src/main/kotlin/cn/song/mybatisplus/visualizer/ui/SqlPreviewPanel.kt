@@ -458,14 +458,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             })
         }
         paramFields += field
-        // FlowLayout：字段按 preferred 宽度（不随行拉伸），行紧凑
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            add(JBLabel("#$source").apply {
-                preferredSize = Dimension(140, preferredSize.height)
-            })
+        // T-M19.4-01：FlowLayout 间距 (4,2) → (8,6)——参数名较长时视觉"贴太近"（用户实测）
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
+            add(paramLabel(source))
             add(field)
             border = JBUI.Borders.empty(0, 8, 2, 8)
         }
+    }
+
+    /**
+     * 参数行标签（T-M19.4-01，用户实测：`#productInfo.getDicProtocolType()` 这类长参数名被
+     * 固定 140px 标签截断显示不全）：
+     *  - 宽度**按文本自适应**（FontMetrics 计算，夹在 140~300px）——短名不拉伸、长名不截断；
+     *  - 文本超过 300px 上限时 tooltip 展示全名（标签本身截断显示）；
+     *  - 标签超出面板宽度时由 FlowLayout 自然换行（输入框换到下一行）。
+     */
+    private fun paramLabel(source: String): JBLabel = JBLabel("#$source").apply {
+        val text = "#$source"
+        val metrics = getFontMetrics(UIUtil.getLabelFont())
+        val textWidth = metrics.stringWidth(text)
+        preferredSize = Dimension(textWidth.coerceIn(140, 300), preferredSize.height)
+        if (textWidth > 300) toolTipText = text
     }
 
     /** 普通参数值变更：更新回填表并重渲染 SQL。 */
@@ -550,6 +563,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
+
+    /**
+     * T-M19.4-01：第 index 个普通参数行的标签（JBLabel）——布局断言用
+     * （宽度自适应/tooltip 全名）。按 paramPanel 中「含 JBLabel 的 JBPanel 行」定位，
+     * 与 paramFields 的顺序一致（普通参数行按 source 顺序追加）。
+     */
+    internal fun paramRowLabelForTest(index: Int): JBLabel? = paramPanel.components
+        .filterIsInstance<JBPanel<*>>()
+        .filter { row -> row.components.any { it is JBLabel } }
+        .getOrNull(index)
+        ?.components?.filterIsInstance<JBLabel>()?.firstOrNull()
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()

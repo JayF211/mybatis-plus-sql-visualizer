@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 
@@ -85,7 +86,8 @@ object MpjLambdaConverter : WrapperConverter {
             when (call.methodName) {
                 in JOIN_METHODS -> {
                     val join = parseJoin(call, mainAlias) ?: continue
-                    if (collectionChildClasses.any { cls -> NamingStrategy.toSnakeCase(cls) == join.tableName }) continue
+                    // T-M19.4：子表推断走统一入口（策略 + 修饰链），与 join.tableName 已修饰名可比对
+                    if (collectionChildClasses.any { cls -> EntityResolver.inferDecoratedTableName(cls) == join.tableName }) continue
                     joins += join
                 }
                 SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias)?.let { joins += it }
@@ -223,7 +225,8 @@ object MpjLambdaConverter : WrapperConverter {
         }
         if (className.isEmpty()) return null
 
-        val tableName = tableInfo?.tableName ?: NamingStrategy.toSnakeCase(className)
+        // T-M19.4：主表兜底推断走统一入口（策略 + 修饰链，全局语义）
+        val tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className)
         var alias = className.replaceFirstChar { it.lowercaseChar() }
         val onConditions = mutableListOf<Condition>()
 
@@ -384,7 +387,8 @@ object MpjLambdaConverter : WrapperConverter {
      */
     private fun parseCollection(call: WrapperCall, joinCalls: List<WrapperCall>, mainAlias: String): JoinClause? {
         val childClass = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-        val childTable = NamingStrategy.toSnakeCase(childClass)
+        // T-M19.4：子表推断走统一入口（策略 + 修饰链，全局语义）
+        val childTable = EntityResolver.inferDecoratedTableName(childClass)
         val alias = childClass.replaceFirstChar { it.lowercaseChar() }
 
         val subSelect = renderCollectionSubSelect(call, childTable, alias)
@@ -430,7 +434,8 @@ object MpjLambdaConverter : WrapperConverter {
                 // 嵌套 collection（P07 三层关联）：子查询内递归 LEFT JOIN；外键按「孙表.父表名_id = 父表.id」约定（R7 待 MPJ 对照）
                 "collection" -> {
                     val grandChild = (c.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return@forEach
-                    val grandTable = NamingStrategy.toSnakeCase(grandChild)
+                    // T-M19.4：孙表推断走统一入口（策略 + 修饰链，全局语义）
+                    val grandTable = EntityResolver.inferDecoratedTableName(grandChild)
                     val grandAlias = grandChild.replaceFirstChar { it.lowercaseChar() }
                     val grandSub = renderCollectionSubSelect(c, grandTable, grandAlias)
                     nestedJoins += "LEFT JOIN ($grandSub) $grandAlias ON $grandAlias.${alias}_id = $alias.id"

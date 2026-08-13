@@ -5,6 +5,17 @@
 ## [Unreleased]
 
 ### Added
+- M19.4 参数面板布局修复 + 表名配置增强（282 测试全绿）：
+  - **参数面板布局修复（用户实测：长参数名显示不全）**：`buildParamRow` 标签**固定 140px** → **按文本自适应**（FontMetrics 计算宽度，夹在 140~300px，`#productInfo.getDicProtocolType()` 这类长名完整显示）；文本超过 300px 上限时 **tooltip 展示全名**；行间距 `(4, 2)` → `(8, 6)`（视觉不再"贴太近"）；标签超出面板宽度时 FlowLayout 自然换行（输入框换到下一行）
+  - **表名推断策略**（设置新增下拉）：无 `@TableName` 时类名→表名的推断方式——`SNAKE`（默认，对齐 MP 现状：驼峰转下划线，`Entity` 后缀不剥离）/ `CAMEL`（**纯保留驼峰**：仅首字母小写、**不去 Entity 后缀**，`BikeDeviceInfoEntity` → `bikeDeviceInfoEntity`，`BikeDeviceInfo` → `bikeDeviceInfo`）；显式 `@TableName` 不受影响
+  - **忽略字段名**（设置新增文本，`;` 分隔）：按 Java **字段名**匹配，命中字段不进 SELECT 全列展开/参数对照/补全列集合（`@TableField(exist=false)` 之外的自行排除手段；两者并存、注解优先）
+  - **移除表名前缀/后缀**（设置新增两文本，`;` 分隔）：推断表名以哪个开头/结尾就移除哪个（**首个匹配、大小写敏感**；仅作用于推断表名）
+  - **添加表前缀/添加表后缀**：**单值**（用户反馈定稿——不存在多个，恢复 T-M16.2-03 原语义）；修饰链顺序 = 添加前缀 + 移除后缀(移除前缀(表名)) + 添加后缀
+  - **`@TableName` 失效修复（用户实测，两层根因）**：① **缓存**——WrapperCache 按**锚点文件**（wrapper 所在文件）戳失效，实体文件新增/修改 `@TableName` 不触发 → 命中旧解析结果；修复：`LocatedWrapper` 记录**实体文件戳**，命中缓存时校验、变更即重算；② **语义**——显式 `@TableName` 即最终表名、**优先级最高、豁免修饰链**（推断策略与添加/移除前缀后缀均不作用；原 T-M16.2-03「全局语义」按用户反馈收窄为**推断语义**，修饰链仅作用于无注解推断的表名）；回归：`testEntityAnnotationChangeRefreshesPreview`（编辑实体加 @TableName → 预览更新）+ `testLocatedWrapperEntityFileValid`（实体文件变更 → 缓存校验失效，LightPlatform 无法端到端模拟跨文件类型解析，单元覆盖校验逻辑）
+  - **设置修改后预览不生效（用户实测，根因：WrapperCache 按文件戳失效、设置变更不触发）**：缓存键新增**表配置签名**维度（推断策略/忽略字段/添加移除表前缀后缀 6 字段拼接）——设置页修改后**同一文件**再次预览不再命中旧结果（既有测试每次重建文件掩盖了此问题）；新增 `testTableConfigChangeInvalidatesPreviewCache` 回归（同一 service + 同一文件，修复前命中旧缓存失败）
+  - **兜底路径统一走修饰链（推断语义补全）**：实体类不可解析的文本兜底推断（`WrapperLocator.inferEntityFromChain` / `resolveTableInfo`）与 MPJ 子表推断（`MpjLambdaConverter` 主表兜底/collection 子表/孙表/join 比对 4 处）全部改走 `EntityResolver.inferDecoratedTableName`（companion 静态化：推断策略 + 修饰链），此前这些路径绕过配置直接 `toSnakeCase`
+  - **设置页文案与布局（用户反馈调整）**：推断策略选项「保留驼峰（去 Entity 后缀）」→「保留驼峰」且**行为同步改为纯保留驼峰**；「表前缀/表后缀」更名「**添加表前缀/添加表后缀**」并上移至「移除表名前缀/移除表名后缀」上方（行顺序：添加表前缀 → 添加表后缀 → 移除表名前缀 → 移除表名后缀 → 忽略字段名 → 表名推断策略）；移除类 2 栏 + 忽略字段名 **3 个多值输入栏空时显示灰色提示「多个时使用;来分隔」**（JBTextField.emptyText 原生 placeholder，语言切换 rebuild 即时刷新；添加类单值无提示）
+  - 测试：`EntityResolverTableConfigTest`（11 例：推断策略 SNAKE/CAMEL/显式表名不受影响、忽略字段跳过/空白容忍/注解优先、移除首匹配/不匹配保持/大小写敏感、添加单值+移除多值、显式表名同样被修饰）+ `PluginSettingsPersistenceTest` 新字段 round-trip + 面板 reset/apply 联动 + 行顺序/placeholder 断言 + `SqlPreviewPanelTest` 标签宽度自适应/tooltip 断言 + `SqlPreviewServiceTest` 缓存失效回归
 - M18.2 插件「最新变化」显示修复（用户实测：详情页显示停留在 M12 动态条件支持）：
   - **根因链**：① `plugin.xml` 无显式 `<change-notes>`；② IPGP `patchPluginXml` 未配置时自动用 `org.jetbrains.changelog` 从 CHANGELOG.md `[Unreleased]` 注入 change-notes；③ CHANGELOG 存在多个同名 `### Added` 分区，解析器取到**最后一个分区**（M12/M10）→ 注入内容错误；④ 自动注入**覆盖** plugin.xml 手写值
   - **修复**：`build.gradle.kts` `patchPluginXml.changeNotes` **显式配置**（M13~M18.1 十条倒序摘要，单一可信来源，更新时同步改构建脚本）；移除 plugin.xml 手写 change-notes（不生效且误导）

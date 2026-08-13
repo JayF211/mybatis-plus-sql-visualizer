@@ -22,7 +22,11 @@ import com.intellij.psi.PsiWhiteSpace
  *  - `@TableField(exist = false)` 的字段（非表字段）跳过
  *  - T-M16.2-02：字段递归**父类**收集（父类字段在前，对齐 MP 声明顺序语义）——继承实体
  *    （如 `BaseEntity {id, createTime, deleted}`）的 SELECT 全列展开与 @TableLogic/@TableId 识别同样生效
- *  - T-M16.2-03：表前缀/后缀配置（全局语义，`@TableName` 显式表名同样被修饰）
+ *  - T-M16.2-03：表前缀/后缀配置（**推断语义**——仅作用于推断表名；T-M19.4 用户反馈收窄，
+ *    `@TableName` 显式表名即最终表名、优先级最高、豁免修饰）
+ *  - T-M19.4：表名推断策略（无注解时 SNAKE 驼峰转下划线 / CAMEL 纯保留驼峰）、忽略字段名
+ *    （`;` 分隔 Java 字段名）、移除表名前缀/后缀（`;` 分隔首匹配）；添加表前缀/后缀为**单值**
+ *    （用户反馈定稿，不再 `;` 分隔）
  */
 class EntityResolver {
 
@@ -34,11 +38,16 @@ class EntityResolver {
      */
     fun resolve(entityClass: PsiClass): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
-        val tableName = annotationValue(entityClass, TABLE_NAME) ?: NamingStrategy.toSnakeCase(className)
+        // T-M19.4（用户反馈：@TableName 应为最高优先级）：**显式 @TableName 即最终表名**——
+        // 豁免推断策略与修饰链（添加/移除表名前缀后缀仅作用于**推断表名**；
+        // T-M16.2-03 的「全局语义」按用户反馈收窄为推断语义）
+        val tableName = annotationValue(entityClass, TABLE_NAME) ?: decorateTableName(inferTableName(className))
 
         // T-M16.2-02：递归父类收集字段（父类字段在前；@TableLogic/@TableId/@TableField 标注随字段本身生效）
         val fields = collectFieldsIncludingSuper(entityClass)
-        val columns = fields.mapNotNull { field -> resolveColumn(field) }
+        // T-M19.4-03-②：忽略字段名配置（`;` 分隔，按 Java 字段名匹配）——命中字段不进
+        // SELECT 全列展开/参数对照/补全列集合（resolveColumn 返回 null 跳过；@TableField(exist=false) 注解优先）
+        val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames()) }
         // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field；
         // T-M16.2-02 修复：父类字段同样识别，继承实体的 deleted 不再丢失）
         val logicDeleteColumn = fields
@@ -46,9 +55,7 @@ class EntityResolver {
             ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
         // T-M16-05：表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
-        // T-M16.2-03：表前缀/后缀配置（全局语义；设置服务不可用时兜底空字符串——测试环境与未配置时零影响）
-        val prefixed = tablePrefix() + tableName + tableSuffix()
-        return TableInfo(className, prefixed, columns, logicDeleteColumn, comment)
+        return TableInfo(className, tableName, columns, logicDeleteColumn, comment)
     }
 
     /**
@@ -63,20 +70,19 @@ class EntityResolver {
         return superFields + clazz.fields.toList()
     }
 
-    /** T-M16.2-03：表前缀（全局语义；设置服务不可用时兜底空字符串）。 */
-    private fun tablePrefix(): String = runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault("")
-
-    /** T-M16.2-03：表后缀（全局语义；设置服务不可用时兜底空字符串）。 */
-    private fun tableSuffix(): String = runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault("")
-
     /**
-     * 解析单个字段为列信息；非表字段（@TableField(exist=false)）返回 null。
+     * 解析单个字段为列信息；非表字段（@TableField(exist=false) / T-M19.4 忽略字段名配置）返回 null。
      */
-    private fun resolveColumn(field: PsiField): ColumnInfo? {
+    private fun resolveColumn(field: PsiField, ignoredFields: Set<String>): ColumnInfo? {
         val fieldName = field.name
         val tableFieldAnnotation = findAnnotation(field, TABLE_FIELD)
-        // @TableField(exist = false)：非数据库字段，跳过
+        // @TableField(exist = false)：非数据库字段，跳过（注解优先）
         if (annotationAttributeBoolean(tableFieldAnnotation, "exist") == false) {
+            return null
+        }
+        // T-M19.4-03-②：忽略字段名（`;` 分隔，Java 字段名匹配）——与 @TableField(exist=false) 并存
+        // （注解优先）；命中即跳过：SELECT 全列展开、参数对照、补全列集合均不含该字段（M19.4-R3）
+        if (fieldName in ignoredFields) {
             return null
         }
         val columnName = annotationValue(field, TABLE_FIELD)
@@ -289,5 +295,72 @@ class EntityResolver {
         private const val TABLE_FIELD = "com.baomidou.mybatisplus.annotation.TableField"
         private const val TABLE_ID = "com.baomidou.mybatisplus.annotation.TableId"
         private const val TABLE_LOGIC = "com.baomidou.mybatisplus.annotation.TableLogic"
+
+        // ------------------------------------------------------------------
+        // T-M19.4：表名推断策略 + 统一修饰链（companion 静态化——实体类不可解析的兜底路径复用，
+        // 见 [inferDecoratedTableName]，保证「全局语义」在全部推断点一致生效）
+        // ------------------------------------------------------------------
+
+        /**
+         * 无 @TableName 时的表名推断（T-M19.4-03-①）：
+         *  - [PluginSettings.INFERENCE_SNAKE]（默认，对齐 MP）：驼峰转下划线（BikeDeviceInfoEntity → bike_device_info_entity）；
+         *  - [PluginSettings.INFERENCE_CAMEL]：**纯保留驼峰**——仅首字母小写，**不去 Entity 后缀**
+         *    （用户反馈：文案「保留驼峰」与行为一致；BikeDeviceInfoEntity → bikeDeviceInfoEntity，
+         *    BikeDeviceInfo → bikeDeviceInfo）。
+         * 设置服务不可用时兜底默认 SNAKE。
+         */
+        private fun inferTableName(className: String): String {
+            val strategy = runCatching { PluginSettings.getInstance().state.tableNameInference }
+                .getOrDefault(PluginSettings.INFERENCE_SNAKE)
+            return if (strategy == PluginSettings.INFERENCE_CAMEL) {
+                className.replaceFirstChar { it.lowercaseChar() }
+            } else {
+                NamingStrategy.toSnakeCase(className)
+            }
+        }
+
+        /**
+         * T-M19.4-03-③：统一表名修饰链（全局语义——`@TableName` 显式表名同样被修饰，沿用 T-M16.2-03）：
+         * `最终表名 = 添加前缀 + 移除后缀(移除前缀(表名)) + 添加后缀`；
+         *  - 移除前缀/后缀：`;` 分隔，首个匹配（大小写敏感），不匹配则不修饰（M19.4-R2）；
+         *  - 添加前缀/后缀：**单值**（用户反馈定稿，不再 `;` 分隔拼接；T-M16.2-03 原语义）。
+         */
+        private fun decorateTableName(raw: String): String {
+            val removedPrefix = removeTablePrefixList().firstOrNull { raw.startsWith(it) }?.let { raw.removePrefix(it) } ?: raw
+            val removedSuffix = removeTableSuffixList().firstOrNull { removedPrefix.endsWith(it) }?.let { removedPrefix.removeSuffix(it) } ?: removedPrefix
+            return tablePrefix() + removedSuffix + tableSuffix()
+        }
+
+        /**
+         * T-M19.4（用户实测：表名配置在部分路径不生效）：实体类不可解析的**兜底推断**统一入口——
+         * 按配置推断策略（SNAKE/CAMEL）+ 统一修饰链，与 [resolve] 的推断路径语义一致。
+         * WrapperLocator 文本兜底、MpjLambdaConverter 子表推断等全部走此函数（全局语义）。
+         */
+        @JvmStatic
+        fun inferDecoratedTableName(className: String): String = decorateTableName(inferTableName(className))
+
+        /**
+         * T-M19.4：`;` 分隔配置解析为列表（trim + 去空；设置服务不可用时兜底空列表——
+         * 测试环境与未配置时零影响）。
+         */
+        private fun listSetting(get: (PluginSettings.State) -> String): List<String> =
+            runCatching { get(PluginSettings.getInstance().state) }
+                .getOrDefault("")
+                .split(';').map { it.trim() }.filter { it.isNotEmpty() }
+
+        /** T-M16.2-03 全局语义：添加表前缀（**单值**，用户反馈定稿）。 */
+        private fun tablePrefix(): String = runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault("")
+
+        /** T-M16.2-03 全局语义：添加表后缀（**单值**，用户反馈定稿）。 */
+        private fun tableSuffix(): String = runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault("")
+
+        /** T-M19.4：移除表名前缀列表（`;` 分隔，最终表名首个匹配移除）。 */
+        private fun removeTablePrefixList(): List<String> = listSetting { it.removeTablePrefix }
+
+        /** T-M19.4：移除表名后缀列表（`;` 分隔，最终表名首个匹配移除）。 */
+        private fun removeTableSuffixList(): List<String> = listSetting { it.removeTableSuffix }
+
+        /** T-M19.4：忽略字段名集合（`;` 分隔，按 Java 字段名匹配）。 */
+        private fun ignoredFieldNames(): Set<String> = listSetting { it.ignoredFields }.toSet()
     }
 }

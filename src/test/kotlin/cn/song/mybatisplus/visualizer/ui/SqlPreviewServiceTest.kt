@@ -2537,8 +2537,9 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         }
     }
 
-    fun testTablePrefixAppliesToExplicitTableNameAnnotation() {
-        // M16.2-R3 全局语义：@TableName("t_user") 显式表名同样被前缀修饰（文档说明）
+    fun testExplicitTableNameNotDecoratedByPrefix() {
+        // T-M19.4（用户反馈：@TableName 应为最高优先级）：显式 @TableName 即最终表名——
+        // **豁免修饰链**（添加前缀/移除前缀/推断策略均不作用；原 M16.2-R3「全局语义」收窄为推断语义）
         val settings = PluginSettings.getInstance()
         val oldPrefix = settings.state.tablePrefix
         settings.state.tablePrefix = "sys_"
@@ -2562,10 +2563,165 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
                 """.trimIndent(),
             )
             val result = newService().preview(myFixture.file)!!
-            assertEquals("SELECT id FROM sys_t_user WHERE id = 1", result.compactSql.trim())
+            assertEquals("SELECT id FROM t_user WHERE id = 1", result.compactSql.trim())
         } finally {
             settings.state.tablePrefix = oldPrefix
         }
+    }
+
+    fun testTableConfigChangeInvalidatesPreviewCache() {
+        // T-M19.4（用户实测：设置修改后预览不生效——WrapperCache 按文件戳失效，设置变更不触发；
+        // 既有测试每次 configureByText 重建文件（新文件实例 stamp 变化）掩盖了此问题）：
+        // **同一 service 实例 + 同一文件**下修改表名配置后再次 preview，必须反映新配置
+        // （缓存键含表配置签名维度）
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.tablePrefix = ""
+            settings.state.tableSuffix = ""
+            settings.state.removeTablePrefix = ""
+            settings.state.removeTableSuffix = ""
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    }
+
+                    static class DeviceInfoEntity { private Long id; }
+                }
+                """.trimIndent(),
+            )
+            // 同一 service 实例（WrapperCache 复用），文件不重建
+            val service = newService()
+            assertEquals(
+                "SELECT id FROM device_info_entity WHERE id = 1001",
+                service.preview(anchor())!!.compactSql.trim(),
+            )
+
+            // ① 添加前缀 → 缓存必须失效，反映新配置
+            settings.state.tablePrefix = "sys_"
+            assertEquals(
+                "SELECT id FROM sys_device_info_entity WHERE id = 1001",
+                service.preview(anchor())!!.compactSql.trim(),
+            )
+
+            // ② 清空前缀 + 移除后缀 → 再次失效
+            settings.state.tablePrefix = ""
+            settings.state.removeTableSuffix = "_entity"
+            assertEquals(
+                "SELECT id FROM device_info WHERE id = 1001",
+                service.preview(anchor())!!.compactSql.trim(),
+            )
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testEntityAnnotationChangeRefreshesPreview() {
+        // T-M19.4（用户实测：给实体新增 @TableName 后预览仍显示推断表名）：
+        // 编辑实体代码（新增 @TableName）后再次预览必须反映注解（文件变更 → 缓存失效 → 重新解析）。
+        // 注：LightPlatform 无法跨文件解析类型（实体须与 wrapper 同文件），此处同文件场景验证
+        // 「实体注解变更 → 预览更新」用户可见行为；跨文件实体文件的缓存失效逻辑由
+        // LocatedWrapper.entityFileValid 单元测试覆盖（真实 IDE 中实体文件独立存在）
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.tablePrefix = ""
+            settings.state.tableSuffix = ""
+            settings.state.removeTablePrefix = ""
+            settings.state.removeTableSuffix = ""
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    }
+
+                    static class DeviceInfoEntity {
+                        private Long id;
+                    }
+                }
+                """.trimIndent(),
+            )
+            // 同一 service 实例（WrapperCache 复用），同一文件
+            val service = newService()
+            assertEquals(
+                "SELECT id FROM device_info_entity WHERE id = 1001",
+                service.preview(anchor())!!.compactSql.trim(),
+            )
+
+            // 编辑文件：给实体新增 @TableName → 预览必须更新（@TableName 优先级最高，豁免修饰）
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                myFixture.file.viewProvider.document.setText(
+                    """
+                    import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                    public class Demo {
+                        public void query() {
+                            LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                                .eq(DeviceInfoEntity::getId, 1001L);
+                        }
+
+                        @TableName("device_info")
+                        static class DeviceInfoEntity {
+                            private Long id;
+                        }
+                    }
+                    """.trimIndent(),
+                )
+            }
+            com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+            assertEquals(
+                "SELECT id FROM device_info WHERE id = 1001",
+                service.preview(anchor())!!.compactSql.trim(),
+            )
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testLocatedWrapperEntityFileValid() {
+        // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳
+        // 失效、实体文件变化不触发）：LocatedWrapper 记录实体文件戳——实体文件文档变更（stamp
+        // 变化）后 entityFileValid() 返回 false，SqlPreviewService 据此重算（真实 IDE 实体文件
+        // 与 wrapper 文件分离，LightPlatform 无法端到端模拟跨文件类型解析，单元覆盖校验逻辑）
+        myFixture.configureByText("Entity.java", "public class E { private Long id; }")
+        val entityFile = myFixture.file
+        val wrapper = cn.song.mybatisplus.visualizer.psi.LocatedWrapper(
+            chain = cn.song.mybatisplus.visualizer.model.WrapperChain(
+                wrapperType = cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY,
+                entityClass = "E",
+                calls = emptyList(),
+            ),
+            table = null,
+            entityFile = entityFile,
+        )
+        assertTrue("实体文件未变时应有效", wrapper.entityFileValid())
+        // 编辑实体文件（同一 PsiFile 实例、文档变更 → stamp 变化）→ 失效
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            entityFile.viewProvider.document.setText("public class E { private String name; }")
+        }
+        com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+        assertFalse("实体文件变更后应失效", wrapper.entityFileValid())
+        // 无实体文件（文本兜底）恒有效
+        val noFile = cn.song.mybatisplus.visualizer.psi.LocatedWrapper(
+            chain = cn.song.mybatisplus.visualizer.model.WrapperChain(
+                wrapperType = cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY,
+                entityClass = "E",
+                calls = emptyList(),
+            ),
+            table = null,
+        )
+        assertTrue("无实体类（文本兜底）恒有效", noFile.entityFileValid())
     }
 
     // ------------------------------------------------------------------

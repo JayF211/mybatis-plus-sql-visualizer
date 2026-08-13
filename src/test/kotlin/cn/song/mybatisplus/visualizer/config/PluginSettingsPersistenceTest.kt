@@ -188,4 +188,101 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             storage.roamingType,
         )
     }
+
+    fun testStateRoundTripKeepsM19_4TableConfig() {
+        // T-M19.4-02：四项设置增强随 State 持久化往返保留（getState → loadState，模拟 IDE 保存/重启加载）
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.tableNameInference = PluginSettings.INFERENCE_CAMEL
+            settings.state.ignoredFields = "transientField; remark"
+            settings.state.removeTablePrefix = "t_;tmp_"
+            settings.state.removeTableSuffix = "_log;_bak"
+            val saved = settings.getState()
+            assertEquals("getState 应反映最新 tableNameInference", PluginSettings.INFERENCE_CAMEL, saved.tableNameInference)
+            assertEquals("getState 应反映最新 ignoredFields", "transientField; remark", saved.ignoredFields)
+            assertEquals("getState 应反映最新 removeTablePrefix", "t_;tmp_", saved.removeTablePrefix)
+            assertEquals("getState 应反映最新 removeTableSuffix", "_log;_bak", saved.removeTableSuffix)
+            // 模拟重启：新实例 loadState（IDE 从磁盘反序列化后调用）
+            val fresh = PluginSettings()
+            fresh.loadState(saved)
+            assertEquals("loadState 后 tableNameInference 保留", PluginSettings.INFERENCE_CAMEL, fresh.state.tableNameInference)
+            assertEquals("loadState 后 ignoredFields 保留", "transientField; remark", fresh.state.ignoredFields)
+            assertEquals("loadState 后 removeTablePrefix 保留", "t_;tmp_", fresh.state.removeTablePrefix)
+            assertEquals("loadState 后 removeTableSuffix 保留", "_log;_bak", fresh.state.removeTableSuffix)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testPanelResetApplyM19_4RowsSynced() {
+        // T-M19.4-02：设置面板 4 新行 isModified/apply/reset 联动——reset 从 state 回读表单，
+        // 表单与配置一致时 isModified=false、apply 不改变 state（通过 apply 后 state 是否变化
+        // 推断表单与 state 一致性，无法直接访问私有字段）
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.tableNameInference = PluginSettings.INFERENCE_CAMEL
+            settings.state.ignoredFields = "a; b"
+            settings.state.removeTablePrefix = "t_"
+            settings.state.removeTableSuffix = "_log"
+            val panel = PluginSettingsPanel(settings)
+            panel.reset()
+            assertFalse("reset 后表单与 state 一致 → isModified=false", panel.isModified())
+            val before = settings.state.copy()
+            panel.apply()
+            assertEquals("apply 不应改变 state（reset 已同步表单）", before, settings.state)
+            assertFalse("apply 后 isModified 仍为 false", panel.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testPanelTableConfigRowsOrderAndPlaceholderHint() {
+        // T-M19.4（用户反馈调整）：行顺序 = 添加表前缀 → 添加表后缀 → 移除表名前缀 → 移除表名后缀 →
+        // 忽略字段名 → 表名推断策略；仅「移除表名前缀/移除表名后缀/忽略字段名」3 个支持多值的输入栏
+        // 空时显示灰色提示「多个时使用;来分隔」（添加表前缀/后缀为**单值**，无提示），
+        // 语言切换 rebuild 后 placeholder 随语言刷新
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.language = "zh"
+            val panel = PluginSettingsPanel(settings)
+            // 行顺序：根面板直接子组件（GridBagLayout 按 add 顺序）中收集非空行标签文本
+            val labels = panel.getRoot().components
+                .filterIsInstance<com.intellij.ui.components.JBLabel>()
+                .map { it.text }.filter { it.isNotBlank() }
+            val expected = listOf("添加表前缀", "添加表后缀", "移除表名前缀", "移除表名后缀", "忽略字段名", "表名推断策略")
+            val indices = expected.map { labels.indexOf(it) }
+            assertTrue(
+                "行顺序应为 $expected，实际行标签: $labels",
+                indices.none { it < 0 } && indices.zipWithNext().all { (a, b) -> a < b },
+            )
+            // placeholder：仅 3 个支持多值的输入栏（添加表前缀/后缀单值 + shortcut 只读框均不计入）
+            val zhHints = mutableListOf<String>()
+            collectTextFieldEmptyTexts(panel.getRoot(), zhHints)
+            assertEquals("placeholder 应仅设置于 3 个多值输入栏", 3, zhHints.size)
+            assertTrue("placeholder 应为当前语言提示: $zhHints", zhHints.all { it == "多个时使用;来分隔" })
+
+            // 切英文 rebuild 后 placeholder 随语言刷新
+            settings.state.language = "en"
+            panel.rebuild()
+            val enHints = mutableListOf<String>()
+            collectTextFieldEmptyTexts(panel.getRoot(), enHints)
+            assertEquals("英文 placeholder 数量仍为 3", 3, enHints.size)
+            assertTrue("英文 placeholder 应刷新: $enHints", enHints.all { it == "Separate multiple values with ;" })
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    /** 收集组件树中全部 JBTextField 的非空 placeholder 提示（emptyText；辅助断言用）。 */
+    private fun collectTextFieldEmptyTexts(component: java.awt.Component, out: MutableList<String>) {
+        if (component is com.intellij.ui.components.JBTextField && component.emptyText.text.isNotBlank()) {
+            out += component.emptyText.text
+        }
+        if (component is java.awt.Container) {
+            component.components.forEach { collectTextFieldEmptyTexts(it, out) }
+        }
+    }
 }

@@ -66,6 +66,19 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         LanguageOption("AUTO", MpSqlVisualizerBundle.message("settings.language.auto")),
     )
 
+    /**
+     * 表名推断策略选项（值 + 当前语言下的显示文案；rebuild 时按新语言重建）。
+     * 与 [LanguageOption] 同理必须为 data class（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
+     */
+    private data class InferenceOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun inferenceOptions(): Array<InferenceOption> = arrayOf(
+        InferenceOption(PluginSettings.INFERENCE_SNAKE, MpSqlVisualizerBundle.message("settings.tableNameInference.snake")),
+        InferenceOption(PluginSettings.INFERENCE_CAMEL, MpSqlVisualizerBundle.message("settings.tableNameInference.camel")),
+    )
+
     // ------------------------------------------------------------------
     // 表单控件
     // ------------------------------------------------------------------
@@ -88,8 +101,20 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private val tablePrefixField = JBTextField(12)
 
-    /** 表后缀输入框（T-M16.2-03）：统一加在所有表名后，全局语义；清空即恢复原样。 */
+    /** 表后缀输入框（T-M16.2-03）：统一加在所有表名后，全局语义；清空即恢复原样。T-M19.4：多值 `;` 分隔。 */
     private val tableSuffixField = JBTextField(12)
+
+    /** 表名推断策略下拉（T-M19.4）：无 @TableName 时类名→表名的推断方式（SNAKE 默认 / CAMEL 保留驼峰）。 */
+    private val inferenceCombo = JComboBox<InferenceOption>()
+
+    /** 忽略字段名输入框（T-M19.4）：`;` 分隔的 Java 字段名——命中字段不进 SQL（SELECT 展开/补全/参数对照）。 */
+    private val ignoredFieldsField = JBTextField(12)
+
+    /** 移除表名前缀输入框（T-M19.4）：`;` 分隔，最终表名以哪个开头就移除哪个（首个匹配）。 */
+    private val removeTablePrefixField = JBTextField(12)
+
+    /** 移除表名后缀输入框（T-M19.4）：`;` 分隔，最终表名以哪个结尾就移除哪个（首个匹配）。 */
+    private val removeTableSuffixField = JBTextField(12)
 
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
@@ -165,8 +190,36 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         addRow("", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
         addRow("", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
         addRow("", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
-        addRow(MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField)
-        addRow(MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField)
+        // 添加表前缀/表后缀：**单值**（用户反馈定稿，不存在多个——无 placeholder 提示；tooltip 保留）
+        addRow(MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
+            toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
+        })
+        addRow(MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField.apply {
+            toolTipText = MpSqlVisualizerBundle.message("settings.tableSuffix.tip")
+        })
+        // T-M19.4（用户要求）：行顺序 = 添加表前缀 → 添加表后缀 → 移除表名前缀 → 移除表名后缀 →
+        // 忽略字段名 → 表名推断策略；移除类 2 栏 + 忽略字段名共 3 个输入栏支持多值（`;` 分隔），
+        // 空时显示灰色提示「多个时使用;来分隔」（JBTextField.emptyText 原生 placeholder；
+        // tooltip/emptyText 均在 buildRows 内每轮重设——rebuild 时随语言即时刷新，同 M19.2 复选框文案修复）
+        addRow(MpSqlVisualizerBundle.message("settings.removeTablePrefix"), removeTablePrefixField.apply {
+            toolTipText = MpSqlVisualizerBundle.message("settings.removeTablePrefix.tip")
+            emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+        })
+        addRow(MpSqlVisualizerBundle.message("settings.removeTableSuffix"), removeTableSuffixField.apply {
+            toolTipText = MpSqlVisualizerBundle.message("settings.removeTableSuffix.tip")
+            emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+        })
+        addRow(MpSqlVisualizerBundle.message("settings.ignoredFields"), ignoredFieldsField.apply {
+            toolTipText = MpSqlVisualizerBundle.message("settings.ignoredFields.tip")
+            emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+        })
+        addRow(MpSqlVisualizerBundle.message("settings.tableNameInference"), inferenceCombo.apply {
+            model = DefaultComboBoxModel(inferenceOptions())
+            toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
+            // 选中当前配置值（按 value 匹配，SNAKE 兜底）
+            selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
+                ?: inferenceOptions().first()
+        })
         addRow(MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
             model = DefaultComboBoxModel(languageOptions())
             // 选中当前配置值（按 value 匹配，zh 兜底）
@@ -388,6 +441,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || tablePrefixField.text.trim() != s.tablePrefix
             || tableSuffixField.text.trim() != s.tableSuffix
+            || (inferenceCombo.selectedItem as? InferenceOption)?.value != s.tableNameInference
+            || ignoredFieldsField.text.trim() != s.ignoredFields
+            || removeTablePrefixField.text.trim() != s.removeTablePrefix
+            || removeTableSuffixField.text.trim() != s.removeTableSuffix
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
             || shortcutEditor.shortcut != currentShortcut()
     }
@@ -409,6 +466,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.injectLogicDelete = injectLogicDeleteCheck.isSelected
         s.tablePrefix = tablePrefixField.text.trim()
         s.tableSuffix = tableSuffixField.text.trim()
+        s.tableNameInference = (inferenceCombo.selectedItem as? InferenceOption)?.value ?: PluginSettings.INFERENCE_SNAKE
+        s.ignoredFields = ignoredFieldsField.text.trim()
+        s.removeTablePrefix = removeTablePrefixField.text.trim()
+        s.removeTableSuffix = removeTableSuffixField.text.trim()
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
         languagePending = false
@@ -427,6 +488,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         injectLogicDeleteCheck.isSelected = s.injectLogicDelete
         tablePrefixField.text = s.tablePrefix
         tableSuffixField.text = s.tableSuffix
+        inferenceCombo.selectedItem = inferenceOptions().firstOrNull { it.value == s.tableNameInference }
+            ?: inferenceOptions().first()
+        ignoredFieldsField.text = s.ignoredFields
+        removeTablePrefixField.text = s.removeTablePrefix
+        removeTableSuffixField.text = s.removeTableSuffix
         languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
         shortcutEditor.shortcut = currentShortcut()
     }

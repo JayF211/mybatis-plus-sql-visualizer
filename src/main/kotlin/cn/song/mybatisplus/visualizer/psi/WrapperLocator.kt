@@ -34,11 +34,22 @@ import com.intellij.psi.util.PsiTreeUtil
  *
  * @param chain Wrapper 调用链
  * @param table 实体解析的表信息（实体类缺失时为 null）
+ * @param entityFile 实体类所在文件（@TableName/@TableField 注解来源；文本兜底无实体类时为 null）
  */
 data class LocatedWrapper(
     val chain: WrapperChain,
     val table: TableInfo?,
-)
+    val entityFile: com.intellij.psi.PsiFile? = null,
+) {
+    /** T-M19.4：解析时的实体文件修改戳——缓存命中时校验（实体文件变更即失效重算）。 */
+    val entityFileStamp: Long = entityFile?.modificationStamp ?: -1L
+
+    /**
+     * T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效、
+     * 实体文件变化不触发）：实体文件是否仍与解析时一致；无实体类（文本兜底）视为有效。
+     */
+    fun entityFileValid(): Boolean = entityFile == null || entityFile.modificationStamp == entityFileStamp
+}
 
 /**
  * Wrapper 定位器（M1-02，F-01 入口）：从光标所在元素定位 Wrapper 调用链。
@@ -231,6 +242,7 @@ object WrapperLocator {
         return LocatedWrapper(
             chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed),
             table = table,
+            entityFile = entityClass?.containingFile,
         )
     }
 
@@ -321,6 +333,7 @@ object WrapperLocator {
                 updateEntityConsumed = updateEntityConsumed,
             ),
             table = table,
+            entityFile = entityClass?.containingFile,
         )
     }
 
@@ -366,13 +379,13 @@ object WrapperLocator {
         // resolve 优先（真实 IDE）：@TableName/@TableField 注解解析
         resolvedClass?.let { return EntityResolver().resolve(it) }
 
-        // 文本兜底：类名 snake_case 表名 + getter 属性列（与既有命名策略兜底一致）
+        // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
         val className = refs.firstNotNullOfOrNull { it.first } ?: return null
         val columns = refs.map { it.second }.distinct()
             .map { ColumnInfo(fieldName = it, columnName = NamingStrategy.toSnakeCase(it)) }
         return TableInfo(
             entityClassName = className,
-            tableName = NamingStrategy.toSnakeCase(className),
+            tableName = EntityResolver.inferDecoratedTableName(className),
             columns = columns,
         )
     }
@@ -759,13 +772,14 @@ object WrapperLocator {
     /**
      * 解析实体表信息；实体类不可解析时，用类型参数类名按命名策略推断表名
      * （列名由 getter → 命名策略兜底，见 [cn.song.mybatisplus.visualizer.psi.ArgResolver.resolveLambdaColumn]）。
+     * T-M19.4：兜底推断走统一入口（策略 + 修饰链，全局语义，与 [EntityResolver.resolve] 一致）。
      */
     private fun resolveTableInfo(entityClass: PsiClass?, typeArgName: String?): TableInfo? {
         entityClass?.let { return EntityResolver().resolve(it) }
         val name = typeArgName ?: return null
         return TableInfo(
             entityClassName = name,
-            tableName = NamingStrategy.toSnakeCase(name),
+            tableName = EntityResolver.inferDecoratedTableName(name),
             columns = emptyList(),
         )
     }

@@ -118,6 +118,30 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testParamRowLabelWidthAdaptsAndTooltipForLongNames() {
+        // T-M19.4-01（用户实测：`#productInfo.getDicProtocolType()` 这类长参数名被固定 140px
+        // 标签截断显示不全）：标签宽度按文本自适应（FontMetrics 计算，夹在 140~300px）；
+        // 文本超过 300px 上限时 tooltip 展示全名
+        val panel = SqlPreviewPanel(project)
+        val short = "id"
+        val medium = "productInfo.getDicProtocolType()"   // 用户实测场景：约 200px，固定 140px 时截断
+        val long = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo()"
+        panel.showResult(result(params = listOf(short, medium, long)))
+        val shortLabel = panel.paramRowLabelForTest(0)!!
+        val mediumLabel = panel.paramRowLabelForTest(1)!!
+        val longLabel = panel.paramRowLabelForTest(2)!!
+        // 短名：宽度按下限 140px（不再小于 140）
+        assertEquals("短参数标签宽度下限 140", 140, shortLabel.preferredSize.width)
+        // 用户实测场景：宽度按文本自适应（>140 不再固定 140 截断，且不超 300 上限）
+        assertTrue("中等长度参数标签宽度按文本自适应（>140）", mediumLabel.preferredSize.width > 140)
+        assertTrue("中等长度参数标签宽度不超过 300", mediumLabel.preferredSize.width <= 300)
+        // 超长名：宽度夹在 300 上限 + tooltip 全名；短名不设 tooltip
+        assertEquals("超长参数标签宽度上限 300", 300, longLabel.preferredSize.width)
+        assertEquals("超长参数 tooltip 应为全名", "#$long", longLabel.toolTipText)
+        assertNull("短参数不设 tooltip", shortLabel.toolTipText)
+        panel.clear()
+    }
+
     // ------------------------------------------------------------------
     // M9：参数回填 / 可编辑 / 补全上下文
     // ------------------------------------------------------------------
