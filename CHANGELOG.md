@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### Added
+- M18.1 问题快速反馈入口：
+  - `plugin.xml <description>` 末尾追加「问题反馈」链接（`<a>` 跳转 Gitee 仓库 Issues 页，双语文案）；IDE 插件管理页与 Marketplace 网页版均可点击
+  - `README.md` 联系作者区块补充 Issues 提交反馈引导
 - M18 插件介绍页底部作者微信 + 交流群二维码：
   - `plugin.xml <description>` 末尾追加双语「联系作者」区块（`<img>` 外链 Gitee raw 直链——base64/相对路径在插件描述中不可用，官方推荐外部 URL）；IDE 插件管理页（已安装/浏览市场）与 Marketplace 网页版展示
   - `README.md` 末尾新增「📞 联系作者」表格（仓库相对路径渲染）

@@ -117,3 +117,5 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 |----------|--------|
 | ![微信](docs/images/wechat-qr.png) | ![交流群](docs/images/group-qr.png) |
 
+> 🐛 遇到问题或有建议？请在 [Issues](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues) 提交反馈。
+

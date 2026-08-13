@@ -54,6 +54,8 @@
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/wechat-qr.png" width="220" height="220"/>
         <p>Scan to join the WeChat group / 扫码加入交流群</p>
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/group-qr.png" width="220" height="220"/>
+        <!-- M18.1 问题反馈入口：跳转仓库 Issues 页（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
+        <p>Found an issue? Please report it at <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues">Gitee Issues</a> / 遇到问题？请到仓库 Issues 页提交反馈</p>
         ]]></description>
 
     <!-- 插件兼容性声明
