@@ -73,16 +73,20 @@ class PluginDistributionSelfCheckTest {
     }
 
     @Test
-    fun `pluginXml_configurable不声明bundle与key`() {
-        // M16.1：displayName 由 getDisplayName() 动态返回（跟随插件语言）；key 属性由 IDE 默认 locale
-        // 解析、不跟随插件语言，且与 getDisplayName 双写易冲突
+    fun `pluginXml_configurable声明displayName或key_匹配getDisplayName覆写`() {
+        // M16.1 修正：覆写 getDisplayName() 的 Configurable 必须声明 displayName 或 key 属性
+        // （Plugin DevKit 验证规则，缺失报错 "Define 'displayName' or 'key' attributes matching..."）；
+        // 声明 bundle+key（key 由 IDE 默认 locale 解析，getDisplayName 覆写保留作动态兜底）
         val xml = resourceText("META-INF/plugin.xml")
         val noComments = xml.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
         val configurableSection = noComments.substringAfter("applicationConfigurable", "")
         assertTrue(
-            "applicationConfigurable 不应声明 bundle/key 属性",
-            !configurableSection.contains("bundle=") && !configurableSection.contains("key="),
+            "applicationConfigurable 应声明 displayName 或 key 属性（匹配 getDisplayName 覆写）",
+            configurableSection.contains("key=") || configurableSection.contains("displayName="),
         )
+        if (configurableSection.contains("key=")) {
+            assertTrue("声明 key 时应同时声明 bundle", configurableSection.contains("bundle="))
+        }
     }
 
     @Test

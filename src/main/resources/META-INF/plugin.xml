@@ -60,10 +60,13 @@
 
         <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer
              （官方规范：必须用 applicationConfigurable 注册；com.intellij.configurable 为 abstract EP 不可直接注册；
-              M16.1：displayName 由 getDisplayName() 动态返回（跟随插件语言切换），不声明 bundle+key——
-              key 属性由 IDE 默认 locale 解析、不跟随插件语言，且与 getDisplayName 双写易冲突） -->
+              M16.1 修正：覆写 getDisplayName() 的 Configurable 必须声明 displayName 或 key 属性
+              （Plugin DevKit 验证规则，缺失报错），故声明 bundle+key——key 由 IDE 默认 locale 解析；
+              getDisplayName() 覆写保留作动态兜底（插件语言 zh/en 手动切换时以代码为准） -->
         <applicationConfigurable parentId="tools"
                                  id="cn.song.mybatisplus.visualizer.settings"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
