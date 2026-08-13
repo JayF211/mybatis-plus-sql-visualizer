@@ -5,10 +5,11 @@
 ## [Unreleased]
 
 ### Added
-- M18.2 变更说明补全（`<change-notes>`）：
-  - 根因：`plugin.xml` 从未维护 `<change-notes>`，市场发布停留在 v1.6/M12——IDE 插件管理页与市场页「最新变化」一直显示旧文案
-  - 修复：`plugin.xml` 新增 `<change-notes>`（HTML 白名单 ul/li），覆盖自 v1.6/M12 以来 M13~M18.1 全部变更摘要（倒序）；任何分发渠道（本地安装/市场浏览）均显示最新变更
-  - 注意：市场页面仍显示旧版需**发布新版本**（`./gradlew verifyPlugin buildPlugin` 已通过；上传 zip 或 publishPlugin 时 change notes 自动取自 plugin.xml）
+- M18.2 插件「最新变化」显示修复（用户实测：详情页显示停留在 M12 动态条件支持）：
+  - **根因链**：① `plugin.xml` 无显式 `<change-notes>`；② IPGP `patchPluginXml` 未配置时自动用 `org.jetbrains.changelog` 从 CHANGELOG.md `[Unreleased]` 注入 change-notes；③ CHANGELOG 存在多个同名 `### Added` 分区，解析器取到**最后一个分区**（M12/M10）→ 注入内容错误；④ 自动注入**覆盖** plugin.xml 手写值
+  - **修复**：`build.gradle.kts` `patchPluginXml.changeNotes` **显式配置**（M13~M18.1 十条倒序摘要，单一可信来源，更新时同步改构建脚本）；移除 plugin.xml 手写 change-notes（不生效且误导）
+  - **验证**：完整构建链（jar → composedJar → prepareSandbox → buildPlugin）后解压 zip 核对 jar 内 change-notes = 新内容
+  - **附带发现**：`-x prepareSandbox` 跳过时 buildPlugin 从沙盒残留 jar 打包（zip 内为旧内容）——验证产物必须走完整构建链；沙盒 jar 被 IDE 进程占用时 prepareSandbox 报文件锁错误，释放后正常
 - M18.1 问题快速反馈入口：
   - `plugin.xml <description>` 末尾追加「问题反馈」链接（`<a>` 跳转 Gitee 仓库 Issues 页，双语文案）；IDE 插件管理页与 Marketplace 网页版均可点击
   - `README.md` 联系作者区块补充 Issues 提交反馈引导
@@ -17,6 +18,10 @@
   - `README.md` 末尾新增「📞 联系作者」表格（仓库相对路径渲染）
   - 二维码成品图：裁剪主体 + 缩放 220×220 + 压缩（44.6KB / 27KB），入库 `docs/images/`（`.gitignore` 放行 `docs/images/`）
   - 注意：二维码为**限时码**（群码 8月20日前有效），换码后重跑图片处理替换入库文件即可（URL 不变，无需改描述）
+- M17.4 按钮一行化（用户实测反馈，260 测试全绿）：
+  - **弹窗底部按钮区一行三个**：「执行 SQL | 复制 SQL | 取消」（`SqlPreviewDialog.createActions`——执行 SQL/复制 SQL 为 DialogWrapperAction，取消为 cancelAction）
+  - 根因：面板底部栏按钮与弹窗 DialogWrapper 自带按钮区（复制 SQL + 取消）叠加成两行；**移除面板底部栏**，按钮统一由弹窗 action 区提供（面板 `executeSql()` 改 internal 供弹窗调用）
+  - bundle：删除废弃的 `dialog.copy.button`（弹窗复制改复用 `panel.copySql`）
 - M17.3 执行 SQL 按钮位置修正（用户明确要求，260 测试全绿）：
   - 「执行 SQL」「复制 SQL」两个按钮在**面板右下角同一行**（底部栏右对齐），执行 SQL 在左、复制 SQL 在右；
   - 顶部工具栏仅保留：单行多行切换 / 格式化 / 刷新（**顶部无复制按钮**）；

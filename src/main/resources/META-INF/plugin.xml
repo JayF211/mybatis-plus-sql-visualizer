@@ -58,23 +58,9 @@
         <p>Found an issue? Please report it at <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues">Gitee Issues</a> / 遇到问题？请到仓库 Issues 页提交反馈</p>
         ]]></description>
 
-    <!-- 插件变更说明（Marketplace 与 IDE 插件管理页「最新变化」展示；HTML 有限白名单 ul/li/b）——
-         此前缺失导致各渠道显示停留在市场发布时的旧文案；内容覆盖自上次发布（v1.6/M12）以来的全部变更 -->
-    <change-notes><![CDATA[
-        <ul>
-            <li>M18.1：介绍页新增「问题反馈」入口——点击跳转 Gitee 仓库 Issues 页提交反馈</li>
-            <li>M18：插件介绍页底部展示作者微信与交流群二维码（IDE 插件管理页与市场页面均可显示）</li>
-            <li>M17：「执行 SQL」按钮——预览面板选择数据源后自动创建临时 .sql 文件（Database 控制台绑定数据源），Ctrl+Enter 执行；兼容 IDEA 2025.3+，Community 版自动隐藏</li>
-            <li>M16.3：修复设置语言切换保存失效（roaming 契约）、补全注释不显示（builder 返回值丢弃）、SELECT 空列名三处缺陷</li>
-            <li>M16.2：SQL 补全三处回归修复 + 实体父类字段参与补全 + 表前缀/表后缀配置</li>
-            <li>M16.1：修复中英文切换保存失效（移除 PluginSettings 双注册）</li>
-            <li>M16：SQL 面板字段补全 + 注释提示（@Schema/@ApiModelProperty 四级优先级；位置感知：FROM 后提示表名、WHERE 后提示列名）</li>
-            <li>M15：官方 API 全覆盖（union/selectSub/子查询条件/逻辑删除控制等）+ 服务链约 264 处真实用法 + 逻辑删除注入 + 字符串版 QueryWrapper/UpdateWrapper</li>
-            <li>M14：设置页增强（界面语言切换/快捷键录制/表前缀后缀）+ 弹窗自适应与尺寸记忆 + 插件名统一</li>
-            <li>M13：动态条件简化（复选框纯手动）+ LIKE 自动拼百分号 + 字段类型推断引号</li>
-        </ul>
-    ]]></change-notes>
-
+    <!-- 插件变更说明由 build.gradle.kts patchPluginXml.changeNotes 注入（M18.2）——
+         此处不写 change-notes：patchPluginXml 自动注入会覆盖显式值，且 changelog 插件从
+         CHANGELOG.md [Unreleased] 自动提取会取错分区（多 ### Added），显式配置在构建脚本 -->
     <!-- 插件兼容性声明
          （M14.7 动态插件支持）：仅依赖 com.intellij.java（内置模块，常驻加载）；
          移除 org.jetbrains.kotlin 运行时依赖——本插件不处理 Kotlin PSI，该依赖为模板遗留，

@@ -72,4 +72,24 @@ tasks {
     runIde {
         autoReload = true
     }
+
+    // M18.2 变更说明修复（用户实测：插件详情页「最新变化」显示停留在 M12）——
+    // 根因：patchPluginXml 未显式配置时，org.jetbrains.changelog 自动从 CHANGELOG.md [Unreleased]
+    // 注入 change-notes；本 CHANGELOG 存在多个同名 ### Added 分区，解析器取到最后一个分区
+    // （M12/M10），且自动注入会覆盖 plugin.xml 中手写的 change-notes。
+    // 修复：显式配置 changeNotes（单一来源，与发布内容一致；更新时同步修改此处）。
+    patchPluginXml {
+        changeNotes = """<ul>
+            <li>M18.1：介绍页新增「问题反馈」入口——点击跳转 Gitee 仓库 Issues 页提交反馈</li>
+            <li>M18：插件介绍页底部展示作者微信与交流群二维码（IDE 插件管理页与市场页面均可显示）</li>
+            <li>M17：「执行 SQL」按钮——预览面板选择数据源后自动创建临时 .sql 文件（Database 控制台绑定数据源），Ctrl+Enter 执行；兼容 IDEA 2025.3+，Community 版自动隐藏</li>
+            <li>M16.3：修复设置语言切换保存失效（roaming 契约）、补全注释不显示（builder 返回值丢弃）、SELECT 空列名三处缺陷</li>
+            <li>M16.2：SQL 补全三处回归修复 + 实体父类字段参与补全 + 表前缀/表后缀配置</li>
+            <li>M16.1：修复中英文切换保存失效（移除 PluginSettings 双注册）</li>
+            <li>M16：SQL 面板字段补全 + 注释提示（@Schema/@ApiModelProperty 四级优先级；位置感知：FROM 后提示表名、WHERE 后提示列名）</li>
+            <li>M15：官方 API 全覆盖（union/selectSub/子查询条件/逻辑删除控制等）+ 服务链约 264 处真实用法 + 逻辑删除注入 + 字符串版 QueryWrapper/UpdateWrapper</li>
+            <li>M14：设置页增强（界面语言切换/快捷键录制/表前缀后缀）+ 弹窗自适应与尺寸记忆 + 插件名统一</li>
+            <li>M13：动态条件简化（复选框纯手动）+ LIKE 自动拼百分号 + 字段类型推断引号</li>
+        </ul>"""
+    }
 }
