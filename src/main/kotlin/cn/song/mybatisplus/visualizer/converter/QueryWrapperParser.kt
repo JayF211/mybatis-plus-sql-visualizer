@@ -56,6 +56,8 @@ class QueryWrapperParser(
         var having: Condition? = null
         val orderBy = mutableListOf<OrderByItem>()
         var limit: LimitClause? = null
+        var rawFirst: String? = null
+        var comment: String? = null
         var distinct = false
         var orPending = false
 
@@ -147,6 +149,9 @@ class QueryWrapperParser(
                     orderBy += orderItems(columns, if (asc) ascValue.unquoted == "true" else true)
                 }
                 "last" -> limit = parseLimit(call)
+                // first / comment（官方 API，M15 增补）：SQL 最前片段与注释原样透传
+                "first" -> rawFirst = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
+                "comment" -> comment = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
 
                 // ---------- 逻辑分组 ----------
                 // 无参 or()（P14）：与前一条件组成 OR 分组（分隔符）；有参 and/or → 嵌套 lambda 分组
@@ -181,6 +186,8 @@ class QueryWrapperParser(
             having = having,
             orderBy = orderBy,
             limit = limit,
+            rawFirst = rawFirst,
+            comment = comment,
         )
     }
 
@@ -236,11 +243,29 @@ class QueryWrapperParser(
     // 各操作解析
     // ------------------------------------------------------------------
 
-    /** 二元比较：`column op value`。 */
+    /** 二元比较：`column op value`；子查询形态 `column op (SELECT ...)`（官方 sub-query API，M15 增补）。 */
     private fun simple(call: WrapperCall, op: String): Condition? {
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
+        // 子查询条件：eq(col, SubEntity.class, w -> w.select(...).eq(...)) → col = (SELECT ...)
+        if (call.args.size >= 3 && call.args.getOrNull(2) is WrapperArg.NestedArg) {
+            return subQueryCondition(call, op)
+        }
         val value = argAsValue(call.args.getOrNull(1)) ?: return null
         return Condition.Simple(column, op, value)
+    }
+
+    /**
+     * 子查询条件（官方 sub-query API，1.5.2+）：`eq(col, SubEntity.class, w -> w.select(...).between(...))`
+     * → `col op (SELECT ... FROM sub_entity WHERE ...)`。子查询用**独立解析器**（不继承主表别名前缀），
+     * 渲染为单行（compact）嵌入条件。
+     */
+    private fun subQueryCondition(call: WrapperCall, op: String): Condition? {
+        val column = argAsColumn(call.args.firstOrNull()) ?: return null
+        val subTable = (call.args.getOrNull(1) as? WrapperArg.EntityRefArg)?.tableInfo ?: return null
+        val nested = call.args.getOrNull(2) as? WrapperArg.NestedArg ?: return null
+        val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
+        val subSql = SqlGenerator.generate(subStatement, compact = true)
+        return Condition.Raw("${column.qualifiedName} $op ($subSql)")
     }
 
     /** LIKE 条件。 */
@@ -250,9 +275,13 @@ class QueryWrapperParser(
         return Condition.Like(column, negated, value, position)
     }
 
-    /** IN 列表条件：`column IN (v1, v2, ...)`。 */
+    /** IN 列表条件：`column IN (v1, v2, ...)`；子查询形态 `column IN (SELECT ...)`（官方 sub-query API）。 */
     private fun inList(call: WrapperCall, negated: Boolean): Condition? {
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
+        // 子查询形态：in(col, SubEntity.class, w -> ...) → col IN (子查询)
+        if (call.args.size >= 3 && call.args.getOrNull(2) is WrapperArg.NestedArg) {
+            return subQueryCondition(call, if (negated) "NOT IN" else "IN")
+        }
         val values = call.args.drop(1).mapNotNull { argAsValue(it) }
         if (values.isEmpty()) return null
         return Condition.In(column, negated, values)

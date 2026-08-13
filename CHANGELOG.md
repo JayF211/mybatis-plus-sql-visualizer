@@ -5,6 +5,12 @@
 ## [Unreleased]
 
 ### Added
+- M15 官方 API 增补 2（220 测试全绿）：
+  - **comment / first**：`comment("...")` SQL 注释追加末尾、`first("...")` SQL 最前片段（SelectStatement.rawFirst/comment 模型）
+  - **setAlias**：MPJ 主表别名方法（优先级：构造别名 > setAlias > 默认 t）
+  - **子查询条件**（官方 sub-query API）：`eq/ne/gt/ge/lt/le/in/notIn(col, SubEntity.class, w -> ...)` → `col op (SELECT ... FROM sub_entity WHERE ...)`，子查询用独立解析器渲染（不继承主表别名）
+  - **select(Class, Predicate) / selectFilter**：谓词不可静态求值，按全列近似渲染
+  - **selectJoinMaps / selectJoinPage / selectJoinMapsPage** 消费验证（渲染同为 SELECT）
 - M15 官方 API 全覆盖（基于官方文档 + 3.5.15/1.5.6 源码核实的《官方 API 清单》，217 测试全绿）：
   - **MP 条件方法补齐**：`notLikeLeft`/`notLikeRight`、`inSql`/`notInSql`、`eqSql`/`gtSql`/`geSql`/`ltSql`/`leSql`（SQL 片段比较）、`nested`（独立括号块）、`not(consumer)`（NOT 包裹）、`func(consumer)`（条件展开）、`orderBy(condition, isAsc, cols)`（双布尔前缀解析）；`setIncrBy`/`setDecrBy`（`SET col = col ± val`）
   - **MPJ 补齐**：`selectSum`/`selectMin`/`selectAvg`/`selectLen`（含别名重载）、`fullJoin`、`join(自定义关键字, ...)`、字符串 SQL join（`leftJoin("sql", args)` 含 `{i}` 参数）、`selectAll(Class, prefix, exclude...)`、`applyFunc`（条件版 selectFunc，`%s`+`{0}` 占位）、`eqIfExists` 等 IfExists 条件族、`selectAsClass`（属性名交集映射）；链式终结点补充 `first`/`mapOne`/`mapFirst`/`mapList`/`mapPage`

@@ -2123,6 +2123,118 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testOfficialApiFirstAndComment() {
+        // 官方 API（M15 增补）：first（SQL 最前片段）与 comment（SQL 注释）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    orderService.lambdaQuery()
+                        .first("/*+ hint */")
+                        .eq(OrderEntity::getId, 1001L)
+                        .comment("biz=order")
+                        .one();
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("first/comment 应产出预览结果", result)
+        assertEquals(
+            """
+            /*+ hint */ SELECT id
+            FROM order_entity
+            WHERE id = 1001
+            /* biz=order */
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiSetAliasAndSubQueryCondition() {
+        // 官方 API（M15 增补）：setAlias（主表别名方法）与子查询条件（eq/in(col, Sub.class, wrapper)）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .setAlias("o")
+                        .selectAll(OrderEntity.class)
+                        .eq(OrderEntity::getMerchantId, MerchantEntity.class,
+                            m -> m.select(MerchantEntity::getId).eq(MerchantEntity::getCode, "M001"))
+                        .in(OrderEntity::getStationId, StationEntity.class,
+                            s -> s.select(StationEntity::getId).gt(StationEntity::getSort, 0))
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private Long merchantId;
+                    private Long stationId;
+                }
+
+                static class MerchantEntity {
+                    private Long id;
+                    private String code;
+                }
+
+                static class StationEntity {
+                    private Long id;
+                    private Integer sort;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("setAlias/子查询条件应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT o.id, o.merchant_id, o.station_id
+            FROM order_entity o
+            WHERE o.merchant_id = (SELECT id FROM merchant_entity WHERE code = 'M001')
+                AND o.station_id IN (SELECT id FROM station_entity WHERE sort > 0)
+                AND o.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiSelectJoinMapsConsumption() {
+        // 官方 API（M15 增补）：mapper.selectJoinMaps(wrapper) 等 Map 消费——渲染同为 SELECT
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    orderMapper.selectJoinMaps(new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .eq(OrderEntity::getId, 1001L));
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("selectJoinMaps 消费应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id
+            FROM order_entity t
+            WHERE t.id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     /**
      * 定位锚点元素：文件内第一个方法调用；无调用时回退到 Wrapper 变量声明 / 字面量 / 任意元素。
      */

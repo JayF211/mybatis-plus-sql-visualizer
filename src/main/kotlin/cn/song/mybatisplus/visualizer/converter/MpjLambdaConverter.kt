@@ -37,7 +37,11 @@ object MpjLambdaConverter : WrapperConverter {
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.MPJ_LAMBDA)
 
     override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
-        val mainAlias = chain.constructorAlias ?: MAIN_ALIAS_DEFAULT
+        // 主表别名：构造别名 > setAlias("x") 方法（官方 API，M15 增补）> 默认 t
+        val mainAlias = chain.constructorAlias
+            ?: chain.calls.firstOrNull { it.methodName == SET_ALIAS }
+                ?.args?.firstOrNull()?.asValue()?.let { (it as? SqlValue.Literal)?.unquoted }
+            ?: MAIN_ALIAS_DEFAULT
         val selectAsCalls = chain.calls.filter { it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS }
         val joinCalls = chain.calls.filter { it.methodName in JOIN_METHODS }
         val collectionCalls = chain.calls.filter { it.methodName == SELECT_COLLECTION }
@@ -48,7 +52,7 @@ object MpjLambdaConverter : WrapperConverter {
         val restCalls = chain.calls.filterNot {
             it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName in JOIN_METHODS
                 || it.methodName == SELECT_ALL || it.methodName == SELECT_COLLECTION
-                || it.methodName == SELECT_ASSOCIATION
+                || it.methodName == SELECT_ASSOCIATION || it.methodName == SET_ALIAS
         }
         val base = QueryWrapperParser(table, mainAlias)
             .parse(WrapperChain(chain.wrapperType, chain.entityClass, restCalls))
@@ -282,6 +286,7 @@ object MpjLambdaConverter : WrapperConverter {
     private const val SELECT_AS = "selectAs"
     private const val SELECT_AS_CLASS = "selectAsClass"
     private const val SELECT_ALL = "selectAll"
+    private const val SET_ALIAS = "setAlias"
     private const val SELECT_COLLECTION = "selectCollection"
     private const val SELECT_ASSOCIATION = "selectAssociation"
 

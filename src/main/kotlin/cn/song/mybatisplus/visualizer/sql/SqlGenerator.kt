@@ -134,7 +134,9 @@ object SqlGenerator {
         } else {
             statement.selectColumns
         }
-        val sb = StringBuilder("SELECT ")
+        // first 片段（官方 API）：置于 SELECT 之前（如 `/* hint */ SELECT ...`）
+        val sb = StringBuilder(statement.rawFirst?.let { "$it " } ?: "")
+        sb.append("SELECT ")
         if (statement.distinct) sb.append("DISTINCT ")
         sb.append(selectColumns.joinToString(", ") { it.rendered })
 
@@ -179,6 +181,9 @@ object SqlGenerator {
 
         // LIMIT（分页子句按方言渲染）
         statement.limit?.let { sb.append(nl).append(dialect.renderLimit(it)) }
+
+        // comment 片段（官方 API）：追加到语句末尾（`/* comment */`）
+        statement.comment?.let { sb.append(nl).append("/* $it */") }
 
         return sb.toString()
     }

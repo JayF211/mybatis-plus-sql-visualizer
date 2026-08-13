@@ -245,6 +245,11 @@ object ArgResolver {
                     resolveJoinClass(expr, resolveVariables)
                 methodName == SELECT_AS_CLASS ->
                     resolveJoinClass(expr, resolveVariables)
+                // 子查询条件（官方 sub-query API）：eq(col, SubEntity.class, w -> ...) 的第二参为子表类引用
+                methodName in SUBQUERY_CONDITION_METHODS && index == 1 &&
+                    call.argumentList.expressions.size >= 3 &&
+                    call.argumentList.expressions.getOrNull(2) is PsiLambdaExpression ->
+                    resolveJoinClass(expr, resolveVariables)
                 methodName in ALIAS_SECOND_ARG_METHODS && index == 1 ->
                     resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 methodName == SELECT_FUNC || methodName == APPLY_FUNC && index == 1 ->
@@ -281,6 +286,9 @@ object ArgResolver {
 
     /** MPJ selectAsClass 方法名（两个实参均为实体类引用，converter 按字段交集映射）。 */
     private const val SELECT_AS_CLASS = "selectAsClass"
+
+    /** 支持子查询条件的比较方法（eq(col, Sub.class, wrapper) 等官方 sub-query API）。 */
+    private val SUBQUERY_CONDITION_METHODS = setOf("eq", "ne", "gt", "ge", "lt", "le", "in", "notIn")
 
     /** MPJ 中第二参为「目标 VO 字段/别名」的方法名集合（selectAs、selectCount、selectSum/Min/Max/Avg/Len）。 */
     private val ALIAS_SECOND_ARG_METHODS = setOf(

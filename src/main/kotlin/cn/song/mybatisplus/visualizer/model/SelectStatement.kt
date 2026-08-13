@@ -51,6 +51,8 @@ enum class JoinType { INNER, LEFT, RIGHT, FULL }
  * @param having        HAVING 条件（单个）
  * @param orderBy       ORDER BY 项列表
  * @param limit         分页子句（null 表示无 LIMIT）
+ * @param rawFirst      SQL 最前片段（`first("...")` 官方 API，M15 增补）；非 null 时置于 SELECT 之前
+ * @param comment       SQL 注释（`comment("...")` 官方 API，M15 增补）；非 null 时追加到语句末尾
  */
 data class SelectStatement(
     override val table: TableInfo,
@@ -63,4 +65,6 @@ data class SelectStatement(
     val having: Condition? = null,
     val orderBy: List<OrderByItem> = emptyList(),
     val limit: LimitClause? = null,
+    val rawFirst: String? = null,
+    val comment: String? = null,
 ) : SqlStatement()
