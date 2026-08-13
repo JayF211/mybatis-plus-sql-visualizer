@@ -153,6 +153,14 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNotNull("应挂补全上下文", ctx)
         assertEquals("tbl", ctx!!.tableName)
         assertEquals(listOf("id", "phone"), ctx.columns)
+
+        // M16.2 双载体：Editor 上同样挂载补全上下文（编辑后 PSI 重建丢失时兜底）
+        val editor = panel.editorForTest()
+        assertNotNull("应创建编辑器", editor)
+        val editorCtx = editor!!.getUserData(SqlCompletionContext.KEY)
+        assertNotNull("Editor 上应挂补全上下文（M16.2）", editorCtx)
+        assertEquals("tbl", editorCtx!!.tableName)
+        assertEquals(listOf("id", "phone"), editorCtx.columns)
         panel.clear()
     }
 

@@ -12,11 +12,12 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 - **参数替换**：`?` 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪）；**LIKE 自动拼百分号**（`like` → `'%值%'`）；**字段类型推断引号**（String 列输入数字恒加引号 `'123'`，数值列恒原样）
 - **动态条件**：布尔重载 `.eq(true, "name", val)` 在预览左栏提供**复选框开关**（纯手动勾选：勾选拼接、取消移除；字面量 `false` 默认不勾选）
 - **SQL 格式化**：关键字大写、子句换行缩进，支持格式化/单行两种视图
-- **字段补全 + 注释提示**：SQL 编辑器输入列名前缀提示实体字段（**位置感知**：FROM/JOIN 后提示表名、WHERE/ON/HAVING/GROUP BY/ORDER BY 后提示列名）；补全项显示**字段注释**（`@Schema`/`@ApiModelProperty` 注解 > JavaDoc > 行注释，四级优先级含数据源 schema 预留），且**输入注释关键词也能检索到对应字段**（如输入"设备名"命中 `name` 列）；表名同样展示表注释
+- **字段补全 + 注释提示**：SQL 编辑器输入列名前缀提示实体字段（**位置感知**：FROM/JOIN 后提示表名、WHERE/ON/HAVING/GROUP BY/ORDER BY 后提示列名）；补全列含**父类继承字段**（BaseEntity 等基类字段参与全列展开与提示）；补全项显示**字段注释**（`@Schema`/`@ApiModelProperty` 注解 > JavaDoc > 行注释，四级优先级含数据源 schema 预留），且**输入注释关键词也能检索到对应字段**（如输入"设备名"命中 `name` 列）；表名同样展示表注释
+- **表前缀/表后缀**：设置页可配置表名前缀/后缀（如 `sys_` + device_info → `sys_device_info`），**全局生效**（`@TableName` 显式表名同样被修饰），清空输入框即恢复原样
 - **多种触发方式**：右键菜单 / 快捷键（默认 `Alt+Shift+Q`）/ 代码左侧 gutter 图标，一键复制
 - **多数据库方言**：MySQL / PostgreSQL / Oracle（分页子句差异化渲染；`saveOrUpdate` 批量按 PG `ON CONFLICT` 渲染 upsert）
 - **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN（含 `selectCollection` 子查询、`selectFunc` 聚合、`exists` 三形态、`apply`/`last` 原生片段透传）预览，批量操作展开（F-15）
-- **逻辑删除注入**：实体含 `@TableLogic` 时查询/删除自动追加 `AND deleted = 0`（设置页可关闭）
+- **逻辑删除注入**：实体含 `@TableLogic` 时查询/删除自动追加 `AND deleted = 0`（设置页可关闭；父类继承字段如 `BaseEntity.deleted` 同样识别）
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
 
 ## 🚀 使用说明
@@ -61,6 +62,8 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 | 替换 ? 占位符 | 开 | 关闭后**可静态求值的变量**也渲染为 `?`（左栏输入框手动填值）；代码字面量恒内联 | 下次预览 |
 | 格式化输出 | 开 | 多行缩进（关 = 单行） | 下次预览 |
 | 代码左侧显示预览 SQL 图标 | 开 | gutter 图标入口（关 = 不显示） | 立即 |
+| 表前缀 | 空 | 统一加在所有表名前（如 `sys_`；`@TableName` 显式表名同样修饰）；清空 = 恢复原样 | 下次预览 |
+| 表后缀 | 空 | 统一加在所有表名后；清空 = 恢复原样 | 下次预览 |
 | 界面语言 | 简体中文 | 插件 UI 语言（English / 跟随系统可选） | 立即 |
 | 快捷键 | `Alt+Shift+Q` | 内嵌录制，保存写入 IDE Keymap（冲突可「强制使用」抢占） | 立即 |
 

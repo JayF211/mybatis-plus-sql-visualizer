@@ -49,7 +49,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 // 通过 apply 后 state 是否变化推断表单与 state 一致性（无法直接访问私有字段）
                 val before = PluginSettings.State().apply {
                     dialect = s.dialect; replaceParams = s.replaceParams; formatSql = s.formatSql
-                    showGutterIcon = s.showGutterIcon; injectLogicDelete = s.injectLogicDelete; language = s.language
+                    showGutterIcon = s.showGutterIcon; injectLogicDelete = s.injectLogicDelete
+                    tablePrefix = s.tablePrefix; tableSuffix = s.tableSuffix; language = s.language
                 }
                 p.apply()
                 if (s.dialect != before.dialect) reasons += "dialect ${before.dialect}->${s.dialect}"
@@ -57,6 +58,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 if (s.formatSql != before.formatSql) reasons += "formatSql"
                 if (s.showGutterIcon != before.showGutterIcon) reasons += "showGutterIcon"
                 if (s.injectLogicDelete != before.injectLogicDelete) reasons += "injectLogicDelete"
+                if (s.tablePrefix != before.tablePrefix) reasons += "tablePrefix ${before.tablePrefix}->${s.tablePrefix}"
+                if (s.tableSuffix != before.tableSuffix) reasons += "tableSuffix ${before.tableSuffix}->${s.tableSuffix}"
                 if (s.language != before.language) reasons += "language ${before.language}->${s.language}"
             }
             assertTrue("reset 后表单与 state 不一致: $reasons", reasons.isEmpty())
@@ -76,5 +79,43 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         } finally {
             settings.state.language = old
         }
+    }
+
+    fun testStateRoundTripKeepsTablePrefixSuffix() {
+        // T-M16.2-03：表前缀/后缀随 State 持久化往返保留（getState → loadState，模拟 IDE 保存/重启加载）
+        val settings = PluginSettings.getInstance()
+        val oldPrefix = settings.state.tablePrefix
+        val oldSuffix = settings.state.tableSuffix
+        try {
+            settings.state.tablePrefix = "sys_"
+            settings.state.tableSuffix = "_log"
+            val snapshot = settings.getState()
+            assertEquals("getState 应反映最新 tablePrefix", "sys_", snapshot.tablePrefix)
+            assertEquals("getState 应反映最新 tableSuffix", "_log", snapshot.tableSuffix)
+            // 模拟重启：新实例 loadState（IDE 从磁盘反序列化后调用）
+            val fresh = PluginSettings()
+            fresh.loadState(snapshot)
+            assertEquals("loadState 后 tablePrefix 保留", "sys_", fresh.state.tablePrefix)
+            assertEquals("loadState 后 tableSuffix 保留", "_log", fresh.state.tableSuffix)
+        } finally {
+            settings.state.tablePrefix = oldPrefix
+            settings.state.tableSuffix = oldSuffix
+        }
+    }
+
+    fun testStorageRoamingDisabledContract() {
+        // T-M16.3-01（用户报告语言切换保存失效根因）：官方规范（IntelliJ Platform SDK——Services）——
+        // **应用级轻服务（@Service(APP)）+ PersistentStateComponent 必须禁用 roaming**
+        // （roamingType = RoamingType.DISABLED）；默认 RoamingType.DEFAULT 使状态进入设置同步
+        // （Settings Sync）管理通道，与轻服务持久化不兼容 → 确定后重开/重启设置回滚。
+        // 编译期契约断言，防回归。
+        val state = PluginSettings::class.java.getAnnotation(com.intellij.openapi.components.State::class.java)
+        assertNotNull("@State 注解应存在（PersistentStateComponent 持久化声明）", state)
+        val storage = state!!.storages.first()
+        assertEquals(
+            "应用级轻服务的存储必须禁用 roaming",
+            com.intellij.openapi.components.RoamingType.DISABLED,
+            storage.roamingType,
+        )
     }
 }

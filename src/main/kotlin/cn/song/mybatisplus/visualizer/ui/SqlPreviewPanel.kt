@@ -48,7 +48,8 @@ import javax.swing.event.DocumentListener
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ `LexerEditorHighlighter` 语法高亮；
  *    文档由 `SqlPreviewLanguage` 的 PSI 文件支撑，挂 [SqlCompletionContributor] 提供补全（Ctrl+Space）
- *  - 补全上下文（表名/列名）经 PSI userData 传递（[SqlCompletionContext]）
+ *  - 补全上下文（表名/列名）双载体传递（[SqlCompletionContext]）：**Editor userData 优先**（M16.2，
+ *    嵌入式编辑器编辑后 PSI 可能被 commit 重建丢失 userData）+ **PSI userData 兜底**
  *
  * 说明：编辑器生命周期在 [removeNotify] 时释放，避免泄漏（EditorFactory.releaseEditor）。
  */
@@ -159,20 +160,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         updateMeta(result)
     }
 
-    /** 刷新 PSI 文件上的补全上下文（表名/列名，可能随新预览变化）。 */
+    /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。 */
     private fun refreshCompletionContext() {
-        val psi = psiFile ?: return
-        psi.putUserData(
-            SqlCompletionContext.KEY,
-            SqlCompletionContext(
-                tableName = current?.tableName,
-                columns = current?.columns ?: emptyList(),
-                tableAlias = null,
-                columnComments = current?.columnComments ?: emptyMap(),
-                tableComment = current?.tableComment,
-            ),
-        )
+        val ctx = buildCompletionContext()
+        editor?.putUserData(SqlCompletionContext.KEY, ctx)
+        psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
     }
+
+    /** 由当前预览结果构造补全上下文（表名/列名/注释；M16.2 抽为复用函数，Editor 与 PSI 同源）。 */
+    private fun buildCompletionContext(): SqlCompletionContext = SqlCompletionContext(
+        tableName = current?.tableName,
+        columns = current?.columns ?: emptyList(),
+        tableAlias = null,
+        columnComments = current?.columnComments ?: emptyMap(),
+        tableComment = current?.tableComment,
+    )
 
     /** 按当前单行/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
@@ -258,22 +260,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         createEditor(sql)
     }
 
-    /** 首次创建：SqlPreviewLanguage PSI 文件 → 文档 → 可编辑编辑器，附补全上下文。 */
+    /** 首次创建：SqlPreviewLanguage PSI 文件 → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
     private fun createEditor(sql: String) {
         val proj = project
         val created = if (proj != null) {
             val psi = PsiFileFactory.getInstance(proj)
                 .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
-            psi.putUserData(
-                SqlCompletionContext.KEY,
-                SqlCompletionContext(
-                    tableName = current?.tableName,
-                    columns = current?.columns ?: emptyList(),
-                    tableAlias = null,
-                    columnComments = current?.columnComments ?: emptyMap(),
-                    tableComment = current?.tableComment,
-                ),
-            )
             psiFile = psi
             val doc = PsiDocumentManager.getInstance(proj).getDocument(psi)
                 ?: EditorFactory.getInstance().createDocument(sql)
@@ -281,6 +273,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
         }
+        // M16.2：补全上下文双载体——Editor userData 为主载体（用户输入后 PSI 可能被 commit 重建而丢失 userData，
+        // Editor 对象编辑期间稳定）、PSI 文件 userData 作兜底
+        val ctx = buildCompletionContext()
+        created.putUserData(SqlCompletionContext.KEY, ctx)
+        psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
         (created as EditorEx).apply {
             highlighter = LexerEditorHighlighter(
                 SqlSyntaxHighlighter(),

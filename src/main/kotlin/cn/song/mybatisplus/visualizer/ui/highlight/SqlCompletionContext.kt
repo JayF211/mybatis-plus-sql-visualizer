@@ -3,10 +3,11 @@ package cn.song.mybatisplus.visualizer.ui.highlight
 import com.intellij.openapi.util.Key
 
 /**
- * SQL 补全上下文（M9-03/04）：当前预览涉及的实体表/列，随 PSI 文件传递。
+ * SQL 补全上下文（M9-03/04）：当前预览涉及的实体表/列，随 Editor/PSI 文件双载体传递。
  *
- * 面板在创建预览 PSI 文件时通过 [KEY] 绑定上下文，补全器从
- * `position.containingFile.getUserData(KEY)` 读取，避免全局可变状态。
+ * 面板在创建预览编辑器时通过 [KEY] 绑定上下文，补全器从
+ * `editor.getUserData(KEY)`（优先，M16.2——嵌入式编辑器编辑后稳定）或
+ * `position.containingFile.getUserData(KEY)`（兜底）读取，避免全局可变状态。
  *
  * @param tableName      当前主表名（如 merchant_entity）
  * @param columns        当前实体列名（snake_case）

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.config
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.RoamingType
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
@@ -9,10 +10,18 @@ import com.intellij.openapi.components.Storage
 /**
  * 插件配置状态（T-M5-01，F-16 配置项持久化）。
  *
- * application-level service（全局配置，跨项目共享），经 XmlSerializer 持久化
- * 到 `MyBatis-Plus SQL Visualizer` 配置目录。修改后由 [PluginSettingsConfigurable.apply] 写回即生效。
+ * application-level 轻服务（@Service(Service.Level.APP)，跨项目共享），经 XmlSerializer 持久化
+ * 到 `mp-sql-visualizer.xml`。修改后由 [PluginSettingsConfigurable.apply] 写回即生效。
+ *
+ * T-M16.3（语言切换保存失效）：
+ * 官方规范（IntelliJ Platform SDK——Services）要求**应用级轻服务 + PersistentStateComponent 必须
+ * 禁用 roaming**（`roamingType = RoamingType.DISABLED`）——默认 RoamingType.DEFAULT 使状态进入
+ * 设置同步（Settings Sync）管理通道，与轻服务持久化不兼容，导致「确定后重开/重启设置回滚」。
  */
-@State(name = "MpSqlVisualizerSettings", storages = [Storage("mp-sql-visualizer.xml")])
+@State(
+    name = "MpSqlVisualizerSettings",
+    storages = [Storage("mp-sql-visualizer.xml", roamingType = RoamingType.DISABLED)],
+)
 @Service(Service.Level.APP)
 class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
@@ -41,6 +50,18 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * （对齐 MyBatis-Plus 全局 `logic-delete-field` 配置）；false 时保持纯 wrapper 语义。
          */
         var injectLogicDelete: Boolean = true,
+
+        /**
+         * 表前缀（T-M16.2-03）：统一加在所有表名**前**（如 `sys_` + device_info → `sys_device_info`）。
+         * 全局语义——`@TableName` 显式表名同样被修饰（文档说明）；空字符串表示不修饰。
+         */
+        var tablePrefix: String = "",
+
+        /**
+         * 表后缀（T-M16.2-03）：统一加在所有表名**后**（如 device_info + `_log` → `device_info_log`）。
+         * 全局语义——`@TableName` 显式表名同样被修饰（文档说明）；空字符串表示不修饰（"清除"即置空）。
+         */
+        var tableSuffix: String = "",
     )
 
     private var state = State()

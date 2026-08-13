@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
@@ -19,6 +20,9 @@ import com.intellij.psi.PsiWhiteSpace
  *  - 列名：优先 `@TableField("xxx")` 注解，否则按命名策略由字段名推断
  *  - 主键：`@TableId` 标记
  *  - `@TableField(exist = false)` 的字段（非表字段）跳过
+ *  - T-M16.2-02：字段递归**父类**收集（父类字段在前，对齐 MP 声明顺序语义）——继承实体
+ *    （如 `BaseEntity {id, createTime, deleted}`）的 SELECT 全列展开与 @TableLogic/@TableId 识别同样生效
+ *  - T-M16.2-03：表前缀/后缀配置（全局语义，`@TableName` 显式表名同样被修饰）
  */
 class EntityResolver {
 
@@ -32,15 +36,38 @@ class EntityResolver {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
         val tableName = annotationValue(entityClass, TABLE_NAME) ?: NamingStrategy.toSnakeCase(className)
 
-        val columns = entityClass.fields.mapNotNull { field -> resolveColumn(field) }
-        // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field）
-        val logicDeleteColumn = entityClass.fields
+        // T-M16.2-02：递归父类收集字段（父类字段在前；@TableLogic/@TableId/@TableField 标注随字段本身生效）
+        val fields = collectFieldsIncludingSuper(entityClass)
+        val columns = fields.mapNotNull { field -> resolveColumn(field) }
+        // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field；
+        // T-M16.2-02 修复：父类字段同样识别，继承实体的 deleted 不再丢失）
+        val logicDeleteColumn = fields
             .firstOrNull { hasAnnotation(it, TABLE_LOGIC) }
             ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
         // T-M16-05：表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
-        return TableInfo(className, tableName, columns, logicDeleteColumn, comment)
+        // T-M16.2-03：表前缀/后缀配置（全局语义；设置服务不可用时兜底空字符串——测试环境与未配置时零影响）
+        val prefixed = tablePrefix() + tableName + tableSuffix()
+        return TableInfo(className, prefixed, columns, logicDeleteColumn, comment)
     }
+
+    /**
+     * 递归收集类及其所有父类的字段（T-M16.2-02）：
+     *  - **父类字段在前、子类字段在后**（对齐 MP 声明顺序语义）；
+     *  - 仅沿 `superClass` 类继承链——接口字段不纳入（M16.2-R2），`Object` 无字段天然过滤；
+     *  - `seen` 集合防循环继承（异常 PSI 场景防御）。
+     */
+    private fun collectFieldsIncludingSuper(clazz: PsiClass, seen: MutableSet<PsiClass> = mutableSetOf()): List<PsiField> {
+        if (!seen.add(clazz)) return emptyList()
+        val superFields = clazz.superClass?.let { collectFieldsIncludingSuper(it, seen) } ?: emptyList()
+        return superFields + clazz.fields.toList()
+    }
+
+    /** T-M16.2-03：表前缀（全局语义；设置服务不可用时兜底空字符串）。 */
+    private fun tablePrefix(): String = runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault("")
+
+    /** T-M16.2-03：表后缀（全局语义；设置服务不可用时兜底空字符串）。 */
+    private fun tableSuffix(): String = runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault("")
 
     /**
      * 解析单个字段为列信息；非表字段（@TableField(exist=false)）返回 null。
@@ -244,7 +271,11 @@ class EntityResolver {
     private fun attributeString(annotation: PsiAnnotation, attribute: String): String? {
         val memberValue = annotation.findAttributeValue(attribute) ?: return null
         val literal = memberValue as? PsiLiteralExpression ?: return null
-        return literal.value as? String
+        val value = literal.value as? String
+        // T-M16.3-03：真实项目注解类可解析时 findAttributeValue 返回**默认值**（如 @TableField 的
+        // `value() default ""`）——空白视为未指定（回退命名策略），否则 @TableField(fill=...) 无 value
+        // 的字段列名解析为空串（用户实测 `SELECT id, , , deleted, ...` 空列名根因）
+        return value?.takeIf { it.isNotBlank() }
     }
 
     private fun annotationAttributeBoolean(annotation: PsiAnnotation?, attribute: String): Boolean? {

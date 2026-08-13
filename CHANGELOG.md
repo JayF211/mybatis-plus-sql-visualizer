@@ -4,7 +4,21 @@
 
 ## [Unreleased]
 
+### Fixed
+- M16.3 用户实测三处缺陷修复（254 测试全绿，反证验证）：
+  - **设置语言切换保存失效（根因修正）**：`PluginSettings` 是应用级轻服务（`@Service(Service.Level.APP)`）+ `PersistentStateComponent`——官方规范（SDK Services 文档）要求**必须禁用 roaming**（`roamingType = RoamingType.DISABLED`）；原 `@Storage("mp-sql-visualizer.xml")` 使用默认 `RoamingType.DEFAULT`，状态进入设置同步（Settings Sync）管理通道、与轻服务持久化不兼容 → 切英文确定后重开/重启回中文。修复：`@Storage` 显式声明 `roamingType = RoamingType.DISABLED`（M16.1 移除双注册后仍未生效即此根因）；新增编译期契约测试 `testStorageRoamingDisabledContract` 防回归
+  - **补全看不到注释（根因：不可变 builder 返回值被丢弃）**：`SqlCompletionContributor` 中 `LookupElementBuilder` **不可变**——`withTailText`/`withLookupString` 返回**新实例**，原实现 `builder.withTailText(...)` 丢弃返回值后添加原始 builder → 注释 tailText 从不展示（字段补全正常、注释全无）。修复：抽 `withComment` 链式装饰（表名/列名两处）；渲染测试 `testWithCommentCarriesTailTextAndLookupString`（反证：还原丢弃写法时 tailText=null 复现）
+  - **SELECT 空列名（`SELECT id, , , deleted, ...`）**：真实项目注解类可解析时 `PsiAnnotation.findAttributeValue("value")` 返回注解**默认值**（`@TableField` 的 `value() default ""`）→ `@TableField(fill=...)` 无 value 的字段列名解析为空串（测试环境注解不可解析故未暴露）。修复：`attributeString` 空白视为未指定（回退命名策略），逻辑删除列计算同源修复；回归测试用**同文件可解析注解**复现（反证：还原旧实现时输出与用户实测完全一致的 `id, , , deleted`）
+
 ### Added
+- M16.2 SQL 补全修复 + 实体父类字段 + 表前缀/后缀配置（250 测试全绿）：
+  - **SQL 补全修复（M16 回归，T-M16.2-01）**：
+    - 回归点 A：M16 重写 Contributor 时 `ctx == null` 直接 return——上下文丢失时**关键字补全也静默失效**（M9 用 `if (ctx != null)` 包裹）。修复：关键字补全不依赖上下文（恢复 M9 语义），实体表/列/别名补全仅在 ctx 非空时执行
+    - 回归点 B：上下文原绑定在 PSI 文件 userData，嵌入式编辑器用户输入后 `PsiDocumentManager` commit 会**重建非项目 PSI（userData 丢失）**，而 Editor 对象编辑期间稳定。修复：**Editor userData 优先 + PSI userData 兜底**双载体（`SqlCompletionContributor.resolveContext`，面板创建/刷新编辑器时双写）
+    - 回归点 C：`detectClause` 用旧 PSI offset 切新文档文本可能抛 StringIndexOutOfBounds → Contributor 异常被 IDE 吞掉 → 补全无提示。修复：offset clamp 到文本长度 + 空文本/异常回退 UNKNOWN
+  - **实体父类字段（T-M16.2-02）**：`EntityResolver` 字段收集**递归父类**（父类字段在前，对齐 MP 声明顺序语义；仅类继承链、`seen` 集合防循环继承）——继承实体（真实项目 `BaseEntity {id, createTime, deleted}`，80 实体 extends）的 SELECT 全列展开含父类列；**@TableLogic 继承识别修复**（父类 deleted 被识别——M15 逻辑删除注入对继承实体此前失效）；@TableId/@TableField(exist=false) 对父类字段同样生效
+  - **表前缀/表后缀配置（T-M16.2-03）**：`PluginSettings.State` 新增 `tablePrefix`/`tableSuffix`（默认空=不修饰）；`EntityResolver.resolve` 末尾全局应用（**@TableName 显式表名同样被修饰**——全局语义，文档说明）；设置页新增两行文本输入「表前缀」「表后缀」（可添加/清除=清空输入框）；bundle 中英文案 `settings.tablePrefix`/`settings.tableSuffix`
+  - 测试：`SqlCompletionContributorTest`（detectClause 边界 clamp 不抛异常 / 上下文双载体 Editor 优先）、`EntityResolverCommentTest`（继承字段全列含父类 / 多级继承递归 / 父类 exist=false 跳过）、`SqlPreviewServiceTest`（前缀+后缀生效 / 清空恢复原样 / @TableName 显式表名修饰）、`PluginSettingsPersistenceTest`（State 往返保留前缀后缀）——239 → 250 全绿
 - M16.1 i18n 大小写合规（Plugin DevKit 检查器）：action `text` 修正为 Title Case（Convert To SQL——每个单词首字母大写）、`description` 修正为 Sentence Case（Convert the mybatis-plus wrapper under the caret to sql——仅首词大写，专有名词词首小写合规）；configurable displayName 已合规无需改动
 - M16.1 设置中英文切换失效修复（239 测试全绿）：
   - **移除 PluginSettings 双重注册**：plugin.xml `<applicationService>` 与 `@Service(APP)` 注解并存（M14.7 引入注解时未移除 XML 遗留）——官方规范禁止，双注册导致持久化绑定错实例、语言切换"即时生效但保存失效"（确定后重开/重启回中文的根因）；保留注解式注册（IDE 自动发现）

@@ -2478,4 +2478,158 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         }
         assertEquals("界面语言", MpSqlVisualizerBundle.message("settings.language"))
     }
+
+    // ------------------------------------------------------------------
+    // T-M16.2-03：表前缀/后缀配置（全局语义，@TableName 显式表名同样修饰；清空恢复原样）
+    // ------------------------------------------------------------------
+
+    fun testTablePrefixSuffixConfigAppliedAndCleared() {
+        val settings = PluginSettings.getInstance()
+        val oldPrefix = settings.state.tablePrefix
+        val oldSuffix = settings.state.tableSuffix
+        try {
+            settings.state.tablePrefix = "sys_"
+            settings.state.tableSuffix = "_log"
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    }
+
+                    static class DeviceInfoEntity { private Long id; }
+                }
+                """.trimIndent(),
+            )
+            val prefixed = newService().preview(anchor())!!
+            // 前缀 + 后缀同时生效（sys_ + device_info_entity + _log）
+            assertEquals("SELECT id FROM sys_device_info_entity_log WHERE id = 1001", prefixed.compactSql.trim())
+            // 元信息表名同步修饰（补全上下文同源）
+            assertEquals("sys_device_info_entity_log", prefixed.tableName)
+
+            // 清除（输入框清空 = 空字符串）→ 恢复原样
+            settings.state.tablePrefix = ""
+            settings.state.tableSuffix = ""
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    }
+
+                    static class DeviceInfoEntity { private Long id; }
+                }
+                """.trimIndent(),
+            )
+            val cleared = newService().preview(anchor())!!
+            assertEquals("SELECT id FROM device_info_entity WHERE id = 1001", cleared.compactSql.trim())
+        } finally {
+            settings.state.tablePrefix = oldPrefix
+            settings.state.tableSuffix = oldSuffix
+        }
+    }
+
+    fun testTablePrefixAppliesToExplicitTableNameAnnotation() {
+        // M16.2-R3 全局语义：@TableName("t_user") 显式表名同样被前缀修饰（文档说明）
+        val settings = PluginSettings.getInstance()
+        val oldPrefix = settings.state.tablePrefix
+        settings.state.tablePrefix = "sys_"
+        try {
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+                @com.baomidou.mybatisplus.annotation.TableName("t_user")
+                public class UserEntity {
+                    private Long id;
+                }
+
+                public class Demo {
+                    public void query() {
+                        merchantService.getOne(Wrappers.<UserEntity>lambdaQuery()
+                            .eq(UserEntity::getId, 1L));
+                    }
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(myFixture.file)!!
+            assertEquals("SELECT id FROM sys_t_user WHERE id = 1", result.compactSql.trim())
+        } finally {
+            settings.state.tablePrefix = oldPrefix
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-M16.3：真实项目回归——注解可解析（同文件 @interface 模拟 classpath）时的
+    // ① 空列名（@TableField 默认 value="" 被解析为列名）② 注释随预览结果传递
+    // ------------------------------------------------------------------
+
+    fun testRealProjectResolvableAnnotationsNoEmptyColumnsAndCommentsFlow() {
+        // 用户真实场景回归（biz_bike_station_share_scheme_info）：实体继承 BaseEntity、
+        // 父类字段 @TableField(fill=...) 无 value、子类 javadoc 注释——
+        // ① SELECT 全列不得出现空列名（原 `SELECT id, , , deleted, ...`）；
+        // ② javadoc 注释随 PreviewResult.columnComments 传递（补全展示/检索的数据源）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public @interface TableField {
+                String value() default "";
+                boolean exist() default true;
+                String comment() default "";
+            }
+
+            public class BaseEntity {
+                @TableId
+                private Long id;
+
+                @TableField(fill = com.baomidou.mybatisplus.annotation.FieldFill.INSERT)
+                private String createTime;
+
+                @TableField(fill = com.baomidou.mybatisplus.annotation.FieldFill.INSERT_UPDATE)
+                private String updateTime;
+
+                @TableLogic
+                private Integer deleted;
+            }
+
+            @com.baomidou.mybatisplus.annotation.TableName("biz_bike_station_share_scheme_info")
+            public class BikeStationShareSchemeInfoEntity extends BaseEntity {
+                /** 场站ID（关联 biz_bike_station_info.id） */
+                private Long stationId;
+
+                /** 方案名称 */
+                private String schemeName;
+            }
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<BikeStationShareSchemeInfoEntity> w = new LambdaQueryWrapper<BikeStationShareSchemeInfoEntity>()
+                        .eq(BikeStationShareSchemeInfoEntity::getStationId, stationId);
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())!!
+        // ① 无空列名（父类字段完整展开，@TableField 默认 value 回退命名策略）——与用户实测输出对比：
+        // 原 `SELECT id, , , deleted, station_id, ...` 现完整展开
+        assertEquals(
+            "SELECT id, create_time, update_time, deleted, station_id, scheme_name " +
+                "FROM biz_bike_station_share_scheme_info WHERE station_id = ? AND deleted = 0",
+            result.compactSql.trim(),
+        )
+        // ② 注释随补全上下文数据源传递
+        assertEquals("场站ID（关联 biz_bike_station_info.id）", result.columnComments["station_id"])
+        assertEquals("方案名称", result.columnComments["scheme_name"])
+    }
 }

@@ -42,6 +42,9 @@ import javax.swing.SwingUtilities
  * M14.1（用户反馈）：
  *  - 移除悬停预览相关配置（autoPreview / hoverDelay 已随功能删除）；
  *  - 布局紧凑化（减小行距 + 底部 weighty 占位，消除内容区上方空白）。
+ *
+ * M16.2 增强：
+ *  - 「表前缀」「表后缀」文本输入行（可添加/清除）——统一修饰预览 SQL 中的表名（全局语义）。
  */
 class PluginSettingsPanel(private val settings: PluginSettings) {
 
@@ -74,6 +77,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
 
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
+
+    /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
+    private val tablePrefixField = JBTextField(12)
+
+    /** 表后缀输入框（T-M16.2-03）：统一加在所有表名后，全局语义；清空即恢复原样。 */
+    private val tableSuffixField = JBTextField(12)
 
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
@@ -123,6 +132,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         addRow("", formatCheck)
         addRow("", gutterIconCheck)
         addRow("", injectLogicDeleteCheck)
+        addRow(MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField)
+        addRow(MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField)
         addRow(MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
             model = DefaultComboBoxModel(languageOptions())
             // 选中当前配置值（按 value 匹配，zh 兜底）
@@ -323,6 +334,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || formatCheck.isSelected != s.formatSql
             || gutterIconCheck.isSelected != s.showGutterIcon
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
+            || tablePrefixField.text.trim() != s.tablePrefix
+            || tableSuffixField.text.trim() != s.tableSuffix
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
             || shortcutEditor.shortcut != currentShortcut()
     }
@@ -340,6 +353,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.formatSql = formatCheck.isSelected
         s.showGutterIcon = gutterIconCheck.isSelected
         s.injectLogicDelete = injectLogicDeleteCheck.isSelected
+        s.tablePrefix = tablePrefixField.text.trim()
+        s.tableSuffix = tableSuffixField.text.trim()
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
         return languageChanged
@@ -355,6 +370,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         formatCheck.isSelected = s.formatSql
         gutterIconCheck.isSelected = s.showGutterIcon
         injectLogicDeleteCheck.isSelected = s.injectLogicDelete
+        tablePrefixField.text = s.tablePrefix
+        tableSuffixField.text = s.tableSuffix
         languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
         shortcutEditor.shortcut = currentShortcut()
     }
