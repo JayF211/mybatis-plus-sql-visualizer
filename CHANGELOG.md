@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### Added
+- M18.2 变更说明补全（`<change-notes>`）：
+  - 根因：`plugin.xml` 从未维护 `<change-notes>`，市场发布停留在 v1.6/M12——IDE 插件管理页与市场页「最新变化」一直显示旧文案
+  - 修复：`plugin.xml` 新增 `<change-notes>`（HTML 白名单 ul/li），覆盖自 v1.6/M12 以来 M13~M18.1 全部变更摘要（倒序）；任何分发渠道（本地安装/市场浏览）均显示最新变更
+  - 注意：市场页面仍显示旧版需**发布新版本**（`./gradlew verifyPlugin buildPlugin` 已通过；上传 zip 或 publishPlugin 时 change notes 自动取自 plugin.xml）
 - M18.1 问题快速反馈入口：
   - `plugin.xml <description>` 末尾追加「问题反馈」链接（`<a>` 跳转 Gitee 仓库 Issues 页，双语文案）；IDE 插件管理页与 Marketplace 网页版均可点击
   - `README.md` 联系作者区块补充 Issues 提交反馈引导
