@@ -243,12 +243,17 @@ class QueryWrapperParser(
     // 各操作解析
     // ------------------------------------------------------------------
 
-    /** 二元比较：`column op value`；子查询形态 `column op (SELECT ...)`（官方 sub-query API，M15 增补）。 */
+    /** 二元比较：`column op value`；列对列（MPJ 子查询内 `eq(子表列, 主表列)`）与子查询形态。 */
     private fun simple(call: WrapperCall, op: String): Condition? {
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
         // 子查询条件：eq(col, SubEntity.class, w -> w.select(...).eq(...)) → col = (SELECT ...)
         if (call.args.size >= 3 && call.args.getOrNull(2) is WrapperArg.NestedArg) {
             return subQueryCondition(call, op)
+        }
+        // 列对列比较（MPJ 官方）：eq(子表列, 主表列) → 列 = 列
+        val right = call.args.getOrNull(1)
+        if (right is WrapperArg.ColumnArg) {
+            return Condition.ColumnComparison(left = column, right = right.column)
         }
         val value = argAsValue(call.args.getOrNull(1)) ?: return null
         return Condition.Simple(column, op, value)

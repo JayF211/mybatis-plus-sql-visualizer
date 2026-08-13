@@ -108,7 +108,9 @@ class SqlPreviewService(private val project: Project) {
             }
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
-            val injectLogicDelete = settings?.state?.injectLogicDelete ?: true
+            // M15 增补：MPJ `disableLogicDel()` 控制开关——链内出现时跳过注入
+            val injectLogicDelete = (settings?.state?.injectLogicDelete ?: true) &&
+                !located.chain.calls.any { it.methodName in LOGIC_DELETE_DISABLE_METHODS }
             val finalStatement = if (injectLogicDelete) injectLogicDeleteCondition(table, statement) else statement
             val result = buildPreviewResult(located.chain.wrapperType, table, finalStatement)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
@@ -226,6 +228,9 @@ class SqlPreviewService(private val project: Project) {
         WrapperType.MPJ_QUERY,
         WrapperType.MPJ_LAMBDA_QUERY,
     )
+
+    /** 逻辑删除控制方法（MPJ 官方 API，M15 增补）：链内出现时跳过 deleted 注入。 */
+    private val LOGIC_DELETE_DISABLE_METHODS = setOf("disableLogicDel", "logicDelToOn")
 
     /**
      * 清空缓存（编辑器文件切换/项目关闭时由持有方调用）。

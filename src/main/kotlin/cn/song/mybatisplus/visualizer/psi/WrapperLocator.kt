@@ -539,7 +539,7 @@ object WrapperLocator {
             when (cursor) {
                 is PsiExpressionList -> {
                     val call = cursor.parent as? PsiMethodCallExpression ?: return false
-                    if (call.methodExpression.referenceName != UPDATE_CONSUMER) return false
+                    if (call.methodExpression.referenceName !in UPDATE_CONSUMER_METHODS) return false
                     val args = call.argumentList.expressions
                     // 双参、wrapper 不是首参，且首参不是 null 字面量（`update(null, wrapper)` 为 mapper 批量更新，非实体更新）
                     if (args.size < 2) return false
@@ -561,7 +561,7 @@ object WrapperLocator {
      */
     private fun isEntityUpdateConsumer(expr: PsiElement): Boolean {
         val call = expr.consumingCall() ?: return false
-        if (call.methodExpression.referenceName != UPDATE_CONSUMER) return false
+        if (call.methodExpression.referenceName !in UPDATE_CONSUMER_METHODS) return false
         val args = call.argumentList.expressions
         if (args.size < 2) return false
         // `update(null, wrapper)` 第一参为 null 字面量 → mapper 批量更新，非实体更新
@@ -569,8 +569,8 @@ object WrapperLocator {
         return args.drop(1).any { arg -> PsiTreeUtil.isAncestor(arg, expr, false) }
     }
 
-    /** 实体更新消费方法名（`service.update(entity, wrapper)` 双参形态）。 */
-    private const val UPDATE_CONSUMER = "update"
+    /** 实体更新消费方法名（`service.update(entity, wrapper)` 双参形态；updateJoin/updateJoinAndNull 为 MPJ 官方联表更新，M15 增补）。 */
+    private val UPDATE_CONSUMER_METHODS = setOf("update", "updateJoin", "updateJoinAndNull")
     private fun isConsumerArgument(ref: PsiReferenceExpression, consumerMethods: Set<String>): Boolean {
         var cursor: PsiElement? = ref.parent
         while (cursor != null) {
@@ -694,8 +694,9 @@ object WrapperLocator {
     private const val COUNT_TERMINAL = "count"
     private const val EXISTS_TERMINAL = "exists"
 
-    /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法）。 */
-    internal val deleteConsumerMethodNames: Set<String> = setOf("remove", "delete")
+    /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法；
+     *  deleteJoin 为 MPJ 官方联表删除，M15 增补）。 */
+    internal val deleteConsumerMethodNames: Set<String> = setOf("remove", "delete", "deleteJoin")
 
     /** 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。 */
     internal val countConsumerMethodNames: Set<String> = setOf("count", "selectJoinCount")

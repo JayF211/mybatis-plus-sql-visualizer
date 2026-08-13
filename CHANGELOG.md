@@ -5,6 +5,12 @@
 ## [Unreleased]
 
 ### Added
+- M15 官方 API 增补 3（223 测试全绿）：
+  - **union / unionAll**：`union(SubClass.class, w -> ...)` → `UNION (SELECT ... FROM sub_entity WHERE ...)` 子查询（独立解析器 + compact 单行渲染）
+  - **selectSub**：`selectSub(SubClass.class, w -> ..., alias)` → `(SELECT ...) AS alias` 子查询列（第三参按别名解析，驼峰属性名）
+  - **逻辑删除控制**：`disableLogicDel()` / `logicDelToOn()` 链内出现时跳过 deleted 注入
+  - **联表更新删除消费**：`deleteJoin(wrapper)` → DELETE；`updateJoin(entity, wrapper)` / `updateJoinAndNull` → 实体字段展开 SET
+  - **列对列比较**：`eq(子表列, 主表列)`（子查询内）→ `列 = 列`（ColumnComparison；子查询内近似无外层别名）
 - M15 官方 API 增补 2（220 测试全绿）：
   - **comment / first**：`comment("...")` SQL 注释追加末尾、`first("...")` SQL 最前片段（SelectStatement.rawFirst/comment 模型）
   - **setAlias**：MPJ 主表别名方法（优先级：构造别名 > setAlias > 默认 t）

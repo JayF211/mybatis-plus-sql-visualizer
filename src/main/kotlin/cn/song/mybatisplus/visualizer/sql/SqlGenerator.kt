@@ -182,6 +182,11 @@ object SqlGenerator {
         // LIMIT（分页子句按方言渲染）
         statement.limit?.let { sb.append(nl).append(dialect.renderLimit(it)) }
 
+        // UNION / UNION ALL 子查询（MPJ 官方 API，M15 增补）
+        statement.unions.forEach { union ->
+            sb.append(nl).append(union.keyword).append(" (").append(union.sql).append(")")
+        }
+
         // comment 片段（官方 API）：追加到语句末尾（`/* comment */`）
         statement.comment?.let { sb.append(nl).append("/* $it */") }
 

@@ -1783,7 +1783,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `selectSum/Max/Min/Avg/Len/Count`（含别名） | ✅ | selectLen → LENGTH |
 | `selectFunc`（String 模板） | ✅ | `%s`/`{0}` 占位 |
 | `selectFunc(BaseFuncEnum)` 8 形态 | 🟡 | enum 形态未建模（真实项目用 String 模板） |
-| `selectSub`（子查询列） | ⬜ | 子查询列模型评估中 |
+| `selectSub`（子查询列） | ✅ | `(SELECT ...) AS alias` 子查询列（M15 增补；子查询内列对列比较近似无别名） |
 | `selectCollection/selectAssociation`（5 形态） | 🟡 | 核心形态已支持；prefix/free 映射形态评估中 |
 | `distinct` | ✅ | – |
 | `leftJoin/innerJoin/rightJoin/fullJoin`（20 重载） | 🟡 | 三参/四参别名/on()/lambda ON/字符串/自定义关键字已支持；5 参 rightAlias、子表 MConsumer（1.5.2+）、ext MFunction 形态评估中 |
@@ -1793,8 +1793,9 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `eqIfExists` 等 IfExists 条件族 | ✅ | 归一化为普通条件（官方 API 补充） |
 | 子查询条件（`eq/ne/gt/ge/lt/le/in/notIn(col, Class, wrapper)`） | ✅ | 独立解析器渲染子查询（M15 增补） |
 | `setAlias` | ✅ | 主表别名方法（M15 增补，优先级：构造别名 > setAlias > 默认 t） |
-| `from(子查询主表)` / `union/unionAll` | ⬜ | 评估中 |
-| `pageByMain` / `disableLogicDel` 等逻辑删除控制 | ⬜ | 评估中 |
+| `union/unionAll` | ✅ | `UNION (子查询)`（M15 增补） |
+| `from(子查询主表)` | ⬜ | 评估中 |
+| `disableLogicDel` / `logicDelToOn` | ✅ | 跳过 deleted 注入（M15 增补）；logicDelToWhere 等其余形态评估中 |
 | `fill` 关联填充 | ⬜ | 评估中 |
 | Chain 消费 `one(Class)/list(Class)/page(P, Class)/first/map*` | ✅ | – |
 
@@ -1806,11 +1807,11 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `MPJLambdaQueryWrapper` | ✅ | P17 |
 | `selectJoinList/One/ListPage/Count` | ✅ | – |
 | `selectJoinMap(s)/selectJoinPage/selectJoinMapsPage` | ✅ | 渲染同为 SELECT（实参锚点定位 + 默认 SELECT 消费） |
-| `deleteJoin/updateJoin/updateJoinAndNull`（联表更新删除） | ⬜ | 需 UpdateJoinWrapper/DeleteJoinWrapper 模型，评估中 |
+| `deleteJoin` / `updateJoin` / `updateJoinAndNull`（消费） | ✅ | deleteJoin(wrapper)→DELETE；updateJoin(entity, wrapper)→实体字段展开 SET（M15 增补） |
 | `UpdateJoinWrapper/DeleteJoinWrapper` | ⬜ | 新 wrapper 类型，评估中 |
 | `selectJoinOnePage` | ⬜ | 官方确认不存在此 API |
 
-**已评估暂不支持的边界（⬜）**：`selectSub`（子查询列）、`from(子查询主表)`、`union/unionAll`、联表更新删除（deleteJoin/updateJoin/updateJoinAndNull + UpdateJoinWrapper/DeleteJoinWrapper）、fill 关联填充、逻辑删除控制开关（disableLogicDel 等）、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API，如后续需要可单独里程碑实现。
+**已评估暂不支持的边界（⬜）**：`from(子查询主表)`、fill 关联填充、UpdateJoinWrapper/DeleteJoinWrapper 直接构造、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API，如后续需要可单独里程碑实现。
 
 ---
 
@@ -1818,6 +1819,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-13 | **官方 API 增补 3（223 测试全绿）**：union/unionAll 子查询、selectSub 子查询列、disableLogicDel/logicDelToOn 逻辑删除控制、deleteJoin/updateJoin/updateJoinAndNull 联表更新删除消费、列对列比较（eq(子表列, 主表列)） |
 | 2026-08-13 | **官方 API 增补 2（220 测试全绿）**：comment/first（rawFirst/comment 模型）、setAlias（主表别名方法）、子查询条件（eq/ne/gt/ge/lt/le/in/notIn(col, Sub.class, wrapper)，独立解析器渲染）、selectJoinMaps/selectJoinPage 消费验证、select(Class, Predicate)/selectFilter 全列近似 |
 | 2026-08-13 | **官方 API 全覆盖补充**：基于官方文档（MP `guides/wrapper`/`data-interface`、MPJ `mybatis-plus-join.github.io`，均核实到 3.5.15/1.5.6 源码）新增 §5.6 官方 API 覆盖矩阵；插件补充实现 notLikeLeft/Right、inSql/notInSql、eqSql~leSql、nested/not/func、orderBy isAsc、setIncrBy/setDecrBy、MPJ selectSum/Min/Avg/Len、fullJoin、join 自定义关键字、字符串 join、selectAll exclude/prefix、applyFunc、IfExists 条件族、selectAsClass、链式 first/map* 终结点（217 测试全绿）；LIKE 字面量引号渲染修复、lambda or() 双层括号展平 |
 | 2026-08-13 | **全量复核 + 扩展**：① 复核 P01~P20（模块名/类名按真实代码修正，核对 61 文件/125 构造/58+36+27+4 消费）；② 新增原生 MyBatis-Plus 语料：查询 Q01~Q19（92 文件）、更新/删除/链式 U01~U13（36+7 文件、20 链式文件）、XML/注解/配置 X01~X12（20 XML、108 实体、4 配置类）；③ 覆盖矩阵扩为 5 张（MPJ/原生查询/更新删除/消费/XML）；④ 测试建议按 F-01~F-20 重新映射并新增 18 条高风险用例 |

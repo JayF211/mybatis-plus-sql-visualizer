@@ -7,10 +7,12 @@ import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.model.UnionClause
 import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 
 /**
@@ -42,7 +44,7 @@ object MpjLambdaConverter : WrapperConverter {
             ?: chain.calls.firstOrNull { it.methodName == SET_ALIAS }
                 ?.args?.firstOrNull()?.asValue()?.let { (it as? SqlValue.Literal)?.unquoted }
             ?: MAIN_ALIAS_DEFAULT
-        val selectAsCalls = chain.calls.filter { it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS }
+        val selectAsCalls = chain.calls.filter { it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName == SELECT_SUB }
         val joinCalls = chain.calls.filter { it.methodName in JOIN_METHODS }
         val collectionCalls = chain.calls.filter { it.methodName == SELECT_COLLECTION }
         val selectAllCalls = chain.calls.filter { it.methodName == SELECT_ALL }
@@ -50,7 +52,8 @@ object MpjLambdaConverter : WrapperConverter {
         // 其余调用（eq/select/orderBy/distinct/selectMax 等）委托 Query 解析，列自动带主表别名。
         // selectAssociation 不产生额外 SQL（leftJoin 已体现关联，仅作结果映射标记），从解析链中剔除。
         val restCalls = chain.calls.filterNot {
-            it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName in JOIN_METHODS
+            it.methodName == SELECT_AS || it.methodName == SELECT_AS_CLASS || it.methodName == SELECT_SUB
+                || it.methodName in JOIN_METHODS || it.methodName in UNION_METHODS
                 || it.methodName == SELECT_ALL || it.methodName == SELECT_COLLECTION
                 || it.methodName == SELECT_ASSOCIATION || it.methodName == SET_ALIAS
         }
@@ -58,12 +61,12 @@ object MpjLambdaConverter : WrapperConverter {
             .parse(WrapperChain(chain.wrapperType, chain.entityClass, restCalls))
 
         // selectAll(Class[, prefix][, exclude...])：主表全列（带主表别名前缀）+ 聚合列（selectSum 等，委托 base）
-        // + selectAs/selectAsClass 列追加；exclude 排除字段（官方 API）、prefix 列前缀（官方 API）
+        // + selectAs/selectAsClass/selectSub 列追加；exclude 排除字段（官方 API）、prefix 列前缀（官方 API）
         val selectAsColumns = selectAsCalls.flatMap { call ->
-            if (call.methodName == SELECT_AS_CLASS) {
-                parseSelectAsClass(call, mainAlias)
-            } else {
-                listOfNotNull(parseSelectAs(call, mainAlias))
+            when (call.methodName) {
+                SELECT_AS_CLASS -> parseSelectAsClass(call, mainAlias)
+                SELECT_SUB -> parseSelectSub(call)
+                else -> listOfNotNull(parseSelectAs(call, mainAlias))
             }
         }
         val selectColumns = if (selectAllCalls.isNotEmpty()) {
@@ -89,11 +92,47 @@ object MpjLambdaConverter : WrapperConverter {
             }
         }
 
+        // UNION / UNION ALL 子查询（官方 API，M15 增补）：渲染子查询后追加
+        val unions = chain.calls
+            .filter { it.methodName in UNION_METHODS }
+            .mapNotNull { parseUnion(it) }
+
         return base.copy(
             tableAlias = mainAlias,
             selectColumns = selectColumns,
             joins = joins,
+            unions = unions,
         )
+    }
+
+    /**
+     * 解析 union / unionAll（官方 API）：`union(SubClass.class, w -> w.selectAll().eq(...))`
+     * → `UNION (SELECT ... FROM sub_entity WHERE ...)`。子查询独立解析（不继承主表别名），compact 单行渲染。
+     */
+    private fun parseUnion(call: WrapperCall): UnionClause? {
+        val subTable = (call.args.getOrNull(0) as? WrapperArg.EntityRefArg)?.tableInfo ?: return null
+        val nested = call.args.getOrNull(1) as? WrapperArg.NestedArg ?: return null
+        val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
+        val keyword = if (call.methodName == "unionAll") "UNION ALL" else "UNION"
+        return UnionClause(keyword, SqlGenerator.generate(subStatement, compact = true))
+    }
+
+    /**
+     * 解析 selectSub（官方 API）：`selectSub(SubClass.class, w -> w.select(...).eq(...), alias)`
+     * → `(SELECT ... FROM sub_entity WHERE ...) AS alias` 子查询列。
+     */
+    private fun parseSelectSub(call: WrapperCall): List<ColumnRef> {
+        val subTable = (call.args.getOrNull(0) as? WrapperArg.EntityRefArg)?.tableInfo ?: return emptyList()
+        val nested = call.args.getOrNull(1) as? WrapperArg.NestedArg ?: return emptyList()
+        val alias = when (val arg = call.args.getOrNull(2)) {
+            is WrapperArg.AliasArg -> arg.propertyName
+            is WrapperArg.ColumnArg -> arg.column.columnName
+            is WrapperArg.ValueArg -> (arg.value as? SqlValue.Literal)?.unquoted
+            else -> null
+        } ?: return emptyList()
+        val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
+        val subSql = SqlGenerator.generate(subStatement, compact = true)
+        return listOf(ColumnRef(columnName = subSql, rawExpr = "($subSql)", alias = alias))
     }
 
     /**
@@ -286,7 +325,11 @@ object MpjLambdaConverter : WrapperConverter {
     private const val SELECT_AS = "selectAs"
     private const val SELECT_AS_CLASS = "selectAsClass"
     private const val SELECT_ALL = "selectAll"
+    private const val SELECT_SUB = "selectSub"
     private const val SET_ALIAS = "setAlias"
+
+    /** UNION 方法（union / unionAll）。 */
+    private val UNION_METHODS = setOf("union", "unionAll")
     private const val SELECT_COLLECTION = "selectCollection"
     private const val SELECT_ASSOCIATION = "selectAssociation"
 

@@ -53,6 +53,7 @@ enum class JoinType { INNER, LEFT, RIGHT, FULL }
  * @param limit         分页子句（null 表示无 LIMIT）
  * @param rawFirst      SQL 最前片段（`first("...")` 官方 API，M15 增补）；非 null 时置于 SELECT 之前
  * @param comment       SQL 注释（`comment("...")` 官方 API，M15 增补）；非 null 时追加到语句末尾
+ * @param unions        UNION / UNION ALL 子查询（MPJ 官方 API，M15 增补）；按调用顺序追加到主语句之后
  */
 data class SelectStatement(
     override val table: TableInfo,
@@ -67,4 +68,16 @@ data class SelectStatement(
     val limit: LimitClause? = null,
     val rawFirst: String? = null,
     val comment: String? = null,
+    val unions: List<UnionClause> = emptyList(),
 ) : SqlStatement()
+
+/**
+ * UNION 子查询子句（MPJ 官方 API）：`union(Class, w -> ...)` → `UNION (子查询)`。
+ *
+ * @param keyword UNION / UNION ALL
+ * @param sql     子查询 SQL（compact 单行渲染）
+ */
+data class UnionClause(
+    val keyword: String,
+    val sql: String,
+)

@@ -245,11 +245,17 @@ object ArgResolver {
                     resolveJoinClass(expr, resolveVariables)
                 methodName == SELECT_AS_CLASS ->
                     resolveJoinClass(expr, resolveVariables)
+                // union/unionAll/selectSub 的第一参为子查询实体类引用（官方 API，M15 增补）
+                (methodName in UNION_METHODS || methodName == SELECT_SUB) && index == 0 ->
+                    resolveJoinClass(expr, resolveVariables)
                 // 子查询条件（官方 sub-query API）：eq(col, SubEntity.class, w -> ...) 的第二参为子表类引用
                 methodName in SUBQUERY_CONDITION_METHODS && index == 1 &&
                     call.argumentList.expressions.size >= 3 &&
                     call.argumentList.expressions.getOrNull(2) is PsiLambdaExpression ->
                     resolveJoinClass(expr, resolveVariables)
+                // selectSub 的第三参为结果别名（方法引用 → AliasArg 驼峰属性名）
+                methodName == SELECT_SUB && index == 2 ->
+                    resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 methodName in ALIAS_SECOND_ARG_METHODS && index == 1 ->
                     resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 methodName == SELECT_FUNC || methodName == APPLY_FUNC && index == 1 ->
@@ -289,6 +295,12 @@ object ArgResolver {
 
     /** 支持子查询条件的比较方法（eq(col, Sub.class, wrapper) 等官方 sub-query API）。 */
     private val SUBQUERY_CONDITION_METHODS = setOf("eq", "ne", "gt", "ge", "lt", "le", "in", "notIn")
+
+    /** UNION 方法（第一参为子查询实体类引用）。 */
+    private val UNION_METHODS = setOf("union", "unionAll")
+
+    /** selectSub 方法（子查询列，第一参为子查询实体类引用）。 */
+    private const val SELECT_SUB = "selectSub"
 
     /** MPJ 中第二参为「目标 VO 字段/别名」的方法名集合（selectAs、selectCount、selectSum/Min/Max/Avg/Len）。 */
     private val ALIAS_SECOND_ARG_METHODS = setOf(

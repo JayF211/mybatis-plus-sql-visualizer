@@ -2235,6 +2235,127 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testOfficialApiUnionAndSelectSub() {
+        // 官方 API（M15 增补）：union/unionAll 子查询 + selectSub 子查询列
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .selectSub(RefundEntity.class, r -> r.select(RefundEntity::getAmount).eq(RefundEntity::getOrderId, OrderEntity::getId), OrderEntity::getRefundAmount)
+                        .eq(OrderEntity::getId, 1001L)
+                        .union(RefundEntity.class, r -> r.selectAll(RefundEntity.class).eq(RefundEntity::getOrderId, 1001L))
+                        .unionAll(OrderEntity.class, r -> r.selectAll(OrderEntity.class).eq(OrderEntity::getId, 1002L));
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String refundAmount;
+                }
+
+                static class RefundEntity {
+                    private Long id;
+                    private Long orderId;
+                    private String amount;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("union/selectSub 应产出预览结果", result)
+        // 近似说明：子查询内列对列比较（eq(子表列, 外层主表列)）静态无法区分内外层表，右列不带别名
+        assertEquals(
+            """
+            SELECT t.id, t.refund_amount, (SELECT amount FROM refund_entity WHERE order_id = id) AS refundAmount
+            FROM order_entity t
+            WHERE t.id = 1001
+            UNION (SELECT id, order_id, amount FROM refund_entity WHERE order_id = 1001)
+            UNION ALL (SELECT id, refund_amount FROM order_entity WHERE id = 1002)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOfficialApiLogicDeleteDisable() {
+        // 官方 API（M15 增补）：disableLogicDel() 跳过 deleted 注入
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .disableLogicDel()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("disableLogicDel 应产出预览结果", result)
+        assertEquals(
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testOfficialApiDeleteJoinAndUpdateJoinConsumption() {
+        // 官方 API（M15 增补）：deleteJoin(wrapper) → DELETE；updateJoin(entity, wrapper) → 实体展开 SET
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void delete() {
+                    orderService.deleteJoin(new MPJLambdaWrapper<OrderEntity>()
+                        .eq(OrderEntity::getId, 1001L));
+                }
+
+                public void update() {
+                    orderService.updateJoin(entity, new MPJLambdaWrapper<OrderEntity>()
+                        .eq(OrderEntity::getId, 1001L));
+                }
+
+                static class OrderEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String orderCode;
+                    private Integer dicStatus;
+                }
+            }
+            """.trimIndent(),
+        )
+        // deleteJoin 消费 → DELETE
+        val deleteCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "deleteJoin" }
+        val deleteResult = newService().preview(deleteCall)
+        assertNotNull("deleteJoin 应产出预览结果", deleteResult)
+        assertEquals(
+            "DELETE FROM order_entity WHERE id = 1001",
+            deleteResult!!.compactSql.trim(),
+        )
+        // updateJoin(entity, wrapper) 双参 → 实体字段展开 SET
+        val updateCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "updateJoin" }
+        val updateResult = newService().preview(updateCall)
+        assertNotNull("updateJoin 应产出预览结果", updateResult)
+        assertEquals(
+            """
+            UPDATE order_entity
+            SET order_code = ?, dic_status = ?
+            WHERE id = 1001
+            """.trimIndent(),
+            updateResult!!.sql,
+        )
+    }
+
     /**
      * 定位锚点元素：文件内第一个方法调用；无调用时回退到 Wrapper 变量声明 / 字面量 / 任意元素。
      */
