@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- M16.1 i18n 大小写合规（Plugin DevKit 检查器）：action `text` 修正为 Title Case（Convert To SQL——每个单词首字母大写）、`description` 修正为 Sentence Case（Convert the mybatis-plus wrapper under the caret to sql——仅首词大写，专有名词词首小写合规）；configurable displayName 已合规无需改动
 - M16.1 设置中英文切换失效修复（239 测试全绿）：
   - **移除 PluginSettings 双重注册**：plugin.xml `<applicationService>` 与 `@Service(APP)` 注解并存（M14.7 引入注解时未移除 XML 遗留）——官方规范禁止，双注册导致持久化绑定错实例、语言切换"即时生效但保存失效"（确定后重开/重启回中文的根因）；保留注解式注册（IDE 自动发现）
   - **设置页标题跟随语言**：`applicationConfigurable` 移除 `bundle`/`key` 属性，displayName 由 `getDisplayName()` 动态返回（key 属性由 IDE 默认 locale 解析、不跟随插件语言）
