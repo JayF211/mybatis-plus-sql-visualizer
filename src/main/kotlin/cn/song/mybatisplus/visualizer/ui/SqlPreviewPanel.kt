@@ -351,7 +351,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             return
         }
 
-        val viewSources = views.mapNotNull { it.valueSource }.toSet()
+        val viewSources = views.flatMap { it.valueSources }.toSet()
         if (views.isNotEmpty()) {
             paramPanel.add(conditionSectionHeader())
             views.forEach { paramPanel.add(buildConditionRow(it)) }
@@ -398,7 +398,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderSql()
     }
 
-    /** 动态条件行：复选框（勾选开关）+（有值来源时）值输入框。 */
+    /** 动态条件行：复选框（勾选开关）+（有值来源时）值输入框（M19.5：between 等多值条件每个 source 一个输入框）。 */
     private fun buildConditionRow(view: ConditionView): JBPanel<JBPanel<*>> {
         val checkBox = JCheckBox(view.label, view.id in enabledIds).apply {
             toolTipText = conditionTooltip(view)
@@ -410,8 +410,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes += checkBox
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             add(checkBox)
-            if (view.valueSource != null) {
-                val field = conditionValueField(view)
+            // M19.5：多值条件（between 等）每个 source 一个输入框；valueSources 为空时回退单值（旧路径兼容）
+            view.valueSources.ifEmpty { listOfNotNull(view.valueSource) }.forEach { source ->
+                val field = conditionValueField(view, source)
                 add(field)
                 paramFields += field
                 conditionValueFields += field
@@ -420,14 +421,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** 动态条件值输入框：值变更联动勾选态与 SQL 重渲染。 */
-    private fun conditionValueField(view: ConditionView): JBTextField = JBTextField(8).apply {
-        toolTipText = "#${view.valueSource}"
-        text = paramValues[view.valueSource] ?: ""
+    /** 动态条件值输入框：值变更联动勾选态与 SQL 重渲染（按 source 绑定，多值条件每个来源一个输入框）。 */
+    private fun conditionValueField(view: ConditionView, source: String): JBTextField = JBTextField(8).apply {
+        toolTipText = "#$source"
+        text = paramValues[source] ?: ""
         document.addDocumentListener(object : DocumentListener {
-            override fun insertUpdate(e: DocumentEvent?) = onConditionValueChanged(view, this@apply.text)
-            override fun removeUpdate(e: DocumentEvent?) = onConditionValueChanged(view, this@apply.text)
-            override fun changedUpdate(e: DocumentEvent?) = onConditionValueChanged(view, this@apply.text)
+            override fun insertUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
+            override fun removeUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
+            override fun changedUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
         })
     }
 
@@ -440,8 +441,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 动态条件值变更（M13：复选框纯手动）：仅更新按 source 绑定的参数值并重渲染，
      * 勾选态只由用户操作决定（值空保留 `?`，不自动取消勾选）。
      */
-    private fun onConditionValueChanged(view: ConditionView, text: String) {
-        val source = view.valueSource ?: return
+    private fun onConditionValueChanged(view: ConditionView, source: String, text: String) {
         paramValues[source] = text
         renderSql()
     }
@@ -514,8 +514,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     private fun renderParamValue(v: String?, hint: ParamHint?): String {
         if (v.isNullOrBlank()) return "?"
-        val escaped = v.replace("'", "''")
         val like = hint?.likePosition
+        // M19.6（用户实测）：IN 列表多值回填——逗号分割，每个值独立渲染（引号规则同单值），
+        // 输入 `1,2` → `('1','2')`（原实现拼成 `'1,2'` 单值）
+        if (hint?.inList == true) {
+            val parts = v.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.isEmpty()) return "?"
+            return parts.joinToString(", ") { renderSingleValue(it, hint) }
+        }
+        val escaped = v.replace("'", "''")
         return when {
             // LIKE 模式：恒引号 + 按位置拼 %（值本身转义）
             like != null -> when (like) {
@@ -524,12 +531,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 LikePosition.RIGHT -> "'$escaped%'"
                 LikePosition.NONE -> "'$escaped'"
             }
-            // 类型已知：String 列恒引号、数值等列恒原样（M13 字段类型推断）
+            else -> renderSingleValue(v, hint)
+        }
+    }
+
+    /** 单值渲染（M19.6 抽取，IN 列表各值与普通参数共用）：String 列恒引号、数值恒原样、未知走数字启发式。 */
+    private fun renderSingleValue(raw: String, hint: ParamHint?): String {
+        val escaped = raw.replace("'", "''")
+        return when {
             hint?.quote == true -> "'$escaped'"
-            hint?.quote == false -> v.trim()
-            // 类型未知：保留原数字启发式
+            hint?.quote == false -> raw.trim()
             else -> {
-                val trimmed = v.trim()
+                val trimmed = raw.trim()
                 if (NUMBER_REGEX.matches(trimmed)) trimmed else "'$escaped'"
             }
         }

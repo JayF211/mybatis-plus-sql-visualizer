@@ -61,17 +61,19 @@ object WrapperAnchorDetector {
             return if (isInsideWrapperVariableInitializer(newExpr)) null else element
         }
 
-        // 场景 C：内联 Wrappers 静态工厂调用（`Wrappers.<X>lambdaQuery()...`，无变量、无 new）
-        //          + 服务链调用（`service.lambdaQuery()...` / `service.lambdaUpdate()...`，T-M15-01，
-        //            qualifier 为任意 service 引用或隐式 this，语法级文本匹配，不 resolve）
+        // 场景 C：内联 Wrappers/ChainWrappers 静态工厂调用（`Wrappers.<X>lambdaQuery()...`、`ChainWrappers.queryChain(...)`，
+        //          无变量、无 new）+ 服务链调用（`service.lambdaQuery()...` / `service.lambdaUpdate()...`，T-M15-01，
+        //          qualifier 为任意 service 引用或隐式 this，语法级文本匹配，不 resolve；
+        //          P1-03：query/update 歧义方法经 isServiceChainStart 守卫——`service.update(wrapper)` 消费调用不标锚点）
         if (element is PsiIdentifier) {
             val ref = element.parent as? PsiReferenceExpression ?: return null
             if (ref.referenceNameElement !== element) return null
             if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 val qualifier = ref.qualifierExpression as? PsiReferenceExpression
-                val isWrappersFactory = qualifier?.referenceName == "Wrappers"
-                val isServiceChain = ref.referenceName in WrapperLocator.serviceChainMethodNames
+                val isWrappersFactory = qualifier?.referenceName in WrapperLocator.wrapperFactoryClassNames
+                val isServiceChain = ref.referenceName in WrapperLocator.serviceChainMethodNames &&
+                    WrapperLocator.isServiceChainStart(call)
                 if (!isWrappersFactory && !isServiceChain) return null
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return if (isInsideWrapperVariableInitializer(call)) null else element
@@ -110,12 +112,17 @@ object WrapperAnchorDetector {
      *
      * 沿表达式链向上：全为 `PsiExpression` 直到 `PsiVariable` → 在初始化内（去重）；
      * 中途遇到语句/方法/类边界（内联场景，如 `list(...)`）→ 不在（应标该表达式锚点）。
+     *
+     * M19.5（T-M19.5-01，2026-08-13 用户实测）：**仅当变量本身是 Wrapper 变量才去重**——
+     * 结果变量赋值形态（`XxxEntity e = service.lambdaQuery()...one()` / `boolean b = service.lambdaUpdate()...update()`）
+     * 变量类型非 Wrapper（场景 B 不标变量），此时去重会整条链失去锚点；`isWrapperVariable` 为 O(1)
+     * 纯语法判定（文本匹配 + initializer 链首回溯，无 resolve），符合性能红线。
      */
     private fun isInsideWrapperVariableInitializer(expr: PsiElement): Boolean {
         var cursor: PsiElement? = expr.parent
         while (cursor != null) {
             when (cursor) {
-                is PsiVariable -> return true
+                is PsiVariable -> return WrapperLocator.isWrapperVariable(cursor)
                 is PsiExpression -> cursor = cursor.parent
                 else -> return false
             }

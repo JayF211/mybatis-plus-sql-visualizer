@@ -122,10 +122,12 @@ class QueryWrapperParser(
                 "isNotNull" -> orPending = addConditionFlagged(conditions, unary(call, "IS NOT NULL").flagged(analysis), orPending)
 
                 // ---------- 自定义片段 ----------
+                // M19.6：applyFunc/exists/notExists 同样挂复选框（无布尔重载时 flagSource 为 null）；
+                // apply 的布尔前缀与 toggle 由 parseApply 自含（parseRawTemplate），此处不加 flagged 避免覆盖
                 "apply" -> orPending = addConditionFlagged(conditions, parseApply(call), orPending)
-                "applyFunc" -> orPending = addConditionFlagged(conditions, parseApplyFunc(call), orPending)
-                "exists" -> orPending = addConditionFlagged(conditions, parseExists(call, negated = false), orPending)
-                "notExists" -> orPending = addConditionFlagged(conditions, parseExists(call, negated = true), orPending)
+                "applyFunc" -> orPending = addConditionFlagged(conditions, parseApplyFunc(call).flagged(analysis), orPending)
+                "exists" -> orPending = addConditionFlagged(conditions, parseExists(call, negated = false).flagged(analysis), orPending)
+                "notExists" -> orPending = addConditionFlagged(conditions, parseExists(call, negated = true).flagged(analysis), orPending)
 
                 // ---------- 结构 ----------
                 "groupBy" -> groupBy += columnArgs(call)
@@ -342,10 +344,12 @@ class QueryWrapperParser(
         return Condition.Group(connector, children)
     }
 
-    /** HAVING：M1 支持单条件（取嵌套链/条件的第一个条件）。 */
+    /** HAVING：P1-06（M19.5）多条件支持——嵌套链**全部条件**组成 AND 组（M1 起仅取第一个）。 */
     private fun parseHaving(call: WrapperCall): Condition? {
-        val nested = call.args.firstOrNull() as? WrapperArg.NestedArg
-        return nested?.let { parseInternal(it.chain).conditions.firstOrNull() }
+        val nested = call.args.firstOrNull() as? WrapperArg.NestedArg ?: return null
+        val conditions = parseInternal(nested.chain).conditions
+        if (conditions.isEmpty()) return null
+        return if (conditions.size == 1) conditions.first() else Condition.Group(Connector.AND, conditions)
     }
 
     /** ORDER BY 项列表；支持 `orderByAsc("alias", Entity::getX)` 字符串别名前缀（清单 P11）。 */
@@ -443,30 +447,47 @@ class QueryWrapperParser(
 
     /**
      * 为条件挂载动态条件元数据（值来源/标签由条件模型计算，id 按 pre-order 递增）。
+     * M19.6：analysis 可为 null（无布尔重载的条件同样生成复选框）。
      */
-    private fun Condition.bindToggle(analysis: FlagAnalysis): Condition {
+    private fun Condition.bindToggle(analysis: FlagAnalysis?): Condition {
+        val sources = valueSourcesOf(this)
         val toggle = ConditionToggle(
             id = "c${toggleSeq++}",
-            flagSource = analysis.flagSource,
-            defaultEnabled = analysis.defaultEnabled,
+            flagSource = analysis?.flagSource,
+            defaultEnabled = analysis?.defaultEnabled ?: true,
             label = SqlGenerator.renderConditionText(this),
-            valueSource = valueSourceOf(this),
+            valueSource = sources.firstOrNull(),
+            valueSources = sources,
         )
         return withToggle(toggle)
     }
 
-    /** 条件挂载动态条件元数据（M12）：分析结果非 null 且条件非 null 时挂载。 */
+    /**
+     * 条件挂载动态条件元数据（M12 + M19.6 扩展，2026-08-13 用户实测建议）：
+     * **所有条件**均可勾选开关——布尔重载（[FlagAnalysis]）携带 flagSource（tooltip）；
+     * 无布尔重载的条件（`apply("1 = 0")` 短路、`in` 动态集合、`isNull` 等）同样生成复选框
+     * （flagSource 为 null，默认勾选），面板可按需关停查看 SQL 变化。
+     */
     private fun Condition?.flagged(analysis: FlagAnalysis?): Condition? =
-        if (analysis == null) this else this?.bindToggle(analysis)
+        if (this == null) null else bindToggle(analysis)
 
     /**
-     * 条件关联的未解析参数来源：单值占位符条件（Simple/Like）取占位符 source，供面板值输入框绑定；
-     * 多值/无值条件（in/between/一元/raw/分组）第一版无独立值输入框（checkbox-only）。
+     * 条件关联的未解析参数来源（M12 单值 + M19.5/M19.6 多值）：
+     *  - Simple/Like：占位符 source（单值，条件行一个输入框）；
+     *  - Between：lo/hi 两个占位符 source（M19.5：条件行两个输入框，2026-08-13 用户实测）；
+     *  - In：values 各占位符 source（M19.6：in(col, List 变量) 的值来源进条件行输入框，
+     *    多值逗号分割回填——2026-08-13 用户实测，替代普通参数区避免重复）；
+     *  - 其余（一元/raw/分组）：无独立值输入框（checkbox-only）。
      */
-    private fun valueSourceOf(condition: Condition): String? = when (condition) {
-        is Condition.Simple -> (condition.value as? SqlValue.Placeholder)?.source
-        is Condition.Like -> (condition.pattern as? SqlValue.Placeholder)?.source
-        else -> null
+    private fun valueSourcesOf(condition: Condition): List<String> = when (condition) {
+        is Condition.Simple -> listOfNotNull((condition.value as? SqlValue.Placeholder)?.source)
+        is Condition.Like -> listOfNotNull((condition.pattern as? SqlValue.Placeholder)?.source)
+        is Condition.Between -> listOfNotNull(
+            (condition.lo as? SqlValue.Placeholder)?.source,
+            (condition.hi as? SqlValue.Placeholder)?.source,
+        )
+        is Condition.In -> condition.values.mapNotNull { (it as? SqlValue.Placeholder)?.source }
+        else -> emptyList()
     }
 
     /**
@@ -548,21 +569,19 @@ class QueryWrapperParser(
 
     /**
      * 解析 apply（清单 P10）：原样 SQL 片段透传 + `{i}` 参数替换 + 布尔前缀 toggle。
+     * M19.6（2026-08-13 用户实测）：**无布尔前缀同样挂复选框**（flagSource 为 null，默认勾选）——
+     * `apply("1 = 0")` 短路空集可在参数面板勾选开关。
      */
     private fun parseApply(call: WrapperCall): Condition? {
         val t = parseRawTemplate(call) ?: return null
         return Condition.Raw(
             t.sql,
-            toggle = if (t.hasFlag) {
-                ConditionToggle(
-                    id = "c${toggleSeq++}",
-                    flagSource = t.flagSource,
-                    defaultEnabled = t.defaultEnabled,
-                    label = SqlGenerator.renderConditionText(Condition.Raw(t.sql)),
-                )
-            } else {
-                null
-            },
+            toggle = ConditionToggle(
+                id = "c${toggleSeq++}",
+                flagSource = t.flagSource,
+                defaultEnabled = t.defaultEnabled,
+                label = SqlGenerator.renderConditionText(Condition.Raw(t.sql)),
+            ),
         )
     }
 

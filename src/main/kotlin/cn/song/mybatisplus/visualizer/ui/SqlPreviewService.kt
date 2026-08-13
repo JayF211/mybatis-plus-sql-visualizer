@@ -139,8 +139,8 @@ class SqlPreviewService(private val project: Project) {
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
             // M15 增补：MPJ `disableLogicDel()` 控制开关——链内出现时跳过注入
-            val injectLogicDelete = (settings?.state?.injectLogicDelete ?: true) &&
-                !located.chain.calls.any { it.methodName in LOGIC_DELETE_DISABLE_METHODS }
+            // P1-01（M19.5）：enableLogicDel/logicDelToWhere 等剩余形态按源码顺序求值（见 [logicDeleteActive]）
+            val injectLogicDelete = (settings?.state?.injectLogicDelete ?: true) && logicDeleteActive(located.chain.calls)
             val finalStatement = if (injectLogicDelete) injectLogicDeleteCondition(table, statement) else statement
             val result = buildPreviewResult(located.chain.wrapperType, table, finalStatement)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
@@ -225,7 +225,9 @@ class SqlPreviewService(private val project: Project) {
     /** 单个条件节点 → 条件视图（自身 toggle + 嵌套 Group 子节点递归）。 */
     private fun Condition.toConditionViews(): List<ConditionView> {
         val own = toggle?.let {
-            ConditionView(it.id, it.label, it.flagSource, it.defaultEnabled, it.valueSource)
+            // valueSources 为空时回退单值（旧路径仅设 valueSource，M19.5 兼容）
+            val sources = it.valueSources.ifEmpty { listOfNotNull(it.valueSource) }
+            ConditionView(it.id, it.label, it.flagSource, it.defaultEnabled, it.valueSource, sources)
         }
         val nested = when (this) {
             is Condition.Group -> children.flatMap { it.toConditionViews() }
@@ -264,8 +266,24 @@ class SqlPreviewService(private val project: Project) {
         WrapperType.MPJ_LAMBDA_QUERY,
     )
 
-    /** 逻辑删除控制方法（MPJ 官方 API，M15 增补）：链内出现时跳过 deleted 注入。 */
-    private val LOGIC_DELETE_DISABLE_METHODS = setOf("disableLogicDel", "logicDelToOn")
+    /**
+     * 逻辑删除控制求值（P1-01，M19.5）：MPJ 官方四个控制方法的 WHERE 注入语义近似——
+     * 按**源码顺序**扫描链调用维护开关（链上可先 disable 再 enable 精确控制）：
+     *  - `disableLogicDel` → 关闭注入（M15 既有）；
+     *  - `enableLogicDel` → 重新开启注入（官方 API 补充）；
+     *  - `logicDelToOn` → deleted 追加到 ON 而非 WHERE——ON 条件超出插件 WHERE 模型，近似为关闭注入（M15 既有）；
+     *  - `logicDelToWhere` → 明确声明追加到 WHERE，即默认行为，开启注入（官方 API 补充）。
+     */
+    private fun logicDeleteActive(calls: List<cn.song.mybatisplus.visualizer.model.WrapperCall>): Boolean {
+        var active = true
+        for (call in calls) {
+            when (call.methodName) {
+                "disableLogicDel", "logicDelToOn" -> active = false
+                "enableLogicDel", "logicDelToWhere" -> active = true
+            }
+        }
+        return active
+    }
 
     /**
      * 清空缓存（编辑器文件切换/项目关闭时由持有方调用）。

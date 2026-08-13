@@ -224,6 +224,26 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
     }
 
+    fun testChainWrappersFactoryMethodNameIsAnchor() {
+        // P1-05（M19.5）：ChainWrappers 静态工厂方法名应为 gutter 锚点（场景 C isWrappersFactory 扩展）
+        configure(
+            """
+            public class Demo {
+                public void query() {
+                    ChainWrappers.queryChain(deviceInfoMapper).eq("a", 1).list();
+                }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "queryChain" }
+        assertSame(
+            "ChainWrappers 工厂方法名应为锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
     fun testServiceConsumerCallIsNotAnchor() {
         // 消费调用（service.update(wrapper) / service.count(wrapper)）不是链起点 → 不是锚点（仅 lambdaQuery/lambdaUpdate 放行）
         configure(
@@ -244,6 +264,84 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
                 WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
             )
         }
+    }
+
+    fun testAssignedServiceChainEntityResultAnchors() {
+        // M19.5（T-M19.5-01，2026-08-13 用户实测用例 1 原样）：实体结果变量赋值形态——
+        // `XxxEntity e = service.lambdaQuery()...one()` 的 lambdaQuery 方法名必须是锚点
+        // （旧实现 isInsideWrapperVariableInitializer 对任意变量初始化一律去重 → 整条链无锚点，回归已实证）
+        configure(
+            """
+            public class Demo {
+                public void query() {
+                    DeviceEntity onlineVersion = service.lambdaQuery()
+                            .eq(DeviceEntity::getStationId, 1)
+                            .orderByDesc(DeviceEntity::getDicStatus)
+                            .last("LIMIT 1")
+                            .one();
+                }
+
+                static class DeviceEntity { private Long stationId; private Integer dicStatus; }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaQuery" }
+        assertSame(
+            "实体结果变量赋值不应抑制服务链锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testAssignedServiceChainBooleanResultAnchors() {
+        // M19.5（用户实测用例 2 原样）：boolean 结果变量赋值形态（lambdaUpdate...update()）
+        configure(
+            """
+            public class Demo {
+                public void update() {
+                    boolean updated = service.lambdaUpdate()
+                            .eq(WorkflowEntity::getId, 1L)
+                            .set(WorkflowEntity::getShelveStatus, 0)
+                            .update();
+                }
+
+                static class WorkflowEntity { private Long id; private Integer shelveStatus; }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaUpdate" }
+        assertSame(
+            "boolean 结果变量赋值不应抑制服务链锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testAssignedServiceChainLongResultAnchors() {
+        // M19.5（测试盲区补全）：long 结果变量赋值形态（lambdaQuery...count()）——
+        // 旧实现下 `long total = service.lambdaQuery()...count()` 同样无锚点
+        configure(
+            """
+            public class Demo {
+                public void count() {
+                    long total = service.lambdaQuery()
+                            .eq(DeviceEntity::getDicStatus, 1)
+                            .count();
+                }
+
+                static class DeviceEntity { private Integer dicStatus; }
+            }
+            """.trimIndent(),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaQuery" }
+        assertSame(
+            "long 结果变量赋值不应抑制服务链锚点",
+            factoryCall.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
     }
 
     fun testBaseTypeVariableAnchors() {

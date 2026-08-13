@@ -445,14 +445,14 @@ class QueryWrapperParserTest {
         assertTrue(base.contains("AND name = '张三'"))
         assertFalse("false 条件默认不应拼接", base.contains("station_id = 2"))
 
-        // 显式启用 c0+c1 → 三个条件都在
-        val all = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0", "c1"))
+        // 显式启用 c0+c2（M19.6：普通条件 name 也占 id c1）→ 三个条件都在
+        val all = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0", "c2"))
         assertTrue(all.contains("AND station_id = 2"))
 
-        // 全禁用（空集合）→ 仅普通条件（SELECT 列清单仍含 station_id，仅条件不出现）
+        // 全禁用（空集合）→ 所有条件均关闭（M19.6：普通条件同样挂 toggle 可勾选，原"普通条件恒保留"语义扩展）
         val none = SqlGenerator.generate(statement, compact = false, enabledConditionIds = emptySet())
         assertFalse(none.contains("id = 1"))
-        assertTrue(none.contains("name = '张三'"))
+        assertFalse(none.contains("name = '张三'"))
         assertFalse(none.contains("station_id = 2"))
     }
 

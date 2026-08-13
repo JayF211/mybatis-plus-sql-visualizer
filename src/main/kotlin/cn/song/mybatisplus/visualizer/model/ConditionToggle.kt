@@ -10,7 +10,9 @@ package cn.song.mybatisplus.visualizer.model
  * @param defaultEnabled 默认勾选态（M13 简化）：字面量 true→true、false→false；运行时布尔→true；
  *                       不再做判空语义识别与静态求值
  * @param label          人读条件文本（如 "name = '张三'" / "name = ?"），复选框行标签
- * @param valueSource    关联的未解析参数来源（该条件有值输入框时非 null，用于按 source 绑定）
+ * @param valueSource    关联的未解析参数来源（该条件有值输入框时非 null，用于按 source 绑定）；
+ *                       多值条件（between 等）取第一个来源，完整列表见 [valueSources]
+ * @param valueSources   关联的未解析参数来源全集（M19.5：between 双值 → 两个输入框，每个 source 一个）
  */
 data class ConditionToggle(
     val id: String,
@@ -18,4 +20,5 @@ data class ConditionToggle(
     val defaultEnabled: Boolean,
     val label: String,
     val valueSource: String? = null,
+    val valueSources: List<String> = emptyList(),
 )

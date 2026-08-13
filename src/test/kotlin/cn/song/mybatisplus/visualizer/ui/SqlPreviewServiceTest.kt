@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetector
+import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
@@ -11,6 +13,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
@@ -1739,6 +1742,192 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testGetByIdRendersSelect() {
+        // M19.5（T-M19.5-03，用户实测用例 3 原样）：service.getById(id) 单主键查询——
+        // SELECT 全列 + 主键等值；实体从 service qualifier 泛型解析（T-M15-08 removeById 同链路）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private SpWorkflowVersionService spWorkflowVersionService;
+
+                public void query() {
+                    spWorkflowVersionService.getById(1001L);
+                }
+
+                static class SpWorkflowVersionEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String versionNo;
+                    private Integer dicStatus;
+                }
+
+                static class BaseService<T> {}
+
+                static class SpWorkflowVersionService extends BaseService<SpWorkflowVersionEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, version_no, dic_status
+            FROM sp_workflow_version_entity
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testListByIdsRendersSelectIn() {
+        // M19.5（T-M19.5-03，P1-02/P2-08 合并项）：service.listByIds(ids) / selectByIds(ids) 主键 IN 查询
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void query() {
+                    deviceInfoService.listByIds(ids);
+                    deviceInfoService.selectByIds(ids);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private String name;
+                }
+
+                static class BaseService<T> {}
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("listByIds", "selectByIds")) {
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == name }
+            val result = newService().preview(call)
+            assertNotNull("$name 应产出预览结果", result)
+            assertEquals(
+                """
+                SELECT id, name
+                FROM device_info_entity
+                WHERE id IN (?, ?, ...)
+                """.trimIndent(),
+                result!!.sql,
+            )
+        }
+    }
+
+    fun testDeleteByIdsRendersDeleteIn() {
+        // M19.5（P1-02）：service.deleteByIds(ids)（3.5.9+ 新名）→ 主键 IN 删除（与 removeByIds 同族）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void delete() {
+                    deviceInfoService.deleteByIds(ids);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class BaseService<T> {}
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("deleteByIds 应产出预览结果", result)
+        assertEquals(
+            """
+            DELETE FROM device_info_entity
+            WHERE id IN (?, ?, ...)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testSaveEntityRendersInsert() {
+        // M19.5（T-M19.5-03，用户实测用例 4 原样）：service.save(new Entity()) 单实体插入——
+        // 全列 INSERT（类注释声称支持但注册表缺失，注释与实现不一致，M19.5 补注册）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private CarDeviceInfoService carDeviceInfoService;
+
+                public void save() {
+                    carDeviceInfoService.save(new CarDeviceInfoEntity());
+                }
+
+                static class CarDeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String deviceCode;
+                    private Integer dicStatus;
+                }
+
+                static class CarDeviceInfoService {
+                    public void save(CarDeviceInfoEntity entity) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("save 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO car_device_info_entity (id, device_code, dic_status)
+            VALUES (?, ?, ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testEntityCrudMethodNamesAreAnchors() {
+        // M19.5（T-M19.5-04）：save/getById/listByIds 注册后经 batchOperationMethodNames 集合，
+        // WrapperAnchorDetector 场景 D 锚点自动生效（gutter 图标）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void ops() {
+                    deviceInfoService.save(entity);
+                    deviceInfoService.getById(1001L);
+                    deviceInfoService.listByIds(ids);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class DeviceInfoService {
+                    public void save(DeviceInfoEntity entity) {}
+                    public void getById(Long id) {}
+                    public void listByIds(java.util.List<Long> ids) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("save", "getById", "listByIds")) {
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == name }
+            assertSame(
+                "$name 方法名应为 gutter 锚点",
+                call.methodExpression.referenceNameElement,
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
+    }
+
     fun testUpdateByIdRendersUpdate() {
         // U12（T-M15-08）：service.updateById(entity) 单实体更新（update-strategy: always 全列语义）
         myFixture.configureByText(
@@ -2303,6 +2492,859 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertNotNull("disableLogicDel 应产出预览结果", result)
         assertEquals(
             "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testMpjStepByStepAliasOnLambdaAndBetween() {
+        // 2026-08-13 用户实测：MPJ 分步构建 + 四参别名 lambda ON（leftJoin(Class, "t1", on -> ...)）+
+        // selectAs 字符串列（含 CASE WHEN 表达式）+ between——验证整体识别与参数面板 between 值来源
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private SpWorkflowService spWorkflowService;
+
+                public void query(WorkflowQueryDTO dto) {
+                    Page<WorkflowMainVO> page = new Page<>(dto.getPageNum(), dto.getPageSize());
+                    MPJLambdaWrapper<SpWorkflow> wrapper = new MPJLambdaWrapper<>();
+                    wrapper.selectAll(SpWorkflow.class);
+                    wrapper.like(true, SpWorkflow::getName, dto.getName());
+                    wrapper.between(true, SpWorkflow::getCreatedTime, dto.getStartTime(), dto.getEndTime());
+                    wrapper.eq(true, SpWorkflow::getStatus, dto.getStatus());
+                    wrapper.eq(SpWorkflow::getDeleted, 0);
+                    wrapper.leftJoin(SpWorkflowVersion.class, "t1", on -> on
+                            .eq("t1.workflow_id", SpWorkflow::getId)
+                            .apply("t1.version = (SELECT MAX(version) FROM sp_workflow_version WHERE workflow_id = t.id)"));
+                    wrapper.selectAs("t1.id", WorkflowMainVO::getVersionId);
+                    wrapper.selectAs("CASE WHEN t2.version IS NOT NULL THEN 1 ELSE 0 END", WorkflowMainVO::getPublish);
+                    wrapper.orderByDesc(SpWorkflow::getUpdatedTime);
+                    spWorkflowService.selectJoinListPage(page, WorkflowMainVO.class, wrapper);
+                }
+
+                static class SpWorkflow {
+                    private Long id;
+                    private String name;
+                    private Integer status;
+                    private Integer sceneType;
+                    private Integer deleted;
+                    private LocalDateTime createdTime;
+                    private LocalDateTime updatedTime;
+                }
+
+                static class SpWorkflowVersion {
+                    private Long id;
+                    private Long workflowId;
+                    private Integer version;
+                    private Integer scriptStatus;
+                }
+
+                static class WorkflowMainVO {
+                    private Long versionId;
+                    private Long templateId;
+                    private Integer publish;
+                }
+
+                static class WorkflowQueryDTO {
+                    public Long getPageNum() { return 1L; }
+                    public Long getPageSize() { return 10L; }
+                    public String getName() { return ""; }
+                    public LocalDateTime getStartTime() { return null; }
+                    public LocalDateTime getEndTime() { return null; }
+                    public Integer getStatus() { return 1; }
+                }
+
+                static class Page<T> {
+                    public Page(Long a, Long b) {}
+                }
+
+                static class SpWorkflowService {
+                    public Page<WorkflowMainVO> selectJoinListPage(Page<WorkflowMainVO> p, Class<WorkflowMainVO> c, Object w) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        // 用户实际触发点：gutter 图标锚点 = wrapper 变量声明（场景 B）
+        val wrapperVariable = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiLocalVariable::class.java)
+            .first { it.name == "wrapper" }
+        val located = WrapperLocator.locateWithTable(wrapperVariable.nameIdentifier!!)
+        assertNotNull("分步 MPJ 应被定位", located)
+        val result = newService().preview(wrapperVariable.nameIdentifier!!)
+        assertNotNull("分步 MPJ + 别名 lambda ON + between 应产出预览结果", result)
+        assertTrue("between 应出现在 SQL 中", result!!.compactSql.contains("BETWEEN"))
+        assertTrue("别名 join 应带 ON 条件", result.compactSql.contains("LEFT JOIN sp_workflow_version t1 ON t1.workflow_id = t.id"))
+        assertTrue("CASE WHEN 表达式列应原样透传", result.compactSql.contains("CASE WHEN t2.version IS NOT NULL THEN 1 ELSE 0 END"))
+        // 问题 B：between 的两个值（startTime/endTime）应作为动态条件的两个值来源（参数面板两个输入框）
+        val views = result.previewModel?.conditionViews.orEmpty()
+        val betweenView = views.firstOrNull { it.label.contains("BETWEEN") }
+        assertNotNull("between 应有动态条件视图", betweenView)
+        assertEquals(
+            "between 动态条件应有 2 个值来源（参数面板两个输入框）",
+            2,
+            betweenView!!.valueSources.size,
+        )
+        assertTrue("值来源应含 startTime", betweenView.valueSources.any { it.contains("StartTime") })
+        assertTrue("值来源应含 endTime", betweenView.valueSources.any { it.contains("EndTime") })
+        assertEquals(
+            "between 两个值应进入未解析参数",
+            2,
+            result.unresolvedParams.count { it.contains("StartTime") || it.contains("EndTime") },
+        )
+    }
+
+    fun testHelperMethodAppendsConditionsToChain() {
+        // M19.6（2026-08-13 用户实测）：wrapper 作为实参传入自定义 helper 方法
+        // （`applyBusinessOpenInfoFilter(wrapper, dto)`，清单 P16 "wrapper 作为方法入参就地修改"）——
+        // 方法体内 wrapper.apply("1 = 0") / wrapper.in(col, list) 应并入主链参与 SQL 生成；
+        // 无布尔重载的条件同样生成复选框（flagSource 为 null）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query(CarInvoiceQueryDTO dto) {
+                    LambdaQueryWrapper<OrderInvoiceApplyEntity> wrapper = Wrappers.<OrderInvoiceApplyEntity>lambdaQuery()
+                            .likeRight(true, OrderInvoiceApplyEntity::getApplyNo, dto.getApplyNo())
+                            .eq(true, OrderInvoiceApplyEntity::getDicApplyStatus, dto.getDicApplyStatus());
+                    applyBusinessOpenInfoFilter(wrapper, dto);
+                    orderService.list(wrapper);
+                }
+
+                private void applyBusinessOpenInfoFilter(LambdaQueryWrapper<OrderInvoiceApplyEntity> wrapper, CarInvoiceQueryDTO dto) {
+                    List<String> huifuIds = resolveBusinessOpenHuifuIds(dto);
+                    if (ObjectUtil.isNull(huifuIds)) {
+                        return;
+                    }
+                    if (CollUtil.isEmpty(huifuIds)) {
+                        wrapper.apply("1 = 0");
+                        return;
+                    }
+                    wrapper.in(OrderInvoiceApplyEntity::getHuifuId, huifuIds);
+                }
+
+                private List<String> resolveBusinessOpenHuifuIds(CarInvoiceQueryDTO dto) { return null; }
+
+                static class OrderInvoiceApplyEntity {
+                    private Long id;
+                    private String applyNo;
+                    private Integer dicApplyStatus;
+                    private String huifuId;
+                }
+
+                static class CarInvoiceQueryDTO {
+                    public String getApplyNo() { return ""; }
+                    public Integer getDicApplyStatus() { return 1; }
+                }
+
+                static class OrderService {
+                    public void list(Object w) {}
+                }
+
+                static class ObjectUtil { public static boolean isNull(Object o) { return o == null; } }
+                static class CollUtil { public static boolean isEmpty(Object o) { return true; } }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("helper 追加条件应产出预览结果", result)
+        // 条件顺序：主链 like/eq → helper 调用点之后追加（apply 在 if 内、in 在 if 后无条件执行——均并入）
+        assertEquals(
+            "SELECT id, apply_no, dic_apply_status, huifu_id FROM order_invoice_apply_entity WHERE apply_no LIKE ? AND dic_apply_status = ? AND 1 = 0 AND huifu_id IN (?)",
+            result!!.compactSql.trim(),
+        )
+        // 无布尔重载的 in 条件也应生成复选框（flagSource null，M19.6 全量 toggle）
+        val views = result.previewModel?.conditionViews.orEmpty()
+        val inView = views.firstOrNull { it.label.contains("huifu_id IN") }
+        assertNotNull("in 条件应有复选框", inView)
+        assertNull("无布尔重载条件 flagSource 应为 null", inView!!.flagSource)
+        assertTrue("无布尔重载条件默认勾选", inView.defaultEnabled)
+    }
+
+    fun testHelperMethodShortCircuitApplyToggles() {
+        // M19.6：helper 内 apply("1 = 0") 短路空集（用户用例 isEmpty 分支）——并入主链且带复选框
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderInvoiceApplyEntity> wrapper = Wrappers.<OrderInvoiceApplyEntity>lambdaQuery()
+                            .eq(true, OrderInvoiceApplyEntity::getDicApplyStatus, 1);
+                    applyBusinessOpenInfoFilter(wrapper);
+                    orderService.list(wrapper);
+                }
+
+                private void applyBusinessOpenInfoFilter(LambdaQueryWrapper<OrderInvoiceApplyEntity> wrapper) {
+                    wrapper.apply("1 = 0");
+                }
+
+                static class OrderInvoiceApplyEntity {
+                    private Long id;
+                    private Integer dicApplyStatus;
+                }
+
+                static class OrderService {
+                    public void list(Object w) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("helper apply 短路应产出预览结果", result)
+        assertEquals(
+            "SELECT id, dic_apply_status FROM order_invoice_apply_entity WHERE dic_apply_status = 1 AND 1 = 0",
+            result!!.compactSql.trim(),
+        )
+        val applyView = result.previewModel?.conditionViews.orEmpty()
+            .firstOrNull { it.label.contains("1 = 0") }
+        assertNotNull("apply(1 = 0) 应有复选框", applyView)
+        assertNull("apply 无布尔重载 flagSource 应为 null", applyView!!.flagSource)
+    }
+
+    fun testWrapperClearTruncatesChain() {
+        // M19.6（2026-08-13 用户实测建议）：wrapper.clear() 截断——MP 语义清空全部条件；
+        // clear 之前的调用丢弃、clear 之后的保留（用户：'如果有 wrapper.clear() 相关就截断'）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderEntity> wrapper = new LambdaQueryWrapper<OrderEntity>()
+                            .eq(OrderEntity::getId, 1001L);
+                    wrapper.clear();
+                    wrapper.eq(OrderEntity::getOrderCode, "X");
+                    orderService.list(wrapper);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String orderCode;
+                }
+
+                static class OrderService {
+                    public void list(Object w) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("clear 截断应产出预览结果", result)
+        assertEquals(
+            "SELECT id, order_code FROM order_entity WHERE order_code = 'X'",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testInWithListVariableParamsAndViews() {
+        // M19.6 复现（2026-08-13 用户实测）：in(col, List 变量) 的参数来源与视图——确认重复与回填格式问题
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderInvoiceApplyEntity> wrapper = Wrappers.<OrderInvoiceApplyEntity>lambdaQuery()
+                            .eq(true, OrderInvoiceApplyEntity::getDicApplyStatus, 1);
+                    applyBusinessOpenInfoFilter(wrapper);
+                    orderService.list(wrapper);
+                }
+
+                private void applyBusinessOpenInfoFilter(LambdaQueryWrapper<OrderInvoiceApplyEntity> wrapper) {
+                    List<String> huifuIds = resolveBusinessOpenHuifuIds();
+                    wrapper.in(OrderInvoiceApplyEntity::getHuifuId, huifuIds);
+                }
+
+                private List<String> resolveBusinessOpenHuifuIds() { return null; }
+
+                static class OrderInvoiceApplyEntity {
+                    private Long id;
+                    private Integer dicApplyStatus;
+                    private String huifuId;
+                }
+
+                static class OrderService {
+                    public void list(Object w) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("in(List 变量) 应产出预览结果", result)
+        // 参数来源：huifuIds 应恰好出现一次（distinct 后一个输入框）
+        assertEquals("unresolvedParams 应只含一个 huifuIds", 1, result!!.unresolvedParams.count { it == "huifuIds" })
+        // in 条件视图：复选框 + 值来源
+        val inView = result.previewModel?.conditionViews.orEmpty().firstOrNull { it.label.contains("huifu_id IN") }
+        assertNotNull("in 应有条件视图", inView)
+        assertEquals("in 条件值来源应含 huifuIds", listOf("huifuIds"), inView!!.valueSources)
+    }
+
+    fun testGetByIdWithNonEntityArgTypeResolvesServiceEntity() {
+        // M19.6（2026-08-13 用户实测）：getById(dto.getId()) 的实参类型非实体（真实 IDE 中 Long 可解析，
+        // 原实现把 java.lang.Long 当实体——FROM long + serialVersionUID 字段列）；
+        // 自定义 LongValue 模拟真实环境可解析的非实体参数类型 → 应走 service qualifier 泛型解析正确实体
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private BikeDeviceProductInfoService bikeDeviceProductInfoService;
+
+                public void query(Dto dto) {
+                    BikeDeviceProductInfoEntity productInfo = bikeDeviceProductInfoService.getById(dto.getId());
+                }
+
+                static class BikeDeviceProductInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String productName;
+                }
+
+                static class BaseService<T> {
+                    public T getById(LongValue id) { return null; }
+                }
+
+                static class BikeDeviceProductInfoService extends BaseService<BikeDeviceProductInfoEntity> {}
+
+                static class Dto {
+                    public LongValue getId() { return null; }
+                }
+
+                static class LongValue {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById 非实体参数应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, product_name
+            FROM bike_device_product_info_entity
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testSaveEntityArgStillResolvesEntityType() {
+        // M19.6 正向：save(entity) 的实体参数类型仍走步骤 2（isLikelyEntity 不误伤真实实体）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void save() {
+                    DeviceInfoEntity entity = new DeviceInfoEntity();
+                    deviceInfoService.save(entity);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                static class DeviceInfoService {
+                    public void save(DeviceInfoEntity entity) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("save(实体) 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO device_info_entity (id, name)
+            VALUES (?, ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testScratchMpjChainWithStringOnColumns() {
+        // 2026-08-13 用户实测（Scratch 用例原样）：链式内联 MPJ + 双字符串 on eq（"t1.workflow_id", "t.id"）+
+        // 字符串值 eq("t2.script_status", "1") + CASE WHEN selectAs + helper 空实现传参
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public static void main(String[] args) {
+                    WorkflowQueryDTO dto = new WorkflowQueryDTO();
+                    dto.setName("测试流程");
+                    dto.setStatus(1);
+                    dto.setSceneType(0);
+                    dto.setStartTime(LocalDateTime.now().minusDays(7));
+                    dto.setEndTime(LocalDateTime.now());
+
+                    Page<WorkflowMainVO> page = new Page<>(dto.getPageNum(), dto.getPageSize());
+                    MPJLambdaWrapper<SpWorkflow> wrapper = new MPJLambdaWrapper<SpWorkflow>()
+                            .selectAll(SpWorkflow.class)
+                            .like(JPubUtils.IsNotEmpty(dto.getName()), SpWorkflow::getName, dto.getName())
+                            .between(JPubUtils.IsNotEmpty(dto.getStartTime()),
+                                    SpWorkflow::getCreatedTime, dto.getStartTime(), dto.getEndTime())
+                            .eq(JPubUtils.IsNotEmpty(dto.getStatus()), SpWorkflow::getStatus, dto.getStatus())
+                            .eq(JPubUtils.IsNotEmpty(dto.getSceneType()), SpWorkflow::getSceneType, dto.getSceneType())
+                            .eq(SpWorkflow::getDeleted, 0)
+                            .leftJoin(SpWorkflowVersion.class, "t1", on -> on
+                                    .eq("t1.workflow_id", "t.id")
+                                    .apply("t1.version = (SELECT MAX(version) FROM sp_workflow_version WHERE workflow_id = t.id)")
+                            )
+                            .selectAs("t1.id", WorkflowMainVO::getVersionId)
+                            .selectAs("t1.template_id", WorkflowMainVO::getTemplateId)
+                            .leftJoin(SpWorkflowVersion.class, "t2", on -> on
+                                    .eq("t2.workflow_id", "t.id")
+                                    .eq("t2.script_status", "1")
+                            )
+                            .selectAs("t2.version", WorkflowMainVO::getPublishVersion)
+                            .selectAs("CASE WHEN t2.version IS NOT NULL THEN 1 ELSE 0 END", WorkflowMainVO::getPublish)
+                            .orderByDesc(SpWorkflow::getUpdatedTime);
+
+                    applyWorkflowDataScope(wrapper);
+                }
+
+                private static void applyWorkflowDataScope(MPJLambdaWrapper<SpWorkflow> wrapper) {
+                    // 空实现：数据权限过滤（无实际调用）
+                }
+
+                static class SpWorkflow {
+                    private Long id;
+                    private String name;
+                    private Integer status;
+                    private Integer sceneType;
+                    private Integer deleted;
+                    private LocalDateTime createdTime;
+                    private LocalDateTime updatedTime;
+                }
+
+                static class SpWorkflowVersion {
+                    private Long id;
+                    private Long workflowId;
+                    private Long templateId;
+                    private Integer version;
+                    private Integer scriptStatus;
+                }
+
+                static class WorkflowQueryDTO {
+                    private Integer pageNum = 1;
+                    private Integer pageSize = 10;
+                    private String name;
+                    private Integer status;
+                    private Integer sceneType;
+                    private LocalDateTime startTime;
+                    private LocalDateTime endTime;
+                    public Integer getPageNum() { return pageNum; }
+                    public Integer getPageSize() { return pageSize; }
+                    public String getName() { return name; }
+                    public void setName(String name) { this.name = name; }
+                    public Integer getStatus() { return status; }
+                    public void setStatus(Integer status) { this.status = status; }
+                    public Integer getSceneType() { return sceneType; }
+                    public void setSceneType(Integer sceneType) { this.sceneType = sceneType; }
+                    public LocalDateTime getStartTime() { return startTime; }
+                    public void setStartTime(LocalDateTime startTime) { this.startTime = startTime; }
+                    public LocalDateTime getEndTime() { return endTime; }
+                    public void setEndTime(LocalDateTime endTime) { this.endTime = endTime; }
+                }
+
+                static class WorkflowMainVO {
+                    private Long id;
+                    private Long versionId;
+                    private Long templateId;
+                    private Integer publishVersion;
+                    private Integer publish;
+                }
+
+                static class JPubUtils {
+                    public static boolean IsNotEmpty(Object obj) { return true; }
+                }
+
+                static class Page<T> {
+                    public Page(Integer a, Integer b) {}
+                }
+
+                static class LocalDateTime {
+                    public static LocalDateTime now() { return null; }
+                    public LocalDateTime minusDays(long d) { return this; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val wrapperVariable = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiLocalVariable::class.java)
+            .first { it.name == "wrapper" }
+        val result = newService().preview(wrapperVariable.nameIdentifier!!)
+        assertNotNull("Scratch 用例应产出预览结果", result)
+        // 双字符串 on eq：右参 "t.id" 是字符串列引用 → 列对列比较（不能加引号当值）
+        assertTrue("t1 join ON 应为列对列比较", result!!.compactSql.contains("t1.workflow_id = t.id"))
+        assertTrue("t2 join ON 应为列对列比较", result.compactSql.contains("t2.workflow_id = t.id"))
+        assertTrue("t2 script_status 字符串值应带引号", result.compactSql.contains("t2.script_status = '1'"))
+        assertTrue("apply 子查询应原样透传", result.compactSql.contains("(SELECT MAX(version) FROM sp_workflow_version WHERE workflow_id = t.id)"))
+        assertTrue("CASE WHEN 表达式列应原样透传", result.compactSql.contains("CASE WHEN t2.version IS NOT NULL THEN 1 ELSE 0 END"))
+    }
+
+    fun testScratchMpjChainWithHelperConditions() {
+        // 2026-08-13 用户实测延伸：applyWorkflowDataScope(wrapper) 内追加多个条件（M19.6 helper 跨方法续链，
+        // MPJ wrapper 形态）——tenantId 等值、createdTime 范围、name 模糊应并入主链 WHERE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public static void main(String[] args) {
+                    MPJLambdaWrapper<SpWorkflow> wrapper = new MPJLambdaWrapper<SpWorkflow>()
+                            .selectAll(SpWorkflow.class)
+                            .eq(JPubUtils.IsNotEmpty("测试"), SpWorkflow::getName, "测试流程")
+                            .eq(SpWorkflow::getDeleted, 0)
+                            .leftJoin(SpWorkflowVersion.class, "t1", on -> on
+                                    .eq("t1.workflow_id", "t.id"))
+                            .selectAs("t1.id", WorkflowMainVO::getVersionId)
+                            .orderByDesc(SpWorkflow::getUpdatedTime);
+
+                    applyWorkflowDataScope(wrapper);
+                }
+
+                private static void applyWorkflowDataScope(MPJLambdaWrapper<SpWorkflow> wrapper) {
+                    wrapper.eq(SpWorkflow::getTenantId, "default_tenant");
+                    wrapper.ge(SpWorkflow::getCreatedTime, LocalDateTime.now().minusDays(30));
+                    wrapper.likeRight(SpWorkflow::getName, "审批");
+                }
+
+                static class SpWorkflow {
+                    private Long id;
+                    private String name;
+                    private Integer deleted;
+                    private String tenantId;
+                    private LocalDateTime createdTime;
+                    private LocalDateTime updatedTime;
+                }
+
+                static class SpWorkflowVersion {
+                    private Long id;
+                    private Long workflowId;
+                }
+
+                static class WorkflowMainVO {
+                    private Long versionId;
+                }
+
+                static class JPubUtils {
+                    public static boolean IsNotEmpty(Object obj) { return true; }
+                }
+
+                static class LocalDateTime {
+                    public static LocalDateTime now() { return null; }
+                    public LocalDateTime minusDays(long d) { return this; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val wrapperVariable = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiLocalVariable::class.java)
+            .first { it.name == "wrapper" }
+        val result = newService().preview(wrapperVariable.nameIdentifier!!)
+        assertNotNull("MPJ + helper 条件应产出预览结果", result)
+        // helper 内三个条件按调用点之后追加（逻辑顺序）
+        assertEquals(
+            "SELECT t.id, t.name, t.deleted, t.tenant_id, t.created_time, t.updated_time, t1.id AS versionId FROM sp_workflow t LEFT JOIN sp_workflow_version t1 ON t1.workflow_id = t.id WHERE t.name = '测试流程' AND t.deleted = 0 AND t.tenant_id = 'default_tenant' AND t.created_time >= ? AND t.name LIKE '审批%' ORDER BY t.updated_time DESC",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testOfficialApiLogicDeleteEnableRestores() {
+        // P1-01（M19.5）：disableLogicDel().enableLogicDel() 链上先关后开 → 注入恢复（按源码顺序求值）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .disableLogicDel()
+                        .enableLogicDel()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("enableLogicDel 应恢复注入", result)
+        assertEquals(
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND deleted = 0",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testOfficialApiLogicDelToWhereInjects() {
+        // P1-01（M19.5）：logicDelToWhere() 明确声明追加到 WHERE → 注入（= 默认行为）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .logicDelToWhere()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("logicDelToWhere 应产出预览结果", result)
+        assertEquals(
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND deleted = 0",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testOfficialApiLogicDelToOnSkips() {
+        // P1-01（M19.5）：logicDelToOn() ON 形态超出插件 WHERE 模型 → 跳过注入（M15 既有近似）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()
+                        .selectAll(OrderEntity.class)
+                        .logicDelToOn()
+                        .eq(OrderEntity::getId, 1001L);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("logicDelToOn 应产出预览结果", result)
+        assertEquals(
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testServiceStringQueryChainRendersSelect() {
+        // P1-03（M19.5）：service.query() 字符串链（QueryChainWrapper）——实体经 service 泛型解析
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void query() {
+                    deviceInfoService.query()
+                            .eq("dic_status", 1)
+                            .orderByDesc("create_time")
+                            .last("limit 1")
+                            .list();
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer dicStatus;
+                    private String createTime;
+                }
+
+                static class QueryChainWrapper<T> {
+                    public QueryChainWrapper<T> eq(String column, Object value) { return this; }
+                    public QueryChainWrapper<T> orderByDesc(String column) { return this; }
+                    public QueryChainWrapper<T> last(String lastSql) { return this; }
+                    public void list() {}
+                }
+
+                static class BaseService<T> {
+                    public QueryChainWrapper<T> query() { return null; }
+                }
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("service.query() 字符串链应产出预览结果", result)
+        assertEquals(
+            "SELECT id, dic_status, create_time FROM device_info_entity WHERE dic_status = 1 ORDER BY create_time DESC LIMIT 1",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testServiceStringUpdateChainRendersUpdate() {
+        // P1-03（M19.5）：service.update() 字符串链（UpdateChainWrapper）→ UPDATE（字符串列 set/eq）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void update() {
+                    deviceInfoService.update()
+                            .set("dic_status", 0)
+                            .eq("id", 1001L)
+                            .update();
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Integer dicStatus;
+                }
+
+                static class UpdateChainWrapper<T> {
+                    public UpdateChainWrapper<T> set(String column, Object value) { return this; }
+                    public UpdateChainWrapper<T> eq(String column, Object value) { return this; }
+                    public void update() {}
+                }
+
+                static class BaseService<T> {
+                    public UpdateChainWrapper<T> update() { return null; }
+                }
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("service.update() 字符串链应产出预览结果", result)
+        // 字面量值恒内联（1001/0 为代码常量，非运行时变量）
+        assertEquals(
+            "UPDATE device_info_entity SET dic_status = 0 WHERE id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testServiceUpdateConsumerStillNotChainStart() {
+        // P1-03 回归：service.update(wrapper) 消费调用（有实参）仍不得被识别为链起点
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void update() {
+                    deviceInfoService.update(wrapper);
+                }
+            }
+            """.trimIndent(),
+        )
+        val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "update" }
+        assertNull("service.update(wrapper) 消费调用不应是链起点", WrapperLocator.locate(call))
+    }
+
+    fun testServiceLambdaUpdateChainUpdateEntityRendersEntitySet() {
+        // P1-04（M19.5）：链上 update(entity) 终结点——实体字段展开 SET（主键排除进 WHERE）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void update() {
+                    DeviceInfoEntity entity = new DeviceInfoEntity();
+                    deviceInfoService.lambdaUpdate()
+                            .eq(DeviceInfoEntity::getId, 1001L)
+                            .update(entity);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    private Integer dicStatus;
+                }
+
+                static class LambdaUpdateChainWrapper<T> {
+                    public LambdaUpdateChainWrapper<T> eq(SFunction col, Object val) { return this; }
+                    public void update(T entity) {}
+                }
+
+                static class BaseService<T> {
+                    public LambdaUpdateChainWrapper<T> lambdaUpdate() { return null; }
+                }
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("链上 update(entity) 应产出预览结果", result)
+        // 实体字段展开 SET（name/dic_status 占位——运行时值不可静态求值）；eq 的 1001 为字面量恒内联
+        assertEquals(
+            "UPDATE device_info_entity SET name = ?, dic_status = ? WHERE id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testChainWrappersLambdaQueryChainLocates() {
+        // P1-05（M19.5）：ChainWrappers.lambdaQueryChain(BaseMapper) 静态工厂——实体从返回类型泛型解析
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    ChainWrappers.lambdaQueryChain(deviceInfoMapper)
+                            .eq(DeviceInfoEntity::getId, 1001L)
+                            .one();
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class LambdaQueryChainWrapper<T> {
+                    public LambdaQueryChainWrapper<T> eq(SFunction col, Object val) { return this; }
+                    public void one() {}
+                }
+
+                static class ChainWrappers {
+                    public static LambdaQueryChainWrapper<DeviceInfoEntity> lambdaQueryChain(Object mapper) { return null; }
+                }
+
+                interface SFunction {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("ChainWrappers 工厂链应产出预览结果", result)
+        assertEquals(
+            "SELECT id FROM device_info_entity WHERE id = 1001",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testHavingMultipleConditionsGrouped() {
+        // P1-06（M19.5）：having 嵌套链多条件 → HAVING (a > ? AND b < ?)（M1 起仅取第一个条件）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderEntity> w = new LambdaQueryWrapper<OrderEntity>()
+                            .select(OrderEntity::getDicStatus)
+                            .groupBy(OrderEntity::getDicStatus)
+                            .having(x -> x.gt(OrderEntity::getAmount, 100)
+                                    .lt(OrderEntity::getAmount, 1000));
+                    orderService.list(w);
+                }
+
+                static class OrderEntity {
+                    private Integer dicStatus;
+                    private BigDecimal amount;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("having 多条件应产出预览结果", result)
+        assertEquals(
+            "SELECT dic_status FROM order_entity GROUP BY dic_status HAVING (amount > 100 AND amount < 1000)",
             result!!.compactSql.trim(),
         )
     }

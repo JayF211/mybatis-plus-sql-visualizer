@@ -140,8 +140,12 @@ object WrapperLocator {
      *
      * 降级必须限定基类型（T-M15-01 回归）：`long total = service.lambdaQuery()...count()` 的 total
      * 类型不是 Wrapper 基类，若仅按 initializer 链首判断会被误判为 wrapper 变量（链被截断、table 为 null）。
+     *
+     * M19.5（T-M19.5-01a）起为 internal：供 [WrapperAnchorDetector] 复用（结果变量赋值形态
+     * 不应抑制服务链锚点，见 20260813-1536 开发计划）。判定为 O(1) 纯语法（文本匹配 + initializer
+     * 链首回溯，无 resolve），符合 M10 性能红线。
      */
-    private fun isWrapperVariable(variable: PsiVariable): Boolean {
+    internal fun isWrapperVariable(variable: PsiVariable): Boolean {
         if (detectWrapperType(variable.type) != null) return true
         val typeName = (variable.type as? PsiClassType)?.className ?: return false
         if (typeName !in wrapperBaseTypeNames) return false
@@ -307,12 +311,25 @@ object WrapperLocator {
 
         // 链式终结点（Q17/U07-④⑤/U11-⑤，T-M15-01）：`service.lambdaQuery()...one()` / `service.lambdaUpdate()...remove()`。
         // 终结点是链的消费方法（非 Wrapper 操作），从链中剔除并记录消费语义。
-        val terminal = chainCalls.lastOrNull { it.methodExpression.referenceName in chainTerminalMethodNames }
-        val nonTerminalCalls = if (terminal != null) chainCalls.filterNot { it === terminal } else chainCalls
+        // M19.6：wrapper.clear() 截断（MP 语义清空全部条件）——遇 clear 丢弃此前收集（与 buildChain 一致）
+        val clearedCalls = mutableListOf<PsiMethodCallExpression>()
+        for (call in chainCalls) {
+            if (call.methodExpression.referenceName == CLEAR_METHOD) {
+                clearedCalls.clear()
+            } else {
+                clearedCalls += call
+            }
+        }
+        val terminal = clearedCalls.lastOrNull { it.methodExpression.referenceName in chainTerminalMethodNames }
+        val nonTerminalCalls = if (terminal != null) clearedCalls.filterNot { it === terminal } else clearedCalls
         val terminalName = terminal?.methodExpression?.referenceName
         val chainDeleteConsumed = terminalName == REMOVE_TERMINAL
         val chainCountConsumed = terminalName == COUNT_TERMINAL
         val chainExistsConsumed = terminalName == EXISTS_TERMINAL
+        // P1-04（M19.5）：链上 `update(entity)` 终结点（带实参）——实体字段展开 SET
+        // （复用 SqlPreviewService.updateEntityConsumed 分支：实体全列 SET + 主键进 WHERE）
+        val chainUpdateEntity = terminalName == UPDATE_TERMINAL &&
+            terminal != null && terminal.argumentList.expressions.isNotEmpty()
 
         val wrapperCalls = nonTerminalCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
@@ -324,7 +341,7 @@ object WrapperLocator {
             (consumingCall?.let { it.methodExpression.referenceName in countConsumerMethodNames } == true)
         val existsConsumed = chainExistsConsumed ||
             (consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true)
-        val updateEntityConsumed = isEntityUpdateConsumer(factoryCall)
+        val updateEntityConsumed = isEntityUpdateConsumer(factoryCall) || chainUpdateEntity
 
         return LocatedWrapper(
             chain = WrapperChain(
@@ -402,23 +419,42 @@ object WrapperLocator {
 
     /**
      * 识别 Wrapper 工厂/链起点调用：
-     *  - `Wrappers.<T>lambdaQuery()` 静态工厂（qualifier 指向 Wrappers 工具类）；
+     *  - `Wrappers.<T>lambdaQuery()` 静态工厂 / `ChainWrappers.lambdaQueryChain(Class)` 等（P1-05，qualifier 指向工具类）；
      *  - `service.lambdaQuery()` / `service.lambdaUpdate()` 服务链（T-M15-01，qualifier 为任意 service 引用或
      *    隐式 this 无 qualifier）；仅放行 [serviceChainMethodNames]，避免把 `service.update(wrapper)` 等
-     *    消费调用误判为链起点。
+     *    消费调用误判为链起点（P1-03：query/update 为歧义方法，需 [isServiceChainStart] 守卫）。
      */
     private fun isWrapperFactoryCall(call: PsiMethodCallExpression): Boolean {
         val methodName = call.methodExpression.referenceName
         if (methodName !in wrapperFactoryMethodNames) return false
         val qualifier = call.methodExpression.qualifierExpression as? PsiReferenceExpression
-        if (qualifier == null) return methodName in serviceChainMethodNames
+        if (qualifier == null) return methodName in serviceChainMethodNames && isServiceChainStart(call)
         val resolved = qualifier.resolve()
         return when (resolved) {
-            is PsiClass -> resolved.name == "Wrappers"
-            else -> qualifier.referenceName == "Wrappers" || methodName in serviceChainMethodNames
-        }    }
+            is PsiClass -> resolved.name in wrapperFactoryClassNames
+            else -> qualifier.referenceName in wrapperFactoryClassNames ||
+                (methodName in serviceChainMethodNames && isServiceChainStart(call))
+        }
+    }
 
-    /** Wrappers 静态工厂方法 → Wrapper 类型映射。 */
+    /**
+     * 服务链起点守卫（P1-03，M19.5）：`lambdaQuery`/`lambdaUpdate` 恒为链起点；
+     * `query`/`update` 同时是**消费方法名**（`service.update(wrapper)`）——仅当调用**无实参**
+     * 且存在**后续链调用**（该调用是某外层方法调用的 qualifier）时才按链起点识别。
+     * 纯语法 O(1)（不 resolve），符合 M10 性能红线；internal 供 [WrapperAnchorDetector] 复用。
+     */
+    internal fun isServiceChainStart(call: PsiMethodCallExpression): Boolean {
+        val methodName = call.methodExpression.referenceName
+        if (methodName !in ambiguousServiceChainMethods) return true
+        if (call.argumentList.expressions.isNotEmpty()) return false
+        val parent = call.parent
+        return parent is PsiReferenceExpression && parent.parent is PsiMethodCallExpression
+    }
+
+    /** 与消费方法名冲突的服务链起点方法（需 [isServiceChainStart] 守卫）。 */
+    private val ambiguousServiceChainMethods: Set<String> = setOf("query", "update")
+
+    /** Wrappers 静态工厂方法 → Wrapper 类型映射（P1-05：ChainWrappers 工厂方法一并映射）。 */
     private fun factoryWrapperType(call: PsiMethodCallExpression): WrapperType? =
         when (call.methodExpression.referenceName) {
             "lambdaQuery" -> WrapperType.LAMBDA_QUERY
@@ -426,12 +462,47 @@ object WrapperLocator {
             "lambdaDelete" -> WrapperType.LAMBDA_DELETE
             "query" -> WrapperType.QUERY
             "update" -> WrapperType.UPDATE
+            // ChainWrappers 静态工厂（MP 官方 API，P1-05）
+            "queryChain" -> WrapperType.QUERY
+            "lambdaQueryChain" -> WrapperType.LAMBDA_QUERY
+            "lambdaUpdateChain" -> WrapperType.LAMBDA_UPDATE
+            "lambdaDeleteChain" -> WrapperType.LAMBDA_DELETE
+            "updateChain" -> WrapperType.UPDATE
+            "deleteChain" -> WrapperType.LAMBDA_DELETE
             else -> null
         }
 
     // ------------------------------------------------------------------
     // 构建调用链
     // ------------------------------------------------------------------
+
+    /**
+     * M19.6（2026-08-13 用户实测）：wrapper 作为实参传入自定义 helper 方法
+     * （`applyBusinessOpenInfoFilter(wrapper, dto)`，清单 P16 "wrapper 作为方法入参就地修改"形态）——
+     * 展开方法体内对该形参的**直接链式调用**并入主链（helper 内追加的 apply/in/eq 等条件参与 SQL 生成）。
+     *
+     * 规则：
+     *  - 仅收集链首 qualifier resolve 到对应形参的调用（`wrapper.apply(...)` / `wrapper.in(...)`）；
+     *  - lambda 体内调用（`wrapper.and(w -> w.eq(...))`）的 w 是 lambda 参数，不在此收集（由 NestedArg 解析）；
+     *  - 只展开一层（helper 内不再递归传参）；
+     *  - 展开调用的逻辑位置由调用方锚定在 helper **调用点**之后（文件偏移可能早于主链）。
+     */
+    private fun expandHelperCalls(call: PsiMethodCallExpression, ref: PsiReferenceExpression): List<PsiMethodCallExpression> {
+        val method = call.resolveMethod() ?: return emptyList()
+        val body = method.body ?: return emptyList()
+        val paramIndex = call.argumentList.expressions.indexOfFirst { it === ref }
+        if (paramIndex < 0) return emptyList()
+        val param = method.parameterList.getParameter(paramIndex) ?: return emptyList()
+        val result = mutableListOf<PsiMethodCallExpression>()
+        PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
+            .forEach { inner ->
+                val chain = ArgResolver.collectCallChain(inner)
+                val head = chain.firstOrNull() ?: return@forEach
+                val headQualifier = head.methodExpression.qualifierExpression as? PsiReferenceExpression
+                if (headQualifier?.resolve() === param) result += chain
+            }
+        return result
+    }
 
     /**
      * 从 Wrapper 变量构建完整调用链。
@@ -449,7 +520,7 @@ object WrapperLocator {
         val table: TableInfo? = resolveTableInfo(entityClass, typeArgName)
         val constructorAlias = extractConstructorAlias(variable.initializer)
 
-        val callElements = mutableListOf<PsiMethodCallExpression>()
+        val callElements = mutableListOf<Pair<PsiMethodCallExpression, Int>>()
         var deleteConsumed = false
         var countConsumed = false
         var existsConsumed = false
@@ -459,7 +530,7 @@ object WrapperLocator {
         //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除
         variable.initializer?.let { init ->
             val initCalls = ArgResolver.collectChainFromInitializer(init).dropWhile { isWrapperFactoryCall(it) }
-            callElements += expandFactoryCalls(initCalls)
+            expandFactoryCalls(initCalls).forEach { callElements += it to it.textRange.endOffset }
         }
 
         // 2. 变量引用上的方法调用（分步写法）+ 消费识别（`service.remove(wrapper)` / `service.count(wrapper)` 等）
@@ -480,26 +551,45 @@ object WrapperLocator {
             val qualifier = call.methodExpression.qualifierExpression
             val isDirect = qualifier === refExpression
             if (isDirect) {
-                callElements += collectExtendingChain(call)
+                collectExtendingChain(call).forEach { callElements += it to call.textRange.endOffset }
             }
             val isLambdaConverted = qualifier is PsiMethodCallExpression &&
                 qualifier.methodExpression.referenceName == "lambda" &&
                 qualifier.methodExpression.qualifierExpression === refExpression
             if (isLambdaConverted) {
-                callElements += call
+                callElements += call to call.textRange.endOffset
+            }
+            // M19.6（2026-08-13 用户实测）：wrapper 作为**实参**传入自定义 helper 方法
+            // （`applyBusinessOpenInfoFilter(wrapper, dto)`，清单 P16 "wrapper 作为方法入参就地修改"）——
+            // 展开方法体内对该形参的链式调用；展开调用**锚定在 helper 调用点**（逻辑顺序，而非文件偏移）
+            if (call.argumentList.expressions.any { it === refExpression }) {
+                expandHelperCalls(call, refExpression).forEach { callElements += it to call.textRange.endOffset }
             }
         }
 
         // 合并去重（注意：链式调用表达式的 textOffset 可能相同——都从 new 起始，
-        // 必须用 endOffset 区分），按源码结束位置排序
+        // 必须用 endOffset 区分）；按**逻辑顺序**排序：主链按源码偏移，跨方法展开的调用
+        // 锚定其 helper 调用点（M19.6），组内按自身源码偏移
         val sortedCalls = callElements
-            .distinctBy { it.textRange.endOffset }
-            .sortedBy { it.textRange.endOffset }
+            .distinctBy { it.first.textRange.endOffset }
+            .sortedWith(compareBy({ it.second }, { it.first.textRange.endOffset }))
+            .map { it.first }
+
+        // M19.6（2026-08-13 用户实测）：wrapper.clear() 截断——MP 语义清空全部条件；
+        // 按源码顺序遇 clear() 丢弃此前已收集的调用（clear 自身不入链）
+        val truncatedCalls = mutableListOf<PsiMethodCallExpression>()
+        for (call in sortedCalls) {
+            if (call.methodExpression.referenceName == CLEAR_METHOD) {
+                truncatedCalls.clear()
+            } else {
+                truncatedCalls += call
+            }
+        }
 
         // P15（T-M15-05）：if/else 互斥分支——排序后（源码序）同一 if 语句内的调用只保留第一个分支
         // （then），避免 `if (x) { w.eq(...) } else { w.in(...) }` 合并成 AND 双条件
         val seenIfStatements = mutableSetOf<PsiIfStatement>()
-        val dedupedCalls = sortedCalls.filter { call ->
+        val dedupedCalls = truncatedCalls.filter { call ->
             val enclosingIf = PsiTreeUtil.getParentOfType(call, PsiIfStatement::class.java, false)
             enclosingIf == null || seenIfStatements.add(enclosingIf)
         }
@@ -678,17 +768,26 @@ object WrapperLocator {
     // 类型识别
     // ------------------------------------------------------------------
 
-    /** Wrappers 静态工厂方法名（`Wrappers.<T>lambdaQuery()` 等）。M10 起 internal 供 [WrapperAnchorDetector] 复用。 */
+    /** Wrappers 静态工厂方法名（`Wrappers.<T>lambdaQuery()` 等）。M10 起 internal 供 [WrapperAnchorDetector] 复用。
+     *  P1-05（M19.5）：ChainWrappers 工厂方法（queryChain/lambdaQueryChain 等）一并收录。 */
     internal val wrapperFactoryMethodNames: Set<String> = setOf(
         "lambdaQuery", "lambdaUpdate", "lambdaDelete", "query", "update",
+        "queryChain", "lambdaQueryChain", "lambdaUpdateChain", "lambdaDeleteChain", "updateChain", "deleteChain",
     )
 
     /**
-     * 服务链起点方法名（`service.lambdaQuery()` / `service.lambdaUpdate()`，T-M15-01）。
-     * 与 [wrapperFactoryMethodNames] 不同：只放行这两个方法（`service.update(wrapper)` 等消费调用
+     * Wrappers / ChainWrappers 静态工厂类名（P1-05，M19.5）。
+     * M10 起 internal 供 [WrapperAnchorDetector] 复用（gutter 锚点快速路径文本匹配）。
+     */
+    internal val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers")
+
+    /**
+     * 服务链起点方法名（`service.lambdaQuery()` / `service.lambdaUpdate()`，T-M15-01；
+     * P1-03 扩展 `service.query()` / `service.update()` 字符串链——歧义方法经 [isServiceChainStart] 守卫）。
+     * 与 [wrapperFactoryMethodNames] 不同：只放行这些方法（`service.update(wrapper)` 等消费调用
      * 不在此列，避免误判为链起点）。
      */
-    internal val serviceChainMethodNames: Set<String> = setOf("lambdaQuery", "lambdaUpdate")
+    internal val serviceChainMethodNames: Set<String> = setOf("lambdaQuery", "lambdaUpdate", "query", "update")
 
     /**
      * 链式 wrapper 终结点（消费方法，非 Wrapper 操作，T-M15-01）：
@@ -706,6 +805,8 @@ object WrapperLocator {
     private const val REMOVE_TERMINAL = "remove"
     private const val COUNT_TERMINAL = "count"
     private const val EXISTS_TERMINAL = "exists"
+    private const val UPDATE_TERMINAL = "update"
+    private const val CLEAR_METHOD = "clear"
 
     /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法；
      *  deleteJoin 为 MPJ 官方联表删除，M15 增补）。 */

@@ -24,7 +24,8 @@ data class SqlPreviewModel(
  * @param label          人读条件文本（复选框标签）
  * @param flagSource     布尔条件实参源码（tooltip），null 表示非布尔重载
  * @param defaultEnabled 默认勾选态
- * @param valueSource    关联值输入框来源；null 表示 checkbox-only（无输入框）
+ * @param valueSource    关联值输入框来源（首值）；null 表示 checkbox-only（无输入框）
+ * @param valueSources   关联值输入框来源全集（M19.5：between 双值 → 两个输入框，每个 source 一个）
  */
 data class ConditionView(
     val id: String,
@@ -32,4 +33,5 @@ data class ConditionView(
     val flagSource: String?,
     val defaultEnabled: Boolean,
     val valueSource: String?,
+    val valueSources: List<String> = emptyList(),
 )

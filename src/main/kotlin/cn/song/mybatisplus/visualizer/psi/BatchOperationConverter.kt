@@ -9,17 +9,21 @@ import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
 
 /**
- * 批量/单实体操作转换器（F-15，M6-01 + T-M15-08 扩展）：识别 `service.updateBatchById(list)` 等调用，
- * 生成 SQL 模板 + 参数组说明。
+ * 批量/单实体操作转换器（F-15，M6-01 + T-M15-08 扩展 + M19.5 实体单条 CRUD）：识别
+ * `service.updateBatchById(list)` 等调用，生成 SQL 模板 + 参数组说明。
  *
  * 支持的批量方法：
  *  - `updateBatchById(list)` / `updateById(entity)`：UPDATE 表 SET 非主键列 = ? WHERE 主键 = ?
- *  - `saveBatch(list)` / `insertBatchSomeColumn(list)` / `save(entity)`：INSERT INTO 表 (列...) VALUES (?, ...)
+ *  - `saveBatch(list)` / `insertBatchSomeColumn(list)` / `save(entity)`（M19.5 补注册，与注释一致化）：
+ *    INSERT INTO 表 (列...) VALUES (?, ...)
  *  - `saveOrUpdate(entity)` / `saveOrUpdateBatch(list)`（U12，T-M15-08）：INSERT + 方言 upsert（PG `ON CONFLICT`）
- *  - `removeByIds(list)` / `removeById(id)`（U11，T-M15-08）：DELETE FROM 表 WHERE 主键 IN/=
+ *  - `removeByIds(list)` / `removeById(id)` / `deleteByIds(ids)`（U11/P1-02，T-M15-08 + M19.5）：
+ *    DELETE FROM 表 WHERE 主键 IN/=
+ *  - `getById(id)` / `listByIds(ids)` / `selectByIds(ids)`（M19.5，实体单条查询，P2-08 同点合并）：
+ *    SELECT 全列 FROM 表 WHERE 主键 =/IN
  *
  * 实体类解析顺序：集合参数泛型（`List<Entity>`）→ 实体参数类型 → service qualifier 泛型
- * （`XxxService extends IService<Entity>` / `ServiceImpl<Mapper, Entity>`，removeById 单参场景）。
+ * （`XxxService extends IService<Entity>` / `ServiceImpl<Mapper, Entity>`，getById/removeById 单参场景）。
  * 运行时行值不可得，输出 `?` 模板并附参数组说明（每行一组，字段顺序与 SQL 一致）。
  */
 object BatchOperationConverter {
@@ -30,6 +34,7 @@ object BatchOperationConverter {
         INSERT("INSERT"),
         DELETE("DELETE"),
         UPSERT("UPSERT"),
+        SELECT("SELECT"),
     }
 
     private val BATCH_OPERATIONS = mapOf(
@@ -37,10 +42,15 @@ object BatchOperationConverter {
         "updateById" to Operation.UPDATE,
         "saveBatch" to Operation.INSERT,
         "insertBatchSomeColumn" to Operation.INSERT,
+        "save" to Operation.INSERT,
         "saveOrUpdate" to Operation.UPSERT,
         "saveOrUpdateBatch" to Operation.UPSERT,
         "removeByIds" to Operation.DELETE,
         "removeById" to Operation.DELETE,
+        "deleteByIds" to Operation.DELETE,
+        "getById" to Operation.SELECT,
+        "listByIds" to Operation.SELECT,
+        "selectByIds" to Operation.SELECT,
     )
 
     /** 批量操作方法名集合（M10 起 internal 供 [WrapperAnchorDetector] gutter 锚点复用）。 */
@@ -61,6 +71,7 @@ object BatchOperationConverter {
             Operation.INSERT -> buildInsertBatch(methodName, table)
             Operation.DELETE -> buildDeleteBatch(methodName, table)
             Operation.UPSERT -> buildUpsertBatch(methodName, table)
+            Operation.SELECT -> buildSelectBatch(methodName, table)
         }
     }
 
@@ -68,22 +79,39 @@ object BatchOperationConverter {
      * 解析目标实体表信息（T-M15-08 起支持三种来源）：
      *  1. 集合参数泛型（`List<Entity>`，批量形态）
      *  2. 实体参数类型（`save(entity)` / `updateById(entity)` 单实体形态）
-     *  3. service qualifier 泛型（`removeById(id)` 单参形态：`XxxService extends IService<Entity>`）
+     *  3. service qualifier 泛型（`getById(id)` / `removeById(id)` 单参形态：`XxxService extends IService<Entity>`）
+     *
+     * M19.6（2026-08-13 用户实测）：步骤 1/2 增加 [isLikelyEntity] 限定——`getById(dto.getId())`
+     * 的实参 Long 在真实 IDE 可解析，原实现把 java.lang.Long 当实体（FROM long + serialVersionUID
+     * 字段列，用户实测症状）；限定后 Long/String 等基础类型跳过，走步骤 3 service 泛型。
      */
     private fun resolveEntityTable(call: PsiMethodCallExpression): TableInfo? {
         val firstArg = call.argumentList.expressions.firstOrNull() ?: return null
-        // 1. 集合参数泛型
+        // 1. 集合参数泛型（List<Entity>）
         val listType = firstArg.type as? PsiClassType
         val entityType = listType?.parameters?.firstOrNull() as? PsiClassType
         val entityFromList = entityType?.resolve()
-        if (entityFromList != null) return EntityResolver().resolve(entityFromList)
-        // 2. 实体参数类型
+        if (entityFromList != null && isLikelyEntity(entityFromList)) return EntityResolver().resolve(entityFromList)
+        // 2. 实体参数类型（save(entity) / updateById(entity)）
         val entityFromArg = firstArg.type as? PsiClassType
         val entityClassFromArg = entityFromArg?.resolve()
-        if (entityClassFromArg != null) return EntityResolver().resolve(entityClassFromArg)
-        // 3. service qualifier 泛型（removeById(id) 等单参非实体场景）
+        if (entityClassFromArg != null && isLikelyEntity(entityClassFromArg)) return EntityResolver().resolve(entityClassFromArg)
+        // 3. service qualifier 泛型（getById(id) 等单参非实体场景）
         val entityFromService = resolveServiceEntityClass(call) ?: return null
         return EntityResolver().resolve(entityFromService)
+    }
+
+    /**
+     * 实体类启发式判定（M19.6）：仅接受 **@TableName 注解实体**（真实实体，兼容无 Entity 后缀命名
+     * 如 SpWorkflow）或**类名含 "Entity"** 的类；排除 JDK 基础类型（java./javax. 前缀）——
+     * 避免 getById/removeById 的 Long/String 等实参类型被误当实体解析。
+     */
+    private fun isLikelyEntity(psiClass: PsiClass): Boolean {
+        val qualifiedName = psiClass.qualifiedName ?: return false
+        if (qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.")) return false
+        if (psiClass.annotations.any { (it.qualifiedName ?: "").endsWith(".TableName") }) return true
+        val name = psiClass.name ?: return false
+        return "Entity" in name
     }
 
     /**
@@ -133,13 +161,28 @@ object BatchOperationConverter {
         return BatchPreview(methodName, table.tableName, sql, buildParamGroups(columns))
     }
 
-    /** DELETE 模板：主键 IN 列表（removeByIds）/ 主键等值（removeById，U11）。 */
+    /** DELETE 模板：主键 IN 列表（removeByIds/deleteByIds）/ 主键等值（removeById，U11）。 */
     private fun buildDeleteBatch(methodName: String, table: TableInfo): BatchPreview {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val sql = if (methodName == "removeById") {
             "DELETE FROM ${table.tableName}\nWHERE ${idColumn.columnName} = ?"
         } else {
             "DELETE FROM ${table.tableName}\nWHERE ${idColumn.columnName} IN (?, ?, ...)"
+        }
+        return BatchPreview(methodName, table.tableName, sql, null)
+    }
+
+    /**
+     * SELECT 模板（M19.5，实体单条查询，P1-02/P2-08 同点合并）：
+     * 全列清单 + 主键等值（getById）/ 主键 IN（listByIds/selectByIds）。
+     */
+    private fun buildSelectBatch(methodName: String, table: TableInfo): BatchPreview {
+        val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
+        val selectColumns = table.columns.joinToString(", ") { it.columnName }
+        val sql = if (methodName == "getById") {
+            "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE ${idColumn.columnName} = ?"
+        } else {
+            "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE ${idColumn.columnName} IN (?, ?, ...)"
         }
         return BatchPreview(methodName, table.tableName, sql, null)
     }

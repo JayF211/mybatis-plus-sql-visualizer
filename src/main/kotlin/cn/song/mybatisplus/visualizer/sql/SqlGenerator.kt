@@ -341,7 +341,17 @@ object SqlGenerator {
 
         is Condition.In -> {
             val op = if (condition.negated) "NOT IN" else "IN"
-            val values = condition.values.joinToString(", ") { renderValue(it, paramSink, hintSink, quoteHint(table, condition.column)) }
+            // M19.6（用户实测）：IN 列表占位符标记 inList 提示——面板回填按逗号分割多值、每个值独立引号
+            val values = condition.values.joinToString(", ") { value ->
+                when (value) {
+                    is SqlValue.Placeholder -> {
+                        paramSink?.add(value.source)
+                        hintSink?.add(ParamHint(quote = quoteHint(table, condition.column), inList = true))
+                        "?"
+                    }
+                    is SqlValue.Literal -> value.raw
+                }
+            }
             "${condition.column.qualifiedName} $op ($values)"
         }
 

@@ -399,6 +399,33 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testInListMultiValueBackfill() {
+        // M19.6（2026-08-13 用户实测）：IN 列表占位符回填按逗号分割多值、每个值独立引号——
+        // 输入 `1,2` → IN ('1','2')（原实现拼成 IN ('1,2') 单值；name 为 String 列恒引号）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.In(
+                        ColumnRef(columnName = "name"),
+                        negated = false,
+                        values = listOf(SqlValue.Placeholder("names")),
+                        toggle = ConditionToggle("c0", null, true, "name IN (?)", "names", listOf("names")),
+                    ),
+                ),
+                views = listOf(
+                    ConditionView("c0", "name IN (?)", null, true, "names", listOf("names")),
+                ),
+            ),
+        )
+        panel.conditionValueFieldForTest(0)!!.text = "张三,李四"
+        assertTrue(panel.editorForTest()!!.document.text.contains("name IN ('张三', '李四')"))
+        // 单值输入不受影响（String 列恒引号）
+        panel.conditionValueFieldForTest(0)!!.text = "王五"
+        assertTrue(panel.editorForTest()!!.document.text.contains("name IN ('王五')"))
+        panel.clear()
+    }
+
     // ------------------------------------------------------------------
     // M17：执行 SQL（M17.4 起由弹窗底部按钮区调用面板 internal executeSql()；
     // 测试沙盒无 Database 插件 → Community 降级路径）

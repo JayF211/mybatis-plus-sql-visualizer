@@ -373,7 +373,7 @@ wrapper.apply(StrUtil.isNotBlank(sql), sql);
 
 **出现位置**：`admin/CarInvoiceAppService#applyBusinessOpenInfoFilter`（`apply("1 = 0")` + `in` 大集合）、`admin/CarInvoiceAppService#listOrderRelByApplyJoinCursor`（**元组比较参数化 apply**）、`admin/CarInvoiceAppService#applyStationIdsFilter`（jsonb `@>` 拼接 + 字符串列名参数）、`admin/GiftFundAppService#list`（`apply(condition, buildShowStatusCondition(...))` boolean + 动态 SQL）。
 
-**测试要点**：`apply` 原样透传 SQL；`{0}/{1}` 绑定参数替换（含元组比较形态）；带 boolean 条件的重载；方言表达式（jsonb）透传。
+**测试要点**：`apply` 原样透传 SQL；`{0}/{1}` 绑定参数替换（含元组比较形态）；带 boolean 条件的重载；方言表达式（jsonb）透传；**M19.6（用户实测）：无布尔前缀的 `apply` 同样生成复选框**（`apply("1 = 0")` 短路空集可在参数面板勾选开关，flagSource 为 null 默认勾选）。
 
 ---
 
@@ -441,6 +441,8 @@ wrapper.orderByDesc(CouponEntity::getDicCouponType)
 
 **测试要点**：`leftJoin(Class, on -> on.eq(...))` lambda ON；`on` 内多条件 `eq`；与 `.and(w -> ...or(t -> ...isNotNull(...)))` 叠加；条件式续链（P15 同链）。
 
+> **M19.5/M19.6 扩展（2026-08-13 用户实测）**：① **四参别名 + lambda ON**：`leftJoin(Class, "t1", on -> on.eq("t1.workflow_id", Entity::getId).apply("...子查询..."))`——别名与 lambda ON 组合形态（parseJoin 4b 分支）；② on 内 **`eq` 字符串列**（`eq("t1.workflow_id", 主表列)` 左字符串列原样、右方法引用加主表别名）；③ on 内 **`apply` 子查询**（`Condition.Raw` 原样透传）；④ **双字符串 eq**（Scratch 用例）：`eq("t1.workflow_id", "t.id")` 右参含 `.` 按**字符串列引用**生成列对列比较（`t1.workflow_id = t.id`，不加引号）；无 `.` 的字符串右参按值（`eq("t2.script_status", "1")` → `= '1'`）。
+
 ---
 
 ### P14 `and` / `or` 嵌套复合条件
@@ -506,6 +508,8 @@ private MPJLambdaWrapper<WalletWithdrawEntity> applyWithdrawFilters(
 **出现位置**：`admin/MerchantWalletWithdrawAppService#applyWithdrawFilters`、`admin/CarInvoiceAppService#applyStationIdsFilter/#applyBusinessOpenInfoFilter`（MPJ 重载）、`admin/MerchantShareRecordAppService#appendCursorCondition`、`merchant-admin/MerchantShareRecordAppService#appendCursorCondition`、`merchant/HomeService#applyCarKeywordFilter/#applyCarDicStatusFilter/#applyBikeKeywordFilter/#applyBikeDicStatusFilter`。
 
 **测试要点**：`MPJLambdaWrapper<T>` 作为入参类型；入参方法内继续链式（有 return 与无 return 两种形态）；与 P03 工厂模式配合（3 级链）。
+
+> **M19.6 扩展（2026-08-13 用户实测）**：**wrapper 作为实参传入自定义 helper 方法的跨方法续链追踪**——`applyBusinessOpenInfoFilter(wrapper, dto)` 方法体内对形参的直接链式调用（`wrapper.apply("1 = 0")`、`wrapper.in(col, list)` 等）自动并入主链（helper 调用点之后逻辑排序，P15 if 分支去重同样生效）；**MPJ wrapper 同样适用**（`applyWorkflowDataScope(MPJLambdaWrapper)` 内 eq/ge/likeRight 等追加条件并入联表查询 WHERE，主表别名 `t.` 前缀统一）；**`wrapper.clear()` 截断**——按源码顺序遇 clear() 丢弃此前收集的条件（MP 语义清空），buildChain 与工厂链统一处理。
 
 ---
 
@@ -722,7 +726,7 @@ merchantWalletFlowService.list(sumQw);
 
 **出现位置**：`admin/StpInterfaceImpl#getPermissionList`（`in(col, roleIds)` 前次查询结果回填）、`admin/CarStationInfoAppService#listChargeTypes`、`merchant-admin/SubAccountService#validateRoleIds`、`consumer/CouponUserService`（4 常量 varargs）、`consumer/UserInvoiceAppService#page`（284-288，boolean 取反 + 4 常量）、`merchant/ChargingPortManagementService`（342/445，单值 varargs）、`merchant/AccountManagementAppService#queryDayAmountSummary`（字符串列 boolean 形态）。
 
-**测试要点**：`in` 参数可为 `Collection`/`List`/`Set`/varargs 常量/单值；boolean 条件取反用法（`dto.getX() == null` 为真时 in 默认集）；集合来源多样（DTO 列表、流式去重、上次查询结果、`List.of(...)` 常量）。
+**测试要点**：`in` 参数可为 `Collection`/`List`/`Set`/varargs 常量/单值；boolean 条件取反用法（`dto.getX() == null` 为真时 in 默认集）；集合来源多样（DTO 列表、流式去重、上次查询结果、`List.of(...)` 常量）；**M19.6（用户实测）：`in(col, List 变量)` 的值来源进动态条件行输入框**（替代普通参数区避免重复），参数面板输入 `1,2` 回填为 `('1','2')`（逗号分割多值、每个值独立引号，String 列恒引号）。
 
 ---
 
@@ -750,7 +754,7 @@ merchantWalletFlowService.list(sumQw);
 
 **出现位置**：18 处：`merchant/AccountManagementAppService#rechargeRecord/#fundDetail`、`merchant-admin/CarOrderRecordAppService`（447/501）、`consumer/UserDiscountAppService`（82 boolean/98）、`consumer/CarOrderAppService`（310/414）、`merchant/OrderManagementService`、`merchant/ChargingPortManagementService`。
 
-**测试要点**：`between(col, v1, v2)` → `BETWEEN ? AND ?`；boolean 重载用 `ObjUtil.isAllNotEmpty` 双参判断。
+**测试要点**：`between(col, v1, v2)` → `BETWEEN ? AND ?`；boolean 重载用 `ObjUtil.isAllNotEmpty` 双参判断；**M19.5（用户实测）：between 动态条件行渲染两个值输入框**（lo/hi 两个占位符 source 各一个输入框，`ConditionToggle.valueSources` 多值扩展，2026-08-13）。
 
 ---
 
@@ -908,7 +912,9 @@ boolean exists = giftFundDataService.lambdaQuery().eq(GiftFundEntity::getId, id)
 
 **出现位置**：`merchant/CarInvoiceManagementAppService#listOrders/#findByApplyNo`（one）、`merchant/AccountManagementAppService`（oneOpt 6 处）、`callback/HuifuInvoiceAutoReissueService`（62-64 one、145-152 update 链）、`consumer/UserInvoiceAppService`（793-796 exists）、`merchant/StationInfoManagementService`（729-748 count）、`modules/CarOrderInvoiceLifecycleService#getById`（294/313 one）。
 
-**测试要点**：链式终结点全集（`.one()/.oneOpt()/.list()/.count()/.exists()/.page()/.last("LIMIT 1")`）；`lambdaQuery()` 链与 `lambdaUpdate()` 链（Q17 与 U14）方法名归属区分；显式 `LambdaQueryChainWrapper` 类型声明仅 1 处（`modules/CarDevicePortInfoServiceImpl#findByDeviceCodeAndNumber`，先 `count(wrapper)` 查重再 `getOne(wrapper)` 复用）。
+**测试要点**：链式终结点全集（`.one()/.oneOpt()/.list()/.count()/.exists()/.page()/.last("LIMIT 1")`）；`lambdaQuery()` 链与 `lambdaUpdate()` 链（Q17 与 U13）方法名归属区分；显式 `LambdaQueryChainWrapper` 类型声明仅 1 处（`modules/CarDevicePortInfoServiceImpl#findByDeviceCodeAndNumber`，先 `count(wrapper)` 查重再 `getOne(wrapper)` 复用）。
+
+> ✅ **已修复（M19.5，300 测试全绿）**：链式**赋值给结果变量**的形态（`XxxEntity e = service.lambdaQuery()...one();`、`long total = ...count();`）gutter 预览图标不显示——`WrapperAnchorDetector.isInsideWrapperVariableInitializer` 的"变量初始化去重"未区分 **Wrapper 变量**与**结果变量**，整条链失去锚点（临时回归测试实证复现后修复：仅对 Wrapper 变量去重，转换链路/快捷键路径本不受影响）。修复记录见 `docs/开发计划/20260813-1536-用户实测两类未识别形态修复-开发计划.md`。
 
 ---
 
@@ -1214,6 +1220,8 @@ ListUtil.partition(ids, BATCH_SIZE).forEach(batchIds ->
 
 **测试要点**：批量方法 SQL 形态（F-15 批量操作预览语料）；`updateById` 在 `update-strategy: always` 下含 null 列 SET（全局配置影响最终 SQL，见 X11）。
 
+> ✅ **已修复（M19.5，300 测试全绿）**：**单实体形态 `service.save(entity)`**（`BatchOperationConverter` 类注释声称支持 `save(entity)`，但操作注册表 `BATCH_OPERATIONS` 缺失 `save` 条目——注释与实现不一致）与 **`service.getById(id)` 单主键查询**（插件无 SELECT 类实体单查操作类型）——M19.5 补注册 `save` → INSERT 全列模板，新增 `Operation.SELECT`（getById 主键等值 / listByIds/selectByIds 主键 IN）+ `deleteByIds`（P1-02）。修复记录见 `docs/开发计划/20260813-1536-用户实测两类未识别形态修复-开发计划.md`。
+
 ---
 
 ### U13 `lambdaUpdate()` 链式更新（20 文件，约 87 处，见 U07-④ 代码）
@@ -1221,6 +1229,8 @@ ListUtil.partition(ids, BATCH_SIZE).forEach(batchIds ->
 与 U07-④ 同语料。补充代表性：`admin/AuthAppService`、`admin/IcCardInfoAppService`（123/147）、`consumer/WalletAppService`、`consumer/PrepayAppService`、`consumer/CarOccupyAppService#markOccupyPaid`（211）、`callback/HuifuCallbackAppService`（302）、`callback/MerchantCallbackAppService`（74）、`merchant/AccountManagementAppService`、`merchant/GiftFundAppService`、`integration/MerchantBalanceWithdrawalService`、`modules/UserPaymentTradeRecordServiceImpl`（16/26）、`modules/MerchantWalletWithdrawAccountingServiceImpl`（51/89/203）。
 
 **测试要点**：`lambdaUpdate()` 链与 `lambdaQuery()` 链的**方法名归属区分**（同为 `set/eq/...` 链，终结点 `.update()`/`.remove()` vs `.list()`/`.one()`）。
+
+> ✅ **已修复（M19.5，300 测试全绿）**：`boolean updated = service.lambdaUpdate()...update();` **赋值形态**受 `WrapperAnchorDetector` 锚点去重误抑制影响（无 gutter 图标）；M19.5 修复（仅对 Wrapper 变量去重），standalone 形态（终结点直接作为语句）本不受影响。修复记录见 `docs/开发计划/20260813-1536-用户实测两类未识别形态修复-开发计划.md`。
 
 ### 4.4 Mapper XML / 注解 / 配置模式（X01~X12）
 
@@ -1535,7 +1545,8 @@ mybatis-plus:
 | 排序 | 裸 `orderBy` / 字符串列排序 | ❌ | – |
 | 尾缀 | `last` | ✅（59 处） | Q12 |
 | 片段 | `apply`（raw / `{0}` / boolean / 短路） | ✅（20 处） | Q11 |
-| 消费 | `list` / `getOne` / `getOne(w, false)` / `getOneOpt` / `count` / `page` / `remove` / `getById` / `listByIds` | ✅ | Q15 |
+| 消费 | `list` / `getOne` / `getOne(w, false)` / `getOneOpt` / `count` / `page` / `remove` | ✅ | Q15 |
+| 消费 | `getById(id)` / `listByIds(ids)` / `selectByIds(ids)`（单主键查询，无 wrapper） | ✅（M19.5：SELECT 主键等值/IN 模板，实体经 service qualifier 泛型解析） | U12 |
 | 消费 | `mapper.selectList` / `selectOne` / `selectCount` / `selectPage` / `delete` | ✅ | Q15 |
 | 消费 | `selectMaps` / `selectObjs` / `selectMap` / `getMap` / `listMaps` / `listObjs` | ❌ | – |
 | 链式 | `lambdaQuery()...one()/.oneOpt()/.list()/.count()/.exists()/.page()/.last()` | ✅（35 文件） | Q17 |
@@ -1555,6 +1566,7 @@ mybatis-plus:
 | 字符串 | `new UpdateWrapper<>()` + 字符串列 eq + setSql + apply + last + `wrapper.lambda()` 转换 | ✅（7 文件） | U09 |
 | 删除 | `removeById` / `removeByIds` / `remove(wrapper)` / `mapper.delete(wrapper)` / `lambdaUpdate().remove()` | ✅（无 LambdaDeleteWrapper） | U11 |
 | 批量 | `saveBatch` / `updateBatchById` / `saveOrUpdate` / `saveOrUpdateBatch` / `insertBatchSomeColumn` | ✅ | U12/X09 |
+| 实体单条 | `save(entity)`（INSERT） / `getById(id)`（SELECT 主键等值） / `listByIds(ids)` / `selectByIds(ids)`（SELECT 主键 IN） / `deleteByIds(ids)`（DELETE 主键 IN） | ✅（M19.5：`save` 补注册（注释一致化）；新增 Operation.SELECT 模板） | U12 |
 | 实体 | `updateById`（`update-strategy: always` 语义） | ✅ | U12 |
 | 乐观锁 | `@Version` / OptimisticLockerInnerInterceptor | ❌（手动 CAS 替代） | U10 |
 | 防全表 | `selectCount(wrapper)` 预检后复用追加 set | ✅（4 处） | U08 |
@@ -1627,6 +1639,8 @@ mybatis-plus:
 16. **XML 解析链**：`<bind>` 静态常量 OGNL 引用（`@类@常量`）+ `${}` 列别名（X02）、test 表达式 `&gt;` 转义与裸 `>` 混用（X01）、动态 JOIN 分支（X04）、CDATA 内操作符、空 XML 与无 XML 的 Mapper 接口容错（X04）。
 17. **逻辑删除与全局策略注入**：查询/删除自动追加 `deleted = 0`、插入填充 deleted/updateTime（X07/X10/X11）；`update-strategy: always` 下 updateById 全字段 SET 含 null。
 18. **`update(entity, wrapper) || save(entity)` upsert**（U07-②）与 `mapper.update(null, wrapper)` 的 null 第一参识别。
+19. **链式赋值形态锚点（2026-08-13 用户实测新增，M19.5 已修复）**：`XxxEntity e = service.lambdaQuery()...one()`、`long n = ...count()`、`boolean b = service.lambdaUpdate()...update()` 等**结果变量赋值**形态——`WrapperAnchorDetector.isInsideWrapperVariableInitializer` 对**任意变量**初始化一律去重（未检查变量是否 Wrapper 类型），gutter 锚点全灭；现有测试仅覆盖 standalone 形态（`testServiceChainCallAnchors`、`testServiceLambdaQueryChainRendersSelect`）与 locator 路径（count 赋值测试走 `preview` 而非 anchor，未暴露）。修复：仅当变量为 Wrapper 类型（或基类型降级）才去重 + 回归测试三形态（实体/boolean/long 结果变量）。
+20. **实体单条 CRUD 识别（2026-08-13 用户实测新增，M19.5 已修复）**：`service.save(entity)`（INSERT 单实体）、`service.getById(id)`（SELECT 主键等值）、`service.listByIds(ids)`（SELECT 主键 IN）——`BatchOperationConverter` 操作注册表缺 `save`（类注释声称支持但 map 未注册，注释与实现不一致）；`getById`/`listByIds` 属新 SELECT 操作类型（主键等值/IN 模板；实体经 service qualifier 泛型解析，T-M15-08 的 removeById 链路已具备）。修复：注册 `save` → INSERT（复用 saveBatch 全列模板）+ 新增 `Operation.SELECT`（getById/listByIds/selectByIds）+ `deleteByIds`（P1-02 同点）+ 锚点自动生效（`batchOperationMethodNames` 同一集合）。
 
 ### 6.3 待补充（本清单之外）
 
@@ -1739,7 +1753,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `and(Consumer)` / `or()` / `or(Consumer)` / `nested` / `not(Consumer)` | ✅ | nested/not 为官方 API 补充；lambda 内 or() 已展平双层括号 |
 | `apply`（raw/`{0}`/boolean） | ✅ | – |
 | `last` / `comment` / `first` | ✅ | 全部支持（M15 增补：rawFirst 前缀 + comment 注释） |
-| `groupBy` / `having` | ✅/🟡 | having 仅单条件（M1 既有限制） |
+| `groupBy` / `having` | ✅ | P1-06（M19.5）：having 多条件 → AND 组（M1 起仅单条件） |
 | `orderByAsc/orderByDesc/orderBy(condition, isAsc, cols)` | ✅ | orderBy 双布尔前缀解析（官方 API 补充） |
 | `func(Consumer)` | ✅ | 条件直接展开（官方 API 补充） |
 | `select`（varargs/字符串列/List） | ✅ | – |
@@ -1754,11 +1768,11 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | API | 状态 | 说明 |
 |-----|:----:|------|
 | `service.lambdaQuery()/lambdaUpdate()` | ✅ | T-M15-01 |
-| `service.query()/update()`（字符串链） | 🟡 | 终结点同 lambda 链（字符串列链） |
+| `service.query()/update()`（字符串链） | ✅ | P1-03（M19.5）：终结点同 lambda 链（字符串列链）；`isServiceChainStart` 守卫区分 `service.update(wrapper)` 消费调用 |
 | 终结点 `one/oneOpt/list/count/exists/page/remove/update` | ✅ | – |
 | 终结点 `first/mapOne/mapFirst/mapList/mapPage` | ✅ | 官方 API 补充（链式剥离） |
-| 链上 `update(T entity)` | 🟡 | 实体更新链（近似 SELECT 渲染） |
-| `ChainWrappers` 静态工厂 | 🟡 | 定位需工厂识别扩展 |
+| 链上 `update(T entity)` | ✅ | P1-04（M19.5）：实体字段展开 SET（复用 updateEntityConsumed 分支） |
+| `ChainWrappers` 静态工厂 | ✅ | P1-05（M19.5）：queryChain/lambdaQueryChain/lambdaUpdateChain/lambdaDeleteChain/updateChain/deleteChain + 锚点 |
 
 **IService / BaseMapper 消费方法**：
 
@@ -1769,7 +1783,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `removeById(s)/removeByMap/deleteById(s)/delete(wrapper)` | ✅ | T-M15-08 + M10 |
 | `update(entity, wrapper)` 双参 | ✅ | T-M15-04 实体字段展开 |
 | `saveBatch/updateBatchById/saveOrUpdate(Batch)/insertBatchSomeColumn` | ✅ | T-M15-08 |
-| `selectByIds/deleteByIds`（3.5.9+ 新名） | 🟡 | 与 removeByIds 同族，待补 |
+| `selectByIds/deleteByIds`（3.5.9+ 新名） | ✅ | P1-02（M19.5）：与 removeByIds 同族；selectByIds 并入 Operation.SELECT（与 getById/listByIds 同模板） |
 | ResultHandler 流式重载 | ⬜ | 消费形态同无 handler 版本，评估中 |
 
 **MPJLambdaWrapper**：
@@ -1795,7 +1809,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `setAlias` | ✅ | 主表别名方法（M15 增补，优先级：构造别名 > setAlias > 默认 t） |
 | `union/unionAll` | ✅ | `UNION (子查询)`（M15 增补） |
 | `from(子查询主表)` | ⬜ | 评估中 |
-| `disableLogicDel` / `logicDelToOn` | ✅ | 跳过 deleted 注入（M15 增补）；logicDelToWhere 等其余形态评估中 |
+| `disableLogicDel` / `logicDelToOn` | ✅ | P1-01（M19.5）：四形态（disableLogicDel/enableLogicDel/logicDelToOn/logicDelToWhere）按源码顺序求值（enable/logicDelToWhere 恢复注入，logicDelToOn 近似跳过） |
 | `fill` 关联填充 | ⬜ | 评估中 |
 | Chain 消费 `one(Class)/list(Class)/page(P, Class)/first/map*` | ✅ | – |
 
@@ -1811,7 +1825,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 | `UpdateJoinWrapper/DeleteJoinWrapper` | ⬜ | 新 wrapper 类型，评估中 |
 | `selectJoinOnePage` | ⬜ | 官方确认不存在此 API |
 
-**已评估暂不支持的边界（⬜）**：`from(子查询主表)`、fill 关联填充、UpdateJoinWrapper/DeleteJoinWrapper 直接构造、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API——**全部 🟡/⬜ 项已排入《低频复杂 API 后期实现计划》（docs/开发计划/20260813-0829-低频复杂API后期实现计划.md，P1/P2/P3 分组 + 实现思路，建议并入 M17/M18 或按需立项）**。
+**已评估暂不支持的边界（⬜）**：`from(子查询主表)`、fill 关联填充、UpdateJoinWrapper/DeleteJoinWrapper 直接构造、`select(Class, Predicate)` 谓词精确求值、`eqOrIsNull`（3.5.17 才有）。这些均为真实项目 0 使用且官方文档低频 API——**全部 🟡/⬜ 项已排入《低频复杂 API 后期实现计划》（docs/开发计划/20260813-0829-低频复杂API后期实现计划.md，P1/P2/P3 分组 + 实现思路），M19.5 起与《用户实测两类未识别形态修复》一起开工：P1 全部 + P2-08 并入 M19.5，P2 剩余排 M20，P3 按需立项**。
 
 ---
 
@@ -1819,6 +1833,15 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-13 | **用户实测延伸：MPJ wrapper + helper 多条件（310 测试全绿）**：`applyWorkflowDataScope(MPJLambdaWrapper)` 内追加 eq(tenantId 字面量)/ge(createdTime 占位)/likeRight(name) 三个条件——M19.6 helper 跨方法续链对 MPJ wrapper 同样生效（并入联表查询 WHERE、主表别名 t. 前缀统一、逻辑顺序在 helper 调用点之后），Scratch 延伸用例测试固化 |
+| 2026-08-13 | **用户实测（Scratch 用例）：on 双字符串 eq 列对列比较（309 测试全绿）**：`eq("t1.workflow_id", "t.id")` 右参字符串含 `.` 被当字符串值渲染（`= 't.id'` 加引号）——修复：`parseOnLambda` 右参 ValueArg 含 `.` 按字符串列引用生成列对列比较（`t1.workflow_id = t.id`），无 `.` 字符串按值（`eq("t2.script_status", "1")` → `= '1'`）。Scratch 用例全链路测试固化（selectAll + 双别名 join + apply 子查询 + CASE WHEN 列 + 布尔条件 + helper 空实现传参），P13 测试要点补充 |
+| 2026-08-13 | **用户实测：getById 实参类型被误当实体（308 测试全绿）**：`getById(dto.getId())` 的 Long 实参在真实 IDE 可解析——`resolveEntityTable` 步骤 2 未限定类型，把 java.lang.Long 当实体解析（`FROM long` + `serialVersionUID/MIN_VALUE/MAX_VALUE` 等字段列，测试环境 Long 不可解析故未暴露）。修复：`isLikelyEntity` 启发式（@TableName 注解 OR 类名含 Entity，排除 java./javax. 前缀）接入步骤 1/2，基础类型跳过走步骤 3 service 泛型；实体参数（save/updateById）不受影响 |
+| 2026-08-13 | **用户实测：in 集合参数面板（306 测试全绿）**：`in(col, List 变量)` 值来源挂入动态条件行（`valueSourcesOf` 处理 `Condition.In`——原缺失导致 checkbox-only、值来源滞留普通参数区）；**IN 多值回填**（`ParamHint.inList` + SqlGenerator IN 占位符标记 + 面板逗号分割、每个值独立引号——输入 `1,2` → `('1','2')`，原实现拼成 `('1,2')` 单值）。Q06 测试要点补充 |
+| 2026-08-13 | **用户实测：helper 跨方法续链 + clear 截断 + 全量条件复选框（304 测试全绿）**：① `applyBusinessOpenInfoFilter(wrapper, dto)` 等**wrapper 实参传入自定义方法**的方法体内续链自动并入主链（P16 就地修改形态实现，展开调用锚定 helper 调用点逻辑排序）；② **`wrapper.clear()` 截断**（MP 语义清空，clear 前条件丢弃）；③ **无布尔重载条件全量挂复选框**（apply/in/isNull 等均可勾选开关，flagSource 为 null；apply 短路 `"1 = 0"` 由 parseApply 自含 toggle 扩展）。P16/Q11 测试要点补充 |
+| 2026-08-13 | **用户实测：MPJ 分步链 + 四参别名 lambda ON + between 参数面板（301 测试全绿）**：① `leftJoin(Class, "t1", on -> ...)` 四参别名 + lambda ON 形态 ON 条件丢失（parseJoin 缺 4b 分支）；② on 内 `eq` 字符串列与 `apply` 子查询未解析（parseOnLambda 仅支持方法引用 eq/ne）；③ between 动态条件无值输入框（valueSourceOf 仅 Simple/Like，lo/hi 双占位符未入条件行）——修复：parseJoin 4b + parseOnLambda 字符串列/apply + `ConditionToggle/ConditionView.valueSources` 多值扩展（between 条件行两个输入框，兼容回退单值）。P13/Q08 测试要点补充 |
+| 2026-08-13 | **M19.5 交付（300 测试全绿）**：① 服务链赋值形态锚点修复（结果变量赋值不再抑制 gutter 锚点，实体/boolean/long 三形态回归）；② 实体单条 CRUD：`save` 补注册 + 新增 `Operation.SELECT`（getById 主键等值 / listByIds/selectByIds 主键 IN / deleteByIds 删除）；③ 低频 P1 全部 + P2-08：logicDel 四形态（enableLogicDel/logicDelToWhere/logicDelToOn/disableLogicDel 按源码顺序求值）、service.query()/update() 字符串链（含消费守卫）、链上 update(entity) 实体展开 SET、ChainWrappers 工厂、having 多条件 → AND 组。§5.2/§5.3/§5.6 矩阵相应行 🟡 → ✅，§6.2 第 19/20 条标注已修复 |
+| 2026-08-13 | **用户实测：实体单条 CRUD 未识别**：`service.save(entity)`（INSERT 单实体——`BatchOperationConverter` 类注释声称支持但操作注册表未注册 `save`，注释与实现不一致）与 `service.getById(id)`（SELECT 主键等值——无 SELECT 类实体单查操作类型），同族 `listByIds(ids)` 一并排入 M19.5。U12 追加已知问题标注，§5.2/§5.3 矩阵修正为 🟡，§6.2 高风险用例新增第 20 条；修复排期见 `docs/开发计划/20260813-1536-用户实测两类未识别形态修复-开发计划.md` |
+| 2026-08-13 | **用户实测：服务链赋值形态 gutter 锚点丢失**：`XxxEntity x = service.lambdaQuery()...one()`、`boolean b = service.lambdaUpdate()...update()` 等**结果变量赋值**形态整条链无预览图标（根因：`WrapperAnchorDetector.isInsideWrapperVariableInitializer` 对任意变量初始化一律去重，未区分 Wrapper 变量与结果变量；已用临时回归测试实证复现，standalone 形态与定位/转换链路不受影响）。Q17/U13 追加已知问题标注，§6.2 高风险用例新增第 19 条；修复排期见 `docs/开发计划/20260813-1536-用户实测两类未识别形态修复-开发计划.md` |
 | 2026-08-13 | **官方 API 增补 3（223 测试全绿）**：union/unionAll 子查询、selectSub 子查询列、disableLogicDel/logicDelToOn 逻辑删除控制、deleteJoin/updateJoin/updateJoinAndNull 联表更新删除消费、列对列比较（eq(子表列, 主表列)） |
 | 2026-08-13 | **官方 API 增补 2（220 测试全绿）**：comment/first（rawFirst/comment 模型）、setAlias（主表别名方法）、子查询条件（eq/ne/gt/ge/lt/le/in/notIn(col, Sub.class, wrapper)，独立解析器渲染）、selectJoinMaps/selectJoinPage 消费验证、select(Class, Predicate)/selectFilter 全列近似 |
 | 2026-08-13 | **官方 API 全覆盖补充**：基于官方文档（MP `guides/wrapper`/`data-interface`、MPJ `mybatis-plus-join.github.io`，均核实到 3.5.15/1.5.6 源码）新增 §5.6 官方 API 覆盖矩阵；插件补充实现 notLikeLeft/Right、inSql/notInSql、eqSql~leSql、nested/not/func、orderBy isAsc、setIncrBy/setDecrBy、MPJ selectSum/Min/Avg/Len、fullJoin、join 自定义关键字、字符串 join、selectAll exclude/prefix、applyFunc、IfExists 条件族、selectAsClass、链式 first/map* 终结点（217 测试全绿）；LIKE 字面量引号渲染修复、lambda or() 双层括号展平 |

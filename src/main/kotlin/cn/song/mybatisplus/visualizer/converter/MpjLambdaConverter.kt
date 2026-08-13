@@ -247,25 +247,31 @@ object MpjLambdaConverter : WrapperConverter {
                         index = 1
                     }
                 }
-                // 3. on(col1, col2)：left 主表列、right 关联表列
-                if (rest.getOrNull(index) is WrapperArg.OnConditionArg) {
-                    onConditions += rest.drop(index).mapNotNull { arg ->
-                        (arg as? WrapperArg.OnConditionArg)?.let { oc ->
-                            Condition.ColumnComparison(
-                                left = oc.left.withTableAlias(mainAlias),
-                                right = oc.right.withTableAlias(alias),
+                val aliasNext = rest.getOrNull(index)
+                when {
+                    // 4b. 四参别名 + lambda ON：leftJoin(Class, "t1", on -> ...)（2026-08-13 用户实测）
+                    aliasNext is WrapperArg.NestedArg ->
+                        onConditions += parseOnLambda(aliasNext.chain, alias, mainAlias)
+                    // 3. on(col1, col2)：left 主表列、right 关联表列
+                    aliasNext is WrapperArg.OnConditionArg ->
+                        onConditions += rest.drop(index).mapNotNull { arg ->
+                            (arg as? WrapperArg.OnConditionArg)?.let { oc ->
+                                Condition.ColumnComparison(
+                                    left = oc.left.withTableAlias(mainAlias),
+                                    right = oc.right.withTableAlias(alias),
+                                )
+                            }
+                        }
+                    else -> {
+                        // 1. 三参：leftJoin(Class, 关联表字段, 主表字段) → ON alias.左 = mainAlias.右
+                        val left = rest.getOrNull(index) as? WrapperArg.ColumnArg
+                        val right = rest.getOrNull(index + 1) as? WrapperArg.ColumnArg
+                        if (left != null && right != null) {
+                            onConditions += Condition.ColumnComparison(
+                                left = left.column.withTableAlias(alias),
+                                right = right.column.withTableAlias(mainAlias),
                             )
                         }
-                    }
-                } else {
-                    // 1. 三参：leftJoin(Class, 关联表字段, 主表字段) → ON alias.左 = mainAlias.右
-                    val left = rest.getOrNull(index) as? WrapperArg.ColumnArg
-                    val right = rest.getOrNull(index + 1) as? WrapperArg.ColumnArg
-                    if (left != null && right != null) {
-                        onConditions += Condition.ColumnComparison(
-                            left = left.column.withTableAlias(alias),
-                            right = right.column.withTableAlias(mainAlias),
-                        )
                     }
                 }
             }
@@ -307,21 +313,55 @@ object MpjLambdaConverter : WrapperConverter {
      *  - `eq(关联表字段, 主表字段)` → 列对列比较（alias.左 = mainAlias.右）
      *  - `eq(关联表字段, 值)` → 简单等值条件（alias.列 = 值）
      */
+    /**
+     * lambda ON 条件解析（P13 + 2026-08-13 用户实测扩展）：
+     *  - `eq/ne(col, 列|值)`：列可为**方法引用**（按左右归属加别名）或**字符串列/表达式**（原样透传）；
+     *  - 右参为字符串且**含 `.`**（`eq("t1.workflow_id", "t.id")`，Scratch 用例）→ 字符串列引用，
+     *    生成列对列比较（不能加引号当值）；否则为字符串值（`eq("t2.script_status", "1")` → `= '1'`）；
+     *  - `apply(sql)`：Raw 条件原样透传（含子查询，如 `t1.version = (SELECT MAX(version) ...)`）。
+     */
     private fun parseOnLambda(chain: WrapperChain, alias: String, mainAlias: String): List<Condition> =
         chain.calls.mapNotNull { call ->
-            if (call.methodName != "eq" && call.methodName != "ne") return@mapNotNull null
-            val left = call.args.getOrNull(0) as? WrapperArg.ColumnArg ?: return@mapNotNull null
-            val right = call.args.getOrNull(1)
-            when (right) {
-                is WrapperArg.ColumnArg ->
-                    Condition.ColumnComparison(
-                        left = left.column.withTableAlias(alias),
-                        right = right.column.withTableAlias(mainAlias),
-                    )
-                else -> {
-                    val value = right?.asValue() ?: return@mapNotNull null
-                    Condition.Simple(left.column.withTableAlias(alias), if (call.methodName == "ne") "!=" else "=", value)
+            when (call.methodName) {
+                "eq", "ne" -> {
+                    val left = call.args.getOrNull(0)
+                    val leftCol = when (left) {
+                        is WrapperArg.ColumnArg -> left.column.withTableAlias(alias)
+                        is WrapperArg.ValueArg ->
+                            (left.value as? SqlValue.Literal)?.let { ColumnRef(columnName = it.unquoted) }
+                        else -> null
+                    } ?: return@mapNotNull null
+                    val right = call.args.getOrNull(1)
+                    when (right) {
+                        is WrapperArg.ColumnArg ->
+                            Condition.ColumnComparison(
+                                left = leftCol,
+                                right = right.column.withTableAlias(mainAlias),
+                            )
+                        is WrapperArg.ValueArg -> {
+                            val literal = right.value as? SqlValue.Literal
+                            if (literal != null && literal.unquoted.contains('.')) {
+                                // 字符串列引用形态（"t.id"）→ 列对列比较
+                                Condition.ColumnComparison(
+                                    left = leftCol,
+                                    right = ColumnRef(columnName = literal.unquoted),
+                                )
+                            } else {
+                                val value = right.asValue() ?: return@mapNotNull null
+                                Condition.Simple(leftCol, if (call.methodName == "ne") "!=" else "=", value)
+                            }
+                        }
+                        else -> {
+                            val value = right?.asValue() ?: return@mapNotNull null
+                            Condition.Simple(leftCol, if (call.methodName == "ne") "!=" else "=", value)
+                        }
+                    }
                 }
+                "apply" -> {
+                    val raw = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
+                    if (raw != null) Condition.Raw(raw) else null
+                }
+                else -> null
             }
         }
 
