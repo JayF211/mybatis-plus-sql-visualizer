@@ -421,20 +421,20 @@ object BatchOperationConverter {
     }
 
     /**
-     * UPSERT 模板（saveOrUpdate / saveOrUpdateBatch，U12，T-M15-08）：
+     * UPSERT 模板（saveOrUpdate / saveOrUpdateBatch，U12，T-M15-08；insertOrUpdate，T-M20-08）：
      * INSERT + PG 方言 `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`。
-     * T-M23-04：主键为固定列（ON CONFLICT 依赖，恒参与、无勾选），非主键列可勾选
-     * （取消勾选 → 同时退出 INSERT 列清单与 DO UPDATE SET）；初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
+     * T-M23.2（用户实测：saveOrUpdate 主键应为可选）：主键纳入 toggleColumns（默认勾选，完整 upsert；
+     * 取消勾选 → 纯 INSERT 新记录路径，无 ON CONFLICT——[BatchModel.conflictColumn] 判活跃态）；
+     * 初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
     private fun buildUpsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val prefix = entityPrefix(call)
-        val toggleColumns = batchColumns(prefix, table, table.columns.filter { it.columnName != idColumn.columnName }) { true }
-        val fixedColumns = listOf(
-            BatchColumn(idColumn.columnName, idSource(prefix, idColumn.columnName), ParamQuote.decide(idColumn.fieldType), checked = true),
-        )
+        val toggleColumns = batchColumns(prefix, table, table.columns) { true }
         val paramGroups = buildParamGroups(table.columns.map { it.columnName })
-        return modelBuild(BatchModel(BatchKind.UPSERT, table.tableName, toggleColumns, fixedColumns)).copy(paramGroups = paramGroups)
+        return modelBuild(
+            BatchModel(BatchKind.UPSERT, table.tableName, toggleColumns, conflictColumn = idColumn.columnName),
+        ).copy(paramGroups = paramGroups)
     }
 
     // ------------------------------------------------------------------

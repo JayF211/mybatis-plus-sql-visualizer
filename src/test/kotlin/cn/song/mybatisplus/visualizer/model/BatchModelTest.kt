@@ -140,33 +140,49 @@ class BatchModelTest {
     }
 
     @Test
-    fun upsertFixedIdFirstAndConflictSetFollowsActive() {
+    fun upsertConflictKeyFollowsActive() {
+        // T-M23.2（用户实测：saveOrUpdate 主键应为可选）：主键为 toggle 列（默认勾选渲染完整 upsert；
+        // 取消勾选 → 纯 INSERT 新记录路径，无 ON CONFLICT）
         val model = BatchModel(
             kind = BatchKind.UPSERT,
-            tableName = "station_occupy_info",
+            tableName = "task_record",
             toggleColumns = listOf(
-                BatchColumn("station_id", "entity.station_id", quote = false, checked = true),
+                BatchColumn("id", "entity.id", quote = false, checked = true),
+                BatchColumn("task_name", "entity.task_name", quote = true, checked = true),
                 BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
             ),
-            fixedColumns = listOf(BatchColumn("id", "entity.id", quote = false, checked = true)),
+            conflictColumn = "id",
         )
+        // 主键勾选（默认）：完整 upsert
         assertEquals(
             """
-            INSERT INTO station_occupy_info (id, station_id, dic_status)
+            INSERT INTO task_record (id, task_name, dic_status)
             VALUES (?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET station_id = EXCLUDED.station_id, dic_status = EXCLUDED.dic_status
+            ON CONFLICT (id) DO UPDATE SET task_name = EXCLUDED.task_name, dic_status = EXCLUDED.dic_status
             """.trimIndent(),
-            model.renderSql(setOf("id", "station_id", "dic_status")),
+            model.renderSql(setOf("id", "task_name", "dic_status")),
         )
-        // 取消 station_id → INSERT 列与 DO UPDATE SET 同步减列
+        // 主键取消勾选（新记录插入路径）：纯 INSERT，无 ON CONFLICT
         assertEquals(
             """
-            INSERT INTO station_occupy_info (id, dic_status)
+            INSERT INTO task_record (task_name, dic_status)
             VALUES (?, ?)
-            ON CONFLICT (id) DO UPDATE SET dic_status = EXCLUDED.dic_status
             """.trimIndent(),
-            model.renderSql(setOf("id", "dic_status")),
+            model.renderSql(setOf("task_name", "dic_status")),
         )
-        assertEquals(listOf("entity.id", "entity.station_id", "entity.dic_status"), model.orderedSources(setOf("id", "station_id", "dic_status")))
+        // 取消非主键列 → 同步退出 INSERT 列清单与 DO UPDATE SET
+        assertEquals(
+            """
+            INSERT INTO task_record (id, task_name)
+            VALUES (?, ?)
+            ON CONFLICT (id) DO UPDATE SET task_name = EXCLUDED.task_name
+            """.trimIndent(),
+            model.renderSql(setOf("id", "task_name")),
+        )
+        // 参数顺序与 `?` 顺序一致
+        assertEquals(
+            listOf("entity.id", "entity.task_name", "entity.dic_status"),
+            model.orderedSources(setOf("id", "task_name", "dic_status")),
+        )
     }
 }

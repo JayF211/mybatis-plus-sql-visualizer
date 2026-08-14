@@ -12,7 +12,11 @@ enum class BatchKind {
     /** UPDATE：`UPDATE t SET 列 = ?, ... WHERE 主键 = ?`（toggleColumns = SET 列；fixedColumns = WHERE 主键/@Version）。 */
     UPDATE,
 
-    /** UPSERT：`INSERT ... ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`（主键 fixed，其余可勾选）。 */
+    /**
+     * UPSERT：`INSERT ... ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`。
+     * T-M23.2：主键在 [BatchModel.toggleColumns] 内**可勾选**（默认勾选渲染完整 upsert；
+     * 取消勾选 → 渲染纯 INSERT 新记录路径），冲突键见 [BatchModel.conflictColumn]。
+     */
     UPSERT,
 }
 
@@ -46,17 +50,23 @@ data class BatchColumn(
 data class BatchModel(
     val kind: BatchKind,
     val tableName: String,
-    /** 可勾选列（INSERT 全列 / UPDATE SET 列 / UPSERT 非主键列）。 */
+    /** 可勾选列（INSERT 全列 / UPDATE SET 列 / UPSERT 全列含主键）。 */
     val toggleColumns: List<BatchColumn>,
-    /** 固定列（UPDATE 的 WHERE 主键与 @Version / UPSERT 主键；恒参与、无勾选）。 */
+    /** 固定列（UPDATE 的 WHERE 主键与 @Version；恒参与、无勾选）。 */
     val fixedColumns: List<BatchColumn> = emptyList(),
     /** UPDATE @Version 列名：SET 追加 `version = version + 1`（字面量，固定；WHERE 侧见 fixedColumns）。 */
     val versionColumn: String? = null,
+    /**
+     * UPSERT 冲突键列名（ON CONFLICT 目标，通常为主键；T-M23.2 用户实测：saveOrUpdate 主键**可选**——
+     * 主键在 [toggleColumns] 内默认勾选，取消勾选 → 渲染纯 INSERT（新记录路径），不再固定必填）。
+     * INSERT/UPDATE 为 null。
+     */
+    val conflictColumn: String? = null,
 ) {
 
     /**
      * 渲染顺序的列（`?` 出现顺序 = 参数行顺序）：
-     * UPDATE 先 SET（toggle）后 WHERE（fixed）；INSERT/UPSERT 固定列在前。
+     * UPDATE 先 SET（toggle）后 WHERE（fixed）；INSERT/UPSERT 固定列在前（UPSERT 无固定列时即 toggle 顺序）。
      */
     fun orderedColumns(activeColumns: Set<String>): List<BatchColumn> = when (kind) {
         BatchKind.UPDATE ->
@@ -94,11 +104,18 @@ data class BatchModel(
 
         BatchKind.UPSERT -> {
             val toggles = toggleColumns.filter { it.columnName in activeColumns }
-            val cols = fixedColumns.map { it.columnName } + toggles.map { it.columnName }
-            val conflictSet = toggles.joinToString(", ") { "${it.columnName} = EXCLUDED.${it.columnName}" }
-            "INSERT INTO $tableName (${cols.joinToString(", ")})\n" +
-                "VALUES (${cols.joinToString(", ") { "?" }})\n" +
-                "ON CONFLICT (${fixedColumns.first().columnName}) DO UPDATE SET $conflictSet"
+            val conflict = conflictColumn?.takeIf { it in activeColumns }
+            val cols = toggles.map { it.columnName }
+            if (conflict == null) {
+                // 主键未勾选（新记录插入路径）→ 纯 INSERT，无 ON CONFLICT
+                "INSERT INTO $tableName (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
+            } else {
+                val conflictSet = toggles.filter { it.columnName != conflict }
+                    .joinToString(", ") { "${it.columnName} = EXCLUDED.${it.columnName}" }
+                "INSERT INTO $tableName (${cols.joinToString(", ")})\n" +
+                    "VALUES (${cols.joinToString(", ") { "?" }})\n" +
+                    "ON CONFLICT ($conflict) DO UPDATE SET $conflictSet"
+            }
         }
     }
 }

@@ -2183,6 +2183,49 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals("WHERE 主键应为固定列", listOf("id"), model.fixedColumns.map { it.columnName })
     }
 
+    fun testBatchSaveOrUpdateIdSelectable() {
+        // T-M23.2（用户实测：taskRecordService.saveOrUpdate(task)——id 应为可选）：
+        // saveOrUpdate 主键纳入 toggleColumns（默认勾选渲染完整 upsert；取消 → 纯 INSERT 新记录路径），
+        // 不再是固定必填列
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private TaskRecordService taskRecordService;
+
+                public void saveOrUpdate(TaskRecordEntity task) {
+                    taskRecordService.saveOrUpdate(task);
+                }
+
+                static class TaskRecordEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String taskName;
+                    private Integer dicStatus;
+                }
+
+                static class BaseService<T> {}
+
+                static class TaskRecordService extends BaseService<TaskRecordEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("saveOrUpdate 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO task_record_entity (id, task_name, dic_status)
+            VALUES (?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET task_name = EXCLUDED.task_name, dic_status = EXCLUDED.dic_status
+            """.trimIndent(),
+            result!!.sql,
+        )
+        val model = result.batchModel!!
+        assertEquals("主键应在 toggleColumns（可选）", listOf("id", "task_name", "dic_status"), model.toggleColumns.map { it.columnName })
+        assertEquals("冲突键应为主键", "id", model.conflictColumn)
+        assertTrue("fixedColumns 应为空（无必填列）", model.fixedColumns.isEmpty())
+    }
+
     fun testBatchRemoveByIdUnresolvableArgRegistersParamRow() {
         // T-M23-02（用户实测：removeById 没有填参数的地方）：removeById(1001L) 字面量内联（无参数行，
         // 见 testRemoveByIdRendersDelete）；removeById(id) 运行时值 → `?` + `#id` 参数行

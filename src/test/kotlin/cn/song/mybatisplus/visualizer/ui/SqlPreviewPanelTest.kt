@@ -537,6 +537,39 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testBatchModelSelectAllNoneButtons() {
+        // T-M23.2（用户要求：参数可选场景必须有【全选/全不选】按钮）：
+        // 全不选 → 全部取消勾选、SQL 空列清单；全选 → 全部勾选、SQL 全列
+        val model = BatchModel(
+            kind = BatchKind.INSERT,
+            tableName = "biz_store_coupon",
+            toggleColumns = listOf(
+                BatchColumn("id", "entity.id", quote = false, checked = false),
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            ),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(batchResult(model))
+        assertNotNull("批量区应有全选按钮", panel.batchSelectAllButtonForTest())
+        assertNotNull("批量区应有全不选按钮", panel.batchSelectNoneButtonForTest())
+        // 全不选 → 空列清单（文档化边界）
+        panel.batchSelectNoneButtonForTest()!!.doClick()
+        assertFalse(panel.batchCheckboxForTest(0)!!.isSelected)
+        assertFalse(panel.batchCheckboxForTest(1)!!.isSelected)
+        assertFalse(panel.batchCheckboxForTest(2)!!.isSelected)
+        assertTrue(panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon ()"))
+        // 全选 → 全列恢复
+        panel.batchSelectAllButtonForTest()!!.doClick()
+        assertTrue(panel.batchCheckboxForTest(0)!!.isSelected)
+        assertTrue(panel.batchCheckboxForTest(1)!!.isSelected)
+        assertTrue(panel.batchCheckboxForTest(2)!!.isSelected)
+        assertTrue(
+            panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, name, dic_status)"),
+        )
+        panel.clear()
+    }
+
     fun testInListMultiValueBackfill() {
         // M19.6（2026-08-13 用户实测）：IN 列表占位符回填按逗号分割多值、每个值独立引号——
         // 输入 `1,2` → IN ('1','2')（原实现拼成 IN ('1,2') 单值；name 为 String 列恒引号）

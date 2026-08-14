@@ -71,6 +71,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
     private var selectAllButton: JButton? = null
     private var selectNoneButton: JButton? = null
+    // T-M23.2：批量「参数列」区全选/全不选按钮
+    private var batchSelectAllButton: JButton? = null
+    private var batchSelectNoneButton: JButton? = null
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -280,6 +283,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         batchCheckBoxes.clear()
         selectAllButton = null
         selectNoneButton = null
+        batchSelectAllButton = null
+        batchSelectNoneButton = null
         paramPanel.removeAll()
         releaseEditor()
         editorHolder.removeAll()
@@ -373,8 +378,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // T-M23-04：批量列级勾选（toggle 列：复选框 + 值输入框，勾选决定列是否进入 SQL；
         // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
+        // T-M23.2（用户要求）：参数可选场景必须有【全选/全不选】按钮
         if (batchModel != null) {
-            paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.batch.columns")))
+            paramPanel.add(batchSectionHeader())
             batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
             batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false)) }
             paramPanel.revalidate()
@@ -434,6 +440,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 分区标题行。 */
     private fun sectionLabel(text: String): JBLabel = JBLabel(text).apply {
         border = JBUI.Borders.empty(6, 8, 2, 8)
+    }
+
+    /**
+     * 批量「参数列」分区标题行（T-M23.2，用户要求：参数可选场景必须有【全选/全不选】）：
+     * 左侧分区名 + 右侧全选/全不选按钮（操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
+     */
+    private fun batchSectionHeader(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        add(JBLabel(MpSqlVisualizerBundle.message("panel.batch.columns")).apply {
+            border = JBUI.Borders.empty(4, 8, 0, 8)
+        }, BorderLayout.WEST)
+        add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
+            batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
+            batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
+            add(batchSelectAllButton)
+            add(batchSelectNoneButton)
+        }, BorderLayout.EAST)
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+    }
+
+    /**
+     * 批量列全选/全不选（T-M23.2）：操作 [batchCheckBoxes] 与 [enabledIds]（列名作 id），
+     * 同步复选框 UI 与 SQL 重渲染（全不选 → 空列清单形态，文档化边界）。
+     */
+    private fun setAllBatchColumns(enabled: Boolean) {
+        val model = current?.batchModel ?: return
+        model.toggleColumns.forEach { col ->
+            if (enabled) enabledIds.add(col.columnName) else enabledIds.remove(col.columnName)
+        }
+        batchCheckBoxes.forEach { it.isSelected = enabled }
+        renderSql()
     }
 
     /** 动态条件分区操作行（M14.2）：全选/全不选按钮（「动态条件」分区标题已移除，避免占用左栏空间）。 */
@@ -656,6 +692,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
     internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
+    /** T-M23.2：批量「参数列」区全选/全不选按钮。 */
+    internal fun batchSelectAllButtonForTest(): JButton? = batchSelectAllButton
+    internal fun batchSelectNoneButtonForTest(): JButton? = batchSelectNoneButton
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
     internal fun selectAllButtonForTest(): JButton? = selectAllButton
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
