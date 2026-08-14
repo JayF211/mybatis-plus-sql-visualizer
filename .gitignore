@@ -57,3 +57,6 @@ reasonix.toml
 /scripts/**
 /.agents/
 /.codex/
+
+### ZCode ###
+.zcode/

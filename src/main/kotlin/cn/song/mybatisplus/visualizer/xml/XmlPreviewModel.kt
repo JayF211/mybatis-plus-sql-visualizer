@@ -63,6 +63,8 @@ class XmlPreviewModel private constructor(
     val paramProps: Set<String>,
     /** 静态字段值（T-M25.2）：`@class@field` → 值（PSI 层解析用户项目常量类注入）。 */
     val staticFieldValues: Map<String, Any?>,
+    /** MP 占位 mock（T-M26-B）：`ew` → MockObject(customSqlSegment/sqlSelect/sqlSet 片段)，覆盖变量占位。 */
+    val extraBindings: Map<String, Any?>,
     private val rootNode: SqlNode,
 ) {
 
@@ -99,6 +101,8 @@ class XmlPreviewModel private constructor(
             }
         }
         state.bindOverrides.forEach { (name, value) -> bindings[name] = value }
+        // T-M26-B：MP 占位 mock 覆盖（ew → 片段对象，置于最后优先级最高）
+        bindings.putAll(extraBindings)
         return bindings
     }
 
@@ -111,12 +115,14 @@ class XmlPreviewModel private constructor(
 
         /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。
          *  T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。
-         *  T-M25.2：staticFieldValues 为 `@class@field` → 值（PSI 层解析用户项目常量类）。 */
+         *  T-M25.2：staticFieldValues 为 `@class@field` → 值（PSI 层解析用户项目常量类）。
+         *  T-M26-B：extraBindings 为 MP 占位 mock（`ew` → 片段对象）。 */
         fun from(
             statement: XmlStatement,
             errors: List<String>,
             extraParamProps: Set<String> = emptySet(),
             staticFieldValues: Map<String, Any?> = emptyMap(),
+            extraBindings: Map<String, Any?> = emptyMap(),
         ): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
@@ -138,6 +144,7 @@ class XmlPreviewModel private constructor(
                 variables = variables,
                 paramProps = paramProps,
                 staticFieldValues = staticFieldValues,
+                extraBindings = extraBindings,
                 rootNode = statement.node,
             )
         }

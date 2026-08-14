@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.xml.MockObject
+import cn.song.mybatisplus.visualizer.xml.XmlEwExpander
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlParseException
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
@@ -32,7 +34,9 @@ object XmlPreviewService {
                 ?: return emptyResult("未找到可预览的 SQL 语句（mapper 中无 select/insert/update/delete）。")
             val warnings = mutableListOf<String>()
             val staticValues = resolveStaticFields(fileText, project, warnings)
-            XmlPreviewModel.from(statement, parsed.errors, staticFieldValues = staticValues) to warnings
+            // T-M26-B（P-立项-03）：MP 占位展开（${ew.customSqlSegment} 等）——Java 关联 wrapper 实参 → 片段注入
+            val ewBindings = resolveEwPlaceholders(fileText, parsed.namespace, statement.id, project, warnings)
+            XmlPreviewModel.from(statement, parsed.errors, staticFieldValues = staticValues, extraBindings = ewBindings) to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
         } catch (e: XmlScriptException) {
@@ -40,6 +44,24 @@ object XmlPreviewService {
         }
 
         return toResult(model, staticWarnings)
+    }
+
+    /**
+     * T-M26-B：MP 占位展开——扫描 `${变量.customSqlSegment/sqlSelect/sqlSet}`，
+     * 经 [XmlEwResolver] 关联 Java Mapper 方法 wrapper 实参展开为 SQL 片段，
+     * 包装为 MockObject（`ew.customSqlSegment` 属性访问求值）注入 mock bindings。
+     */
+    private fun resolveEwPlaceholders(
+        fileText: String,
+        namespace: String?,
+        statementId: String,
+        project: Project?,
+        warnings: MutableList<String>,
+    ): Map<String, Any?> {
+        val placeholders = XmlEwExpander.placeholders(fileText)
+        if (placeholders.isEmpty() || project == null) return emptyMap()
+        val resolved = XmlEwResolver.resolve(namespace, statementId, placeholders, project, warnings)
+        return resolved.mapValues { (_, fragments) -> MockObject(fragments) }
     }
 
     /**
