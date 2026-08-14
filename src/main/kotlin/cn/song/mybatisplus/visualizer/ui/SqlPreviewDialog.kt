@@ -31,6 +31,8 @@ class SqlPreviewDialog(
         // 最小尺寸兜底（防止拉伸时缩没；DialogWrapper 无 setMinimumSize，对中心面板设置）
         panel.minimumSize = Dimension(MIN_WIDTH, MIN_HEIGHT)
         init()
+        // 关闭按钮文案走插件 bundle（平台 cancelAction 随 IDE 语言包，插件语言设置独立于 IDE，避免中文环境显示英文 Cancel）
+        setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"))
         // 弹窗默认尺寸（按屏幕比例自适应；环境异常兜底）
         val size = initialSize()
         setSize(size.width, size.height)
