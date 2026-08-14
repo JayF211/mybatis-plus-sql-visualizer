@@ -2101,6 +2101,53 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(listOf(false, true, false), result.paramHints.map { it.quote })
     }
 
+    fun testBatchSaveKeywordColumnQuoted() {
+        // T-M23.4（用户示例：biz_banner 的 table 字段为 MySQL 保留字）：批量 INSERT 列清单
+        // 关键字列名反引号包裹（方言符号），参数行/回填提示不受影响（模型层列名不包裹）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private BizBannerService bizBannerService;
+
+                public void save(BizBannerEntity entity) {
+                    bizBannerService.save(entity);
+                }
+
+                static class BizBannerEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String title;
+                    private String name;
+                    private String table;
+                    private String imageUrl;
+                    private Integer dicStatus;
+                    private Integer sort;
+                }
+
+                static class BaseService<T> {}
+
+                static class BizBannerService extends BaseService<BizBannerEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("save 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO biz_banner_entity (id, title, name, `table`, image_url, dic_status, sort)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+        // 参数行来源/引号提示与未引用时一致
+        assertEquals(
+            listOf("entity.id", "entity.title", "entity.name", "entity.table", "entity.image_url", "entity.dic_status", "entity.sort"),
+            result.unresolvedParams,
+        )
+        assertEquals(listOf(false, true, true, true, true, false, false), result.paramHints.map { it.quote })
+    }
+
     fun testBatchSaveAutoIncrementIdDefaultUnchecked() {
         // T-M23-04（用户建议：添加时 id 可能不需要）：@TableId(type = IdType.AUTO) 主键默认不勾选
         // → 初始 INSERT 不含 id 列（对齐 MP：自增主键不进 INSERT 列清单）

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.BatchKind
 import cn.song.mybatisplus.visualizer.model.BatchModel
@@ -7,6 +8,8 @@ import cn.song.mybatisplus.visualizer.model.BatchPreview
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParamQuote
 import com.intellij.psi.PsiClass
@@ -139,13 +142,20 @@ object BatchOperationConverter {
     /**
      * T-M23-04：模型驱动的批量构建（初始 SQL 与参数登记均出自 [BatchModel.renderSql]/ordered*，
      * 与面板勾选重建共用唯一渲染源）。
+     * T-M23.4：注入当前方言（关键字标识符引用——保留字列名按方言符号包裹；设置服务不可用时兜底 MySQL）。
      */
     private fun modelBuild(model: BatchModel): BatchBuild {
+        val model = model.copy(dialect = currentDialect())
         val initialActive = (model.toggleColumns.filter { it.checked }.map { it.columnName } +
             model.fixedColumns.map { it.columnName }).toSet()
         val params = model.orderedColumns(initialActive).map { ParamEntry(it.source, ParamHint(quote = it.quote)) }
         return BatchBuild(sql = model.renderSql(initialActive), params = params, model = model)
     }
+
+    /** T-M23.4：当前设置方言（Psi 层读设置，EntityResolver.inferTableName 同款模式；兜底 MySQL）。 */
+    private fun currentDialect(): Dialect =
+        runCatching { DialectRegistry.byName(PluginSettings.getInstance().state.dialect) }
+            .getOrDefault(DialectRegistry.byName(null))
 
     /**
      * 转换批量/单实体方法调用。

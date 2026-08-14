@@ -112,8 +112,8 @@ object SqlGenerator {
         enabledConditionIds: Set<String>?,
     ): String = when (statement) {
         is SelectStatement -> generateSelect(statement, compact, paramSink, hintSink, dialect, enabledConditionIds)
-        is UpdateStatement -> generateUpdate(statement, compact, paramSink, hintSink, enabledConditionIds)
-        is DeleteStatement -> generateDelete(statement, compact, paramSink, hintSink, enabledConditionIds)
+        is UpdateStatement -> generateUpdate(statement, compact, paramSink, hintSink, dialect, enabledConditionIds)
+        is DeleteStatement -> generateDelete(statement, compact, paramSink, hintSink, dialect, enabledConditionIds)
     }
 
     /** SELECT 渲染（含 MPJ 主表别名与联表子句）。 */
@@ -128,9 +128,10 @@ object SqlGenerator {
         val nl = if (compact) " " else "\n"
 
         // SELECT 列：未显式指定时展开为表全部列（联表场景同主表列）
+        // T-M23.4：展开列改为 tableAlias + columnName 构造（原 `prefix + it` 拼进 columnName，
+        // 关键字引用无法拆分别名前缀；顺带修复 quoteHint 按 columnName 匹配的隐患）
         val selectColumns = if (statement.selectColumns.isEmpty()) {
-            val prefix = statement.tableAlias?.let { "$it." } ?: ""
-            statement.table.allColumnNames.map { ColumnRef(columnName = prefix + it) }
+            statement.table.allColumnNames.map { ColumnRef(tableAlias = statement.tableAlias, columnName = it) }
         } else {
             statement.selectColumns
         }
@@ -138,25 +139,25 @@ object SqlGenerator {
         val sb = StringBuilder(statement.rawFirst?.let { "$it " } ?: "")
         sb.append("SELECT ")
         if (statement.distinct) sb.append("DISTINCT ")
-        sb.append(selectColumns.joinToString(", ") { it.rendered })
+        sb.append(selectColumns.joinToString(", ") { renderColumnRef(it, dialect) })
 
         // FROM 主表（可带别名）；T-M21-07：from(子查询主表) 形态 → FROM (子查询SQL) 外层别名
         // （主表实体表名不再直接出现——在子查询内部）
         statement.fromSubQuery?.let { (subSql, outerAlias) ->
             sb.append(nl).append("FROM (").append(subSql).append(") ").append(outerAlias)
         } ?: run {
-            sb.append(nl).append("FROM ").append(statement.table.tableName)
+            sb.append(nl).append("FROM ").append(renderTableName(statement.table.tableName, dialect))
             statement.tableAlias?.let { sb.append(" ").append(it) }
         }
 
         // JOIN 子句
         statement.joins.forEach { join ->
-            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds))
+            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds, dialect))
         }
 
         // WHERE 条件
         val whereSql = renderConditionList(
-            statement.conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds, hintSink, statement.table,
+            statement.conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds, hintSink, statement.table, dialect,
         )
         if (whereSql.isNotEmpty()) {
             sb.append(nl).append("WHERE ").append(whereSql)
@@ -165,13 +166,13 @@ object SqlGenerator {
         // GROUP BY
         if (statement.groupBy.isNotEmpty()) {
             sb.append(nl).append("GROUP BY ")
-                .append(statement.groupBy.joinToString(", ") { it.qualifiedName })
+                .append(statement.groupBy.joinToString(", ") { renderQualified(it, dialect) })
         }
 
         // HAVING
         statement.having?.let { h ->
             if (h.isConditionVisible(enabledConditionIds)) {
-                val havingSql = renderCondition(h, paramSink, hintSink, statement.table, enabledConditionIds)
+                val havingSql = renderCondition(h, paramSink, hintSink, statement.table, enabledConditionIds, dialect)
                 if (havingSql.isNotEmpty()) sb.append(nl).append("HAVING ").append(havingSql)
             }
         }
@@ -180,7 +181,7 @@ object SqlGenerator {
         if (statement.orderBy.isNotEmpty()) {
             sb.append(nl).append("ORDER BY ")
                 .append(statement.orderBy.joinToString(", ") {
-                    "${it.column.qualifiedName} ${if (it.asc) "ASC" else "DESC"}"
+                    "${renderQualified(it.column, dialect)} ${if (it.asc) "ASC" else "DESC"}"
                 })
         }
 
@@ -214,13 +215,14 @@ object SqlGenerator {
         compact: Boolean,
         paramSink: MutableList<String>?,
         hintSink: MutableList<ParamHint>?,
+        dialect: Dialect,
         enabledConditionIds: Set<String>?,
     ): String {
         val nl = if (compact) " " else "\n"
-        val sb = StringBuilder("UPDATE ").append(statement.table.tableName)
+        val sb = StringBuilder("UPDATE ").append(renderTableName(statement.table.tableName, dialect))
         statement.tableAlias?.let { sb.append(" ").append(it) }
         statement.joins.forEach { join ->
-            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds))
+            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds, dialect))
         }
 
         if (statement.sets.isNotEmpty()) {
@@ -228,7 +230,7 @@ object SqlGenerator {
             sb.append(statement.sets.joinToString(", ") { set ->
                 when {
                     set.isRaw -> set.rawSql.orEmpty()
-                    set.column != null -> "${set.column.qualifiedName} = ${renderValue(
+                    set.column != null -> "${renderQualified(set.column, dialect)} = ${renderValue(
                         set.value ?: SqlValue.Placeholder("?"), paramSink, hintSink, quoteHint(statement.table, set.column),
                     )}"
                     else -> ""
@@ -236,7 +238,7 @@ object SqlGenerator {
             })
         }
 
-        appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table)
+        appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table, dialect)
         // 非 limit 尾缀透传（U05，T-M15-04）：`last("AND (last_total - n >= 0)")` 追加到语句末尾
         statement.rawTail?.let { sb.append(nl).append(it) }
         return sb.toString()
@@ -254,21 +256,22 @@ object SqlGenerator {
         compact: Boolean,
         paramSink: MutableList<String>?,
         hintSink: MutableList<ParamHint>?,
+        dialect: Dialect,
         enabledConditionIds: Set<String>?,
     ): String {
         val nl = if (compact) " " else "\n"
         val sb = StringBuilder()
         if (statement.deleteTargets.isEmpty()) {
-            sb.append("DELETE FROM ").append(statement.table.tableName)
+            sb.append("DELETE FROM ").append(renderTableName(statement.table.tableName, dialect))
         } else {
             sb.append("DELETE ").append(statement.deleteTargets.joinToString(", "))
-            sb.append(" FROM ").append(statement.table.tableName)
+            sb.append(" FROM ").append(renderTableName(statement.table.tableName, dialect))
             statement.tableAlias?.let { sb.append(" ").append(it) }
         }
         statement.joins.forEach { join ->
-            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds))
+            sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds, dialect))
         }
-        appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table)
+        appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table, dialect)
         return sb.toString()
     }
 
@@ -282,8 +285,9 @@ object SqlGenerator {
         hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
         table: TableInfo,
+        dialect: Dialect,
     ) {
-        val whereSql = renderConditionList(conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds, hintSink, table)
+        val whereSql = renderConditionList(conditions, Connector.AND, indent = !compact, paramSink, enabledConditionIds, hintSink, table, dialect)
         if (whereSql.isNotEmpty()) {
             sb.append(nl).append("WHERE ").append(whereSql)
         }
@@ -296,6 +300,7 @@ object SqlGenerator {
         paramSink: MutableList<String>?,
         hintSink: MutableList<ParamHint>?,
         enabledConditionIds: Set<String>?,
+        dialect: Dialect,
     ): String {
         val typeName = join.customKeyword ?: when (join.type) {
             cn.song.mybatisplus.visualizer.model.JoinType.INNER -> "INNER JOIN"
@@ -308,9 +313,9 @@ object SqlGenerator {
         val onPart = if (join.onConditions.isEmpty()) {
             ""
         } else {
-            " ON " + renderConditionList(join.onConditions, Connector.AND, indent = false, paramSink, enabledConditionIds, hintSink, null)
+            " ON " + renderConditionList(join.onConditions, Connector.AND, indent = false, paramSink, enabledConditionIds, hintSink, null, dialect)
         }
-        return "$typeName ${join.tableName} ${join.alias}$onPart"
+        return "$typeName ${renderTableName(join.tableName, dialect)} ${join.alias}$onPart"
     }
 
     // ------------------------------------------------------------------
@@ -322,6 +327,7 @@ object SqlGenerator {
      *
      * @param indent   true=顶层多条件换行缩进（如 `    AND xxx`），false=单行连接
      * @param paramSink 参数收集器（可为 null）
+     * @param dialect  方言（T-M23.4 关键字标识符引用；默认 MySQL）
      */
     private fun renderConditionList(
         conditions: List<Condition>,
@@ -331,11 +337,12 @@ object SqlGenerator {
         enabledIds: Set<String>? = null,
         hintSink: MutableList<ParamHint>? = null,
         table: TableInfo? = null,
+        dialect: Dialect = MySqlDialect,
     ): String {
         // 动态条件按启用集合/defaultEnabled 过滤；组内全空的 Group 渲染为空字符串后剔除
         val rendered = conditions
             .filter { it.isConditionVisible(enabledIds) }
-            .map { renderCondition(it, paramSink, hintSink, table, enabledIds) }
+            .map { renderCondition(it, paramSink, hintSink, table, enabledIds, dialect) }
             .filter { it.isNotEmpty() }
         if (rendered.isEmpty()) return ""
         return if (indent) {
@@ -360,6 +367,7 @@ object SqlGenerator {
      * @param enabledIds 动态条件启用集合（递归传给 Group 子条件；默认 null 按 defaultEnabled）
      * @param hintSink   回填提示收集器（M13，可为 null）
      * @param table      主表信息（列类型查询用；join ON 条件等无法匹配时类型未知）
+     * @param dialect    方言（T-M23.4 关键字标识符引用；默认 MySQL）
      */
     private fun renderCondition(
         condition: Condition,
@@ -367,12 +375,13 @@ object SqlGenerator {
         hintSink: MutableList<ParamHint>? = null,
         table: TableInfo? = null,
         enabledIds: Set<String>? = null,
+        dialect: Dialect = MySqlDialect,
     ): String = when (condition) {
         is Condition.Simple ->
-            "${condition.column.qualifiedName} ${condition.op} ${renderValue(condition.value, paramSink, hintSink, quoteHint(table, condition.column))}"
+            "${renderQualified(condition.column, dialect)} ${condition.op} ${renderValue(condition.value, paramSink, hintSink, quoteHint(table, condition.column))}"
 
         is Condition.Unary ->
-            "${condition.column.qualifiedName} ${condition.op}"
+            "${renderQualified(condition.column, dialect)} ${condition.op}"
 
         is Condition.In -> {
             val op = if (condition.negated) "NOT IN" else "IN"
@@ -387,30 +396,52 @@ object SqlGenerator {
                     is SqlValue.Literal -> value.raw
                 }
             }
-            "${condition.column.qualifiedName} $op ($values)"
+            "${renderQualified(condition.column, dialect)} $op ($values)"
         }
 
         is Condition.Between -> {
             val op = if (condition.negated) "NOT BETWEEN" else "BETWEEN"
-            "${condition.column.qualifiedName} $op ${renderValue(condition.lo, paramSink, hintSink, quoteHint(table, condition.column))} AND ${renderValue(condition.hi, paramSink, hintSink, quoteHint(table, condition.column))}"
+            "${renderQualified(condition.column, dialect)} $op ${renderValue(condition.lo, paramSink, hintSink, quoteHint(table, condition.column))} AND ${renderValue(condition.hi, paramSink, hintSink, quoteHint(table, condition.column))}"
         }
 
         is Condition.Like -> {
             val op = if (condition.negated) "NOT LIKE" else "LIKE"
-            "${condition.column.qualifiedName} $op ${renderLike(condition.pattern, condition.position, paramSink, hintSink)}"
+            "${renderQualified(condition.column, dialect)} $op ${renderLike(condition.pattern, condition.position, paramSink, hintSink)}"
         }
 
         is Condition.Group -> {
-            val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, enabledIds, hintSink, table)
+            val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, enabledIds, hintSink, table, dialect)
             if (childrenSql.isEmpty()) "" else if (condition.negated) "NOT ($childrenSql)" else "($childrenSql)"
         }
 
         is Condition.ColumnComparison ->
-            "${condition.left.qualifiedName} = ${condition.right.qualifiedName}"
+            "${renderQualified(condition.left, dialect)} = ${renderQualified(condition.right, dialect)}"
 
         is Condition.Raw ->
             condition.sqlText
     }
+
+    // ------------------------------------------------------------------
+    // T-M23.4：标识符渲染统一入口（关键字命中 → 按方言符号包裹；模型层列名保持原始值）
+    // ------------------------------------------------------------------
+
+    /**
+     * 渲染带表限定的列引用：`别名.列`——别名前缀不包，列名按需引用（`t.`table``）。
+     */
+    private fun renderQualified(column: ColumnRef, dialect: Dialect): String =
+        (column.tableAlias?.let { "$it." } ?: "") + dialect.quoteIfKeyword(column.columnName)
+
+    /**
+     * 渲染完整列表达式（含聚合函数与 AS 别名）：rawExpr 原样透传（selectFunc 表达式，不拆解——
+     * 文档化边界）；否则 `函数(限定列)` 或 `限定列`；别名 `AS xxx` 不引用。
+     */
+    private fun renderColumnRef(column: ColumnRef, dialect: Dialect): String {
+        val expr = column.rawExpr ?: (column.function?.let { "$it(${renderQualified(column, dialect)})" } ?: renderQualified(column, dialect))
+        return if (column.alias != null) "$expr AS ${column.alias}" else expr
+    }
+
+    /** 渲染表名（关键字命中 → 按方言符号包裹）。 */
+    private fun renderTableName(tableName: String, dialect: Dialect): String = dialect.quoteIfKeyword(tableName)
 
     /**
      * 渲染参数值：字面量原样输出；占位符输出 `?` 并收集来源与回填提示（M13）。

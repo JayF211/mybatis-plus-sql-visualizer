@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.LimitClause
  * 方言差异点（M5 实现范围）：
  *  - 分页子句：[renderLimit]（MySQL 用 LIMIT，PostgreSQL 用 LIMIT+OFFSET，Oracle 用 FETCH）
  *  - 标识符引用：[quoteIdentifier]（MySQL 反引号，PG/Oracle 双引号；默认不引用，按需启用）
+ *  - 关键字判定：[reservedWords]（T-M23.4 按方言保留字集合，[quoteIfKeyword] 只判本方言）
  *
  * 新增方言：实现本接口并注册进 [DialectRegistry]。
  */
@@ -29,6 +30,22 @@ interface Dialect {
      * 默认原样返回（不引用）；需要时子类覆写（如 MySQL 反引号）。
      */
     fun quoteIdentifier(identifier: String): String = identifier
+
+    /**
+     * 本方言保留字集合（T-M23.4，小写；[quoteIfKeyword] 判定用）——
+     * 按方言判定：MySQL 只判 MySQL 保留字（如 `number` 是 Oracle 保留字但 MySQL 合法：MySQL 不包）。
+     */
+    val reservedWords: Set<String>
+
+    /**
+     * 标识符**按需引用**（T-M23.4）：命中**本方言**保留字（大小写不敏感）→ [quoteIdentifier]
+     * 包裹（符号按方言：MySQL 反引号 / PG 双引号 / SQLServer 方括号）；否则原样返回。
+     *
+     * 语义：引用幂等安全（被引用的词在本方言是保留字，包裹后合法）——宁可多包、不漏包；
+     * 仅渲染层调用，模型层列名保持原始值（参数对照/补全/勾选匹配不受影响）。
+     */
+    fun quoteIfKeyword(identifier: String): String =
+        if (identifier.lowercase() in reservedWords) quoteIdentifier(identifier) else identifier
 }
 
 /**
@@ -58,6 +75,8 @@ object MySqlDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val reservedWords: Set<String> = MYSQL_RESERVED
 }
 
 /**
@@ -69,6 +88,8 @@ object PostgreSQLDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val reservedWords: Set<String> = PG_RESERVED
 }
 
 /**
@@ -84,6 +105,8 @@ object OracleDialect : Dialect {
     }
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val reservedWords: Set<String> = ORACLE_RESERVED
 }
 
 /**
@@ -99,12 +122,15 @@ object SqlServerDialect : Dialect {
         "OFFSET ${limit.offset ?: 0} ROWS FETCH NEXT ${limit.count} ROWS ONLY"
 
     override fun quoteIdentifier(identifier: String): String = "[$identifier]"
+
+    override val reservedWords: Set<String> = SQLSERVER_RESERVED
 }
 
 /**
  * H2 方言：`LIMIT {count} OFFSET {offset}`（无 offset 时仅 `LIMIT {count}`）。
  *
  * 依据：T-M22-03，同 PostgreSQL 的 LIMIT/OFFSET 形态。标识符引用双引号 `"x"`。
+ * 关键字判定：按 PostgreSQL 集合近似（H2 关键字表与 PG 高度重叠，文档化近似）。
  */
 object H2Dialect : Dialect {
     override val name: String = "H2"
@@ -112,6 +138,8 @@ object H2Dialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val reservedWords: Set<String> = PG_RESERVED
 }
 
 /**
@@ -125,12 +153,15 @@ object SqliteDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val reservedWords: Set<String> = SQLITE_RESERVED
 }
 
 /**
  * MariaDB 方言：同 MySQL 的 `LIMIT [offset,] count`。
  *
  * 依据：T-M22-03，MariaDB 兼容 MySQL LIMIT 语法。标识符引用反引号。
+ * 关键字判定：按 MySQL 集合（MariaDB 关键字表与 MySQL 高度重叠）。
  */
 object MariaDbDialect : Dialect {
     override val name: String = "MariaDB"
@@ -138,12 +169,15 @@ object MariaDbDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val reservedWords: Set<String> = MYSQL_RESERVED
 }
 
 /**
  * DM（达梦）方言：同 MySQL 的 `LIMIT [offset,] count`。
  *
  * 依据：T-M22-03（假设性标注：达梦兼容 MySQL LIMIT 语法）。标识符引用双引号 `"x"`。
+ * 关键字判定：按 Oracle 集合近似（达梦兼容 Oracle，文档化近似）。
  */
 object DmDialect : Dialect {
     override val name: String = "DM（达梦）"
@@ -151,12 +185,15 @@ object DmDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val reservedWords: Set<String> = ORACLE_RESERVED
 }
 
 /**
  * KingBase（人大金仓）方言：同 PostgreSQL 的 `LIMIT {count} OFFSET {offset}`。
  *
  * 依据：T-M22-03（假设性标注：人大金仓兼容 PostgreSQL）。标识符引用双引号 `"x"`。
+ * 关键字判定：按 PostgreSQL 集合（人大金仓兼容 PG，文档化近似）。
  */
 object KingBaseDialect : Dialect {
     override val name: String = "KingBase（人大金仓）"
@@ -164,6 +201,8 @@ object KingBaseDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val reservedWords: Set<String> = PG_RESERVED
 }
 
 /**

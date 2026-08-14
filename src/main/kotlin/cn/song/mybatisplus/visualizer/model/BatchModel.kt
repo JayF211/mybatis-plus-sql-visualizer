@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 
 /**
@@ -62,6 +64,12 @@ data class BatchModel(
      * INSERT/UPDATE 为 null。
      */
     val conflictColumn: String? = null,
+    /**
+     * 方言（T-M23.4 关键字标识符引用）：渲染列名/表名时命中保留字（[cn.song.mybatisplus.visualizer.sql.isSqlKeyword]）
+     * → 按方言符号包裹（MySQL 反引号 / PG 双引号 / SQLServer 方括号）；默认 MySQL。
+     * 纯对象（无 IDE 依赖），BatchModel 保持纯函数可独立单测。
+     */
+    val dialect: Dialect = MySqlDialect,
 ) {
 
     /**
@@ -90,31 +98,33 @@ data class BatchModel(
      */
     fun renderSql(activeColumns: Set<String>): String = when (kind) {
         BatchKind.INSERT -> {
-            val cols = toggleColumns.filter { it.columnName in activeColumns }.map { it.columnName }
-            "INSERT INTO $tableName (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
+            // T-M23.4：列名/表名命中保留字 → 按方言包裹（用户示例 `table` 列）
+            val cols = toggleColumns.filter { it.columnName in activeColumns }.map { dialect.quoteIfKeyword(it.columnName) }
+            "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
         }
 
         BatchKind.UPDATE -> {
             val setSql = toggleColumns.filter { it.columnName in activeColumns }
-                .joinToString(", ") { "${it.columnName} = ?" } +
-                (versionColumn?.let { ", $it = $it + 1" } ?: "")
-            val whereSql = fixedColumns.joinToString(" AND ") { "${it.columnName} = ?" }
-            "UPDATE $tableName\nSET $setSql\nWHERE $whereSql"
+                .joinToString(", ") { "${dialect.quoteIfKeyword(it.columnName)} = ?" } +
+                (versionColumn?.let { ", ${dialect.quoteIfKeyword(it)} = $it + 1" } ?: "")
+            val whereSql = fixedColumns.joinToString(" AND ") { "${dialect.quoteIfKeyword(it.columnName)} = ?" }
+            "UPDATE ${dialect.quoteIfKeyword(tableName)}\nSET $setSql\nWHERE $whereSql"
         }
 
         BatchKind.UPSERT -> {
             val toggles = toggleColumns.filter { it.columnName in activeColumns }
             val conflict = conflictColumn?.takeIf { it in activeColumns }
-            val cols = toggles.map { it.columnName }
+            val cols = toggles.map { dialect.quoteIfKeyword(it.columnName) }
             if (conflict == null) {
                 // 主键未勾选（新记录插入路径）→ 纯 INSERT，无 ON CONFLICT
-                "INSERT INTO $tableName (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
+                "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
             } else {
+                // `列 = EXCLUDED.列`：列名按需引用（EXCLUDED 前缀不包）
                 val conflictSet = toggles.filter { it.columnName != conflict }
-                    .joinToString(", ") { "${it.columnName} = EXCLUDED.${it.columnName}" }
-                "INSERT INTO $tableName (${cols.joinToString(", ")})\n" +
+                    .joinToString(", ") { "${dialect.quoteIfKeyword(it.columnName)} = EXCLUDED.${dialect.quoteIfKeyword(it.columnName)}" }
+                "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\n" +
                     "VALUES (${cols.joinToString(", ") { "?" }})\n" +
-                    "ON CONFLICT ($conflict) DO UPDATE SET $conflictSet"
+                    "ON CONFLICT (${dialect.quoteIfKeyword(conflict)}) DO UPDATE SET $conflictSet"
             }
         }
     }

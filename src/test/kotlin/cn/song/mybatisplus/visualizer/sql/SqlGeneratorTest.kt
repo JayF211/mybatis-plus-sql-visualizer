@@ -287,4 +287,118 @@ class SqlGeneratorTest {
         assertEquals(emptyList<String>(), generated.unresolvedParams)
         assertEquals(emptyList<ParamHint>(), generated.paramHints)
     }
+
+    // ------------------------------------------------------------------
+    // T-M23.4：关键字标识符引用（保留字列名/表名 → 按方言符号包裹）
+    // ------------------------------------------------------------------
+
+    /** 含关键字列（table）与关键字表名（order）的实体表信息。 */
+    private val keywordTable = TableInfo(
+        entityClassName = "BizBannerEntity",
+        tableName = "order",
+        columns = listOf(
+            ColumnInfo("id", "id", isId = true),
+            ColumnInfo("title", "title"),
+            ColumnInfo("table", "table"),
+            ColumnInfo("imageUrl", "image_url"),
+        ),
+    )
+
+    @Test
+    fun `关键字列_全列展开与条件反引号`() {
+        val statement = SelectStatement(
+            table = keywordTable,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "table"), "=", SqlValue.Placeholder("table")),
+            ),
+        )
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, title, `table`, image_url
+            FROM `order`
+            WHERE `table` = ?
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `关键字列_表别名形态只包列名`() {
+        val statement = SelectStatement(
+            table = keywordTable,
+            tableAlias = "t",
+            conditions = listOf(
+                Condition.Simple(ColumnRef(tableAlias = "t", columnName = "table"), "=", SqlValue.Literal("1001")),
+            ),
+        )
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT t.id, t.title, t.`table`, t.image_url
+            FROM `order` t
+            WHERE t.`table` = 1001
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `关键字列_排序与分组`() {
+        val statement = SelectStatement(
+            table = keywordTable,
+            groupBy = listOf(ColumnRef(columnName = "table")),
+            orderBy = listOf(OrderByItem(ColumnRef(columnName = "table"), asc = true)),
+        )
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, title, `table`, image_url
+            FROM `order`
+            GROUP BY `table`
+            ORDER BY `table` ASC
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `关键字引用_符号按方言切换`() {
+        val statement = SelectStatement(
+            table = keywordTable,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "table"), "=", SqlValue.Literal("1001")),
+            ),
+        )
+        // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
+        assertEquals(
+            "SELECT id, title, \"table\", image_url\nFROM \"order\"\nWHERE \"table\" = 1001",
+            SqlGenerator.generate(statement, compact = false, dialect = PostgreSQLDialect).trim(),
+        )
+        // SQL Server 方括号
+        assertEquals(
+            "SELECT id, title, [table], image_url\nFROM [order]\nWHERE [table] = 1001",
+            SqlGenerator.generate(statement, compact = false, dialect = SqlServerDialect).trim(),
+        )
+        // MySQL（默认）反引号
+        assertEquals(
+            "SELECT id, title, `table`, image_url\nFROM `order`\nWHERE `table` = 1001",
+            SqlGenerator.generate(statement, compact = false, dialect = MySqlDialect).trim(),
+        )
+    }
+
+    @Test
+    fun `关键字列_参数对照不受引用影响`() {
+        // 模型层列名不包裹：quoteHint 按原始 columnName 匹配 → 参数来源/提示与未引用时一致
+        val statement = SelectStatement(
+            table = keywordTable,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "table"), "=", SqlValue.Placeholder("table")),
+            ),
+        )
+        val generated = SqlGenerator.generateWithParams(statement)
+        assertEquals(listOf("table"), generated.unresolvedParams)
+        // keywordTable 列无 fieldType → 引号提示 null（列类型未知，面板走数字启发式）
+        assertEquals(listOf(ParamHint(quote = null)), generated.paramHints)
+    }
 }

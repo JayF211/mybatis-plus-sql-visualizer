@@ -19,8 +19,8 @@ import org.junit.Test
  * T-M21-08 转换器单元测试：UpdateJoinWrapper / DeleteJoinWrapper（纯逻辑模型构造，无 PSI）。
  *
  * 对照 MPJ 官方 SQL 输出结构：
- *  - UpdateJoin：`UPDATE user t LEFT JOIN address t1 ON (t1.user_id = t.id) SET t.name = ?, t1.tel = ? WHERE (t.id = ?)`
- *  - DeleteJoin：`DELETE t,t1 FROM user t LEFT JOIN address t1 ON (t1.user_id = t.id) WHERE (t.id = ?)`
+ *  - UpdateJoin：`UPDATE `user` t LEFT JOIN address t1 ON (t1.user_id = t.id) SET t.name = ?, t1.tel = ? WHERE (t.id = ?)`
+ *  - DeleteJoin：`DELETE t,t1 FROM `user` t LEFT JOIN address t1 ON (t1.user_id = t.id) WHERE (t.id = ?)`
  *    （delete(Class...)/delete(String...)/deleteAll() 控制删除哪些表）
  *
  * 覆盖：
@@ -108,7 +108,7 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
-            UPDATE user t
+            UPDATE `user` t
             LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
             SET t.name = '张三', t1.tel = 138, t.update_by = 'admin', t.age = t.age + 1
             WHERE t.id = 1001
@@ -143,7 +143,7 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(UpdateJoinConverter.convert(chain, table))
         assertEquals(
             """
-            UPDATE user t
+            UPDATE `user` t
             LEFT JOIN address addressEntity ON t.id = addressEntity.user_id
             SET t.age = t.age - 2
             WHERE t1.status = '1'
@@ -166,7 +166,7 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(UpdateJoinConverter.convert(chain, table))
         assertEquals(
             """
-            UPDATE user t
+            UPDATE `user` t
             SET t.name = ?, t.update_by = ?, t.age = ?
             WHERE t.id = 1001
             """.trimIndent(),
@@ -182,7 +182,7 @@ class UpdateJoinDeleteJoinConverterTest {
         ))
         assertEquals(
             """
-            UPDATE user t
+            UPDATE `user` t
             SET t.name = ?, t.update_by = ?, t.age = ?
             """.trimIndent(),
             andNull,
@@ -215,7 +215,7 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(UpdateJoinConverter.convert(chain, table))
         assertEquals(
             """
-            UPDATE user u
+            UPDATE `user` u
             LEFT JOIN address addressEntity ON addressEntity.user_id = u.id
             SET u.name = 'x'
             WHERE u.id = 1
@@ -244,7 +244,7 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(UpdateJoinConverter.convert(chain, table))
         assertEquals(
             """
-            UPDATE user t
+            UPDATE `user` t
             LEFT JOIN address t1 on t1.user_id = t.id
             SET t.name = 'x'
             WHERE t.id = 1
@@ -259,7 +259,7 @@ class UpdateJoinDeleteJoinConverterTest {
 
     @Test
     fun `deleteJoin_deleteAll全表目标`() {
-        // deleteAll() → 主别名 + 全部 join 别名：DELETE t, addressEntity FROM user t LEFT JOIN ...
+        // deleteAll() → 主别名 + 全部 join 别名：DELETE t, addressEntity FROM `user` t LEFT JOIN ...
         val chain = WrapperChain(
             WrapperType.DELETE_JOIN, "UserEntity",
             listOf(
@@ -273,7 +273,7 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
-            DELETE t, addressEntity FROM user t
+            DELETE t, addressEntity FROM `user` t
             LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
             WHERE t.id = 1001
             """.trimIndent(),
@@ -296,7 +296,7 @@ class UpdateJoinDeleteJoinConverterTest {
         assertEquals(listOf("t"), mainStatement.deleteTargets)
         assertEquals(
             """
-            DELETE t FROM user t
+            DELETE t FROM `user` t
             LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
             WHERE t.id = 1001
             """.trimIndent(),
@@ -316,7 +316,7 @@ class UpdateJoinDeleteJoinConverterTest {
         assertEquals(listOf("addressEntity"), subStatement.deleteTargets)
         assertEquals(
             """
-            DELETE addressEntity FROM user t
+            DELETE addressEntity FROM `user` t
             LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
             WHERE t.id = 1001
             """.trimIndent(),
@@ -351,7 +351,7 @@ class UpdateJoinDeleteJoinConverterTest {
 
     @Test
     fun `deleteJoin_单表无join保持既有形态`() {
-        // 无 join、无 delete 调用 → DELETE t FROM user t WHERE ...（主别名仍在删除目标中，FROM 后带主别名）；
+        // 无 join、无 delete 调用 → DELETE t FROM `user` t WHERE ...（主别名仍在删除目标中，FROM 后带主别名）；
         // 对比：LambdaDeleteWrapper 单表删除（deleteTargets 空）走既有 DELETE FROM 形态
         val chain = WrapperChain(
             WrapperType.DELETE_JOIN, "UserEntity",
@@ -360,14 +360,14 @@ class UpdateJoinDeleteJoinConverterTest {
         val sql = SqlGenerator.generate(DeleteJoinConverter.convert(chain, table))
         assertEquals(
             """
-            DELETE t FROM user t
+            DELETE t FROM `user` t
             WHERE t.id = 1
             """.trimIndent(),
             sql,
         )
         assertEquals(
             """
-            DELETE FROM user
+            DELETE FROM `user`
             WHERE id = 1
             """.trimIndent(),
             SqlGenerator.generate(LambdaDeleteConverter.convert(

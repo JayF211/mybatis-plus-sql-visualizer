@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
+import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -183,6 +185,95 @@ class BatchModelTest {
         assertEquals(
             listOf("entity.id", "entity.task_name", "entity.dic_status"),
             model.orderedSources(setOf("id", "task_name", "dic_status")),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // T-M23.4：关键字标识符引用（多方言保留字命中 → 按方言符号包裹）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun insertKeywordColumnsQuoted() {
+        // 用户示例：biz_banner 的 table 字段为 MySQL 保留字 → 反引号包裹；普通列原样
+        val model = BatchModel(
+            kind = BatchKind.INSERT,
+            tableName = "biz_banner",
+            toggleColumns = listOf(
+                BatchColumn("title", "entity.title", quote = true, checked = true),
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+                BatchColumn("table", "entity.table", quote = true, checked = true),
+                BatchColumn("image_url", "entity.image_url", quote = true, checked = true),
+            ),
+        )
+        val active = model.toggleColumns.map { it.columnName }.toSet()
+        assertEquals(
+            """
+            INSERT INTO biz_banner (title, name, `table`, image_url)
+            VALUES (?, ?, ?, ?)
+            """.trimIndent(),
+            model.renderSql(active),
+        )
+        // 参数来源/提示不随包裹变化（模型层列名保持原始值）
+        assertEquals(
+            listOf("entity.title", "entity.name", "entity.table", "entity.image_url"),
+            model.orderedSources(active),
+        )
+    }
+
+    @Test
+    fun keywordQuoteFollowsDialect() {
+        val columns = listOf(
+            BatchColumn("table", "entity.table", quote = true, checked = true),
+            BatchColumn("name", "entity.name", quote = true, checked = true),
+        )
+        val active = setOf("table", "name")
+        // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
+        assertEquals(
+            "INSERT INTO biz_banner (\"table\", name)\nVALUES (?, ?)",
+            BatchModel(BatchKind.INSERT, "biz_banner", columns, dialect = PostgreSQLDialect).renderSql(active),
+        )
+        // SQL Server 方括号
+        assertEquals(
+            "INSERT INTO biz_banner ([table], name)\nVALUES (?, ?)",
+            BatchModel(BatchKind.INSERT, "biz_banner", columns, dialect = SqlServerDialect).renderSql(active),
+        )
+        // 默认（MySQL 形态）反引号
+        assertEquals(
+            "INSERT INTO biz_banner (`table`, name)\nVALUES (?, ?)",
+            BatchModel(BatchKind.INSERT, "biz_banner", columns).renderSql(active),
+        )
+    }
+
+    @Test
+    fun updateAndUpsertKeywordColumnsQuoted() {
+        // UPDATE：SET 列 + WHERE 固定列 + 表名引用
+        val update = BatchModel(
+            kind = BatchKind.UPDATE,
+            tableName = "order",
+            toggleColumns = listOf(
+                BatchColumn("group", "entity.group", quote = false, checked = true),
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+            ),
+            fixedColumns = listOf(BatchColumn("key", "entity.key", quote = false, checked = false)),
+        )
+        assertEquals(
+            "UPDATE `order`\nSET `group` = ?, name = ?\nWHERE `key` = ?",
+            update.renderSql(setOf("group", "name")),
+        )
+        // UPSERT：ON CONFLICT 冲突键 + EXCLUDED 列名（只包列名本体）
+        val upsert = BatchModel(
+            kind = BatchKind.UPSERT,
+            tableName = "biz_banner",
+            toggleColumns = listOf(
+                BatchColumn("table", "entity.table", quote = true, checked = true),
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+            ),
+            conflictColumn = "table",
+        )
+        assertEquals(
+            "INSERT INTO biz_banner (`table`, name)\nVALUES (?, ?)\n" +
+                "ON CONFLICT (`table`) DO UPDATE SET name = EXCLUDED.name",
+            upsert.renderSql(setOf("table", "name")),
         )
     }
 }
