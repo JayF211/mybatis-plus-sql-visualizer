@@ -57,7 +57,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val editor = panel.editorForTest()
         assertNotNull("应挂载编辑器视图", editor)
         assertEquals(
-            "SELECT * FROM t_biz WHERE type = ? AND id IN ( ? , ? ) AND name LIKE ?",
+            "SELECT * FROM t_biz WHERE type = ? AND id IN ( ? , ? ) AND name LIKE '%1%'",
             compact(editor!!.document.text),
         )
         panel.clear()
