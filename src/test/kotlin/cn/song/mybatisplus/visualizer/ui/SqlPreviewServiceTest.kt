@@ -4608,4 +4608,179 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
         assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.DELETE_JOIN, result.wrapperType)
     }
+
+    // ------------------------------------------------------------------
+    // T-M22-02：@Version 乐观锁注入（OptimisticLockerInnerInterceptor 语义）
+    // ------------------------------------------------------------------
+
+    fun testOptimisticLockInjectedForEntityUpdate() {
+        // T-M22-02：service.update(entity, wrapper) 实体更新——@Version 实体自动追加
+        // `SET version = version + 1` + WHERE 末尾 `AND version = ?`（实体字段 SET 不含 version，
+        // 对齐 MP OptimisticLockerInnerInterceptor）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void update() {
+                    userService.update(entity, Wrappers.<UserEntity>lambdaUpdate()
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.Version
+                    private Integer version;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("update(entity, wrapper) 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE user_entity
+            SET name = ?, version = version + 1
+            WHERE id = 1001
+                AND version = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOptimisticLockInjectedForLambdaUpdateChain() {
+        // T-M22-02：lambdaUpdate 链式更新（service.lambdaUpdate().set(...).eq(...).update()）——
+        // 语句未显式涉及 version → SET 追加 `version = version + 1`、WHERE 追加 `AND version = ?`
+        // （实体从 service 声明返回类型泛型解析，@Version 列随 EntityResolver 识别）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private UserService userService;
+
+                public void update() {
+                    userService.lambdaUpdate()
+                        .set(UserEntity::getDicStatus, 2)
+                        .eq(UserEntity::getId, 1001L)
+                        .update();
+                }
+
+                static class LambdaUpdateChainWrapper<T> {}
+
+                static class UserService {
+                    public LambdaUpdateChainWrapper<UserEntity> lambdaUpdate() { return null; }
+                }
+
+                static class UserEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private Integer dicStatus;
+                    @com.baomidou.mybatisplus.annotation.Version
+                    private Integer version;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("lambdaUpdate 链更新应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE user_entity
+            SET dic_status = 2, version = version + 1
+            WHERE id = 1001
+                AND version = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testOptimisticLockNotDuplicatedWhenExplicitVersionSetAndEq() {
+        // T-M22-02：语句已显式 `set(version)` / `eq(version)` → 不重复注入
+        // （SET version = 5 + WHERE version = 5 保持原样，无 `version = version + 1`）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private UserService userService;
+
+                public void update() {
+                    userService.lambdaUpdate()
+                        .set(UserEntity::getDicStatus, 2)
+                        .set(UserEntity::getVersion, 5)
+                        .eq(UserEntity::getId, 1001L)
+                        .eq(UserEntity::getVersion, 5)
+                        .update();
+                }
+
+                static class LambdaUpdateChainWrapper<T> {}
+
+                static class UserService {
+                    public LambdaUpdateChainWrapper<UserEntity> lambdaUpdate() { return null; }
+                }
+
+                static class UserEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private Integer dicStatus;
+                    @com.baomidou.mybatisplus.annotation.Version
+                    private Integer version;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("显式 version 更新应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE user_entity
+            SET dic_status = 2, version = 5
+            WHERE id = 1001
+                AND version = 5
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testUpdateByIdWithVersionColumnRendersIncrement() {
+        // T-M22-02：BatchOperationConverter.updateById 模板——@Version 实体 SET 追加 `version = version + 1`、
+        // WHERE 追加 `AND version = ?`（version 列不进实体 SET；参数组说明同步含 version）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private UserService userService;
+
+                public void update() {
+                    UserEntity entity = new UserEntity();
+                    userService.updateById(entity);
+                }
+
+                static class UserEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.Version
+                    private Integer version;
+                }
+
+                static class UserService {
+                    public void updateById(UserEntity entity) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("updateById 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE user_entity
+            SET name = ?, version = version + 1
+            WHERE id = ? AND version = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+        // 参数组说明与 SQL 占位顺序一致（name → id → version）
+        assertTrue("参数组说明应含 version", result!!.paramTable!!.contains("version=?"))
+    }
 }

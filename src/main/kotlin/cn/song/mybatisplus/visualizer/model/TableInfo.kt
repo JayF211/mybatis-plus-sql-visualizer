@@ -9,6 +9,7 @@ package cn.song.mybatisplus.visualizer.model
  * @param tableName       数据库表名（如 device_info）
  * @param columns         实体字段到列的映射（含主键标记）
  * @param logicDeleteColumn 逻辑删除列（@TableLogic 标注字段的列名，T-M15-07）；null 表示无逻辑删除
+ * @param versionColumn     乐观锁版本列（@Version 标注字段的列名，T-M22-02）；null 表示无乐观锁
  * @param comment         表注释（M16：类级注解/javadoc/行注释提取，schema 预留最高优先级）
  */
 data class TableInfo(
@@ -16,6 +17,7 @@ data class TableInfo(
     val tableName: String,
     val columns: List<ColumnInfo>,
     val logicDeleteColumn: String? = null,
+    val versionColumn: String? = null,
     val comment: String? = null,
 ) {
     /** 便捷查找：按实体字段名取列信息，找不到返回 null。 */

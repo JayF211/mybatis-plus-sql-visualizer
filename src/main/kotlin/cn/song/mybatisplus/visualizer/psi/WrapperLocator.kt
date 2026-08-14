@@ -837,9 +837,12 @@ object WrapperLocator {
     /**
      * Wrappers / ChainWrappers 静态工厂类名（P1-05，M19.5）；
      * T-M20-02：MPJ 官方工厂 JoinWrappers（com.github.yulichang.toolkit）与旧工厂 MPJWrappers 一并收录。
+     * T-M22-04：Db kit（com.baomidou.mybatisplus.extension.toolkit.Db 静态工具）——
+     * `Db.lambdaQuery(User.class)...` 与 Wrappers 同映射（lambdaQuery → LAMBDA_QUERY，
+     * factoryWrapperType 的 qualifier 分支恒映射；实体从链内方法引用推断）。
      * M10 起 internal 供 [WrapperAnchorDetector] 复用（gutter 锚点快速路径文本匹配）。
      */
-    internal val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers", "JoinWrappers", "MPJWrappers")
+    internal val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers", "JoinWrappers", "MPJWrappers", "Db")
 
     /**
      * 服务链起点方法名（`service.lambdaQuery()` / `service.lambdaUpdate()`，T-M15-01；

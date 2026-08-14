@@ -32,15 +32,30 @@ interface Dialect {
 }
 
 /**
+ * 共享渲染辅助：MySQL 形态 `LIMIT [offset,] count`（无 offset 时 `LIMIT count`）。
+ * 供 MySQL / MariaDB / DM 复用。
+ */
+private fun renderMySqlStyleLimit(limit: LimitClause): String {
+    val offsetPart = if (limit.offset != null) "${limit.offset}, " else ""
+    return "LIMIT $offsetPart${limit.count}"
+}
+
+/**
+ * 共享渲染辅助：PostgreSQL 形态 `LIMIT {count} OFFSET {offset}`（无 offset 时仅 `LIMIT {count}`）。
+ * 供 PostgreSQL / H2 / SQLite / KingBase 复用。
+ */
+private fun renderPgStyleLimit(limit: LimitClause): String {
+    val offsetPart = if (limit.offset != null) " OFFSET ${limit.offset}" else ""
+    return "LIMIT ${limit.count}$offsetPart"
+}
+
+/**
  * MySQL 方言：`LIMIT [offset,] count`。
  */
 object MySqlDialect : Dialect {
     override val name: String = "MySQL"
 
-    override fun renderLimit(limit: LimitClause): String {
-        val offsetPart = if (limit.offset != null) "${limit.offset}, " else ""
-        return "LIMIT $offsetPart${limit.count}"
-    }
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 }
@@ -51,10 +66,7 @@ object MySqlDialect : Dialect {
 object PostgreSQLDialect : Dialect {
     override val name: String = "PostgreSQL"
 
-    override fun renderLimit(limit: LimitClause): String {
-        val offsetPart = if (limit.offset != null) " OFFSET ${limit.offset}" else ""
-        return "LIMIT ${limit.count}$offsetPart"
-    }
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 }
@@ -75,12 +87,102 @@ object OracleDialect : Dialect {
 }
 
 /**
+ * SQL Server 方言（2012+）：`OFFSET {offset|0} ROWS FETCH NEXT {count} ROWS ONLY`。
+ *
+ * 依据：T-M22-03，同 MyBatis-Plus SqlServerDialect 的 2012+ OFFSET/FETCH 语法，
+ * 无 offset 时按 0 渲染。标识符引用方括号 `[x]`。
+ */
+object SqlServerDialect : Dialect {
+    override val name: String = "SQL Server"
+
+    override fun renderLimit(limit: LimitClause): String =
+        "OFFSET ${limit.offset ?: 0} ROWS FETCH NEXT ${limit.count} ROWS ONLY"
+
+    override fun quoteIdentifier(identifier: String): String = "[$identifier]"
+}
+
+/**
+ * H2 方言：`LIMIT {count} OFFSET {offset}`（无 offset 时仅 `LIMIT {count}`）。
+ *
+ * 依据：T-M22-03，同 PostgreSQL 的 LIMIT/OFFSET 形态。标识符引用双引号 `"x"`。
+ */
+object H2Dialect : Dialect {
+    override val name: String = "H2"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+}
+
+/**
+ * SQLite 方言：同 H2 的 `LIMIT {count} OFFSET {offset}`。
+ *
+ * 依据：T-M22-03，SQLite 原生支持 `LIMIT count OFFSET offset`。标识符引用双引号 `"x"`。
+ */
+object SqliteDialect : Dialect {
+    override val name: String = "SQLite"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+}
+
+/**
+ * MariaDB 方言：同 MySQL 的 `LIMIT [offset,] count`。
+ *
+ * 依据：T-M22-03，MariaDB 兼容 MySQL LIMIT 语法。标识符引用反引号。
+ */
+object MariaDbDialect : Dialect {
+    override val name: String = "MariaDB"
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+}
+
+/**
+ * DM（达梦）方言：同 MySQL 的 `LIMIT [offset,] count`。
+ *
+ * 依据：T-M22-03（假设性标注：达梦兼容 MySQL LIMIT 语法）。标识符引用双引号 `"x"`。
+ */
+object DmDialect : Dialect {
+    override val name: String = "DM（达梦）"
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+}
+
+/**
+ * KingBase（人大金仓）方言：同 PostgreSQL 的 `LIMIT {count} OFFSET {offset}`。
+ *
+ * 依据：T-M22-03（假设性标注：人大金仓兼容 PostgreSQL）。标识符引用双引号 `"x"`。
+ */
+object KingBaseDialect : Dialect {
+    override val name: String = "KingBase（人大金仓）"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+}
+
+/**
  * 方言注册表：按名称获取方言，未知名称回退 MySQL。
  */
 object DialectRegistry {
 
     /** 全部支持方言（顺序即 Settings 下拉顺序）。 */
-    val dialects: List<Dialect> = listOf(MySqlDialect, PostgreSQLDialect, OracleDialect)
+    val dialects: List<Dialect> = listOf(
+        MySqlDialect,
+        PostgreSQLDialect,
+        OracleDialect,
+        SqlServerDialect,
+        H2Dialect,
+        SqliteDialect,
+        MariaDbDialect,
+        DmDialect,
+        KingBaseDialect,
+    )
 
     /**
      * 按名称取方言。

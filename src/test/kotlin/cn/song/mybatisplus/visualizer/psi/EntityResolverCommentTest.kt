@@ -304,4 +304,50 @@ class EntityResolverCommentTest : BasePlatformTestCase() {
         // 注释不受影响（javadoc；@TableField 默认 comment="" 不误取）
         assertEquals("场站ID（关联 biz_bike_station_info.id）", table.columnByField("stationId")?.comment)
     }
+
+    // ------------------------------------------------------------------
+    // T-M22-02：@Version 乐观锁版本列识别
+    // ------------------------------------------------------------------
+
+    fun testVersionColumnSnakeCaseFallback() {
+        // T-M22-02：@Version 标注字段 → versionColumn（无 @TableField 时列名按命名策略 snake_case，
+        // 与 @TableLogic 同模式）
+        val clazz = resolveEntity(
+            """
+            public class UserEntity {
+                @com.baomidou.mybatisplus.annotation.TableId
+                private Long id;
+                @com.baomidou.mybatisplus.annotation.Version
+                private Integer version;
+            }
+            """.trimIndent(),
+        )
+        assertEquals("version", EntityResolver().resolve(clazz).versionColumn)
+    }
+
+    fun testVersionColumnFromTableFieldAnnotation() {
+        // T-M22-02：@Version + @TableField("row_ver") → 列名取 @TableField 值（注解优先）
+        val clazz = resolveEntity(
+            """
+            public class UserEntity {
+                @com.baomidou.mybatisplus.annotation.TableField("row_ver")
+                @com.baomidou.mybatisplus.annotation.Version
+                private Integer rowVersion;
+            }
+            """.trimIndent(),
+        )
+        assertEquals("row_ver", EntityResolver().resolve(clazz).versionColumn)
+    }
+
+    fun testNoVersionColumnIsNull() {
+        // T-M22-02：无 @Version 字段 → versionColumn 为 null（不误识别）
+        val clazz = resolveEntity(
+            """
+            public class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        assertNull(EntityResolver().resolve(clazz).versionColumn)
+    }
 }

@@ -21,7 +21,8 @@ import com.intellij.psi.PsiWhiteSpace
  *  - 主键：`@TableId` 标记
  *  - `@TableField(exist = false)` 的字段（非表字段）跳过
  *  - T-M16.2-02：字段递归**父类**收集（父类字段在前，对齐 MP 声明顺序语义）——继承实体
- *    （如 `BaseEntity {id, createTime, deleted}`）的 SELECT 全列展开与 @TableLogic/@TableId 识别同样生效
+ *    （如 `BaseEntity {id, createTime, deleted}`）的 SELECT 全列展开与 @TableLogic/@TableId/
+ *    @Version（T-M22-02）识别同样生效
  *  - T-M16.2-03：表前缀/后缀配置（**推断语义**——仅作用于推断表名；T-M19.4 用户反馈收窄，
  *    `@TableName` 显式表名即最终表名、优先级最高、豁免修饰）
  *  - T-M19.4：表名推断策略（无注解时 SNAKE 驼峰转下划线 / CAMEL 纯保留驼峰）、忽略字段名
@@ -53,9 +54,15 @@ class EntityResolver {
         val logicDeleteColumn = fields
             .firstOrNull { hasAnnotation(it, TABLE_LOGIC) }
             ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
+        // T-M22-02：乐观锁版本列（@Version 标注字段——MP OptimisticLockerInnerInterceptor 语义：
+        // UPDATE 自动追加 `version = version + 1` + `AND version = ?`；列名 = @TableField 值或 snake_case；
+        // 与 @TableLogic 同模式：父类字段同样识别）
+        val versionColumn = fields
+            .firstOrNull { hasAnnotation(it, VERSION) }
+            ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
         // T-M16-05：表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
-        return TableInfo(className, tableName, columns, logicDeleteColumn, comment)
+        return TableInfo(className, tableName, columns, logicDeleteColumn, versionColumn, comment)
     }
 
     /**
@@ -295,6 +302,9 @@ class EntityResolver {
         private const val TABLE_FIELD = "com.baomidou.mybatisplus.annotation.TableField"
         private const val TABLE_ID = "com.baomidou.mybatisplus.annotation.TableId"
         private const val TABLE_LOGIC = "com.baomidou.mybatisplus.annotation.TableLogic"
+        // T-M22-02：乐观锁版本注解（OptimisticLockerInnerInterceptor 的 @Version 字段识别；
+        // 与 TABLE_LOGIC 同模式走 findAnnotation 短名兜底）
+        private const val VERSION = "com.baomidou.mybatisplus.annotation.Version"
 
         // ------------------------------------------------------------------
         // T-M19.4：表名推断策略 + 统一修饰链（companion 静态化——实体类不可解析的兜底路径复用，

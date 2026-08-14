@@ -131,6 +131,10 @@ class SqlPreviewService(private val project: Project) {
                     val parsed = QueryWrapperParser(table).parse(located.chain)
                     val sets = table.columns
                         .filter { !it.isId }
+                        // T-M22-02：@Version 列排除——实体 SET 不含 version（对齐 MP
+                        // OptimisticLockerInnerInterceptor：version 不进实体字段 SET，
+                        // 由 [injectOptimisticLockCondition] 追加 `version = version + 1`）
+                        .filter { it.columnName != table.versionColumn }
                         .map { SetClause(column = ColumnRef(columnName = it.columnName), value = SqlValue.Placeholder("?")) }
                     UpdateStatement(table, sets, parsed.conditions)
                 }
@@ -150,11 +154,15 @@ class SqlPreviewService(private val project: Project) {
             // logicDelToOn/logicDelToWhere 仅控制**副表** deleted 条件位置（ON / WHERE 末尾），不再影响主表注入
             // （旧实现把二者当作全局开关是错误近似，见 [evaluateLogicDeleteState]）
             val logicDelete = evaluateLogicDeleteState(located.chain.calls)
-            val finalStatement = if (settings?.state?.injectLogicDelete ?: true) {
+            val baseStatement = if (settings?.state?.injectLogicDelete ?: true) {
                 injectLogicDeleteCondition(table, statement, logicDelete)
             } else {
                 statement
             }
+            // T-M22-02：乐观锁注入（@Version 实体 UPDATE——SET version = version + 1 + WHERE 末尾
+            // AND version = ?；不依赖配置开关，对齐 MP OptimisticLockerInnerInterceptor 默认行为；
+            // 与逻辑删除注入串行调用——二者按语句类型互斥：逻辑删除仅 SELECT/DELETE、乐观锁仅 UPDATE）
+            val finalStatement = injectOptimisticLockCondition(table, baseStatement)
             val result = buildPreviewResult(located.chain.wrapperType, table, finalStatement)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
@@ -278,6 +286,51 @@ class SqlPreviewService(private val project: Project) {
             else -> statement
         }
     }
+
+    /**
+     * T-M22-02：乐观锁条件注入（@Version 实体 + MP OptimisticLockerInnerInterceptor 语义）——
+     * UPDATE 语句自动追加 `SET version = version + 1` 与 WHERE 末尾 `AND version = ?`；
+     * 语句已显式涉及 version 列（SET 赋值或 WHERE 条件）时不重复注入。
+     * **不依赖配置开关**（对齐 MP 拦截器默认行为，无 @Version 字段的实体零影响）；
+     * 仅 [UpdateStatement] 注入——SelectStatement/DeleteStatement 不注入。
+     *
+     * 边界（文档化，不实现）：
+     *  - `@InterceptorIgnore`（方法级注解，静态代码不可映射调用方意图）不做抑制处理；
+     *  - `@KeySequence`（序列取主键）不在主键解析范围内——主键恒以列名占位。
+     */
+    private fun injectOptimisticLockCondition(table: TableInfo, statement: SqlStatement): SqlStatement {
+        val update = statement as? UpdateStatement ?: return statement
+        val versionColumn = table.versionColumn ?: return update
+        // 已显式 SET version（如 set(Entity::getVersion, x) / setSql）→ 不重复注入
+        if (update.sets.any { it.column?.columnName == versionColumn }) return update
+        // 已显式条件 version（如 eq(Entity::getVersion, x)）→ 不重复注入
+        if (conditionReferencesColumn(update.conditions, versionColumn)) return update
+        return update.copy(
+            sets = update.sets + SetClause(
+                column = ColumnRef(columnName = versionColumn),
+                rawSql = "$versionColumn = $versionColumn + 1",
+            ),
+            conditions = update.conditions + Condition.Simple(
+                ColumnRef(columnName = versionColumn), "=", SqlValue.Placeholder("?"),
+            ),
+        )
+    }
+
+    /** T-M22-02：条件树是否已提及指定列（Simple/In/Between/Like/Unary/ColumnComparison 按列名匹配，Group 递归）。 */
+    private fun conditionReferencesColumn(conditions: List<Condition>, columnName: String): Boolean =
+        conditions.any { condition ->
+            when (condition) {
+                is Condition.Simple -> condition.column.columnName == columnName
+                is Condition.Unary -> condition.column.columnName == columnName
+                is Condition.In -> condition.column.columnName == columnName
+                is Condition.Between -> condition.column.columnName == columnName
+                is Condition.Like -> condition.column.columnName == columnName
+                is Condition.ColumnComparison ->
+                    condition.left.columnName == columnName || condition.right.columnName == columnName
+                is Condition.Group -> conditionReferencesColumn(condition.children, columnName)
+                is Condition.Raw -> false
+            }
+        }
 
     /** 单个条件节点 → 条件视图（自身 toggle + 嵌套 Group 子节点递归）。 */
     private fun Condition.toConditionViews(): List<ConditionView> {
