@@ -99,6 +99,10 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
 
+        <!-- T-M25-03 注解预览：MyBatis SQL 注解（@Select/@Insert/@Update/@Delete 及 Provider 族）行显示预览图标（O(1) 语法判定） -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProvider"/>
+
         <!-- T-M24-04 XML 预览：mapper 语句（select/insert/update/delete）行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider"/>

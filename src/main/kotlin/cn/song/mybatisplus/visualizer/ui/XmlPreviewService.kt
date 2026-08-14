@@ -32,8 +32,13 @@ object XmlPreviewService {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
 
+        return toResult(model)
+    }
+
+    /** 预览模型 → [PreviewResult]（T-M25-02 注解预览共用）：初始渲染 + 参数对照 + 错误合并。 */
+    internal fun toResult(model: XmlPreviewModel, extraWarnings: List<String> = emptyList()): PreviewResult {
         val rendered = model.renderSql()
-        val errors = model.errors + rendered.errors
+        val errors = model.errors + extraWarnings + rendered.errors
         val sql = rendered.sql
         return PreviewResult(
             sql = sql,

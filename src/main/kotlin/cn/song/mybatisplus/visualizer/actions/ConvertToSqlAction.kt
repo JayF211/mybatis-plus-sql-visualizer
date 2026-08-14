@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
+import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
@@ -14,6 +15,7 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethodCallExpression
@@ -90,6 +92,17 @@ class ConvertToSqlAction : AnAction() {
         // 分支 B（现状）：光标处定位（内部增强：eq/list 调用处同样可触发）
         val offset = editor.caretModel.offset
         val element = file.findElementAt(offset) ?: return
+
+        // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览（@Select/@Update/Provider 族）
+        val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false)
+        if (annotation != null && AnnotationSqlPreviewService.isSqlAnnotation(annotation)) {
+            SqlPreviewService.previewAsync(project, {
+                AnnotationSqlPreviewService.preview(annotation, project)
+            }) { result ->
+                SqlPreviewService.showResult(project, result)
+            }
+            return
+        }
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
         SqlPreviewService.previewAsync(project, {
