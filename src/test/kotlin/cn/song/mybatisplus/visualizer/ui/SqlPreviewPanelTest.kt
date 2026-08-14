@@ -18,6 +18,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.components.JBPanel
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -26,6 +28,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Color
 import java.awt.image.BufferedImage
+import javax.swing.JComponent
+import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicSplitPaneUI
 
 /**
@@ -241,14 +245,18 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     )
 
     /** 构造带动态条件模型的预览结果（面板走模型级重生成路径）。 */
-    private fun dynamicResult(conditions: List<Condition>, views: List<ConditionView>): PreviewResult {
+    private fun dynamicResult(
+        conditions: List<Condition>,
+        views: List<ConditionView>,
+        params: List<String> = emptyList(),
+    ): PreviewResult {
         val statement = SelectStatement(table = tableInfo(), conditions = conditions)
         val model = SqlPreviewModel(statement, MySqlDialect, formatSql = true, conditionViews = views)
         return PreviewResult(
             sql = "SELECT id, station_id, name\nFROM car_device_info",
             compactSql = "SELECT id, station_id, name FROM car_device_info",
-            unresolvedParams = emptyList(),
-            paramTable = null,
+            unresolvedParams = params,
+            paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
             wrapperType = WrapperType.LAMBDA_QUERY,
             tableName = "car_device_info",
             columns = listOf("id", "station_id", "name"),
@@ -671,5 +679,86 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val expRgb = Color(expected.red, expected.green, expected.blue).rgb
         assertEquals("分隔条像素应等于面板底色", expRgb, img.getRGB(loc + split.dividerSize / 2, 50))
         panel.clear()
+    }
+
+    fun testSelectAllButtonsPinnedAtLeftPanelTopRight() {
+        // T-M26.2（用户反馈：参数名过长时右上角全选/全不选被隐藏，须拉宽左面板才能看到）：
+        // 按钮固定左面板右上角操作行——长参数名只影响滚动区内容，不再把按钮推出视口。
+        // 渲染级断言：按钮在左面板内、参数滚动区（viewport）外，布局后右缘贴近分隔栏（随分隔栏移动）
+        val long = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo()"
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                ),
+                views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
+                params = listOf(long),
+            ),
+        )
+        val split = panel.splitPaneForTest()!!
+        val left = split.leftComponent as JComponent
+        val scroll = left.components.filterIsInstance<JBScrollPane>().firstOrNull()
+        assertNotNull("左面板应含参数滚动区", scroll)
+        val button = panel.selectAllButtonForTest()!!
+        assertTrue("动态条件场景应显示全选按钮", button.isVisible)
+        // 按钮位于左面板固定行：在 leftPanel 内、滚动区 viewport 外（不再受内容宽度影响）
+        assertTrue("按钮应在左面板内", SwingUtilities.isDescendingFrom(button, left))
+        assertFalse("按钮不应在参数滚动区内", SwingUtilities.isDescendingFrom(button, scroll!!.viewport))
+        // 布局后按钮组右缘贴近分隔栏（左面板右边界 = dividerLocation，随分隔栏移动）
+        split.setSize(400, 120)
+        split.doLayout()
+        if (split.dividerLocation < 0) split.dividerLocation = 150
+        split.doLayout()
+        // headless 未显示组件 validate() 不布局（peer 为 null）——用同步 doLayout 链：
+        // JSplitPaneUI 只布局左右面板 bounds，左面板 BorderLayout 与操作行 FlowLayout 须逐层 doLayout
+        left.doLayout()
+        left.components.filterIsInstance<JBPanel<*>>().forEach { it.doLayout() }
+        // 按钮组右对齐：组内最右可见按钮（条件组 = 全不选）右缘应贴近分隔栏
+        val bar = button.parent
+        val rightMostX = bar.components.filter { it.isVisible }.maxOf { it.x + it.width }
+        val groupRight = SwingUtilities.convertPoint(bar, rightMostX, 0, split).x
+        val loc = split.dividerLocation
+        assertTrue("按钮组右缘应贴近分隔栏", groupRight in (loc - 40)..loc)
+        panel.clear()
+    }
+
+    fun testActionButtonGroupsSwitchByScene() {
+        // T-M26.2：右上角按钮组按场景切换——动态条件显示条件组、批量显示批量组、无内容整行隐藏
+        val panel = SqlPreviewPanel(project)
+        // 无参数 → 整行隐藏
+        panel.showResult(result())
+        assertFalse("无内容时全选按钮应隐藏", panel.selectAllButtonForTest()!!.isVisible)
+        assertFalse("无内容时批量全选按钮应隐藏", panel.batchSelectAllButtonForTest()!!.isVisible)
+        // 动态条件 → 条件组可见、批量组隐藏
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                ),
+                views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
+            ),
+        )
+        assertTrue("动态条件场景应显示条件组", panel.selectAllButtonForTest()!!.isVisible)
+        assertFalse("动态条件场景不应显示批量组", panel.batchSelectAllButtonForTest()!!.isVisible)
+        // 批量列 → 批量组可见、条件组隐藏
+        panel.showResult(
+            batchResult(
+                BatchModel(
+                    kind = BatchKind.INSERT,
+                    tableName = "biz_store_coupon",
+                    toggleColumns = listOf(
+                        BatchColumn("name", "entity.name", quote = true, checked = true),
+                    ),
+                ),
+            ),
+        )
+        assertFalse("批量场景不应显示条件组", panel.selectAllButtonForTest()!!.isVisible)
+        assertTrue("批量场景应显示批量组", panel.batchSelectAllButtonForTest()!!.isVisible)
+        panel.clear()
+        assertFalse("clear 后全选按钮应隐藏", panel.selectAllButtonForTest()!!.isVisible)
+        assertFalse("clear 后批量全选按钮应隐藏", panel.batchSelectAllButtonForTest()!!.isVisible)
     }
 }

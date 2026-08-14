@@ -76,11 +76,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val conditionValueFields = mutableListOf<JBTextField>()
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
-    private var selectAllButton: JButton? = null
-    private var selectNoneButton: JButton? = null
+    // T-M26.2：全选/全不选按钮固定左面板右上角（actionBar 固定行，随分隔栏移动）——
+    // 按钮移出参数滚动区，不再受参数列表内容宽度（长参数名撑宽 paramPanel）影响；
+    // 条件组（动态条件/XML 条件开关）与批量组（批量「参数列」）互斥，按场景切换可见性
+    private val selectAllButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
+    private val selectNoneButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
     // T-M23.2：批量「参数列」区全选/全不选按钮
-    private var batchSelectAllButton: JButton? = null
-    private var batchSelectNoneButton: JButton? = null
+    private val batchSelectAllButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
+    private val batchSelectNoneButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
+    private val actionBar = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+        add(selectAllButton)
+        add(selectNoneButton)
+        add(batchSelectAllButton)
+        add(batchSelectNoneButton)
+        isVisible = false
+    }
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -120,7 +131,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             isOpaque = false
             viewport.isOpaque = false
         }
-        val split = ThemedSplitPane(paramScroll, editorHolder).apply {
+        // T-M26.2：左面板 = 固定操作行（全选/全不选右上角，宽度随分隔栏） + 参数滚动区
+        // （按钮原在滚动区内，长参数名撑宽 paramPanel 时被推出视口——上移固定后不受影响）
+        val leftPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(actionBar, BorderLayout.NORTH)
+            add(paramScroll, BorderLayout.CENTER)
+        }
+        val split = ThemedSplitPane(leftPanel, editorHolder).apply {
             resizeWeight = 0.3
             isContinuousLayout = true
             isOneTouchExpandable = false
@@ -381,10 +398,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         xmlErrors = emptyList()
         currentWarning = null
         errorCopyButton?.isVisible = false
-        selectAllButton = null
-        selectNoneButton = null
-        batchSelectAllButton = null
-        batchSelectNoneButton = null
+        // T-M26.2：按钮为固定实例（不再按次重建），clear 复位右上角操作行（按钮组 + 整行隐藏）
+        showActionButtons(showConditionGroup = false, showBatchGroup = false)
         paramPanel.removeAll()
         releaseEditor()
         editorHolder.removeAll()
@@ -468,6 +483,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val batchModel = result.batchModel
 
         if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null) {
+            showActionButtons(showConditionGroup = false, showBatchGroup = false)
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
@@ -480,6 +496,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
         // T-M23.2（用户要求）：参数可选场景必须有【全选/全不选】按钮
         if (batchModel != null) {
+            showActionButtons(showConditionGroup = false, showBatchGroup = true)
             paramPanel.add(batchSectionHeader())
             batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
             batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false)) }
@@ -494,6 +511,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val hasControls = xmlModel.conditionViews.isNotEmpty() ||
                 xmlModel.forEachViews.isNotEmpty() || xmlModel.bindViews.isNotEmpty()
             if (!hasControls && result.unresolvedParams.isEmpty()) {
+                showActionButtons(showConditionGroup = false, showBatchGroup = false)
                 paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                     border = JBUI.Borders.empty(6, 8)
                 })
@@ -501,8 +519,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 paramPanel.repaint()
                 return
             }
+            showActionButtons(showConditionGroup = xmlModel.conditionViews.isNotEmpty(), showBatchGroup = false)
             if (xmlModel.conditionViews.isNotEmpty()) {
-                paramPanel.add(conditionSectionHeader())
                 xmlModel.conditionViews.forEach { paramPanel.add(buildXmlConditionRow(it)) }
             }
             if (xmlModel.forEachViews.isNotEmpty()) {
@@ -525,8 +543,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
 
         val viewSources = views.flatMap { it.valueSources }.toSet()
+        showActionButtons(showConditionGroup = views.isNotEmpty(), showBatchGroup = false)
         if (views.isNotEmpty()) {
-            paramPanel.add(conditionSectionHeader())
             views.forEach { paramPanel.add(buildConditionRow(it)) }
         }
         // 普通参数行：未解析参数中不属于任何动态条件值输入框的来源（去重，同一 source 共享一个输入框）
@@ -579,21 +597,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * 批量「参数列」分区标题行（T-M23.2，用户要求：参数可选场景必须有【全选/全不选】）：
-     * 左侧分区名 + 右侧全选/全不选按钮（操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
+     * T-M26.2：批量「参数列」分区标题行——全选/全不选按钮已上移左面板右上角固定
+     * 操作行（actionBar，原 T-M23.2 在本行 EAST），此处仅保留分区名标签。
      */
-    private fun batchSectionHeader(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-        add(JBLabel(MpSqlVisualizerBundle.message("panel.batch.columns")).apply {
-            border = JBUI.Borders.empty(4, 8, 0, 8)
-        }, BorderLayout.WEST)
-        add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
-            batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
-            batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
-            add(batchSelectAllButton)
-            add(batchSelectNoneButton)
-        }, BorderLayout.EAST)
-        border = JBUI.Borders.empty(0, 8, 2, 8)
-    }
+    private fun batchSectionHeader(): JBLabel = sectionLabel(MpSqlVisualizerBundle.message("panel.batch.columns"))
 
     /**
      * 批量列全选/全不选（T-M23.2）：操作 [batchCheckBoxes] 与 [enabledIds]（列名作 id），
@@ -608,13 +615,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderSql()
     }
 
-    /** 动态条件分区操作行（M14.2）：全选/全不选按钮（「动态条件」分区标题已移除，避免占用左栏空间）。 */
-    private fun conditionSectionHeader(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
-        selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
-        selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
-        add(selectAllButton)
-        add(selectNoneButton)
-        border = JBUI.Borders.empty(0, 8, 2, 8)
+    /**
+     * T-M26.2：左面板右上角固定操作行的按钮组可见性切换——条件组（动态条件/XML 条件开关）
+     * 与批量组（批量「参数列」）互斥场景，无内容时整行隐藏（与按钮在列表内时"无按钮"一致）。
+     */
+    private fun showActionButtons(showConditionGroup: Boolean, showBatchGroup: Boolean) {
+        selectAllButton.isVisible = showConditionGroup
+        selectNoneButton.isVisible = showConditionGroup
+        batchSelectAllButton.isVisible = showBatchGroup
+        batchSelectNoneButton.isVisible = showBatchGroup
+        actionBar.isVisible = showConditionGroup || showBatchGroup
     }
 
     /** 左栏分区内的紧凑按钮（比工具栏按钮更小，避免挤压复选框行）。 */

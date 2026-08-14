@@ -19,6 +19,7 @@
   - foreach 集合值输入（`2,3` → `IN ( 2 , 3 )` 自动回填，唯一入口）；迭代内容 trim（IN 单行紧凑）
   - bind 自动求值回显参数行（静态常量/LIKE 模板算出的值自动填入，可手动覆盖）
 - **预览弹窗左右分栏分隔条修复（T-M26.1）**：深色主题下左右分栏间出现白色竖条纹（平台 LAF 委托 Metal，`MetalSplitPaneDivider` 以 Metal 主题浅色直接填充分隔条，与 `setBackground` 无关，原覆盖无效）——`ThemedSplitPane` 覆写 paint 在 LAF 绘制后把分隔条区域覆盖为面板底色，亮/暗主题下与面板融为一体
+- **左面板全选/全不选按钮固定右上角（T-M26.2）**：SQL 预览面板左侧参数列表的全选/全不选按钮原在参数滚动区内（`paramPanel` BoxLayout 把按钮行拉伸到最宽参数行宽度），参数名过长时右对齐按钮被推出左面板视口隐藏，须拉宽左面板才能看到——按钮移出滚动区固定到左面板右上角操作行（右对齐贴分隔栏、拖拽分隔栏自动跟随，不再受内容宽度影响），按场景切换按钮组（动态条件/XML 条件开关 ↔ 批量「参数列」），无参数内容时整行隐藏
 - **文件级多注解候选（M26-A）**：Wrapper 预览未命中（光标不在 Wrapper 链上）时，Java 文件预览回落到文件内全部 SQL 注解——单个直接预览、多个弹候选对话框（注解行号 + SQL 摘要），非 Mapper 文件同样可用
 - **MP 占位 `${ew.customSqlSegment}` 展开（M26-B）**：mapper XML 中的 `${ew.customSqlSegment}`/`${ew.sqlSelect}`/`${ew.sqlSet}` 占位经 namespace 关联 Java Mapper 方法 → 调用处 wrapper 实参 → Wrapper 预览全链路 SQL → 提取对应片段回填：
   - `customSqlSegment` = `WHERE (条件)`（含 WHERE 关键字，对齐 MP `SqlHelper`）；sqlSelect = SELECT 列清单；sqlSet = SET 片段
