@@ -17,15 +17,21 @@ class AnnotationSqlParser {
      * @param sqlText   注解 SQL 文本（调用方已按 `String.join(" ", value).trim()` 拼接）
      * @param kind      语句类型（注解类型直接映射 SqlCommandType）
      * @param paramNames 方法参数 mock 名（@Param 值优先 + 实际名 + param1..N）
+     * @param staticFieldValues 静态字段值（T-M25.2）：`@class@field` → 值
      */
-    fun parse(sqlText: String, kind: XmlStatementKind, paramNames: List<String>): XmlPreviewModel {
+    fun parse(
+        sqlText: String,
+        kind: XmlStatementKind,
+        paramNames: List<String>,
+        staticFieldValues: Map<String, Any?> = emptyMap(),
+    ): XmlPreviewModel {
         val node = if (sqlText.startsWith("<script>")) {
             parseScript(sqlText)
         } else {
             MixedSqlNode(listOf(TextSqlNode(sqlText)))
         }
         val statement = XmlStatement(id = "annotation", kind = kind, node = node, parameterType = null)
-        return XmlPreviewModel.from(statement, emptyList(), extraParamProps = paramNames.toSet())
+        return XmlPreviewModel.from(statement, emptyList(), extraParamProps = paramNames.toSet(), staticFieldValues = staticFieldValues)
     }
 
     private fun parseScript(scriptText: String): SqlNode {

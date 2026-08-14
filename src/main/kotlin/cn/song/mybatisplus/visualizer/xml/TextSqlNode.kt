@@ -38,7 +38,7 @@ class TextSqlNode(val text: String) : SqlNode {
             parameter == null -> context.bind("value", null)
             isSimpleType(parameter) -> context.bind("value", parameter)
         }
-        val result = OgnlEvaluator.evaluate(content, context.bindings)
+        val result = OgnlEvaluator.evaluate(content, context.bindings, context.staticFieldValues)
         when (result) {
             is EvalResult.Ok -> {
                 if (result.value == null) {

@@ -76,7 +76,7 @@ object AnnotationSqlPreviewService {
         }
         val sql = values.joinToString(" ").trim()
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
-        return buildResult(sql, shortName, paramNames(method), warnings)
+        return buildResult(sql, shortName, paramNames(method), warnings, project)
     }
 
     // ------------------------------------------------------------------
@@ -106,7 +106,7 @@ object AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"))
         }
-        return buildResult(sql, shortName, paramNames(mapperMethod), warnings)
+        return buildResult(sql, shortName, paramNames(mapperMethod), warnings, project)
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -175,8 +175,14 @@ object AnnotationSqlPreviewService {
         }
     }
 
-    /** 模型 → 结果（解析异常兜底 warning）。 */
-    private fun buildResult(sql: String, shortName: String, paramNames: List<String>, warnings: List<String>): PreviewResult {
+    /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。 */
+    private fun buildResult(
+        sql: String,
+        shortName: String,
+        paramNames: List<String>,
+        warnings: MutableList<String>,
+        project: Project?,
+    ): PreviewResult {
         val kind = when (shortName.removeSuffix("Provider")) {
             "Select" -> XmlStatementKind.SELECT
             "Insert" -> XmlStatementKind.INSERT
@@ -184,7 +190,8 @@ object AnnotationSqlPreviewService {
             else -> XmlStatementKind.DELETE
         }
         return try {
-            val model = AnnotationSqlParser().parse(sql, kind, paramNames)
+            val staticValues = XmlPreviewService.resolveStaticFields(sql, project, warnings)
+            val model = AnnotationSqlParser().parse(sql, kind, paramNames, staticValues)
             XmlPreviewService.toResult(model, warnings)
         } catch (e: XmlParseException) {
             nullResult(e.message ?: "SQL 解析失败。")

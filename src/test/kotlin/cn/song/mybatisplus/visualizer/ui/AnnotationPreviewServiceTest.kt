@@ -122,4 +122,54 @@ class AnnotationPreviewServiceTest : BasePlatformTestCase() {
         val result = AnnotationSqlPreviewService.preview(annotationOf("one"), project)
         assertEquals("SELECT 1", compact(result!!.sql))
     }
+
+    fun testXmlPreviewResolvesStaticConstantFromProject() {
+        // T-M25.2（用户实测）：bind 表达式 @类全名@静态字段——PSI 解析用户项目常量类字段初始值
+        myFixture.configureByText(
+            "DicConstants.java",
+            """
+            package com.cyzc.platform.common.constant;
+            public class DicConstants {
+                public static final String DIC_VALUE_BIKE = "1";
+                public static final String DIC_VALUE_CAR = "2";
+            }
+            """.trimIndent(),
+        )
+        val mapper = """
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="status" value="@com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE"/>
+                SELECT * FROM t WHERE status = #{status} AND type = #{type}
+              </select>
+            </mapper>
+        """.trimIndent()
+        val result = XmlPreviewService.preview(mapper, "s1", project)
+        assertNull("静态常量解析成功不应有警告", result.warning)
+        assertEquals("SELECT * FROM t WHERE status = ? AND type = ?", compact(result.sql))
+        assertEquals(listOf("status", "type"), result.unresolvedParams)
+        // bind 的 mock 值：常量 "1"（面板 bind 行显示表达式，SQL 中 #{} 为参数占位）
+        assertEquals("status", result.xmlModel!!.bindViews.single().name)
+    }
+
+    fun testXmlPreviewStaticConstantUnresolvedWarning() {
+        myFixture.configureByText(
+            "DicConstants.java",
+            """
+            package com.cyzc.platform.common.constant;
+            public class DicConstants {
+                public static final String DIC_VALUE_BIKE = "1";
+            }
+            """.trimIndent(),
+        )
+        val mapper = """
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="status" value="@com.cyzc.platform.common.constant.DicConstants@MISSING_FIELD"/>
+                SELECT * FROM t WHERE status = #{status}
+              </select>
+            </mapper>
+        """.trimIndent()
+        val result = XmlPreviewService.preview(mapper, "s1", project)
+        assertTrue("字段不存在应提示", result.warning?.contains("无法解析") == true)
+    }
 }

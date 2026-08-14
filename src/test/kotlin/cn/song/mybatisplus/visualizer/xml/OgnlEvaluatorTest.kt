@@ -11,13 +11,14 @@ import org.junit.Test
  */
 class OgnlEvaluatorTest {
 
-    private fun eval(expr: String, bindings: Map<String, Any?> = emptyMap()): Any? = when (val r = OgnlEvaluator.evaluate(expr, bindings)) {
-        is EvalResult.Ok -> r.value
-        is EvalResult.Err -> error("unexpected eval error: ${r.message}")
-    }
+    private fun eval(expr: String, bindings: Map<String, Any?> = emptyMap(), staticValues: Map<String, Any?> = emptyMap()): Any? =
+        when (val r = OgnlEvaluator.evaluate(expr, bindings, staticValues)) {
+            is EvalResult.Ok -> r.value
+            is EvalResult.Err -> error("unexpected eval error: ${r.message}")
+        }
 
-    private fun truth(expr: String, bindings: Map<String, Any?> = emptyMap()): Boolean =
-        OgnlEvaluator.isTrue(eval(expr, bindings))
+    private fun truth(expr: String, bindings: Map<String, Any?> = emptyMap(), staticValues: Map<String, Any?> = emptyMap()): Boolean =
+        OgnlEvaluator.isTrue(eval(expr, bindings, staticValues))
 
     // ------------------------------------------------------------------
     // 判真规则（MyBatis ExpressionEvaluator：Boolean / Number≠0 / 其他非 null）
@@ -146,6 +147,40 @@ class OgnlEvaluatorTest {
     fun `下标访问`() {
         assertEquals("b", eval("list[1]", bindings))
         assertEquals("v1", eval("map['k1']", bindings))
+    }
+
+    // ------------------------------------------------------------------
+    // 静态字段引用（T-M25.2：@class@field，MyBatis mapper 常见 OGNL 常量写法）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `静态字段引用_注入值求值`() {
+        val staticValues = mapOf("com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE" to "1")
+        assertEquals("1", eval("@com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE", staticValues = staticValues))
+        assertEquals("%1%", eval("'%' + @com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE + '%'", staticValues = staticValues))
+        assertTrue(truth("@com.cyzc.DicConstants@FLAG == true", staticValues = mapOf("com.cyzc.DicConstants@FLAG" to true)))
+    }
+
+    @Test
+    fun `静态字段引用_未注入时求值为null`() {
+        assertEquals(null, eval("@com.cyzc.DicConstants@DIC_VALUE"))
+    }
+
+    @Test
+    fun `静态字段引用_内部类与dollar类名`() {
+        val staticValues = mapOf("com.cyzc.Outer\$Inner@VALUE" to "x")
+        assertEquals("x", eval("@com.cyzc.Outer\$Inner@VALUE", staticValues = staticValues))
+    }
+
+    @Test
+    fun `静态字段引用_语法错误报错`() {
+        assertTrue(OgnlEvaluator.parse("@com.cyzc.DicConstants") is ParseResult.Err) // 缺 @字段
+        assertTrue(OgnlEvaluator.parse("@com.cyzc.@X") is ParseResult.Err) // 类名空
+    }
+
+    @Test
+    fun `静态字段引用不产生根变量`() {
+        assertEquals(emptySet<String>(), OgnlEvaluator.rootVariables("@com.cyzc.DicConstants@DIC_VALUE"))
     }
 
     // ------------------------------------------------------------------

@@ -14,6 +14,8 @@ open class DynamicContext(
     initialBindings: Map<String, Any?>,
     private val conditionOverrides: Map<String, Boolean> = emptyMap(),
     private val protectedBindNames: Set<String> = emptySet(),
+    /** 静态字段值（T-M25.2）：`@class@field` → 值；预览引擎由 PSI 层解析用户项目常量类注入。 */
+    open val staticFieldValues: Map<String, Any?> = emptyMap(),
 ) {
 
     /**

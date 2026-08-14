@@ -57,8 +57,9 @@ class XmlSqlRenderer {
         bindings: Map<String, Any?>,
         conditionOverrides: Map<String, Boolean> = emptyMap(),
         protectedNames: Set<String> = emptySet(),
+        staticFieldValues: Map<String, Any?> = emptyMap(),
     ): RenderedXmlSql {
-        val context = DynamicContext(bindings, conditionOverrides, protectedNames)
+        val context = DynamicContext(bindings, conditionOverrides, protectedNames, staticFieldValues)
         node.apply(context)
         return parseParameterMappings(context.getSql(), context.errors)
     }

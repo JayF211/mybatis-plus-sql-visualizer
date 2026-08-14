@@ -61,6 +61,8 @@ class XmlPreviewModel private constructor(
     val variables: Set<String>,
     /** `_parameter` 的直接属性（`_parameter.title` 形态）——mock 参数对象属性。 */
     val paramProps: Set<String>,
+    /** 静态字段值（T-M25.2）：`@class@field` → 值（PSI 层解析用户项目常量类注入）。 */
+    val staticFieldValues: Map<String, Any?>,
     private val rootNode: SqlNode,
 ) {
 
@@ -77,6 +79,7 @@ class XmlPreviewModel private constructor(
         // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值
         conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) },
         protectedNames = state.bindOverrides.keys.toSet(),
+        staticFieldValues = staticFieldValues,
     )
 
     private fun mockBindings(state: XmlPreviewState): Map<String, Any?> {
@@ -106,8 +109,14 @@ class XmlPreviewModel private constructor(
         fun defaultTruth(test: String): Boolean = !test.contains("== null")
 
         /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。
-         *  T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。 */
-        fun from(statement: XmlStatement, errors: List<String>, extraParamProps: Set<String> = emptySet()): XmlPreviewModel {
+         *  T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。
+         *  T-M25.2：staticFieldValues 为 `@class@field` → 值（PSI 层解析用户项目常量类）。 */
+        fun from(
+            statement: XmlStatement,
+            errors: List<String>,
+            extraParamProps: Set<String> = emptySet(),
+            staticFieldValues: Map<String, Any?> = emptyMap(),
+        ): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
             val bindViews = mutableListOf<XmlBindView>()
@@ -127,6 +136,7 @@ class XmlPreviewModel private constructor(
                 errors = errors,
                 variables = variables,
                 paramProps = paramProps,
+                staticFieldValues = staticFieldValues,
                 rootNode = statement.node,
             )
         }

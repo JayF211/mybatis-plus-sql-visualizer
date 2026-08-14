@@ -298,4 +298,44 @@ class XmlSqlRendererTest {
         val sql = compact(m.renderSql().sql)
         assertEquals("SELECT '' FROM t", sql)
     }
+
+    @Test
+    fun `bind静态常量引用_注入值渲染`() {
+        // T-M25.2（用户实测）：OGNL 静态字段引用 @类全名@字段名（MyBatis mapper 常见）
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="portStatus" value="@com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE_DEVICE_PORT_STATUS_IDLE"/>
+                SELECT * FROM t WHERE port_status = #{portStatus}
+              </select>
+            </mapper>
+        """.trimIndent())
+        val statement = parsed.statements.single()
+        val m = XmlPreviewModel.from(
+            statement,
+            parsed.errors,
+            staticFieldValues = mapOf(
+                "com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE_DEVICE_PORT_STATUS_IDLE" to "1",
+            ),
+        )
+        val rendered = m.renderSql()
+        assertEquals("SELECT * FROM t WHERE port_status = ?", compact(rendered.sql))
+        assertEquals("portStatus", rendered.mappings.single().property)
+        assertTrue(rendered.errors.isEmpty())
+    }
+
+    @Test
+    fun `bind静态常量引用_未注入时提示可填写覆盖值`() {
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="portStatus" value="@com.cyzc.platform.common.constant.DicConstants@DIC_VALUE"/>
+                SELECT * FROM t WHERE port_status = #{portStatus}
+              </select>
+            </mapper>
+        """.trimIndent())
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val rendered = m.renderSql()
+        assertTrue(rendered.errors.any { it.contains("静态常量") && it.contains("填写覆盖值") })
+    }
 }

@@ -53,6 +53,9 @@ open class TrimSqlNode(
 
         override fun isProtected(name: String): Boolean = delegate.isProtected(name)
 
+        override val staticFieldValues: Map<String, Any?>
+            get() = delegate.staticFieldValues
+
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings
 

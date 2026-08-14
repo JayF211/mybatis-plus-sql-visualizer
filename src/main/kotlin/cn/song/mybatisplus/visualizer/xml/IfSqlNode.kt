@@ -16,10 +16,11 @@ class IfSqlNode(val contents: SqlNode, val test: String) : SqlNode {
         return truth
     }
 
-    private fun evaluate(context: DynamicContext): Boolean = when (val result = OgnlEvaluator.evaluate(test, context.bindings)) {
-        is EvalResult.Ok -> OgnlEvaluator.isTrue(result.value)
-        is EvalResult.Err -> true // 解析失败：预览默认展开（面板开关可改）
-    }
+    private fun evaluate(context: DynamicContext): Boolean =
+        when (val result = OgnlEvaluator.evaluate(test, context.bindings, context.staticFieldValues)) {
+            is EvalResult.Ok -> OgnlEvaluator.isTrue(result.value)
+            is EvalResult.Err -> true // 解析失败：预览默认展开（面板开关可改）
+        }
 }
 
 /**
@@ -47,9 +48,18 @@ class VarDeclSqlNode(val name: String, val expression: String) : SqlNode {
 
     override fun apply(context: DynamicContext): Boolean {
         if (context.isProtected(name)) return true
-        val result = OgnlEvaluator.evaluate(expression, context.bindings)
+        val result = OgnlEvaluator.evaluate(expression, context.bindings, context.staticFieldValues)
         when (result) {
-            is EvalResult.Ok -> context.bind(name, result.value)
+            is EvalResult.Ok -> {
+                if (result.value == null) {
+                    // T-M25.2：静态常量引用求值为空 → 提示可填写覆盖值（常量类/字段不可解析或未注入）
+                    val refs = OgnlEvaluator.staticFieldRefs(expression)
+                    if (refs.isNotEmpty()) {
+                        context.errors += "静态常量 ${refs.joinToString(", ")} 求值为空（常量类/字段不可解析或未注入，可在预览中填写覆盖值）"
+                    }
+                }
+                context.bind(name, result.value)
+            }
             is EvalResult.Err -> {
                 context.errors += "无法解析 bind 表达式 '$expression'（${result.message}，可在预览中填写覆盖值）"
                 context.bind(name, null)

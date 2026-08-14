@@ -58,7 +58,7 @@ class ForeachSqlNode(
      */
     private fun evaluateIterable(context: DynamicContext): Iterable<*>? {
         val direct = context.bindings[collectionExpression]
-        val value = direct ?: when (val r = OgnlEvaluator.evaluate(collectionExpression, context.bindings)) {
+        val value = direct ?: when (val r = OgnlEvaluator.evaluate(collectionExpression, context.bindings, context.staticFieldValues)) {
             is EvalResult.Ok -> r.value
             is EvalResult.Err -> {
                 context.errors += "无法解析 foreach collection '$collectionExpression'（${r.message}）"
@@ -125,6 +125,9 @@ class ForeachSqlNode(
 
         override fun isProtected(name: String): Boolean = delegate.isProtected(name)
 
+        override val staticFieldValues: Map<String, Any?>
+            get() = delegate.staticFieldValues
+
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings
     }
@@ -161,6 +164,9 @@ class ForeachSqlNode(
         override fun conditionResult(test: String): Boolean? = delegate.conditionResult(test)
 
         override fun isProtected(name: String): Boolean = delegate.isProtected(name)
+
+        override val staticFieldValues: Map<String, Any?>
+            get() = delegate.staticFieldValues
 
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings

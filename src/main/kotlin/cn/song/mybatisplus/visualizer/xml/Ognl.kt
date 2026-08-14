@@ -38,6 +38,9 @@ sealed interface OgnlExpr {
     /** 根变量引用（从 bindings 取值的起始标识符）。 */
     data class RootRef(val name: String) : OgnlExpr
 
+    /** 静态字段引用（T-M25.2）：`@com.xxx.Class@FIELD`（MyBatis mapper 常见 OGNL 常量写法）。 */
+    data class StaticFieldRef(val className: String, val fieldName: String) : OgnlExpr
+
     /** 引用链：基础表达式（[RootRef] 或字面量，如 `'str'.length()`）+ 后缀步骤。 */
     data class Chain(val base: OgnlExpr, val steps: List<ChainStep>) : OgnlExpr
 
@@ -75,18 +78,20 @@ object OgnlEvaluator {
         ParseResult.Err(e.message ?: "parse error")
     }
 
-    /** 解析 + 求值（bindings 为变量上下文）。求值期异常安全降级为 [EvalResult.Err]。 */
-    fun evaluate(text: String, bindings: Map<String, Any?>): EvalResult = when (val p = parse(text)) {
-        is ParseResult.Err -> EvalResult.Err(p.message)
-        is ParseResult.Ok -> evaluate(p.expr, bindings)
-    }
+    /** 解析 + 求值（bindings 为变量上下文；staticFieldValues 为 `@class@field` → 值的映射，T-M25.2）。求值期异常安全降级为 [EvalResult.Err]。 */
+    fun evaluate(text: String, bindings: Map<String, Any?>, staticFieldValues: Map<String, Any?> = emptyMap()): EvalResult =
+        when (val p = parse(text)) {
+            is ParseResult.Err -> EvalResult.Err(p.message)
+            is ParseResult.Ok -> evaluate(p.expr, bindings, staticFieldValues)
+        }
 
     /** 求值（AST）。 */
-    fun evaluate(expr: OgnlExpr, bindings: Map<String, Any?>): EvalResult = try {
-        EvalResult.Ok(eval(expr, bindings))
-    } catch (e: Throwable) {
-        EvalResult.Err(e.message ?: "evaluation error")
-    }
+    fun evaluate(expr: OgnlExpr, bindings: Map<String, Any?>, staticFieldValues: Map<String, Any?> = emptyMap()): EvalResult =
+        try {
+            EvalResult.Ok(eval(expr, bindings, staticFieldValues))
+        } catch (e: Throwable) {
+            EvalResult.Err(e.message ?: "evaluation error")
+        }
 
     /** 判真规则（对齐 MyBatis ExpressionEvaluator.evaluateBoolean）：
      * Boolean → 原值；Number → compareTo(0) != 0；其他 → != null（空串为真、0 为假）。
@@ -95,6 +100,37 @@ object OgnlEvaluator {
         is Boolean -> value
         is Number -> runCatching { toDecimal(value).compareTo(BigDecimal.ZERO) != 0 }.getOrDefault(true)
         else -> value != null
+    }
+
+    /** 提取表达式中的静态字段引用（`class@field` 集合，T-M25.2 求值为空提示用）；解析失败返回空集。 */
+    fun staticFieldRefs(text: String): Set<String> {
+        val result = parse(text)
+        if (result !is ParseResult.Ok) return emptySet()
+        val out = mutableSetOf<String>()
+        collectStaticRefs(result.expr, out)
+        return out
+    }
+
+    private fun collectStaticRefs(expr: OgnlExpr, out: MutableSet<String>) {
+        when (expr) {
+            is OgnlExpr.StaticFieldRef -> out += "${expr.className}@${expr.fieldName}"
+            is OgnlExpr.Chain -> {
+                collectStaticRefs(expr.base, out)
+                expr.steps.forEach { step ->
+                    when (step) {
+                        is ChainStep.Property -> Unit
+                        is ChainStep.Method -> step.args.forEach { collectStaticRefs(it, out) }
+                        is ChainStep.Index -> collectStaticRefs(step.expr, out)
+                    }
+                }
+            }
+            is OgnlExpr.Unary -> collectStaticRefs(expr.operand, out)
+            is OgnlExpr.Binary -> {
+                collectStaticRefs(expr.left, out)
+                collectStaticRefs(expr.right, out)
+            }
+            else -> Unit
+        }
     }
 
     /** 提取表达式中引用的根变量（变量收集用）；解析失败返回空集。 */
@@ -133,7 +169,7 @@ object OgnlEvaluator {
 
     private fun collectPaths(expr: OgnlExpr, out: MutableSet<String>) {
         when (expr) {
-            is OgnlExpr.Literal, is OgnlExpr.ListLiteral -> Unit
+            is OgnlExpr.Literal, is OgnlExpr.ListLiteral, is OgnlExpr.StaticFieldRef -> Unit
             is OgnlExpr.RootRef -> out += expr.name
             is OgnlExpr.Chain -> {
                 val base = expr.base
@@ -165,7 +201,7 @@ object OgnlEvaluator {
 
     private fun collectRoots(expr: OgnlExpr, out: MutableSet<String>) {
         when (expr) {
-            is OgnlExpr.Literal, is OgnlExpr.ListLiteral -> Unit
+            is OgnlExpr.Literal, is OgnlExpr.ListLiteral, is OgnlExpr.StaticFieldRef -> Unit
             is OgnlExpr.RootRef -> out += expr.name
             is OgnlExpr.Chain -> {
                 collectRoots(expr.base, out)
@@ -189,27 +225,28 @@ object OgnlEvaluator {
     // 求值
     // ------------------------------------------------------------------
 
-    private fun eval(expr: OgnlExpr, bindings: Map<String, Any?>): Any? = when (expr) {
+    private fun eval(expr: OgnlExpr, bindings: Map<String, Any?>, staticFieldValues: Map<String, Any?>): Any? = when (expr) {
         is OgnlExpr.Literal -> expr.value
-        is OgnlExpr.ListLiteral -> expr.items.map { eval(it, bindings) }
+        is OgnlExpr.ListLiteral -> expr.items.map { eval(it, bindings, staticFieldValues) }
         is OgnlExpr.RootRef -> bindings[expr.name]
+        is OgnlExpr.StaticFieldRef -> staticFieldValues["${expr.className}@${expr.fieldName}"]
         is OgnlExpr.Chain -> {
-            var current = eval(expr.base, bindings)
+            var current = eval(expr.base, bindings, staticFieldValues)
             for (step in expr.steps) {
                 current = when (step) {
                     is ChainStep.Property -> property(current, step.name)
-                    is ChainStep.Method -> method(current, step.name, step.args.map { eval(it, bindings) })
-                    is ChainStep.Index -> index(current, eval(step.expr, bindings))
+                    is ChainStep.Method -> method(current, step.name, step.args.map { eval(it, bindings, staticFieldValues) })
+                    is ChainStep.Index -> index(current, eval(step.expr, bindings, staticFieldValues))
                 }
             }
             current
         }
         is OgnlExpr.Unary -> when (expr.op) {
-            "!", "not" -> !isTrue(eval(expr.operand, bindings))
-            "-" -> (eval(expr.operand, bindings) as? Number)?.let { toDecimal(it).negate() }
+            "!", "not" -> !isTrue(eval(expr.operand, bindings, staticFieldValues))
+            "-" -> (eval(expr.operand, bindings, staticFieldValues) as? Number)?.let { toDecimal(it).negate() }
             else -> null
         }
-        is OgnlExpr.Binary -> evalBinary(expr.op, eval(expr.left, bindings), eval(expr.right, bindings))
+        is OgnlExpr.Binary -> evalBinary(expr.op, eval(expr.left, bindings, staticFieldValues), eval(expr.right, bindings, staticFieldValues))
     }
 
     private fun evalBinary(op: String, left: Any?, right: Any?): Any? = when (op) {
@@ -451,7 +488,7 @@ object OgnlEvaluator {
 
         companion object {
             val SYMBOLS_TWO = setOf("&&", "||", "==", "!=", "<=", ">=")
-            val SYMBOLS_ONE = setOf("!", "<", ">", "+", "-", "*", "/", "%", "(", ")", "{", "}", "[", "]", ",", ".")
+            val SYMBOLS_ONE = setOf("!", "<", ">", "+", "-", "*", "/", "%", "(", ")", "{", "}", "[", "]", ",", ".", "@")
         }
     }
 
@@ -595,6 +632,42 @@ object OgnlEvaluator {
             return if (steps.isEmpty()) base else OgnlExpr.Chain(base, steps)
         }
 
+        /**
+         * 静态字段引用（T-M25.2）：`@com.xxx.Class@FIELD`（OGNL 静态访问，MyBatis mapper 常见）。
+         * 类名支持包路径与 `$`（内部类）；`@@`（root 类）与静态方法调用暂不支持（解析报错）。
+         */
+        private fun parseStaticFieldRef(): OgnlExpr {
+            advance() // '@'
+            val className = StringBuilder()
+            while (true) {
+                when {
+                    current.kind == TokenKind.IDENT -> {
+                        className.append(current.text)
+                        advance()
+                    }
+                    current.text == "." -> {
+                        // 点后必须跟标识符（拒绝尾点如 `@a.b.@X`）
+                        if (lexer.peek().kind != TokenKind.IDENT) {
+                            throw OgnlParseException("expected class name after '@'")
+                        }
+                        className.append('.')
+                        advance()
+                    }
+                    else -> break
+                }
+            }
+            if (current.text != "@") {
+                throw OgnlParseException("expected '@' after class name in static reference, found '${current.text}'")
+            }
+            advance()
+            if (current.kind != TokenKind.IDENT) {
+                throw OgnlParseException("expected static field name after '@class@'")
+            }
+            val field = current.text
+            advance()
+            return OgnlExpr.StaticFieldRef(className.toString(), field)
+        }
+
         private fun parseArgs(): List<OgnlExpr> {
             expect("(")
             val args = mutableListOf<OgnlExpr>()
@@ -611,6 +684,7 @@ object OgnlEvaluator {
 
         private fun parsePrimary(): OgnlExpr {
             return when {
+                current.text == "@" -> parseStaticFieldRef()
                 current.kind == TokenKind.NUMBER -> {
                     val token = current
                     advance()
