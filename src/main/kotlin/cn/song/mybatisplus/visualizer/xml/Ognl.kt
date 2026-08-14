@@ -106,6 +106,63 @@ object OgnlEvaluator {
         return out
     }
 
+    /**
+     * 提取根路径：`_parameter.title`（_parameter 的直接属性，供模拟参数对象属性收集）、
+     * `list` 等普通根变量；`_parameter.getTitle()` 按 getter 推断为 `_parameter.title`。
+     */
+    fun rootPaths(text: String): Set<String> {
+        val result = parse(text)
+        if (result !is ParseResult.Ok) return emptySet()
+        val out = mutableSetOf<String>()
+        collectPaths(result.expr, out)
+        return out
+    }
+
+    /** Chain 首步的属性名（Property 直取；getX()/isX() 方法推断）。 */
+    private fun firstPropName(step: ChainStep): String? = when (step) {
+        is ChainStep.Property -> step.name
+        is ChainStep.Method -> when {
+            step.name.length > 3 && step.name.startsWith("get") && step.name[3].isUpperCase() ->
+                step.name.substring(3).replaceFirstChar { it.lowercaseChar() }
+            step.name.length > 2 && step.name.startsWith("is") && step.name[2].isUpperCase() ->
+                step.name.substring(2).replaceFirstChar { it.lowercaseChar() }
+            else -> null
+        }
+        is ChainStep.Index -> null
+    }
+
+    private fun collectPaths(expr: OgnlExpr, out: MutableSet<String>) {
+        when (expr) {
+            is OgnlExpr.Literal, is OgnlExpr.ListLiteral -> Unit
+            is OgnlExpr.RootRef -> out += expr.name
+            is OgnlExpr.Chain -> {
+                val base = expr.base
+                if (base is OgnlExpr.RootRef) {
+                    val firstProp = expr.steps.firstOrNull()?.let { firstPropName(it) }
+                    if (base.name == DynamicContext.PARAMETER_OBJECT_KEY && firstProp != null) {
+                        out += "${DynamicContext.PARAMETER_OBJECT_KEY}.$firstProp"
+                    } else {
+                        out += base.name
+                    }
+                } else {
+                    collectPaths(base, out)
+                }
+                expr.steps.forEach { step ->
+                    when (step) {
+                        is ChainStep.Property -> Unit
+                        is ChainStep.Method -> step.args.forEach { collectPaths(it, out) }
+                        is ChainStep.Index -> collectPaths(step.expr, out)
+                    }
+                }
+            }
+            is OgnlExpr.Unary -> collectPaths(expr.operand, out)
+            is OgnlExpr.Binary -> {
+                collectPaths(expr.left, out)
+                collectPaths(expr.right, out)
+            }
+        }
+    }
+
     private fun collectRoots(expr: OgnlExpr, out: MutableSet<String>) {
         when (expr) {
             is OgnlExpr.Literal, is OgnlExpr.ListLiteral -> Unit

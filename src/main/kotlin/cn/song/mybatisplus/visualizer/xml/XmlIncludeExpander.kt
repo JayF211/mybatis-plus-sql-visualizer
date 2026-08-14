@@ -19,34 +19,50 @@ object XmlIncludeExpander {
 
     /** 展开语句元素中的全部 include（就地修改 DOM）。 */
     fun expand(statement: Element, fragments: Map<String, Element>, errors: MutableList<String>) {
-        expandRecursive(statement, fragments, errors, 0)
+        expandRecursive(statement, fragments, errors, 0, emptySet())
     }
 
-    private fun expandRecursive(element: Element, fragments: Map<String, Element>, errors: MutableList<String>, depth: Int) {
-        if (depth > MAX_DEPTH) {
-            errors += "Include nesting too deep (possible include cycle)."
+    /**
+     * 递归展开：入口先检查自身是否 include（嵌套 include 的拷贝体会以 include 元素身份进入）；
+     * 同一 refid 在当前展开链上重复出现 → 循环截断（移除节点 + 错误记录，不残留）。
+     */
+    private fun expandRecursive(
+        element: Element,
+        fragments: Map<String, Element>,
+        errors: MutableList<String>,
+        depth: Int,
+        chain: Set<String>,
+    ) {
+        if (element.tagName == "include") {
+            if (depth > MAX_DEPTH) {
+                errors += "Include nesting too deep (possible include cycle)."
+                element.parentNode?.removeChild(element)
+                return
+            }
+            val props = propertyMap(element)
+            val refid = resolveRefid(element.getAttribute("refid"), props)
+            if (refid in chain) {
+                errors += "Include cycle detected: '$refid'."
+                element.parentNode?.removeChild(element)
+                return
+            }
+            val target = fragments[refid]
+            if (target == null) {
+                errors += "Include refid '$refid' not found in this mapper (cross-namespace include is not supported)."
+                element.parentNode?.removeChild(element)
+                return
+            }
+            val copies = copyChildren(target, props)
+            replaceNode(element, copies)
+            copies.filterIsInstance<Element>()
+                .forEach { expandRecursive(it, fragments, errors, depth + 1, chain + refid) }
             return
         }
         // 快照遍历（展开会修改子节点集合）
         val children = element.childNodes
         val snapshot = (0 until children.length).map { children.item(it) }
         for (child in snapshot) {
-            if (child !is Element) continue
-            if (child.tagName == "include") {
-                val props = propertyMap(child)
-                val refid = resolveRefid(child.getAttribute("refid"), props)
-                val target = fragments[refid]
-                if (target == null) {
-                    errors += "Include refid '$refid' not found in this mapper (cross-namespace include is not supported)."
-                    element.removeChild(child)
-                    continue
-                }
-                val copies = copyChildren(target, props)
-                replaceNode(child, copies)
-                copies.filterIsInstance<Element>().forEach { expandRecursive(it, fragments, errors, depth + 1) }
-            } else {
-                expandRecursive(child, fragments, errors, depth + 1)
-            }
+            if (child is Element) expandRecursive(child, fragments, errors, depth + 1, chain)
         }
     }
 

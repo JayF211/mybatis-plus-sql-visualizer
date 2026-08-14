@@ -59,6 +59,8 @@ class XmlPreviewModel private constructor(
     val errors: List<String>,
     /** 顶层变量（bind / `${}` 表达式引用的根标识符，排除保留键）——mock 参数对象属性。 */
     val variables: Set<String>,
+    /** `_parameter` 的直接属性（`_parameter.title` 形态）——mock 参数对象属性。 */
+    val paramProps: Set<String>,
     private val rootNode: SqlNode,
 ) {
 
@@ -72,13 +74,14 @@ class XmlPreviewModel private constructor(
     fun renderSql(state: XmlPreviewState): RenderedXmlSql = XmlSqlRenderer().render(
         node = rootNode,
         bindings = mockBindings(state),
-        conditionOverrides = state.enabledIds.associateWith { true },
+        // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值
+        conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) },
         protectedNames = state.bindOverrides.keys.toSet(),
     )
 
     private fun mockBindings(state: XmlPreviewState): Map<String, Any?> {
         val bindings = mutableMapOf<String, Any?>()
-        bindings[DynamicContext.PARAMETER_OBJECT_KEY] = MockObject(variables.associateWith { "1" })
+        bindings[DynamicContext.PARAMETER_OBJECT_KEY] = MockObject(paramProps.associateWith { "1" })
         bindings[DynamicContext.DATABASE_ID_KEY] = null
         forEachViews.forEach { view ->
             bindings[view.collectionExpr] = if (view.collectionExpr in state.forEachNulls) {
@@ -104,7 +107,8 @@ class XmlPreviewModel private constructor(
             val forEachViews = mutableListOf<XmlForEachView>()
             val bindViews = mutableListOf<XmlBindView>()
             val variables = mutableSetOf<String>()
-            collect(statement.node, conditionViews, forEachViews, bindViews, variables)
+            val paramProps = mutableSetOf<String>()
+            collect(statement.node, conditionViews, forEachViews, bindViews, variables, paramProps)
             variables.remove(DynamicContext.PARAMETER_OBJECT_KEY)
             variables.remove(DynamicContext.DATABASE_ID_KEY)
             return XmlPreviewModel(
@@ -116,8 +120,24 @@ class XmlPreviewModel private constructor(
                 parameterType = statement.parameterType,
                 errors = errors,
                 variables = variables,
+                paramProps = paramProps,
                 rootNode = statement.node,
             )
+        }
+
+        /** 表达式根路径分派：`_parameter.x` → 模拟参数对象属性；其余根（排除保留键）→ 变量。 */
+        private fun collectExpressionPaths(
+            expression: String,
+            variables: MutableSet<String>,
+            paramProps: MutableSet<String>,
+        ) {
+            OgnlEvaluator.rootPaths(expression).forEach { path ->
+                if (path.startsWith("${DynamicContext.PARAMETER_OBJECT_KEY}.")) {
+                    paramProps += path.removePrefix("${DynamicContext.PARAMETER_OBJECT_KEY}.")
+                } else if (path != DynamicContext.PARAMETER_OBJECT_KEY && path != DynamicContext.DATABASE_ID_KEY) {
+                    variables += path
+                }
+            }
         }
 
         private fun collect(
@@ -126,9 +146,11 @@ class XmlPreviewModel private constructor(
             forEachViews: MutableList<XmlForEachView>,
             bindViews: MutableList<XmlBindView>,
             variables: MutableSet<String>,
+            paramProps: MutableSet<String>,
         ) {
             when (node) {
-                is MixedSqlNode -> node.children.forEach { collect(it, conditionViews, forEachViews, bindViews, variables) }
+                is MixedSqlNode ->
+                    node.children.forEach { collect(it, conditionViews, forEachViews, bindViews, variables, paramProps) }
                 is StaticTextSqlNode -> Unit
                 is TextSqlNode -> {
                     val dollarTokens = mutableListOf<String>()
@@ -136,25 +158,25 @@ class XmlPreviewModel private constructor(
                         dollarTokens += token
                         token
                     }
-                    dollarTokens.forEach { variables += OgnlEvaluator.rootVariables(it) }
+                    dollarTokens.forEach { collectExpressionPaths(it, variables, paramProps) }
                 }
                 is IfSqlNode -> {
                     conditionViews += XmlConditionView(node.test, node.test, defaultTruth(node.test))
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
                 }
                 is ChooseSqlNode -> {
                     // when 本身是 IfSqlNode，递归 collect 统一处理（此处不重复添加）
-                    node.whenNodes.forEach { collect(it, conditionViews, forEachViews, bindViews, variables) }
-                    node.defaultNode?.let { collect(it, conditionViews, forEachViews, bindViews, variables) }
+                    node.whenNodes.forEach { collect(it, conditionViews, forEachViews, bindViews, variables, paramProps) }
+                    node.defaultNode?.let { collect(it, conditionViews, forEachViews, bindViews, variables, paramProps) }
                 }
-                is TrimSqlNode -> collect(node.contents, conditionViews, forEachViews, bindViews, variables)
+                is TrimSqlNode -> collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
                 is ForeachSqlNode -> {
                     forEachViews += XmlForEachView(node.collectionExpression)
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
                 }
                 is VarDeclSqlNode -> {
                     bindViews += XmlBindView(node.name, node.expression)
-                    variables += OgnlEvaluator.rootVariables(node.expression)
+                    collectExpressionPaths(node.expression, variables, paramProps)
                 }
             }
         }
