@@ -13,6 +13,11 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.xml.XmlBindView
+import cn.song.mybatisplus.visualizer.xml.XmlConditionView
+import cn.song.mybatisplus.visualizer.xml.XmlForEachView
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -86,6 +91,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     private val enabledIds = mutableSetOf<String>()
     private val paramValues = mutableMapOf<String, String>()
+    // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文）
+    private val xmlForEachCounts = mutableMapOf<String, Int>()
+    private val xmlForEachNulls = mutableSetOf<String>()
+    private val xmlBindOverrides = mutableMapOf<String, String>()
+    private var xmlErrors = listOf<String>()
 
     init {
         // 顶部元信息行 + 工具栏
@@ -175,6 +185,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         result.batchModel?.toggleColumns?.forEach { col ->
             if (col.checked) enabledIds.add(col.columnName)
         }
+        // T-M24-04：XML 预览状态初始化（条件开关走 enabledIds，按启发式默认勾选；foreach/bind 独立状态）
+        result.xmlModel?.let { model ->
+            model.conditionViews.forEach { view ->
+                if (view.defaultEnabled) enabledIds.add(view.id)
+            }
+            xmlForEachCounts.clear()
+            xmlForEachCounts.putAll(model.defaultState().forEachCounts)
+            xmlForEachNulls.clear()
+            xmlBindOverrides.clear()
+            xmlErrors = emptyList()
+        }
         // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
         result.previewModel?.let { compactMode = !it.formatSql }
         modeButton.text = modeButtonText()
@@ -205,7 +226,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val result = current ?: return
         val model = result.previewModel
         val batch = result.batchModel
+        val xml = result.xmlModel
         when {
+            // T-M24-04：XML 动态 SQL——渲染单源 XmlPreviewModel.renderSql(state)，勾选/次数/覆盖变更重渲染
+            xml != null -> {
+                val state = XmlPreviewState(
+                    enabledIds = enabledIds.toSet(),
+                    forEachCounts = xmlForEachCounts.toMap(),
+                    forEachNulls = xmlForEachNulls.toSet(),
+                    bindOverrides = xmlBindOverrides.toMap(),
+                )
+                val rendered = xml.renderSql(state)
+                xmlErrors = rendered.errors
+                val base = rendered.sql
+                val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
+                showSql(backfillParamsBySource(sql, rendered.mappings.map { it.property }))
+            }
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
             batch != null -> {
                 val active = enabledIds.toSet()
@@ -297,6 +333,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
+        xmlForEachCounts.clear()
+        xmlForEachNulls.clear()
+        xmlBindOverrides.clear()
+        xmlErrors = emptyList()
         selectAllButton = null
         selectNoneButton = null
         batchSelectAllButton = null
@@ -404,6 +444,42 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             return
         }
 
+        // T-M24-04：XML 预览左栏——动态条件开关 + foreach 次数/null + bind 覆盖值 + 参数值输入
+        val xmlModel = result.xmlModel
+        if (xmlModel != null) {
+            val hasControls = xmlModel.conditionViews.isNotEmpty() ||
+                xmlModel.forEachViews.isNotEmpty() || xmlModel.bindViews.isNotEmpty()
+            if (!hasControls && result.unresolvedParams.isEmpty()) {
+                paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
+                    border = JBUI.Borders.empty(6, 8)
+                })
+                paramPanel.revalidate()
+                paramPanel.repaint()
+                return
+            }
+            if (xmlModel.conditionViews.isNotEmpty()) {
+                paramPanel.add(conditionSectionHeader())
+                xmlModel.conditionViews.forEach { paramPanel.add(buildXmlConditionRow(it)) }
+            }
+            if (xmlModel.forEachViews.isNotEmpty()) {
+                paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.xml.foreach.section")))
+                xmlModel.forEachViews.forEach { paramPanel.add(buildXmlForEachRow(it)) }
+            }
+            if (xmlModel.bindViews.isNotEmpty()) {
+                paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.xml.bind.section")))
+                xmlModel.bindViews.forEach { paramPanel.add(buildXmlBindRow(it)) }
+            }
+            // #{} 参数值输入（foreach 的 __frch_ 重写名不提供输入框——值空保留 `?`，可直接编辑 SQL）
+            val ordinarySources = result.unresolvedParams.distinct().filter { !it.startsWith("__frch_") }
+            if (ordinarySources.isNotEmpty()) {
+                if (hasControls) paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.param.section")))
+                ordinarySources.forEach { paramPanel.add(buildParamRow(it)) }
+            }
+            paramPanel.revalidate()
+            paramPanel.repaint()
+            return
+        }
+
         val viewSources = views.flatMap { it.valueSources }.toSet()
         if (views.isNotEmpty()) {
             paramPanel.add(conditionSectionHeader())
@@ -506,11 +582,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
-     * 同步复选框 UI 与 SQL 重渲染。
+     * 同步复选框 UI 与 SQL 重渲染。T-M24-04：XML 预览的条件开关（id = test 表达式）一并处理。
      */
     private fun setAllConditions(enabled: Boolean) {
         val views = current?.previewModel?.conditionViews.orEmpty()
+        val xmlViews = current?.xmlModel?.conditionViews.orEmpty()
         views.forEach { if (enabled) enabledIds.add(it.id) else enabledIds.remove(it.id) }
+        xmlViews.forEach { if (enabled) enabledIds.add(it.id) else enabledIds.remove(it.id) }
         conditionCheckBoxes.forEach { it.isSelected = enabled }
         renderSql()
     }
@@ -539,8 +617,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /** 动态条件值输入框：值变更联动勾选态与 SQL 重渲染（按 source 绑定，多值条件每个来源一个输入框）。 */
-    private fun conditionValueField(view: ConditionView, source: String): JBTextField = JBTextField(8).apply {
-        toolTipText = "#$source"
+    private fun conditionValueField(view: ConditionView, source: String): JBTextField = JBTextField(8).apply {        toolTipText = "#$source"
         text = paramValues[source] ?: ""
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
@@ -560,6 +637,87 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     private fun onConditionValueChanged(view: ConditionView, source: String, text: String) {
         paramValues[source] = text
+        renderSql()
+    }
+
+    /**
+     * T-M24-04：XML 动态条件行——复选框（label = test 表达式，id 进 [enabledIds]），
+     * 与 Wrapper 动态条件交互一致（全选/全不选按钮共用）。
+     */
+    private fun buildXmlConditionRow(view: XmlConditionView): JBPanel<JBPanel<*>> {
+        val checkBox = JCheckBox(view.label, view.id in enabledIds).apply {
+            toolTipText = MpSqlVisualizerBundle.message("panel.xml.condition")
+            addActionListener {
+                if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
+                renderSql()
+            }
+        }
+        conditionCheckBoxes += checkBox
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            add(checkBox)
+            border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    /** T-M24-04：foreach 行——collection 表达式标签 + 展开次数输入（0 = 空集合）+ null 复选框。 */
+    private fun buildXmlForEachRow(view: XmlForEachView): JBPanel<JBPanel<*>> {
+        val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+        row.add(JBLabel(MpSqlVisualizerBundle.message("panel.xml.foreach", view.collectionExpr)).apply {
+            border = JBUI.Borders.empty(0, 8, 0, 0)
+        })
+        val countField = JBTextField(3).apply {
+            text = (xmlForEachCounts[view.collectionExpr] ?: XmlPreviewModel.DEFAULT_FOREACH_SIZE).toString()
+            toolTipText = "0 = 空集合（整段不输出）"
+            document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = onXmlForEachCountChanged(view, this@apply.text)
+                override fun removeUpdate(e: DocumentEvent?) = onXmlForEachCountChanged(view, this@apply.text)
+                override fun changedUpdate(e: DocumentEvent?) = onXmlForEachCountChanged(view, this@apply.text)
+            })
+        }
+        row.add(countField)
+        paramFields += countField
+        val nullBox = JCheckBox(MpSqlVisualizerBundle.message("panel.xml.foreach.null"), view.collectionExpr in xmlForEachNulls).apply {
+            addActionListener {
+                if (isSelected) xmlForEachNulls.add(view.collectionExpr) else xmlForEachNulls.remove(view.collectionExpr)
+                renderSql()
+            }
+        }
+        row.add(nullBox)
+        row.border = JBUI.Borders.empty(0, 8, 2, 8)
+        return row
+    }
+
+    /** T-M24-04：foreach 次数变更（非数字输入忽略，保持上次有效值）。 */
+    private fun onXmlForEachCountChanged(view: XmlForEachView, text: String) {
+        val count = text.toIntOrNull()?.coerceIn(0, 99) ?: return
+        xmlForEachCounts[view.collectionExpr] = count
+        renderSql()
+    }
+
+    /** T-M24-04：bind 行——表达式标签 + 覆盖值输入（留空 = 表达式自动求值）。 */
+    private fun buildXmlBindRow(view: XmlBindView): JBPanel<JBPanel<*>> {
+        val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+        row.add(JBLabel(MpSqlVisualizerBundle.message("panel.xml.bind", "${view.name} = ${view.expression}")).apply {
+            border = JBUI.Borders.empty(0, 8, 0, 0)
+        })
+        val field = JBTextField(8).apply {
+            text = xmlBindOverrides[view.name] ?: ""
+            toolTipText = MpSqlVisualizerBundle.message("panel.xml.bind", view.name)
+            document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = onXmlBindOverrideChanged(view.name, this@apply.text)
+                override fun removeUpdate(e: DocumentEvent?) = onXmlBindOverrideChanged(view.name, this@apply.text)
+                override fun changedUpdate(e: DocumentEvent?) = onXmlBindOverrideChanged(view.name, this@apply.text)
+            })
+        }
+        row.add(field)
+        paramFields += field
+        row.border = JBUI.Borders.empty(0, 8, 2, 8)
+        return row
+    }
+
+    /** T-M24-04：bind 覆盖值变更（留空移除覆盖 → 恢复表达式求值）。 */
+    private fun onXmlBindOverrideChanged(name: String, text: String) {
+        if (text.isEmpty()) xmlBindOverrides.remove(name) else xmlBindOverrides[name] = text
         renderSql()
     }
 
@@ -673,10 +831,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val meta = buildList {
             result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
             result.tableName?.let { add("${MpSqlVisualizerBundle.message("panel.meta.table")}: $it") }
+            // T-M24-04：XML 语句元信息（类型 + parameterType）
+            result.xmlModel?.let { xml ->
+                add("XML ${xml.kind.name.lowercase()}: ${xml.statementId}")
+                xml.parameterType?.let { add("parameterType: $it") }
+            }
         }.joinToString("   ")
-        val warningLine = result.warning?.let { "   ⚠ $it" } ?: ""
+        // T-M24-04：XML 渲染期错误并入警示（解析期错误在 PreviewResult.warning）
+        val xmlWarning = result.xmlModel?.let { xml ->
+            (xmlErrors).joinToString("；").ifEmpty { null }
+        }
+        val warning = xmlWarning ?: result.warning
+        val warningLine = warning?.let { "   ⚠ $it" } ?: ""
         metaLabel.text = meta + warningLine
-        metaLabel.foreground = if (result.warning != null) JBColor.RED else JBUI.CurrentTheme.Label.foreground()
+        metaLabel.foreground = if (warning != null) JBColor.RED else JBUI.CurrentTheme.Label.foreground()
     }
 
     override fun removeNotify() {
@@ -693,6 +861,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
+    /** T-M24-04：元信息标签文本（警告断言用）。 */
+    internal fun metaLabelForTest(): String = metaLabel.text
 
     /**
      * T-M19.4-01：第 index 个普通参数行的标签（JBLabel）——布局断言用
@@ -717,5 +887,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
+        /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
+        private val WHITESPACE_REGEX = Regex("\\s+")
     }
 }

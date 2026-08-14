@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 
 /**
  * 预览结果（M3-01 整合层产物）：一次 Wrapper 转换的完整展示数据。
@@ -21,6 +22,8 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint
  *                         旧文本路径（previewModel=null）回填用
  * @param batchModel       批量可选参数模型（T-M23-04）：INSERT/UPDATE/UPSERT 的列级勾选结构，
  *                         面板勾选重建 SQL；无列级选择（Wrapper 预览 / SELECT·DELETE 批量）为 null
+ * @param xmlModel         XML 动态 SQL 预览模型（T-M24-04）：mapper 语句的条件开关/foreach/bind
+ *                         面板勾选重建；非 XML 预览为 null（与 previewModel/batchModel 互斥）
  */
 data class PreviewResult(
     val sql: String,
@@ -36,4 +39,5 @@ data class PreviewResult(
     val previewModel: SqlPreviewModel? = null,
     val paramHints: List<ParamHint> = emptyList(),
     val batchModel: BatchModel? = null,
+    val xmlModel: XmlPreviewModel? = null,
 )

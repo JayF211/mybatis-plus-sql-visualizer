@@ -25,6 +25,8 @@ dependencies {
         // Add plugin dependencies for compilation here:
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
+        // T-M24-04：XML 平台模块（XML PSI 定位语句 + XML gutter；平台 bundled，IDE 恒启用）
+        bundledModule("intellij.xml.psi")
         // M17：Database 插件（数据源/控制台 API，仅 Ultimate 捆绑）。
         // 注：2026.2 中 SQL 语言支持（com.intellij.sql）已并入平台核心，无需/无法单独声明
         bundledPlugin("com.intellij.database")

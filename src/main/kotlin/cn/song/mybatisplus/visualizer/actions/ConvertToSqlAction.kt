@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.actions
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
+import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -15,6 +17,9 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.XmlFile
+import com.intellij.psi.xml.XmlTag
 
 /**
  * 转换 Action（M3-02，F-04 右键菜单 + F-05 快捷键）。
@@ -35,6 +40,13 @@ class ConvertToSqlAction : AnAction() {
         val project = e.project ?: return
         val file = e.getData(CommonDataKeys.PSI_FILE) ?: return
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
+
+        // T-M24-04：XML mapper 文件 → 预览光标所在语句（不在语句内 → 首个语句）
+        if (file is XmlFile) {
+            previewXmlStatement(project, file, editor)
+            return
+        }
+
         val service = project.getService(SqlPreviewService::class.java)
 
         // 分支 A（T-M23.7）：选择代码块 → 扫描选择区内 SQL 候选（wrapper 链首 + 批量方法），0/1/多分发
@@ -89,6 +101,34 @@ class ConvertToSqlAction : AnAction() {
         }
     }
 
+    /**
+     * T-M24-04：XML mapper 语句预览——光标所在语句优先，否则文件首个语句；
+     * 转换后台执行（EDT 禁止 PSI 慢操作），结果统一展示入口。
+     */
+    private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor) {
+        val element = file.findElementAt(editor.caretModel.offset) ?: run {
+            SqlPreviewService.showResult(project, null)
+            return
+        }
+        val tag = PsiTreeUtil.getParentOfType(element, XmlTag::class.java)
+        var statement = tag
+        while (statement != null && statement.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS) {
+            statement = statement.parentTag
+        }
+        val target = statement
+            ?: PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
+                .firstOrNull { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
+        if (target == null) {
+            SqlPreviewService.showResult(project, null)
+            return
+        }
+        SqlPreviewService.previewAsync(project, {
+            XmlPreviewService.preview(file.text, target.getAttributeValue("id"))
+        }) { result ->
+            SqlPreviewService.showResult(project, result)
+        }
+    }
+
     /** 预览单个链首调用（后台转换，EDT 渲染）。 */
     private fun preview(service: SqlPreviewService, anchor: PsiElement, project: Project) {
         SqlPreviewService.previewAsync(project, { service.preview(anchor) }) { result ->
@@ -113,9 +153,9 @@ class ConvertToSqlAction : AnAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
-        // 仅在 Java 文件中可用（M1 聚焦 Java PSI；Kotlin 支持后续里程碑）
+        // Java 文件（Wrapper 链）与 XML mapper 文件（T-M24-04：动态 SQL 语句）均可用
         val file = e.getData(CommonDataKeys.PSI_FILE)
-        e.presentation.isEnabledAndVisible = file is PsiJavaFile
+        e.presentation.isEnabledAndVisible = file is PsiJavaFile || file is XmlFile
     }
 
     companion object {

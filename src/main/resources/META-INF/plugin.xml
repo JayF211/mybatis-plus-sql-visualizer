@@ -67,6 +67,8 @@
          且 Kotlin 插件不支持动态卸载（依赖非动态插件会导致本插件也无法免重启安装/更新）；
          kotlin-stdlib 由构建自动打包进插件 jar，功能不受影响 -->
     <depends>com.intellij.java</depends>
+    <!-- T-M24-04 XML 预览：com.intellij.modules.xml（平台 bundled 模块，IDE 恒启用）——XML PSI 定位语句 + XML gutter 注册 -->
+    <depends>com.intellij.modules.xml</depends>
 
     <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
          官方规范（Plugin Dependencies）：可选依赖须声明 optional="true" + config-file，
@@ -96,6 +98,10 @@
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
+
+        <!-- T-M24-04 XML 预览：mapper 语句（select/insert/update/delete）行显示预览图标（O(1) 标签名判定） -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider"/>
 
         <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
         <lang.parserDefinition language="MP_SQL_Preview"

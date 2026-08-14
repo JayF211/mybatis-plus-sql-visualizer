@@ -48,10 +48,13 @@ class VarDeclSqlNode(val name: String, val expression: String) : SqlNode {
     override fun apply(context: DynamicContext): Boolean {
         if (context.isProtected(name)) return true
         val result = OgnlEvaluator.evaluate(expression, context.bindings)
-        context.bind(name, when (result) {
-            is EvalResult.Ok -> result.value
-            is EvalResult.Err -> null
-        })
+        when (result) {
+            is EvalResult.Ok -> context.bind(name, result.value)
+            is EvalResult.Err -> {
+                context.errors += "无法解析 bind 表达式 '$expression'（${result.message}，可在预览中填写覆盖值）"
+                context.bind(name, null)
+            }
+        }
         return true
     }
 }

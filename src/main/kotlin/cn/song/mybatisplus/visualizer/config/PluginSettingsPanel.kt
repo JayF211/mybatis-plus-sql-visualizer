@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.config
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
@@ -228,6 +229,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                 ?: languageOptions().first()
         })
         addRow(MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
+
+        // T-M23.14：内部构建号（MPV-Build，jar manifest 注入的构建时刻时间戳）——只读信息行，
+        // 用户反馈问题时可直接报出定位具体产物；非 jar 环境（开发/测试）显示 "—"。
+        addRow(MpSqlVisualizerBundle.message("settings.buildNumber"), JBLabel().apply {
+            text = PluginBuildInfo.displayText()
+            toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
+        })
 
         // M14.1 布局优化：底部 weighty 占位，把内容顶到顶部（消除内容区上方空白/居中拉伸）
         gbc.gridx = 0
