@@ -43,18 +43,28 @@ class ConvertToSqlAction : AnAction() {
             val selStart = selectionModel.selectionStart
             val selEnd = selectionModel.selectionEnd
             ApplicationManager.getApplication().executeOnPooledThread {
-                val chainHeads = try {
-                    ReadAction.compute<List<PsiMethodCallExpression>, Throwable> {
-                        WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
+                // T-M23.8 增量修复（EDT 慢操作）：候选扫描 + 弹窗显示文本（摘要/行文本，含 PSI 解析）
+                // 一并后台 ReadAction 预计算——SqlSelectionDialog 构造只做纯 UI 渲染（EDT 上 PSI 解析
+                // 会被 2025.3+ SlowOperations 守卫禁止，实测 SEVERE "Slow operations are prohibited on EDT"）
+                val payload = try {
+                    ReadAction.compute<Pair<List<PsiMethodCallExpression>, List<String>>, Throwable> {
+                        val heads = WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
+                        heads to heads.map { head ->
+                            SqlSelectionDialog.displayText(
+                                WrapperLocator.sqlCandidateSummary(head),
+                                WrapperLocator.sqlCandidateLineText(head),
+                            )
+                        }
                     }
                 } catch (t: Throwable) {
-                    emptyList()
+                    emptyList<PsiMethodCallExpression>() to emptyList()
                 }
+                val (chainHeads, displayTexts) = payload
                 ApplicationManager.getApplication().invokeLater {
                     when (chainHeads.size) {
                         0 -> SqlPreviewService.showResult(project, null)
                         1 -> preview(service, chainHeads[0], project)
-                        else -> SqlSelectionDialog(project, chainHeads) { head ->
+                        else -> SqlSelectionDialog(project, chainHeads, displayTexts) { head ->
                             // T-M23.8：选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
                             locateEditorTo(editor, head)
                             preview(service, head, project)

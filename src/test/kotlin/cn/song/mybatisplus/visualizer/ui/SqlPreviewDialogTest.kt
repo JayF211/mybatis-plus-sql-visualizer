@@ -2,9 +2,11 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 
 /**
  * SqlPreviewDialog 弹窗测试（T-M23.6）：底部按钮区（执行 SQL / 复制 SQL / 关闭）+
@@ -50,5 +52,40 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         assertTrue("< 应转义为 &lt;", escaped.contains("&lt;"))
         assertTrue("> 应转义为 &gt;", escaped.contains("&gt;"))
         assertFalse("原始 < 不应直接出现在 HTML 中", escaped.contains("a<b"))
+    }
+
+    fun testDialogRendersPrecomputedTextsWithoutPsiResolve() {
+        // T-M23.8 增量修复（EDT 慢操作回归防护）：弹窗构造只渲染调用方后台预计算的显示文本——
+        // 若构造内仍从 PSI 重新计算摘要（旧实现，EDT 上会被 2025.3+ SlowOperations 守卫禁止），
+        // 传入的预计算文本会被覆盖，逐项断言即失败
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void m(OrderService service, Order order) {
+                    service.getById(order.getId());
+                    service.getById(1001L);
+                }
+
+                static class Order {
+                    private Long id;
+                }
+
+                static class OrderService {
+                    public void getById(Object id) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val file = myFixture.file
+        val candidates = WrapperLocator.sqlCandidatesInRange(file, 0, file.textLength)
+        assertTrue("fixture 应含多个候选（触发多选弹窗分支）", candidates.size >= 2)
+        val displayTexts = candidates.mapIndexed { i, _ -> "PRE-$i" }
+        val dialog = SqlSelectionDialog(project, candidates, displayTexts) {}
+        val model = dialog.listForTest().model
+        assertEquals("列表项数应与预计算文本数一致", displayTexts.size, model.size)
+        for (i in displayTexts.indices) {
+            assertEquals("列表第 $i 项应原样渲染预计算文本（不重新解析 PSI）", displayTexts[i], model.getElementAt(i))
+        }
     }
 }
