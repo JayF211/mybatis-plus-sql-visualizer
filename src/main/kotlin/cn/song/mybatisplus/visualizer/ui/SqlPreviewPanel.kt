@@ -96,6 +96,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val xmlForEachNulls = mutableSetOf<String>()
     private val xmlBindOverrides = mutableMapOf<String, String>()
     private var xmlErrors = listOf<String>()
+    /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
+    private var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
@@ -245,6 +247,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 )
                 val rendered = xml.renderSql(state)
                 xmlErrors = rendered.errors
+                xmlMappings = rendered.mappings
                 val base = rendered.sql
                 val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
                 showSql(backfillParamsBySource(sql, rendered.mappings.map { it.property }))
@@ -669,23 +672,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** T-M24-04：foreach 行——collection 表达式标签 + 展开次数输入（0 = 空集合）+ null 复选框。 */
+    /** T-M25.4：foreach 行——collection 表达式标签 + **集合值输入框**（逗号分隔，如 `2,3` → 展开两项并回填）+ null 复选框。 */
     private fun buildXmlForEachRow(view: XmlForEachView): JBPanel<JBPanel<*>> {
         val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
         row.add(JBLabel(MpSqlVisualizerBundle.message("panel.xml.foreach", view.collectionExpr)).apply {
             border = JBUI.Borders.empty(0, 8, 0, 0)
         })
-        val countField = JBTextField(3).apply {
-            text = (xmlForEachCounts[view.collectionExpr] ?: XmlPreviewModel.DEFAULT_FOREACH_SIZE).toString()
-            toolTipText = "0 = 空集合（整段不输出）"
+        val valuesField = JBTextField(8).apply {
+            toolTipText = "集合值（逗号分隔，如 2,3；留空 = 默认展开 ${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
             document.addDocumentListener(object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent?) = onXmlForEachCountChanged(view, this@apply.text)
-                override fun removeUpdate(e: DocumentEvent?) = onXmlForEachCountChanged(view, this@apply.text)
-                override fun changedUpdate(e: DocumentEvent?) = onXmlForEachCountChanged(view, this@apply.text)
+                override fun insertUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
+                override fun removeUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
+                override fun changedUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
             })
         }
-        row.add(countField)
-        paramFields += countField
+        row.add(valuesField)
+        paramFields += valuesField
         val nullBox = JCheckBox(MpSqlVisualizerBundle.message("panel.xml.foreach.null"), view.collectionExpr in xmlForEachNulls).apply {
             addActionListener {
                 if (isSelected) xmlForEachNulls.add(view.collectionExpr) else xmlForEachNulls.remove(view.collectionExpr)
@@ -697,10 +699,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return row
     }
 
-    /** T-M24-04：foreach 次数变更（非数字输入忽略，保持上次有效值）。 */
-    private fun onXmlForEachCountChanged(view: XmlForEachView, text: String) {
-        val count = text.toIntOrNull()?.coerceIn(0, 99) ?: return
-        xmlForEachCounts[view.collectionExpr] = count
+    /**
+     * T-M25.4：foreach 集合值变更——逗号分隔值解析为展开项并**自动回填对应参数行**：
+     * `2,3` → 展开 2 项 + `IN (2, 3)`；留空 → 恢复默认展开次数并清空该 foreach 的参数值（`?` 保持）；
+     * 回填键取最近一次渲染的真实映射（`__frch_<item>_<n>`，多 foreach 场景编号偏移亦正确）。
+     */
+    private fun onXmlForEachValuesChanged(view: XmlForEachView, text: String) {
+        val item = view.item ?: return
+        val values = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val keys = xmlMappings.map { it.property }.filter { it.startsWith("__frch_${item}_") }
+        if (values.isEmpty()) {
+            xmlForEachCounts[view.collectionExpr] = XmlPreviewModel.DEFAULT_FOREACH_SIZE
+            keys.forEach { paramValues.remove(it) }
+        } else {
+            xmlForEachCounts[view.collectionExpr] = values.size
+            keys.forEachIndexed { i, key ->
+                if (i < values.size) paramValues[key] = values[i] else paramValues.remove(key)
+            }
+        }
         renderSql()
     }
 

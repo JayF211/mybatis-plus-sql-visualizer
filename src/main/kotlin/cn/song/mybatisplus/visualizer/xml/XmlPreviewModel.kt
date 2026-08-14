@@ -13,8 +13,8 @@ data class XmlConditionView(
     val defaultEnabled: Boolean,
 )
 
-/** foreach 视图：collection 表达式（面板次数/空集/null 控件按表达式定位）。 */
-data class XmlForEachView(val collectionExpr: String)
+/** foreach 视图：collection 表达式（面板集合值/null 控件按表达式定位）+ item 名（T-M25.4 集合值回填键前缀）。 */
+data class XmlForEachView(val collectionExpr: String, val item: String? = null)
 
 /** bind 视图：变量名 + 表达式（面板覆盖值输入，空 = 自动求值）。 */
 data class XmlBindView(val name: String, val expression: String)
@@ -187,7 +187,7 @@ class XmlPreviewModel private constructor(
                 }
                 is TrimSqlNode -> collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
                 is ForeachSqlNode -> {
-                    forEachViews += XmlForEachView(node.collectionExpression)
+                    forEachViews += XmlForEachView(node.collectionExpression, node.item)
                     collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
                 }
                 is VarDeclSqlNode -> {

@@ -100,6 +100,25 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testXmlForEachValuesInputBackfills() {
+        // T-M25.4（用户实测：在 foreach 次数框输入 2,3 无效）——集合值输入：逗号分隔自动回填 IN (2, 3)
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(xmlResult())
+        panel.selectNoneButtonForTest()?.actionListeners?.forEach { it.actionPerformed(null) }
+        panel.conditionCheckboxForTest(1)?.let { box ->
+            box.isSelected = true
+            box.actionListeners.forEach { it.actionPerformed(null) }
+        }
+        // foreach 集合值输入框（tooltip 含"逗号分隔"）
+        val valuesField = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+            .firstOrNull { it.toolTipText?.contains("逗号分隔") == true }
+        assertNotNull("foreach 应有集合值输入框", valuesField)
+        valuesField!!.text = "2,3" // setText 触发 DocumentListener → 回填
+        val sql = compact(panel.editorForTest()!!.document.text)
+        assertTrue("输入 2,3 应回填为 IN ( 2 , 3 )：$sql", sql.contains("IN ( 2 , 3 )"))
+        panel.clear()
+    }
+
     fun testXmlForEachCountZeroDropsInClause() {
         // 全不选（selectNone 按钮）→ 只剩 foreach 条件开启 → 次数 0 → IN 片段消失
         val panel = SqlPreviewPanel(project)
