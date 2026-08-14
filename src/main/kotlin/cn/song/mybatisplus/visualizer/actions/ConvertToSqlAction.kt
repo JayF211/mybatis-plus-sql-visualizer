@@ -18,6 +18,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiJavaFile
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlFile
@@ -108,8 +109,54 @@ class ConvertToSqlAction : AnAction() {
         SqlPreviewService.previewAsync(project, {
             service.preview(element)
         }) { result ->
-            // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者；
-            // result 为 null 时弹友好提示
+            if (result != null) {
+                // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
+                SqlPreviewService.showResult(project, result)
+            } else {
+                // M26-A：Wrapper 未命中 → 回落文件级 SQL 注解候选（Mapper 接口场景）
+                showAnnotationCandidates(project, file)
+            }
+        }
+    }
+
+    /**
+     * M26-A：文件级 SQL 注解候选——收集文件内全部 @Select/@Update 等注解（0/1/多分发，
+     * 仿 T-M23.7 选择区候选交互）；摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫）。
+     */
+    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val payload = try {
+                ReadAction.compute<Pair<List<PsiAnnotation>, List<String>>, Throwable> {
+                    val annotations = AnnotationSqlPreviewService.annotationCandidates(file)
+                    annotations to annotations.map { anno ->
+                        val method = PsiTreeUtil.getParentOfType(anno, PsiMethod::class.java)
+                        SqlSelectionDialog.displayText(
+                            "${method?.name ?: "?"}（${anno.qualifiedName?.substringAfterLast('.')}）",
+                            AnnotationSqlPreviewService.sqlSnippet(anno),
+                        )
+                    }
+                }
+            } catch (t: Throwable) {
+                emptyList<PsiAnnotation>() to emptyList()
+            }
+            val (annotations, displayTexts) = payload
+            ApplicationManager.getApplication().invokeLater {
+                when (annotations.size) {
+                    0 -> SqlPreviewService.showResult(project, null)
+                    1 -> previewAnnotation(project, annotations[0])
+                    else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
+                        previewAnnotation(project, selected)
+                    }.show()
+                }
+            }
+        }
+    }
+
+    /** 预览单个 SQL 注解（后台转换，EDT 渲染）。 */
+    private fun previewAnnotation(project: Project, annotation: PsiAnnotation) {
+        SqlPreviewService.previewAsync(project, {
+            AnnotationSqlPreviewService.preview(annotation, project)
+        }) { result ->
             SqlPreviewService.showResult(project, result)
         }
     }

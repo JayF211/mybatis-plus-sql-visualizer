@@ -172,4 +172,39 @@ class AnnotationPreviewServiceTest : BasePlatformTestCase() {
         val result = XmlPreviewService.preview(mapper, "s1", project)
         assertTrue("字段不存在应提示", result.warning?.contains("无法解析") == true)
     }
+
+    fun testAnnotationCandidatesFromFile() {
+        // M26-A：文件级多注解候选——收集全部 SQL 注解（含 Provider 族），排除非 SQL 注解
+        myFixture.configureByText(
+            "MultiMapper.java",
+            """
+            import org.apache.ibatis.annotations.Select;
+            import org.apache.ibatis.annotations.Update;
+            import org.apache.ibatis.annotations.Param;
+
+            public interface MultiMapper {
+                @Select("SELECT * FROM t_user WHERE id = #{id}")
+                User selectById(@Param("id") Long id);
+
+                @Select({"SELECT * FROM t_user", "WHERE name = #{name}"})
+                User selectByName(String name);
+
+                @Update("UPDATE t_user SET name = #{name} WHERE id = #{id}")
+                int updateName(@Param("id") Long id, @Param("name") String name);
+
+                @Deprecated
+                int legacy();
+            }
+            """.trimIndent(),
+        )
+        val candidates = AnnotationSqlPreviewService.annotationCandidates(myFixture.file)
+        assertEquals(3, candidates.size)
+        // 摘要：value 首个元素（数组取首元素）
+        val byMethod = candidates.associateBy {
+            com.intellij.psi.util.PsiTreeUtil.getParentOfType(it, com.intellij.psi.PsiMethod::class.java)!!.name
+        }
+        assertEquals("SELECT * FROM t_user WHERE id = #{id}", AnnotationSqlPreviewService.sqlSnippet(byMethod.getValue("selectById")))
+        assertEquals("SELECT * FROM t_user", AnnotationSqlPreviewService.sqlSnippet(byMethod.getValue("selectByName")))
+        assertEquals("UPDATE t_user SET name = #{name} WHERE id = #{id}", AnnotationSqlPreviewService.sqlSnippet(byMethod.getValue("updateName")))
+    }
 }

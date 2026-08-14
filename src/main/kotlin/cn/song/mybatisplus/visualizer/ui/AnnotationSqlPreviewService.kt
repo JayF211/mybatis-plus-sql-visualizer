@@ -46,6 +46,18 @@ object AnnotationSqlPreviewService {
     fun isSqlAnnotation(annotation: PsiAnnotation): Boolean =
         annotation.qualifiedName?.substringAfterLast('.') in SQL_ANNOTATIONS
 
+    /** M26-A：文件内全部 SQL 注解候选（文件级多候选——光标不在注解/Wrapper 上时回落）。 */
+    fun annotationCandidates(file: com.intellij.psi.PsiFile): List<PsiAnnotation> =
+        PsiTreeUtil.collectElementsOfType(file, PsiAnnotation::class.java).filter { isSqlAnnotation(it) }
+
+    /** M26-A：注解 SQL 摘要（候选列表行文本——value 首个字符串元素，截断）。 */
+    fun sqlSnippet(annotation: PsiAnnotation, maxLength: Int = 80): String {
+        val value = annotation.findAttributeValue(null)
+        val first = (value as? PsiArrayInitializerMemberValue)?.initializers?.firstOrNull() ?: value
+        val text = (first as? com.intellij.psi.PsiLiteralExpression)?.value?.toString()?.trim().orEmpty()
+        return if (text.length > maxLength) text.take(maxLength) + "…" else text
+    }
+
     /** 预览注解 SQL（解析失败/降级场景返回带 warning 的空结果，不抛异常）。 */
     fun preview(annotation: PsiAnnotation, project: Project?): PreviewResult {
         val shortName = annotation.qualifiedName?.substringAfterLast('.') ?: return nullResult()
