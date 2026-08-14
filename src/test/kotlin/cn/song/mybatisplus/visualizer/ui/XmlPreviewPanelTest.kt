@@ -202,31 +202,4 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
-    fun testForEachParamInputBackfillsSql() {
-        // T-M25.4（用户实测：list 参数输入后右侧仍是 ?）——foreach 展开项的 __frch_ 参数
-        // 之前被过滤无输入框；现在提供输入框（标签可读化 id[0]/id[1]）并回填 SQL
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
-        // 参数行标签可读化：__frch_id_0 → id[0]
-        val labels = (0 until 8).mapNotNull { panel.paramRowLabelForTest(it)?.text }
-        assertTrue("foreach 参数行应显示可读标签 id[0]", labels.any { it.contains("id[0]") })
-        // 找到 __frch_id_0 的输入框并输入值（paramFields 顺序：条件开关无框 + foreach 次数 + bind 覆盖 + 参数行）
-        val fieldIndex = paramFieldsIndexOf(panel, "__frch_id_0")
-        assertTrue("foreach 参数应有输入框", fieldIndex >= 0)
-        val field = panel.paramFieldForTest(fieldIndex)!!
-        field.text = "1" // setText 触发 DocumentListener → onParamChanged → 重渲染回填
-        // 回填：( 1 , ? )——第一个 ? 被值替换（第二个未填保持 ?；IN 与 ( 之间保留换行/段间空格）
-        assertTrue(panel.editorForTest()!!.document.text.contains("( 1 , ?"))
-        panel.clear()
-    }
-
-    /** 按 tooltip（#原始 source）定位参数输入框索引。 */
-    private fun paramFieldsIndexOf(panel: SqlPreviewPanel, source: String): Int {
-        var index = 0
-        while (true) {
-            val field = panel.paramFieldForTest(index) ?: return -1
-            if (field.toolTipText == "#$source") return index
-            index++
-        }
-    }
 }

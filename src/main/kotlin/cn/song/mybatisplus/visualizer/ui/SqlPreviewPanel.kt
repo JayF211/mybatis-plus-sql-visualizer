@@ -481,12 +481,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.xml.bind.section")))
                 xmlModel.bindViews.forEach { paramPanel.add(buildXmlBindRow(it)) }
             }
-            // #{} 参数值输入（T-M25.4：foreach 展开的 __frch_ 重写名也提供输入框——标签可读化 id[0]/id[1]，
-            // source 仍用原始名保证回填匹配）
-            val ordinarySources = result.unresolvedParams.distinct()
+            // #{} 参数值输入（T-M25.4：foreach 展开项不再单独建行——集合值由 foreach 输入框统一回填）
+            val ordinarySources = result.unresolvedParams.distinct().filter { !it.startsWith("__frch_") }
             if (ordinarySources.isNotEmpty()) {
                 if (hasControls) paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.param.section")))
-                ordinarySources.forEach { paramPanel.add(buildXmlParamRow(it)) }
+                ordinarySources.forEach { paramPanel.add(buildParamRow(it)) }
             }
             paramPanel.revalidate()
             paramPanel.repaint()
@@ -700,24 +699,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-M25.4：foreach 集合值变更——逗号分隔值解析为展开项并**自动回填对应参数行**：
-     * `2,3` → 展开 2 项 + `IN (2, 3)`；留空 → 恢复默认展开次数并清空该 foreach 的参数值（`?` 保持）；
-     * 回填键取最近一次渲染的真实映射（`__frch_<item>_<n>`，多 foreach 场景编号偏移亦正确）。
+     * T-M25.4：foreach 集合值变更——逗号分隔值解析为展开项并**自动回填**：
+     * `2,3` → 展开 2 项 + `IN ( 2 , 3 )`；留空 → 恢复默认展开次数并清空该 foreach 的参数值（`?` 保持）。
+     * **先渲染一次刷新键清单**（逐字符输入时中间态 counts 会改变渲染键数量，直接取旧键会漏填），
+     * 再按新键填值二次渲染。
      */
     private fun onXmlForEachValuesChanged(view: XmlForEachView, text: String) {
         val item = view.item ?: return
         val values = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        xmlForEachCounts[view.collectionExpr] =
+            if (values.isEmpty()) XmlPreviewModel.DEFAULT_FOREACH_SIZE else values.size
+        renderSql() // 第一次渲染：刷新 xmlMappings 为当前 counts 对应的键
         val keys = xmlMappings.map { it.property }.filter { it.startsWith("__frch_${item}_") }
         if (values.isEmpty()) {
-            xmlForEachCounts[view.collectionExpr] = XmlPreviewModel.DEFAULT_FOREACH_SIZE
             keys.forEach { paramValues.remove(it) }
         } else {
-            xmlForEachCounts[view.collectionExpr] = values.size
             keys.forEachIndexed { i, key ->
                 if (i < values.size) paramValues[key] = values[i] else paramValues.remove(key)
             }
         }
-        renderSql()
+        renderSql() // 第二次渲染：按值回填
     }
 
     /** T-M24-04：bind 行——表达式标签 + 覆盖值输入（留空 = 表达式自动求值）。 */
@@ -766,33 +767,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             border = JBUI.Borders.empty(0, 8, 2, 8)
         }
     }
-
-    /**
-     * T-M25.4：XML 参数行（含 foreach 展开项）——标签可读化（`__frch_id_0` → `id[0]`），
-     * source 保持原始名（paramValues / backfill 按原始名匹配）。
-     */
-    private fun buildXmlParamRow(source: String): JBPanel<JBPanel<*>> {
-        val display = displayParamName(source)
-        val field = JBTextField(8).apply {
-            toolTipText = "#$source"
-            text = paramValues[source] ?: ""
-            document.addDocumentListener(object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
-                override fun removeUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
-                override fun changedUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
-            })
-        }
-        paramFields += field
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
-            add(paramLabel(display))
-            add(field)
-            border = JBUI.Borders.empty(0, 8, 2, 8)
-        }
-    }
-
-    /** foreach 重写名可读化：`__frch_id_0` → `id[0]`；普通参数原样。 */
-    private fun displayParamName(source: String): String =
-        FRCH_PARAM_REGEX.replace(source) { m -> "${m.groupValues[1]}[${m.groupValues[2]}]" }
 
     /**
      * 参数行标签（T-M19.4-01，用户实测：`#productInfo.getDicProtocolType()` 这类长参数名被
@@ -957,7 +931,5 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")
-        /** T-M25.4：foreach 重写名可读化（`__frch_id_0` → `id[0]`）。 */
-        private val FRCH_PARAM_REGEX = Regex("__frch_(\\w+)_(\\d+)")
     }
 }
