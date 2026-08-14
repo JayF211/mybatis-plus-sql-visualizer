@@ -96,6 +96,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val xmlForEachNulls = mutableSetOf<String>()
     private val xmlBindOverrides = mutableMapOf<String, String>()
     private var xmlErrors = listOf<String>()
+    // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
+    private var errorCopyButton: JButton? = null
+    private var currentWarning: String? = null
 
     init {
         // 顶部元信息行 + 工具栏
@@ -126,9 +129,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     private lateinit var modeButton: JButton
 
-    /** 顶部工具栏：单行多行切换 / 格式化 / 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
+    /** 顶部工具栏：复制错误（有警示时可见）/ 单行多行切换 / 格式化 / 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.X_AXIS)
+        errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
+            copyError()
+        }.apply { isVisible = false }
+        add(errorCopyButton)
         modeButton = smallButton(modeButtonText()) {
             toggleCompact()
             modeButton.text = modeButtonText()
@@ -337,6 +344,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         xmlForEachNulls.clear()
         xmlBindOverrides.clear()
         xmlErrors = emptyList()
+        currentWarning = null
+        errorCopyButton?.isVisible = false
         selectAllButton = null
         selectNoneButton = null
         batchSelectAllButton = null
@@ -841,10 +850,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val xmlWarning = result.xmlModel?.let { xml ->
             (xmlErrors).joinToString("；").ifEmpty { null }
         }
-        val warning = xmlWarning ?: result.warning
-        val warningLine = warning?.let { "   ⚠ $it" } ?: ""
+        currentWarning = xmlWarning ?: result.warning
+        val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
         metaLabel.text = meta + warningLine
-        metaLabel.foreground = if (warning != null) JBColor.RED else JBUI.CurrentTheme.Label.foreground()
+        metaLabel.foreground = if (currentWarning != null) JBColor.RED else JBUI.CurrentTheme.Label.foreground()
+        // T-M25.3：错误复制按钮随警示可见
+        errorCopyButton?.isVisible = currentWarning != null
+    }
+
+    /**
+     * T-M25.3：一键复制完整错误信息（用户实测：弹窗顶部 ⚠ 警示文本难以选中复制；
+     * 复制内容为完整 warning——解析/渲染错误合并文本，非显示截断）。
+     */
+    fun copyError(): Boolean {
+        val warning = currentWarning ?: return false
+        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+        clipboard.setContents(StringSelection(warning), null)
+        return true
     }
 
     override fun removeNotify() {
@@ -863,6 +885,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
+    /** T-M25.3：错误复制按钮（可见性断言用）。 */
+    internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 
     /**
      * T-M19.4-01：第 index 个普通参数行的标签（JBLabel）——布局断言用

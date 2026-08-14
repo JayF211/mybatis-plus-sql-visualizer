@@ -141,4 +141,45 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         assertTrue("渲染错误应显示在元信息警示", panel.metaLabelForTest().contains("⚠"))
         panel.clear()
     }
+
+    fun testErrorCopyButtonVisibleWithWarning() {
+        // T-M25.3（用户实测：错误提示难以复制）——有警示时工具栏出现复制错误按钮
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="bad" value="not valid @@ expr"/>
+                SELECT * FROM t
+              </select>
+            </mapper>
+        """.trimIndent())
+        val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val rendered = model.renderSql()
+        val result = PreviewResult(
+            sql = rendered.sql,
+            compactSql = rendered.sql,
+            unresolvedParams = emptyList(),
+            paramTable = null,
+            wrapperType = null,
+            tableName = null,
+            xmlModel = model,
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result)
+        val button = panel.errorCopyButtonForTest()
+        assertNotNull("错误复制按钮应存在", button)
+        assertTrue("有警示时按钮应可见", button!!.isVisible)
+        assertTrue("复制错误应成功", panel.copyError())
+        panel.clear()
+        assertFalse("清空后按钮应隐藏", panel.errorCopyButtonForTest()?.isVisible ?: true)
+    }
+
+    fun testErrorCopyButtonHiddenWithoutWarning() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(xmlResult()) // 无警告的预览
+        val button = panel.errorCopyButtonForTest()
+        assertNotNull(button)
+        assertFalse("无警示时按钮应隐藏", button!!.isVisible)
+        assertFalse("无错误时复制返回 false", panel.copyError())
+        panel.clear()
+    }
 }
