@@ -260,4 +260,42 @@ class XmlSqlRendererTest {
         assertTrue(m.errors.any { it.contains("missing") })
         assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
     }
+
+    @Test
+    fun `官方DTD声明可解析`() {
+        // T-M25.1（用户实测）：MyBatis 官方 DTD 声明（<!DOCTYPE mapper PUBLIC ...>）
+        // 此前被 disallow-doctype-decl 拒绝——允许声明 + EntityResolver 拦截（不联网）
+        val m = model("""
+            <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t WHERE id = #{id}</select>
+            </mapper>
+        """.trimIndent())
+        assertEquals("SELECT * FROM t WHERE id = ?", compact(m.renderSql().sql))
+        assertEquals("id", m.renderSql().mappings.single().property)
+    }
+
+    @Test
+    fun `内部实体定义可解析`() {
+        val m = model("""
+            <!DOCTYPE mapper [<!ENTITY status "ACTIVE">]>
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t WHERE status = '&status;'</select>
+            </mapper>
+        """.trimIndent())
+        assertEquals("SELECT * FROM t WHERE status = 'ACTIVE'", compact(m.renderSql().sql))
+    }
+
+    @Test
+    fun `外部实体被清空_XXE防护`() {
+        // 外部实体引用解析为空（不注入外部文件内容）——实测 /etc/hosts 内容不出现
+        val m = model("""
+            <!DOCTYPE mapper [<!ENTITY xxe SYSTEM "file:///etc/hosts">]>
+            <mapper namespace="n">
+              <select id="s1">SELECT '&xxe;' FROM t</select>
+            </mapper>
+        """.trimIndent())
+        val sql = compact(m.renderSql().sql)
+        assertEquals("SELECT '' FROM t", sql)
+    }
 }
