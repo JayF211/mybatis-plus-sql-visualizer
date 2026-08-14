@@ -1,5 +1,11 @@
 [versions]
 junit = "4.13.2"
+mp = "3.5.17"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+# T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例的方法签名/注解元数据来源；
+# 与官方 API 覆盖矩阵基准一致；仅测试依赖，插件运行时零依赖不变）。
+# 注：MPJ 1.5.x 不在 Maven Central（实证 1.5.7~1.5.9 均 404，Central 最新 1.4.13），
+# 锚点/定位黄金用例所需签名（and(Consumer)/注解类）均由 mp-core 提供，暂不加 MPJ。
+mp-core = { module = "com.baomidou:mybatis-plus-core", version.ref = "mp" }

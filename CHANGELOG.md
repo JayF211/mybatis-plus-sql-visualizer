@@ -28,6 +28,8 @@
 
 ### Fixed
 
+- **MPJ 联表主表逻辑删除条件补主表别名（T-M23.10）**：`AND deleted = 0` → `AND t.deleted = 0`——多表 JOIN 下裸列名与副表 deleted 歧义（MySQL ambiguous）；DeleteJoin 多表删除、UpdateJoin + @Version 乐观锁（`SET t.version = t.version + 1` / `AND t.version = ?`）同病同治；单表场景（tableAlias=null）输出逐字节不变；顺带 `inferEntityFromChain` 支持宿主文件内类名→PsiClass 解析——服务链/工厂形态 @TableLogic/@Version 注解生效、SELECT 展开列对齐实体全列（与真实 IDE 一致）
+- **gutter 锚点误标修复（T-M23.11/12）**：① `selectAll` 同时收录于批量注册表与 MPJ 链方法 → wrapper 链上调用被误标批量锚点产生双图标——场景 D 加链首回溯守卫（内联/工厂形态）+ 撞名白名单变量判定（分步形态），批量形态（Db.selectAll / updateBatchById）不受影响；② 嵌套条件 lambda 参数（`wrapper.and(o -> ...)`，真实 IDE 推断类型为 LambdaQueryWrapper）被场景 B 误标产生三图标——场景 B 排除 lambda 参数，方法参数锚点保留
 - **多 SQL 选择弹窗 EDT 慢操作修复**：候选扫描与弹窗显示文本同批后台 `ReadAction.compute` 预计算，弹窗构造只做纯 UI 渲染（不再触碰 PSI）
 - **弹窗关闭按钮文案走插件 bundle**：平台 cancelAction 随 IDE 语言包（中文环境显示英文 Cancel）→ 改走插件界面语言
 - **M23.9 打包编译警告清零**：9 处（`Messages.showDialog` 弃用替换、`DaemonCodeAnalyzer.restart` 参数泛化、`TextAttributesKey.createTextAttributesKey` 弃用豁免、冗余 cast ×3、恒真条件 ×1），行为零变化
