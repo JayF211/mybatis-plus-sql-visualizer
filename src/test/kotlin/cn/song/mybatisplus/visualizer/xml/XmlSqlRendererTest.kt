@@ -1,0 +1,263 @@
+package cn.song.mybatisplus.visualizer.xml
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * 渲染管线端到端测试（T-M24-01）：mapper 文本 → 解析 → 预览模型 → 渲染。
+ *
+ * 覆盖：静态语句、where/if 组合、include 展开 + property、CDATA、set、foreach、
+ * choose、bind、转义 `\#{`、渲染状态切换（关闭条件 / foreach 次数 / bind 覆盖）。
+ */
+class XmlSqlRendererTest {
+
+    /** 解析 mapper 文本并构建预览模型（首个语句）。 */
+    private fun model(mapper: String, statementId: String = "s1"): XmlPreviewModel {
+        val parsed = XmlMapperParser().parse(mapper)
+        val statement = parsed.statements.first { it.id == statementId }
+        return XmlPreviewModel.from(statement, parsed.errors)
+    }
+
+    /** 空白归一化单行断言（段间/缩进空白不参与比较）。 */
+    private fun compact(sql: String): String = sql.replace(Regex("\\s+"), " ").trim()
+
+    private val mapperTemplate = """
+        <mapper namespace="com.example.BizMapper">
+          <sql id="baseWhere">
+            <if test="status != null">AND status = #{status}</if>
+          </sql>
+          <select id="s1" resultType="map">
+            SELECT * FROM t_biz
+            <where>
+              <if test="type != null">AND type = #{type}</if>
+              <include refid="baseWhere">
+                <property name="status" value="1"/>
+              </include>
+            </where>
+            AND create_time <![CDATA[ > ]]> #{createTime}
+            <if test="ids != null">
+              AND id IN
+              <foreach collection="ids" item="id" open="(" separator="," close=")">
+                #{id}
+              </foreach>
+            </if>
+            <choose>
+              <when test="orderType == 1">ORDER BY create_time DESC</when>
+              <otherwise>ORDER BY id</otherwise>
+            </choose>
+            <bind name="likeName" value="'%' + name + '%'"/>
+            <if test="name != null">AND name LIKE #{likeName}</if>
+          </select>
+        </mapper>
+    """.trimIndent()
+
+    // ------------------------------------------------------------------
+    // 默认状态（全部条件按启发式展开）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `默认渲染_全标签组合`() {
+        val m = model(mapperTemplate)
+        val result = m.renderSql()
+
+        assertEquals(
+            "SELECT * FROM t_biz WHERE type = ? AND status = ? AND create_time > ? " +
+                "AND id IN ( ? , ? ) ORDER BY create_time DESC AND name LIKE ?",
+            compact(result.sql),
+        )
+        // 参数顺序：#{} 出现顺序（含 foreach 重写名）
+        assertEquals(
+            listOf("type", "status", "createTime", "__frch_id_0", "__frch_id_1", "likeName"),
+            result.mappings.map { it.property },
+        )
+        // 视图收集
+        assertEquals(5, m.conditionViews.size)
+        assertEquals(listOf("ids"), m.forEachViews.map { it.collectionExpr })
+        assertEquals(listOf("likeName"), m.bindViews.map { it.name })
+        assertEquals(setOf("name"), m.variables)
+        assertTrue(result.errors.isEmpty())
+    }
+
+    @Test
+    fun `默认勾选态启发式`() {
+        val m = model(mapperTemplate)
+        val ids = m.conditionViews.map { it.id to it.defaultEnabled }.toMap()
+        assertEquals(true, ids["type != null"])
+        assertEquals(true, ids["status != null"])
+        assertEquals(true, ids["ids != null"])
+        assertEquals(true, ids["orderType == 1"]) // 非判空形态默认展开
+        assertEquals(true, ids["name != null"])
+        // == null 形态默认关闭
+        val m2 = model(mapperTemplate.replace("name != null", "name == null"))
+        assertEquals(false, m2.conditionViews.last { it.id == "name == null" }.defaultEnabled)
+    }
+
+    // ------------------------------------------------------------------
+    // 渲染状态切换
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `关闭条件后where整体消失`() {
+        val m = model(mapperTemplate)
+        val state = m.defaultState().copy(
+            enabledIds = setOf("ids != null"), // 只剩 foreach 条件
+        )
+        val result = m.renderSql(state)
+        // where 内容为空 → WHERE 不输出（对齐 MyBatis trim 行为）
+        assertEquals(
+            "SELECT * FROM t_biz AND create_time > ? AND id IN ( ? , ? ) ORDER BY id",
+            compact(result.sql),
+        )
+    }
+
+    @Test
+    fun `foreach次数可调_零次为空集`() {
+        val m = model(mapperTemplate)
+        val state = m.defaultState().copy(forEachCounts = mapOf("ids" to 3))
+        assertEquals(
+            "SELECT * FROM t_biz WHERE type = ? AND status = ? AND create_time > ? " +
+                "AND id IN ( ? , ? , ? ) ORDER BY create_time DESC AND name LIKE ?",
+            compact(m.renderSql(state).sql),
+        )
+        val zero = m.defaultState().copy(forEachCounts = mapOf("ids" to 0))
+        assertTrue(!compact(m.renderSql(zero).sql).contains("IN ("))
+    }
+
+    @Test
+    fun `bind覆盖值优先于表达式求值`() {
+        val m = model(mapperTemplate)
+        val state = m.defaultState().copy(bindOverrides = mapOf("likeName" to "'%用户输入%'"))
+        val result = m.renderSql(state)
+        assertEquals(
+            "SELECT * FROM t_biz WHERE type = ? AND status = ? AND create_time > ? " +
+                "AND id IN ( ? , ? ) ORDER BY create_time DESC AND name LIKE ?",
+            compact(result.sql),
+        )
+        assertEquals("likeName", result.mappings.last().property)
+    }
+
+    @Test
+    fun `choose关闭首个when时走otherwise`() {
+        val m = model(mapperTemplate)
+        val state = m.defaultState().copy(enabledIds = m.defaultState().enabledIds - "orderType == 1")
+        assertTrue(compact(m.renderSql(state).sql).endsWith("ORDER BY id AND name LIKE ?"))
+    }
+
+    // ------------------------------------------------------------------
+    // 静态语句与边界
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `纯静态语句_无参数`() {
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">SELECT 1</select>
+            </mapper>
+        """.trimIndent())
+        val result = m.renderSql()
+        assertEquals("SELECT 1", result.sql)
+        assertTrue(result.mappings.isEmpty())
+        assertTrue(m.conditionViews.isEmpty())
+        assertTrue(m.forEachViews.isEmpty())
+    }
+
+    @Test
+    fun `纯参数语句_含jdbcType属性`() {
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t WHERE a = #{a} AND b = #{b, jdbcType=VARCHAR}</select>
+            </mapper>
+        """.trimIndent())
+        val result = m.renderSql()
+        assertEquals("SELECT * FROM t WHERE a = ? AND b = ?", result.sql)
+        assertEquals("a", result.mappings[0].property)
+        assertEquals("b", result.mappings[1].property)
+        assertEquals("VARCHAR", result.mappings[1].attributes["jdbcType"])
+    }
+
+    @Test
+    fun `转义dollar在静态文本中原样保留`() {
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">SELECT \${'$'}{col} FROM t</select>
+            </mapper>
+        """.trimIndent())
+        // `\${` 转义 → 文本判定为静态 → StaticTextSqlNode 原样输出（对齐 MyBatis：转义仅在动态文本生效）
+        assertEquals("SELECT \\${'$'}{col} FROM t", m.renderSql().sql)
+    }
+
+    @Test
+    fun `dollar表达式未解析时输出空串并记录错误`() {
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t WHERE ${'$'}{ew.customSqlSegment}</select>
+            </mapper>
+        """.trimIndent())
+        val result = m.renderSql()
+        // ew 无模拟值 → 空串（MP 占位等场景由面板标注）
+        assertEquals("SELECT * FROM t WHERE", result.sql)
+        assertTrue(result.errors.isNotEmpty())
+    }
+
+    @Test
+    fun `set与if组合_update语句`() {
+        val m = model("""
+            <mapper namespace="n">
+              <update id="s1">
+                UPDATE t_biz
+                <set>
+                  <if test="name != null">name = #{name},</if>
+                  <if test="remark != null">remark = #{remark},</if>
+                </set>
+                WHERE id = #{id}
+              </update>
+            </mapper>
+        """.trimIndent())
+        assertEquals(
+            "UPDATE t_biz SET name = ?, remark = ? WHERE id = ?",
+            compact(m.renderSql().sql),
+        )
+        assertEquals(
+            "UPDATE t_biz SET name = ? WHERE id = ?",
+            compact(m.renderSql(m.defaultState().copy(enabledIds = setOf("name != null"))).sql),
+        )
+    }
+
+    @Test
+    fun `未知标签报错`() {
+        assertThrows(XmlScriptException::class.java) {
+            XmlMapperParser().parse("""
+                <mapper namespace="n">
+                  <select id="s1"><else>oops</else></select>
+                </mapper>
+            """.trimIndent())
+        }
+    }
+
+    @Test
+    fun `根元素非mapper报错`() {
+        assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse("""<configuration></configuration>""")
+        }
+    }
+
+    @Test
+    fun `非良构XML报错`() {
+        assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse("""<mapper><select id="a"></mapper>""")
+        }
+    }
+
+    @Test
+    fun `include缺失记录错误且不中断`() {
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t <include refid="missing"/></select>
+            </mapper>
+        """.trimIndent())
+        assertTrue(m.errors.any { it.contains("missing") })
+        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+    }
+}
