@@ -427,9 +427,9 @@ object SqlGenerator {
 
     /**
      * 渲染带表限定的列引用：`别名.列`——别名前缀不包，列名按需引用（`t.`table``）。
+     * 与 [cn.song.mybatisplus.visualizer.model.ColumnRef.qualifiedName]（dialect 重载）同一入口。
      */
-    private fun renderQualified(column: ColumnRef, dialect: Dialect): String =
-        (column.tableAlias?.let { "$it." } ?: "") + dialect.quoteIfKeyword(column.columnName)
+    private fun renderQualified(column: ColumnRef, dialect: Dialect): String = column.qualifiedName(dialect)
 
     /**
      * 渲染完整列表达式（含聚合函数与 AS 别名）：rawExpr 原样透传（selectFunc 表达式，不拆解——

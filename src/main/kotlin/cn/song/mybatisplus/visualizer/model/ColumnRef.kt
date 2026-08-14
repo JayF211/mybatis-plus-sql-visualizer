@@ -20,6 +20,14 @@ data class ColumnRef(
     val qualifiedName: String
         get() = if (tableAlias != null) "$tableAlias.$columnName" else columnName
 
+    /**
+     * T-M23.5：带表限定的列表达式，列名命中**本方言**保留字 → 按方言符号引用（`t.`table``）——
+     * 别名前缀不包、列名本体按需包。供解析期 raw 拼接（QueryWrapperParser 等）与
+     * [cn.song.mybatisplus.visualizer.sql.SqlGenerator] 渲染共用，与 `quoteIfKeyword` 同语义。
+     */
+    fun qualifiedName(dialect: cn.song.mybatisplus.visualizer.sql.Dialect): String =
+        (tableAlias?.let { "$it." } ?: "") + dialect.quoteIfKeyword(columnName)
+
     /** 渲染完整列表达式（含聚合函数与 AS 别名），如 `MAX(t.power)`、`COUNT(t.id) AS applyCount`。 */
     val rendered: String
         get() {

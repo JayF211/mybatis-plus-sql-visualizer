@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.psi.currentDialect
 
 /**
  * LambdaUpdateWrapper 转换器（F-09）：`UPDATE 表 SET col = ? ... WHERE ...`。
@@ -79,7 +80,9 @@ object LambdaUpdateConverter : WrapperConverter {
             val column = args.getOrNull(startIndex).asColumn() ?: return null
             val value = args.getOrNull(startIndex + 1).asValue() ?: return null
             val op = if (call.methodName == SET_INCR) "+" else "-"
-            SetClause(rawSql = "${column.qualifiedName} = ${column.qualifiedName} $op ${renderSetValue(value)}")
+            // T-M23.5：列名按方言引用（setIncrBy/setDecrBy 解析期拼 rawSql）
+            val qualified = column.qualifiedName(currentDialect())
+            SetClause(rawSql = "$qualified = $qualified $op ${renderSetValue(value)}")
         }
         else -> null
     }

@@ -389,4 +389,28 @@ class UpdateJoinDeleteJoinConverterTest {
             WrapperChain(WrapperType.DELETE_JOIN, "UserEntity", listOf(eqCall("id", "1"))), table,
         ) is DeleteStatement)
     }
+
+    @Test
+    fun `updateJoin_setIncrBy关键字列引用`() {
+        // T-M23.5：联表 setIncrBy 解析期拼 rawSql——关键字列按方言引用（t.`table` = t.`table` + 1）
+        val chain = WrapperChain(
+            WrapperType.UPDATE_JOIN, "UserEntity",
+            listOf(
+                WrapperCall("setIncrBy", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "table")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1")),
+                )),
+                eqCall("id", "1001"),
+            ),
+        )
+        val sql = SqlGenerator.generate(UpdateJoinConverter.convert(chain, table))
+        assertEquals(
+            """
+            UPDATE `user` t
+            SET t.`table` = t.`table` + 1
+            WHERE t.id = 1001
+            """.trimIndent(),
+            sql,
+        )
+    }
 }

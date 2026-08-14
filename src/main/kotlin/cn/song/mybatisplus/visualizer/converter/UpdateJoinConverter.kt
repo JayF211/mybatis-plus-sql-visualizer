@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.psi.currentDialect
 
 /**
  * UpdateJoinWrapper 转换器（T-M21-08，MPJ 官方联表更新，1.4.5+，原 P3-01 提前）：
@@ -110,7 +111,8 @@ object UpdateJoinConverter : WrapperConverter {
             val startIndex = if (args.size >= 3 && isFlagArgument(args[0])) 1 else 0
             val column = args.getOrNull(startIndex).asColumn() ?: return emptyList()
             val value = args.getOrNull(startIndex + 1).asValue() ?: return emptyList()
-            val qualified = withMainAliasIfUnqualified(column, mainAlias).qualifiedName
+            // T-M23.5：列名按方言引用（联表 setIncrBy/setDecrBy 解析期拼 rawSql）
+            val qualified = withMainAliasIfUnqualified(column, mainAlias).qualifiedName(currentDialect())
             val op = if (call.methodName == SET_INCR) "+" else "-"
             listOf(SetClause(rawSql = "$qualified = $qualified $op ${renderSetValue(value)}"))
         }

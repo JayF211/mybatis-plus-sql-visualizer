@@ -152,11 +152,6 @@ object BatchOperationConverter {
         return BatchBuild(sql = model.renderSql(initialActive), params = params, model = model)
     }
 
-    /** T-M23.4：当前设置方言（Psi 层读设置，EntityResolver.inferTableName 同款模式；兜底 MySQL）。 */
-    private fun currentDialect(): Dialect =
-        runCatching { DialectRegistry.byName(PluginSettings.getInstance().state.dialect) }
-            .getOrDefault(DialectRegistry.byName(null))
-
     /**
      * 转换批量/单实体方法调用。
      *
@@ -351,23 +346,25 @@ object BatchOperationConverter {
         injectLogicDelete: Boolean,
         resolveVariables: Boolean,
     ): BatchBuild {
+        val dialect = currentDialect()
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
         val singleId = methodName in SINGLE_ID_DELETE_METHODS
         val (idWhere, idParams) = if (singleId) {
-            renderIdCondition(call, idColumn, resolveVariables)
+            renderIdCondition(call, idColumn, resolveVariables, dialect)
         } else {
-            "${idColumn.columnName} IN (?, ?, ...)" to emptyList()
+            "${dialect.quoteIfKeyword(idColumn.columnName)} IN (?, ?, ...)" to emptyList()
         }
         return if (logicColumn != null) {
-            // 软删除：删除转 UPDATE（deleted = 1 为字面量，不进参数行）
+            // 软删除：删除转 UPDATE（deleted = 1 为字面量，不进参数行）；T-M23.5 表名/列名按方言引用
+            val logic = dialect.quoteIfKeyword(logicColumn)
             BatchBuild(
-                sql = "UPDATE ${table.tableName}\nSET $logicColumn = 1\nWHERE $idWhere AND $logicColumn = 0",
+                sql = "UPDATE ${dialect.quoteIfKeyword(table.tableName)}\nSET $logic = 1\nWHERE $idWhere AND $logic = 0",
                 params = idParams,
             )
         } else {
             BatchBuild(
-                sql = "DELETE FROM ${table.tableName}\nWHERE $idWhere",
+                sql = "DELETE FROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $idWhere",
                 params = idParams,
             )
         }
@@ -388,22 +385,24 @@ object BatchOperationConverter {
         injectLogicDelete: Boolean,
         resolveVariables: Boolean,
     ): BatchBuild {
+        val dialect = currentDialect()
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
-        val selectColumns = table.columns.joinToString(", ") { it.columnName }
-        val logicCond = if (injectLogicDelete) table.logicDeleteColumn?.let { "$it = 0" } else null
+        // T-M23.5：全列清单/表名/条件列名按方言引用（用户实测：批量 SELECT 未处理关键字列）
+        val selectColumns = table.columns.joinToString(", ") { dialect.quoteIfKeyword(it.columnName) }
+        val logicCond = if (injectLogicDelete) table.logicDeleteColumn?.let { "${dialect.quoteIfKeyword(it)} = 0" } else null
         return when {
             methodName == "selectAll" -> {
                 val where = logicCond?.let { "\nWHERE $it" } ?: ""
-                BatchBuild("SELECT $selectColumns\nFROM ${table.tableName}$where")
+                BatchBuild("SELECT $selectColumns\nFROM ${dialect.quoteIfKeyword(table.tableName)}$where")
             }
             methodName in SINGLE_ID_SELECT_METHODS -> {
-                val (idWhere, idParams) = renderIdCondition(call, idColumn, resolveVariables)
+                val (idWhere, idParams) = renderIdCondition(call, idColumn, resolveVariables, dialect)
                 val where = idWhere + (logicCond?.let { " AND $it" } ?: "")
-                BatchBuild("SELECT $selectColumns\nFROM ${table.tableName}\nWHERE $where", idParams)
+                BatchBuild("SELECT $selectColumns\nFROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $where", idParams)
             }
             else -> {
-                val where = "${idColumn.columnName} IN (?, ?, ...)" + (logicCond?.let { " AND $it" } ?: "")
-                BatchBuild("SELECT $selectColumns\nFROM ${table.tableName}\nWHERE $where")
+                val where = "${dialect.quoteIfKeyword(idColumn.columnName)} IN (?, ?, ...)" + (logicCond?.let { " AND $it" } ?: "")
+                BatchBuild("SELECT $selectColumns\nFROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $where")
             }
         }
     }
@@ -416,16 +415,17 @@ object BatchOperationConverter {
      * SELECT 同理追加 `AND deleted = 0`。
      */
     private fun buildMapConditionBatch(methodName: String, table: TableInfo, injectLogicDelete: Boolean): BatchBuild {
+        val dialect = currentDialect()
         val isDelete = methodName.startsWith("remove") || methodName.startsWith("delete")
         val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
-        val condition = "<Map 等值条件: col = ? AND col = ? ...>" + (logicColumn?.let { " AND $it = 0" } ?: "")
+        val condition = "<Map 等值条件: col = ? AND col = ? ...>" + (logicColumn?.let { " AND ${dialect.quoteIfKeyword(it)} = 0" } ?: "")
         val sql = when {
             isDelete && logicColumn != null ->
-                "UPDATE ${table.tableName}\nSET $logicColumn = 1\nWHERE $condition"
+                "UPDATE ${dialect.quoteIfKeyword(table.tableName)}\nSET ${dialect.quoteIfKeyword(logicColumn)} = 1\nWHERE $condition"
             isDelete ->
-                "DELETE FROM ${table.tableName}\nWHERE $condition"
+                "DELETE FROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $condition"
             else ->
-                "SELECT ${table.columns.joinToString(", ") { it.columnName }}\nFROM ${table.tableName}\nWHERE $condition"
+                "SELECT ${table.columns.joinToString(", ") { dialect.quoteIfKeyword(it.columnName) }}\nFROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $condition"
         }
         return BatchBuild(sql)
     }
@@ -460,20 +460,26 @@ object BatchOperationConverter {
      *
      * @return (WHERE 片段, 参数登记)；Db.getById(Class, id) 两参形态 id 取第二个实参
      */
-    private fun renderIdCondition(call: PsiMethodCallExpression, idColumn: ColumnInfo, resolveVariables: Boolean): Pair<String, List<ParamEntry>> {
+    private fun renderIdCondition(
+        call: PsiMethodCallExpression,
+        idColumn: ColumnInfo,
+        resolveVariables: Boolean,
+        dialect: Dialect = currentDialect(),
+    ): Pair<String, List<ParamEntry>> {
         val args = call.argumentList.expressions
         val idExpr = if (args.size > 1) args[1] else args.firstOrNull()
+        val idName = dialect.quoteIfKeyword(idColumn.columnName)
         if (idExpr != null) {
             val value = if (resolveVariables) ExpressionEvaluator.evaluate(idExpr) else SqlValue.Placeholder(idExpr.text)
             return when (value) {
                 is SqlValue.Literal ->
-                    "${idColumn.columnName} = ${value.raw}" to emptyList()
+                    "$idName = ${value.raw}" to emptyList()
                 is SqlValue.Placeholder ->
-                    "${idColumn.columnName} = ?" to listOf(ParamEntry(value.source, ParamHint(quote = ParamQuote.decide(idColumn.fieldType))))
+                    "$idName = ?" to listOf(ParamEntry(value.source, ParamHint(quote = ParamQuote.decide(idColumn.fieldType))))
             }
         }
         // ActiveRecord 无参形态：id 来自实体字段
-        return "${idColumn.columnName} = ?" to listOf(
+        return "$idName = ?" to listOf(
             ParamEntry(idSource(entityPrefix(call), idColumn.columnName), ParamHint(quote = ParamQuote.decide(idColumn.fieldType))),
         )
     }

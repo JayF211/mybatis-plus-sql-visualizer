@@ -13,6 +13,8 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
+import cn.song.mybatisplus.visualizer.psi.currentDialect
+import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 
 /**
@@ -32,6 +34,11 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 class QueryWrapperParser(
     private val table: TableInfo,
     private val columnPrefix: String? = null,
+    /**
+     * T-M23.5：方言（解析期 raw 拼接的保留字引用；默认读当前设置，测试环境兜底 MySQL）。
+     * 子查询递归（[subQueryCondition]）沿用同一方言。
+     */
+    private val dialect: Dialect = currentDialect(),
 ) {
 
     /** 动态条件 toggle id 序号（M12，pre-order 递增，同一 parse 树内稳定）。 */
@@ -263,17 +270,17 @@ class QueryWrapperParser(
         if (first is SqlValue.Placeholder) {
             val fn = enumFunctionOf(first.source) ?: return emptyList()
             val column = func.columns.firstOrNull() ?: return emptyList()
-            val qualified = columnPrefix?.let { column.withTableAlias(it) }?.qualifiedName ?: column.qualifiedName
+            val qualified = columnPrefix?.let { column.withTableAlias(it) }?.qualifiedName(dialect) ?: column.qualifiedName(dialect)
             val expr = "$fn($qualified)"
             return listOf(ColumnRef(columnName = expr, rawExpr = expr, alias = alias))
         }
         val template = (first as? SqlValue.Literal)?.unquoted ?: return emptyList()
 
         var expr = template
-        // %s 列占位替换（逐列、带主表别名前缀）
+        // %s 列占位替换（逐列、带主表别名前缀）；T-M23.5 列名按方言引用
         for (col in func.columns) {
             if (!expr.contains("%s")) break
-            expr = expr.replaceFirst("%s", columnPrefix?.let { col.withTableAlias(it) }?.qualifiedName ?: col.qualifiedName)
+            expr = expr.replaceFirst("%s", columnPrefix?.let { col.withTableAlias(it) }?.qualifiedName(dialect) ?: col.qualifiedName(dialect))
         }
         // {0}/{1} 绑定参数替换
         for ((index, value) in func.values.withIndex()) {
@@ -393,9 +400,9 @@ class QueryWrapperParser(
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
         val subTable = (call.args.getOrNull(1) as? WrapperArg.EntityRefArg)?.tableInfo ?: return null
         val nested = call.args.getOrNull(2) as? WrapperArg.NestedArg ?: return null
-        val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
+        val subStatement = QueryWrapperParser(subTable, dialect = dialect).parse(nested.chain)
         val subSql = SqlGenerator.generate(subStatement, compact = true)
-        return Condition.Raw("${column.qualifiedName} $op ($subSql)")
+        return Condition.Raw("${column.qualifiedName(dialect)} $op ($subSql)")
     }
 
     /** LIKE 条件。 */
@@ -430,14 +437,14 @@ class QueryWrapperParser(
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
         val sql = (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted ?: return null
         val op = if (negated) "NOT IN" else "IN"
-        return Condition.Raw("${column.qualifiedName} $op ($sql)")
+        return Condition.Raw("${column.qualifiedName(dialect)} $op ($sql)")
     }
 
     /** 比较 SQL 片段条件（eqSql/gtSql/geSql/ltSql/leSql，官方 API）：`column op (sql 片段)`。 */
     private fun compareSql(call: WrapperCall, op: String): Condition? {
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
         val sql = (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-        return Condition.Raw("${column.qualifiedName} $op ($sql)")
+        return Condition.Raw("${column.qualifiedName(dialect)} $op ($sql)")
     }
 
     /** NOT 嵌套条件（not(consumer)，官方 API）：`NOT (嵌套条件)`。 */
@@ -734,9 +741,9 @@ class QueryWrapperParser(
         val func = call.args.getOrNull(1) as? WrapperArg.FuncArg ?: return null
         var sql = template
         for (col in func.columns) {
-            // MPJ 主表别名前缀（concat(t.order_code, t.code, ...)）
-            val qualified = columnPrefix?.let { col.withTableAlias(it) }?.qualifiedName
-                ?: col.qualifiedName ?: col.columnName
+            // MPJ 主表别名前缀（concat(t.order_code, t.code, ...)）；T-M23.5 列名按方言引用
+            val qualified = columnPrefix?.let { col.withTableAlias(it) }?.qualifiedName(dialect)
+                ?: col.qualifiedName(dialect)
             sql = sql.replaceFirst("%s", qualified)
         }
         for ((index, value) in func.values.withIndex()) {

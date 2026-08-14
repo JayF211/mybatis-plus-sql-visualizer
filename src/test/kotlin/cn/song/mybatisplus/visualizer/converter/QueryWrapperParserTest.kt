@@ -919,6 +919,29 @@ class QueryWrapperParserTest {
     }
 
     @Test
+    fun `selectFunc_枚举形态关键字列引用`() {
+        // T-M23.5：selectFunc 枚举形态（解析期拼 rawExpr）——关键字列按方言引用（SUM(`table`)）
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectFunc", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("DefaultFuncEnum.SUM")),
+                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "table")), values = emptyList()),
+                    WrapperArg.ValueArg(SqlValue.Literal("totalCount")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(parser.parse(chain))
+        assertEquals(
+            """
+            SELECT SUM(`table`) AS totalCount
+            FROM car_device_info
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
     fun `selectFunc_未知枚举忽略不崩溃`() {
         // T-M21-06：未知枚举（映射表外）→ 忽略该列（不崩溃），其余列正常渲染
         val chain = WrapperChain(

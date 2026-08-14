@@ -2148,6 +2148,85 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(listOf(false, true, true, true, true, false, false), result.paramHints.map { it.quote })
     }
 
+    fun testBatchGetByIdKeywordColumnsQuoted() {
+        // T-M23.5（用户实测：查询未处理关键字）：批量 SELECT（getById 形态）——
+        // 全列清单/表名/主键条件按方言引用（`table` 列反引号包裹）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private BizBannerService bizBannerService;
+
+                public void query(Long id) {
+                    bizBannerService.getById(id);
+                }
+
+                static class BizBannerEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String title;
+                    private String name;
+                    private String table;
+                    private String imageUrl;
+                    private Integer dicStatus;
+                }
+
+                static class BaseService<T> {}
+
+                static class BizBannerService extends BaseService<BizBannerEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, title, name, `table`, image_url, dic_status
+            FROM biz_banner_entity
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testBatchRemoveByIdLogicDeleteKeywordColumnsQuoted() {
+        // T-M23.5：批量软删除模板（@TableLogic）——表名/SET 逻辑列/WHERE 主键与逻辑条件按方言引用
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private BizBannerService bizBannerService;
+
+                public void remove(Long id) {
+                    bizBannerService.removeById(id);
+                }
+
+                static class BizBannerEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String table;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class BaseService<T> {}
+
+                static class BizBannerService extends BaseService<BizBannerEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("removeById 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE biz_banner_entity
+            SET deleted = 1
+            WHERE id = ? AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     fun testBatchSaveAutoIncrementIdDefaultUnchecked() {
         // T-M23-04（用户建议：添加时 id 可能不需要）：@TableId(type = IdType.AUTO) 主键默认不勾选
         // → 初始 INSERT 不含 id 列（对齐 MP：自增主键不进 INSERT 列清单）
