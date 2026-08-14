@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -696,5 +697,142 @@ class WrapperLocatorTest : BasePlatformTestCase() {
             """.trimIndent(),
             SqlGenerator.generate(statement),
         )
+    }
+
+    // ------------------------------------------------------------------
+    // T-M23.7：任意位置触发（eq/list 调用处）定位增强 + 选择区扫描
+    // ------------------------------------------------------------------
+
+    fun testChainStyleNewLocatesAtEqCall() {
+        // 用户需求：光标在 eq 调用处（链中）也可触发——定位增强沿 parent 找最近调用、
+        // 回溯链首（new wrapper 构造）构建链
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1001L);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        // 光标模拟：eq 调用的实参字面量（链中任意位置）
+        val eqArg = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiLiteralExpression::class.java)
+            .first { it.text == "1001L" }
+        val located = WrapperLocator.locateWithTable(eqArg)
+        assertNotNull("eq 调用处应定位到链", located)
+        assertEquals(WrapperType.LAMBDA_QUERY, located!!.chain.wrapperType)
+        assertEquals("DeviceInfoEntity", located.chain.entityClass)
+        assertEquals(listOf("eq"), located.chain.calls.map { it.methodName })
+    }
+
+    fun testServiceChainLocatesAtListCall() {
+        // 用户需求：光标在 .list() 调用处（链尾）也可触发——回溯链首（服务工厂调用）构建链
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    DeviceInfoService service = new DeviceInfoService();
+                    service.lambdaQuery().eq("station_id", 1001L).list();
+                }
+
+                static class DeviceInfoService {
+                    public Object lambdaQuery() { return null; }
+                    public Object eq(String col, Object val) { return this; }
+                    public Object list() { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        // 光标模拟：list 调用自身（链尾）
+        val listCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "list" }
+        val located = WrapperLocator.locateWithTable(listCall)
+        assertNotNull("list 调用处应定位到链", located)
+        assertEquals(WrapperType.LAMBDA_QUERY, located!!.chain.wrapperType)
+    }
+
+    fun testPlainMethodChainNotMisdetected() {
+        // 防误伤：普通方法调用（非 wrapper 链首）在任意位置 → null
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query(Object w) {
+                    helper.applyFilter(w);
+                }
+            }
+            """.trimIndent(),
+        )
+        val arg = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiReferenceExpression::class.java)
+            .first { it.text == "w" }
+        assertNull("普通方法实参处不应误定位", WrapperLocator.locateWithTable(arg))
+    }
+
+    fun testChainHeadCallsInRangeCollectsAndDeduplicates() {
+        // 选择区扫描：两个 wrapper 链首 + 一个普通调用——只收集 2 个链首（普通调用不算；
+        // 同一链 eq/list 多处不重复计数）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L).isNotNull(DeviceInfoEntity::getId);
+                    DeviceInfoService service = new DeviceInfoService();
+                    service.lambdaQuery().eq("station_id", 2L).list();
+                    helper.applyFilter(w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class DeviceInfoService {
+                    public Object lambdaQuery() { return null; }
+                    public Object eq(String col, Object val) { return this; }
+                    public Object list() { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val heads = WrapperLocator.chainHeadCallsInRange(myFixture.file, 0, myFixture.file.textLength)
+        assertEquals("选择区应收集 2 个链首（new 链 1 + 服务链 1，普通调用不计）", 2, heads.size)
+        // 按源码顺序：new 链首（eq 调用）在前、服务链首（lambdaQuery）在后
+        assertTrue(heads[0].methodExpression.referenceName in listOf("eq", "isNotNull"))
+        assertEquals("lambdaQuery", heads[1].methodExpression.referenceName)
+    }
+
+    fun testChainHeadSummaryFormat() {
+        // 摘要：行号 + Wrapper 类型 + 表名（`L{行号} {类型} {表名}`）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        val head = WrapperLocator.chainHeadCallsInRange(myFixture.file, 0, myFixture.file.textLength).first()
+        val summary = WrapperLocator.chainHeadSummary(head)
+        assertTrue("摘要应含 Wrapper 类型: $summary", summary.contains("LAMBDA_QUERY"))
+        assertTrue("摘要应含表名: $summary", summary.contains("device_info_entity"))
+        assertTrue("摘要应以行号开头: $summary", summary.startsWith("L"))
     }
 }

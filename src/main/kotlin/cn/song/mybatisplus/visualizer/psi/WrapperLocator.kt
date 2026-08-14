@@ -8,10 +8,12 @@ import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiExpressionList
 import com.intellij.psi.PsiField
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiIfStatement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -75,15 +77,99 @@ object WrapperLocator {
     /**
      * 定位并同时返回实体表信息（供 converter 全链路使用）。
      *
-     * 支持两类 Wrapper 来源：
+     * 支持三类 Wrapper 来源：
      *  - 变量声明（`LambdaQueryWrapper<X> w = ...`，含分步续链）
      *  - 内联 new 表达式（`list(new MPJLambdaQueryWrapper<X>().select(...).eq(...))`，无变量）
+     *  - Wrappers 静态工厂 / 服务链（`Wrappers.<X>lambdaQuery()...` / `service.lambdaQuery()...`）
+     * T-M23.7：末尾追加 [locateFromChainCall] 兜底——链中/链尾（eq/list 调用处）任意位置定位。
      */
     fun locateWithTable(anchor: PsiElement, resolveVariables: Boolean = true): LocatedWrapper? {
         findWrapperVariable(anchor)?.let { return buildChain(it, resolveVariables) }
         findWrapperNewExpression(anchor)?.let { return buildChainFromNew(it, resolveVariables) }
         findWrapperFactoryCall(anchor)?.let { return buildChainFromFactory(it, resolveVariables) }
+        locateFromChainCall(anchor, resolveVariables)?.let { return it }
         return null
+    }
+
+    // ------------------------------------------------------------------
+    // T-M23.7：链中/链尾任意位置定位（eq/list 调用处）与选择区扫描
+    // ------------------------------------------------------------------
+
+    /**
+     * 从**任意相关位置**定位 wrapper 链（用户需求：光标在 `eq` 调用处、`.list()` 调用处等
+     * 链中/链尾也可触发）：
+     *  1. 沿 parent 链找**最近的方法调用**（含锚点自身）；
+     *  2. 沿 `methodExpression.qualifierExpression` **回溯到链首**（与工厂链收集同构）；
+     *  3. 链首判定（[isChainHeadCall]）：new wrapper 构造 → [buildChainFromNew]；
+     *     Wrappers 工厂/服务链 → [buildChainFromFactory]；
+     *  4. 非 wrapper 链首（普通方法调用，如 `helper.applyFilter(w)`）→ null（防误伤）。
+     *
+     * 仅用户显式触发（快捷键/右键）时调用，无 M10 daemon 性能红线。
+     */
+    private fun locateFromChainCall(anchor: PsiElement, resolveVariables: Boolean): LocatedWrapper? {
+        val call = generateSequence(anchor) { it.parent }
+            .filterIsInstance<PsiMethodCallExpression>()
+            .firstOrNull() ?: return null
+        // 回溯到链首（qualifier 不再是方法调用为止）；sequence 至少含 call 自身，兜底自身
+        val chainHead = generateSequence(call) {
+            it.methodExpression.qualifierExpression as? PsiMethodCallExpression
+        }.lastOrNull() ?: call
+        return when {
+            chainHead.methodExpression.qualifierExpression is PsiNewExpression ->
+                (chainHead.methodExpression.qualifierExpression as PsiNewExpression)
+                    .takeIf { detectWrapperType(it.type) != null }
+                    ?.let { buildChainFromNew(it, resolveVariables) }
+            isWrapperFactoryCall(chainHead) -> buildChainFromFactory(chainHead, resolveVariables)
+            else -> null
+        }
+    }
+
+    /**
+     * T-M23.7：调用是否为 wrapper **链首**（new wrapper 构造链首 / 工厂·服务链首）。
+     * internal 供选择区扫描（[chainHeadCallsInRange]）与 ConvertToSqlAction 复用。
+     */
+    internal fun isChainHeadCall(call: PsiMethodCallExpression): Boolean {
+        val qualifier = call.methodExpression.qualifierExpression
+        return (qualifier is PsiNewExpression && detectWrapperType(qualifier.type) != null) ||
+            isWrapperFactoryCall(call)
+    }
+
+    /** T-M23.7：链首 wrapper 类型（new 构造 → 构造类型；工厂/服务链 → 工厂类型）；非链首 null。 */
+    private fun wrapperTypeOfChainHead(call: PsiMethodCallExpression): WrapperType? {
+        val qualifier = call.methodExpression.qualifierExpression
+        return when {
+            qualifier is PsiNewExpression -> detectWrapperType(qualifier.type)
+            isWrapperFactoryCall(call) -> factoryWrapperType(call)
+            else -> null
+        }
+    }
+
+    /**
+     * T-M23.7：扫描选择区（offset 范围）内全部 wrapper **链首调用**（按链首 offset 去重排序）——
+     * 同一链的 eq/list 多处只计 1 个；嵌套子查询链首在实参子树内为独立链首（合理行为，文档化）。
+     *
+     * @param file  目标文件
+     * @param start 选择区起始 offset（含）
+     * @param end   选择区结束 offset（不含）
+     */
+    fun chainHeadCallsInRange(file: PsiFile, start: Int, end: Int): List<PsiMethodCallExpression> =
+        PsiTreeUtil.collectElementsOfType(file, PsiMethodCallExpression::class.java)
+            .filter { it.textRange.startOffset in start until end && isChainHeadCall(it) }
+            .distinctBy { it.textRange.startOffset }
+            .sortedBy { it.textRange.startOffset }
+
+    /**
+     * T-M23.7：多 SQL 选择列表项摘要：`L{行号} {Wrapper 类型} {表名}`（表名解析失败省略表名）。
+     * 行号按文档行（1-based）；类型/表名轻量解析（选择弹窗列表展示用）。
+     */
+    fun chainHeadSummary(call: PsiMethodCallExpression): String {
+        val typeName = wrapperTypeOfChainHead(call)?.name ?: "?"
+        val line = runCatching {
+            val doc = PsiDocumentManager.getInstance(call.project).getDocument(call.containingFile)
+            doc?.getLineNumber(call.textRange.startOffset)?.plus(1) ?: 0
+        }.getOrDefault(0)
+        val tableName = locateWithTable(call)?.table?.tableName
+        return "L$line $typeName${tableName?.let { "  $it" } ?: ""}"
     }
 
     // ------------------------------------------------------------------
