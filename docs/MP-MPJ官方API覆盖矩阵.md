@@ -71,7 +71,7 @@
 | 方法 / 重载形态 | 目标状态 | 对应任务编号 | 备注 |
 |------|:----:|------|------|
 | `save` / `saveBatch` | ✅ | —（M19.5 / T-M15-08） | INSERT 全列模板；T-M23-02 参数面板每 `?` 登记 `实体.列名` 输入行；T-M23-04 参数列级勾选——`@TableId(type = IdType.AUTO)` 主键默认不勾选（对齐 MP：自增主键不进 INSERT 列清单） |
-| `saveOrUpdate` / `saveOrUpdateBatch` | ✅ | —（T-M15-08） | UPSERT 模板；T-M23-04 主键固定（ON CONFLICT 依赖）、非主键列可勾选 |
+| `saveOrUpdate` / `saveOrUpdateBatch` | ✅ | —（T-M15-08） | UPSERT 模板；T-M23.2 主键**可选**（toggle 列默认勾选渲染完整 upsert，取消 → 纯 INSERT 新记录路径），非主键列可勾选（取消 → 同步退出 INSERT 列清单与 DO UPDATE SET） |
 | `saveOrUpdate(T, Wrapper)` | ✅ | T-M20-10 | UPSERT + wrapper 条件 + 实体字段展开 SET |
 | `removeById` / `removeByIds` / `remove` / `removeByMap` | ✅ | —（T-M15-08 / T-M20-07） | removeByMap：Map 等值链（字面量展开 / 变量占位）；T-M23-01 @TableLogic 实体软删除（UPDATE SET deleted=1 + AND deleted=0，无 @TableLogic 维持 DELETE）；T-M23-02 实参字面量内联 / 变量参数行 |
 | `updateById` | ✅ | —（既有能力） | UPDATE 主键等值；T-M23-04 SET 列级勾选（默认全勾选，可按需取消——近似 NOT_NULL"只更新需要修改的字段"），WHERE 主键固定 |
