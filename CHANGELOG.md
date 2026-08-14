@@ -6,6 +6,12 @@
 
 ### Added
 
+- **MyBatis 注解 SQL 预览**（M25）：Java Mapper 方法上的 `@Select/@Insert/@Update/@Delete`（含 `<script>` 动态标签）与 `@SelectProvider` 等 Provider 注解（L1 常量折叠）——注解行 gutter 图标 + 右键预览，复用 XML 引擎（动态条件勾选/foreach 次数/bind 覆盖）：
+  - 数组元素拼接对齐 MyBatis（`String.join(" ", value).trim()`）；`<script>` 与 XML mapper 同一解析路径
+  - `@Param` 参数名 mock（`param1..N` 注入）；Provider 常量折叠（字面量/文本块/`+` 拼接/静态 final 引用），动态生成场景降级提示
+  - `@Lang` 自定义语言驱动提示不支持
+- **XML 多语句候选**（M25）：光标不在语句内时列出全部语句（行号 + 摘要）供选择预览
+
 - **MyBatis XML mapper 动态 SQL 预览**（M24）：在 `<select|insert|update|delete>` 语句上点击 gutter 图标或右键预览动态 SQL——引擎忠实复刻 MyBatis 3.5.19 渲染算法：
   - 动态标签全兼容：`if` / `choose(when/otherwise)` / `trim` / `where` / `set` / `foreach`（含 `__frch_` 参数重写、Map 迭代、空集合语义）/ `bind` / `sql`+`include`（同文件 property 静态替换）
   - 受限 OGNL 求值：判空/比较/逻辑/算术/成员方法/列表字面量，表达式无法解析时面板提供手动开关兜底
