@@ -71,11 +71,24 @@ sealed interface EvalResult {
 
 object OgnlEvaluator {
 
-    /** 解析表达式。 */
+    /** 解析表达式（T-M25.2：`||X||` 剥壳兼容——社区非标准写法，真实 OGNL 会报 Malformed；预览宽容按 X 解析）。 */
     fun parse(text: String): ParseResult = try {
-        Parser(Lexer(text)).parseExpression()
+        Parser(Lexer(unwrapOrBars(text))).parseExpression()
     } catch (e: OgnlParseException) {
         ParseResult.Err(e.message ?: "parse error")
+    }
+
+    /** `||` 包裹剥壳：`||X||` → `X`（递归，`||||X||||` 亦支持）；非包裹原样返回。 */
+    private fun unwrapOrBars(text: String): String {
+        var result = text
+        while (true) {
+            val trimmed = result.trim()
+            if (trimmed.length > 4 && trimmed.startsWith("||") && trimmed.endsWith("||")) {
+                result = trimmed.substring(2, trimmed.length - 2)
+            } else {
+                return result
+            }
+        }
     }
 
     /** 解析 + 求值（bindings 为变量上下文；staticFieldValues 为 `@class@field` → 值的映射，T-M25.2）。求值期异常安全降级为 [EvalResult.Err]。 */
@@ -93,13 +106,31 @@ object OgnlEvaluator {
             EvalResult.Err(e.message ?: "evaluation error")
         }
 
-    /** 判真规则（对齐 MyBatis ExpressionEvaluator.evaluateBoolean）：
+    /**
+     * 判真规则（对齐 MyBatis ExpressionEvaluator.evaluateBoolean——**if test 判定用**）：
      * Boolean → 原值；Number → compareTo(0) != 0；其他 → != null（空串为真、0 为假）。
      */
     fun isTrue(value: Any?): Boolean = when (value) {
         is Boolean -> value
         is Number -> runCatching { toDecimal(value).compareTo(BigDecimal.ZERO) != 0 }.getOrDefault(true)
         else -> value != null
+    }
+
+    /**
+     * OGNL 操作数判真（对齐 OgnlOps.booleanValue——`||`/`&&`/`!` 等 OGNL 操作符用）：
+     * 与 [isTrue] 的关键差异——**空串为 false**、集合/数组/Map 按 size 判真。
+     * （MyBatis 的 test 表达式走 ExpressionEvaluator 空串为真；OGNL 操作符走本规则。）
+     */
+    fun ognlTruthy(value: Any?): Boolean = when (value) {
+        null -> false
+        is Boolean -> value
+        is Number -> runCatching { toDecimal(value).compareTo(BigDecimal.ZERO) != 0 }.getOrDefault(true)
+        is Char -> value != '\u0000'
+        is CharSequence -> value.length > 0
+        is Collection<*> -> value.isNotEmpty()
+        is Map<*, *> -> value.isNotEmpty()
+        is Array<*> -> value.isNotEmpty()
+        else -> true
     }
 
     /** 提取表达式中的静态字段引用（`class@field` 集合，T-M25.2 求值为空提示用）；解析失败返回空集。 */
@@ -242,7 +273,7 @@ object OgnlEvaluator {
             current
         }
         is OgnlExpr.Unary -> when (expr.op) {
-            "!", "not" -> !isTrue(eval(expr.operand, bindings, staticFieldValues))
+            "!", "not" -> !ognlTruthy(eval(expr.operand, bindings, staticFieldValues))
             "-" -> (eval(expr.operand, bindings, staticFieldValues) as? Number)?.let { toDecimal(it).negate() }
             else -> null
         }
@@ -250,8 +281,10 @@ object OgnlEvaluator {
     }
 
     private fun evalBinary(op: String, left: Any?, right: Any?): Any? = when (op) {
-        "and", "&&" -> if (!isTrue(left)) false else isTrue(right)
-        "or", "||" -> if (isTrue(left)) true else isTrue(right)
+        // 对齐 OGNL ASTOr/ASTAnd：返回第一个 truthy/falsy 操作数的**值**（非 Boolean）——
+        // `'' || @F` 返回 @F 的值；`'x' || anything` 返回 'x'；判真用 OgnlOps 语义（空串为 false）
+        "or", "||" -> if (ognlTruthy(left)) left else right
+        "and", "&&" -> if (!ognlTruthy(left)) left else right
         "==" -> equal(left, right)
         "!=" -> !equal(left, right)
         "<" -> compare(left, right)?.let { it < 0 }

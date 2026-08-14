@@ -179,8 +179,21 @@ class OgnlEvaluatorTest {
     }
 
     @Test
-    fun `静态字段引用不产生根变量`() {
+    fun `静态字段引用_不产生根变量`() {
         assertEquals(emptySet<String>(), OgnlEvaluator.rootVariables("@com.cyzc.DicConstants@DIC_VALUE"))
+    }
+
+    @Test
+    fun `双竖线包裹剥壳兼容`() {
+        // 社区非标准写法 ||X||（真实 OGNL Malformed）——预览宽容按 X 解析
+        val staticValues = mapOf("com.cyzc.DicConstants@DIC_VALUE" to "1")
+        assertEquals("1", eval("||@com.cyzc.DicConstants@DIC_VALUE||", staticValues = staticValues))
+        assertEquals("1", eval("'' || @com.cyzc.DicConstants@DIC_VALUE || ''", staticValues = staticValues))
+        // 剥壳不误伤真二元 ||（不以 || 开头/结尾）
+        assertTrue(truth("true || false"))
+        assertTrue(truth("null || 'x'"))
+        // 极端嵌套剥壳
+        assertEquals("1", eval("||||@com.cyzc.DicConstants@DIC_VALUE||||", staticValues = staticValues))
     }
 
     // ------------------------------------------------------------------

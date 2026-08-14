@@ -48,6 +48,11 @@ class VarDeclSqlNode(val name: String, val expression: String) : SqlNode {
 
     override fun apply(context: DynamicContext): Boolean {
         if (context.isProtected(name)) return true
+        // T-M25.2：`||X||` 非标准包裹——真实 OGNL 运行时会解析失败，预览兼容并按内部表达式解析
+        val trimmed = expression.trim()
+        if (trimmed.startsWith("||") && trimmed.endsWith("||")) {
+            context.errors += "bind 表达式被 || 包裹（非标准 OGNL，MyBatis 运行时会解析失败），已按内部表达式兼容解析"
+        }
         val result = OgnlEvaluator.evaluate(expression, context.bindings, context.staticFieldValues)
         when (result) {
             is EvalResult.Ok -> {

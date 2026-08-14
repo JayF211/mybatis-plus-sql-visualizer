@@ -325,6 +325,29 @@ class XmlSqlRendererTest {
     }
 
     @Test
+    fun `bind双竖线包裹_兼容解析并提示`() {
+        // 用户实测场景：value="||@class@FIELD||"（非标准写法，真实 OGNL 运行时会失败）
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="idleStatus" value="||@com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE_DEVICE_PORT_STATUS_IDLE||"/>
+                SELECT * FROM t WHERE status = #{idleStatus}
+              </select>
+            </mapper>
+        """.trimIndent())
+        val m = XmlPreviewModel.from(
+            parsed.statements.single(),
+            parsed.errors,
+            staticFieldValues = mapOf(
+                "com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE_DEVICE_PORT_STATUS_IDLE" to "1",
+            ),
+        )
+        val rendered = m.renderSql()
+        assertEquals("SELECT * FROM t WHERE status = ?", compact(rendered.sql))
+        assertTrue("应提示 || 包裹非标准写法", rendered.errors.any { it.contains("|| 包裹") })
+    }
+
+    @Test
     fun `bind静态常量引用_未注入时提示可填写覆盖值`() {
         val parsed = XmlMapperParser().parse("""
             <mapper namespace="n">
