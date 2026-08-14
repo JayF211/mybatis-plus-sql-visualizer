@@ -133,11 +133,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 交给 [cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport]——选择数据源 → 自动创建
      * 临时文件（Database 控制台绑定）→ 打开可执行。无项目/无内容时不动作；
      * Community（无 database 插件）由支持层提示降级。
+     * T-M23.6：成功提示「关闭 SQL 面板」按钮 → 回调 [onClosePanelRequested]（预览弹窗关闭）。
      */
     internal fun executeSql() {
         val proj = project ?: return
         val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
-        ExecuteSqlSupport.execute(proj, sql)
+        ExecuteSqlSupport.execute(proj, sql, onClosePanel = { onClosePanelRequested?.invoke() })
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
@@ -267,10 +268,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
         clipboard.setContents(StringSelection(text), null)
         project?.let {
-            Messages.showInfoMessage(it, MpSqlVisualizerBundle.message("dialog.copy.done"), MpSqlVisualizerBundle.message("plugin.name"))
+            // T-M23.6：提示改多按钮——[确定, 关闭 SQL 面板]，点「关闭 SQL 面板」（index 1）→ 回调关闭预览弹窗
+            val options = arrayOf(
+                MpSqlVisualizerBundle.message("dialog.ok"),
+                MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+            )
+            val choice = Messages.showDialog(
+                it, MpSqlVisualizerBundle.message("dialog.copy.done"),
+                MpSqlVisualizerBundle.message("plugin.name"), options, 0, Messages.getInformationIcon(),
+            )
+            if (choice == 1) onClosePanelRequested?.invoke()
         }
         return true
     }
+
+    /**
+     * T-M23.6：提示「关闭 SQL 面板」按钮回调（由预览弹窗 [cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog]
+     * 注入 `dispose()`；null 时提示不出现关闭按钮链路，回调为空操作）。
+     */
+    var onClosePanelRequested: (() -> Unit)? = null
 
     /** 清空展示区。 */
     fun clear() {

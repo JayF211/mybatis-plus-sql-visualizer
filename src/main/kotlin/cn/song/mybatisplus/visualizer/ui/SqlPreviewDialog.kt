@@ -28,6 +28,8 @@ class SqlPreviewDialog(
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.showResult(result)
+        // T-M23.6：复制/执行 SQL 成功提示的「关闭 SQL 面板」按钮 → 关闭预览弹窗
+        panel.onClosePanelRequested = { dispose() }
         // 最小尺寸兜底（防止拉伸时缩没；DialogWrapper 无 setMinimumSize，对中心面板设置）
         panel.minimumSize = Dimension(MIN_WIDTH, MIN_HEIGHT)
         init()
@@ -39,6 +41,9 @@ class SqlPreviewDialog(
     }
 
     override fun createCenterPanel(): JComponent = panel
+
+    /** T-M23.6：internal 测试访问器（面板「关闭 SQL 面板」回调链路断言，仿 SqlPreviewPanel.editorForTest）。 */
+    internal fun panelForTest(): SqlPreviewPanel? = panel
 
     override fun createActions(): Array<Action> = arrayOf(
         // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）

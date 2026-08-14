@@ -39,19 +39,23 @@ object ExecuteSqlSupport {
      * 执行入口：不可用 → 提示升级 Ultimate；可用 → 反射调用 launcher。
      * 所有 UI 提示均 runCatching 兜底（测试/headless 环境不抛异常）。
      *
-     * @param project 当前项目（面板无项目时不调用本方法）
-     * @param sql     当前编辑器 SQL（含参数回填与手动编辑）
+     * @param project      当前项目（面板无项目时不调用本方法）
+     * @param sql          当前编辑器 SQL（含参数回填与手动编辑）
+     * @param onClosePanel T-M23.6：成功提示「关闭 SQL 面板」按钮回调（预览弹窗关闭）；
+     *                     null → 成功提示维持单 OK（非预览弹窗入口零影响）
      */
     @JvmStatic
-    fun execute(project: Project, sql: String) {
+    fun execute(project: Project, sql: String, onClosePanel: (() -> Unit)? = null) {
         if (!isAvailable()) {
             showInfo(project, MpSqlVisualizerBundle.message("execute.noDatabase"))
             return
         }
         runCatching {
-            Class.forName(LAUNCHER_CLASS)
-                .getMethod("execute", Project::class.java, String::class.java)
-                .invoke(null, project, sql)
+            // T-M23.6：第三参 Runnable 透传「关闭 SQL 面板」回调（反射方法签名与 launcher 一致）
+            val closeRunnable = onClosePanel?.let { Runnable { it() } }
+            val method = Class.forName(LAUNCHER_CLASS)
+                .getMethod("execute", Project::class.java, String::class.java, Runnable::class.java)
+            method.invoke(null, project, sql, closeRunnable)
         }.onFailure { error ->
             showError(project, MpSqlVisualizerBundle.message("execute.failed", error.message ?: error.toString()))
         }

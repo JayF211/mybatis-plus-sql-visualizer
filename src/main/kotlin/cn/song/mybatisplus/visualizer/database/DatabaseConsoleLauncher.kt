@@ -27,13 +27,16 @@ object DatabaseConsoleLauncher {
     /**
      * 执行入口（经反射调用）：创建临时 .sql 文件并打开（数据源由用户在编辑器右上角选择）。
      * 任何一步失败 → 错误提示（不抛异常到调用方）。
+     *
+     * T-M23.6：成功提示提供「关闭 SQL 面板」按钮——`onClosePanel` 非空时点击触发
+     * （经反射由 ExecuteSqlSupport 传入，闭包内回调预览弹窗 dispose）。
      */
     @JvmStatic
-    fun execute(project: Project, sql: String) {
+    fun execute(project: Project, sql: String, onClosePanel: Runnable? = null) {
         runCatching {
             val vf = createTempFile(sql)
             FileEditorManager.getInstance(project).openFile(vf, true)
-            showInfo(project, MpSqlVisualizerBundle.message("execute.done"))
+            showInfo(project, MpSqlVisualizerBundle.message("execute.done"), onClosePanel)
         }.onFailure { error ->
             showError(project, MpSqlVisualizerBundle.message("execute.failed", error.message ?: error.toString()))
         }
@@ -50,8 +53,25 @@ object DatabaseConsoleLauncher {
             ?: error("临时文件创建失败: ${ioFile.absolutePath}")
     }
 
-    private fun showInfo(project: Project, message: String) {
-        runCatching { Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title")) }
+    /**
+     * T-M23.6：成功提示改多按钮——`[确定, 关闭 SQL 面板]`，点「关闭 SQL 面板」（index 1）
+     * → 触发 [onClosePanel]（预览弹窗直接关闭）；失败提示维持单按钮（用户需留在面板修改 SQL）。
+     */
+    private fun showInfo(project: Project, message: String, onClosePanel: Runnable?) {
+        runCatching {
+            if (onClosePanel == null) {
+                Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title"))
+            } else {
+                val options = arrayOf(
+                    MpSqlVisualizerBundle.message("dialog.ok"),
+                    MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+                )
+                val choice = Messages.showDialog(
+                    project, message, MpSqlVisualizerBundle.message("execute.title"), options, 0, Messages.getInformationIcon(),
+                )
+                if (choice == 1) onClosePanel.run()
+            }
+        }
     }
 
     private fun showError(project: Project, message: String) {

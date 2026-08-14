@@ -104,6 +104,22 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testCopySqlClosePanelCallbackInjectable() {
+        // T-M23.6：onClosePanelRequested 回调默认 null、可注入（预览弹窗赋值 dispose）；
+        // project null → 弹框跳过（回调不触发），注入的回调可被面板外部链路触发
+        val panel = SqlPreviewPanel(null)
+        assertNull("默认无关闭面板回调", panel.onClosePanelRequested)
+        var closed = false
+        panel.onClosePanelRequested = { closed = true }
+        panel.showResult(result())
+        assertTrue("有内容时应复制成功", panel.copySql())
+        assertFalse("无 project 弹框跳过，回调不应触发", closed)
+        // 链路：点「关闭 SQL 面板」→ onClosePanelRequested?.invoke()
+        panel.onClosePanelRequested?.invoke()
+        assertTrue("注入的回调应可触发", closed)
+        panel.clear()
+    }
+
     fun testClearReleasesEditor() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())
