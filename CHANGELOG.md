@@ -19,13 +19,18 @@
   - foreach 集合值输入（`2,3` → `IN ( 2 , 3 )` 自动回填，唯一入口）；迭代内容 trim（IN 单行紧凑）
   - bind 自动求值回显参数行（静态常量/LIKE 模板算出的值自动填入，可手动覆盖）
 - **预览弹窗左右分栏分隔条修复（T-M26.1）**：深色主题下左右分栏间出现白色竖条纹（平台 LAF 委托 Metal，`MetalSplitPaneDivider` 以 Metal 主题浅色直接填充分隔条，与 `setBackground` 无关，原覆盖无效）——`ThemedSplitPane` 覆写 paint 在 LAF 绘制后把分隔条区域覆盖为面板底色，亮/暗主题下与面板融为一体
+- **文件级多注解候选（M26-A）**：Wrapper 预览未命中（光标不在 Wrapper 链上）时，Java 文件预览回落到文件内全部 SQL 注解——单个直接预览、多个弹候选对话框（注解行号 + SQL 摘要），非 Mapper 文件同样可用
+- **MP 占位 `${ew.customSqlSegment}` 展开（M26-B）**：mapper XML 中的 `${ew.customSqlSegment}`/`${ew.sqlSelect}`/`${ew.sqlSet}` 占位经 namespace 关联 Java Mapper 方法 → 调用处 wrapper 实参 → Wrapper 预览全链路 SQL → 提取对应片段回填：
+  - `customSqlSegment` = `WHERE (条件)`（含 WHERE 关键字，对齐 MP `SqlHelper`）；sqlSelect = SELECT 列清单；sqlSet = SET 片段
+  - @Param 名匹配优先定位 wrapper 参数，其次按类型；多调用处取第一处
+  - 降级链逐级提示：缺 namespace / 找不到接口 / 无同名方法 / 无 Wrapper 参数 / 无调用处（可填覆盖值）
 
 - **MyBatis XML mapper 动态 SQL 预览**（M24）：在 `<select|insert|update|delete>` 语句上点击 gutter 图标或右键预览动态 SQL——引擎忠实复刻 MyBatis 3.5.19 渲染算法：
   - 动态标签全兼容：`if` / `choose(when/otherwise)` / `trim` / `where` / `set` / `foreach`（含 `__frch_` 参数重写、Map 迭代、空集合语义）/ `bind` / `sql`+`include`（同文件 property 静态替换）
   - 受限 OGNL 求值：判空/比较/逻辑/算术/成员方法/列表字面量，表达式无法解析时面板提供手动开关兜底
   - 预览面板：动态条件勾选（启发式默认）、foreach 展开次数与 null、bind 覆盖值、`#{}` 参数回填、SQL 高亮/格式化/执行/复制全部复用
   - 参数对照表显示 `#{}` 属性名（foreach 内为 `__frch_` 重写名）；include 缺失/循环/未解析变量等给出警示提示
-  - 边界：跨命名空间 include 暂不支持；`${ew.customSqlSegment}` 等 MP 占位按普通 `${}` 求值（后续立项）；注解 `@Select` 的 `<script>` 暂不支持
+  - 边界：跨命名空间 include 暂不支持；`${ew.customSqlSegment}` 等 MP 占位展开见 M26-B（占位求值为空提示）；注解 `@Select` 的 `<script>` 暂不支持
 
 ## [2026.8.14] - 2026-08-14
 
