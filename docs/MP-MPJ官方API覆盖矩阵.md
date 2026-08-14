@@ -316,6 +316,7 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-14 | **T-M23.6 同步（492 测试全绿）**：UI 行为变更（复制/执行 SQL 成功提示加「关闭 SQL 面板」按钮）——无 API 矩阵行影响，记录于清单 §8 与开发计划 `20260814-1100-弹窗提示一键关闭SQL面板-开发计划.md` |
 | 2026-08-14 | **T-M23.5 同步（490 测试全绿）**：§1.5 `selectList` 行备注——批量 SELECT/DELETE/Map 模板与 setIncrBy/selectFunc/applyFunc 解析期拼接按方言引用补齐（psi 层 `currentDialect` 共享 + `ColumnRef.qualifiedName(dialect)` 统一入口） |
 | 2026-08-14 | **T-M23.4 同步（486 测试全绿）**：§1.4 `save/saveBatch` 与 §1.5 `selectList` 行备注——保留字按方言引用（五方言保留字集合，列名/表名/ON CONFLICT/EXCLUDED；符号按方言：反引号/双引号/方括号） |
 | 2026-08-14 | **T-M23.3 同步（472 测试全绿）**：§1.4 `save/saveBatch` 与 §1.5 `selectList` 行备注——字段顺序角色分组（`ColumnRole`：主键置顶/业务居中/fill 与逻辑删除沉底，组内声明顺序稳定排序；SELECT 全列展开与批量面板同序） |
