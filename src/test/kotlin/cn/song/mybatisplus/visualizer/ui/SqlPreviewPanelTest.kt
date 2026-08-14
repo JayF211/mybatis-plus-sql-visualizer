@@ -18,11 +18,15 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.awt.Color
+import java.awt.image.BufferedImage
+import javax.swing.plaf.basic.BasicSplitPaneUI
 
 /**
  * SqlPreviewPanel 行为测试（M8/M9）：编辑器视图 + 单行多行切换 + 生命周期 + 参数回填。
@@ -639,6 +643,33 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(result(sql = "   ", compact = "   "))
         panel.executeSql()
+        panel.clear()
+    }
+
+    fun testSplitDividerPaintedAsPanelBackground() {
+        // T-M26.1：分隔条绘制应等于面板底色——真实 IDE 中平台 LAF 委托 Metal，
+        // MetalSplitPaneDivider 以 Metal 主题浅色填充分隔条（与 setBackground 无关），
+        // 深色主题下呈白色竖条纹；ThemedSplitPane 在 paint 尾部覆盖分隔条区域。
+        // 渲染级断言：先人为把分隔条背景污染为白色（模拟 LAF 的浅色绘制），
+        // 再断言渲染后分隔条像素 == 面板底色（覆盖生效；删掉覆盖则本测试失败）
+        val panel = SqlPreviewPanel(project)
+        val split = panel.splitPaneForTest()
+        assertNotNull("应存在左右分栏", split)
+        split!!.setSize(300, 100)
+        split.doLayout()
+        // 修正（headless 测试环境不自动布局分隔条）：手动定位到中间，模拟真实布局
+        if (split.dividerLocation < 0) split.dividerLocation = 150
+        val loc = split.dividerLocation
+        assertTrue("分隔条应已布局", loc >= 0)
+        // 污染：让 BasicSplitPaneDivider（opaque）以白色填充，模拟 LAF 浅色分隔条
+        (split.ui as? BasicSplitPaneUI)?.divider?.background = Color.WHITE
+        val img = BufferedImage(300, 100, BufferedImage.TYPE_INT_RGB)
+        val g = img.createGraphics()
+        split.paint(g)
+        g.dispose()
+        val expected = UIUtil.getPanelBackground()
+        val expRgb = Color(expected.red, expected.green, expected.blue).rgb
+        assertEquals("分隔条像素应等于面板底色", expRgb, img.getRGB(loc + split.dividerSize / 2, 50))
         panel.clear()
     }
 }

@@ -39,11 +39,13 @@ import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Graphics
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JCheckBox
+import javax.swing.JComponent
 import javax.swing.JSplitPane
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -118,18 +120,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             isOpaque = false
             viewport.isOpaque = false
         }
-        val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, paramScroll, editorHolder).apply {
+        val split = ThemedSplitPane(paramScroll, editorHolder).apply {
             resizeWeight = 0.3
             isContinuousLayout = true
             isOneTouchExpandable = false
             dividerSize = 3
-            // 分隔条用 IDE 面板底色（避免亮/暗主题下出现白色割裂带）
             background = UIUtil.getPanelBackground()
         }
         add(split, BorderLayout.CENTER)
     }
 
     private lateinit var modeButton: JButton
+
+    /**
+     * T-M26.1：分隔条主题化分栏——Swing JSplitPane 的分隔条由 LAF 的 SplitPaneUI 绘制：
+     * 平台 LAF 委托 Metal，MetalSplitPaneDivider 直接以 Metal 主题浅色（controlColor）填充，
+     * 与 JSplitPane/divider 的 setBackground 均无关，深色主题下呈现白色竖条纹割裂感。
+     * 此处覆写 paint，在 LAF 绘制完成后把分隔条区域覆盖为面板底色（亮/暗主题均与面板
+     * 融为一体；拖拽/布局行为不变，拖拽中分隔条移动时本覆盖随 dividerLocation 更新）。
+     */
+    private class ThemedSplitPane(left: JComponent, right: JComponent) :
+        JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right) {
+        override fun paint(g: Graphics) {
+            super.paint(g)
+            // 注意：dividerLocation 因 setDividerLocation(int/double) 重载无法作 Kotlin 属性合成，须显式 getter
+            val loc = getDividerLocation()
+            if (loc < 0) return
+            g.color = UIUtil.getPanelBackground()
+            g.fillRect(loc, 0, getDividerSize(), height)
+        }
+    }
 
     /** 顶部工具栏：复制错误（有警示时可见）/ 单行多行切换 / 格式化 / 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
@@ -938,6 +958,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
     internal fun selectAllButtonForTest(): JButton? = selectAllButton
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
+    /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。 */
+    internal fun splitPaneForTest(): JSplitPane? = components.filterIsInstance<JSplitPane>().firstOrNull()
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")

@@ -18,6 +18,7 @@
   - 预览弹窗「复制错误信息」按钮（有警示时一键复制完整错误文本）
   - foreach 集合值输入（`2,3` → `IN ( 2 , 3 )` 自动回填，唯一入口）；迭代内容 trim（IN 单行紧凑）
   - bind 自动求值回显参数行（静态常量/LIKE 模板算出的值自动填入，可手动覆盖）
+- **预览弹窗左右分栏分隔条修复（T-M26.1）**：深色主题下左右分栏间出现白色竖条纹（平台 LAF 委托 Metal，`MetalSplitPaneDivider` 以 Metal 主题浅色直接填充分隔条，与 `setBackground` 无关，原覆盖无效）——`ThemedSplitPane` 覆写 paint 在 LAF 绘制后把分隔条区域覆盖为面板底色，亮/暗主题下与面板融为一体
 
 - **MyBatis XML mapper 动态 SQL 预览**（M24）：在 `<select|insert|update|delete>` 语句上点击 gutter 图标或右键预览动态 SQL——引擎忠实复刻 MyBatis 3.5.19 渲染算法：
   - 动态标签全兼容：`if` / `choose(when/otherwise)` / `trim` / `where` / `set` / `foreach`（含 `__frch_` 参数重写、Map 迭代、空集合语义）/ `bind` / `sql`+`include`（同文件 property 静态替换）
