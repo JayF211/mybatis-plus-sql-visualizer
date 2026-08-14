@@ -167,10 +167,10 @@ class ConvertToSqlAction : AnAction() {
         }
     }
 
-    /** 预览单个 XML 语句（后台转换，EDT 渲染）。 */
+    /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     private fun previewXml(project: Project, file: XmlFile, tag: XmlTag) {
         SqlPreviewService.previewAsync(project, {
-            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"))
+            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
         }) { result ->
             SqlPreviewService.showResult(project, result)
         }

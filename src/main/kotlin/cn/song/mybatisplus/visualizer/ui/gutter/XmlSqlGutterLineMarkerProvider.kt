@@ -61,7 +61,8 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             val tag = elt.parent as? XmlTag ?: return
             val file = tag.containingFile as? XmlFile ?: return
             SqlPreviewService.previewAsync(project, {
-                XmlPreviewService.preview(file.text, tag.getAttributeValue("id"))
+                // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
+                XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
             }) { result ->
                 SqlPreviewService.showResult(project, result)
             }
