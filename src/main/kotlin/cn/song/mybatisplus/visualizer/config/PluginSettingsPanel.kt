@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
+import com.intellij.openapi.ui.DoNotAskOption
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
@@ -308,14 +309,17 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict.force"),
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict.cancel"),
                                 )
-                                val choice = Messages.showDialog(
+                                // 2025.3 弃用 Messages.showDialog → showIdeaMessageDialog（首参 project 可空，
+                                // 与原无 project 行为一致；第 7 参须显式绑定顶层 DoNotAskOption 重载，
+                                // 嵌套 DialogWrapper.DoNotAskOption 重载同批弃用；返回选项索引 Int）
+                                val choice = Messages.showIdeaMessageDialog(
+                                    null,
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict", conflict),
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict.title"),
                                     options,
                                     0,
-                                    1,
                                     Messages.getWarningIcon(),
-                                    null,
+                                    null as DoNotAskOption?,
                                 )
                                 when (choice) {
                                     0 -> { // 使用（普通）：不抢占

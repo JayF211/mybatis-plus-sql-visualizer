@@ -276,7 +276,7 @@ object BatchOperationConverter {
         // 父类/接口泛型参数（ServiceImpl<M, Entity> 的 Entity、IService<Entity> 的 Entity）
         val clazz = varType.resolve() ?: return null
         for (superType in clazz.superTypes) {
-            val params = (superType as? PsiClassType)?.parameters ?: continue
+            val params = superType.parameters
             val candidate = params.lastOrNull() as? PsiClassType ?: continue
             val resolved = candidate.resolve() ?: continue
             if (resolved.name?.endsWith(ENTITY_SUFFIX) == true) return resolved

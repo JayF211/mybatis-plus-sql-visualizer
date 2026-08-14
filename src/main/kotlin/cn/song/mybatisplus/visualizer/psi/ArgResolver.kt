@@ -295,7 +295,7 @@ object ArgResolver {
      */
     private fun resolveJoinClass(expr: PsiExpression, resolveVariables: Boolean): WrapperArg {
         val classAccess = expr as? PsiClassObjectAccessExpression
-        val psiClass = (classAccess?.operand?.type as? PsiClassType)?.resolve() as? PsiClass
+        val psiClass = (classAccess?.operand?.type as? PsiClassType)?.resolve()
         return if (psiClass != null) {
             WrapperArg.EntityRefArg(EntityResolver().resolve(psiClass))
         } else {

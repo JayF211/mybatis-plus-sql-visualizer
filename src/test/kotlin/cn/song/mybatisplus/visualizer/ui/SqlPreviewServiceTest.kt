@@ -5316,7 +5316,8 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """.trimIndent(),
             result!!.sql,
         )
-        // 参数组说明与 SQL 占位顺序一致（name → id → version）
-        assertTrue("参数组说明应含 version", result!!.paramTable!!.contains("version=?"))
+        // 参数组说明与 SQL 占位顺序一致（name → id → version）——
+        // 5317 的 result!! 已带出非空 smart cast，此处 result 直接访问；paramTable 可空保留 !!
+        assertTrue("参数组说明应含 version", result.paramTable!!.contains("version=?"))
     }
 }

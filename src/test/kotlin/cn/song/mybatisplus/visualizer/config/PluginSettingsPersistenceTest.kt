@@ -38,30 +38,30 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // 模拟用户在语言下拉选择 English 后 apply（直接改 state 等价于 combo 写回路径）
             settings.state.language = "en"
             val configurable = PluginSettingsConfigurable()
-            val panel = configurable.createComponent()
+            configurable.createComponent()
             // reset 应从 state 读取 en
             configurable.reset()
-            // 验证 panel 当前语言（通过再次 apply 不改变 state 证明 reset 已同步）
+            // 验证 panel 当前语言（通过再次 apply 不改变 state 证明 reset 已同步）。
+            // M23.9：createComponent 返回 getRoot()（JComponent）而非面板本身，原 `panel is
+            // PluginSettingsPanel` 恒 false 是死分支（警告暴露）——改经 panelForTest 取回表单面板
             val s = settings.state
             val reasons = mutableListOf<String>()
-            if (panel is PluginSettingsPanel) {
-                val p = panel
-                // 通过 apply 后 state 是否变化推断表单与 state 一致性（无法直接访问私有字段）
-                val before = PluginSettings.State().apply {
-                    dialect = s.dialect; replaceParams = s.replaceParams; formatSql = s.formatSql
-                    showGutterIcon = s.showGutterIcon; injectLogicDelete = s.injectLogicDelete
-                    tablePrefix = s.tablePrefix; tableSuffix = s.tableSuffix; language = s.language
-                }
-                p.apply()
-                if (s.dialect != before.dialect) reasons += "dialect ${before.dialect}->${s.dialect}"
-                if (s.replaceParams != before.replaceParams) reasons += "replaceParams"
-                if (s.formatSql != before.formatSql) reasons += "formatSql"
-                if (s.showGutterIcon != before.showGutterIcon) reasons += "showGutterIcon"
-                if (s.injectLogicDelete != before.injectLogicDelete) reasons += "injectLogicDelete"
-                if (s.tablePrefix != before.tablePrefix) reasons += "tablePrefix ${before.tablePrefix}->${s.tablePrefix}"
-                if (s.tableSuffix != before.tableSuffix) reasons += "tableSuffix ${before.tableSuffix}->${s.tableSuffix}"
-                if (s.language != before.language) reasons += "language ${before.language}->${s.language}"
+            val p = configurable.panelForTest()
+            // 通过 apply 后 state 是否变化推断表单与 state 一致性（无法直接访问私有字段）
+            val before = PluginSettings.State().apply {
+                dialect = s.dialect; replaceParams = s.replaceParams; formatSql = s.formatSql
+                showGutterIcon = s.showGutterIcon; injectLogicDelete = s.injectLogicDelete
+                tablePrefix = s.tablePrefix; tableSuffix = s.tableSuffix; language = s.language
             }
+            p.apply()
+            if (s.dialect != before.dialect) reasons += "dialect ${before.dialect}->${s.dialect}"
+            if (s.replaceParams != before.replaceParams) reasons += "replaceParams"
+            if (s.formatSql != before.formatSql) reasons += "formatSql"
+            if (s.showGutterIcon != before.showGutterIcon) reasons += "showGutterIcon"
+            if (s.injectLogicDelete != before.injectLogicDelete) reasons += "injectLogicDelete"
+            if (s.tablePrefix != before.tablePrefix) reasons += "tablePrefix ${before.tablePrefix}->${s.tablePrefix}"
+            if (s.tableSuffix != before.tableSuffix) reasons += "tableSuffix ${before.tableSuffix}->${s.tableSuffix}"
+            if (s.language != before.language) reasons += "language ${before.language}->${s.language}"
             assertTrue("reset 后表单与 state 不一致: $reasons", reasons.isEmpty())
             assertEquals("state.language 保持 en", "en", settings.state.language)
         } finally {

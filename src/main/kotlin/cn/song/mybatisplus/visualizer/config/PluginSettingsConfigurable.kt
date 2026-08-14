@@ -49,9 +49,13 @@ class PluginSettingsConfigurable : Configurable {
                 .filter { it.project === project }
                 .mapNotNull { PsiDocumentManager.getInstance(project).getPsiFile(it.document) }
                 .distinct()
-                .forEach { DaemonCodeAnalyzer.getInstance(project).restart(it) }
+                .forEach { DaemonCodeAnalyzer.getInstance(project).restart(it as Any) }
         }
     }
 
     override fun reset() = panel.reset()
+
+    /** M23.9：internal 测试访问器（仿 SqlPreviewDialog.panelForTest——createComponent 返回
+     * 的是 getRoot() 的 JComponent，测试需经此取回表单面板断言 apply 幂等）。 */
+    internal fun panelForTest(): PluginSettingsPanel = panel
 }

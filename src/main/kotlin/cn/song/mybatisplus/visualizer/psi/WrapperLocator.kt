@@ -458,7 +458,7 @@ object WrapperLocator {
         // P1-04（M19.5）：链上 `update(entity)` 终结点（带实参）——实体字段展开 SET
         // （复用 SqlPreviewService.updateEntityConsumed 分支：实体全列 SET + 主键进 WHERE）
         val chainUpdateEntity = terminalName == UPDATE_TERMINAL &&
-            terminal != null && terminal.argumentList.expressions.isNotEmpty()
+            terminal.argumentList.expressions.isNotEmpty()
 
         val wrapperCalls = nonTerminalCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
@@ -880,7 +880,7 @@ object WrapperLocator {
     private fun entityClassFromConstructorArg(newExpr: PsiNewExpression): PsiClass? {
         val firstArg = newExpr.argumentList?.expressions?.firstOrNull() ?: return null
         if (firstArg is PsiClassObjectAccessExpression || firstArg is PsiLiteralExpression) return null
-        return (firstArg.type as? PsiClassType)?.resolve() as? PsiClass
+        return (firstArg.type as? PsiClassType)?.resolve()
     }
 
     // ------------------------------------------------------------------
