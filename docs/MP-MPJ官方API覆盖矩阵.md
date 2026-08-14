@@ -70,7 +70,7 @@
 
 | 方法 / 重载形态 | 目标状态 | 对应任务编号 | 备注 |
 |------|:----:|------|------|
-| `save` / `saveBatch` | ✅ | —（M19.5 / T-M15-08） | INSERT 全列模板；T-M23-02 参数面板每 `?` 登记 `实体.列名` 输入行；T-M23-04 参数列级勾选——`@TableId(type = IdType.AUTO)` 主键默认不勾选（对齐 MP：自增主键不进 INSERT 列清单） |
+| `save` / `saveBatch` | ✅ | —（M19.5 / T-M15-08） | INSERT 全列模板；T-M23-02 参数面板每 `?` 登记 `实体.列名` 输入行；T-M23-04 参数列级勾选——`@TableId(type = IdType.AUTO)` 主键默认不勾选（对齐 MP：自增主键不进 INSERT 列清单）；T-M23.3 列顺序角色分组（主键置顶/业务居中/fill 与逻辑删除沉底，面板同序） |
 | `saveOrUpdate` / `saveOrUpdateBatch` | ✅ | —（T-M15-08） | UPSERT 模板；T-M23.2 主键**可选**（toggle 列默认勾选渲染完整 upsert，取消 → 纯 INSERT 新记录路径），非主键列可勾选（取消 → 同步退出 INSERT 列清单与 DO UPDATE SET） |
 | `saveOrUpdate(T, Wrapper)` | ✅ | T-M20-10 | UPSERT + wrapper 条件 + 实体字段展开 SET |
 | `removeById` / `removeByIds` / `remove` / `removeByMap` | ✅ | —（T-M15-08 / T-M20-07） | removeByMap：Map 等值链（字面量展开 / 变量占位）；T-M23-01 @TableLogic 实体软删除（UPDATE SET deleted=1 + AND deleted=0，无 @TableLogic 维持 DELETE）；T-M23-02 实参字面量内联 / 变量参数行 |
@@ -101,7 +101,7 @@
 | `selectOne` / `selectOne(w, false)` | ✅ | T-M20-06 | 双参形态核对（追加 LIMIT 1 语义） |
 | `exists` | ✅ | T-M20-06 | SELECT EXISTS/1 形态 |
 | `selectCount` | ✅ | —（既有能力） | SELECT COUNT(*) |
-| `selectList` | ✅ | —（既有能力） | SELECT 全列 + wrapper |
+| `selectList` | ✅ | —（既有能力） | SELECT 全列 + wrapper；T-M23.3 列顺序角色分组（`id, 业务字段…, create_time, update_time, deleted`——主键置顶/业务居中/审计沉底，组内声明顺序） |
 | `selectMaps` / `selectObjs` | ✅ | T-M20-06 | SQL 同 selectList，仅返回差异 |
 | `selectPage` / `selectMapsPage` | ✅ | T-M20-06 | 分页 SQL（LIMIT/OFFSET 按方言） |
 | `selectWithCursor`（3.5.17 新增） | ✅ | T-M20-06/09 | SELECT + ResultHandler 游标消费形态 |
@@ -316,4 +316,5 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-14 | **T-M23.3 同步（472 测试全绿）**：§1.4 `save/saveBatch` 与 §1.5 `selectList` 行备注——字段顺序角色分组（`ColumnRole`：主键置顶/业务居中/fill 与逻辑删除沉底，组内声明顺序稳定排序；SELECT 全列展开与批量面板同序） |
 | 2026-08-13 | 初版：基于《20260813-1730-全量API预览支持-开发计划.md》§1 调研结论（MP 官网 + jar javap + v3.5.9/v3.5.17 tag 源码；MPJ 官网 + master 源码 + releases/tags 三重交叉核实），建立 MP 3.5.17 / MPJ 1.5.9 **官方 API 全量覆盖矩阵**（T-M20-01 语料基座）：MP 9 个分类面、MPJ 7 个分类面，每行标注目标状态 / 对应任务编号（T-M20-xx / T-M21-xx / T-M22-xx）/ 备注；目标状态按 §3 规则填写（🟡 2 项、⬜ 10 项，其余 ✅） |
