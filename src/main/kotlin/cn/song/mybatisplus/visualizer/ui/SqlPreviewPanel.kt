@@ -204,6 +204,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             xmlForEachNulls.clear()
             xmlBindOverrides.clear()
             xmlErrors = emptyList()
+            // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
+            val initial = model.renderSql(XmlPreviewState(
+                enabledIds = enabledIds.toSet(),
+                forEachCounts = xmlForEachCounts.toMap(),
+            ))
+            initial.bindValues.forEach { (name, value) ->
+                if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
+            }
         }
         // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
         result.previewModel?.let { compactMode = !it.formatSql }
@@ -248,6 +256,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val rendered = xml.renderSql(state)
                 xmlErrors = rendered.errors
                 xmlMappings = rendered.mappings
+                // T-M25.5：bind 自动求值结果并入参数回填（用户手动输入优先，清空则恢复自动值）
+                rendered.bindValues.forEach { (name, value) ->
+                    if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
+                }
                 val base = rendered.sql
                 val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
                 showSql(backfillParamsBySource(sql, rendered.mappings.map { it.property }))

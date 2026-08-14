@@ -34,11 +34,13 @@ data class ParameterMapping(
     }
 }
 
-/** 渲染产物：SQL（`#{}` 已替换为 `?`）+ 参数映射 + 错误提示。 */
+/** 渲染产物：SQL（`#{}` 已替换为 `?`）+ 参数映射 + 错误提示 + bind 自动求值结果（T-M25.5）。 */
 data class RenderedXmlSql(
     val sql: String,
     val mappings: List<ParameterMapping>,
     val errors: List<String>,
+    /** bind 名 → 求值结果字符串（含面板覆盖值；供参数行自动回填显示）。 */
+    val bindValues: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -58,18 +60,24 @@ class XmlSqlRenderer {
         conditionOverrides: Map<String, Boolean> = emptyMap(),
         protectedNames: Set<String> = emptySet(),
         staticFieldValues: Map<String, Any?> = emptyMap(),
+        bindNames: Set<String> = emptySet(),
     ): RenderedXmlSql {
         val context = DynamicContext(bindings, conditionOverrides, protectedNames, staticFieldValues)
         node.apply(context)
-        return parseParameterMappings(context.getSql(), context.errors)
+        // T-M25.5：渲染完成后提取 bind 求值结果（含覆盖值）——参数行自动回填显示
+        val bindValues = bindNames.mapNotNull { name ->
+            context.bindings[name]?.toString()?.let { name to it }
+        }.toMap()
+        val (sql, mappings) = parseParameterMappings(context.getSql(), context.errors)
+        return RenderedXmlSql(sql, mappings, context.errors, bindValues)
     }
 
-    private fun parseParameterMappings(sql: String, errors: List<String>): RenderedXmlSql {
+    private fun parseParameterMappings(sql: String, errors: List<String>): Pair<String, List<ParameterMapping>> {
         val mappings = mutableListOf<ParameterMapping>()
         val rendered = TokenParser.parse(sql, "#{", "}") { token ->
             mappings += ParameterMapping.parse(token)
             "?"
         }
-        return RenderedXmlSql(rendered, mappings, errors)
+        return rendered to mappings
     }
 }

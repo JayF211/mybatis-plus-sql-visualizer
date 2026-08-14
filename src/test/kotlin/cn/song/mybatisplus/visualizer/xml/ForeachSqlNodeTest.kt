@@ -123,6 +123,23 @@ class ForeachSqlNodeTest {
     }
 
     @Test
+    fun `迭代内容换行缩进被trim_预览紧凑`() {
+        // T-M25.5（用户实测）：foreach 体 "\n  #{x}\n" 原样输出使 IN 每项换行——trim 后单行紧凑
+        val node = ForeachSqlNode(
+            contents = MixedSqlNode(listOf(StaticTextSqlNode("\n  #{x}\n"))),
+            collectionExpression = "list",
+            separator = ",",
+            open = "(",
+            close = ")",
+            item = "x",
+            index = null,
+            nullable = false,
+        )
+        val result = render(node, mapOf("list" to listOf("a", "b")))
+        assertEquals("( ? , ? )", result.sql.replace(Regex("\\s+"), " ").trim())
+    }
+
+    @Test
     fun `嵌套foreach同名item内层遮蔽外层`() {
         val outer = ForeachSqlNode(
             contents = MixedSqlNode(

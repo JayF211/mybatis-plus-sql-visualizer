@@ -80,6 +80,7 @@ class XmlPreviewModel private constructor(
         conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) },
         protectedNames = state.bindOverrides.keys.toSet(),
         staticFieldValues = staticFieldValues,
+        bindNames = bindViews.map { it.name }.toSet(),
     )
 
     private fun mockBindings(state: XmlPreviewState): Map<String, Any?> {

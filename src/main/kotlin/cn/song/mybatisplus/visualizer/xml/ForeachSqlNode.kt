@@ -154,7 +154,9 @@ class ForeachSqlNode(
                 }
                 "#{$newContent}"
             }
-            delegate.appendSql(newSql)
+            // T-M25.5（用户实测）：迭代内容 trim——mapper 里 foreach 体的换行缩进（"\n  #{x}\n"）
+            // 若原样输出会使 IN 每项换行一行；trim 后预览紧凑（SQL 语义不变，MyBatis 原样保留）
+            delegate.appendSql(newSql.trim())
         }
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)

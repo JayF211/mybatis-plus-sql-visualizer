@@ -262,6 +262,38 @@ class XmlSqlRendererTest {
     }
 
     @Test
+    fun `bind自动求值结果提取`() {
+        // T-M25.5（用户实测：bind 变量未自动求值）——渲染结果携带 bind 求值结果
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="idleStatus" value="'1'"/>
+                SELECT * FROM t WHERE status = #{idleStatus}
+              </select>
+            </mapper>
+        """.trimIndent())
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val rendered = m.renderSql()
+        assertEquals("1", rendered.bindValues["idleStatus"])
+        assertEquals("SELECT * FROM t WHERE status = ?", compact(rendered.sql))
+    }
+
+    @Test
+    fun `bind覆盖值优先于自动求值`() {
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                <bind name="status" value="'1'"/>
+                SELECT * FROM t WHERE status = #{status}
+              </select>
+            </mapper>
+        """.trimIndent())
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val state = m.defaultState().copy(bindOverrides = mapOf("status" to "9"))
+        assertEquals("9", m.renderSql(state).bindValues["status"])
+    }
+
+    @Test
     fun `官方DTD声明可解析`() {
         // T-M25.1（用户实测）：MyBatis 官方 DTD 声明（<!DOCTYPE mapper PUBLIC ...>）
         // 此前被 disallow-doctype-decl 拒绝——允许声明 + EntityResolver 拦截（不联网）
