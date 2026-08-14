@@ -102,28 +102,62 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /**
-     * T-M24-04：XML mapper 语句预览——光标所在语句优先，否则文件首个语句；
-     * 转换后台执行（EDT 禁止 PSI 慢操作），结果统一展示入口。
+     * T-M24-04/M25-01：XML mapper 语句预览——光标所在语句优先；不在语句内时
+     * 收集全部语句（0/1/多分发，多候选走 [SqlSelectionDialog]，仿 Java 选择区候选交互）。
      */
     private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor) {
-        val element = file.findElementAt(editor.caretModel.offset) ?: run {
-            SqlPreviewService.showResult(project, null)
-            return
-        }
-        val tag = PsiTreeUtil.getParentOfType(element, XmlTag::class.java)
+        val element = file.findElementAt(editor.caretModel.offset)
+        val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
         var statement = tag
         while (statement != null && statement.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS) {
             statement = statement.parentTag
         }
-        val target = statement
-            ?: PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
-                .firstOrNull { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
-        if (target == null) {
-            SqlPreviewService.showResult(project, null)
+        if (statement != null) {
+            previewXml(project, file, statement)
             return
         }
+        // 光标不在语句内 → 全部语句候选（T-M25-01）
+        val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
+            .filter { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
+        when (statements.size) {
+            0 -> SqlPreviewService.showResult(project, null)
+            1 -> previewXml(project, file, statements[0])
+            else -> {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    // EDT 慢操作守卫：摘要/行文本后台 ReadAction 预计算（仿 T-M23.8 Java 候选）
+                    val displayTexts = try {
+                        ReadAction.compute<List<String>, Throwable> {
+                            statements.map { tag ->
+                                val line = tag.containingFile.viewProvider.document
+                                    ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+                                val text = tag.text?.trim().orEmpty()
+                                SqlSelectionDialog.displayText(
+                                    "${tag.name} ${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
+                                    text,
+                                )
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        emptyList()
+                    }
+                    ApplicationManager.getApplication().invokeLater {
+                        if (displayTexts.size != statements.size) {
+                            SqlPreviewService.showResult(project, null)
+                            return@invokeLater
+                        }
+                        SqlSelectionDialog(project, statements, displayTexts) { selected ->
+                            previewXml(project, file, selected)
+                        }.show()
+                    }
+                }
+            }
+        }
+    }
+
+    /** 预览单个 XML 语句（后台转换，EDT 渲染）。 */
+    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag) {
         SqlPreviewService.previewAsync(project, {
-            XmlPreviewService.preview(file.text, target.getAttributeValue("id"))
+            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"))
         }) { result ->
             SqlPreviewService.showResult(project, result)
         }

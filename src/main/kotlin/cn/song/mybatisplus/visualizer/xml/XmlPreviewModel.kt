@@ -81,7 +81,11 @@ class XmlPreviewModel private constructor(
 
     private fun mockBindings(state: XmlPreviewState): Map<String, Any?> {
         val bindings = mutableMapOf<String, Any?>()
-        bindings[DynamicContext.PARAMETER_OBJECT_KEY] = MockObject(paramProps.associateWith { "1" })
+        // 变量/参数名占位双写：_parameter 对象属性 + bindings 顶层（对齐 MyBatis ContextMap →
+        // _parameter fallback：`${param1}` 与 `_parameter.param1` 均可取到占位 "1"）
+        val mockProps = (variables + paramProps).associateWith { "1" }
+        bindings[DynamicContext.PARAMETER_OBJECT_KEY] = MockObject(mockProps)
+        mockProps.keys.forEach { bindings[it] = "1" }
         bindings[DynamicContext.DATABASE_ID_KEY] = null
         forEachViews.forEach { view ->
             bindings[view.collectionExpr] = if (view.collectionExpr in state.forEachNulls) {
@@ -101,8 +105,9 @@ class XmlPreviewModel private constructor(
         /** 启发式默认勾选态：含 `== null` → false（变量默认非 null），其余 true（保守展开）。 */
         fun defaultTruth(test: String): Boolean = !test.contains("== null")
 
-        /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。 */
-        fun from(statement: XmlStatement, errors: List<String>): XmlPreviewModel {
+        /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。
+         *  T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。 */
+        fun from(statement: XmlStatement, errors: List<String>, extraParamProps: Set<String> = emptySet()): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
             val bindViews = mutableListOf<XmlBindView>()
@@ -111,6 +116,7 @@ class XmlPreviewModel private constructor(
             collect(statement.node, conditionViews, forEachViews, bindViews, variables, paramProps)
             variables.remove(DynamicContext.PARAMETER_OBJECT_KEY)
             variables.remove(DynamicContext.DATABASE_ID_KEY)
+            paramProps += extraParamProps
             return XmlPreviewModel(
                 statementId = statement.id,
                 kind = statement.kind,

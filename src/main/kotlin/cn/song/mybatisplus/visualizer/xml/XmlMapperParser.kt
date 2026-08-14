@@ -38,8 +38,7 @@ class XmlParseException(message: String) : RuntimeException(message)
 class XmlMapperParser {
 
     fun parse(fileText: String): XmlMapperModel {
-        val document = runCatching { newDocumentBuilder().parse(InputSource(StringReader(fileText))) }
-            .getOrElse { throw XmlParseException("XML 解析失败：${it.message}") }
+        val document = parseDocument(fileText)
         val root: Element = document.documentElement ?: throw XmlParseException("XML 文档为空。")
         if (root.tagName != "mapper") {
             throw XmlParseException("不是 MyBatis mapper 文件：根元素为 <${root.tagName}>（期望 <mapper>）。")
@@ -65,6 +64,11 @@ class XmlMapperParser {
             }
         return XmlMapperModel(namespace, statements, errors)
     }
+
+    /** 解析 XML 文本为 DOM（安全配置：禁 DTD/外部实体）。注解 `<script>` 等片段解析复用（T-M25-02）。 */
+    internal fun parseDocument(fileText: String): org.w3c.dom.Document =
+        runCatching { newDocumentBuilder().parse(InputSource(StringReader(fileText))) }
+            .getOrElse { throw XmlParseException("XML 解析失败：${it.message}") }
 
     private fun childElements(element: Element): List<Element> {
         val result = mutableListOf<Element>()

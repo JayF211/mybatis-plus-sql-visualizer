@@ -42,10 +42,11 @@ class TextSqlNode(val text: String) : SqlNode {
         when (result) {
             is EvalResult.Ok -> {
                 if (result.value == null) {
-                    // 未解析变量检测：表达式引用了 bindings 中不存在的根变量 → 提示（MP 占位 ${ew...} 等场景）
-                    val missing = OgnlEvaluator.rootVariables(content).any { it !in context.bindings }
-                    if (missing) {
-                        context.errors += "未解析变量 \${$content}（模拟参数中不存在，可在预览中查看或忽略）"
+                    // 求值为空提示：表达式含变量引用且模拟上下文求值为 null——MP 占位 ${ew...}、
+                    // 对象属性缺失等场景（字面量表达式无此提示）
+                    val roots = OgnlEvaluator.rootVariables(content)
+                    if (roots.isNotEmpty()) {
+                        context.errors += "模拟参数下表达式 \${$content} 求值为空（MP 占位 ${'$'}{ew...} 等需真实参数值）"
                     }
                 }
                 result.value?.toString() ?: ""

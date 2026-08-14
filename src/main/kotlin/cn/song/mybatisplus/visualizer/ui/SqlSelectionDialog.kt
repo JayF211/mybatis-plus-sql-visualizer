@@ -12,8 +12,10 @@ import javax.swing.JScrollPane
 import javax.swing.ListSelectionModel
 
 /**
- * 多 SQL 选择弹窗（T-M23.7/8）：选择代码块后右键、选择区内含**多个** SQL 候选时，
- * 弹出列表让用户选择要预览哪一个。
+ * 多 SQL 选择弹窗（T-M23.7/8；T-M25-01 泛化支持 XML 语句候选）。
+ *
+ * 选择代码块后右键、选择区内含**多个** SQL 候选时，弹出列表让用户选择要预览哪一个。
+ * 泛型 [T]：Wrapper 链首（[PsiMethodCallExpression]）与 XML mapper 语句（XmlTag）均可用。
  *
  * T-M23.8（用户反馈：摘要不够明细、不能定位代码位置）：列表每项**两行**展示——
  * 第一行摘要（`行号 + Wrapper 类型/方法名 + 表名`），第二行**代码行内容**（缩进 + 截断 80 字符 +
@@ -24,15 +26,15 @@ import javax.swing.ListSelectionModel
  * （摘要/行文本含 PSI 解析，EDT 上会被 2025.3+ SlowOperations 守卫禁止）——
  * 构造只做纯 UI 渲染，不再触碰 PSI。
  */
-class SqlSelectionDialog(
+class SqlSelectionDialog<T>(
     private val project: Project,
-    candidates: List<PsiMethodCallExpression>,
+    candidates: List<T>,
     displayTexts: List<String>,
-    private val onSelect: (PsiMethodCallExpression) -> Unit,
+    private val onSelect: (T) -> Unit,
 ) : DialogWrapper(project, true) {
 
-    /** 候选 SQL 调用（显示文本列表索引序与之一一对应）。 */
-    private val candidates: List<PsiMethodCallExpression> = candidates
+    /** 候选 SQL（显示文本列表索引序与之一一对应）。 */
+    private val candidates: List<T> = candidates
 
     /** 列表项显示文本（后台预计算；此处仅渲染，不做 PSI 解析）。 */
     private val list = JList(displayTexts.toTypedArray()).apply {
