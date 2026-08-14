@@ -2,9 +2,40 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
-## [Unreleased]
+## [2026.8.14] - 2026-08-14
 
 ### Added
+
+- **官方 API 覆盖差距清零**（M19.5 ~ M22，MP 3.5.17 / MPJ 1.5.9，对齐官方 API 覆盖矩阵）：
+  - 实体单条 CRUD：`save` / `getById` / `listByIds` / `selectByIds` / `deleteByIds`
+  - 工厂与链式：`JoinWrappers` / `MPJWrappers` / `ChainWrappers`；服务链赋值形态（实体/boolean/long 三形态）gutter 锚点修复；`service.query()/update()` 字符串链
+  - 消费方法全集：`selectCount` / `getObj` / `selectJoinMaps` / `selectJoinPage`；Map 条件消费（`selectByMap` / `listByMap` / `removeByMap` / `deleteByMap`）；BaseMapper 批量族（`insert` / `insertOrUpdate`）；`getOptById` / `removeBatchByIds` / `saveOrUpdate(entity, wrapper)`
+  - 逻辑删除精确化：六方法主/副表独立开关 + ON/WHERE 位置；`enableLogicDel` / `logicDelToWhere` / `logicDelToOn` / `disableLogicDel` 四形态
+  - 联表扩展：join 4/5 参（rightAlias / 子表 MConsumer / ext MFunction）、`selectCollection` prefix/free 形态、`selectFunc` 枚举映射、`from` 子查询主表、`union` / `unionAll`、`selectSub` 子查询列、**UpdateJoinWrapper / DeleteJoinWrapper 全链路**（多表 UPDATE/DELETE）、on 双字符串列对列比较
+  - 条件与语句补全：`allEq` 6 重载、`eqOrIsNull`、`setEntity`、`select(Class, Predicate)` / `selectFilter`、`nested` / `not` / `func`、`inSql` / `notInSql`、`eqSql` ~ `leSql`、`notLikeLeft/Right`、`setIncrBy` / `setDecrBy`、`having`、`comment` / `first` / `setAlias`
+- **多数据库方言**（M22）：新增 6 种——SQL Server（OFFSET..FETCH）/ H2 / SQLite（LIMIT..OFFSET）/ MariaDB / DM 达梦 / KingBase 人大金仓（共 9 方言，设置下拉自动同步）；`@Version` 乐观锁注入；Db / SimpleQuery / ActiveRecord 识别
+- **SQL 关键字方言化引用**（M23.4 ~ M23.5）：五方言保留字集合，判定与符号按方言（反引号 / 双引号 / 方括号），`table` 等关键字字段自动引用——覆盖 SELECT 全列 / WHERE / 批量模板 / 查询路径解析期拼接；`apply` / 原生字面量维持不处理
+- **批量操作增强**（M23 系列，用户实测驱动）：
+  - 批量逻辑删除/软删除对齐：`@TableLogic` 批量 SELECT 自动追加 `deleted = 0`；有 `@TableLogic` 时 `removeById` 等删除操作自动转 `UPDATE ... SET deleted = 1` 软删除
+  - 批量参数面板：`save(entity)` 每个 `?` 登记参数行、实参字面量内联、按列类型回填引号（数值类型白名单外一律加引号）
+  - 参数列级勾选：`save` 自增主键（IdType.AUTO）默认不勾选、`updateById` SET 可按需取消、全选/全不选、`saveOrUpdate` 主键可选（取消 → 纯 INSERT）
+  - 字段顺序角色分组：主键置顶、自动填充审计字段沉底（BaseEntity 继承场景）
+- **触发与选择体验**（M23.6 ~ M23.8）：
+  - 任意位置触发：光标在 `eq` 调用处 / `.list()` 链尾也可触发预览
+  - 多 SQL 选择：选择代码块右键 → 自动扫描候选 → 多个时弹选择框（摘要 + 代码行预览 + 定位跳转，IDEA Find 风格）；候选扩展至批量方法调用
+  - 复制 / 执行 SQL 成功提示新增「关闭 SQL 面板」一键按钮
+- 构建：jar manifest 保留 MPV-Build 内部构建号（每次构建唯一）
+
+### Fixed
+
+- **多 SQL 选择弹窗 EDT 慢操作修复**：候选扫描与弹窗显示文本同批后台 `ReadAction.compute` 预计算，弹窗构造只做纯 UI 渲染（不再触碰 PSI）
+- **弹窗关闭按钮文案走插件 bundle**：平台 cancelAction 随 IDE 语言包（中文环境显示英文 Cancel）→ 改走插件界面语言
+- **M23.9 打包编译警告清零**：9 处（`Messages.showDialog` 弃用替换、`DaemonCodeAnalyzer.restart` 参数泛化、`TextAttributesKey.createTextAttributesKey` 弃用豁免、冗余 cast ×3、恒真条件 ×1），行为零变化
+
+## [2026.8.13] - 2026-08-13
+
+### Added
+
 - M19.4 参数面板布局修复 + 表名配置增强（282 测试全绿）：
   - **参数面板布局修复（用户实测：长参数名显示不全）**：`buildParamRow` 标签**固定 140px** → **按文本自适应**（FontMetrics 计算宽度，夹在 140~300px，`#productInfo.getDicProtocolType()` 这类长名完整显示）；文本超过 300px 上限时 **tooltip 展示全名**；行间距 `(4, 2)` → `(8, 6)`（视觉不再"贴太近"）；标签超出面板宽度时 FlowLayout 自然换行（输入框换到下一行）
   - **表名推断策略**（设置新增下拉）：无 `@TableName` 时类名→表名的推断方式——`SNAKE`（默认，对齐 MP 现状：驼峰转下划线，`Entity` 后缀不剥离）/ `CAMEL`（**纯保留驼峰**：仅首字母小写、**不去 Entity 后缀**，`BikeDeviceInfoEntity` → `bikeDeviceInfoEntity`，`BikeDeviceInfo` → `bikeDeviceInfo`）；显式 `@TableName` 不受影响
@@ -53,23 +84,6 @@
   - 测试：`ExecuteSqlSupportTest`（isAvailable 降级判定 / execute 不抛异常）+ `SqlPreviewPanelTest`（按钮存在 / 点击降级不崩 / 无项目 no-op）——254 → 260 全绿；`buildPlugin` + `verifyPlugin` 成功
   - 手动验收（Ultimate 2025.3+）：按钮 → 选数据源 → 临时文件打开（绑定数据源）→ Ctrl+Enter 执行出结果；无数据源引导提示；Community 安装不崩溃、点击提示升级
 
-### Fixed
-- M19 用户实测两处缺陷修复（262 测试全绿）：
-  - **设置语言切换仍无效果（根因修正：apply 门控链路 + JDK17 setSelectedItem 匹配语义）**：M16.3 roaming 修复（磁盘持久化）后复测仍失效——① 反编译 IDEA Ultimate 2026.2.1 `ConfigurableEditor.apply()`：Settings 框架 OK 仅对「当前选中页」且 `isModified()==true` 的 configurable 调用 `apply()`（`myApplyAction.isEnabled() ? configurable : null`，未启用传 null 直接跳过）→ 改完语言切到其他设置页再点确定（或修改检测未触发）即被静默丢弃，`state.language` 从未写入、重开设置原样。② 顺带发现 `LanguageOption` 无 equals 覆写（身份判等）+ JDK17 `JComboBox.setSelectedItem` 以 equals 在 model 中查找元素、**找不到即静默 return**（反编译 JDK17 验证）→ `reset()`/选中写入传入的新实例全部匹配失败（选中显示与事件触发一并失效）。修复：语言下拉**写穿式持久化**（选中即写入配置，不依赖 OK→apply 链路；值守卫防循环，`apply()` 幂等）+ `LanguageOption` 改 **data class（按 value 判等）**；回归测试 `testLanguageWriteThroughOnSelection` / `testLanguageWriteThroughApplyIdempotent`（写穿后 apply 幂等、重复选同值 no-op）
-  - **执行 SQL 数据源弹框无内容（根因：ChooseByNamePopup 空词不显示列表）**：多数据源时 `ChooseByNamePopup`（GotoClass 同款）在搜索词为空且未调用 `setShowListForEmptyPattern(true)` 时（`ChooseByNameBase.rebuildList`：`!canShowListForEmptyPattern() && text.isEmpty()` → 清空列表 + 隐藏 + 不执行元素计算）→ 弹框无内容，仅输入字符后才出现列表（平台设计行为）。修复（按用户要求）：**移除数据源选择弹框**——直接创建临时 `mpsql-exec-*.sql` 文件并打开编辑器，用户经 Database 插件 SQL 编辑器**右上角数据源选择器**自行选择后 Ctrl+Enter 执行（IDE 原生行为）；删除 `listDataSources/chooseDataSource/DataSourceByNameModel/会话与 attachConsole` 一整套 database 反射面（launcher 现为纯平台 API）
-- **M19.1 语言切换体验修正（用户实测反馈）**：
-  - **「应用」按钮灰掉**：语言**写穿**后表单与配置一致 → `isModified()` 返回 false → 平台 Apply 按钮启用 = `isModified()`（反编译 2026.2.1 `ConfigurableEditor.updateCurrent` 验证）→ 应用按钮不可点。修复：写穿后置 `languagePending`「待应用」标记——`isModified()` 含该标记（Apply 保持可点），`apply()` 消费后清除（幂等），语言变更仍由写穿保证持久化
-  - **切换后右侧面板不实时变（左侧树即时变）**：写穿监听在 `ActionEvent` 派发中途**同步**调用 `rebuild()` 修改组件树——Swing 事件派发期间重建组件 UI 刷新不可靠。修复：**`SwingUtilities.invokeLater { rebuild() }`** 延后到事件派发完成再重建（右侧面板与左侧树同步实时刷新）
-- **M19.2 语言切换右侧文本仍不实时变（根因修正：控件实例文本构造时固化）**：用户实测列举四项（参数替换/格式化/预览图标/逻辑删除——**全是复选框**）确定重开才变英文。根因：行标签 `JBLabel` 是 `buildRows` **每次新建**（随语言变——即用户看到的"左侧"），但**复选框/按钮是字段实例**——文本在面板构造时按当时语言固化，`rebuild` 重建布局只是把同一实例重新 add，文本从不更新（M14.7 rebuild 设计即存在此漏洞）。修复：**控件文本设置收进 `buildRows`**（4 个复选框 `apply { text = ... }` + `ShortcutEditor.updateTexts()` 刷新 tooltip/按钮）——每次 rebuild 随语言重设，切换即时生效；回归测试 `testLanguageWriteThroughRefreshesCheckboxTexts`（zh→en rebuild 后遍历组件树断言复选框全英文、无 CJK 残留）
-- **M19.3 预览面板刷新后 SQL 停在单行（用户实测）**：`refreshView()` 原语义"保留参数与模式"只重渲染——此前手动切换/设置快照的单行模式被保留，刷新不会回到默认多行，与用户"刷新=默认多行"直觉冲突。修复：**刷新时模式复位为与设置「SQL 格式化输出」对齐**（默认多行，`PluginSettings.state.formatSql` 兜底 true）并同步模式按钮文本，参数与回填保留；回归测试 `testRefreshResetsModeToSettingsDefault`（切单行 → 刷新 → 恢复多行）
-
-### Fixed
-- M16.3 用户实测三处缺陷修复（254 测试全绿，反证验证）：
-  - **设置语言切换保存失效（根因修正）**：`PluginSettings` 是应用级轻服务（`@Service(Service.Level.APP)`）+ `PersistentStateComponent`——官方规范（SDK Services 文档）要求**必须禁用 roaming**（`roamingType = RoamingType.DISABLED`）；原 `@Storage("mp-sql-visualizer.xml")` 使用默认 `RoamingType.DEFAULT`，状态进入设置同步（Settings Sync）管理通道、与轻服务持久化不兼容 → 切英文确定后重开/重启回中文。修复：`@Storage` 显式声明 `roamingType = RoamingType.DISABLED`（M16.1 移除双注册后仍未生效即此根因）；新增编译期契约测试 `testStorageRoamingDisabledContract` 防回归
-  - **补全看不到注释（根因：不可变 builder 返回值被丢弃）**：`SqlCompletionContributor` 中 `LookupElementBuilder` **不可变**——`withTailText`/`withLookupString` 返回**新实例**，原实现 `builder.withTailText(...)` 丢弃返回值后添加原始 builder → 注释 tailText 从不展示（字段补全正常、注释全无）。修复：抽 `withComment` 链式装饰（表名/列名两处）；渲染测试 `testWithCommentCarriesTailTextAndLookupString`（反证：还原丢弃写法时 tailText=null 复现）
-  - **SELECT 空列名（`SELECT id, , , deleted, ...`）**：真实项目注解类可解析时 `PsiAnnotation.findAttributeValue("value")` 返回注解**默认值**（`@TableField` 的 `value() default ""`）→ `@TableField(fill=...)` 无 value 的字段列名解析为空串（测试环境注解不可解析故未暴露）。修复：`attributeString` 空白视为未指定（回退命名策略），逻辑删除列计算同源修复；回归测试用**同文件可解析注解**复现（反证：还原旧实现时输出与用户实测完全一致的 `id, , , deleted`）
-
-### Added
 - M16.2 SQL 补全修复 + 实体父类字段 + 表前缀/后缀配置（250 测试全绿）：
   - **SQL 补全修复（M16 回归，T-M16.2-01）**：
     - 回归点 A：M16 重写 Contributor 时 `ctx == null` 直接 return——上下文丢失时**关键字补全也静默失效**（M9 用 `if (ctx != null)` 包裹）。修复：关键字补全不依赖上下文（恢复 M9 语义），实体表/列/别名补全仅在 ctx 非空时执行
@@ -146,14 +160,6 @@
   - **中英文切换无效**：根因是 Java `ResourceBundle` fallback 链默认包含 JVM 默认 locale——系统中文时请求 `en` 找不到 `_en` 回退到系统中文 locale。修复：自定义 Control 覆写 `getFallbackLocale` 返回 null（fallback 直达 base 英文），`en`/`zh` 由插件配置精确控制；新增 fixture 测试 `testLanguageSwitchEnImmediate`
   - **gutter 图标开关不即时生效**：line marker 结果被高亮缓存，设置变化不触发重算。修复：设置保存时若开关变化，遍历所有打开项目编辑器文件触发 `DaemonCodeAnalyzer.restart(file)`（图标立即刷新，无需重开文件）
 
-### Changed
-- M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：
-  - 模型：删除 `EmptyValueRule` 枚举与 `ConditionToggle.emptyRule`/`ConditionView.emptyRule`（判空语义识别下线）；`ColumnInfo` 新增 `fieldType`（实体字段类型，`EntityResolver` 记录）；新增 `sql/ParamHint`（引号/LIKE 位置回填提示），`GeneratedSql.paramHints`/`PreviewResult.paramHints` 与 `unresolvedParams` 并行
-  - 转换：`analyzeFlag` 删除判空语义识别（`isNotBlank`/`isNotNull` 等正则）与判空方法静态求值，`defaultEnabled` 简化为三态（字面量 true→勾选、false→不勾选、运行时布尔→勾选）；**复选框纯手动**——值空不再联动勾选态（M12 的 SKIP_ON_BLANK 空值自动取消勾选、SKIP_ON_NULL 空值拼 `''` 行为移除，空值一律保留 `?`）
-  - 生成：渲染链线程化 table + hintSink，为每个 `?` 并行产出 `ParamHint`（String 列 quote=true、数值列 quote=false、未知 null；LIKE 占位符 quote=true + likePosition）；**SQL 文本输出与 M12 基线逐字节一致**（回填提示为附加信息）
-  - 展示：`SqlPreviewPanel` 值输入框回填按 hint 渲染——LIKE 自动拼百分号（`'%值%'`/`'%值'`/`'值%'`）、String 列输入数字恒引号（`'123'`）、数值列恒原样（`123`）、类型未知走原数字启发式；`conditionTooltip` 与 bundle 清理 `panel.condition.skipNull`（详见《20260812-2210-动态条件简化与参数值类型推断-开发计划.md》）
-
-### Added
 - M12 动态条件支持（布尔重载复选框 + 空值不拼接，v1.6）：
   - 模型：新增 `ConditionToggle`/`EmptyValueRule`（`SKIP_ON_BLANK` 判空 / `SKIP_ON_NULL` 判非 null / `UNKNOWN`），`Condition` 各子类带 `toggle` 元数据（默认 null，旧逻辑兼容）
   - 转换：`QueryWrapperParser.skipConditionFlag` → `analyzeFlag`/`markConditionFlag`——布尔条件重载（`.eq(true, col, val)` 等）不再丢弃 `false` 条件，改为打 toggle 元数据（`false` 条件进入模型但默认排除，生成层过滤；默认输出与 M11 基线**逐字节一致**）；**判空语义识别**（`isNotBlank`/`isNotEmpty`/`hasText` → 判空，`isNotNull`/`nonNull`/`!= null` → 判非 null）；**判空方法静态求值**（`StrUtil.isNotBlank("")`→默认排除、`"" != null`→默认拼接 `name = ''`、null 判非 null→排除）；`apply(condition, ...)` 布尔前缀同（运行时布尔前缀由丢弃改为动态条件）
@@ -167,10 +173,34 @@
   - 删除消费识别：`LambdaQueryWrapper` + `service.remove(wrapper)` / `mapper.delete(wrapper)`（MP 惯用删除写法）→ 转 DELETE 而非 SELECT（`WrapperChain.deleteConsumed`，WrapperLocator 三种构造路径均收集，消费调用取最近实参列表——覆盖内联 `remove(new Wrapper...())` 及嵌套场景）
   - 基类型声明支持：`Wrapper<X> w = new LambdaQueryWrapper<X>()...`（抽象基类型变量）→ 变量名仍显示图标，`WrapperLocator` 从初始化表达式链首推断具体 wrapper 类型并正常转换
 
+### Changed
+
+- M13 动态条件简化 + 参数值类型推断（M12 微调，v1.7）：
+  - 模型：删除 `EmptyValueRule` 枚举与 `ConditionToggle.emptyRule`/`ConditionView.emptyRule`（判空语义识别下线）；`ColumnInfo` 新增 `fieldType`（实体字段类型，`EntityResolver` 记录）；新增 `sql/ParamHint`（引号/LIKE 位置回填提示），`GeneratedSql.paramHints`/`PreviewResult.paramHints` 与 `unresolvedParams` 并行
+  - 转换：`analyzeFlag` 删除判空语义识别（`isNotBlank`/`isNotNull` 等正则）与判空方法静态求值，`defaultEnabled` 简化为三态（字面量 true→勾选、false→不勾选、运行时布尔→勾选）；**复选框纯手动**——值空不再联动勾选态（M12 的 SKIP_ON_BLANK 空值自动取消勾选、SKIP_ON_NULL 空值拼 `''` 行为移除，空值一律保留 `?`）
+  - 生成：渲染链线程化 table + hintSink，为每个 `?` 并行产出 `ParamHint`（String 列 quote=true、数值列 quote=false、未知 null；LIKE 占位符 quote=true + likePosition）；**SQL 文本输出与 M12 基线逐字节一致**（回填提示为附加信息）
+  - 展示：`SqlPreviewPanel` 值输入框回填按 hint 渲染——LIKE 自动拼百分号（`'%值%'`/`'%值'`/`'值%'`）、String 列输入数字恒引号（`'123'`）、数值列恒原样（`123`）、类型未知走原数字启发式；`conditionTooltip` 与 bundle 清理 `panel.condition.skipNull`（详见《20260812-2210-动态条件简化与参数值类型推断-开发计划.md》）
+
 ### Removed
+
 - M11 移除侧边工具栏面板（工具窗口，v1.5）：删除 `SqlToolWindow`/`SqlPreviewToolWindowFactory`/`SqlPreviewEditorTracker` 三个文件与 plugin.xml 的 `<toolWindow>`/`<editorFactoryListener>` 扩展；移除 `PluginSettings.displayMode`（DIALOG/TOOL_WINDOW/BOTH）与 Settings 页面「显示方式」下拉、bundle `settings.displayMode.*`/`toolwindow.*` 文案；展示收敛为**恒弹窗**（`SqlPreviewService.showResult` 统一走 `SqlPreviewDialog`），只保留右键菜单 / 快捷键 / gutter 图标三入口（详见《20260812-2034-移除侧边工具栏面板-开发计划.md》）
 
 ### Fixed
+
+- M19 用户实测两处缺陷修复（262 测试全绿）：
+  - **设置语言切换仍无效果（根因修正：apply 门控链路 + JDK17 setSelectedItem 匹配语义）**：M16.3 roaming 修复（磁盘持久化）后复测仍失效——① 反编译 IDEA Ultimate 2026.2.1 `ConfigurableEditor.apply()`：Settings 框架 OK 仅对「当前选中页」且 `isModified()==true` 的 configurable 调用 `apply()`（`myApplyAction.isEnabled() ? configurable : null`，未启用传 null 直接跳过）→ 改完语言切到其他设置页再点确定（或修改检测未触发）即被静默丢弃，`state.language` 从未写入、重开设置原样。② 顺带发现 `LanguageOption` 无 equals 覆写（身份判等）+ JDK17 `JComboBox.setSelectedItem` 以 equals 在 model 中查找元素、**找不到即静默 return**（反编译 JDK17 验证）→ `reset()`/选中写入传入的新实例全部匹配失败（选中显示与事件触发一并失效）。修复：语言下拉**写穿式持久化**（选中即写入配置，不依赖 OK→apply 链路；值守卫防循环，`apply()` 幂等）+ `LanguageOption` 改 **data class（按 value 判等）**；回归测试 `testLanguageWriteThroughOnSelection` / `testLanguageWriteThroughApplyIdempotent`（写穿后 apply 幂等、重复选同值 no-op）
+  - **执行 SQL 数据源弹框无内容（根因：ChooseByNamePopup 空词不显示列表）**：多数据源时 `ChooseByNamePopup`（GotoClass 同款）在搜索词为空且未调用 `setShowListForEmptyPattern(true)` 时（`ChooseByNameBase.rebuildList`：`!canShowListForEmptyPattern() && text.isEmpty()` → 清空列表 + 隐藏 + 不执行元素计算）→ 弹框无内容，仅输入字符后才出现列表（平台设计行为）。修复（按用户要求）：**移除数据源选择弹框**——直接创建临时 `mpsql-exec-*.sql` 文件并打开编辑器，用户经 Database 插件 SQL 编辑器**右上角数据源选择器**自行选择后 Ctrl+Enter 执行（IDE 原生行为）；删除 `listDataSources/chooseDataSource/DataSourceByNameModel/会话与 attachConsole` 一整套 database 反射面（launcher 现为纯平台 API）
+- **M19.1 语言切换体验修正（用户实测反馈）**：
+  - **「应用」按钮灰掉**：语言**写穿**后表单与配置一致 → `isModified()` 返回 false → 平台 Apply 按钮启用 = `isModified()`（反编译 2026.2.1 `ConfigurableEditor.updateCurrent` 验证）→ 应用按钮不可点。修复：写穿后置 `languagePending`「待应用」标记——`isModified()` 含该标记（Apply 保持可点），`apply()` 消费后清除（幂等），语言变更仍由写穿保证持久化
+  - **切换后右侧面板不实时变（左侧树即时变）**：写穿监听在 `ActionEvent` 派发中途**同步**调用 `rebuild()` 修改组件树——Swing 事件派发期间重建组件 UI 刷新不可靠。修复：**`SwingUtilities.invokeLater { rebuild() }`** 延后到事件派发完成再重建（右侧面板与左侧树同步实时刷新）
+- **M19.2 语言切换右侧文本仍不实时变（根因修正：控件实例文本构造时固化）**：用户实测列举四项（参数替换/格式化/预览图标/逻辑删除——**全是复选框**）确定重开才变英文。根因：行标签 `JBLabel` 是 `buildRows` **每次新建**（随语言变——即用户看到的"左侧"），但**复选框/按钮是字段实例**——文本在面板构造时按当时语言固化，`rebuild` 重建布局只是把同一实例重新 add，文本从不更新（M14.7 rebuild 设计即存在此漏洞）。修复：**控件文本设置收进 `buildRows`**（4 个复选框 `apply { text = ... }` + `ShortcutEditor.updateTexts()` 刷新 tooltip/按钮）——每次 rebuild 随语言重设，切换即时生效；回归测试 `testLanguageWriteThroughRefreshesCheckboxTexts`（zh→en rebuild 后遍历组件树断言复选框全英文、无 CJK 残留）
+- **M19.3 预览面板刷新后 SQL 停在单行（用户实测）**：`refreshView()` 原语义"保留参数与模式"只重渲染——此前手动切换/设置快照的单行模式被保留，刷新不会回到默认多行，与用户"刷新=默认多行"直觉冲突。修复：**刷新时模式复位为与设置「SQL 格式化输出」对齐**（默认多行，`PluginSettings.state.formatSql` 兜底 true）并同步模式按钮文本，参数与回填保留；回归测试 `testRefreshResetsModeToSettingsDefault`（切单行 → 刷新 → 恢复多行）
+
+- M16.3 用户实测三处缺陷修复（254 测试全绿，反证验证）：
+  - **设置语言切换保存失效（根因修正）**：`PluginSettings` 是应用级轻服务（`@Service(Service.Level.APP)`）+ `PersistentStateComponent`——官方规范（SDK Services 文档）要求**必须禁用 roaming**（`roamingType = RoamingType.DISABLED`）；原 `@Storage("mp-sql-visualizer.xml")` 使用默认 `RoamingType.DEFAULT`，状态进入设置同步（Settings Sync）管理通道、与轻服务持久化不兼容 → 切英文确定后重开/重启回中文。修复：`@Storage` 显式声明 `roamingType = RoamingType.DISABLED`（M16.1 移除双注册后仍未生效即此根因）；新增编译期契约测试 `testStorageRoamingDisabledContract` 防回归
+  - **补全看不到注释（根因：不可变 builder 返回值被丢弃）**：`SqlCompletionContributor` 中 `LookupElementBuilder` **不可变**——`withTailText`/`withLookupString` 返回**新实例**，原实现 `builder.withTailText(...)` 丢弃返回值后添加原始 builder → 注释 tailText 从不展示（字段补全正常、注释全无）。修复：抽 `withComment` 链式装饰（表名/列名两处）；渲染测试 `testWithCommentCarriesTailTextAndLookupString`（反证：还原丢弃写法时 tailText=null 复现）
+  - **SELECT 空列名（`SELECT id, , , deleted, ...`）**：真实项目注解类可解析时 `PsiAnnotation.findAttributeValue("value")` 返回注解**默认值**（`@TableField` 的 `value() default ""`）→ `@TableField(fill=...)` 无 value 的字段列名解析为空串（测试环境注解不可解析故未暴露）。修复：`attributeString` 空白视为未指定（回退命名策略），逻辑删除列计算同源修复；回归测试用**同文件可解析注解**复现（反证：还原旧实现时输出与用户实测完全一致的 `id, , , deleted`）
+
 - **同文件多 Wrapper 串缓存（删除/修改被识别成查询的根因之一）**：`WrapperCache` 原按 `PsiFile` 缓存定位结果，但定位结果依赖锚点——文件含查询+删除+修改多个 wrapper 时，首次点击缓存查询结果，后续点击全部命中查询 → 删除/修改显示 SELECT。缓存键改为 `PsiFile + 锚点起始偏移`，各锚点独立缓存。回归：`SqlPreviewServiceTest.testMultipleWrappersInOneFileDoNotCrossContaminate`
 - **内联 wrapper 定位跨方法误命中（根因之二）**：`findWrapperNewExpression`/`findWrapperFactoryCall` 沿祖先链向上时每层都向下扫子树，走到 `PsiClass` 级别会命中类内**其他方法**的 wrapper（如 `remove(Wrappers.<X>lambdaQuery()...)` 定位到同文件 query 方法的 `new LambdaQueryWrapper`）→ 删除/修改被串成查询。改为向下扫子树只在锚点初始位置一次、向上只检查元素自身
 - `WrapperLocator.detectWrapperType` 类名提取 bug：原用 `canonicalText.substringAfterLast('.')`，泛型实参带包名时（真实项目常态，如 `LambdaQueryWrapper<com.biz.Entity>`）最后一个 `.` 落在泛型参数内，导致 Wrapper 类型识别失败——gutter 图标不显示，且悬停/快捷键/右键定位全部失效。改为 `PsiClassType.getClassName()`（在 `<` 之前取末段，无需 resolve，快速路径安全）。回归测试：`WrapperAnchorDetectorTest.testQualifiedEntityTypeAnchors`
