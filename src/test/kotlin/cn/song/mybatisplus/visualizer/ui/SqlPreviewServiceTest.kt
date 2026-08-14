@@ -4920,8 +4920,10 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())!!
         // ① 无空列名（父类字段完整展开，@TableField 默认 value 回退命名策略）——与用户实测输出对比：
         // 原 `SELECT id, , , deleted, station_id, ...` 现完整展开
+        // T-M23.3 角色分组：id(PRIMARY) 置顶、业务字段(BUSINESS) 居中、fill 审计字段(AUDIT) 与
+        // deleted(SYSTEM) 沉底——真实 FieldFill 形态（fill 提取成功 → create/update 沉底）
         assertEquals(
-            "SELECT id, create_time, update_time, deleted, station_id, scheme_name " +
+            "SELECT id, station_id, scheme_name, create_time, update_time, deleted " +
                 "FROM biz_bike_station_share_scheme_info WHERE station_id = ? AND deleted = 0",
             result.compactSql.trim(),
         )

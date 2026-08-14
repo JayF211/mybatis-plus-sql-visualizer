@@ -212,8 +212,8 @@ class EntityResolverCommentTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         val table = EntityResolver().resolve(clazz)
-        // 父类字段在前、子类字段在后
-        assertEquals(listOf("id", "create_time", "deleted", "name"), table.allColumnNames)
+        // T-M23.3 角色分组：id(PRIMARY) 置顶、createTime/name(BUSINESS) 居中保持声明顺序、deleted(SYSTEM) 沉底
+        assertEquals(listOf("id", "create_time", "name", "deleted"), table.allColumnNames)
         // 父类 @TableLogic → 逻辑删除列识别
         assertEquals("deleted", table.logicDeleteColumn)
         // 父类 @TableId → 主键标记
@@ -300,7 +300,9 @@ class EntityResolverCommentTest : BasePlatformTestCase() {
         )
         val table = EntityResolver().resolve(clazz)
         // 无空列名：@TableField 默认 value="" 不回退为空串，全部按命名策略
-        assertEquals(listOf("id", "create_time", "update_time", "deleted", "station_id"), table.allColumnNames)
+        // T-M23.3 角色分组：字符串形态 fill（无 FieldFill）不沉底——create/update 为 BUSINESS 居中，
+        // station_id(BUSINESS) 在 deleted(SYSTEM 沉底) 前
+        assertEquals(listOf("id", "create_time", "update_time", "station_id", "deleted"), table.allColumnNames)
         // 注释不受影响（javadoc；@TableField 默认 comment="" 不误取）
         assertEquals("场站ID（关联 biz_bike_station_info.id）", table.columnByField("stationId")?.comment)
     }

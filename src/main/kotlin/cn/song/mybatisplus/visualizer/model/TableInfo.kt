@@ -1,6 +1,24 @@
 package cn.song.mybatisplus.visualizer.model
 
 /**
+ * 字段角色（T-M23.3 角色分组排序键）：PRIMARY(0) < BUSINESS(1) < AUDIT(2) < SYSTEM(3)，
+ * 组内保持声明顺序（稳定排序）——`id, 业务字段…, create_time, update_time, deleted`。
+ */
+enum class ColumnRole {
+    /** @TableId 主键——置顶。 */
+    PRIMARY,
+
+    /** 普通业务字段——居中。 */
+    BUSINESS,
+
+    /** @TableField(fill = ...) 自动填充字段——沉底组 1（审计字段惯例）。 */
+    AUDIT,
+
+    /** @TableLogic / @Version——沉底组 2。 */
+    SYSTEM,
+}
+
+/**
  * 表信息（F-13 实体解析产物）。
  *
  * 由实体类解析得到：表名（@TableName 注解或命名策略推断）、字段列映射（@TableField 或命名策略）。
@@ -40,6 +58,8 @@ data class TableInfo(
  * @param fill       自动填充标注（@TableField(fill = FieldFill.XXX) 的文本，T-M15-08）：
  *                   INSERT / INSERT_UPDATE 参与插入、UPDATE / INSERT_UPDATE 参与更新；null 表示无填充
  * @param comment    字段注释（M16：注解 > javadoc > 行注释，四级优先级含 schema 预留）
+ * @param role       T-M23.3：字段角色（角色分组排序键，默认 [ColumnRole.BUSINESS]——
+ *                   存量构造零影响；排序由 EntityResolver 计算并稳定排序）
  */
 data class ColumnInfo(
     val fieldName: String,
@@ -49,4 +69,5 @@ data class ColumnInfo(
     val fieldType: String? = null,
     val fill: String? = null,
     val comment: String? = null,
+    val role: ColumnRole = ColumnRole.BUSINESS,
 )

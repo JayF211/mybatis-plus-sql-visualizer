@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.psi.PsiAnnotation
@@ -20,9 +21,13 @@ import com.intellij.psi.PsiWhiteSpace
  *  - 列名：优先 `@TableField("xxx")` 注解，否则按命名策略由字段名推断
  *  - 主键：`@TableId` 标记
  *  - `@TableField(exist = false)` 的字段（非表字段）跳过
- *  - T-M16.2-02：字段递归**父类**收集（父类字段在前，对齐 MP 声明顺序语义）——继承实体
+ *  - T-M16.2-02：字段递归**父类**收集（父类字段在前，组内对齐 MP 声明顺序语义）——继承实体
  *    （如 `BaseEntity {id, createTime, deleted}`）的 SELECT 全列展开与 @TableLogic/@TableId/
  *    @Version（T-M22-02）识别同样生效
+ *  - T-M23.3：字段按**角色分组**稳定排序——`@TableId`(PRIMARY) 置顶、业务字段(BUSINESS) 居中、
+ *    `fill` 自动填充(AUDIT) 与 `@TableLogic`/`@Version`(SYSTEM) 沉底，组内保持声明顺序
+ *    （用户反馈：BaseEntity 审计字段不应把业务字段挤到后面——
+ *    `id, 业务字段…, create_time, update_time, deleted`）
  *  - T-M16.2-03：表前缀/后缀配置（**推断语义**——仅作用于推断表名；T-M19.4 用户反馈收窄，
  *    `@TableName` 显式表名即最终表名、优先级最高、豁免修饰）
  *  - T-M19.4：表名推断策略（无注解时 SNAKE 驼峰转下划线 / CAMEL 纯保留驼峰）、忽略字段名
@@ -48,7 +53,10 @@ class EntityResolver {
         val fields = collectFieldsIncludingSuper(entityClass)
         // T-M19.4-03-②：忽略字段名配置（`;` 分隔，按 Java 字段名匹配）——命中字段不进
         // SELECT 全列展开/参数对照/补全列集合（resolveColumn 返回 null 跳过；@TableField(exist=false) 注解优先）
+        // T-M23.3：按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，
+        // 组内保持声明顺序）——三处消费点（SELECT 全列/批量面板/补全）共用 columns 自动统一生效
         val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames()) }
+            .sortedWith(compareBy { it.role })
         // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field；
         // T-M16.2-02 修复：父类字段同样识别，继承实体的 deleted 不再丢失）
         val logicDeleteColumn = fields
@@ -111,7 +119,14 @@ class EntityResolver {
             ?.removePrefix("FieldFill")
         // T-M16-01：字段注释（注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(field)
-        return ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment)
+        // T-M23.3：角色分组——主键置顶(PRIMARY)、fill 自动填充沉底(AUDIT)、逻辑删除/乐观锁沉底(SYSTEM)
+        val role = when {
+            isId -> ColumnRole.PRIMARY
+            fill != null -> ColumnRole.AUDIT
+            hasAnnotation(field, TABLE_LOGIC) || hasAnnotation(field, VERSION) -> ColumnRole.SYSTEM
+            else -> ColumnRole.BUSINESS
+        }
+        return ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role)
     }
 
     // ------------------------------------------------------------------
