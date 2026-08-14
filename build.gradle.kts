@@ -68,6 +68,17 @@ tasks.withType<Test>().configureEach {
 }
 
 // M14.7：开发期热重载——runIde 沙盒中修改代码即时生效（要求插件支持动态加载）
+// T-M23.10 内部构建号（用户确认保留，独立于已回退的检测功能）：jar manifest 注入
+// MPV-Build（执行期毫秒时间戳，每次构建唯一）——对外版本号一日一版（同日多次构建相同），
+// 构建号用于区分同日构建与问题定位；对所有 Jar 任务注入（jar + composedJar——
+// buildPlugin 最终产物由 composedJar 生成，只配 jar 会导致 zip 内 jar 丢失该属性），
+// 强制每次执行（刷新时间戳）。
+tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
+    doFirst {
+        manifest.attributes["MPV-Build"] = System.currentTimeMillis().toString()
+    }
+    outputs.upToDateWhen { false }
+}
 tasks {
     runIde {
         autoReload = true
