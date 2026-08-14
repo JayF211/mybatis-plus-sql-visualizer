@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiMethodCallExpression
@@ -849,5 +850,42 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         val batchSummary = WrapperLocator.sqlCandidateSummary(candidates[1])
         assertTrue("批量摘要应含方法名: $batchSummary", batchSummary.contains("getById"))
         assertTrue("批量摘要应以行号开头: $batchSummary", batchSummary.startsWith("L"))
+    }
+
+    fun testSqlCandidateLineTextAndLineOffsets() {
+        // T-M23.8：代码行预览与定位——候选调用所在行完整文本 + 行首/行尾 offset
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L);
+                    DeviceInfoService service = new DeviceInfoService();
+                    service.getById(2L);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class DeviceInfoService {
+                    public Object getById(Long id) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val head = WrapperLocator.sqlCandidatesInRange(myFixture.file, 0, myFixture.file.textLength).first()
+        // 行文本：候选调用所在行完整内容（trim）
+        val lineText = WrapperLocator.sqlCandidateLineText(head)
+        assertTrue("行文本应含链代码: $lineText", lineText.contains("new LambdaQueryWrapper"))
+        assertTrue("行文本应含 eq: $lineText", lineText.contains("eq"))
+        // 行 offset：行首 ≤ 调用 start、行尾 ≥ 调用 end；按 offset 切出文本 = 行文本
+        val (start, end) = WrapperLocator.lineOffsetsOf(head)
+        assertTrue("行首应不晚于调用起点", start <= head.textRange.startOffset)
+        assertTrue("行尾应不早于调用终点", end >= head.textRange.endOffset)
+        val doc = myFixture.editor.document
+        assertEquals("按行 offset 切出应与行文本一致", lineText, doc.getText(TextRange(start, end)).trim())
     }
 }

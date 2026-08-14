@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
@@ -184,6 +185,27 @@ object WrapperLocator {
         } else {
             "L$line ${call.methodExpression.referenceName ?: "?"}"
         }
+    }
+
+    /**
+     * T-M23.8：候选调用所在**代码行完整文本**（trim；选择弹窗第二行预览）。
+     * 文档不可得时返回空串（兜底，不抛异常）。
+     */
+    fun sqlCandidateLineText(call: PsiMethodCallExpression): String {
+        val doc = PsiDocumentManager.getInstance(call.project).getDocument(call.containingFile) ?: return ""
+        val line = doc.getLineNumber(call.textRange.startOffset)
+        return doc.getText(TextRange(doc.getLineStartOffset(line), doc.getLineEndOffset(line))).trim()
+    }
+
+    /**
+     * T-M23.8：候选调用所在行的 `(行首, 行尾)` offset（编辑器定位跳转用——
+     * 光标到行首 + 整行选中）。文档不可得时回退调用自身范围（兜底）。
+     */
+    fun lineOffsetsOf(call: PsiMethodCallExpression): Pair<Int, Int> {
+        val doc = PsiDocumentManager.getInstance(call.project).getDocument(call.containingFile)
+            ?: return call.textRange.startOffset to call.textRange.endOffset
+        val line = doc.getLineNumber(call.textRange.startOffset)
+        return doc.getLineStartOffset(line) to doc.getLineEndOffset(line)
     }
 
     // ------------------------------------------------------------------

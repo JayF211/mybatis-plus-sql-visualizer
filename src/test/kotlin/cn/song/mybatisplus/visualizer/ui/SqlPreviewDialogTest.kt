@@ -32,4 +32,23 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         // 释放编辑器（面板生命周期约定，同 SqlPreviewPanelTest 的 clear 收尾）
         dialog.panelForTest()!!.clear()
     }
+
+    fun testDisplayTextTwoLineWithTruncationAndEscape() {
+        // T-M23.8：列表项显示文本纯函数——两行布局（摘要 + 代码行缩进）、
+        // 超长行截断 80 字符 + 省略号、& < > HTML 转义防破坏布局
+        val short = SqlSelectionDialog.displayText("L3 LAMBDA_QUERY  tbl", "service.getById(id);")
+        assertTrue(
+            "两行布局应以 HTML 形式组合摘要与缩进代码行",
+            short.startsWith("<html>L3 LAMBDA_QUERY  tbl<br>&nbsp;&nbsp;&nbsp;service.getById(id);</html>"),
+        )
+        val longLine = "x".repeat(100)
+        val truncated = SqlSelectionDialog.displayText("L1 BATCH", longLine)
+        assertTrue("超长行应截断加省略号", truncated.contains("…"))
+        assertFalse("截断后不应保留完整长行", truncated.contains("x".repeat(81)))
+        val escaped = SqlSelectionDialog.displayText("L1 BATCH", "w.eq(\"a<b&c>d\");")
+        assertTrue("& 应转义为 &amp;", escaped.contains("&amp;"))
+        assertTrue("< 应转义为 &lt;", escaped.contains("&lt;"))
+        assertTrue("> 应转义为 &gt;", escaped.contains("&gt;"))
+        assertFalse("原始 < 不应直接出现在 HTML 中", escaped.contains("a<b"))
+    }
 }

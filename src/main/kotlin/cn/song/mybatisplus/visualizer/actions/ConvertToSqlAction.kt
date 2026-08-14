@@ -9,6 +9,8 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiJavaFile
@@ -53,6 +55,8 @@ class ConvertToSqlAction : AnAction() {
                         0 -> SqlPreviewService.showResult(project, null)
                         1 -> preview(service, chainHeads[0], project)
                         else -> SqlSelectionDialog(project, chainHeads) { head ->
+                            // T-M23.8：选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
+                            locateEditorTo(editor, head)
                             preview(service, head, project)
                         }.show()
                     }
@@ -79,6 +83,19 @@ class ConvertToSqlAction : AnAction() {
     private fun preview(service: SqlPreviewService, anchor: PsiElement, project: Project) {
         SqlPreviewService.previewAsync(project, { service.preview(anchor) }) { result ->
             SqlPreviewService.showResult(project, result)
+        }
+    }
+
+    /**
+     * T-M23.8：编辑器定位跳转到候选调用所在行（IDEA Find 定位风格）——
+     * 光标到行首 + 滚动居中 + 整行选中高亮；失败 runCatching 兜底（不中断预览）。
+     */
+    private fun locateEditorTo(editor: Editor, call: PsiMethodCallExpression) {
+        runCatching {
+            val (start, end) = WrapperLocator.lineOffsetsOf(call)
+            editor.caretModel.moveToOffset(start)
+            editor.scrollingModel.scrollToCaret(ScrollType.CENTER_UP)
+            editor.selectionModel.setSelection(start, end)
         }
     }
 
