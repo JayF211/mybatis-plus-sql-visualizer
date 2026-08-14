@@ -2,6 +2,17 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
+## [Unreleased]
+
+### Added
+
+- **MyBatis XML mapper 动态 SQL 预览**（M24）：在 `<select|insert|update|delete>` 语句上点击 gutter 图标或右键预览动态 SQL——引擎忠实复刻 MyBatis 3.5.19 渲染算法：
+  - 动态标签全兼容：`if` / `choose(when/otherwise)` / `trim` / `where` / `set` / `foreach`（含 `__frch_` 参数重写、Map 迭代、空集合语义）/ `bind` / `sql`+`include`（同文件 property 静态替换）
+  - 受限 OGNL 求值：判空/比较/逻辑/算术/成员方法/列表字面量，表达式无法解析时面板提供手动开关兜底
+  - 预览面板：动态条件勾选（启发式默认）、foreach 展开次数与 null、bind 覆盖值、`#{}` 参数回填、SQL 高亮/格式化/执行/复制全部复用
+  - 参数对照表显示 `#{}` 属性名（foreach 内为 `__frch_` 重写名）；include 缺失/循环/未解析变量等给出警示提示
+  - 边界：跨命名空间 include 暂不支持；`${ew.customSqlSegment}` 等 MP 占位按普通 `${}` 求值（后续立项）；注解 `@Select` 的 `<script>` 暂不支持
+
 ## [2026.8.14] - 2026-08-14
 
 ### Added
