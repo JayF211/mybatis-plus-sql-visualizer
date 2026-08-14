@@ -14,7 +14,7 @@ logs/
 *.iml
 *.ipr
 rebel.xml
-.xcodemap
+.xcodemap/
 
 ### Eclipse ###
 .apt_generated

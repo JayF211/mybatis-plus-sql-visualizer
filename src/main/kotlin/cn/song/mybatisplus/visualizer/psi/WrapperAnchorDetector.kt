@@ -4,8 +4,10 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiKeyword
+import com.intellij.psi.PsiLambdaExpression
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiNewExpression
+import com.intellij.psi.PsiParameter
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
 
@@ -34,6 +36,14 @@ object WrapperAnchorDetector {
     private val WRAPPER_BASE_TYPE_NAMES: Set<String> = setOf("Wrapper", "AbstractWrapper")
 
     /**
+     * 与 wrapper 链方法撞名的批量操作方法名（T-M23.11）：同时收录于
+     * [BatchOperationConverter.batchOperationMethodNames] 与 MPJ/MP 链方法——
+     * 场景 D 对白名单调用做分步形态变量判定（wrapper 变量上的调用去重，见场景 D）；
+     * 将来批量注册表新增名字与链方法撞名时扩展本集合。
+     */
+    private val BATCH_CHAIN_COLLISION_NAMES: Set<String> = setOf("selectAll")
+
+    /**
      * 元素是否为 Wrapper 锚点；是则返回作为 gutter marker 的叶子元素（即元素自身），否则 null。
      *
      * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
@@ -42,6 +52,10 @@ object WrapperAnchorDetector {
         // 场景 B 优先：变量名（PsiLocalVariable / PsiField / PsiParameter 的 nameIdentifier）
         if (element is PsiIdentifier && element.parent is PsiVariable) {
             val variable = element.parent as PsiVariable
+            // T-M23.12（用户实测）：lambda 参数（`wrapper.and(o -> ...)` 的 o，真实 IDE 类型推断为
+            // LambdaQueryWrapper）不标锚点——嵌套条件 lambda 参数不是独立 wrapper 变量（方法参数
+            // `void del(LambdaQueryWrapper<X> w)` 父链是 PsiMethod，不受影响）。O(1) 语法级（parent 链）。
+            if (variable is PsiParameter && (variable.parent?.parent) is PsiLambdaExpression) return null
             if (WrapperLocator.detectWrapperType(variable.type) != null) return element
             // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
             // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明。
@@ -82,6 +96,20 @@ object WrapperAnchorDetector {
             if (ref.referenceName in BatchOperationConverter.batchOperationMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 if (call.argumentList.expressions.isEmpty()) return null
+                // T-M23.11（用户实测）：wrapper 链上的同名调用（`new MPJLambdaWrapper<>().selectAll(Entity.class)`——
+                // selectAll 同时收录于批量注册表与 MPJ 链方法）不标批量锚点——链锚点由场景 A（new）/B（变量）/C（工厂）
+                // 承载，避免同一链双图标；批量形态（service.updateBatchById / Db.selectAll / entity.selectAll()）
+                // 链首非 wrapper 构造/工厂，不受影响。O(1) 语法级链首回溯，无 resolve，符合性能红线。
+                if (initializerHeadIsWrapper(call)) return null
+                // T-M23.11 分步形态（`MPJLambdaWrapper w = new ...; w.selectAll(...)`）：qualifier 是变量引用，
+                // 语法级回溯不到链首——仅对「与链方法撞名的批量方法」（目前仅 selectAll，新增撞名时扩展）做一次
+                // 变量 resolve（局部变量作用域内查找，微秒级；普通标识符负例仍零 resolve，红线语义不变）；
+                // wrapper 变量上的调用不标批量锚点（链锚点已由场景 B 变量行承载）
+                if (ref.referenceName in BATCH_CHAIN_COLLISION_NAMES) {
+                    val variable = (call.methodExpression.qualifierExpression as? PsiReferenceExpression)
+                        ?.resolve() as? PsiVariable
+                    if (variable != null && WrapperLocator.isWrapperVariable(variable)) return null
+                }
                 return element
             }
             return null

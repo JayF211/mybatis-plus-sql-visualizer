@@ -12,6 +12,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 
 /**
  * WrapperAnchorDetector 单测（M10-01，gutter 锚点判定）。
@@ -555,6 +556,133 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             "Wrappers.lambdaQuery 方法名应仍为锚点",
             factoryCall.methodExpression.referenceNameElement,
             WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testInlineMpjSelectAllOnWrapperChainNotBatchAnchor() {
+        // T-M23.11（用户实测）：`selectJoinOne(VO.class, new MPJLambdaWrapper<>().selectAll(Entity.class)...)`——
+        // selectAll 同时收录于批量注册表与 MPJ 链方法；链上调用不标批量锚点（链锚点由 new 承载），避免双图标
+        configure(
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    taskRecordService.selectJoinOne(VO.class,
+                            new MPJLambdaWrapper<RecordEntity>()
+                                    .selectAll(RecordEntity.class)
+                                    .eq(RecordEntity::getId, 1L));
+                }
+
+                static class RecordEntity { private Long id; }
+                static class VO { }
+            }
+            """.trimIndent(),
+        )
+        val selectAllCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "selectAll" }
+        assertNull(
+            "wrapper 链上的 selectAll(Class) 不应标批量锚点",
+            WrapperAnchorDetector.anchorElement(selectAllCall.methodExpression.referenceNameElement),
+        )
+        val newKeyword = firstNewExpression().firstChild as? PsiKeyword
+        assertNotNull(newKeyword)
+        assertSame(
+            "链锚点应由 new 关键字承载",
+            newKeyword,
+            WrapperAnchorDetector.anchorElement(newKeyword!!),
+        )
+    }
+
+    fun testBatchSelectAllCallStillAnchor() {
+        // T-M23.11 回归（不能造成一个图标也识别不出来）：批量形态（链首非 wrapper 构造/工厂）仍标锚点
+        configure(
+            """
+            import java.util.List;
+
+            public class Demo {
+                public void query() {
+                    Db.selectAll(DeviceEntity.class);
+                    service.updateBatchById(list);
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("selectAll", "updateBatchById")) {
+            val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .filter { it.methodExpression.referenceName == name }
+            assertTrue("应存在 $name 调用", calls.isNotEmpty())
+            for (call in calls) {
+                assertSame(
+                    "批量形态 $name 方法名应仍为锚点",
+                    call.methodExpression.referenceNameElement,
+                    WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+                )
+            }
+        }
+    }
+
+    fun testStepByStepSelectAllOnWrapperVariableNotBatchAnchor() {
+        // T-M23.11 分步形态：`MPJLambdaWrapper w = new ...; w.selectAll(...)`——白名单变量判定——
+        // selectAll 不标批量锚点（变量行场景 B 图标承载链），且变量行锚点必须仍在（图标不丢）
+        configure(
+            """
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<RecordEntity> w = new MPJLambdaWrapper<RecordEntity>();
+                    w.selectAll(RecordEntity.class).eq(RecordEntity::getId, 1L);
+                }
+
+                static class RecordEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val variable = firstVariable()
+        assertSame(
+            "分步形态变量行应为锚点（图标不丢）",
+            variable.nameIdentifier,
+            WrapperAnchorDetector.anchorElement(variable.nameIdentifier),
+        )
+        val selectAllCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "selectAll" }
+        assertNull(
+            "wrapper 变量上的 selectAll 不应标批量锚点（分步去重）",
+            WrapperAnchorDetector.anchorElement(selectAllCall.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testLambdaParameterWrapperIsNotAnchor() {
+        // T-M23.12（用户实测）：`wrapper.and(o -> ...)` 嵌套条件 lambda 参数（显式声明 wrapper 类型，
+        // LightPlatform 可解析类型文本）不应标锚点——真实 IDE 推断类型为 LambdaQueryWrapper 会被
+        // 场景 B 命中产生多余图标；方法参数锚点（testMethodParameterWrapperAnchors）不受影响
+        configure(
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceEntity> wrapper = new LambdaQueryWrapper<DeviceEntity>();
+                    wrapper.and((LambdaQueryWrapper<DeviceEntity> o) -> o.eq(DeviceEntity::getId, 1L));
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val variable = firstVariable()
+        assertSame(
+            "wrapper 变量行锚点应保留（图标不丢）",
+            variable.nameIdentifier,
+            WrapperAnchorDetector.anchorElement(variable.nameIdentifier),
+        )
+        val lambdaParam = PsiTreeUtil.findChildOfType(myFixture.file, PsiParameter::class.java)!!
+        assertNull(
+            "lambda 参数不应是锚点（嵌套条件非独立 wrapper 变量）",
+            WrapperAnchorDetector.anchorElement(lambdaParam.nameIdentifier),
         )
     }
 }

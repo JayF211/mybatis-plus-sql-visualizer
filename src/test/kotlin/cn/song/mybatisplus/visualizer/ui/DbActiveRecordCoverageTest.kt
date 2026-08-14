@@ -99,7 +99,7 @@ class DbActiveRecordCoverageTest : BasePlatformTestCase() {
         assertNotNull("Db.lambdaQuery 链应产出预览结果", result)
         assertEquals(
             """
-            SELECT status
+            SELECT id, status
             FROM user_entity
             WHERE status = 1
             """.trimIndent(),

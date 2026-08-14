@@ -244,7 +244,8 @@ class SqlPreviewService(private val project: Project) {
      * 仅 SELECT/DELETE（UPDATE 不注入——更新可能修改 deleted 本身，真实项目发票域显式 `.eq(getDeleted, 0)`）。
      *
      * 主表/副表注入按 [LogicDeleteState] 独立控制（对齐 MPJ 官方六方法语义）：
-     *  - 主表：mainActive 时 WHERE 追加 `deleted = 0`（保持既有无别名格式）；
+     *  - 主表：mainActive 时 WHERE 追加 `t.deleted = 0`（T-M23.10：MPJ 联表带主表别名 statement.tableAlias，
+     *    单表 tableAlias=null 渲染裸列名，维持历史格式）；
      *  - 副表：对每个带 [JoinClause.logicDeleteColumn] 的 join，subActive 时——
      *    - subToWhere=false（默认 / `logicDelToOn`）→ ON 条件追加 `alias.deleted = 0`；
      *    - subToWhere=true（`logicDelToWhere`）→ WHERE 末尾追加带别名的 `alias.deleted = 0`（主表在前、副表在后）。
@@ -262,7 +263,7 @@ class SqlPreviewService(private val project: Project) {
                 if (state.mainActive) {
                     table.logicDeleteColumn?.let { column ->
                         conditions = conditions + Condition.Simple(
-                            ColumnRef(columnName = column), "=", SqlValue.Literal("0"),
+                            ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal("0"),
                         )
                     }
                 }
@@ -289,7 +290,7 @@ class SqlPreviewService(private val project: Project) {
                 if (!state.mainActive) return statement
                 statement.copy(
                     conditions = statement.conditions + Condition.Simple(
-                        ColumnRef(columnName = column), "=", SqlValue.Literal("0"),
+                        ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal("0"),
                     ),
                 )
             }
@@ -315,13 +316,17 @@ class SqlPreviewService(private val project: Project) {
         if (update.sets.any { it.column?.columnName == versionColumn }) return update
         // 已显式条件 version（如 eq(Entity::getVersion, x)）→ 不重复注入
         if (conditionReferencesColumn(update.conditions, versionColumn)) return update
+        // T-M23.10：联表更新（UpdateJoinWrapper）主表有别名——version 列与 SET 表达式带 tableAlias
+        // （单表 tableAlias=null 渲染裸列名，维持历史格式）
+        val alias = update.tableAlias
+        val prefix = alias?.let { "$it." } ?: ""
         return update.copy(
             sets = update.sets + SetClause(
-                column = ColumnRef(columnName = versionColumn),
-                rawSql = "$versionColumn = $versionColumn + 1",
+                column = ColumnRef(tableAlias = alias, columnName = versionColumn),
+                rawSql = "$prefix$versionColumn = $prefix$versionColumn + 1",
             ),
             conditions = update.conditions + Condition.Simple(
-                ColumnRef(columnName = versionColumn), "=", SqlValue.Placeholder("?"),
+                ColumnRef(tableAlias = alias, columnName = versionColumn), "=", SqlValue.Placeholder("?"),
             ),
         )
     }

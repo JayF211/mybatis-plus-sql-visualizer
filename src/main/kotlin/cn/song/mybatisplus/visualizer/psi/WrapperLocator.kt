@@ -525,8 +525,16 @@ object WrapperLocator {
         // resolve 优先（真实 IDE）：@TableName/@TableField 注解解析
         resolvedClass?.let { return EntityResolver().resolve(it) }
 
-        // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
+        // T-M23.10：方法引用 resolve 不可用时（LightPlatform 测试环境），按类名文本在**宿主文件**内
+        // 解析 PsiClass（嵌套 static class 可解析；类声明不在表达式子树内，须以文件为遍历根），
+        // 使 @TableLogic/@Version 等注解在 JoinWrappers.update/delete 等工厂形态同样生效；
+        // 解析失败退回纯文本兜底（既有行为）
         val className = refs.firstNotNullOfOrNull { it.first } ?: return null
+        PsiTreeUtil.collectElementsOfType(host.containingFile, PsiClass::class.java)
+            .firstOrNull { it.name == className }
+            ?.let { return EntityResolver().resolve(it) }
+
+        // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
         val columns = refs.map { it.second }.distinct()
             .map { ColumnInfo(fieldName = it, columnName = NamingStrategy.toSnakeCase(it)) }
         return TableInfo(

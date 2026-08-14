@@ -825,9 +825,10 @@ class ConsumerMethodsCoverageTest : BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull("getObj 链式终结点应产出预览结果", result)
-        // 服务链实体推断（inferEntityFromChain）只收录链内方法引用涉及的列（id），stationId 不入 SELECT
+        // T-M23.10：服务链实体推断（inferEntityFromChain）在实体类可解析时走 EntityResolver 全列解析
+        // （与真实 IDE resolvedClass 行为一致）；类不可解析才退回「仅链上方法引用列」文本兜底
         assertEquals(
-            "SELECT id FROM device_info_entity WHERE id = 1001",
+            "SELECT id, station_id FROM device_info_entity WHERE id = 1001",
             result!!.compactSql.trim(),
         )
         // 定位层面：getObj 应被识别为链式终结点（chainTerminalMethodNames 收录，终结点不入链）

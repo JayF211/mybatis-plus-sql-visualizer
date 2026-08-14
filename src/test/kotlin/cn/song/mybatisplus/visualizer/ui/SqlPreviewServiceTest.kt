@@ -3985,7 +3985,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull("enableLogicDel 应恢复注入", result)
         assertEquals(
-            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND deleted = 0",
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND t.deleted = 0",
             result!!.compactSql.trim(),
         )
     }
@@ -4014,7 +4014,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull("logicDelToWhere 应产出预览结果", result)
         assertEquals(
-            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND deleted = 0",
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND t.deleted = 0",
             result!!.compactSql.trim(),
         )
     }
@@ -4044,7 +4044,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull("logicDelToOn 应产出预览结果", result)
         assertEquals(
-            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND deleted = 0",
+            "SELECT t.id, t.deleted FROM order_entity t WHERE t.id = 1001 AND t.deleted = 0",
             result!!.compactSql.trim(),
         )
     }
@@ -4090,7 +4090,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             FROM order_entity t
             LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
             WHERE t.id = 1001
-                AND deleted = 0
+                AND t.deleted = 0
             """.trimIndent(),
             result!!.sql,
         )
@@ -4175,7 +4175,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             FROM order_entity t
             LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id
             WHERE t.id = 1001
-                AND deleted = 0
+                AND t.deleted = 0
             """.trimIndent(),
             result!!.sql,
         )
@@ -4219,7 +4219,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             FROM order_entity t
             LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
             WHERE t.id = 1001
-                AND deleted = 0
+                AND t.deleted = 0
             """.trimIndent(),
             result!!.sql,
         )
@@ -4262,7 +4262,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             FROM order_entity t
             LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id
             WHERE t.id = 1001
-                AND deleted = 0
+                AND t.deleted = 0
                 AND orderItemEntity.deleted = 0
             """.trimIndent(),
             result!!.sql,
@@ -4306,7 +4306,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             FROM order_entity t
             LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
             WHERE t.id = 1001
-                AND deleted = 0
+                AND t.deleted = 0
             """.trimIndent(),
             result!!.sql,
         )
@@ -4350,7 +4350,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             FROM order_entity t
             LEFT JOIN order_item_entity orderItemEntity ON orderItemEntity.order_id = t.id AND orderItemEntity.deleted = 0
             WHERE t.id = 1001
-                AND deleted = 0
+                AND t.deleted = 0
             """.trimIndent(),
             result!!.sql,
         )
@@ -5143,6 +5143,145 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             result!!.sql,
         )
         assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.DELETE_JOIN, result.wrapperType)
+    }
+
+    fun testMpjMainTableLogicDeleteUsesMainAlias() {
+        // T-M23.10（用户实测复现）：MPJ 联表主表逻辑删除注入条件必须带主表别名 `t.`——
+        // 裸 `deleted = 0` 与多副表 deleted 列歧义（Column 'deleted' in where clause is ambiguous）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<PortEntity> w = new MPJLambdaWrapper<PortEntity>()
+                        .selectAll(PortEntity.class)
+                        .leftJoin(DeviceEntity.class, DeviceEntity::getId, PortEntity::getDeviceId)
+                        .leftJoin(StationEntity.class, StationEntity::getId, PortEntity::getStationId)
+                        .eq(PortEntity::getId, 1001L);
+                }
+
+                static class PortEntity {
+                    private Long id;
+                    private Long deviceId;
+                    private Long stationId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class DeviceEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class StationEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("MPJ 三表联表应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT t.id, t.device_id, t.station_id, t.deleted
+            FROM port_entity t
+            LEFT JOIN device_entity deviceEntity ON deviceEntity.id = t.device_id AND deviceEntity.deleted = 0
+            LEFT JOIN station_entity stationEntity ON stationEntity.id = t.station_id AND stationEntity.deleted = 0
+            WHERE t.id = 1001
+                AND t.deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testDeleteJoinMainTableLogicDeleteUsesMainAlias() {
+        // T-M23.10：DeleteJoinWrapper 多表删除主表逻辑删除条件带别名（与 SELECT 同病同治）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void delete() {
+                    mapper.deleteJoin(UserEntity.class, JoinWrappers.delete(UserEntity.class)
+                            .leftJoin(AddressEntity.class, AddressEntity::getUserId, UserEntity::getId)
+                            .deleteAll()
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class AddressEntity {
+                    private Long id;
+                    private Long userId;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("deleteJoin 消费应产出预览结果", result)
+        assertEquals(
+            """
+            DELETE t, addressEntity FROM user_entity t
+            LEFT JOIN address_entity addressEntity ON addressEntity.user_id = t.id
+            WHERE t.id = 1001
+                AND t.deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testUpdateJoinWithVersionColumnUsesMainAlias() {
+        // T-M23.10：UpdateJoinWrapper 联表更新 + @Version 实体——乐观锁 SET/WHERE 条件带主表别名
+        // （裸 `version = ?` 与联表场景歧义，与逻辑删除注入同病）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+
+            public class Demo {
+                public void update() {
+                    mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class)
+                            .set(UserEntity::getName, "x")
+                            .leftJoin(AddressEntity.class, AddressEntity::getUserId, UserEntity::getId)
+                            .eq(UserEntity::getId, 1001L));
+                }
+
+                static class UserEntity {
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.Version
+                    private Integer version;
+                }
+
+                static class AddressEntity {
+                    private Long id;
+                    private Long userId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("updateJoin 消费应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE user_entity t
+            LEFT JOIN address_entity addressEntity ON addressEntity.user_id = t.id
+            SET t.name = 'x', t.version = t.version + 1
+            WHERE t.id = 1001
+                AND t.version = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
     }
 
     // ------------------------------------------------------------------
