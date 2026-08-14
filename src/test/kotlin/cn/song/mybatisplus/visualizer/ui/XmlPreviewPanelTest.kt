@@ -67,8 +67,9 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
         panel.toggleCompact()
+        // T-M25.5：bind 自动求值回填（'%' + name + '%'，mock name="1" → '%1%'）
         assertEquals(
-            "SELECT * FROM t_biz WHERE type = ? AND id IN ( ? , ? ) AND name LIKE ?",
+            "SELECT * FROM t_biz WHERE type = ? AND id IN ( ? , ? ) AND name LIKE '%1%'",
             panel.editorForTest()!!.document.text,
         )
         panel.clear()
