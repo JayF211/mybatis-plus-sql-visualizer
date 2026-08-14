@@ -95,6 +95,11 @@ class EntityResolver {
         val columnName = annotationValue(field, TABLE_FIELD)
             ?: NamingStrategy.toSnakeCase(fieldName)
         val isId = hasAnnotation(field, TABLE_ID)
+        // T-M23-04：主键是否自增（@TableId(type = IdType.AUTO)）——取 type 属性文本判含 "AUTO"；
+        // 注解类可解析且未显式写 type 时 findAttributeValue 返回默认值 IdType.NONE（不含 AUTO，恒勾选），
+        // 与既有 fill 属性读取同一 API 形态
+        val idTypeAuto = isId && findAnnotation(field, TABLE_ID)
+            ?.findAttributeValue("type")?.text?.contains("AUTO") == true
         // M13：记录字段类型（参数回填引号推断用）；PSI 类型解析异常时兜底 null
         val fieldType = runCatching { field.type.canonicalText }.getOrNull()
         // T-M15-08：自动填充标注（@TableField(fill = FieldFill.INSERT_UPDATE) 的 fill 属性文本，
@@ -106,7 +111,7 @@ class EntityResolver {
             ?.removePrefix("FieldFill")
         // T-M16-01：字段注释（注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(field)
-        return ColumnInfo(fieldName, columnName, isId, fieldType, fill, comment)
+        return ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment)
     }
 
     // ------------------------------------------------------------------

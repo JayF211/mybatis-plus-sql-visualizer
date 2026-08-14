@@ -19,6 +19,8 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint
  *                         null 表示无可勾选动态条件（批量操作等走旧文本渲染路径）
  * @param paramHints       与 [unresolvedParams] 并行的回填提示（M13）：引号/LIKE 百分号，
  *                         旧文本路径（previewModel=null）回填用
+ * @param batchModel       批量可选参数模型（T-M23-04）：INSERT/UPDATE/UPSERT 的列级勾选结构，
+ *                         面板勾选重建 SQL；无列级选择（Wrapper 预览 / SELECT·DELETE 批量）为 null
  */
 data class PreviewResult(
     val sql: String,
@@ -33,4 +35,5 @@ data class PreviewResult(
     val tableComment: String? = null,
     val previewModel: SqlPreviewModel? = null,
     val paramHints: List<ParamHint> = emptyList(),
+    val batchModel: BatchModel? = null,
 )

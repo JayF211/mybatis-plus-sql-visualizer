@@ -2101,6 +2101,88 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(listOf(false, true, false), result.paramHints.map { it.quote })
     }
 
+    fun testBatchSaveAutoIncrementIdDefaultUnchecked() {
+        // T-M23-04（用户建议：添加时 id 可能不需要）：@TableId(type = IdType.AUTO) 主键默认不勾选
+        // → 初始 INSERT 不含 id 列（对齐 MP：自增主键不进 INSERT 列清单）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private StoreCouponService storeCouponService;
+
+                public void save(StoreCouponEntity entity) {
+                    storeCouponService.save(entity);
+                }
+
+                static class StoreCouponEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.AUTO)
+                    private Long id;
+                    private String name;
+                    private Integer dicStatus;
+                }
+
+                static class BaseService<T> {}
+
+                static class StoreCouponService extends BaseService<StoreCouponEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("save 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO store_coupon_entity (name, dic_status)
+            VALUES (?, ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals("AUTO 主键不进参数行", listOf("entity.name", "entity.dic_status"), result.unresolvedParams)
+        val model = result.batchModel!!
+        assertEquals("主键应默认不勾选", false, model.toggleColumns.first { it.columnName == "id" }.checked)
+    }
+
+    fun testBatchUpdateByIdExposesToggleColumns() {
+        // T-M23-04（用户建议：修改时有些字段可能不需要修改）：updateById 的 SET 列为可勾选（默认全勾选），
+        // WHERE 主键为固定列（无勾选）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void update(DeviceInfoEntity entity) {
+                    deviceInfoService.updateById(entity);
+                }
+
+                static class DeviceInfoEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    private Integer dicStatus;
+                }
+
+                static class BaseService<T> {}
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("updateById 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE device_info_entity
+            SET name = ?, dic_status = ?
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+        val model = result.batchModel!!
+        assertEquals("SET 列应为可勾选", listOf("name", "dic_status"), model.toggleColumns.map { it.columnName })
+        assertEquals("SET 列默认全勾选", listOf(true, true), model.toggleColumns.map { it.checked })
+        assertEquals("WHERE 主键应为固定列", listOf("id"), model.fixedColumns.map { it.columnName })
+    }
+
     fun testBatchRemoveByIdUnresolvableArgRegistersParamRow() {
         // T-M23-02（用户实测：removeById 没有填参数的地方）：removeById(1001L) 字面量内联（无参数行，
         // 见 testRemoveByIdRendersDelete）；removeById(id) 运行时值 → `?` + `#id` 参数行

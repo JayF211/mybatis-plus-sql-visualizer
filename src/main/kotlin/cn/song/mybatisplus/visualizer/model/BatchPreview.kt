@@ -17,6 +17,8 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint
  * @param paramGroups 参数组说明（null 表示单语句、无需参数组）
  * @param paramSources 未解析参数来源（T-M23-02，与 SQL 中 `?` 顺序对应；无参数为空列表）
  * @param paramHints  与 [paramSources] 并行的回填引号提示（T-M23-02，按列类型 [ParamQuote]）
+ * @param batchModel  批量可选参数模型（T-M23-04）：INSERT/UPDATE/UPSERT 的列级勾选结构，
+ *                    驱动面板勾选重建 SQL；SELECT/DELETE 等无列级选择的方法为 null
  */
 data class BatchPreview(
     val methodName: String,
@@ -25,4 +27,5 @@ data class BatchPreview(
     val paramGroups: String?,
     val paramSources: List<String> = emptyList(),
     val paramHints: List<ParamHint> = emptyList(),
+    val batchModel: BatchModel? = null,
 )

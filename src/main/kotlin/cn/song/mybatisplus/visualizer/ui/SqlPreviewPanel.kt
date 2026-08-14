@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
+import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -66,6 +67,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val paramFields = mutableListOf<JBTextField>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
     private val conditionValueFields = mutableListOf<JBTextField>()
+    // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
+    private val batchCheckBoxes = mutableListOf<JCheckBox>()
     private var selectAllButton: JButton? = null
     private var selectNoneButton: JButton? = null
 
@@ -164,6 +167,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         result.previewModel?.conditionViews.orEmpty().forEach { view ->
             if (view.defaultEnabled) enabledIds.add(view.id)
         }
+        // T-M23-04：批量列级勾选初始化——按 BatchModel 默认勾选态（列名作 id，与条件 toggle 互斥）
+        result.batchModel?.toggleColumns?.forEach { col ->
+            if (col.checked) enabledIds.add(col.columnName)
+        }
         // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
         result.previewModel?.let { compactMode = !it.formatSql }
         modeButton.text = modeButtonText()
@@ -193,19 +200,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun renderSql() {
         val result = current ?: return
         val model = result.previewModel
-        if (model != null) {
-            // 模型级重生成：按动态条件启用集合重新生成 SQL（含回填提示），再按 source 回填参数
-            val generated = SqlGenerator.generateWithParams(
-                statement = model.statement,
-                compact = compactMode,
-                dialect = model.dialect,
-                enabledConditionIds = enabledIds.toSet(),
-            )
-            showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams, generated.paramHints))
-        } else {
-            // 旧文本路径（无可勾选动态条件，如批量操作）
-            val base = if (compactMode) result.compactSql else result.sql
-            showSql(backfillParamsBySource(base, result.unresolvedParams, result.paramHints))
+        val batch = result.batchModel
+        when {
+            // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
+            batch != null -> {
+                val active = enabledIds.toSet()
+                val sql = batch.renderSql(active)
+                showSql(backfillParamsBySource(sql, batch.orderedSources(active), batch.orderedHints(active)))
+            }
+            model != null -> {
+                // 模型级重生成：按动态条件启用集合重新生成 SQL（含回填提示），再按 source 回填参数
+                val generated = SqlGenerator.generateWithParams(
+                    statement = model.statement,
+                    compact = compactMode,
+                    dialect = model.dialect,
+                    enabledConditionIds = enabledIds.toSet(),
+                )
+                showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams, generated.paramHints))
+            }
+            else -> {
+                // 旧文本路径（无可勾选动态条件，如批量操作）
+                val base = if (compactMode) result.compactSql else result.sql
+                showSql(backfillParamsBySource(base, result.unresolvedParams, result.paramHints))
+            }
         }
     }
 
@@ -260,6 +277,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramFields.clear()
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
+        batchCheckBoxes.clear()
         selectAllButton = null
         selectNoneButton = null
         paramPanel.removeAll()
@@ -334,18 +352,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 参数输入与回填（M12：动态条件复选框行 + 按 source 绑定 + 空值语义）
     // ------------------------------------------------------------------
 
-    /** 重建左侧面板：动态条件复选框行 + 普通参数值输入行。 */
+    /** 重建左侧面板：动态条件复选框行 + 普通参数值输入行（T-M23-04：批量列级勾选行）。 */
     private fun rebuildLeftPanel(result: PreviewResult) {
         paramPanel.removeAll()
         paramFields.clear()
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
+        batchCheckBoxes.clear()
         val views = result.previewModel?.conditionViews.orEmpty()
+        val batchModel = result.batchModel
 
-        if (views.isEmpty() && result.unresolvedParams.isEmpty()) {
+        if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null) {
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
+            paramPanel.revalidate()
+            paramPanel.repaint()
+            return
+        }
+
+        // T-M23-04：批量列级勾选（toggle 列：复选框 + 值输入框，勾选决定列是否进入 SQL；
+        // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
+        if (batchModel != null) {
+            paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.batch.columns")))
+            batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
+            batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false)) }
             paramPanel.revalidate()
             paramPanel.repaint()
             return
@@ -364,6 +395,40 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         paramPanel.revalidate()
         paramPanel.repaint()
+    }
+
+    /**
+     * T-M23-04：批量列行——toggle 列渲染「复选框（列来源，tooltip 列名）+ 值输入框」，
+     * 勾选变更重渲染（列名入 [enabledIds]）；fixed 列渲染「#来源 标签 + 值输入框」。
+     */
+    private fun buildBatchColumnRow(col: BatchColumn, isToggle: Boolean): JBPanel<JBPanel<*>> {
+        val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+        if (isToggle) {
+            val checkBox = JCheckBox(col.source, col.columnName in enabledIds).apply {
+                toolTipText = col.columnName
+                addActionListener {
+                    if (isSelected) enabledIds.add(col.columnName) else enabledIds.remove(col.columnName)
+                    renderSql()
+                }
+            }
+            batchCheckBoxes += checkBox
+            row.add(checkBox)
+        } else {
+            row.add(paramLabel(col.source))
+        }
+        val field = JBTextField(8).apply {
+            toolTipText = "#${col.source}"
+            text = paramValues[col.source] ?: ""
+            document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = onParamChanged(col.source, this@apply.text)
+                override fun removeUpdate(e: DocumentEvent?) = onParamChanged(col.source, this@apply.text)
+                override fun changedUpdate(e: DocumentEvent?) = onParamChanged(col.source, this@apply.text)
+            })
+        }
+        paramFields += field
+        row.add(field)
+        row.border = JBUI.Borders.empty(0, 8, 2, 8)
+        return row
     }
 
     /** 分区标题行。 */
@@ -589,6 +654,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         ?.components?.filterIsInstance<JBLabel>()?.firstOrNull()
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
+    /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
+    internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
     internal fun selectAllButtonForTest(): JButton? = selectAllButton
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton

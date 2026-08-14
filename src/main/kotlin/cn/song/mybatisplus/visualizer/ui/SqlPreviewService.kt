@@ -196,6 +196,7 @@ class SqlPreviewService(private val project: Project) {
             wrapperType = null,
             tableName = batch.tableName,
             paramHints = batch.paramHints,
+            batchModel = batch.batchModel,
         )
     }
 

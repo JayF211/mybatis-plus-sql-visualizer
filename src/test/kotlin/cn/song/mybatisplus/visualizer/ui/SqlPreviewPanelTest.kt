@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.BatchColumn
+import cn.song.mybatisplus.visualizer.model.BatchKind
+import cn.song.mybatisplus.visualizer.model.BatchModel
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
@@ -432,6 +435,105 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         )
         panel.conditionValueFieldForTest(0)!!.text = "2024-01-01 00:00:00"
         assertTrue(panel.editorForTest()!!.document.text.contains("use_time = '2024-01-01 00:00:00'"))
+        panel.clear()
+    }
+
+    // ------------------------------------------------------------------
+    // T-M23-04：批量参数列级勾选（BatchModel 复选框 + 勾选重建 SQL）
+    // ------------------------------------------------------------------
+
+    /** 构造带 BatchModel 的批量预览结果（面板走批量勾选重生成路径）。 */
+    private fun batchResult(model: BatchModel): PreviewResult {
+        val active = (model.toggleColumns.filter { it.checked }.map { it.columnName } + model.fixedColumns.map { it.columnName }).toSet()
+        val sql = model.renderSql(active)
+        return PreviewResult(
+            sql = sql,
+            compactSql = sql,
+            unresolvedParams = model.orderedSources(active),
+            paramTable = null,
+            wrapperType = null,
+            tableName = model.tableName,
+            columns = model.toggleColumns.map { it.columnName },
+            batchModel = model,
+        )
+    }
+
+    fun testBatchModelAutoIdDefaultUncheckedRendersWithoutId() {
+        // T-M23-04（用户建议）：save(entity) 自增主键默认不勾选 → 初始 SQL 无 id 列
+        val model = BatchModel(
+            kind = BatchKind.INSERT,
+            tableName = "biz_store_coupon",
+            toggleColumns = listOf(
+                BatchColumn("id", "entity.id", quote = false, checked = false),
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            ),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(batchResult(model))
+        val sql = panel.editorForTest()!!.document.text
+        assertTrue("初始 SQL 应含勾选列", sql.contains("INSERT INTO biz_store_coupon (name, dic_status)"))
+        assertFalse("初始 SQL 不应含 id 列", sql.contains("id"))
+        assertFalse("id 复选框默认不勾选", panel.batchCheckboxForTest(0)!!.isSelected)
+        panel.clear()
+    }
+
+    fun testBatchModelCheckboxToggleRebuildsSql() {
+        // T-M23-04：勾选 id 复选框 → SQL 列清单恢复 id；取消 name → SET/列清单移除 name
+        val model = BatchModel(
+            kind = BatchKind.INSERT,
+            tableName = "biz_store_coupon",
+            toggleColumns = listOf(
+                BatchColumn("id", "entity.id", quote = false, checked = false),
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            ),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(batchResult(model))
+        // 勾选 id → INSERT 恢复 id 列
+        panel.batchCheckboxForTest(0)!!.doClick()
+        assertTrue(panel.batchCheckboxForTest(0)!!.isSelected)
+        assertTrue(
+            "勾选后 SQL 应含 id",
+            panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, name, dic_status)"),
+        )
+        // 取消 name → 列清单移除 name
+        panel.batchCheckboxForTest(1)!!.doClick()
+        assertTrue(
+            "取消后 SQL 不应含 name",
+            panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, dic_status)"),
+        )
+        // 回填值不丢：勾选态变更后重渲染仍按 source 绑定；未勾选列的输入值不进 SQL
+        panel.paramFieldForTest(0)!!.text = "1"
+        panel.paramFieldForTest(1)!!.text = "张三"
+        assertTrue(panel.editorForTest()!!.document.text.contains("VALUES (1, ?)"))
+        assertFalse("未勾选列（name）的输入值不应进入 SQL", panel.editorForTest()!!.document.text.contains("张三"))
+        // 重新勾选 name → 值保留、按 String 列类型加引号回填
+        panel.batchCheckboxForTest(1)!!.doClick()
+        assertTrue(panel.editorForTest()!!.document.text.contains("VALUES (1, '张三', ?)"))
+        panel.clear()
+    }
+
+    fun testBatchModelFixedColumnHasNoCheckbox() {
+        // T-M23-04：UPDATE 的 WHERE 主键为固定列——仅值输入框（无复选框），复选框数 = toggle 列数
+        val model = BatchModel(
+            kind = BatchKind.UPDATE,
+            tableName = "device_info",
+            toggleColumns = listOf(
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+            ),
+            fixedColumns = listOf(BatchColumn("id", "entity.id", quote = false, checked = true)),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(batchResult(model))
+        assertNotNull("toggle 列应有复选框", panel.batchCheckboxForTest(0))
+        assertNull("fixed 列不应有复选框（复选框仅 toggle 列）", panel.batchCheckboxForTest(1))
+        // 值输入框：toggle(name) + fixed(id) 各一个
+        assertEquals("name 值输入框", "#entity.name", panel.paramFieldForTest(0)!!.toolTipText)
+        assertEquals("id 值输入框", "#entity.id", panel.paramFieldForTest(1)!!.toolTipText)
+        assertTrue(panel.editorForTest()!!.document.text.contains("SET name = ?"))
+        assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = ?"))
         panel.clear()
     }
 

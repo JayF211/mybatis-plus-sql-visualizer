@@ -33,6 +33,8 @@ data class TableInfo(
  * @param fieldName  实体字段名（如 shareSchemeId）
  * @param columnName 数据库列名（如 share_scheme_id）
  * @param isId       是否主键（@TableId）
+ * @param idTypeAuto T-M23-04：主键是否自增（`@TableId(type = IdType.AUTO)`）——INSERT 模板
+ *                   默认不勾选主键列（对齐 MP：自增主键不进 INSERT 列清单）；非 AUTO 恒勾选
  * @param fieldType  实体字段类型全限定名（M13，如 java.lang.String / java.lang.Long），
  *                   用于参数回填的引号推断；PSI 解析失败时为 null
  * @param fill       自动填充标注（@TableField(fill = FieldFill.XXX) 的文本，T-M15-08）：
@@ -43,6 +45,7 @@ data class ColumnInfo(
     val fieldName: String,
     val columnName: String,
     val isId: Boolean = false,
+    val idTypeAuto: Boolean = false,
     val fieldType: String? = null,
     val fill: String? = null,
     val comment: String? = null,

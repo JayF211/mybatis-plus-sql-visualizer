@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.model.BatchColumn
+import cn.song.mybatisplus.visualizer.model.BatchKind
+import cn.song.mybatisplus.visualizer.model.BatchModel
 import cn.song.mybatisplus.visualizer.model.BatchPreview
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.SqlValue
@@ -111,12 +114,38 @@ object BatchOperationConverter {
 
     /**
      * T-M23-02：批量构建结果（SQL 模板 + 按 `?` 出现顺序的参数登记 + 参数组说明）。
+     * T-M23-04：INSERT/UPDATE/UPSERT 携带 [BatchModel]（面板勾选重建 SQL 的唯一结构源）。
      */
     private data class BatchBuild(
         val sql: String,
         val params: List<ParamEntry> = emptyList(),
         val paramGroups: String? = null,
+        val model: BatchModel? = null,
     )
+
+    /**
+     * T-M23-04：由列清单构造勾选列（source = `实体前缀.列名`，hint 按列类型引号判定）。
+     */
+    private fun batchColumns(prefix: String, table: TableInfo, columns: List<ColumnInfo>, checked: (ColumnInfo) -> Boolean): List<BatchColumn> =
+        columns.map { col ->
+            BatchColumn(
+                columnName = col.columnName,
+                source = idSource(prefix, col.columnName),
+                quote = ParamQuote.decide(col.fieldType),
+                checked = checked(col),
+            )
+        }
+
+    /**
+     * T-M23-04：模型驱动的批量构建（初始 SQL 与参数登记均出自 [BatchModel.renderSql]/ordered*，
+     * 与面板勾选重建共用唯一渲染源）。
+     */
+    private fun modelBuild(model: BatchModel): BatchBuild {
+        val initialActive = (model.toggleColumns.filter { it.checked }.map { it.columnName } +
+            model.fixedColumns.map { it.columnName }).toSet()
+        val params = model.orderedColumns(initialActive).map { ParamEntry(it.source, ParamHint(quote = it.quote)) }
+        return BatchBuild(sql = model.renderSql(initialActive), params = params, model = model)
+    }
 
     /**
      * 转换批量/单实体方法调用。
@@ -155,6 +184,7 @@ object BatchOperationConverter {
             paramGroups = build.paramGroups,
             paramSources = build.params.map { it.source },
             paramHints = build.params.map { it.hint },
+            batchModel = build.model,
         )
     }
 
@@ -258,43 +288,42 @@ object BatchOperationConverter {
      * T-M22-02（@Version 乐观锁）：实体含 @Version 字段时（对齐 MP OptimisticLockerInnerInterceptor）——
      * version 列不进实体 SET（`version = ?` 由 `version = version + 1` 取代），
      * WHERE 末尾追加 `AND version = ?`；参数组说明同步追加 version（buildParamGroups 顺序与 SQL 一致）。
-     * T-M23-02：SET/主键/version 各 `?` 登记 `实体变量.列名` 参数行（值运行时不可得，面板可手动填）。
+     * T-M23-04：SET 列为可勾选（默认全勾选，用户可按需取消——近似 NOT_NULL"只更新需要修改的字段"），
+     * WHERE 主键/@Version 为固定列（无勾选）；初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
     private fun buildUpdateBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val versionColumn = table.versionColumn
         val setColumns = table.columns.filter { it.columnName != idColumn.columnName && it.columnName != versionColumn }
-        val setSql = setColumns.joinToString(", ") { "${it.columnName} = ?" } +
-            (versionColumn?.let { ", $it = $it + 1" } ?: "")
-        val whereSql = "${idColumn.columnName} = ?" + (versionColumn?.let { " AND $it = ?" } ?: "")
-        val sql = "UPDATE ${table.tableName}\nSET $setSql\nWHERE $whereSql"
-        // T-M23-02：实体更新 id 来自实体字段（运行时不可得）→ `实体.主键列` 参数行
         val prefix = entityPrefix(call)
-        val params = columnParams(prefix, table, setColumns.map { it.columnName }) +
-            listOf(ParamEntry(idSource(prefix, idColumn.columnName), ParamHint(quote = ParamQuote.decide(idColumn.fieldType)))) +
-            listOfNotNull(versionColumn?.let { version ->
-                val versionField = table.columns.firstOrNull { it.columnName == version }
-                ParamEntry("$prefix.$version", ParamHint(quote = ParamQuote.decide(versionField?.fieldType)))
-            })
+        val toggleColumns = batchColumns(prefix, table, setColumns) { true }
+        val fixedColumns = listOf(
+            BatchColumn(idColumn.columnName, idSource(prefix, idColumn.columnName), ParamQuote.decide(idColumn.fieldType), checked = true),
+        ) + listOfNotNull(versionColumn?.let { version ->
+            val versionField = table.columns.firstOrNull { it.columnName == version }
+            BatchColumn(version, "$prefix.$version", ParamQuote.decide(versionField?.fieldType), checked = true)
+        })
         val paramGroups = buildParamGroups(setColumns.map { it.columnName } + idColumn.columnName + listOfNotNull(versionColumn))
-        return BatchBuild(sql, params, paramGroups)
+        return modelBuild(BatchModel(BatchKind.UPDATE, table.tableName, toggleColumns, fixedColumns, versionColumn)).copy(paramGroups = paramGroups)
     }
 
     /**
      * INSERT 模板：全列 + VALUES。
      * `insertBatchSomeColumn`（自定义注入器，X09）：排除 `FieldFill.UPDATE` 填充列（update 侧维护，插入不参与）；
      * `save(entity)` 单实体同模板（F-15 语义一致）。
-     * T-M23-02：每个 `?` 登记 `实体变量.列名` 参数行。
+     * T-M23-04：全列可勾选，**主键默认不勾选**（`@TableId(type = IdType.AUTO)` 自增场景，对齐 MP INSERT 不含主键列）；
+     * 初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
     private fun buildInsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val columns = if (methodName == "insertBatchSomeColumn") {
-            table.columns.filter { it.fill != "UPDATE" }.map { it.columnName }
+            table.columns.filter { it.fill != "UPDATE" }
         } else {
-            table.columns.map { it.columnName }
+            table.columns
         }
-        val placeholders = columns.joinToString(", ") { "?" }
-        val sql = "INSERT INTO ${table.tableName} (${columns.joinToString(", ")})\nVALUES ($placeholders)"
-        return BatchBuild(sql, columnParams(entityPrefix(call), table, columns), buildParamGroups(columns))
+        val prefix = entityPrefix(call)
+        val toggleColumns = batchColumns(prefix, table, columns) { col -> !(col.isId && col.idTypeAuto) }
+        val paramGroups = buildParamGroups(columns.map { it.columnName })
+        return modelBuild(BatchModel(BatchKind.INSERT, table.tableName, toggleColumns)).copy(paramGroups = paramGroups)
     }
 
     /**
@@ -394,18 +423,18 @@ object BatchOperationConverter {
     /**
      * UPSERT 模板（saveOrUpdate / saveOrUpdateBatch，U12，T-M15-08）：
      * INSERT + PG 方言 `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`。
-     * T-M23-02：VALUES 各 `?` 登记 `实体变量.列名` 参数行。
+     * T-M23-04：主键为固定列（ON CONFLICT 依赖，恒参与、无勾选），非主键列可勾选
+     * （取消勾选 → 同时退出 INSERT 列清单与 DO UPDATE SET）；初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
     private fun buildUpsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
-        val columns = table.columns.map { it.columnName }
-        val placeholders = columns.joinToString(", ") { "?" }
-        val updateColumns = table.columns.filter { it.columnName != idColumn.columnName }
-        val conflictSet = updateColumns.joinToString(", ") { "${it.columnName} = EXCLUDED.${it.columnName}" }
-        val sql = "INSERT INTO ${table.tableName} (${columns.joinToString(", ")})\n" +
-            "VALUES ($placeholders)\n" +
-            "ON CONFLICT (${idColumn.columnName}) DO UPDATE SET $conflictSet"
-        return BatchBuild(sql, columnParams(entityPrefix(call), table, columns), buildParamGroups(columns))
+        val prefix = entityPrefix(call)
+        val toggleColumns = batchColumns(prefix, table, table.columns.filter { it.columnName != idColumn.columnName }) { true }
+        val fixedColumns = listOf(
+            BatchColumn(idColumn.columnName, idSource(prefix, idColumn.columnName), ParamQuote.decide(idColumn.fieldType), checked = true),
+        )
+        val paramGroups = buildParamGroups(table.columns.map { it.columnName })
+        return modelBuild(BatchModel(BatchKind.UPSERT, table.tableName, toggleColumns, fixedColumns)).copy(paramGroups = paramGroups)
     }
 
     // ------------------------------------------------------------------
@@ -451,12 +480,6 @@ object BatchOperationConverter {
     /** 实体字段参数来源：`实体变量.列名`；无前缀（ActiveRecord 形态）时仅列名。 */
     private fun idSource(prefix: String, columnName: String): String =
         if (prefix.isEmpty()) columnName else "$prefix.$columnName"
-
-    /** 按列清单生成参数登记：source = `实体变量.列名`，hint 按列类型引号判定（[ParamQuote]）。 */
-    private fun columnParams(prefix: String, table: TableInfo, columns: List<String>): List<ParamEntry> = columns.map { col ->
-        val fieldType = table.columns.firstOrNull { it.columnName == col }?.fieldType
-        ParamEntry(idSource(prefix, col), ParamHint(quote = ParamQuote.decide(fieldType)))
-    }
 
     /**
      * 参数组说明（docs/项目介绍.md 格式）：`-- 实际参数: [col=?, col=?] × N`。
