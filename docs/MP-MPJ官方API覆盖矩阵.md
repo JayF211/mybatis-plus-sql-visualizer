@@ -70,17 +70,17 @@
 
 | 方法 / 重载形态 | 目标状态 | 对应任务编号 | 备注 |
 |------|:----:|------|------|
-| `save` / `saveBatch` | ✅ | —（M19.5 / T-M15-08） | INSERT 全列模板 |
+| `save` / `saveBatch` | ✅ | —（M19.5 / T-M15-08） | INSERT 全列模板；T-M23-02 参数面板每 `?` 登记 `实体.列名` 输入行 |
 | `saveOrUpdate` / `saveOrUpdateBatch` | ✅ | —（T-M15-08） | UPSERT 模板 |
 | `saveOrUpdate(T, Wrapper)` | ✅ | T-M20-10 | UPSERT + wrapper 条件 + 实体字段展开 SET |
-| `removeById` / `removeByIds` / `remove` / `removeByMap` | ✅ | —（T-M15-08 / T-M20-07） | removeByMap：Map 等值链（字面量展开 / 变量占位） |
+| `removeById` / `removeByIds` / `remove` / `removeByMap` | ✅ | —（T-M15-08 / T-M20-07） | removeByMap：Map 等值链（字面量展开 / 变量占位）；T-M23-01 @TableLogic 实体软删除（UPDATE SET deleted=1 + AND deleted=0，无 @TableLogic 维持 DELETE）；T-M23-02 实参字面量内联 / 变量参数行 |
 | `updateById` | ✅ | —（既有能力） | UPDATE 主键等值 |
 | `update(Wrapper)` / `update(T, Wrapper)` | ✅ | —（T-M15-04） | 实体字段展开 SET + wrapper WHERE |
 | `updateBatchById(Collection)` | ✅ | T-M20-10 | 批量 UPDATE 主键 IN（IService 便捷重载核对） |
-| `getById` / `getOptById` | ✅ | —（M19.5）/ T-M20-10 | getOptById → SELECT 主键等值（Optional 返回） |
+| `getById` / `getOptById` | ✅ | —（M19.5）/ T-M20-10 | getOptById → SELECT 主键等值（Optional 返回）；T-M23-01 @TableLogic 追加 `AND deleted = 0`；T-M23-02 实参字面量内联 / 变量参数行 |
 | `getOne` / `getOne(w, false)` / `getOneOpt` | ✅ | T-M20-06 | 双参 / 三参形态核对与锚点 |
 | `getMap` / `getObj` | ✅ | T-M20-06 | SQL 形态同 selectList，仅返回差异 |
-| `list` / `listByIds` / `listByMap` / `listMaps` / `listObjs` | ✅ | —（M19.5）/ T-M20-06、T-M20-07 | listByMap Map 等值链；listMaps/listObjs 返回差异 |
+| `list` / `listByIds` / `listByMap` / `listMaps` / `listObjs` | ✅ | —（M19.5）/ T-M20-06、T-M20-07 | listByMap Map 等值链；listMaps/listObjs 返回差异；T-M23-01 @TableLogic 批量查询追加 `AND deleted = 0` |
 | `count` / `exists` | ✅ | T-M20-06 | exists 消费锚点与 SQL 形态核对 |
 | `page` / `pageMaps` | ✅ | T-M20-06 | pageMaps SQL 同 page |
 | 便捷 4 方法：`saveBatch` / `saveOrUpdateBatch` / `removeBatchByIds` / `updateBatchById`（IService 3.5.9+ 仅剩默认方法，无 batchSize 版） | ✅ | —（T-M15-08 / T-M20-10） | 批量模板；与 IRepository 同名方法（含 batchSize 重载）同模板 |
@@ -90,14 +90,14 @@
 | 方法 / 重载形态 | 目标状态 | 对应任务编号 | 备注 |
 |------|:----:|------|------|
 | `insert` | ✅ | —（既有能力） | INSERT 全列 |
-| `deleteById` | ✅ | —（既有能力） | DELETE 主键等值（逻辑删除转 UPDATE） |
-| `deleteByMap` | ✅ | T-M20-07 | DELETE + Map 等值链 |
+| `deleteById` | ✅ | —（既有能力） | DELETE 主键等值（逻辑删除转 UPDATE，T-M23-01 落地：@TableLogic 实体软删除） |
+| `deleteByMap` | ✅ | T-M20-07 | DELETE + Map 等值链（T-M23-01 @TableLogic 转软删除） |
 | `delete` | ✅ | —（既有能力） | DELETE + wrapper |
-| `deleteBatchIds`（旧名） / `deleteByIds`（新名，3.5.9+） | ✅ | —（P1-02，M19.5） | 新旧双名同模板；逻辑删除批量 → UPDATE SET del=1 WHERE id IN |
+| `deleteBatchIds`（旧名） / `deleteByIds`（新名，3.5.9+） | ✅ | —（P1-02，M19.5） | 新旧双名同模板；逻辑删除批量 → UPDATE SET del=1 WHERE id IN（T-M23-01 落地） |
 | `updateById` / `update` | ✅ | —（既有能力） | 实体字段展开 SET |
-| `selectById` | ✅ | —（M19.5） | SELECT 主键等值（Operation.SELECT） |
-| `selectBatchIds`（旧名） / `selectByIds`（新名，3.5.9+） | ✅ | —（P1-02，M19.5） | SELECT 主键 IN |
-| `selectByMap` | ✅ | T-M20-07 | SELECT 全列 + Map 等值链 |
+| `selectById` | ✅ | —（M19.5） | SELECT 主键等值（Operation.SELECT；T-M23-01 @TableLogic 追加 AND deleted = 0） |
+| `selectBatchIds`（旧名） / `selectByIds`（新名，3.5.9+） | ✅ | —（P1-02，M19.5） | SELECT 主键 IN（T-M23-01 @TableLogic 追加 AND deleted = 0） |
+| `selectByMap` | ✅ | T-M20-07 | SELECT 全列 + Map 等值链（T-M23-01 @TableLogic 追加 AND deleted = 0） |
 | `selectOne` / `selectOne(w, false)` | ✅ | T-M20-06 | 双参形态核对（追加 LIMIT 1 语义） |
 | `exists` | ✅ | T-M20-06 | SELECT EXISTS/1 形态 |
 | `selectCount` | ✅ | —（既有能力） | SELECT COUNT(*) |
