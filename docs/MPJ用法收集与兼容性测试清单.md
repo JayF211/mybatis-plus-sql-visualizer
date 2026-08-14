@@ -1568,7 +1568,7 @@ mybatis-plus:
 | 批量 | `saveBatch` / `updateBatchById` / `saveOrUpdate` / `saveOrUpdateBatch` / `insertBatchSomeColumn` | ✅ | U12/X09 |
 | 实体单条 | `save(entity)`（INSERT） / `getById(id)`（SELECT 主键等值） / `listByIds(ids)` / `selectByIds(ids)`（SELECT 主键 IN） / `deleteByIds(ids)`（DELETE 主键 IN） | ✅（M19.5：`save` 补注册（注释一致化）；新增 Operation.SELECT 模板） | U12 |
 | 实体 | `updateById`（`update-strategy: always` 语义） | ✅ | U12 |
-| 乐观锁 | `@Version` / OptimisticLockerInnerInterceptor | ❌（手动 CAS 替代） | U10 |
+| 乐观锁 | `@Version` / OptimisticLockerInnerInterceptor | ✅（T-M22-02，M22：updateById/实体更新/wrapper 更新自动注入 `SET version = version+1` + `AND version = ?`；显式涉及 version 列不重复注入） | U10 |
 | 防全表 | `selectCount(wrapper)` 预检后复用追加 set | ✅（4 处） | U08 |
 
 ### 5.4 Mapper XML / 注解矩阵
@@ -1589,7 +1589,7 @@ mybatis-plus:
 | 实体 | `@TableId(type = AUTO)` 全部 | ✅ | X06 |
 | 实体 | `@TableField`（fill/typeHandler/updateStrategy/exist/value 保留字） | ✅ | X06 |
 | 实体 | `@TableLogic`（BaseEntity.deleted + 全局配置） | ✅ | X07 |
-| 实体 | `@Version` | ❌ | – |
+| 实体 | `@Version` | ✅（T-M22-02，M22） | – |
 | 配置 | `PaginationInnerInterceptor(DbType.POSTGRE_SQL)` 唯一拦截器 | ✅ | X08 |
 | 配置 | Tenant / OptimisticLocker / BlockAttack / @InterceptorIgnore | ❌ | – |
 | 配置 | 自定义 SqlInjector（insertBatchSomeColumn + DEFAULT） | ✅ | X09 |
@@ -1835,6 +1835,7 @@ app 层各模块 Service（`CarInvoiceManagementAppService`、`AccountManagement
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-14 | **M22 P2 项交付（444 测试全绿，0b3b3fe）**：① 方言扩展 6 种——SQL Server（OFFSET..FETCH）/H2/SQLite（LIMIT..OFFSET）/MariaDB（MySQL 形态）/DM 达梦/KingBase 人大金仓（DialectRegistry 9 方言，设置下拉自动同步）；② @Version 乐观锁注入（TableInfo.versionColumn + 中央注入，updateById 模板同步）；③ Db kit（类字面量显式解析 + lambdaQuery 链）/SimpleQuery/ActiveRecord（qualifier 实体步骤 4 + selectAll/deleteById 注册）。§5.6 与矩阵相应行 ⬜ → ✅；剩余 ⬜（fill、Tenant/DataPermission/DynamicTableName、XML customSqlSegment、Kotlin 侧）按需立项 |
 | 2026-08-13 | **M21 交付（420 测试全绿）**：中等成本 API 补全——allEq 6 重载（Map.of 字面量展开/IS NULL）、setEntity、select(Class,Predicate)/selectFilter 黑白名单近似、selectFunc(BaseFuncEnum) 枚举映射、join 4/5 参 rightAlias + 子表 MConsumer + ext MFunction、selectCollection prefix/free 形态、from(子查询主表)、around（对照源码核实双段形态）、setTableName/pageByMain no-op、inIfNotEmpty/setIfNotEmpty/setIfExists、**UpdateJoinWrapper/DeleteJoinWrapper 全链路**（新 converter + 多表 UPDATE/DELETE 渲染）。§5.6 矩阵 🟡/⬜ → ✅（保留 🟡：selectFilter 谓词精确求值；⬜：fill 等 M22 项） |
 | 2026-08-13 | **M20 交付（379 测试全绿）**：P0 差距清零——JoinWrappers/MPJWrappers 工厂识别、MPJ entity 构造、selectIgnore/groupByStr/orderByStr/stringQuery·lambda 互转、逻辑删除六方法精确化（主/副表独立开关 + ON/WHERE 位置）、消费方法全集核对（selectCount/getObj 补注册 + ResultHandler 流式重载）、Map 条件消费（removeByMap/deleteByMap/selectByMap/listByMap）、BaseMapper 批量族（insert/insertOrUpdate）、eqOrIsNull（3.5.17）、getOptById/removeBatchByIds/saveOrUpdate(entity, wrapper)。§5.6 矩阵相应行更新；计数/exists 分支 MPJ 联表保真 |
 | 2026-08-13 | **用户实测延伸：MPJ wrapper + helper 多条件（310 测试全绿）**：`applyWorkflowDataScope(MPJLambdaWrapper)` 内追加 eq(tenantId 字面量)/ge(createdTime 占位)/likeRight(name) 三个条件——M19.6 helper 跨方法续链对 MPJ wrapper 同样生效（并入联表查询 WHERE、主表别名 t. 前缀统一、逻辑顺序在 helper 调用点之后），Scratch 延伸用例测试固化 |
