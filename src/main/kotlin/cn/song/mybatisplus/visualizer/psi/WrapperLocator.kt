@@ -126,7 +126,7 @@ object WrapperLocator {
 
     /**
      * T-M23.7：调用是否为 wrapper **链首**（new wrapper 构造链首 / 工厂·服务链首）。
-     * internal 供选择区扫描（[chainHeadCallsInRange]）与 ConvertToSqlAction 复用。
+     * internal 供选择区扫描（[isSqlCandidate]）与 ConvertToSqlAction 复用。
      */
     internal fun isChainHeadCall(call: PsiMethodCallExpression): Boolean {
         val qualifier = call.methodExpression.qualifierExpression
@@ -145,31 +145,45 @@ object WrapperLocator {
     }
 
     /**
-     * T-M23.7：扫描选择区（offset 范围）内全部 wrapper **链首调用**（按链首 offset 去重排序）——
-     * 同一链的 eq/list 多处只计 1 个；嵌套子查询链首在实参子树内为独立链首（合理行为，文档化）。
+     * T-M23.7：调用是否为 SQL 候选——**wrapper 链首** 或 **批量操作方法调用**
+     * （`getById`/`save`/`removeById`/`selectAll` 等，注册表 [BatchOperationConverter.batchOperationMethodNames]；
+     * 用户实测：选择区含 `bannerService.getById(id)` 时也应进多 SQL 选择列表）。
+     * internal 供选择区扫描（[sqlCandidatesInRange]）与 ConvertToSqlAction 复用。
+     */
+    internal fun isSqlCandidate(call: PsiMethodCallExpression): Boolean =
+        isChainHeadCall(call) || call.methodExpression.referenceName in BatchOperationConverter.batchOperationMethodNames
+
+    /**
+     * T-M23.7：扫描选择区（offset 范围）内全部 SQL 候选调用（wrapper 链首 + 批量操作方法，
+     * 按 offset 去重排序）——同一链的 eq/list 多处只计 1 个；批量方法（getById 等）单调用各计 1；
+     * 嵌套子查询链首在实参子树内为独立链首（合理行为，文档化）。
      *
      * @param file  目标文件
      * @param start 选择区起始 offset（含）
      * @param end   选择区结束 offset（不含）
      */
-    fun chainHeadCallsInRange(file: PsiFile, start: Int, end: Int): List<PsiMethodCallExpression> =
+    fun sqlCandidatesInRange(file: PsiFile, start: Int, end: Int): List<PsiMethodCallExpression> =
         PsiTreeUtil.collectElementsOfType(file, PsiMethodCallExpression::class.java)
-            .filter { it.textRange.startOffset in start until end && isChainHeadCall(it) }
+            .filter { it.textRange.startOffset in start until end && isSqlCandidate(it) }
             .distinctBy { it.textRange.startOffset }
             .sortedBy { it.textRange.startOffset }
 
     /**
-     * T-M23.7：多 SQL 选择列表项摘要：`L{行号} {Wrapper 类型} {表名}`（表名解析失败省略表名）。
-     * 行号按文档行（1-based）；类型/表名轻量解析（选择弹窗列表展示用）。
+     * T-M23.7：多 SQL 选择列表项摘要：`L{行号} {Wrapper 类型} {表名}`（wrapper 链首）/
+     * `L{行号} {方法名}`（批量方法调用，如 `L18 getById`）。行号按文档行（1-based）。
      */
-    fun chainHeadSummary(call: PsiMethodCallExpression): String {
-        val typeName = wrapperTypeOfChainHead(call)?.name ?: "?"
+    fun sqlCandidateSummary(call: PsiMethodCallExpression): String {
         val line = runCatching {
             val doc = PsiDocumentManager.getInstance(call.project).getDocument(call.containingFile)
             doc?.getLineNumber(call.textRange.startOffset)?.plus(1) ?: 0
         }.getOrDefault(0)
-        val tableName = locateWithTable(call)?.table?.tableName
-        return "L$line $typeName${tableName?.let { "  $it" } ?: ""}"
+        return if (isChainHeadCall(call)) {
+            val typeName = wrapperTypeOfChainHead(call)?.name ?: "?"
+            val tableName = locateWithTable(call)?.table?.tableName
+            "L$line $typeName${tableName?.let { "  $it" } ?: ""}"
+        } else {
+            "L$line ${call.methodExpression.referenceName ?: "?"}"
+        }
     }
 
     // ------------------------------------------------------------------

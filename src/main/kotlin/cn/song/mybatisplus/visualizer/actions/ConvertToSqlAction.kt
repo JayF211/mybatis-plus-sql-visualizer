@@ -35,7 +35,7 @@ class ConvertToSqlAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val service = project.getService(SqlPreviewService::class.java)
 
-        // 分支 A（T-M23.7）：选择代码块 → 扫描选择区内链首（后台线程），0/1/多分发
+        // 分支 A（T-M23.7）：选择代码块 → 扫描选择区内 SQL 候选（wrapper 链首 + 批量方法），0/1/多分发
         val selectionModel = editor.selectionModel
         if (selectionModel.hasSelection()) {
             val selStart = selectionModel.selectionStart
@@ -43,7 +43,7 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().executeOnPooledThread {
                 val chainHeads = try {
                     ReadAction.compute<List<PsiMethodCallExpression>, Throwable> {
-                        WrapperLocator.chainHeadCallsInRange(file, selStart, selEnd)
+                        WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
                     }
                 } catch (t: Throwable) {
                     emptyList()

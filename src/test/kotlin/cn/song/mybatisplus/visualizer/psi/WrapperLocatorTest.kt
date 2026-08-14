@@ -776,9 +776,9 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         assertNull("普通方法实参处不应误定位", WrapperLocator.locateWithTable(arg))
     }
 
-    fun testChainHeadCallsInRangeCollectsAndDeduplicates() {
-        // 选择区扫描：两个 wrapper 链首 + 一个普通调用——只收集 2 个链首（普通调用不算；
-        // 同一链 eq/list 多处不重复计数）
+    fun testSqlCandidatesInRangeCollectsAndDeduplicates() {
+        // 选择区扫描（T-M23.7 增量，用户实测）：wrapper 链首 + 批量方法调用（getById）都是候选——
+        // 两个 wrapper 链首 + 1 个批量调用 + 普通调用（applyFilter 不计）
         myFixture.configureByText(
             "Demo.java",
             """
@@ -789,6 +789,7 @@ class WrapperLocatorTest : BasePlatformTestCase() {
                     new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L).isNotNull(DeviceInfoEntity::getId);
                     DeviceInfoService service = new DeviceInfoService();
                     service.lambdaQuery().eq("station_id", 2L).list();
+                    service.getById(3L);
                     helper.applyFilter(w);
                 }
 
@@ -800,19 +801,21 @@ class WrapperLocatorTest : BasePlatformTestCase() {
                     public Object lambdaQuery() { return null; }
                     public Object eq(String col, Object val) { return this; }
                     public Object list() { return null; }
+                    public Object getById(Long id) { return null; }
                 }
             }
             """.trimIndent(),
         )
-        val heads = WrapperLocator.chainHeadCallsInRange(myFixture.file, 0, myFixture.file.textLength)
-        assertEquals("选择区应收集 2 个链首（new 链 1 + 服务链 1，普通调用不计）", 2, heads.size)
-        // 按源码顺序：new 链首（eq 调用）在前、服务链首（lambdaQuery）在后
+        val heads = WrapperLocator.sqlCandidatesInRange(myFixture.file, 0, myFixture.file.textLength)
+        assertEquals("选择区应收集 3 个候选（new 链 1 + 服务链 1 + getById 批量 1，普通调用不计）", 3, heads.size)
+        // 按源码顺序：new 链首（eq 调用）在前、服务链首（lambdaQuery）、批量 getById 在后
         assertTrue(heads[0].methodExpression.referenceName in listOf("eq", "isNotNull"))
         assertEquals("lambdaQuery", heads[1].methodExpression.referenceName)
+        assertEquals("getById", heads[2].methodExpression.referenceName)
     }
 
     fun testChainHeadSummaryFormat() {
-        // 摘要：行号 + Wrapper 类型 + 表名（`L{行号} {类型} {表名}`）
+        // 摘要：wrapper 链首 → `L{行号} {类型} {表名}`；批量方法调用 → `L{行号} {方法名}`
         myFixture.configureByText(
             "Demo.java",
             """
@@ -821,18 +824,30 @@ class WrapperLocatorTest : BasePlatformTestCase() {
             public class Demo {
                 public void query() {
                     new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L);
+                    DeviceInfoService service = new DeviceInfoService();
+                    service.getById(2L);
                 }
 
                 static class DeviceInfoEntity {
                     private Long id;
                 }
+
+                static class DeviceInfoService {
+                    public Object getById(Long id) { return null; }
+                }
             }
             """.trimIndent(),
         )
-        val head = WrapperLocator.chainHeadCallsInRange(myFixture.file, 0, myFixture.file.textLength).first()
-        val summary = WrapperLocator.chainHeadSummary(head)
-        assertTrue("摘要应含 Wrapper 类型: $summary", summary.contains("LAMBDA_QUERY"))
-        assertTrue("摘要应含表名: $summary", summary.contains("device_info_entity"))
-        assertTrue("摘要应以行号开头: $summary", summary.startsWith("L"))
+        val candidates = WrapperLocator.sqlCandidatesInRange(myFixture.file, 0, myFixture.file.textLength)
+        assertEquals(2, candidates.size)
+        // wrapper 链首摘要：类型 + 表名 + 行号前缀
+        val wrapperSummary = WrapperLocator.sqlCandidateSummary(candidates[0])
+        assertTrue("摘要应含 Wrapper 类型: $wrapperSummary", wrapperSummary.contains("LAMBDA_QUERY"))
+        assertTrue("摘要应含表名: $wrapperSummary", wrapperSummary.contains("device_info_entity"))
+        assertTrue("摘要应以行号开头: $wrapperSummary", wrapperSummary.startsWith("L"))
+        // 批量方法调用摘要：行号 + 方法名
+        val batchSummary = WrapperLocator.sqlCandidateSummary(candidates[1])
+        assertTrue("批量摘要应含方法名: $batchSummary", batchSummary.contains("getById"))
+        assertTrue("批量摘要应以行号开头: $batchSummary", batchSummary.startsWith("L"))
     }
 }

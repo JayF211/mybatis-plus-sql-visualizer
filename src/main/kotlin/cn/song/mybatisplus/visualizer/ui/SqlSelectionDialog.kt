@@ -26,7 +26,7 @@ class SqlSelectionDialog(
     /** 候选链首调用（摘要列表索引序与之一一对应）。 */
     private val candidates: List<PsiMethodCallExpression> = candidates
 
-    private val list = JList(candidates.map { WrapperLocator.chainHeadSummary(it) }.toTypedArray()).apply {
+    private val list = JList(candidates.map { WrapperLocator.sqlCandidateSummary(it) }.toTypedArray()).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
     }
 
