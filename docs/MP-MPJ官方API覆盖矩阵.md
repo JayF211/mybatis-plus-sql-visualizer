@@ -101,7 +101,7 @@
 | `selectOne` / `selectOne(w, false)` | ✅ | T-M20-06 | 双参形态核对（追加 LIMIT 1 语义） |
 | `exists` | ✅ | T-M20-06 | SELECT EXISTS/1 形态 |
 | `selectCount` | ✅ | —（既有能力） | SELECT COUNT(*) |
-| `selectList` | ✅ | —（既有能力） | SELECT 全列 + wrapper；T-M23.3 列顺序角色分组（`id, 业务字段…, create_time, update_time, deleted`——主键置顶/业务居中/审计沉底，组内声明顺序）；T-M23.4 保留字按方言引用（列名/表名命中本方言保留字 → 按方言符号包裹；raw 形态 apply/子查询为文档化边界） |
+| `selectList` | ✅ | —（既有能力） | SELECT 全列 + wrapper；T-M23.3 列顺序角色分组（`id, 业务字段…, create_time, update_time, deleted`——主键置顶/业务居中/审计沉底，组内声明顺序）；T-M23.4 保留字按方言引用（列名/表名命中本方言保留字 → 按方言符号包裹；raw 形态 apply/子查询为文档化边界）；T-M23.5 批量 SELECT/DELETE/Map 模板与 setIncrBy/selectFunc/applyFunc 解析期拼接同规则补齐 |
 | `selectMaps` / `selectObjs` | ✅ | T-M20-06 | SQL 同 selectList，仅返回差异 |
 | `selectPage` / `selectMapsPage` | ✅ | T-M20-06 | 分页 SQL（LIMIT/OFFSET 按方言） |
 | `selectWithCursor`（3.5.17 新增） | ✅ | T-M20-06/09 | SELECT + ResultHandler 游标消费形态 |
@@ -316,6 +316,7 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-14 | **T-M23.5 同步（490 测试全绿）**：§1.5 `selectList` 行备注——批量 SELECT/DELETE/Map 模板与 setIncrBy/selectFunc/applyFunc 解析期拼接按方言引用补齐（psi 层 `currentDialect` 共享 + `ColumnRef.qualifiedName(dialect)` 统一入口） |
 | 2026-08-14 | **T-M23.4 同步（486 测试全绿）**：§1.4 `save/saveBatch` 与 §1.5 `selectList` 行备注——保留字按方言引用（五方言保留字集合，列名/表名/ON CONFLICT/EXCLUDED；符号按方言：反引号/双引号/方括号） |
 | 2026-08-14 | **T-M23.3 同步（472 测试全绿）**：§1.4 `save/saveBatch` 与 §1.5 `selectList` 行备注——字段顺序角色分组（`ColumnRole`：主键置顶/业务居中/fill 与逻辑删除沉底，组内声明顺序稳定排序；SELECT 全列展开与批量面板同序） |
 | 2026-08-13 | 初版：基于《20260813-1730-全量API预览支持-开发计划.md》§1 调研结论（MP 官网 + jar javap + v3.5.9/v3.5.17 tag 源码；MPJ 官网 + master 源码 + releases/tags 三重交叉核实），建立 MP 3.5.17 / MPJ 1.5.9 **官方 API 全量覆盖矩阵**（T-M20-01 语料基座）：MP 9 个分类面、MPJ 7 个分类面，每行标注目标状态 / 对应任务编号（T-M20-xx / T-M21-xx / T-M22-xx）/ 备注；目标状态按 §3 规则填写（🟡 2 项、⬜ 10 项，其余 ✅） |
