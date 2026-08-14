@@ -1,7 +1,11 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.model.BatchPreview
+import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.ParamQuote
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
@@ -22,18 +26,26 @@ import com.intellij.psi.PsiVariable
  *    INSERT + 方言 upsert（PG `ON CONFLICT`）
  *  - `removeByIds(list)` / `removeById(id)` / `deleteByIds(ids)`（U11/P1-02，T-M15-08 + M19.5）/
  *    `removeBatchByIds(list)`（T-M20-10 核对补注册）/ `deleteById(id)`（T-M22-04，Mapper 单删与
- *    ActiveRecord 无参形态同主键等值模板）：DELETE FROM 表 WHERE 主键 IN/=
+ *    ActiveRecord 无参形态同主键等值模板）：DELETE FROM 表 WHERE 主键 IN/=；
+ *    **T-M23-01（用户确认）**：实体含 @TableLogic 时删除操作实际是修改操作——转软删除
+ *    `UPDATE 表 SET deleted = 1 WHERE ... AND deleted = 0`（对齐 MP LogicDeleteSqlInjector）；
+ *    无 @TableLogic 维持物理 DELETE。
  *  - `removeByMap(map)` / `deleteByMap(map)`（T-M20-07，MP/MPJ Map 条件删除）与
  *    `selectByMap(map)` / `listByMap(map)`（T-M20-07 Map 条件查询）：
  *    WHERE Map 等值条件占位（键值静态不可得，可读占位文本）
  *  - `getById(id)` / `getOptById(id)`（T-M20-10，IService 3.5.15）/ `listByIds(ids)` / `selectByIds(ids)`
- *    （M19.5，实体单条查询，P2-08 同点合并）：SELECT 全列 FROM 表 WHERE 主键 =/IN
- *  - `selectAll()`（T-M22-04，ActiveRecord）：SELECT 全列 FROM 表（无 WHERE）
+ *    （M19.5，实体单条查询，P2-08 同点合并）：SELECT 全列 FROM 表 WHERE 主键 =/IN；
+ *    **T-M23-01**：实体含 @TableLogic 时 WHERE 追加 `AND deleted = 0`（对齐 MP 内置 SQL）
+ *  - `selectAll()`（T-M22-04，ActiveRecord）：SELECT 全列 FROM 表（无 WHERE；@TableLogic 时 WHERE deleted = 0）
  *
  * 实体类解析顺序：集合参数泛型（`List<Entity>`）→ 实体参数类型 → service qualifier 泛型
  * （`XxxService extends IService<Entity>` / `ServiceImpl<Mapper, Entity>`，getById/removeById 单参场景）
  * → qualifier 实体类型（T-M22-04，ActiveRecord `entity.insert()` 等无参形态）。
  * 运行时行值不可得，输出 `?` 模板并附参数组说明（每行一组，字段顺序与 SQL 一致）。
+ *
+ * T-M23-02（参数面板）：单主键方法实参可静态求值（字面量/可追踪变量，[ExpressionEvaluator]）时
+ * **内联**进 SQL（`removeById(1L)` → `WHERE id = 1`）；不可求值 → `?` + 参数登记
+ * （source=实参文本，面板参数行）；实体/集合方法每个 `?` 登记 `实体变量.列名`。
  */
 object BatchOperationConverter {
 
@@ -93,24 +105,57 @@ object BatchOperationConverter {
     internal val batchOperationMethodNames: Set<String> = BATCH_OPERATIONS.keys
 
     /**
+     * T-M23-02：单个 `?` 的参数登记（source + 回填引号提示，供面板参数行）。
+     */
+    private data class ParamEntry(val source: String, val hint: ParamHint)
+
+    /**
+     * T-M23-02：批量构建结果（SQL 模板 + 按 `?` 出现顺序的参数登记 + 参数组说明）。
+     */
+    private data class BatchBuild(
+        val sql: String,
+        val params: List<ParamEntry> = emptyList(),
+        val paramGroups: String? = null,
+    )
+
+    /**
      * 转换批量/单实体方法调用。
      *
-     * @param call service 方法调用表达式
+     * @param call              service 方法调用表达式
+     * @param injectLogicDelete 逻辑删除注入开关（T-M23-01，settings.injectLogicDelete）：
+     *                          关闭时 SELECT 不追加 `deleted = 0`、删除不转软删除
+     * @param resolveVariables  变量求值开关（T-M23-02，settings.replaceParams）：false 时跳过
+     *                          实参静态求值，一律 `?` + 参数行（对齐 Wrapper 路径 ArgResolver）
      * @return 批量预览；方法不匹配或实体无法解析时返回 null
      */
-    fun convert(call: PsiMethodCallExpression): BatchPreview? {
+    fun convert(
+        call: PsiMethodCallExpression,
+        injectLogicDelete: Boolean = true,
+        resolveVariables: Boolean = true,
+    ): BatchPreview? {
         val methodName = call.methodExpression.referenceName ?: return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
         val table = resolveEntityTable(call) ?: return null
         // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 模板）
-        if (methodName in MAP_CONDITION_METHODS) return buildMapConditionBatch(methodName, table)
-        return when (operation) {
-            Operation.UPDATE -> buildUpdateBatch(methodName, table)
-            Operation.INSERT -> buildInsertBatch(methodName, table)
-            Operation.DELETE -> buildDeleteBatch(methodName, table)
-            Operation.UPSERT -> buildUpsertBatch(methodName, table)
-            Operation.SELECT -> buildSelectBatch(methodName, table)
+        val build = if (methodName in MAP_CONDITION_METHODS) {
+            buildMapConditionBatch(methodName, table, injectLogicDelete)
+        } else {
+            when (operation) {
+                Operation.UPDATE -> buildUpdateBatch(call, methodName, table)
+                Operation.INSERT -> buildInsertBatch(call, methodName, table)
+                Operation.DELETE -> buildDeleteBatch(call, methodName, table, injectLogicDelete, resolveVariables)
+                Operation.UPSERT -> buildUpsertBatch(call, methodName, table)
+                Operation.SELECT -> buildSelectBatch(call, methodName, table, injectLogicDelete, resolveVariables)
+            }
         }
+        return BatchPreview(
+            methodName = methodName,
+            tableName = table.tableName,
+            sql = build.sql,
+            paramGroups = build.paramGroups,
+            paramSources = build.params.map { it.source },
+            paramHints = build.params.map { it.hint },
+        )
     }
 
     /**
@@ -204,13 +249,18 @@ object BatchOperationConverter {
         return null
     }
 
+    // ------------------------------------------------------------------
+    // SQL 模板构建（T-M23-01：逻辑删除/软删除；T-M23-02：参数登记）
+    // ------------------------------------------------------------------
+
     /**
      * UPDATE 模板：非主键列 SET + 主键 WHERE（无主键标记时用首列；updateById 同 update-strategy: always 全列语义）。
      * T-M22-02（@Version 乐观锁）：实体含 @Version 字段时（对齐 MP OptimisticLockerInnerInterceptor）——
      * version 列不进实体 SET（`version = ?` 由 `version = version + 1` 取代），
      * WHERE 末尾追加 `AND version = ?`；参数组说明同步追加 version（buildParamGroups 顺序与 SQL 一致）。
+     * T-M23-02：SET/主键/version 各 `?` 登记 `实体变量.列名` 参数行（值运行时不可得，面板可手动填）。
      */
-    private fun buildUpdateBatch(methodName: String, table: TableInfo): BatchPreview {
+    private fun buildUpdateBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val versionColumn = table.versionColumn
         val setColumns = table.columns.filter { it.columnName != idColumn.columnName && it.columnName != versionColumn }
@@ -218,16 +268,25 @@ object BatchOperationConverter {
             (versionColumn?.let { ", $it = $it + 1" } ?: "")
         val whereSql = "${idColumn.columnName} = ?" + (versionColumn?.let { " AND $it = ?" } ?: "")
         val sql = "UPDATE ${table.tableName}\nSET $setSql\nWHERE $whereSql"
+        // T-M23-02：实体更新 id 来自实体字段（运行时不可得）→ `实体.主键列` 参数行
+        val prefix = entityPrefix(call)
+        val params = columnParams(prefix, table, setColumns.map { it.columnName }) +
+            listOf(ParamEntry(idSource(prefix, idColumn.columnName), ParamHint(quote = ParamQuote.decide(idColumn.fieldType)))) +
+            listOfNotNull(versionColumn?.let { version ->
+                val versionField = table.columns.firstOrNull { it.columnName == version }
+                ParamEntry("$prefix.$version", ParamHint(quote = ParamQuote.decide(versionField?.fieldType)))
+            })
         val paramGroups = buildParamGroups(setColumns.map { it.columnName } + idColumn.columnName + listOfNotNull(versionColumn))
-        return BatchPreview(methodName, table.tableName, sql, paramGroups)
+        return BatchBuild(sql, params, paramGroups)
     }
 
     /**
      * INSERT 模板：全列 + VALUES。
      * `insertBatchSomeColumn`（自定义注入器，X09）：排除 `FieldFill.UPDATE` 填充列（update 侧维护，插入不参与）；
      * `save(entity)` 单实体同模板（F-15 语义一致）。
+     * T-M23-02：每个 `?` 登记 `实体变量.列名` 参数行。
      */
-    private fun buildInsertBatch(methodName: String, table: TableInfo): BatchPreview {
+    private fun buildInsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val columns = if (methodName == "insertBatchSomeColumn") {
             table.columns.filter { it.fill != "UPDATE" }.map { it.columnName }
         } else {
@@ -235,58 +294,109 @@ object BatchOperationConverter {
         }
         val placeholders = columns.joinToString(", ") { "?" }
         val sql = "INSERT INTO ${table.tableName} (${columns.joinToString(", ")})\nVALUES ($placeholders)"
-        return BatchPreview(methodName, table.tableName, sql, buildParamGroups(columns))
+        return BatchBuild(sql, columnParams(entityPrefix(call), table, columns), buildParamGroups(columns))
     }
 
-    /** DELETE 模板：主键 IN 列表（removeByIds/deleteByIds）/ 主键等值（removeById，U11；deleteById，T-M22-04）。 */
-    private fun buildDeleteBatch(methodName: String, table: TableInfo): BatchPreview {
+    /**
+     * DELETE 模板（T-M23-01）：主键 IN 列表（removeByIds/deleteByIds）/ 主键等值（removeById，U11；deleteById，T-M22-04）。
+     *
+     * **有 @TableLogic（且逻辑删除开关开启）→ 软删除**（用户确认：删除操作实际是修改操作）：
+     * `UPDATE 表 SET deleted = 1 WHERE 主键 ... AND deleted = 0`（对齐 MP LogicDeleteSqlInjector）；
+     * 无 @TableLogic → 物理 DELETE（存量行为）。
+     * T-M23-02：主键等值实参可静态求值 → 内联（`removeById(1L)` → `WHERE id = 1`）；不可求值 → `?` + 参数行。
+     */
+    private fun buildDeleteBatch(
+        call: PsiMethodCallExpression,
+        methodName: String,
+        table: TableInfo,
+        injectLogicDelete: Boolean,
+        resolveVariables: Boolean,
+    ): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
-        val sql = if (methodName in SINGLE_ID_DELETE_METHODS) {
-            "DELETE FROM ${table.tableName}\nWHERE ${idColumn.columnName} = ?"
+        val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
+        val singleId = methodName in SINGLE_ID_DELETE_METHODS
+        val (idWhere, idParams) = if (singleId) {
+            renderIdCondition(call, idColumn, resolveVariables)
         } else {
-            "DELETE FROM ${table.tableName}\nWHERE ${idColumn.columnName} IN (?, ?, ...)"
+            "${idColumn.columnName} IN (?, ?, ...)" to emptyList()
         }
-        return BatchPreview(methodName, table.tableName, sql, null)
+        return if (logicColumn != null) {
+            // 软删除：删除转 UPDATE（deleted = 1 为字面量，不进参数行）
+            BatchBuild(
+                sql = "UPDATE ${table.tableName}\nSET $logicColumn = 1\nWHERE $idWhere AND $logicColumn = 0",
+                params = idParams,
+            )
+        } else {
+            BatchBuild(
+                sql = "DELETE FROM ${table.tableName}\nWHERE $idWhere",
+                params = idParams,
+            )
+        }
     }
 
     /**
      * SELECT 模板（M19.5，实体单条查询，P1-02/P2-08 同点合并）：
      * 全列清单 + 主键等值（getById/getOptById，T-M20-10 并入）/ 主键 IN（listByIds/selectByIds）。
      * T-M22-04：ActiveRecord selectAll() 全列查询——**无 WHERE**（方法名分支）。
+     * T-M23-01：实体含 @TableLogic（开关开启）→ WHERE 追加 `AND deleted = 0`（对齐 MP 内置 SQL）；
+     * selectAll 无 WHERE 时输出 `WHERE deleted = 0`。
+     * T-M23-02：主键等值实参可静态求值 → 内联；不可求值 → `?` + 参数行。
      */
-    private fun buildSelectBatch(methodName: String, table: TableInfo): BatchPreview {
+    private fun buildSelectBatch(
+        call: PsiMethodCallExpression,
+        methodName: String,
+        table: TableInfo,
+        injectLogicDelete: Boolean,
+        resolveVariables: Boolean,
+    ): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val selectColumns = table.columns.joinToString(", ") { it.columnName }
-        val sql = when {
-            methodName == "selectAll" -> "SELECT $selectColumns\nFROM ${table.tableName}"
-            methodName in SINGLE_ID_SELECT_METHODS -> "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE ${idColumn.columnName} = ?"
-            else -> "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE ${idColumn.columnName} IN (?, ?, ...)"
+        val logicCond = if (injectLogicDelete) table.logicDeleteColumn?.let { "$it = 0" } else null
+        return when {
+            methodName == "selectAll" -> {
+                val where = logicCond?.let { "\nWHERE $it" } ?: ""
+                BatchBuild("SELECT $selectColumns\nFROM ${table.tableName}$where")
+            }
+            methodName in SINGLE_ID_SELECT_METHODS -> {
+                val (idWhere, idParams) = renderIdCondition(call, idColumn, resolveVariables)
+                val where = idWhere + (logicCond?.let { " AND $it" } ?: "")
+                BatchBuild("SELECT $selectColumns\nFROM ${table.tableName}\nWHERE $where", idParams)
+            }
+            else -> {
+                val where = "${idColumn.columnName} IN (?, ?, ...)" + (logicCond?.let { " AND $it" } ?: "")
+                BatchBuild("SELECT $selectColumns\nFROM ${table.tableName}\nWHERE $where")
+            }
         }
-        return BatchPreview(methodName, table.tableName, sql, null)
     }
 
     /**
      * T-M20-07（Map 条件消费）：`removeByMap(Map)` / `deleteByMap(Map)` / `selectByMap(Map)` / `listByMap(Map)`
      * 的 Map 等值条件模板——Map 键值均为运行时数据，列名与取值静态不可得，WHERE 用可读占位文本
      * `col = ? AND col = ? ...`；删除/查询由方法名前缀区分。参数组说明置空（Map 键不可静态枚举）。
+     * T-M23-01：Map 删除在有 @TableLogic 时同为软删除（`UPDATE 表 SET deleted = 1 WHERE <Map 条件> AND deleted = 0`）；
+     * SELECT 同理追加 `AND deleted = 0`。
      */
-    private fun buildMapConditionBatch(methodName: String, table: TableInfo): BatchPreview {
+    private fun buildMapConditionBatch(methodName: String, table: TableInfo, injectLogicDelete: Boolean): BatchBuild {
         val isDelete = methodName.startsWith("remove") || methodName.startsWith("delete")
-        val condition = "<Map 等值条件: col = ? AND col = ? ...>"
-        val sql = if (isDelete) {
-            "DELETE FROM ${table.tableName}\nWHERE $condition"
-        } else {
-            val selectColumns = table.columns.joinToString(", ") { it.columnName }
-            "SELECT $selectColumns\nFROM ${table.tableName}\nWHERE $condition"
+        val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
+        val condition = "<Map 等值条件: col = ? AND col = ? ...>" + (logicColumn?.let { " AND $it = 0" } ?: "")
+        val sql = when {
+            isDelete && logicColumn != null ->
+                "UPDATE ${table.tableName}\nSET $logicColumn = 1\nWHERE $condition"
+            isDelete ->
+                "DELETE FROM ${table.tableName}\nWHERE $condition"
+            else ->
+                "SELECT ${table.columns.joinToString(", ") { it.columnName }}\nFROM ${table.tableName}\nWHERE $condition"
         }
-        return BatchPreview(methodName, table.tableName, sql, null)
+        return BatchBuild(sql)
     }
 
     /**
      * UPSERT 模板（saveOrUpdate / saveOrUpdateBatch，U12，T-M15-08）：
      * INSERT + PG 方言 `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`。
+     * T-M23-02：VALUES 各 `?` 登记 `实体变量.列名` 参数行。
      */
-    private fun buildUpsertBatch(methodName: String, table: TableInfo): BatchPreview {
+    private fun buildUpsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val columns = table.columns.map { it.columnName }
         val placeholders = columns.joinToString(", ") { "?" }
@@ -295,7 +405,57 @@ object BatchOperationConverter {
         val sql = "INSERT INTO ${table.tableName} (${columns.joinToString(", ")})\n" +
             "VALUES ($placeholders)\n" +
             "ON CONFLICT (${idColumn.columnName}) DO UPDATE SET $conflictSet"
-        return BatchPreview(methodName, table.tableName, sql, buildParamGroups(columns))
+        return BatchBuild(sql, columnParams(entityPrefix(call), table, columns), buildParamGroups(columns))
+    }
+
+    // ------------------------------------------------------------------
+    // T-M23-02：参数登记辅助
+    // ------------------------------------------------------------------
+
+    /**
+     * 单主键方法的 `?` 渲染与参数登记：
+     *  - 实参可静态求值（字面量/可追踪变量，[ExpressionEvaluator]；受 resolveVariables 开关控制）→
+     *    **内联**进 SQL（`removeById(1L)` → `id = 1`，无参数行）；
+     *  - 运行时值 → `?` + 参数行（source=实参表达式文本，如 `id` / `dto.getId()`）；
+     *  - 无实参（ActiveRecord `entity.getById()` / `entity.deleteById()` 形态）→ `?` + `实体.主键列` 参数行。
+     *
+     * @return (WHERE 片段, 参数登记)；Db.getById(Class, id) 两参形态 id 取第二个实参
+     */
+    private fun renderIdCondition(call: PsiMethodCallExpression, idColumn: ColumnInfo, resolveVariables: Boolean): Pair<String, List<ParamEntry>> {
+        val args = call.argumentList.expressions
+        val idExpr = if (args.size > 1) args[1] else args.firstOrNull()
+        if (idExpr != null) {
+            val value = if (resolveVariables) ExpressionEvaluator.evaluate(idExpr) else SqlValue.Placeholder(idExpr.text)
+            return when (value) {
+                is SqlValue.Literal ->
+                    "${idColumn.columnName} = ${value.raw}" to emptyList()
+                is SqlValue.Placeholder ->
+                    "${idColumn.columnName} = ?" to listOf(ParamEntry(value.source, ParamHint(quote = ParamQuote.decide(idColumn.fieldType))))
+            }
+        }
+        // ActiveRecord 无参形态：id 来自实体字段
+        return "${idColumn.columnName} = ?" to listOf(
+            ParamEntry(idSource(entityPrefix(call), idColumn.columnName), ParamHint(quote = ParamQuote.decide(idColumn.fieldType))),
+        )
+    }
+
+    /**
+     * 实体/集合参数前缀：首实参文本（`save(entity)` → `entity`、`saveBatch(list)` → `list`）；
+     * 无实参（ActiveRecord `entity.insert()` 形态）→ qualifier 文本；均无 → 空串。
+     */
+    private fun entityPrefix(call: PsiMethodCallExpression): String {
+        call.argumentList.expressions.firstOrNull()?.let { return it.text }
+        return (call.methodExpression.qualifierExpression as? PsiReferenceExpression)?.text.orEmpty()
+    }
+
+    /** 实体字段参数来源：`实体变量.列名`；无前缀（ActiveRecord 形态）时仅列名。 */
+    private fun idSource(prefix: String, columnName: String): String =
+        if (prefix.isEmpty()) columnName else "$prefix.$columnName"
+
+    /** 按列清单生成参数登记：source = `实体变量.列名`，hint 按列类型引号判定（[ParamQuote]）。 */
+    private fun columnParams(prefix: String, table: TableInfo, columns: List<String>): List<ParamEntry> = columns.map { col ->
+        val fieldType = table.columns.firstOrNull { it.columnName == col }?.fieldType
+        ParamEntry(idSource(prefix, col), ParamHint(quote = ParamQuote.decide(fieldType)))
     }
 
     /**

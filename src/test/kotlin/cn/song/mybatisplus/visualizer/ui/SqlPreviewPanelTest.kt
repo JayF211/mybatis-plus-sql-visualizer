@@ -399,6 +399,42 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testDynamicConditionDateTimeColumnValueQuoted() {
+        // T-M23-03（用户实测：LocalDateTime 参数回填不带引号）：除确定的数值类型外其他类型默认带引号——
+        // LocalDateTime 列回填 `2024-01-01 00:00:00` → `use_time = '2024-01-01 00:00:00'`（原实现无引号，SQL 无效）
+        val statement = SelectStatement(
+            table = tableInfo().copy(
+                columns = tableInfo().columns + ColumnInfo("useTime", "use_time", fieldType = "java.time.LocalDateTime"),
+            ),
+            conditions = listOf(
+                Condition.Simple(
+                    ColumnRef(columnName = "use_time"), "=", SqlValue.Placeholder("now"),
+                    toggle = ConditionToggle("c0", "true", true, "use_time = ?", "now"),
+                ),
+            ),
+        )
+        val model = SqlPreviewModel(
+            statement, MySqlDialect, formatSql = true,
+            conditionViews = listOf(ConditionView("c0", "use_time = ?", "true", true, "now")),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            PreviewResult(
+                sql = "SELECT id, station_id, name, use_time\nFROM car_device_info",
+                compactSql = "SELECT id, station_id, name, use_time FROM car_device_info",
+                unresolvedParams = emptyList(),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "car_device_info",
+                columns = listOf("id", "station_id", "name", "use_time"),
+                previewModel = model,
+            ),
+        )
+        panel.conditionValueFieldForTest(0)!!.text = "2024-01-01 00:00:00"
+        assertTrue(panel.editorForTest()!!.document.text.contains("use_time = '2024-01-01 00:00:00'"))
+        panel.clear()
+    }
+
     fun testInListMultiValueBackfill() {
         // M19.6（2026-08-13 用户实测）：IN 列表占位符回填按逗号分割多值、每个值独立引号——
         // 输入 `1,2` → IN ('1','2')（原实现拼成 IN ('1,2') 单值；name 为 String 列恒引号）

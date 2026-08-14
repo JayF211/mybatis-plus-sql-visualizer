@@ -69,7 +69,7 @@ class DbActiveRecordCoverageTest : BasePlatformTestCase() {
             """
             SELECT id, name
             FROM user_entity
-            WHERE id = ?
+            WHERE id = 1001
             """.trimIndent(),
             result!!.sql,
         )

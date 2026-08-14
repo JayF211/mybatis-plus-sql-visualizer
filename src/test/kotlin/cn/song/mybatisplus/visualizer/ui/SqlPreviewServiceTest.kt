@@ -1736,7 +1736,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(
             """
             DELETE FROM device_info_entity
-            WHERE id = ?
+            WHERE id = 1001
             """.trimIndent(),
             result!!.sql,
         )
@@ -1774,7 +1774,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """
             SELECT id, version_no, dic_status
             FROM sp_workflow_version_entity
-            WHERE id = ?
+            WHERE id = 1001
             """.trimIndent(),
             result!!.sql,
         )
@@ -1851,6 +1851,289 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """.trimIndent(),
             result!!.sql,
         )
+    }
+
+    fun testBatchGetByIdWithLogicDeleteAppendsDeletedCondition() {
+        // T-M23-01（用户实测：getById 没有 deleted）：@TableLogic 实体批量查询自动追加 `AND deleted = 0`
+        // （对齐 MP 内置 SQL；批量路径此前绕过逻辑删除注入）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private StoreCouponService storeCouponService;
+
+                public void query(Long id) {
+                    storeCouponService.getById(id);
+                }
+
+                static class StoreCouponEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class BaseService<T> {}
+
+                static class StoreCouponService extends BaseService<StoreCouponEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, name, deleted
+            FROM store_coupon_entity
+            WHERE id = ? AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+        // T-M23-02：id 为方法参数（运行时值）→ 参数行登记
+        assertEquals("getById 应登记 id 参数行", listOf("id"), result.unresolvedParams)
+    }
+
+    fun testBatchRemoveByIdWithLogicDeleteIsSoftDelete() {
+        // T-M23-01（用户确认：有 @TableLogic 时删除操作实际是修改操作）：
+        // removeById(id) → UPDATE 软删除（SET deleted = 1 + WHERE ... AND deleted = 0，对齐 MP LogicDeleteSqlInjector）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private StoreCouponService storeCouponService;
+
+                public void remove(Long id) {
+                    storeCouponService.removeById(id);
+                }
+
+                static class StoreCouponEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class BaseService<T> {}
+
+                static class StoreCouponService extends BaseService<StoreCouponEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("removeById 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_entity
+            SET deleted = 1
+            WHERE id = ? AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals(listOf("id"), result.unresolvedParams)
+    }
+
+    fun testBatchRemoveByIdsWithLogicDeleteIsSoftDelete() {
+        // T-M23-01：removeByIds(ids) @TableLogic → 软删除 IN 模板（DELETE 转 UPDATE）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private StoreCouponService storeCouponService;
+
+                public void remove(java.util.List<Long> ids) {
+                    storeCouponService.removeByIds(ids);
+                }
+
+                static class StoreCouponEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+
+                static class BaseService<T> {}
+
+                static class StoreCouponService extends BaseService<StoreCouponEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("removeByIds 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE store_coupon_entity
+            SET deleted = 1
+            WHERE id IN (?, ?, ...) AND deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testBatchSelectAllWithLogicDeleteAppendsWhere() {
+        // T-M23-01：ActiveRecord selectAll() @TableLogic → 无 WHERE 时追加 `WHERE deleted = 0`
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    StoreCouponEntity e = new StoreCouponEntity();
+                    e.selectAll();
+                }
+
+                static class StoreCouponEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("selectAll 应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id, name, deleted
+            FROM store_coupon_entity
+            WHERE deleted = 0
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testBatchLogicDeleteSwitchOffKeepsHardDelete() {
+        // T-M23-01：injectLogicDelete=false → SELECT 不追加 deleted 条件、删除不转软删除（纯模板语义）
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.injectLogicDelete
+        settings.state.injectLogicDelete = false
+        try {
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    private StoreCouponService storeCouponService;
+
+                    public void ops(Long id) {
+                        storeCouponService.getById(id);
+                        storeCouponService.removeById(id);
+                    }
+
+                    static class StoreCouponEntity {
+                        @com.baomidou.mybatisplus.annotation.TableId
+                        private Long id;
+                        private String name;
+                        @com.baomidou.mybatisplus.annotation.TableLogic
+                        private Integer deleted;
+                    }
+
+                    static class BaseService<T> {}
+
+                    static class StoreCouponService extends BaseService<StoreCouponEntity> {}
+                }
+                """.trimIndent(),
+            )
+            val calls = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            val getById = newService().preview(calls.first { it.methodExpression.referenceName == "getById" })!!
+            assertEquals(
+                """
+                SELECT id, name, deleted
+                FROM store_coupon_entity
+                WHERE id = ?
+                """.trimIndent(),
+                getById.sql.trim(),
+            )
+            val removeById = newService().preview(calls.first { it.methodExpression.referenceName == "removeById" })!!
+            assertEquals(
+                """
+                DELETE FROM store_coupon_entity
+                WHERE id = ?
+                """.trimIndent(),
+                removeById.sql.trim(),
+            )
+        } finally {
+            settings.state.injectLogicDelete = old
+        }
+    }
+
+    fun testBatchSaveRendersInsertWithParamSources() {
+        // T-M23-02（用户实测：save 没有填参数的地方）：save(entity) 每个 `?` 登记 `实体.列名` 参数行，
+        // 回填引号提示按列类型（数值列无引号、String 列引号）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private StoreCouponService storeCouponService;
+
+                public void save(StoreCouponEntity entity) {
+                    storeCouponService.save(entity);
+                }
+
+                static class StoreCouponEntity {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    private Integer dicStatus;
+                }
+
+                static class BaseService<T> {}
+
+                static class StoreCouponService extends BaseService<StoreCouponEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("save 应产出预览结果", result)
+        assertEquals(
+            """
+            INSERT INTO store_coupon_entity (id, name, dic_status)
+            VALUES (?, ?, ?)
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals(
+            "save 应登记实体字段参数行",
+            listOf("entity.id", "entity.name", "entity.dic_status"),
+            result.unresolvedParams,
+        )
+        // 数值列（Long/Integer）无引号、String 列引号
+        assertEquals(listOf(false, true, false), result.paramHints.map { it.quote })
+    }
+
+    fun testBatchRemoveByIdUnresolvableArgRegistersParamRow() {
+        // T-M23-02（用户实测：removeById 没有填参数的地方）：removeById(1001L) 字面量内联（无参数行，
+        // 见 testRemoveByIdRendersDelete）；removeById(id) 运行时值 → `?` + `#id` 参数行
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void remove(Long id) {
+                    deviceInfoService.removeById(id);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+
+                static class BaseService<T> {}
+
+                static class DeviceInfoService extends BaseService<DeviceInfoEntity> {}
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("removeById 应产出预览结果", result)
+        assertEquals(
+            """
+            DELETE FROM device_info_entity
+            WHERE id = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+        assertEquals("removeById 应登记 id 参数行", listOf("id"), result.unresolvedParams)
     }
 
     fun testSaveEntityRendersInsert() {
@@ -2330,7 +2613,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """
             SELECT id, name
             FROM device_info_entity
-            WHERE id = ?
+            WHERE id = 1001
             """.trimIndent(),
             result!!.sql,
         )

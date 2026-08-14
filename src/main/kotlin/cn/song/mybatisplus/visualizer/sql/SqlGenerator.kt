@@ -447,11 +447,13 @@ object SqlGenerator {
     }
 
     /**
-     * 列值引号提示（M13）：按实体字段类型判定 —— String/CharSequence 列恒加引号；
-     * 数值/时间等类型恒原样；列或类型未知返回 null（面板走原数字启发式）。
+     * 列值引号提示（M13，T-M23-03 修正）：按实体字段类型判定——
+     * **除确定的数值类型（int/long 等）外，其他类型默认带引号**（用户确认：LocalDateTime/Date/Boolean
+     * 等非数值类型原实现一律不加引号，回填后 SQL 无效）；列或类型未知返回 null（面板走原数字启发式）。
+     * 判定逻辑见 [ParamQuote]（批量模板路径共用，T-M23-02）。
      */
     private fun quoteHint(table: TableInfo?, column: ColumnRef): Boolean? {
-        val type = table?.columns?.firstOrNull { it.columnName == column.columnName }?.fieldType ?: return null
-        return if ("String" in type || "CharSequence" in type) true else false
+        val type = table?.columns?.firstOrNull { it.columnName == column.columnName }?.fieldType
+        return ParamQuote.decide(type)
     }
 }

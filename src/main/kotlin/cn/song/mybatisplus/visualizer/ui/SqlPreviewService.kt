@@ -179,14 +179,23 @@ class SqlPreviewService(private val project: Project) {
         val batchCall = generateSequence(anchor) { it.parent }
             .filterIsInstance<PsiMethodCallExpression>()
             .firstOrNull()
-        val batch = batchCall?.let { BatchOperationConverter.convert(it) } ?: return null
+        // T-M23-01/02：批量路径接线——逻辑删除注入开关（settings.injectLogicDelete）与变量求值开关
+        // （settings.replaceParams，实参可静态求值时内联）对齐 Wrapper 路径；参数来源/回填提示透传面板
+        val batch = batchCall?.let {
+            BatchOperationConverter.convert(
+                it,
+                injectLogicDelete = settings?.state?.injectLogicDelete ?: true,
+                resolveVariables = settings?.state?.replaceParams ?: true,
+            )
+        } ?: return null
         return PreviewResult(
             sql = batch.sql,
             compactSql = batch.sql,
-            unresolvedParams = emptyList(),
+            unresolvedParams = batch.paramSources,
             paramTable = batch.paramGroups,
             wrapperType = null,
             tableName = batch.tableName,
+            paramHints = batch.paramHints,
         )
     }
 
