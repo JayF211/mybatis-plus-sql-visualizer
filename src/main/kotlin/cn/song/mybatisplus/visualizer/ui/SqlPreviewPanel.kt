@@ -18,6 +18,8 @@ import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.DataProvider
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.KeyboardShortcut
@@ -487,7 +489,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             settings.isAdditionalPageAtBottom = false
         }
         editorHolder.removeAll()
-        editorHolder.add(created.component, BorderLayout.CENTER)
+        // T-M27.1：编辑器组件链补 DataProvider——2025.3 平台编辑器内部改为 UiCompatibleDataProvider
+        // （仅新 UI 兼容查询路径生效），传统 DataManager.getDataContext 沿父链只认 DataProvider 接口，
+        // 面板编辑器获得焦点时 Ctrl+Space 的 CodeCompletionAction 拿不到 CommonDataKeys.EDITOR
+        // （断言 editor != null 静默失败）→ 补全无反应（用户实测）。外层包装 DataProvider 提供
+        // EDITOR：真实 IDE 的 DataManagerImpl 沿组件父链查找即命中，快捷键路径恢复
+        editorHolder.add(
+            object : JBPanel<JBPanel<*>>(BorderLayout()), DataProvider {
+                override fun getData(dataId: String): Any? =
+                    if (CommonDataKeys.EDITOR.`is`(dataId)) created else null
+            }.apply { add(created.component, BorderLayout.CENTER) },
+            BorderLayout.CENTER,
+        )
         editorHolder.revalidate()
         editorHolder.repaint()
         editor = created

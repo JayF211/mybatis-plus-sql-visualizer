@@ -17,8 +17,13 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
+import com.intellij.codeInsight.completion.CompletionType
+import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
+import com.intellij.openapi.actionSystem.DataProvider
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -784,5 +789,68 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
         assertNull("clear 后应无全选按钮", panel.selectAllButtonForTest())
         assertNull("clear 后应无批量全选按钮", panel.batchSelectAllButtonForTest())
+    }
+
+    // ------------------------------------------------------------------
+    // T-M27.1：SQL 面板补全触发（用户实测：配置数据源后 XML 有补全、面板无补全——
+    // 根因：编辑器组件链无 DataProvider（2025.3 平台编辑器改 UiCompatibleDataProvider，
+    // 传统 getDataContext 沿父链只认 DataProvider）→ Ctrl+Space 的 action 拿不到 EDITOR
+    // 静默失败。修复：挂载时包装 DataProvider 提供 EDITOR）
+    // ------------------------------------------------------------------
+
+    fun testPanelEditorWrapsDataProviderForEditor() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result())
+        val editor = panel.editorForTest()
+        assertNotNull("应挂载编辑器", editor)
+        // 组件树中应存在提供 EDITOR 的 DataProvider（Ctrl+Space action 的 DataContext 来源）
+        val provider = findDataProvider(panel)
+        assertNotNull("编辑器组件链应有 DataProvider 包装", provider)
+        assertEquals("DataProvider 应提供当前编辑器", editor, provider!!.getData(CommonDataKeys.EDITOR.name))
+        panel.clear()
+    }
+
+    fun testPanelEditorCompletionOffersKeywordsAndColumns() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result())
+        val editor = panel.editorForTest()!!
+        // 表名位：FROM 后（空格后空前缀 → 全量命中；测试环境 HeadlessDataManager 使 DataContext
+        // 路径不可模拟，直接调平台补全处理器 = 编辑器内 Ctrl+Space 的最终路径）
+        editor.caretModel.moveToOffset(editor.document.text.indexOf("FROM") + 5)
+        val handler = CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true)
+        handler.invokeCompletion(project, editor, 1, false)
+        val lookup = LookupManager.getInstance(project).getActiveLookup()
+        assertNotNull("Ctrl+Space 应弹出补全（实际为 null——补全链路失效）", lookup)
+        val items = lookup!!.items.map { it.lookupString }
+        assertTrue("补全应含关键字 SELECT：$items", items.contains("SELECT"))
+        assertTrue("补全应含关键字 DISTINCT：$items", items.contains("DISTINCT"))
+        assertTrue("FROM 后应含表名 tbl：$items", items.contains("tbl"))
+        LookupManager.getInstance(project).hideActiveLookup()
+        panel.clear()
+
+        // 列名位：WHERE 后（空格后空前缀）
+        val panel2 = SqlPreviewPanel(project)
+        panel2.showResult(result(sql = "SELECT id FROM tbl WHERE ", compact = "SELECT id FROM tbl"))
+        val editor2 = panel2.editorForTest()!!
+        editor2.caretModel.moveToOffset(editor2.document.text.indexOf("WHERE") + 6)
+        CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true).invokeCompletion(project, editor2, 1, false)
+        val lookup2 = LookupManager.getInstance(project).getActiveLookup()
+        assertNotNull("WHERE 后应弹出补全", lookup2)
+        val items2 = lookup2!!.items.map { it.lookupString }
+        assertTrue("WHERE 后应含列名 id：$items2", items2.contains("id"))
+        assertTrue("WHERE 后应含列名 name：$items2", items2.contains("name"))
+        LookupManager.getInstance(project).hideActiveLookup()
+        panel2.clear()
+    }
+
+    /** 沿组件树找 DataProvider（编辑器挂载包装）。 */
+    private fun findDataProvider(component: java.awt.Component): DataProvider? {
+        if (component is DataProvider) return component
+        if (component is java.awt.Container) {
+            for (c in component.components) {
+                findDataProvider(c)?.let { return it }
+            }
+        }
+        return null
     }
 }
