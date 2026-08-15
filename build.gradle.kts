@@ -129,7 +129,7 @@ tasks {
             val manifest = buildString {
                 appendLine("{")
                 appendLine("  \"version\": \"$version\",")
-                appendLine("  \"downloadUrl\": \"https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/v$version/mybatis-plus-sql-visualizer-$version.zip\",")
+                appendLine("  \"downloadUrl\": \"https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/$version/mybatis-plus-sql-visualizer-$version.zip\",")
                 appendLine("  \"changeNotes\": \"（手动补充本次发布变更说明，纯文本，\\\\n 换行）\",")
                 appendLine("  \"publishDate\": \"${LocalDate.now()}\",")
                 appendLine("  \"sinceBuild\": \"253\"")
