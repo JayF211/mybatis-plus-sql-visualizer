@@ -90,6 +90,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 作用于**最终表名**（含 `@TableName` 显式表名，M19.4-R1 全局语义）；空字符串不修饰。
          */
         var removeTableSuffix: String = "",
+
+        /**
+         * 启动时自动检查更新（M28）：勾选时 IDE 启动静默检查（[update.StartupUpdateCheck]），
+         * 仅在发现新版本时通知；不勾选则完全跳过启动检查（设置页手动检查不受影响）。
+         * 默认开（用户拍板）。
+         */
+        var autoCheckUpdate: Boolean = true,
     )
 
     private var state = State()

@@ -131,6 +131,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 快捷键内嵌编辑（M14.1：录制式修改 Convert to SQL 的 KeyboardShortcut，保存写入 Keymap）。 */
     private val shortcutEditor = ShortcutEditor()
 
+    /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
+    private val updateSection = UpdateSection(settings)
+
     private val rootPanel: JPanel = JPanel(GridBagLayout()).apply {
         border = JBUI.Borders.empty(8, 10, 8, 10)
     }
@@ -229,6 +232,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                 ?: languageOptions().first()
         })
         addRow(MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
+
+        // M28：更新分区（检查更新/下载安装/重启提示/启动自动检查开关）——置于构建号行之前
+        addRow("", updateSection.apply { updateTexts() })
 
         // T-M23.14：内部构建号（MPV-Build，jar manifest 注入的构建时刻时间戳）——只读信息行，
         // 用户反馈问题时可直接报出定位具体产物；非 jar 环境（开发/测试）显示 "—"。
@@ -458,6 +464,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || removeTablePrefixField.text.trim() != s.removeTablePrefix
             || removeTableSuffixField.text.trim() != s.removeTableSuffix
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
+            || updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate
             || shortcutEditor.shortcut != currentShortcut()
     }
 
@@ -483,6 +490,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.removeTablePrefix = removeTablePrefixField.text.trim()
         s.removeTableSuffix = removeTableSuffixField.text.trim()
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
+        s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
         languagePending = false
         return languageChanged
@@ -506,6 +514,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         removeTablePrefixField.text = s.removeTablePrefix
         removeTableSuffixField.text = s.removeTableSuffix
         languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
+        updateSection.resetState()
         shortcutEditor.shortcut = currentShortcut()
     }
 }

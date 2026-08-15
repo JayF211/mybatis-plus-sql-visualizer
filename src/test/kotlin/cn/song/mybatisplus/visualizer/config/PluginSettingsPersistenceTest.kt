@@ -137,7 +137,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             val hasCjk = { s: String -> s.any { it.code in 0x4E00..0x9FFF } }
             assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
-            assertEquals("复选框总数应为 4", 4, texts.size)
+            // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5
+            assertEquals("复选框总数应为 5（含 M28 自动检查开关）", 5, texts.size)
         } finally {
             settings.state.language = old
         }
