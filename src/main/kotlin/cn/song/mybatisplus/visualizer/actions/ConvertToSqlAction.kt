@@ -47,8 +47,14 @@ class ConvertToSqlAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
 
         // T-M24-04：XML mapper 文件 → 预览光标所在语句（不在语句内 → 首个语句）
+        // T-M29.6：选择区优先——选中段落内多条语句时弹选择栏（与 Java 选择区候选交互一致）
         if (file is XmlFile) {
-            previewXmlStatement(project, file, editor)
+            val selectionModel = editor.selectionModel
+            if (selectionModel.hasSelection()) {
+                previewXmlSelection(project, file, editor, selectionModel.selectionStart, selectionModel.selectionEnd)
+            } else {
+                previewXmlStatement(project, file, editor)
+            }
             return
         }
 
@@ -79,7 +85,8 @@ class ConvertToSqlAction : AnAction() {
                 val (chainHeads, displayTexts) = payload
                 ApplicationManager.getApplication().invokeLater {
                     when (chainHeads.size) {
-                        0 -> SqlPreviewService.showResult(project, null)
+                        // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选（0/1/多分发）
+                        0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd)
                         1 -> preview(service, chainHeads[0], project)
                         else -> SqlSelectionDialog(project, chainHeads, displayTexts) { head ->
                             // T-M23.8：选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
@@ -116,7 +123,7 @@ class ConvertToSqlAction : AnAction() {
                 SqlPreviewService.showResult(project, result)
             } else {
                 // M26-A：Wrapper 未命中 → 回落文件级 SQL 注解候选（Mapper 接口场景）
-                showAnnotationCandidates(project, file)
+                showAnnotationCandidates(project, file, editor)
             }
         }
     }
@@ -124,8 +131,9 @@ class ConvertToSqlAction : AnAction() {
     /**
      * M26-A：文件级 SQL 注解候选——收集文件内全部 @Select/@Update 等注解（0/1/多分发，
      * 仿 T-M23.7 选择区候选交互）；摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫）。
+     * T-M29.6：选中确定后编辑器定位（对齐选择区候选交互）。
      */
-    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile) {
+    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<PsiAnnotation>, List<String>>, Throwable> {
@@ -147,6 +155,48 @@ class ConvertToSqlAction : AnAction() {
                     0 -> SqlPreviewService.showResult(project, null)
                     1 -> previewAnnotation(project, annotations[0])
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
+                        locateEditorTo(editor, selected)
+                        previewAnnotation(project, selected)
+                    }.show()
+                }
+            }
+        }
+    }
+
+    /**
+     * T-M29.6：选择区内 SQL 注解候选回落——选择区内无 Wrapper 候选时扫描选择区内 SQL 注解
+     * （@Select/@Update 等，startOffset 在选区范围），0/1/多分发（多条弹 [SqlSelectionDialog]，
+     * 选中确定 → 编辑器定位 → 预览）；摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫，仿 M26-A）。
+     */
+    private fun showAnnotationSelectionCandidates(
+        project: Project,
+        file: com.intellij.psi.PsiFile,
+        editor: Editor,
+        selStart: Int,
+        selEnd: Int,
+    ) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val payload = try {
+                ReadAction.compute<Pair<List<PsiAnnotation>, List<String>>, Throwable> {
+                    val annotations = AnnotationSqlPreviewService.annotationCandidatesInRange(file, selStart, selEnd)
+                    annotations to annotations.map { anno ->
+                        val method = PsiTreeUtil.getParentOfType(anno, PsiMethod::class.java)
+                        SqlSelectionDialog.displayText(
+                            "${method?.name ?: "?"}（${anno.qualifiedName?.substringAfterLast('.')}）",
+                            AnnotationSqlPreviewService.sqlSnippet(anno),
+                        )
+                    }
+                }
+            } catch (t: Throwable) {
+                emptyList<PsiAnnotation>() to emptyList()
+            }
+            val (annotations, displayTexts) = payload
+            ApplicationManager.getApplication().invokeLater {
+                when (annotations.size) {
+                    0 -> SqlPreviewService.showResult(project, null)
+                    1 -> previewAnnotation(project, annotations[0])
+                    else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
+                        locateEditorTo(editor, selected)
                         previewAnnotation(project, selected)
                     }.show()
                 }
@@ -160,6 +210,44 @@ class ConvertToSqlAction : AnAction() {
             AnnotationSqlPreviewService.preview(annotation, project)
         }) { result ->
             SqlPreviewService.showResult(project, result)
+        }
+    }
+
+    /**
+     * T-M29.6：XML 选择区语句候选——扫描选择区内 mapper 语句（<select|insert|update|delete>，
+     * startOffset 在选区范围），0/1/多分发（多条弹 [SqlSelectionDialog]，仿 Java 选择区候选交互）；
+     * 摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫，仿 T-M23.8）。
+     */
+    private fun previewXmlSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val payload = try {
+                ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
+                    val tags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
+                    tags to tags.map { tag ->
+                        val line = tag.containingFile.viewProvider.document
+                            ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+                        val text = tag.text?.trim().orEmpty()
+                        SqlSelectionDialog.displayText(
+                            "${tag.name} ${tag.getAttributeValue("id").orEmpty()}（第 $line 行）",
+                            text,
+                        )
+                    }
+                }
+            } catch (t: Throwable) {
+                emptyList<XmlTag>() to emptyList()
+            }
+            val (tags, displayTexts) = payload
+            ApplicationManager.getApplication().invokeLater {
+                when (tags.size) {
+                    0 -> SqlPreviewService.showResult(project, null)
+                    1 -> previewXml(project, file, tags[0])
+                    else -> SqlSelectionDialog(project, tags, displayTexts) { selected ->
+                        // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
+                        locateEditorTo(editor, selected)
+                        previewXml(project, file, selected)
+                    }.show()
+                }
+            }
         }
     }
 
@@ -208,6 +296,8 @@ class ConvertToSqlAction : AnAction() {
                             return@invokeLater
                         }
                         SqlSelectionDialog(project, statements, displayTexts) { selected ->
+                            // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
+                            locateEditorTo(editor, selected)
                             previewXml(project, file, selected)
                         }.show()
                     }
@@ -239,12 +329,13 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /**
-     * T-M23.8：编辑器定位跳转到候选调用所在行（IDEA Find 定位风格）——
-     * 光标到行首 + 滚动居中 + 整行选中高亮；失败 runCatching 兜底（不中断预览）。
+     * T-M23.8：编辑器定位跳转到候选元素所在行（IDEA Find 定位风格）——
+     * 光标到行首 + 滚动居中 + 整行选中高亮；T-M29.6 泛化支持任意 PSI 元素
+     * （Wrapper 链首/XML 语句/注解）。失败 runCatching 兜底（不中断预览）。
      */
-    private fun locateEditorTo(editor: Editor, call: PsiMethodCallExpression) {
+    private fun locateEditorTo(editor: Editor, element: PsiElement) {
         runCatching {
-            val (start, end) = WrapperLocator.lineOffsetsOf(call)
+            val (start, end) = WrapperLocator.lineOffsetsOf(element)
             editor.caretModel.moveToOffset(start)
             editor.scrollingModel.scrollToCaret(ScrollType.CENTER_UP)
             editor.selectionModel.setSelection(start, end)

@@ -207,4 +207,75 @@ class AnnotationPreviewServiceTest : BasePlatformTestCase() {
         assertEquals("SELECT * FROM t_user", AnnotationSqlPreviewService.sqlSnippet(byMethod.getValue("selectByName")))
         assertEquals("UPDATE t_user SET name = #{name} WHERE id = #{id}", AnnotationSqlPreviewService.sqlSnippet(byMethod.getValue("updateName")))
     }
+
+    // ------------------------------------------------------------------
+    // T-M29.6：选择区内注解候选（annotationCandidatesInRange）
+    // ------------------------------------------------------------------
+
+    private val selectionMapper = """
+        import org.apache.ibatis.annotations.Select;
+        import org.apache.ibatis.annotations.Update;
+
+        public interface MultiMapper {
+            @Select("SELECT * FROM t_user WHERE id = #{id}")
+            User selectById(Long id);
+
+            @Select("SELECT * FROM t_user WHERE name = #{name}")
+            User selectByName(String name);
+
+            @Update("UPDATE t_user SET name = #{name} WHERE id = #{id}")
+            int updateName(Long id, String name);
+
+            @Deprecated
+            int legacy();
+        }
+        """.trimIndent()
+
+    private fun methodNameOf(annotation: PsiAnnotation): String =
+        PsiTreeUtil.getParentOfType(annotation, com.intellij.psi.PsiMethod::class.java)!!.name
+
+    fun testAnnotationCandidatesInRangeCollectsSelectionAnnotations() {
+        myFixture.configureByText("MultiMapper.java", selectionMapper)
+        val first = annotationOf("selectById")
+        val last = annotationOf("updateName")
+        val result = AnnotationSqlPreviewService.annotationCandidatesInRange(
+            myFixture.file,
+            first.textRange.startOffset,
+            last.textRange.endOffset,
+        )
+        assertEquals(
+            "选择区（selectById 注解开头 → updateName 注解结束）应含 3 个 SQL 注解且按 offset 排序，非 SQL 注解排除",
+            listOf("selectById", "selectByName", "updateName"),
+            result.map { methodNameOf(it) },
+        )
+    }
+
+    fun testAnnotationCandidatesInRangeEmptyWhenSelectionContainsNoAnnotationStart() {
+        myFixture.configureByText("MultiMapper.java", selectionMapper)
+        // 选择区从 selectById 注解内部开始（不含注解起始点）→ 无注解起始点（startOffset 判定与 Java 候选一致）
+        val first = annotationOf("selectById")
+        val result = AnnotationSqlPreviewService.annotationCandidatesInRange(
+            myFixture.file,
+            first.textRange.startOffset + 1,
+            first.textRange.endOffset,
+        )
+        assertTrue("选择区内无注解起始点应返回空", result.isEmpty())
+    }
+
+    fun testAnnotationCandidatesInRangeExcludesAnnotationAtSelectionEnd() {
+        myFixture.configureByText("MultiMapper.java", selectionMapper)
+        // until 语义：注解起始恰好等于选择区结束 → 不计入
+        val first = annotationOf("selectById")
+        val second = annotationOf("selectByName")
+        val result = AnnotationSqlPreviewService.annotationCandidatesInRange(
+            myFixture.file,
+            first.textRange.startOffset,
+            second.textRange.startOffset,
+        )
+        assertEquals(
+            "选择区结束恰在 selectByName 注解起始 → 只含 selectById",
+            listOf("selectById"),
+            result.map { methodNameOf(it) },
+        )
+    }
 }

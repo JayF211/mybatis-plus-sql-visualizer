@@ -50,6 +50,16 @@ object AnnotationSqlPreviewService {
     fun annotationCandidates(file: com.intellij.psi.PsiFile): List<PsiAnnotation> =
         PsiTreeUtil.collectElementsOfType(file, PsiAnnotation::class.java).filter { isSqlAnnotation(it) }
 
+    /**
+     * T-M29.6：选择区内 SQL 注解候选（注解起始 offset 在选区范围内，按 offset 排序）——
+     * ConvertToSqlAction 选择区候选回落复用（与 Java 选择区候选语义一致：注解开头在选择区内才计入）；
+     * 纯 PSI 遍历零 resolve。
+     */
+    fun annotationCandidatesInRange(file: com.intellij.psi.PsiFile, start: Int, end: Int): List<PsiAnnotation> =
+        annotationCandidates(file)
+            .filter { it.textRange.startOffset in start until end }
+            .sortedBy { it.textRange.startOffset }
+
     /** M26-A：注解 SQL 摘要（候选列表行文本——value 首个字符串元素，截断）。 */
     fun sqlSnippet(annotation: PsiAnnotation, maxLength: Int = 80): String {
         val value = annotation.findAttributeValue(null)

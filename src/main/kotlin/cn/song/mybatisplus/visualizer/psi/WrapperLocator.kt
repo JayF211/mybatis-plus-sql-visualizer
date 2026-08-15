@@ -200,13 +200,14 @@ object WrapperLocator {
     }
 
     /**
-     * T-M23.8：候选调用所在行的 `(行首, 行尾)` offset（编辑器定位跳转用——
-     * 光标到行首 + 整行选中）。文档不可得时回退调用自身范围（兜底）。
+     * T-M23.8：候选元素所在行的 `(行首, 行尾)` offset（编辑器定位跳转用——
+     * 光标到行首 + 整行选中；T-M29.6 泛化支持任意 PSI 元素：Wrapper 链首/XML 语句/注解）。
+     * 文档不可得时回退元素自身范围（兜底）。
      */
-    fun lineOffsetsOf(call: PsiMethodCallExpression): Pair<Int, Int> {
-        val doc = PsiDocumentManager.getInstance(call.project).getDocument(call.containingFile)
-            ?: return call.textRange.startOffset to call.textRange.endOffset
-        val line = doc.getLineNumber(call.textRange.startOffset)
+    fun lineOffsetsOf(element: PsiElement): Pair<Int, Int> {
+        val doc = PsiDocumentManager.getInstance(element.project).getDocument(element.containingFile)
+            ?: return element.textRange.startOffset to element.textRange.endOffset
+        val line = doc.getLineNumber(element.textRange.startOffset)
         return doc.getLineStartOffset(line) to doc.getLineEndOffset(line)
     }
 

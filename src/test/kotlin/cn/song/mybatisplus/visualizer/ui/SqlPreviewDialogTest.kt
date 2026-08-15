@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
+import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
+import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -80,6 +82,30 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         val file = myFixture.file
         val candidates = WrapperLocator.sqlCandidatesInRange(file, 0, file.textLength)
         assertTrue("fixture 应含多个候选（触发多选弹窗分支）", candidates.size >= 2)
+        val displayTexts = candidates.mapIndexed { i, _ -> "PRE-$i" }
+        val dialog = SqlSelectionDialog(project, candidates, displayTexts) {}
+        val model = dialog.listForTest().model
+        assertEquals("列表项数应与预计算文本数一致", displayTexts.size, model.size)
+        for (i in displayTexts.indices) {
+            assertEquals("列表第 $i 项应原样渲染预计算文本（不重新解析 PSI）", displayTexts[i], model.getElementAt(i))
+        }
+    }
+
+    fun testDialogRendersXmlTagCandidates() {
+        // T-M25-01 泛化回归补测（T-M29.6）：XmlTag 语句候选同样走预计算文本渲染——
+        // 弹窗构造不触碰 PSI，XML 语句候选与 Wrapper 候选行为一致（选择区/全文件候选共用）
+        myFixture.configureByText(
+            "OrderMapper.xml",
+            """
+            <mapper namespace="com.example.OrderMapper">
+              <select id="selectList">SELECT * FROM t</select>
+              <select id="selectByName">SELECT * FROM t WHERE name = #{name}</select>
+            </mapper>
+            """.trimIndent(),
+        )
+        val file = myFixture.file as XmlFile
+        val candidates = XmlSqlGutterLineMarkerProvider.statementsInRange(file, 0, file.textLength)
+        assertTrue("fixture 应含多条语句（触发多选弹窗分支）", candidates.size >= 2)
         val displayTexts = candidates.mapIndexed { i, _ -> "PRE-$i" }
         val dialog = SqlSelectionDialog(project, candidates, displayTexts) {}
         val model = dialog.listForTest().model

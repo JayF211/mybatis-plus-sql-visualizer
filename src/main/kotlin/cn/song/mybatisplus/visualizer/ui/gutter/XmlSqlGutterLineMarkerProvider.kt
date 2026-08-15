@@ -13,6 +13,7 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import com.intellij.psi.PsiElement
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlToken
@@ -82,5 +83,15 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             IconLoader.getIcon("/icons/sqlGutter.svg", XmlSqlGutterLineMarkerProvider::class.java)
 
         val STATEMENT_TAGS = setOf("select", "insert", "update", "delete")
+
+        /**
+         * T-M29.6：选择区内 mapper 语句候选（tag 起始 offset 在选区范围内，按 offset 排序）——
+         * ConvertToSqlAction 选择区候选交互复用（与 Java 选择区候选语义一致：语句开头在选择区内才计入）；
+         * 纯 PSI 遍历零 resolve，internal 供测试。
+         */
+        internal fun statementsInRange(file: XmlFile, start: Int, end: Int): List<XmlTag> =
+            PsiTreeUtil.collectElementsOfType(file, XmlTag::class.java)
+                .filter { it.name in STATEMENT_TAGS && it.textRange.startOffset in start until end }
+                .sortedBy { it.textRange.startOffset }
     }
 }
