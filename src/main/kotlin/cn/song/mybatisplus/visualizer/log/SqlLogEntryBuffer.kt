@@ -5,7 +5,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * 日志条目缓冲（T-M31-03，纯逻辑，不依赖平台）：条目列表（最新在前、上限裁剪）、
- * 暂停态、监听器登记——线程安全（任意线程可 [addEntry]，监听器回调不在此处调度）。
+ * 暂停态、去重（对齐 MybatisCodeHelper-Pro「移除重复的sql」——相同 SQL 在窗口内重复丢弃）、
+ * 监听器登记——线程安全（任意线程可 [addEntry]，监听器回调不在此处调度）。
  *
  * 与平台壳 [SqlLogManager] 分离：本类可纯 JUnit 测试（无 Application 依赖）。
  */
@@ -20,15 +21,29 @@ class SqlLogEntryBuffer(
     var paused: Boolean = false
         private set
 
-    /** 新条目入队（最新在前；暂停态丢弃；超过上限裁掉最旧）。 */
+    /** 去重开关（默认开，对齐 MybatisCodeHelper-Pro「移除重复的sql」勾选态）。 */
+    @Volatile
+    var dedupeEnabled: Boolean = true
+
+    /** 去重窗口（毫秒）：相同还原 SQL 在该窗口内重复出现时丢弃后到者。 */
+    @Volatile
+    var dedupeWindowMs: Long = DEFAULT_DEDUPE_WINDOW_MS
+
+    /** 新条目入队（最新在前；暂停态丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
+        if (dedupeEnabled && isDuplicate(entry)) return false
         synchronized(entries) {
             entries.addFirst(entry)
             while (entries.size > maxEntries) entries.removeLast()
         }
         notifyChanged()
         return true
+    }
+
+    private fun isDuplicate(entry: LogSqlEntry): Boolean {
+        val now = entry.timestamp
+        return entries.firstOrNull { it.restoredSql == entry.restoredSql && now - it.timestamp < dedupeWindowMs } != null
     }
 
     /** 最新在前的快照。 */
@@ -64,5 +79,6 @@ class SqlLogEntryBuffer(
 
     companion object {
         private const val DEFAULT_MAX_ENTRIES = 200
+        private const val DEFAULT_DEDUPE_WINDOW_MS = 1000L
     }
 }

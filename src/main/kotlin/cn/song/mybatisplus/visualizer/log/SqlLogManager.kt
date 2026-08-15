@@ -19,16 +19,27 @@ class SqlLogManager(private val project: Project) : Disposable {
     private val buffer = SqlLogEntryBuffer()
     private val bridge = SqlLogConsoleBridge(buffer)
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
-    private var attached = false
 
     /** 条目缓冲（面板与测试访问）。 */
     val entries: SqlLogEntryBuffer get() = buffer
 
-    /** 挂载监听：现有 console 遍历 + contentAdded 增量（幂等；execution API 缺失时优雅降级）。 */
-    fun attach() {
-        if (attached) return
-        attached = true
+    /** 捕捉状态（默认关——用户点击「开始捕捉」后才挂载监听，对齐 MybatisCodeHelper-Pro 手动监听）。 */
+    @Volatile
+    var capturing: Boolean = false
+        private set
+
+    /** 开始捕捉：挂载控制台监听（幂等）。 */
+    fun startCapture() {
+        if (capturing) return
+        capturing = true
         bridge.attach(project)
+    }
+
+    /** 停止捕捉：移除挂载，保留已捕获条目。 */
+    fun stopCapture() {
+        if (!capturing) return
+        capturing = false
+        bridge.detach()
     }
 
     /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */

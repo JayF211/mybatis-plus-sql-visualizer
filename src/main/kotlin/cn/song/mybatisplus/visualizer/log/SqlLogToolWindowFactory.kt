@@ -23,6 +23,7 @@ import java.awt.Color
 import java.awt.FlowLayout
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.Insets
 import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -30,6 +31,7 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.DefaultListModel
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
@@ -62,6 +64,10 @@ class SqlLogPanel(
 
     private val listModel = DefaultListModel<LogSqlEntry>()
     private val list = JBList(listModel)
+    private val captureButton = iconButton(AllIcons.Actions.Execute, "log.panel.capture") {
+        if (manager.capturing) manager.stopCapture() else manager.startCapture()
+        updateCaptureButton()
+    }
     private val pauseButton = iconButton(AllIcons.Actions.Pause, "log.panel.pause") {
         manager.entries.setPaused(!manager.entries.paused)
         updatePauseButton()
@@ -84,7 +90,6 @@ class SqlLogPanel(
         add(tabs, BorderLayout.CENTER)
 
         manager.addUiListener { refreshList() }
-        manager.attach()
         refreshList()
     }
 
@@ -92,8 +97,15 @@ class SqlLogPanel(
 
     private fun buildToolbar(): JPanel {
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2))
-        toolbar.add(iconButton(AllIcons.Actions.GC, "log.panel.clear") { manager.entries.clear() })
+        toolbar.add(captureButton)
+        toolbar.add(
+            JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
+                isSelected = manager.entries.dedupeEnabled
+                addActionListener { manager.entries.dedupeEnabled = isSelected }
+            },
+        )
         toolbar.add(pauseButton)
+        toolbar.add(iconButton(AllIcons.Actions.GC, "log.panel.clear") { manager.entries.clear() })
         toolbar.add(iconButton(AllIcons.Actions.Properties, "log.panel.settings") { openSettings() })
         return toolbar
     }
@@ -105,6 +117,13 @@ class SqlLogPanel(
 
     private fun openSettings() {
         ShowSettingsUtil.getInstance().showSettingsDialog(project, PluginSettingsConfigurable::class.java)
+    }
+
+    private fun updateCaptureButton() {
+        captureButton.text = MpSqlVisualizerBundle.message(
+            if (manager.capturing) "log.panel.stop" else "log.panel.capture",
+        )
+        captureButton.icon = if (manager.capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
     }
 
     // ---------- 条目列表 ----------
@@ -181,6 +200,7 @@ class SqlLogPanel(
         val snapshot = manager.entries.snapshot()
         listModel.clear()
         snapshot.forEach { listModel.addElement(it) }
+        updateCaptureButton()
         updatePauseButton()
         updatePreview(list.selectedValue)
     }
@@ -277,6 +297,16 @@ private class BlueSelectedTabUi : BasicTabbedPaneUI() {
             rect.y + (rect.height + fm.ascent - fm.descent) / 2,
         )
     }
+
+    /** 不画内容区边框（T-M31.5：BasicTabbedPaneUI 默认 content border 在部分 LAF 下呈浅色，割裂面板）。 */
+    override fun paintContentBorder(
+        g: Graphics,
+        tabPlacement: Int,
+        selectedIndex: Int,
+    ) = Unit
+
+    /** 内容区无边框 → 布局不预留边框空隙。 */
+    override fun getContentBorderInsets(tabPlacement: Int): Insets = Insets(0, 0, 0, 0)
 
     companion object {
         /** MP 蓝（与侧边栏图标 sqlLog.svg 同色）。 */
