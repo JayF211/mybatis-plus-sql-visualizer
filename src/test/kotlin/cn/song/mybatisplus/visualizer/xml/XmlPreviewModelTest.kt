@@ -171,4 +171,58 @@ class XmlPreviewModelTest {
         assertEquals(XmlStatementKind.UPDATE, m.kind)
         assertEquals("map", m.parameterType)
     }
+
+    // ------------------------------------------------------------------
+    // T-M29.5：参数回填引号映射（quoteFor 精确/前缀/未命中）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `quoteFor_精确与前缀匹配`() {
+        val m = XmlPreviewModel.from(
+            XmlMapperParser().parse("""
+                <mapper namespace="n">
+                  <select id="s1">SELECT * FROM t WHERE a = #{p.settlementStartDate} AND b = #{p.dicCreditStatus}</select>
+                </mapper>
+            """.trimIndent()).statements.single(),
+            emptyList(),
+            paramQuotes = mapOf(
+                "p.settlementStartDate" to true,
+                "p.dicCreditStatus" to false,
+                "keyword" to true,
+            ),
+        )
+        // 精确命中
+        assertEquals(true, m.quoteFor("p.settlementStartDate"))
+        assertEquals(false, m.quoteFor("p.dicCreditStatus"))
+        assertEquals(true, m.quoteFor("keyword"))
+        // 未命中 → null（面板兜底引号）
+        assertEquals(null, m.quoteFor("unknown"))
+    }
+
+    @Test
+    fun `quoteFor_Map参数前缀兜底`() {
+        // Map 入参：键 = 参数名 p，任意 p.* 属性前缀命中（T-M29.4 兜底语义）
+        val m = XmlPreviewModel.from(
+            XmlMapperParser().parse("""
+                <mapper namespace="n">
+                  <select id="s1">SELECT * FROM t WHERE a = #{p.settlementStartDate}</select>
+                </mapper>
+            """.trimIndent()).statements.single(),
+            emptyList(),
+            paramQuotes = mapOf("p" to true),
+        )
+        assertEquals(true, m.quoteFor("p.settlementStartDate"))
+        // 精确键优先于前缀（DTO 与 Map 键并存时不误判）
+        val mixed = XmlPreviewModel.from(
+            XmlMapperParser().parse("""
+                <mapper namespace="n">
+                  <select id="s1">SELECT * FROM t</select>
+                </mapper>
+            """.trimIndent()).statements.single(),
+            emptyList(),
+            paramQuotes = mapOf("p" to true, "p.dicCreditStatus" to false),
+        )
+        assertEquals(false, mixed.quoteFor("p.dicCreditStatus"))
+        assertEquals(true, mixed.quoteFor("p.settlementStartDate"))
+    }
 }

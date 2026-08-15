@@ -42,7 +42,12 @@ object XmlPreviewService {
             val staticValues = resolveStaticFields(fileText, project, warnings)
             // T-M26-B（P-立项-03）：MP 占位展开（${ew.customSqlSegment} 等）——Java 关联 wrapper 实参 → 片段注入
             val ewBindings = resolveEwPlaceholders(fileText, parsed.namespace, statement.id, project, warnings)
-            XmlPreviewModel.from(statement, parsed.errors, staticFieldValues = staticValues, extraBindings = ewBindings) to warnings
+            // T-M29.5：mapper 方法参数类型 → 回填引号映射（DTO 字段类型判定；Map/解析失败不含键 → 面板兜底引号）
+            val paramQuotes = XmlParamTypeResolver.resolveQuotes(project, parsed.namespace, statement.id)
+            XmlPreviewModel.from(
+                statement, parsed.errors,
+                staticFieldValues = staticValues, extraBindings = ewBindings, paramQuotes = paramQuotes,
+            ) to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")
         } catch (e: XmlScriptException) {

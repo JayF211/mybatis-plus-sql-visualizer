@@ -331,11 +331,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val base = rendered.sql
                 val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
                 val sources = rendered.mappings.map { it.property }
-                // T-M29.4：XML 入参无列类型信息（Map 等）——参数回填**默认带引号**（对齐 Wrapper 路径
-                // T-M23-03「未知类型默认引号」：日期/字符串列必须引号；数值列 MySQL/PG/Oracle/SQLServer
-                // 隐式转换等价）。原 likeParamHints 仅 LIKE 参数标记引号、其余走数字启发式——
-                // 用户实测 `settlement_period >= 2025`（LocalDate 年份输入被裸渲染，日期列比较失效）
-                val xmlHints = MutableList(sources.size) { ParamHint(quote = true) }
+                // T-M29.5：参数回填引号按 mapper 方法参数 Java 类型判定（XmlParamTypeResolver 注入
+                // model.paramQuotes：DTO 字段 LocalDate→引号/Integer→裸渲染，贴近真实绑定效果）；
+                // 未命中（Map/无类型信息）→ 兜底引号（T-M29.4：日期/字符串列安全，数值列隐式转换等价）
+                val xmlHints = sources.map { ParamHint(quote = xml.quoteFor(it) ?: true) }
                 showSql(backfillParamsBySource(sql, sources, xmlHints))
             }
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填

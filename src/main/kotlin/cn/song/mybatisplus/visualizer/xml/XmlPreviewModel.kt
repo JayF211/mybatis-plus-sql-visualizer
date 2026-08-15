@@ -65,8 +65,22 @@ class XmlPreviewModel private constructor(
     val staticFieldValues: Map<String, Any?>,
     /** MP 占位 mock（T-M26-B）：`ew` → MockObject(customSqlSegment/sqlSelect/sqlSet 片段)，覆盖变量占位。 */
     val extraBindings: Map<String, Any?>,
+    /** 参数回填引号映射（T-M29.5）：参数路径（`@Param` 值.字段 / 参数名）→ 是否引号——
+     * 由 XmlParamTypeResolver 按 mapper 方法签名参数 Java 类型解析（DTO 字段类型 → ParamQuote）；
+     * Map/无类型信息参数不含键（面板兜底引号）。 */
+    val paramQuotes: Map<String, Boolean> = emptyMap(),
     private val rootNode: SqlNode,
 ) {
+
+    /**
+     * T-M29.5：参数路径 → 引号策略（精确匹配优先，前缀匹配兜底——
+     * DTO 参数键为 `p.settlementStartDate` 精确路径；Map 参数键为 `p`，任意 `p.*` 属性命中）。
+     * 未命中返回 null（面板兜底引号）。
+     */
+    fun quoteFor(source: String): Boolean? {
+        paramQuotes[source]?.let { return it }
+        return paramQuotes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.value
+    }
 
     fun defaultState(): XmlPreviewState = XmlPreviewState(
         enabledIds = conditionViews.filter { it.defaultEnabled }.map { it.id }.toSet(),
@@ -123,6 +137,7 @@ class XmlPreviewModel private constructor(
             extraParamProps: Set<String> = emptySet(),
             staticFieldValues: Map<String, Any?> = emptyMap(),
             extraBindings: Map<String, Any?> = emptyMap(),
+            paramQuotes: Map<String, Boolean> = emptyMap(),
         ): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
@@ -145,6 +160,7 @@ class XmlPreviewModel private constructor(
                 paramProps = paramProps,
                 staticFieldValues = staticFieldValues,
                 extraBindings = extraBindings,
+                paramQuotes = paramQuotes,
                 rootNode = statement.node,
             )
         }
