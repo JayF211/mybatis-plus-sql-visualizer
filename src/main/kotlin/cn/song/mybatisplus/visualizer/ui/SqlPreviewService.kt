@@ -266,13 +266,15 @@ class SqlPreviewService(private val project: Project) {
         statement: SqlStatement,
         state: LogicDeleteState,
     ): SqlStatement {
+        // T-M31.18：逻辑删除值可配置（默认 0，用户可调整——对齐 MP logic-delete-value）
+        val logicDeleteValue = PluginSettings.getInstance().state.logicDeleteValue.ifBlank { "0" }
         return when (statement) {
             is SelectStatement -> {
                 var conditions = statement.conditions
                 if (state.mainActive) {
                     table.logicDeleteColumn?.let { column ->
                         conditions = conditions + Condition.Simple(
-                            ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal("0"),
+                            ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal(logicDeleteValue),
                         )
                     }
                 }
@@ -282,7 +284,7 @@ class SqlPreviewService(private val project: Project) {
                     val column = join.logicDeleteColumn ?: return@map join
                     if (!state.subActive) return@map join
                     val cond = Condition.Simple(
-                        ColumnRef(tableAlias = join.alias, columnName = column), "=", SqlValue.Literal("0"),
+                        ColumnRef(tableAlias = join.alias, columnName = column), "=", SqlValue.Literal(logicDeleteValue),
                     )
                     if (state.subToWhere) {
                         subWhere += cond
@@ -299,7 +301,7 @@ class SqlPreviewService(private val project: Project) {
                 if (!state.mainActive) return statement
                 statement.copy(
                     conditions = statement.conditions + Condition.Simple(
-                        ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal("0"),
+                        ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal(logicDeleteValue),
                     ),
                 )
             }

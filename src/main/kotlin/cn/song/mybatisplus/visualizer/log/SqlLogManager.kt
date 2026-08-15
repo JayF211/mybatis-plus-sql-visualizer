@@ -22,7 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 class SqlLogManager(private val project: Project) : Disposable {
 
     private val buffer = SqlLogEntryBuffer()
-    private val bridge = SqlLogConsoleBridge(buffer, ::parserConfig)
+    private val bridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings)
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
     private var attached = false
 

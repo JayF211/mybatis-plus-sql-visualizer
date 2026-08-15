@@ -52,6 +52,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var injectLogicDelete: Boolean = true,
 
         /**
+         * 逻辑删除值（T-M31.18）：注入 `AND deleted = {值}` 的可配置值（默认 0；
+         * 用户可按业务调整，如 1——对齐 MP `logic-delete-value` 配置语义）。
+         */
+        var logicDeleteValue: String = DEFAULT_LOGIC_DELETE_VALUE,
+
+        /**
          * 表前缀（T-M16.2-03）：统一加在所有表名**前**（如 `sys_` + device_info → `sys_device_info`）。
          * 全局语义——`@TableName` 显式表名同样被修饰（文档说明）；空字符串表示不修饰。
          */
@@ -179,6 +185,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
+        const val DEFAULT_LOGIC_DELETE_VALUE = "0"
 
         /**
          * 获取全局配置实例。

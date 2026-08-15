@@ -25,6 +25,7 @@ import javax.swing.Timer
 class SqlLogConsoleBridge(
     private val buffer: SqlLogEntryBuffer,
     private val parserConfig: () -> ParserConfig = { ParserConfig("Preparing:", "Parameters:", true, 20000) },
+    private val syncBufferConfig: () -> Unit = {},
 ) {
 
     private var runContentManager: Any? = null
@@ -156,6 +157,8 @@ class SqlLogConsoleBridge(
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line ->
                         parser.feed(line)
+                        // T-M31.18：每次入队前同步设置（去重窗口/过滤关键字即时生效，不再依赖重新捕捉）
+                        syncBufferConfig()
                         parser.takeEntries().forEach { buffer.addEntry(it) }
                     },
                 )

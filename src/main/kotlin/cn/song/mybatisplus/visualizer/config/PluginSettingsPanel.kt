@@ -116,6 +116,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
 
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
+    private val logicDeleteValueField = JBTextField(6)
 
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private val tablePrefixField = JBTextField(12)
@@ -263,6 +264,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
             addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
             addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
+            })
         }
 
         // 组 2：表名映射（预览相关，低频——配置一次长期不变）
@@ -600,6 +604,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || formatCheck.isSelected != s.formatSql
             || gutterIconCheck.isSelected != s.showGutterIcon
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
+            || logicDeleteValueField.text.trim() != s.logicDeleteValue
             || tablePrefixField.text.trim() != s.tablePrefix
             || tableSuffixField.text.trim() != s.tableSuffix
             || (inferenceCombo.selectedItem as? InferenceOption)?.value != s.tableNameInference
@@ -637,6 +642,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.formatSql = formatCheck.isSelected
         s.showGutterIcon = gutterIconCheck.isSelected
         s.injectLogicDelete = injectLogicDeleteCheck.isSelected
+        s.logicDeleteValue = logicDeleteValueField.text.trim()
         s.tablePrefix = tablePrefixField.text.trim()
         s.tableSuffix = tableSuffixField.text.trim()
         s.tableNameInference = (inferenceCombo.selectedItem as? InferenceOption)?.value ?: PluginSettings.INFERENCE_SNAKE
@@ -672,6 +678,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         formatCheck.isSelected = s.formatSql
         gutterIconCheck.isSelected = s.showGutterIcon
         injectLogicDeleteCheck.isSelected = s.injectLogicDelete
+        logicDeleteValueField.text = s.logicDeleteValue
         tablePrefixField.text = s.tablePrefix
         tableSuffixField.text = s.tableSuffix
         inferenceCombo.selectedItem = inferenceOptions().firstOrNull { it.value == s.tableNameInference }

@@ -1768,6 +1768,38 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testLogicDeleteValueConfigurable() {
+        // T-M31.18：逻辑删除值可配置（默认 0，用户可调为 1）
+        val snapshot = PluginSettings.getInstance().getState().copy()
+        try {
+            PluginSettings.getInstance().state.logicDeleteValue = "1"
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    public void query() {
+                        LambdaQueryWrapper<OrderEntity> w = new LambdaQueryWrapper<OrderEntity>()
+                            .eq(OrderEntity::getOrderCode, code);
+                        orderService.getOne(w);
+                    }
+
+                    static class OrderEntity {
+                        private Long id;
+                        private String orderCode;
+                        @com.baomidou.mybatisplus.annotation.TableLogic
+                        private Integer deleted;
+                    }
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())
+            assertNotNull("逻辑删除实体应产出预览结果", result)
+            assertTrue("逻辑删除值应可配置为 1：${result!!.sql}", result.sql.contains("AND deleted = 1"))
+        } finally {
+            PluginSettings.getInstance().loadState(snapshot)
+        }
+    }
+
     fun testLogicDeleteInjectionSwitchOff() {
         // T-M15-07：injectLogicDelete=false → 不追加 deleted 条件（纯 wrapper 语义）
         val settings = PluginSettings.getInstance()
