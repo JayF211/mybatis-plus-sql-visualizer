@@ -30,36 +30,63 @@ class StartupUpdateCheckTest {
         assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = true, alreadyChecked = true))
     }
 
-    // ---------------- T-M28.3 通知内容（每行一个标题） ----------------
+    // ---------------- T-M28.3/28.4 通知内容（只显示最新版、功能点每行一个） ----------------
 
     @Test
-    fun notificationContentShowsOneTitlePerLine() {
-        // 用户要求「更新标题每行显示一个」：每个版本一行（<br> 连接，HTML 换行）
-        val notes = "v2026.8.15：XML/注解动态 SQL 预览\nv2026.8.14：Wrapper 全覆盖"
+    fun notificationContentShowsLatestVersionOnlyOneItemPerLine() {
+        // 用户要求「只显示最新版的日志，每行一个功能点」：首行剥离版本前缀、按分号拆分行
+        val notes = "v2026.8.15：XML 动态 SQL 预览（M24）；注解 SQL 预览（M25）；MP 占位展开与多候选（M26）\n" +
+            "v2026.8.14：官方 API 覆盖差距清零"
         val content = StartupUpdateCheck.notificationContent(notes)
-        assertEquals("v2026.8.15：XML/注解动态 SQL 预览<br>v2026.8.14：Wrapper 全覆盖", content)
+        assertTrue(content.startsWith("XML 动态 SQL 预览（M24）<br>\n注解 SQL 预览（M25）<br>\nMP 占位展开与多候选（M26）"))
+        assertFalse("不得包含旧版本内容", content.contains("v2026.8.14"))
+        assertFalse("不得保留版本号前缀", content.contains("v2026.8.15："))
+    }
+
+    @Test
+    fun stripVersionPrefixVariants() {
+        // 容忍有无 v 前缀与中英文冒号
+        assertEquals("功能A", StartupUpdateCheck.stripVersionPrefix("v2026.8.15：功能A"))
+        assertEquals("功能A", StartupUpdateCheck.stripVersionPrefix("2026.8.15: 功能A"))
+        assertEquals("功能A", StartupUpdateCheck.stripVersionPrefix("功能A"))
+        assertEquals("", StartupUpdateCheck.stripVersionPrefix("v2026.8.15："))
     }
 
     @Test
     fun notificationContentTruncatesEachLongLine() {
         val long = "标".repeat(300)
         val content = StartupUpdateCheck.notificationContent(long)
-        assertTrue("超长标题应截断（≤61 字符）", content.length <= 61)
-        assertTrue("截断应带省略号", content.endsWith("…"))
+        assertTrue("功能点应截断为 60 字符加省略号", content.startsWith("标".repeat(60) + "…"))
+        assertTrue("截断后应带 Gitee 链接", content.contains("href="))
     }
 
     @Test
     fun notificationContentEscapesHtml() {
-        // 变更日志可能含 SQL 动态标签（<if> 等）——HTML 转义防渲染破坏（文本节点引号无需转义）
+        // 变更日志可能含 SQL 动态标签（<if> 等）——HTML 转义防渲染破坏（文本节点引号无需转义；
+        // "v1：" 非合法版本前缀（正则要求 4 位年份）→ 原样保留）
         val content = StartupUpdateCheck.notificationContent("v1：<if test=\"x & y\">")
-        assertEquals("v1：&lt;if test=\"x &amp; y\"&gt;", content)
+        assertTrue(content.startsWith("v1：&lt;if test=\"x &amp; y\"&gt;"))
+        assertTrue(content.contains("href="))
+    }
+
+    @Test
+    fun notificationContentAppendsGiteeLink() {
+        // T-M28.4：内容末尾附 Gitee 发布页链接（可点击跳转）
+        val content = StartupUpdateCheck.notificationContent("v2026.8.15：测试")
+        assertTrue("应包含 Gitee 链接", content.contains("href=\"" + cn.song.mybatisplus.visualizer.update.UpdateSource.GITEE_RELEASES_URL + "\""))
+        assertTrue("应包含链接文案", content.contains(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("update.notification.viewGitee")))
+        // 无标题时默认文案同样带链接
+        val fallback = StartupUpdateCheck.notificationContent(null)
+        assertTrue(fallback.contains("href="))
     }
 
     @Test
     fun notificationContentFallsBackForMissingNotes() {
-        val fallback = MpSqlVisualizerBundle.message("update.notification.content")
-        assertEquals(fallback, StartupUpdateCheck.notificationContent(null))
-        assertEquals(fallback, StartupUpdateCheck.notificationContent(""))
-        assertEquals(fallback, StartupUpdateCheck.notificationContent("   \n  "))
+        val expected = MpSqlVisualizerBundle.message("update.notification.content") +
+            "<br>\n<a href=\"" + cn.song.mybatisplus.visualizer.update.UpdateSource.GITEE_RELEASES_URL + "\">" +
+            MpSqlVisualizerBundle.message("update.notification.viewGitee") + "</a>"
+        assertEquals(expected, StartupUpdateCheck.notificationContent(null))
+        assertEquals(expected, StartupUpdateCheck.notificationContent(""))
+        assertEquals(expected, StartupUpdateCheck.notificationContent("   \n  "))
     }
 }

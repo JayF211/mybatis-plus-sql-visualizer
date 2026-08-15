@@ -169,6 +169,11 @@ class UpdateSectionTest : BasePlatformTestCase() {
         assertEquals(1, restarts)
     }
 
+    fun testGiteeLinkPresent() {
+        // T-M28.4：变更日志关联 Gitee——链接存在且文案走 bundle
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), section.giteeLink.text)
+    }
+
     /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */
     private fun waitForState(target: UpdateSection.State) {
         val deadline = System.currentTimeMillis() + 10_000

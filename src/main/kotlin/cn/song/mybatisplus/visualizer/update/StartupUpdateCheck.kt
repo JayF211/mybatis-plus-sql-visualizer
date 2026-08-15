@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationListener
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
@@ -69,6 +70,8 @@ class StartupUpdateCheck : ProjectActivity {
             .addAction(
                 NotificationAction.createSimpleExpiring(MpSqlVisualizerBundle.message("update.notification.later")) { }
             )
+        // T-M28.4：内容内 Gitee 链接点击跳转（URL_OPENING_LISTENER 打开浏览器）
+        notification.setListener(NotificationListener.URL_OPENING_LISTENER)
         runCatching { notification.notify(project) }
     }
 
@@ -129,27 +132,41 @@ class StartupUpdateCheck : ProjectActivity {
             autoCheck && !alreadyChecked
 
         /**
-         * 通知内容：每个版本**一行标题**（用户要求「更新标题每行显示一个」）——changeNotes
-         * 按行拆分（每行一个版本），最多显示 [maxTitleVersions] 行、每行超长截断加省略号；
-         * HTML 转义后 `<br>` 连接（Notification 内容按 HTML 渲染，裸 `\n` 不换行——否则
-         * 多行会挤在一起）；无标题用默认文案。纯函数（单测直接覆盖）。
+         * 通知内容：**只显示最新版**变更日志、**每个功能点一行**（用户要求：带换行符，如
+         * 「XML 动态 SQL 预览（M24）\n注解 SQL 预览（M25）」）——取 changeNotes 首行
+         * （最新版），剥离版本号前缀（`v2026.8.15：`），按分号（`；`/`;`）拆分为功能点，
+         * 最多显示 [maxTitleVersions] 个、每个超长截断加省略号；HTML 转义后以
+         * **`<br>\n` 连接**——`<br>` 保证通知 HTML 渲染分行、`\n` 保证文本形态含真实
+         * 换行符（双满足）；末尾附 Gitee 发布页链接；无标题用默认文案。纯函数（单测覆盖）。
          */
         internal fun notificationContent(changeNotes: String?): String {
-            val lines = changeNotes?.lineSequence()
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                ?.toList()
-                .orEmpty()
-            if (lines.isEmpty()) {
-                return MpSqlVisualizerBundle.message("update.notification.content")
+            val firstLine = changeNotes?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+            val items = if (firstLine.isEmpty()) {
+                emptyList()
+            } else {
+                stripVersionPrefix(firstLine).split(Regex("[；;]"))
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
             }
-            return lines.take(maxTitleVersions).joinToString("<br>") { line ->
-                val title = if (line.length > maxTitleLength) line.take(maxTitleLength) + "…" else line
-                title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            val body = if (items.isEmpty()) {
+                MpSqlVisualizerBundle.message("update.notification.content")
+            } else {
+                items.take(maxTitleVersions).joinToString("<br>\n") { item ->
+                    val title = if (item.length > maxTitleLength) item.take(maxTitleLength) + "…" else item
+                    title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                }
             }
+            return body + "<br>\n<a href=\"" + UpdateSource.GITEE_RELEASES_URL + "\">" +
+                MpSqlVisualizerBundle.message("update.notification.viewGitee") + "</a>"
         }
 
-        private val maxTitleVersions = 3
+        /** 剥离行首版本号前缀（`v2026.8.15：` / `2026.8.15:`，容忍有无 v 与中英文冒号）。 */
+        internal fun stripVersionPrefix(line: String): String =
+            VERSION_PREFIX_REGEX.replace(line, "")
+
+        private val VERSION_PREFIX_REGEX = Regex("""^v?\d{4}(\.\d{1,2}){1,3}\s*[:：]\s*""")
+
+        private val maxTitleVersions = 8
         private val maxTitleLength = 60
     }
 }

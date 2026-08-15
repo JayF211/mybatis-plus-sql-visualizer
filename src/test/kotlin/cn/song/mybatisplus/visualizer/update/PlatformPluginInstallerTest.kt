@@ -14,10 +14,11 @@ import java.nio.file.Files
 class PlatformPluginInstallerTest : BasePlatformTestCase() {
 
     fun testBlankDescriptorRejected() {
-        // null/空白：无法判断 → 保守按开发态拒绝（安全侧）
-        assertTrue(PlatformPluginInstaller.isDevInstallation(null))
-        assertTrue(PlatformPluginInstaller.isDevInstallation(""))
-        assertTrue(PlatformPluginInstaller.isDevInstallation("   "))
+        // null/空白：2026.2 已安装插件 descriptorPath 实证返回 null——无法判断时**放行**
+        // （不得误拒正常安装；开发态防护由非 null 路径特征段承担）
+        assertFalse(PlatformPluginInstaller.isDevInstallation(null))
+        assertFalse(PlatformPluginInstaller.isDevInstallation(""))
+        assertFalse(PlatformPluginInstaller.isDevInstallation("   "))
     }
 
     fun testDevBuildPathsRejected() {

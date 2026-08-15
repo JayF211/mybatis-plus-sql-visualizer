@@ -109,16 +109,18 @@ object PlatformPluginInstaller {
     }
 
     /**
-     * 开发态安装判定（T-M28.3 二修）：descriptorPath 归一化后含**构建产物特征段**
+     * 开发态安装判定（T-M28.3/28.4）：descriptorPath 归一化后含**构建产物特征段**
      * （build/classes/out/target/.gradle）→ 开发态（runIde/测试从 build/classes 加载，
      * 卸载调度会误删构建产物）拒绝更新；其余一律放行。
      *
      * 背景：白名单式（必须位于插件目录内）判定依赖 descriptorPath 精确格式——2026.2 平台
-     * 返回 URL 风格且形态多变（用户日常 IDE 两次实证误拒），黑名单式按内容特征判定
-     * 对格式不敏感、鲁棒得多；descriptorPath 为 null/空白保守按开发态拒绝。
+     * 返回 URL 风格且形态多变（用户日常 IDE 多次实证误拒），黑名单式按内容特征判定
+     * 对格式不敏感；**descriptorPath 为 null/空白时放行**——2026.2 已安装插件
+     * `getDescriptorPath()` 实证返回 null，无法判断时不得误拒正常安装
+     * （开发态防护由非 null 路径的特征段判定承担）。
      */
     internal fun isDevInstallation(descriptorPath: String?): Boolean {
-        if (descriptorPath.isNullOrBlank()) return true
+        if (descriptorPath.isNullOrBlank()) return false
         val segments = normalizeDescriptorPath(descriptorPath).replace('\\', '/').split('/')
         return segments.any { it in DEV_PATH_MARKERS }
     }

@@ -5,13 +5,16 @@ import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult
 import cn.song.mybatisplus.visualizer.update.PluginVersion
 import cn.song.mybatisplus.visualizer.update.UpdateManifest
+import cn.song.mybatisplus.visualizer.update.UpdateSource
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.progress.util.ProgressIndicatorBase
+import com.intellij.ui.components.labels.LinkLabel
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.RestartDialogImpl
@@ -70,8 +73,19 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     internal val installedLabel = JBLabel()
     internal val restartButton = JButton()
 
+    /** 变更日志标题（T-M28.4：标题行 = 左标题 + 右 Gitee 发布页链接）。 */
+    internal val notesTitleLabel = JBLabel().apply { name = "notesTitle" }
+
+    /** 变更日志 → Gitee 发布页链接（用户要求可点击跳转）。 */
+    internal val giteeLink = LinkLabel<Any>(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), null) { _, _ ->
+        BrowserUtil.browse(UpdateSource.GITEE_RELEASES_URL)
+    }
+
     private val notesContainer = JPanel(BorderLayout(0, 2)).apply {
-        add(JBLabel().apply { name = "notesTitle" }, BorderLayout.NORTH)
+        add(JPanel(BorderLayout(8, 0)).apply {
+            add(notesTitleLabel, BorderLayout.WEST)
+            add(giteeLink, BorderLayout.EAST)
+        }, BorderLayout.NORTH)
         add(JScrollPane(notesArea).apply {
             border = UIUtil.getTextFieldBorder()
             isVisible = false
@@ -216,7 +230,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         installButton.text = MpSqlVisualizerBundle.message("settings.update.downloadInstall")
         installedLabel.text = MpSqlVisualizerBundle.message("settings.update.installed")
         restartButton.text = MpSqlVisualizerBundle.message("settings.update.restartNow")
-        (notesContainer.getComponent(0) as JBLabel).text = MpSqlVisualizerBundle.message("settings.update.changelog")
+        notesTitleLabel.text = MpSqlVisualizerBundle.message("settings.update.changelog")
+        giteeLink.text = MpSqlVisualizerBundle.message("settings.update.viewOnGitee")
         renderState()
     }
 

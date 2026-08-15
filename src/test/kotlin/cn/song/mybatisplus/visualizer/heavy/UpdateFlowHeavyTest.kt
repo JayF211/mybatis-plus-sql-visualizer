@@ -78,11 +78,19 @@ class UpdateFlowHeavyTest : HeavyPlatformTestCase() {
         assertTrue("应发现新版本，实际: $result", result is PluginUpdateRunner.CheckResult.Available)
         assertEquals("9999.1.1", (result as PluginUpdateRunner.CheckResult.Available).manifest.version)
 
-        // ② 真实 HTTP 下载 + zip 校验 + 安装入口（目录守卫拒绝——测试环境插件不在插件目录内）
-        val install = PluginUpdateRunner.downloadAndInstall(result.manifest, null)
-        assertTrue("应被目录守卫拒绝（保护开发产物），实际: $install", install is PluginUpdateRunner.InstallResult.Failed)
-        val message = (install as PluginUpdateRunner.InstallResult.Failed).message
-        assertTrue("拒绝原因应为插件目录守卫，实际: $message", message.contains("plugins directory"))
+        // ② 真实 HTTP 下载 + zip 校验 + 安装入口触达（守卫对测试环境 descriptorPath=null
+        //    已放行——T-M28.4 实证 2026.2 已安装插件 descriptorPath 为 null；install seam
+        //    注入替身，避免测试沙盒真实调度卸载/解压）
+        var installCalled = false
+        val install = PluginUpdateRunner.downloadAndInstall(
+            result.manifest, null,
+            install = {
+                installCalled = true
+                PluginUpdateRunner.InstallResult.Installed
+            },
+        )
+        assertTrue("下载与校验通过后应触达安装入口（守卫不再误拒 null descriptorPath）", installCalled)
+        assertEquals(PluginUpdateRunner.InstallResult.Installed, install)
 
         assertEquals("清单应被拉取 1 次", 1, manifestHits.get())
         assertEquals("插件包应被下载 1 次", 1, zipHits.get())

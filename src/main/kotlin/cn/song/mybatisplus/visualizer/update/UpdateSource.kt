@@ -22,6 +22,9 @@ object UpdateSource {
     /** 清单 URL 覆盖系统属性名（沙盒验证/换源用）。 */
     const val MANIFEST_URL_OVERRIDE = "mpvs.update.manifest.url"
 
+    /** Gitee 发布页（T-M28.4 变更日志链接目标——设置页/通知可点击跳转）。 */
+    const val GITEE_RELEASES_URL = "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases"
+
     /** 实际清单 URL（系统属性覆盖优先；属性空白视为未设置）。 */
     fun manifestUrl(): String =
         System.getProperty(MANIFEST_URL_OVERRIDE)?.takeIf { it.isNotBlank() } ?: DEFAULT_MANIFEST_URL
