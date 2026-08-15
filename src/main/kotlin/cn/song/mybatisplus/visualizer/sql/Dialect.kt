@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.model.SqlValue
 
 /**
  * 数据库方言 SPI（T-M5-03/F-14）。
@@ -53,8 +54,8 @@ interface Dialect {
  * 供 MySQL / MariaDB / DM 复用。
  */
 private fun renderMySqlStyleLimit(limit: LimitClause): String {
-    val offsetPart = if (limit.offset != null) "${limit.offset}, " else ""
-    return "LIMIT $offsetPart${limit.count}"
+    val offsetPart = if (limit.offset != null) "${renderLimitValue(limit.offset)}, " else ""
+    return "LIMIT $offsetPart${renderLimitValue(limit.count)}"
 }
 
 /**
@@ -62,8 +63,14 @@ private fun renderMySqlStyleLimit(limit: LimitClause): String {
  * 供 PostgreSQL / H2 / SQLite / KingBase 复用。
  */
 private fun renderPgStyleLimit(limit: LimitClause): String {
-    val offsetPart = if (limit.offset != null) " OFFSET ${limit.offset}" else ""
-    return "LIMIT ${limit.count}$offsetPart"
+    val offsetPart = if (limit.offset != null) " OFFSET ${renderLimitValue(limit.offset)}" else ""
+    return "LIMIT ${renderLimitValue(limit.count)}$offsetPart"
+}
+
+/** T-M29-03：分页子句数值渲染——字面量原样、运行时值 `?`（service.page 的 pageNum/pageSize 变量）。 */
+private fun renderLimitValue(value: SqlValue): String = when (value) {
+    is SqlValue.Literal -> value.raw
+    is SqlValue.Placeholder -> "?"
 }
 
 /**
@@ -99,9 +106,9 @@ object OracleDialect : Dialect {
     override val name: String = "Oracle"
 
     override fun renderLimit(limit: LimitClause): String = if (limit.offset != null) {
-        "OFFSET ${limit.offset} ROWS FETCH NEXT ${limit.count} ROWS ONLY"
+        "OFFSET ${renderLimitValue(limit.offset)} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
     } else {
-        "FETCH FIRST ${limit.count} ROWS ONLY"
+        "FETCH FIRST ${renderLimitValue(limit.count)} ROWS ONLY"
     }
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -119,7 +126,7 @@ object SqlServerDialect : Dialect {
     override val name: String = "SQL Server"
 
     override fun renderLimit(limit: LimitClause): String =
-        "OFFSET ${limit.offset ?: 0} ROWS FETCH NEXT ${limit.count} ROWS ONLY"
+        "OFFSET ${renderLimitValue(limit.offset ?: SqlValue.Literal("0"))} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
 
     override fun quoteIdentifier(identifier: String): String = "[$identifier]"
 

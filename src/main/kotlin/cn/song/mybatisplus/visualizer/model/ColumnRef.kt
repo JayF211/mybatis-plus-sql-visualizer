@@ -50,10 +50,16 @@ data class OrderByItem(
 /**
  * 分页子句（MP 的 last("limit ...") / page 参数解析产物）。
  *
- * @param offset 偏移量（null 表示无 OFFSET）
- * @param count  行数限制
+ * @param offset 偏移量（null 表示无 OFFSET）；字面量直接渲染，运行时值渲染 `?`（T-M29-03）
+ * @param count  行数限制；字面量直接渲染，运行时值渲染 `?`
  */
 data class LimitClause(
-    val offset: Long? = null,
-    val count: Long,
-)
+    val offset: SqlValue? = null,
+    val count: SqlValue,
+) {
+    /** 便捷构造：Long 字面量（`last("limit 10")` 文本解析等既有路径，T-M29-03 兼容）。 */
+    constructor(offset: Long? = null, count: Long) : this(
+        offset?.let { SqlValue.Literal(it.toString()) },
+        SqlValue.Literal(count.toString()),
+    )
+}

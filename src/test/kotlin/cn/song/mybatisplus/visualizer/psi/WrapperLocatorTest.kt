@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
+import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import com.intellij.openapi.util.TextRange
@@ -148,6 +150,104 @@ class WrapperLocatorTest : BasePlatformTestCase() {
         // 至少应解析出 eq、and 与 orderByAsc（or() 无参切换 M1 简化忽略）
         val methods = chain!!.calls.map { it.methodName }
         assertEquals(listOf("eq", "and", "orderByAsc"), methods)
+    }
+
+    // ------------------------------------------------------------------
+    // T-M29-02/03：分页消费识别（service.page / selectPage / 链式 page 终结点）
+    // ------------------------------------------------------------------
+
+    fun testPageConsumptionLiteralLimit() {
+        // 用户实测形态：service.page(new Page<>(pageNum, pageSize), wrapper) —— 字面量直接计算 LIMIT
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    MyService.page(new Page<>(1, 10), w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Long stationId;
+                    private Integer sort;
+                }
+            }
+            """.trimIndent(),
+        )
+        val pageCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "page" }
+        val located = WrapperLocator.locateWithTable(pageCall)
+        assertNotNull("page 消费应定位到 wrapper", located)
+        val limit = located!!.chain.pageLimit
+        assertNotNull("page 消费应解析出分页 LIMIT", limit)
+        // offset = (1-1)*10 = 0、count = 10
+        assertEquals(LimitClause(offset = SqlValue.Literal("0"), count = SqlValue.Literal("10")), limit)
+    }
+
+    fun testPageConsumptionVariableLimit() {
+        // 运行时变量 pageNum/pageSize → 占位符（offset 来源标注计算公式，对齐 MP getOffet）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query(long pageNum, long pageSize) {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                    MyService.page(new Page<>(pageNum, pageSize), w);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private Long stationId;
+                    private Integer sort;
+                }
+            }
+            """.trimIndent(),
+        )
+        val pageCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "page" }
+        val limit = WrapperLocator.locateWithTable(pageCall)!!.chain.pageLimit
+        assertNotNull(limit)
+        assertEquals(SqlValue.Placeholder("(pageNum - 1) * pageSize"), limit!!.offset)
+        assertEquals(SqlValue.Placeholder("pageSize"), limit.count)
+    }
+
+    fun testSelectPageInlineAndChainTerminalPage() {
+        // BaseMapper.selectPage 实参形态（内联 new）+ 链式 lambdaQuery()...page(Page) 终结点形态
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    MyMapper.selectPage(new Page<>(2, 20), new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1L));
+                    MyService.lambdaQuery().eq("a", "b").page(new Page<>(3, 30));
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                }
+            }
+            """.trimIndent(),
+        )
+        // 内联 new 形态：selectPage 消费 → LIMIT 20, 20
+        val selectPageCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "selectPage" }
+        val inlineLimit = WrapperLocator.locateWithTable(selectPageCall)!!.chain.pageLimit
+        assertEquals(LimitClause(offset = SqlValue.Literal("20"), count = SqlValue.Literal("20")), inlineLimit)
+        // 链式终结点形态：lambdaQuery()...page(Page) → LIMIT 60, 30
+        val chainCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaQuery" }
+        val chainLimit = WrapperLocator.locateWithTable(chainCall)!!.chain.pageLimit
+        assertEquals(LimitClause(offset = SqlValue.Literal("60"), count = SqlValue.Literal("30")), chainLimit)
     }
 
     fun testVariableTracingInlinedValue() {

@@ -274,6 +274,201 @@ class QueryWrapperParserTest {
         assertEquals(2, group.children.size)
     }
 
+    // ------------------------------------------------------------------
+    // T-M29-01：分组方法布尔条件重载（and/or/nested/not/func 的 condition 首参）
+    // ------------------------------------------------------------------
+
+    /** 便捷构造：and/or 嵌套链（NESTED 类型，实体名与主链一致）。 */
+    private fun nested(calls: List<WrapperCall>) = WrapperArg.NestedArg(
+        WrapperChain(WrapperType.NESTED, "DeviceInfoEntity", calls),
+    )
+
+    /** 条件树全部 toggle id（含嵌套组内子条件；enabledConditionIds 集合构造用）。 */
+    private fun Condition.allToggleIds(): List<String> = when (this) {
+        is Condition.Group -> listOfNotNull(toggle?.id) + children.flatMap { it.allToggleIds() }
+        else -> listOfNotNull(toggle?.id)
+    }
+
+    @Test
+    fun `分组布尔重载_and运行时布尔组默认勾选渲染`() {
+        // 用户实测形态：and(condition, w -> w.likeRight(code).or().likeRight(user_phone))
+        // 此前首参布尔被当 NestedArg 取 → 整组静默丢弃；修复后组挂开关、默认渲染
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                eqCall("id", "1"),
+                WrapperCall("and", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("isNotBlank(keyword)")),
+                    nested(listOf(
+                        WrapperCall("likeRight", listOf(
+                            WrapperArg.ColumnArg(ColumnRef(columnName = "code")),
+                            WrapperArg.ValueArg(SqlValue.Placeholder("keyword")),
+                        )),
+                        WrapperCall("or", emptyList()),
+                        WrapperCall("likeRight", listOf(
+                            WrapperArg.ColumnArg(ColumnRef(columnName = "user_phone")),
+                            WrapperArg.ValueArg(SqlValue.Placeholder("keyword")),
+                        )),
+                    )),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        val group = statement.conditions[1] as Condition.Group
+        assertEquals(Connector.OR, group.connector)
+        assertEquals("isNotBlank(keyword)", group.toggle?.flagSource)
+        assertTrue(group.toggle!!.defaultEnabled)
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, name
+            FROM car_device_info
+            WHERE id = 1
+                AND (code LIKE ? OR user_phone LIKE ?)
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `分组布尔重载_and字面量false默认不渲染_勾选后渲染`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                eqCall("id", "1"),
+                WrapperCall("and", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("false")),
+                    nested(listOf(eqCall("station_id", "101"))),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        val group = statement.conditions[1] as Condition.Group
+        assertEquals("false", group.toggle?.flagSource)
+        assertFalse(group.toggle!!.defaultEnabled)
+        // 默认（enabledIds=null 按 defaultEnabled）：组不渲染（对齐 MP false 条件跳过）
+        val defaultSql = SqlGenerator.generate(statement)
+        assertFalse("默认不渲染：$defaultSql", defaultSql.contains("station_id = 101"))
+        // 勾选后渲染（enabledConditionIds 语义为「仅渲染集合内动态条件」——须含全部条件 id，含组内子条件）
+        val allIds = statement.conditions.flatMap { it.allToggleIds() }.toSet()
+        val enabledSql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = allIds)
+        assertTrue("勾选后渲染：$enabledSql", enabledSql.contains("AND (station_id = 101)"))
+    }
+
+    @Test
+    fun `分组布尔重载_or与nested`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                eqCall("id", "1"),
+                WrapperCall("or", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("true")),
+                    nested(listOf(eqCall("id", "2"))),
+                )),
+                WrapperCall("nested", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("nestedFlag")),
+                    nested(listOf(eqCall("name", "'x'"))),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals(3, statement.conditions.size)
+        val orGroup = statement.conditions[1] as Condition.Group
+        assertEquals(Connector.OR, orGroup.connector)
+        assertEquals("true", orGroup.toggle?.flagSource)
+        val nestedGroup = statement.conditions[2] as Condition.Group
+        assertEquals(Connector.AND, nestedGroup.connector)
+        assertEquals("nestedFlag", nestedGroup.toggle?.flagSource)
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, name
+            FROM car_device_info
+            WHERE id = 1
+                AND (id = 2)
+                AND (name = 'x')
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `分组布尔重载_not`() {
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                WrapperCall("not", listOf(
+                    WrapperArg.ValueArg(SqlValue.Placeholder("notFlag")),
+                    nested(listOf(eqCall("id", "1"))),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        val group = statement.conditions[0] as Condition.Group
+        assertTrue(group.negated)
+        assertEquals("notFlag", group.toggle?.flagSource)
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, name
+            FROM car_device_info
+            WHERE NOT (id = 1)
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `分组布尔重载_func子条件组化挂开关`() {
+        // func(condition, consumer)：子条件展开为 AND 组挂开关（无标志形态保持展平，见回归用例）
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                WrapperCall("func", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("true")),
+                    nested(listOf(eqCall("id", "1"), eqCall("name", "'x'"))),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals(1, statement.conditions.size)
+        val group = statement.conditions[0] as Condition.Group
+        assertEquals(2, group.children.size)
+        assertEquals("true", group.toggle?.flagSource)
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, name
+            FROM car_device_info
+            WHERE (id = 1 AND name = 'x')
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `分组无标志回归_不挂toggle`() {
+        // and(w -> ...) 无布尔首参：组照常解析、不挂开关（回归不变）
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                WrapperCall("and", listOf(nested(listOf(eqCall("id", "1"))))),
+            ),
+        )
+        val statement = parser.parse(chain)
+        val group = statement.conditions[0] as Condition.Group
+        assertNull(group.toggle)
+        val sql = SqlGenerator.generate(statement)
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, name
+            FROM car_device_info
+            WHERE (id = 1)
+            """.trimIndent(),
+            sql,
+        )
+    }
+
     @Test
     fun `结构解析_select排序分页`() {
         val chain = WrapperChain(

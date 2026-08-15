@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
@@ -319,9 +321,11 @@ object WrapperLocator {
      *    否则走到 PsiClass 级别会命中类内其他方法的 wrapper（回归：删除/修改被串成查询，2026-08-12）。
      */
     private fun findWrapperNewExpression(anchor: PsiElement): PsiNewExpression? {
-        PsiTreeUtil.findChildOfType(anchor, PsiNewExpression::class.java)?.let { newExpr ->
-            if (detectWrapperType(newExpr.type) != null) return newExpr
-        }
+        // T-M29-03：扫锚点子树全部 new 表达式取**首个 wrapper 构造**（原 findChildOfType 只取第一个——
+        // `selectPage(new Page<>(...), new LambdaQueryWrapper<>()...)` 的 Page 先于 wrapper 时漏检）
+        PsiTreeUtil.collectElementsOfType(anchor, PsiNewExpression::class.java)
+            .firstOrNull { detectWrapperType(it.type) != null }
+            ?.let { return it }
         var current: PsiElement? = anchor
         while (current != null) {
             if (current is PsiNewExpression && detectWrapperType(current.type) != null) return current
@@ -371,9 +375,13 @@ object WrapperLocator {
         val countConsumed = consumingCall?.let { it.methodExpression.referenceName in countConsumerMethodNames } == true
         val existsConsumed = consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true
         val updateEntityConsumed = isEntityUpdateConsumer(newExpr)
+        // T-M29-02/03：分页消费（`service.page(page, new W()...)`）——Page 实参解析为 LIMIT 子句
+        val pageLimit = consumingCall?.let {
+            if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageLimit(it) else null
+        }
 
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed),
+            chain = WrapperChain(wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit),
             table = table,
             entityFile = resolvedEntity?.containingFile,
         )
@@ -459,6 +467,8 @@ object WrapperLocator {
         // （复用 SqlPreviewService.updateEntityConsumed 分支：实体全列 SET + 主键进 WHERE）
         val chainUpdateEntity = terminalName == UPDATE_TERMINAL &&
             terminal.argumentList.expressions.isNotEmpty()
+        // T-M29-02/03：链式分页终结点（`service.lambdaQuery()...page(new Page<>(...))`）——Page 实参解析为 LIMIT
+        val chainPageLimit = if (terminalName == PAGE_TERMINAL) parsePageLimit(terminal) else null
 
         val wrapperCalls = nonTerminalCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
@@ -471,12 +481,16 @@ object WrapperLocator {
         val existsConsumed = chainExistsConsumed ||
             (consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true)
         val updateEntityConsumed = isEntityUpdateConsumer(factoryCall) || chainUpdateEntity
+        // T-M29-02/03：分页消费（链式终结点 page / `service.page(page, Wrappers.lambdaQuery()...)` 实参形态）
+        val pageLimit = chainPageLimit ?: consumingCall?.let {
+            if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageLimit(it) else null
+        }
 
         return LocatedWrapper(
             chain = WrapperChain(
                 wrapperType, table?.entityClassName ?: entityClass?.name, wrapperCalls, constructorAlias = null,
                 deleteConsumed = deleteConsumed, countConsumed = countConsumed, existsConsumed = existsConsumed,
-                updateEntityConsumed = updateEntityConsumed,
+                updateEntityConsumed = updateEntityConsumed, pageLimit = pageLimit,
             ),
             table = table,
             entityFile = entityClass?.containingFile,
@@ -697,6 +711,8 @@ object WrapperLocator {
         var countConsumed = false
         var existsConsumed = false
         var updateEntityConsumed = false
+        // T-M29-02/03：分页消费（`service.page(new Page<>(...), wrapper)`）→ Page 实参解析的 LIMIT 子句
+        var pageLimit: LimitClause? = null
 
         // 1. 初始化表达式中的链式调用；若链首为工厂方法调用（baseJoinWrapper()），展开其方法体内的 wrapper 链（P03）；
         //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除
@@ -712,6 +728,8 @@ object WrapperLocator {
             if (isConsumerArgument(refExpression, countConsumerMethodNames)) countConsumed = true
             if (isConsumerArgument(refExpression, setOf(EXISTS_CONSUMER))) existsConsumed = true
             if (isEntityUpdateArgument(refExpression)) updateEntityConsumed = true
+            // T-M29-02：分页消费（`service.page(page, wrapper)` / `mapper.selectPage(page, wrapper)`）
+            if (pageLimit == null) pageConsumingCall(refExpression)?.let { pageLimit = parsePageLimit(it) }
             // w 引用的 PSI 结构：w.eq(...) 中 w 引用 → methodExpression(eq 引用) → PsiMethodCallExpression
             // 向上遍历找最近的调用表达式
             val call = generateSequence(refExpression.parent) { it.parent }
@@ -768,7 +786,7 @@ object WrapperLocator {
 
         val wrapperCalls = dedupedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed),
+            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit),
             table = table,
         )
     }
@@ -861,6 +879,85 @@ object WrapperLocator {
             cursor = cursor.parent
         }
         return false
+    }
+
+    /**
+     * T-M29-02：引用是否作为**分页消费方法**的实参（`service.page(page, wrapper)` / `selectPage` 等）；
+     * 命中返回消费调用（[parsePageLimit] 从其实参解析 Page），否则 null。判定规则同 [isConsumerArgument]。
+     */
+    private fun pageConsumingCall(ref: PsiReferenceExpression): PsiMethodCallExpression? {
+        var cursor: PsiElement? = ref.parent
+        while (cursor != null) {
+            when (cursor) {
+                is PsiExpressionList -> {
+                    val call = cursor.parent as? PsiMethodCallExpression ?: return null
+                    return call.takeIf { it.methodExpression.referenceName in pageConsumerMethodNames }
+                }
+                is PsiMethodCallExpression, is PsiStatement, is PsiMethod, is PsiClass -> return null
+            }
+            cursor = cursor.parent
+        }
+        return null
+    }
+
+    /**
+     * T-M29-03：解析分页消费调用的 Page 实参（`new Page<>(current, size)`）为 [LimitClause]。
+     *
+     *  - Page 实参：直接 new 表达式，或可解析到 new Page 初始化表达式的变量引用（分步写法）；
+     *  - 空构造 `new Page<>()` → 默认 current=1、size=10（对齐 MP 默认）；
+     *  - current/size 字面量 → 直接计算 offset=(current-1)*size（current<=0 按 0，对齐 MP getOffet）；
+     *  - 任一为运行时值 → `?` 占位（offset 来源标注计算公式，面板回填后即真实偏移）；
+     *  - 解析失败（Page 变量不可解析 / 非 Page 类型等）→ null（不渲染 LIMIT，维持现状）。
+     */
+    private fun parsePageLimit(call: PsiMethodCallExpression): LimitClause? {
+        val pageExpr = call.argumentList.expressions.firstNotNullOfOrNull { arg -> resolvePageNewExpression(arg) }
+            ?: return null
+        val args = pageExpr.argumentList?.expressions.orEmpty()
+        val current = args.getOrNull(0)?.let { ExpressionEvaluator.evaluate(it) } ?: SqlValue.Literal("1")
+        val size = args.getOrNull(1)?.let { ExpressionEvaluator.evaluate(it) } ?: SqlValue.Literal("10")
+        val offset = when {
+            current is SqlValue.Literal && size is SqlValue.Literal -> {
+                val c = current.unquoted.toLongOrNull()
+                val s = size.unquoted.toLongOrNull()
+                if (c != null && s != null) {
+                    SqlValue.Literal((if (c > 0) (c - 1) * s else 0L).toString())
+                } else {
+                    pageOffsetPlaceholder(current, size)
+                }
+            }
+            else -> pageOffsetPlaceholder(current, size)
+        }
+        return LimitClause(offset = offset, count = size)
+    }
+
+    /** new Page 表达式解析：直接 new 表达式，或变量引用 → 初始化表达式（分步写法 `Page p = new Page<>(...); service.page(p, w)`）。 */
+    private fun resolvePageNewExpression(expr: PsiExpression): PsiNewExpression? {
+        if (expr is PsiNewExpression && isPageType(expr)) return expr
+        if (expr is PsiReferenceExpression) {
+            val variable = expr.resolve() as? PsiVariable ?: return null
+            val init = variable.initializer as? PsiNewExpression ?: return null
+            return init.takeIf { isPageType(it) }
+        }
+        return null
+    }
+
+    /** Page 类型判定（Page / PageImpl 简单类名，不 resolve——LightPlatform 无 MP classpath 也生效）。 */
+    private fun isPageType(newExpr: PsiNewExpression): Boolean {
+        val className = (newExpr.type as? PsiClassType)?.className ?: return false
+        return className == "Page" || className == "PageImpl"
+    }
+
+    /** 分页 offset 运行时占位来源：`(current - 1) * size` 计算公式文本（对齐 MP getOffet 语义）。 */
+    private fun pageOffsetPlaceholder(current: SqlValue, size: SqlValue): SqlValue {
+        val currentText = when (current) {
+            is SqlValue.Literal -> current.unquoted
+            is SqlValue.Placeholder -> current.source
+        }
+        val sizeText = when (size) {
+            is SqlValue.Literal -> size.unquoted
+            is SqlValue.Placeholder -> size.source
+        }
+        return SqlValue.Placeholder("($currentText - 1) * $sizeText")
     }
 
     /**
@@ -1003,11 +1100,20 @@ object WrapperLocator {
     private const val COUNT_TERMINAL = "count"
     private const val EXISTS_TERMINAL = "exists"
     private const val UPDATE_TERMINAL = "update"
+    /** T-M29-02：链式分页终结点（`service.lambdaQuery()...page(Page)`）。 */
+    private const val PAGE_TERMINAL = "page"
     private const val CLEAR_METHOD = "clear"
 
     /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法；
      *  deleteJoin 为 MPJ 官方联表删除，M15 增补）。 */
     internal val deleteConsumerMethodNames: Set<String> = setOf("remove", "delete", "deleteJoin")
+
+    /**
+     * T-M29-02：分页类消费方法——wrapper 作为实参传入时查询转分页渲染（LIMIT 子句）：
+     * `IService.page(Page, wrapper)` / `BaseMapper.selectPage(Page, wrapper)` / MPJ `selectJoinPage` /
+     * `Db.page(Page, wrapper)`（链式 `lambdaQuery()...page(...)` 终结点由 [PAGE_TERMINAL] 单独识别）。
+     */
+    internal val pageConsumerMethodNames: Set<String> = setOf("page", "selectPage", "selectJoinPage")
 
     /**
      * 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。

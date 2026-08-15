@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.DeleteStatement
+import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SetClause
@@ -163,7 +164,15 @@ class SqlPreviewService(private val project: Project) {
             // AND version = ?；不依赖配置开关，对齐 MP OptimisticLockerInnerInterceptor 默认行为；
             // 与逻辑删除注入串行调用——二者按语句类型互斥：逻辑删除仅 SELECT/DELETE、乐观锁仅 UPDATE）
             val finalStatement = injectOptimisticLockCondition(table, baseStatement)
-            val result = buildPreviewResult(located.chain.wrapperType, table, finalStatement)
+            // T-M29-02/03：分页消费（`service.page(Page, wrapper)` / `selectPage` / 链式 `page()`）→ LIMIT 子句
+            // （覆盖 last("limit ...")——MP 运行时两者并存属错误用法，预览以分页为准，文档化边界；
+            // count/exists 消费不追加分页）
+            val pagedStatement = if (located.chain.countConsumed || located.chain.existsConsumed) {
+                finalStatement
+            } else {
+                applyPageLimit(finalStatement, located.chain.pageLimit)
+            }
+            val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
                 result.copy(
@@ -329,6 +338,15 @@ class SqlPreviewService(private val project: Project) {
                 ColumnRef(tableAlias = alias, columnName = versionColumn), "=", SqlValue.Placeholder("?"),
             ),
         )
+    }
+
+    /** T-M29-03：分页 LIMIT 注入——仅 SELECT 语句生效（UPDATE/DELETE 不追加，维持现状）。 */
+    private fun applyPageLimit(statement: SqlStatement, pageLimit: LimitClause?): SqlStatement {
+        val limit = pageLimit ?: return statement
+        return when (statement) {
+            is SelectStatement -> statement.copy(limit = limit)
+            else -> statement
+        }
     }
 
     /** T-M22-02：条件树是否已提及指定列（Simple/In/Between/Like/Unary/ColumnComparison 按列名匹配，Group 递归）。 */

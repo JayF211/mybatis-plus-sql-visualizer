@@ -343,6 +343,93 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertTrue("内联 count 应转 COUNT(*)", result!!.compactSql.contains("COUNT(*)"))
     }
 
+    fun testUserCodeShapeAndGroupAndPageLimit() {
+        // T-M29-01/03 用户实测全形态：and(condition, w -> ...) 布尔组 + service.page(Page, wrapper) 分页
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void query(long pageNum, long pageSize, String keyword,
+                                  java.util.List<Long> stationIds, Integer dicStatus,
+                                  java.time.LocalDateTime startTime, java.time.LocalDateTime endTime) {
+                    LambdaQueryWrapper<BikeOrderRecordEntity> wrapper = Wrappers.<BikeOrderRecordEntity>lambdaQuery()
+                        .in(CollUtil.isNotEmpty(stationIds), BikeOrderRecordEntity::getStationId, stationIds)
+                        .eq(ObjUtil.isNotNull(dicStatus), BikeOrderRecordEntity::getDicStatus, dicStatus)
+                        .in(BikeOrderRecordEntity::getDicPayStatus, 1, 2)
+                        .and(StrUtil.isNotBlank(keyword), w ->
+                                w.likeRight(BikeOrderRecordEntity::getCode, keyword)
+                                        .or().likeRight(BikeOrderRecordEntity::getUserPhone, keyword))
+                        .between(BikeOrderRecordEntity::getCreateTime, startTime, endTime)
+                        .orderByDesc(BikeOrderRecordEntity::getCreateTime);
+                    Page<BikeOrderRecordEntity> page = bikeOrderRecordService.page(new Page<>(pageNum, pageSize), wrapper);
+                }
+
+                static class BikeOrderRecordEntity {
+                    private Long id;
+                    private String code;
+                    private Long stationId;
+                    private Integer dicStatus;
+                    private Integer dicPayStatus;
+                    private String userPhone;
+                    private java.time.LocalDateTime createTime;
+                    @com.baomidou.mybatisplus.annotation.TableLogic
+                    private Integer deleted;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出预览结果", result)
+        val sql = result!!.sql
+        // 修复前：and 布尔组被静默丢弃；修复后渲染 (code LIKE ? OR user_phone LIKE ?)
+        assertTrue("and 组应渲染：$sql", sql.contains("AND (code LIKE ? OR user_phone LIKE ?)"))
+        // 分页消费：LIMIT ?, ?（运行时 pageNum/pageSize）
+        assertTrue("分页 LIMIT 应渲染：$sql", sql.contains("LIMIT ?, ?"))
+        assertTrue("逻辑删除注入：$sql", sql.contains("AND deleted = 0"))
+        // 分页占位符参数进参数区（offset 来源标注计算公式）
+        assertTrue("分页 offset 参数缺失：${result.unresolvedParams}", result.unresolvedParams.contains("(pageNum - 1) * pageSize"))
+        assertTrue("分页 size 参数缺失：${result.unresolvedParams}", result.unresolvedParams.contains("pageSize"))
+        // 动态条件面板：and 组挂开关（label = 组渲染文本）
+        val views = result.previewModel?.conditionViews.orEmpty()
+        assertTrue(
+            "面板应有 and 组开关：${views.map { it.label }}",
+            views.any { it.label.contains("code LIKE") && it.label.contains("user_phone LIKE") },
+        )
+    }
+
+    fun testPageConsumedRendersLiteralLimit() {
+        // T-M29-03：new Page<>(2, 10) 字面量 → 直接计算 LIMIT 10, 10（offset=(2-1)*10）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    service.page(new Page<>(2, 10), w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("page 消费应产出预览结果", result)
+        assertEquals(
+            """
+            SELECT id
+            FROM device_info_entity
+            WHERE id = 1001
+            LIMIT 10, 10
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     fun testPreviewWithUnresolvedParam() {
         myFixture.configureByText(
             "Demo.java",
@@ -1228,12 +1315,14 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull("exists SQL 子查询条件应产出预览结果", result)
+        // T-M29-03：链式终结点 page(new Page<>(1, 10)) 分页消费 → LIMIT 0, 10（offset=(1-1)*10）
         assertEquals(
             """
             SELECT id
             FROM price_task_record_entity
             WHERE id = 1001
                 AND EXISTS (SELECT 1 FROM rel WHERE rel.task_id = main.id AND rel.station_id = ?)
+            LIMIT 0, 10
             """.trimIndent(),
             result!!.sql,
         )

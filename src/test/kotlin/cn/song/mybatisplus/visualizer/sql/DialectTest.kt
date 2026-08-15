@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.sql
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -36,6 +37,28 @@ class DialectTest {
         assertEquals(
             "OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
             OracleDialect.renderLimit(LimitClause(offset = 5, count = 10)),
+        )
+    }
+
+    @Test
+    fun `分页占位符_运行时值渲染问号`() {
+        // T-M29-03：service.page 的运行时 pageNum/pageSize → `?` 占位（各方言形态）
+        val placeholder = LimitClause(
+            offset = SqlValue.Placeholder("(pageNum - 1) * pageSize"),
+            count = SqlValue.Placeholder("pageSize"),
+        )
+        assertEquals("LIMIT ?, ?", MySqlDialect.renderLimit(placeholder))
+        assertEquals("LIMIT ? OFFSET ?", PostgreSQLDialect.renderLimit(placeholder))
+        assertEquals("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY", OracleDialect.renderLimit(placeholder))
+        assertEquals("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY", SqlServerDialect.renderLimit(placeholder))
+        // 字面量 + 占位符混合（SQL Server 无 offset 恒渲染 0）
+        assertEquals(
+            "LIMIT 0, ?",
+            MySqlDialect.renderLimit(LimitClause(offset = SqlValue.Literal("0"), count = SqlValue.Placeholder("pageSize"))),
+        )
+        assertEquals(
+            "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY",
+            SqlServerDialect.renderLimit(LimitClause(count = SqlValue.Placeholder("pageSize"))),
         )
     }
 

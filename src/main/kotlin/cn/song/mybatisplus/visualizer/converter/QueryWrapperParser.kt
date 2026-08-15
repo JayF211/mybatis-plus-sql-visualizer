@@ -195,21 +195,37 @@ class QueryWrapperParser(
 
                 // ---------- 逻辑分组 ----------
                 // 无参 or()（P14）：与前一条件组成 OR 分组（分隔符）；有参 and/or → 嵌套 lambda 分组
+                // T-M29-01：分组方法布尔条件重载（`and(condition, w -> ...)`）——剥离标志、
+                // 组挂动态条件开关（此前首参布尔被当 NestedArg 取 → 整组静默丢弃）
                 "or" -> if (call.args.isEmpty()) {
                     orPending = true
                 } else {
-                    orPending = addConditionFlagged(conditions, parseGroup(call), orPending)
+                    orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending)
                 }
-                "and" -> orPending = addConditionFlagged(conditions, parseGroup(call), orPending)
+                "and" -> orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending)
                 // nested(consumer)：独立括号块（官方 API，语义与 and 等价——隐式 AND 连接）
-                "nested" -> orPending = addConditionFlagged(conditions, parseGroup(call), orPending)
+                "nested" -> orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending)
                 // not(consumer)：NOT (条件)（官方 API）
-                "not" -> orPending = addConditionFlagged(conditions, parseNot(call), orPending)
-                // func(consumer)：条件分支动态构建（官方 API）——consumer 内条件按 AND 直接展开，不产生括号组
+                "not" -> orPending = addConditionFlagged(conditions, parseNotFlagged(call), orPending)
+                // func(consumer)：条件分支动态构建（官方 API）——consumer 内条件按 AND 直接展开，不产生括号组；
+                // func(condition, consumer) 布尔重载（T-M29-01）→ 子条件包成 AND 组挂开关（默认勾选按标志）
                 "func" -> {
-                    val nested = call.args.firstOrNull() as? WrapperArg.NestedArg
+                    val analysis = stripGroupFlag(call)
+                    val effective = analysis?.call ?: call
+                    val nested = effective.args.firstOrNull() as? WrapperArg.NestedArg
                     if (nested != null) {
-                        conditions += parseInternal(nested.chain).conditions
+                        val children = parseInternal(nested.chain).conditions
+                        if (analysis != null) {
+                            if (children.isNotEmpty()) {
+                                orPending = addConditionFlagged(
+                                    conditions,
+                                    Condition.Group(Connector.AND, children).flagged(analysis),
+                                    orPending,
+                                )
+                            }
+                        } else {
+                            conditions += children
+                        }
                     }
                 }
 
@@ -472,6 +488,49 @@ class QueryWrapperParser(
         // 直接返回该组避免 `AND ((a OR b))` 双层括号
         if (children.size == 1 && children[0] is Condition.Group) return children[0]
         return Condition.Group(connector, children)
+    }
+
+    /**
+     * T-M29-01：分组方法布尔条件重载（`and(condition, w -> ...)` 等）——剥离布尔首参后
+     * 解析嵌套组，组挂动态条件开关（默认勾选按标志：字面量 false 不勾选，运行时布尔勾选）。
+     * 无布尔首参走原 [parseGroup]（不挂开关，回归不变）。
+     */
+    private fun parseGroupFlagged(call: WrapperCall): Condition? {
+        val analysis = stripGroupFlag(call)
+        val effective = analysis?.call ?: call
+        val group = parseGroup(effective) ?: return null
+        return if (analysis != null) group.flagged(analysis) else group
+    }
+
+    /** T-M29-01：not(condition, w -> ...) 布尔重载（与 [parseGroupFlagged] 同模式）。 */
+    private fun parseNotFlagged(call: WrapperCall): Condition? {
+        val analysis = stripGroupFlag(call)
+        val effective = analysis?.call ?: call
+        val group = parseNot(effective) ?: return null
+        return if (analysis != null) group.flagged(analysis) else group
+    }
+
+    /** T-M29-01：支持布尔条件重载的分组方法（and/or/nested/not/func 的 condition 首参）。 */
+    private val GROUP_FLAG_METHODS = setOf("and", "or", "nested", "not", "func")
+
+    /**
+     * T-M29-01：剥离分组方法的布尔条件首参（`and(StrUtil.isNotBlank(x), w -> ...)` 形态）。
+     * 判定与 [analyzeFlag] 同一规则：首参仅 true/false 字面量或占位符（运行时布尔）为标志，
+     * 首参即 NestedArg（无标志形态）或其他实参类型返回 null（走原逻辑）。
+     */
+    private fun stripGroupFlag(call: WrapperCall): FlagAnalysis? {
+        if (call.methodName !in GROUP_FLAG_METHODS) return null
+        val first = call.args.getOrNull(0) ?: return null
+        if (first is WrapperArg.NestedArg) return null
+        val firstValue = first.asValue() ?: return null
+        val flagText = when (firstValue) {
+            is SqlValue.Literal -> firstValue.unquoted
+            is SqlValue.Placeholder -> firstValue.source
+        }
+        // 字符串字面量不可能是布尔标志（字符串版列名实参等），仅 true/false 字面量与占位符为条件重载
+        if (firstValue is SqlValue.Literal && flagText != "true" && flagText != "false") return null
+        val defaultEnabled = (firstValue as? SqlValue.Literal)?.unquoted != "false"
+        return FlagAnalysis(WrapperCall(call.methodName, call.args.drop(1)), flagText, defaultEnabled)
     }
 
     /** HAVING：P1-06（M19.5）多条件支持——嵌套链**全部条件**组成 AND 组（M1 起仅取第一个）。 */

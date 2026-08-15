@@ -189,8 +189,12 @@ object SqlGenerator {
         // （MP 内部 sqlSegments 中 LAST 段位于 ORDER BY 之后、分页 LIMIT 之前，位置对齐）
         statement.rawAround?.let { sb.append(nl).append(it) }
 
-        // LIMIT（分页子句按方言渲染）
-        statement.limit?.let { sb.append(nl).append(dialect.renderLimit(it)) }
+        // LIMIT（分页子句按方言渲染；T-M29-03：分页运行时值占位符参与参数收集——面板回填）
+        statement.limit?.let { limit ->
+            collectLimitValue(limit.offset, paramSink, hintSink)
+            collectLimitValue(limit.count, paramSink, hintSink)
+            sb.append(nl).append(dialect.renderLimit(limit))
+        }
 
         // UNION / UNION ALL 子查询（MPJ 官方 API，M15 增补）
         statement.unions.forEach { union ->
@@ -474,6 +478,17 @@ object SqlGenerator {
                 LikePosition.NONE -> v
             }
             "'$core'"
+        }
+    }
+
+    /**
+     * T-M29-03：分页子句占位符收集（`service.page` 的运行时 pageNum/pageSize）——
+     * 数值参数无引号提示（与 [renderValue] 的 quote 参数语义一致）。
+     */
+    private fun collectLimitValue(value: SqlValue?, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?) {
+        if (value is SqlValue.Placeholder) {
+            paramSink?.add(value.source)
+            hintSink?.add(ParamHint(quote = false))
         }
     }
 

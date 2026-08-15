@@ -16,9 +16,11 @@ package cn.song.mybatisplus.visualizer.model
  *                        true 时查询类 wrapper 转 `SELECT COUNT(*) FROM ...`
  * @param existsConsumed  链式终结点消费（`service.lambdaQuery()...exists()`，Q14-③，T-M15-01）；
  *                        true 时查询类链转 `SELECT EXISTS (子查询)`
- * @param updateEntityConsumed 实体更新消费（`service.update(entity, wrapper)` 双参，U07-②，T-M15-04）；
- *                        true 时用实体字段展开 SET 列（值占位）
- */
+     * @param updateEntityConsumed 实体更新消费（`service.update(entity, wrapper)` 双参，U07-②，T-M15-04）；
+     *                        true 时用实体字段展开 SET 列（值占位）
+     * @param pageLimit       分页消费解析产物（`service.page(Page, wrapper)` / `selectPage` / 链式 `page()`，
+     *                        T-M29-02/03）；null 表示无分页消费或 Page 实参不可解析（不渲染 LIMIT）
+     */
 data class WrapperChain(
     val wrapperType: WrapperType,
     val entityClass: String?,
@@ -28,6 +30,7 @@ data class WrapperChain(
     val countConsumed: Boolean = false,
     val existsConsumed: Boolean = false,
     val updateEntityConsumed: Boolean = false,
+    val pageLimit: LimitClause? = null,
 )
 
 /**

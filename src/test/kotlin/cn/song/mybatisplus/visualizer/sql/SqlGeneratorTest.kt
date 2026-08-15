@@ -214,6 +214,29 @@ class SqlGeneratorTest {
         )
     }
 
+    @Test
+    fun `分页占位符_参数收集与回填提示`() {
+        // T-M29-03：service.page 的运行时 pageNum/pageSize → `?` + 参数来源（面板参数区回填）
+        val statement = SelectStatement(
+            table = table,
+            limit = LimitClause(
+                offset = SqlValue.Placeholder("(pageNum - 1) * pageSize"),
+                count = SqlValue.Placeholder("pageSize"),
+            ),
+        )
+        val generated = SqlGenerator.generateWithParams(statement, compact = false)
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, sort
+            FROM car_device_info
+            LIMIT ?, ?
+            """.trimIndent(),
+            generated.sql,
+        )
+        assertEquals(listOf("(pageNum - 1) * pageSize", "pageSize"), generated.unresolvedParams)
+        assertEquals(listOf(ParamHint(quote = false), ParamHint(quote = false)), generated.paramHints)
+    }
+
     // ------------------------------------------------------------------
     // M13：回填提示（paramHints 与 unresolvedParams 并行；SQL 文本不变）
     // ------------------------------------------------------------------
