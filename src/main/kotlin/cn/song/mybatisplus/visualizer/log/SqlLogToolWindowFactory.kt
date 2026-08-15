@@ -95,9 +95,9 @@ class SqlLogPanel(
     // ---------- 工具栏（IDEA 原生 ActionToolbar：扁平图标按钮 + tooltip） ----------
 
     private fun buildToolbar(): JPanel {
+        // T-M31.16：暂停按钮移除（捕捉开关已覆盖——用户方案 A）
         val group = DefaultActionGroup(
             CaptureAction(),
-            PauseAction(),
             FormatAction(),
             ClearAction(),
             SettingsAction(),
@@ -122,19 +122,6 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             if (manager.capturing) manager.stopCapture() else manager.startCapture()
-        }
-    }
-
-    private inner class PauseAction : AnAction() {
-        override fun update(e: AnActionEvent) {
-            e.presentation.icon = if (manager.entries.paused) AllIcons.Actions.Resume else AllIcons.Actions.Pause
-            e.presentation.text = MpSqlVisualizerBundle.message(
-                if (manager.entries.paused) "log.panel.resume" else "log.panel.pause",
-            )
-        }
-
-        override fun actionPerformed(e: AnActionEvent) {
-            manager.entries.setPaused(!manager.entries.paused)
         }
     }
 
