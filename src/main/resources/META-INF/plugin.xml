@@ -130,6 +130,11 @@
                            displayName="MyBatis-Plus SQL Visualizer"
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
+
+        <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
+             → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板） -->
+        <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
+                    factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
     </extensions>
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
