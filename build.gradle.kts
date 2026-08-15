@@ -99,6 +99,13 @@ tasks {
     // 保留最近两个版本，更早历史见 CHANGELOG.md。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.8.15</h2>
+            <ul>
+                <li><b>MyBatis XML mapper 动态 SQL 预览</b>（M24~M26）：mapper XML / 注解 SQL（@Select 等含 &lt;script&gt;）gutter 图标 + 右键预览——复刻 MyBatis 3.5.19 渲染算法（if/choose/trim/where/set/foreach/bind/sql+include 全兼容、受限 OGNL 求值、动态条件勾选/foreach 次数/bind 覆盖/参数回填）；${'$'}{ew.customSqlSegment} 等 MP 占位按调用处 Wrapper 全链路展开；文件级多注解候选选择</li>
+                <li><b>XML/注解 SQL 代码补全</b>（M27）：mapper XML 与 Java SQL 注解字符串内 Ctrl+Space——SQL 关键字、表名/列名位置感知、别名前缀列、#{} 参数名、XML 动态标签与 OGNL；预览面板输入自动弹补全（含 @TableName 联表候选）</li>
+                <li><b>设置页检查更新与自动安装</b>（M28）：设置页「更新」分区——检查更新/变更日志展示/下载并安装一键完成 + 重启提示；「启动时自动检查更新」开关（默认开）发现新版弹通知后台安装；构建号一键复制</li>
+                <li><b>预览 SQL 修复</b>（M29）：分组布尔条件重载不再静默丢弃（and/or/nested/not/func 开关化）、分页 LIMIT 渲染（9 方言）、格式化逗号/空格修复（幂等）、动态条件面板组行合并、XML 参数回填默认引号</li>
+            </ul>
             <h2>v2026.8.14</h2>
             <ul>
                 <li><b>官方 API 覆盖差距清零</b>（MP 3.5.17 / MPJ 1.5.9）：实体单条 CRUD（save/getById/listByIds/deleteByIds）、JoinWrappers/MPJWrappers/ChainWrappers 工厂、Map 条件消费、UpdateJoinWrapper/DeleteJoinWrapper 联表更新删除全链路、allEq/eqOrIsNull/selectFunc 枚举/union/selectSub 等全量 API 补全</li>
@@ -106,11 +113,7 @@ tasks {
                 <li><b>多数据库方言</b>：新增 SQL Server/H2/SQLite/MariaDB/DM 达梦/KingBase 人大金仓（共 9 方言）；@Version 乐观锁注入；Db/SimpleQuery/ActiveRecord 识别</li>
                 <li><b>SQL 关键字方言化引用</b>：table 等保留字按方言自动加引号（反引号/双引号/方括号）</li>
                 <li><b>多 SQL 选择</b>：选择代码块弹候选框（代码行预览 + 定位跳转）、任意位置触发预览、复制/执行提示一键关闭 SQL 面板</li>
-                <li>弹窗关闭按钮文案随插件语言；打包编译警告清零；500 测试全绿</li>
-            </ul>
-            <h2>v2026.8.13（首发）</h2>
-            <ul>
-                <li>Wrapper 全覆盖（Lambda/字符串版 QueryWrapper·UpdateWrapper·DeleteWrapper、MPJ 联表 JOIN/selectCollection/selectFunc、服务链 lambdaQuery/lambdaUpdate）实时转可读 SQL；参数替换（? 回填、LIKE 拼百分号、列类型推断引号）；动态条件复选框；SQL 格式化；字段补全 + 注释提示（@Schema/@ApiModelProperty）；表名配置；逻辑删除注入；执行 SQL（Ultimate）；多方言分页；右键/快捷键/gutter 图标三入口；中英文界面</li>
+                <li>弹窗关闭按钮文案随插件语言；</li>
             </ul>
         """.trimIndent()
     }

@@ -2,23 +2,15 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
-## [Unreleased]
+## [2026.8.15] - 2026-08-15
 
 ### Added
 
-- **XML 预览参数回填默认引号**（T-M29.4）：Map 等无类型信息入参的参数输入默认渲染带引号（`2025` → `'2025'`）——LocalDate/字符串列比较不再被数字启发式误判为数值（数值列隐式转换语义不变）
-- **SQL 格式化逗号丢失修复**（T-M29.2）：格式化后 SELECT 列清单/分页参数逗号丢失（非法 SQL）修复——列清单逗号保留行尾换行、`LIMIT ?, ?` / `GROUP BY a, b` 逗号保持同行；默认显示与点击格式化结果不再漂移（格式化幂等）
-- **动态条件面板组行合并**（T-M29.1）：and 布尔组开关行与组内子条件行重复展示修复——组带开关时子条件并入组行（组复选框 + 组内值输入框，同源去重），不再重复成行；组内子条件与 HAVING 子条件在面板流程恒丢失的预存缺陷一并修复（按各自默认态渲染）
 - **构建号复制按钮**（T-M28.2）：内部构建号行新增「复制」按钮，一键复制构建号文本（反馈问题直接粘贴）；无构建号时按钮禁用
-- **XML 预览格式化空格修复**（T-M29.3）：函数名与括号间多余空格修复（`TRIM_SCALE (` / `CONCAT (` → 括号紧贴，函数名集合补全常见函数）；双引号字符串（如 bind 常量渲染的 `"1"`）不再被拆成 `" 1 "`（词法器支持双引号整段 token）
-- **设置页更新修复**（T-M28.1）：「检查更新」按钮修复（点击即状态反馈——此前按钮未绑定事件，点击无反应）；内部构建号 (MPV-Build) 显示修复（日常 IDE 上此前恒为 —）；更新链路跨平台加固（Win/Mac 目录差异不影响更新判定）
-- **预览 SQL 与预期 SQL 不一致修复**（M29）：① `.and(condition, w -> ...)` 等**分组方法布尔条件重载**不再被静默丢弃——and/or/nested/not/func 的布尔首参剥离为动态条件开关（默认勾选按标志，`and(false, ...)` 默认不渲染），组内 OR 条件正常渲染（如 `AND (code LIKE ? OR user_phone LIKE ?)`）；② **分页 LIMIT 渲染**——`service.page(new Page<>(...), wrapper)` / `selectPage` / 链式 `page()` 识别为分页消费：字面量直接计算 `LIMIT 0, 10`，运行时变量渲染 `LIMIT ?, ?`（参数区可回填，offset 标注 `(pageNum - 1) * pageSize` 公式），全 9 方言适配
 - **设置页检查更新与自动安装更新**（M28）：插件设置页新增「更新」分区——当前版本展示、「检查更新」按钮（已最新/发现新版/失败原因状态反馈）、新版变更日志展示、「下载并安装」一键完成（下载进度条）→ 安装完成后提示「重启 IDE 生效」+ 重启按钮（IDE 原生确认框，可选稍后）；「启动时自动检查更新」开关（默认开）——启动静默检查，发现新版弹通知可「立即更新」后台下载安装；更新源 = 发布仓库 `update/update.json` 清单 + Gitee Release 附件（发布流程新增清单维护步骤，`./gradlew writeUpdateManifest`）
 - **注解 `<script>` 动态标签补全**（T-M27.5）：`@Select("<script>…")` 内输入 `<` 补动态标签名、标签内补属性、test/collection 值内补参数名与实体字段——与 XML mapper 体验一致
 - **表名提示 + SQL 格式标准化**（T-M27.4）：预览弹窗补全表名全位置提示（输入表名前缀即命中，含 @TableName 联表候选）；SQL 渲染自动格式化（列清单换行/主子句顶格/子查询缩进/AND 缩进/空行剔除——XML 动态标签残留空行归一）
 - **XML 预览补全增强**（T-M27.3）：XML mapper 预览弹窗输入自动弹出表名/列名补全——预览结果注入实体上下文（namespace→Mapper 接口→主实体），与 Java 注解预览一致（列注释/中文检索）
-- **SQL 面板输入自动补全**（T-M27.2）：预览弹窗 SQL 编辑器输入字符自动弹出补全——平台 autopopup 对非文件编辑器弹空窗（contributor 未调度），面板自建：文档监听 + commit 后手动补全处理器（explicit=true）接管
-- **SQL 面板补全修复**（T-M27.1）：预览弹窗 SQL 编辑器 Ctrl+Space 补全不触发修复——编辑器组件链补 DataProvider（2025.3 平台编辑器改为 UiCompatibleDataProvider，传统 DataContext 查询拿不到 EDITOR 致补全静默失效）
 - **XML/注解 SQL 代码补全**（M27）：mapper XML 语句与 Java SQL 注解字符串（@Select/@Insert/@Update/@Delete）内 Ctrl+Space 补全——
   - SQL 关键字、表名/列名（FROM/JOIN/WHERE 等子句位置感知）、`别名.` 前缀列（联表：LEFT JOIN/逗号多表别名绑定）
   - `#{}` 参数名（@Param 感知）；XML 动态标签（`<if>/<foreach>/<where>` 等）与 test/collection 属性 OGNL 补全
@@ -28,6 +20,30 @@
   - `@Param` 参数名 mock（`param1..N` 注入）；Provider 常量折叠（字面量/文本块/`+` 拼接/静态 final 引用），动态生成场景降级提示
   - `@Lang` 自定义语言驱动提示不支持
 - **XML 多语句候选**（M25）：光标不在语句内时列出全部语句（行号 + 摘要）供选择预览
+- **左侧面板布局对齐 IDEA 原生惯例（T-M26.3）**：SQL 预览面板左栏布局优化（参考 IntelliJ Platform UI Guidelines）——① 分区标题统一 TitledSeparator 分组（「动态条件」「foreach 展开」「bind 变量」「参数」，动态条件区补标题）；② 全选/全不选回挂分区标题行右侧（IDEA 组操作惯例，T-M26.2 的固定右上角拆除——长文本按视口宽度截断后按钮不再被推出视口）；③ 表单两列对齐（参数/bind/foreach 行标签列统一宽度、输入框左缘对齐）；④ 长文本中段省略 + tooltip 全名（bind 常量引用、test 表达式），截断上限跟随视口宽度（默认 240 面板即不再横向溢出）
+- **SQL 面板支持格式化快捷键（T-M26.6）**：预览面板内按 Ctrl+Alt+L 快速格式化 SQL（与「格式化」按钮同逻辑）——跟随 IDE keymap 的 Reformat Code 绑定（用户自定义键位跟随，未绑定兜底 Ctrl+Alt+L）；`registerCustomShortcutSet` 注册到面板整体（焦点在 SQL 编辑器或参数输入框均可触发），组件级 custom shortcut 命中即消费按键、不与全局 Reformat Code 双触发
+- **文件级多注解候选（M26-A）**：Wrapper 预览未命中（光标不在 Wrapper 链上）时，Java 文件预览回落到文件内全部 SQL 注解——单个直接预览、多个弹候选对话框（注解行号 + SQL 摘要），非 Mapper 文件同样可用
+- **MP 占位 `${ew.customSqlSegment}` 展开（M26-B）**：mapper XML 中的 `${ew.customSqlSegment}`/`${ew.sqlSelect}`/`${ew.sqlSet}` 占位经 namespace 关联 Java Mapper 方法 → 调用处 wrapper 实参 → Wrapper 预览全链路 SQL → 提取对应片段回填：
+  - `customSqlSegment` = `WHERE (条件)`（含 WHERE 关键字，对齐 MP `SqlHelper`）；sqlSelect = SELECT 列清单；sqlSet = SET 片段
+  - @Param 名匹配优先定位 wrapper 参数，其次按类型；多调用处取第一处
+  - 降级链逐级提示：缺 namespace / 找不到接口 / 无同名方法 / 无 Wrapper 参数 / 无调用处（可填覆盖值）
+- **MyBatis XML mapper 动态 SQL 预览**（M24）：在 `<select|insert|update|delete>` 语句上点击 gutter 图标或右键预览动态 SQL——引擎忠实复刻 MyBatis 3.5.19 渲染算法：
+  - 动态标签全兼容：`if` / `choose(when/otherwise)` / `trim` / `where` / `set` / `foreach`（含 `__frch_` 参数重写、Map 迭代、空集合语义）/ `bind` / `sql`+`include`（同文件 property 静态替换）
+  - 受限 OGNL 求值：判空/比较/逻辑/算术/成员方法/列表字面量，表达式无法解析时面板提供手动开关兜底
+  - 预览面板：动态条件勾选（启发式默认）、foreach 展开次数与 null、bind 覆盖值、`#{}` 参数回填、SQL 高亮/格式化/执行/复制全部复用
+  - 参数对照表显示 `#{}` 属性名（foreach 内为 `__frch_` 重写名）；include 缺失/循环/未解析变量等给出警示提示
+  - 边界：跨命名空间 include 暂不支持；`${ew.customSqlSegment}` 等 MP 占位展开见 M26-B（占位求值为空提示）；注解 `@Select` 的 `<script>` 暂不支持
+
+### Fixed
+
+- **XML 预览参数回填默认引号**（T-M29.4）：Map 等无类型信息入参的参数输入默认渲染带引号（`2025` → `'2025'`）——LocalDate/字符串列比较不再被数字启发式误判为数值（数值列隐式转换语义不变）
+- **SQL 格式化逗号丢失修复**（T-M29.2）：格式化后 SELECT 列清单/分页参数逗号丢失（非法 SQL）修复——列清单逗号保留行尾换行、`LIMIT ?, ?` / `GROUP BY a, b` 逗号保持同行；默认显示与点击格式化结果不再漂移（格式化幂等）
+- **动态条件面板组行合并**（T-M29.1）：and 布尔组开关行与组内子条件行重复展示修复——组带开关时子条件并入组行（组复选框 + 组内值输入框，同源去重），不再重复成行；组内子条件与 HAVING 子条件在面板流程恒丢失的预存缺陷一并修复（按各自默认态渲染）
+- **XML 预览格式化空格修复**（T-M29.3）：函数名与括号间多余空格修复（`TRIM_SCALE (` / `CONCAT (` → 括号紧贴，函数名集合补全常见函数）；双引号字符串（如 bind 常量渲染的 `"1"`）不再被拆成 `" 1 "`（词法器支持双引号整段 token）
+- **设置页更新修复**（T-M28.1）：「检查更新」按钮修复（点击即状态反馈——此前按钮未绑定事件，点击无反应）；内部构建号 (MPV-Build) 显示修复（日常 IDE 上此前恒为 —）；更新链路跨平台加固（Win/Mac 目录差异不影响更新判定）
+- **预览 SQL 与预期 SQL 不一致修复**（M29）：① `.and(condition, w -> ...)` 等**分组方法布尔条件重载**不再被静默丢弃——and/or/nested/not/func 的布尔首参剥离为动态条件开关（默认勾选按标志，`and(false, ...)` 默认不渲染），组内 OR 条件正常渲染（如 `AND (code LIKE ? OR user_phone LIKE ?)`）；② **分页 LIMIT 渲染**——`service.page(new Page<>(...), wrapper)` / `selectPage` / 链式 `page()` 识别为分页消费：字面量直接计算 `LIMIT 0, 10`，运行时变量渲染 `LIMIT ?, ?`（参数区可回填，offset 标注 `(pageNum - 1) * pageSize` 公式），全 9 方言适配
+- **SQL 面板输入自动补全**（T-M27.2）：预览弹窗 SQL 编辑器输入字符自动弹出补全——平台 autopopup 对非文件编辑器弹空窗（contributor 未调度），面板自建：文档监听 + commit 后手动补全处理器（explicit=true）接管
+- **SQL 面板补全修复**（T-M27.1）：预览弹窗 SQL 编辑器 Ctrl+Space 补全不触发修复——编辑器组件链补 DataProvider（2025.3 平台编辑器改为 UiCompatibleDataProvider，传统 DataContext 查询拿不到 EDITOR 致补全静默失效）
 - **XML/注解预览实测修复**（T-M25.2~25.5，沙盒真实项目验证）：
   - OGNL 静态常量引用 `@类全名@字段名`（bind 表达式常见写法）——解析用户项目常量类字段值注入预览
   - `||表达式||` 非标准包裹兼容（真实 OGNL 运行时会解析失败，预览宽容解析并提示）
@@ -37,22 +53,8 @@
   - bind 自动求值回显参数行（静态常量/LIKE 模板算出的值自动填入，可手动覆盖）
 - **预览弹窗左右分栏分隔条修复（T-M26.1）**：深色主题下左右分栏间出现白色竖条纹（平台 LAF 委托 Metal，`MetalSplitPaneDivider` 以 Metal 主题浅色直接填充分隔条，与 `setBackground` 无关，原覆盖无效）——`ThemedSplitPane` 覆写 paint 在 LAF 绘制后把分隔条区域覆盖为面板底色，亮/暗主题下与面板融为一体
 - **左面板全选/全不选按钮固定右上角（T-M26.2）**：SQL 预览面板左侧参数列表的全选/全不选按钮原在参数滚动区内（`paramPanel` BoxLayout 把按钮行拉伸到最宽参数行宽度），参数名过长时右对齐按钮被推出左面板视口隐藏，须拉宽左面板才能看到——按钮移出滚动区固定到左面板右上角操作行（右对齐贴分隔栏、拖拽分隔栏自动跟随，不再受内容宽度影响），按场景切换按钮组（动态条件/XML 条件开关 ↔ 批量「参数列」），无参数内容时整行隐藏
-- **左侧面板布局对齐 IDEA 原生惯例（T-M26.3）**：SQL 预览面板左栏布局优化（参考 IntelliJ Platform UI Guidelines）——① 分区标题统一 TitledSeparator 分组（「动态条件」「foreach 展开」「bind 变量」「参数」，动态条件区补标题）；② 全选/全不选回挂分区标题行右侧（IDEA 组操作惯例，T-M26.2 的固定右上角拆除——长文本按视口宽度截断后按钮不再被推出视口）；③ 表单两列对齐（参数/bind/foreach 行标签列统一宽度、输入框左缘对齐）；④ 长文本中段省略 + tooltip 全名（bind 常量引用、test 表达式），截断上限跟随视口宽度（默认 240 面板即不再横向溢出）
 - **删除 bind 变量分区（T-M26.4）**：XML 预览左栏 bind 变量区与「参数」区重复展示同一组值（bind 求值结果已回显在参数区），双入口改同一个值违反单一来源——删除 bind 分区（面板渲染、覆盖输入框、bundle 文案），bind 求值结果由「参数」区唯一承担（输入覆盖、清空恢复自动值，功能等价）；模型层 `bindOverrides` 能力保留、面板不再接线；边界：bind 变量被 `${}` 文本拼接引用时（无 `?` 可回填）走默认求值
 - **foreach 行精简 + LIKE 参数类型修复（T-M26.5）**：① foreach 行布局精简——分区标题改「foreach 集合」，内容行去掉「foreach 集合: 」前缀、直接显示集合表达式（如 `deviceIds [输入框] 为 null`）；② 模糊查询参数类型推断修复——XML 渲染 SQL 的 LIKE 参数（`LIKE ?` / `LIKE CONCAT('%', ?, '%')`）回填恒加引号（String 列如 `deviceCode` 的纯数字输入不再被数字启发式误判，`#keyword="111"` → `LIKE CONCAT('%', '111', '%')`），与 Wrapper 场景 SqlGenerator hints 对齐
-- **SQL 面板支持格式化快捷键（T-M26.6）**：预览面板内按 Ctrl+Alt+L 快速格式化 SQL（与「格式化」按钮同逻辑）——跟随 IDE keymap 的 Reformat Code 绑定（用户自定义键位跟随，未绑定兜底 Ctrl+Alt+L）；`registerCustomShortcutSet` 注册到面板整体（焦点在 SQL 编辑器或参数输入框均可触发），组件级 custom shortcut 命中即消费按键、不与全局 Reformat Code 双触发
-- **文件级多注解候选（M26-A）**：Wrapper 预览未命中（光标不在 Wrapper 链上）时，Java 文件预览回落到文件内全部 SQL 注解——单个直接预览、多个弹候选对话框（注解行号 + SQL 摘要），非 Mapper 文件同样可用
-- **MP 占位 `${ew.customSqlSegment}` 展开（M26-B）**：mapper XML 中的 `${ew.customSqlSegment}`/`${ew.sqlSelect}`/`${ew.sqlSet}` 占位经 namespace 关联 Java Mapper 方法 → 调用处 wrapper 实参 → Wrapper 预览全链路 SQL → 提取对应片段回填：
-  - `customSqlSegment` = `WHERE (条件)`（含 WHERE 关键字，对齐 MP `SqlHelper`）；sqlSelect = SELECT 列清单；sqlSet = SET 片段
-  - @Param 名匹配优先定位 wrapper 参数，其次按类型；多调用处取第一处
-  - 降级链逐级提示：缺 namespace / 找不到接口 / 无同名方法 / 无 Wrapper 参数 / 无调用处（可填覆盖值）
-
-- **MyBatis XML mapper 动态 SQL 预览**（M24）：在 `<select|insert|update|delete>` 语句上点击 gutter 图标或右键预览动态 SQL——引擎忠实复刻 MyBatis 3.5.19 渲染算法：
-  - 动态标签全兼容：`if` / `choose(when/otherwise)` / `trim` / `where` / `set` / `foreach`（含 `__frch_` 参数重写、Map 迭代、空集合语义）/ `bind` / `sql`+`include`（同文件 property 静态替换）
-  - 受限 OGNL 求值：判空/比较/逻辑/算术/成员方法/列表字面量，表达式无法解析时面板提供手动开关兜底
-  - 预览面板：动态条件勾选（启发式默认）、foreach 展开次数与 null、bind 覆盖值、`#{}` 参数回填、SQL 高亮/格式化/执行/复制全部复用
-  - 参数对照表显示 `#{}` 属性名（foreach 内为 `__frch_` 重写名）；include 缺失/循环/未解析变量等给出警示提示
-  - 边界：跨命名空间 include 暂不支持；`${ew.customSqlSegment}` 等 MP 占位展开见 M26-B（占位求值为空提示）；注解 `@Select` 的 `<script>` 暂不支持
 
 ## [2026.8.14] - 2026-08-14
 
