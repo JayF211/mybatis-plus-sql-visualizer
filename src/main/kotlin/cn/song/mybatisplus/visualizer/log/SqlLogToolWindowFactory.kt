@@ -7,6 +7,10 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
@@ -18,31 +22,24 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTabbedPane
 import java.awt.BorderLayout
-import java.awt.Color
 import java.awt.FlowLayout
-import java.awt.Graphics
-import java.awt.Graphics2D
-import java.awt.Insets
-import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.DefaultListModel
-import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
-import javax.swing.JTabbedPane
-import javax.swing.plaf.basic.BasicTabbedPaneUI
 
 /**
- * MyBatis SQL 日志工具窗口（T-M31-04，交互参考 MybatisCodeHelperPro「MyBatis Sql」面板）：
- * 双标签页（SQL 日志列表 / SQL 预览），选中标签蓝底白字（[BlueSelectedTabUi]），
- * 工具栏图标化（清空/暂停-继续/设置）；双击列表项打开现有预览弹窗（高亮/格式化/复制/执行全复用），
- * 右键菜单复制/删除单条。
+ * MyBatis SQL 日志工具窗口（T-M31-04）：双标签页（SQL 日志列表 / SQL 预览），
+ * 全部使用 IDEA 原生组件（[JBTabbedPane] 主题化标签页 + ActionToolbar 扁平图标工具栏 + tooltip，
+ * T-M31.6 用户要求 UI 与 IDE 原生风格统一）；双击列表项打开现有预览弹窗
+ * （高亮/格式化/复制/执行全复用），右键菜单复制/删除单条。
  */
 class SqlLogToolWindowFactory : ToolWindowFactory {
 
@@ -64,16 +61,12 @@ class SqlLogPanel(
 
     private val listModel = DefaultListModel<LogSqlEntry>()
     private val list = JBList(listModel)
-    private val captureButton = iconButton(AllIcons.Actions.Execute, "log.panel.capture") {
-        if (manager.capturing) manager.stopCapture() else manager.startCapture()
-        updateCaptureButton()
-    }
-    private val pauseButton = iconButton(AllIcons.Actions.Pause, "log.panel.pause") {
-        manager.entries.setPaused(!manager.entries.paused)
-        updatePauseButton()
-    }
-    private val tabs = JTabbedPane().apply { ui = BlueSelectedTabUi() }
+    private val tabs = JBTabbedPane()
     private val previewEditor: Editor = createPreviewEditor()
+    private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
+        isSelected = manager.entries.dedupeEnabled
+        addActionListener { manager.entries.dedupeEnabled = isSelected }
+    }
 
     init {
         // 标签 1：SQL 日志（工具栏 + 条目列表）
@@ -93,37 +86,71 @@ class SqlLogPanel(
         refreshList()
     }
 
-    // ---------- 工具栏 ----------
+    // ---------- 工具栏（IDEA 原生 ActionToolbar：扁平图标按钮 + tooltip） ----------
 
     private fun buildToolbar(): JPanel {
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2))
-        toolbar.add(captureButton)
-        toolbar.add(
-            JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
-                isSelected = manager.entries.dedupeEnabled
-                addActionListener { manager.entries.dedupeEnabled = isSelected }
-            },
+        val group = DefaultActionGroup(
+            CaptureAction(),
+            PauseAction(),
+            ClearAction(),
+            SettingsAction(),
         )
-        toolbar.add(pauseButton)
-        toolbar.add(iconButton(AllIcons.Actions.GC, "log.panel.clear") { manager.entries.clear() })
-        toolbar.add(iconButton(AllIcons.Actions.Properties, "log.panel.settings") { openSettings() })
-        return toolbar
+        val toolbar = ActionManager.getInstance()
+            .createActionToolbar(TOOLBAR_ID, group, true)
+            .apply { targetComponent = this@SqlLogPanel }
+
+        val bar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4))
+        bar.add(toolbar.component)
+        bar.add(dedupeCheckBox)
+        return bar
     }
 
-    private fun iconButton(icon: javax.swing.Icon, textKey: String, action: () -> Unit): JButton =
-        JButton(MpSqlVisualizerBundle.message(textKey), icon).apply {
-            addActionListener { action() }
+    private inner class CaptureAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = if (manager.capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
+            e.presentation.text = MpSqlVisualizerBundle.message(
+                if (manager.capturing) "log.panel.stop" else "log.panel.capture",
+            )
         }
 
-    private fun openSettings() {
-        ShowSettingsUtil.getInstance().showSettingsDialog(project, PluginSettingsConfigurable::class.java)
+        override fun actionPerformed(e: AnActionEvent) {
+            if (manager.capturing) manager.stopCapture() else manager.startCapture()
+        }
     }
 
-    private fun updateCaptureButton() {
-        captureButton.text = MpSqlVisualizerBundle.message(
-            if (manager.capturing) "log.panel.stop" else "log.panel.capture",
-        )
-        captureButton.icon = if (manager.capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
+    private inner class PauseAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = if (manager.entries.paused) AllIcons.Actions.Resume else AllIcons.Actions.Pause
+            e.presentation.text = MpSqlVisualizerBundle.message(
+                if (manager.entries.paused) "log.panel.resume" else "log.panel.pause",
+            )
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            manager.entries.setPaused(!manager.entries.paused)
+        }
+    }
+
+    private inner class ClearAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            manager.entries.clear()
+        }
+    }
+
+    private inner class SettingsAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Properties
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            ShowSettingsUtil.getInstance().showSettingsDialog(project, PluginSettingsConfigurable::class.java)
+        }
     }
 
     // ---------- 条目列表 ----------
@@ -200,16 +227,7 @@ class SqlLogPanel(
         val snapshot = manager.entries.snapshot()
         listModel.clear()
         snapshot.forEach { listModel.addElement(it) }
-        updateCaptureButton()
-        updatePauseButton()
         updatePreview(list.selectedValue)
-    }
-
-    private fun updatePauseButton() {
-        pauseButton.text = MpSqlVisualizerBundle.message(
-            if (manager.entries.paused) "log.panel.resume" else "log.panel.pause",
-        )
-        pauseButton.icon = if (manager.entries.paused) AllIcons.Actions.Resume else AllIcons.Actions.Pause
     }
 
     private fun openPreview(entry: LogSqlEntry) {
@@ -256,60 +274,8 @@ class SqlLogPanel(
     override fun dispose() {
         EditorFactory.getInstance().releaseEditor(previewEditor)
     }
-}
-
-/**
- * 选中标签蓝底白字（T-M31.4，参考 MybatisCodeHelper-Pro 选中标签深蓝底样式）：
- * 自定义 [BasicTabbedPaneUI] 的 paintTab——选中画 MP 蓝矩形底 + 白字，未选中沿用 LAF 前景；
- * 不依赖 LAF 主题（亮/暗一致），布局计算仍走父类。
- */
-private class BlueSelectedTabUi : BasicTabbedPaneUI() {
-
-    /** Kotlin 无法访问 Java protected 字段 [BasicTabbedPaneUI.tabbedPane]，经 installUI 捕获。 */
-    private var pane: JTabbedPane? = null
-
-    override fun installUI(c: javax.swing.JComponent) {
-        super.installUI(c)
-        pane = c as JTabbedPane
-    }
-
-    override fun paintTab(
-        g: Graphics,
-        tabPlacement: Int,
-        rects: Array<Rectangle>,
-        tabIndex: Int,
-        iconRect: Rectangle,
-        textRect: Rectangle,
-    ) {
-        val rect = rects[tabIndex]
-        val g2 = g as Graphics2D
-        val selected = pane?.selectedIndex == tabIndex
-        g2.color = if (selected) TAB_SELECTED_BG else pane?.foreground ?: Color.WHITE
-        if (selected) {
-            g2.fillRect(rect.x, rect.y, rect.width, rect.height)
-            g2.color = Color.WHITE
-        }
-        val fm = g2.fontMetrics
-        val title = pane?.getTitleAt(tabIndex) ?: return
-        g2.drawString(
-            title,
-            rect.x + (rect.width - fm.stringWidth(title)) / 2,
-            rect.y + (rect.height + fm.ascent - fm.descent) / 2,
-        )
-    }
-
-    /** 不画内容区边框（T-M31.5：BasicTabbedPaneUI 默认 content border 在部分 LAF 下呈浅色，割裂面板）。 */
-    override fun paintContentBorder(
-        g: Graphics,
-        tabPlacement: Int,
-        selectedIndex: Int,
-    ) = Unit
-
-    /** 内容区无边框 → 布局不预留边框空隙。 */
-    override fun getContentBorderInsets(tabPlacement: Int): Insets = Insets(0, 0, 0, 0)
 
     companion object {
-        /** MP 蓝（与侧边栏图标 sqlLog.svg 同色）。 */
-        private val TAB_SELECTED_BG = Color(0x1E9FFF)
+        private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
     }
 }
