@@ -53,4 +53,52 @@ class PlatformPluginInstallerTest : BasePlatformTestCase() {
         assertTrue(PlatformPluginInstaller.isUnderPluginsDir("jar:file:$root.zip!/META-INF/plugin.xml"))
         assertTrue(PlatformPluginInstaller.isUnderPluginsDir("$root.zip!/META-INF/plugin.xml"))
     }
+
+    // ---------------- T-M28.3 路径归一化（2026.2 descriptorPath URL 风格实证） ----------------
+
+    fun testNormalizeDescriptorPathStripsJarUrlForms() {
+        // 2026.2 平台实际形态：jar:file:/C:/…（驱动字母前导斜杠）——T-M28.3 用户实测守卫误拒根因
+        assertEquals(
+            "C:/Users/me/plugins/a.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath("jar:file:/C:/Users/me/plugins/a.jar!/META-INF/plugin.xml"),
+        )
+        // 大小写前缀
+        assertEquals(
+            "C:/Users/me/plugins/a.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath("JAR:FILE:/C:/Users/me/plugins/a.jar!/META-INF/plugin.xml"),
+        )
+        // file: 前缀
+        assertEquals(
+            "C:/Users/me/plugins/a.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath("file:/C:/Users/me/plugins/a.jar"),
+        )
+    }
+
+    fun testNormalizeDescriptorPathKeepsOrdinaryPaths() {
+        // Windows 普通路径（反斜杠）不变
+        assertEquals("C:\\Users\\me\\plugins\\a.jar", PlatformPluginInstaller.normalizeDescriptorPath("C:\\Users\\me\\plugins\\a.jar"))
+        // Mac 绝对路径（无盘符，前导斜杠保留）
+        assertEquals("/Users/me/plugins/a.jar", PlatformPluginInstaller.normalizeDescriptorPath("/Users/me/plugins/a.jar"))
+        // 目录形态（plugin.xml 直路径 + ! 后缀剥离）
+        assertEquals(
+            "C:/Users/me/plugins/p/META-INF/plugin.xml",
+            PlatformPluginInstaller.normalizeDescriptorPath("C:/Users/me/plugins/p/META-INF/plugin.xml"),
+        )
+        // 空白与空
+        assertEquals("", PlatformPluginInstaller.normalizeDescriptorPath(""))
+        assertEquals("x", PlatformPluginInstaller.normalizeDescriptorPath("  x  "))
+    }
+
+    // ---------------- T-M28.3 权限加固（Windows 静默跳过不抛） ----------------
+
+    fun testEnsureReadableDoesNotThrowOnWindows() {
+        // Windows 无 POSIX API（UnsupportedOperationException 静默跳过）；POSIX 语义由实现保证
+        val temp = Files.createTempFile("mpvs-perm-", ".zip")
+        try {
+            PlatformPluginInstaller.ensureReadable(temp)  // 不抛即通过
+            assertTrue(Files.exists(temp))
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+    }
 }

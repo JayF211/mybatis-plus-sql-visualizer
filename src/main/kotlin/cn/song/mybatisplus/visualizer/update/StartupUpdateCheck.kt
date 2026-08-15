@@ -50,13 +50,17 @@ class StartupUpdateCheck : ProjectActivity {
         })
     }
 
-    /** 「发现新版本」通知：立即更新 / 稍后。 */
+    /** 「发现新版本」通知：标题带插件名（T-M28.3 用户要求）；内容只保留变更日志标题行；立即更新 / 稍后。 */
     private fun showAvailable(project: Project, manifest: UpdateManifest) {
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)
             .createNotification(
-                MpSqlVisualizerBundle.message("update.notification.title", manifest.version),
-                manifest.changeNotes ?: MpSqlVisualizerBundle.message("update.notification.content"),
+                MpSqlVisualizerBundle.message(
+                    "update.notification.title",
+                    MpSqlVisualizerBundle.message("plugin.name"),
+                    manifest.version,
+                ),
+                notificationContent(manifest.changeNotes),
                 NotificationType.INFORMATION,
             )
             .addAction(NotificationAction.createSimple(MpSqlVisualizerBundle.message("update.notification.installNow")) {
@@ -106,7 +110,7 @@ class StartupUpdateCheck : ProjectActivity {
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)
             .createNotification(
-                MpSqlVisualizerBundle.message("update.notification.installed.title"),
+                MpSqlVisualizerBundle.message("update.notification.failed.title"),
                 MpSqlVisualizerBundle.message("settings.update.installFailed", message),
                 NotificationType.ERROR,
             )
@@ -123,5 +127,24 @@ class StartupUpdateCheck : ProjectActivity {
         /** 启动检查决策（纯函数，单测覆盖）：开关关或本会话已检查 → 跳过。 */
         internal fun shouldStartupCheck(autoCheck: Boolean, alreadyChecked: Boolean): Boolean =
             autoCheck && !alreadyChecked
+
+        /**
+         * 通知内容：只保留变更日志**标题行**（首行，超长截断加省略号）——用户要求
+         * 「更新内容只需要保留标题即可」，全文展示留给设置页变更日志区；无标题用默认文案。
+         * 纯函数（单测直接覆盖）。
+         */
+        internal fun notificationContent(changeNotes: String?): String {
+            val firstLine = changeNotes?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+            if (firstLine.isEmpty()) {
+                return MpSqlVisualizerBundle.message("update.notification.content")
+            }
+            return if (firstLine.length > maxTitleLength) {
+                firstLine.take(maxTitleLength) + "…"
+            } else {
+                firstLine
+            }
+        }
+
+        private val maxTitleLength = 100
     }
 }
