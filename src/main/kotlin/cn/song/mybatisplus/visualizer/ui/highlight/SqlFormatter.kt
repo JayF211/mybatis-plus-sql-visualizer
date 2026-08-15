@@ -45,6 +45,8 @@ object SqlFormatter {
         var lineIndent = 0
         val parenIndents = ArrayDeque<Int>()
         var parenNewlined = false
+        // T-M29.2：当前主子句（SELECT/SET 列清单逗号换行；LIMIT/GROUP/ORDER 等逗号保持同行）
+        var currentClause = ""
 
         fun flushSpace() {
             if (pendingSpace && !atLineStart && sb.isNotEmpty() && sb.last() != ' ') sb.append(' ')
@@ -75,6 +77,7 @@ object SqlFormatter {
                     } else if (!atLineStart) {
                         newline(subIndent())
                     }
+                    currentClause = "JOIN"
                     sb.append(upper)
                     atLineStart = false
                     pendingSpace = true
@@ -84,6 +87,7 @@ object SqlFormatter {
                 type == SqlTokenTypes.KEYWORD && upper in NEW_LINE_KEYWORDS -> {
                     if (!atLineStart) newline(subIndent())
                     pendingSpace = false
+                    currentClause = upper
                     sb.append(upper)
                     atLineStart = false
                     pendingSpace = true
@@ -132,14 +136,16 @@ object SqlFormatter {
                     atLineStart = false
                 }
 
-                // 逗号：顶层（SELECT 列清单/SET 清单）→ 换行缩进 4；括号内（函数参数/IN 列表）→ 同行
+                // 逗号：SELECT/SET 列清单（顶层）→ 逗号保留行尾 + 换行缩进 4；其余顶层（LIMIT 参数/
+                // GROUP BY/ORDER BY 列表）→ 保持同行；括号内（函数参数/IN 列表）→ 同行
+                // T-M29.2：原实现顶层逗号只换行不输出逗号——列清单/分页参数逗号丢失（非法 SQL）
                 type == SqlTokenTypes.OPERATOR && text == "," -> {
                     if (sb.isNotEmpty() && sb.last() == ' ') sb.deleteCharAt(sb.length - 1)
-                    if (depth == 0) {
-                        if (!atLineStart) newline(4)
+                    sb.append(',')
+                    if (depth == 0 && (currentClause == "SELECT" || currentClause == "SET") && !atLineStart) {
+                        newline(4)
                     } else {
-                        sb.append(", ")
-                        pendingSpace = false
+                        pendingSpace = true
                         atLineStart = false
                     }
                 }

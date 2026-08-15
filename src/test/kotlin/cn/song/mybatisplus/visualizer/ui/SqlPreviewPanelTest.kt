@@ -979,8 +979,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             ),
         )
         val doc = panel.editorForTest()!!.document.text
+        // T-M29.2：列清单逗号保留（原实现顶层逗号丢失 → 非法 SQL）
         assertEquals(
-            "SELECT\n    id\n    name\nFROM t\nWHERE id = 1",
+            "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
             doc,
         )
         panel.clear()

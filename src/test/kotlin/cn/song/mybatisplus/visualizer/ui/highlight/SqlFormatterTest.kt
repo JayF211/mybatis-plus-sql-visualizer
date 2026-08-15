@@ -7,6 +7,8 @@ import org.junit.Test
  * SqlFormatter 格式化器单测（M9 增强）。
  *
  * 纯逻辑测试：关键字大写、子句换行、WHERE 条件缩进、运算符/逗号空格规范化。
+ * T-M29.2：顶层逗号保留（SELECT/SET 列清单逗号行尾 + 换行；LIMIT/GROUP BY/ORDER BY 逗号同行）——
+ * 原实现顶层逗号丢失（列清单/分页参数无逗号，非法 SQL）。
  */
 class SqlFormatterTest {
 
@@ -15,7 +17,7 @@ class SqlFormatterTest {
         val input = "select id,name from t where id=1 and name='abc' or age>10"
         val expected = """
             SELECT
-                id
+                id,
                 name
             FROM t
             WHERE id = 1
@@ -56,7 +58,7 @@ class SqlFormatterTest {
         val input = "select count(*),sum(x) from t where id in(1,2,3)"
         val expected = """
             SELECT
-                COUNT(*)
+                COUNT(*),
                 SUM(x)
             FROM t
             WHERE id IN (1, 2, 3)
@@ -83,7 +85,7 @@ class SqlFormatterTest {
         val expected = """
             UPDATE t
             SET
-                name = 'x'
+                name = 'x',
                 age = 1
             WHERE id = 1
         """.trimIndent()
@@ -123,7 +125,7 @@ class SqlFormatterTest {
         """.trimIndent()
         val expected = """
             SELECT
-                COALESCE(SUM(r.fee), 0) AS totalAmount
+                COALESCE(SUM(r.fee), 0) AS totalAmount,
                 COUNT(DISTINCT r.order_code) AS orderCount
             FROM sys_merchant_share_record r
             WHERE r.merchant_id = ?
@@ -138,5 +140,91 @@ class SqlFormatterTest {
                 )
         """.trimIndent()
         assertEquals(expected, SqlFormatter.format(input))
+    }
+
+    // ------------------------------------------------------------------
+    // T-M29.2：顶层逗号保留（列清单/分页参数逗号不再丢失）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testLimitCommaStaysInline() {
+        // 分页参数逗号：LIMIT ?, ? 保持同行（原实现顶层逗号换行且丢失逗号 → LIMIT ? ? / LIMIT ?\n    ?）
+        val input = "select id from t limit 5, 10"
+        val expected = """
+            SELECT
+                id
+            FROM t
+            LIMIT 5, 10
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.format(input))
+        val placeholder = "select id from t limit ?, ?"
+        val expectedPlaceholder = """
+            SELECT
+                id
+            FROM t
+            LIMIT ?, ?
+        """.trimIndent()
+        assertEquals(expectedPlaceholder, SqlFormatter.format(placeholder))
+    }
+
+    @Test
+    fun testGroupByOrderByCommaStaysInline() {
+        // GROUP BY / ORDER BY 多列逗号保持同行（仅 SELECT/SET 列清单换行）
+        val input = "select a,b from t group by a,b order by a asc,b desc"
+        val expected = """
+            SELECT
+                a,
+                b
+            FROM t
+            GROUP BY a, b
+            ORDER BY a ASC, b DESC
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.format(input))
+    }
+
+    @Test
+    fun testFormatIdempotent() {
+        // T-M29.2 回归：二次格式化与首次一致（原实现首次吞逗号、二次输入不同 → 输出漂移：
+        // 列清单从每列一行变成一行无逗号——用户实测默认显示与点击格式化差异大的根因）
+        val input = "select id,code,name from biz_order where station_id in (?) and status = ? limit ?, ?"
+        val once = SqlFormatter.format(input)
+        val twice = SqlFormatter.format(once)
+        assertEquals(once, twice)
+        assertEquals(
+            """
+            SELECT
+                id,
+                code,
+                name
+            FROM biz_order
+            WHERE station_id IN (?)
+                AND status = ?
+            LIMIT ?, ?
+            """.trimIndent(),
+            once,
+        )
+    }
+
+    @Test
+    fun testUserSceneColumnListAndLimit() {
+        // 用户实测场景（面板复制）：完整列清单 + BETWEEN + 分页——修复后 SQL 合法
+        val input = "SELECT id, code, start_time, station_id, dic_status FROM biz_bike_order_record WHERE create_time BETWEEN ? AND ? ORDER BY create_time DESC LIMIT ?, ?"
+        val formatted = SqlFormatter.format(input)
+        assertEquals(
+            """
+            SELECT
+                id,
+                code,
+                start_time,
+                station_id,
+                dic_status
+            FROM biz_bike_order_record
+            WHERE create_time BETWEEN ?
+                AND ?
+            ORDER BY create_time DESC
+            LIMIT ?, ?
+            """.trimIndent(),
+            formatted,
+        )
     }
 }
