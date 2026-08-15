@@ -1,4 +1,7 @@
 import java.time.LocalDate
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.jvm.tasks.Jar
+import org.gradle.process.CommandLineArgumentProvider
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
@@ -121,8 +124,35 @@ tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
     outputs.upToDateWhen { false }
 }
 tasks {
+    // T-M31.9：消除 runIde 启动日志的 RegionUrlMapper SecurityException: setContextClassLoader 噪音。
+    // 根因：发行版 vmoptions 的 -Djava.security.manager=CoreBootstrapSecurityManager 使 JDK 21 common
+    // pool 在启动早期（SM 卸载前）创建 InnocuousForkJoinWorkerThread（setContextClassLoader 硬抛）。
+    // 修复：独立 Java 源编译普通线程工厂 jar（不进入插件产物），追加 runIde 启动 classpath，
+    // 经 java.util.concurrent.ForkJoinPool.common.threadFactory 属性生效（JDK 21 common pool 构造
+    // 用 getSystemClassLoader 加载该类，无视 SM 状态）。注意：不可改为 -Djava.security.manager=allow
+    // ——SM 是 FileSystems 在 initLevel 2 预初始化的触发者（PathClassLoader 构造依赖它），实测会崩。
+    val compilePlainFjpf = register<JavaCompile>("compilePlainFjpf") {
+        source = fileTree("dev-support/plain-fjpf/src")
+        classpath = files()
+        destinationDirectory.set(layout.buildDirectory.dir("plain-fjpf/classes"))
+        options.release.set(17)
+        options.encoding = "UTF-8"
+    }
+    val plainFjpfJar = register<Jar>("plainFjpfJar") {
+        from(compilePlainFjpf.map { it.destinationDirectory })
+        destinationDirectory.set(layout.buildDirectory.dir("plain-fjpf"))
+        archiveFileName.set("plain-fjpf.jar")
+    }
     runIde {
         autoReload = true
+        dependsOn(plainFjpfJar)
+        classpath += files(layout.buildDirectory.file("plain-fjpf/plain-fjpf.jar"))
+        jvmArgumentProviders.add(CommandLineArgumentProvider {
+            listOf(
+                "-Djava.util.concurrent.ForkJoinPool.common.threadFactory=" +
+                    "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
+            )
+        })
     }
 
     // M18.2 变更说明修复（用户实测：插件详情页「最新变化」显示停留在 M12）——
@@ -238,6 +268,8 @@ intellijPlatformTesting {
                 classpath = classpath + sourceSets["test"].output
                 filter {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest")
+                    // T-M36.4 SQL→Java 面板 fixture 测试
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.log.SqlToJavaPanelTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperLocatorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCommentTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.TrimSqlNodeTest")
@@ -261,6 +293,8 @@ intellijPlatformTesting {
                     // P0 SQL 反向转换（T-M36）：代码生成单测 + round-trip 闭环；T-M36.3 Wrapper 形态分发
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.JavaCodeGeneratorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaRoundTripTest")
+                    // T-M36.4 共享编排纯逻辑测试
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverterTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.WrapperFormatTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
