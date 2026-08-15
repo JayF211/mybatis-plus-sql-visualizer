@@ -142,7 +142,7 @@ object AnnotationSqlPreviewService {
     }
 
     /** 数组元素/单值常量求值：失败记录 warning（元素缺失/非常量）。 */
-    private fun constantString(memberValue: PsiAnnotationMemberValue?, project: Project?, warnings: MutableList<String>): String {
+    internal fun constantString(memberValue: PsiAnnotationMemberValue?, project: Project?, warnings: MutableList<String>): String {
         val result = constantExpression(memberValue, project)
         if (result == null && memberValue != null) {
             warnings += MpSqlVisualizerBundle.message("annotation.constant.failed")
@@ -165,7 +165,7 @@ object AnnotationSqlPreviewService {
      * 方法参数 mock 名（对齐 ParamNameResolver）：@Param 值优先，否则实际参数名；
      * 多参数或含 @Param 时补 `param1..N`（GENERIC_NAME_CACHE）。
      */
-    private fun paramNames(method: PsiMethod?): List<String> {
+    internal fun paramNames(method: PsiMethod?): List<String> {
         if (method == null) return emptyList()
         val parameters = method.parameterList.parameters
         if (parameters.isEmpty()) return emptyList()

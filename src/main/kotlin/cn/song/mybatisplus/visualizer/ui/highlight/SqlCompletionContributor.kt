@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import cn.song.mybatisplus.visualizer.sql.SqlClause
+import cn.song.mybatisplus.visualizer.sql.detectClause
 import com.intellij.codeInsight.completion.CompletionContributor
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
@@ -28,6 +30,9 @@ import com.intellij.util.ProcessingContext
  *  - `detectClause` 防御：offset clamp 到文本长度 + 空文本/异常回退 UNKNOWN（旧 PSI offset 与新文档
  *    长度不一致时 `substring` 越界抛异常 → Contributor 异常被 IDE 吞掉 → 补全静默失效）。
  *
+ * T-M27-01（M27）：`detectClause` / `SqlClause` 迁入 `sql.SqlTextAnalysis` 纯函数模块
+ * （零 PSI/IDE 依赖），本类改调公共 API——语义与防御行为不变（预览编辑器补全依赖，回归测试兜底）。
+ *
  * 补全来源抽象见 [SqlCompletionProvider]（预留 Database 方案 B 切换点）。
  * 注册见 plugin.xml `<completion.contributor>`。
  */
@@ -54,7 +59,14 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 当前实体表/列/别名（M16：位置感知 + 注释展示/检索）
                     // M16.2：双载体读取（Editor userData 优先、PSI 兜底）；ctx 为 null 时跳过实体补全
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position) ?: return
-                    val clause = detectClause(parameters.position)
+                    // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
+                    // 异常/无文件回退 UNKNOWN）
+                    val clause = runCatching {
+                        detectClause(
+                            parameters.position.containingFile?.text.orEmpty(),
+                            parameters.position.textRange.startOffset,
+                        )
+                    }.getOrElse { SqlClause.UNKNOWN }
 
                     // 表名：FROM/JOIN 后或子句无法判定（全量）
                     if (clause != SqlClause.COLUMN && clause != SqlClause.SELECT_COLUMN) {
@@ -86,9 +98,6 @@ class SqlCompletionContributor : CompletionContributor() {
         )
     }
 
-    /** 当前输入位置所在的 SQL 子句（M16 位置感知，轻量文本方案）。 */
-    internal enum class SqlClause { TABLE, COLUMN, SELECT_COLUMN, UNKNOWN }
-
     /**
      * 补全项注释装饰（M16 注释展示/检索；T-M16.3-02 修复）：
      * [LookupElementBuilder] **不可变**——`withTailText`/`withLookupString` 返回**新实例**，
@@ -111,54 +120,4 @@ class SqlCompletionContributor : CompletionContributor() {
      */
     internal fun resolveContext(editorContext: SqlCompletionContext?, position: PsiElement): SqlCompletionContext? =
         editorContext ?: position.containingFile?.getUserData(SqlCompletionContext.KEY)
-
-    /**
-     * 从补全位置向前扫描最近的结构关键词推断子句（轻量文本方案，不动 AST）：
-     *  - FROM / JOIN（含 LEFT/RIGHT/INNER/FULL JOIN）之后 → 表名位；
-     *  - WHERE / ON / HAVING / GROUP BY / ORDER BY 之后 → 列名位；
-     *  - SELECT 之后且其后无 FROM → SELECT 列位（列 + 聚合函数）；
-     *  - 无法判定 → UNKNOWN（全量候选，不劣于现状）。
-     * 仅向前扫描**最后出现**的关键词（复合词优先匹配长词），判定失败回退全量。
-     *
-     * M16.2 防御：offset clamp 到文本长度 + 空文本/异常回退 UNKNOWN（旧 PSI 未随编辑更新时
-     * offset 可能超过新文档长度，substring 越界抛异常会让补全静默失效）。
-     */
-    private fun detectClause(position: PsiElement): SqlClause = runCatching {
-        val file = position.containingFile ?: return@runCatching SqlClause.UNKNOWN
-        detectClause(file.text, position.textRange.startOffset)
-    }.getOrElse { SqlClause.UNKNOWN }
-
-    /** 位置判定（M16.2 防御）：offset clamp 到文本长度、空文本回退 UNKNOWN（internal 供测试）。 */
-    internal fun detectClause(text: String, startOffset: Int): SqlClause {
-        val safeOffset = startOffset.coerceIn(0, text.length)
-        return detectClauseFromText(text.substring(0, safeOffset))
-    }
-
-    /** 位置判定纯函数（internal 供测试）：按光标前文本推断子句。 */
-    internal fun detectClauseFromText(textBeforeCaret: String): SqlClause {
-        val text = textBeforeCaret.uppercase()
-        // 复合词优先（GROUP BY/ORDER BY/各类 JOIN），再单关键词
-        val keywords = listOf(
-            "GROUP BY", "ORDER BY", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "FULL JOIN",
-            "SELECT", "FROM", "WHERE", "HAVING", "ON", "JOIN",
-        )
-        var lastKw: String? = null
-        var lastIdx = -1
-        for (kw in keywords) {
-            val idx = text.lastIndexOf(kw)
-            if (idx > lastIdx) {
-                lastIdx = idx
-                lastKw = kw
-            }
-        }
-        return when (lastKw) {
-            "FROM", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "FULL JOIN" -> SqlClause.TABLE
-            "WHERE", "ON", "HAVING", "GROUP BY", "ORDER BY" -> SqlClause.COLUMN
-            "SELECT" -> {
-                // SELECT 之后若已有 FROM（当前在 SELECT 与 FROM 之间之后的列位）→ 列名位
-                if (text.substring(lastIdx).contains(" FROM ")) SqlClause.COLUMN else SqlClause.SELECT_COLUMN
-            }
-            else -> SqlClause.UNKNOWN
-        }
-    }
 }

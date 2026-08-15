@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import cn.song.mybatisplus.visualizer.sql.SqlClause
+import cn.song.mybatisplus.visualizer.sql.detectClause
+import cn.song.mybatisplus.visualizer.sql.detectClauseFromText
 import com.intellij.codeInsight.completion.CompletionContributor
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.codeInsight.lookup.LookupElementPresentation
@@ -17,6 +20,8 @@ import org.junit.Assert.assertTrue
  *  - CompletionContributor 已注册到语言
  *  - SqlCompletionProvider 提供关键字
  *  - M16.2：detectClause 边界防御（offset clamp/空文本）与上下文双载体读取（Editor userData 优先）
+ *  - T-M27-01：detectClause 迁入 sql.SqlTextAnalysis 纯函数模块——下述 detectClause 用例改走公共 API
+ *    （断言语义不变）
  */
 class SqlCompletionContributorTest : BasePlatformTestCase() {
 
@@ -68,34 +73,32 @@ class SqlCompletionContributorTest : BasePlatformTestCase() {
 
     fun testDetectClausePositionAware() {
         // T-M16-04：位置感知——FROM/JOIN 后表名位、WHERE/ON/HAVING/GROUP BY/ORDER BY 后列名位、
-        // SELECT 列位、无法判定全量
-        val contributor = SqlCompletionContributor()
-        assertEquals(SqlCompletionContributor.SqlClause.TABLE, contributor.detectClauseFromText("SELECT id FROM "))
-        assertEquals(SqlCompletionContributor.SqlClause.TABLE, contributor.detectClauseFromText("SELECT t.id FROM device t LEFT JOIN "))
-        assertEquals(SqlCompletionContributor.SqlClause.COLUMN, contributor.detectClauseFromText("SELECT id FROM device WHERE "))
-        assertEquals(SqlCompletionContributor.SqlClause.COLUMN, contributor.detectClauseFromText("SELECT id FROM device WHERE id = 1 AND "))
-        assertEquals(SqlCompletionContributor.SqlClause.COLUMN, contributor.detectClauseFromText("SELECT id FROM device ORDER BY "))
-        assertEquals(SqlCompletionContributor.SqlClause.COLUMN, contributor.detectClauseFromText("SELECT id FROM device GROUP BY "))
-        assertEquals(SqlCompletionContributor.SqlClause.COLUMN, contributor.detectClauseFromText("SELECT id FROM device t ON "))
-        assertEquals(SqlCompletionContributor.SqlClause.SELECT_COLUMN, contributor.detectClauseFromText("SELECT "))
-        assertEquals(SqlCompletionContributor.SqlClause.SELECT_COLUMN, contributor.detectClauseFromText("SELECT id, "))
-        assertEquals(SqlCompletionContributor.SqlClause.UNKNOWN, contributor.detectClauseFromText(""))
+        // SELECT 列位、无法判定全量（T-M27-01：改走 SqlTextAnalysis 公共 API，语义不变）
+        assertEquals(SqlClause.TABLE, detectClauseFromText("SELECT id FROM "))
+        assertEquals(SqlClause.TABLE, detectClauseFromText("SELECT t.id FROM device t LEFT JOIN "))
+        assertEquals(SqlClause.COLUMN, detectClauseFromText("SELECT id FROM device WHERE "))
+        assertEquals(SqlClause.COLUMN, detectClauseFromText("SELECT id FROM device WHERE id = 1 AND "))
+        assertEquals(SqlClause.COLUMN, detectClauseFromText("SELECT id FROM device ORDER BY "))
+        assertEquals(SqlClause.COLUMN, detectClauseFromText("SELECT id FROM device GROUP BY "))
+        assertEquals(SqlClause.COLUMN, detectClauseFromText("SELECT id FROM device t ON "))
+        assertEquals(SqlClause.SELECT_COLUMN, detectClauseFromText("SELECT "))
+        assertEquals(SqlClause.SELECT_COLUMN, detectClauseFromText("SELECT id, "))
+        assertEquals(SqlClause.UNKNOWN, detectClauseFromText(""))
     }
 
     fun testDetectClauseOffsetClamped() {
         // T-M16.2-01：offset 越界 clamp 不抛异常（旧 PSI 未随编辑更新时 offset 可能超过新文档长度——
-        // substring 越界异常被 IDE 吞掉 → 补全静默失效的回归点 C）
-        val contributor = SqlCompletionContributor()
+        // substring 越界异常被 IDE 吞掉 → 补全静默失效的回归点 C）（T-M27-01：改走 SqlTextAnalysis 公共 API）
         // offset 超过文本长度 → clamp 到末尾，按全量文本判定（不抛异常）
-        assertEquals(SqlCompletionContributor.SqlClause.TABLE, contributor.detectClause("SELECT id FROM t", 999))
+        assertEquals(SqlClause.TABLE, detectClause("SELECT id FROM t", 999))
         // offset 为负 → clamp 到 0 → 空前缀 → UNKNOWN
-        assertEquals(SqlCompletionContributor.SqlClause.UNKNOWN, contributor.detectClause("SELECT id FROM t", -1))
+        assertEquals(SqlClause.UNKNOWN, detectClause("SELECT id FROM t", -1))
         // 空文本 → UNKNOWN
-        assertEquals(SqlCompletionContributor.SqlClause.UNKNOWN, contributor.detectClause("", 0))
+        assertEquals(SqlClause.UNKNOWN, detectClause("", 0))
         // 正常位置不受影响
         assertEquals(
-            SqlCompletionContributor.SqlClause.COLUMN,
-            contributor.detectClause("SELECT id FROM t WHERE id = 1 ", "SELECT id FROM t WHERE id = 1 ".length),
+            SqlClause.COLUMN,
+            detectClause("SELECT id FROM t WHERE id = 1 ", "SELECT id FROM t WHERE id = 1 ".length),
         )
     }
 

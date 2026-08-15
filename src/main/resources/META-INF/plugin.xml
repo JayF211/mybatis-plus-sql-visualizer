@@ -114,6 +114,14 @@
                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
         <fileType name="MP_SQL_Preview" extensions="mpsql" language="MP_SQL_Preview"
                   implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewFileType"/>
+
+        <!-- M27 XML/注解 SQL 代码补全（T-M27-03/05，方案 B 自研，Community 兼容）：mapper 语句
+             文本与 @Select 等注解字符串内——SQL 关键字/表名/列名/`别名.` 前缀列/#{} 参数名/
+             XML 动态标签与 OGNL 属性（守卫 O(1) 语法判定，实体解析仅补全触发时执行） -->
+        <completion.contributor language="XML"
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributor"/>
+        <completion.contributor language="JAVA"
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributor"/>
     </extensions>
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
