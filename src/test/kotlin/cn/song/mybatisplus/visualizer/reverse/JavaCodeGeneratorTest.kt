@@ -232,4 +232,80 @@ class JavaCodeGeneratorTest {
             code.contains(".nested(w -> w\n        .and(w2 -> w2\n        .eq(\"a\", 1)\n        .eq(\"b\", 2))\n        .or()\n        .eq(\"c\", 3))"),
         )
     }
+
+    // ------------------------------------------------------------------
+    // Lambda 模式（T-M36.2）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `lambda模式_列映射为Entity方法引用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf("id", "name"),
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'张三'", "张三")),
+                Condition.Unary(ColumnRef(columnName = "deleted"), "IS NULL"),
+                Condition.Like(ColumnRef(columnName = "nick_name"), negated = false, SqlValue.Literal("'%张%'", "张"), LikePosition.ANYWHERE),
+            ),
+            orderBy = listOf(OrderByItem(ColumnRef(columnName = "create_time"), asc = false)),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf(
+                "id" to "id",
+                "name" to "name",
+                "deleted" to "deleted",
+                "nick_name" to "nickName",
+                "create_time" to "createTime",
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains("new LambdaQueryWrapper<User>()"))
+        assertTrue(code, code.contains(".select(User::getId, User::getName)"))
+        assertTrue(code, code.contains(".eq(User::getName, \"张三\")"))
+        assertTrue(code, code.contains(".isNull(User::getDeleted)"))
+        assertTrue(code, code.contains(".like(User::getNickName, \"张\")"))
+        assertTrue(code, code.contains(".orderByDesc(User::getCreateTime)"))
+        assertTrue(code, code.contains("// 实体类 User 由表名 user 匹配"))
+    }
+
+    @Test
+    fun `lambda模式_未映射列回落字符串并注释警告`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x")),
+                Condition.Simple(ColumnRef(columnName = "extra_col"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".eq(User::getName, \"x\")"))
+        assertTrue(code, code.contains(".eq(\"extra_col\", 1)"))
+        assertTrue(code, code.contains("// 注意：以下列未在实体中找到对应字段，已回落字符串列名：extra_col"))
+    }
+
+    @Test
+    fun `lambda模式_组内列同样映射`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                    ),
+                ),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("a" to "a", "b" to "b"),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".nested(w -> w\n        .eq(User::getA, 1)\n        .or()\n        .eq(User::getB, 2))"))
+    }
 }

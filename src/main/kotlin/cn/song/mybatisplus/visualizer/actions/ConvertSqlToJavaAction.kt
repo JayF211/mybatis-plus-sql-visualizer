@@ -1,27 +1,42 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
+import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseParser
+import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
 import cn.song.mybatisplus.visualizer.ui.JavaCodePreviewDialog
+import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.psi.PsiClass
 
 /**
- * SQL → MyBatis-Plus Java 代码 转换 Action（SQL 反向链路，P0）。
+ * SQL → MyBatis-Plus Java 代码 转换 Action（SQL 反向链路，P0 + T-M36.2）。
  *
  * 触发方式（plugin.xml 注册）：编辑器右键菜单 "Convert SQL to MP Java Code" + 快捷键
  * `Alt+Shift+J`（Windows/Linux）/ `Cmd+Shift+J`（macOS）。
  *
- * 行为：取编辑器选择区文本 → [SqlReverseParser] 解析（单表 SELECT，P0 范围）→
- * [JavaCodeGenerator] 生成 QueryWrapper 代码 → [JavaCodePreviewDialog] 预览（复制/关闭）；
- * 解析失败（P1+ 结构/语法错误）弹错误对话框（含行号定位）。
+ * 行为：取编辑器选择区文本 → [SqlReverseParser] 解析（单表 SELECT）→
+ * [EntityClassFinder] 按表名查找项目内实体类（T-M36.2）：
+ *  - 唯一候选 → 生成 `LambdaQueryWrapper<Entity>` 代码（列→字段映射，未映射回落字符串列名）；
+ *  - 多候选 → [SqlSelectionDialog] 选择后生成；
+ *  - 无候选 → 回落字符串列名 `QueryWrapper` 形态（P0 行为）。
+ * 结果经 [JavaCodePreviewDialog] 预览（复制/关闭）；解析失败（P1+ 结构/语法错误）弹错误
+ * 对话框（含行号定位）。
  *
- * 与 [ConvertToSqlAction]（Wrapper→SQL 正向）互补；不依赖 PSI，任何文件类型均可使用。
+ * 与 [ConvertToSqlAction]（Wrapper→SQL 正向）互补。实体查找为 PSI 索引访问 → 后台
+ * ReadAction 执行（对齐 ConvertToSqlAction 的 EDT 慢操作守卫模式）；SQL 解析与代码生成为
+ * 纯函数，在 EDT 回调中执行。
  */
 class ConvertSqlToJavaAction : AnAction() {
 
@@ -30,26 +45,18 @@ class ConvertSqlToJavaAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val selectionModel = editor.selectionModel
         if (!selectionModel.hasSelection()) {
-            Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("reverse.error.noSelection"),
-                MpSqlVisualizerBundle.message("plugin.name"),
-            )
+            showNoSelection(project)
             return
         }
         val text = selectionModel.selectedText ?: return
         if (text.isBlank()) {
-            Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("reverse.error.noSelection"),
-                MpSqlVisualizerBundle.message("plugin.name"),
-            )
+            showNoSelection(project)
             return
         }
 
-        val code = try {
-            val result = SqlReverseParser.parse(text)
-            JavaCodeGenerator.generate(result)
+        // 1. SQL 解析（纯函数，EDT 安全）；失败 → 错误弹窗（含行号）
+        val result = try {
+            SqlReverseParser.parse(text)
         } catch (ex: SqlReverseException) {
             val line = SqlReverseParser.lineOf(text, ex.offset)
             Messages.showErrorDialog(
@@ -59,8 +66,63 @@ class ConvertSqlToJavaAction : AnAction() {
             )
             return
         }
-        JavaCodePreviewDialog(project, code).show()
+
+        // 2. 实体查找（PSI 索引访问 → 后台 ReadAction；T-M36.2）
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val candidates = try {
+                ReadAction.compute<List<EntityCandidate>, Throwable> {
+                    EntityClassFinder(project).find(result.tableName).map { clazz ->
+                        EntityCandidate(clazz, EntityResolver().resolve(clazz))
+                    }
+                }
+            } catch (t: Throwable) {
+                emptyList()
+            }
+            ApplicationManager.getApplication().invokeLater {
+                showResult(project, result, candidates)
+            }
+        }
     }
+
+    /** 结果分发：无候选回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。 */
+    private fun showResult(project: Project, result: SqlReverseResult, candidates: List<EntityCandidate>) {
+        when (candidates.size) {
+            0 -> JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result)).show()
+            1 -> showLambdaDialog(project, result, candidates[0])
+            else -> {
+                // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
+                val displayTexts = candidates.map { c ->
+                    SqlSelectionDialog.displayText(
+                        "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
+                        c.psiClass.containingFile?.name ?: "",
+                    )
+                }
+                SqlSelectionDialog(project, candidates, displayTexts) { selected ->
+                    showLambdaDialog(project, result, selected)
+                }.show()
+            }
+        }
+    }
+
+    /** 生成并展示 LambdaQueryWrapper 版本代码。 */
+    private fun showLambdaDialog(project: Project, result: SqlReverseResult, candidate: EntityCandidate) {
+        val target = JavaCodeGenerator.EntityTarget(
+            className = candidate.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
+            columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
+        )
+        JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result, target)).show()
+    }
+
+    private fun showNoSelection(project: Project) {
+        Messages.showInfoMessage(
+            project,
+            MpSqlVisualizerBundle.message("reverse.error.noSelection"),
+            MpSqlVisualizerBundle.message("plugin.name"),
+        )
+    }
+
+    /** 实体候选（类 + 已解析表信息；PSI 访问已在后台完成，EDT 仅持纯数据）。 */
+    private data class EntityCandidate(val psiClass: PsiClass, val tableInfo: TableInfo)
 
     // 仅访问编辑器选择区（UI 状态，非 PSI）→ EDT 更新线程安全且无慢操作风险
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
