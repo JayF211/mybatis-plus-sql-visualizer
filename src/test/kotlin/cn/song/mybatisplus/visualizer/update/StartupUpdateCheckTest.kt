@@ -30,17 +30,21 @@ class StartupUpdateCheckTest {
         assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = true, alreadyChecked = true))
     }
 
-    // ---------------- T-M28.3/28.4 通知内容（只显示最新版、功能点每行一个） ----------------
+    // ---------------- T-M28.3/28.6 通知内容（只显示最新版、每行一个标题、有序列表编号） ----------------
 
     @Test
-    fun notificationContentShowsLatestVersionOnlyOneItemPerLine() {
-        // 用户要求「只显示最新版的日志，每行一个功能点」：首行剥离版本前缀、按分号拆分行
-        val notes = "v2026.8.15：XML 动态 SQL 预览（M24）；注解 SQL 预览（M25）；MP 占位展开与多候选（M26）\n" +
+    fun notificationContentShowsLatestVersionTitlesWithOrderedList() {
+        // 用户要求「每行一个标题 + 有序列表编号」：按行拆分（清单约定每行一个标题）、
+        // <ol><li> 自动编号、只显示最新版（旧版本行不显示）
+        val notes = "v2026.8.15：\nXML 动态 SQL 预览（M24）\n注解 SQL 预览（M25）\nMP 占位展开与多候选（M26）\n" +
             "v2026.8.14：官方 API 覆盖差距清零"
         val content = StartupUpdateCheck.notificationContent(notes)
-        assertTrue(content.startsWith("XML 动态 SQL 预览（M24）<br>\n注解 SQL 预览（M25）<br>\nMP 占位展开与多候选（M26）"))
+        assertTrue(
+            "应渲染有序列表",
+            content.startsWith("<ol><li>XML 动态 SQL 预览（M24）</li><li>注解 SQL 预览（M25）</li>"),
+        )
+        assertTrue("列表应以 </ol> 结尾", content.contains("</ol>"))
         assertFalse("不得包含旧版本内容", content.contains("v2026.8.14"))
-        assertFalse("不得保留版本号前缀", content.contains("v2026.8.15："))
     }
 
     @Test
@@ -56,16 +60,15 @@ class StartupUpdateCheckTest {
     fun notificationContentTruncatesEachLongLine() {
         val long = "标".repeat(300)
         val content = StartupUpdateCheck.notificationContent(long)
-        assertTrue("功能点应截断为 60 字符加省略号", content.startsWith("标".repeat(60) + "…"))
+        assertTrue("标题应截断为 60 字符加省略号", content.startsWith("<ol><li>" + "标".repeat(60) + "…"))
         assertTrue("截断后应带 Gitee 链接", content.contains("href="))
     }
 
     @Test
     fun notificationContentEscapesHtml() {
-        // 变更日志可能含 SQL 动态标签（<if> 等）——HTML 转义防渲染破坏（文本节点引号无需转义；
-        // "v1：" 非合法版本前缀（正则要求 4 位年份）→ 原样保留）
+        // 变更日志可能含 SQL 动态标签（<if> 等）——HTML 转义防渲染破坏（文本节点引号无需转义）
         val content = StartupUpdateCheck.notificationContent("v1：<if test=\"x & y\">")
-        assertTrue(content.startsWith("v1：&lt;if test=\"x &amp; y\"&gt;"))
+        assertTrue(content.startsWith("<ol><li>v1：&lt;if test=\"x &amp; y\"&gt;</li>"))
         assertTrue(content.contains("href="))
     }
 

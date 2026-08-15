@@ -132,29 +132,26 @@ class StartupUpdateCheck : ProjectActivity {
             autoCheck && !alreadyChecked
 
         /**
-         * 通知内容：**只显示最新版**变更日志、**每个功能点一行**（用户要求：带换行符，如
-         * 「XML 动态 SQL 预览（M24）\n注解 SQL 预览（M25）」）——取 changeNotes 首行
-         * （最新版），剥离版本号前缀（`v2026.8.15：`），按分号（`；`/`;`）拆分为功能点，
-         * 最多显示 [maxTitleVersions] 个、每个超长截断加省略号；HTML 转义后以
-         * **`<br>\n` 连接**——`<br>` 保证通知 HTML 渲染分行、`\n` 保证文本形态含真实
-         * 换行符（双满足）；末尾附 Gitee 发布页链接；无标题用默认文案。纯函数（单测覆盖）。
+         * 通知内容：**只显示最新版**变更日志、**每行一个标题、有序列表自动编号**
+         * （用户要求，T-M28.6）——changeNotes 按行拆分（清单约定：每行一个功能标题，
+         * 如 `XML 动态 SQL 预览（M24）`），剥离行首版本号前缀（兼容旧格式），
+         * `<ol><li>` 有序列表渲染（HTML 自动编号）；最多 [maxTitleVersions] 行、
+         * 每行超长截断加省略号、HTML 转义；末尾附 Gitee 发布页链接；
+         * 无标题用默认文案。纯函数（单测直接覆盖）。
          */
         internal fun notificationContent(changeNotes: String?): String {
-            val firstLine = changeNotes?.lineSequence()?.firstOrNull()?.trim().orEmpty()
-            val items = if (firstLine.isEmpty()) {
-                emptyList()
-            } else {
-                stripVersionPrefix(firstLine).split(Regex("[；;]"))
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-            }
-            val body = if (items.isEmpty()) {
+            val titles = changeNotes?.lineSequence()
+                ?.map { stripVersionPrefix(it.trim()) }
+                ?.filter { it.isNotEmpty() }
+                ?.toList()
+                .orEmpty()
+            val body = if (titles.isEmpty()) {
                 MpSqlVisualizerBundle.message("update.notification.content")
             } else {
-                items.take(maxTitleVersions).joinToString("<br>\n") { item ->
+                "<ol>" + titles.take(maxTitleVersions).joinToString("") { item ->
                     val title = if (item.length > maxTitleLength) item.take(maxTitleLength) + "…" else item
-                    title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                }
+                    "<li>" + title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</li>"
+                } + "</ol>"
             }
             return body + "<br>\n<a href=\"" + UpdateSource.GITEE_RELEASES_URL + "\">" +
                 MpSqlVisualizerBundle.message("update.notification.viewGitee") + "</a>"
