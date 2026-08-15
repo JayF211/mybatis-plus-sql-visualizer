@@ -391,12 +391,51 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         // 分页占位符参数进参数区（offset 来源标注计算公式）
         assertTrue("分页 offset 参数缺失：${result.unresolvedParams}", result.unresolvedParams.contains("(pageNum - 1) * pageSize"))
         assertTrue("分页 size 参数缺失：${result.unresolvedParams}", result.unresolvedParams.contains("pageSize"))
-        // 动态条件面板：and 组挂开关（label = 组渲染文本）
+        // T-M29.1：动态条件面板——and 组一行承载（组开关 + 组内子条件值来源），子条件不再单独成行
         val views = result.previewModel?.conditionViews.orEmpty()
+        val groupView = views.firstOrNull { it.label.contains("code LIKE") && it.label.contains("user_phone LIKE") }
+        assertNotNull("面板应有 and 组开关行：${views.map { it.label }}", groupView)
         assertTrue(
-            "面板应有 and 组开关：${views.map { it.label }}",
-            views.any { it.label.contains("code LIKE") && it.label.contains("user_phone LIKE") },
+            "组行值来源应含 keyword：${groupView!!.valueSources}",
+            groupView.valueSources.any { it.contains("keyword") },
         )
+        assertTrue("组内子条件不应单独成行：${views.map { it.label }}", views.none { it.label == "code LIKE ?" })
+        assertEquals(
+            "条件行数 = 5（station_id / dic_status / dic_pay_status / and 组 / between）：${views.map { it.label }}",
+            5,
+            views.size,
+        )
+    }
+
+    fun testAndGroupWithoutFlagChildrenStillFlattened() {
+        // T-M29.1 回归：无布尔标志 and(w -> ...) 组无开关 → 组内子条件照旧单独成行（M19.6 存量行为）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query(String keyword) {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L)
+                        .and(x -> x.likeRight(DeviceInfoEntity::getCode, keyword)
+                                     .or().likeRight(DeviceInfoEntity::getUserPhone, keyword));
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private String code;
+                    private String userPhone;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出预览结果", result)
+        val views = result!!.previewModel?.conditionViews.orEmpty()
+        // 无组开关行（组无 toggle）；code LIKE / user_phone LIKE 两个子条件行照旧（M19.6 全条件挂开关）
+        assertTrue("无组开关行：${views.map { it.label }}", views.none { it.label.contains("code LIKE") && it.label.contains("user_phone LIKE") })
+        assertEquals("行数 = 3（id = 1001 / code LIKE / user_phone LIKE）：${views.map { it.label }}", 3, views.size)
     }
 
     fun testPageConsumedRendersLiteralLimit() {

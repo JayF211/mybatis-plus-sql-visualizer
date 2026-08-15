@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.sql
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.ConditionToggle
+import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -10,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -235,6 +238,59 @@ class SqlGeneratorTest {
         )
         assertEquals(listOf("(pageNum - 1) * pageSize", "pageSize"), generated.unresolvedParams)
         assertEquals(listOf(ParamHint(quote = false), ParamHint(quote = false)), generated.paramHints)
+    }
+
+    @Test
+    fun `组带开关_enabledIds不含子条件时组内容仍渲染`() {
+        // T-M29.1：组开关行合并子条件后，子条件 id 不进面板 enabledIds——
+        // 组带开关时子条件按各自 defaultEnabled 渲染（enabledIds 仅控制组本身显隐）
+        val group = Condition.Group(
+            Connector.OR,
+            listOf(
+                Condition.Like(ColumnRef(columnName = "code"), false, SqlValue.Placeholder("keyword"), LikePosition.RIGHT)
+                    .withToggle(ConditionToggle("c1", null, true, "code LIKE ?")),
+                Condition.Like(ColumnRef(columnName = "user_phone"), false, SqlValue.Placeholder("keyword"), LikePosition.RIGHT)
+                    .withToggle(ConditionToggle("c2", null, true, "user_phone LIKE ?")),
+            ),
+            toggle = ConditionToggle("c0", "isNotBlank(keyword)", true, "(code LIKE ? OR user_phone LIKE ?)"),
+        )
+        val statement = SelectStatement(table = table, conditions = listOf(group))
+        val sql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0"))
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, sort
+            FROM car_device_info
+            WHERE (code LIKE ? OR user_phone LIKE ?)
+            """.trimIndent(),
+            sql,
+        )
+        // 组未勾选（enabledIds 不含 c0）→ 整组不渲染
+        val disabledSql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = emptySet())
+        assertTrue("组未勾选应整组消失：$disabledSql", !disabledSql.contains("LIKE"))
+    }
+
+    @Test
+    fun `having子条件_enabledIds不含时仍渲染`() {
+        // T-M29.1：HAVING 子条件不在面板展示（无开关行）——按 defaultEnabled 渲染，
+        // 面板 enabledIds 过滤不再丢失 HAVING（M19.5 预存缺陷）
+        val having = Condition.Group(
+            Connector.AND,
+            listOf(
+                Condition.Simple(ColumnRef(columnName = "amount"), ">", SqlValue.Literal("100"))
+                    .withToggle(ConditionToggle("h0", null, true, "amount > 100")),
+            ),
+        )
+        val statement = SelectStatement(
+            table = table,
+            groupBy = listOf(ColumnRef(columnName = "station_id")),
+            having = having,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))
+                    .withToggle(ConditionToggle("w0", null, true, "id = 1")),
+            ),
+        )
+        val sql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("w0"))
+        assertTrue("HAVING 应渲染：$sql", sql.contains("HAVING (amount > 100)"))
     }
 
     // ------------------------------------------------------------------

@@ -170,9 +170,11 @@ object SqlGenerator {
         }
 
         // HAVING
+        // T-M29.1：HAVING 子条件不在面板展示（无开关行）——按各自 defaultEnabled 渲染，
+        // 不按 enabledConditionIds 过滤（否则面板流程恒丢失 HAVING，M19.5 预存缺陷）
         statement.having?.let { h ->
             if (h.isConditionVisible(enabledConditionIds)) {
-                val havingSql = renderCondition(h, paramSink, hintSink, statement.table, enabledConditionIds, dialect)
+                val havingSql = renderCondition(h, paramSink, hintSink, statement.table, null, dialect)
                 if (havingSql.isNotEmpty()) sb.append(nl).append("HAVING ").append(havingSql)
             }
         }
@@ -414,7 +416,11 @@ object SqlGenerator {
         }
 
         is Condition.Group -> {
-            val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, enabledIds, hintSink, table, dialect)
+            // T-M29.1：组带开关（布尔重载）时子条件开关并入组行、不在面板单独展示——
+            // 子条件按各自 defaultEnabled 渲染（enabledIds 仅控制组本身显隐）；
+            // 无开关组维持 enabledIds 透传（子条件行仍可单独勾选）
+            val childIds = if (condition.toggle != null) null else enabledIds
+            val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, childIds, hintSink, table, dialect)
             if (childrenSql.isEmpty()) "" else if (condition.negated) "NOT ($childrenSql)" else "($childrenSql)"
         }
 

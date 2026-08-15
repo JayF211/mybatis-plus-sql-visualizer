@@ -365,9 +365,24 @@ class SqlPreviewService(private val project: Project) {
             }
         }
 
-    /** 单个条件节点 → 条件视图（自身 toggle + 嵌套 Group 子节点递归）。 */
+    /**
+     * 单个条件节点 → 条件视图。
+     * 组带开关（布尔重载，T-M29.1 用户反馈：组行与子条件行重复展示）：子条件**并入组行**——
+     * 组复选框 + 组内子条件值输入框（来源递归收集去重，按渲染顺序），子条件不再单独成行；
+     * 组无开关（无布尔标志 `and(w -> ...)`）与非组条件：自身 toggle + 嵌套子条件扁平化（M19.6 存量）。
+     */
     private fun Condition.toConditionViews(): List<ConditionView> {
-        val own = toggle?.let {
+        val ownToggle = toggle
+        if (this is Condition.Group && ownToggle != null) {
+            val sources = groupValueSources()
+            return listOf(
+                ConditionView(
+                    ownToggle.id, ownToggle.label, ownToggle.flagSource, ownToggle.defaultEnabled,
+                    sources.firstOrNull(), sources,
+                ),
+            )
+        }
+        val own = ownToggle?.let {
             // valueSources 为空时回退单值（旧路径仅设 valueSource，M19.5 兼容）
             val sources = it.valueSources.ifEmpty { listOfNotNull(it.valueSource) }
             ConditionView(it.id, it.label, it.flagSource, it.defaultEnabled, it.valueSource, sources)
@@ -378,6 +393,19 @@ class SqlPreviewService(private val project: Project) {
         }
         return listOfNotNull(own) + nested
     }
+
+    /** T-M29.1：组内子条件值来源递归收集（Simple/Like/Between/In 占位符，组递归；去重保持渲染顺序）。 */
+    private fun Condition.groupValueSources(): List<String> = when (this) {
+        is Condition.Simple -> listOfNotNull((value as? SqlValue.Placeholder)?.source)
+        is Condition.Like -> listOfNotNull((pattern as? SqlValue.Placeholder)?.source)
+        is Condition.Between -> listOfNotNull(
+            (lo as? SqlValue.Placeholder)?.source,
+            (hi as? SqlValue.Placeholder)?.source,
+        )
+        is Condition.In -> values.mapNotNull { (it as? SqlValue.Placeholder)?.source }
+        is Condition.Group -> children.flatMap { it.groupValueSources() }
+        else -> emptyList()
+    }.distinct()
 
     /**
      * 当前方言（配置未加载时默认 MySQL）。
