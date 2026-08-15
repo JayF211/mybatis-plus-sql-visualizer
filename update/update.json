@@ -1,7 +1,7 @@
 {
   "version": "2026.8.15",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.15/mybatis-plus-sql-visualizer-2026.8.15.zip",
-  "changeNotes": "v2026.8.15：XML/注解动态 SQL 预览（mapper XML 与 @Select 等含 script，复刻 MyBatis 3.5.19 渲染算法——动态条件勾选/foreach 展开/bind 覆盖/参数回填；${ew.customSqlSegment} 占位展开）；XML/注解 SQL 代码补全（关键字/表名列名位置感知/OGNL，面板输入自动弹补全）；设置页检查更新与自动安装（一键下载安装+重启提示，启动自动检查默认开）；预览修复（分组布尔条件不再静默丢弃/分页 LIMIT 渲染/格式化逗号空格/面板组行合并/XML 参数回填默认引号）\nv2026.8.14：官方 API 覆盖差距清零（实体单条 CRUD/联表删除更新全链路/allEq/selectFunc 等）；批量操作增强（软删除/参数面板/角色分组）；多数据库方言（9 种）+ 乐观锁注入；SQL 关键字方言化引用；多 SQL 选择与定位跳转",
+  "changeNotes": "XML 动态 SQL 预览（M24）\n注解 SQL 预览（M25）\nMP 占位展开与多候选（M26）\n面板与预览体验（T-M26.x）\nXML/注解 SQL 代码补全（M27）\n设置页检查更新与自动安装（M28）\n预览 SQL 修复（M29 系列，用户实测驱动）",
   "publishDate": "2026-08-15",
   "sinceBuild": "253"
 }
