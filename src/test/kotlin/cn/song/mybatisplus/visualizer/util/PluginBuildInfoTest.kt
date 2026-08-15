@@ -77,4 +77,21 @@ class PluginBuildInfoTest {
         // 测试 classpath 为 classes 目录（非 jar）→ 当前环境构建号必然为 null（开发形态语义）
         assertNull(PluginBuildInfo.mpvBuild())
     }
+
+    // ---------------- T-M28.1 jarFileFrom（classloader 定位 jar 的提取纯函数） ----------------
+
+    @Test
+    fun testJarFileFromExtractsJarProtocol() {
+        // jar:file:/…!/… 协议 → 提取 jar 文件（模拟日常 IDE 插件 jar 内类文件资源 URL）
+        val jar = tempJarWithManifest(mapOf("MPV-Build" to "1786700024611"))
+        val url = java.net.URL("jar:${jar.toURI()}!/cn/song/mybatisplus/visualizer/util/PluginBuildInfo.class")
+        assertEquals(jar.absolutePath, PluginBuildInfo.jarFileFrom(url)?.absolutePath)
+    }
+
+    @Test
+    fun testJarFileFromRejectsFileProtocol() {
+        // 开发态 classes 目录（file 协议）→ null（ownJarFile 保持 "—" 语义）
+        assertNull(PluginBuildInfo.jarFileFrom(File(".").toURI().toURL()))
+        assertNull(PluginBuildInfo.jarFileFrom(java.net.URL("file:/nonexistent")))
+    }
 }

@@ -1,11 +1,13 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult
 import cn.song.mybatisplus.visualizer.update.PluginVersion
 import cn.song.mybatisplus.visualizer.update.UpdateManifest
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.util.ui.UIUtil
 
 /**
  * 设置页更新分区测试（T-M28-03）：
@@ -112,5 +114,55 @@ class UpdateSectionTest : BasePlatformTestCase() {
         section.updateTexts()
         assertEquals(MpSqlVisualizerBundle.message("settings.update.check"), section.checkButton.text)
         assertEquals(MpSqlVisualizerBundle.message("settings.update.restartNow"), section.restartButton.text)
+    }
+
+    // ---------------- T-M28.1 按钮交互（此前缺失绑定——用户实测点击无反应；盲区补测） ----------------
+
+    fun testButtonsHaveActionListeners() {
+        assertTrue("检查更新按钮应绑定事件", section.checkButton.actionListeners.isNotEmpty())
+        assertTrue("下载并安装按钮应绑定事件", section.installButton.actionListeners.isNotEmpty())
+        assertTrue("重启按钮应绑定事件", section.restartButton.actionListeners.isNotEmpty())
+    }
+
+    fun testCheckButtonClickShowsCheckingThenResult() {
+        var calls = 0
+        section.checkRunner = { calls++; CheckResult.UpToDate }
+        section.checkButton.doClick()
+        // 同步进入「检查中」（Backgroundable 从非 EDT 同步执行；fake 立即完成）
+        assertEquals(UpdateSection.State.Checking, section.state)
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.checking"), section.statusLabel.text)
+        waitForState(UpdateSection.State.UpToDate)
+        assertEquals(1, calls)
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.statusLabel.text)
+    }
+
+    fun testInstallButtonClickDownloadsAndInstalls() {
+        var calls = 0
+        section.installRunner = { _, _ -> calls++; InstallResult.Installed }
+        section.renderCheck(CheckResult.Available(UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)))
+        section.installButton.doClick()
+        assertEquals(UpdateSection.State.Downloading, section.state)
+        waitForState(UpdateSection.State.Installed)
+        assertEquals(1, calls)
+        assertTrue("安装完成应显示重启按钮", section.restartButton.isVisible)
+    }
+
+    fun testRestartButtonClickInvokesRestartAction() {
+        var restarts = 0
+        section.restartAction = { restarts++ }
+        section.renderCheck(CheckResult.Available(UpdateManifest("1.0", "https://x/p.zip", null, null, null)))
+        section.renderInstall(InstallResult.Installed)
+        section.restartButton.doClick()
+        assertEquals(1, restarts)
+    }
+
+    /** 轮询等待状态（EDT 派发 + 短轮询；fake seam 立即完成，正常一轮即达）。 */
+    private fun waitForState(target: UpdateSection.State) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (section.state != target && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+        assertEquals(target, section.state)
     }
 }

@@ -46,6 +46,20 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     private var failureReason: String? = null
 
+    /**
+     * 检查编排 seam（T-M28.1）：测试注入 fake 不触网；默认走 [PluginUpdateRunner.check] 真实实现。
+     * 与按钮绑定配套——交互测试经 doClick 驱动全链路。
+     */
+    internal var checkRunner: () -> PluginUpdateRunner.CheckResult =
+        { PluginUpdateRunner.check(PluginVersion.current()) }
+
+    /** 下载安装编排 seam（T-M28.1：测试注入 fake；默认真实实现，indicator 驱动进度条）。 */
+    internal var installRunner: (UpdateManifest, ProgressIndicator?) -> PluginUpdateRunner.InstallResult =
+        { manifest, indicator -> PluginUpdateRunner.downloadAndInstall(manifest, indicator) }
+
+    /** 重启回调 seam（T-M28.1：测试注入 fake 不弹原生重启确认框）。 */
+    internal var restartAction: () -> Unit = { RestartDialogImpl.restartWithConfirmation() }
+
     internal val versionLabel = JBLabel()
     internal val autoCheckCheck = JCheckBox()
     internal val checkButton = JButton()
@@ -73,6 +87,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         notesArea.isEditable = false
         notesArea.lineWrap = true
         notesArea.wrapStyleWord = true
+        // T-M28.1：三按钮事件绑定（此前缺失——用户实测点击检查更新无反应；测试盲区：只测渲染未测交互）
+        checkButton.addActionListener { runCheck() }
+        installButton.addActionListener { runInstall() }
+        restartButton.addActionListener { restartIde() }
         buildLayout()
         resetState()
         updateTexts()
@@ -226,7 +244,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             true,
         ) {
             override fun run(indicator: ProgressIndicator) {
-                val result = PluginUpdateRunner.check(PluginVersion.current())
+                val result = checkRunner()
                 ApplicationManager.getApplication().invokeLater {
                     if (isDisplayable) renderCheck(result)
                 }
@@ -247,7 +265,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             true,
         ) {
             override fun run(indicator: ProgressIndicator) {
-                val result = PluginUpdateRunner.downloadAndInstall(manifest, progress)
+                val result = installRunner(manifest, progress)
                 ApplicationManager.getApplication().invokeLater {
                     if (isDisplayable) renderInstall(result)
                 }
@@ -257,7 +275,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     /** 重启 IDE（IDE 原生重启确认框，可选「稍后」——用户拍板，不自动重启）。 */
     internal fun restartIde() {
-        RestartDialogImpl.restartWithConfirmation()
+        restartAction()
     }
 
     /** 进度条适配：下载 fraction → 确定态进度（EDT 更新）。 */

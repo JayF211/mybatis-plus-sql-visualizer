@@ -52,10 +52,28 @@ object PluginBuildInfo {
         return if (time != null) "$DISPLAY_PREFIX: $raw（$time）" else "$DISPLAY_PREFIX: $raw"
     }
 
-    /** 本类所在 jar（codeSource）；目录形态（runIde 增量编译/测试 classpath）返回 null。 */
+    /**
+     * 本类所在 jar（classloader 定位类文件资源）。
+     *
+     * T-M28.1 修复：原实现用 `protectionDomain.codeSource.location`——2026.2 平台
+     * PathClassLoader 下不可靠（用户日常 IDE 实证：已安装 jar manifest 含 MPV-Build
+     * 但 codeSource 拿不到 jar 路径 → 构建号恒 "—"）；改为 classloader 定位**插件专属
+     * 类文件资源**（`PluginBuildInfo.class` 相对路径——父加载器必然找不到，委托必落到
+     * 插件自身 jar）→ JarURLConnection 提取 jar 路径（与 PluginVersion 读 plugin.xml
+     * 同款手法，零平台 API 依赖）。目录形态（开发态/测试 classpath，file 协议）返回 null。
+     */
     private fun ownJarFile(): File? = runCatching {
-        val location = PluginBuildInfo::class.java.protectionDomain.codeSource.location
-        val file = File(location.toURI())
-        file.takeIf { it.isFile && it.name.endsWith(".jar", ignoreCase = true) }
+        val url = PluginBuildInfo::class.java.getResource("PluginBuildInfo.class") ?: return null
+        jarFileFrom(url)?.takeIf { it.isFile }
+    }.getOrNull()
+
+    /**
+     * 从类文件资源 URL 提取所在 jar：`jar:file:/…!/…` 协议返回 jar 文件；
+     * file 协议（开发态 classes 目录）/异常返回 null。纯函数（单测直接覆盖）。
+     */
+    internal fun jarFileFrom(url: java.net.URL): File? = runCatching {
+        if (url.protocol != "jar") return null
+        val jarFileUrl = (url.openConnection() as java.net.JarURLConnection).jarFileURL
+        File(jarFileUrl.toURI())
     }.getOrNull()
 }
