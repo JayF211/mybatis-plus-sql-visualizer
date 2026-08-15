@@ -140,23 +140,27 @@ class SqlLogConsoleBridge(
             return
         }
         attachedConsoles[console] = true
-        try {
-            val filterIface = Class.forName(FILTER_IFACE_NAME)
-            val parser = MyBatisLogParser()
-            val filter = Proxy.newProxyInstance(
-                filterIface.classLoader,
-                arrayOf(filterIface),
-                LogFilterProxyHandler { line ->
-                    parser.feed(line)
-                    parser.takeEntries().forEach { buffer.addEntry(it) }
-                },
-            )
-            console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
-            LOG.info("attachFilter: filter attached to ${console.javaClass.name}")
-        } catch (t: Throwable) {
-            attachedConsoles.remove(console) // 挂载失败允许下次重试
-            LOG.warn("attachFilter: failed on ${console.javaClass.name}", t)
+        for (filterIfaceName in FILTER_IFACE_CANDIDATES) {
+            try {
+                val filterIface = Class.forName(filterIfaceName)
+                val parser = MyBatisLogParser()
+                val filter = Proxy.newProxyInstance(
+                    filterIface.classLoader,
+                    arrayOf(filterIface),
+                    LogFilterProxyHandler { line ->
+                        parser.feed(line)
+                        parser.takeEntries().forEach { buffer.addEntry(it) }
+                    },
+                )
+                console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
+                LOG.info("attachFilter: filter($filterIfaceName) attached to ${console.javaClass.name}")
+                return
+            } catch (t: Throwable) {
+                LOG.debug("attachFilter: candidate $filterIfaceName failed on ${console.javaClass.name}", t)
+            }
         }
+        attachedConsoles.remove(console) // 全部候选失败允许下次重试
+        LOG.warn("attachFilter: all filter candidates failed on ${console.javaClass.name}")
     }
 
     companion object {
@@ -167,7 +171,11 @@ class SqlLogConsoleBridge(
             "com.intellij.execution.RunContentManager",
             "com.intellij.execution.ui.RunContentManager",
         )
-        private const val FILTER_IFACE_NAME = "com.intellij.execution.ui.ConsoleView\$Filter"
+        /** Filter 接口双候选：243/253 为 ConsoleView 嵌套接口；2026.2 移除嵌套接口，addMessageFilter 参数改为独立接口（T-M31.12 实证）。 */
+        private val FILTER_IFACE_CANDIDATES = listOf(
+            "com.intellij.execution.ui.ConsoleView\$Filter",
+            "com.intellij.execution.filters.Filter",
+        )
         private val CONTENT_LISTENER_CLASS = ContentManagerListener::class.java
         private const val POLL_INTERVAL_MS = 2000
 
