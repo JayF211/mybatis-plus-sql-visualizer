@@ -19,7 +19,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 > - 脚本（本机工具，不在仓库）：`C:\Users\USER\.zcode\cli\parallel_tasks.py`；数据文件 `parallel-tasks.json` 同目录（全局共享）
 > - 用法：`python parallel_tasks.py check`（无活跃任务 exit 0 / 有活跃任务 exit 1 并列出对方）→ 有并行活动时 `register --name <任务名> --sandbox <独立沙盒>` 登记 → 跑完 `done` 注销；`prune` 清超时残留
 > - kill 白名单：kill java/idea 进程前查表——命令行含**自己登记的沙盒名**才允许 kill
-> - M28×M29 二次实证教训：登记会自锁 `check`（别把 check 链进自己命令）；共享 gradle daemon 会被对方 `--stop` 误杀（测试执行器莫名 FAILED）——权威全量回归建议 `git worktree` 独立目录 + `--no-daemon`
+> - **沙盒本身也会冲突**：① `prepareTestSandbox` 目标文件互锁（「用户映射区域」错误——对方/残留测试 JVM 把沙盒内 jar 映射锁定，复制必失败）；② SDK 解压目录（`~/.gradle/caches/.../transforms/idea-2025.3.5-win`）两会话共享，沙盒 system 索引（`records.dat`）互锁会强制重取；③ 已隔离的沙盒也可能被**自己早前运行的残留测试 worker** 锁住——按白名单杀（命令行含自己沙盒名）或直接删沙盒目录再跑
+> - M28×M29 二次实证教训：登记会自锁 `check`（别把 check 链进自己命令）；共享 gradle daemon 会被对方 `--stop` 误杀（测试执行器莫名 FAILED）——权威全量回归建议 `git worktree` 独立目录 + `--no-daemon`（沙盒随 build 目录一并完全隔离）
 > - 完整约定见本地记忆 `agent-parallel-test-isolation.md`（本机 `~/.zcode/cli/memories/projects/.../memory/`）
 
 ## 核心文档（docs/ 根目录）
@@ -111,6 +112,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-15 | 索引提示块补充：沙盒本身也冲突（prepareTestSandbox 互锁/残留测试 worker 映射锁定/共享 SDK 解压与 records.dat 互锁） |
 | 2026-08-15 | 索引新增重点提示：文件头 🔴 并行测试协调登记表（parallel_tasks.py 位置/用法/场景原因——T-M26.1 互锁互杀 + M28×M29 实证） |
 | 2026-08-15 | 更新索引条目：20260815-1219-设置页检查更新与自动安装更新-M28-开发计划.md（M28 已交付 766 测试全绿，T-M28-01~06） |
 | 2026-08-15 | 新增索引条目：20260815-1219-设置页检查更新与自动安装更新-M28-开发计划.md（M28 任务源 T-M28-xx，计划定稿待开工） |
