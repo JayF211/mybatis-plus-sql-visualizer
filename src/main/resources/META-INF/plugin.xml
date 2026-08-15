@@ -127,7 +127,8 @@
              仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；displayName 为
              EP 属性不支持 bundle key，静态写（通知正文走 bundle） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
-                           displayName="MyBatis-Plus SQL Visualizer"/>
+                           displayName="MyBatis-Plus SQL Visualizer"
+                           displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
     </extensions>
 
