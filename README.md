@@ -105,6 +105,12 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 
 详见 [开发计划](docs/开发计划/20260812-1058-MP-SQL可视化-开发计划.md) 的 M6 里程碑。
 
+**M28 起发布流程新增一步（插件设置页「检查更新」的数据源）**：打版发布时维护仓库根
+`update/update.json`——运行 `./gradlew writeUpdateManifest` 生成骨架（版本号/下载地址/
+发布日期），人工补充本次 `changeNotes`（纯文本，`
+` 换行），提交推送后生效
+（清单 URL 固定：`https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/update/update.json`）。
+
 ## 变更记录
 
 见 [CHANGELOG.md](CHANGELOG.md)。

@@ -1,3 +1,4 @@
+import java.time.LocalDate
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
@@ -112,5 +113,30 @@ tasks {
                 <li>Wrapper 全覆盖（Lambda/字符串版 QueryWrapper·UpdateWrapper·DeleteWrapper、MPJ 联表 JOIN/selectCollection/selectFunc、服务链 lambdaQuery/lambdaUpdate）实时转可读 SQL；参数替换（? 回填、LIKE 拼百分号、列类型推断引号）；动态条件复选框；SQL 格式化；字段补全 + 注释提示（@Schema/@ApiModelProperty）；表名配置；逻辑删除注入；执行 SQL（Ultimate）；多方言分页；右键/快捷键/gutter 图标三入口；中英文界面</li>
             </ul>
         """.trimIndent()
+    }
+
+    // M28：生成更新清单 update/update.json（插件设置页「检查更新」的数据源；发布时执行）——
+    // 版本号/下载地址/发布日期自动生成，changeNotes 生成后**人工补充**本次发布说明（纯文本，
+    // \n 换行）。发布流程：改 gradle.properties 版本号 → buildPlugin 并上传 Gitee Release 附件 →
+    // 执行本任务 → 补 changeNotes → 提交推送（清单 URL 固定，见 update/UpdateSource.kt）。
+    register("writeUpdateManifest") {
+        group = "publishing"
+        description = "生成更新清单 update/update.json（M28 检查更新数据源）"
+        // 配置期捕获（configuration cache 兼容：doLast 不触达 project/providers）
+        val version = providers.gradleProperty("version").get()
+        val outputFile = layout.projectDirectory.file("update/update.json").asFile
+        doLast {
+            val manifest = buildString {
+                appendLine("{")
+                appendLine("  \"version\": \"$version\",")
+                appendLine("  \"downloadUrl\": \"https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/v$version/mybatis-plus-sql-visualizer-$version.zip\",")
+                appendLine("  \"changeNotes\": \"（手动补充本次发布变更说明，纯文本，\\\\n 换行）\",")
+                appendLine("  \"publishDate\": \"${LocalDate.now()}\",")
+                appendLine("  \"sinceBuild\": \"253\"")
+                appendLine("}")
+            }
+            outputFile.parentFile.mkdirs()
+            outputFile.writeText(manifest)
+        }
     }
 }
