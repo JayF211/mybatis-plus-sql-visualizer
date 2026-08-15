@@ -6,6 +6,10 @@
 
 ### Added
 
+- **XML/注解 SQL 代码补全**（M27）：mapper XML 语句与 Java SQL 注解字符串（@Select/@Insert/@Update/@Delete）内 Ctrl+Space 补全——
+  - SQL 关键字、表名/列名（FROM/JOIN/WHERE 等子句位置感知）、`别名.` 前缀列（联表：LEFT JOIN/逗号多表别名绑定）
+  - `#{}` 参数名（@Param 感知）；XML 动态标签（`<if>/<foreach>/<where>` 等）与 test/collection 属性 OGNL 补全
+  - 列注释 tailText 展示与中文关键词检索；Community 兼容（方案 B 自研、零数据源依赖、实体注解即 schema）
 - **MyBatis 注解 SQL 预览**（M25）：Java Mapper 方法上的 `@Select/@Insert/@Update/@Delete`（含 `<script>` 动态标签）与 `@SelectProvider` 等 Provider 注解（L1 常量折叠）——注解行 gutter 图标 + 右键预览，复用 XML 引擎（动态条件勾选/foreach 次数/bind 覆盖）：
   - 数组元素拼接对齐 MyBatis（`String.join(" ", value).trim()`）；`<script>` 与 XML mapper 同一解析路径
   - `@Param` 参数名 mock（`param1..N` 注入）；Provider 常量折叠（字面量/文本块/`+` 拼接/静态 final 引用），动态生成场景降级提示
