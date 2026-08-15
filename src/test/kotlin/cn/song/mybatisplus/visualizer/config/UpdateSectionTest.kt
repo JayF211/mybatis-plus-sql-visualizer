@@ -19,9 +19,22 @@ class UpdateSectionTest : BasePlatformTestCase() {
 
     private lateinit var section: UpdateSection
 
+    /** 窗口宿主（T-M28.1 交互测试）：异步回调按 `isDisplayable` 判活——无宿主组件
+     *  displayable=false 会跳过渲染（真实设置页在对话框内无此问题），测试须放入可见窗口。 */
+    private lateinit var host: javax.swing.JFrame
+
     override fun setUp() {
         super.setUp()
         section = UpdateSection(PluginSettings.getInstance())
+        host = javax.swing.JFrame()
+        host.contentPane.add(section)
+        host.pack()
+        host.isVisible = true
+    }
+
+    override fun tearDown() {
+        host.dispose()
+        super.tearDown()
     }
 
     fun testInitialState() {
