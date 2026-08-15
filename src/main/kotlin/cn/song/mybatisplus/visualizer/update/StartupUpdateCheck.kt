@@ -129,22 +129,27 @@ class StartupUpdateCheck : ProjectActivity {
             autoCheck && !alreadyChecked
 
         /**
-         * 通知内容：只保留变更日志**标题行**（首行，超长截断加省略号）——用户要求
-         * 「更新内容只需要保留标题即可」，全文展示留给设置页变更日志区；无标题用默认文案。
-         * 纯函数（单测直接覆盖）。
+         * 通知内容：每个版本**一行标题**（用户要求「更新标题每行显示一个」）——changeNotes
+         * 按行拆分（每行一个版本），最多显示 [maxTitleVersions] 行、每行超长截断加省略号；
+         * HTML 转义后 `<br>` 连接（Notification 内容按 HTML 渲染，裸 `\n` 不换行——否则
+         * 多行会挤在一起）；无标题用默认文案。纯函数（单测直接覆盖）。
          */
         internal fun notificationContent(changeNotes: String?): String {
-            val firstLine = changeNotes?.lineSequence()?.firstOrNull()?.trim().orEmpty()
-            if (firstLine.isEmpty()) {
+            val lines = changeNotes?.lineSequence()
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?.toList()
+                .orEmpty()
+            if (lines.isEmpty()) {
                 return MpSqlVisualizerBundle.message("update.notification.content")
             }
-            return if (firstLine.length > maxTitleLength) {
-                firstLine.take(maxTitleLength) + "…"
-            } else {
-                firstLine
+            return lines.take(maxTitleVersions).joinToString("<br>") { line ->
+                val title = if (line.length > maxTitleLength) line.take(maxTitleLength) + "…" else line
+                title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             }
         }
 
-        private val maxTitleLength = 100
+        private val maxTitleVersions = 3
+        private val maxTitleLength = 60
     }
 }

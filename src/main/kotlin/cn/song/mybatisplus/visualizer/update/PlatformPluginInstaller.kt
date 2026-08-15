@@ -37,11 +37,13 @@ object PlatformPluginInstaller {
         val pluginId = PluginId.findId(UpdateSource.PLUGIN_ID)
             ?: return PluginUpdateRunner.InstallResult.Failed("plugin id not found")
         val old = PluginManagerCore.getPlugin(pluginId)
-        if (old != null && !isUnderPluginsDir(old.descriptorPath)) {
-            // 开发态/非插件目录安装（如 runIde 从 build/classes 加载）——卸载调度会误删
-            // 构建产物，拒绝并提示（正式安装形态下 descriptorPath 必在插件目录内）
+        if (old != null && isDevInstallation(old.descriptorPath)) {
+            // 开发态安装（runIde/测试从 build/classes 加载）——卸载调度会误删构建产物，拒绝；
+            // 错误消息带 descriptorPath 便于诊断格式差异（T-M28.3 二修：白名单判定误拒实证）
+            LOG.warn("plugin update rejected: dev-mode installation (descriptorPath=${old.descriptorPath})")
             return PluginUpdateRunner.InstallResult.Failed(
-                "current installation is not under the IDE plugins directory; update from a regular install"
+                "updates are not supported for a development-mode installation (descriptorPath: " +
+                    "${old.descriptorPath ?: "null"}); install from the plugin zip first"
             )
         }
         val persistent = persistZip(zip)
@@ -107,24 +109,19 @@ object PlatformPluginInstaller {
     }
 
     /**
-     * 旧版安装位置是否在插件目录内（跨平台，T-M28.1/28.3）：descriptorPath 归一化后
-     * Path **组件级**比较 + `toRealPath()` 解析符号链接（Windows 组件比较大小写不敏感；
-     * Mac 解析后两侧均为真实路径必然一致）；`toRealPath` 失败（文件不存在等）回退字符串
-     * 比较。拒绝时记日志（含原始路径，便于诊断格式差异）。
+     * 开发态安装判定（T-M28.3 二修）：descriptorPath 归一化后含**构建产物特征段**
+     * （build/classes/out/target/.gradle）→ 开发态（runIde/测试从 build/classes 加载，
+     * 卸载调度会误删构建产物）拒绝更新；其余一律放行。
+     *
+     * 背景：白名单式（必须位于插件目录内）判定依赖 descriptorPath 精确格式——2026.2 平台
+     * 返回 URL 风格且形态多变（用户日常 IDE 两次实证误拒），黑名单式按内容特征判定
+     * 对格式不敏感、鲁棒得多；descriptorPath 为 null/空白保守按开发态拒绝。
      */
-    internal fun isUnderPluginsDir(descriptorPath: String?): Boolean {
-        if (descriptorPath.isNullOrBlank()) return false
-        val raw = normalizeDescriptorPath(descriptorPath)
-        if (raw.isBlank()) return false
-        val ok = runCatching {
-            Path.of(raw).toRealPath().startsWith(PathManager.getPluginsDir().toRealPath())
-        }.getOrElse {
-            val pluginsRoot = PathManager.getPluginsDir().toAbsolutePath().normalize().toString()
-            Path.of(raw).toAbsolutePath().normalize().toString().startsWith(pluginsRoot)
-        }
-        if (!ok) {
-            LOG.warn("plugin update guard rejected: descriptorPath=$descriptorPath (normalized=$raw)")
-        }
-        return ok
+    internal fun isDevInstallation(descriptorPath: String?): Boolean {
+        if (descriptorPath.isNullOrBlank()) return true
+        val segments = normalizeDescriptorPath(descriptorPath).replace('\\', '/').split('/')
+        return segments.any { it in DEV_PATH_MARKERS }
     }
+
+    private val DEV_PATH_MARKERS = setOf("build", "classes", "out", "target", ".gradle")
 }

@@ -30,22 +30,29 @@ class StartupUpdateCheckTest {
         assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = true, alreadyChecked = true))
     }
 
-    // ---------------- T-M28.3 通知内容（只保留标题行） ----------------
+    // ---------------- T-M28.3 通知内容（每行一个标题） ----------------
 
     @Test
-    fun notificationContentKeepsFirstLineOnly() {
-        val notes = "v2026.8.15：官方 API 覆盖差距清零；批量操作增强\nv2026.8.14：Wrapper 全覆盖"
+    fun notificationContentShowsOneTitlePerLine() {
+        // 用户要求「更新标题每行显示一个」：每个版本一行（<br> 连接，HTML 换行）
+        val notes = "v2026.8.15：XML/注解动态 SQL 预览\nv2026.8.14：Wrapper 全覆盖"
         val content = StartupUpdateCheck.notificationContent(notes)
-        assertTrue("只保留首行标题", content.startsWith("v2026.8.15"))
-        assertFalse("不得包含后续版本行", content.contains("v2026.8.14"))
+        assertEquals("v2026.8.15：XML/注解动态 SQL 预览<br>v2026.8.14：Wrapper 全覆盖", content)
     }
 
     @Test
-    fun notificationContentTruncatesLongTitle() {
+    fun notificationContentTruncatesEachLongLine() {
         val long = "标".repeat(300)
         val content = StartupUpdateCheck.notificationContent(long)
-        assertTrue("超长标题应截断（≤101 字符）", content.length <= 101)
+        assertTrue("超长标题应截断（≤61 字符）", content.length <= 61)
         assertTrue("截断应带省略号", content.endsWith("…"))
+    }
+
+    @Test
+    fun notificationContentEscapesHtml() {
+        // 变更日志可能含 SQL 动态标签（<if> 等）——HTML 转义防渲染破坏（文本节点引号无需转义）
+        val content = StartupUpdateCheck.notificationContent("v1：<if test=\"x & y\">")
+        assertEquals("v1：&lt;if test=\"x &amp; y\"&gt;", content)
     }
 
     @Test

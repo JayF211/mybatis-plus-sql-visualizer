@@ -1,57 +1,41 @@
 package cn.song.mybatisplus.visualizer.update
 
-import com.intellij.openapi.application.PathManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.nio.file.Files
-import java.nio.file.Path
 
 /**
- * 插件目录守卫测试（T-M28.1 跨平台加固）：
- * `isUnderPluginsDir` 决定更新时是否调度卸载旧版——误拒会导致更新失败
- * （用户要求 Win/Mac 目录差异不得影响更新）。
- * 覆盖：null/空白拒绝、插件目录内（真实文件 toRealPath 路径 + 未创建子路径兜底路径）、
- * 目录外拒绝；大小写/符号链接差异由 Path 组件比较 + toRealPath 保证（Windows 组件
- * 比较大小写不敏感、Mac 解析后两侧均为真实路径）。
+ * 安装守卫测试（T-M28.1/28.3 跨平台）：
+ * `isDevInstallation` 决定更新时是否调度卸载旧版——**黑名单式**判定（构建产物特征段），
+ * 真实安装任意形态一律放行（白名单式依赖 descriptorPath 精确格式，2026.2 平台 URL 风格
+ * 形态多变，用户日常 IDE 两次实证误拒——T-M28.3 二修）。
+ * 覆盖：null/空白保守拒绝、开发态特征路径拒绝、真实安装（Win/Mac/URL 风格/jar 前缀）放行、
+ * 归一化各形态。
  */
 class PlatformPluginInstallerTest : BasePlatformTestCase() {
 
     fun testBlankDescriptorRejected() {
-        assertFalse(PlatformPluginInstaller.isUnderPluginsDir(null))
-        assertFalse(PlatformPluginInstaller.isUnderPluginsDir(""))
-        assertFalse(PlatformPluginInstaller.isUnderPluginsDir("   "))
+        // null/空白：无法判断 → 保守按开发态拒绝（安全侧）
+        assertTrue(PlatformPluginInstaller.isDevInstallation(null))
+        assertTrue(PlatformPluginInstaller.isDevInstallation(""))
+        assertTrue(PlatformPluginInstaller.isDevInstallation("   "))
     }
 
-    fun testPathInsidePluginsDirAccepted() {
-        val root = PathManager.getPluginsDir()
-        // 真实文件（toRealPath 分支）
-        val real = Files.createTempFile(root, "guard-check-", ".tmp")
-        try {
-            assertTrue(PlatformPluginInstaller.isUnderPluginsDir(real.toString()))
-        } finally {
-            Files.deleteIfExists(real)
-        }
-        // 未创建子路径（兜底字符串比较分支——插件安装目录形态 `<plugins>/<id>/META-INF/plugin.xml`）
-        val virtual = root.resolve("cn.song.test").resolve("META-INF").resolve("plugin.xml").toString()
-        assertTrue(PlatformPluginInstaller.isUnderPluginsDir(virtual))
+    fun testDevBuildPathsRejected() {
+        // 开发态特征段（build/classes 等）→ 拒绝（卸载调度会误删构建产物）
+        assertTrue(PlatformPluginInstaller.isDevInstallation("F:/repo/build/classes/kotlin/main/META-INF/plugin.xml"))
+        assertTrue(PlatformPluginInstaller.isDevInstallation("F:/repo/build/classes/java/main/META-INF/plugin.xml"))
+        assertTrue(PlatformPluginInstaller.isDevInstallation("F:/repo/out/production/classes/META-INF/plugin.xml"))
+        assertTrue(PlatformPluginInstaller.isDevInstallation("C:\\repo\\.gradle\\classes\\META-INF\\plugin.xml"))
     }
 
-    fun testPathOutsidePluginsDirRejected() {
-        // 系统临时目录（真实存在，toRealPath 分支）
-        val outside = Files.createTempDirectory("guard-outside-")
-        try {
-            assertFalse(PlatformPluginInstaller.isUnderPluginsDir(outside.toString()))
-            // 不存在路径（兜底分支）
-            assertFalse(PlatformPluginInstaller.isUnderPluginsDir(Path.of(outside.toString(), "no-such-plugin").toString()))
-        } finally {
-            Files.deleteIfExists(outside)
-        }
-    }
-
-    fun testJarPrefixedDescriptorHandled() {
-        // zip 形态 descriptorPath 带 jar:file:/! 前缀：剥离后按插件目录判定
-        val root = PathManager.getPluginsDir().resolve("cn.song.test").toString()
-        assertTrue(PlatformPluginInstaller.isUnderPluginsDir("jar:file:$root.zip!/META-INF/plugin.xml"))
-        assertTrue(PlatformPluginInstaller.isUnderPluginsDir("$root.zip!/META-INF/plugin.xml"))
+    fun testRealInstallationsAccepted() {
+        // 真实安装（插件目录任意形态）一律放行——不依赖路径精确格式
+        assertFalse(PlatformPluginInstaller.isDevInstallation("C:/Users/me/AppData/Roaming/JetBrains/IntelliJIdea2026.2/plugins/mybatis-plus-sql-visualizer/lib/xxx.jar"))
+        assertFalse(PlatformPluginInstaller.isDevInstallation("C:\\Users\\me\\AppData\\Roaming\\JetBrains\\IntelliJIdea2026.2\\plugins\\mybatis-plus-sql-visualizer\\META-INF\\plugin.xml"))
+        assertFalse(PlatformPluginInstaller.isDevInstallation("/Users/me/Library/Application Support/JetBrains/IntelliJIdea2026.2/plugins/mybatis-plus-sql-visualizer/lib/xxx.jar"))
+        // URL 风格（2026.2 平台形态）+ jar 前缀
+        assertFalse(PlatformPluginInstaller.isDevInstallation("jar:file:/C:/Users/me/plugins/mybatis-plus-sql-visualizer/lib/xxx.jar!/META-INF/plugin.xml"))
+        assertFalse(PlatformPluginInstaller.isDevInstallation("JAR:FILE:/Users/me/plugins/a.zip!/META-INF/plugin.xml"))
     }
 
     // ---------------- T-M28.3 路径归一化（2026.2 descriptorPath URL 风格实证） ----------------
