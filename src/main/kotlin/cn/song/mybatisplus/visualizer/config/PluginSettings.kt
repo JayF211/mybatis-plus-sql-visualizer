@@ -97,6 +97,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 默认开（用户拍板）。
          */
         var autoCheckUpdate: Boolean = true,
+
+        /**
+         * SQL 反向转换的默认 Wrapper 形态（T-M36.3）：[REVERSE_AUTO] 自动 /
+         * [REVERSE_QUERY] 字符串列名 / [REVERSE_LAMBDA] Lambda / [REVERSE_MPJ_LAMBDA] MPJ。
+         * 分发逻辑见 [cn.song.mybatisplus.visualizer.reverse.resolveWrapperFormat]。
+         */
+        var reverseWrapperFormat: String = REVERSE_AUTO,
     )
 
     private var state = State()
@@ -118,6 +125,18 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 表名推断策略：纯保留驼峰——仅首字母小写、不去 Entity 后缀（`BikeDeviceInfoEntity` → `bikeDeviceInfoEntity`）。 */
         const val INFERENCE_CAMEL = "CAMEL"
+
+        /** 反向转换 Wrapper 形态：自动（有实体 → Lambda，无实体 → 字符串）。 */
+        const val REVERSE_AUTO = "AUTO"
+
+        /** 反向转换 Wrapper 形态：恒字符串列名 QueryWrapper。 */
+        const val REVERSE_QUERY = "QUERY"
+
+        /** 反向转换 Wrapper 形态：LambdaQueryWrapper（无实体回落字符串）。 */
+        const val REVERSE_LAMBDA = "LAMBDA"
+
+        /** 反向转换 Wrapper 形态：MPJLambdaWrapper（无实体回落字符串）。 */
+        const val REVERSE_MPJ_LAMBDA = "MPJ_LAMBDA"
 
         /**
          * 获取全局配置实例。

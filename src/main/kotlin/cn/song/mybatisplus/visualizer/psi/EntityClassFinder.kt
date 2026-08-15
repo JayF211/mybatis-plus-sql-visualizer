@@ -32,6 +32,11 @@ class EntityClassFinder(private val project: Project) {
             val classes = PsiShortNamesCache.getInstance(project)
                 .getClassesByName(candidateName, GlobalSearchScope.projectScope(project))
             for (clazz in classes) {
+                // T-M36.3：VO/DTO 类排除——候选类名以 VO/DTO 结尾的（如 UserVO）不参与转换
+                // （表名校验已覆盖绝大多数；此为命名惯例的显式防御）
+                if (clazz.name?.endsWithIgnoreCase("VO") == true || clazz.name?.endsWithIgnoreCase("DTO") == true) {
+                    continue
+                }
                 // 解析表名精确匹配（大小写不敏感——表名大小写因方言/平台而异）；
                 // resolve 异常情况返回空表名 → 自然排除
                 if (resolver.resolve(clazz).tableName.equals(tableName, ignoreCase = true)) {
@@ -41,6 +46,9 @@ class EntityClassFinder(private val project: Project) {
         }
         return result
     }
+
+    private fun String.endsWithIgnoreCase(suffix: String): Boolean =
+        endsWith(suffix, ignoreCase = true)
 
     /**
      * 候选类名：表名驼峰（`car_device_info` → `CarDeviceInfo`，复用

@@ -101,6 +101,47 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
         assertTrue(EntityClassFinder(project).find("car_device_info").isEmpty())
     }
 
+    fun testVoDtoClassesExcluded() {
+        // T-M36.3：VO/DTO 类即使表名匹配也被排除（命名惯例显式防御）
+        addClassFile(
+            "User.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("user")
+            public class User {
+                private Long id;
+                private String name;
+            }
+            """,
+        )
+        addClassFile(
+            "UserVO.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("user")
+            public class UserVO {
+                private String name;
+            }
+            """,
+        )
+        addClassFile(
+            "UserDto.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("user")
+            public class UserDto {
+                private String name;
+            }
+            """,
+        )
+        val found = EntityClassFinder(project).find("user")
+        assertEquals(1, found.size)
+        assertEquals("User", found[0].name)
+    }
+
     fun testNoMatchReturnsEmpty() {
         assertTrue(EntityClassFinder(project).find("not_exist_table").isEmpty())
     }

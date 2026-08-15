@@ -308,4 +308,33 @@ class JavaCodeGeneratorTest {
         val code = JavaCodeGenerator.generate(result, entity)
         assertTrue(code, code.contains(".nested(w -> w\n        .eq(User::getA, 1)\n        .or()\n        .eq(User::getB, 2))"))
     }
+
+    // ------------------------------------------------------------------
+    // MPJ 形态（T-M36.3）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `MPJ形态_生成MPJLambdaWrapper与lambda列`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
+        val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new MPJLambdaWrapper<User>()"))
+        assertTrue(code, code.contains(".eq(User::getName, \"x\")"))
+        assertTrue(code, code.contains("// SQL → MyBatis-Plus-Join MPJLambdaWrapper 反向生成"))
+        assertTrue(code, code.contains("// 实体类 User 由表名 user 匹配（需引入 MPJ 依赖）"))
+    }
+
+    @Test
+    fun `MPJ形态_无实体恒QueryWrapper`() {
+        val result = SqlReverseResult(tableName = "user", selectColumns = null)
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new QueryWrapper<User>()"))
+        assertTrue(code, !code.contains("MPJ"))
+    }
 }

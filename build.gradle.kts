@@ -198,6 +198,8 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisTest")
                     // P0 SQL 反向转换（T-M36）：解析器单测（~30 用例，最大片）
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest")
+                    // T-M36.2 实体查找 Heavy 用例（与 HeavyAnchorSemanticsTest 同片，分散重类）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.EntityClassFinderHeavyTest")
                     // T-M31 日志还原：解析/还原纯逻辑单测
                     includeTestsMatching("cn.song.mybatisplus.visualizer.log.*")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
@@ -243,9 +245,10 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateDeleteMpjConverterTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.ConsumerMethodsCoverageTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlSqlRendererTest")
-                    // P0 SQL 反向转换（T-M36）：代码生成单测 + round-trip 闭环
+                    // P0 SQL 反向转换（T-M36）：代码生成单测 + round-trip 闭环；T-M36.3 Wrapper 形态分发
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.JavaCodeGeneratorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaRoundTripTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.WrapperFormatTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")

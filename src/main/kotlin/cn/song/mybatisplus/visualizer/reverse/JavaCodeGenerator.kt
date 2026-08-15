@@ -41,17 +41,31 @@ object JavaCodeGenerator {
     /**
      * 生成完整代码片段。
      *
-     * @param entity 非 null → LambdaQueryWrapper 形态（列→字段映射）；null → 字符串列名形态
+     * @param entity      非 null → lambda 列引用形态；null → 字符串列名形态
+     * @param wrapperKind 实体可用时的 Wrapper 类型（T-M36.3）：LAMBDA → LambdaQueryWrapper、
+     *                    MPJ_LAMBDA → MPJLambdaWrapper；entity 为 null 时恒 QueryWrapper
      */
-    fun generate(result: SqlReverseResult, entity: EntityTarget?): String {
+    fun generate(
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        wrapperKind: GeneratedWrapper = GeneratedWrapper.LAMBDA,
+    ): String {
         val sb = StringBuilder()
         if (entity == null) {
             sb.append("// SQL → MyBatis-Plus QueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
             val entityName = entityClassName(result.tableName)
             sb.append("// 实体类名 $entityName 由表名 ${result.tableName} 推断，请按实际类名调整\n")
         } else {
-            sb.append("// SQL → MyBatis-Plus LambdaQueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
-            sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
+            when (wrapperKind) {
+                GeneratedWrapper.MPJ_LAMBDA -> {
+                    sb.append("// SQL → MyBatis-Plus-Join MPJLambdaWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
+                    sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配（需引入 MPJ 依赖）\n")
+                }
+                else -> {
+                    sb.append("// SQL → MyBatis-Plus LambdaQueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
+                    sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
+                }
+            }
             val unmapped = unmappedColumns(result, entity)
             if (unmapped.isNotEmpty()) {
                 sb.append("// 注意：以下列未在实体中找到对应字段，已回落字符串列名：${unmapped.joinToString(", ")}\n")
@@ -59,7 +73,11 @@ object JavaCodeGenerator {
         }
         result.warnings.forEach { sb.append("// 注意：$it\n") }
 
-        val wrapperName = if (entity == null) "QueryWrapper" else "LambdaQueryWrapper"
+        val wrapperName = when {
+            entity == null -> "QueryWrapper"
+            wrapperKind == GeneratedWrapper.MPJ_LAMBDA -> "MPJLambdaWrapper"
+            else -> "LambdaQueryWrapper"
+        }
         val entityName = entity?.className ?: entityClassName(result.tableName)
         sb.append("new $wrapperName<$entityName>()")
         if (result.selectColumns != null && result.selectColumns.isNotEmpty()) {

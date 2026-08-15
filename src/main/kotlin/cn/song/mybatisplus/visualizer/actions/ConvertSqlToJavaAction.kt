@@ -1,12 +1,16 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
+import cn.song.mybatisplus.visualizer.reverse.GeneratedWrapper
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
+import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseParser
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
+import cn.song.mybatisplus.visualizer.reverse.resolveWrapperFormat
 import cn.song.mybatisplus.visualizer.ui.JavaCodePreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -67,7 +71,12 @@ class ConvertSqlToJavaAction : AnAction() {
             return
         }
 
-        // 2. 实体查找（PSI 索引访问 → 后台 ReadAction；T-M36.2）
+        // 2. 实体查找（PSI 索引访问 → 后台 ReadAction；T-M36.2）；QUERY 形态无需实体（T-M36.3 跳过查找）
+        val format = reverseFormat()
+        if (format == ReverseWrapperFormat.QUERY) {
+            showResult(project, result, emptyList(), GeneratedWrapper.QUERY)
+            return
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
             val candidates = try {
                 ReadAction.compute<List<EntityCandidate>, Throwable> {
@@ -79,16 +88,28 @@ class ConvertSqlToJavaAction : AnAction() {
                 emptyList()
             }
             ApplicationManager.getApplication().invokeLater {
-                showResult(project, result, candidates)
+                // T-M36.3：配置 + 是否有实体 → 最终形态（AUTO/LAMBDA/MPJ_LAMBDA 无实体回落 QUERY）
+                val wrapper = resolveWrapperFormat(format, candidates.isNotEmpty())
+                showResult(project, result, candidates, wrapper)
             }
         }
     }
 
-    /** 结果分发：无候选回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。 */
-    private fun showResult(project: Project, result: SqlReverseResult, candidates: List<EntityCandidate>) {
+    /** 反向转换配置形态（测试环境 settings 未注册时默认 AUTO）。 */
+    private fun reverseFormat(): ReverseWrapperFormat = runCatching {
+        ReverseWrapperFormat.fromPersisted(PluginSettings.getInstance().state.reverseWrapperFormat)
+    }.getOrDefault(ReverseWrapperFormat.AUTO)
+
+    /** 结果分发：无实体（或 QUERY 形态）回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。 */
+    private fun showResult(
+        project: Project,
+        result: SqlReverseResult,
+        candidates: List<EntityCandidate>,
+        wrapper: GeneratedWrapper,
+    ) {
         when (candidates.size) {
             0 -> JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result)).show()
-            1 -> showLambdaDialog(project, result, candidates[0])
+            1 -> showLambdaDialog(project, result, candidates[0], wrapper)
             else -> {
                 // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
                 val displayTexts = candidates.map { c ->
@@ -98,19 +119,24 @@ class ConvertSqlToJavaAction : AnAction() {
                     )
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->
-                    showLambdaDialog(project, result, selected)
+                    showLambdaDialog(project, result, selected, wrapper)
                 }.show()
             }
         }
     }
 
-    /** 生成并展示 LambdaQueryWrapper 版本代码。 */
-    private fun showLambdaDialog(project: Project, result: SqlReverseResult, candidate: EntityCandidate) {
+    /** 生成并展示 Lambda 形态代码（wrapper 由配置分发决定，T-M36.3）。 */
+    private fun showLambdaDialog(
+        project: Project,
+        result: SqlReverseResult,
+        candidate: EntityCandidate,
+        wrapper: GeneratedWrapper,
+    ) {
         val target = JavaCodeGenerator.EntityTarget(
             className = candidate.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
             columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
         )
-        JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result, target)).show()
+        JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result, target, wrapper)).show()
     }
 
     private fun showNoSelection(project: Project) {

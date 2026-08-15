@@ -82,6 +82,21 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         InferenceOption(PluginSettings.INFERENCE_CAMEL, MpSqlVisualizerBundle.message("settings.tableNameInference.camel")),
     )
 
+    /**
+     * 反向转换 Wrapper 形态选项（T-M36.3）：值 + 当前语言下的显示文案。
+     * 与 [LanguageOption] 同理必须为 data class（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
+     */
+    private data class ReverseFormatOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun reverseFormatOptions(): Array<ReverseFormatOption> = arrayOf(
+        ReverseFormatOption(PluginSettings.REVERSE_AUTO, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.auto")),
+        ReverseFormatOption(PluginSettings.REVERSE_QUERY, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.query")),
+        ReverseFormatOption(PluginSettings.REVERSE_LAMBDA, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.lambda")),
+        ReverseFormatOption(PluginSettings.REVERSE_MPJ_LAMBDA, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.mpjLambda")),
+    )
+
     // ------------------------------------------------------------------
     // 表单控件
     // ------------------------------------------------------------------
@@ -121,6 +136,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
 
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
+
+    /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
+    private val reverseFormatCombo = JComboBox<ReverseFormatOption>()
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -231,6 +249,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             // 选中当前配置值（按 value 匹配，zh 兜底）
             selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
                 ?: languageOptions().first()
+        })
+        // T-M36.3：SQL 反向转换默认 Wrapper 形态（AUTO 自动/字符串列名/Lambda/MPJ Lambda）
+        addRow(MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
+            model = DefaultComboBoxModel(reverseFormatOptions())
+            toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
+            selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
+                ?: reverseFormatOptions().first()
         })
         addRow(MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
 
@@ -506,6 +531,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.removeTablePrefix = removeTablePrefixField.text.trim()
         s.removeTableSuffix = removeTableSuffixField.text.trim()
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
+        s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
         s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
         languagePending = false
@@ -530,6 +556,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         removeTablePrefixField.text = s.removeTablePrefix
         removeTableSuffixField.text = s.removeTableSuffix
         languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
+        reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
+            ?: reverseFormatOptions().first()
         updateSection.resetState()
         shortcutEditor.shortcut = currentShortcut()
     }
