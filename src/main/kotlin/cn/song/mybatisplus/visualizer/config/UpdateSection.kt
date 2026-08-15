@@ -182,7 +182,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         }
     }
 
-    /** 当前 IDE 构建主号（如 `253`）；读取失败返回 null。 */
+    /** 当前 IDE 构建主号（如 `243`）；读取失败返回 null。 */
     private fun currentBuildMajor(): Int? =
         Regex("^\\d+").find(ApplicationInfo.getInstance().build.asStringWithoutProductCode())
             ?.value?.toIntOrNull()

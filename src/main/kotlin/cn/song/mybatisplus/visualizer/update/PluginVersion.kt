@@ -7,7 +7,7 @@ package cn.song.mybatisplus.visualizer.update
  * `patchPluginXml` 在构建期注入（打包 jar 与开发态 classes 资源均存在），无需平台 API。
  *
  * 背景（不依赖 `PluginManagerCore`/`PluginId` 的原因）：该组 API 在 2025.3~2026.2 间有
- * 包迁移（ExecuteSqlSupport 注释实证），本项目编译基线 2025.3.5 / 运行 IDE 2026.2.1，
+ * 包迁移（ExecuteSqlSupport 注释实证），本项目编译基线 2024.3.7.1 / 运行 IDE 2026.2.1，
  * 双端直接引用有 NoClassDefFoundError 风险；读取自身 plugin.xml 零平台依赖（同
  * PluginBuildInfo 的 codeSource/classloader 手法）。
  */

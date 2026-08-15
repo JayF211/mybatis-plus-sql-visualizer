@@ -3,10 +3,10 @@
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
-    <!-- 插件兼容 IDE 版本（M17：强制要求兼容 IDEA 2025.3+）——
-         since-build=253（2025.3 构建号前缀）；不设 until-build（兼容至最新）。
-         构建平台为最低支持版本 Ultimate 2025.3.5，公共 API 向后兼容保证 2026.x 可运行 -->
-    <idea-version since-build="253"/>
+    <!-- 插件兼容 IDE 版本（T-M30：最低兼容降至 IDEA 2024.3，原 M17 强制要求 2025.3+）——
+         since-build=243（2024.3 构建号前缀）；不设 until-build（兼容至最新）。
+         构建平台为最低支持版本 Ultimate 2024.3.7.1，公共 API 向后兼容保证 2025.x/2026.x 可运行 -->
+    <idea-version since-build="243"/>
 
     <!-- 消息 bundle 声明（M16 i18n）：plugin.xml 中 action text/description 按 action.<id>.<prop> 约定、
          configurable displayName 按 bundle+key 属性，从 messages.MpSqlVisualizerBundle（含 _zh）解析本地化 -->

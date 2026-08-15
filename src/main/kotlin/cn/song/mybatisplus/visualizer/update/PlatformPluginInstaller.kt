@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.update
 
+import com.intellij.ide.plugins.IdeaPluginDescriptorImpl
 import com.intellij.ide.plugins.PluginInstaller
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.ide.startup.StartupActionScriptManager
@@ -48,7 +49,10 @@ object PlatformPluginInstaller {
         }
         val persistent = persistZip(zip)
         if (old != null) {
-            PluginInstaller.uninstallAfterRestart(old)
+            // T-M30：跨版本签名差异——2024.3 的 uninstallAfterRestart 参数为具体实现类
+            // IdeaPluginDescriptorImpl（2025.3+ 放宽为接口 IdeaPluginDescriptor）；
+            // getPlugin 返回接口，运行时对象恒为实现类，显式 cast 两端编译均通过。
+            PluginInstaller.uninstallAfterRestart(old as IdeaPluginDescriptorImpl)
         }
         // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
         // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand

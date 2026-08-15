@@ -49,7 +49,7 @@ class PluginSettingsConfigurable : Configurable {
                 .filter { it.project === project }
                 .mapNotNull { PsiDocumentManager.getInstance(project).getPsiFile(it.document) }
                 .distinct()
-                .forEach { DaemonCodeAnalyzer.getInstance(project).restart(it as Any) }
+                .forEach { DaemonCodeAnalyzer.getInstance(project).restart(it) }
         }
     }
 

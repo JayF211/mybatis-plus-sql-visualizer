@@ -9,7 +9,7 @@ import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
-import com.intellij.openapi.ui.DoNotAskOption
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
@@ -337,9 +337,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict.force"),
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict.cancel"),
                                 )
-                                // 2025.3 弃用 Messages.showDialog → showIdeaMessageDialog（首参 project 可空，
-                                // 与原无 project 行为一致；第 7 参须显式绑定顶层 DoNotAskOption 重载，
-                                // 嵌套 DialogWrapper.DoNotAskOption 重载同批弃用；返回选项索引 Int）
+                                // 与原无 project 行为一致；返回选项索引 Int。
+                                // T-M30：跨版本签名差异——2024.3 的 showIdeaMessageDialog 第 7 参为嵌套
+                                // DialogWrapper.DoNotAskOption（顶层 com.intellij.openapi.ui.DoNotAskOption
+                                // 虽已存在但该重载未启用）；2025.3+ 顶层重载为正式、嵌套重载同批弃用（仍存在，
+                                // 运行时两端均可用）。统一传嵌套类型：243 编译无弃用警告，253+ 运行时兼容。
                                 val choice = Messages.showIdeaMessageDialog(
                                     null,
                                     MpSqlVisualizerBundle.message("settings.shortcut.conflict", conflict),
@@ -347,7 +349,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                                     options,
                                     0,
                                     Messages.getWarningIcon(),
-                                    null as DoNotAskOption?,
+                                    null as DialogWrapper.DoNotAskOption?,
                                 )
                                 when (choice) {
                                     0 -> { // 使用（普通）：不抢占

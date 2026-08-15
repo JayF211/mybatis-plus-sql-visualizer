@@ -18,7 +18,7 @@ class UpdateManifestTest {
               "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/v2026.8.15/mybatis-plus-sql-visualizer-2026.8.15.zip",
               "changeNotes": "line1\nline2",
               "publishDate": "2026-08-15",
-              "sinceBuild": "253"
+              "sinceBuild": "243"
             }
             """.trimIndent()
         )
@@ -29,7 +29,7 @@ class UpdateManifestTest {
         )
         assertEquals("line1\nline2", m?.changeNotes)
         assertEquals("2026-08-15", m?.publishDate)
-        assertEquals("253", m?.sinceBuild)
+        assertEquals("243", m?.sinceBuild)
     }
 
     @Test
@@ -68,10 +68,10 @@ class UpdateManifestTest {
 
     @Test
     fun sinceBuildWarn() {
-        val m = parseManifest("""{"version":"2026.8.14","downloadUrl":"https://x/y.zip","sinceBuild":"253"}""")!!
-        assertEquals(false, m.warnsIncompatible(253))
-        assertEquals(false, m.warnsIncompatible(254))
-        assertEquals(true, m.warnsIncompatible(252))
+        val m = parseManifest("""{"version":"2026.8.14","downloadUrl":"https://x/y.zip","sinceBuild":"243"}""")!!
+        assertEquals(false, m.warnsIncompatible(243))
+        assertEquals(false, m.warnsIncompatible(244))
+        assertEquals(true, m.warnsIncompatible(242))
         assertEquals(false, m.warnsIncompatible(null))
         assertEquals(false, parseManifest("""{"version":"1","downloadUrl":"u"}""")!!.warnsIncompatible(100))
     }

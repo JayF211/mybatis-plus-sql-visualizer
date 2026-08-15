@@ -87,8 +87,8 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 ## 🔧 开发环境
 
 - JDK 17（`jvmToolchain(17)`）
-- **构建平台：IntelliJ IDEA Ultimate 2025.3.5**（`intellijIdeaUltimate("2025.3.5")`——最低支持版本编译；数据源 API 在 `com.intellij.database` 仅 Ultimate 捆绑）
-- **兼容性：强制支持 IDEA 2025.3+**（`<idea-version since-build="253"/>`；公共 API 向后兼容保证 2026.x 可运行；Plugin Verifier 已验证 2025.3.1 / 2025.3.5 / 2026.2.1 三版本 0 问题）
+- **构建平台：IntelliJ IDEA Ultimate 2024.3.7.1**（`intellijIdeaUltimate("2024.3.7.1")`——最低支持版本编译（T-M30：兼容下限由 2025.3 降至 2024.3）；数据源 API 在 `com.intellij.database` 仅 Ultimate 捆绑）
+- **兼容性：支持 IDEA 2024.3+**（`<idea-version since-build="243"/>`；公共 API 向后兼容保证 2025.x/2026.x 可运行；Plugin Verifier 按目标 IDE 集合校验）
 - Gradle 9.x（Wrapper 内置）
 
 ## 🛠 常用命令

@@ -3,5 +3,5 @@
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.15/mybatis-plus-sql-visualizer-2026.8.15.zip",
   "changeNotes": "XML 动态 SQL 预览（M24）\n注解 SQL 预览（M25）\nMP 占位展开与多候选（M26）\n面板与预览体验（T-M26.x）\nXML/注解 SQL 代码补全（M27）\n设置页检查更新与自动安装（M28）\n预览 SQL 修复（M29 系列，用户实测驱动）",
   "publishDate": "2026-08-15",
-  "sinceBuild": "253"
+  "sinceBuild": "243"
 }

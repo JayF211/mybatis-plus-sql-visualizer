@@ -46,6 +46,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 里程碑/内容 | 当前状态 |
 |------|-------------|----------|
+| [20260815-1734-兼容IDEA243-T-M30-开发计划.md](./开发计划/20260815-1734-兼容IDEA243-T-M30-开发计划.md) | **T-M30 任务源**：最低兼容从 2025.3 降至 2024.3——构建基准 2024.3.7.1 + since-build=243 + update 清单；API 适配 4 处（XML 模块名、PluginInstaller.uninstallAfterRestart 签名、Messages 嵌套 DoNotAskOption、DaemonCodeAnalyzer.restart）；Kotlin 方案 A（编译目标 stdlib 2.0.21） | 实施中 |
 | [20260815-1555-更新安装失败与通知修复-T-M28.3-开发计划.md](./开发计划/20260815-1555-更新安装失败与通知修复-T-M28.3-开发计划.md) | **T-M28.3 任务源**：更新安装失败（2026.2 descriptorPath URL 风格致守卫误拒，路径归一化）+ 通知修复（插件名/内容只留标题/失败标题）+ 下载包权限加固（POSIX 644） | 已交付（2026-08-15，812 测试全绿） |
 | [20260815-1416-检查更新无反应与构建号不显示修复-T-M28.1-开发计划.md](./开发计划/20260815-1416-检查更新无反应与构建号不显示修复-T-M28.1-开发计划.md) | **T-M28.1 任务源**：检查更新按钮无反应（UpdateSection 按钮缺 ActionListener + 测试盲区）+ 内部构建号不显示（codeSource 在 2026.2.1 不可靠，改 classloader 类文件定位）+ 跨平台加固（目录守卫 Path 组件级比较） | 已交付（2026-08-15，792 测试全绿） |
 | [20260815-1700-预览SQL与预期SQL不一致修复-M29-开发计划.md](./开发计划/20260815-1700-预览SQL与预期SQL不一致修复-M29-开发计划.md) | **M29 任务源**（T-M29-xx）：预览与预期 SQL 不一致修复——and/or/nested/not/func 布尔条件组静默丢弃（parseGroup 首参布尔被当 NestedArg）+ page/selectPage 分页 LIMIT 缺失（消费识别 + Page 实参解析 + LimitClause SqlValue 化） | 已交付（2026-08-15，782 测试全绿） |

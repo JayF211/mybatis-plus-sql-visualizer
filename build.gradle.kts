@@ -16,18 +16,23 @@ dependencies {
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
-        // M17：构建平台 = **最低支持版本 Ultimate 2025.3.5**（用户强制要求兼容 IDEA 2025.3+）。
-        // 官方兼容策略：以最低版本为编译基准，公共 API 向后兼容保证 2026.x 可运行；
+        // M17：构建平台 = **最低支持版本 Ultimate 2024.3.7.1**（T-M30：最低兼容降至 IDEA 243/2024.3）。
+        // 官方兼容策略：以最低版本为编译基准，公共 API 向后兼容保证 2025.x/2026.x 可运行；
         // Plugin Verifier 按目标 IDE 集合校验。database API 在 com.intellij.database（仅 Ultimate）。
-        // 注：本机安装为 Ultimate 2026.2.1，2025.3 平台需下载（gradle.properties 已配代理）。
-        intellijIdeaUltimate("2025.3.5")
+        // Kotlin 规则（T-M30）：多版本支持须以最低捆绑 stdlib 为编译目标——2024.3 捆绑 stdlib 2.0.21，
+        // 平台 distro 进编译 classpath 后自动满足（kotlin.stdlib.default.dependency=false 不打包 stdlib）。
+        // 注：本机日常 IDE 为 Ultimate 2026.2.1，243 平台需下载（gradle.properties 已配代理）。
+        intellijIdeaUltimate("2024.3.7.1")
         testFramework(TestFrameworkType.Platform)
 
         // Add plugin dependencies for compilation here:
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
-        // T-M24-04：XML 平台模块（XML PSI 定位语句 + XML gutter；平台 bundled，IDE 恒启用）
-        bundledModule("intellij.xml.psi")
+        // T-M24-04：XML 平台模块（XML PSI 定位语句 + XML gutter；平台 bundled，IDE 恒启用）。
+        // T-M30：构建基准降至 2024.3 后 XML PSI 类在平台核心（app.jar，lib/modules 无独立模块），
+        // bundledModule("intellij.xml.psi") 在 2024.3 distro 中不存在（253+ 才拆分为该模块）——移除声明，
+        // 编译期类来自平台核心，运行期 253+ 由平台 XML 模块提供（com.intellij.modules.xml 依赖已声明）。
+        // bundledModule("intellij.xml.psi")
         // M17：Database 插件（数据源/控制台 API，仅 Ultimate 捆绑）。
         // 注：2026.2 中 SQL 语言支持（com.intellij.sql）已并入平台核心，无需/无法单独声明
         bundledPlugin("com.intellij.database")
@@ -135,7 +140,7 @@ tasks {
                 appendLine("  \"downloadUrl\": \"https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/$version/mybatis-plus-sql-visualizer-$version.zip\",")
                 appendLine("  \"changeNotes\": \"（手动补充本次发布变更说明，纯文本，\\\\n 换行）\",")
                 appendLine("  \"publishDate\": \"${LocalDate.now()}\",")
-                appendLine("  \"sinceBuild\": \"253\"")
+                appendLine("  \"sinceBuild\": \"243\"")
                 appendLine("}")
             }
             outputFile.parentFile.mkdirs()
