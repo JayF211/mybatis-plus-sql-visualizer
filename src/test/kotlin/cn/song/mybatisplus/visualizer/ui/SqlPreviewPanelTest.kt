@@ -52,13 +52,14 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         compact: String = "SELECT id FROM tbl",
         params: List<String> = emptyList(),
         columns: List<String> = listOf("id", "name"),
+        tableName: String? = "tbl",
     ) = PreviewResult(
         sql = sql,
         compactSql = compact,
         unresolvedParams = params,
         paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
         wrapperType = WrapperType.LAMBDA_QUERY,
-        tableName = "tbl",
+        tableName = tableName,
         columns = columns,
     )
 
@@ -883,6 +884,66 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNotNull("输入字符后应自动弹出补全（实际为 null——自建 autopopup 失效）", lookup)
         val items = lookup!!.items.map { it.lookupString }
         assertTrue("补全应含关键字 SELECT：$items", items.contains("SELECT"))
+        LookupManager.getInstance(project).hideActiveLookup()
+        panel.clear()
+    }
+
+    fun testTypingTriggersAutoPopupXmlScene() {
+        // XML 预览场景：tableName/columns 为空（XmlPreviewService 不关联实体）——
+        // 关键字补全应仍弹出（预览补全不依赖实体上下文）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl", tableName = null, columns = emptyList()))
+        val editor = panel.editorForTest()!!
+        val insertOffset = editor.document.textLength
+        editor.caretModel.moveToOffset(insertOffset)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            editor.document.insertString(insertOffset, "S")
+        }
+        editor.caretModel.moveToOffset(insertOffset + 1)
+        var lookup = LookupManager.getInstance(project).getActiveLookup()
+        var round = 0
+        while (lookup == null && round < 30) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(50)
+            lookup = LookupManager.getInstance(project).getActiveLookup()
+            round++
+        }
+        assertNotNull("XML 场景（无实体上下文）输入字符后也应自动弹出补全", lookup)
+        val items = lookup!!.items.map { it.lookupString }
+        assertTrue("XML 场景应含关键字 SELECT：$items", items.contains("SELECT"))
+        LookupManager.getInstance(project).hideActiveLookup()
+        panel.clear()
+    }
+
+    fun testTypingTriggersAutoPopupXmlSceneWithEntity() {
+        // T-M27.3：XML 预览注入实体上下文后——输入应弹**列名**（不止关键字）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(
+                sql = "SELECT i FROM ",
+                compact = "SELECT i FROM tbl",
+                tableName = "tbl",
+                columns = listOf("id", "name"),
+            ),
+        )
+        val editor = panel.editorForTest()!!
+        val insertOffset = editor.document.textLength
+        editor.caretModel.moveToOffset(insertOffset)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            editor.document.insertString(insertOffset, "S")
+        }
+        editor.caretModel.moveToOffset(insertOffset + 1)
+        var lookup = LookupManager.getInstance(project).getActiveLookup()
+        var round = 0
+        while (lookup == null && round < 30) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(50)
+            lookup = LookupManager.getInstance(project).getActiveLookup()
+            round++
+        }
+        assertNotNull("XML 预览（注入实体）输入字符后应弹出补全", lookup)
+        val items = lookup!!.items.map { it.lookupString }
+        assertTrue("应含关键字 SELECT：$items", items.contains("SELECT"))
         LookupManager.getInstance(project).hideActiveLookup()
         panel.clear()
     }

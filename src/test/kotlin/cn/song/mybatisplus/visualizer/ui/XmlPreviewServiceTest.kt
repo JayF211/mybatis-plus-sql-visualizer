@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -83,5 +85,28 @@ class XmlPreviewServiceTest {
             </mapper>
         """.trimIndent(), null)
         assertTrue(result.warning?.contains("未找到") == true)
+    }
+
+    // T-M27.3：XML 预览注入实体上下文（namespace → Mapper 接口 → 主实体）——
+    // 预览弹窗 SQL 编辑器补全的表名/列名/注释来源
+    fun testEntityContextInjectedIntoResult() {
+        val ctx = SqlCompletionContext(
+            "t_biz",
+            listOf("id", "name"),
+            null,
+            columnComments = mapOf("name" to "业务名"),
+            tableComment = "业务表",
+        )
+        val result = XmlPreviewService.preview(mapper, "selectById", null, ctx)
+        assertEquals("t_biz", result.tableName)
+        assertEquals(listOf("id", "name"), result.columns)
+        assertEquals(mapOf("name" to "业务名"), result.columnComments)
+        assertEquals("业务表", result.tableComment)
+    }
+
+    // T-M27.3：无实体上下文（解析失败/未关联）→ 保持 null 行为（兼容既有路径）
+    fun testEntityContextNullKeepsNullTable() {
+        val result = XmlPreviewService.preview(mapper, "selectById")
+        assertNull(result.tableName)
     }
 }

@@ -1,4 +1,5 @@
 package cn.song.mybatisplus.visualizer.ui
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
@@ -27,7 +28,12 @@ import com.intellij.psi.search.GlobalSearchScope
  */
 object XmlPreviewService {
 
-    fun preview(fileText: String, statementId: String?, project: Project? = null): PreviewResult {
+    fun preview(
+        fileText: String,
+        statementId: String?,
+        project: Project? = null,
+        entityContext: SqlCompletionContext? = null,
+    ): PreviewResult {
         val (model, staticWarnings) = try {
             val parsed = XmlMapperParser().parse(fileText)
             val statement = parsed.statements.firstOrNull { it.id == statementId } ?: parsed.statements.firstOrNull()
@@ -43,7 +49,7 @@ object XmlPreviewService {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
 
-        return toResult(model, staticWarnings)
+        return toResult(model, staticWarnings, entityContext)
     }
 
     /**
@@ -98,7 +104,11 @@ object XmlPreviewService {
     }
 
     /** 预览模型 → [PreviewResult]（T-M25-02 注解预览共用）：初始渲染 + 参数对照 + 错误合并。 */
-    internal fun toResult(model: XmlPreviewModel, extraWarnings: List<String> = emptyList()): PreviewResult {
+    internal fun toResult(
+        model: XmlPreviewModel,
+        extraWarnings: List<String> = emptyList(),
+        entityContext: SqlCompletionContext? = null,
+    ): PreviewResult {
         val rendered = model.renderSql()
         val errors = model.errors + extraWarnings + rendered.errors
         val sql = rendered.sql
@@ -108,7 +118,12 @@ object XmlPreviewService {
             unresolvedParams = rendered.mappings.map { it.property },
             paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
             wrapperType = null,
-            tableName = null,
+            // T-M27.3：XML 预览注入实体上下文（namespace → Mapper 接口 → 主实体）——
+            // 预览弹窗 SQL 编辑器补全的表名/列名/注释来源（此前恒 null，仅关键字可补）
+            tableName = entityContext?.tableName,
+            columns = entityContext?.columns.orEmpty(),
+            columnComments = entityContext?.columnComments.orEmpty(),
+            tableComment = entityContext?.tableComment,
             warning = errors.joinToString("；").ifEmpty { null },
             xmlModel = model,
         )

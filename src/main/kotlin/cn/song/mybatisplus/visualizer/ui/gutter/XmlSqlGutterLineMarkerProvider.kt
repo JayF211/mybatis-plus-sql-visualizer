@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
 import com.intellij.codeInsight.daemon.LineMarkerInfo
@@ -62,7 +63,9 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             val file = tag.containingFile as? XmlFile ?: return
             SqlPreviewService.previewAsync(project, {
                 // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
-                XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
+                // T-M27.3：注入实体上下文（namespace → Mapper 接口 → 主实体）——预览弹窗补全表/列来源
+                val entity = XmlSqlCompletionContextResolver.resolveXml(project, tag).main
+                XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
             }) { result ->
                 SqlPreviewService.showResult(project, result)
             }

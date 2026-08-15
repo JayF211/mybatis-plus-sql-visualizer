@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -217,7 +218,9 @@ class ConvertToSqlAction : AnAction() {
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     private fun previewXml(project: Project, file: XmlFile, tag: XmlTag) {
         SqlPreviewService.previewAsync(project, {
-            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
+            // T-M27.3：注入实体上下文（namespace → Mapper 接口 → 主实体）——预览弹窗补全表/列来源
+            val entity = XmlSqlCompletionContextResolver.resolveXml(project, tag).main
+            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
         }) { result ->
             SqlPreviewService.showResult(project, result)
         }
