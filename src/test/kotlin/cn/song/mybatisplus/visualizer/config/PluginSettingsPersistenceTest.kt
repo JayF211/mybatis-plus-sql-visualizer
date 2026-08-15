@@ -145,6 +145,16 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
     }
 
     /** 收集组件树中全部 JCheckBox 文本（M19.2 复选框文案刷新断言辅助）。 */
+    /** 递归收集全部 JBLabel 文本（按组件树布局顺序；T-M31.8 分组重构后行标签在组面板第二层）。 */
+    private fun collectLabelTexts(component: java.awt.Component): List<String> {
+        val texts = mutableListOf<String>()
+        if (component is com.intellij.ui.components.JBLabel) texts += component.text ?: ""
+        if (component is java.awt.Container) {
+            component.components.forEach { texts += collectLabelTexts(it) }
+        }
+        return texts.filter { it.isNotBlank() }
+    }
+
     private fun collectCheckBoxTexts(component: java.awt.Component, out: MutableList<String>) {
         if (component is javax.swing.JCheckBox) out += component.text
         if (component is java.awt.Container) {
@@ -249,10 +259,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         try {
             settings.state.language = "zh"
             val panel = PluginSettingsPanel(settings)
-            // 行顺序：根面板直接子组件（GridBagLayout 按 add 顺序）中收集非空行标签文本
-            val labels = panel.getRoot().components
-                .filterIsInstance<com.intellij.ui.components.JBLabel>()
-                .map { it.text }.filter { it.isNotBlank() }
+            // 行顺序：递归收集全部行标签文本（T-M31.8 分组重构后行标签在组面板第二层，
+            // 直接子组件只含 TitledSeparator + 组面板——须递归；相对顺序断言不受组标题干扰）
+            val labels = collectLabelTexts(panel.getRoot())
             val expected = listOf("添加表前缀", "添加表后缀", "移除表名前缀", "移除表名后缀", "忽略字段名", "表名推断策略")
             val indices = expected.map { labels.indexOf(it) }
             assertTrue(

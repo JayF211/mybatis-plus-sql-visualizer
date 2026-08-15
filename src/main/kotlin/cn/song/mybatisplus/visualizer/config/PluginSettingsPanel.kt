@@ -13,6 +13,7 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
@@ -162,7 +163,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     // ------------------------------------------------------------------
 
     init {
-        buildRows(rootPanel)
+        buildSections(rootPanel)
         reset()
         // M19（用户实测：设置切语言确定后重开仍原样——平台 Settings 框架 OK 仅对「当前选中页」且
         // isModified()==true 的 configurable 调用 apply()，改完语言切到其他页再确定即被静默跳过；
@@ -183,10 +184,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     }
 
     /**
-     * 构建表单布局（GridBag 两列表格：标签 + 控件）。
-     * rebuild 时重新调用（语言切换后文案刷新）。
+     * 构建表单布局（T-M31.8：分组 + TitledSeparator 分隔线，对齐 SQL 预览面板左侧分区样式）。
+     * 高频组在上、低频组在下、同类相聚；rebuild 时重新调用（语言切换后组标题与文案刷新）。
      */
-    private fun buildRows(panel: JPanel) {
+    private fun buildSections(panel: JPanel) {
         val gbc = GridBagConstraints().apply {
             gridx = 0
             gridy = 0
@@ -194,7 +195,39 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             insets = Insets(4, 6, 4, 6)   // M14.1 紧凑行距
         }
 
-        fun addRow(label: String, component: JComponent) {
+        fun titleRow(titleKey: String) {
+            gbc.gridx = 0
+            gbc.gridwidth = 2
+            gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            panel.add(TitledSeparator(MpSqlVisualizerBundle.message(titleKey)), gbc)
+            gbc.gridwidth = 1
+            gbc.weightx = 0.0
+            gbc.fill = GridBagConstraints.NONE
+            gbc.gridy++
+        }
+
+        fun section(rows: (JPanel, GridBagConstraints) -> Unit) {
+            val sectionPanel = JPanel(GridBagLayout())
+            val inner = GridBagConstraints().apply {
+                gridx = 0
+                gridy = 0
+                anchor = GridBagConstraints.WEST
+                insets = Insets(4, 6, 4, 6)
+            }
+            rows(sectionPanel, inner)
+            gbc.gridx = 0
+            gbc.gridwidth = 2
+            gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            panel.add(sectionPanel, gbc)
+            gbc.gridwidth = 1
+            gbc.weightx = 0.0
+            gbc.fill = GridBagConstraints.NONE
+            gbc.gridy++
+        }
+
+        fun addRow(panel: JPanel, gbc: GridBagConstraints, label: String, component: JComponent) {
             gbc.gridx = 0
             gbc.weightx = 0.0
             panel.add(JBLabel(label), gbc)
@@ -208,79 +241,103 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
 
         // M19.2：复选框/按钮为**字段实例**（构造时按当时语言固化文本）——rebuild 重建布局只重新
         // add 同一实例，文本不随语言变（用户实测：切换语言后右侧复选框仍中文、确定重开才变）。
-        // 修复：文本在 buildRows 内每轮（重）设置，rebuild 时随语言即时刷新。
-        addRow(MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
-        addRow("", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
-        addRow("", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
-        addRow("", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
-        addRow("", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
-        // 添加表前缀/表后缀：**单值**（用户反馈定稿，不存在多个——无 placeholder 提示；tooltip 保留）
-        addRow(MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
-            toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
-        })
-        addRow(MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField.apply {
-            toolTipText = MpSqlVisualizerBundle.message("settings.tableSuffix.tip")
-        })
-        // T-M19.4（用户要求）：行顺序 = 添加表前缀 → 添加表后缀 → 移除表名前缀 → 移除表名后缀 →
-        // 忽略字段名 → 表名推断策略；移除类 2 栏 + 忽略字段名共 3 个输入栏支持多值（`;` 分隔），
-        // 空时显示灰色提示「多个时使用;来分隔」（JBTextField.emptyText 原生 placeholder；
-        // tooltip/emptyText 均在 buildRows 内每轮重设——rebuild 时随语言即时刷新，同 M19.2 复选框文案修复）
-        addRow(MpSqlVisualizerBundle.message("settings.removeTablePrefix"), removeTablePrefixField.apply {
-            toolTipText = MpSqlVisualizerBundle.message("settings.removeTablePrefix.tip")
-            emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-        })
-        addRow(MpSqlVisualizerBundle.message("settings.removeTableSuffix"), removeTableSuffixField.apply {
-            toolTipText = MpSqlVisualizerBundle.message("settings.removeTableSuffix.tip")
-            emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-        })
-        addRow(MpSqlVisualizerBundle.message("settings.ignoredFields"), ignoredFieldsField.apply {
-            toolTipText = MpSqlVisualizerBundle.message("settings.ignoredFields.tip")
-            emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-        })
-        addRow(MpSqlVisualizerBundle.message("settings.tableNameInference"), inferenceCombo.apply {
-            model = DefaultComboBoxModel(inferenceOptions())
-            toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
-            // 选中当前配置值（按 value 匹配，SNAKE 兜底）
-            selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
-                ?: inferenceOptions().first()
-        })
-        addRow(MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
-            model = DefaultComboBoxModel(languageOptions())
-            // 选中当前配置值（按 value 匹配，zh 兜底）
-            selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
-                ?: languageOptions().first()
-        })
-        // T-M36.3：SQL 反向转换默认 Wrapper 形态（AUTO 自动/字符串列名/Lambda/MPJ Lambda）
-        addRow(MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
-            model = DefaultComboBoxModel(reverseFormatOptions())
-            toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
-            selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
-                ?: reverseFormatOptions().first()
-        })
-        addRow(MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
+        // 修复：文本在 buildSections 内每轮（重）设置，rebuild 时随语言即时刷新（组标题同理）。
 
-        // M28：更新分区（检查更新/下载安装/重启提示/启动自动检查开关）——置于构建号行之前
-        addRow("", updateSection.apply { updateTexts() })
+        // 组 1：SQL 预览（最高频）
+        titleRow("settings.section.preview")
+        section { p, g ->
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
+            addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
+            addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
+            addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
+        }
 
-        // T-M23.14：内部构建号（MPV-Build，jar manifest 注入的构建时刻时间戳）——只读信息行，
-        // 用户反馈问题时可直接报出定位具体产物；非 jar 环境（开发/测试）显示 "—"。
-        // T-M28.2：右侧「复制」按钮一键复制完整构建号文本（反馈问题直接粘贴）；
-        // 无构建号（开发态 "—"）禁用；复制成功按钮文字短暂变「已复制」。
-        addRow(MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
-            add(JBLabel().apply {
-                text = PluginBuildInfo.displayText()
-                toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
-            }, BorderLayout.CENTER)
-            add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
-                isEnabled = PluginBuildInfo.mpvBuild() != null
-                addActionListener {
-                    CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()))
-                    val original = text
-                    text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
-                    javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
-                }
-            }, BorderLayout.EAST)
-        })
+        // 组 2：表名映射（预览相关，低频——配置一次长期不变）
+        titleRow("settings.section.tableMapping")
+        section { p, g ->
+            // 添加表前缀/表后缀：**单值**（用户反馈定稿，不存在多个——无 placeholder 提示；tooltip 保留）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.tableSuffix.tip")
+            })
+            // T-M19.4（用户要求）：行顺序 = 添加表前缀 → 添加表后缀 → 移除表名前缀 → 移除表名后缀 →
+            // 忽略字段名 → 表名推断策略；移除类 2 栏 + 忽略字段名共 3 个输入栏支持多值（`;` 分隔），
+            // 空时显示灰色提示「多个时使用;来分隔」（JBTextField.emptyText 原生 placeholder；
+            // tooltip/emptyText 均在 buildSections 内每轮重设——rebuild 时随语言即时刷新，同 M19.2）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTablePrefix"), removeTablePrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.removeTablePrefix.tip")
+                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTableSuffix"), removeTableSuffixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.removeTableSuffix.tip")
+                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.ignoredFields"), ignoredFieldsField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.ignoredFields.tip")
+                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.tableNameInference"), inferenceCombo.apply {
+                model = DefaultComboBoxModel(inferenceOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
+                // 选中当前配置值（按 value 匹配，SNAKE 兜底）
+                selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
+                    ?: inferenceOptions().first()
+            })
+        }
+
+        // 组 3：代码生成（低频；后续生成类设置并入此组）
+        titleRow("settings.section.codeGen")
+        section { p, g ->
+            // T-M36.3：SQL 反向转换默认 Wrapper 形态（AUTO 自动/字符串列名/Lambda/MPJ Lambda）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
+                model = DefaultComboBoxModel(reverseFormatOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
+                selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
+                    ?: reverseFormatOptions().first()
+            })
+        }
+
+        // 组 4：界面与操作（低频——环境偏好）
+        titleRow("settings.section.ui")
+        section { p, g ->
+            addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
+                model = DefaultComboBoxModel(languageOptions())
+                // 选中当前配置值（按 value 匹配，zh 兜底）
+                selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
+                    ?: languageOptions().first()
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
+        }
+
+        // 组 5：更新与诊断（最低频）
+        titleRow("settings.section.updateDiagnostics")
+        section { p, g ->
+            // M28：更新分区（检查更新/下载安装/重启提示/启动自动检查开关）
+            addRow(p, g, "", updateSection.apply { updateTexts() })
+
+            // T-M23.14：内部构建号（MPV-Build，jar manifest 注入的构建时刻时间戳）——只读信息行，
+            // 用户反馈问题时可直接报出定位具体产物；非 jar 环境（开发/测试）显示 "—"。
+            // T-M28.2：右侧「复制」按钮一键复制完整构建号文本（反馈问题直接粘贴）；
+            // 无构建号（开发态 "—"）禁用；复制成功按钮文字短暂变「已复制」。
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
+                add(JBLabel().apply {
+                    text = PluginBuildInfo.displayText()
+                    toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
+                }, BorderLayout.CENTER)
+                add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
+                    isEnabled = PluginBuildInfo.mpvBuild() != null
+                    addActionListener {
+                        CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()))
+                        val original = text
+                        text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
+                        javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
+                    }
+                }, BorderLayout.EAST)
+            })
+        }
 
         // M14.1 布局优化：底部 weighty 占位，把内容顶到顶部（消除内容区上方空白/居中拉伸）
         gbc.gridx = 0
@@ -460,7 +517,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      */
     fun rebuild() {
         rootPanel.removeAll()
-        buildRows(rootPanel)
+        buildSections(rootPanel)
         reset()
         rootPanel.revalidate()
         rootPanel.repaint()

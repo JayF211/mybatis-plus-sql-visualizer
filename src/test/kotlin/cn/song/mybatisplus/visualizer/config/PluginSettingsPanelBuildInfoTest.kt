@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.config
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBLabel
 import java.awt.Component
 import java.awt.Container
@@ -62,5 +63,29 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
         if (component is JButton) buttons += component
         if (component is Container) component.components.forEach { buttons += collectButtons(it) }
         return buttons
+    }
+
+    /** T-M31.8：设置页 5 个分组标题（TitledSeparator）存在且按高频→低频顺序排列。 */
+    fun testSettingsPanelSectionsTitles() {
+        val configurable = PluginSettingsConfigurable()
+        configurable.createComponent()
+        val separators = collectSeparators(configurable.panelForTest().getRoot())
+
+        val expected = listOf(
+            "settings.section.preview",
+            "settings.section.tableMapping",
+            "settings.section.codeGen",
+            "settings.section.ui",
+            "settings.section.updateDiagnostics",
+        ).map { MpSqlVisualizerBundle.message(it) }
+        assertEquals("5 个分组标题按高频→低频顺序", expected, separators)
+    }
+
+    /** 递归收集组件树中全部 TitledSeparator 标题（按布局顺序）。 */
+    private fun collectSeparators(component: Component): List<String> {
+        val titles = mutableListOf<String>()
+        if (component is TitledSeparator) titles += component.text ?: ""
+        if (component is Container) component.components.forEach { titles += collectSeparators(it) }
+        return titles
     }
 }
