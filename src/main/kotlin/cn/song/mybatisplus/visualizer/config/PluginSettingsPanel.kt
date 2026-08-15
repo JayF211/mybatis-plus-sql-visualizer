@@ -141,6 +141,19 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
     private val reverseFormatCombo = JComboBox<ReverseFormatOption>()
 
+    // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
+    private val logSqlPrefixField = JBTextField(12)
+    private val logParamPrefixField = JBTextField(12)
+    private val logMixedPrefixCheck = JBCheckBox()
+    private val logAutoCaptureCheck = JBCheckBox()
+    private val logAutoOpenCheck = JBCheckBox()
+    private val logTimestampCheck = JBCheckBox()
+    private val logTimestampFormatField = JBTextField(12)
+    private val logFormatSqlCheck = JBCheckBox()
+    private val logFilterKeywordsField = JBTextField(12)
+    private val logDedupeField = JBTextField(12)
+    private val logMaxParseField = JBTextField(12)
+
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
      * 平台 Apply 按钮启用 = `configurable.isModified()`，无此标记则写穿后 Apply 按钮灰掉
@@ -299,7 +312,39 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
         }
 
-        // 组 4：界面与操作（低频——环境偏好）
+        // 组 4：SQL 日志（T-M31.14 日志还原配置，参考 MybatisCodeHelper-Pro Log Setting）
+        titleRow("settings.section.sqlLog")
+        section { p, g ->
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.paramPrefix"), logParamPrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.paramPrefix.tip")
+            })
+            addRow(p, g, "", logMixedPrefixCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.mixedPrefix")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
+            })
+            addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
+            addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
+            addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
+            })
+            addRow(p, g, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
+                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.dedupeWindow"), logDedupeField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.dedupeWindow.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
+            })
+        }
+
+        // 组 5：界面与操作（低频——环境偏好）
         titleRow("settings.section.ui")
         section { p, g ->
             addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
@@ -312,7 +357,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
         }
 
-        // 组 5：更新与诊断（最低频）
+        // 组 6：更新与诊断（最低频）
         titleRow("settings.section.updateDiagnostics")
         section { p, g ->
             // M28：更新分区（检查更新/下载安装/重启提示/启动自动检查开关）
@@ -564,6 +609,17 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
             || updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate
             || shortcutEditor.shortcut != currentShortcut()
+            || logSqlPrefixField.text.trim() != s.logSqlPrefix
+            || logParamPrefixField.text.trim() != s.logParamPrefix
+            || logMixedPrefixCheck.isSelected != s.logMixedPrefix
+            || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
+            || logAutoOpenCheck.isSelected != s.logAutoOpenOnCapture
+            || logTimestampCheck.isSelected != s.logTimestampEnabled
+            || logTimestampFormatField.text.trim() != s.logTimestampFormat
+            || logFormatSqlCheck.isSelected != s.logFormatSql
+            || logFilterKeywordsField.text.trim() != s.logFilterKeywords
+            || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
+            || logMaxParseField.text.trim().toIntOrNull() != s.logMaxParseLength
     }
 
     /**
@@ -590,6 +646,17 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
         s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
+        s.logSqlPrefix = logSqlPrefixField.text.trim()
+        s.logParamPrefix = logParamPrefixField.text.trim()
+        s.logMixedPrefix = logMixedPrefixCheck.isSelected
+        s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
+        s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
+        s.logTimestampEnabled = logTimestampCheck.isSelected
+        s.logTimestampFormat = logTimestampFormatField.text.trim()
+        s.logFormatSql = logFormatSqlCheck.isSelected
+        s.logFilterKeywords = logFilterKeywordsField.text.trim()
+        s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
+        s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
         if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
         languagePending = false
         return languageChanged
@@ -617,5 +684,16 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             ?: reverseFormatOptions().first()
         updateSection.resetState()
         shortcutEditor.shortcut = currentShortcut()
+        logSqlPrefixField.text = s.logSqlPrefix
+        logParamPrefixField.text = s.logParamPrefix
+        logMixedPrefixCheck.isSelected = s.logMixedPrefix
+        logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
+        logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
+        logTimestampCheck.isSelected = s.logTimestampEnabled
+        logTimestampFormatField.text = s.logTimestampFormat
+        logFormatSqlCheck.isSelected = s.logFormatSql
+        logFilterKeywordsField.text = s.logFilterKeywords
+        logDedupeField.text = s.logDedupeWindowMs.toString()
+        logMaxParseField.text = s.logMaxParseLength.toString()
     }
 }

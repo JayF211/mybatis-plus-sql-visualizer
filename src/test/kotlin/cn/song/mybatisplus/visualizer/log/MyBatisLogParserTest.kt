@@ -177,4 +177,47 @@ class MyBatisLogParserTest {
         assertNull(p.closePending()) // 无挂起条目
         assertEquals(0, p.takeEntries().size)
     }
+
+    // ---------- T-M31.14 可配置前缀 / 混合模式 / 最大长度 ----------
+
+    @Test
+    fun `自定义前缀解析`() {
+        val p = MyBatisLogParser(sqlPrefix = "==> SQL:", paramPrefix = "==> ARGS:")
+        p.feed("==> SQL: SELECT * FROM t WHERE id = ?")
+        p.feed("==> ARGS: 5(Long)")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM t WHERE id = 5", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `混合模式关闭时仅行首精确匹配`() {
+        val p = MyBatisLogParser(mixedPrefix = false)
+        p.feed("2026-08-15 INFO ==>  Preparing: SELECT 1") // 带日志前缀 → 不匹配（非行首）
+        p.feed("Preparing: SELECT 2") // 行首匹配
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 2", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `混合模式开启时带日志前缀仍匹配`() {
+        val p = MyBatisLogParser(mixedPrefix = true)
+        p.feed("2026-08-15 INFO ==>  Preparing: SELECT 1")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 1", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `超长 SQL 截断`() {
+        val p = MyBatisLogParser(maxParseLength = 20)
+        p.feed("Preparing: SELECT * FROM very_long_table_name WHERE id = 1")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(20, entries[0].rawSql.length)
+    }
 }

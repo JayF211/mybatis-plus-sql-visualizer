@@ -3,17 +3,23 @@ package cn.song.mybatisplus.visualizer.log
 /**
  * MyBatis 控制台日志解析器（T-M31-01）：逐行喂入控制台输出，配对 `Preparing:` / `Parameters:` 行。
  *
- * 支持的日志形态（自动识别，不做格式配置）：
+ * 支持的日志形态（T-M31.14 起前缀可配置）：
  * - MP 前缀：`==>  Preparing: SELECT ...` / `==> Parameters: 1(Long), abc(String)`
  * - 原生：`Preparing: SELECT ...` / `Parameters: 1, abc(String)`
- * - 带日志框架前缀（时间戳/线程/类名）——按关键字 `Preparing:` / `Parameters:` 定位，不要求行首锚定
+ * - 带日志框架前缀（时间戳/线程/类名）——[mixedPrefix]=true 时按关键字定位（默认，宽容匹配）；
+ *   false 时仅行首精确前缀匹配（用户自定义前缀后开启）
  * - 无参语句：仅 `Preparing:` 行（无 Parameters），还原时不做替换
  *
  * 噪声行（`<== Columns:` / `<== Total:` / 业务日志等）自然忽略；
  * 一条语句可跟多条 Parameters 行（极端形态），参数顺序追加。
+ * [maxParseLength] 超长截断（防控制台大输出卡顿）。
  */
 class MyBatisLogParser(
     private val restorer: LogSqlRestorer = LogSqlRestorer(),
+    private val sqlPrefix: String = DEFAULT_SQL_PREFIX,
+    private val paramPrefix: String = DEFAULT_PARAM_PREFIX,
+    private val mixedPrefix: Boolean = true,
+    private val maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
@@ -22,14 +28,14 @@ class MyBatisLogParser(
 
     /** 喂入一行控制台输出（任意线程，内部无共享可变状态——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
-        val sql = extractAfterKeyword(line, KEY_PREPARING)
+        val sql = extractAfterKeyword(line, sqlPrefix)
         if (sql != null) {
             closePending() // 上一条未闭合（无 Parameters 或异常日志）先闭合
-            pendingSql = sql
+            pendingSql = sql.take(maxParseLength)
             pendingParams.clear()
             return
         }
-        val paramsText = extractAfterKeyword(line, KEY_PARAMETERS)
+        val paramsText = extractAfterKeyword(line, paramPrefix)
         if (paramsText != null) {
             if (pendingSql == null) return // 无上下文（未捕获到 Preparing），忽略
             pendingParams += parseParams(paramsText)
@@ -58,15 +64,21 @@ class MyBatisLogParser(
     }
 
     private fun extractAfterKeyword(line: String, keyword: String): String? {
-        val idx = line.indexOf(keyword)
+        if (keyword.isEmpty()) return null
+        val idx = if (mixedPrefix) line.indexOf(keyword) else {
+            // 严格模式：行首精确前缀（允许日志框架前缀在关键字前？——严格模式按用户定义的前缀整段匹配，
+            // 即行以「前缀 + 空格/冒号」开头；此处实现为行首匹配关键字）
+            if (line.startsWith(keyword)) 0 else -1
+        }
         if (idx < 0) return null
         val text = line.substring(idx + keyword.length).trim()
         return text.ifEmpty { null }
     }
 
     companion object {
-        private const val KEY_PREPARING = "Preparing:"
-        private const val KEY_PARAMETERS = "Parameters:"
+        private const val DEFAULT_SQL_PREFIX = "Preparing:"
+        private const val DEFAULT_PARAM_PREFIX = "Parameters:"
+        private const val DEFAULT_MAX_PARSE_LENGTH = 20000
     }
 }
 

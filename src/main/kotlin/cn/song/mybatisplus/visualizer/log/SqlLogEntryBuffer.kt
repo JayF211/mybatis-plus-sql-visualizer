@@ -29,9 +29,14 @@ class SqlLogEntryBuffer(
     @Volatile
     var dedupeWindowMs: Long = DEFAULT_DEDUPE_WINDOW_MS
 
-    /** 新条目入队（最新在前；暂停态丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
+    /** 过滤关键字（T-M31.14，`;` 分隔后传入）：还原 SQL 包含任一关键字则丢弃。 */
+    @Volatile
+    var filterKeywords: List<String> = emptyList()
+
+    /** 新条目入队（最新在前；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
+        if (isFiltered(entry.restoredSql)) return false
         if (dedupeEnabled && isDuplicate(entry)) return false
         synchronized(entries) {
             entries.addFirst(entry)
@@ -40,6 +45,9 @@ class SqlLogEntryBuffer(
         notifyChanged()
         return true
     }
+
+    private fun isFiltered(sql: String): Boolean =
+        filterKeywords.isNotEmpty() && filterKeywords.any { sql.contains(it, ignoreCase = true) }
 
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
         val now = entry.timestamp

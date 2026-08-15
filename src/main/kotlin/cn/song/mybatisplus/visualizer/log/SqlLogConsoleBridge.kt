@@ -24,6 +24,7 @@ import javax.swing.Timer
  */
 class SqlLogConsoleBridge(
     private val buffer: SqlLogEntryBuffer,
+    private val parserConfig: () -> ParserConfig = { ParserConfig("Preparing:", "Parameters:", true, 20000) },
 ) {
 
     private var runContentManager: Any? = null
@@ -143,7 +144,13 @@ class SqlLogConsoleBridge(
         for (filterIfaceName in FILTER_IFACE_CANDIDATES) {
             try {
                 val filterIface = Class.forName(filterIfaceName)
-                val parser = MyBatisLogParser()
+                val config = parserConfig()
+                val parser = MyBatisLogParser(
+                    sqlPrefix = config.sqlPrefix,
+                    paramPrefix = config.paramPrefix,
+                    mixedPrefix = config.mixedPrefix,
+                    maxParseLength = config.maxParseLength,
+                )
                 val filter = Proxy.newProxyInstance(
                     filterIface.classLoader,
                     arrayOf(filterIface),

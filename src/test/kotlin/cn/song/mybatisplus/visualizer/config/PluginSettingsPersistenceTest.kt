@@ -138,7 +138,7 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5
-            assertEquals("复选框总数应为 5（含 M28 自动检查开关）", 5, texts.size)
+            assertEquals("复选框总数应为 10（T-M31.14 SQL 日志组 +5：混合前缀/自动监听/自动打开/时间戳/格式化日志）", 10, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -271,7 +271,7 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // placeholder：仅 3 个支持多值的输入栏（添加表前缀/后缀单值 + shortcut 只读框均不计入）
             val zhHints = mutableListOf<String>()
             collectTextFieldEmptyTexts(panel.getRoot(), zhHints)
-            assertEquals("placeholder 应仅设置于 3 个多值输入栏", 3, zhHints.size)
+            assertEquals("placeholder 应设置于 4 个多值输入栏（T-M31.14 含日志过滤关键字）", 4, zhHints.size)
             assertTrue("placeholder 应为当前语言提示: $zhHints", zhHints.all { it == "多个时使用;来分隔" })
 
             // 切英文 rebuild 后 placeholder 随语言刷新
@@ -279,7 +279,7 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             panel.rebuild()
             val enHints = mutableListOf<String>()
             collectTextFieldEmptyTexts(panel.getRoot(), enHints)
-            assertEquals("英文 placeholder 数量仍为 3", 3, enHints.size)
+            assertEquals("英文 placeholder 数量为 4（T-M31.14 含日志过滤关键字）", 4, enHints.size)
             assertTrue("英文 placeholder 应刷新: $enHints", enHints.all { it == "Separate multiple values with ;" })
         } finally {
             settings.loadState(snapshot)

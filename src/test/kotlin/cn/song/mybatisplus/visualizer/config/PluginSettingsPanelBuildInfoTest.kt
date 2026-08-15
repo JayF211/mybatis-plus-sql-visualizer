@@ -75,10 +75,11 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.section.preview",
             "settings.section.tableMapping",
             "settings.section.codeGen",
+            "settings.section.sqlLog", // T-M31.14 新增
             "settings.section.ui",
             "settings.section.updateDiagnostics",
         ).map { MpSqlVisualizerBundle.message(it) }
-        assertEquals("5 个分组标题按高频→低频顺序", expected, separators)
+        assertEquals("6 个分组标题按高频→低频顺序", expected, separators)
     }
 
     /** 递归收集组件树中全部 TitledSeparator 标题（按布局顺序）。 */

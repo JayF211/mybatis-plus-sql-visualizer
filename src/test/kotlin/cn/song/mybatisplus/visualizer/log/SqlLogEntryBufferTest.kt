@@ -121,6 +121,22 @@ class SqlLogEntryBufferTest {
     }
 
     @Test
+    fun `过滤关键字命中时丢弃`() {
+        buffer.filterKeywords = listOf("from_dual", "TMP_")
+        assertFalse(buffer.addEntry(entryAt("SELECT * FROM from_dual", 0L)))
+        assertFalse(buffer.addEntry(entryAt("SELECT * FROM TMP_LOG", 100L)))
+        assertTrue(buffer.addEntry(entryAt("SELECT * FROM user", 200L)))
+        assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `过滤关键字为空时全部保留`() {
+        buffer.filterKeywords = emptyList()
+        assertTrue(buffer.addEntry(entryAt("SELECT * FROM user", 0L)))
+        assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
     fun `去重开关显式关闭时全部保留`() {
         buffer.dedupeEnabled = false
         buffer.addEntry(entryAt("SELECT 1", 0L))

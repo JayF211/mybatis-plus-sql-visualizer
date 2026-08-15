@@ -1,8 +1,11 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -14,6 +17,8 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
+import java.text.SimpleDateFormat
+import java.util.Date
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.options.ShowSettingsUtil
@@ -167,10 +172,11 @@ class SqlLogPanel(
             ): java.awt.Component {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
                 val entry = value as? LogSqlEntry
-                // T-M31.13：SQL 词法着色（对齐参考插件高亮观感；JLabel 原生 HTML 渲染）
+                // T-M31.13/14：SQL 词法着色（插件自身 SqlHighlightColors 配色，随 IDE 主题）+ 可选时间戳前缀
                 text = null
                 if (entry != null) {
-                    text = "<html>" + SqlListHtmlRenderer.render(entry.summary) + "</html>"
+                    val timestamp = timestampHtml(entry.timestamp)
+                    text = "<html>" + timestamp + SqlListHtmlRenderer.render(entry.summary) + "</html>"
                     toolTipText = entry.restoredSql
                 }
                 return this
@@ -234,11 +240,34 @@ class SqlLogPanel(
         updatePreview(list.selectedValue)
     }
 
+    /** 时间戳 HTML 前缀（设置开关 + 格式；灰字跟随主题）。 */
+    private fun timestampHtml(timestamp: Long): String {
+        val state = PluginSettings.getInstance().state
+        if (!state.logTimestampEnabled) return ""
+        val formatted = try {
+            SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
+        } catch (_: IllegalArgumentException) {
+            SimpleDateFormat(DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp)) // 非法格式回退
+        }
+        val color = toHex(EditorColorsManager.getInstance().globalScheme.getAttributes(SqlHighlightColors.COMMENT).foregroundColor)
+        return "<span style='color:$color'>[$formatted] </span>"
+    }
+
+    private fun toHex(color: java.awt.Color): String {
+        val r = Integer.toHexString(color.red).padStart(2, '0')
+        val g = Integer.toHexString(color.green).padStart(2, '0')
+        val b = Integer.toHexString(color.blue).padStart(2, '0')
+        return "#$r$g$b"
+    }
+
     private fun openPreview(entry: LogSqlEntry) {
+        // T-M31.14：设置开启时预览展示格式化版（多行缩进），否则原样
+        val state = PluginSettings.getInstance().state
+        val sql = if (state.logFormatSql) SqlFormatter.format(entry.restoredSql) else entry.restoredSql
         SqlPreviewService.showResult(
             project,
             PreviewResult(
-                sql = entry.restoredSql,
+                sql = sql,
                 compactSql = entry.restoredSql,
                 unresolvedParams = emptyList(),
                 paramTable = null,
@@ -281,5 +310,6 @@ class SqlLogPanel(
 
     companion object {
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
+        private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
     }
 }

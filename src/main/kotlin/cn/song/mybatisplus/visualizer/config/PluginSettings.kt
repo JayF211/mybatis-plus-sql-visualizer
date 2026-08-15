@@ -104,6 +104,41 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 分发逻辑见 [cn.song.mybatisplus.visualizer.reverse.resolveWrapperFormat]。
          */
         var reverseWrapperFormat: String = REVERSE_AUTO,
+
+        // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
+
+        /** 日志 SQL 前缀（Preparing 行定位关键字）。 */
+        var logSqlPrefix: String = DEFAULT_LOG_SQL_PREFIX,
+
+        /** 日志参数前缀（Parameters 行定位关键字）。 */
+        var logParamPrefix: String = DEFAULT_LOG_PARAM_PREFIX,
+
+        /** 混合前缀（true=关键字宽容匹配，同时兼容 `==>` 与原生格式；false=行首精确前缀匹配）。 */
+        var logMixedPrefix: Boolean = true,
+
+        /** 项目启动时自动开始监听（默认关——手动点「捕捉」）。 */
+        var logAutoCaptureOnStart: Boolean = false,
+
+        /** 发现 SQL 时自动打开日志工具窗口（默认关）。 */
+        var logAutoOpenOnCapture: Boolean = false,
+
+        /** 列表条目显示捕获时间戳（默认开）。 */
+        var logTimestampEnabled: Boolean = true,
+
+        /** 时间戳格式（对齐参考插件默认）。 */
+        var logTimestampFormat: String = DEFAULT_LOG_TIMESTAMP_FORMAT,
+
+        /** 日志还原 SQL 格式化（多行缩进；预览编辑器展示用）。 */
+        var logFormatSql: Boolean = true,
+
+        /** 过滤：还原 SQL 包含任一关键字（`;` 分隔）则丢弃。 */
+        var logFilterKeywords: String = "",
+
+        /** 去重窗口毫秒（相同 SQL 在该窗口内重复丢弃；默认 1000 对齐参考插件）。 */
+        var logDedupeWindowMs: Long = DEFAULT_LOG_DEDUPE_WINDOW_MS,
+
+        /** 日志行解析最大长度（超长截断，防控制台大输出卡顿；默认 20000 对齐参考插件）。 */
+        var logMaxParseLength: Int = DEFAULT_LOG_MAX_PARSE_LENGTH,
     )
 
     private var state = State()
@@ -137,6 +172,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 反向转换 Wrapper 形态：MPJLambdaWrapper（无实体回落字符串）。 */
         const val REVERSE_MPJ_LAMBDA = "MPJ_LAMBDA"
+
+        // ---------- SQL 日志默认值（T-M31.14） ----------
+        const val DEFAULT_LOG_SQL_PREFIX = "Preparing:"
+        const val DEFAULT_LOG_PARAM_PREFIX = "Parameters:"
+        const val DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
+        const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 1000L
+        const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
 
         /**
          * 获取全局配置实例。

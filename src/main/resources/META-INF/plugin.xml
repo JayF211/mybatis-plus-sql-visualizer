@@ -131,6 +131,9 @@
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
+        <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.log.LogStartupCapture"/>
+
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标） -->
