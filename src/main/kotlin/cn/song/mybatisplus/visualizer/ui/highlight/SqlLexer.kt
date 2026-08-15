@@ -62,6 +62,9 @@ class SqlLexer : LexerBase() {
             isLineCommentStart() -> scanLineComment()
             isBlockCommentStart() -> scanBlockComment()
             c == '\'' -> scanString()
+            // T-M29.3：双引号字符串（MySQL 字符串字面量 / PG 标识符）——整段单 token，
+            // 否则 `"1"` 被拆成 `"`+`1`+`"` 三个 token（格式化拼出 `" 1 "`）
+            c == '"' -> scanDoubleQuoted()
             c.isDigit() -> scanNumber()
             isIdentifierStart(c) -> scanWord()
             c == '`' || c == '[' -> scanQuotedIdentifier()
@@ -104,6 +107,25 @@ class SqlLexer : LexerBase() {
         while (myTokenEnd < myEnd) {
             if (myBuffer[myTokenEnd] == '\'') {
                 if (myTokenEnd + 1 < myEnd && myBuffer[myTokenEnd + 1] == '\'') {
+                    myTokenEnd += 2
+                } else {
+                    myTokenEnd++
+                    break
+                }
+            } else {
+                myTokenEnd++
+            }
+        }
+        myTokenType = SqlTokenTypes.STRING
+        myTableState = 0
+    }
+
+    /** `"..."` 双引号字符串（`""` 转义；T-M29.3）。 */
+    private fun scanDoubleQuoted() {
+        myTokenEnd++
+        while (myTokenEnd < myEnd) {
+            if (myBuffer[myTokenEnd] == '"') {
+                if (myTokenEnd + 1 < myEnd && myBuffer[myTokenEnd + 1] == '"') {
                     myTokenEnd += 2
                 } else {
                     myTokenEnd++

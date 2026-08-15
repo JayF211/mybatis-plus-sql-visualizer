@@ -28,8 +28,14 @@ object SqlFormatter {
     /** 紧跟 JOIN 的修饰关键字（`LEFT JOIN` 保持同行）。 */
     private val JOIN_QUALIFIERS = setOf("LEFT", "RIGHT", "INNER", "FULL", "CROSS")
 
-    /** 函数名（括号前不空格：`COUNT(`）。 */
-    private val FUNCTION_NAMES = setOf("COUNT", "SUM", "MAX", "MIN", "AVG", "COALESCE", "CAST", "CONVERT")
+    /** 函数名（括号前不空格：`COUNT(`）。T-M29.3：补 CONCAT（MP LIKE 常用）/TRIM_SCALE（项目自定义）及常见函数。 */
+    private val FUNCTION_NAMES = setOf(
+        "COUNT", "SUM", "MAX", "MIN", "AVG", "COALESCE", "CAST", "CONVERT",
+        "CONCAT", "TRIM_SCALE", "NULLIF", "IFNULL", "LENGTH", "SUBSTRING", "SUBSTR", "REPLACE",
+        "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM", "ROUND", "ABS", "FLOOR", "CEIL", "CEILING",
+        "NOW", "CURDATE", "DATE_FORMAT", "STR_TO_DATE", "GROUP_CONCAT", "IF", "JSON_EXTRACT",
+        "DATEDIFF", "DATEADD",
+    )
 
     /** 格式化 SQL 文本。 */
     fun format(sql: String): String {

@@ -97,6 +97,18 @@ class SqlLexerTest {
     }
 
     @Test
+    fun testDoubleQuotedStringSingleToken() {
+        // T-M29.3：双引号字符串整段单 token（原实现拆成 `"`+`1`+`"` → 格式化拼出 `" 1 "`）
+        val sql = "SELECT \"1\" FROM t"
+        val t = tokens(sql)
+        assertEquals(SqlTokenTypes.STRING, t[1].first)
+        assertEquals("\"1\"", t[1].second)
+        // `""` 转义不提前结束
+        val escaped = "SELECT \"a\"\"b\""
+        assertEquals("\"a\"\"b\"", tokens(escaped)[1].second)
+    }
+
+    @Test
     fun testNumberDecimal() {
         val sql = "SELECT 1.5, -2, 0.5"
         val t = tokens(sql)

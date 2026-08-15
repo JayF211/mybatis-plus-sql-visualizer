@@ -227,4 +227,64 @@ class SqlFormatterTest {
             formatted,
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-M29.3：函数名括号不空格（CONCAT/TRIM_SCALE）+ 双引号常量不拆 token
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testFunctionNameNoSpaceBeforeParen() {
+        // 用户实测 XML 预览：TRIM_SCALE( / CONCAT( 括号前不得有空格（FUNCTION_NAMES 缺 → `TRIM_SCALE (`）
+        val input = "SELECT TRIM_SCALE(COALESCE(SUM(t.order_fee), 0)), CONCAT(?, '%') FROM t"
+        val formatted = SqlFormatter.format(input)
+        assertEquals(
+            """
+            SELECT
+                TRIM_SCALE(COALESCE(SUM(t.order_fee), 0)),
+                CONCAT(?, '%')
+            FROM t
+            """.trimIndent(),
+            formatted,
+        )
+    }
+
+    @Test
+    fun testDoubleQuotedConstantPreserved() {
+        // 用户实测 XML 预览：bind 常量渲染 `"1"` 不得变成 `" 1 "`（lexer 双引号整段单 token）
+        val input = "SELECT \"1\", \"2\" FROM t WHERE a = ?"
+        val formatted = SqlFormatter.format(input)
+        assertEquals(
+            """
+            SELECT
+                "1",
+                "2"
+            FROM t
+            WHERE a = ?
+            """.trimIndent(),
+            formatted,
+        )
+    }
+
+    @Test
+    fun testUserXmlSceneStatistics() {
+        // 用户实测 XML 预览全场景：bind 常量列 + 子查询 + CONCAT LIKE + 分页——全部合法且无多余空格
+        val input = "SELECT TRIM_SCALE(COALESCE(SUM(t.order_fee), 0)) \"1\", TRIM_SCALE(COALESCE(SUM(t.fee), 0)) \"2\" FROM (SELECT r.dic_biz_type, MAX(r.order_fee) AS order_fee FROM sys_merchant_share_record r WHERE r.deleted = 0 AND m.phone LIKE CONCAT(?, '%') GROUP BY r.dic_biz_type) t"
+        val formatted = SqlFormatter.format(input)
+        assertEquals(
+            """
+            SELECT
+                TRIM_SCALE(COALESCE(SUM(t.order_fee), 0)) "1",
+                TRIM_SCALE(COALESCE(SUM(t.fee), 0)) "2"
+            FROM (
+                SELECT
+                    r.dic_biz_type, MAX(r.order_fee) AS order_fee
+                FROM sys_merchant_share_record r
+                WHERE r.deleted = 0
+                    AND m.phone LIKE CONCAT(?, '%')
+                GROUP BY r.dic_biz_type
+            ) t
+            """.trimIndent(),
+            formatted,
+        )
+    }
 }
