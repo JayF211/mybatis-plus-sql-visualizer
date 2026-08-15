@@ -23,12 +23,12 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Color
 import java.awt.image.BufferedImage
-import javax.swing.JComponent
 import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicSplitPaneUI
 
@@ -147,25 +147,27 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
 
     fun testParamRowLabelWidthAdaptsAndTooltipForLongNames() {
         // T-M19.4-01（用户实测：`#productInfo.getDicProtocolType()` 这类长参数名被固定 140px
-        // 标签截断显示不全）：标签宽度按文本自适应（FontMetrics 计算，夹在 140~300px）；
-        // 文本超过 300px 上限时 tooltip 展示全名
+        // 标签截断显示不全）+ T-M26.3（标签列宽统一：按最长可见标签自适应 140~260，
+        // 超宽中段省略 + tooltip 全名）
         val panel = SqlPreviewPanel(project)
         val short = "id"
-        val medium = "productInfo.getDicProtocolType()"   // 用户实测场景：约 200px，固定 140px 时截断
+        val medium = "productInfo.getDicProtocolType()"   // 用户实测场景：约 200px
         val long = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo()"
         panel.showResult(result(params = listOf(short, medium, long)))
         val shortLabel = panel.paramRowLabelForTest(0)!!
         val mediumLabel = panel.paramRowLabelForTest(1)!!
         val longLabel = panel.paramRowLabelForTest(2)!!
-        // 短名：宽度按下限 140px（不再小于 140）
-        assertEquals("短参数标签宽度下限 140", 140, shortLabel.preferredSize.width)
-        // 用户实测场景：宽度按文本自适应（>140 不再固定 140 截断，且不超 300 上限）
-        assertTrue("中等长度参数标签宽度按文本自适应（>140）", mediumLabel.preferredSize.width > 140)
-        assertTrue("中等长度参数标签宽度不超过 300", mediumLabel.preferredSize.width <= 300)
-        // 超长名：宽度夹在 300 上限 + tooltip 全名；短名不设 tooltip
-        assertEquals("超长参数标签宽度上限 300", 300, longLabel.preferredSize.width)
-        assertEquals("超长参数 tooltip 应为全名", "#$long", longLabel.toolTipText)
+        // T-M26.3：同一场景所有参数行共享标签列宽（最长可见标签夹取 140~260）
+        val columnWidth = shortLabel.preferredSize.width
+        assertTrue("列宽应不小于下限 140", columnWidth >= 140)
+        assertTrue("列宽应不超过上限 260", columnWidth <= 260)
+        assertEquals("标签列宽应统一", columnWidth, mediumLabel.preferredSize.width)
+        assertEquals("标签列宽应统一", columnWidth, longLabel.preferredSize.width)
+        // 超长名：截断显示（文本 != 全名）+ tooltip 全名；短/中名不截断、无 tooltip
+        assertEquals("超长标签 tooltip 应为全名", "#$long", longLabel.toolTipText)
+        assertNotEquals("超长标签应截断显示", "#$long", longLabel.text)
         assertNull("短参数不设 tooltip", shortLabel.toolTipText)
+        assertNull("中等长度参数不设 tooltip", mediumLabel.toolTipText)
         panel.clear()
     }
 
@@ -681,57 +683,56 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
-    fun testSelectAllButtonsPinnedAtLeftPanelTopRight() {
-        // T-M26.2（用户反馈：参数名过长时右上角全选/全不选被隐藏，须拉宽左面板才能看到）：
-        // 按钮固定左面板右上角操作行——长参数名只影响滚动区内容，不再把按钮推出视口。
-        // 渲染级断言：按钮在左面板内、参数滚动区（viewport）外，布局后右缘贴近分隔栏（随分隔栏移动）
-        val long = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo()"
+    fun testSelectAllButtonsOnConditionSectionHeader() {
+        // T-M26.3（方案 A）：全选/全不选回挂「动态条件」分区标题行右侧（IDEA 组操作惯例，
+        // T-M26.2 的固定右上角已拆除）。长 test 表达式标签按视口宽度截断 → 标题行按钮不被推出
+        // 视口：断言按钮在参数面板内、布局后仍可见于视口
+        val long = "stationIds != null and stationIds.size() > 0"
         val panel = SqlPreviewPanel(project)
+        val split = panel.splitPaneForTest()!!
+        // 先布局再 showResult：截断上限按视口宽度计算（真实 IDE 中 rebuild 发生在面板布局后）
+        split.setSize(500, 120)
+        split.doLayout()
+        if (split.dividerLocation < 0) split.dividerLocation = 250
+        split.doLayout()
+        (split.leftComponent as JBScrollPane).doLayout() // 布局 viewport bounds（否则宽度为 0，截断上限回落默认值）
         panel.showResult(
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef(columnName = "station_id"), "IN", SqlValue.Placeholder("stationIds"),
+                        toggle = ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", listOf("stationIds"))),
                 ),
-                views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
-                params = listOf(long),
+                views = listOf(ConditionView("c0", long, "true", true, "stationIds", listOf("stationIds"))),
             ),
         )
-        val split = panel.splitPaneForTest()!!
-        val left = split.leftComponent as JComponent
-        val scroll = left.components.filterIsInstance<JBScrollPane>().firstOrNull()
-        assertNotNull("左面板应含参数滚动区", scroll)
+        val scroll = split.leftComponent as JBScrollPane
+        val viewport = scroll.viewport
         val button = panel.selectAllButtonForTest()!!
-        assertTrue("动态条件场景应显示全选按钮", button.isVisible)
-        // 按钮位于左面板固定行：在 leftPanel 内、滚动区 viewport 外（不再受内容宽度影响）
-        assertTrue("按钮应在左面板内", SwingUtilities.isDescendingFrom(button, left))
-        assertFalse("按钮不应在参数滚动区内", SwingUtilities.isDescendingFrom(button, scroll!!.viewport))
-        // 布局后按钮组右缘贴近分隔栏（左面板右边界 = dividerLocation，随分隔栏移动）
-        split.setSize(400, 120)
+        // 按钮在参数面板内（回挂分区标题行，随列表滚动——T-M26.2 曾固定视口外）
+        assertTrue("按钮应在参数面板内", SwingUtilities.isDescendingFrom(button, viewport.view))
+        // 布局（doLayout 不递归，逐层布局组件树）后按钮仍可见于视口（长标签按视口截断 → 行宽受限）
         split.doLayout()
-        if (split.dividerLocation < 0) split.dividerLocation = 150
-        split.doLayout()
-        // headless 未显示组件 validate() 不布局（peer 为 null）——用同步 doLayout 链：
-        // JSplitPaneUI 只布局左右面板 bounds，左面板 BorderLayout 与操作行 FlowLayout 须逐层 doLayout
-        left.doLayout()
-        left.components.filterIsInstance<JBPanel<*>>().forEach { it.doLayout() }
-        // 按钮组右对齐：组内最右可见按钮（条件组 = 全不选）右缘应贴近分隔栏
-        val bar = button.parent
-        val rightMostX = bar.components.filter { it.isVisible }.maxOf { it.x + it.width }
-        val groupRight = SwingUtilities.convertPoint(bar, rightMostX, 0, split).x
-        val loc = split.dividerLocation
-        assertTrue("按钮组右缘应贴近分隔栏", groupRight in (loc - 40)..loc)
+        layoutTree(scroll)
+        val btnLeft = SwingUtilities.convertPoint(button, 0, 0, scroll).x
+        assertTrue("按钮应位于视口内", btnLeft < viewport.width)
         panel.clear()
     }
 
+    /** headless 未显示组件 validate() 不布局（peer 为 null）——同步 doLayout 递归布局组件树。 */
+    private fun layoutTree(container: java.awt.Container) {
+        container.doLayout()
+        container.components.filterIsInstance<java.awt.Container>().forEach { layoutTree(it) }
+    }
+
     fun testActionButtonGroupsSwitchByScene() {
-        // T-M26.2：右上角按钮组按场景切换——动态条件显示条件组、批量显示批量组、无内容整行隐藏
+        // T-M26.3：按钮组按场景构建——无内容无按钮、动态条件 → 条件组（标题行右侧）、
+        // 批量 → 批量组、clear 复位（字段置 null）
         val panel = SqlPreviewPanel(project)
-        // 无参数 → 整行隐藏
+        // 无参数 → 无按钮
         panel.showResult(result())
-        assertFalse("无内容时全选按钮应隐藏", panel.selectAllButtonForTest()!!.isVisible)
-        assertFalse("无内容时批量全选按钮应隐藏", panel.batchSelectAllButtonForTest()!!.isVisible)
-        // 动态条件 → 条件组可见、批量组隐藏
+        assertNull("无内容时应无全选按钮", panel.selectAllButtonForTest())
+        assertNull("无内容时应无批量全选按钮", panel.batchSelectAllButtonForTest())
+        // 动态条件 → 条件组
         panel.showResult(
             dynamicResult(
                 conditions = listOf(
@@ -741,9 +742,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
             ),
         )
-        assertTrue("动态条件场景应显示条件组", panel.selectAllButtonForTest()!!.isVisible)
-        assertFalse("动态条件场景不应显示批量组", panel.batchSelectAllButtonForTest()!!.isVisible)
-        // 批量列 → 批量组可见、条件组隐藏
+        assertNotNull("动态条件场景应有全选按钮", panel.selectAllButtonForTest())
+        assertNull("动态条件场景不应有批量全选按钮", panel.batchSelectAllButtonForTest())
+        // 批量列 → 批量组
         panel.showResult(
             batchResult(
                 BatchModel(
@@ -755,10 +756,10 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 ),
             ),
         )
-        assertFalse("批量场景不应显示条件组", panel.selectAllButtonForTest()!!.isVisible)
-        assertTrue("批量场景应显示批量组", panel.batchSelectAllButtonForTest()!!.isVisible)
+        assertNull("批量场景不应有全选按钮", panel.selectAllButtonForTest())
+        assertNotNull("批量场景应有批量全选按钮", panel.batchSelectAllButtonForTest())
         panel.clear()
-        assertFalse("clear 后全选按钮应隐藏", panel.selectAllButtonForTest()!!.isVisible)
-        assertFalse("clear 后批量全选按钮应隐藏", panel.batchSelectAllButtonForTest()!!.isVisible)
+        assertNull("clear 后应无全选按钮", panel.selectAllButtonForTest())
+        assertNull("clear 后应无批量全选按钮", panel.batchSelectAllButtonForTest())
     }
 }

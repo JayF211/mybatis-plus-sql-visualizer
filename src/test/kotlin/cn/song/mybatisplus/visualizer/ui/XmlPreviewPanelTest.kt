@@ -12,8 +12,9 @@ import org.junit.Assert.assertTrue
 
 /**
  * SqlPreviewPanel XML 分支测试（T-M24-04）：
- *  - xmlModel 渲染（含紧凑切换）、条件开关勾选重渲染、foreach 次数、bind 覆盖
- *  - 左栏控件构建（条件复选框 / foreach 次数 / bind 覆盖值 / 参数行）
+ *  - xmlModel 渲染（含紧凑切换）、条件开关勾选重渲染、foreach 次数、bind 求值回显
+ *  - 左栏控件构建（条件复选框 / foreach 次数 / 参数行；T-M26.4：bind 分区已删除，
+ *    bind 值由「参数」区唯一承担——求值结果回显、输入覆盖）
  */
 class XmlPreviewPanelTest : BasePlatformTestCase() {
 
@@ -131,6 +132,60 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         }
         val sql1 = compact(panel.editorForTest()!!.document.text)
         assertTrue("默认展开两次：IN ( ? , ? )", sql1.contains("IN ( ? , ? )"))
+        panel.clear()
+    }
+
+    fun testXmlBindValuesOnlyInParamSection() {
+        // T-M26.4（用户反馈：bind 变量区与参数区重复展示同一组值）——bind 分区已删除：
+        // bind 求值结果仅在「参数」区显示（唯一入口：输入覆盖、清空恢复自动值）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(xmlResult())
+        // bind 名在参数区有输入行（求值结果回显：'%' + name + '%'，mock name="1" → "%1%"）
+        val bindRow = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+            .firstOrNull { it.toolTipText == "#likeName" }
+        assertNotNull("bind 变量应在参数区有输入行", bindRow)
+        assertEquals("bind 求值结果应回显到参数行", "%1%", bindRow!!.text)
+        // 参数输入覆盖 bind 值 → SQL 回填覆盖值（等价于原 bind 覆盖输入框）
+        bindRow.text = "xx"
+        assertTrue(
+            "参数输入应覆盖 bind 值：" + compact(panel.editorForTest()!!.document.text),
+            compact(panel.editorForTest()!!.document.text).contains("name LIKE 'xx'"),
+        )
+        panel.clear()
+    }
+
+    fun testXmlLikeParamQuotedForPureNumericInput() {
+        // T-M26.5（用户反馈：模糊查询字段类型推断不正确）——XML 渲染 SQL 的 LIKE 参数
+        // 回填恒加引号：String 列（如 deviceCode）的纯数字输入不再被数字启发式误判为数字
+        // （#keyword="111" → LIKE CONCAT('%', '111', '%')）
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                SELECT * FROM t WHERE code LIKE CONCAT('%', #{keyword}, '%')
+              </select>
+            </mapper>
+        """.trimIndent())
+        val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val rendered = model.renderSql()
+        val result = PreviewResult(
+            sql = rendered.sql,
+            compactSql = rendered.sql,
+            unresolvedParams = rendered.mappings.map { it.property },
+            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            wrapperType = null,
+            tableName = null,
+            xmlModel = model,
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result)
+        val keywordField = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+            .firstOrNull { it.toolTipText == "#keyword" }
+        assertNotNull("应有关键词参数输入行", keywordField)
+        keywordField!!.text = "111"
+        assertTrue(
+            "LIKE 参数回填应带引号：" + compact(panel.editorForTest()!!.document.text),
+            compact(panel.editorForTest()!!.document.text).contains("LIKE CONCAT('%', '111', '%')"),
+        )
         panel.clear()
     }
 

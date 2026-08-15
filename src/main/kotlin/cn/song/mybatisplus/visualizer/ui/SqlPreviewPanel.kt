@@ -13,7 +13,6 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-import cn.song.mybatisplus.visualizer.xml.XmlBindView
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
@@ -30,6 +29,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
 import com.intellij.ui.JBColor
+import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -39,6 +39,8 @@ import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Font
+import java.awt.FontMetrics
 import java.awt.Graphics
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -71,27 +73,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val paramPanel = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
     }
+    // T-M26.3：滚动区提升为字段——截断上限（标签列/复选框文本）按视口宽度计算，
+    // 保证行宽不超出视口（标题行右侧按钮不被推出）
+    private val paramScroll = JBScrollPane(paramPanel).apply {
+        preferredSize = Dimension(240, 200)
+        isOpaque = false
+        viewport.isOpaque = false
+    }
     private val paramFields = mutableListOf<JBTextField>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
     private val conditionValueFields = mutableListOf<JBTextField>()
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
-    // T-M26.2：全选/全不选按钮固定左面板右上角（actionBar 固定行，随分隔栏移动）——
-    // 按钮移出参数滚动区，不再受参数列表内容宽度（长参数名撑宽 paramPanel）影响；
-    // 条件组（动态条件/XML 条件开关）与批量组（批量「参数列」）互斥，按场景切换可见性
-    private val selectAllButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
-    private val selectNoneButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+    // T-M26.3：全选/全不选按钮回挂分区标题行右侧（IDEA 组操作惯例，T-M23.2 原生形态；
+    // T-M26.2 曾固定面板右上角——长文本截断后按钮不再被推出视口，回归标题行）——每次 rebuild 重建
+    private var selectAllButton: JButton? = null
+    private var selectNoneButton: JButton? = null
     // T-M23.2：批量「参数列」区全选/全不选按钮
-    private val batchSelectAllButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
-    private val batchSelectNoneButton: JButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
-    private val actionBar = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
-        border = JBUI.Borders.empty(0, 8, 2, 8)
-        add(selectAllButton)
-        add(selectNoneButton)
-        add(batchSelectAllButton)
-        add(batchSelectNoneButton)
-        isVisible = false
-    }
+    private var batchSelectAllButton: JButton? = null
+    private var batchSelectNoneButton: JButton? = null
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -104,10 +104,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     private val enabledIds = mutableSetOf<String>()
     private val paramValues = mutableMapOf<String, String>()
-    // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文）
+    // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文；
+    // T-M26.4：bind 覆盖状态已移除——bind 值由「参数」区输入统一承担）
     private val xmlForEachCounts = mutableMapOf<String, Int>()
     private val xmlForEachNulls = mutableSetOf<String>()
-    private val xmlBindOverrides = mutableMapOf<String, String>()
     private var xmlErrors = listOf<String>()
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     private var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
@@ -126,18 +126,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(topRow, BorderLayout.NORTH)
 
         // 中部左右分栏：参数输入 | SQL 编辑器
-        val paramScroll = JBScrollPane(paramPanel).apply {
-            preferredSize = Dimension(240, 200)
-            isOpaque = false
-            viewport.isOpaque = false
-        }
-        // T-M26.2：左面板 = 固定操作行（全选/全不选右上角，宽度随分隔栏） + 参数滚动区
-        // （按钮原在滚动区内，长参数名撑宽 paramPanel 时被推出视口——上移固定后不受影响）
-        val leftPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(actionBar, BorderLayout.NORTH)
-            add(paramScroll, BorderLayout.CENTER)
-        }
-        val split = ThemedSplitPane(leftPanel, editorHolder).apply {
+        // T-M26.3：按钮回挂分区标题行右侧（conditionSectionHeader/batchSectionHeader），
+        // 左面板即参数滚动区（T-M26.2 的固定操作行已拆除——长文本按视口截断后按钮不再被推出视口）
+        val split = ThemedSplitPane(paramScroll, editorHolder).apply {
             resizeWeight = 0.3
             isContinuousLayout = true
             isOneTouchExpandable = false
@@ -239,7 +230,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             xmlForEachCounts.clear()
             xmlForEachCounts.putAll(model.defaultState().forEachCounts)
             xmlForEachNulls.clear()
-            xmlBindOverrides.clear()
             xmlErrors = emptyList()
             // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
             val initial = model.renderSql(XmlPreviewState(
@@ -288,7 +278,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     enabledIds = enabledIds.toSet(),
                     forEachCounts = xmlForEachCounts.toMap(),
                     forEachNulls = xmlForEachNulls.toSet(),
-                    bindOverrides = xmlBindOverrides.toMap(),
+                    // T-M26.4：bind 覆盖已由「参数」区输入承担（回填层覆盖），渲染走表达式自动求值
+                    bindOverrides = emptyMap(),
                 )
                 val rendered = xml.renderSql(state)
                 xmlErrors = rendered.errors
@@ -299,7 +290,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
                 val base = rendered.sql
                 val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
-                showSql(backfillParamsBySource(sql, rendered.mappings.map { it.property }))
+                val sources = rendered.mappings.map { it.property }
+                // T-M26.5：LIKE 参数提示（模糊查询恒引号——String 列纯数字输入不再被数字启发式误判）
+                showSql(backfillParamsBySource(sql, sources, likeParamHints(sql, sources)))
             }
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
             batch != null -> {
@@ -394,12 +387,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         batchCheckBoxes.clear()
         xmlForEachCounts.clear()
         xmlForEachNulls.clear()
-        xmlBindOverrides.clear()
         xmlErrors = emptyList()
         currentWarning = null
         errorCopyButton?.isVisible = false
-        // T-M26.2：按钮为固定实例（不再按次重建），clear 复位右上角操作行（按钮组 + 整行隐藏）
-        showActionButtons(showConditionGroup = false, showBatchGroup = false)
+        selectAllButton = null
+        selectNoneButton = null
+        batchSelectAllButton = null
+        batchSelectNoneButton = null
         paramPanel.removeAll()
         releaseEditor()
         editorHolder.removeAll()
@@ -479,11 +473,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
+        // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
+        selectAllButton = null
+        selectNoneButton = null
+        batchSelectAllButton = null
+        batchSelectNoneButton = null
         val views = result.previewModel?.conditionViews.orEmpty()
         val batchModel = result.batchModel
 
         if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null) {
-            showActionButtons(showConditionGroup = false, showBatchGroup = false)
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
@@ -494,24 +492,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // T-M23-04：批量列级勾选（toggle 列：复选框 + 值输入框，勾选决定列是否进入 SQL；
         // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
-        // T-M23.2（用户要求）：参数可选场景必须有【全选/全不选】按钮
+        // T-M23.2（用户要求）：参数可选场景必须有【全选/全不选】按钮（标题行右侧，T-M26.3 回归）
         if (batchModel != null) {
-            showActionButtons(showConditionGroup = false, showBatchGroup = true)
             paramPanel.add(batchSectionHeader())
+            // T-M26.3：fixed 列标签参与列宽统一（toggle 列复选框文本独立截断上限）
+            val labelWidth = labelColumnWidth(batchModel.fixedColumns.map { "#${it.source}" })
             batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
-            batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false)) }
+            batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false, labelWidth)) }
             paramPanel.revalidate()
             paramPanel.repaint()
             return
         }
 
-        // T-M24-04：XML 预览左栏——动态条件开关 + foreach 次数/null + bind 覆盖值 + 参数值输入
+        // T-M24-04：XML 预览左栏——动态条件开关 + foreach 次数/null + 参数值输入
+        // T-M26.4：bind 分区已删除——bind 求值结果由「参数」区回显（输入覆盖、清空恢复自动值）
         val xmlModel = result.xmlModel
         if (xmlModel != null) {
-            val hasControls = xmlModel.conditionViews.isNotEmpty() ||
-                xmlModel.forEachViews.isNotEmpty() || xmlModel.bindViews.isNotEmpty()
+            val hasControls = xmlModel.conditionViews.isNotEmpty() || xmlModel.forEachViews.isNotEmpty()
             if (!hasControls && result.unresolvedParams.isEmpty()) {
-                showActionButtons(showConditionGroup = false, showBatchGroup = false)
                 paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                     border = JBUI.Borders.empty(6, 8)
                 })
@@ -519,23 +517,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 paramPanel.repaint()
                 return
             }
-            showActionButtons(showConditionGroup = xmlModel.conditionViews.isNotEmpty(), showBatchGroup = false)
+            // #{} 参数值输入（T-M25.4：foreach 展开项不再单独建行——集合值由 foreach 输入框统一回填）
+            val ordinarySources = result.unresolvedParams.distinct().filter { !it.startsWith("__frch_") }
+            // T-M26.3：两列行标签列宽统一（foreach/参数按最长可见标签自适应 140~260）
+            // T-M26.5：foreach 行标签即集合表达式（分区标题已含「foreach 集合」语义）
+            val labelWidth = labelColumnWidth(
+                xmlModel.forEachViews.map { it.collectionExpr } +
+                    ordinarySources.map { "#$it" },
+            )
             if (xmlModel.conditionViews.isNotEmpty()) {
+                paramPanel.add(conditionSectionHeader())
                 xmlModel.conditionViews.forEach { paramPanel.add(buildXmlConditionRow(it)) }
             }
             if (xmlModel.forEachViews.isNotEmpty()) {
-                paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.xml.foreach.section")))
-                xmlModel.forEachViews.forEach { paramPanel.add(buildXmlForEachRow(it)) }
+                paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.xml.foreach.section")))
+                xmlModel.forEachViews.forEach { paramPanel.add(buildXmlForEachRow(it, labelWidth)) }
             }
-            if (xmlModel.bindViews.isNotEmpty()) {
-                paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.xml.bind.section")))
-                xmlModel.bindViews.forEach { paramPanel.add(buildXmlBindRow(it)) }
-            }
-            // #{} 参数值输入（T-M25.4：foreach 展开项不再单独建行——集合值由 foreach 输入框统一回填）
-            val ordinarySources = result.unresolvedParams.distinct().filter { !it.startsWith("__frch_") }
             if (ordinarySources.isNotEmpty()) {
-                if (hasControls) paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.param.section")))
-                ordinarySources.forEach { paramPanel.add(buildParamRow(it)) }
+                if (hasControls) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
+                ordinarySources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
             }
             paramPanel.revalidate()
             paramPanel.repaint()
@@ -543,15 +543,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
 
         val viewSources = views.flatMap { it.valueSources }.toSet()
-        showActionButtons(showConditionGroup = views.isNotEmpty(), showBatchGroup = false)
-        if (views.isNotEmpty()) {
-            views.forEach { paramPanel.add(buildConditionRow(it)) }
-        }
         // 普通参数行：未解析参数中不属于任何动态条件值输入框的来源（去重，同一 source 共享一个输入框）
         val ordinarySources = result.unresolvedParams.distinct().filter { it !in viewSources }
+        val labelWidth = labelColumnWidth(ordinarySources.map { "#$it" })
+        if (views.isNotEmpty()) {
+            paramPanel.add(conditionSectionHeader())
+            views.forEach { paramPanel.add(buildConditionRow(it)) }
+        }
         if (ordinarySources.isNotEmpty()) {
-            if (views.isNotEmpty()) paramPanel.add(sectionLabel(MpSqlVisualizerBundle.message("panel.param.section")))
-            ordinarySources.forEach { paramPanel.add(buildParamRow(it)) }
+            if (views.isNotEmpty()) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
+            ordinarySources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
         }
         paramPanel.revalidate()
         paramPanel.repaint()
@@ -560,12 +561,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * T-M23-04：批量列行——toggle 列渲染「复选框（列来源，tooltip 列名）+ 值输入框」，
      * 勾选变更重渲染（列名入 [enabledIds]）；fixed 列渲染「#来源 标签 + 值输入框」。
+     * T-M26.3：fixed 列标签按统一列宽（labelWidth）构建。
      */
-    private fun buildBatchColumnRow(col: BatchColumn, isToggle: Boolean): JBPanel<JBPanel<*>> {
+    private fun buildBatchColumnRow(col: BatchColumn, isToggle: Boolean, labelWidth: Int = 0): JBPanel<JBPanel<*>> {
         val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
         if (isToggle) {
-            val checkBox = JCheckBox(col.source, col.columnName in enabledIds).apply {
-                toolTipText = col.columnName
+            val checkBox = JCheckBox(checkBoxText(col.source), col.columnName in enabledIds).apply {
+                toolTipText = if (checkBoxText(col.source) != col.source) col.source else col.columnName
                 addActionListener {
                     if (isSelected) enabledIds.add(col.columnName) else enabledIds.remove(col.columnName)
                     renderSql()
@@ -574,7 +576,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             batchCheckBoxes += checkBox
             row.add(checkBox)
         } else {
-            row.add(paramLabel(col.source))
+            row.add(paramLabel(col.source, labelWidth))
         }
         val field = JBTextField(8).apply {
             toolTipText = "#${col.source}"
@@ -591,16 +593,35 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return row
     }
 
-    /** 分区标题行。 */
-    private fun sectionLabel(text: String): JBLabel = JBLabel(text).apply {
-        border = JBUI.Borders.empty(6, 8, 2, 8)
+    /**
+     * T-M26.3：分区标题行（IDEA Group Header 惯例）——CENTER 为 TitledSeparator（短标题 + 分隔线），
+     * EAST 为可选操作按钮组（全选/全不选回挂此处，T-M23.2 形态回归；T-M26.2 曾固定面板右上角，
+     * 长文本截断后按钮不再被推出视口）。
+     */
+    private fun sectionHeaderRow(title: String, buttons: List<JButton> = emptyList()): JBPanel<JBPanel<*>> {
+        val row = JBPanel<JBPanel<*>>(BorderLayout())
+        row.add(TitledSeparator(title), BorderLayout.CENTER)
+        if (buttons.isNotEmpty()) {
+            row.add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 2)).apply {
+                buttons.forEach { add(it) }
+            }, BorderLayout.EAST)
+        }
+        row.border = JBUI.Borders.empty(0, 8, 2, 8)
+        return row
     }
 
     /**
-     * T-M26.2：批量「参数列」分区标题行——全选/全不选按钮已上移左面板右上角固定
-     * 操作行（actionBar，原 T-M23.2 在本行 EAST），此处仅保留分区名标签。
+     * 批量「参数列」分区标题行（T-M23.2 回归，T-M26.3 TitledSeparator 化）：左侧分区标题 +
+     * 右侧全选/全不选按钮（操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
      */
-    private fun batchSectionHeader(): JBLabel = sectionLabel(MpSqlVisualizerBundle.message("panel.batch.columns"))
+    private fun batchSectionHeader(): JBPanel<JBPanel<*>> {
+        batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
+        batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
+        return sectionHeaderRow(
+            MpSqlVisualizerBundle.message("panel.batch.columns"),
+            listOf(batchSelectAllButton!!, batchSelectNoneButton!!),
+        )
+    }
 
     /**
      * 批量列全选/全不选（T-M23.2）：操作 [batchCheckBoxes] 与 [enabledIds]（列名作 id），
@@ -616,15 +637,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-M26.2：左面板右上角固定操作行的按钮组可见性切换——条件组（动态条件/XML 条件开关）
-     * 与批量组（批量「参数列」）互斥场景，无内容时整行隐藏（与按钮在列表内时"无按钮"一致）。
+     * 动态条件分区标题行（T-M26.3）：TitledSeparator「动态条件」+ 右侧全选/全不选按钮
+     * （T-M23.2 形态回归，IDEA 组操作惯例；XML 条件开关同样复用，见 T-M24-04）。
      */
-    private fun showActionButtons(showConditionGroup: Boolean, showBatchGroup: Boolean) {
-        selectAllButton.isVisible = showConditionGroup
-        selectNoneButton.isVisible = showConditionGroup
-        batchSelectAllButton.isVisible = showBatchGroup
-        batchSelectNoneButton.isVisible = showBatchGroup
-        actionBar.isVisible = showConditionGroup || showBatchGroup
+    private fun conditionSectionHeader(): JBPanel<JBPanel<*>> {
+        selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
+        selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+        return sectionHeaderRow(
+            MpSqlVisualizerBundle.message("panel.condition.section"),
+            listOf(selectAllButton!!, selectNoneButton!!),
+        )
     }
 
     /** 左栏分区内的紧凑按钮（比工具栏按钮更小，避免挤压复选框行）。 */
@@ -649,8 +671,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 动态条件行：复选框（勾选开关）+（有值来源时）值输入框（M19.5：between 等多值条件每个 source 一个输入框）。 */
     private fun buildConditionRow(view: ConditionView): JBPanel<JBPanel<*>> {
-        val checkBox = JCheckBox(view.label, view.id in enabledIds).apply {
-            toolTipText = conditionTooltip(view)
+        val rawLabel = view.label
+        val displayLabel = checkBoxText(rawLabel)
+        val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
+            // T-M26.3：标签被截断时 tooltip 展示表达式原文（否则保留 flagSource 提示）
+            toolTipText = if (displayLabel != rawLabel) rawLabel else conditionTooltip(view)
             addActionListener {
                 if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
                 renderSql()
@@ -699,8 +724,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 与 Wrapper 动态条件交互一致（全选/全不选按钮共用）。
      */
     private fun buildXmlConditionRow(view: XmlConditionView): JBPanel<JBPanel<*>> {
-        val checkBox = JCheckBox(view.label, view.id in enabledIds).apply {
-            toolTipText = MpSqlVisualizerBundle.message("panel.xml.condition")
+        val rawLabel = view.label
+        val displayLabel = checkBoxText(rawLabel)
+        val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
+            // T-M26.3：标签被截断时 tooltip 展示 test 表达式原文（否则保留条件提示）
+            toolTipText = if (displayLabel != rawLabel) rawLabel else MpSqlVisualizerBundle.message("panel.xml.condition")
             addActionListener {
                 if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
                 renderSql()
@@ -713,10 +741,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** T-M25.4：foreach 行——collection 表达式标签 + **集合值输入框**（逗号分隔，如 `2,3` → 展开两项并回填）+ null 复选框。 */
-    private fun buildXmlForEachRow(view: XmlForEachView): JBPanel<JBPanel<*>> {
+    /** T-M25.4：foreach 行——**集合表达式标签 + 集合值输入框**（逗号分隔，如 `2,3` → 展开两项并回填）+ null 复选框（T-M26.5：标签即集合表达式，分区标题已含「foreach 集合」语义）。 */
+    private fun buildXmlForEachRow(view: XmlForEachView, labelWidth: Int): JBPanel<JBPanel<*>> {
         val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
-        row.add(JBLabel(MpSqlVisualizerBundle.message("panel.xml.foreach", view.collectionExpr)).apply {
+        row.add(columnLabel(view.collectionExpr, labelWidth).apply {
             border = JBUI.Borders.empty(0, 8, 0, 0)
         })
         val valuesField = JBTextField(8).apply {
@@ -763,35 +791,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderSql() // 第二次渲染：按值回填
     }
 
-    /** T-M24-04：bind 行——表达式标签 + 覆盖值输入（留空 = 表达式自动求值）。 */
-    private fun buildXmlBindRow(view: XmlBindView): JBPanel<JBPanel<*>> {
-        val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
-        row.add(JBLabel(MpSqlVisualizerBundle.message("panel.xml.bind", "${view.name} = ${view.expression}")).apply {
-            border = JBUI.Borders.empty(0, 8, 0, 0)
-        })
-        val field = JBTextField(8).apply {
-            text = xmlBindOverrides[view.name] ?: ""
-            toolTipText = MpSqlVisualizerBundle.message("panel.xml.bind", view.name)
-            document.addDocumentListener(object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent?) = onXmlBindOverrideChanged(view.name, this@apply.text)
-                override fun removeUpdate(e: DocumentEvent?) = onXmlBindOverrideChanged(view.name, this@apply.text)
-                override fun changedUpdate(e: DocumentEvent?) = onXmlBindOverrideChanged(view.name, this@apply.text)
-            })
-        }
-        row.add(field)
-        paramFields += field
-        row.border = JBUI.Borders.empty(0, 8, 2, 8)
-        return row
-    }
-
-    /** T-M24-04：bind 覆盖值变更（留空移除覆盖 → 恢复表达式求值）。 */
-    private fun onXmlBindOverrideChanged(name: String, text: String) {
-        if (text.isEmpty()) xmlBindOverrides.remove(name) else xmlBindOverrides[name] = text
-        renderSql()
-    }
-
     /** 普通参数行：`#<source>` 标签 + 值输入框。 */
-    private fun buildParamRow(source: String): JBPanel<JBPanel<*>> {
+    private fun buildParamRow(source: String, labelWidth: Int): JBPanel<JBPanel<*>> {
         val field = JBTextField(8).apply {
             toolTipText = "#$source"
             text = paramValues[source] ?: ""
@@ -804,25 +805,71 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramFields += field
         // T-M19.4-01：FlowLayout 间距 (4,2) → (8,6)——参数名较长时视觉"贴太近"（用户实测）
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
-            add(paramLabel(source))
+            add(paramLabel(source, labelWidth))
             add(field)
             border = JBUI.Borders.empty(0, 8, 2, 8)
         }
     }
 
     /**
-     * 参数行标签（T-M19.4-01，用户实测：`#productInfo.getDicProtocolType()` 这类长参数名被
-     * 固定 140px 标签截断显示不全）：
-     *  - 宽度**按文本自适应**（FontMetrics 计算，夹在 140~300px）——短名不拉伸、长名不截断；
-     *  - 文本超过 300px 上限时 tooltip 展示全名（标签本身截断显示）；
-     *  - 标签超出面板宽度时由 FlowLayout 自然换行（输入框换到下一行）。
+     * 参数行标签（T-M19.4-01 自适应 + T-M26.3 统一列宽）：`#source` 超列宽时中段省略显示、
+     * tooltip 全名（IDEA 长文本惯例，用户 T-M19.4-01"长参数名显示不全"诉求由 tooltip 兜底）。
      */
-    private fun paramLabel(source: String): JBLabel = JBLabel("#$source").apply {
-        val text = "#$source"
+    private fun paramLabel(source: String, columnWidth: Int): JBLabel = columnLabel("#$source", columnWidth)
+
+    /**
+     * T-M26.3：两列行标签——统一列宽（输入框左缘对齐，IDEA 表单惯例），
+     * 文本超列宽时中段省略（保留尾部）+ tooltip 全名。
+     */
+    private fun columnLabel(fullText: String, columnWidth: Int): JBLabel = JBLabel(fullText).apply {
         val metrics = getFontMetrics(UIUtil.getLabelFont())
-        val textWidth = metrics.stringWidth(text)
-        preferredSize = Dimension(textWidth.coerceIn(140, 300), preferredSize.height)
-        if (textWidth > 300) toolTipText = text
+        if (metrics.stringWidth(fullText) > columnWidth) {
+            toolTipText = fullText
+            text = ellipsize(fullText, metrics, columnWidth)
+        }
+        preferredSize = Dimension(columnWidth, preferredSize.height)
+    }
+
+    /**
+     * T-M26.3：两列行标签列宽——按最长可见标签自适应，**上限跟随左栏视口宽度**
+     * （标签列 + 输入框约 90px + 间距边距 38px 不超出视口，保证标题行右侧按钮不被推出；
+     * 默认 240 面板 → 上限约 109，宽面板放宽至 260 封顶；未布局/测试环境取 260）。
+     */
+    private fun labelColumnWidth(texts: List<String>): Int {
+        if (texts.isEmpty()) return 140
+        val metrics = getFontMetrics(UIUtil.getLabelFont())
+        val viewport = paramScroll.viewport.width
+        val maxWidth = if (viewport <= 0) 260 else (viewport - 128).coerceIn(80, 260)
+        return texts.maxOf { metrics.stringWidth(it) }.coerceIn(80, maxWidth)
+    }
+
+    /** T-M26.3：长文本中段省略——保留尾部（bind 字段名/参数名尾部有意义），超宽时显示 `头…尾`。 */
+    private fun ellipsize(text: String, metrics: FontMetrics, maxWidth: Int): String {
+        val mark = "\u2026"
+        if (metrics.stringWidth(text) <= maxWidth) return text
+        val tailLen = (text.length * 0.3).toInt().coerceAtLeast(4).coerceAtMost(text.length - 1)
+        val tail = text.takeLast(tailLen)
+        var head = text.length - tailLen
+        while (head > 0 && metrics.stringWidth(text.take(head) + mark + tail) > maxWidth) head--
+        return text.take(head) + mark + tail
+    }
+
+    /**
+     * T-M26.3：复选框标签截断上限——跟随视口宽度（文本 + 图标约 20px + 边距 36px 不超出视口，
+     * 保证标题行右侧按钮不被推出；默认 240 面板 → 约 181；未布局/测试环境取 280）。
+     */
+    private fun checkBoxMaxWidth(): Int {
+        val viewport = paramScroll.viewport.width
+        return if (viewport <= 0) 280 else (viewport - 56).coerceIn(100, 280)
+    }
+
+    /** 复选框字体（与渲染一致，截断度量用——UIUtil.getLabelFont 与复选框字体在 headless 下可能不一致）。 */
+    private val checkBoxFont: Font by lazy { JCheckBox().font }
+
+    /** T-M26.3：复选框标签截断——test 表达式等长文本超上限时中段省略显示（tooltip 原文由调用方处理）。 */
+    private fun checkBoxText(raw: String, maxWidth: Int = checkBoxMaxWidth()): String {
+        val metrics = getFontMetrics(checkBoxFont)
+        return if (metrics.stringWidth(raw) > maxWidth) ellipsize(raw, metrics, maxWidth) else raw
     }
 
     /** 普通参数值变更：更新回填表并重渲染 SQL。 */
@@ -854,6 +901,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             i++
         }
         return sb.toString()
+    }
+
+    /**
+     * T-M26.5：XML 渲染 SQL 的 LIKE 参数提示——某个 `?` 与最近的 LIKE 关键字之间无其他 `?`
+     * 时判定为模糊查询参数（恒引号，修复数字启发式把 String 列 LIKE 值当数字的误判：
+     * `#keyword="111"` → `LIKE CONCAT('%', '111', '%')`；如 `CONCAT('%', ?, '%')` 中 ? 前
+     * 最近的 LIKE 比上一个 ? 更近）。与 Wrapper 场景的 SqlGenerator hints 对齐。
+     */
+    private fun likeParamHints(sql: String, sources: List<String>): List<ParamHint> {
+        val hints = MutableList(sources.size) { ParamHint() }
+        var qIndex = -1
+        var paramIndex = 0
+        while (paramIndex < sources.size) {
+            qIndex = sql.indexOf('?', qIndex + 1)
+            if (qIndex < 0) break
+            val likePos = maxOf(sql.lastIndexOf("LIKE", qIndex), sql.lastIndexOf("like", qIndex))
+            val prevQ = sql.lastIndexOf('?', qIndex - 1)
+            if (likePos > prevQ) hints[paramIndex] = ParamHint(quote = true)
+            paramIndex++
+        }
+        return hints
     }
 
     private fun renderParamValue(v: String?, hint: ParamHint?): String {
