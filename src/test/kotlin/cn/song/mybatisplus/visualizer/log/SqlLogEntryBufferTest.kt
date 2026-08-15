@@ -88,6 +88,7 @@ class SqlLogEntryBufferTest {
 
     @Test
     fun `去重窗口内相同 SQL 丢弃且不通知`() {
+        buffer.dedupeEnabled = true
         var notified = 0
         buffer.addListener { notified++ }
         assertTrue(buffer.addEntry(entryAt("SELECT 1", 0L)))
@@ -98,6 +99,7 @@ class SqlLogEntryBufferTest {
 
     @Test
     fun `去重窗口外相同 SQL 保留`() {
+        buffer.dedupeEnabled = true
         buffer.addEntry(entryAt("SELECT 1", 0L))
         assertTrue(buffer.addEntry(entryAt("SELECT 1", 1500L))) // 超窗口
         assertEquals(2, buffer.snapshot().size)
@@ -105,13 +107,22 @@ class SqlLogEntryBufferTest {
 
     @Test
     fun `不同 SQL 不去重`() {
+        buffer.dedupeEnabled = true
         buffer.addEntry(entryAt("SELECT 1", 0L))
         assertTrue(buffer.addEntry(entryAt("SELECT 2", 100L)))
         assertEquals(2, buffer.snapshot().size)
     }
 
     @Test
-    fun `去重开关关闭时全部保留`() {
+    fun `去重开关默认关闭时全部保留`() {
+        assertFalse(buffer.dedupeEnabled) // 默认关（T-M31.7 用户要求）
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        assertTrue(buffer.addEntry(entryAt("SELECT 1", 100L)))
+        assertEquals(2, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `去重开关显式关闭时全部保留`() {
         buffer.dedupeEnabled = false
         buffer.addEntry(entryAt("SELECT 1", 0L))
         assertTrue(buffer.addEntry(entryAt("SELECT 1", 100L)))

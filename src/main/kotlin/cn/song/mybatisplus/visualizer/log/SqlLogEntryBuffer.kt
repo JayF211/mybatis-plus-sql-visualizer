@@ -21,9 +21,9 @@ class SqlLogEntryBuffer(
     var paused: Boolean = false
         private set
 
-    /** 去重开关（默认开，对齐 MybatisCodeHelper-Pro「移除重复的sql」勾选态）。 */
+    /** 去重开关（默认关——用户手动勾选后才启用，T-M31.7 用户要求）。 */
     @Volatile
-    var dedupeEnabled: Boolean = true
+    var dedupeEnabled: Boolean = false
 
     /** 去重窗口（毫秒）：相同还原 SQL 在该窗口内重复出现时丢弃后到者。 */
     @Volatile
