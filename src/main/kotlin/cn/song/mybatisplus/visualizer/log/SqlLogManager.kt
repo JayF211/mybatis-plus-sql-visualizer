@@ -4,7 +4,9 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.wm.ToolWindowManager
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -17,14 +19,25 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * T-M31.14：配置装配——parser 前缀/混合/最大长度、去重窗口、过滤关键字均来自 [PluginSettings]；
  * 发现 SQL 自动打开日志窗口（[TOOL_WINDOW_ID]）。
+ *
+ * T-xx（设置生效性审计）：
+ *  - 自动打开监听与面板解耦——窗口从未打开（启动自动监听旗舰场景）时同样触发 [maybeAutoOpenWindow]；
+ *  - capturing 仅在桥挂载成功后置位——attach 失败不进入「已捕捉但无监听」的假状态（可重试）；
+ *  - [startAutoCaptureForOpenProjects]：设置「启动自动监听」开启后对已打开项目立即生效
+ *    （postStartupActivity 仅项目打开时触发，不重开项目也能本会话捕捉）。
  */
 @Service(Service.Level.PROJECT)
 class SqlLogManager(private val project: Project) : Disposable {
 
     private val buffer = SqlLogEntryBuffer()
-    private val bridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings)
+    private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings)
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
-    private var attached = false
+
+    /** 缓冲变更 → 面板刷新（EDT 调度）；仅面板订阅时登记（命名引用——可被 removeListener 精确移除）。 */
+    private val uiNotifyListener: () -> Unit = { notifyUi() }
+
+    /** 缓冲变更 → 自动打开窗口检查（T-xx：与面板创建解耦——窗口从未打开时监听已接线）。 */
+    private val autoOpenListener: () -> Unit = { maybeAutoOpenWindow() }
 
     /** 条目缓冲（面板与测试访问）。 */
     val entries: SqlLogEntryBuffer get() = buffer
@@ -34,14 +47,31 @@ class SqlLogManager(private val project: Project) : Disposable {
     var capturing: Boolean = false
         private set
 
+    init {
+        // T-xx：自动打开决策监听随 manager 生命周期常驻——面板懒加载（工具窗口首次打开才创建
+        // SqlLogPanel → addUiListener），若监听只在 addUiListener 时接线，窗口从未打开的场景
+        // （启动自动监听 + logAutoOpenOnCapture）自动打开永不触发（该设置形同虚设）
+        buffer.addListener(autoOpenListener)
+    }
+
+    /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
+     * （不用次级构造函数——轻服务容器按构造函数参数解析，避免多公开构造函数的歧义风险。） */
+    internal fun installBridgeForTest(bridge: SqlLogConsoleBridge) {
+        this.bridge = bridge
+    }
+
     /** 开始捕捉：挂载控制台监听 + 轮询兜底（幂等）。 */
     fun startCapture() {
         if (capturing) return
-        capturing = true
         applySettings()
+        // T-xx（设置生效性审计）：**先挂载成功再置 capturing**——attach 失败（环境缺 execution API /
+        // 反射目标不可用）时保持「未捕捉」态并 warn（可诊断），工具栏仍显示「捕捉」可手动重试；
+        // 原实现先置 true 再 attach，失败后进入「已捕捉但无任何监听」的假状态（静默失败，无感知无重试）
         if (bridge.attach(project)) {
-            // 2026.2 无 contentAdded 监听接口（T-M31.10）→ 2s 轮询扫描新 console
+            capturing = true
             bridge.startPolling()
+        } else {
+            LOG.warn("startCapture: 控制台监听挂载失败（execution API 不可用）——未进入捕捉态，可稍后手动重试")
         }
     }
 
@@ -64,29 +94,32 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */
     fun addUiListener(listener: () -> Unit) {
         if (uiListeners.isEmpty()) {
-            buffer.addListener {
-                notifyUi()
-                maybeAutoOpenWindow()
-            }
+            buffer.addListener(uiNotifyListener)
         }
         uiListeners += listener
     }
 
     fun removeUiListener(listener: () -> Unit) {
         uiListeners -= listener
-        if (uiListeners.isEmpty()) buffer.removeListener(::notifyUi)
+        if (uiListeners.isEmpty()) buffer.removeListener(uiNotifyListener)
     }
 
-    /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次）。 */
+    /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次；与面板是否已创建无关）。 */
     private fun maybeAutoOpenWindow() {
         if (autoOpenFired) return
         if (!PluginSettings.getInstance().state.logAutoOpenOnCapture) return
         if (buffer.snapshot().isEmpty()) return
         autoOpenFired = true
         ApplicationManager.getApplication().invokeLater {
-            ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.show()
+            // runCatching 兜底：项目已关闭/工具窗口不可用等边缘场景不得抛出（显示失败静默即可）
+            runCatching {
+                ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.show()
+            }
         }
     }
+
+    /** T-xx：测试访问器——验证窗口未打开时首条捕获也能触发自动打开决策（见 [maybeAutoOpenWindow]）。 */
+    internal fun autoOpenFiredForTest(): Boolean = autoOpenFired
 
     private fun notifyUi() {
         ApplicationManager.getApplication().invokeLater {
@@ -107,13 +140,32 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** 面板销毁/项目关闭时移除挂载。 */
     override fun dispose() {
         bridge.detach()
-        buffer.removeListener(::notifyUi)
+        buffer.removeListener(uiNotifyListener)
+        buffer.removeListener(autoOpenListener)
         uiListeners.clear()
     }
 
     companion object {
+        private val LOG = Logger.getInstance(SqlLogManager::class.java)
+
         /** plugin.xml `<toolWindow id>`（自动打开用）。 */
         const val TOOL_WINDOW_ID = "cn.song.mybatisplus.visualizer.log"
+
+        /**
+         * T-xx（设置生效性审计）：启动自动监听开关开启后对**全部已打开项目**立即生效——
+         * [cn.song.mybatisplus.visualizer.log.LogStartupCapture]（postStartupActivity）只在项目打开时触发，
+         * 用户在设置页勾选后不重开项目也要能本会话捕捉（「开了没生效」的主因之一）；
+         * 幂等（startCapture 由 capturing 守卫）；开→关不传播（工具栏手动捕捉独立于启动开关，避免误停）。
+         *
+         * @param provider 内部测试缝：默认 project.getService；测试注入受控 manager 断言传播语义。
+         */
+        internal fun startAutoCaptureForOpenProjects(
+            provider: (Project) -> SqlLogManager = { it.getService(SqlLogManager::class.java) },
+        ) {
+            ProjectManager.getInstance().openProjects.forEach { project ->
+                runCatching { provider(project).startCapture() }
+            }
+        }
     }
 
     private var autoOpenFired = false

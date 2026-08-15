@@ -16,10 +16,17 @@ package cn.song.mybatisplus.visualizer.log
  */
 class MyBatisLogParser(
     private val restorer: LogSqlRestorer = LogSqlRestorer(),
-    private val sqlPrefix: String = DEFAULT_SQL_PREFIX,
-    private val paramPrefix: String = DEFAULT_PARAM_PREFIX,
-    private val mixedPrefix: Boolean = true,
-    private val maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
+
+    /**
+     * 配置项为 **var 可变**（T-xx 设置生效性审计）：此前为构造时固化（filter 挂载时快照）——
+     * 捕捉中修改前缀/混合/最大长度对已挂载 console 不生效（读的是缓存旧值）；
+     * 现由 [SqlLogConsoleBridge] 每次喂行前按 [ParserConfig] 重新同步，即时生效。
+     * 默认值与构造参数保持兼容（既有测试按命名参数构造不受影响）。
+     */
+    var sqlPrefix: String = DEFAULT_SQL_PREFIX,
+    var paramPrefix: String = DEFAULT_PARAM_PREFIX,
+    var mixedPrefix: Boolean = true,
+    var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()

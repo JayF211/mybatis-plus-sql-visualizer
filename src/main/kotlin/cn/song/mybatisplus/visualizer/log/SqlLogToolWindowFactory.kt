@@ -305,7 +305,7 @@ class SqlLogPanel(
             JMenuItem(MpSqlVisualizerBundle.message("log.panel.copy")).apply {
                 addActionListener {
                     Toolkit.getDefaultToolkit().systemClipboard
-                        .setContents(StringSelection(entry.restoredSql), null)
+                        .setContents(StringSelection(withTerminator(entry.restoredSql)), null)
                 }
             },
         )

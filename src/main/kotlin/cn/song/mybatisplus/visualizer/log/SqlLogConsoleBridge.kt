@@ -21,8 +21,11 @@ import javax.swing.Timer
  * → 双包名候选加载；增量挂载（contentAdded）在 262 无接口方法 → **轮询兜底**（2s scanAll，幂等）。
  *
  * 全部调用经反射 + Proxy，任一步失败即优雅降级（返回 false / 静默跳过），不抛异常。
+ *
+ * T-xx（设置生效性审计）：`open` 开放子类化——[SqlLogManager] 内部测试缝（installBridgeForTest）
+ * 注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机，生产不受影响。
  */
-class SqlLogConsoleBridge(
+open class SqlLogConsoleBridge(
     private val buffer: SqlLogEntryBuffer,
     private val parserConfig: () -> ParserConfig = { ParserConfig("Preparing:", "Parameters:", true, 20000) },
     private val syncBufferConfig: () -> Unit = {},
@@ -39,8 +42,9 @@ class SqlLogConsoleBridge(
     }
     private var pollTimer: Timer? = null
 
-    /** 反射取 RunContentManager 实例（双包名候选）并挂载现有 console；环境缺 execution API 时返回 false。 */
-    fun attach(project: Project): Boolean {
+    /** 反射取 RunContentManager 实例（双包名候选）并挂载现有 console；环境缺 execution API 时返回 false。
+     *  T-xx：`open` 供测试受控桥覆写（attach 恒成功/恒失败）。 */
+    open fun attach(project: Project): Boolean {
         if (runContentManager != null) {
             LOG.debug("attach: already attached")
             return true
@@ -156,6 +160,14 @@ class SqlLogConsoleBridge(
                     filterIface.classLoader,
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line ->
+                        // T-xx（设置生效性审计）：每次喂行前同步解析器配置——前缀/混合/最大长度即时生效，
+                        // 对齐 filterKeywords/去重窗口的 T-M31.18 实时同步策略；此前 parser 挂载时固化配置，
+                        // 捕捉中修改仅对**之后新挂载**的 console 生效（读缓存旧值），现同策略修齐
+                        val cfg = parserConfig()
+                        parser.sqlPrefix = cfg.sqlPrefix
+                        parser.paramPrefix = cfg.paramPrefix
+                        parser.mixedPrefix = cfg.mixedPrefix
+                        parser.maxParseLength = cfg.maxParseLength
                         parser.feed(line)
                         // T-M31.18：每次入队前同步设置（去重窗口/过滤关键字即时生效，不再依赖重新捕捉）
                         syncBufferConfig()

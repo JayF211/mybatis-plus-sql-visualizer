@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
 import com.intellij.lang.java.JavaLanguage
 import com.intellij.lang.java.JavaSyntaxHighlighterFactory
 import com.intellij.openapi.Disposable
@@ -110,6 +111,7 @@ class SqlToJavaPanel(
     /** 转换：parse（EDT 纯函数）→ 实体查找（后台 ReadAction）→ 分发（设置形态）。 */
     private inner class ConvertAction : AnAction() {
         override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Execute
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.convert")
         }
 
@@ -121,6 +123,7 @@ class SqlToJavaPanel(
     /** 格式化输入区 SQL（SqlFormatter 幂等；程序性写入不触发补全）。 */
     private inner class FormatAction : AnAction() {
         override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.ReformatCode
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.format")
         }
 
@@ -133,6 +136,7 @@ class SqlToJavaPanel(
 
     private inner class ClearInputAction : AnAction() {
         override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.GC
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.clearInput")
         }
 
@@ -143,6 +147,7 @@ class SqlToJavaPanel(
 
     private inner class CopyAction : AnAction() {
         override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Copy
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.copy")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
@@ -156,6 +161,7 @@ class SqlToJavaPanel(
 
     private inner class ClearResultAction : AnAction() {
         override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.GC
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.clearResult")
         }
 

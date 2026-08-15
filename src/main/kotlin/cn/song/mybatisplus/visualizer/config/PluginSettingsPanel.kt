@@ -581,6 +581,16 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         // selectedItem 变化会同步触发 ActionListener，写穿与 rebuild 由监听统一处理
     }
 
+    /** T-xx：反向转换形态选择入口（测试用）——与下拉选择同一路径（selectedItem 按 equals 匹配）。 */
+    internal fun selectReverseFormat(value: String) {
+        reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == value } ?: return
+    }
+
+    /** T-xx：启动自动监听复选框设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setLogAutoCaptureCheck(checked: Boolean) {
+        logAutoCaptureCheck.isSelected = checked
+    }
+
     // ------------------------------------------------------------------
     // 配置读写
     // ------------------------------------------------------------------
@@ -608,6 +618,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || tablePrefixField.text.trim() != s.tablePrefix
             || tableSuffixField.text.trim() != s.tableSuffix
             || (inferenceCombo.selectedItem as? InferenceOption)?.value != s.tableNameInference
+            // T-xx（设置生效性审计）：反向转换形态下拉此前**漏挂 isModified**——仅改此项时 Apply 按钮不启用，
+            // 改动被平台静默丢弃（有读取点但保存链路断裂，形同假开关）；补上与其余下拉一致的变化检测
+            || (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
             || ignoredFieldsField.text.trim() != s.ignoredFields
             || removeTablePrefixField.text.trim() != s.removeTablePrefix
             || removeTableSuffixField.text.trim() != s.removeTableSuffix

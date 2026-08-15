@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.editor.EditorFactory
@@ -17,6 +18,10 @@ import javax.swing.JComponent
  * M14.7：保存后按变更类型联动——
  *  - 界面语言变化 → 重建表单（设置页自身文案即时切换）；
  *  - gutter 图标开关变化 → 遍历所有打开项目的编辑器触发重分析（line marker 立即刷新，无需重开文件）。
+ *
+ * T-xx（设置生效性审计）：启动自动监听开关「关→开」→ 对全部已打开项目立即生效
+ * （postStartupActivity 只在项目打开时触发——不重开项目也要本会话能捕捉，见
+ * [SqlLogManager.startAutoCaptureForOpenProjects]）。
  */
 class PluginSettingsConfigurable : Configurable {
 
@@ -32,12 +37,19 @@ class PluginSettingsConfigurable : Configurable {
     override fun isModified(): Boolean = panel.isModified()
 
     /**
-     * 保存配置；按变更类型联动（语言 → 重建表单；gutter 开关 → 全局刷新行标记）。
+     * 保存配置；按变更类型联动（语言 → 重建表单；gutter 开关 → 全局刷新行标记；
+     * 启动自动监听开启 → 已打开项目立即开始捕捉）。
      */
     override fun apply() {
         val settings = PluginSettings.getInstance()
         val gutterIconBefore = settings.state.showGutterIcon
+        val autoCaptureBefore = settings.state.logAutoCaptureOnStart
         if (panel.apply()) panel.rebuild()
+        // T-xx：自动监听「关→开」→ 全部已打开项目立即 startCapture（幂等）；
+        // 「开→关」不传播——工具栏手动捕捉独立于启动开关，避免误停用户手动监听
+        if (!autoCaptureBefore && settings.state.logAutoCaptureOnStart) {
+            SqlLogManager.startAutoCaptureForOpenProjects()
+        }
         // M14.7：gutter 图标开关变化 → 触发已打开编辑器的重分析（line marker 立即生效，无需重开文件）
         if (settings.state.showGutterIcon != gutterIconBefore) refreshGutterIcons()
     }
