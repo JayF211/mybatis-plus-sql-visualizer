@@ -196,6 +196,8 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetectorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisTest")
+                    // P0 SQL 反向转换（T-M36）：解析器单测（~30 用例，最大片）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.ForeachSqlNodeTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverTableConfigTest")
@@ -239,6 +241,9 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateDeleteMpjConverterTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.ConsumerMethodsCoverageTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlSqlRendererTest")
+                    // P0 SQL 反向转换（T-M36）：代码生成单测 + round-trip 闭环
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.JavaCodeGeneratorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaRoundTripTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")

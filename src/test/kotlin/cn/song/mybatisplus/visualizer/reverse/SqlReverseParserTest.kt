@@ -1,0 +1,322 @@
+package cn.song.mybatisplus.visualizer.reverse
+
+import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.LikePosition
+import cn.song.mybatisplus.visualizer.model.SqlValue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * SQL 反向解析器单元测试（P0）：SQL 文本 → [SqlReverseResult]（复用 [Condition] 模型）。
+ */
+class SqlReverseParserTest {
+
+    // ------------------------------------------------------------------
+    // 语句结构
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `无条件_表名与星号列`() {
+        val result = SqlReverseParser.parse("SELECT * FROM user")
+        assertEquals("user", result.tableName)
+        assertNull(result.selectColumns)
+        assertTrue(result.conditions.isEmpty())
+        assertTrue(result.orderBy.isEmpty())
+        assertNull(result.limit)
+    }
+
+    @Test
+    fun `简单列清单_保留顺序`() {
+        val result = SqlReverseParser.parse("SELECT id, name, age FROM user")
+        assertEquals(listOf("id", "name", "age"), result.selectColumns)
+    }
+
+    @Test
+    fun `函数列_整体放弃select生成`() {
+        assertNull(SqlReverseParser.parse("SELECT COUNT(*) FROM user").selectColumns)
+        assertNull(SqlReverseParser.parse("SELECT id, COUNT(*) FROM user").selectColumns)
+        assertNull(SqlReverseParser.parse("SELECT MAX(age) AS maxAge FROM user").selectColumns)
+    }
+
+    @Test
+    fun `反引号与点分_剥壳取末段`() {
+        val result = SqlReverseParser.parse("SELECT `id`, t.name FROM `my_db`.`user`")
+        assertEquals("user", result.tableName)
+        assertEquals(listOf("id", "name"), result.selectColumns)
+    }
+
+    @Test
+    fun `库前缀表名_取末段`() {
+        assertEquals("user", SqlReverseParser.parse("SELECT * FROM mydb.user").tableName)
+    }
+
+    @Test
+    fun `表别名_消费但不影响解析`() {
+        val result = SqlReverseParser.parse("SELECT * FROM user u WHERE u.id = 1")
+        assertEquals("user", result.tableName)
+        assertEquals(1, result.conditions.size)
+    }
+
+    @Test
+    fun `多行缩进与注释_忽略`() {
+        val result = SqlReverseParser.parse(
+            """
+            -- 查询用户
+            SELECT id /* 主键 */, name
+            FROM user
+            WHERE age > 18
+            """.trimIndent(),
+        )
+        assertEquals(listOf("id", "name"), result.selectColumns)
+        assertEquals(1, result.conditions.size)
+    }
+
+    @Test
+    fun `结尾分号_允许`() {
+        val result = SqlReverseParser.parse("SELECT * FROM user WHERE id = 1;")
+        assertEquals(1, result.conditions.size)
+    }
+
+    // ------------------------------------------------------------------
+    // WHERE 条件
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `字符串值_保留引号原文与解转义`() {
+        val result = SqlReverseParser.parse("SELECT * FROM user WHERE name = '张三'")
+        val c = result.conditions.single() as Condition.Simple
+        assertEquals("name", c.column.columnName)
+        assertEquals("=", c.op)
+        val value = c.value as SqlValue.Literal
+        assertEquals("'张三'", value.raw)
+        assertEquals("张三", value.unquoted)
+    }
+
+    @Test
+    fun `字符串双写转义_解转义`() {
+        val result = SqlReverseParser.parse("SELECT * FROM user WHERE name = 'O''Brien'")
+        val c = result.conditions.single() as Condition.Simple
+        assertEquals("O'Brien", (c.value as SqlValue.Literal).unquoted)
+    }
+
+    @Test
+    fun `数字与布尔值_原样字面量`() {
+        val result = SqlReverseParser.parse("SELECT * FROM user WHERE age > 18 AND flag = TRUE AND off = FALSE")
+        val conditions = result.conditions
+        assertEquals("18", ((conditions[0] as Condition.Simple).value as SqlValue.Literal).raw)
+        assertEquals("true", ((conditions[1] as Condition.Simple).value as SqlValue.Literal).raw)
+        assertEquals("false", ((conditions[2] as Condition.Simple).value as SqlValue.Literal).raw)
+    }
+    @Test
+    fun `比较操作符全家`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t WHERE a = 1 AND b != 2 AND c <> 3 AND d > 4 AND e >= 5 AND f < 6 AND g <= 7",
+        )
+        val ops = result.conditions.map { (it as Condition.Simple).op }
+        assertEquals(listOf("=", "!=", "<>", ">", ">=", "<", "<="), ops)
+    }
+
+    @Test
+    fun `等号NULL_映射IS NULL`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = NULL")
+        val c = result.conditions.single() as Condition.Unary
+        assertEquals("a", c.column.columnName)
+        assertEquals("IS NULL", c.op)
+    }
+
+    @Test
+    fun `不等号NULL_映射IS NOT NULL`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a != NULL")
+        assertEquals("IS NOT NULL", (result.conditions.single() as Condition.Unary).op)
+    }
+
+    @Test
+    fun `IS NULL与IS NOT NULL`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a IS NULL AND b IS NOT NULL")
+        val a = result.conditions[0] as Condition.Unary
+        val b = result.conditions[1] as Condition.Unary
+        assertEquals("IS NULL", a.op)
+        assertEquals("IS NOT NULL", b.op)
+    }
+
+    @Test
+    fun `IN与NOT IN_多值`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE status IN (1, 2, 3) AND name NOT IN ('a', 'b')")
+        val in1 = result.conditions[0] as Condition.In
+        assertTrue(!in1.negated)
+        assertEquals(listOf("1", "2", "3"), in1.values.map { (it as SqlValue.Literal).raw })
+        val in2 = result.conditions[1] as Condition.In
+        assertTrue(in2.negated)
+        assertEquals(listOf("a", "b"), in2.values.map { (it as SqlValue.Literal).unquoted })
+    }
+
+    @Test
+    fun `BETWEEN与NOT BETWEEN`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a BETWEEN 1 AND 5 AND b NOT BETWEEN 1 AND 2")
+        val between = result.conditions[0] as Condition.Between
+        assertTrue(!between.negated)
+        assertEquals("1", (between.lo as SqlValue.Literal).raw)
+        assertEquals("5", (between.hi as SqlValue.Literal).raw)
+        assertTrue((result.conditions[1] as Condition.Between).negated)
+    }
+
+    @Test
+    fun `LIKE通配符位置_映射LikePosition`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t WHERE a LIKE '%abc%' AND b LIKE 'abc%' AND c LIKE '%abc'",
+        )
+        val a = result.conditions[0] as Condition.Like
+        assertEquals(LikePosition.ANYWHERE, a.position)
+        assertEquals("abc", (a.pattern as SqlValue.Literal).unquoted)
+        assertEquals(LikePosition.RIGHT, (result.conditions[1] as Condition.Like).position)
+        assertEquals(LikePosition.LEFT, (result.conditions[2] as Condition.Like).position)
+    }
+
+    @Test
+    fun `NOT LIKE_negated标记`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a NOT LIKE '%abc%'")
+        val a = result.conditions.single() as Condition.Like
+        assertTrue(a.negated)
+        assertEquals(LikePosition.ANYWHERE, a.position)
+    }
+
+    @Test
+    fun `LIKE无通配符_降级Raw并记warning`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a LIKE 'abc'")
+        val raw = result.conditions.single() as Condition.Raw
+        assertEquals("a LIKE 'abc'", raw.sqlText)
+        assertEquals(1, result.warnings.size)
+    }
+
+    @Test
+    fun `LIKE中间百分号或下划线_降级Raw`() {
+        assertTrue(SqlReverseParser.parse("SELECT * FROM t WHERE a LIKE 'a%b'").conditions.single() is Condition.Raw)
+        assertTrue(SqlReverseParser.parse("SELECT * FROM t WHERE a LIKE 'a_b'").conditions.single() is Condition.Raw)
+        assertTrue(SqlReverseParser.parse("SELECT * FROM t WHERE a LIKE 'ab'").conditions.single() is Condition.Raw)
+    }
+
+    @Test
+    fun `别名列_剥离前缀`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE u.a = 1 AND `v`.`b` = 2")
+        assertEquals("a", (result.conditions[0] as Condition.Simple).column.columnName)
+        assertEquals("b", (result.conditions[1] as Condition.Simple).column.columnName)
+    }
+
+    @Test
+    fun `顶层AND连接_顺序保留`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 AND b = 2 AND c = 3")
+        assertEquals(3, result.conditions.size)
+        assertEquals(listOf("a", "b", "c"), result.conditions.map { (it as Condition.Simple).column.columnName })
+    }
+
+    // ------------------------------------------------------------------
+    // ORDER BY / LIMIT
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `ORDER BY_默认ASC与显式DESC`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 ORDER BY id DESC, name")
+        assertEquals(2, result.orderBy.size)
+        assertTrue(!result.orderBy[0].asc)
+        assertEquals("id", result.orderBy[0].column.columnName)
+        assertTrue(result.orderBy[1].asc)
+    }
+
+    @Test
+    fun `LIMIT_单值与偏移形态`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t LIMIT 10")
+        assertEquals("10", (result.limit?.count as SqlValue.Literal).raw)
+        assertNull(result.limit?.offset)
+
+        val paged = SqlReverseParser.parse("SELECT * FROM t LIMIT 5, 10")
+        assertEquals("5", (paged.limit?.offset as SqlValue.Literal).raw)
+        assertEquals("10", (paged.limit?.count as SqlValue.Literal).raw)
+    }
+
+    // ------------------------------------------------------------------
+    // 错误场景（P1+ 范围明确报错）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `非SELECT语句_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("UPDATE user SET name = 'x' WHERE id = 1") }
+        assertEquals(SqlReverseParser.KEY_NOT_SELECT, ex.key)
+    }
+
+    @Test
+    fun `OR条件_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 OR b = 2") }
+        assertEquals(SqlReverseParser.KEY_UNSUPPORTED, ex.key)
+        assertTrue(ex.detail.contains("OR"))
+    }
+
+    @Test
+    fun `括号嵌套_报错`() {
+        assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE (a = 1 AND b = 2)") }
+    }
+
+    @Test
+    fun `GROUP BY与HAVING_报错`() {
+        assertThrows { SqlReverseParser.parse("SELECT * FROM t GROUP BY a") }
+        assertThrows { SqlReverseParser.parse("SELECT * FROM t HAVING a > 1") }
+    }
+
+    @Test
+    fun `JOIN_报错`() {
+        assertThrows { SqlReverseParser.parse("SELECT * FROM t LEFT JOIN u ON t.id = u.tid") }
+    }
+
+    @Test
+    fun `参数占位符_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = ?") }
+        assertTrue(ex.detail.contains("?"))
+    }
+
+    @Test
+    fun `列对列比较_报错`() {
+        assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = b") }
+    }
+
+    @Test
+    fun `函数条件_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE DATE_FORMAT(create_time, '%Y') = '2024'") }
+        assertTrue(ex.detail.contains("函数表达式"))
+    }
+
+    @Test
+    fun `子查询_报错`() {
+        assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a IN (SELECT id FROM u)") }
+    }
+
+    @Test
+    fun `多条语句_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t; SELECT * FROM u") }
+        assertTrue(ex.detail.contains("多条"))
+    }
+
+    @Test
+    fun `缺少FROM_报错`() {
+        assertThrows { SqlReverseParser.parse("SELECT 1") }
+    }
+
+    @Test
+    fun `空文本与未闭合字符串_报错`() {
+        assertThrows { SqlReverseParser.parse("   ") }
+        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = 'abc") }
+        assertEquals(SqlReverseParser.KEY_PARSE, ex.key)
+    }
+
+    // ------------------------------------------------------------------
+    // 工具
+    // ------------------------------------------------------------------
+
+    private fun assertThrows(block: () -> Unit): SqlReverseException =
+        try {
+            block()
+            throw AssertionError("expected SqlReverseException")
+        } catch (e: SqlReverseException) {
+            e
+        }
+}
