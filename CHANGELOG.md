@@ -6,7 +6,7 @@
 
 ### Added
 
-- **更新安装失败与通知修复**（T-M28.3）：修复「更新失败: current installation is not under the IDE plugins directory」——目录守卫路径归一化（2026.2 平台 descriptorPath 为 URL 风格，Windows 驱动字母前导斜杠误拒正常安装）；更新通知优化——标题带插件名、内容只保留变更日志标题行、失败通知用「更新失败」标题；下载包权限加固（POSIX 644，Mac/sudo 场景防安装失败）
+- **更新安装失败与通知修复**（T-M28.3，含二修）：修复「更新失败: current installation is not under the IDE plugins directory」——安装守卫改黑名单式判定（真实安装任意形态放行，仅拒绝开发态构建产物路径）；更新通知优化——标题带插件名、内容每行一个版本标题（HTML 换行）、失败通知用「更新失败」标题；下载包权限加固（POSIX 644，Mac/sudo 场景防安装失败）：修复「更新失败: current installation is not under the IDE plugins directory」——目录守卫路径归一化（2026.2 平台 descriptorPath 为 URL 风格，Windows 驱动字母前导斜杠误拒正常安装）；更新通知优化——标题带插件名、内容只保留变更日志标题行、失败通知用「更新失败」标题；下载包权限加固（POSIX 644，Mac/sudo 场景防安装失败）
 - **构建号复制按钮**（T-M28.2）：内部构建号行新增「复制」按钮，一键复制构建号文本（反馈问题直接粘贴）；无构建号时按钮禁用
 - **设置页检查更新与自动安装更新**（M28）：插件设置页新增「更新」分区——当前版本展示、「检查更新」按钮（已最新/发现新版/失败原因状态反馈）、新版变更日志展示、「下载并安装」一键完成（下载进度条）→ 安装完成后提示「重启 IDE 生效」+ 重启按钮（IDE 原生确认框，可选稍后）；「启动时自动检查更新」开关（默认开）——启动静默检查，发现新版弹通知可「立即更新」后台下载安装；更新源 = 发布仓库 `update/update.json` 清单 + Gitee Release 附件（发布流程新增清单维护步骤，`./gradlew writeUpdateManifest`）
 - **注解 `<script>` 动态标签补全**（T-M27.5）：`@Select("<script>…")` 内输入 `<` 补动态标签名、标签内补属性、test/collection 值内补参数名与实体字段——与 XML mapper 体验一致
