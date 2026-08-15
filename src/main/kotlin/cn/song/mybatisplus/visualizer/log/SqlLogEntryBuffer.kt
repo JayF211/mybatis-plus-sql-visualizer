@@ -87,6 +87,6 @@ class SqlLogEntryBuffer(
 
     companion object {
         private const val DEFAULT_MAX_ENTRIES = 200
-        private const val DEFAULT_DEDUPE_WINDOW_MS = 1000L
+        private const val DEFAULT_DEDUPE_WINDOW_MS = 60000L
     }
 }

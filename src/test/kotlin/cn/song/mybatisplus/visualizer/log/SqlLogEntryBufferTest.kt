@@ -79,6 +79,11 @@ class SqlLogEntryBufferTest {
 
     // ---------- 去重（对齐 MybatisCodeHelper-Pro「移除重复的sql」） ----------
 
+    companion object {
+        /** 与 SqlLogEntryBuffer 默认窗口（60000ms，T-M31.17）同步——超窗口用例时间差须大于它。 */
+        private const val DEFAULT_WINDOW = 60000L
+    }
+
     private fun entryAt(sql: String, ts: Long) = LogSqlEntry(
         rawSql = sql,
         restoredSql = sql,
@@ -101,7 +106,7 @@ class SqlLogEntryBufferTest {
     fun `去重窗口外相同 SQL 保留`() {
         buffer.dedupeEnabled = true
         buffer.addEntry(entryAt("SELECT 1", 0L))
-        assertTrue(buffer.addEntry(entryAt("SELECT 1", 1500L))) // 超窗口
+        assertTrue(buffer.addEntry(entryAt("SELECT 1", DEFAULT_WINDOW + 100L))) // 超窗口
         assertEquals(2, buffer.snapshot().size)
     }
 

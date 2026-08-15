@@ -151,7 +151,7 @@ class SqlLogPanel(
 
     private inner class SettingsAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Properties
+            e.presentation.icon = AllIcons.General.Settings
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
         }
 

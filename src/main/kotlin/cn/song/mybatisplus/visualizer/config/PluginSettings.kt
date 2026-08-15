@@ -134,7 +134,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 过滤：还原 SQL 包含任一关键字（`;` 分隔）则丢弃。 */
         var logFilterKeywords: String = "",
 
-        /** 去重窗口毫秒（相同 SQL 在该窗口内重复丢弃；默认 1000 对齐参考插件）。 */
+        /** 去重窗口毫秒（相同 SQL 在该窗口内重复丢弃；默认 60000——T-M31.17 用户实测 1000ms 过短，重复查询仍显示）。 */
         var logDedupeWindowMs: Long = DEFAULT_LOG_DEDUPE_WINDOW_MS,
 
         /** 日志行解析最大长度（超长截断，防控制台大输出卡顿；默认 20000 对齐参考插件）。 */
@@ -177,7 +177,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_SQL_PREFIX = "Preparing:"
         const val DEFAULT_LOG_PARAM_PREFIX = "Parameters:"
         const val DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
-        const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 1000L
+        const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
 
         /**
