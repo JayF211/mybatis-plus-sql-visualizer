@@ -96,16 +96,20 @@ class SqlLogConsoleBridge(
     private fun scanAll() {
         val rcm = runContentManager ?: return
         val descriptors = try {
-            rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm) as? Array<*>
-        } catch (t: Throwable) {
-            // 262 的接口为 getAllDescriptors() 返回 List —— 兼容两种返回形态
-            try {
-                val result = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
-                (result as? Collection<*>)?.toTypedArray()
-            } catch (t2: Throwable) {
-                LOG.warn("scanAll: getAllDescriptors failed on ${rcm.javaClass.name}", t2)
-                null
+            val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
+            when (raw) {
+                // 2024.3/2025.3 返回 Array；2026.2 返回 List（T-M31.10 实证）——as? 失败返回 null 不抛异常，
+                // 必须显式分支，否则 Collection 兜底永不执行
+                is Array<*> -> raw
+                is Collection<*> -> raw.toTypedArray()
+                else -> {
+                    LOG.warn("scanAll: unexpected getAllDescriptors return type: ${raw?.javaClass?.name}")
+                    null
+                }
             }
+        } catch (t: Throwable) {
+            LOG.warn("scanAll: getAllDescriptors failed on ${rcm.javaClass.name}", t)
+            null
         } ?: return
         LOG.debug("scanAll: ${descriptors.size} run descriptors")
         for (descriptor in descriptors) {
