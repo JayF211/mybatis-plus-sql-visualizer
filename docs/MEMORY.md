@@ -14,6 +14,14 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 > 本文件为 docs/ 目录导航清单，随仓库发布。用途与本地 ~/.zcode 会话记忆不同（见上方元数据）。
 
+> 🔴 **多会话并行开发必读（重点）——并行测试协调登记表**：
+> 场景原因：2026-08-15 T-M26.1 验证时两个并行会话同仓库跑测试，测试沙盒互锁 + 互相误杀对方测试 JVM（误判残留进程），导致索引/test-results 损坏、1.3GB hprof 垃圾的「互锁互杀」循环；此后落地共享登记表机制，**任何会话跑 Gradle 测试前必须查表**。
+> - 脚本（本机工具，不在仓库）：`C:\Users\USER\.zcode\cli\parallel_tasks.py`；数据文件 `parallel-tasks.json` 同目录（全局共享）
+> - 用法：`python parallel_tasks.py check`（无活跃任务 exit 0 / 有活跃任务 exit 1 并列出对方）→ 有并行活动时 `register --name <任务名> --sandbox <独立沙盒>` 登记 → 跑完 `done` 注销；`prune` 清超时残留
+> - kill 白名单：kill java/idea 进程前查表——命令行含**自己登记的沙盒名**才允许 kill
+> - M28×M29 二次实证教训：登记会自锁 `check`（别把 check 链进自己命令）；共享 gradle daemon 会被对方 `--stop` 误杀（测试执行器莫名 FAILED）——权威全量回归建议 `git worktree` 独立目录 + `--no-daemon`
+> - 完整约定见本地记忆 `agent-parallel-test-isolation.md`（本机 `~/.zcode/cli/memories/projects/.../memory/`）
+
 ## 核心文档（docs/ 根目录）
 
 | 文档 | 用途 |
@@ -97,12 +105,13 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 版本记录 / 版本号规范 | `发行说明/` |
 | 文档命名 / 格式规范 | `文档命名规范-说明文档.md` |
 | 产品介绍 / 使用说明 | `项目介绍.md` |
-| 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/` |
+| 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
 
 ## 变更记录
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-15 | 索引新增重点提示：文件头 🔴 并行测试协调登记表（parallel_tasks.py 位置/用法/场景原因——T-M26.1 互锁互杀 + M28×M29 实证） |
 | 2026-08-15 | 更新索引条目：20260815-1219-设置页检查更新与自动安装更新-M28-开发计划.md（M28 已交付 766 测试全绿，T-M28-01~06） |
 | 2026-08-15 | 新增索引条目：20260815-1219-设置页检查更新与自动安装更新-M28-开发计划.md（M28 任务源 T-M28-xx，计划定稿待开工） |
 | 2026-08-15 | 更新索引条目：20260815-1630-XML与注解SQL代码补全-M27-开发计划.md（M27 已交付 714 测试全绿，T-M27-01~06） |
