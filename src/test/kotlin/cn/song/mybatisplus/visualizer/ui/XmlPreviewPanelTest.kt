@@ -129,7 +129,8 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         assertNotNull("foreach 应有集合值输入框", valuesField)
         valuesField!!.text = "2,3" // setText 触发 DocumentListener → 回填
         val sql = compact(panel.editorForTest()!!.document.text)
-        assertTrue("输入 2,3 应回填为 IN ( 2 , 3 )：$sql", sql.contains("IN ( 2 , 3 )"))
+        // T-M29.4：foreach 展开项默认引号（`IN ( '2' , '3' )`，数值隐式转换语义不变）
+        assertTrue("输入 2,3 应回填为 IN ( '2' , '3' )：$sql", sql.contains("IN ( '2' , '3' )"))
         panel.clear()
     }
 
@@ -198,6 +199,52 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             "LIKE 参数回填应带引号：" + compact(panel.editorForTest()!!.document.text),
             compact(panel.editorForTest()!!.document.text).contains("LIKE CONCAT('%', '111', '%')"),
         )
+        panel.clear()
+    }
+
+    fun testXmlParamQuotedByDefault() {
+        // T-M29.4（用户实测：Map 入参无列类型信息）——XML 参数回填默认带引号：
+        // `settlement_period >= #{p.settlementStartDate}` 输入 2025 → `>= '2025'`（LocalDate 年份输入
+        // 不再被数字启发式裸渲染）；数值列（dic_credit_status）输入 2 → `= '2'`（隐式转换语义不变）
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">
+                SELECT * FROM t
+                <where>
+                    t.deleted = 0
+                    <if test="p.settlementStartDate != null">
+                        AND t.settlement_period &gt;= #{p.settlementStartDate}
+                    </if>
+                    <if test="p.dicCreditStatus != null">
+                        AND t.dic_credit_status = #{p.dicCreditStatus}
+                    </if>
+                </where>
+              </select>
+            </mapper>
+        """.trimIndent())
+        val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val rendered = model.renderSql()
+        val result = PreviewResult(
+            sql = rendered.sql,
+            compactSql = rendered.sql,
+            unresolvedParams = rendered.mappings.map { it.property },
+            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            wrapperType = null,
+            tableName = null,
+            xmlModel = model,
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result)
+        val fields = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+        val dateField = fields.firstOrNull { it.toolTipText == "#p.settlementStartDate" }
+        val statusField = fields.firstOrNull { it.toolTipText == "#p.dicCreditStatus" }
+        assertNotNull("应有日期参数输入行", dateField)
+        assertNotNull("应有状态参数输入行", statusField)
+        dateField!!.text = "2025"
+        statusField!!.text = "2"
+        val sql = compact(panel.editorForTest()!!.document.text)
+        assertTrue("日期参数应带引号：$sql", sql.contains("t.settlement_period >= '2025'"))
+        assertTrue("数值参数默认也带引号（隐式转换等价）：$sql", sql.contains("t.dic_credit_status = '2'"))
         panel.clear()
     }
 

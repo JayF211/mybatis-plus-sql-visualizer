@@ -331,8 +331,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val base = rendered.sql
                 val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
                 val sources = rendered.mappings.map { it.property }
-                // T-M26.5：LIKE 参数提示（模糊查询恒引号——String 列纯数字输入不再被数字启发式误判）
-                showSql(backfillParamsBySource(sql, sources, likeParamHints(sql, sources)))
+                // T-M29.4：XML 入参无列类型信息（Map 等）——参数回填**默认带引号**（对齐 Wrapper 路径
+                // T-M23-03「未知类型默认引号」：日期/字符串列必须引号；数值列 MySQL/PG/Oracle/SQLServer
+                // 隐式转换等价）。原 likeParamHints 仅 LIKE 参数标记引号、其余走数字启发式——
+                // 用户实测 `settlement_period >= 2025`（LocalDate 年份输入被裸渲染，日期列比较失效）
+                val xmlHints = MutableList(sources.size) { ParamHint(quote = true) }
+                showSql(backfillParamsBySource(sql, sources, xmlHints))
             }
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
             batch != null -> {
@@ -1035,27 +1039,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             i++
         }
         return sb.toString()
-    }
-
-    /**
-     * T-M26.5：XML 渲染 SQL 的 LIKE 参数提示——某个 `?` 与最近的 LIKE 关键字之间无其他 `?`
-     * 时判定为模糊查询参数（恒引号，修复数字启发式把 String 列 LIKE 值当数字的误判：
-     * `#keyword="111"` → `LIKE CONCAT('%', '111', '%')`；如 `CONCAT('%', ?, '%')` 中 ? 前
-     * 最近的 LIKE 比上一个 ? 更近）。与 Wrapper 场景的 SqlGenerator hints 对齐。
-     */
-    private fun likeParamHints(sql: String, sources: List<String>): List<ParamHint> {
-        val hints = MutableList(sources.size) { ParamHint() }
-        var qIndex = -1
-        var paramIndex = 0
-        while (paramIndex < sources.size) {
-            qIndex = sql.indexOf('?', qIndex + 1)
-            if (qIndex < 0) break
-            val likePos = maxOf(sql.lastIndexOf("LIKE", qIndex), sql.lastIndexOf("like", qIndex))
-            val prevQ = sql.lastIndexOf('?', qIndex - 1)
-            if (likePos > prevQ) hints[paramIndex] = ParamHint(quote = true)
-            paramIndex++
-        }
-        return hints
     }
 
     private fun renderParamValue(v: String?, hint: ParamHint?): String {
