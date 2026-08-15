@@ -1,6 +1,6 @@
 {
   "version": "2026.8.14",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/v2026.8.14/mybatis-plus-sql-visualizer-2026.8.14.zip",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.14/mybatis-plus-sql-visualizer-2026.8.14.zip",
   "changeNotes": "v2026.8.14：官方 API 覆盖差距清零（实体单条 CRUD/联表删除更新全链路/allEq/selectFunc 等）；批量操作增强（软删除/参数面板/角色分组）；多数据库方言（9 种）+ 乐观锁注入；SQL 关键字方言化引用；多 SQL 选择与定位跳转\nv2026.8.13（首发）：Wrapper 全覆盖实时转可读 SQL、参数替换、动态条件、格式化、字段补全、表名配置、逻辑删除注入、执行 SQL、gutter 图标、中英文界面",
   "publishDate": "2026-08-14",
   "sinceBuild": "253"
