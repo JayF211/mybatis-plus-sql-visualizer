@@ -65,14 +65,22 @@ object PlatformPluginInstaller {
     }
 
     /**
-     * 旧版安装位置是否在插件目录内：descriptorPath（plugin.xml 路径）规范化前缀判定；
-     * zip 形态的 descriptorPath 可能带 `jar:file:`/`!` 前缀（按包名容忍剥离）。
+     * 旧版安装位置是否在插件目录内（跨平台加固，T-M28.1）：descriptorPath（plugin.xml 路径）
+     * 规范化前缀判定；zip 形态的 descriptorPath 可能带 `jar:file:`/`!` 前缀（按包名容忍剥离）。
+     *
+     * 原实现为字符串前缀比较——`String.startsWith` **大小写敏感**（Windows 用户目录大小写
+     * 差异会误拒）、**不解析符号链接**（Mac 软链迁移/外置盘场景误拒）→ 改为 Path **组件级**
+     * 比较 + `toRealPath()` 解析符号链接（Windows 组件比较大小写不敏感；Mac 解析后两侧
+     * 均为真实路径必然一致）；`toRealPath` 失败（文件不存在等）回退字符串比较。
      */
-    private fun isUnderPluginsDir(descriptorPath: String?): Boolean {
+    internal fun isUnderPluginsDir(descriptorPath: String?): Boolean {
         if (descriptorPath.isNullOrBlank()) return false
         val raw = descriptorPath.substringBefore('!').removePrefix("jar:file:")
-        val pluginsRoot = PathManager.getPluginsDir().toAbsolutePath().normalize().toString()
-        val path = Path.of(raw).toAbsolutePath().normalize().toString()
-        return path.startsWith(pluginsRoot)
+        return runCatching {
+            Path.of(raw).toRealPath().startsWith(PathManager.getPluginsDir().toRealPath())
+        }.getOrElse {
+            val pluginsRoot = PathManager.getPluginsDir().toAbsolutePath().normalize().toString()
+            Path.of(raw).toAbsolutePath().normalize().toString().startsWith(pluginsRoot)
+        }
     }
 }
