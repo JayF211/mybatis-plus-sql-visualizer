@@ -102,6 +102,19 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 | `./gradlew verifyPlugin` | 校验插件描述与兼容性，三态：默认全量三版本（243/253/262，发布/里程碑前）；`-PverifyIdes=minimal` 边界两版本（243+262，约 10 分钟）；`-PverifyIdes=smoke` 仅构建基准 243（约 2 分钟，日常开发后兼容冒烟；高版本 API 移除风险由发布前全量兜底） |
 | `./gradlew buildPlugin` | 生成发布 zip（`build/distributions/`） |
 
+### 验证节奏建议（T-M31.3 定稿）
+
+| 场景 | 命令 | 耗时 |
+|------|------|------|
+| **日常开发迭代**（每次功能提交前） | `./gradlew test` + `./gradlew verifyPlugin -PverifyIdes=smoke` | 约 3 分钟 |
+| **需要看 API 移除面**（使用新平台 API 后） | `verifyPlugin -PverifyIdes=minimal`（边界 243+262） | 约 10 分钟 |
+| **发布 / 里程碑交付** | `verifyPlugin` 全量三版本（243/253/262） | 约 10 分钟 |
+
+> 说明：测试本身分钟级（`clean test` 带缓存约 1 分钟，分片并行 `testShards` 同量级）；
+> verifyPlugin 是大头（262 单版本字节码分析约 7.5 分钟，不可缓存）——日常用 smoke（仅构建基准 243，
+> 编译基准确认 + 冒烟），高版本 API 移除风险由发布前全量兜底（T-M30.1 uninstallAfterRestart 教训）。
+> 另：verifyPlugin 与并行测试共享默认沙盒/`.pluginVerifier` 缓存，并行会话需错峰。
+
 ## 📦 发布
 
 详见 [开发计划](docs/开发计划/20260812-1058-MP-SQL可视化-开发计划.md) 的 M6 里程碑。
