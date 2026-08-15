@@ -99,7 +99,7 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 | `./gradlew build` | 编译 + 测试 + 打包插件 |
 | `./gradlew test` | 运行单元测试 |
 | `./gradlew runIde` | 启动沙箱 IDEA 调试插件 |
-| `./gradlew verifyPlugin` | 校验插件描述与兼容性 |
+| `./gradlew verifyPlugin` | 校验插件描述与兼容性（默认 243/253/262 三版本全量，约 10 分钟）；日常开发可 `-PverifyIdes=minimal` 只验证边界版本（243+262，省约 40%）；发布前跑全量 |
 | `./gradlew buildPlugin` | 生成发布 zip（`build/distributions/`） |
 
 ## 📦 发布

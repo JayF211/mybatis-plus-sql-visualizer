@@ -61,11 +61,20 @@ intellijPlatform {
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
     // 版本 + 中段版本 + 最新版本；首次运行下载各发行版（体积大，gradle.properties 已配代理）。
+    // T-M31.1 提速：验证耗时与版本数线性（243≈1min / 253≈5.7min / 262≈7.5min，字节码分析不可缓存）——
+    // 日常开发用 `-PverifyIdes=minimal` 只验证边界（243 最低兼容 + 262 API 移除最敏感，253 被两头覆盖）；
+    // 发布/里程碑交付用默认全量三版本。
     pluginVerification {
         ides {
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.1")
+            val minimal = providers.gradleProperty("verifyIdes").orNull == "minimal"
+            if (minimal) {
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.1")
+            } else {
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.1")
+            }
         }
         // T-M30.1：失败等级仅保留兼容性问题（IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败）——
         // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API，
