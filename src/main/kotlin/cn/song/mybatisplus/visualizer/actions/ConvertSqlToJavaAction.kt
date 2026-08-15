@@ -1,16 +1,10 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
-import cn.song.mybatisplus.visualizer.model.TableInfo
-import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
-import cn.song.mybatisplus.visualizer.psi.EntityResolver
-import cn.song.mybatisplus.visualizer.reverse.GeneratedWrapper
-import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
-import cn.song.mybatisplus.visualizer.reverse.SqlReverseParser
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
-import cn.song.mybatisplus.visualizer.reverse.resolveWrapperFormat
+import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.ui.JavaCodePreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -22,25 +16,20 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
-import com.intellij.psi.PsiClass
 
 /**
- * SQL → MyBatis-Plus Java 代码 转换 Action（SQL 反向链路，P0 + T-M36.2）。
+ * SQL → MyBatis-Plus Java 代码 转换 Action（SQL 反向链路，P0 + T-M36.2/3 + T-M36.4 共享编排）。
  *
  * 触发方式（plugin.xml 注册）：编辑器右键菜单 "Convert SQL to MP Java Code" + 快捷键
  * `Alt+Shift+J`（Windows/Linux）/ `Cmd+Shift+J`（macOS）。
  *
- * 行为：取编辑器选择区文本 → [SqlReverseParser] 解析（单表 SELECT）→
- * [EntityClassFinder] 按表名查找项目内实体类（T-M36.2）：
- *  - 唯一候选 → 生成 `LambdaQueryWrapper<Entity>` 代码（列→字段映射，未映射回落字符串列名）；
- *  - 多候选 → [SqlSelectionDialog] 选择后生成；
- *  - 无候选 → 回落字符串列名 `QueryWrapper` 形态（P0 行为）。
- * 结果经 [JavaCodePreviewDialog] 预览（复制/关闭）；解析失败（P1+ 结构/语法错误）弹错误
- * 对话框（含行号定位）。
+ * 行为：取编辑器选择区文本 → [SqlToJavaConverter] 共享编排（T-M36.4 抽取，与工具窗口
+ * 「SQL → Java」tab 同一链路）——解析（纯函数，失败弹错误对话框含行号）→ 按设置形态
+ * （[PluginSettings.REVERSE_QUERY] 跳过实体查找）后台 ReadAction 查找实体 → 分发
+ * （无候选回落 QueryWrapper / 唯一候选直接生成 / 多候选 [SqlSelectionDialog] 选择）→
+ * [JavaCodePreviewDialog] 预览（复制/关闭）。
  *
- * 与 [ConvertToSqlAction]（Wrapper→SQL 正向）互补。实体查找为 PSI 索引访问 → 后台
- * ReadAction 执行（对齐 ConvertToSqlAction 的 EDT 慢操作守卫模式）；SQL 解析与代码生成为
- * 纯函数，在 EDT 回调中执行。
+ * 与 [ConvertToSqlAction]（Wrapper→SQL 正向）互补。
  */
 class ConvertSqlToJavaAction : AnAction() {
 
@@ -60,37 +49,32 @@ class ConvertSqlToJavaAction : AnAction() {
 
         // 1. SQL 解析（纯函数，EDT 安全）；失败 → 错误弹窗（含行号）
         val result = try {
-            SqlReverseParser.parse(text)
+            SqlToJavaConverter.parse(text)
         } catch (ex: SqlReverseException) {
-            val line = SqlReverseParser.lineOf(text, ex.offset)
             Messages.showErrorDialog(
                 project,
-                MpSqlVisualizerBundle.message(ex.key, ex.detail) + "\n（第 $line 行）",
+                MpSqlVisualizerBundle.message(ex.key, ex.detail) + "\n（第 ${SqlToJavaConverter.errorLine(text, ex.offset)} 行）",
                 MpSqlVisualizerBundle.message("reverse.error.title"),
             )
             return
         }
 
-        // 2. 实体查找（PSI 索引访问 → 后台 ReadAction；T-M36.2）；QUERY 形态无需实体（T-M36.3 跳过查找）
+        // 2. 实体查找（PSI 索引访问 → 后台 ReadAction）；QUERY 形态无需实体（跳过查找）
         val format = reverseFormat()
         if (format == ReverseWrapperFormat.QUERY) {
-            showResult(project, result, emptyList(), GeneratedWrapper.QUERY)
+            showResult(project, result, emptyList(), format)
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             val candidates = try {
-                ReadAction.compute<List<EntityCandidate>, Throwable> {
-                    EntityClassFinder(project).find(result.tableName).map { clazz ->
-                        EntityCandidate(clazz, EntityResolver().resolve(clazz))
-                    }
+                ReadAction.compute<List<SqlToJavaConverter.EntityCandidate>, Throwable> {
+                    SqlToJavaConverter.findCandidates(project, result.tableName)
                 }
             } catch (t: Throwable) {
                 emptyList()
             }
             ApplicationManager.getApplication().invokeLater {
-                // T-M36.3：配置 + 是否有实体 → 最终形态（AUTO/LAMBDA/MPJ_LAMBDA 无实体回落 QUERY）
-                val wrapper = resolveWrapperFormat(format, candidates.isNotEmpty())
-                showResult(project, result, candidates, wrapper)
+                showResult(project, result, candidates, format)
             }
         }
     }
@@ -100,16 +84,19 @@ class ConvertSqlToJavaAction : AnAction() {
         ReverseWrapperFormat.fromPersisted(PluginSettings.getInstance().state.reverseWrapperFormat)
     }.getOrDefault(ReverseWrapperFormat.AUTO)
 
-    /** 结果分发：无实体（或 QUERY 形态）回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。 */
+    /** 结果分发：无候选回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。 */
     private fun showResult(
         project: Project,
         result: SqlReverseResult,
-        candidates: List<EntityCandidate>,
-        wrapper: GeneratedWrapper,
+        candidates: List<SqlToJavaConverter.EntityCandidate>,
+        format: ReverseWrapperFormat,
     ) {
         when (candidates.size) {
-            0 -> JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result)).show()
-            1 -> showLambdaDialog(project, result, candidates[0], wrapper)
+            0 -> JavaCodePreviewDialog(
+                project,
+                SqlToJavaConverter.generateCode(result, null, format),
+            ).show()
+            1 -> showCodeDialog(project, result, candidates[0], format)
             else -> {
                 // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
                 val displayTexts = candidates.map { c ->
@@ -119,24 +106,20 @@ class ConvertSqlToJavaAction : AnAction() {
                     )
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->
-                    showLambdaDialog(project, result, selected, wrapper)
+                    showCodeDialog(project, result, selected, format)
                 }.show()
             }
         }
     }
 
-    /** 生成并展示 Lambda 形态代码（wrapper 由配置分发决定，T-M36.3）。 */
-    private fun showLambdaDialog(
+    /** 生成并展示代码（形态由配置分发，T-M36.3）。 */
+    private fun showCodeDialog(
         project: Project,
         result: SqlReverseResult,
-        candidate: EntityCandidate,
-        wrapper: GeneratedWrapper,
+        candidate: SqlToJavaConverter.EntityCandidate,
+        format: ReverseWrapperFormat,
     ) {
-        val target = JavaCodeGenerator.EntityTarget(
-            className = candidate.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
-            columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
-        )
-        JavaCodePreviewDialog(project, JavaCodeGenerator.generate(result, target, wrapper)).show()
+        JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, candidate, format)).show()
     }
 
     private fun showNoSelection(project: Project) {
@@ -146,9 +129,6 @@ class ConvertSqlToJavaAction : AnAction() {
             MpSqlVisualizerBundle.message("plugin.name"),
         )
     }
-
-    /** 实体候选（类 + 已解析表信息；PSI 访问已在后台完成，EDT 仅持纯数据）。 */
-    private data class EntityCandidate(val psiClass: PsiClass, val tableInfo: TableInfo)
 
     // 仅访问编辑器选择区（UI 状态，非 PSI）→ EDT 更新线程安全且无慢操作风险
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT

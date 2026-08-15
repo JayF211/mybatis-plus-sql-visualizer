@@ -69,6 +69,8 @@ class SqlLogPanel(
     private val tabs = JBTabbedPane()
     private var formatToggled = false // T-M31.15 工具栏「格式化」按钮切换态
     private val previewEditor: Editor = createPreviewEditor()
+    /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
+    private val sqlToJavaPanel = SqlToJavaPanel(project)
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener { manager.entries.dedupeEnabled = isSelected }
@@ -86,6 +88,7 @@ class SqlLogPanel(
 
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.preview"), previewPanel)
+        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
         add(tabs, BorderLayout.CENTER)
 
         manager.addUiListener { refreshList() }
@@ -314,9 +317,10 @@ class SqlLogPanel(
         menu.show(list, e.x, e.y)
     }
 
-    /** 面板销毁：释放预览编辑器（manager 生命周期由项目 @Service 管理）。 */
+    /** 面板销毁：释放预览编辑器与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
         EditorFactory.getInstance().releaseEditor(previewEditor)
+        sqlToJavaPanel.dispose()
     }
 
     companion object {
