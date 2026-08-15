@@ -198,6 +198,8 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisTest")
                     // P0 SQL 反向转换（T-M36）：解析器单测（~30 用例，最大片）
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest")
+                    // T-M31 日志还原：解析/还原纯逻辑单测
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.log.*")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.ForeachSqlNodeTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverTableConfigTest")

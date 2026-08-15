@@ -1,0 +1,180 @@
+package cn.song.mybatisplus.visualizer.log
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+/**
+ * 日志行解析与参数配对单元测试（T-M31-01）。
+ */
+class MyBatisLogParserTest {
+
+    private fun parser() = MyBatisLogParser()
+
+    private fun feedAll(p: MyBatisLogParser, vararg lines: String): List<LogSqlEntry> {
+        lines.forEach { p.feed(it) }
+        p.closePending()
+        return p.takeEntries()
+    }
+
+    @Test
+    fun `MP 前缀格式配对 Preparing 与 Parameters`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT id, name FROM user WHERE id = ? AND status = ?",
+            "==> Parameters: 1(Long), active(String)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT id, name FROM user WHERE id = 1 AND status = 'active'", entries[0].restoredSql)
+        assertEquals(2, entries[0].params.size)
+        assertEquals("1", entries[0].params[0].value)
+        assertEquals("Long", entries[0].params[0].type)
+    }
+
+    @Test
+    fun `MyBatis 原生格式无前缀配对`() {
+        val entries = feedAll(
+            parser(),
+            "Preparing: DELETE FROM t WHERE id = ?",
+            "Parameters: 7(Integer)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("DELETE FROM t WHERE id = 7", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `带日志框架前缀的行按关键字定位`() {
+        val entries = feedAll(
+            parser(),
+            "2026-08-15 10:00:00.123  INFO 1234 --- [main] c.s.m.Log : ==>  Preparing: SELECT * FROM user WHERE id = ?",
+            "2026-08-15 10:00:00.124  INFO 1234 --- [main] c.s.m.Log : ==> Parameters: 42(Long)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM user WHERE id = 42", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `多条语句连续配对`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM a WHERE x = ?",
+            "==> Parameters: 1(Integer)",
+            "==>  Preparing: SELECT * FROM b WHERE y = ?",
+            "==> Parameters: 2(Integer)",
+        )
+        assertEquals(2, entries.size)
+        assertEquals("SELECT * FROM a WHERE x = 1", entries[0].restoredSql)
+        assertEquals("SELECT * FROM b WHERE y = 2", entries[1].restoredSql)
+    }
+
+    @Test
+    fun `无参语句直接闭合不替换`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT COUNT(*) FROM user",
+            "==> Total: 1",
+            "<== Columns: COUNT(*)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT COUNT(*) FROM user", entries[0].restoredSql)
+        assertEquals(emptyList<LogSqlParam>(), entries[0].params)
+    }
+
+    @Test
+    fun `噪声行忽略`() {
+        val entries = feedAll(
+            parser(),
+            "2026-08-15 10:00:00.100  INFO --- [main] c.s.m.Application : started in 2s",
+            "==>  Preparing: SELECT * FROM t WHERE id = ?",
+            "==> Parameters: 3(Long)",
+            "<==    Columns: id, name",
+            "<==      Total: 1",
+        )
+        assertEquals(1, entries.size)
+    }
+
+    @Test
+    fun `无参 Preparing 由下一条 Preparing 闭合`() {
+        val p = parser()
+        p.feed("==>  Preparing: SELECT 1") // 无参语句
+        p.feed("==>  Preparing: SELECT * FROM t WHERE id = ?") // 新语句闭合上一条
+        p.feed("==> Parameters: 5(Long)") // 属于第二条
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(2, entries.size)
+        assertEquals("SELECT 1", entries[0].restoredSql)
+        assertEquals("SELECT * FROM t WHERE id = 5", entries[1].restoredSql)
+    }
+
+    @Test
+    fun `值内逗号与括号的字符串参数`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM t WHERE name IN (?, ?)",
+            "==> Parameters: a, b(String), c(x)(String)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM t WHERE name IN ('a, b', 'c(x)')", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `null 字面量位于参数列表中间`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ? AND c = ?",
+            "==> Parameters: 1(Long), null, abc(String)",
+        )
+        assertEquals("SELECT * FROM t WHERE a = 1 AND b = NULL AND c = 'abc'", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `无类型标注参数回落启发式`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?",
+            "==> Parameters: 1, abc",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM t WHERE a = 1 AND b = 'abc'", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `占位符少于参数时忽略多余参数`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM t WHERE id = ?",
+            "==> Parameters: 1(Long), 2(Long)",
+        )
+        assertEquals("SELECT * FROM t WHERE id = 1", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `占位符多于参数时保留问号`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?",
+            "==> Parameters: 1(Long)",
+        )
+        assertEquals("SELECT * FROM t WHERE a = 1 AND b = ?", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `参数值包含单引号时转义`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing: SELECT * FROM t WHERE name = ?",
+            "==> Parameters: O'Brien(String)",
+        )
+        assertEquals("SELECT * FROM t WHERE name = 'O''Brien'", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `takeEntries 取走后缓冲区清空`() {
+        val p = parser()
+        p.feed("==>  Preparing: SELECT 1")
+        p.closePending()
+        assertEquals(1, p.takeEntries().size)
+        assertNull(p.closePending()) // 无挂起条目
+        assertEquals(0, p.takeEntries().size)
+    }
+}
