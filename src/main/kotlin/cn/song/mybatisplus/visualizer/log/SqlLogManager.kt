@@ -28,17 +28,21 @@ class SqlLogManager(private val project: Project) : Disposable {
     var capturing: Boolean = false
         private set
 
-    /** 开始捕捉：挂载控制台监听（幂等）。 */
+    /** 开始捕捉：挂载控制台监听 + 轮询兜底（幂等）。 */
     fun startCapture() {
         if (capturing) return
         capturing = true
-        bridge.attach(project)
+        if (bridge.attach(project)) {
+            // 2026.2 无 contentAdded 监听接口（T-M31.10）→ 2s 轮询扫描新 console
+            bridge.startPolling()
+        }
     }
 
-    /** 停止捕捉：移除挂载，保留已捕获条目。 */
+    /** 停止捕捉：移除挂载并停止轮询，保留已捕获条目。 */
     fun stopCapture() {
         if (!capturing) return
         capturing = false
+        bridge.stopPolling()
         bridge.detach()
     }
 
