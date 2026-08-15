@@ -140,3 +140,101 @@ tasks {
         }
     }
 }
+
+// 并行分片测试（2026-08-15 提速）：782 个测试按方法数均衡分 4 片（~195/片）。
+// 用法：./gradlew testShards（4 片并行）或单跑某片 ./gradlew testShard1；权威串行兜底仍是 ./gradlew test。
+// 前提：每片独立 sandbox 目录——多 worker 共享 .intellijPlatform/sandbox/.../system-test 会
+// PersistentFS 互踩损坏（实证：191 失败 + 卡死），分片隔离后无共享写点。
+// 新增测试类时加入最小编号片以保持均衡。
+intellijPlatformTesting {
+    testIde {
+        register("testShard1") {
+            testFramework(TestFrameworkType.Platform)
+            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard1"))
+            task {
+                // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
+                testClassesDirs = sourceSets["test"].output.classesDirs
+                classpath = classpath + sourceSets["test"].output
+                filter {
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewServiceTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.AnnotationSqlParserTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.AnnotationPreviewServiceTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.UpdateSectionTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlPreviewServiceTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlEwExpanderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.EdgeCaseTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProviderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewDialogTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.UpdateFlowHeavyTest")
+
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.QueryWrapperParserTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetectorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.ForeachSqlNodeTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverTableConfigTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.MpjJoinExtConverterTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatterTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolverTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.UpdateManifestTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.util.PluginBuildInfoTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginVersionTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewDialogSizeTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyAnchorSemanticsTest")
+                }
+            }
+        }
+        register("testShard2") {
+            testFramework(TestFrameworkType.Platform)
+            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard2"))
+            task {
+                testClassesDirs = sourceSets["test"].output.classesDirs
+                classpath = classpath + sourceSets["test"].output
+                filter {
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperLocatorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCommentTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.TrimSqlNodeTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.DialectTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlPreviewPanelTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.DbActiveRecordCoverageTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateJoinDeleteJoinConverterTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlLexerTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlScriptBuilderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginDistributionSelfCheckTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProviderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlKeywordsTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlEwResolverTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupportTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavySqlCompletionContextResolverTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginSettingsPanelBuildInfoTest")
+
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateDeleteMpjConverterTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.ConsumerMethodsCoverageTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlSqlRendererTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.model.BatchModelTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginSettingsPersistenceTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlIncludeExpanderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.VersionComparatorTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.ParameterReplacerTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverColumnOrderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.StartupUpdateCheckTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProviderTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.util.NamingStrategyTest")
+                }
+            }
+        }
+    }
+}
+
+tasks.register("testShards") {
+    group = "verification"
+    description = "并行分片全量测试（4 片同时执行，各片独立沙盒）"
+    dependsOn("testShard1", "testShard2")
+}
