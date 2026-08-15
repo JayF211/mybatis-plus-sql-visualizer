@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.reverse
 
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -138,5 +139,97 @@ class JavaCodeGeneratorTest {
     @Test
     fun `javaEscape_转义集合`() {
         assertEquals("a\\\"b\\\\c\\n", JavaCodeGenerator.javaEscape("a\"b\\c\n"))
+    }
+
+    // ------------------------------------------------------------------
+    // 组渲染（T-M36.1）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `OR组_渲染nested与or分隔`() {
+        val result = SqlReverseResult(
+            tableName = "t",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("'x'", "x")),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".nested(w -> w\n        .eq(\"a\", 1)\n        .or()\n        .eq(\"b\", \"x\"))"))
+    }
+
+    @Test
+    fun `AND组与前置条件_渲染nested`() {
+        val result = SqlReverseResult(
+            tableName = "t",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("3")),
+                Condition.Group(
+                    Connector.AND,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".eq(\"c\", 3)\n    .nested(w -> w\n        .eq(\"a\", 1)\n        .eq(\"b\", 2))"))
+    }
+
+    @Test
+    fun `NOT组_渲染not`() {
+        val result = SqlReverseResult(
+            tableName = "t",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                    ),
+                    negated = true,
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".not(w -> w\n        .eq(\"a\", 1)\n        .or()\n        .eq(\"b\", 2))"))
+    }
+
+    @Test
+    fun `嵌套组_渲染递归lambda`() {
+        val result = SqlReverseResult(
+            tableName = "t",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Group(
+                            Connector.AND,
+                            listOf(
+                                Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                                Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                            ),
+                        ),
+                        Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("3")),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        // 嵌套子组 → .and(w2 -> w2 ...)；OR 组第二子条件前 .or()（嵌套内统一 8 空格缩进）
+        assertTrue(
+            code,
+            code.contains(".nested(w -> w\n        .and(w2 -> w2\n        .eq(\"a\", 1)\n        .eq(\"b\", 2))\n        .or()\n        .eq(\"c\", 3))"),
+        )
     }
 }

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.reverse
 
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -32,7 +33,7 @@ object SqlReverseParser {
         if (tokens.isEmpty()) {
             throw SqlReverseException(0, KEY_PARSE, "SQL 文本为空")
         }
-        val cursor = Cursor(tokens)
+        val cursor = Cursor(tokens, sqlText)
 
         // SELECT 语句头
         if (!cursor.isKeyword(cursor.current, "SELECT")) {
@@ -134,6 +135,12 @@ object SqlReverseParser {
                     continue
                 }
                 t.type == TokenType.WORD -> {
+                    // DISTINCT：不收集为列，标记复杂（select 生成放弃）
+                    if (cursor.isKeyword(t, "DISTINCT")) {
+                        anyComplex = true
+                        cursor.advance()
+                        continue
+                    }
                     if (isFunctionCall(cursor)) {
                         anyComplex = true
                         skipExpression(cursor)
@@ -237,18 +244,44 @@ object SqlReverseParser {
     // WHERE 条件序列
     // ------------------------------------------------------------------
 
-    /** 条件序列：顶层 AND 连接；OR / 空条件直接报错（P1 范围）。 */
+    /**
+     * 条件序列（T-M36.1 升级）：顶层按 OR 分段，段内 AND 连接；出现 OR 时整体建模为
+     * `Group(OR, 段们)`（段内多条件包 `Group(AND)`）——与正向链路 `or()` 分隔符语义一致。
+     *
+     * 形态：`a = 1 AND b = 2` → `[a, b]`（无 OR 保持扁平，P0 行为不变）；
+     * `a = 1 OR b = 2` → `[Group(OR, [a, b])]`；
+     * `a = 1 AND b = 2 OR c = 3` → `[Group(OR, [Group(AND, [a, b]), c])]`（AND 优先级高于 OR）。
+     */
     private fun parseConditionList(cursor: Cursor, warnings: MutableList<String>): List<Condition> {
+        val orSegments = mutableListOf<List<Condition>>()
+        orSegments.add(parseAndSegment(cursor, warnings))
+        while (cursor.isKeyword(cursor.current, "OR")) {
+            cursor.advance()
+            orSegments.add(parseAndSegment(cursor, warnings))
+        }
+        if (orSegments.size == 1) return orSegments[0]
+        return listOf(
+            Condition.Group(
+                connector = Connector.OR,
+                children = orSegments.map { segment ->
+                    if (segment.size == 1) segment[0] else Condition.Group(Connector.AND, segment)
+                },
+            ),
+        )
+    }
+
+    /** AND 连接的条件段（遇 OR / `)` / 子句起点 / 分号终止，均不消费）。 */
+    private fun parseAndSegment(cursor: Cursor, warnings: MutableList<String>): List<Condition> {
         val conditions = mutableListOf<Condition>()
         while (true) {
             val t = cursor.current ?: break
             if (t.type == TokenType.WORD && isClauseStart(cursor)) break
-            if (t.type == TokenType.SYMBOL && t.text == ";") break
+            if (t.type == TokenType.SYMBOL && (t.text == ";" || t.text == ")")) break
             if (cursor.isKeyword(t, "AND")) {
                 cursor.advance()
                 continue
             }
-            if (cursor.isKeyword(t, "OR")) unsupported(cursor, "OR 嵌套条件")
+            if (cursor.isKeyword(t, "OR")) break
             conditions.add(parseCondition(cursor, warnings))
         }
         return conditions
@@ -266,9 +299,39 @@ object SqlReverseParser {
             cursor.isKeyword(t, "UNION") || cursor.isKeyword(t, "FOR")
     }
 
-    /** 单个条件：`列 操作符 值`。 */
+    /**
+     * 单个条件（T-M36.1 升级）：括号组 / NOT 组 / 普通条件。
+     * 解析失败且为"表达式形态不支持"（[KEY_UNSUPPORTED]：函数、子查询、列对列、`?` 占位符等）
+     * → 降级为 [Condition.Raw] 整条件 apply() 透传（记 warning）；语法错误（[KEY_PARSE]）保持报错。
+     */
     private fun parseCondition(cursor: Cursor, warnings: MutableList<String>): Condition {
+        val startOffset = cursor.current?.offset
+            ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "条件不完整")
+        return try {
+            parseConditionInternal(cursor, warnings)
+        } catch (e: SqlReverseException) {
+            if (e.key == KEY_UNSUPPORTED) {
+                degradeToRaw(cursor, startOffset, warnings)
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private fun parseConditionInternal(cursor: Cursor, warnings: MutableList<String>): Condition {
+        val head = cursor.current ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "条件不完整")
+        // 括号组 `( ... )` / `NOT ( ... )`（T-M36.1）
+        if (head.type == TokenType.SYMBOL && head.text == "(") {
+            cursor.advance()
+            return parseGroup(cursor, warnings, negated = false)
+        }
+        if (cursor.isKeyword(head, "NOT") && cursor.isSymbol(cursor.peek(), "(")) {
+            cursor.advance()
+            cursor.advance()
+            return parseGroup(cursor, warnings, negated = true)
+        }
         val column = parseColumnRef(cursor)
+        // 操作符判定基于列名之后的当前 token（P0 行为：t 为列名解析后的 current）
         val t = cursor.current ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "条件不完整")
         return when {
             // = != <> < <= > >= 二元比较（操作符 token 已判定，先消费再取右侧值）
@@ -320,7 +383,7 @@ object SqlReverseParser {
                 cursor.advance()
                 Condition.Unary(column, if (negated) "IS NOT NULL" else "IS NULL")
             }
-            // NOT IN / NOT BETWEEN / NOT LIKE
+            // NOT IN / NOT BETWEEN / NOT LIKE（NOT ( 组已在入口分支处理）
             cursor.isKeyword(t, "NOT") -> {
                 cursor.advance()
                 parseNegated(cursor, column, t.offset, warnings)
@@ -338,7 +401,7 @@ object SqlReverseParser {
                 cursor.advance()
                 parseLike(cursor, column, negated = false, t.offset, warnings)
             }
-            // 列名后紧跟 `(` → 函数表达式（DATE_FORMAT(...) 等，P1 范围）
+            // 列名后紧跟 `(` → 函数表达式（DATE_FORMAT(...) 等，降级 apply 透传）
             t.type == TokenType.SYMBOL && t.text == "(" ->
                 unsupported(cursor, "函数表达式 ${column.columnName}(...)")
             else -> throw SqlReverseException(
@@ -348,6 +411,64 @@ object SqlReverseParser {
             )
         }
     }
+
+    /**
+     * 括号组解析（T-M36.1）：当前位于 `(` 之后；组内递归走 [parseConditionList]（OR 分段语义一致），
+     * 直到 `)`。组内为单个 Group（如 `(a = 1 OR b = 2)`）时直接复用该组（避免双重括号），
+     * 否则包 `Group(AND, ...)`（保留括号，round-trip 等价）。空组报语法错误。
+     */
+    private fun parseGroup(cursor: Cursor, warnings: MutableList<String>, negated: Boolean): Condition {
+        val inner = parseConditionList(cursor, warnings)
+        expectSymbol(cursor, ")")
+        if (inner.isEmpty()) {
+            throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "空括号组")
+        }
+        val single = inner.singleOrNull()
+        if (single is Condition.Group) {
+            return if (negated) single.copy(negated = true) else single
+        }
+        return Condition.Group(connector = Connector.AND, children = inner, negated = negated)
+    }
+
+    /**
+     * 表达式形态降级（T-M36.1）：从条件起始偏移扫描到顶层 AND/OR/`)`/子句边界，
+     * 取原文整段为 [Condition.Raw]（生成 apply() 透传），游标推进到条件末尾。
+     */
+    private fun degradeToRaw(cursor: Cursor, startOffset: Int, warnings: MutableList<String>): Condition.Raw {
+        val startIdx = cursor.tokens.indexOfFirst { it.offset == startOffset }.coerceAtLeast(0)
+        var depth = 0
+        var idx = startIdx
+        while (idx < cursor.tokens.size) {
+            val tk = cursor.tokens[idx]
+            if (depth == 0 && (
+                    (tk.type == TokenType.WORD && (isKeyword(tk, "AND") || isKeyword(tk, "OR") || isClauseToken(tk))) ||
+                        (tk.type == TokenType.SYMBOL && (tk.text == ";" || tk.text == ")"))
+                    )
+            ) {
+                break
+            }
+            if (tk.type == TokenType.SYMBOL && tk.text == "(") depth++
+            if (tk.type == TokenType.SYMBOL && tk.text == ")") depth--
+            idx++
+        }
+        val endOffset = if (idx > startIdx) {
+            val last = cursor.tokens[idx - 1]
+            last.offset + last.text.length
+        } else {
+            startOffset
+        }
+        cursor.pos = idx
+        val rawText = cursor.source.substring(startOffset, endOffset).trim()
+        warnings.add("条件「$rawText」无法静态转换为 Wrapper 方法，已用 apply() 透传")
+        return Condition.Raw(rawText)
+    }
+
+    private fun isKeyword(t: Token, kw: String): Boolean =
+        t.type == TokenType.WORD && t.text.equals(kw, ignoreCase = true)
+
+    private fun isClauseToken(t: Token): Boolean =
+        isKeyword(t, "ORDER") || isKeyword(t, "GROUP") || isKeyword(t, "HAVING") ||
+            isKeyword(t, "LIMIT") || isKeyword(t, "UNION") || isKeyword(t, "FOR")
 
     /** 二元比较：值可为 NULL（= NULL → IS NULL，!= NULL → IS NOT NULL）。 */
     private fun parseBinary(cursor: Cursor, column: ColumnRef, sqlOp: String): Condition {
@@ -644,7 +765,7 @@ object SqlReverseParser {
     const val KEY_PARSE = "reverse.error.parse"
 
     /** Token 游标。 */
-    private class Cursor(val tokens: List<Token>) {
+    private class Cursor(val tokens: List<Token>, val source: String) {
         var pos = 0
 
         val current: Token? get() = tokens.getOrNull(pos)

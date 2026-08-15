@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.reverse
 
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import org.junit.Assert.assertEquals
@@ -246,15 +247,123 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `OR条件_报错`() {
-        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 OR b = 2") }
-        assertEquals(SqlReverseParser.KEY_UNSUPPORTED, ex.key)
-        assertTrue(ex.detail.contains("OR"))
+    fun `顶层OR_还原为Group`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 OR b = 2")
+        val group = result.conditions.single() as Condition.Group
+        assertEquals(Connector.OR, group.connector)
+        assertEquals(2, group.children.size)
+        assertEquals("a", (group.children[0] as Condition.Simple).column.columnName)
+        assertEquals("b", (group.children[1] as Condition.Simple).column.columnName)
     }
 
     @Test
-    fun `括号嵌套_报错`() {
-        assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE (a = 1 AND b = 2)") }
+    fun `混合优先级_AND段包Group`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 AND b = 2 OR c = 3")
+        val group = result.conditions.single() as Condition.Group
+        assertEquals(Connector.OR, group.connector)
+        val andGroup = group.children[0] as Condition.Group
+        assertEquals(Connector.AND, andGroup.connector)
+        assertEquals(2, andGroup.children.size)
+        assertEquals("c", (group.children[1] as Condition.Simple).column.columnName)
+    }
+
+    @Test
+    fun `括号组_还原Group保留括号`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE (a = 1 AND b = 2) AND c = 3")
+        assertEquals(2, result.conditions.size)
+        val group = result.conditions[0] as Condition.Group
+        assertEquals(Connector.AND, group.connector)
+        assertEquals(2, group.children.size)
+        assertEquals("c", (result.conditions[1] as Condition.Simple).column.columnName)
+    }
+
+    @Test
+    fun `括号组内OR_单组直接复用`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE (a = 1 OR b = 2) AND c = 3")
+        val group = result.conditions[0] as Condition.Group
+        assertEquals(Connector.OR, group.connector)
+        assertEquals(2, group.children.size)
+    }
+
+    @Test
+    fun `NOT括号组_negated标记`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE NOT (a = 1 OR b = 2)")
+        val group = result.conditions.single() as Condition.Group
+        assertTrue(group.negated)
+        assertEquals(Connector.OR, group.connector)
+    }
+
+    @Test
+    fun `嵌套组_递归还原`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t WHERE (a = 1 OR b = 2) AND (c = 3 OR (d = 4 AND e = 5))",
+        )
+        assertEquals(2, result.conditions.size)
+        val outer = result.conditions[1] as Condition.Group
+        assertEquals(Connector.OR, outer.connector)
+        val inner = outer.children[1] as Condition.Group
+        assertEquals(Connector.AND, inner.connector)
+        assertEquals(2, inner.children.size)
+    }
+
+    @Test
+    fun `DISTINCT_不收集为列`() {
+        val result = SqlReverseParser.parse("SELECT DISTINCT id, name FROM t WHERE a = 1")
+        assertNull(result.selectColumns)
+    }
+
+    // ------------------------------------------------------------------
+    // 降级透传（T-M36.1：表达式形态 → apply() 原文）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `函数条件_降级Raw透传`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE DATE_FORMAT(create_time, '%Y') = '2024'")
+        val raw = result.conditions.single() as Condition.Raw
+        assertEquals("DATE_FORMAT(create_time, '%Y') = '2024'", raw.sqlText)
+        assertEquals(1, result.warnings.size)
+    }
+
+    @Test
+    fun `右侧函数_降级Raw透传`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = DATE_FORMAT(now(), '%Y')")
+        assertTrue(result.conditions.single() is Condition.Raw)
+    }
+
+    @Test
+    fun `列对列_降级Raw透传`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = b")
+        assertTrue(result.conditions.single() is Condition.Raw)
+    }
+
+    @Test
+    fun `子查询_降级Raw透传`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a IN (SELECT id FROM u)")
+        val raw = result.conditions.single() as Condition.Raw
+        assertEquals("a IN (SELECT id FROM u)", raw.sqlText)
+    }
+
+    @Test
+    fun `参数占位符_降级Raw透传`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = ?")
+        val raw = result.conditions.single() as Condition.Raw
+        assertEquals("a = ?", raw.sqlText)
+        assertEquals(1, result.warnings.size)
+    }
+
+    @Test
+    fun `降级条件与普通条件混合_边界正确`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t WHERE DATE_FORMAT(create_time, '%Y') = '2024' AND a = 1 OR b = 2",
+        )
+        // 降级条件结束于 AND；剩余 a = 1 OR b = 2 → 段1=[Raw, a] 包 Group(AND)、段2=[b]
+        val group = result.conditions.single() as Condition.Group
+        assertEquals(Connector.OR, group.connector)
+        val andGroup = group.children[0] as Condition.Group
+        assertTrue(andGroup.children[0] is Condition.Raw)
+        assertEquals("a", (andGroup.children[1] as Condition.Simple).column.columnName)
+        assertEquals("b", (group.children[1] as Condition.Simple).column.columnName)
+        assertEquals(1, result.warnings.size)
     }
 
     @Test
@@ -266,28 +375,6 @@ class SqlReverseParserTest {
     @Test
     fun `JOIN_报错`() {
         assertThrows { SqlReverseParser.parse("SELECT * FROM t LEFT JOIN u ON t.id = u.tid") }
-    }
-
-    @Test
-    fun `参数占位符_报错`() {
-        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = ?") }
-        assertTrue(ex.detail.contains("?"))
-    }
-
-    @Test
-    fun `列对列比较_报错`() {
-        assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a = b") }
-    }
-
-    @Test
-    fun `函数条件_报错`() {
-        val ex = assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE DATE_FORMAT(create_time, '%Y') = '2024'") }
-        assertTrue(ex.detail.contains("函数表达式"))
-    }
-
-    @Test
-    fun `子查询_报错`() {
-        assertThrows { SqlReverseParser.parse("SELECT * FROM t WHERE a IN (SELECT id FROM u)") }
     }
 
     @Test

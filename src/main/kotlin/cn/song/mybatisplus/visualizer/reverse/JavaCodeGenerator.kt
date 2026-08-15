@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.reverse
 
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SqlValue
 
@@ -84,12 +85,43 @@ object JavaCodeGenerator {
 
         is Condition.Raw -> "apply(\"${javaEscape(condition.sqlText)}\")"
 
-        is Condition.Group ->
-            // P0 解析器不产出 Group；防御性兜底（生成 and/or 嵌套语义等价形态）
-            "nested(w -> w" + condition.children.joinToString("") { "\n        ." + renderCondition(it) } + ")"
+        is Condition.Group -> renderGroup(condition)
 
         is Condition.ColumnComparison ->
             "apply(\"${javaEscape(condition.left.columnName)} = ${condition.right.columnName}\")"
+    }
+
+    // ------------------------------------------------------------------
+    // 组渲染（T-M36.1）：括号组 / OR 分组 → nested / not lambda
+    // ------------------------------------------------------------------
+
+    /**
+     * 组渲染（T-M36.1）：`(a = 1 OR b = 2)` → `nested(w -> w.eq("a", 1).or().eq("b", 2))`；
+     * `NOT (...)` → `not(w -> ...)`；组内嵌套子组 → `.and(w2 -> ...)` / `.or(w2 -> ...)` 递归。
+     * 组连接符 OR 时子条件间以无参 `.or()` 分隔（对齐 MP `or()` 分隔符语义）。
+     */
+    private fun renderGroup(group: Condition.Group): String {
+        val wrapper = if (group.negated) "not" else "nested"
+        return "$wrapper(w -> w" + renderGroupChildren(group, 2) + ")"
+    }
+
+    /** 组内子条件链（nextVarIndex：嵌套 lambda 变量名序号，w2/w3...）。 */
+    private fun renderGroupChildren(group: Condition.Group, nextVarIndex: Int): String {
+        val sb = StringBuilder()
+        group.children.forEachIndexed { i, child ->
+            if (i > 0 && group.connector == Connector.OR) sb.append("\n        .or()")
+            when (child) {
+                is Condition.Group -> {
+                    val method = if (child.connector == Connector.OR) "or" else "and"
+                    val varName = "w$nextVarIndex"
+                    sb.append("\n        .$method($varName -> $varName")
+                        .append(renderGroupChildren(child, nextVarIndex + 1))
+                        .append(")")
+                }
+                else -> sb.append("\n        .").append(renderCondition(child))
+            }
+        }
+        return sb.toString()
     }
 
     /** 二元比较操作符 → 方法名。 */

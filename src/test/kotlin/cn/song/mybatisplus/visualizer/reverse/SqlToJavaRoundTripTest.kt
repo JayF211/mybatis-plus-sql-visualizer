@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.reverse
 
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -134,5 +135,99 @@ class SqlToJavaRoundTripTest {
                 limit = LimitClause(offset = SqlValue.Literal("5"), count = SqlValue.Literal("10")),
             ),
         )
+    }
+
+    // ------------------------------------------------------------------
+    // 组闭环（T-M36.1）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `括号组_逐字符闭环`() {
+        val sql1 = roundTrip(
+            SelectStatement(
+                table = table,
+                selectColumns = listOf(ColumnRef(columnName = "id")),
+                conditions = listOf(
+                    Condition.Group(
+                        Connector.OR,
+                        listOf(
+                            Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                            Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                        ),
+                    ),
+                    Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("'x'", "x")),
+                ),
+            ),
+        )
+        assertEquals("SELECT id\nFROM `user`\nWHERE (a = 1 OR b = 2)\n    AND c = 'x'", sql1)
+    }
+
+    @Test
+    fun `AND组与NOT组_逐字符闭环`() {
+        val sql1 = roundTrip(
+            SelectStatement(
+                table = table,
+                selectColumns = listOf(ColumnRef(columnName = "id")),
+                conditions = listOf(
+                    Condition.Group(
+                        Connector.AND,
+                        listOf(
+                            Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                            Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                        ),
+                    ),
+                    Condition.Group(
+                        Connector.OR,
+                        listOf(
+                            Condition.Simple(ColumnRef(columnName = "d"), "=", SqlValue.Literal("4")),
+                            Condition.Simple(ColumnRef(columnName = "e"), "=", SqlValue.Literal("5")),
+                        ),
+                        negated = true,
+                    ),
+                ),
+            ),
+        )
+        assertEquals("SELECT id\nFROM `user`\nWHERE (a = 1 AND b = 2)\n    AND NOT (d = 4 OR e = 5)", sql1)
+    }
+
+    @Test
+    fun `顶层OR_语义等价闭环`() {
+        // 顶层裸 OR 建模为 Group(OR)（渲染会带括号——SQL 语义等价，round-trip 断言结构一致）
+        val parsed = SqlReverseParser.parse("SELECT * FROM `user` WHERE a = 1 OR b = 2")
+        val group = parsed.conditions.single() as Condition.Group
+        assertEquals(Connector.OR, group.connector)
+        // 模型 → SQL 渲染（带括号形态）
+        val sql = SqlGenerator.generate(
+            SelectStatement(
+                table = table,
+                selectColumns = listOf(ColumnRef(columnName = "id")),
+                conditions = parsed.conditions,
+            ),
+        )
+        assertEquals("SELECT id\nFROM `user`\nWHERE (a = 1 OR b = 2)", sql)
+        // 再反解 → 结构一致（稳定不动点）
+        val reparsed = SqlReverseParser.parse(sql)
+        assertEquals(parsed.conditions, reparsed.conditions)
+    }
+
+    @Test
+    fun `降级Raw_函数与子查询透传闭环`() {
+        for (sqlText in listOf(
+            "SELECT * FROM `user` WHERE DATE_FORMAT(create_time, '%Y') = '2024'",
+            "SELECT * FROM `user` WHERE a IN (SELECT id FROM u)",
+            "SELECT * FROM `user` WHERE a = ?",
+        )) {
+            val parsed = SqlReverseParser.parse(sqlText)
+            val raw = parsed.conditions.single() as Condition.Raw
+            assertEquals(1, parsed.warnings.size)
+            val sql2 = SqlGenerator.generate(
+                SelectStatement(
+                    table = table,
+                    selectColumns = listOf(ColumnRef(columnName = "id")),
+                    conditions = parsed.conditions,
+                ),
+            )
+            assertEquals("SELECT id\nFROM `user`\nWHERE ${raw.sqlText}", sql2)
+        }
     }
 }

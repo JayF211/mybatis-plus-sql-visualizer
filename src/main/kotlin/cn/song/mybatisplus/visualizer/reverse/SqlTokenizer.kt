@@ -69,7 +69,7 @@ internal class SqlTokenizer {
                     tokens.add(Token(TokenType.WORD, sql.substring(i, j), i))
                     i = j
                 }
-                c in "=!<>(),*.;+-/%" -> {
+                c in "=!<>(),*.;+-/%?" -> {
                     tokens.add(Token(TokenType.SYMBOL, c.toString(), i))
                     i++
                 }
