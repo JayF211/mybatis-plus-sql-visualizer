@@ -19,6 +19,7 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 - **CRUD 全覆盖**：SELECT / UPDATE / DELETE / 联表 JOIN（含 `selectCollection` 子查询、`selectFunc` 聚合、`exists` 三形态、`apply`/`last` 原生片段透传）预览，批量操作展开（F-15）
 - **逻辑删除注入**：实体含 `@TableLogic` 时查询/删除自动追加 `AND deleted = 0`（设置页可关闭；父类继承字段如 `BaseEntity.deleted` 同样识别）
 - **执行 SQL**（IntelliJ IDEA Ultimate + Database 插件）：预览面板工具栏「执行 SQL」——选择数据源 → **自动创建临时 .sql 文件**（Database 控制台绑定数据源）→ 打开后可执行（Ctrl+Enter）；Community 版点击提示升级
+- **MyBatis SQL 日志还原**（T-M31）：右侧工具窗口「MyBatis SQL Log」自动监听运行控制台 `Preparing:`/`Parameters:` 日志（MyBatis 与 MyBatis-Plus `==>` 格式自动识别）→ 还原为可执行 SQL 条目列表（String/时间引号与单引号转义、数值/布尔原样、null→NULL），双击打开预览弹窗（格式化/复制/执行/补全全复用），右键复制/删除单条，工具栏清空/暂停
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
 
 ## 🚀 使用说明
