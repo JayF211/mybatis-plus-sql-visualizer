@@ -17,12 +17,18 @@ import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.actionSystem.Shortcut
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
+import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiDocumentManager
@@ -44,11 +50,14 @@ import java.awt.FontMetrics
 import java.awt.Graphics
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.awt.event.InputEvent
+import java.awt.event.KeyEvent
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JSplitPane
+import javax.swing.KeyStroke
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -68,6 +77,14 @@ import javax.swing.event.DocumentListener
 class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreviewPanel>(BorderLayout()) {
 
     private val metaLabel = JBLabel()
+
+    // T-M26.6：格式化快捷键动作（跟随 IDE keymap 的 Reformat Code，兜底 Ctrl+Alt+L）——
+    // 注册到面板整体，焦点在 SQL 编辑器或参数输入框时均可触发；每次触发取当前 editor 格式化
+    private val reformatAction = object : AnAction() {
+        override fun actionPerformed(e: AnActionEvent) {
+            formatSql()
+        }
+    }
 
     // 左：动态条件复选框 + 参数值输入区
     private val paramPanel = JBPanel<JBPanel<*>>().apply {
@@ -136,6 +153,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             background = UIUtil.getPanelBackground()
         }
         add(split, BorderLayout.CENTER)
+
+        // T-M26.6：注册格式化快捷键——组件级 custom shortcut 命中即消费按键，
+        // 不与 IDE 全局 Reformat Code 双触发（预览语言无 formatter，全局动作本不可用）
+        reformatAction.registerCustomShortcutSet(
+            CustomShortcutSet(*reformatShortcuts()),
+            this,
+        )
     }
 
     private lateinit var modeButton: JButton
@@ -341,6 +365,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (formatted != editor.document.text) {
             WriteCommandAction.runWriteCommandAction(project) { editor.document.setText(formatted) }
         }
+    }
+
+    /**
+     * T-M26.6：格式化快捷键集——当前激活 keymap 中 Reformat Code（Ctrl+Alt+L）的绑定
+     * （跟随用户自定义键位）；keymap 无绑定时兜底默认 Ctrl+Alt+L。
+     * 注：2025.3 平台 IdeActions 无 ReformatCode 常量，用动作 id 字符串。
+     */
+    private fun reformatShortcuts(): Array<Shortcut> {
+        val fromKeymap = KeymapManager.getInstance().activeKeymap.getShortcuts("ReformatCode")
+        if (fromKeymap.isNotEmpty()) return fromKeymap
+        return arrayOf(
+            KeyboardShortcut(
+                KeyStroke.getKeyStroke(KeyEvent.VK_L, InputEvent.CTRL_MASK or InputEvent.ALT_MASK),
+                null,
+            ),
+        )
     }
 
     /** 单行 / 多行切换。 */
@@ -1038,6 +1078,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
     /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。 */
     internal fun splitPaneForTest(): JSplitPane? = components.filterIsInstance<JSplitPane>().firstOrNull()
+    /** T-M26.6：格式化快捷键 action（注册断言 + 触发格式化测试用）。 */
+    internal fun reformatActionForTest(): AnAction = reformatAction
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")

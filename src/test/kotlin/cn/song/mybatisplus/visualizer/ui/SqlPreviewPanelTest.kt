@@ -17,6 +17,8 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -722,6 +724,27 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     private fun layoutTree(container: java.awt.Container) {
         container.doLayout()
         container.components.filterIsInstance<java.awt.Container>().forEach { layoutTree(it) }
+    }
+
+    fun testReformatShortcutRegistered() {
+        // T-M26.6：格式化快捷键注册——action 实例存在（跟随 IDE keymap 的 Reformat Code，
+        // 兜底 Ctrl+Alt+L），触发走 [SqlPreviewPanel.formatSql]（与「格式化」按钮同逻辑）
+        val panel = SqlPreviewPanel(project)
+        assertNotNull("应注册格式化 action", panel.reformatActionForTest())
+        panel.clear()
+    }
+
+    fun testReformatShortcutFormatsSql() {
+        // T-M26.6：触发格式化 action 后 SQL 被格式化（关键字大写 + 子句换行）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result(sql = "select id from tbl", compact = "select id from tbl"))
+        panel.reformatActionForTest().actionPerformed(
+            AnActionEvent.createFromAnAction(panel.reformatActionForTest(), null, "test", DataContext.EMPTY_CONTEXT),
+        )
+        val text = panel.editorForTest()!!.document.text
+        assertTrue("格式化后关键字应大写：" + text, text.contains("SELECT"))
+        assertTrue("格式化后应含换行：" + text, text.contains("\n"))
+        panel.clear()
     }
 
     fun testActionButtonGroupsSwitchByScene() {
