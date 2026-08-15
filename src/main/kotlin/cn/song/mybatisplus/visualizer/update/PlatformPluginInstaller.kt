@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.update
 
-import com.intellij.ide.plugins.IdeaPluginDescriptorImpl
+import com.intellij.ide.plugins.IdeaPluginDescriptor
 import com.intellij.ide.plugins.PluginInstaller
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.ide.startup.StartupActionScriptManager
@@ -18,8 +18,9 @@ import java.nio.file.attribute.PosixFilePermissions
  * （[com.intellij.util.ui.RestartDialogImpl.restartWithConfirmation]，环境否决动态卸载，
  * 覆盖更新必重启——T-M23.10 定论，不做动态加载）。
  *
- * 版本兼容（2025.3.5~2026.2.1 探测实证）：`PluginInstaller.uninstallAfterRestart` /
- * `StartupActionScriptManager.addActionCommand` / `PluginId`（openapi.extensions）在两端
+ * 版本兼容（T-M30.1 Plugin Verifier 实证）：`uninstallAfterRestart` 参数类型跨版本
+ * 不同（2024.3 为 IdeaPluginDescriptorImpl / 2025.3+ 仅 IdeaPluginDescriptor）——反射分发；
+ * `StartupActionScriptManager.addActionCommand` / `PluginId`（openapi.extensions）两端
  * 签名一致；**单测不调用本类**（编排层 [PluginUpdateRunner] 以 install seam 注入替代），
  * 由 runIde 沙盒端到端验证真实安装链路。
  */
@@ -49,10 +50,18 @@ object PlatformPluginInstaller {
         }
         val persistent = persistZip(zip)
         if (old != null) {
-            // T-M30：跨版本签名差异——2024.3 的 uninstallAfterRestart 参数为具体实现类
-            // IdeaPluginDescriptorImpl（2025.3+ 放宽为接口 IdeaPluginDescriptor）；
-            // getPlugin 返回接口，运行时对象恒为实现类，显式 cast 两端编译均通过。
-            PluginInstaller.uninstallAfterRestart(old as IdeaPluginDescriptorImpl)
+            // T-M30.1：跨版本签名差异（Plugin Verifier 实证）——2024.3 的
+            // `PluginInstaller.uninstallAfterRestart` 参数为具体实现类 IdeaPluginDescriptorImpl；
+            // 2025.3+ 该重载已移除，仅保留接口 IdeaPluginDescriptor 版（按 243 编译的
+            // Impl 版调用在 253/2026.2 运行期 NoSuchMethodError）。反射按运行期实际重载
+            // 分发：先按描述符运行时类型找（243 命中 Impl 版），找不到回落接口版（253+）。
+            // 不直接引用 IdeaPluginDescriptorImpl（Internal API），与 M17 执行 SQL 反射隔离手法一致。
+            val method = runCatching {
+                PluginInstaller::class.java.getMethod("uninstallAfterRestart", old.javaClass)
+            }.getOrElse {
+                PluginInstaller::class.java.getMethod("uninstallAfterRestart", IdeaPluginDescriptor::class.java)
+            }
+            method.invoke(null, old)
         }
         // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
         // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand

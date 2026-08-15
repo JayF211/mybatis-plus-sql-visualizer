@@ -1,5 +1,7 @@
 import java.time.LocalDate
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
 
 plugins {
     id("org.jetbrains.kotlin.jvm")
@@ -55,6 +57,21 @@ intellijPlatform {
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索
     // 索引（其余功能不受影响）；在非中文 locale 环境可改回 true 以获得设置搜索支持。
     buildSearchableOptions = false
+
+    // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
+    // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
+    // 版本 + 中段版本 + 最新版本；首次运行下载各发行版（体积大，gradle.properties 已配代理）。
+    pluginVerification {
+        ides {
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.1")
+        }
+        // T-M30.1：失败等级仅保留兼容性问题（IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败）——
+        // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API，
+        // 无公共替代（官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
+        failureLevel = listOf(FailureLevel.COMPATIBILITY_PROBLEMS)
+    }
 }
 
 kotlin {
