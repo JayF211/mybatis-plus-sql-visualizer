@@ -295,6 +295,55 @@ class AnnotationSqlCompletionContributorTest : BasePlatformTestCase() {
         assertLookupContains(items, "name")
     }
 
+    // ------------------------------------------------------------------
+    // T-M27.5：<script> 动态标签补全（与 XML mapper 一致：标签名/属性/OGNL）
+    // ------------------------------------------------------------------
+
+    fun testScriptDynamicTagCompletion() {
+        // 光标前 `<` → 补标签名
+        val items = completeIn(
+            """
+            public interface UserMapper {
+                @Select("<script>SELECT * FROM t WHERE 1=1 <caret></script>")
+                int one();
+            }
+            """,
+        )
+        assertLookupContains(items, "if", "foreach", "where")
+    }
+
+    fun testScriptAttributeCompletion() {
+        // `<foreach ` 后 → 补属性
+        val items = completeIn(
+            """
+            public interface UserMapper {
+                @Select("<script><foreach <caret> </foreach></script>")
+                int one();
+            }
+            """,
+        )
+        assertLookupContains(items, "collection", "item", "separator")
+    }
+
+    fun testScriptOgnlCompletion() {
+        // `<if test="` 值内 → 参数名 + 主表实体字段（同文件实体 fixture）
+        val items = completeIn(
+            """
+            @com.baomidou.mybatisplus.annotation.TableName("t_device_info")
+            public class DeviceInfoEntity {
+                private Long id;
+                private String name;
+            }
+
+            public interface UserMapper {
+                @Select("<script><if test=\"<caret>\">SELECT * FROM t</if></script>")
+                DeviceInfoEntity select(DeviceInfoEntity entity);
+            }
+            """,
+        )
+        assertLookupContains(items, "entity", "id", "name")
+    }
+
     /**
      * 直接调用 [AnnotationSqlCompletionContributor.fillCompletionVariants] 的收集器：
      * 重写 [CompletionResultSet] 的全部抽象方法（前缀恒匹配 [PrefixMatcher.ALWAYS_TRUE]——

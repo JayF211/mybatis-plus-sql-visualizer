@@ -55,4 +55,39 @@ object SourceSqlSuggestionFactory {
      */
     private fun withComment(builder: LookupElementBuilder, comment: String?): LookupElementBuilder =
         if (comment != null) builder.withTailText("  $comment").withLookupString(comment) else builder
+
+    // ------------------------------------------------------------------
+    // T-M27.5：MyBatis 动态标签共享数据（XML mapper 与注解 <script> 补全共用）
+    // ------------------------------------------------------------------
+
+    /** 动态标签名（标签插入点：光标前 `<` 补全）。 */
+    val DYNAMIC_TAGS: List<String> = listOf(
+        "if", "foreach", "where", "set", "trim", "choose", "when", "otherwise", "bind", "sql", "include",
+    )
+
+    /** 动态标签 → 属性名（属性名位置补全；choose/where/set 无属性）。 */
+    val DYNAMIC_TAG_ATTRIBUTES: Map<String, List<String>> = mapOf(
+        "if" to listOf("test"),
+        "foreach" to listOf("collection", "item", "separator", "open", "close"),
+        "bind" to listOf("name", "value"),
+        "include" to listOf("refid"),
+        "trim" to listOf("prefix", "suffix", "prefixOverrides", "suffixOverrides"),
+        "choose" to emptyList(),
+        "when" to listOf("test"),
+        "sql" to listOf("id"),
+        "where" to emptyList(),
+        "set" to emptyList(),
+    )
+
+    /** 动态标签插入点：光标前非空白字符是 `<`（等长语句文本内左侧匹配）。 */
+    val DYNAMIC_TAG_PATTERN: Regex = Regex("""[^\s]*<\s*$""")
+
+    /** 属性名位置：`<tagName  `（标签名 + 空白后光标）。 */
+    val ATTRIBUTE_POSITION_PATTERN: Regex = Regex("""<\w+\s+[\w-]*$""")
+
+    /** OGNL `param.` 前缀（第二段字段名补全）。 */
+    val OGNL_PREFIX_PATTERN: Regex = Regex("""[\w$]+\.\w*$""")
+
+    /** 注解 `<script>` OGNL 属性值内（test/collection 引号内光标）。 */
+    val OGNL_ATTRIBUTE_PATTERN: Regex = Regex("""<\w+\s+(test|collection)\s*=\s*"[^"]*"?>?$""")
 }

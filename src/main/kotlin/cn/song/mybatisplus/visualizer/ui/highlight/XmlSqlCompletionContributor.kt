@@ -73,8 +73,8 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     val beforeCaret = statementText.substring(0, caretInStatement)
 
                     // a. 动态标签：光标前非空白字符是 `<`（`1=1 <caret>` 等插入点）
-                    if (DYNAMIC_TAG_PATTERN.containsMatchIn(beforeCaret)) {
-                        DYNAMIC_TAGS.forEach { tag ->
+                    if (SourceSqlSuggestionFactory.DYNAMIC_TAG_PATTERN.containsMatchIn(beforeCaret)) {
+                        SourceSqlSuggestionFactory.DYNAMIC_TAGS.forEach { tag ->
                             if (prefix.prefixMatches(tag)) result.addElement(SourceSqlSuggestionFactory.xmlTag(tag))
                         }
                         return
@@ -96,10 +96,10 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     val nearestTag = PsiTreeUtil.getParentOfType(parameters.position, XmlTag::class.java)
                     val attributeNamePosition = nearestTag != null && (
                         parameters.position.parent is XmlAttribute ||
-                            ATTRIBUTE_POSITION_PATTERN.containsMatchIn(beforeCaret)
+                            SourceSqlSuggestionFactory.ATTRIBUTE_POSITION_PATTERN.containsMatchIn(beforeCaret)
                         )
                     if (attributeNamePosition) {
-                        DYNAMIC_TAG_ATTRIBUTES[nearestTag.name].orEmpty().forEach { attribute ->
+                        SourceSqlSuggestionFactory.DYNAMIC_TAG_ATTRIBUTES[nearestTag.name].orEmpty().forEach { attribute ->
                             if (prefix.prefixMatches(attribute)) result.addElement(SourceSqlSuggestionFactory.xmlAttribute(attribute))
                         }
                         return
@@ -133,7 +133,7 @@ class XmlSqlCompletionContributor : CompletionContributor() {
         val context = resolveContext(statementTag)
         val prefix = result.prefixMatcher
         val fieldNames = mainEntityFieldNames(context)
-        val secondSegment = OGNL_PREFIX_PATTERN.containsMatchIn(beforeCaret)
+        val secondSegment = SourceSqlSuggestionFactory.OGNL_PREFIX_PATTERN.containsMatchIn(beforeCaret)
         if (secondSegment) {
             fieldNames.forEach { name ->
                 if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
@@ -196,28 +196,7 @@ class XmlSqlCompletionContributor : CompletionContributor() {
         "if", "foreach", "where", "set", "trim", "choose", "when", "otherwise", "bind", "sql", "include",
     )
 
-    /** 动态标签 → 属性名（属性名位置补全；choose/where/set 无属性）。 */
-    private val DYNAMIC_TAG_ATTRIBUTES = mapOf(
-        "if" to listOf("test"),
-        "foreach" to listOf("collection", "item", "separator", "open", "close"),
-        "bind" to listOf("name", "value"),
-        "include" to listOf("refid"),
-        "trim" to listOf("prefix", "suffix", "prefixOverrides", "suffixOverrides"),
-        "choose" to emptyList(),
-        "when" to listOf("test"),
-        "sql" to listOf("id"),
-        "where" to emptyList(),
-        "set" to emptyList(),
-    )
-
-    /** 动态标签插入点：光标前非空白字符是 `<`（等长语句文本内左侧匹配）。 */
-    private val DYNAMIC_TAG_PATTERN = Regex("""[^\s]*<\s*$""")
-
-    /** 属性名位置：`<tagName  `（标签名 + 空白后光标）。 */
-    private val ATTRIBUTE_POSITION_PATTERN = Regex("""<\w+\s+[\w-]*$""")
-
-    /** OGNL `param.` 前缀（第二段字段名补全）。 */
-    private val OGNL_PREFIX_PATTERN = Regex("""[\w$]+\.\w*$""")
+    // T-M27.5：标签名/属性/模式正则提取至 SourceSqlSuggestionFactory（XML 与注解 <script> 共用）
 
     /** resolve 失败降级上下文（只补关键字/动态标签，不阻塞补全）。 */
     private val EMPTY_SOURCE_SQL_CONTEXT = SourceSqlContext(null, emptyList(), emptyList())

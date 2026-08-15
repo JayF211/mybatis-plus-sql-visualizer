@@ -84,22 +84,76 @@ class AnnotationSqlCompletionContributor : CompletionContributor(), DumbAware {
                     // 文本提取：常量求值（数组取当前元素 / + 拼接取整段），失败空串 → return
                     val raw = extractSqlText(annotation, literal, parameters.position.project)
                     if (raw.isEmpty()) return
-                    // <script>/XML 标签等长剥离（偏移量 1:1，offset 无需换算）
-                    val text = stripXmlTags(raw)
-                    val sqlOffset = (parameters.offset - literal.textRange.startOffset).coerceIn(0, text.length)
-
                     val sourceContext = resolveSourceContext(parameters, annotation)
                     val prefix = result.prefixMatcher
-                    runCatching { SourceSqlCompleter.sqlCompletions(text, sqlOffset, sourceContext) }
-                        .getOrElse { emptyList() }
-                        .forEach { item ->
-                            if (prefix.prefixMatches(item.lookupString)) {
-                                result.addElement(item)
+                    // T-M27.5：`<script>` 动态标签补全（与 XML mapper 一致：标签名/属性/OGNL，
+                    // 文本级判断——注解字符串无 XML PSI）——beforeCaret = 光标前原文
+                    val caretInRaw = (parameters.offset - literal.textRange.startOffset).coerceIn(0, raw.length)
+                    val beforeCaret = raw.substring(0, caretInRaw)
+                    when {
+                        // 标签插入点：光标前 `<` → 补标签名
+                        SourceSqlSuggestionFactory.DYNAMIC_TAG_PATTERN.containsMatchIn(beforeCaret) -> {
+                            SourceSqlSuggestionFactory.DYNAMIC_TAGS.forEach { tag ->
+                                if (prefix.prefixMatches(tag)) result.addElement(SourceSqlSuggestionFactory.xmlTag(tag))
                             }
+                            return
                         }
+                        // 标签属性位：`<tagName  ` → 补属性
+                        SourceSqlSuggestionFactory.ATTRIBUTE_POSITION_PATTERN.containsMatchIn(beforeCaret) -> {
+                            val tagName = TAG_NAME_AT_CARET.find(beforeCaret)?.groupValues?.get(1)
+                            SourceSqlSuggestionFactory.DYNAMIC_TAG_ATTRIBUTES[tagName].orEmpty().forEach { attr ->
+                                if (prefix.prefixMatches(attr)) result.addElement(SourceSqlSuggestionFactory.xmlAttribute(attr))
+                            }
+                            return
+                        }
+                        // test/collection 属性值内 → OGNL（参数名 + 主表实体字段）
+                        SourceSqlSuggestionFactory.OGNL_ATTRIBUTE_PATTERN.containsMatchIn(beforeCaret) -> {
+                            addOgnlCompletions(sourceContext, beforeCaret, prefix, result)
+                            return
+                        }
+                        else -> {
+                            // <script>/XML 标签等长剥离（偏移量 1:1，offset 无需换算）
+                            val text = stripXmlTags(raw)
+                            runCatching { SourceSqlCompleter.sqlCompletions(text, caretInRaw, sourceContext) }
+                                .getOrElse { emptyList() }
+                                .forEach { item ->
+                                    if (prefix.prefixMatches(item.lookupString)) {
+                                        result.addElement(item)
+                                    }
+                                }
+                        }
+                    }
                 }
             },
         )
+    }
+
+    /** 属性名位置的标签名提取（`<foreach  ` → foreach）。 */
+    private val TAG_NAME_AT_CARET = Regex("""<(\w+)\s+[\w-]*$""")
+
+    /** OGNL 补全：test/collection 值内——参数名 + 主表实体字段（`param.` 前缀时仅第二段字段）。 */
+    private fun addOgnlCompletions(
+        context: SourceSqlContext,
+        beforeCaret: String,
+        prefix: com.intellij.codeInsight.completion.PrefixMatcher,
+        result: CompletionResultSet,
+    ) {
+        val fieldNames = context.candidates
+            .firstOrNull { it.tableName == context.main?.tableName }
+            ?.columns?.map { it.fieldName }
+            .orEmpty()
+        if (SourceSqlSuggestionFactory.OGNL_PREFIX_PATTERN.containsMatchIn(beforeCaret)) {
+            fieldNames.forEach { name ->
+                if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+            }
+        } else {
+            context.paramNames.forEach { name ->
+                if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+            }
+            fieldNames.forEach { name ->
+                if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+            }
+        }
     }
 
     /**

@@ -8,6 +8,7 @@
 
 - **预览 SQL 与预期 SQL 不一致修复**（M29）：① `.and(condition, w -> ...)` 等**分组方法布尔条件重载**不再被静默丢弃——and/or/nested/not/func 的布尔首参剥离为动态条件开关（默认勾选按标志，`and(false, ...)` 默认不渲染），组内 OR 条件正常渲染（如 `AND (code LIKE ? OR user_phone LIKE ?)`）；② **分页 LIMIT 渲染**——`service.page(new Page<>(...), wrapper)` / `selectPage` / 链式 `page()` 识别为分页消费：字面量直接计算 `LIMIT 0, 10`，运行时变量渲染 `LIMIT ?, ?`（参数区可回填，offset 标注 `(pageNum - 1) * pageSize` 公式），全 9 方言适配
 - **设置页检查更新与自动安装更新**（M28）：插件设置页新增「更新」分区——当前版本展示、「检查更新」按钮（已最新/发现新版/失败原因状态反馈）、新版变更日志展示、「下载并安装」一键完成（下载进度条）→ 安装完成后提示「重启 IDE 生效」+ 重启按钮（IDE 原生确认框，可选稍后）；「启动时自动检查更新」开关（默认开）——启动静默检查，发现新版弹通知可「立即更新」后台下载安装；更新源 = 发布仓库 `update/update.json` 清单 + Gitee Release 附件（发布流程新增清单维护步骤，`./gradlew writeUpdateManifest`）
+- **注解 `<script>` 动态标签补全**（T-M27.5）：`@Select("<script>…")` 内输入 `<` 补动态标签名、标签内补属性、test/collection 值内补参数名与实体字段——与 XML mapper 体验一致
 - **表名提示 + SQL 格式标准化**（T-M27.4）：预览弹窗补全表名全位置提示（输入表名前缀即命中，含 @TableName 联表候选）；SQL 渲染自动格式化（列清单换行/主子句顶格/子查询缩进/AND 缩进/空行剔除——XML 动态标签残留空行归一）
 - **XML 预览补全增强**（T-M27.3）：XML mapper 预览弹窗输入自动弹出表名/列名补全——预览结果注入实体上下文（namespace→Mapper 接口→主实体），与 Java 注解预览一致（列注释/中文检索）
 - **SQL 面板输入自动补全**（T-M27.2）：预览弹窗 SQL 编辑器输入字符自动弹出补全——平台 autopopup 对非文件编辑器弹空窗（contributor 未调度），面板自建：文档监听 + commit 后手动补全处理器（explicit=true）接管
