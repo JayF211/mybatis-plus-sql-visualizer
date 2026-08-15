@@ -6,6 +6,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBLabel
 import java.awt.Component
 import java.awt.Container
+import javax.swing.JButton
 
 /**
  * 设置页内部构建号行测试（T-M23.14）：
@@ -37,5 +38,29 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
         assertNotNull("构建号行应有解释 tooltip", valueLabel)
         assertEquals("值应来自 displayText（测试环境为 —）", PluginBuildInfo.displayText(), valueLabel!!.text)
         assertEquals("—", valueLabel.text)
+    }
+
+    /** T-M28.2：构建号行复制按钮——存在、文案走 bundle、开发态（无构建号）禁用。 */
+    fun testBuildNumberRowHasCopyButton() {
+        val configurable = PluginSettingsConfigurable()
+        configurable.createComponent()
+        val panel = configurable.panelForTest().getRoot()
+
+        val copyButton = collectButtons(panel)
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("settings.buildNumber.copy") }
+        assertNotNull("构建号行应有复制按钮", copyButton)
+        assertEquals(
+            "测试环境无构建号（非 jar 形态）→ 复制按钮应禁用（复制 — 无意义）",
+            false,
+            copyButton!!.isEnabled,
+        )
+    }
+
+    /** 递归收集组件树中全部 JButton（复制按钮定位辅助）。 */
+    private fun collectButtons(component: Component): List<JButton> {
+        val buttons = mutableListOf<JButton>()
+        if (component is JButton) buttons += component
+        if (component is Container) component.components.forEach { buttons += collectButtons(it) }
+        return buttons
     }
 }
