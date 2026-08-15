@@ -67,6 +67,7 @@ class SqlLogPanel(
     private val listModel = DefaultListModel<LogSqlEntry>()
     private val list = JBList(listModel)
     private val tabs = JBTabbedPane()
+    private var formatToggled = false // T-M31.15 工具栏「格式化」按钮切换态
     private val previewEditor: Editor = createPreviewEditor()
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
@@ -97,6 +98,7 @@ class SqlLogPanel(
         val group = DefaultActionGroup(
             CaptureAction(),
             PauseAction(),
+            FormatAction(),
             ClearAction(),
             SettingsAction(),
         )
@@ -133,6 +135,19 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             manager.entries.setPaused(!manager.entries.paused)
+        }
+    }
+
+    /** T-M31.15：格式化按钮——切换预览标签页 SQL 的格式化/单行显示。 */
+    private inner class FormatAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.ReformatCode
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.format")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            formatToggled = !formatToggled
+            updatePreview(list.selectedValue)
         }
     }
 
@@ -175,8 +190,10 @@ class SqlLogPanel(
                 // T-M31.13/14：SQL 词法着色（插件自身 SqlHighlightColors 配色，随 IDE 主题）+ 可选时间戳前缀
                 text = null
                 if (entry != null) {
+                    // T-M31.15：时间戳与 SQL 分行（<br>）+ 每条 SQL 末尾分号结束符 + 条目间空行
                     val timestamp = timestampHtml(entry.timestamp)
-                    text = "<html>" + timestamp + SqlListHtmlRenderer.render(entry.summary) + "</html>"
+                    val sql = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+                    text = "<html>" + timestamp + "<br>" + sql + "<br></html>"
                     toolTipText = entry.restoredSql
                 }
                 return this
@@ -223,7 +240,9 @@ class SqlLogPanel(
 
     private fun updatePreview(entry: LogSqlEntry?) {
         val document = previewEditor.document
-        val text = entry?.restoredSql ?: ""
+        val base = withTerminator(entry?.restoredSql ?: "")
+        // T-M31.15：工具栏「格式化」按钮 toggle——格式化多行/单行切换
+        val text = if (formatToggled && entry != null) SqlFormatter.format(base) else base
         if (document.text != text) {
             document.setReadOnly(false)
             document.setText(text)
@@ -239,6 +258,10 @@ class SqlLogPanel(
         snapshot.forEach { listModel.addElement(it) }
         updatePreview(list.selectedValue)
     }
+
+    /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复）。 */
+    private fun withTerminator(sql: String): String =
+        if (sql.isEmpty() || sql.endsWith(";")) sql else sql + ";"
 
     /** 时间戳 HTML 前缀（设置开关 + 格式；灰字跟随主题）。 */
     private fun timestampHtml(timestamp: Long): String {
@@ -263,7 +286,8 @@ class SqlLogPanel(
     private fun openPreview(entry: LogSqlEntry) {
         // T-M31.14：设置开启时预览展示格式化版（多行缩进），否则原样
         val state = PluginSettings.getInstance().state
-        val sql = if (state.logFormatSql) SqlFormatter.format(entry.restoredSql) else entry.restoredSql
+        val base = withTerminator(entry.restoredSql)
+        val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
         SqlPreviewService.showResult(
             project,
             PreviewResult(
