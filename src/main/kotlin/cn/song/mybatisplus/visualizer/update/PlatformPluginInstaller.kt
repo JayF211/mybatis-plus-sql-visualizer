@@ -50,13 +50,26 @@ object PlatformPluginInstaller {
         if (old != null) {
             PluginInstaller.uninstallAfterRestart(old)
         }
-        val targetDir = PathManager.getPluginsDir().resolve(pluginId.idString)
-        StartupActionScriptManager.addActionCommand(StartupActionScriptManager.UnzipCommand(persistent, targetDir))
+        // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
+        // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand
+        // 纯解压不剥顶层；解压到 `<plugins>/<pluginId>/` 会多嵌套一层（用户实测：重启后插件
+        // 列表消失——平台扫描不到嵌套 jar 内的 plugin.xml）。解压到根后 zip 顶层目录名
+        // 与旧安装目录名一致，删旧解新即正确替换。
+        StartupActionScriptManager.addActionCommand(
+            StartupActionScriptManager.UnzipCommand(persistent, unzipTargetDir())
+        )
         PluginUpdateRunner.InstallResult.Installed
     }.getOrElse { error ->
         LOG.warn("plugin update install failed — ${error.message}", error)
         PluginUpdateRunner.InstallResult.Failed(error.message ?: error.toString())
     }
+
+    /**
+     * 解压目标目录（T-M28.5）：插件目录**根**——发布 zip 顶层含插件名目录
+     * （`mybatis-plus-sql-visualizer/lib/…`），UnzipCommand 不剥顶层，目标必须是根
+     * 才能解出正确形态（见 install() 注释）。internal 供测试断言。
+     */
+    internal fun unzipTargetDir(): Path = PathManager.getPluginsDir()
 
     /** 下载包复制到 system 目录下持久位置（重启后启动脚本读取；留在原处不删——脚本引用）。 */
     private fun persistZip(zip: Path): Path {

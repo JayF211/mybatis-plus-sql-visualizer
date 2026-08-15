@@ -86,4 +86,15 @@ class PlatformPluginInstallerTest : BasePlatformTestCase() {
             Files.deleteIfExists(temp)
         }
     }
+
+    // ---------------- T-M28.5 解压目标（zip 顶层含插件名目录，必须解到插件目录根） ----------------
+
+    fun testUnzipTargetIsPluginsRoot() {
+        // 发布 zip 顶层自带插件名目录（IPGP buildPlugin 布局），UnzipCommand 不剥顶层——
+        // 目标必须是插件目录根，否则多嵌套一层平台扫描不到（用户实测重启后插件消失）
+        assertEquals(
+            com.intellij.openapi.application.PathManager.getPluginsDir(),
+            PlatformPluginInstaller.unzipTargetDir(),
+        )
+    }
 }
