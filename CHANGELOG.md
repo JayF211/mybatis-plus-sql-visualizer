@@ -6,6 +6,7 @@
 
 ### Added
 
+- **SQL 面板输入自动补全**（T-M27.2）：预览弹窗 SQL 编辑器输入字符自动弹出补全——平台 autopopup 对非文件编辑器弹空窗（contributor 未调度），面板自建：文档监听 + commit 后手动补全处理器（explicit=true）接管
 - **SQL 面板补全修复**（T-M27.1）：预览弹窗 SQL 编辑器 Ctrl+Space 补全不触发修复——编辑器组件链补 DataProvider（2025.3 平台编辑器改为 UiCompatibleDataProvider，传统 DataContext 查询拿不到 EDITOR 致补全静默失效）
 - **XML/注解 SQL 代码补全**（M27）：mapper XML 语句与 Java SQL 注解字符串（@Select/@Insert/@Update/@Delete）内 Ctrl+Space 补全——
   - SQL 关键字、表名/列名（FROM/JOIN/WHERE 等子句位置感知）、`别名.` 前缀列（联表：LEFT JOIN/逗号多表别名绑定）

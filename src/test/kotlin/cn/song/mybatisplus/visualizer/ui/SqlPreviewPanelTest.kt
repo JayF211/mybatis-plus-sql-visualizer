@@ -18,6 +18,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
+import com.intellij.testFramework.EditorTestUtil
+import com.intellij.util.ui.UIUtil
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -27,7 +29,6 @@ import com.intellij.openapi.actionSystem.DataProvider
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -852,5 +853,37 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             }
         }
         return null
+    }
+
+    // ------------------------------------------------------------------
+    // T-M27.2：面板输入自动弹出补全（用户实测：输入字符无自动提示——平台 autopopup 对
+    // 非文件编辑器显示空弹窗且不调度 contributor，面板自建：文档监听 + 手动模式补全处理器）
+    // ------------------------------------------------------------------
+
+    fun testTypingTriggersAutoPopup() {
+        val panel = SqlPreviewPanel(project)
+        // SQL 末尾空白处输入（新词起始，前缀 S 命中 SELECT）
+        panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl"))
+        val editor = panel.editorForTest()!!
+        val insertOffset = editor.document.textLength
+        editor.caretModel.moveToOffset(insertOffset)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            editor.document.insertString(insertOffset, "S")
+        }
+        // 真实输入后 caret 自动在字符后（insertString 不移动 caret，测试手动模拟）
+        editor.caretModel.moveToOffset(insertOffset + 1)
+        var lookup = LookupManager.getInstance(project).getActiveLookup()
+        var round = 0
+        while (lookup == null && round < 30) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(50)
+            lookup = LookupManager.getInstance(project).getActiveLookup()
+            round++
+        }
+        assertNotNull("输入字符后应自动弹出补全（实际为 null——自建 autopopup 失效）", lookup)
+        val items = lookup!!.items.map { it.lookupString }
+        assertTrue("补全应含关键字 SELECT：$items", items.contains("SELECT"))
+        LookupManager.getInstance(project).hideActiveLookup()
+        panel.clear()
     }
 }

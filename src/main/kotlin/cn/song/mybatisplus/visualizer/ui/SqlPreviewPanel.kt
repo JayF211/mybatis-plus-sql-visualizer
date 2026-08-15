@@ -23,6 +23,11 @@ import com.intellij.openapi.actionSystem.DataProvider
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
+import com.intellij.codeInsight.completion.CompletionType
+import com.intellij.codeInsight.lookup.LookupManager
+import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.actionSystem.Shortcut
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
@@ -114,6 +119,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
+
+    /** T-M27.2：自建 autopopup 的文档监听器与调度防重入标志（平台 autopopup 对非文件编辑器不生效）。 */
+    private var autoPopupListener: com.intellij.openapi.editor.event.DocumentListener? = null
+    private var autoPopupScheduled = false
     private var psiFile: PsiFile? = null
     private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
 
@@ -504,11 +513,68 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editorHolder.revalidate()
         editorHolder.repaint()
         editor = created
+        bindAutoPopup(created)
+    }
+
+    /**
+     * T-M27.2：自建输入自动补全（用户实测：面板内输入字符无自动提示，与 Java 代码编辑器行为不一致）。
+     *
+     * 平台 autopopup 链路（TypedHandler → CompletionAutoPopupHandler → AutoPopupController →
+     * CodeCompletionHandlerBase(autopopup=true)）对**非项目文件编辑器**不生效——`CompletionProgressIndicator`
+     * 的 autopopup 流程显示**空弹窗**（contributor 未被调度；探针实证：手动模式 contributor 正常被调用、
+     * forParameters 含本插件 contributor，仅 autopopup 模式未调度，与语言无关——Java 文件同为空）。
+     * 修复：面板监听文档输入（标识符字符），直接调**手动模式**补全处理器，绕开平台
+     * autopopup 调度。关键参数：构造第 4 参 explicit=true（探针实证：false 时 contributor
+     * 不被调度、弹空窗）+ 补全前 commitDocument（未 commit 时前缀按旧 PSI 文本计算误过滤）。
+     * 防回环：有效 lookup 激活/删除/非标识符/调度中均不重复触发（平台空弹窗不拦截，
+     * 由自建补全接管）。
+     */
+    private fun bindAutoPopup(created: Editor) {
+        val listener = object : com.intellij.openapi.editor.event.DocumentListener {
+            override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
+                if (event.newLength == 0 || event.oldLength > event.newLength) return
+                val ed = editor ?: return
+                if (ed.isDisposed || project == null) { return }
+                // 平台 autopopup 会先弹**空弹窗**（contributor 未调度）——空弹窗不拦截，
+                // 由自建补全接管；仅"已有有效项"的补全（lookup 选中插入回环）拦截
+                val active = LookupManager.getActiveLookup(ed)
+                if (active != null && active.items.isNotEmpty()) { return }
+                if (autoPopupScheduled) { return }
+                // 插入的最后一个字符为标识符（字母/数字/_）才弹（中文输入等场景不触发）。
+                // 用**事件插入位置**而非 caret——DocumentListener 在 caret 移动前触发（真实输入同时序）
+                val insertEnd = event.offset + event.newLength
+                if (insertEnd <= 0) return
+                val prev = ed.document.getText(TextRange.create(insertEnd - 1, insertEnd)).firstOrNull() ?: return
+                if (!prev.isLetterOrDigit() && prev != '_') { return }
+                autoPopupScheduled = true
+                ApplicationManager.getApplication().invokeLater {
+                    autoPopupScheduled = false
+                    val ed2 = editor ?: return@invokeLater
+                    val proj = project ?: return@invokeLater
+                    if (ed2.isDisposed) return@invokeLater
+                    val active2 = LookupManager.getActiveLookup(ed2)
+                    if (active2 != null && active2.items.isNotEmpty()) return@invokeLater
+                    try {
+                        // 先提交文档（PSI 同步）——补全前缀按编辑器文档计算，未 commit 时用旧 PSI
+                        // 文本算前缀导致误过滤（如 "FROM Stbl" 按旧文本 "FROM tbl" 前缀算成 "t"）
+                        com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(ed2.document)
+                        CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true)
+                            .invokeCompletion(proj, ed2, 1, false)
+                    } catch (t: Throwable) {
+                        // 补全异常不影响输入（弹窗失败下次输入重试）
+                    }
+                }
+            }
+        }
+        created.document.addDocumentListener(listener)
+        autoPopupListener = listener
     }
 
     /** 释放当前编辑器（幂等）。 */
     private fun releaseEditor() {
         editor?.let {
+            autoPopupListener?.let { l -> it.document.removeDocumentListener(l) }
+            autoPopupListener = null
             EditorFactory.getInstance().releaseEditor(it)
             editor = null
         }
