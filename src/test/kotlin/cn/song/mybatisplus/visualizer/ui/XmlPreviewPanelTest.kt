@@ -18,6 +18,18 @@ import org.junit.Assert.assertTrue
  */
 class XmlPreviewPanelTest : BasePlatformTestCase() {
 
+    // T-M27.4：渲染文本断言类测试关闭自动格式化（格式化行为由 SqlFormatterTest +
+    // SqlPreviewPanelTest.testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
+    override fun setUp() {
+        super.setUp()
+        runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
+    }
+
+    override fun tearDown() {
+        runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
+        super.tearDown()
+    }
+
     private val mapper = """
         <mapper namespace="com.example.BizMapper">
           <select id="selectList" resultType="map">

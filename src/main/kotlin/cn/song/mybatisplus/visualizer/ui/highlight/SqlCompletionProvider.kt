@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import cn.song.mybatisplus.visualizer.model.TableInfo
+
 /**
  * SQL 补全来源抽象（M9-04，预留 Database 方案 B 切换点）。
  *
@@ -28,6 +30,9 @@ interface SqlCompletionProvider {
 
     /** 表注释（M16：表名补全 tailText 与关键词检索）。 */
     fun tableComment(context: SqlCompletionContext): String? = context.tableComment
+
+    /** T-M27.4：联表候选表（@TableName 实体，含注释；表名补全全位置提示）。 */
+    fun candidateTables(context: SqlCompletionContext): List<TableInfo> = context.candidateTables
 
     companion object {
         /** 当前提供器（默认方案 A）。 */

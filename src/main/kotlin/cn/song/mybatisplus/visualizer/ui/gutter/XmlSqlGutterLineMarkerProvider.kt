@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
@@ -63,8 +64,12 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             val file = tag.containingFile as? XmlFile ?: return
             SqlPreviewService.previewAsync(project, {
                 // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
-                // T-M27.3：注入实体上下文（namespace → Mapper 接口 → 主实体）——预览弹窗补全表/列来源
-                val entity = XmlSqlCompletionContextResolver.resolveXml(project, tag).main
+                // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
+                // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
+                val src = XmlSqlCompletionContextResolver.resolveXml(project, tag)
+                val entity = src.main?.let { m ->
+                    SqlCompletionContext(m.tableName, m.columns, m.tableAlias, m.columnComments, m.tableComment, src.candidates)
+                }
                 XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
             }) { result ->
                 SqlPreviewService.showResult(project, result)

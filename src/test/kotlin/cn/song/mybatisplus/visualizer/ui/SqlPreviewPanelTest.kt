@@ -47,12 +47,25 @@ import javax.swing.plaf.basic.BasicSplitPaneUI
  */
 class SqlPreviewPanelTest : BasePlatformTestCase() {
 
+    // T-M27.4：渲染文本断言类测试关闭自动格式化（默认开启的格式化行为由
+    // SqlFormatterTest + testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
+    override fun setUp() {
+        super.setUp()
+        runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
+    }
+
+    override fun tearDown() {
+        runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
+        super.tearDown()
+    }
+
     private fun result(
         sql: String = "SELECT id\nFROM tbl",
         compact: String = "SELECT id FROM tbl",
         params: List<String> = emptyList(),
         columns: List<String> = listOf("id", "name"),
         tableName: String? = "tbl",
+        candidateTables: List<TableInfo> = emptyList(),
     ) = PreviewResult(
         sql = sql,
         compactSql = compact,
@@ -61,6 +74,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         wrapperType = WrapperType.LAMBDA_QUERY,
         tableName = tableName,
         columns = columns,
+        candidateTables = candidateTables,
     )
 
     fun testShowResultCreatesEditorView() {
@@ -101,6 +115,8 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     fun testRefreshResetsModeToSettingsDefault() {
         // M19.3（用户实测：点刷新后 SQL 仍停留在单行模式）：
         // 刷新 = 模式复位为与设置「SQL 格式化输出」对齐（默认多行）——手动切到单行后刷新应回多行
+        // （setUp 关闭格式化以保持渲染断言——本测试需默认开启语义，显式恢复）
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())
         panel.toggleCompact()   // 切到单行
@@ -109,7 +125,8 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
 
         panel.refreshView()
         assertFalse("刷新后应恢复默认多行模式", panel.compactForTest())
-        assertEquals("SELECT id\nFROM tbl", panel.editorForTest()!!.document.text)
+        // formatSql=true 时刷新渲染自动格式化
+        assertEquals("SELECT\n    id\nFROM tbl", panel.editorForTest()!!.document.text)
         panel.clear()
     }
 
@@ -866,13 +883,14 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // SQL 末尾空白处输入（新词起始，前缀 S 命中 SELECT）
         panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl"))
         val editor = panel.editorForTest()!!
+        // 格式化后 SQL 末尾无空格（format 的 trim）——先补空格再输入（模拟真实输入位置，避免连词）
         val insertOffset = editor.document.textLength
         editor.caretModel.moveToOffset(insertOffset)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, "S")
+            editor.document.insertString(insertOffset, " S")
         }
         // 真实输入后 caret 自动在字符后（insertString 不移动 caret，测试手动模拟）
-        editor.caretModel.moveToOffset(insertOffset + 1)
+        editor.caretModel.moveToOffset(insertOffset + 2)
         var lookup = LookupManager.getInstance(project).getActiveLookup()
         var round = 0
         while (lookup == null && round < 30) {
@@ -894,12 +912,13 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl", tableName = null, columns = emptyList()))
         val editor = panel.editorForTest()!!
+        // 格式化后 SQL 末尾无空格（format 的 trim）——先补空格再输入（模拟真实输入位置，避免连词）
         val insertOffset = editor.document.textLength
         editor.caretModel.moveToOffset(insertOffset)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, "S")
+            editor.document.insertString(insertOffset, " S")
         }
-        editor.caretModel.moveToOffset(insertOffset + 1)
+        editor.caretModel.moveToOffset(insertOffset + 2)
         var lookup = LookupManager.getInstance(project).getActiveLookup()
         var round = 0
         while (lookup == null && round < 30) {
@@ -922,17 +941,18 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             result(
                 sql = "SELECT i FROM ",
                 compact = "SELECT i FROM tbl",
-                tableName = "tbl",
                 columns = listOf("id", "name"),
+                tableName = null,
             ),
         )
         val editor = panel.editorForTest()!!
+        // 格式化后 SQL 末尾无空格（format 的 trim）——先补空格再输入（模拟真实输入位置，避免连词）
         val insertOffset = editor.document.textLength
         editor.caretModel.moveToOffset(insertOffset)
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, "S")
+            editor.document.insertString(insertOffset, " S")
         }
-        editor.caretModel.moveToOffset(insertOffset + 1)
+        editor.caretModel.moveToOffset(insertOffset + 2)
         var lookup = LookupManager.getInstance(project).getActiveLookup()
         var round = 0
         while (lookup == null && round < 30) {
@@ -944,6 +964,60 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNotNull("XML 预览（注入实体）输入字符后应弹出补全", lookup)
         val items = lookup!!.items.map { it.lookupString }
         assertTrue("应含关键字 SELECT：$items", items.contains("SELECT"))
+        LookupManager.getInstance(project).hideActiveLookup()
+        panel.clear()
+    }
+
+    fun testRenderAutoFormatsSql() {
+        // T-M27.4：渲染自动格式化（设置开启）——关键字大写/主子句顶格/列清单换行/空行归一
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(
+                sql = "select  id ,name  from t  where id=1",
+                compact = "select id,name from t where id=1",
+            ),
+        )
+        val doc = panel.editorForTest()!!.document.text
+        assertEquals(
+            "SELECT\n    id\n    name\nFROM t\nWHERE id = 1",
+            doc,
+        )
+        panel.clear()
+        panel.clear()
+    }
+
+    fun testTableNameCompletionInWhereClauseWithCandidates() {
+        // T-M27.4：表名全位置提示——WHERE 后输入表名前缀也提示（主表 + 联表候选），
+        // 不再限定 FROM/JOIN 后（输入 me → merchant_entity 命中）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(
+                sql = "SELECT id FROM t WHERE ",
+                compact = "SELECT id FROM t WHERE ",
+                tableName = "t",
+                columns = listOf("id"),
+                candidateTables = listOf(TableInfo("MerchantEntity", "merchant_entity", emptyList())),
+            ),
+        )
+        val editor = panel.editorForTest()!!
+        val insertOffset = editor.document.textLength
+        editor.caretModel.moveToOffset(insertOffset)
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            editor.document.insertString(insertOffset, "me")
+        }
+        editor.caretModel.moveToOffset(insertOffset + 2)
+        var lookup = LookupManager.getInstance(project).getActiveLookup()
+        var round = 0
+        while (lookup == null && round < 30) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(50)
+            lookup = LookupManager.getInstance(project).getActiveLookup()
+            round++
+        }
+        assertNotNull("WHERE 后输入表名前缀应弹出补全", lookup)
+        val items = lookup!!.items.map { it.lookupString }
+        assertTrue("应含联表候选表名 merchant_entity：$items", items.contains("merchant_entity"))
         LookupManager.getInstance(project).hideActiveLookup()
         panel.clear()
     }

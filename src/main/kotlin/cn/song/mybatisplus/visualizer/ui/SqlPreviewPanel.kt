@@ -123,6 +123,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M27.2：自建 autopopup 的文档监听器与调度防重入标志（平台 autopopup 对非文件编辑器不生效）。 */
     private var autoPopupListener: com.intellij.openapi.editor.event.DocumentListener? = null
     private var autoPopupScheduled = false
+
+    /** T-M27.4：渲染 setText 期间抑制自建 autopopup（格式化替换整文档不触发补全）。 */
+    private var suppressAutoPopup = false
     private var psiFile: PsiFile? = null
     private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
 
@@ -298,6 +301,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         tableAlias = null,
         columnComments = current?.columnComments ?: emptyMap(),
         tableComment = current?.tableComment,
+        // T-M27.4：联表候选表（XML 预览经 resolveXml 注入；预览补全表名候选）
+        candidateTables = current?.candidateTables.orEmpty(),
     )
 
     /** 按当前单行/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
@@ -459,14 +464,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 渲染 SQL 到可编辑编辑器；已存在时更新文档（保留焦点/撤销）。 */
     private fun showSql(sql: String) {
+        // T-M27.4：渲染自动格式化（设置开启且非单行模式）——XML 动态标签展开残留的空行/缩进
+        // 由格式化器归一（关键字大写、主子句顶格、列清单换行缩进、AND 缩进、子查询缩进）；
+        // 单行模式保持紧凑（格式化会引入换行）
+        val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(sql) else sql
         val existing = editor
         if (existing != null) {
-            if (existing.document.text != sql) {
-                WriteCommandAction.runWriteCommandAction(project) { existing.document.setText(sql) }
+            if (existing.document.text != text) {
+                suppressAutoPopup = true
+                try {
+                    WriteCommandAction.runWriteCommandAction(project) { existing.document.setText(text) }
+                } finally {
+                    suppressAutoPopup = false
+                }
             }
             return
         }
-        createEditor(sql)
+        createEditor(text)
     }
 
     /** 首次创建：SqlPreviewLanguage PSI 文件 → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
@@ -532,6 +546,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun bindAutoPopup(created: Editor) {
         val listener = object : com.intellij.openapi.editor.event.DocumentListener {
             override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
+                if (suppressAutoPopup) return
                 if (event.newLength == 0 || event.oldLength > event.newLength) return
                 val ed = editor ?: return
                 if (ed.isDisposed || project == null) { return }

@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import cn.song.mybatisplus.visualizer.model.TableInfo
+
 import com.intellij.openapi.util.Key
 
 /**
@@ -21,6 +23,8 @@ class SqlCompletionContext(
     val tableAlias: String?,
     val columnComments: Map<String, String> = emptyMap(),
     val tableComment: String? = null,
+    /** T-M27.4：联表候选表（@TableName 实体；表名补全全位置提示，主表去重）。 */
+    val candidateTables: List<TableInfo> = emptyList(),
 ) {
     companion object {
         val KEY: Key<SqlCompletionContext> = Key.create("MP_SQL_COMPLETION_CONTEXT")

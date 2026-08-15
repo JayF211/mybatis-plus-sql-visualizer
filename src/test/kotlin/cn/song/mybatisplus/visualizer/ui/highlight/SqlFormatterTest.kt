@@ -14,7 +14,9 @@ class SqlFormatterTest {
     fun testSelectWhereConditions() {
         val input = "select id,name from t where id=1 and name='abc' or age>10"
         val expected = """
-            SELECT id, name
+            SELECT
+                id
+                name
             FROM t
             WHERE id = 1
                 AND name = 'abc'
@@ -27,7 +29,8 @@ class SqlFormatterTest {
     fun testKeywordUppercaseAndClauses() {
         val input = "select a from t order by a desc limit 10"
         val expected = """
-            SELECT a
+            SELECT
+                a
             FROM t
             ORDER BY a DESC
             LIMIT 10
@@ -39,7 +42,8 @@ class SqlFormatterTest {
     fun testJoin() {
         val input = "select t.id from t1 t left join t2 b on t.id=b.id where t.id=1"
         val expected = """
-            SELECT t.id
+            SELECT
+                t.id
             FROM t1 t
             LEFT JOIN t2 b ON t.id = b.id
             WHERE t.id = 1
@@ -51,7 +55,9 @@ class SqlFormatterTest {
     fun testParensAndCommas() {
         val input = "select count(*),sum(x) from t where id in(1,2,3)"
         val expected = """
-            SELECT COUNT(*), SUM(x)
+            SELECT
+                COUNT(*)
+                SUM(x)
             FROM t
             WHERE id IN (1, 2, 3)
         """.trimIndent()
@@ -62,7 +68,8 @@ class SqlFormatterTest {
     fun testNestedParensInline() {
         val input = "select * from t where (a=1 and b=2) or c=3"
         val expected = """
-            SELECT *
+            SELECT
+                *
             FROM t
             WHERE (a = 1 AND b = 2)
                 OR c = 3
@@ -75,7 +82,9 @@ class SqlFormatterTest {
         val input = "update t set name='x',age=1 where id=1"
         val expected = """
             UPDATE t
-            SET name = 'x', age = 1
+            SET
+                name = 'x'
+                age = 1
             WHERE id = 1
         """.trimIndent()
         assertEquals(expected, SqlFormatter.format(input))
@@ -85,9 +94,48 @@ class SqlFormatterTest {
     fun testStringPreserved() {
         val input = "SELECT 'It''s' FROM t WHERE a = 'x'"
         val expected = """
-            SELECT 'It''s'
+            SELECT
+                'It''s'
             FROM t
             WHERE a = 'x'
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.format(input))
+    }
+
+    @Test
+    fun testXmlRenderBlankLinesAndSubquery() {
+        // T-M27.4 用户场景：XML 动态标签展开残留空行/缩进 → 格式化归一
+        val input = """
+            SELECT
+                    COALESCE(SUM(r.fee), 0) AS totalAmount,
+                    COUNT(DISTINCT r.order_code) AS orderCount
+                    FROM sys_merchant_share_record r
+                    WHERE r.merchant_id = ?
+                    AND r.deleted = 0
+                     
+                        AND r.station_id = ?
+                     
+                        AND EXISTS (
+                        SELECT 1 FROM sys_merchant_sub_account_station sa
+                        WHERE sa.merchant_id = ?
+                        AND sa.deleted = 0
+                        )
+        """.trimIndent()
+        val expected = """
+            SELECT
+                COALESCE(SUM(r.fee), 0) AS totalAmount
+                COUNT(DISTINCT r.order_code) AS orderCount
+            FROM sys_merchant_share_record r
+            WHERE r.merchant_id = ?
+                AND r.deleted = 0
+                AND r.station_id = ?
+                AND EXISTS (
+                    SELECT
+                        1
+                    FROM sys_merchant_sub_account_station sa
+                    WHERE sa.merchant_id = ?
+                        AND sa.deleted = 0
+                )
         """.trimIndent()
         assertEquals(expected, SqlFormatter.format(input))
     }

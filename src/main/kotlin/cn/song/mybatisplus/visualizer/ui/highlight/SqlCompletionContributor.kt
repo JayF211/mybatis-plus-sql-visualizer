@@ -68,10 +68,15 @@ class SqlCompletionContributor : CompletionContributor() {
                         )
                     }.getOrElse { SqlClause.UNKNOWN }
 
-                    // 表名：FROM/JOIN 后或子句无法判定（全量）
-                    if (clause != SqlClause.COLUMN && clause != SqlClause.SELECT_COLUMN) {
-                        provider.tableName(ctx)?.takeIf { prefix.prefixMatches(it) }?.let { table ->
-                            result.addElement(withComment(LookupElementBuilder.create(table), provider.tableComment(ctx)))
+                    // 表名：全位置提示（主表 + 联表候选，前缀过滤——T-M27.4 用户需求
+                    // "表名也支持提示"：输入表名前缀即可命中，不再限定 FROM/JOIN 后；
+                    // 候选与主表去重）
+                    provider.tableName(ctx)?.takeIf { prefix.prefixMatches(it) }?.let { table ->
+                        result.addElement(withComment(LookupElementBuilder.create(table), provider.tableComment(ctx)))
+                    }
+                    provider.candidateTables(ctx).forEach { t ->
+                        if (t.tableName != ctx.tableName && prefix.prefixMatches(t.tableName)) {
+                            result.addElement(withComment(LookupElementBuilder.create(t.tableName), t.comment))
                         }
                     }
                     // 列名：WHERE/ON/HAVING/GROUP BY/ORDER BY 后、SELECT 列位或子句无法判定

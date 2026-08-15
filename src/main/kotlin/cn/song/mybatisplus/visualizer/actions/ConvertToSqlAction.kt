@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -218,8 +219,12 @@ class ConvertToSqlAction : AnAction() {
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     private fun previewXml(project: Project, file: XmlFile, tag: XmlTag) {
         SqlPreviewService.previewAsync(project, {
-            // T-M27.3：注入实体上下文（namespace → Mapper 接口 → 主实体）——预览弹窗补全表/列来源
-            val entity = XmlSqlCompletionContextResolver.resolveXml(project, tag).main
+            // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
+            // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
+            val src = XmlSqlCompletionContextResolver.resolveXml(project, tag)
+            val entity = src.main?.let { m ->
+                SqlCompletionContext(m.tableName, m.columns, m.tableAlias, m.columnComments, m.tableComment, src.candidates)
+            }
             XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
         }) { result ->
             SqlPreviewService.showResult(project, result)

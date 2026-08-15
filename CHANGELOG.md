@@ -6,6 +6,7 @@
 
 ### Added
 
+- **表名提示 + SQL 格式标准化**（T-M27.4）：预览弹窗补全表名全位置提示（输入表名前缀即命中，含 @TableName 联表候选）；SQL 渲染自动格式化（列清单换行/主子句顶格/子查询缩进/AND 缩进/空行剔除——XML 动态标签残留空行归一）
 - **XML 预览补全增强**（T-M27.3）：XML mapper 预览弹窗输入自动弹出表名/列名补全——预览结果注入实体上下文（namespace→Mapper 接口→主实体），与 Java 注解预览一致（列注释/中文检索）
 - **SQL 面板输入自动补全**（T-M27.2）：预览弹窗 SQL 编辑器输入字符自动弹出补全——平台 autopopup 对非文件编辑器弹空窗（contributor 未调度），面板自建：文档监听 + commit 后手动补全处理器（explicit=true）接管
 - **SQL 面板补全修复**（T-M27.1）：预览弹窗 SQL 编辑器 Ctrl+Space 补全不触发修复——编辑器组件链补 DataProvider（2025.3 平台编辑器改为 UiCompatibleDataProvider，传统 DataContext 查询拿不到 EDITOR 致补全静默失效）

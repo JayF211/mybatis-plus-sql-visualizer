@@ -38,6 +38,8 @@ data class PreviewResult(
     val tableComment: String? = null,
     val previewModel: SqlPreviewModel? = null,
     val paramHints: List<ParamHint> = emptyList(),
+    /** T-M27.4：联表候选表（@TableName 实体；预览补全表名候选来源）。 */
+    val candidateTables: List<TableInfo> = emptyList(),
     val batchModel: BatchModel? = null,
     val xmlModel: XmlPreviewModel? = null,
 )
