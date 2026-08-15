@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.ui.content.ContentManagerEvent
 import com.intellij.ui.content.ContentManagerListener
@@ -14,7 +15,8 @@ import java.util.IdentityHashMap
  * 与既有 `execute/` 数据库链路同一隔离策略（build.gradle.kts 注释约定）。
  *
  * 全部调用经反射 + Proxy，任一步失败即优雅降级（返回 false / 静默跳过），不抛异常。
- * 面板可见性由 [SqlLogManager.attach] 驱动；新 console（每次 Run）经 ContentManagerListener 增量挂载。
+ * T-M31.9：全程分级日志（attach 每步结果 + 失败原因不吞）——沙盒无 execution 类无法复现挂载，
+ * 真实 IDE 实测（用户反馈：开启捕捉后控制台 SQL 未被识别）依赖日志定位。
  */
 class SqlLogConsoleBridge(
     private val buffer: SqlLogEntryBuffer,
@@ -24,17 +26,27 @@ class SqlLogConsoleBridge(
     private val attachedConsoles = IdentityHashMap<Any, Boolean>()
     private val contentListener = object : ContentManagerListener {
         override fun contentAdded(event: ContentManagerEvent) {
-            scanComponent(event.content.component)
+            val component = event.content.component
+            LOG.debug("contentAdded: ${component.javaClass.name}")
+            scanComponent(component)
         }
     }
 
     /** 反射取 RunContentManager 实例并挂载现有 console；环境缺 execution API 时返回 false。 */
     fun attach(project: Project): Boolean {
-        if (runContentManager != null) return true
-        val rcm = runContentManagerOrNull(project) ?: return false
+        if (runContentManager != null) {
+            LOG.debug("attach: already attached")
+            return true
+        }
+        val rcm = runContentManagerOrNull(project)
+        if (rcm == null) {
+            LOG.warn("attach: RunContentManager unavailable (execution API missing in this environment)")
+            return false
+        }
         runContentManager = rcm
         attachContentListener(rcm)
         scanAll()
+        LOG.info("attach: RCM=${rcm.javaClass.name}, consolesAttached=${attachedConsoles.size}")
         return true
     }
 
@@ -44,8 +56,8 @@ class SqlLogConsoleBridge(
         try {
             rcm.javaClass.getMethod("removeContentManagerListener", CONTENT_LISTENER_CLASS)
                 .invoke(rcm, contentListener)
-        } catch (_: Throwable) {
-            // 忽略：随 console 生命周期自然失效
+        } catch (t: Throwable) {
+            LOG.debug("detach: removeContentManagerListener failed", t)
         }
         runContentManager = null
         attachedConsoles.clear()
@@ -55,8 +67,10 @@ class SqlLogConsoleBridge(
         try {
             rcm.javaClass.getMethod("addContentManagerListener", CONTENT_LISTENER_CLASS)
                 .invoke(rcm, contentListener)
-        } catch (_: Throwable) {
+            LOG.debug("attach: contentAdded listener registered on ${rcm.javaClass.name}")
+        } catch (t: Throwable) {
             // 新 console 增量挂载不可用：仅覆盖挂载时已存在的 console
+            LOG.warn("attach: addContentManagerListener failed on ${rcm.javaClass.name} — new consoles will not be auto-attached", t)
         }
     }
 
@@ -65,26 +79,38 @@ class SqlLogConsoleBridge(
         val rcm = runContentManager ?: return
         val descriptors = try {
             rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm) as? Array<*>
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            LOG.warn("scanAll: getAllDescriptors failed on ${rcm.javaClass.name}", t)
             null
         } ?: return
+        LOG.debug("scanAll: ${descriptors.size} run descriptors")
         for (descriptor in descriptors) {
             val component = try {
                 descriptor?.javaClass?.getMethod("getComponent")?.invoke(descriptor) as? Component
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
+                LOG.warn("scanAll: getComponent failed on ${descriptor?.javaClass?.name}", t)
                 null
             } ?: continue
+            LOG.debug("scanAll: descriptor component=${component.javaClass.name}")
             scanComponent(component)
         }
     }
 
     /** 组件树中查找 ConsoleView 实现并挂载（供 contentAdded 与面板扫描复用）。 */
     fun scanComponent(component: Component?) {
-        findConsoleView(component)?.let { attachFilter(it) }
+        val console = findConsoleView(component)
+        if (console == null) {
+            LOG.debug("scanComponent: no ConsoleView found under ${component?.javaClass?.name}")
+            return
+        }
+        attachFilter(console)
     }
 
     private fun attachFilter(console: Any) {
-        if (attachedConsoles.containsKey(console)) return
+        if (attachedConsoles.containsKey(console)) {
+            LOG.debug("attachFilter: already attached ${console.javaClass.name}")
+            return
+        }
         attachedConsoles[console] = true
         try {
             val filterIface = Class.forName(FILTER_IFACE_NAME)
@@ -98,12 +124,15 @@ class SqlLogConsoleBridge(
                 },
             )
             console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
-        } catch (_: Throwable) {
+            LOG.info("attachFilter: filter attached to ${console.javaClass.name}")
+        } catch (t: Throwable) {
             attachedConsoles.remove(console) // 挂载失败允许下次重试
+            LOG.warn("attachFilter: failed on ${console.javaClass.name}", t)
         }
     }
 
     companion object {
+        private val LOG = Logger.getInstance(SqlLogConsoleBridge::class.java)
         private const val RCM_CLASS_NAME = "com.intellij.execution.RunContentManager"
         private const val FILTER_IFACE_NAME = "com.intellij.execution.ui.ConsoleView\$Filter"
         private val CONTENT_LISTENER_CLASS = ContentManagerListener::class.java
@@ -120,7 +149,8 @@ class SqlLogConsoleBridge(
             Class.forName(RCM_CLASS_NAME)
                 .getMethod("getInstance", Project::class.java)
                 .invoke(null, project)
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            LOG.warn("runContentManagerOrNull failed", t)
             null
         }
     }
@@ -129,7 +159,7 @@ class SqlLogConsoleBridge(
 /** 组件树中查找实现 `com.intellij.execution.ui.ConsoleView` 接口的组件（接口名匹配，无编译期引用）。 */
 internal fun findConsoleView(component: Component?): Any? {
     if (component == null) return null
-    if (component.javaClass.interfaces.any { it.name == "com.intellij.execution.ui.ConsoleView" }) return component
+    if (implementsConsoleView(component.javaClass)) return component
     if (component is Container) {
         for (child in component.components) {
             findConsoleView(child)?.let { return it }
@@ -137,3 +167,11 @@ internal fun findConsoleView(component: Component?): Any? {
     }
     return null
 }
+
+/** 类（含父类/父接口链）是否实现 ConsoleView 接口（接口名匹配）。 */
+private fun implementsConsoleView(clazz: Class<*>): Boolean {
+    if (clazz.interfaces.any { it.name == CONSOLE_VIEW_IFACE_NAME }) return true
+    return clazz.interfaces.any { implementsConsoleView(it) } || clazz.superclass?.let { implementsConsoleView(it) } == true
+}
+
+private const val CONSOLE_VIEW_IFACE_NAME = "com.intellij.execution.ui.ConsoleView"
