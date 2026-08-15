@@ -167,8 +167,12 @@ class SqlLogPanel(
             ): java.awt.Component {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
                 val entry = value as? LogSqlEntry
-                text = entry?.summary ?: ""
-                toolTipText = entry?.restoredSql ?: ""
+                // T-M31.13：SQL 词法着色（对齐参考插件高亮观感；JLabel 原生 HTML 渲染）
+                text = null
+                if (entry != null) {
+                    text = "<html>" + SqlListHtmlRenderer.render(entry.summary) + "</html>"
+                    toolTipText = entry.restoredSql
+                }
                 return this
             }
         }

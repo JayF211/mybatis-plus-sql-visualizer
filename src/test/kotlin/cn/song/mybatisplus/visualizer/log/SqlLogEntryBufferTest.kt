@@ -114,11 +114,10 @@ class SqlLogEntryBufferTest {
     }
 
     @Test
-    fun `去重开关默认关闭时全部保留`() {
-        assertFalse(buffer.dedupeEnabled) // 默认关（T-M31.7 用户要求）
+    fun `去重开关默认开启`() {
+        assertTrue(buffer.dedupeEnabled) // 默认开（T-M31.13 用户实测后要求）
         buffer.addEntry(entryAt("SELECT 1", 0L))
-        assertTrue(buffer.addEntry(entryAt("SELECT 1", 100L)))
-        assertEquals(2, buffer.snapshot().size)
+        assertFalse(buffer.addEntry(entryAt("SELECT 1", 100L))) // 窗口内重复丢弃
     }
 
     @Test
