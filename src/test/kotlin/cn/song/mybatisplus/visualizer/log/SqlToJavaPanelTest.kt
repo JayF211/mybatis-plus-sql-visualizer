@@ -4,10 +4,13 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ReadAction
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import javax.swing.JList
@@ -441,5 +444,96 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             state.reverseWrapperFormat = original
             panel.callerFieldForTest().text = ""
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 调用类特殊值（T-M42：this / baseMapper）
+    // ------------------------------------------------------------------
+
+    fun testClassPickerSpecialValuesPickable() {
+        val caller = panel.callerFieldForTest()
+        // 特殊项「this」：选中 → 文本 = this（字段图标 + 用途说明 tooltip）
+        caller.pickForTest("this", null, AllIcons.Nodes.Field)
+        assertEquals("this", caller.text)
+        assertNotNull("特殊项应显示字段图标", caller.iconForTest())
+        caller.clearForTest()
+        // 特殊项「baseMapper」：同上
+        caller.pickForTest("baseMapper", null, AllIcons.Nodes.Field)
+        assertEquals("baseMapper", caller.text)
+        assertNotNull("特殊项应显示字段图标", caller.iconForTest())
+    }
+
+    fun testThisCallerRegeneratesServiceInvocation() {
+        // 选中特殊项 this → 已有转换结果自动重生成 service 形态调用（this.list(wrapper)）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.convertForTest()
+            assertTrue(panel.resultTextForTest().contains("new QueryWrapper"))
+            panel.callerFieldForTest().pickForTest("this", null, AllIcons.Nodes.Field)
+            val result = panel.resultTextForTest()
+            assertTrue(result, result.contains("List<User> list = this.list(wrapper);"))
+            // 清除 → 回到纯表达式
+            panel.callerFieldForTest().clearForTest()
+            val plain = panel.resultTextForTest()
+            assertTrue(plain, !plain.contains("this.list"))
+        } finally {
+            state.reverseWrapperFormat = original
+            panel.callerFieldForTest().text = ""
+        }
+    }
+
+    fun testBaseMapperCallerRegeneratesMapperInvocation() {
+        // 选中特殊项 baseMapper → 自动重生成 mapper 形态调用（baseMapper.selectList(wrapper)）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.convertForTest()
+            assertTrue(panel.resultTextForTest().contains("new QueryWrapper"))
+            panel.callerFieldForTest().pickForTest("baseMapper", null, AllIcons.Nodes.Field)
+            val result = panel.resultTextForTest()
+            assertTrue(result, result.contains("List<User> list = baseMapper.selectList(wrapper);"))
+        } finally {
+            state.reverseWrapperFormat = original
+            panel.callerFieldForTest().text = ""
+        }
+    }
+
+    fun testSpecialCallerMpjConsideredAvailableForJoin() {
+        // 特殊调用值恒视为具备 MPJ 能力（invocationHasMpj 开头纯字符串分支直出 true，不依赖索引）：
+        // 面板注入 mpj=true 后 JOIN 生成不报「无 MPJ 能力」
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.setCallerMpjForTest(true)
+            panel.inputEditorForTest().setSql(
+                "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1",
+            )
+            panel.callerFieldForTest().text = "this"
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("List<User> list = this.list(wrapper);"))
+        } finally {
+            state.reverseWrapperFormat = original
+            panel.callerFieldForTest().text = ""
+            panel.setCallerMpjForTest(false)
+        }
+    }
+
+    fun testInvocationHasMpjSpecialValuesShortCircuit() {
+        // T-M42：this/baseMapper 非类名，索引反查必然落空——invocationHasMpj 开头纯字符串分支
+        // 直出 true（Light 无索引也可验证；普通类名分支依赖索引见 InvocationMpjHeavyTest）
+        assertTrue(SqlToJavaConverter.invocationHasMpj(project, "this"))
+        assertTrue(SqlToJavaConverter.invocationHasMpj(project, "baseMapper"))
+        // isBlank 守卫仍先于特殊分支：空串 false
+        assertFalse(SqlToJavaConverter.invocationHasMpj(project, ""))
     }
 }

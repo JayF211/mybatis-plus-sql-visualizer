@@ -100,6 +100,14 @@ class EntityResolver {
         if (fieldName in ignoredFields) {
             return null
         }
+        // T-M42（用户实证：SQL 含 serial_version_u_i_d 列时生成 User::getSerialVersionUID 编译失败）：
+        // serialVersionUID（static final 序列化字段，无 getter/setter，MP 官方不映射为列）默认忽略——
+        // 归一化匹配（小写+去下划线）覆盖 serial_version_uid / serial_version_u_i_d / serialVersionUID /
+        // SERIAL_VERSION_UID 等全部形态；正向（SELECT 全列展开/批量面板/补全）与反向（columnToField）
+        // 统一受益
+        if (fieldName.lowercase().replace("_", "") == "serialversionuid") {
+            return null
+        }
         val columnName = annotationValue(field, TABLE_FIELD)
             ?: NamingStrategy.toSnakeCase(fieldName)
         val isId = hasAnnotation(field, TABLE_ID)

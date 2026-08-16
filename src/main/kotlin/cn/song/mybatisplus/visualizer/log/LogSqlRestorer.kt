@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.sql.ParamHint
+
 /**
  * 日志参数还原器（T-M31-02）：把 `?` 占位符按 [LogSqlParam] 顺序替换为可执行 SQL 值。
  *
@@ -48,7 +50,7 @@ class LogSqlRestorer {
         private const val FALSE = "false"
 
         /** 原样直出（数值/布尔）；其余类型标注一律引号（String/时间/枚举/byte[] 等）。 */
-        private val PLAIN_TYPES = setOf(
+        internal val PLAIN_TYPES = setOf(
             "Long", "Integer", "Short", "Byte", "BigDecimal", "BigInteger", "Double", "Float", "Number",
             "long", "int", "short", "byte", "double", "float",
             "Boolean", "boolean",
@@ -57,4 +59,15 @@ class LogSqlRestorer {
         /** 数值字面量（含小数与科学计数，如 `1.0E10`）。 */
         private val NUMERIC_REGEX = Regex("""-?\d+(\.\d+)?([eE][+-]?\d+)?""")
     }
+}
+
+/**
+ * 日志参数 → 回填提示（T-M42）：数值/布尔原样直出（[LogSqlRestorer.PLAIN_TYPES]），
+ * 其余类型标注引号（对齐 [LogSqlRestorer] 还原语义）；无类型标注走面板启发式（null）。
+ * 供 [LogSqlEntry.toRecognizedPreview] 识别参数时生成参数行回填提示。
+ */
+internal fun LogSqlParam.toHint(): ParamHint = when {
+    type == null -> ParamHint()
+    type in LogSqlRestorer.PLAIN_TYPES -> ParamHint(quote = false)
+    else -> ParamHint(quote = true)
 }

@@ -48,9 +48,13 @@ object SqlToJavaConverter {
      * 遍历继承链（接口 + 父类递归）匹配 MPJ 1.5.6 实证接口——Service 侧
      * `MPJBaseService`/`JoinService`、Mapper 侧 `MPJBaseMapper`/`JoinMapper`。
      * 无匹配（含类找不到）→ false（生成器据此回落实体查询/报错，严禁生成不存在的 API）。
+     * T-M42：特殊调用值 `this`/`baseMapper` 非类名无法反查，恒视为具备 MPJ 能力（函数开头直出）。
      */
     fun invocationHasMpj(project: Project, callerClass: String): Boolean {
         if (callerClass.isBlank()) return false
+        // T-M42：特殊调用值（this=service 内、baseMapper=ServiceImpl 字段）非类名，索引反查必然落空——
+        // 恒视为具备 MPJ 能力（JOIN/VO 查询放开 MPJ 方法族；单表查询本就生成普通方法不受影响）
+        if (callerClass == "this" || callerClass == "baseMapper") return true
         val scope = GlobalSearchScope.projectScope(project)
         val clazz = PsiShortNamesCache.getInstance(project).getClassesByName(callerClass, scope)
             .firstOrNull() ?: return false

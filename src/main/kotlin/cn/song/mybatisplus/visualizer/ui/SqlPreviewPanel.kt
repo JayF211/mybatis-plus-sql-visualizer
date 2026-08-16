@@ -24,6 +24,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupManager
@@ -247,9 +248,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     fun showResult(result: PreviewResult) {
         current = result
-        // 参数值按 source 初始化（空字符串；多条件复用同一 source 共享一个值）
+        // 参数值按 source 初始化（T-M42：优先取预填初始值——日志识别 `param1` → 日志参数值；
+        // 其余空字符串；多条件复用同一 source 共享一个值）
         paramValues.clear()
-        result.unresolvedParams.forEach { source -> paramValues.putIfAbsent(source, "") }
+        result.unresolvedParams.forEach { source -> paramValues.putIfAbsent(source, result.initialParamValues[source] ?: "") }
         result.previewModel?.conditionViews.orEmpty().forEach { view -> view.valueSource?.let { paramValues.putIfAbsent(it, "") } }
         // 动态条件启用集合初始化（M13：复选框纯手动）——仅按 defaultEnabled，值空不联动勾选态
         enabledIds.clear()
@@ -490,8 +492,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun createEditor(sql: String) {
         val proj = project
         val created = if (proj != null) {
-            val psi = PsiFileFactory.getInstance(proj)
-                .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
+            // T-M42（用户实测堆栈）：双击日志弹窗 EDT 路径上 PsiFileFactory.createFileFromText 直接调用
+            // 触发 2026.2 平台 markGenerated 树遍历 softAssertReadAccess 硬抛 RuntimeExceptionWithAttachments——
+            // 包 ReadAction（EDT 上同步执行，语义不变；项目为空分支为纯文本编辑器不涉及 PSI）
+            val psi = ReadAction.compute<PsiFile, Throwable> {
+                PsiFileFactory.getInstance(proj)
+                    .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
+            }
             psiFile = psi
             val doc = PsiDocumentManager.getInstance(proj).getDocument(psi)
                 ?: EditorFactory.getInstance().createDocument(sql)

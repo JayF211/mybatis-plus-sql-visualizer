@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
+import com.intellij.ide.util.gotoByName.ChooseByNameModel
 import com.intellij.ide.util.gotoByName.ChooseByNamePopup
 import com.intellij.ide.util.gotoByName.ChooseByNamePopupComponent
 import com.intellij.ide.util.gotoByName.GotoClassModel2
@@ -65,6 +66,7 @@ import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
+import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListCellRenderer
@@ -415,19 +417,106 @@ class SqlToJavaPanel(
                 refresh()
             }
 
-        /** 弹 Goto Class 选择器（IDE 标准类搜索弹窗，候选 = 项目内全部 Java 类）。 */
+        /**
+         * 弹 Goto Class 选择器（IDE 标准类搜索弹窗，候选 = 项目内全部 Java 类）。
+         *
+         * T-M42：模型用 [CallerClassByNameModel] 委托包装 [GotoClassModel2]——候选前插
+         * `this`（service 内调用）与 `baseMapper`（ServiceImpl 的 baseMapper 字段）两个固定项。
+         */
         private fun pickClass() {
-            val popup = ChooseByNamePopup.createPopup(projectRef, GotoClassModel2(projectRef), null)
+            val popup = ChooseByNamePopup.createPopup(projectRef, CallerClassByNameModel(), null)
             popup.invoke(object : ChooseByNamePopupComponent.Callback() {
                 override fun elementChosen(element: Any?) {
-                    val cls = element as? PsiClass ?: return
-                    val simpleName = cls.name ?: return
-                    // flags=0：按可见性取类/接口/枚举原生图标（Iconable 类不在编译 classpath，不引用）
-                    setPicked(simpleName, cls.qualifiedName, cls.getIcon(0))
+                    when (element) {
+                        // T-M42：特殊调用值（字符串元素）——this=当前 service 类内、baseMapper=ServiceImpl
+                        // 字段；tooltip = 用途说明（非类名，无全限定名），图标 = 字段图标（字段语义）
+                        is String -> setPicked(element, SPECIAL_TOOLTIPS[element], AllIcons.Nodes.Field)
+                        is PsiClass -> {
+                            val simpleName = element.name ?: return
+                            // flags=0：按可见性取类/接口/枚举原生图标（Iconable 类不在编译 classpath，不引用）
+                            setPicked(simpleName, element.qualifiedName, element.getIcon(0))
+                        }
+                    }
                 }
 
                 override fun onClose() {}
             }, ModalityState.current(), false)
+        }
+
+        /**
+         * Goto Class 模型委托包装（T-M42）：`getNames` 前插 `this`/`baseMapper` 两个固定名，
+         * `getElementsByName` 对二者直出字符串元素（元素即字符串本身），其余方法一行委托
+         * [GotoClassModel2]。接口签名按 243 平台 [ChooseByNameModel] 实证（javap 2024.3.7.1）。
+         *
+         * 必须显式覆写的三个方法（委托实现按 NavigationItem/PsiClass 强转，对字符串元素会抛
+         * ClassCastException/NPE，逐行实证）：
+         *  - [getElementName]/[getFullName]：字符串元素直出字符串本身（过滤/排序/提示用）；
+         *  - [getListCellRenderer]：字符串元素走纯文本 + 字段图标渲染（委托渲染器对非
+         *    NavigationItem 值在 showIcon=true 时 ModuleRendererFactory 返回 null → NPE）。
+         */
+        private inner class CallerClassByNameModel : ChooseByNameModel {
+            private val delegate = GotoClassModel2(projectRef)
+            private val delegateRenderer = delegate.getListCellRenderer() as ListCellRenderer<Any>
+
+            /** 特殊项渲染：纯文本 + 字段图标 + 用途说明 tooltip。 */
+            private val specialRenderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component {
+                    val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus) as JComponent
+                    (c as? JLabel)?.icon = AllIcons.Nodes.Field
+                    if (value is String) c.toolTipText = SPECIAL_TOOLTIPS[value]
+                    return c
+                }
+            }
+
+            override fun getNames(checkBoxState: Boolean): Array<String> =
+                arrayOf(CALLER_THIS, CALLER_BASE_MAPPER) + delegate.getNames(checkBoxState)
+
+            override fun getElementsByName(name: String, checkBoxState: Boolean, pattern: String): Array<Any> =
+                when (name) {
+                    CALLER_THIS, CALLER_BASE_MAPPER -> arrayOf<Any>(name)
+                    else -> delegate.getElementsByName(name, checkBoxState, pattern)
+                }
+
+            /** 特殊项元素名 = 字符串本身（委托实现按 NavigationItem 强转，字符串会 ClassCastException）。 */
+            override fun getElementName(element: Any): String =
+                (element as? String) ?: (delegate.getElementName(element) ?: element.toString())
+
+            /** 特殊项全限定名 = 字符串本身（委托实现按 NavigationItem 强转）。 */
+            override fun getFullName(element: Any): String? =
+                (element as? String) ?: delegate.getFullName(element)
+
+            /** 列表渲染：特殊项走纯文本 + 字段图标；类元素委托 GotoClassModel2 渲染器。 */
+            override fun getListCellRenderer(): ListCellRenderer<*> = object : ListCellRenderer<Any> {
+                override fun getListCellRendererComponent(
+                    list: JList<out Any>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component = if (value is String) {
+                    specialRenderer.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                } else {
+                    delegateRenderer.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                }
+            }
+
+            override fun getPromptText(): String = delegate.getPromptText() ?: ""
+            override fun getCheckBoxName(): String? = delegate.getCheckBoxName()
+            override fun getCheckBoxMnemonic(): Char = delegate.getCheckBoxMnemonic()
+            override fun getNotInMessage(): String = delegate.getNotInMessage() ?: ""
+            override fun getNotFoundMessage(): String = delegate.getNotFoundMessage() ?: ""
+            override fun loadInitialCheckBoxState(): Boolean = delegate.loadInitialCheckBoxState()
+            override fun saveInitialCheckBoxState(state: Boolean) = delegate.saveInitialCheckBoxState(state)
+            override fun getSeparators(): Array<String> = delegate.getSeparators()
+            override fun getHelpId(): String = delegate.getHelpId() ?: ""
+            override fun willOpenEditor(): Boolean = delegate.willOpenEditor()
+            override fun useMiddleMatching(): Boolean = delegate.useMiddleMatching()
         }
 
         /** 选中结果写入（类图标 + 简单类名，tooltip = 全限定名）+ 变更回调。 */
@@ -938,6 +1027,16 @@ class SqlToJavaPanel(
     companion object {
         private const val TOOLBAR_ID_INPUT = "cn.song.mybatisplus.visualizer.reverse.input.toolbar"
         private const val TOOLBAR_ID_RESULT = "cn.song.mybatisplus.visualizer.reverse.result.toolbar"
+
+        /** T-M42：调用类选择器固定特殊候选（service 内 this / ServiceImpl 的 baseMapper 字段）。 */
+        private const val CALLER_THIS = "this"
+        private const val CALLER_BASE_MAPPER = "baseMapper"
+
+        /** 特殊项用途说明（选中后字段级 tooltip；非类名，无全限定名可展示）。 */
+        private val SPECIAL_TOOLTIPS = mapOf(
+            CALLER_THIS to "this：当前 service 类内使用（生成 this.list(...) / this.save(...) 等）",
+            CALLER_BASE_MAPPER to "baseMapper：ServiceImpl 的 baseMapper 字段（生成 baseMapper.selectList(...) / baseMapper.insert(...) 等）",
+        )
 
         /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。 */
         private const val PICKER_CORNER = 10

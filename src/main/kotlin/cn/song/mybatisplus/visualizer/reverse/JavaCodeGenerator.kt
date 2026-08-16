@@ -114,31 +114,35 @@ object JavaCodeGenerator {
             else -> wrapperKind
         }
         val chain = buildString {
+            // T-M42：serialVersionUID 系列列过滤后渲染（全部被过滤 → 空列表 → 自然回落 selectAll/不生成
+            // select 调用，MP 全列语义）
+            val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it) }
+            val conditions = filterConditions(result.conditions)
             if (isJoin) {
                 // 多表：主表 selectAll（列清单未显式指定时）——MPJ 语义
-                if (result.selectColumns == null || result.selectColumns.isEmpty()) {
+                if (selectColumns == null || selectColumns.isEmpty()) {
                     append("\n    .selectAll(")
                         .append(entity?.className ?: entityClassName(result.tableName))
                         .append(".class)")
                 } else {
-                    result.selectColumns.forEach {
+                    selectColumns.forEach {
                         append("\n    .select(").append(renderSelectColumn(it, entity)).append(")")
                     }
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
-                result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
                     append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
                 }
             } else {
-                if (result.selectColumns != null && result.selectColumns.isNotEmpty()) {
+                if (selectColumns != null && selectColumns.isNotEmpty()) {
                     append("\n    .select(")
-                        .append(result.selectColumns.joinToString(", ") { renderSelectColumn(it, entity) })
+                        .append(selectColumns.joinToString(", ") { renderSelectColumn(it, entity) })
                         .append(")")
                 }
-                result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
@@ -210,9 +214,15 @@ object JavaCodeGenerator {
     /** MPJ 形态集合（多表强制分发判定）。 */
     private val JOIN_WRAPPERS = setOf(GeneratedWrapper.MPJ_LAMBDA, GeneratedWrapper.MPJ_QUERY)
 
-    /** 调用类 → 实例变量名（驼峰首字母小写：`BannerService` → `bannerService`）——生成变量调用形式，复制即用。 */
-    private fun callerVar(invocation: InvocationTarget): String =
-        invocation.callerClass.replaceFirstChar { it.lowercaseChar() }
+    /**
+     * 调用对象变量名（T-M42）：特殊调用值直出（`this`=service 内调用、`baseMapper`=ServiceImpl 的
+     * baseMapper 字段——均非类名，保持原样），普通类名驼峰首字母小写（`BannerService` → `bannerService`）
+     * ——生成变量调用形式，复制即用。
+     */
+    private fun callerVar(invocation: InvocationTarget): String = when (invocation.callerClass) {
+        "this", "baseMapper" -> invocation.callerClass
+        else -> invocation.callerClass.replaceFirstChar { it.lowercaseChar() }
+    }
 
     /** UPDATE：UpdateWrapper 链（set/setSql）+ 条件；带调用类 → Service.update / Mapper.update(null, wrapper)。 */
     private fun generateUpdate(
@@ -227,7 +237,8 @@ object JavaCodeGenerator {
             sb.append("// ⚠ 无 WHERE 条件，将更新全表数据！\n")
         }
         val chain = buildString {
-            result.sets.forEach { set ->
+            // T-M42：serialVersionUID 系列 SET 列与条件列跳过（不生成该列 set/setSql）
+            result.sets.filterNot { isIgnoredColumn(it.column) }.forEach { set ->
                 append("\n    .")
                 if (set.rawSql != null) {
                     append("setSql(\"").append(javaEscape(set.rawSql)).append("\")")
@@ -237,7 +248,7 @@ object JavaCodeGenerator {
                         .append(")")
                 }
             }
-            result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+            filterConditions(result.conditions).forEach { append("\n    .").append(renderCondition(it, entity)) }
             renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
             result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
         }
@@ -300,7 +311,7 @@ object JavaCodeGenerator {
                         .append(")")
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
-                result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                filterConditions(result.conditions).forEach { append("\n    .").append(renderCondition(it, entity)) }
             }
             return appendWrapperAndInvocation(
                 sb,
@@ -315,7 +326,7 @@ object JavaCodeGenerator {
         }
         // 单表删除：现状不变
         val chain = buildString {
-            result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+            filterConditions(result.conditions).forEach { append("\n    .").append(renderCondition(it, entity)) }
             renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
             result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
         }
@@ -348,18 +359,26 @@ object JavaCodeGenerator {
         val entityName = entity?.className ?: entityClassName(result.tableName)
         val entityVar = entityName.replaceFirstChar { it.lowercaseChar() }
         val rows = result.insertValues
+        // T-M42：serialVersionUID 系列插入列跳过（setter 链不生成该列；保留原列索引对齐行值——
+        // 过滤后第 i 个保留列取值于原行第 colIndex 位；全部被过滤 → 生成空实体 new X() 保语句合法）
+        val insertPairs = result.insertColumns.mapIndexedNotNull { index, column ->
+            if (isIgnoredColumn(column)) null else index to column
+        }
 
         // 单行实体 setter 链（列→字段：实体映射优先，缺失按列名驼峰推断）
-        fun setterChain(row: List<SqlValue>): String = buildString {
-            result.insertColumns.forEachIndexed { i, column ->
-                val field = entity?.columnToField?.get(column)
-                    ?: column.split('_').joinToString("") { seg -> seg.replaceFirstChar { it.uppercase() } }
-                    .replaceFirstChar { it.lowercaseChar() }
-                val value = row.getOrNull(i)
-                append(if (i == 0) "new $entityName()" else "\n    ")
-                append(".set").append(field.replaceFirstChar { it.uppercase() }).append("(")
-                    .append(value?.let { javaValue(it) } ?: "null")
-                    .append(")")
+        fun setterChain(row: List<SqlValue>): String {
+            if (insertPairs.isEmpty()) return "new $entityName()"
+            return buildString {
+                insertPairs.forEachIndexed { i, (colIndex, column) ->
+                    val field = entity?.columnToField?.get(column)
+                        ?: column.split('_').joinToString("") { seg -> seg.replaceFirstChar { it.uppercase() } }
+                        .replaceFirstChar { it.lowercaseChar() }
+                    val value = row.getOrNull(colIndex)
+                    append(if (i == 0) "new $entityName()" else "\n    ")
+                    append(".set").append(field.replaceFirstChar { it.uppercase() }).append("(")
+                        .append(value?.let { javaValue(it) } ?: "null")
+                        .append(")")
+                }
             }
         }
 
@@ -604,13 +623,46 @@ object JavaCodeGenerator {
             scan(result.limit?.offset) || scan(result.limit?.count)
     }
 
-    /** 调用类是否为 Mapper（类名以 Mapper 结尾；否则按 Service 处理，注释提示）。 */
-    private fun isMapper(invocation: InvocationTarget): Boolean =
-        invocation.callerClass.endsWith("Mapper")
+    /** 调用类是否为 Mapper（T-M42：`baseMapper` 恒为 Mapper 形态、`this` 恒为 Service 形态；
+     * 否则类名以 Mapper 结尾判 Mapper，按 Service 处理并注释提示）。 */
+    private fun isMapper(invocation: InvocationTarget): Boolean = when (invocation.callerClass) {
+        "baseMapper" -> true
+        "this" -> false
+        else -> invocation.callerClass.endsWith("Mapper")
+    }
 
     // ------------------------------------------------------------------
     // 列渲染（T-M36.2：lambda 模式列→属性）
     // ------------------------------------------------------------------
+
+    /**
+     * T-M42：serialVersionUID 系列列名（归一化：小写+去下划线）默认忽略——static final 序列化字段
+     * 非业务列（无 getter/setter，MP 官方不映射），生成引用会编译失败；剥别名前缀与反引号后匹配，
+     * 覆盖 serial_version_uid / serial_version_u_i_d / serialVersionUID / `serial_version_u_i_d` /
+     * t.serial_version_u_i_d 等全部形态。
+     */
+    private fun isIgnoredColumn(expr: String): Boolean =
+        expr.substringAfterLast('.').trim('`').lowercase().replace("_", "") == "serialversionuid"
+
+    /**
+     * T-M42：条件树过滤——命中 serialVersionUID 列的 Simple/In/Between/Like/Unary 条件跳过；
+     * Group 递归过滤（子条件全被过滤的组整组跳过，避免生成空 nested/not lambda）。
+     */
+    private fun filterConditions(conditions: List<Condition>): List<Condition> =
+        conditions.mapNotNull { condition ->
+            when (condition) {
+                is Condition.Group -> {
+                    val children = filterConditions(condition.children)
+                    if (children.isEmpty()) null else condition.copy(children = children)
+                }
+                is Condition.Simple -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                is Condition.Unary -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                is Condition.In -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                is Condition.Between -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                is Condition.Like -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                else -> condition
+            }
+        }
 
     /**
      * 列引用渲染（T-M37 列归属）：lambda 模式且列有字段映射 → `Entity::getField`——
@@ -655,7 +707,8 @@ object JavaCodeGenerator {
         }
         result.conditions.forEach { collect(it) }
         result.orderBy.forEach { used.add(it.column.columnName) }
-        return used.distinct().filter { entity.columnToField[it] == null }
+        // T-M42：被过滤的 serialVersionUID 系列列不计入「未映射回落」提示（实际是跳过而非回落字符串列名）
+        return used.distinct().filter { !isIgnoredColumn(it) && entity.columnToField[it] == null }
     }
 
     // ------------------------------------------------------------------
@@ -761,11 +814,13 @@ object JavaCodeGenerator {
 
     /** ORDER BY 渲染：相邻同向合并（orderByAsc("a","b")），异向拆开。 */
     private fun renderOrderBy(result: SqlReverseResult, entity: EntityTarget?): List<String> {
-        if (result.orderBy.isEmpty()) return emptyList()
+        // T-M42：serialVersionUID 系列排序列跳过（含反引号形态；全部被过滤 → 不生成 orderBy 调用）
+        val orderBy = result.orderBy.filterNot { isIgnoredColumn(it.column.columnName) }
+        if (orderBy.isEmpty()) return emptyList()
         val calls = mutableListOf<String>()
         var group = mutableListOf<Pair<String, String?>>()
-        var groupAsc = result.orderBy[0].asc
-        result.orderBy.forEach { item ->
+        var groupAsc = orderBy[0].asc
+        orderBy.forEach { item ->
             if (item.asc != groupAsc && group.isNotEmpty()) {
                 calls.add(orderByCall(groupAsc, group, entity))
                 group = mutableListOf()

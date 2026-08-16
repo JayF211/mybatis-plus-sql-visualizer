@@ -6,6 +6,11 @@
 
 ### Added
 
+- **双击日志 SQL 弹窗自动识别参数（T-M42）**：双击日志列表条目弹出的 SQL 预览弹窗自动识别参数——左侧参数区显示 `#param1`… 参数行并**预填日志中的参数值**（类型感知引号：String 加引号、数值/布尔原样），修改参数值实时回填 SQL；参数数量与占位符不匹配时保持原状（未解析警告）
+- **日志列表 Ctrl+C 复制纯 SQL（T-M42）**：选中日志条目按 Ctrl+C 复制的是纯 SQL 文本（还原后 SQL + 分号，与右键「复制」一致，多选逐条换行拼接）——不再复制列表渲染用的 HTML 源码
+- **预览弹窗 EDT 报错修复（T-M42）**：双击日志 SQL 弹窗在 IDEA 2026.2 上报 "Read access is allowed from inside read-action only" 的异常已修复——编辑器 PSI 文件创建包读操作（Wrapper/gutter/XML/注解全部预览弹窗入口统一受益）
+- **SQL→Java 调用类支持 this / baseMapper（T-M42）**：调用类选择器新增两个固定候选——`this`（service 内使用，生成 `this.list(wrapper)` / `this.page(...)` 等）与 `baseMapper`（MP/MPJ 的 ServiceImpl 字段，生成 `baseMapper.selectList(wrapper)` / `selectPage` 等），多表 JOIN/VO 查询自动放开 MPJ 方法族
+- **serialVersionUID 字段默认忽略（T-M42）**：SQL→Java 反向转换与实体解析对 `serialVersionUID` 系列字段/列名（`serial_version_uid` / `serial_version_u_i_d` / `serialVersionUID` 等全部形态）默认忽略——不再生成 `User::getSerialVersionUID` 这类编译不过的引用（SELECT/WHERE/ORDER BY/INSERT/UPDATE 全部跳过），对齐 MyBatis-Plus 跳过 static 字段的语义
 - **设置页标签修正（T-M41 增量）**：「版本信息」标签与内容错位修复——更新分区为多行组件，GridBag 默认垂直居中把标签错位到「启动时自动检查更新」行，改顶部对齐；「快捷键」行标签改为「Convert to SQL 快捷键」——明确写明是哪个功能的快捷键（与「SQL→Java 快捷键」行对应）
 - **SQL→Java 右键预览高亮 + 快捷键可配置**（T-M41）：右键「Convert SQL to MP Java Code」结果弹窗升级为 IDEA 只读编辑器——生成代码带完整 Java 词法高亮（关键字/字符串/数字着色 + 行号，与侧边栏「SQL → Java」tab 结果区同款高亮器）；插件设置页「界面与操作」组新增「SQL→Java 快捷键」行——录制式修改 Alt+Shift+J（与 Convert to SQL 快捷键同款交互，冲突检测/强制使用保留，保存写入 IDE Keymap）
 - **设置页插件缓存管理与更新分区布局**：「更新与诊断」分区新增统一缓存管理——显示缓存大小（B/KB/MB）+「清除缓存」按钮（统一清空插件全部缓存，点击后信息行显示「已清除」状态文本），缓存行位于版本信息上方；版本行改为「版本信息」标签 + 「当前版本：X [检查更新]」内容行

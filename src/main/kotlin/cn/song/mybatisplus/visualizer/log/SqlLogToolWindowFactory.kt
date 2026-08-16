@@ -34,6 +34,7 @@ import javax.swing.JCheckBox
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
+import javax.swing.ListModel
 
 /**
  * MyBatis SQL 日志工具窗口（T-M31-04）：三标签页（SQL 日志列表 / 日志转 SQL / SQL → Java），
@@ -65,6 +66,20 @@ class SqlLogToolWindowFactory : ToolWindowFactory {
     }
 }
 
+/** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复；T-M42 提为顶层，openPreview/右键复制/列表复制共用）。 */
+internal fun withTerminator(sql: String): String =
+    if (sql.isEmpty() || sql.endsWith(";")) sql else sql + ";"
+
+/**
+ * 日志条目列表（T-M42）：覆写 JBList.itemToText——内置 Ctrl+C 复制默认返回 cellRenderer
+ * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
+ * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。
+ * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
+ */
+internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
+    override fun itemToText(index: Int, element: LogSqlEntry): String = withTerminator(element.restoredSql)
+}
+
 /** 工具窗口面板（标签页 + 工具栏；headless 测试不布局，交互断言走条目模型层）。 */
 class SqlLogPanel(
     private val project: Project,
@@ -72,7 +87,7 @@ class SqlLogPanel(
 ) : JPanel(BorderLayout()), Disposable {
 
     private val listModel = DefaultListModel<LogSqlEntry>()
-    private val list = JBList(listModel)
+    private val list = SqlEntryList(listModel)
     private val tabs = JBTabbedPane()
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)
@@ -232,10 +247,6 @@ class SqlLogPanel(
         snapshot.forEach { listModel.addElement(it) }
     }
 
-    /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复）。 */
-    private fun withTerminator(sql: String): String =
-        if (sql.isEmpty() || sql.endsWith(";")) sql else sql + ";"
-
     /** 时间戳 HTML 前缀（设置开关 + 格式；灰字跟随主题）。 */
     private fun timestampHtml(timestamp: Long): String {
         val state = PluginSettings.getInstance().state
@@ -259,22 +270,45 @@ class SqlLogPanel(
     private fun openPreview(entry: LogSqlEntry) {
         // T-M31.14：设置开启时预览展示格式化版（多行缩进），否则原样
         val state = PluginSettings.getInstance().state
-        val base = withTerminator(entry.restoredSql)
+        // T-M42：双击弹窗自动识别参数——`?` 数 == 参数数 ⇔ 匹配识别（值预填日志参数值，初始显示与现状一致）
+        val recognized = entry.toRecognizedPreview()
+        if (!recognized.recognized) {
+            // 回退现状：restoredSql + 未解析警告（参数缺失/数量不匹配/纯静态 SQL）
+            val base = withTerminator(entry.restoredSql)
+            val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
+            SqlPreviewService.showResult(
+                project,
+                PreviewResult(
+                    sql = sql,
+                    compactSql = entry.restoredSql,
+                    unresolvedParams = emptyList(),
+                    paramTable = null,
+                    wrapperType = null,
+                    tableName = null,
+                    warning = if ('?' in entry.restoredSql) {
+                        MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
+                    } else {
+                        null
+                    },
+                ),
+            )
+            return
+        }
+        // 识别成功：rawSql 回填参数行（param1..N + 日志值预填 + 类型引号提示），全识别无警告
+        val base = withTerminator(recognized.sql)
         val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
         SqlPreviewService.showResult(
             project,
             PreviewResult(
                 sql = sql,
-                compactSql = entry.restoredSql,
-                unresolvedParams = emptyList(),
+                compactSql = withTerminator(recognized.compactSql),
+                unresolvedParams = recognized.unresolvedParams,
                 paramTable = null,
                 wrapperType = null,
                 tableName = null,
-                warning = if ('?' in entry.restoredSql) {
-                    MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
-                } else {
-                    null
-                },
+                warning = null,
+                paramHints = recognized.paramHints,
+                initialParamValues = recognized.initialValues,
             ),
         )
     }

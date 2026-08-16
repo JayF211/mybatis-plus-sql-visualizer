@@ -16,6 +16,7 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
 import com.intellij.testFramework.EditorTestUtil
@@ -227,6 +228,84 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
         // 留空 → 保留 ?
         assertEquals(sql, panel.editorForTest()!!.document.text)
+        panel.clear()
+    }
+
+    // ------------------------------------------------------------------
+    // T-M42：日志双击预览参数识别——initialParamValues 预填（参数行初始值 + SQL 初始渲染）
+    // ------------------------------------------------------------------
+
+    fun testInitialParamValuesPrefillFieldAndRender() {
+        // 日志识别路径：param1 预填 "admin"（String → 引号提示）——初始显示与现状（值内联 'admin'）一致
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE username = ?"
+        panel.showResult(
+            PreviewResult(
+                sql = sql,
+                compactSql = sql,
+                unresolvedParams = listOf("param1"),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "tbl",
+                paramHints = listOf(ParamHint(quote = true)),
+                initialParamValues = mapOf("param1" to "admin"),
+            ),
+        )
+        assertEquals("参数行应预填日志参数值", "admin", panel.paramFieldForTest(0)!!.text)
+        assertTrue(
+            "SQL 初始渲染应含值内联 'admin'：" + panel.editorForTest()!!.document.text,
+            panel.editorForTest()!!.document.text.contains("username = 'admin'"),
+        )
+        panel.clear()
+    }
+
+    fun testInitialParamValuesEditableAfterPrefill() {
+        // 预填值可编辑：改参数行值 → SQL 实时回填（T-M42 验收：改 admin → 新值同步变化）
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE username = ?"
+        panel.showResult(
+            PreviewResult(
+                sql = sql,
+                compactSql = sql,
+                unresolvedParams = listOf("param1"),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "tbl",
+                paramHints = listOf(ParamHint(quote = true)),
+                initialParamValues = mapOf("param1" to "admin"),
+            ),
+        )
+        panel.paramFieldForTest(0)!!.text = "zhang"
+        assertTrue(
+            "修改参数行值后 SQL 应同步回填：" + panel.editorForTest()!!.document.text,
+            panel.editorForTest()!!.document.text.contains("username = 'zhang'"),
+        )
+        assertFalse("原值不应残留", panel.editorForTest()!!.document.text.contains("admin"))
+        panel.clear()
+    }
+
+    fun testInitialParamValuesMissingSourceFallsBackToEmpty() {
+        // 预填表缺失的来源回落空串（参数行初始为空 → 渲染保留 `?`）
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
+        panel.showResult(
+            PreviewResult(
+                sql = sql,
+                compactSql = sql,
+                unresolvedParams = listOf("param1", "param2"),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "tbl",
+                paramHints = listOf(ParamHint(quote = true), ParamHint(quote = false)),
+                initialParamValues = mapOf("param1" to "admin"),
+            ),
+        )
+        assertEquals("param1 应预填", "admin", panel.paramFieldForTest(0)!!.text)
+        assertEquals("param2 无预填值应回落空串", "", panel.paramFieldForTest(1)!!.text)
+        assertTrue(
+            "param2 空值渲染保留 ?：" + panel.editorForTest()!!.document.text,
+            panel.editorForTest()!!.document.text.contains("type = ?"),
+        )
         panel.clear()
     }
 

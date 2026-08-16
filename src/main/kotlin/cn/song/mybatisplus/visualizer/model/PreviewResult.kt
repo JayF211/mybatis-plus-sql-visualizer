@@ -42,4 +42,7 @@ data class PreviewResult(
     val candidateTables: List<TableInfo> = emptyList(),
     val batchModel: BatchModel? = null,
     val xmlModel: XmlPreviewModel? = null,
+    /** T-M42：参数行初始值预填（source → 初始值，如日志识别 `param1` → `admin`）；
+     *  面板初始化参数输入框时优先取本表，缺失回落空串。默认空 map，既有调用点零影响。 */
+    val initialParamValues: Map<String, String> = emptyMap(),
 )

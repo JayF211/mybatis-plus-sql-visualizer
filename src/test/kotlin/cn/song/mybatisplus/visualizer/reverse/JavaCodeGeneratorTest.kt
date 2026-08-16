@@ -743,6 +743,230 @@ class JavaCodeGeneratorTest {
     }
 
     // ------------------------------------------------------------------
+    // 调用类特殊值（T-M42：this=service 内、baseMapper=ServiceImpl 字段）
+    // ------------------------------------------------------------------
+
+    /** SELECT 单表样本（条件 + 实体映射）。 */
+    private fun specialValueSelectResult() = SqlReverseResult(
+        tableName = "user",
+        selectColumns = null,
+        conditions = listOf(Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x"))),
+    )
+
+    @Test
+    fun `this调用_SELECT生成list`() {
+        val code = JavaCodeGenerator.generate(
+            specialValueSelectResult(), null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this"),
+        )
+        assertTrue(code, code.contains("List<User> list = this.list(wrapper);"))
+    }
+
+    @Test
+    fun `this调用_分页生成page`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this"),
+        )
+        assertTrue(code, code.contains("Page<User> page = this.page(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `this调用_UPDATE生成update`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(ReverseSet("name", SqlValue.Literal("'x'", "x"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this"),
+        )
+        assertTrue(code, code.contains("this.update(wrapper);"))
+    }
+
+    @Test
+    fun `this调用_DELETE生成remove`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.DELETE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this"),
+        )
+        assertTrue(code, code.contains("this.remove(wrapper);"))
+    }
+
+    @Test
+    fun `this调用_INSERT单行生成save`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name"),
+            insertValues = listOf(listOf(SqlValue.Literal("'张三'", "张三"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this"),
+        )
+        assertTrue(code, code.contains("User user = new User().setName(\"张三\");"))
+        assertTrue(code, code.contains("this.save(user);"))
+    }
+
+    @Test
+    fun `this调用_INSERT多行生成saveBatch`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name"),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'a'", "a")),
+                listOf(SqlValue.Literal("'b'", "b")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this"),
+        )
+        assertTrue(code, code.contains("this.saveBatch(Arrays.asList(user1, user2));"))
+    }
+
+    @Test
+    fun `baseMapper调用_SELECT生成selectList`() {
+        val code = JavaCodeGenerator.generate(
+            specialValueSelectResult(), null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("baseMapper"),
+        )
+        assertTrue(code, code.contains("List<User> list = baseMapper.selectList(wrapper);"))
+    }
+
+    @Test
+    fun `baseMapper调用_分页生成selectPage`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(count = SqlValue.Literal("10")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("baseMapper"),
+        )
+        assertTrue(code, code.contains("Page<User> page = baseMapper.selectPage(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `baseMapper调用_UPDATE生成update`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(ReverseSet("name", SqlValue.Literal("'x'", "x"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("baseMapper"),
+        )
+        assertTrue(code, code.contains("baseMapper.update(null, wrapper);"))
+    }
+
+    @Test
+    fun `baseMapper调用_DELETE生成delete`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.DELETE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("baseMapper"),
+        )
+        assertTrue(code, code.contains("baseMapper.delete(wrapper);"))
+    }
+
+    @Test
+    fun `baseMapper调用_INSERT单行生成insert`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name"),
+            insertValues = listOf(listOf(SqlValue.Literal("'张三'", "张三"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("baseMapper"),
+        )
+        assertTrue(code, code.contains("baseMapper.insert(user);"))
+    }
+
+    @Test
+    fun `特殊调用值_多表JOIN不报错生成普通调用`() {
+        // mpj=true 放开（invocationHasMpj 对特殊值直出 true）——JOIN 场景不再报「无 MPJ 能力」，
+        // 单表形态方法（list/selectList）正常生成
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(tableAlias = "t", columnName = "status"), "=", SqlValue.Literal("1")),
+            ),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "address",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "t1", columnName = "user_id"),
+                            ColumnRef(tableAlias = "t", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id", "status" to "status"),
+            subEntities = mapOf(
+                "t1" to JavaCodeGenerator.EntityTarget(
+                    className = "Address",
+                    columnToField = mapOf("user_id" to "userId"),
+                ),
+            ),
+        )
+        val thisCode = JavaCodeGenerator.generate(
+            result, main, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget("this", mpj = true),
+        )
+        assertTrue(thisCode, thisCode.contains("List<User> list = this.list(wrapper);"))
+        val mapperCode = JavaCodeGenerator.generate(
+            result, main, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget("baseMapper", mpj = true),
+        )
+        assertTrue(mapperCode, mapperCode.contains("List<User> list = baseMapper.selectList(wrapper);"))
+    }
+
+    @Test
+    fun `特殊调用值_VO查询生成selectJoinList`() {
+        // VO 查询（mpj=true）：this/baseMapper 均生成 MPJ 的 selectJoinList(Vo.class, wrapper)
+        val result = specialValueSelectResult()
+        val thisCode = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("this", voClass = "UserVo", mpj = true),
+        )
+        assertTrue(thisCode, thisCode.contains("List<UserVo> list = this.selectJoinList(UserVo.class, wrapper);"))
+        val mapperCode = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("baseMapper", voClass = "UserVo", mpj = true),
+        )
+        assertTrue(mapperCode, mapperCode.contains("List<UserVo> list = baseMapper.selectJoinList(UserVo.class, wrapper);"))
+    }
+
+    // ------------------------------------------------------------------
     // 多表 JOIN（T-M37）
     // ------------------------------------------------------------------
 
@@ -1125,5 +1349,221 @@ class JavaCodeGeneratorTest {
             e
         }
         assertTrue(ex.detail, ex.detail.contains("无 MPJ 能力"))
+    }
+
+    // ------------------------------------------------------------------
+    // serialVersionUID 默认忽略（T-M42，层 2 生成兜底）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `SELECT含serial_version_u_i_d_无实体_不生成该列引用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf("id", "serial_version_u_i_d", "username"),
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "username"), "=", SqlValue.Literal("'admin'", "admin")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".select(\"id\", \"username\")"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+        assertTrue(code, !code.contains("serialversionuid"))
+    }
+
+    @Test
+    fun `SELECT含serialVersionUID列_有实体_不生成getter引用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf("id", "serial_version_u_i_d", "username"),
+        )
+        // 模拟旧行为：实体映射仍含该列（层 2 兜底须跳过，防 User::getSerialVersionUID 编译失败）
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf(
+                "id" to "id",
+                "serial_version_u_i_d" to "serialVersionUID",
+                "username" to "username",
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".select(User::getId, User::getUsername)"))
+        assertTrue(code, !code.contains("getSerialVersionUID"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `WHERE含serial_version_u_i_d_条件跳过`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1")),
+                Condition.Simple(ColumnRef(columnName = "serial_version_u_i_d"), "=", SqlValue.Literal("2")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".eq(\"id\", 1)"))
+        assertTrue(code, !code.contains(".eq(\"serial_version_u_i_d\""))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `WHERE仅serial_version_u_i_d_条件整组跳过`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "serial_version_u_i_d"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, !code.contains(".eq("))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `WHERE_Group内serial_version_u_i_d跳过且不产生or分隔`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Simple(ColumnRef(columnName = "serial_version_u_i_d"), "=", SqlValue.Literal("2")),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".nested(w -> w\n        .eq(\"a\", 1))"))
+        assertTrue(code, !code.contains(".or()"))
+    }
+
+    @Test
+    fun `WHERE_Group仅serial_version_u_i_d_整组跳过`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "serial_version_u_i_d"), "=", SqlValue.Literal("1")),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, !code.contains("nested("))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `ORDER BY含serial_version_u_i_d_跳过`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            orderBy = listOf(
+                OrderByItem(ColumnRef(columnName = "create_time"), asc = false),
+                OrderByItem(ColumnRef(columnName = "serial_version_u_i_d"), asc = true),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".orderByDesc(\"create_time\")"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `ORDER BY仅serial_version_u_i_d_不生成orderBy调用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            orderBy = listOf(OrderByItem(ColumnRef(columnName = "serial_version_u_i_d"), asc = true)),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, !code.contains("orderBy"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `INSERT含serial_version_u_i_d_不生成setter且值对齐`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name", "serial_version_u_i_d", "age"),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'张三'", "张三"), SqlValue.Literal("1"), SqlValue.Literal("18")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        // 过滤后保留列 (name, age) 取值于原行对应下标（age 值 18 而非被跳过的 1）——值对齐
+        assertTrue(code, code.contains("new User().setName(\"张三\")\n    .setAge(18);"))
+        assertTrue(code, !code.contains("SerialVersionUid"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `INSERT仅serial_version_u_i_d_生成空实体保语句合法`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("serial_version_u_i_d"),
+            insertValues = listOf(listOf(SqlValue.Literal("1"))),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains("new User();"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `UPDATE_SET含serial_version_u_i_d_跳过set`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(
+                ReverseSet("name", SqlValue.Literal("'李四'", "李四")),
+                ReverseSet("serial_version_u_i_d", SqlValue.Literal("2")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains(".set(\"name\", \"李四\")"))
+        assertTrue(code, code.contains(".eq(\"id\", 1)"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `SELECT仅含serial_version_u_i_d_不生成select调用`() {
+        // 全部列被过滤 → selectColumns 空 → 现有 isNotEmpty 分支自然回落（不生成 select，MP 全列语义）
+        val result = SqlReverseResult(tableName = "user", selectColumns = listOf("serial_version_u_i_d"))
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, !code.contains(".select("))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+    }
+
+    @Test
+    fun `SELECT反引号与别名形态_同过滤`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf("id", "`serial_version_u_i_d`", "t.serial_version_u_i_d", "SERIAL_VERSION_UID"),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".select(\"id\")"))
+        assertTrue(code, !code.contains("serial_version_u_i_d"))
+        assertTrue(code, !code.contains("serialversionuid"))
+    }
+
+    @Test
+    fun `正常业务列不受影响_serial_version_uid同形态过滤`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf("username", "serial_version_uid"),
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "username"), "=", SqlValue.Literal("'admin'", "admin")),
+            ),
+            orderBy = listOf(OrderByItem(ColumnRef(columnName = "id"), asc = true)),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue(code, code.contains(".select(\"username\")"))
+        assertTrue(code, code.contains(".eq(\"username\", \"admin\")"))
+        assertTrue(code, code.contains(".orderByAsc(\"id\")"))
+        // serial_version_uid（非逐字母拆分形态）归一化后同样命中
+        assertTrue(code, !code.contains("serial_version_uid"))
     }
 }

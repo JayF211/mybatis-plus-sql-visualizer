@@ -164,6 +164,17 @@ tasks {
     // 保留最近两个版本，更早历史见 CHANGELOG.md。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.8.17</h2>
+            <ul>
+                <li><b>日志 SQL 预览弹窗自动识别参数</b>（T-M42）：双击日志条目弹出的 SQL 预览自动识别参数——左侧参数区显示 #param1… 参数行并预填日志参数值（类型感知引号），修改参数值实时回填 SQL</li>
+                <li><b>日志列表 Ctrl+C 复制纯 SQL</b>（T-M42）：复制内容为还原后 SQL 文本（与右键复制一致），不再复制列表渲染 HTML 源码</li>
+                <li><b>预览弹窗 EDT 报错修复</b>（T-M42）：2026.2 双击日志 SQL 报 Read access 异常已修复（PSI 文件创建包读操作，全部预览弹窗入口统一受益）</li>
+                <li><b>SQL→Java 调用类支持 this / baseMapper</b>（T-M42）：选择器新增两个固定候选——this（service 内：this.list/page/update/remove/save）与 baseMapper（MP/MPJ ServiceImpl 字段：selectList/selectPage/update(null,…)/insert/delete），JOIN/VO 自动放开 MPJ 方法族</li>
+                <li><b>serialVersionUID 默认忽略</b>（T-M42）：SQL→Java 反向与实体解析对 serialVersionUID 系列字段/列名（serial_version_uid / serial_version_u_i_d 等全形态）默认忽略——不再生成 User::getSerialVersionUID 编译不过的引用</li>
+                <li><b>SQL→Java 右键预览高亮 + 快捷键可配置</b>（T-M41）：结果弹窗升级为 IDEA 只读编辑器（Java 词法高亮 + 行号）；设置页新增「SQL→Java 快捷键」行（录制式修改 Alt+Shift+J）</li>
+                <li><b>SQL→Java 性能与设置页优化</b>：实体反查项目级缓存（PsiModificationTracker 失效）+ 类名去首段启发式 + 跳过接口枚举；「更新与诊断」分区统一缓存管理（大小显示 + 清除反馈）</li>
+                <li>1170 测试全绿</li>
+            </ul>
             <h2>v2026.8.16</h2>
             <ul>
                 <li><b>SQL 日志工具窗口</b>（T-M31）：运行控制台 SQL 自动捕获还原为可执行 SQL（Preparing/Parameters 解析、时间戳 + 词法着色列表、去重窗口、捕捉开关）；设置页「SQL 日志」组 11 项 + 逻辑删除值可配置 + 设置生效性审计 29 项；2026.2 执行体系反射桥兼容（真机验证通过）</li>
@@ -307,6 +318,8 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.VersionComparatorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.ParameterReplacerTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverColumnOrderTest")
+                    // T-M42：serialVersionUID 忽略（实体解析源头过滤）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverSerialVersionUidTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.StartupUpdateCheckTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProviderTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.util.NamingStrategyTest")
