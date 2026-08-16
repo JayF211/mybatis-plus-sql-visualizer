@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import cn.song.mybatisplus.visualizer.reverse.ReverseJoin
 import cn.song.mybatisplus.visualizer.reverse.ReverseSet
 import cn.song.mybatisplus.visualizer.reverse.ReverseStatementKind
 import org.junit.Assert.assertEquals
@@ -514,5 +515,128 @@ class JavaCodeGeneratorTest {
         )
         assertTrue(code, code.contains("User user = new User().setName(\"张三\");"))
         assertTrue(code, code.contains("UserService.save(user);"))
+    }
+
+    // ------------------------------------------------------------------
+    // 多表 JOIN（T-M37）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `多表JOIN_生成MPJLambdaWrapper与三参leftJoin`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(tableAlias = "t", columnName = "status"), "=", SqlValue.Literal("1")),
+                Condition.Simple(ColumnRef(tableAlias = "t1", columnName = "city"), "=", SqlValue.Literal("'北京'", "北京")),
+            ),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "address",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "t1", columnName = "user_id"),
+                            ColumnRef(tableAlias = "t", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id", "status" to "status"),
+            subEntities = mapOf(
+                "t1" to JavaCodeGenerator.EntityTarget(
+                    className = "Address",
+                    columnToField = mapOf("user_id" to "userId", "city" to "city"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new MPJLambdaWrapper<User>()"))
+        assertTrue(code, code.contains(".selectAll(User.class)"))
+        assertTrue(code, code.contains(".leftJoin(Address.class, Address::getUserId, User::getId)"))
+        assertTrue(code, code.contains(".eq(User::getStatus, 1)"))
+        assertTrue(code, code.contains(".eq(Address::getCity, \"北京\")"))
+    }
+
+    @Test
+    fun `多表JOIN_ON多条件_回落raw join字符串`() {
+        val result = SqlReverseResult(
+            tableName = "a",
+            selectColumns = null,
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "b",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(ColumnRef(tableAlias = "t1", columnName = "a_id"), ColumnRef(tableAlias = "t", columnName = "id")),
+                        Condition.Simple(ColumnRef(tableAlias = "t1", columnName = "type"), "=", SqlValue.Literal("1")),
+                    ),
+                    rawOn = "t1.a_id = t.id AND t1.type = 1",
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "A",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("B", mapOf("a_id" to "aId", "type" to "type"))),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains(".leftJoin(\"b t1 ON t1.a_id = t.id AND t1.type = 1\")"))
+    }
+
+    @Test
+    fun `多表JOIN_主表无实体生成MPJQueryWrapper`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "address",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(ColumnRef(tableAlias = "t1", columnName = "user_id"), ColumnRef(tableAlias = "t", columnName = "id")),
+                    ),
+                    rawOn = "t1.user_id = t.id",
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.MPJ_QUERY)
+        assertTrue(code, code.contains("new MPJQueryWrapper<>(User.class)"))
+        assertTrue(code, code.contains(".selectAll(User.class)"))
+        assertTrue(code, code.contains(".leftJoin(\"address t1 ON t1.user_id = t.id\")"))
+    }
+
+    @Test
+    fun `多表JOIN_未映射副表列回落带前缀字符串`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(tableAlias = "t1", columnName = "extra_col"), "=", SqlValue.Literal("1")),
+            ),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "address",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(ColumnRef(tableAlias = "t1", columnName = "user_id"), ColumnRef(tableAlias = "t", columnName = "id")),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("Address", mapOf("user_id" to "userId"))),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains(".eq(\"t1.extra_col\", 1)"))
     }
 }

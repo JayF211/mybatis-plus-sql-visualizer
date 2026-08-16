@@ -64,7 +64,7 @@ object SqlReverseParser {
         }
     }
 
-    /** SELECT 主体：列清单 + FROM 表 + 子句序列。 */
+    /** SELECT 主体：列清单 + FROM 表 + 子句序列（T-M37：含 JOIN 解析）。 */
     private fun parseSelectBody(cursor: Cursor): SqlReverseResult {
         val selectColumns = parseSelectColumns(cursor)
         if (!cursor.isKeyword(cursor.current, "FROM")) {
@@ -73,7 +73,7 @@ object SqlReverseParser {
         cursor.advance()
         val tableName = parseTableName(cursor)
         consumeOptionalAlias(cursor)
-        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor)
+        val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
             selectColumns = selectColumns,
@@ -81,6 +81,7 @@ object SqlReverseParser {
             orderBy = orderBy,
             limit = limit,
             warnings = warnings,
+            joins = joins,
         )
     }
 
@@ -223,12 +224,14 @@ object SqlReverseParser {
 
     /**
      * 尾子句序列（SELECT/UPDATE/DELETE 共用）：WHERE / ORDER BY / LIMIT 及不支持子句报错。
+     * T-M37：allowJoin=true（SELECT）时解析 JOIN 链。
      */
-    private fun parseTailClauses(cursor: Cursor): TailClauses {
+    private fun parseTailClauses(cursor: Cursor, allowJoin: Boolean = false): TailClauses {
         val warnings = mutableListOf<String>()
         var conditions = emptyList<Condition>()
         var orderBy = emptyList<OrderByItem>()
         var limit: LimitClause? = null
+        val joins = mutableListOf<ReverseJoin>()
         while (true) {
             val t = cursor.current ?: break
             when {
@@ -245,6 +248,7 @@ object SqlReverseParser {
                     cursor.advance()
                     limit = parseLimit(cursor)
                 }
+                allowJoin && isJoinStart(cursor) -> joins.add(parseJoin(cursor, warnings))
                 cursor.isKeyword(t, "GROUP") -> unsupported(cursor, "GROUP BY")
                 cursor.isKeyword(t, "HAVING") -> unsupported(cursor, "HAVING")
                 cursor.isKeyword(t, "UNION") -> unsupported(cursor, "UNION")
@@ -264,7 +268,7 @@ object SqlReverseParser {
                 )
             }
         }
-        return TailClauses(conditions, orderBy, limit, warnings)
+        return TailClauses(conditions, orderBy, limit, warnings, joins)
     }
 
     /** 尾子句解析产物。 */
@@ -273,7 +277,106 @@ object SqlReverseParser {
         val orderBy: List<OrderByItem>,
         val limit: LimitClause?,
         val warnings: List<String>,
+        val joins: List<ReverseJoin> = emptyList(),
     )
+
+    // ------------------------------------------------------------------
+    // JOIN 解析（T-M37）
+    // ------------------------------------------------------------------
+
+    /** JOIN 起始判定（含修饰词 + [OUTER] JOIN）。 */
+    private fun isJoinStart(cursor: Cursor): Boolean {
+        val t = cursor.current ?: return false
+        if (cursor.isKeyword(t, "JOIN")) return true
+        if (!cursor.isKeyword(t, "LEFT") && !cursor.isKeyword(t, "RIGHT") && !cursor.isKeyword(t, "INNER") &&
+            !cursor.isKeyword(t, "FULL") && !cursor.isKeyword(t, "CROSS")
+        ) {
+            return false
+        }
+        // 修饰词后须跟 [OUTER] JOIN 才算 JOIN 起始（LEFT JOIN / LEFT OUTER JOIN）
+        val next = cursor.peek()
+        if (next != null && cursor.isKeyword(next, "JOIN")) return true
+        if (next != null && cursor.isKeyword(next, "OUTER")) {
+            val after = cursor.tokens.getOrNull(cursor.pos + 2)
+            return after != null && cursor.isKeyword(after, "JOIN")
+        }
+        return false
+    }
+
+    /** 解析一个 JOIN 子句：类型 + 副表[别名] + ON 条件（等值列对 → ColumnComparison）。 */
+    private fun parseJoin(cursor: Cursor, warnings: MutableList<String>): ReverseJoin {
+        val type = when {
+            cursor.isKeyword(cursor.current, "JOIN") -> {
+                cursor.advance()
+                cn.song.mybatisplus.visualizer.model.JoinType.INNER
+            }
+            else -> {
+                val modifier = cursor.current?.text?.uppercase()
+                cursor.advance()
+                if (cursor.isKeyword(cursor.current, "OUTER")) cursor.advance()
+                expectKeyword(cursor, "JOIN")
+                when (modifier) {
+                    "LEFT" -> cn.song.mybatisplus.visualizer.model.JoinType.LEFT
+                    "RIGHT" -> cn.song.mybatisplus.visualizer.model.JoinType.RIGHT
+                    "FULL" -> cn.song.mybatisplus.visualizer.model.JoinType.FULL
+                    else -> cn.song.mybatisplus.visualizer.model.JoinType.INNER
+                }
+            }
+        }
+        val tableName = parseTableName(cursor)
+        val alias = consumeJoinAlias(cursor)
+        if (!cursor.isKeyword(cursor.current, "ON")) {
+            throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "JOIN 缺少 ON 子句")
+        }
+        cursor.advance()
+        // 收集 ON 原文（raw join 字符串透传用；从 ON 后首个 token 到条件解析结束）
+        val onStart = cursor.current?.offset
+        val onConditions = parseOnConditions(cursor, warnings)
+        val rawOn = if (onStart != null && cursor.tokens.isNotEmpty()) {
+            val last = cursor.tokens.getOrNull(cursor.pos - 1)
+            if (last != null && last.offset >= onStart) {
+                cursor.source.substring(onStart, last.offset + last.text.length).trim()
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+        return ReverseJoin(type, tableName, alias, onConditions, rawOn)
+    }
+
+    /** JOIN 副表别名（ON 为边界；无别名返回 null）。 */
+    private fun consumeJoinAlias(cursor: Cursor): String? {
+        val t = cursor.current ?: return null
+        if (t.type == TokenType.WORD && !cursor.isKeyword(t, "ON") && !cursor.isKeyword(t, "WHERE") &&
+            !cursor.isKeyword(t, "GROUP") && !cursor.isKeyword(t, "ORDER") && !cursor.isKeyword(t, "LIMIT") &&
+            !cursor.isKeyword(t, "LEFT") && !cursor.isKeyword(t, "RIGHT") && !cursor.isKeyword(t, "INNER") &&
+            !cursor.isKeyword(t, "FULL") && !cursor.isKeyword(t, "CROSS") && !cursor.isKeyword(t, "JOIN")
+        ) {
+            val alias = t.text.trim('`')
+            cursor.advance()
+            return alias
+        }
+        return null
+    }
+
+    /** ON 条件列表（AND 连接；等值列对自动识别为 ColumnComparison；遇下一个 JOIN/子句结束）。 */
+    private fun parseOnConditions(cursor: Cursor, warnings: MutableList<String>): List<Condition> {
+        val conditions = mutableListOf<Condition>()
+        while (true) {
+            val t = cursor.current ?: break
+            if (isJoinStart(cursor)) break
+            if (t.type == TokenType.WORD && (isClauseStart(cursor) || cursor.isKeyword(t, "WHERE"))) break
+            if (t.type == TokenType.SYMBOL && t.text == ";") break
+            if (cursor.isKeyword(t, "AND")) {
+                cursor.advance()
+                continue
+            }
+            if (cursor.isKeyword(t, "OR")) unsupported(cursor, "ON 内 OR 嵌套条件")
+            conditions.add(parseCondition(cursor, warnings))
+        }
+        return conditions
+    }
 
     // ------------------------------------------------------------------
     // SELECT 列清单
@@ -285,6 +388,7 @@ object SqlReverseParser {
      * 仅收集「简单列」（标识符 / 点分 / 反引号，可带 AS 别名）；出现函数调用
      * （`COUNT(...)` 等）或 `*` 时整体放弃（返回 null——生成器不生成 select() 调用）。
      * 复杂表达式整体跳过（平衡括号消费至逗号/FROM）。
+     * T-M37：保留原文（含表别名前缀与反引号）——多表列归属由生成器拆分（renderSelectColumn）。
      */
     private fun parseSelectColumns(cursor: Cursor): List<String>? {
         val columns = mutableListOf<String>()
@@ -314,7 +418,7 @@ object SqlReverseParser {
                         skipExpression(cursor)
                         continue
                     }
-                    columns.add(stripQualified(consumeQualified(cursor)))
+                    columns.add(consumeQualified(cursor))
                     consumeSelectAlias(cursor)
                 }
                 t.type == TokenType.SYMBOL && t.text == "(" -> {
@@ -403,7 +507,9 @@ object SqlReverseParser {
         if (t.type == TokenType.WORD && !cursor.isKeyword(t, "WHERE") && !cursor.isKeyword(t, "GROUP") &&
             !cursor.isKeyword(t, "ORDER") && !cursor.isKeyword(t, "LIMIT") && !cursor.isKeyword(t, "HAVING") &&
             !cursor.isKeyword(t, "UNION") && !cursor.isKeyword(t, "JOIN") && !cursor.isKeyword(t, "FOR") &&
-            !cursor.isKeyword(t, "SET") && !cursor.isKeyword(t, "INTO")
+            !cursor.isKeyword(t, "SET") && !cursor.isKeyword(t, "INTO") &&
+            !cursor.isKeyword(t, "LEFT") && !cursor.isKeyword(t, "RIGHT") && !cursor.isKeyword(t, "INNER") &&
+            !cursor.isKeyword(t, "FULL") && !cursor.isKeyword(t, "CROSS")
         ) {
             cursor.advance()
         }
@@ -639,8 +745,25 @@ object SqlReverseParser {
         isKeyword(t, "ORDER") || isKeyword(t, "GROUP") || isKeyword(t, "HAVING") ||
             isKeyword(t, "LIMIT") || isKeyword(t, "UNION") || isKeyword(t, "FOR")
 
-    /** 二元比较：值可为 NULL（= NULL → IS NULL，!= NULL → IS NOT NULL）。 */
+    /**
+     * 二元比较（T-M37：`=` 右侧为裸标识符 → 列对列 [Condition.ColumnComparison]——
+     * WHERE/ON 均适用；NULL 字面量 → IS NULL/IS NOT NULL；其余值走 [parseValue]）。
+     */
     private fun parseBinary(cursor: Cursor, column: ColumnRef, sqlOp: String): Condition {
+        if (sqlOp == "=") {
+            val next = cursor.current
+            if (next != null && next.type == TokenType.WORD && !cursor.isKeyword(next, "TRUE") &&
+                !cursor.isKeyword(next, "FALSE") && !cursor.isKeyword(next, "NULL")
+            ) {
+                // 右值为函数调用（后跟 `(`）→ 非列对列，走值解析（降级 Raw 透传）
+                val after = cursor.peek()
+                val isFunction = after != null && after.type == TokenType.SYMBOL && after.text == "("
+                if (!isFunction) {
+                    val right = parseColumnRef(cursor)
+                    return Condition.ColumnComparison(column, right)
+                }
+            }
+        }
         val value = parseValue(cursor) ?: return when (sqlOp) {
             "=" -> Condition.Unary(column, "IS NULL")
             "!=", "<>" -> Condition.Unary(column, "IS NOT NULL")
@@ -859,10 +982,12 @@ object SqlReverseParser {
     // 列引用 / 通用工具
     // ------------------------------------------------------------------
 
-    /** 列引用：`col` / `t.col` / `` `col` `` / `` `t`.`col` ``（前缀剥离，取末段）。 */
+    /** 列引用（T-M37：保留表别名供多表归属）：`col` / `t.col` / `` `col` `` / `` `t`.`col` ``。 */
     private fun parseColumnRef(cursor: Cursor): ColumnRef {
         val text = consumeQualified(cursor)
-        return ColumnRef(columnName = stripQualified(text))
+        val parts = text.split('.')
+        val alias = if (parts.size > 1) parts.dropLast(1).joinToString(".").trim('`').ifEmpty { null } else null
+        return ColumnRef(tableAlias = alias, columnName = parts.last().trim('`'))
     }
 
     /** 消费 `词[.词]` 组合（点分反引号是 3 个 token）。 */
@@ -959,7 +1084,7 @@ object SqlReverseParser {
     }
 }
 
-/** 解析结果（T-M36.7 起支持增删改查）：语句类型 + 表名 / select 列（null=不生成）/ 条件 / 排序 / 分页。 */
+/** 解析结果（T-M36.7 起支持增删改查；T-M37 支持多表 JOIN）：语句类型 + 表名 / select 列 / 条件 / 排序 / 分页。 */
 data class SqlReverseResult(
     val tableName: String,
     val selectColumns: List<String>? = null,
@@ -971,6 +1096,7 @@ data class SqlReverseResult(
     val sets: List<ReverseSet> = emptyList(),
     val insertColumns: List<String> = emptyList(),
     val insertValues: List<SqlValue> = emptyList(),
+    val joins: List<ReverseJoin> = emptyList(),
 )
 
 /** 反向转换语句类型（T-M36.7）：增删改查全支持。 */
@@ -982,6 +1108,20 @@ data class ReverseSet(
     val column: String,
     val value: SqlValue?,
     val rawSql: String? = null,
+)
+
+/**
+ * 联表子句（T-M37 多表 JOIN）：`[LEFT|RIGHT|INNER|FULL] JOIN 副表 [别名] ON 条件`。
+ *
+ * @param onConditions ON 条件（等值列对 → ColumnComparison；其他 → 普通条件/Raw 降级）
+ * @param rawOn        ON 条件原文（token 区间收集，供生成器 raw join 字符串透传）
+ */
+data class ReverseJoin(
+    val type: cn.song.mybatisplus.visualizer.model.JoinType,
+    val tableName: String,
+    val alias: String?,
+    val onConditions: List<Condition>,
+    val rawOn: String? = null,
 )
 
 /**

@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,9 +45,10 @@ class SqlReverseParserTest {
 
     @Test
     fun `反引号与点分_剥壳取末段`() {
+        // T-M37：select 列保留原文（多表归属由生成器拆分）
         val result = SqlReverseParser.parse("SELECT `id`, t.name FROM `my_db`.`user`")
         assertEquals("user", result.tableName)
-        assertEquals(listOf("id", "name"), result.selectColumns)
+        assertEquals(listOf("`id`", "t.name"), result.selectColumns)
     }
 
     @Test
@@ -332,9 +334,76 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `列对列_降级Raw透传`() {
+    fun `列对列_解析为ColumnComparison`() {
+        // T-M37：`a = b` 从降级 Raw 改为结构化列对列（WHERE/ON 均适用）
         val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = b")
+        val cc = result.conditions.single() as Condition.ColumnComparison
+        assertEquals("a", cc.left.columnName)
+        assertEquals("b", cc.right.columnName)
+    }
+
+    @Test
+    fun `右侧函数_仍降级Raw透传`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = DATE_FORMAT(now(), '%Y')")
         assertTrue(result.conditions.single() is Condition.Raw)
+    }
+
+    // ------------------------------------------------------------------
+    // 多表 JOIN（T-M37）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `LEFT JOIN_单等值ON解析为ColumnComparison`() {
+        val result = SqlReverseParser.parse(
+            "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1",
+        )
+        assertEquals(1, result.joins.size)
+        val join = result.joins[0]
+        assertEquals("address", join.tableName)
+        assertEquals("t1", join.alias)
+        val on = join.onConditions.single() as Condition.ColumnComparison
+        assertEquals("user_id", on.left.columnName)
+        assertEquals("t1", on.left.tableAlias)
+        assertEquals("id", on.right.columnName)
+        assertEquals("t", on.right.tableAlias)
+        // WHERE 条件列保留别名
+        val cond = result.conditions.single() as Condition.Simple
+        assertEquals("t", cond.column.tableAlias)
+        // SELECT 列保留原文
+        assertEquals(listOf("t.id", "t1.city"), result.selectColumns)
+        assertNotNull(join.rawOn)
+        assertNotNull(join.rawOn)
+        assertTrue(join.rawOn!!.contains("t1.user_id = t.id"))
+    }
+
+    @Test
+    fun `多JOIN链与ON多条件`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM a t LEFT JOIN b t1 ON t1.a_id = t.id AND t1.type = 1 INNER JOIN c t2 ON t2.b_id = t1.id",
+        )
+        assertEquals(2, result.joins.size)
+        assertEquals("LEFT", result.joins[0].type.name)
+        assertEquals(2, result.joins[0].onConditions.size)
+        assertTrue(result.joins[0].onConditions[0] is Condition.ColumnComparison)
+        assertTrue(result.joins[0].onConditions[1] is Condition.Simple)
+        assertEquals("INNER", result.joins[1].type.name)
+        assertEquals("t2", result.joins[1].alias)
+    }
+
+    @Test
+    fun `JOIN无别名_不归属副实体`() {
+        val result = SqlReverseParser.parse("SELECT * FROM a LEFT JOIN b ON b.a_id = a.id")
+        assertEquals(1, result.joins.size)
+        assertNull(result.joins[0].alias)
+    }
+
+    @Test
+    fun `RIGHT与FULL JOIN_类型解析`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM a RIGHT JOIN b ON b.a_id = a.id FULL OUTER JOIN c ON c.b_id = b.id",
+        )
+        assertEquals("RIGHT", result.joins[0].type.name)
+        assertEquals("FULL", result.joins[1].type.name)
     }
 
     @Test
@@ -374,8 +443,9 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `JOIN_报错`() {
-        assertThrows { SqlReverseParser.parse("SELECT * FROM t LEFT JOIN u ON t.id = u.tid") }
+    fun `UPDATE与DELETE含JOIN_报错`() {
+        // T-M37：仅 SELECT 支持 JOIN；UPDATE/DELETE 联表为 P1 范围
+        assertThrows { SqlReverseParser.parse("UPDATE t SET a = 1 LEFT JOIN u ON t.id = u.tid") }
     }
 
     @Test

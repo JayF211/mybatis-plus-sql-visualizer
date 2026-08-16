@@ -93,6 +93,7 @@ class SqlToJavaPanel(
     private var cacheText: String? = null
     private var cacheResult: SqlReverseResult? = null
     private var cacheCandidates: List<SqlToJavaConverter.EntityCandidate>? = null
+    private var cacheSubEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap()
 
     init {
         // 上：输入区（工具栏 + 编辑器）
@@ -246,16 +247,20 @@ class SqlToJavaPanel(
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
-            val candidates = try {
-                ReadAction.compute<List<SqlToJavaConverter.EntityCandidate>, Throwable> {
-                    SqlToJavaConverter.findCandidates(project, result.tableName)
+            val payload = try {
+                ReadAction.compute<Pair<List<SqlToJavaConverter.EntityCandidate>, Map<String, JavaCodeGenerator.EntityTarget>>, Throwable> {
+                    val candidates = SqlToJavaConverter.findCandidates(project, result.tableName)
+                    // T-M37：多表 JOIN 副实体（别名 → 实体；无别名/未找到 → 该表列回落字符串）
+                    val subEntities = SqlToJavaConverter.findSubEntities(project, result.joins)
+                    candidates to subEntities
                 }
             } catch (t: Throwable) {
-                emptyList()
+                emptyList<SqlToJavaConverter.EntityCandidate>() to emptyMap()
             }
             ApplicationManager.getApplication().invokeLater {
-                cacheCandidates = candidates
-                render(result, candidates, format)
+                cacheCandidates = payload.first
+                cacheSubEntities = payload.second
+                render(result, payload.first, format, payload.second)
             }
         }
     }
@@ -282,8 +287,16 @@ class SqlToJavaPanel(
             }
             return
         }
-        render(cacheResult!!, candidates, format)
+        render(cacheResult!!, candidates, format, cacheSubEntities)
     }
+
+    /** T-M37：多表 JOIN 状态提示（生成 MPJ 形态说明）。 */
+    private fun joinStatus(result: SqlReverseResult, base: String): String =
+        if (result.joins.isNotEmpty()) {
+            "$base（多表 JOIN 已生成 MPJ 形态）"
+        } else {
+            base
+        }
 
     /** 结果区写文本（WriteCommandAction——平台线程检查强制 write action）。 */
     private fun setResultText(text: String) {
@@ -305,22 +318,23 @@ class SqlToJavaPanel(
         result: SqlReverseResult,
         candidates: List<SqlToJavaConverter.EntityCandidate>,
         format: ReverseWrapperFormat,
+        subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
     ) {
         val invocation = buildInvocation()
         val generate = { candidate: SqlToJavaConverter.EntityCandidate? ->
-            SqlToJavaConverter.generateCode(result, candidate, format, invocation)
+            SqlToJavaConverter.generateCode(result, candidate, format, invocation, subEntities)
         }
         when (candidates.size) {
             0 -> {
                 setResultText(generate(null))
-                status(MpSqlVisualizerBundle.message("reverse.panel.status.noEntity"), error = false)
+                status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), error = false)
             }
             1 -> {
                 setResultText(generate(candidates[0]))
                 status(
-                    MpSqlVisualizerBundle.message(
-                        "reverse.panel.status.entity",
-                        candidates[0].psiClass.name ?: "",
+                    joinStatus(
+                        result,
+                        MpSqlVisualizerBundle.message("reverse.panel.status.entity", candidates[0].psiClass.name ?: ""),
                     ),
                     error = false,
                 )

@@ -38,23 +38,53 @@ object SqlToJavaConverter {
         }
 
     /**
+     * 副表实体查找（T-M37 多表 JOIN，须在 ReadAction 内）：按 join 表名查找并解析，
+     * 键 = SQL 表别名（无别名的 join 不归属——P1 默认别名规则）；副表取首个匹配。
+     */
+    fun findSubEntities(
+        project: Project,
+        joins: List<ReverseJoin>,
+    ): Map<String, JavaCodeGenerator.EntityTarget> {
+        val result = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+        for (join in joins) {
+            val alias = join.alias ?: continue
+            val clazz = EntityClassFinder(project).find(join.tableName).firstOrNull() ?: continue
+            val table = EntityResolver().resolve(clazz)
+            result[alias] = JavaCodeGenerator.EntityTarget(
+                className = clazz.name ?: continue,
+                columnToField = table.columns.associate { it.columnName to it.fieldName },
+            )
+        }
+        return result
+    }
+
+    /**
      * 生成代码：候选非 null → 按设置形态生成 lambda 版本；null → 字符串列名形态
      * （QUERY → new QueryWrapper；WRAPPERS → Wrappers.<E>query()，T-M36.6）。
+     * T-M37：多表 JOIN → 强制 MPJ 形态（主表实体可用 → MPJLambdaWrapper；否则 MPJQueryWrapper）。
      *
-     * @param format     设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
-     * @param invocation T-M36.7：调用上下文（Service/Mapper + 可选 VO），null → 纯表达式
+     * @param format      设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
+     * @param invocation  T-M36.7：调用上下文（Service/Mapper + 可选 VO），null → 纯表达式
+     * @param subEntities T-M37：联表副实体（别名 → 实体），多表列归属用
      */
     fun generateCode(
         result: SqlReverseResult,
         candidate: EntityCandidate?,
         format: ReverseWrapperFormat,
         invocation: JavaCodeGenerator.InvocationTarget? = null,
+        subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
     ): String {
-        val wrapper = resolveWrapperFormat(format, hasEntity = candidate != null)
+        val isJoin = result.joins.isNotEmpty()
+        val wrapper = when {
+            isJoin && candidate != null -> GeneratedWrapper.MPJ_LAMBDA
+            isJoin -> GeneratedWrapper.MPJ_QUERY
+            else -> resolveWrapperFormat(format, hasEntity = candidate != null)
+        }
         val target = candidate?.let {
             JavaCodeGenerator.EntityTarget(
                 className = it.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
                 columnToField = it.tableInfo.columns.associate { col -> col.columnName to col.fieldName },
+                subEntities = subEntities,
             )
         }
         return JavaCodeGenerator.generate(result, target, wrapper, invocation)

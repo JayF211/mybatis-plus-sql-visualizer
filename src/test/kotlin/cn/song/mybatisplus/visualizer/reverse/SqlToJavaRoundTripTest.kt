@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.reverse
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.Connector
+import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -229,5 +230,50 @@ class SqlToJavaRoundTripTest {
             )
             assertEquals("SELECT id\nFROM `user`\nWHERE ${raw.sqlText}", sql2)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 多表 JOIN 闭环（T-M37）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `LEFT JOIN单等值_逐字符闭环`() {
+        val sql1 = SqlGenerator.generate(
+            SelectStatement(
+                table = table,
+                selectColumns = listOf(ColumnRef(columnName = "id")),
+                tableAlias = "t",
+                joins = listOf(
+                    JoinClause(
+                        type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                        tableName = "address",
+                        alias = "t1",
+                        onConditions = listOf(
+                            Condition.ColumnComparison(
+                                ColumnRef(tableAlias = "t1", columnName = "user_id"),
+                                ColumnRef(tableAlias = "t", columnName = "id"),
+                            ),
+                        ),
+                    ),
+                ),
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(tableAlias = "t", columnName = "status"), "=", SqlValue.Literal("1")),
+                ),
+            ),
+        )
+        val parsed = SqlReverseParser.parse(sql1)
+        assertEquals(1, parsed.joins.size)
+        assertEquals("address", parsed.joins[0].tableName)
+        // 重建 → 再渲染等价
+        val rebuilt = SelectStatement(
+            table = table,
+            selectColumns = listOf(ColumnRef(columnName = "id")),
+            tableAlias = "t",
+            joins = parsed.joins.map { j ->
+                JoinClause(type = j.type, tableName = j.tableName, alias = j.alias ?: "", onConditions = j.onConditions)
+            },
+            conditions = parsed.conditions,
+        )
+        assertEquals(sql1, SqlGenerator.generate(rebuilt))
     }
 }

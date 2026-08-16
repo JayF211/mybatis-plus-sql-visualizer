@@ -33,9 +33,9 @@ enum class ReverseWrapperFormat(val persistedValue: String) {
 }
 
 /**
- * 最终生成的 Wrapper 形态（[resolveWrapperFormat] 的产物）。
+ * 最终生成的 Wrapper 形态（[resolveWrapperFormat] 的产物；T-M37 新增 MPJ_QUERY）。
  */
-enum class GeneratedWrapper { QUERY, LAMBDA, WRAPPERS_QUERY, WRAPPERS_LAMBDA, MPJ_LAMBDA }
+enum class GeneratedWrapper { QUERY, LAMBDA, WRAPPERS_QUERY, WRAPPERS_LAMBDA, MPJ_LAMBDA, MPJ_QUERY }
 
 /**
  * 形态分发（纯函数，可单测）：配置 + 是否有可用实体 → 最终生成形态。
