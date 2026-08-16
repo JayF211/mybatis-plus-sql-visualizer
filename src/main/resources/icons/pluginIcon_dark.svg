@@ -1,0 +1,12 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- T-M40：插件 logo 暗色备用版（深底 #3C3F41 + 浅蓝 </> + 绿放大镜）——仅作备用留存，不置于 META-INF/
+         同修复方案：玻璃盘预混合实色 #42514C 置于代码之下，代码顶层完整可见，空心环 + 柄前景
+         （与 pluginIcon.svg 同目录会触发暗色主题自动切换；用户要求 logo 一直显示亮色版） -->
+    <rect x="1" y="1" width="38" height="38" rx="9" fill="#3C3F41"/>
+    <circle cx="28.5" cy="27.5" r="6.75" fill="#42514C"/>
+    <path d="M14.25 14.5 L9.25 20 L14.25 25.5" stroke="#4FC1FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="18" y1="26" x2="22" y2="14" stroke="#4FC1FF" stroke-width="3" stroke-linecap="round"/>
+    <path d="M25.75 14.5 L30.75 20 L25.75 25.5" stroke="#4FC1FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="28.5" cy="27.5" r="6.75" fill="none" stroke="#6FD39B" stroke-width="2.6"/>
+    <line x1="33.3" y1="32.3" x2="35.5" y2="34.5" stroke="#6FD39B" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

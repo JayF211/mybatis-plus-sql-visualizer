@@ -1,8 +1,0 @@
-<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <!-- gutter-2a（MP 蓝）：放大镜镜片 MP 蓝 + 镜片内绿色 </> 尖括号 -->
-    <circle cx="8.5" cy="7.5" r="5.4" stroke="#1E9FFF" stroke-width="1.5"/>
-    <path d="M5.6 5.4 L3.4 7.5 L5.6 9.6" stroke="#4FB477" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="7.2" y1="9.8" x2="9.8" y2="5.2" stroke="#4FB477" stroke-width="1.4" stroke-linecap="round"/>
-    <path d="M10 5.4 L12.2 7.5 L10 9.6" stroke="#4FB477" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="12.6" y1="11.8" x2="14.6" y2="13.8" stroke="#1E9FFF" stroke-width="1.5" stroke-linecap="round"/>
-</svg>

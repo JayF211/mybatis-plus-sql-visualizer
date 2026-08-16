@@ -1,9 +1,11 @@
 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <!-- T-M31.2 工具窗口侧边栏图标（MyBatis SQL Log）：MP 蓝圆角矩形 + 白色 </> 符号
-         （参考 MybatisCodeHelper-Pro「深蓝圆角 + Sql 字样」的侧边栏识别度；13px 下放大镜细节会糊，
-         </> 三笔路径在 16 viewBox 下清晰可读；深底亮字亮/暗主题均可见，无需 dark 变体） -->
+    <!-- T-M40 侧边栏图标（独立修复）：玻璃盘用预混合实色 #50B4FF 且置于代码之下（IDEA SVG 渲染器忽略 fill-opacity，
+         半透明属性实测变纯白；实色盘若在代码上会盖住代码线）——代码三笔顶层绘制完整可见，圆环+手柄前景（放大镜在代码上方） -->
     <rect x="0.5" y="0.5" width="15" height="15" rx="3.5" fill="#1E9FFF"/>
-    <path d="M5.2 4.6 L2.9 8 L5.2 11.4" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="6.6" y1="11.6" x2="8.9" y2="4.4" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round"/>
-    <path d="M10.8 4.6 L13.1 8 L10.8 11.4" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="11.4" cy="11.0" r="2.7" fill="#50B4FF"/>
+    <path d="M5.7 5.8 L3.7 8 L5.7 10.2" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="7.2" y1="10.4" x2="8.8" y2="5.6" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round"/>
+    <path d="M10.3 5.8 L12.3 8 L10.3 10.2" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="11.4" cy="11.0" r="2.7" fill="none" stroke="#FFFFFF" stroke-width="1.2"/>
+    <line x1="13.3" y1="12.9" x2="14.2" y2="13.8" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round"/>
 </svg>
