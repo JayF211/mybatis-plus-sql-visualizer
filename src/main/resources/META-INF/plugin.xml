@@ -21,34 +21,32 @@
 
     <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
-        MyBatis-Plus SQL Visualizer converts MyBatis-Plus (and MyBatis-Plus-Join) Wrapper chains into readable, copyable SQL with resolved parameters directly inside IntelliJ IDEA.
+        MyBatis-Plus SQL Visualizer is a debugging tool for MyBatis-Plus (and MyBatis-Plus-Join) inside IntelliJ IDEA: preview Wrapper chains, XML mappers and annotation SQL as readable SQL with resolved parameters, restore SQL from console logs, and convert SQL back to MP Java code.
         <br/>
         <h2>Core capabilities</h2>
         <ul>
-            <li>LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / MPJLambdaWrapper / MPJQueryWrapper to SQL</li>
-            <li>Replace <code>?</code> placeholders with actual parameter values (primitives, objects, collections)</li>
-            <li>Auto SQL formatting (keyword uppercase, clause indentation)</li>
-            <li>Trigger via context menu / shortcut / hover / gutter icon, one-click copy</li>
-            <li>Multiple SQL dialects (MySQL / PostgreSQL / Oracle)</li>
+            <li>Wrapper chains to SQL: LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / string QueryWrapper / UpdateWrapper / MPJLambdaWrapper / MPJQueryWrapper joins / service chains</li>
+            <li>XML mapper dynamic SQL and Java annotation SQL (@Select/@Insert/...) preview (dynamic tags, OGNL conditions, parameter backfill)</li>
+            <li>Replace <code>?</code> placeholders with actual parameter values; dynamic condition checkboxes; SQL auto formatting</li>
+            <li>Console SQL log capture &amp; restore; Log-to-SQL batch conversion</li>
+            <li>SQL to MP Java code reverse conversion (QueryWrapper / LambdaQueryWrapper / Wrappers / MPJ, CRUD &amp; joins, compilable output)</li>
+            <li>9 database dialects, execute SQL (Ultimate), trigger via context menu / shortcut / gutter icon</li>
         </ul>
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         <hr/>
         <h2>核心能力（中文说明）</h2>
         <ul>
-            <li>将 <code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> / <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 链式代码转换为 SQL</li>
-            <li>参数替换：将 <code>?</code> 占位符替换为实际值（基本类型、对象、集合；同文件变量赋值自动追踪，LIKE 自动拼百分号）</li>
-            <li>动态条件：布尔重载 <code>.eq(true, col, val)</code> 在预览左栏提供复选框开关，勾选/取消实时重生成 SQL</li>
-            <li>SQL 自动格式化：关键字大写、子句换行缩进，支持多行/单行两种视图</li>
+            <li>Wrapper 链转 SQL：<code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> / 字符串版 <code>QueryWrapper</code> / <code>UpdateWrapper</code> / <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表 / 服务链</li>
+            <li>XML mapper 动态 SQL 与 <code>@Select</code> 等注解 SQL 预览：动态标签、OGNL 条件勾选、参数回填</li>
+            <li>参数替换：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；动态条件复选框</li>
+            <li>控制台 SQL 日志捕获还原 + 「日志转 SQL」批量还原</li>
+            <li>SQL 反向转 MP Java 代码：增删改查 / 多表 JOIN，QueryWrapper / Lambda / Wrappers / MPJ 四种形态，生成代码可直接编译</li>
+            <li>SQL 自动格式化（多行 / 单行）、9 种数据库方言分页差异渲染、执行 SQL（Ultimate）</li>
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
-            <li>多数据库方言：MySQL / PostgreSQL / Oracle（分页子句差异化渲染）</li>
-            <li>服务链式调用支持：<code>service.lambdaQuery()</code> / <code>lambdaUpdate()</code> 等约 264 处真实项目用法全覆盖</li>
-            <li>逻辑删除注入：实体含 <code>@TableLogic</code> 时查询/删除自动追加 <code>AND deleted = 0</code>（可配置关闭）</li>
-            <li>安全警示：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
-        <!-- 功能截图（占位）：图片存于仓库 docs/images/，raw 直链（与 M18 二维码同理，相对路径在插件描述中不可用）；
-             当前为微信二维码占位图（docs/images/screenshot-*.png，1200x760），
-             替换同名文件后重新发布即可（URL 不变，无需修改描述） -->
+        <!-- 功能截图：图片存于仓库 docs/images/，raw 直链（与 M18 二维码同理，相对路径在插件描述中不可用）；
+             替换 docs/images/screenshot-*.png 同名文件后重新发布即可（URL 不变，无需修改描述） -->
         <hr/>
         <h2>Screenshots / 功能截图</h2>
         <p>Wrapper to SQL preview / Wrapper→SQL 预览弹窗</p>
@@ -57,8 +55,9 @@
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-02-log-panel.png" width="720" height="456"/>
         <p>SQL to MP Java code conversion / SQL→Java 反向转换</p>
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-03-sql-to-java.png" width="720" height="456"/>
-        <p>XML / annotation dynamic SQL preview / XML·注解动态 SQL 预览</p>
+        <p>XML dynamic SQL preview / XML 动态 SQL 预览</p>
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-04-xml-preview.png" width="720" height="456"/>
+        <p>Java annotation SQL preview / Java 注解 SQL 预览</p>
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-05-annotation-preview.png" width="720" height="456"/>
         <!-- M18 联系作者：外链二维码（base64/相对路径在插件描述中不可用，官方推荐外部 URL；
              图片存于仓库 docs/images/，raw 直链；二维码为限时码，更新图片后重新发布即可，URL 不变） -->

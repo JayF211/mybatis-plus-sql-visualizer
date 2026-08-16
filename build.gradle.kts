@@ -166,28 +166,28 @@ tasks {
         changeNotes = """
             <h2>v2026.8.17</h2>
             <ul>
-                <li><b>SQL→Java 生成代码三改进</b>（T-M45）：「复制代码」只复制纯 Java 代码（自动剥离说明注释）；结果区新增「格式化代码」按钮（IDE Java 格式化器，长链按用户代码风格折行）；行尾说明注释改独立行注释</li>
-                <li><b>三处图标统一优化</b>（T-M40）：侧边栏 SQL 日志 / gutter 预览 / logo 统一 MP 蓝圆角底 + &lt;/&gt; 代码 + 放大镜前景层；gutter 图标放大加粗更醒目；功能截图 5 张真实截图入库</li>
-                <li><b>SQL→Java 调用方法按调用类真实 API 选择</b>（T-M44）：调用前反查调用类继承链方法集——selectPage/selectList/page/list 缺失时自动回落 selectJoinPage/selectJoinList/updateJoin/deleteJoin 族（含 Class 参数形态，MPJ 1.4.13/1.5.6 双版本实证），兼容 MPJBaseMapper 与 BaseMapper API 不同的项目；反引号列名提示误报修复</li>
-                <li><b>UPSERT 按方言渲染</b>（T-M43）：saveOrUpdate/insertOrUpdate 预览的冲突子句按当前方言生成——MySQL/MariaDB 渲染 <code>ON DUPLICATE KEY UPDATE 列 = VALUES(列)</code>，PostgreSQL/H2/SQLite/KingBase 渲染 <code>ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列</code>，Oracle/SQL Server/DM 降级纯 INSERT（无原生简洁 upsert 语法，保证 SQL 可执行）；「设置里出现 = 承诺可用」</li>
-                <li><b>SQL→Java 反向分页解析方言宽容</b>（T-M43）：粘贴 SQL 的分页子句支持全部主流方言形态——<code>LIMIT n OFFSET m</code>（PG 系）、<code>OFFSET n ROWS FETCH NEXT m ROWS ONLY</code>（SQL Server/Oracle 12c）、<code>FETCH FIRST n ROWS ONLY</code>（Oracle），含 <code>?</code> 占位符；列名 offset/fetch 不误判</li>
-                <li><b>达梦方言实证化</b>（T-M43）：DM8 官方支持 <code>LIMIT M, N</code> 分页写法（4 种写法之一）——原「假设性标注」更新为官方实证依据</li>
-                <li><b>日志 SQL 预览弹窗自动识别参数</b>（T-M42）：双击日志条目弹出的 SQL 预览自动识别参数——左侧参数区显示 #param1… 参数行并预填日志参数值（类型感知引号），修改参数值实时回填 SQL</li>
-                <li><b>日志列表 Ctrl+C 复制纯 SQL</b>（T-M42）：复制内容为还原后 SQL 文本（与右键复制一致），不再复制列表渲染 HTML 源码</li>
-                <li><b>预览弹窗 EDT 报错修复</b>（T-M42）：2026.2 双击日志 SQL 报 Read access 异常已修复（PSI 文件创建包读操作，全部预览弹窗入口统一受益）</li>
-                <li><b>SQL→Java 调用类支持 this / baseMapper</b>（T-M42）：选择器新增两个固定候选——this（service 内：this.list/page/update/remove/save）与 baseMapper（MP/MPJ ServiceImpl 字段：selectList/selectPage/update(null,…)/insert/delete），JOIN/VO 自动放开 MPJ 方法族</li>
-                <li><b>serialVersionUID 默认忽略</b>（T-M42）：SQL→Java 反向与实体解析对 serialVersionUID 系列字段/列名（serial_version_uid / serial_version_u_i_d 等全形态）默认忽略——不再生成 User::getSerialVersionUID 编译不过的引用</li>
-                <li><b>SQL→Java 右键预览高亮 + 快捷键可配置</b>（T-M41）：结果弹窗升级为 IDEA 只读编辑器（Java 词法高亮 + 行号）；设置页新增「SQL→Java 快捷键」行（录制式修改 Alt+Shift+J）</li>
-                <li><b>SQL→Java 性能与设置页优化</b>：实体反查项目级缓存（PsiModificationTracker 失效）+ 类名去首段启发式 + 跳过接口枚举；「更新与诊断」分区统一缓存管理（大小显示 + 清除反馈）</li>
+                <li>SQL→Java 生成代码三改进（T-M45）</li>
+                <li>三处图标统一优化（T-M40）</li>
+                <li>调用方法按调用类真实 API 选择（T-M44）</li>
+                <li>UPSERT 按方言渲染（T-M43）</li>
+                <li>SQL→Java 反向分页解析方言宽容（T-M43）</li>
+                <li>达梦方言实证化（T-M43）</li>
+                <li>日志 SQL 预览弹窗自动识别参数（T-M42）</li>
+                <li>日志列表 Ctrl+C 复制纯 SQL（T-M42）</li>
+                <li>预览弹窗 EDT 报错修复（T-M42）</li>
+                <li>调用类支持 this / baseMapper（T-M42）</li>
+                <li>serialVersionUID 默认忽略（T-M42）</li>
+                <li>SQL→Java 右键预览高亮 + 快捷键可配置（T-M41）</li>
+                <li>SQL→Java 性能与设置页优化</li>
             </ul>
             <h2>v2026.8.16</h2>
             <ul>
-                <li><b>SQL 日志工具窗口</b>（T-M31）：运行控制台 SQL 自动捕获还原为可执行 SQL（Preparing/Parameters 解析、时间戳 + 词法着色列表、去重窗口、捕捉开关）；设置页「SQL 日志」组 11 项 + 逻辑删除值可配置 + 设置生效性审计 29 项；2026.2 执行体系反射桥兼容（真机验证通过）</li>
-                <li><b>SQL 反向转 MP Java 代码</b>（T-M36/T-M37）：选中 SQL 右键 / Alt+Shift+J 生成 MyBatis-Plus Java 代码——SELECT/UPDATE/DELETE/INSERT 全语句、QueryWrapper/LambdaQueryWrapper/Wrappers/MPJ 形态可配、多表 JOIN 生成 MPJLambdaWrapper + leftJoin 链、嵌套组/顶层 OR/复杂表达式降级 apply、调用类与返回 VO 类选择器；侧边栏「SQL → Java」tab 粘贴即转（形态快捷切换）</li>
-                <li><b>日志转 SQL Tab</b>（T-M38）：侧边栏「SQL 预览」改造为「日志转 SQL」——粘贴 Preparing/Parameters 日志批量还原可执行 SQL（多组语句分隔、参数不足警告、一键复制），日志列表右键一键发送转换</li>
-                <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语、主题化渲染）；工具窗口标题、类选择字段原生观感等体验修复</li>
-                <li><b>兼容下限降至 IDEA 2024.3</b>（T-M30）：支持范围由 2025.3+ 扩展至 2024.3~2026.2；Plugin Verifier 三版本（243/253/262）全 Compatible</li>
-                <li><b>更新链路与预览修复</b>（T-M28.3~28.6 + T-M29.5/29.6）：更新后插件消失、安装守卫误拒、通知变更日志有序列表与 Gitee 关联；XML 参数回填类型感知（按方法签名参数 Java 类型判引号）；选择区多 SQL 选择栏覆盖 XML 与注解</li>
+                <li>SQL 日志工具窗口与日志还原（T-M31）</li>
+                <li>SQL 反向转 MP Java 代码（T-M36/T-M37）</li>
+                <li>日志转 SQL Tab（T-M38）</li>
+                <li>侧边栏帮助入口（T-M39）</li>
+                <li>兼容下限降至 IDEA 2024.3（T-M30）</li>
+                <li>更新链路与预览修复（T-M28.3~28.6 + T-M29.5/29.6）</li>
             </ul>
         """.trimIndent()
     }
