@@ -35,6 +35,7 @@
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         <hr/>
         <h2>核心能力（中文说明）</h2>
+        <p>MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。</p>
         <ul>
             <li>Wrapper 链转 SQL：<code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> / 字符串版 <code>QueryWrapper</code> / <code>UpdateWrapper</code> / <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表 / 服务链</li>
             <li>XML mapper 动态 SQL 与 <code>@Select</code> 等注解 SQL 预览：动态标签、OGNL 条件勾选、参数回填</li>
