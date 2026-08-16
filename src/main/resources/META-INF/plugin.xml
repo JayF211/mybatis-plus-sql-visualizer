@@ -59,6 +59,7 @@
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-03-sql-to-java.png" width="720" height="456"/>
         <p>XML / annotation dynamic SQL preview / XML·注解动态 SQL 预览</p>
         <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-04-xml-preview.png" width="720" height="456"/>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-05-annotation-preview.png" width="720" height="456"/>
         <!-- M18 联系作者：外链二维码（base64/相对路径在插件描述中不可用，官方推荐外部 URL；
              图片存于仓库 docs/images/，raw 直链；二维码为限时码，更新图片后重新发布即可，URL 不变） -->
         <hr/>
