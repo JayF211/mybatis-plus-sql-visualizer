@@ -138,10 +138,11 @@
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributor"/>
 
         <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
-             仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；displayName 为
-             EP 属性不支持 bundle key，静态写（通知正文走 bundle） -->
+             仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
+             （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
-                           displayName="MyBatis-Plus SQL Visualizer"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.updates"
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
