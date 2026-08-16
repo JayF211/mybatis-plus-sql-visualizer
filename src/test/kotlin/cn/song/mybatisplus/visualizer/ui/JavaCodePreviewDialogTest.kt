@@ -49,4 +49,29 @@ class JavaCodePreviewDialogTest : BasePlatformTestCase() {
         assertTrue(MpSqlVisualizerBundle.message("reverse.dialog.title").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.dialog.copy").isNotBlank())
     }
+
+    /** T-M45：复制只复制 Java 代码——剥离说明注释（忽略「日志」）。 */
+    fun testCopyTextStripsComments() {
+        val code = "// SQL → QueryWrapper 反向生成\n" +
+            "Page<User> page = userService.page(new Page<>(1, 1), wrapper);  // 分页占位"
+        val dialog = JavaCodePreviewDialog(project, code)
+        try {
+            assertEquals(
+                "Page<User> page = userService.page(new Page<>(1, 1), wrapper);",
+                dialog.copyTextForTest(),
+            )
+        } finally {
+            dialog.dispose()
+        }
+    }
+
+    /** T-M45：无注释代码复制文本与原文一致（剥离幂等）。 */
+    fun testCopyTextWithoutCommentsUnchanged() {
+        val dialog = JavaCodePreviewDialog(project, sampleCode)
+        try {
+            assertEquals(sampleCode, dialog.copyTextForTest())
+        } finally {
+            dialog.dispose()
+        }
+    }
 }

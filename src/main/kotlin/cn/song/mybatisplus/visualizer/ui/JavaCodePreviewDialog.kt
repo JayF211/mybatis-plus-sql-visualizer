@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.lang.java.JavaLanguage
 import com.intellij.lang.java.JavaSyntaxHighlighterFactory
@@ -79,16 +80,22 @@ class JavaCodePreviewDialog(
         }
     }
 
-    /** 复制生成代码到系统剪贴板（对齐 SqlPreviewPanel.copySql 的复制实现）。 */
+    /** 复制纯 Java 代码到系统剪贴板（T-M45：剥离说明注释——只复制代码忽略「日志」；对齐 SqlPreviewPanel.copySql 的复制实现）。 */
     private fun copyCode() {
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(code), null)
+        clipboard.setContents(StringSelection(copyText()), null)
         Messages.showInfoMessage(
             project,
             MpSqlVisualizerBundle.message("reverse.copy.done"),
             MpSqlVisualizerBundle.message("plugin.name"),
         )
     }
+
+    /** 复制文本 = 剥离注释后的当前编辑器内容（headless 测试无剪贴板，经此断言）。 */
+    private fun copyText(): String = JavaCommentStripper.strip(editor.document.text)
+
+    /** internal 测试访问器：将复制到剪贴板的文本（剥离注释后）。 */
+    internal fun copyTextForTest(): String = copyText()
 
     /** internal 测试访问器（渲染文本断言，仿 SqlSelectionDialog.listForTest）。 */
     internal fun editorForTest(): Editor = editor

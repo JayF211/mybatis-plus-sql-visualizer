@@ -130,6 +130,9 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue(MpSqlVisualizerBundle.message("log.tab.sqlToJava").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.convert").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.status.noEntity").isNotBlank())
+        assertTrue(MpSqlVisualizerBundle.message("reverse.panel.copy").isNotBlank())
+        assertTrue(MpSqlVisualizerBundle.message("reverse.panel.formatCode").isNotBlank())
+        assertTrue(MpSqlVisualizerBundle.message("reverse.copy.done").isNotBlank())
         // T-M37 P1：日志列表右键「发送到 SQL → Java 转换」key（中英 bundle 均存在）
         assertTrue(MpSqlVisualizerBundle.message("log.panel.sendToReverse").isNotBlank())
     }
@@ -443,6 +446,58 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         } finally {
             state.reverseWrapperFormat = original
             panel.callerFieldForTest().text = ""
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-M45：复制剥离注释 + 格式化代码（结果区工具栏）
+    // ------------------------------------------------------------------
+
+    fun testCopyTextStripsComments() {
+        // 转换含说明注释的代码 → 复制文本 = 纯 Java 代码（无 // 注释行）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql("SELECT * FROM user WHERE id = 1 LIMIT ?, ?")
+            panel.callerFieldForTest().text = "UserService"
+            panel.convertForTest()
+            val result = awaitContains("分页 current/size 已占位")
+            // 结果区显示仍带注释（行注释形态——独立行）
+            assertTrue(result, result.contains("// 分页 current/size 已占位，请替换为实际参数"))
+            // 复制文本剥离全部注释，保留代码
+            val copy = panel.copyTextForTest()
+            assertFalse(copy, copy.contains("//"))
+            assertTrue(copy, copy.contains("Page<User> page = userService.page(new Page<>(1, 10), wrapper);"))
+        } finally {
+            state.reverseWrapperFormat = original
+            panel.callerFieldForTest().text = ""
+        }
+    }
+
+    fun testFormatCodeFormatsResult() {
+        // 结果区内容经「格式化代码」后代码完整保留；连续格式化结果稳定（幂等）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            val columns = (1..30).joinToString(", ") { "c$it" }
+            panel.inputEditorForTest().setSql("SELECT $columns FROM user")
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains(".select(\"c1\", \"c2\""))
+            panel.formatCodeForTest()
+            val formatted = panel.resultTextForTest()
+            // 格式化不丢代码（wrapper 构造 + select 链完整）
+            assertTrue(formatted, formatted.contains("new QueryWrapper<User>()"))
+            assertTrue(formatted, formatted.contains(".select(\"c1\""))
+            // 幂等：再格式化结果不变
+            panel.formatCodeForTest()
+            assertEquals(formatted, panel.resultTextForTest())
+        } finally {
+            state.reverseWrapperFormat = original
         }
     }
 

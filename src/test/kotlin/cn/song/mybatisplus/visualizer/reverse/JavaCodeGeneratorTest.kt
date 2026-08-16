@@ -1191,7 +1191,9 @@ class JavaCodeGeneratorTest {
             JavaCodeGenerator.InvocationTarget("UserService"),
         )
         assertTrue(code, code.contains("Page<User> page = userService.page(new Page<>(1, 10), wrapper);"))
-        assertTrue(code, code.contains("// 分页 current/size 已占位，请替换为实际参数"))
+        // T-M45：说明注释为独立行注释（不再行尾注释）——独立行位于调用行上方
+        assertTrue(code, code.contains("// 分页 current/size 已占位，请替换为实际参数\nPage<User> page"))
+        assertTrue(code, !code.contains("wrapper);  //"))
         assertTrue(code, !code.contains(".last(\"LIMIT"))
     }
 

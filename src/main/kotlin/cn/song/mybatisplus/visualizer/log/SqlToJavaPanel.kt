@@ -2,12 +2,14 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
+import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper
 import cn.song.mybatisplus.visualizer.reverse.ReverseJoin
 import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
 import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
+import cn.song.mybatisplus.visualizer.ui.JavaCodeFormatter
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -259,6 +261,7 @@ class SqlToJavaPanel(
     private fun buildResultToolbar(): JPanel {
         val group = DefaultActionGroup(
             CopyAction(),
+            FormatCodeAction(),
             ClearResultAction(),
         )
         val toolbar = ActionManager.getInstance()
@@ -314,9 +317,23 @@ class SqlToJavaPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
+            // T-M45：只复制 Java 代码——剥离说明注释（忽略「日志」），粘贴即用
             Toolkit.getDefaultToolkit().systemClipboard
-                .setContents(StringSelection(resultEditor.document.text), null)
+                .setContents(StringSelection(copyText()), null)
             status(MpSqlVisualizerBundle.message("reverse.copy.done"), error = false)
+        }
+    }
+
+    /** T-M45：直接格式化结果区 Java 代码（对齐输入区「格式化 SQL」交互——格式化当前框内内容）。 */
+    private inner class FormatCodeAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.ReformatCode
+            e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.formatCode")
+            e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            formatResult()
         }
     }
 
@@ -834,6 +851,17 @@ class SqlToJavaPanel(
         }
     }
 
+    /** T-M45：复制文本 = 剥离注释后的结果区内容（复制按钮经此取文本）。 */
+    private fun copyText(): String = JavaCommentStripper.strip(resultEditor.document.text)
+
+    /** T-M45：格式化结果区当前内容（IDE Java 格式化器，结果写回编辑器——复制基于当前内容）。 */
+    private fun formatResult() {
+        val formatted = JavaCodeFormatter.format(project, resultEditor.document.text)
+        if (formatted != resultEditor.document.text) {
+            setResultText(formatted)
+        }
+    }
+
     /** T-M36.7：调用上下文（调用类 + VO 均非必选；留空返回 null → 纯表达式）。 */
     private fun buildInvocation(): JavaCodeGenerator.InvocationTarget? {
         val caller = callerField.text.trim()
@@ -1033,6 +1061,12 @@ class SqlToJavaPanel(
 
     /** 测试访问器：结果区文本。 */
     internal fun resultTextForTest(): String = resultEditor.document.text
+
+    /** 测试访问器：将复制到剪贴板的文本（T-M45：剥离注释后的纯 Java 代码）。 */
+    internal fun copyTextForTest(): String = copyText()
+
+    /** 测试访问器：触发结果区格式化（对齐用户点击「格式化代码」按钮）。 */
+    internal fun formatCodeForTest() = formatResult()
 
     /** 测试访问器：状态行文本。 */
     internal fun statusForTest(): String = statusLabel.text

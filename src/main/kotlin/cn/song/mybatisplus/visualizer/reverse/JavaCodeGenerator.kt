@@ -490,12 +490,13 @@ object JavaCodeGenerator {
         }
         val prefix = if (paged) "Page<$generic> page = " else "List<$generic> list = "
         val call = "$prefix${callerVar(invocation)}.$method($args);"
+        // 说明注释独立成行（T-M45：行尾注释 → 行注释——整行语义清晰，复制剥离注释时行结构稳定）
         val comments = buildString {
-            if (voUnsupported) append("  // 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询")
-            if (vo != null) append("  // VO 查询需 MyBatis-Plus-Join（MPJ）依赖")
-            if (paged) append("  // 分页 current/size 已占位，请替换为实际参数")
+            if (voUnsupported) append("// 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询\n")
+            if (vo != null) append("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖\n")
+            if (paged) append("// 分页 current/size 已占位，请替换为实际参数\n")
         }
-        return call + comments
+        return comments + call
     }
 
     /** 分页参数：`LIMIT count` → `new Page<>(1, count)`；`LIMIT offset, count` → offset/count+1；
