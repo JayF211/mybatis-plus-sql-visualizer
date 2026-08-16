@@ -33,3 +33,22 @@ data class LogSqlParam(
     val value: String?,
     val type: String?,
 )
+
+/**
+ * 条目渲染回 MyBatis 日志文本（T-M38「发送到日志转 SQL」）：`==>  Preparing: <rawSql>` +
+ * `==> Parameters: <v(type), ...>`。与 [MyBatisLogParser] 的宽容匹配（mixedPrefix）互逆——
+ * 渲染文本可再次解析出等价条目（round-trip）。
+ */
+internal fun LogSqlEntry.toLogText(): String = buildString {
+    append("==>  Preparing: ").append(rawSql)
+    if (params.isNotEmpty()) {
+        append('\n').append("==> Parameters: ")
+        append(params.joinToString(", ") { it.toParamText() })
+    }
+}
+
+/** 单个参数渲染回日志形态：`1(Long)` / `abc(String)` / `null`（无类型标注直出值）。 */
+private fun LogSqlParam.toParamText(): String {
+    val v = value ?: return "null"
+    return if (type != null) "$v($type)" else v
+}
