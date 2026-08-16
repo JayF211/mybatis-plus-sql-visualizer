@@ -507,13 +507,18 @@ class SqlToJavaPanel(
                     else -> delegate.getElementsByName(name, checkBoxState, pattern)
                 }
 
-            /** 特殊项元素名 = 字符串本身（委托实现按 NavigationItem 强转，字符串会 ClassCastException）。 */
+            /** 特殊项元素名 = 字符串本身（委托实现按 NavigationItem 强转，字符串会 ClassCastException）；
+             *  类元素委托——PSI 读取须在 ReadAction 内（平台在 EDT 关闭弹窗时调用 getFullName/getElementName，
+             *  GotoClassModel2 → DefaultClassNavigationContributor → getQualifiedName/getName 触发 stub 断言，
+             *  用户实测堆栈 SqlToJavaPanel.kt CallerClassByNameModel.getFullName）。 */
             override fun getElementName(element: Any): String =
-                (element as? String) ?: (delegate.getElementName(element) ?: element.toString())
+                (element as? String) ?: ReadAction.compute<String?, Throwable> {
+                    delegate.getElementName(element)
+                } ?: element.toString()
 
-            /** 特殊项全限定名 = 字符串本身（委托实现按 NavigationItem 强转）。 */
+            /** 特殊项全限定名 = 字符串本身（委托实现按 NavigationItem 强转）；类元素委托（同上 ReadAction）。 */
             override fun getFullName(element: Any): String? =
-                (element as? String) ?: delegate.getFullName(element)
+                (element as? String) ?: ReadAction.compute<String?, Throwable> { delegate.getFullName(element) }
 
             /** 列表渲染：特殊项走纯文本 + 字段图标；类元素委托 GotoClassModel2 渲染器。 */
             override fun getListCellRenderer(): ListCellRenderer<*> = object : ListCellRenderer<Any> {
