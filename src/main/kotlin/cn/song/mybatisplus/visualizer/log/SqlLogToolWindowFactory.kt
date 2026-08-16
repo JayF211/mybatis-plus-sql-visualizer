@@ -45,23 +45,21 @@ class SqlLogToolWindowFactory : ToolWindowFactory {
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         // 窗口标题（stripe 标签）：显示 bundle 文案而非窗口 ID（cn.song.mybatisplus.visualizer.log）；
-        // 2026.2 源码实证：setTitle 只改当前 content 的 displayName（标题栏/浮动标题），
-        // 侧边栏 stripe 标题走独立 stripeTitleProvider（默认 = 工具窗口 id）——须再调 setStripeTitle；
-        // T-M38：invokeLater 二次设置——部分平台版本 createToolWindowContent 阶段 setTitle 后
+        // 2026.2 源码实证：setTitle 只改当前 content 的 displayName，侧边栏 stripe 标题走独立
+        // stripeTitleProvider（默认 = 工具窗口 id）——须 setStripeTitle；
+        // T-M39 二次增量：**content displayName 置空**——新 UI 标题栏 = [stripe 标题] + [content displayName]，
+        // 两者同文案会重复显示（用户反馈），标题只由 stripe 承担；
+        // T-M38：invokeLater 二次设置——部分平台版本 createToolWindowContent 阶段设置后
         // 新 UI 仍按注册 ID 渲染标题栏，延迟到 UI 派发完成后覆盖
         val title = MpSqlVisualizerBundle.message("log.toolwindow.title")
-        toolWindow.setTitle(title)
         toolWindow.setStripeTitle(title)
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            if (!toolWindow.isDisposed) {
-                toolWindow.setTitle(title)
-                toolWindow.setStripeTitle(title)
-            }
+            if (!toolWindow.isDisposed) toolWindow.setStripeTitle(title)
         }
         val manager = project.getService(SqlLogManager::class.java)
         val panel = SqlLogPanel(project, manager)
-        // content 标题同文案（多 content/部分渲染路径的兜底显示）
-        val content = toolWindow.contentManager.factory.createContent(panel, title, false)
+        // content 标题留空（T-M39 二次增量：标题栏由 stripe 标题唯一承担，避免重复显示）
+        val content = toolWindow.contentManager.factory.createContent(panel, "", false)
         content.setDisposer(panel)
         toolWindow.contentManager.addContent(content)
     }

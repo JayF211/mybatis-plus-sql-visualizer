@@ -8,6 +8,7 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -246,8 +247,45 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // 调用类 / VO（T-M36.7）
+    // 调用类 / VO（T-M36.7；T-M39 增量改类选择器）
     // ------------------------------------------------------------------
+
+    fun testClassPickerSelectAndClear() {
+        val caller = panel.callerFieldForTest()
+        // 初始：空值 → … 浏览扩展按钮
+        assertEquals("", caller.text)
+        assertTrue("空值应有扩展按钮（… 浏览）", caller.extensions.isNotEmpty())
+        // 模拟 Goto Class 选择器选中（简单类名 + tooltip 全限定名）
+        caller.pickForTest("UserService", "com.demo.UserService")
+        assertEquals("UserService", caller.text)
+        assertEquals("com.demo.UserService", caller.toolTipText)
+        // 模拟 ✕ 清除
+        caller.clearForTest()
+        assertEquals("", caller.text)
+        assertNull(caller.toolTipText)
+    }
+
+    fun testClassPickerSelectionRegenerates() {
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.convertForTest()
+            assertTrue(panel.resultTextForTest().contains("new QueryWrapper"))
+            // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）
+            panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService")
+            val result = panel.resultTextForTest()
+            assertTrue(result, result.contains("UserService.list"))
+            // 清除 → 回到纯表达式
+            panel.callerFieldForTest().clearForTest()
+            val plain = panel.resultTextForTest()
+            assertTrue(plain, !plain.contains("UserService"))
+        } finally {
+            state.reverseWrapperFormat = original
+        }
+    }
 
     fun testCallerAndVoGenerateInvocation() {
         val state = PluginSettings.getInstance().state

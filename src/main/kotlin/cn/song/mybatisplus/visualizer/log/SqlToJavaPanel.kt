@@ -11,6 +11,9 @@ import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
+import com.intellij.ide.util.gotoByName.ChooseByNamePopup
+import com.intellij.ide.util.gotoByName.ChooseByNamePopupComponent
+import com.intellij.ide.util.gotoByName.GotoClassModel2
 import com.intellij.lang.java.JavaLanguage
 import com.intellij.lang.java.JavaSyntaxHighlighterFactory
 import com.intellij.openapi.Disposable
@@ -19,6 +22,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
@@ -29,8 +33,10 @@ import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
+import com.intellij.psi.PsiClass
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBTextField
+import com.intellij.ui.components.fields.ExtendableTextField
+import com.intellij.ui.components.fields.ExtendableTextComponent.Extension
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
@@ -38,6 +44,8 @@ import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JComboBox
 import javax.swing.JPanel
@@ -78,13 +86,17 @@ class SqlToJavaPanel(
         }
     }
 
-    /** T-M36.7：调用类输入（Service/Mapper 类名，非必选——留空生成纯表达式）。 */
-    private val callerField = JBTextField(12).apply {
+    /** T-M36.7：调用类选择（Service/Mapper 类名，非必选——留空生成纯表达式）。 */
+    private val callerField = ClassPickerField(project) {
+        if (cacheResult != null) regenerateWithNewFormat()
+    }.apply {
         emptyText.text = MpSqlVisualizerBundle.message("reverse.panel.callerHint")
     }
 
-    /** T-M36.7：返回 VO 类名输入（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
-    private val voField = JBTextField(8).apply {
+    /** T-M36.7：返回 VO 类名选择（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
+    private val voField = ClassPickerField(project) {
+        if (cacheResult != null) regenerateWithNewFormat()
+    }.apply {
         emptyText.text = MpSqlVisualizerBundle.message("reverse.panel.voHint")
     }
 
@@ -234,6 +246,89 @@ class SqlToJavaPanel(
             setResultText("")
             status(" ", error = false)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 类选择字段（T-M39 增量：用户要求直接选择项目 Java 类而非手动输入）
+    // ------------------------------------------------------------------
+
+    /**
+     * 类选择字段：点击弹项目类选择器（Goto Class 弹窗，[GotoClassModel2]）。
+     *
+     * 只读展示选中类的简单类名（tooltip 显示全限定名便于区分同名类）；扩展按钮——
+     * 空值显示 … 浏览（弹选择器）、有值显示 ✕ 清除；[onChanged] 在选中/清除后回调
+     * （面板侧接入「已有转换结果时重新生成」）。
+     */
+    internal inner class ClassPickerField(
+        private val projectRef: Project,
+        private val onChanged: () -> Unit = {},
+    ) : ExtendableTextField() {
+
+        init {
+            isEditable = false
+            // 点击字段任意位置弹选择器（扩展按钮区域由按钮自身消费事件，不会触发）
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    pickClass()
+                }
+            })
+            refreshExtensions()
+        }
+
+        /** 弹 Goto Class 选择器（IDE 标准类搜索弹窗，候选 = 项目内全部 Java 类）。 */
+        private fun pickClass() {
+            val popup = ChooseByNamePopup.createPopup(projectRef, GotoClassModel2(projectRef), null)
+            popup.invoke(object : ChooseByNamePopupComponent.Callback() {
+                override fun elementChosen(element: Any?) {
+                    val cls = element as? PsiClass ?: return
+                    val simpleName = cls.name ?: return
+                    setPicked(simpleName, cls.qualifiedName)
+                }
+
+                override fun onClose() {}
+            }, ModalityState.current(), false)
+        }
+
+        /** 选中结果写入（文本 = 简单类名，tooltip = 全限定名）+ 扩展按钮刷新 + 变更回调。 */
+        private fun setPicked(simpleName: String, qualifiedName: String?) {
+            text = simpleName
+            toolTipText = qualifiedName
+            refreshExtensions()
+            onChanged()
+        }
+
+        /** 清除选中值（✕ 扩展按钮触发）。 */
+        private fun clearPicked() {
+            text = ""
+            toolTipText = null
+            refreshExtensions()
+            onChanged()
+        }
+
+        /** 扩展按钮：空值 → … 浏览（弹选择器）；有值 → ✕ 清除。 */
+        private fun refreshExtensions() {
+            setExtensions(
+                if (text.isEmpty()) {
+                    Extension.create(
+                        AllIcons.General.Ellipsis,
+                        MpSqlVisualizerBundle.message("reverse.panel.pickClass"),
+                        Runnable { pickClass() },
+                    )
+                } else {
+                    Extension.create(
+                        AllIcons.Actions.Cancel,
+                        MpSqlVisualizerBundle.message("reverse.panel.clearClass"),
+                        Runnable { clearPicked() },
+                    )
+                },
+            )
+        }
+
+        /** 测试访问器：模拟选择器选中（写入文本 + tooltip + 变更回调）。 */
+        internal fun pickForTest(simpleName: String, qualifiedName: String?) = setPicked(simpleName, qualifiedName)
+
+        /** 测试访问器：模拟 ✕ 清除。 */
+        internal fun clearForTest() = clearPicked()
     }
 
     // ------------------------------------------------------------------
@@ -499,11 +594,11 @@ class SqlToJavaPanel(
         formatCombo.selectedItem = formatOptions().first { it.persisted == persisted }
     }
 
-    /** 测试访问器：调用类输入框。 */
-    internal fun callerFieldForTest(): JBTextField = callerField
+    /** 测试访问器：调用类选择字段。 */
+    internal fun callerFieldForTest(): ClassPickerField = callerField
 
-    /** 测试访问器：返回 VO 输入框。 */
-    internal fun voFieldForTest(): JBTextField = voField
+    /** 测试访问器：返回 VO 选择字段。 */
+    internal fun voFieldForTest(): ClassPickerField = voField
 
     /** 状态行（错误红字 / 提示主题色）。 */
     private fun status(message: String, error: Boolean) {

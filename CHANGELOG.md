@@ -6,6 +6,8 @@
 
 ### Added
 
+- **调用类/VO 改项目类选择器（T-M39 三次增量）**：「SQL → Java」tab 的调用类与返回 VO 由手动输入改为类选择——点击字段弹 IDE 标准 Goto Class 选择器（候选 = 项目内全部 Java 类）；选中后显示简单类名（悬停显示全限定名），右侧 ✕ 一键清除；选中/清除后已有转换结果自动重新生成
+- **标题栏插件名重复修复（T-M39 三次增量）**：新 UI 标题栏同时显示 stripe 标题与 content 标题导致插件名出现两处——content 标题置空，标题栏只保留一处「MyBatis-Plus SQL Visualizer」
 - **工具窗口标题与面板布局修复（T-M39 二次增量）**：① 标题栏左侧不再显示插件包名——2026.2 平台 setTitle 只改 content 标题，侧边栏 stripe 标题须单独 setStripeTitle（否则默认显示窗口注册 id）；② 「SQL → Java」tab 上方布局优化——形态下拉/调用类/VO 从挤在一行的 EAST 区移出，改为独立选项行（形态下拉整行完整显示、调用类/VO 各半行，窄侧边栏不再截断）
 - **帮助入口体验修复（T-M39 增量）**：帮助按钮图标换为与设置/清空按钮同色系的纯灰问号（原灰蓝圆圈与旁边按钮色相不一致）；帮助弹窗主题化渲染——HTML 渲染走 IDE 主题（JBHtmlEditorKit，字体/前景跟随 LAF）、背景透出面板色（消除白底割裂）、排版对齐 IDEA 帮助信息观感（行高/标题间距/列表缩进）；「日志转 SQL」tab 改名「日志 → SQL」（英文 Log → SQL）
 - **侧边栏帮助入口（T-M39）**：SQL 日志工具窗口工具栏新增「?」帮助按钮（设置按钮旁）→ 帮助弹窗集中展示核心功能（Wrapper 预览 / 日志捕获还原 / SQL→Java 反向转换 / XML·注解动态 SQL 预览 / 代码补全 / 执行与更新）、使用方法与默认快捷键（Convert to SQL: Alt+Shift+Q；Convert SQL to MP Java Code: Alt+Shift+J，macOS Cmd+Shift+J，可在 Keymap 修改）；i18n 双语、离线可用
