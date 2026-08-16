@@ -1,0 +1,11 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- T-M40 侧边栏图标（独立修复）：玻璃盘用预混合实色 #50B4FF 且置于代码之下（IDEA SVG 渲染器忽略 fill-opacity，
+         半透明属性实测变纯白；实色盘若在代码上会盖住代码线）——代码三笔顶层绘制完整可见，圆环+手柄前景（放大镜在代码上方） -->
+    <rect x="0.5" y="0.5" width="15" height="15" rx="3.5" fill="#1E9FFF"/>
+    <circle cx="11.4" cy="11.0" r="2.7" fill="#50B4FF"/>
+    <path d="M5.7 5.8 L3.7 8 L5.7 10.2" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="7.2" y1="10.4" x2="8.8" y2="5.6" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round"/>
+    <path d="M10.3 5.8 L12.3 8 L10.3 10.2" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="11.4" cy="11.0" r="2.7" fill="none" stroke="#FFFFFF" stroke-width="1.2"/>
+    <line x1="13.3" y1="12.9" x2="14.2" y2="13.8" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

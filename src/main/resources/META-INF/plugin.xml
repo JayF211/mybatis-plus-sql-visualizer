@@ -150,7 +150,7 @@
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）
-             T-M40：三处图标统一——sqlLog 加右下角放大镜前景层（玻璃盘罩住 > 下部），</> 三笔对称居中 -->
+             T-M40：三处图标统一——sqlLog 蓝底白字版 + 右下角放大镜前景层（玻璃盘浅蓝实色垫底、代码顶层、空心环），无底版实测不理想已回退（sqlLog_bg.svg 为同内容备份） -->
         <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
                     icon="/icons/sqlLog.svg"
                     factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
