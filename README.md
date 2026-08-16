@@ -20,6 +20,17 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 **Java 注解 SQL 预览**（@Select/@Update 等，注解行 gutter 图标）
 <img src="docs/images/screenshot-05-annotation-preview.png" width="720" alt="注解动态 SQL 预览"/>
 
+## 🎯 痛点分析
+
+| 痛点 | 描述 | 影响 |
+|------|------|------|
+| **调试困难** | 开发者无法直观看到 MP 构造器最终生成的 SQL | 排查问题时需要开启 MyBatis 日志，查看繁琐的控制台输出 |
+| **SQL 优化不便** | 无法快速验证生成的 SQL 是否合理 | 影响性能调优效率 |
+| **联表查询复杂** | `MPJLambdaWrapper` 联表查询逻辑复杂，容易出错 | 需要频繁对比实际 SQL 验证逻辑正确性 |
+| **参数不可见** | 日志中的 SQL 带着 `?` 占位符 | 无法直接看到实际参数值，调试效率低 |
+| **CRUD 全覆盖** | 现有方案只能看查询 SQL，无法预览更新、删除语句 | 误操作风险高，特别是批量更新/删除 |
+| **学习成本高** | 新成员学习 MP 时，无法直观理解 API 对应的 SQL 效果 | 团队培训成本增加 |
+
 ## ✨ 功能特性
 
 - **Wrapper 全覆盖**：`LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper` /
@@ -38,6 +49,16 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 - **执行 SQL**（IntelliJ IDEA Ultimate + Database 插件）：预览面板工具栏「执行 SQL」——选择数据源 → **自动创建临时 .sql 文件**（Database 控制台绑定数据源）→ 打开后可执行（Ctrl+Enter）；Community 版点击提示升级
 - **MyBatis SQL 日志还原**（T-M31）：右侧工具窗口「MyBatis SQL Log」自动监听运行控制台 `Preparing:`/`Parameters:` 日志（MyBatis 与 MyBatis-Plus `==>` 格式自动识别）→ 还原为可执行 SQL 条目列表（String/时间引号与单引号转义、数值/布尔原样、null→NULL），双击打开预览弹窗（格式化/复制/执行/补全全复用），右键复制/删除单条，工具栏清空/暂停
 - **安全警示**：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险
+
+## 📌 预览 SQL 与运行时 SQL 的已知差异（设计特性）
+
+> 预览目标是对齐 MP 运行时语义；以下差异为**静态求值特性**，语义等价、仅文本不同。
+
+| 差异 | 说明 |
+|------|------|
+| **静态常量内联** | `in(col, DicConstants.A, DicConstants.B)` 等静态 final 常量引用被求值内联（预览 `IN (1, 2)`）；MP 运行时渲染 `IN (?, ?)` 绑定参数 |
+| **集合单占位符** | `in(col, 集合变量)` 运行时大小不可静态展开 → 预览 `IN (?)`；面板输入框支持逗号分隔多值回填（输入 `1,2,3` → `(1, 2, 3)`） |
+| **分页字面量计算** | `page(new Page<>(1, 10), wrapper)` 字面量直接计算 `LIMIT 0, 10`；运行时变量渲染 `LIMIT ?, ?`（offset 参数来源标注 `(pageNum - 1) * pageSize` 公式） |
 
 ## 🚀 使用说明
 
@@ -98,7 +119,6 @@ LambdaUpdateWrapper<DeviceInfoEntity> update = new LambdaUpdateWrapper<DeviceInf
 
 | 文档 | 说明 |
 |------|------|
-| [项目介绍](docs/项目介绍.md) | 产品背景、痛点分析、使用说明 |
 | [功能概览](docs/需求文档/20260812-1058-MP-SQL可视化-需求文档.md) | 完整功能清单与规格（`F-xx`） |
 | [开发计划](docs/开发计划/20260812-1058-MP-SQL可视化-开发计划.md) | 分阶段开发计划与验收标准（`T-xx`） |
 
