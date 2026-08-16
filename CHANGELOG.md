@@ -2,17 +2,13 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
-## [Unreleased]
+## [2026.8.17] - 2026-08-17
 
 ### Added
 
 - **SQL→Java 复制只复制 Java 代码（T-M45）**：预览弹窗与侧边栏「SQL → Java」tab 的「复制代码」自动剥离说明注释（反向生成头注释/占位提示等）——粘贴即用纯代码；行尾说明注释改为独立行注释（「分页 current/size 已占位」等提示位于调用行上方单独成行，复制时一并省略）
 - **结果区「格式化代码」按钮（T-M45）**：「SQL → Java」tab 结果区工具栏新增「格式化代码」（对齐输入区「格式化 SQL」交互，直接格式化当前框内内容）——用 IDE Java 格式化器归一空格/缩进，长链按用户代码风格折行（代码片段包进合成类方法体后格式化，顶层裸表达式语句格式化稳定）
-
-## [2026.8.17] - 2026-08-16
-
-### Added
-
+- **三处图标统一优化（T-M40）**：侧边栏 SQL 日志图标 / gutter 预览图标 / 插件 logo 统一设计——MP 蓝圆角底 + `</>` 代码 + 右下角放大镜前景层（IDEA 忽略 fill-opacity 实测修复：玻璃盘改实色垫底、代码顶层、空心环前景；中心 = 方块中心）；gutter 预览图标放大 1.25 倍 + 线条加粗（更醒目）；侧边栏图标无底版实测不理想回退蓝底白字版；功能截图 5 张真实截图入库（替换占位图，覆盖预览弹窗/日志面板/SQL→Java/XML·注解预览）
 - **SQL→Java 调用方法按调用类真实 API 选择（T-M44）**：生成调用前反查调用类继承链方法集——`selectPage`/`selectList`/`page`/`list` 等普通方法不存在时自动回落 MPJ join 方法族（`selectJoinPage(page, Class, wrapper)` / `selectJoinList(Class, wrapper)` / `selectJoinListPage` / `updateJoin(null, wrapper)` / `deleteJoin(wrapper)`，签名经 MPJ 1.4.13/1.5.6 双版本 jar 实证）——兼容 MPJBaseMapper 与 BaseMapper API 不同的项目（用户实证：部分 MPJ 依赖的 mapper 无 selectPage）；顺带修复反引号列名在「未映射回落」提示中的误报
 - **UPSERT 按方言渲染（T-M43）**：`saveOrUpdate` / `insertOrUpdate` 预览的冲突子句按当前方言生成——MySQL/MariaDB 渲染 `ON DUPLICATE KEY UPDATE 列 = VALUES(列)`（VALUES() 对 5.7~8.0+/MariaDB 全版本可用），PostgreSQL/H2/SQLite/KingBase 渲染 `ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列`，Oracle/SQL Server/DM 无原生简洁 upsert 语法（MERGE 复杂）→ 降级纯 INSERT——保证「设置里出现 = 承诺可用」：任何可选方言下预览 SQL 均可在该数据库执行
 - **SQL→Java 反向分页解析方言宽容（T-M43）**：粘贴 SQL 的分页子句支持全部主流方言形态——`LIMIT n OFFSET m`（PG/H2/SQLite/KingBase）、`OFFSET n ROWS FETCH NEXT m ROWS ONLY`（SQL Server/Oracle 12c/DM）、`FETCH FIRST n ROWS ONLY`（Oracle），值可为数字或 `?` 占位符（日志分页参数场景）；模型归一化后 `.last("LIMIT offset, count")` 渲染不变（round-trip 自洽）；列名 `offset`/`fetch`（含 LIKE 降级场景）不误判为分页子句

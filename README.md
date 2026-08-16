@@ -5,8 +5,6 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 
 ## 📸 功能截图
 
-> 占位图（微信二维码），替换 `docs/images/screenshot-*.png` 同名文件即可更新，尺寸建议 **1200×760**。
-
 **Wrapper → SQL 预览弹窗**（动态条件勾选 / 参数回填 / 格式化）
 <img src="docs/images/screenshot-01-sql-preview.png" width="720" alt="Wrapper→SQL 预览弹窗"/>
 
@@ -16,8 +14,10 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 **SQL → MP Java 代码反向转换**（右键 / Alt+Shift+J / 侧边栏 tab）
 <img src="docs/images/screenshot-03-sql-to-java.png" width="720" alt="SQL→Java 反向转换"/>
 
-**XML / 注解动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
+**XML 动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
 <img src="docs/images/screenshot-04-xml-preview.png" width="720" alt="XML动态 SQL 预览"/>
+
+**Java 注解 SQL 预览**（@Select/@Update 等，注解行 gutter 图标）
 <img src="docs/images/screenshot-05-annotation-preview.png" width="720" alt="注解动态 SQL 预览"/>
 
 ## ✨ 功能特性

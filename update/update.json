@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.16",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.16/mybatis-plus-sql-visualizer-2026.8.16.zip",
-  "changeNotes": "SQL 日志工具窗口与日志还原（T-M31）\nSQL→Java 反向转换全语句与多表 JOIN（T-M36/T-M37）\n日志转 SQL Tab（T-M38）\n侧边栏帮助入口（T-M39）\n兼容下限降至 IDEA 2024.3（T-M30）\n更新安装与通知修复（T-M28.3~28.6）\nXML/注解选择区多 SQL 选择栏（T-M29.6）\nXML 参数回填类型感知（T-M29.5）",
-  "publishDate": "2026-08-16",
+  "version": "2026.8.17",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.17/mybatis-plus-sql-visualizer-2026.8.17.zip",
+  "changeNotes": "SQL→Java 生成代码改进（T-M45：复制纯代码/格式化代码按钮）\n调用方法按调用类真实 API 选择（T-M44）\nUPSERT 按方言渲染与反向分页宽容（T-M43）\n日志弹窗自动识别参数等五项修复（T-M42）\nSQL→Java 右键预览高亮与快捷键设置（T-M41）\n三处图标统一优化（T-M40）\nSQL→Java 反向链路性能与设置页优化\n功能截图 5 张入库",
+  "publishDate": "2026-08-17",
   "sinceBuild": "243"
 }
