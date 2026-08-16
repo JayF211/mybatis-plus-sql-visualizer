@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -45,6 +46,23 @@ class HelpDialogTest : BasePlatformTestCase() {
         assertTrue("其他节：Gitee Issues 反馈入口", html.contains("Gitee Issues"))
     }
 
+    fun testDialogRendersThemeAware() {
+        // 用户反馈「样式割裂」后的主题化契约：背景透出面板色（无白底）、
+        // 前景取 LAF 文字色、HTML 排版 CSS 已注入文档 StyleSheet
+        val dialog = HelpDialog(project)
+        val pane = dialog.contentForTest()
+        assertFalse("背景应透明（透出面板色，无 JDK 默认白底）", pane.isOpaque)
+        assertEquals("前景应取 LAF 文字色（主题适配）", com.intellij.util.ui.UIUtil.getLabelForeground(), pane.foreground)
+        // <style> 块内容被解析器从文档 content 剥离进 StyleSheet（getText() 不含标签），从 StyleSheet 断言
+        val htmlDoc = pane.document as? javax.swing.text.html.HTMLDocument
+        val bodyRule = htmlDoc?.styleSheet?.getRule("body")
+        assertNotNull("body CSS 规则应已注入（行高排版生效）", bodyRule)
+        assertNotNull(
+            "line-height 应解析进 body 规则",
+            bodyRule?.getAttribute(javax.swing.text.html.CSS.Attribute.LINE_HEIGHT),
+        )
+    }
+
     fun testToolbarGroupContainsHelpAction() {
         // 直接构造（对齐 SqlLogManagerBehaviorTest——测试环境 project.getService 不可用）
         val panel = SqlLogPanel(project, SqlLogManager(project))
@@ -57,7 +75,7 @@ class HelpDialogTest : BasePlatformTestCase() {
                 AnActionEvent.createFromAnAction(it, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
             }
             children.forEachIndexed { i, action -> action.update(events[i]) }
-            val helpIndex = events.indexOfFirst { it.presentation.icon === AllIcons.General.ContextHelp }
+            val helpIndex = events.indexOfFirst { it.presentation.icon === AllIcons.Actions.Help }
             assertTrue("工具栏组应含帮助入口（? 图标，设置按钮旁）", helpIndex >= 0)
             assertEquals(
                 MpSqlVisualizerBundle.message("log.panel.help"),
@@ -79,5 +97,7 @@ class HelpDialogTest : BasePlatformTestCase() {
         // 内容键应解析为真实 HTML（缺失时 message 兜底返回 key 本身）
         assertTrue(MpSqlVisualizerBundle.message("help.content.features").contains("<h3>"))
         assertTrue(MpSqlVisualizerBundle.message("help.content.other").contains("gitee.com"))
+        // 用户要求 tab 名「日志转 SQL」→「日志 → SQL」（测试环境 bundle 兜底中文）
+        assertEquals("日志 → SQL", MpSqlVisualizerBundle.message("log.tab.logToSql"))
     }
 }

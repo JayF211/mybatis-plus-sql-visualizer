@@ -6,6 +6,7 @@
 
 ### Added
 
+- **帮助入口体验修复（T-M39 增量）**：帮助按钮图标换为与设置/清空按钮同色系的纯灰问号（原灰蓝圆圈与旁边按钮色相不一致）；帮助弹窗主题化渲染——HTML 渲染走 IDE 主题（JBHtmlEditorKit，字体/前景跟随 LAF）、背景透出面板色（消除白底割裂）、排版对齐 IDEA 帮助信息观感（行高/标题间距/列表缩进）；「日志转 SQL」tab 改名「日志 → SQL」（英文 Log → SQL）
 - **侧边栏帮助入口（T-M39）**：SQL 日志工具窗口工具栏新增「?」帮助按钮（设置按钮旁）→ 帮助弹窗集中展示核心功能（Wrapper 预览 / 日志捕获还原 / SQL→Java 反向转换 / XML·注解动态 SQL 预览 / 代码补全 / 执行与更新）、使用方法与默认快捷键（Convert to SQL: Alt+Shift+Q；Convert SQL to MP Java Code: Alt+Shift+J，macOS Cmd+Shift+J，可在 Keymap 修改）；i18n 双语、离线可用
 - **日志转 SQL Tab（T-M38）**：侧边栏工具窗口「SQL 预览」tab 改造为「日志转 SQL」输入转换工具——粘贴 MyBatis 日志（`Preparing:`/`Parameters:` 行，前缀与自动捕获同源读取设置）批量还原为可执行 SQL（多组语句 `-- SQL #N` 分隔、默认多行格式化 + 单行切换、参数不足红字警告、SQL 高亮 + 一键复制）；日志列表右键「发送到日志转 SQL」联动（条目渲染回日志文本自动填入并转换）；tab 标题改为「日志转 SQL / Log → SQL」
 - **选择区多 SQL 选择栏覆盖 XML 与注解**（T-M29.6）：XML mapper 选中含多条语句的代码段落弹出选择栏（与 Java 选择区交互一致——选择区内 `<select|insert|update|delete>` 候选 0/1/多分发，展示行号 + 语句摘要，选中后自动定位到语句行）；Java 选择区内无 Wrapper 候选时回落选择区内 SQL 注解候选（`@Select/@Update` 等）；候选选中后编辑器定位跳转（光标到行首 + 滚动居中 + 整行选中）覆盖 XML 语句 / 注解 / 全文件候选全部路径

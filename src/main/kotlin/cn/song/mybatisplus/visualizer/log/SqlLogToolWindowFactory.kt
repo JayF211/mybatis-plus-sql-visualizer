@@ -162,10 +162,12 @@ class SqlLogPanel(
         }
     }
 
-    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 帮助弹窗（核心功能/使用方法/默认快捷键）。 */
+    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 帮助弹窗（核心功能/使用方法/默认快捷键）。
+     *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
+     *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。 */
     private inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.ContextHelp
+            e.presentation.icon = AllIcons.Actions.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
         }
 
