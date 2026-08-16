@@ -117,7 +117,7 @@ tasks.withType<Test>().configureEach {
 // 构建号用于区分同日构建与问题定位；对所有 Jar 任务注入（jar + composedJar——
 // buildPlugin 最终产物由 composedJar 生成，只配 jar 会导致 zip 内 jar 丢失该属性），
 // 强制每次执行（刷新时间戳）。
-tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
+tasks.withType<Jar>().configureEach {
     doFirst {
         manifest.attributes["MPV-Build"] = System.currentTimeMillis().toString()
     }
@@ -186,13 +186,6 @@ tasks {
                 <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语、主题化渲染）；工具窗口标题、类选择字段原生观感等体验修复</li>
                 <li><b>兼容下限降至 IDEA 2024.3</b>（T-M30）：支持范围由 2025.3+ 扩展至 2024.3~2026.2；Plugin Verifier 三版本（243/253/262）全 Compatible</li>
                 <li><b>更新链路与预览修复</b>（T-M28.3~28.6 + T-M29.5/29.6）：更新后插件消失、安装守卫误拒、通知变更日志有序列表与 Gitee 关联；XML 参数回填类型感知（按方法签名参数 Java 类型判引号）；选择区多 SQL 选择栏覆盖 XML 与注解</li>
-            </ul>
-            <h2>v2026.8.15</h2>
-            <ul>
-                <li><b>MyBatis XML mapper 动态 SQL 预览</b>（M24~M26）：mapper XML / 注解 SQL（@Select 等含 &lt;script&gt;）gutter 图标 + 右键预览——复刻 MyBatis 3.5.19 渲染算法（if/choose/trim/where/set/foreach/bind/sql+include 全兼容、受限 OGNL 求值、动态条件勾选/foreach 次数/bind 覆盖/参数回填）；${'$'}{ew.customSqlSegment} 等 MP 占位按调用处 Wrapper 全链路展开；文件级多注解候选选择</li>
-                <li><b>XML/注解 SQL 代码补全</b>（M27）：mapper XML 与 Java SQL 注解字符串内 Ctrl+Space——SQL 关键字、表名/列名位置感知、别名前缀列、#{} 参数名、XML 动态标签与 OGNL；预览面板输入自动弹补全（含 @TableName 联表候选）</li>
-                <li><b>设置页检查更新与自动安装</b>（M28）：设置页「更新」分区——检查更新/变更日志展示/下载并安装一键完成 + 重启提示；「启动时自动检查更新」开关（默认开）发现新版弹通知后台安装；构建号一键复制</li>
-                <li><b>预览 SQL 修复</b>（M29）：分组布尔条件重载不再静默丢弃（and/or/nested/not/func 开关化）、分页 LIMIT 渲染（9 方言）、格式化逗号/空格修复（幂等）、动态条件面板组行合并、XML 参数回填默认引号</li>
             </ul>
         """.trimIndent()
     }
