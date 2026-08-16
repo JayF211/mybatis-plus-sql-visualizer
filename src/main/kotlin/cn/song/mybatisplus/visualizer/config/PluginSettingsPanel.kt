@@ -143,6 +143,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
     private val reverseFormatCombo = JComboBox<ReverseFormatOption>()
 
+    /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
+    private val manualEntityCheck = JBCheckBox()
+
     // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
     private val logSqlPrefixField = JBTextField(12)
     private val logParamPrefixField = JBTextField(12)
@@ -314,6 +317,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                 toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
                 selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
                     ?: reverseFormatOptions().first()
+            })
+            // 手动选择实体类开关：自动推断未命中/多表 JOIN 时弹实体选择弹窗
+            addRow(p, g, "", manualEntityCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
+                toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
             })
         }
 
@@ -592,6 +600,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logAutoCaptureCheck.isSelected = checked
     }
 
+    /** 手动选择实体类复选框设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setManualEntityCheck(checked: Boolean) {
+        manualEntityCheck.isSelected = checked
+    }
+
     // ------------------------------------------------------------------
     // 配置读写
     // ------------------------------------------------------------------
@@ -622,6 +635,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             // T-xx（设置生效性审计）：反向转换形态下拉此前**漏挂 isModified**——仅改此项时 Apply 按钮不启用，
             // 改动被平台静默丢弃（有读取点但保存链路断裂，形同假开关）；补上与其余下拉一致的变化检测
             || (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
+            || manualEntityCheck.isSelected != s.reverseManualEntitySelection
             || ignoredFieldsField.text.trim() != s.ignoredFields
             || removeTablePrefixField.text.trim() != s.removeTablePrefix
             || removeTableSuffixField.text.trim() != s.removeTableSuffix
@@ -665,6 +679,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.removeTableSuffix = removeTableSuffixField.text.trim()
         s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
+        s.reverseManualEntitySelection = manualEntityCheck.isSelected
         s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
         s.logSqlPrefix = logSqlPrefixField.text.trim()
         s.logParamPrefix = logParamPrefixField.text.trim()
@@ -703,6 +718,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
         reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
             ?: reverseFormatOptions().first()
+        manualEntityCheck.isSelected = s.reverseManualEntitySelection
         updateSection.resetState()
         shortcutEditor.shortcut = currentShortcut()
         logSqlPrefixField.text = s.logSqlPrefix

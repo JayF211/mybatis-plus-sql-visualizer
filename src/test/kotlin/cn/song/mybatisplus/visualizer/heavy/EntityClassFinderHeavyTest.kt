@@ -145,4 +145,120 @@ class EntityClassFinderHeavyTest : HeavyPlatformTestCase() {
     fun testNoMatchReturnsEmpty() {
         assertTrue(EntityClassFinder(project).find("not_exist_table").isEmpty())
     }
+
+    // ------------------------------------------------------------------
+    // @TableName 反查慢路径（类名与表名驼峰不一致时的兜底）
+    // ------------------------------------------------------------------
+
+    fun testTableNameAnnotationReverseLookup() {
+        // 实体命名与表名驼峰不一致（AccountRoleRelEntity ↔ sys_account_role_rel）：
+        // 类名推断候选 [SysAccountRoleRel, SysAccountRoleRelEntity] 无法命中 → @TableName 反查兜底
+        addClassFile(
+            "AccountRoleRelEntity.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class AccountRoleRelEntity {
+                private Long roleId;
+                private Long accountId;
+            }
+            """,
+        )
+        val found = EntityClassFinder(project).find("sys_account_role_rel")
+        assertEquals(1, found.size)
+        assertEquals("AccountRoleRelEntity", found[0].name)
+    }
+
+    fun testTableNameAnnotationReverseLookupIgnoreCase() {
+        // 注解值大小写不同（SYS_ACCOUNT_ROLE_REL）仍命中（表名比较大小写不敏感）
+        addClassFile(
+            "RoleRel.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("SYS_ACCOUNT_ROLE_REL")
+            public class RoleRel {
+                private Long id;
+            }
+            """,
+        )
+        val found = EntityClassFinder(project).find("sys_account_role_rel")
+        assertEquals(1, found.size)
+        assertEquals("RoleRel", found[0].name)
+    }
+
+    fun testReverseLookupMultipleCandidates() {
+        // 反查命中多个候选（不同类名同一 @TableName）→ 全部返回（调用方弹选择框）
+        addClassFile(
+            "AccountRoleRelEntity.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class AccountRoleRelEntity {
+                private Long id;
+            }
+            """,
+        )
+        addClassFile(
+            "RoleRel.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class RoleRel {
+                private Long id;
+            }
+            """,
+        )
+        val found = EntityClassFinder(project).find("sys_account_role_rel")
+        assertEquals(2, found.size)
+        assertEquals(listOf("AccountRoleRelEntity", "RoleRel"), found.map { it.name })
+    }
+
+    fun testReverseLookupVoDtoExcluded() {
+        // 反查路径同样排除 VO/DTO 命名
+        addClassFile(
+            "RoleRel.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class RoleRel {
+                private Long id;
+            }
+            """,
+        )
+        addClassFile(
+            "RoleRelVO.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("sys_account_role_rel")
+            public class RoleRelVO {
+                private Long id;
+            }
+            """,
+        )
+        val found = EntityClassFinder(project).find("sys_account_role_rel")
+        assertEquals(1, found.size)
+        assertEquals("RoleRel", found[0].name)
+    }
+
+    fun testReverseLookupAnnotationMismatchExcluded() {
+        // 反查命中判定依赖表名匹配——注解指向别的表的类不命中
+        addClassFile(
+            "RoleRel.java",
+            """
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("other_table")
+            public class RoleRel {
+                private Long id;
+            }
+            """,
+        )
+        assertTrue(EntityClassFinder(project).find("sys_account_role_rel").isEmpty())
+    }
 }

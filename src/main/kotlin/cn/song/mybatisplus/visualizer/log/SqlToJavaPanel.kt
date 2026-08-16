@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
 import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
+import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -41,6 +42,7 @@ import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.GridBagConstraints
@@ -48,8 +50,11 @@ import java.awt.GridBagLayout
 import java.awt.RenderingHints
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.awt.event.ActionEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.AbstractAction
+import javax.swing.Action
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.Icon
@@ -140,6 +145,9 @@ class SqlToJavaPanel(
     private var cacheResult: SqlReverseResult? = null
     private var cacheCandidates: List<SqlToJavaConverter.EntityCandidate>? = null
     private var cacheSubEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap()
+
+    /** 调用类 MPJ 能力（后台 ReadAction 继承链实证；QUERY 形态/未解析默认 false）。 */
+    private var callerMpj = false
 
     init {
         // 上：输入区（工具栏 + 编辑器）
@@ -303,14 +311,29 @@ class SqlToJavaPanel(
 
         private val iconLabel = JBLabel()
         private val textLabel = JBLabel(" ")
-        private val actionButton = JButton().apply {
+        // T-M39 增量修复：关闭/浏览按钮改原生紧凑图标按钮——IDEA 图标按钮类
+        // （JBIconButton/SmallIconButton/InlineIconButton）在 IPGP 发行版全部被裁剪（编译实证），
+        // 用 JButton + IDEA 原生图标 + 16×16 固定尺寸 + FlowLayout 宿主防 BorderLayout 拉伸
+        private val actionButton = JButton(AllIcons.General.Ellipsis).apply {
             isBorderPainted = false
             isContentAreaFilled = false
             isFocusPainted = false
-            border = JBUI.Borders.empty(0, 4)
+            margin = JBUI.emptyInsets()
+            border = JBUI.Borders.empty()
+            iconTextGap = 0
+            preferredSize = Dimension(16, 16)
+            minimumSize = Dimension(16, 16)
+            maximumSize = Dimension(16, 16)
+            toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
             addActionListener {
                 if (currentText.isEmpty()) pickClass() else clearPicked()
             }
+        }
+
+        /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）。 */
+        private val actionButtonHost = JPanel(FlowLayout(FlowLayout.CENTER, 0, 4)).apply {
+            isOpaque = false
+            add(actionButton)
         }
 
         init {
@@ -321,7 +344,7 @@ class SqlToJavaPanel(
             textLabel.border = JBUI.Borders.empty(0, 4, 0, 0)
             add(iconLabel, BorderLayout.WEST)
             add(textLabel, BorderLayout.CENTER)
-            add(actionButton, BorderLayout.EAST)
+            add(actionButtonHost, BorderLayout.EAST)
             // 点击字段任意位置弹选择器（按钮区域由按钮自身消费事件，不会触发）
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
@@ -451,25 +474,92 @@ class SqlToJavaPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Pair<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>>, Throwable> {
+                ReadAction.compute<Triple<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>, Boolean>, Throwable> {
                     val candidates = SqlToJavaConverter.findCandidates(project, result.tableName)
                     // T-M37 P1：副表**全部**候选（alias → 列表；零/无别名 → 空），EDT 层按 joins 顺序分发
                     val subCandidates = SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
-                    candidates to subCandidates
+                    // 调用类 MPJ 能力（继承链实证）——VO 查询/多表生成据此选合法方法
+                    val callerMpj = SqlToJavaConverter.invocationHasMpj(project, callerField.text)
+                    Triple(candidates, subCandidates, callerMpj)
                 }
             } catch (t: Throwable) {
-                emptyList<SqlToJavaConverter.EntityCandidate>() to emptyMap()
+                Triple(emptyList<SqlToJavaConverter.EntityCandidate>(), emptyMap(), false)
             }
             ApplicationManager.getApplication().invokeLater {
                 cacheCandidates = payload.first
-                // 副表候选按 joins 顺序逐个处理：多候选弹窗（onSelect 里继续下一个），
-                // ≤1 直接并入，全部处理完统一 render（EDT 异步回调链）
+                callerMpj = payload.third
+                val manualEnabled = manualEntitySelectionEnabled()
+                // 手动选择实体弹窗分支（开关开启时）：
+                //  - JOIN 多表 → 主表 + 副表一次多选（替代 T-M37 逐表弹窗）；
+                //  - 主表 0 候选（无 JOIN）→ 单行主表手动挑选（自动推断兜底）。
+                if (manualEnabled && result.joins.isNotEmpty()) {
+                    showEntitySelection(result, payload.first, payload.second, format)
+                    return@invokeLater
+                }
+                if (manualEnabled && payload.first.isEmpty()) {
+                    showEntitySelection(result, payload.first, payload.second, format)
+                    return@invokeLater
+                }
+                // 现状：副表候选逐表处理（开关关闭时多候选不弹窗，取第一个）
                 resolveSubEntities(payload.second, result.joins) { subEntities ->
                     cacheSubEntities = subEntities
                     render(result, payload.first, format, subEntities)
                 }
             }
         }
+    }
+
+    /** 手动选择实体类开关（测试环境 settings 未注册时默认开）。 */
+    private fun manualEntitySelectionEnabled(): Boolean = runCatching {
+        settingsState().reverseManualEntitySelection
+    }.getOrDefault(true)
+
+    /**
+     * 实体选择弹窗（自动推断兜底/多表一次多选）：
+     * 弹窗前先写回落结果（取消后不空白），确认后按选中实体重新生成。
+     */
+    private fun showEntitySelection(
+        result: SqlReverseResult,
+        mainCandidates: List<SqlToJavaConverter.EntityCandidate>,
+        subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
+        format: ReverseWrapperFormat,
+    ) {
+        // 先回落显示（弹窗取消 → 保持字符串列名结果）
+        setResultText(generateCode(result, null, format))
+        status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), error = false)
+        val rows = buildList {
+            add(
+                EntitySelectionDialog.TableRow(
+                    key = EntitySelectionDialog.MAIN_KEY,
+                    label = "${MpSqlVisualizerBundle.message("dialog.selectEntity.mainTable")} ${result.tableName}",
+                    candidates = mainCandidates.map { it.psiClass },
+                ),
+            )
+            result.joins.forEach { join ->
+                join.alias?.let { alias ->
+                    add(
+                        EntitySelectionDialog.TableRow(
+                            key = alias,
+                            label = "${MpSqlVisualizerBundle.message("dialog.selectEntity.joinTable")} $alias ${join.tableName}",
+                            candidates = subCandidates[alias].orEmpty().map { it.psiClass },
+                        ),
+                    )
+                }
+            }
+        }
+        EntitySelectionDialog(project, rows) { selections ->
+            val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
+            cacheCandidates = listOfNotNull(main)
+            val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+            result.joins.forEach { join ->
+                val alias = join.alias ?: return@forEach
+                selections[alias]?.let { psi ->
+                    toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                }
+            }
+            cacheSubEntities = subEntities
+            render(result, listOfNotNull(main), format, subEntities)
+        }.show()
     }
 
     /**
@@ -501,6 +591,11 @@ class SqlToJavaPanel(
                         continue
                     }
                     else -> {
+                        // 开关关闭 → 不弹任何选择框，取第一个（纯自动推断）
+                        if (!manualEntitySelectionEnabled()) {
+                            toSubEntity(candidates[0])?.let { subEntities[alias] = it }
+                            continue
+                        }
                         // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
                         val displayTexts = candidates.map { c ->
                             SqlSelectionDialog.displayText(
@@ -587,7 +682,7 @@ class SqlToJavaPanel(
         val caller = callerField.text.trim()
         if (caller.isEmpty()) return null
         val vo = voField.text.trim().ifEmpty { null }
-        return JavaCodeGenerator.InvocationTarget(caller, vo)
+        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj)
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
@@ -597,17 +692,13 @@ class SqlToJavaPanel(
         format: ReverseWrapperFormat,
         subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
     ) {
-        val invocation = buildInvocation()
-        val generate = { candidate: SqlToJavaConverter.EntityCandidate? ->
-            SqlToJavaConverter.generateCode(result, candidate, format, invocation, subEntities)
-        }
         when (candidates.size) {
             0 -> {
-                setResultText(generate(null))
+                setResultText(generateCode(result, null, format))
                 status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), error = false)
             }
             1 -> {
-                setResultText(generate(candidates[0]))
+                setResultText(generateCode(result, candidates[0], format, subEntities))
                 status(
                     joinStatus(
                         result,
@@ -617,6 +708,18 @@ class SqlToJavaPanel(
                 )
             }
             else -> {
+                // 开关关闭 → 不弹任何选择框，取第一个（纯自动推断）
+                if (!manualEntitySelectionEnabled()) {
+                    setResultText(generateCode(result, candidates[0], format, subEntities))
+                    status(
+                        joinStatus(
+                            result,
+                            MpSqlVisualizerBundle.message("reverse.panel.status.entity", candidates[0].psiClass.name ?: ""),
+                        ),
+                        error = false,
+                    )
+                    return
+                }
                 val displayTexts = candidates.map { c ->
                     SqlSelectionDialog.displayText(
                         "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
@@ -624,7 +727,7 @@ class SqlToJavaPanel(
                     )
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->
-                    setResultText(generate(selected))
+                    setResultText(generateCode(result, selected, format, subEntities))
                     status(
                         MpSqlVisualizerBundle.message("reverse.panel.status.entity", selected.psiClass.name ?: ""),
                         error = false,
@@ -633,6 +736,20 @@ class SqlToJavaPanel(
             }
         }
     }
+
+    /** 面板级生成（调用上下文 + 副实体归属）。 */
+    private fun generateCode(
+        result: SqlReverseResult,
+        candidate: SqlToJavaConverter.EntityCandidate?,
+        format: ReverseWrapperFormat,
+        subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
+    ): String = SqlToJavaConverter.generateCode(
+        result,
+        candidate,
+        format,
+        buildInvocation(),
+        subEntities,
+    )
 
     /** 反向转换配置形态（测试环境 settings 未注册时默认 AUTO）。 */
     private fun reverseFormat(): ReverseWrapperFormat = runCatching {
@@ -685,6 +802,11 @@ class SqlToJavaPanel(
 
     /** 测试访问器：调用类选择字段。 */
     internal fun callerFieldForTest(): ClassPickerField = callerField
+
+    /** 测试访问器：注入调用类 MPJ 能力（真实解析依赖索引，Light 环境不可测——见 InvocationMpjHeavyTest）。 */
+    internal fun setCallerMpjForTest(value: Boolean) {
+        callerMpj = value
+    }
 
     /** 测试访问器：返回 VO 选择字段。 */
     internal fun voFieldForTest(): ClassPickerField = voField

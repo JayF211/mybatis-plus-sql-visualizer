@@ -414,10 +414,82 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `参数占位符_降级Raw透传`() {
+    fun `参数占位符_建模Placeholder`() {
         val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = ?")
-        val raw = result.conditions.single() as Condition.Raw
-        assertEquals("a = ?", raw.sqlText)
+        val simple = result.conditions.single() as Condition.Simple
+        assertEquals("=", simple.op)
+        assertTrue(simple.value is SqlValue.Placeholder)
+        assertEquals(0, result.warnings.size)
+    }
+
+    @Test
+    fun `参数占位符_各比较算子`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a != ? AND b > ? AND c >= ? AND d < ? AND e <= ? AND f <> ?")
+        val ops = listOf("!=", ">", ">=", "<", "<=", "<>")
+        assertEquals(6, result.conditions.size)
+        result.conditions.forEachIndexed { i, c ->
+            val simple = c as Condition.Simple
+            assertEquals(ops[i], simple.op)
+            assertTrue("第 $i 个条件应为占位符", simple.value is SqlValue.Placeholder)
+        }
+        assertEquals(0, result.warnings.size)
+    }
+
+    @Test
+    fun `参数占位符_IN与BETWEEN`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a IN (?, ?) AND b BETWEEN ? AND ?")
+        val inCond = result.conditions[0] as Condition.In
+        assertTrue(inCond.values.all { it is SqlValue.Placeholder })
+        val between = result.conditions[1] as Condition.Between
+        assertTrue(between.lo is SqlValue.Placeholder)
+        assertTrue(between.hi is SqlValue.Placeholder)
+    }
+
+    @Test
+    fun `参数占位符_LIKE映射NONE`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a LIKE ?")
+        val like = result.conditions.single() as Condition.Like
+        assertEquals(LikePosition.NONE, like.position)
+        assertTrue(like.pattern is SqlValue.Placeholder)
+        val negated = SqlReverseParser.parse("SELECT * FROM t WHERE a NOT LIKE ?")
+        assertTrue((negated.conditions.single() as Condition.Like).negated)
+    }
+
+    @Test
+    fun `参数占位符_UPDATE_SET值`() {
+        val result = SqlReverseParser.parse("UPDATE t SET a = ? WHERE b = ?")
+        assertEquals(ReverseStatementKind.UPDATE, result.kind)
+        assertTrue(result.sets.single().value is SqlValue.Placeholder)
+        assertTrue((result.conditions.single() as Condition.Simple).value is SqlValue.Placeholder)
+    }
+
+    @Test
+    fun `参数占位符_INSERT多行值`() {
+        val result = SqlReverseParser.parse("INSERT INTO t (a, b) VALUES (?, ?), (?, ?)")
+        assertEquals(ReverseStatementKind.INSERT, result.kind)
+        assertEquals(2, result.insertValues.size)
+        result.insertValues.forEach { row ->
+            assertEquals(2, row.size)
+            assertTrue(row.all { it is SqlValue.Placeholder })
+        }
+    }
+
+    @Test
+    fun `参数占位符_LIMIT偏移形态`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = ? LIMIT ?, ?")
+        assertTrue(result.limit?.offset is SqlValue.Placeholder)
+        assertTrue(result.limit?.count is SqlValue.Placeholder)
+        val single = SqlReverseParser.parse("SELECT * FROM t LIMIT ?")
+        assertNull(single.limit?.offset)
+        assertTrue(single.limit?.count is SqlValue.Placeholder)
+    }
+
+    @Test
+    fun `参数占位符与函数降级_混合边界`() {
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE a = ? AND DATE_FORMAT(create_time, '%Y') = '2024'")
+        assertEquals(2, result.conditions.size)
+        assertTrue((result.conditions[0] as Condition.Simple).value is SqlValue.Placeholder)
+        assertTrue(result.conditions[1] is Condition.Raw)
         assertEquals(1, result.warnings.size)
     }
 

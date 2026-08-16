@@ -111,6 +111,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var reverseWrapperFormat: String = REVERSE_AUTO,
 
+        /**
+         * 允许手动选择实体类（默认开）：自动推断（类名推断 + @TableName 反查）未命中或
+         * 多表 JOIN 时，弹实体选择弹窗让用户从项目类中手动挑选（借助实体做列→字段映射）；
+         * 关闭后保持纯自动推断——未命中直接回落字符串列名形态，不弹任何选择框。
+         */
+        var reverseManualEntitySelection: Boolean = true,
+
         // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
 
         /** 日志 SQL 前缀（Preparing 行定位关键字）。 */

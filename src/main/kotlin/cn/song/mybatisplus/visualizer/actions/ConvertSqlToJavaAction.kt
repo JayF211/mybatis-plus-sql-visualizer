@@ -1,10 +1,12 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
 import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
+import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
 import cn.song.mybatisplus.visualizer.ui.JavaCodePreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -62,19 +64,22 @@ class ConvertSqlToJavaAction : AnAction() {
         // 2. 实体查找（PSI 索引访问 → 后台 ReadAction）；QUERY 形态无需实体（跳过查找）
         val format = reverseFormat()
         if (format == ReverseWrapperFormat.QUERY) {
-            showResult(project, result, emptyList(), format)
+            showResult(project, result, emptyList(), format, emptyMap())
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
-            val candidates = try {
-                ReadAction.compute<List<SqlToJavaConverter.EntityCandidate>, Throwable> {
-                    SqlToJavaConverter.findCandidates(project, result.tableName)
+            val payload = try {
+                ReadAction.compute<Pair<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>>, Throwable> {
+                    val candidates = SqlToJavaConverter.findCandidates(project, result.tableName)
+                    // 副表候选（JOIN 手动多选弹窗用）
+                    val subCandidates = SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
+                    candidates to subCandidates
                 }
             } catch (t: Throwable) {
-                emptyList()
+                emptyList<SqlToJavaConverter.EntityCandidate>() to emptyMap()
             }
             ApplicationManager.getApplication().invokeLater {
-                showResult(project, result, candidates, format)
+                showResult(project, result, payload.first, format, payload.second)
             }
         }
     }
@@ -84,13 +89,62 @@ class ConvertSqlToJavaAction : AnAction() {
         ReverseWrapperFormat.fromPersisted(PluginSettings.getInstance().state.reverseWrapperFormat)
     }.getOrDefault(ReverseWrapperFormat.AUTO)
 
-    /** 结果分发：无候选回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。 */
+    /** 手动选择实体类开关（测试环境 settings 未注册时默认开）。 */
+    private fun manualEntitySelectionEnabled(): Boolean = runCatching {
+        PluginSettings.getInstance().state.reverseManualEntitySelection
+    }.getOrDefault(true)
+
+    /**
+     * 结果分发：0 候选且开关开 → 手动选择弹窗（单行主表兜底）；
+     * JOIN 且开关开 → 手动选择弹窗（主表 + 副表一次多选）；
+     * 否则：无候选回落 QueryWrapper；唯一候选直接生成；多候选选择后生成。
+     */
     private fun showResult(
         project: Project,
         result: SqlReverseResult,
         candidates: List<SqlToJavaConverter.EntityCandidate>,
         format: ReverseWrapperFormat,
+        subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
     ) {
+        if (manualEntitySelectionEnabled() && (result.joins.isNotEmpty() || candidates.isEmpty())) {
+            val rows = buildList {
+                add(
+                    EntitySelectionDialog.TableRow(
+                        key = EntitySelectionDialog.MAIN_KEY,
+                        label = "${MpSqlVisualizerBundle.message("dialog.selectEntity.mainTable")} ${result.tableName}",
+                        candidates = candidates.map { it.psiClass },
+                    ),
+                )
+                result.joins.forEach { join ->
+                    join.alias?.let { alias ->
+                        add(
+                            EntitySelectionDialog.TableRow(
+                                key = alias,
+                                label = "${MpSqlVisualizerBundle.message("dialog.selectEntity.joinTable")} $alias ${join.tableName}",
+                                candidates = subCandidates[alias].orEmpty().map { it.psiClass },
+                            ),
+                        )
+                    }
+                }
+            }
+            EntitySelectionDialog(project, rows) { selections ->
+                val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
+                val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                result.joins.forEach { join ->
+                    val alias = join.alias ?: return@forEach
+                    selections[alias]?.let { psi ->
+                        toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                    }
+                }
+                if (main != null) {
+                    showCodeDialog(project, result, main, format, subEntities)
+                } else {
+                    // 主表未指定实体 → 回落字符串列名形态
+                    JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, null, format)).show()
+                }
+            }.show()
+            return
+        }
         when (candidates.size) {
             0 -> JavaCodePreviewDialog(
                 project,
@@ -112,14 +166,24 @@ class ConvertSqlToJavaAction : AnAction() {
         }
     }
 
+    /** 手动选择实体 → 生成用副实体目标（类名缺失跳过）。 */
+    private fun toSubEntity(candidate: SqlToJavaConverter.EntityCandidate): JavaCodeGenerator.EntityTarget? {
+        val className = candidate.psiClass.name ?: return null
+        return JavaCodeGenerator.EntityTarget(
+            className = className,
+            columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
+        )
+    }
+
     /** 生成并展示代码（形态由配置分发，T-M36.3）。 */
     private fun showCodeDialog(
         project: Project,
         result: SqlReverseResult,
         candidate: SqlToJavaConverter.EntityCandidate,
         format: ReverseWrapperFormat,
+        subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
     ) {
-        JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, candidate, format)).show()
+        JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, candidate, format, subEntities = subEntities)).show()
     }
 
     private fun showNoSelection(project: Project) {

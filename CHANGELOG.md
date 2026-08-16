@@ -2,6 +2,18 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
+## [2026.8.17] - 2026-08-16
+
+### Added
+
+- **调用类继承链实证 MP/MPJ 能力**：选择调用类后自动解析其继承体系（`MPJBaseService`/`JoinService`/`MPJBaseMapper`/`JoinMapper`）——有 MPJ 能力时 VO 查询生成 `selectJoinList` 族 + MPJ wrapper；无 MPJ 能力时 VO 自动回落实体查询（`list/page`）并注释提示，多表 JOIN/删除明确报错——生成的代码只调用真实存在的方法
+- **MP/MPJ 全量 API 实证审计**：对生成器全部调用方法逐一反编译核实（MP 3.5.14 + MPJ 1.5.6）——MP 侧全部通过（list/page/selectList/selectPage/save/saveBatch/update/remove/insert/delete 及全部条件方法）；MPJ 侧修复两处编译隐患：字符串 raw join（副实体缺失/ON 多条件）统一回落 MPJQueryWrapper（MPJLambdaWrapper 无 leftJoin(String)）；多表删除改 `new DeleteJoinWrapper<>(User.class)` + `.delete("t", "t1")`（1.5.6 无多类构造），无法映射时明确报错——保证生成的代码可编译
+- **SQL→Java 调用形态按 MPJ 1.5.6 实证重写**：方法名表经用户本地 MPJ 1.5.6 jar 反编译核实——移除了不存在的 `listVo/pageVo/selectVoPage/selectVoList`，改用真实方法：VO 查询 `selectJoinList(Vo.class, wrapper)`、分页+VO `selectJoinListPage(page, Vo.class, wrapper)`（Mapper 为 `selectJoinPage`）；VO 场景自动强制 MPJ wrapper（selectJoinList 参数类型要求）；调用类改为驼峰首字母小写实例变量调用（`bannerService.page(...)` 而非 `BannerService.page(...)`），复制即可编译使用
+- **SQL→Java 调用形态修正**：分页 SQL（含 `LIMIT ?, ?`）自动生成 `page(new Page<>(current, size), wrapper)` 分页调用（Mapper 为 selectPage），不再错误生成 `list` + `.last("LIMIT...")`；VO 类与实体同名时回落普通 `list/selectList`；调用类/VO 字段的关闭按钮改为 16×16 紧凑原生图标（原按钮过大）
+- **手动选择实体类（可选开关）**：SQL→Java 反向转换在自动推断不好推断时支持手动指定实体——多表 JOIN 一次弹窗多选（主表 + 副表逐行，自动候选预选、Goto Class 手动挑选、可清除）；主表 0 候选时弹单行选择框兜底（取消回落字符串列名）；设置页新增「自动推断失败时允许手动选择实体类」开关（默认开，关闭后纯自动推断不弹任何选择框）
+- **AUTO 形态优先对象引用（@TableName 反查）**：SQL→Java 反向转换 AUTO 模式在实体类名与表名驼峰不一致时（如 `AccountRoleRelEntity` ↔ `sys_account_role_rel`）也能自动找到实体——类名推断未命中时全量扫描项目类的 `@TableName` 注解值与推断表名反查匹配；找到实体即生成 `LambdaQueryWrapper` + 方法引用（`Entity::getX`）形态，找不到才回落字符串列名
+- **SQL→Java 反向识别 `?` 参数占位符（round-trip 修复）**：正向 Java→SQL 产生的 `?` 参数（如 `WHERE role_id = ?`）反向转换时不再降级 `apply()`——`= ?` 转 `.eq`、`!= ?`/`<> ?` 转 `.ne`、`> ?`/`>= ?`/`< ?`/`<= ?` 转 `.gt/.ge/.lt/.le`、`IN (?, ?)` 转 `.in`、`BETWEEN ? AND ?` 转 `.between`、`LIKE ?` 转 `.like`；UPDATE SET 值转 `.set`、INSERT `VALUES (?)` 转实体 setter 链、`LIMIT ?, ?` 转 `.last("LIMIT ?, ?")`；生成代码头部统一注释提示「已生成 "?" 占位，请替换为实际参数」
+
 ## [2026.8.16] - 2026-08-16
 
 ### Added

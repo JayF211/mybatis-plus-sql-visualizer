@@ -65,12 +65,20 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     }
 
     fun testConvertNoEntityFallsBackToQueryWrapper() {
-        panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
-        panel.convertForTest()
-        val result = awaitResult()
-        assertTrue(result, result.contains("new QueryWrapper<User>()"))
-        assertTrue(result, result.contains(".eq(\"name\", \"张三\")"))
-        assertTrue(panel.statusForTest(), panel.statusForTest().contains("未找到对应实体"))
+        // 手动选择开关关闭 → 0 候选直接回落（开关开启的弹窗路径由 EntitySelectionDialogTest 覆盖）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseManualEntitySelection
+        state.reverseManualEntitySelection = false
+        try {
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("new QueryWrapper<User>()"))
+            assertTrue(result, result.contains(".eq(\"name\", \"张三\")"))
+            assertTrue(panel.statusForTest(), panel.statusForTest().contains("未找到对应实体"))
+        } finally {
+            state.reverseManualEntitySelection = original
+        }
     }
 
     fun testConvertParseErrorShowsStatus() {
@@ -150,12 +158,19 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testConvertJoinFallsBackToMpjQueryWithoutEntities() {
-        // 无实体：副表候选为空 → 跳过（该表列回落字符串），主表也无候选 → MPJ_QUERY raw join
-        panel.inputEditorForTest().setSql("SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1")
-        panel.convertForTest()
-        val result = awaitResult()
-        assertTrue(result, result.contains("new MPJQueryWrapper<>"))
-        assertTrue(result, result.contains("leftJoin(\"address t1 ON t1.user_id = t.id\")"))
+        // 无实体：手动选择开关关闭 → 副表候选为空 → 跳过（该表列回落字符串），主表也无候选 → MPJ_QUERY raw join
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseManualEntitySelection
+        state.reverseManualEntitySelection = false
+        try {
+            panel.inputEditorForTest().setSql("SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1")
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("new MPJQueryWrapper<>"))
+            assertTrue(result, result.contains("leftJoin(\"address t1 ON t1.user_id = t.id\")"))
+        } finally {
+            state.reverseManualEntitySelection = original
+        }
     }
 
     fun testFindSubEntityCandidatesKeysByAlias() {
@@ -314,7 +329,7 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）
             panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService")
             val result = panel.resultTextForTest()
-            assertTrue(result, result.contains("UserService.list"))
+            assertTrue(result, result.contains("userService.list"))
             // 清除 → 回到纯表达式
             panel.callerFieldForTest().clearForTest()
             val plain = panel.resultTextForTest()
@@ -337,16 +352,63 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             panel.voFieldForTest().text = "UserVo"
             panel.convertForTest()
             val result = panel.resultTextForTest()
+            // Light 环境无 MPJ 接口 → 调用类无 MPJ 能力 → VO 回落实体查询并注释（严禁生成不存在的 API）
             assertTrue(result, result.contains("QueryWrapper<User> wrapper = new QueryWrapper<User>()"))
-            assertTrue(result, result.contains("List<UserVo> list = UserService.listVo(wrapper, UserVo.class);"))
+            assertTrue(result, result.contains("List<User> list = userService.list(wrapper);"))
+            assertTrue(result, result.contains("// 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询"))
+            assertTrue(result, !result.contains("selectJoinList"))
 
             // 清空 VO → 普通 list 调用
             panel.voFieldForTest().text = ""
             panel.convertForTest()
             val plain = panel.resultTextForTest()
-            assertTrue(plain, plain.contains("List<User> list = UserService.list(wrapper);"))
+            assertTrue(plain, plain.contains("List<User> list = userService.list(wrapper);"))
         } finally {
             state.reverseWrapperFormat = original
+        }
+    }
+
+    fun testCallerWithMpjInjectedGeneratesSelectJoinList() {
+        // MPJ 能力真实解析依赖索引（Light 不可测，见 InvocationMpjHeavyTest）——此处注入验证面板接线：
+        // callerMpj=true → buildInvocation 携带 mpj → VO 查询生成 selectJoinList + MPJ wrapper
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.callerFieldForTest().text = "UserService"
+            panel.voFieldForTest().text = "UserVo"
+            panel.setCallerMpjForTest(true)
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("new MPJQueryWrapper<>(User.class)"))
+            assertTrue(result, result.contains("List<UserVo> list = userService.selectJoinList(UserVo.class, wrapper);"))
+        } finally {
+            state.reverseWrapperFormat = original
+            panel.callerFieldForTest().text = ""
+            panel.voFieldForTest().text = ""
+            panel.setCallerMpjForTest(false)
+        }
+    }
+
+
+    fun testPagedQueryGeneratesPageCall() {
+        // 分页 SQL（LIMIT ?, ?）+ 调用类 → 生成 page 调用（不再 last + list）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql("SELECT * FROM user WHERE id = 1 LIMIT ?, ?")
+            panel.callerFieldForTest().text = "UserService"
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("Page<User> page = userService.page(new Page<>(1, 10), wrapper);"))
+            assertTrue(result, !result.contains(".last(\"LIMIT"))
+        } finally {
+            state.reverseWrapperFormat = original
+            panel.callerFieldForTest().text = ""
         }
     }
 }

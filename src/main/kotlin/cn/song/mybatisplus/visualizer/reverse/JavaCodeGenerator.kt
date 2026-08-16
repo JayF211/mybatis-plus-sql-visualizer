@@ -45,6 +45,10 @@ object JavaCodeGenerator {
     data class InvocationTarget(
         val callerClass: String,
         val voClass: String? = null,
+        /** 调用类是否具备 MPJ 能力（继承链含 MPJBaseService/JoinService/MPJBaseMapper/JoinMapper）——
+         * 由调用方解析（SqlToJavaConverter.invocationHasMpj）；false 时 VO 查询回落实体查询
+         * （严禁生成不存在的 selectJoinList 族方法）。 */
+        val mpj: Boolean = false,
     )
 
     /** 生成完整代码片段（字符串列名 QueryWrapper 形态）。 */
@@ -85,11 +89,29 @@ object JavaCodeGenerator {
         val sb = StringBuilder()
         appendHeader(sb, result, entity, wrapperKind, invocation)
         val isJoin = result.joins.isNotEmpty()
-        // T-M37：多表强制 MPJ 形态（converter 已分发；此处按 joins 防御兜底）
-        val effectiveKind = if (isJoin && wrapperKind !in JOIN_WRAPPERS) {
-            if (entity != null) GeneratedWrapper.MPJ_LAMBDA else GeneratedWrapper.MPJ_QUERY
-        } else {
-            wrapperKind
+        // VO 查询（selectJoinList 族）参数类型为 MPJBaseJoin——须调用类具备 MPJ 能力（继承链实证）
+        // 且 wrapper 强制 MPJ 形态；调用类无 MPJ 时 VO 回落实体查询（selectInvocation 内注释提示）
+        val voQuery = invocation != null && invocation.mpj &&
+            invocation.voClass != null &&
+            invocation.voClass != (entity?.className ?: entityClassName(result.tableName))
+        // 多表 JOIN 依赖 MPJ wrapper 库类——调用类已选定且无 MPJ 能力时无法生成可编译代码，明确报错
+        if (isJoin && invocation != null && !invocation.mpj) {
+            throw SqlReverseException(
+                0,
+                SqlReverseParser.KEY_UNSUPPORTED,
+                "多表 JOIN 需要 MyBatis-Plus-Join（MPJ）依赖，但调用类 ${invocation.callerClass} 无 MPJ 能力",
+            )
+        }
+        // T-M37：多表强制 MPJ 形态；字符串 raw join（副实体缺失/ON 多条件）仅 StringJoin（MPJQueryWrapper）
+        // 合法——MPJLambdaWrapper 无 leftJoin(String)（1.5.6 实证），不能 lambda 化时一律回落 MPJ_QUERY
+        // 保证编译（含用户显式选择 MPJ_LAMBDA 的场景）
+        val effectiveKind = when {
+            isJoin && !result.joins.all { canLambdaJoin(it, entity) } -> GeneratedWrapper.MPJ_QUERY
+            wrapperKind in JOIN_WRAPPERS -> wrapperKind
+            isJoin && entity != null -> GeneratedWrapper.MPJ_LAMBDA
+            isJoin -> GeneratedWrapper.MPJ_QUERY
+            voQuery -> if (entity != null) GeneratedWrapper.MPJ_LAMBDA else GeneratedWrapper.MPJ_QUERY
+            else -> wrapperKind
         }
         val chain = buildString {
             if (isJoin) {
@@ -106,7 +128,10 @@ object JavaCodeGenerator {
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
                 result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
-                result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
+                // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
+                if (result.limit != null && invocation == null) {
+                    append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
+                }
             } else {
                 if (result.selectColumns != null && result.selectColumns.isNotEmpty()) {
                     append("\n    .select(")
@@ -115,7 +140,10 @@ object JavaCodeGenerator {
                 }
                 result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
-                result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
+                // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
+                if (result.limit != null && invocation == null) {
+                    append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
+                }
             }
         }
         val wrapperClass = wrapperClassFor(QUERY_WRAPPER_CLASSES, entity, effectiveKind)
@@ -140,25 +168,34 @@ object JavaCodeGenerator {
     /**
      * JOIN 链渲染（T-M37）：ON 单等值列对且主副实体均可映射 → MPJ 三参
      * `leftJoin(副实体.class, 副::getX, 主::getY)`；否则字符串 raw join
-     * `leftJoin("address t1 ON <原文>")`（MPJ leftJoin(String) 形态）。
+     * `leftJoin("address t1 ON <原文>")`（仅 StringJoin 形态——MPJQueryWrapper 合法，
+     * MPJLambdaWrapper 无 leftJoin(String)，1.5.6 实证；形态分发见 generateSelect.canLambdaJoin）。
      */
     private fun renderJoins(result: SqlReverseResult, entity: EntityTarget?): List<String> =
         result.joins.map { join ->
-            val single = join.onConditions.singleOrNull() as? Condition.ColumnComparison
-            val sub = join.alias?.let { entity?.subEntities?.get(it) }
-            if (single != null && sub != null) {
-                val leftField = sub.columnToField[single.left.columnName]
-                val rightField = entity?.columnToField?.get(single.right.columnName)
-                if (leftField != null && rightField != null) {
-                    return@map "${joinMethod(join.type)}(${sub.className}.class, " +
-                        "${sub.className}::get${leftField.replaceFirstChar { it.uppercase() }}, " +
-                        "${entity?.className}::get${rightField.replaceFirstChar { it.uppercase() }})"
-                }
+            if (canLambdaJoin(join, entity)) {
+                val single = join.onConditions.single() as Condition.ColumnComparison
+                val sub = entity!!.subEntities[join.alias]!!
+                val leftField = sub.columnToField[single.left.columnName]!!
+                val rightField = entity.columnToField[single.right.columnName]!!
+                "${joinMethod(join.type)}(${sub.className}.class, " +
+                    "${sub.className}::get${leftField.replaceFirstChar { it.uppercase() }}, " +
+                    "${entity.className}::get${rightField.replaceFirstChar { it.uppercase() }})"
+            } else {
+                val onText = join.rawOn ?: join.onConditions.joinToString(" AND ") { renderRawCondition(it) }
+                val tablePart = join.tableName + (join.alias?.let { " $it" } ?: "")
+                "${joinMethod(join.type)}(\"$tablePart ON $onText\")"
             }
-            val onText = join.rawOn ?: join.onConditions.joinToString(" AND ") { renderRawCondition(it) }
-            val tablePart = join.tableName + (join.alias?.let { " $it" } ?: "")
-            "${joinMethod(join.type)}(\"$tablePart ON $onText\")"
         }
+
+    /** join 是否可三参 lambda 化（单等值列对 + 主副实体列均可映射）——否则须字符串形态（StringJoin）。 */
+    private fun canLambdaJoin(join: ReverseJoin, entity: EntityTarget?): Boolean {
+        val single = join.onConditions.singleOrNull() as? Condition.ColumnComparison ?: return false
+        val sub = join.alias?.let { entity?.subEntities?.get(it) } ?: return false
+        val leftField = sub.columnToField[single.left.columnName]
+        val rightField = entity?.columnToField?.get(single.right.columnName)
+        return leftField != null && rightField != null
+    }
 
     /** 条件 → SQL 文本（raw join 的 ON 原文重建；仅 ColumnComparison/Simple 等结构化形态）。 */
     private fun renderRawCondition(condition: Condition): String = when (condition) {
@@ -172,6 +209,10 @@ object JavaCodeGenerator {
 
     /** MPJ 形态集合（多表强制分发判定）。 */
     private val JOIN_WRAPPERS = setOf(GeneratedWrapper.MPJ_LAMBDA, GeneratedWrapper.MPJ_QUERY)
+
+    /** 调用类 → 实例变量名（驼峰首字母小写：`BannerService` → `bannerService`）——生成变量调用形式，复制即用。 */
+    private fun callerVar(invocation: InvocationTarget): String =
+        invocation.callerClass.replaceFirstChar { it.lowercaseChar() }
 
     /** UPDATE：UpdateWrapper 链（set/setSql）+ 条件；带调用类 → Service.update / Mapper.update(null, wrapper)。 */
     private fun generateUpdate(
@@ -204,9 +245,9 @@ object JavaCodeGenerator {
         val entityName = entity?.className ?: entityClassName(result.tableName)
         return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
             if (isMapper(invocation!!)) {
-                "${invocation.callerClass}.update(null, wrapper);"
+                "${callerVar(invocation)}.update(null, wrapper);"
             } else {
-                "${invocation.callerClass}.update(wrapper);"
+                "${callerVar(invocation)}.update(wrapper);"
             }
         }
     }
@@ -234,18 +275,30 @@ object JavaCodeGenerator {
                 // DeleteJoinWrapper 构造需要实体类（无字符串形态），无实体上下文无法生成
                 throw SqlReverseException(0, SqlReverseParser.KEY_UNSUPPORTED, "多表删除需要实体类上下文")
             }
-            // 副实体类：按 join 别名在 subEntities 查找；缺失回落主实体类名并注释提醒
-            val subClasses = result.joins.map { join ->
-                val sub = join.alias?.let { entity.subEntities[it] }
-                if (sub != null) {
-                    sub.className
-                } else {
-                    sb.append("// 注意：联表 ${join.tableName} 未找到对应实体，DeleteJoinWrapper 副类回落 ${entity.className}\n")
-                    entity.className
-                }
+            // DeleteJoinWrapper 是 MPJ 库类——调用类已选定且无 MPJ 能力时无法编译，明确报错
+            if (invocation != null && !invocation.mpj) {
+                throw SqlReverseException(
+                    0,
+                    SqlReverseParser.KEY_UNSUPPORTED,
+                    "多表删除需要 MyBatis-Plus-Join（MPJ）依赖，但调用类 ${invocation.callerClass} 无 MPJ 能力",
+                )
             }
-            val subPart = if (subClasses.isEmpty()) "" else ", " + subClasses.joinToString(", ") { "$it.class" }
+            // 1.5.6 实证：DeleteJoinWrapper 无 (Class, Class...) 多类构造；删除目标经 delete(String...)（表名/别名）
+            // 声明；join 链仅 lambda 形态（QueryJoin）——ON 非单等值列对或列映射缺失时字符串 join 编译不过，
+            // 明确报错优于生成不可编译代码
+            if (!result.joins.all { canLambdaJoin(it, entity) }) {
+                throw SqlReverseException(
+                    0,
+                    SqlReverseParser.KEY_UNSUPPORTED,
+                    "多表删除的 JOIN 无法映射为 lambda join（需单等值 ON 且主副实体字段齐全），无法生成 DeleteJoinWrapper",
+                )
+            }
             val chain = buildString {
+                if (result.deleteTargets.isNotEmpty()) {
+                    append("\n    .delete(")
+                        .append(result.deleteTargets.joinToString(", ") { "\"$it\"" })
+                        .append(")")
+                }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
                 result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
             }
@@ -256,8 +309,8 @@ object JavaCodeGenerator {
                 wrapperKind,
                 chain,
                 invocation,
-                invocationLine = { "${invocation!!.callerClass}.deleteJoin(wrapper);" },
-                headOverride = { "new DeleteJoinWrapper<>(${entity.className}.class$subPart)" },
+                invocationLine = { "${callerVar(invocation!!)}.deleteJoin(wrapper);" },
+                headOverride = { "new DeleteJoinWrapper<>(${entity.className}.class)" },
             )
         }
         // 单表删除：现状不变
@@ -270,9 +323,9 @@ object JavaCodeGenerator {
         val entityName = entity?.className ?: entityClassName(result.tableName)
         return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
             if (isMapper(invocation!!)) {
-                "${invocation.callerClass}.delete(wrapper);"
+                "${callerVar(invocation)}.delete(wrapper);"
             } else {
-                "${invocation.callerClass}.remove(wrapper);"
+                "${callerVar(invocation)}.remove(wrapper);"
             }
         }
     }
@@ -315,9 +368,9 @@ object JavaCodeGenerator {
             val chain = setterChain(rows.firstOrNull() ?: emptyList())
             val invocationLine = invocation?.let {
                 "$entityName $entityVar = $chain;\n\n" + if (isMapper(invocation)) {
-                    "${invocation.callerClass}.insert($entityVar);"
+                    "${callerVar(invocation)}.insert($entityVar);"
                 } else {
-                    "${invocation.callerClass}.save($entityVar);"
+                    "${callerVar(invocation)}.save($entityVar);"
                 }
             }
             return if (invocationLine != null) {
@@ -340,33 +393,83 @@ object JavaCodeGenerator {
         sb.append("\n")
         if (isMapper(invocation)) {
             rows.indices.forEach { i ->
-                sb.append("${invocation.callerClass}.insert($entityVar${i + 1});")
+                sb.append("${callerVar(invocation)}.insert($entityVar${i + 1});")
                 if (i < rows.lastIndex) sb.append("\n")
             }
         } else {
             val vars = rows.indices.joinToString(", ") { "$entityVar${it + 1}" }
-            sb.append("${invocation.callerClass}.saveBatch(Arrays.asList($vars));")
+            sb.append("${callerVar(invocation)}.saveBatch(Arrays.asList($vars));")
         }
         return sb.toString()
     }
 
-    /** SELECT 调用行：Service → list/listVo；Mapper → selectList/selectVoList（VO 需 MPJ）。 */
+    /**
+     * SELECT 调用行（分页/普通二选一；调用类 → 驼峰首字母小写实例变量，复制即用）。
+     *
+     * 方法名表全部经 MPJ 1.5.6 jar javap 实证（用户本地版本；`listVo/pageVo/selectVoPage/
+     * selectVoList` 均不存在——旧 1.2.x 名称，1.5.6 已移除）：
+     *  - 普通 → `list(wrapper)`（IService）/ `selectList(wrapper)`（BaseMapper）；
+     *  - 分页（SQL 含 LIMIT）→ `page(new Page<>(c, s), wrapper)` / `selectPage(...)`（MP 原生）；
+     *  - VO 查询（MPJ，VO 类名 ≠ 实体名）→ `selectJoinList(Vo.class, wrapper)`（JoinMapper/JoinService）；
+     *  - 分页 + VO → Service `selectJoinListPage(page, Vo.class, wrapper)` / Mapper `selectJoinPage(page, Vo.class, wrapper)`
+     *    （参数顺序：page 第一、VO class 第二、wrapper 第三——1.5.6 实证）。
+     *
+     * current/size 由 LIMIT 字面量推断（offset/size+1、count），占位符/推断不可靠时回落 1/10 并注释提示替换。
+     */
     private fun selectInvocation(
         result: SqlReverseResult,
         entity: EntityTarget?,
         invocation: InvocationTarget,
     ): String {
         val entityName = entity?.className ?: entityClassName(result.tableName)
-        val vo = invocation.voClass
+        val voRequested = invocation.voClass?.takeIf { it != entityName }
+        // VO 查询依赖 MPJ 能力（调用类继承链实证）；无 MPJ → 回落实体查询并注释提示
+        val vo = voRequested?.takeIf { invocation.mpj }
+        val voUnsupported = voRequested != null && vo == null
         val generic = vo ?: entityName
+        val paged = result.limit != null
         val method = if (isMapper(invocation)) {
-            if (vo != null) "selectVoList" else "selectList"
+            when {
+                paged && vo != null -> "selectJoinPage"
+                paged -> "selectPage"
+                vo != null -> "selectJoinList"
+                else -> "selectList"
+            }
         } else {
-            if (vo != null) "listVo" else "list"
+            when {
+                paged && vo != null -> "selectJoinListPage"
+                paged -> "page"
+                vo != null -> "selectJoinList"
+                else -> "list"
+            }
         }
-        val arg = if (vo != null) ", $vo.class" else ""
-        return "List<$generic> list = ${invocation.callerClass}.$method(wrapper$arg);" +
-            if (vo != null) "  // VO 查询需 MyBatis-Plus-Join" else ""
+        // 参数顺序（1.5.6 实证）：普通 `(wrapper)`；分页 `(page, wrapper)`；
+        // VO `(Vo.class, wrapper)`；分页+VO `(page, Vo.class, wrapper)`
+        val pageArg = if (paged) renderPageArg(result.limit!!) else ""
+        val args = buildString {
+            if (paged) append(pageArg).append(", ")
+            if (vo != null) append("$vo.class, ")
+            append("wrapper")
+        }
+        val prefix = if (paged) "Page<$generic> page = " else "List<$generic> list = "
+        val call = "$prefix${callerVar(invocation)}.$method($args);"
+        val comments = buildString {
+            if (voUnsupported) append("  // 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询")
+            if (vo != null) append("  // VO 查询需 MyBatis-Plus-Join（MPJ）依赖")
+            if (paged) append("  // 分页 current/size 已占位，请替换为实际参数")
+        }
+        return call + comments
+    }
+
+    /** 分页参数：`LIMIT count` → `new Page<>(1, count)`；`LIMIT offset, count` → offset/count+1；
+     * 占位符（`LIMIT ?, ?`）→ `new Page<>(1, 10)`（调用行注释提示替换）。 */
+    private fun renderPageArg(limit: cn.song.mybatisplus.visualizer.model.LimitClause): String {
+        val size = (limit.count as? SqlValue.Literal)?.raw ?: "10"
+        val sizeNum = size.toLongOrNull()
+        val current = (limit.offset as? SqlValue.Literal)?.raw?.toLongOrNull()?.let { offset ->
+            if (sizeNum != null && sizeNum > 0) (offset / sizeNum + 1).coerceAtLeast(1).toString() else "1"
+        } ?: "1"
+        return "new Page<>($current, $size)"
     }
 
     /** wrapper 变量化 + 调用行；无调用 → 纯表达式。headOverride 可定制构造表达式（如 DeleteJoinWrapper 多类构造）。 */
@@ -474,7 +577,31 @@ object JavaCodeGenerator {
         if (wrapperKind == GeneratedWrapper.MPJ_LAMBDA && entity != null) {
             sb.append("// 需引入 MyBatis-Plus-Join（MPJ）依赖\n")
         }
+        if (hasPlaceholder(result)) {
+            sb.append("// 注意：SQL 含参数占位符 ?，无法恢复实际参数，已生成 \"?\" 占位，请替换为实际参数\n")
+        }
         result.warnings.forEach { sb.append("// 注意：$it\n") }
+    }
+
+    /** 结果中是否存在 `?` 占位符（WHERE/SET/INSERT/LIMIT 任一位置）。 */
+    private fun hasPlaceholder(result: SqlReverseResult): Boolean {
+        fun scan(value: SqlValue?): Boolean = value is SqlValue.Placeholder
+
+        fun scanConditions(conditions: List<Condition>): Boolean = conditions.any { c ->
+            when (c) {
+                is Condition.Simple -> scan(c.value)
+                is Condition.In -> c.values.any { scan(it) }
+                is Condition.Between -> scan(c.lo) || scan(c.hi)
+                is Condition.Like -> scan(c.pattern)
+                is Condition.Group -> scanConditions(c.children)
+                else -> false
+            }
+        }
+
+        return scanConditions(result.conditions) ||
+            result.sets.any { scan(it.value) } ||
+            result.insertValues.any { row -> row.any { scan(it) } } ||
+            scan(result.limit?.offset) || scan(result.limit?.count)
     }
 
     /** 调用类是否为 Mapper（类名以 Mapper 结尾；否则按 Service 处理，注释提示）。 */
@@ -657,7 +784,7 @@ object JavaCodeGenerator {
 
     /** LIMIT 渲染（MySQL 形态；与 SqlGenerator MySqlDialect.renderLimit 对齐）。 */
     private fun renderLimit(limit: cn.song.mybatisplus.visualizer.model.LimitClause): String {
-        val offset = (limit.offset as? SqlValue.Literal)?.raw
+        val offset = limit.offset?.let { (it as? SqlValue.Literal)?.raw ?: "?" }
         val count = (limit.count as? SqlValue.Literal)?.raw ?: "?"
         return if (offset != null) "LIMIT $offset, $count" else "LIMIT $count"
     }

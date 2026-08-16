@@ -63,4 +63,30 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = old
         }
     }
+
+    fun testManualEntityToggleAppliesToState() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.reverseManualEntitySelection
+        try {
+            settings.state.reverseManualEntitySelection = false
+            val configurable = PluginSettingsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            panel.setManualEntityCheck(true)
+            assertTrue("勾选「手动选择实体类」应检测到变化", configurable.isModified())
+            configurable.apply()
+            assertTrue("apply 后 state.reverseManualEntitySelection 应为 true", settings.state.reverseManualEntitySelection)
+
+            panel.setManualEntityCheck(false)
+            assertTrue("取消勾选同样应检测到变化", configurable.isModified())
+            configurable.apply()
+            assertFalse("apply 后 state.reverseManualEntitySelection 应回 false", settings.state.reverseManualEntitySelection)
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致（无变化）", configurable.isModified())
+        } finally {
+            settings.state.reverseManualEntitySelection = old
+        }
+    }
 }

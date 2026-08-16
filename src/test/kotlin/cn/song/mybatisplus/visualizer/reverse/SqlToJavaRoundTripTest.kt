@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -216,7 +217,6 @@ class SqlToJavaRoundTripTest {
         for (sqlText in listOf(
             "SELECT * FROM `user` WHERE DATE_FORMAT(create_time, '%Y') = '2024'",
             "SELECT * FROM `user` WHERE a IN (SELECT id FROM u)",
-            "SELECT * FROM `user` WHERE a = ?",
         )) {
             val parsed = SqlReverseParser.parse(sqlText)
             val raw = parsed.conditions.single() as Condition.Raw
@@ -230,6 +230,28 @@ class SqlToJavaRoundTripTest {
             )
             assertEquals("SELECT id\nFROM `user`\nWHERE ${raw.sqlText}", sql2)
         }
+    }
+
+    @Test
+    fun `参数占位符_逐字符闭环`() {
+        // `?` 占位符：反向建模 Placeholder（不再降级 Raw），正向渲染 `?` → 反解结构一致（稳定不动点）
+        val sql1 = SqlGenerator.generate(
+            SelectStatement(
+                table = table,
+                selectColumns = listOf(ColumnRef(columnName = "id")),
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Placeholder("?")),
+                    Condition.In(ColumnRef(columnName = "b"), false, listOf(SqlValue.Placeholder("?"), SqlValue.Placeholder("?"))),
+                ),
+            ),
+        )
+        assertEquals("SELECT id\nFROM `user`\nWHERE a = ?\n    AND b IN (?, ?)", sql1)
+        val reparsed = SqlReverseParser.parse(sql1)
+        val first = reparsed.conditions[0] as Condition.Simple
+        assertTrue(first.value is SqlValue.Placeholder)
+        val second = reparsed.conditions[1] as Condition.In
+        assertTrue(second.values.all { it is SqlValue.Placeholder })
+        assertEquals(0, reparsed.warnings.size)
     }
 
     // ------------------------------------------------------------------

@@ -19,11 +19,14 @@ import cn.song.mybatisplus.visualizer.reverse.SqlTokenizer.TokenType
  * P0 支持范围（超出即抛 [SqlReverseException]，错误文案走 bundle key）：
  *  - `SELECT 列 FROM 表 [WHERE 顶层 AND 链] [ORDER BY ...] [LIMIT ...]`；
  *  - 条件算子：`= != <> > >= < <=`、`IS [NOT] NULL`、`[NOT] IN (...)`、
- *    `[NOT] BETWEEN a AND b`、`[NOT] LIKE '模式'`（通配符位置 → LikePosition）；
+ *    `[NOT] BETWEEN a AND b`、`[NOT] LIKE '模式'`（通配符位置 → LikePosition；
+ *    `LIKE ?` 占位符模式 → LikePosition.NONE）；
+ *  - `?` 参数占位符（WHERE/SET/INSERT/LIMIT 均支持）→ [SqlValue.Placeholder]，
+ *    生成 `"?"` 占位参数由用户替换（round-trip：正向参数渲染的 `?` 可转回）；
  *  - 列名/表名支持反引号与点分前缀（`t.col` / `` `t`.`col` ``），前缀在生成时剥离（单表无别名）。
  *
  * 明确不支持（P1+ 范围，报错而非猜测）：OR/嵌套括号、函数表达式、子查询、
- * JOIN、DISTINCT、GROUP BY/HAVING、UNION、`?` 占位符、列对列比较、多条语句。
+ * JOIN、DISTINCT、GROUP BY/HAVING、UNION、列对列比较、多条语句。
  */
 object SqlReverseParser {
 
@@ -876,6 +879,12 @@ object SqlReverseParser {
     ): Condition {
         val t = cursor.current
             ?: throw SqlReverseException(opOffset, KEY_PARSE, "LIKE 后缺少模式")
+        // `LIKE ?` 占位符模式（`.like(Entity::getX, param)` 正向产物）：无法判断通配符位置 →
+        // LikePosition.NONE（生成 like/notLike，参数由用户替换）
+        if (t.type == TokenType.SYMBOL && t.text == "?") {
+            cursor.advance()
+            return Condition.Like(column, negated, SqlValue.Placeholder("?"), LikePosition.NONE)
+        }
         if (t.type != TokenType.STRING) {
             throw SqlReverseException(t.offset, KEY_PARSE, "LIKE 模式必须是字符串字面量")
         }
@@ -918,8 +927,8 @@ object SqlReverseParser {
     /**
      * 解析条件值。返回 null 表示 NULL 字面量（由调用方决定语义）。
      *
-     * 支持：字符串（保留引号原文 + unquoted 解转义）、数字、TRUE/FALSE。
-     * 明确不支持：`?` 占位符（需变量名，无法静态生成）、函数/子查询/列引用（列对列）。
+     * 支持：字符串（保留引号原文 + unquoted 解转义）、数字、TRUE/FALSE、`?` 占位符。
+     * 明确不支持：函数/子查询/列引用（列对列）。
      */
     private fun parseValue(cursor: Cursor): SqlValue? {
         val t = cursor.current
@@ -949,7 +958,11 @@ object SqlReverseParser {
                 )
             }
             TokenType.SYMBOL -> when (t.text) {
-                "?" -> throw SqlReverseException(t.offset, KEY_UNSUPPORTED, "参数占位符 ?")
+                // 参数占位符 → Placeholder（生成 "?" 占位参数由用户替换；round-trip 自洽）
+                "?" -> {
+                    cursor.advance()
+                    SqlValue.Placeholder("?")
+                }
                 "(" -> throw SqlReverseException(t.offset, KEY_UNSUPPORTED, "子查询/表达式")
                 else -> throw SqlReverseException(t.offset, KEY_PARSE, "条件缺少值")
             }
@@ -986,28 +999,35 @@ object SqlReverseParser {
         return items
     }
 
-    /** LIMIT n / LIMIT offset, count。 */
+    /** LIMIT n / LIMIT offset, count（n/offset/count 可为数字或 `?` 占位符——分页参数运行期值）。 */
     private fun parseLimit(cursor: Cursor): LimitClause {
-        val first = cursor.current
-            ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "LIMIT 缺少行数")
-        if (first.type != TokenType.NUMBER) {
-            throw SqlReverseException(first.offset, KEY_PARSE, "LIMIT 必须是数字")
-        }
-        cursor.advance()
+        val first = parseLimitValue(cursor)
         if (cursor.isSymbol(cursor.current, ",")) {
             cursor.advance()
-            val second = cursor.current
-                ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "LIMIT 缺少行数")
-            if (second.type != TokenType.NUMBER) {
-                throw SqlReverseException(second.offset, KEY_PARSE, "LIMIT 必须是数字")
-            }
-            cursor.advance()
+            val second = parseLimitValue(cursor)
             return LimitClause(
-                offset = SqlValue.Literal(first.text),
-                count = SqlValue.Literal(second.text),
+                offset = first,
+                count = second,
             )
         }
-        return LimitClause(count = SqlValue.Literal(first.text))
+        return LimitClause(count = first)
+    }
+
+    /** LIMIT 值：数字字面量或 `?` 占位符（日志场景分页参数）。 */
+    private fun parseLimitValue(cursor: Cursor): SqlValue {
+        val t = cursor.current
+            ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "LIMIT 缺少行数")
+        return when {
+            t.type == TokenType.NUMBER -> {
+                cursor.advance()
+                SqlValue.Literal(t.text)
+            }
+            t.type == TokenType.SYMBOL && t.text == "?" -> {
+                cursor.advance()
+                SqlValue.Placeholder("?")
+            }
+            else -> throw SqlReverseException(t.offset, KEY_PARSE, "LIMIT 必须是数字或 ? 占位符")
+        }
     }
 
     // ------------------------------------------------------------------

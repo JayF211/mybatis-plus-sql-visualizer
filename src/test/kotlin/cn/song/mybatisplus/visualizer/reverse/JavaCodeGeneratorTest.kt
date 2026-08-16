@@ -477,20 +477,26 @@ class JavaCodeGeneratorTest {
             ),
         )
         val code = JavaCodeGenerator.generate(multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA)
-        assertTrue(code, code.contains("new DeleteJoinWrapper<>(User.class, Address.class)"))
+        assertTrue(code, code.contains("new DeleteJoinWrapper<>(User.class)"))
+        assertTrue(code, code.contains(".delete(\"t\", \"t1\")"))
         assertTrue(code, code.contains(".leftJoin(Address.class, Address::getUserId, User::getId)"))
         assertTrue(code, code.contains(".eq(User::getStatus, 1)"))
         assertTrue(code, code.contains("（MPJ 形态）"))
     }
 
     @Test
-    fun `DELETE_多表_副实体缺失回落主类并注释`() {
+    fun `DELETE_多表_副实体缺失_报错`() {
+        // 1.5.6 实证：DeleteJoinWrapper 无 leftJoin(String)（仅 QueryJoin lambda 形态）——
+        // 副实体缺失无法生成合法 join 链，明确报错优于生成编译不过的代码
         val result = multiTableDeleteResult()
         val main = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("id" to "id", "status" to "status"))
-        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
-        assertTrue(code, code.contains("new DeleteJoinWrapper<>(User.class, User.class)"))
-        assertTrue(code, code.contains("// 注意：联表 address 未找到对应实体，DeleteJoinWrapper 副类回落 User"))
-        assertTrue(code, code.contains(".leftJoin(\"address t1 ON t1.user_id = t.id\")"))
+        val ex = try {
+            JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+            throw AssertionError("expected SqlReverseException")
+        } catch (e: SqlReverseException) {
+            e
+        }
+        assertTrue(ex.detail, ex.detail.contains("无法映射为 lambda join"))
     }
 
     @Test
@@ -519,10 +525,11 @@ class JavaCodeGeneratorTest {
         )
         val code = JavaCodeGenerator.generate(
             multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA,
-            JavaCodeGenerator.InvocationTarget("UserMapper"),
+            JavaCodeGenerator.InvocationTarget("UserMapper", mpj = true),
         )
-        assertTrue(code, code.contains("DeleteJoinWrapper<User> wrapper = new DeleteJoinWrapper<>(User.class, Address.class)"))
-        assertTrue(code, code.contains("UserMapper.deleteJoin(wrapper);"))
+        assertTrue(code, code.contains("DeleteJoinWrapper<User> wrapper = new DeleteJoinWrapper<>(User.class)"))
+        assertTrue(code, code.contains(".delete(\"t\", \"t1\")"))
+        assertTrue(code, code.contains("userMapper.deleteJoin(wrapper);"))
     }
 
     @Test
@@ -539,10 +546,11 @@ class JavaCodeGeneratorTest {
         )
         val code = JavaCodeGenerator.generate(
             multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA,
-            JavaCodeGenerator.InvocationTarget("UserService"),
+            JavaCodeGenerator.InvocationTarget("UserService", mpj = true),
         )
-        assertTrue(code, code.contains("DeleteJoinWrapper<User> wrapper = new DeleteJoinWrapper<>(User.class, Address.class)"))
-        assertTrue(code, code.contains("UserService.deleteJoin(wrapper);"))
+        assertTrue(code, code.contains("DeleteJoinWrapper<User> wrapper = new DeleteJoinWrapper<>(User.class)"))
+        assertTrue(code, code.contains(".delete(\"t\", \"t1\")"))
+        assertTrue(code, code.contains("userService.deleteJoin(wrapper);"))
     }
 
     @Test
@@ -638,7 +646,7 @@ class JavaCodeGeneratorTest {
             code.contains(
                 "User user1 = new User().setName(\"张三\")\n    .setAge(18);\n" +
                     "User user2 = new User().setName(\"李四\")\n    .setAge(20);\n\n" +
-                    "UserService.saveBatch(Arrays.asList(user1, user2));",
+                    "userService.saveBatch(Arrays.asList(user1, user2));",
             ),
         )
     }
@@ -660,7 +668,7 @@ class JavaCodeGeneratorTest {
             JavaCodeGenerator.InvocationTarget("UserMapper"),
         )
         assertTrue(code, code.contains("User user1 = new User().setName(\"a\");\nUser user2 = new User().setName(\"b\");\nUser user3 = new User().setName(\"c\");\n\n"))
-        assertTrue(code, code.contains("UserMapper.insert(user1);\nUserMapper.insert(user2);\nUserMapper.insert(user3);"))
+        assertTrue(code, code.contains("userMapper.insert(user1);\nuserMapper.insert(user2);\nuserMapper.insert(user3);"))
     }
 
     // ------------------------------------------------------------------
@@ -680,11 +688,11 @@ class JavaCodeGeneratorTest {
             JavaCodeGenerator.InvocationTarget("UserService"),
         )
         assertTrue(code, code.contains("LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()"))
-        assertTrue(code, code.contains("List<User> list = UserService.list(wrapper);"))
+        assertTrue(code, code.contains("List<User> list = userService.list(wrapper);"))
     }
 
     @Test
-    fun `SELECT带Mapper和VO_生成selectVoList`() {
+    fun `SELECT带Mapper和VO_生成selectJoinList`() {
         val result = SqlReverseResult(
             tableName = "user",
             selectColumns = null,
@@ -693,10 +701,13 @@ class JavaCodeGeneratorTest {
         val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
         val code = JavaCodeGenerator.generate(
             result, entity, GeneratedWrapper.LAMBDA,
-            JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo"),
+            JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo", mpj = true),
         )
-        assertTrue(code, code.contains("List<UserVo> list = UserMapper.selectVoList(wrapper, UserVo.class);"))
-        assertTrue(code, code.contains("// VO 查询需 MyBatis-Plus-Join"))
+        // MPJ 1.5.6 实证：selectVoList 不存在，真实方法 = selectJoinList(Vo.class, wrapper)
+        assertTrue(code, code.contains("List<UserVo> list = userMapper.selectJoinList(UserVo.class, wrapper);"))
+        // VO 场景强制 MPJ wrapper（selectJoinList 参数类型为 MPJBaseJoin，LambdaQueryWrapper 编译不过）
+        assertTrue(code, code.contains("new MPJLambdaWrapper<User>()"))
+        assertTrue(code, code.contains("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖"))
     }
 
     @Test
@@ -712,7 +723,7 @@ class JavaCodeGeneratorTest {
             JavaCodeGenerator.InvocationTarget("UserMapper"),
         )
         assertTrue(code, code.contains("UpdateWrapper<User> wrapper = new UpdateWrapper<User>()"))
-        assertTrue(code, code.contains("UserMapper.update(null, wrapper);"))
+        assertTrue(code, code.contains("userMapper.update(null, wrapper);"))
     }
 
     @Test
@@ -728,7 +739,7 @@ class JavaCodeGeneratorTest {
             JavaCodeGenerator.InvocationTarget("UserService"),
         )
         assertTrue(code, code.contains("User user = new User().setName(\"张三\");"))
-        assertTrue(code, code.contains("UserService.save(user);"))
+        assertTrue(code, code.contains("userService.save(user);"))
     }
 
     // ------------------------------------------------------------------
@@ -800,6 +811,8 @@ class JavaCodeGeneratorTest {
             subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("B", mapOf("a_id" to "aId", "type" to "type"))),
         )
         val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        // ON 多条件无法三参 lambda 化 → 回落 MPJQueryWrapper（字符串 join 仅 StringJoin 合法，1.5.6 实证）
+        assertTrue(code, code.contains("new MPJQueryWrapper<>(A.class)"))
         assertTrue(code, code.contains(".leftJoin(\"b t1 ON t1.a_id = t.id AND t1.type = 1\")"))
     }
 
@@ -852,5 +865,265 @@ class JavaCodeGeneratorTest {
         )
         val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
         assertTrue(code, code.contains(".eq(\"t1.extra_col\", 1)"))
+    }
+
+    // ------------------------------------------------------------------
+    // ? 参数占位符（P0+P1：WHERE/SET/INSERT/LIMIT）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `占位符条件_渲染eq占位与头注释`() {
+        val result = SqlReverseResult(
+            tableName = "sys_account_role_rel",
+            selectColumns = listOf("id", "account_id", "role_id"),
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "role_id"), "=", SqlValue.Placeholder("?")),
+                Condition.Simple(ColumnRef(columnName = "status"), ">", SqlValue.Placeholder("?")),
+                Condition.In(ColumnRef(columnName = "id"), false, listOf(SqlValue.Placeholder("?"), SqlValue.Placeholder("?"))),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains(".eq(\"role_id\", \"?\")"))
+        assertTrue(code, code.contains(".gt(\"status\", \"?\")"))
+        assertTrue(code, code.contains(".in(\"id\", \"?\", \"?\")"))
+        assertTrue(code, code.contains("// 注意：SQL 含参数占位符 ?，无法恢复实际参数，已生成 \"?\" 占位，请替换为实际参数"))
+    }
+
+    @Test
+    fun `占位符_LIKE渲染like与BETWEEN渲染between`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(
+                Condition.Like(ColumnRef(columnName = "name"), false, SqlValue.Placeholder("?"), LikePosition.NONE),
+                Condition.Between(ColumnRef(columnName = "age"), false, SqlValue.Placeholder("?"), SqlValue.Placeholder("?")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains(".like(\"name\", \"?\")"))
+        assertTrue(code, code.contains(".between(\"age\", \"?\", \"?\")"))
+    }
+
+    @Test
+    fun `占位符_UPDATE_SET渲染set`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Placeholder("?"))),
+            sets = listOf(ReverseSet("name", SqlValue.Placeholder("?"))),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains(".set(\"name\", \"?\")"))
+        assertTrue(code, code.contains(".eq(\"id\", \"?\")"))
+    }
+
+    @Test
+    fun `占位符_INSERT渲染实体setter`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name", "age"),
+            insertValues = listOf(listOf(SqlValue.Placeholder("?"), SqlValue.Placeholder("?"))),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains("new User().setName(\"?\")"))
+        assertTrue(code, code.contains(".setAge(\"?\")"))
+    }
+
+    @Test
+    fun `占位符_LIMIT渲染last保留偏移`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "role_id"), "=", SqlValue.Placeholder("?"))),
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains(".last(\"LIMIT ?, ?\")"))
+        assertTrue(code, code.contains(".eq(\"role_id\", \"?\")"))
+    }
+
+    @Test
+    fun `无占位符_不产生占位注释`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, !code.contains("参数占位符"))
+    }
+
+    // ------------------------------------------------------------------
+    // SELECT 调用形态（分页 page / VO 同名回落）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `SELECT分页带Service_生成page调用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService"),
+        )
+        assertTrue(code, code.contains("Page<User> page = userService.page(new Page<>(1, 10), wrapper);"))
+        assertTrue(code, code.contains("// 分页 current/size 已占位，请替换为实际参数"))
+        assertTrue(code, !code.contains(".last(\"LIMIT"))
+    }
+
+    @Test
+    fun `SELECT分页带Mapper_生成selectPage`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(count = SqlValue.Literal("10")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper"),
+        )
+        assertTrue(code, code.contains("Page<User> page = userMapper.selectPage(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `SELECT分页字面量_推断current`() {
+        val paged = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Literal("20"), count = SqlValue.Literal("10")),
+        )
+        val code = JavaCodeGenerator.generate(
+            paged, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService"),
+        )
+        assertTrue(code, code.contains("new Page<>(3, 10)"))
+        // 无调用类（纯 wrapper 表达式）→ 保持 last 形态不变
+        val plain = JavaCodeGenerator.generate(paged, null, GeneratedWrapper.QUERY)
+        assertTrue(plain, plain.contains(".last(\"LIMIT 20, 10\")"))
+    }
+
+    @Test
+    fun `VO与实体同名_回落普通list调用`() {
+        val result = SqlReverseResult(tableName = "user")
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", voClass = "User"),
+        )
+        assertTrue(code, code.contains("List<User> list = userService.list(wrapper);"))
+        assertTrue(code, !code.contains("listVo"))
+    }
+
+    @Test
+    fun `分页VO组合_生成selectJoinListPage`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", voClass = "UserVo", mpj = true),
+        )
+        // MPJ 1.5.6 实证：pageVo 不存在，真实方法 = selectJoinListPage(page, Vo.class, wrapper)
+        assertTrue(code, code.contains("Page<UserVo> page = userService.selectJoinListPage(new Page<>(1, 10), UserVo.class, wrapper);"))
+        assertTrue(code, code.contains("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖"))
+    }
+
+    @Test
+    fun `分页VO组合Mapper_生成selectJoinPage`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo", mpj = true),
+        )
+        assertTrue(code, code.contains("Page<UserVo> page = userMapper.selectJoinPage(new Page<>(1, 10), UserVo.class, wrapper);"))
+    }
+
+    @Test
+    fun `VO场景_强制MPJ wrapper`() {
+        // selectJoinList 参数类型为 MPJBaseJoin——LambdaQueryWrapper 无法编译，须强制 MPJ wrapper
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x"))),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.LAMBDA,
+            JavaCodeGenerator.InvocationTarget("UserService", voClass = "UserVo", mpj = true),
+        )
+        assertTrue(code, code.contains("new MPJLambdaWrapper<User>()"))
+        assertTrue(code, code.contains("userService.selectJoinList(UserVo.class, wrapper);"))
+        // 无实体 + VO → MPJQueryWrapper（字符串列）同样满足 MPJBaseJoin
+        val plain = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", voClass = "UserVo", mpj = true),
+        )
+        assertTrue(plain, plain.contains("new MPJQueryWrapper<>(User.class)"))
+    }
+
+    @Test
+    fun `非MPJ调用类_VO回落实体查询并注释`() {
+        // 调用类无 MPJ 能力（mpj=false，继承链实证由调用方解析）→ 严禁生成 selectJoinList，
+        // 回落 list + 明确注释；wrapper 保持普通形态（不强制 MPJ）
+        val result = SqlReverseResult(
+            tableName = "user",
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("id" to "id"))
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.LAMBDA,
+            JavaCodeGenerator.InvocationTarget("UserService", voClass = "UserVo"),
+        )
+        assertTrue(code, code.contains("List<User> list = userService.list(wrapper);"))
+        assertTrue(code, code.contains("// 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询"))
+        assertTrue(code, code.contains("new LambdaQueryWrapper<User>()"))
+        assertTrue(code, !code.contains("selectJoinList"))
+    }
+
+    @Test
+    fun `非MPJ调用类_分页VO回落实体page`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo"),
+        )
+        assertTrue(code, code.contains("Page<User> page = userMapper.selectPage(new Page<>(1, 10), wrapper);"))
+        assertTrue(code, !code.contains("selectJoinPage"))
+    }
+
+    @Test
+    fun `非MPJ调用类_多表JOIN报错`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "address",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(ColumnRef(tableAlias = "t1", columnName = "user_id"), ColumnRef(tableAlias = "t", columnName = "id")),
+                    ),
+                    rawOn = "t1.user_id = t.id",
+                ),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("Address", mapOf("user_id" to "userId"))),
+        )
+        val ex = try {
+            JavaCodeGenerator.generate(
+                result, entity, GeneratedWrapper.MPJ_LAMBDA,
+                JavaCodeGenerator.InvocationTarget("UserService"),
+            )
+            throw AssertionError("expected SqlReverseException")
+        } catch (e: SqlReverseException) {
+            e
+        }
+        assertTrue(ex.detail, ex.detail.contains("无 MPJ 能力"))
     }
 }

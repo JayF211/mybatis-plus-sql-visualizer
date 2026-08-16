@@ -5,6 +5,8 @@ import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiClass
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiShortNamesCache
 
 /**
  * SQL → Java 转换共享编排（T-M36.4）。
@@ -36,6 +38,40 @@ object SqlToJavaConverter {
         EntityClassFinder(project).find(tableName).map { clazz ->
             EntityCandidate(clazz, EntityResolver().resolve(clazz))
         }
+
+    /** 手动选择的 PsiClass → 候选（实体选择弹窗回调用；单类解析，EDT 轻量读取）。 */
+    fun candidateOf(psiClass: PsiClass): EntityCandidate =
+        EntityCandidate(psiClass, EntityResolver().resolve(psiClass))
+
+    /**
+     * 调用类是否具备 MPJ 能力（须 ReadAction 内调用——PSI 索引访问）：
+     * 遍历继承链（接口 + 父类递归）匹配 MPJ 1.5.6 实证接口——Service 侧
+     * `MPJBaseService`/`JoinService`、Mapper 侧 `MPJBaseMapper`/`JoinMapper`。
+     * 无匹配（含类找不到）→ false（生成器据此回落实体查询/报错，严禁生成不存在的 API）。
+     */
+    fun invocationHasMpj(project: Project, callerClass: String): Boolean {
+        if (callerClass.isBlank()) return false
+        val scope = GlobalSearchScope.projectScope(project)
+        val clazz = PsiShortNamesCache.getInstance(project).getClassesByName(callerClass, scope)
+            .firstOrNull() ?: return false
+        return hasMpjInterface(clazz)
+    }
+
+    /** 继承链遍历（接口 + 父类递归）匹配 MPJ 接口；internal 供 Heavy 测试直接以 PsiClass 验证。 */
+    internal fun hasMpjInterface(clazz: PsiClass, seen: MutableSet<PsiClass> = mutableSetOf()): Boolean {
+        if (!seen.add(clazz)) return false
+        if (clazz.qualifiedName in MPJ_INTERFACES) return true
+        if (clazz.interfaces.any { hasMpjInterface(it, seen) }) return true
+        return clazz.superClass?.let { hasMpjInterface(it, seen) } ?: false
+    }
+
+    /** MPJ 1.5.6 能力接口（javap 实证全限定名）。 */
+    private val MPJ_INTERFACES = setOf(
+        "com.github.yulichang.base.MPJBaseService",
+        "com.github.yulichang.base.JoinService",
+        "com.github.yulichang.base.MPJBaseMapper",
+        "com.github.yulichang.base.JoinMapper",
+    )
 
     /**
      * 副表实体候选（T-M37 P1，须在 ReadAction 内调用）：按 join 表名查找**全部**匹配实体
