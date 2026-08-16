@@ -159,4 +159,34 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             state.reverseWrapperFormat = original
         }
     }
+
+    // ------------------------------------------------------------------
+    // 调用类 / VO（T-M36.7）
+    // ------------------------------------------------------------------
+
+    fun testCallerAndVoGenerateInvocation() {
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            // 调用类输入（测试访问器直接写文本框）
+            panel.callerFieldForTest().text = "UserService"
+            panel.voFieldForTest().text = "UserVo"
+            panel.convertForTest()
+            val result = panel.resultTextForTest()
+            assertTrue(result, result.contains("QueryWrapper<User> wrapper = new QueryWrapper<User>()"))
+            assertTrue(result, result.contains("List<UserVo> list = UserService.listVo(wrapper, UserVo.class);"))
+
+            // 清空 VO → 普通 list 调用
+            panel.voFieldForTest().text = ""
+            panel.convertForTest()
+            val plain = panel.resultTextForTest()
+            assertTrue(plain, plain.contains("List<User> list = UserService.list(wrapper);"))
+        } finally {
+            state.reverseWrapperFormat = original
+        }
+    }
 }

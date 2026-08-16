@@ -35,28 +35,196 @@ object SqlReverseParser {
         }
         val cursor = Cursor(tokens, sqlText)
 
-        // SELECT 语句头
-        if (!cursor.isKeyword(cursor.current, "SELECT")) {
-            val first = cursor.current
-            throw SqlReverseException(
-                first?.offset ?: 0,
-                KEY_NOT_SELECT,
-                first?.takeIf { it.type == TokenType.WORD }?.text ?: "?",
-            )
+        // 语句头分发（T-M36.7：增删改查全支持）
+        return when {
+            cursor.isKeyword(cursor.current, "SELECT") -> {
+                cursor.advance()
+                parseSelectBody(cursor)
+            }
+            cursor.isKeyword(cursor.current, "UPDATE") -> {
+                cursor.advance()
+                parseUpdateBody(cursor)
+            }
+            cursor.isKeyword(cursor.current, "DELETE") -> {
+                cursor.advance()
+                parseDeleteBody(cursor)
+            }
+            cursor.isKeyword(cursor.current, "INSERT") -> {
+                cursor.advance()
+                parseInsertBody(cursor)
+            }
+            else -> {
+                val first = cursor.current
+                throw SqlReverseException(
+                    first?.offset ?: 0,
+                    KEY_NOT_SELECT,
+                    first?.takeIf { it.type == TokenType.WORD }?.text ?: "?",
+                )
+            }
         }
-        cursor.advance()
+    }
 
+    /** SELECT 主体：列清单 + FROM 表 + 子句序列。 */
+    private fun parseSelectBody(cursor: Cursor): SqlReverseResult {
         val selectColumns = parseSelectColumns(cursor)
-
-        // FROM 表名（可选库前缀/别名）
         if (!cursor.isKeyword(cursor.current, "FROM")) {
-            throw SqlReverseException(cursor.current?.offset ?: sqlText.length, KEY_PARSE, "缺少 FROM 子句")
+            throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "缺少 FROM 子句")
         }
         cursor.advance()
         val tableName = parseTableName(cursor)
         consumeOptionalAlias(cursor)
+        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor)
+        return SqlReverseResult(
+            tableName = tableName,
+            selectColumns = selectColumns,
+            conditions = conditions,
+            orderBy = orderBy,
+            limit = limit,
+            warnings = warnings,
+        )
+    }
 
-        // 子句序列：WHERE / ORDER BY / LIMIT（顺序可任意，仅各出现一次）
+    /** UPDATE 主体：表 + SET 赋值 + 子句序列（T-M36.7）。 */
+    private fun parseUpdateBody(cursor: Cursor): SqlReverseResult {
+        val tableName = parseTableName(cursor)
+        consumeOptionalAlias(cursor)
+        if (!cursor.isKeyword(cursor.current, "SET")) {
+            throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "UPDATE 缺少 SET 子句")
+        }
+        cursor.advance()
+        val sets = parseSets(cursor)
+        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor)
+        return SqlReverseResult(
+            tableName = tableName,
+            conditions = conditions,
+            orderBy = orderBy,
+            limit = limit,
+            warnings = warnings,
+            kind = ReverseStatementKind.UPDATE,
+            sets = sets,
+        )
+    }
+
+    /** DELETE 主体：FROM 表 + 子句序列（T-M36.7）。 */
+    private fun parseDeleteBody(cursor: Cursor): SqlReverseResult {
+        if (!cursor.isKeyword(cursor.current, "FROM")) {
+            throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "DELETE 缺少 FROM 子句")
+        }
+        cursor.advance()
+        val tableName = parseTableName(cursor)
+        consumeOptionalAlias(cursor)
+        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor)
+        return SqlReverseResult(
+            tableName = tableName,
+            conditions = conditions,
+            orderBy = orderBy,
+            limit = limit,
+            warnings = warnings,
+            kind = ReverseStatementKind.DELETE,
+        )
+    }
+
+    /** INSERT 主体：INTO 表 (列清单) VALUES (值清单)（T-M36.7；多 VALUES 行 P1）。 */
+    private fun parseInsertBody(cursor: Cursor): SqlReverseResult {
+        if (!cursor.isKeyword(cursor.current, "INTO")) {
+            throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "INSERT 缺少 INTO 子句")
+        }
+        cursor.advance()
+        val tableName = parseTableName(cursor)
+
+        expectSymbol(cursor, "(")
+        val columns = mutableListOf<String>()
+        while (true) {
+            val t = cursor.current
+                ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "INSERT 列清单不完整")
+            if (t.type != TokenType.WORD) {
+                throw SqlReverseException(t.offset, KEY_PARSE, "INSERT 列名格式不正确")
+            }
+            columns.add(stripQualified(consumeQualified(cursor)))
+            if (cursor.isSymbol(cursor.current, ",")) {
+                cursor.advance()
+                continue
+            }
+            break
+        }
+        expectSymbol(cursor, ")")
+        if (!cursor.isKeyword(cursor.current, "VALUES")) {
+            throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "INSERT 缺少 VALUES")
+        }
+        cursor.advance()
+        expectSymbol(cursor, "(")
+        val values = mutableListOf<SqlValue>()
+        while (true) {
+            val value = parseValue(cursor)
+                ?: throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 值不支持 NULL")
+            values.add(value)
+            if (cursor.isSymbol(cursor.current, ",")) {
+                cursor.advance()
+                continue
+            }
+            break
+        }
+        expectSymbol(cursor, ")")
+        if (columns.size != values.size) {
+            throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 列数与值数不一致")
+        }
+        if (cursor.isSymbol(cursor.current, ",")) {
+            unsupported(cursor, "多行 VALUES（一次转换一行）")
+        }
+        return SqlReverseResult(
+            tableName = tableName,
+            warnings = emptyList(),
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = columns,
+            insertValues = values,
+        )
+    }
+
+    /** SET 赋值清单（T-M36.7）：`列 = 值` 逗号分隔；函数/表达式值降级 rawSql 透传。 */
+    private fun parseSets(cursor: Cursor): List<ReverseSet> {
+        val sets = mutableListOf<ReverseSet>()
+        while (true) {
+            val column = parseColumnRef(cursor)
+            expectSymbol(cursor, "=")
+            val value = try {
+                parseValue(cursor)
+            } catch (e: SqlReverseException) {
+                if (e.key == KEY_UNSUPPORTED) {
+                    // 函数/表达式值（如 update_time = NOW()）→ 收集到逗号边界的原文 rawSql 透传
+                    val startIdx = cursor.tokens.indexOfFirst { it.offset == e.offset }.coerceAtLeast(0)
+                    val endIdx = cursor.tokens.indexOfFirst {
+                        it.offset > e.offset && it.type == TokenType.SYMBOL && it.text == ","
+                    }.let { if (it < 0) cursor.tokens.size else it }
+                    val endOffset = if (endIdx > 0) {
+                        val last = cursor.tokens[endIdx - 1]
+                        last.offset + last.text.length
+                    } else {
+                        e.offset
+                    }
+                    cursor.pos = endIdx
+                    sets.add(ReverseSet(column = column.columnName, value = null, rawSql = "${column.columnName} = ${cursor.source.substring(e.offset, endOffset).trim()}"))
+                    if (cursor.isSymbol(cursor.current, ",")) {
+                        cursor.advance()
+                        continue
+                    }
+                    break
+                }
+                throw e
+            }
+            sets.add(ReverseSet(column = column.columnName, value = value))
+            if (cursor.isSymbol(cursor.current, ",")) {
+                cursor.advance()
+                continue
+            }
+            break
+        }
+        return sets
+    }
+
+    /**
+     * 尾子句序列（SELECT/UPDATE/DELETE 共用）：WHERE / ORDER BY / LIMIT 及不支持子句报错。
+     */
+    private fun parseTailClauses(cursor: Cursor): TailClauses {
         val warnings = mutableListOf<String>()
         var conditions = emptyList<Condition>()
         var orderBy = emptyList<OrderByItem>()
@@ -96,16 +264,16 @@ object SqlReverseParser {
                 )
             }
         }
-
-        return SqlReverseResult(
-            tableName = tableName,
-            selectColumns = selectColumns,
-            conditions = conditions,
-            orderBy = orderBy,
-            limit = limit,
-            warnings = warnings,
-        )
+        return TailClauses(conditions, orderBy, limit, warnings)
     }
+
+    /** 尾子句解析产物。 */
+    private data class TailClauses(
+        val conditions: List<Condition>,
+        val orderBy: List<OrderByItem>,
+        val limit: LimitClause?,
+        val warnings: List<String>,
+    )
 
     // ------------------------------------------------------------------
     // SELECT 列清单
@@ -229,12 +397,13 @@ object SqlReverseParser {
         return stripQualified(consumeQualified(cursor))
     }
 
-    /** 可选表别名：`FROM user u`——u 非子句关键字时视为别名消费。 */
+    /** 可选表别名：`FROM user u`——u 非子句关键字时视为别名消费（T-M36.7：SET/INTO 亦为边界）。 */
     private fun consumeOptionalAlias(cursor: Cursor) {
         val t = cursor.current ?: return
         if (t.type == TokenType.WORD && !cursor.isKeyword(t, "WHERE") && !cursor.isKeyword(t, "GROUP") &&
             !cursor.isKeyword(t, "ORDER") && !cursor.isKeyword(t, "LIMIT") && !cursor.isKeyword(t, "HAVING") &&
-            !cursor.isKeyword(t, "UNION") && !cursor.isKeyword(t, "JOIN") && !cursor.isKeyword(t, "FOR")
+            !cursor.isKeyword(t, "UNION") && !cursor.isKeyword(t, "JOIN") && !cursor.isKeyword(t, "FOR") &&
+            !cursor.isKeyword(t, "SET") && !cursor.isKeyword(t, "INTO")
         ) {
             cursor.advance()
         }
@@ -790,7 +959,7 @@ object SqlReverseParser {
     }
 }
 
-/** 解析结果（P0）：表名 / select 列（null=不生成）/ 条件 / 排序 / 分页。 */
+/** 解析结果（T-M36.7 起支持增删改查）：语句类型 + 表名 / select 列（null=不生成）/ 条件 / 排序 / 分页。 */
 data class SqlReverseResult(
     val tableName: String,
     val selectColumns: List<String>? = null,
@@ -798,6 +967,21 @@ data class SqlReverseResult(
     val orderBy: List<OrderByItem> = emptyList(),
     val limit: LimitClause? = null,
     val warnings: List<String> = emptyList(),
+    val kind: ReverseStatementKind = ReverseStatementKind.SELECT,
+    val sets: List<ReverseSet> = emptyList(),
+    val insertColumns: List<String> = emptyList(),
+    val insertValues: List<SqlValue> = emptyList(),
+)
+
+/** 反向转换语句类型（T-M36.7）：增删改查全支持。 */
+enum class ReverseStatementKind { SELECT, UPDATE, DELETE, INSERT }
+
+/** UPDATE SET 赋值项（T-M36.7）：`列 = 值`；value 为 null 表示 SQL NULL（生成 Java null）；
+ * rawSql 非空表示函数/表达式值原样透传（生成 setSql）。 */
+data class ReverseSet(
+    val column: String,
+    val value: SqlValue?,
+    val rawSql: String? = null,
 )
 
 /**

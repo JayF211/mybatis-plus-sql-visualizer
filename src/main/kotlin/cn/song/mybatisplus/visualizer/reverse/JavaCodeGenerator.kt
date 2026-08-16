@@ -35,74 +35,302 @@ object JavaCodeGenerator {
         val columnToField: Map<String, String>,
     )
 
+    /**
+     * 调用上下文（T-M36.7，面板输入，非必选）：调用类（Service 或 Mapper，类名以
+     * `Mapper` 结尾判 Mapper，否则按 Service）+ 可选返回 VO 类名（仅 SELECT 生效，
+     * 生成 MPJ 的 selectVoList/listVo——需引入 MPJ 依赖，注释已标注）。
+     */
+    data class InvocationTarget(
+        val callerClass: String,
+        val voClass: String? = null,
+    )
+
     /** 生成完整代码片段（字符串列名 QueryWrapper 形态）。 */
     fun generate(result: SqlReverseResult): String = generate(result, null)
 
     /**
-     * 生成完整代码片段。
+     * 生成完整代码片段（T-M36.7：增删改查全支持）。
      *
      * @param entity      非 null → lambda 列引用形态；null → 字符串列名形态
      * @param wrapperKind 实体可用时的 Wrapper 类型（T-M36.3）：LAMBDA → LambdaQueryWrapper、
      *                    MPJ_LAMBDA → MPJLambdaWrapper；entity 为 null 时恒 QueryWrapper
+     * @param invocation  T-M36.7：调用上下文（Service/Mapper 类名 + 可选返回 VO 类名）；
+     *                    null → 生成纯 Wrapper/实体表达式，非 null → 生成完整调用语句
      */
     fun generate(
         result: SqlReverseResult,
         entity: EntityTarget?,
         wrapperKind: GeneratedWrapper = GeneratedWrapper.LAMBDA,
+        invocation: InvocationTarget? = null,
+    ): String = when (result.kind) {
+        ReverseStatementKind.SELECT -> generateSelect(result, entity, wrapperKind, invocation)
+        ReverseStatementKind.UPDATE -> generateUpdate(result, entity, wrapperKind, invocation)
+        ReverseStatementKind.DELETE -> generateDelete(result, entity, wrapperKind, invocation)
+        ReverseStatementKind.INSERT -> generateInsert(result, entity, wrapperKind, invocation)
+    }
+
+    // ------------------------------------------------------------------
+    // 语句渲染（T-M36.7：增删改查）
+    // ------------------------------------------------------------------
+
+    /** SELECT：现有 wrapper 表达式；带调用类 → 变量化 + 调用行（Service.list / Mapper.selectList）。 */
+    private fun generateSelect(
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        wrapperKind: GeneratedWrapper,
+        invocation: InvocationTarget?,
     ): String {
         val sb = StringBuilder()
+        appendHeader(sb, result, entity, wrapperKind, invocation)
+        val chain = buildString {
+            if (result.selectColumns != null && result.selectColumns.isNotEmpty()) {
+                append("\n    .select(")
+                    .append(result.selectColumns.joinToString(", ") { renderColumnRef(it, entity) })
+                    .append(")")
+            }
+            result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+            renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
+            result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
+        }
+        val wrapperClass = wrapperClassFor(QUERY_WRAPPER_CLASSES, entity, wrapperKind)
+        val entityName = entity?.className ?: entityClassName(result.tableName)
+        return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
+            selectInvocation(result, entity, invocation!!)
+        }
+    }
+
+    /** UPDATE：UpdateWrapper 链（set/setSql）+ 条件；带调用类 → Service.update / Mapper.update(null, wrapper)。 */
+    private fun generateUpdate(
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        wrapperKind: GeneratedWrapper,
+        invocation: InvocationTarget?,
+    ): String {
+        val sb = StringBuilder()
+        appendHeader(sb, result, entity, wrapperKind, invocation)
+        if (result.conditions.isEmpty()) {
+            sb.append("// ⚠ 无 WHERE 条件，将更新全表数据！\n")
+        }
+        val chain = buildString {
+            result.sets.forEach { set ->
+                append("\n    .")
+                if (set.rawSql != null) {
+                    append("setSql(\"").append(javaEscape(set.rawSql)).append("\")")
+                } else {
+                    append("set(").append(renderColumnRef(set.column, entity)).append(", ")
+                        .append(set.value?.let { javaValue(it) } ?: "null")
+                        .append(")")
+                }
+            }
+            result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+            renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
+            result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
+        }
+        val wrapperClass = wrapperClassFor(UPDATE_WRAPPER_CLASSES, entity, wrapperKind)
+        val entityName = entity?.className ?: entityClassName(result.tableName)
+        return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
+            if (isMapper(invocation!!)) {
+                "${invocation.callerClass}.update(null, wrapper);"
+            } else {
+                "${invocation.callerClass}.update(wrapper);"
+            }
+        }
+    }
+
+    /** DELETE：条件 wrapper；带调用类 → Service.remove / Mapper.delete。 */
+    private fun generateDelete(
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        wrapperKind: GeneratedWrapper,
+        invocation: InvocationTarget?,
+    ): String {
+        val sb = StringBuilder()
+        appendHeader(sb, result, entity, wrapperKind, invocation)
+        if (result.conditions.isEmpty()) {
+            sb.append("// ⚠ 无 WHERE 条件，将删除全表数据！\n")
+        }
+        val chain = buildString {
+            result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+            renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
+            result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
+        }
+        val wrapperClass = wrapperClassFor(QUERY_WRAPPER_CLASSES, entity, wrapperKind)
+        val entityName = entity?.className ?: entityClassName(result.tableName)
+        return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
+            if (isMapper(invocation!!)) {
+                "${invocation.callerClass}.delete(wrapper);"
+            } else {
+                "${invocation.callerClass}.remove(wrapper);"
+            }
+        }
+    }
+
+    /** INSERT：实体 setter 链；带调用类 → Service.save / Mapper.insert。 */
+    private fun generateInsert(
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        wrapperKind: GeneratedWrapper,
+        invocation: InvocationTarget?,
+    ): String {
+        val sb = StringBuilder()
+        appendHeader(sb, result, entity, wrapperKind, invocation)
+        val entityName = entity?.className ?: entityClassName(result.tableName)
+        val setterChain = buildString {
+            result.insertColumns.forEachIndexed { i, column ->
+                val field = entity?.columnToField?.get(column)
+                    ?: column.split('_').joinToString("") { seg -> seg.replaceFirstChar { it.uppercase() } }
+                    .replaceFirstChar { it.lowercaseChar() }
+                val value = result.insertValues.getOrNull(i)
+                append(if (i == 0) "new $entityName()" else "\n    ")
+                append(".set").append(field.replaceFirstChar { it.uppercase() }).append("(")
+                    .append(value?.let { javaValue(it) } ?: "null")
+                    .append(")")
+            }
+        }
+        val invocationLine = invocation?.let {
+            val entityVar = entityName.replaceFirstChar { it.lowercaseChar() }
+            "$entityName $entityVar = $setterChain;\n\n" + if (isMapper(invocation)) {
+                "${invocation.callerClass}.insert($entityVar);"
+            } else {
+                "${invocation.callerClass}.save($entityVar);"
+            }
+        }
+        return if (invocationLine != null) {
+            sb.append(invocationLine)
+            sb.toString()
+        } else {
+            sb.append(setterChain).append(";")
+            sb.toString()
+        }
+    }
+
+    /** SELECT 调用行：Service → list/listVo；Mapper → selectList/selectVoList（VO 需 MPJ）。 */
+    private fun selectInvocation(
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        invocation: InvocationTarget,
+    ): String {
+        val entityName = entity?.className ?: entityClassName(result.tableName)
+        val vo = invocation.voClass
+        val generic = vo ?: entityName
+        val method = if (isMapper(invocation)) {
+            if (vo != null) "selectVoList" else "selectList"
+        } else {
+            if (vo != null) "listVo" else "list"
+        }
+        val arg = if (vo != null) ", $vo.class" else ""
+        return "List<$generic> list = ${invocation.callerClass}.$method(wrapper$arg);" +
+            if (vo != null) "  // VO 查询需 MyBatis-Plus-Join" else ""
+    }
+
+    /** wrapper 变量化 + 调用行；无调用 → 纯表达式。 */
+    private fun appendWrapperAndInvocation(
+        sb: StringBuilder,
+        wrapperClass: String,
+        entityName: String,
+        wrapperKind: GeneratedWrapper,
+        chain: String,
+        invocation: InvocationTarget?,
+        invocationLine: () -> String,
+    ): String {
+        val head = wrapperHead(wrapperClass, entityName, wrapperKind)
+        if (invocation == null) {
+            sb.append(head).append(chain).append(";")
+            return sb.toString()
+        }
+        sb.append("$wrapperClass<$entityName> wrapper = $head")
+            .append(chain)
+            .append(";\n\n")
+            .append(invocationLine())
+        return sb.toString()
+    }
+
+    // ------------------------------------------------------------------
+    // 包装形态公共（T-M36.6 Wrappers 工厂 / T-M36.7 UPDATE/DELETE 类映射）
+    // ------------------------------------------------------------------
+
+    /** QUERY 族 wrapper 类名（SELECT 条件/DELETE 条件）。 */
+    private val QUERY_WRAPPER_CLASSES = WrapperClassMap(
+        plain = "QueryWrapper",
+        lambda = "LambdaQueryWrapper",
+        mpj = "MPJLambdaWrapper",
+        mpjPlain = "QueryWrapper",
+    )
+
+    /** UPDATE 族 wrapper 类名（MPJ 无单表更新形态 → 回落 UpdateWrapper）。 */
+    private val UPDATE_WRAPPER_CLASSES = WrapperClassMap(
+        plain = "UpdateWrapper",
+        lambda = "LambdaUpdateWrapper",
+        mpj = "UpdateWrapper",
+        mpjPlain = "UpdateWrapper",
+    )
+
+    private data class WrapperClassMap(
+        val plain: String,
+        val lambda: String,
+        val mpj: String,
+        val mpjPlain: String,
+    )
+
+    /** 形态 → wrapper 变量类名（WRAPPERS 工厂返回 plain/lambda 类；MPJ 无实体回落 plain）。 */
+    private fun wrapperClassFor(map: WrapperClassMap, entity: EntityTarget?, wrapperKind: GeneratedWrapper): String =
+        when (wrapperKind) {
+            GeneratedWrapper.QUERY -> map.plain
+            GeneratedWrapper.WRAPPERS_QUERY -> map.plain
+            GeneratedWrapper.LAMBDA -> if (entity != null) map.lambda else map.plain
+            GeneratedWrapper.WRAPPERS_LAMBDA -> if (entity != null) map.lambda else map.plain
+            GeneratedWrapper.MPJ_LAMBDA -> if (entity != null) map.mpj else map.mpjPlain
+        }
+
+    /** wrapper 构造表达式：`new X<E>()` 或 `Wrappers.<E>factory()`（T-M36.6）。 */
+    private fun wrapperHead(wrapperClass: String, entityName: String, wrapperKind: GeneratedWrapper): String =
+        when (wrapperKind) {
+            GeneratedWrapper.WRAPPERS_QUERY -> "Wrappers.<$entityName>query()"
+            GeneratedWrapper.WRAPPERS_LAMBDA -> "Wrappers.<$entityName>lambdaQuery()"
+            else -> "new $wrapperClass<$entityName>()"
+        }
+
+    /** 注释头（语句类型 + 形态 + 实体来源；T-M36.7 按 kind 标注）。 */
+    private fun appendHeader(
+        sb: StringBuilder,
+        result: SqlReverseResult,
+        entity: EntityTarget?,
+        wrapperKind: GeneratedWrapper,
+        invocation: InvocationTarget?,
+    ) {
+        val kindLabel = when (result.kind) {
+            ReverseStatementKind.SELECT -> "QueryWrapper"
+            ReverseStatementKind.UPDATE -> "UpdateWrapper"
+            ReverseStatementKind.DELETE -> "DeleteWrapper"
+            ReverseStatementKind.INSERT -> "Entity"
+        }
+        val formLabel = when {
+            invocation != null -> "（含 ${invocation.callerClass} 调用" + (invocation.voClass?.let { "，返回 $it" } ?: "") + "）"
+            wrapperKind == GeneratedWrapper.WRAPPERS_QUERY || wrapperKind == GeneratedWrapper.WRAPPERS_LAMBDA ->
+                "（Wrappers 工厂形态）"
+            wrapperKind == GeneratedWrapper.MPJ_LAMBDA -> "（MPJ 形态）"
+            else -> ""
+        }
+        sb.append("// SQL → MyBatis-Plus $kindLabel 反向生成（MyBatis-Plus SQL Visualizer）$formLabel\n")
         if (entity == null) {
-            sb.append("// SQL → MyBatis-Plus QueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
             val entityName = entityClassName(result.tableName)
             sb.append("// 实体类名 $entityName 由表名 ${result.tableName} 推断，请按实际类名调整\n")
         } else {
-            when (wrapperKind) {
-                GeneratedWrapper.MPJ_LAMBDA -> {
-                    sb.append("// SQL → MyBatis-Plus-Join MPJLambdaWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
-                    sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配（需引入 MPJ 依赖）\n")
-                }
-                GeneratedWrapper.WRAPPERS_LAMBDA -> {
-                    sb.append("// SQL → MyBatis-Plus Wrappers 工厂形态（Wrappers.lambdaQuery）反向生成（MyBatis-Plus SQL Visualizer）\n")
-                    sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
-                }
-                else -> {
-                    sb.append("// SQL → MyBatis-Plus LambdaQueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
-                    sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
-                }
-            }
+            sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
             val unmapped = unmappedColumns(result, entity)
             if (unmapped.isNotEmpty()) {
                 sb.append("// 注意：以下列未在实体中找到对应字段，已回落字符串列名：${unmapped.joinToString(", ")}\n")
             }
         }
+        if (wrapperKind == GeneratedWrapper.MPJ_LAMBDA && entity != null) {
+            sb.append("// 需引入 MyBatis-Plus-Join（MPJ）依赖\n")
+        }
         result.warnings.forEach { sb.append("// 注意：$it\n") }
-
-        // 包装形态（T-M36.6：Wrappers 工厂 → `Wrappers.<E>query()` / `Wrappers.<E>lambdaQuery()`）
-        val entityName = entity?.className ?: entityClassName(result.tableName)
-        val head = when (wrapperKind) {
-            GeneratedWrapper.WRAPPERS_QUERY -> "Wrappers.<$entityName>query()"
-            GeneratedWrapper.WRAPPERS_LAMBDA -> "Wrappers.<$entityName>lambdaQuery()"
-            else -> {
-                val wrapperName = when {
-                    entity == null -> "QueryWrapper"
-                    wrapperKind == GeneratedWrapper.MPJ_LAMBDA -> "MPJLambdaWrapper"
-                    else -> "LambdaQueryWrapper"
-                }
-                "new $wrapperName<$entityName>()"
-            }
-        }
-        sb.append(head)
-        if (result.selectColumns != null && result.selectColumns.isNotEmpty()) {
-            sb.append("\n    .select(")
-                .append(result.selectColumns.joinToString(", ") { renderColumnRef(it, entity) })
-                .append(")")
-        }
-        result.conditions.forEach { sb.append("\n    .").append(renderCondition(it, entity)) }
-        renderOrderBy(result, entity).forEach { sb.append("\n    .").append(it) }
-        result.limit?.let { sb.append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
-        sb.append(";")
-        return sb.toString()
     }
+
+    /** 调用类是否为 Mapper（类名以 Mapper 结尾；否则按 Service 处理，注释提示）。 */
+    private fun isMapper(invocation: InvocationTarget): Boolean =
+        invocation.callerClass.endsWith("Mapper")
 
     // ------------------------------------------------------------------
     // 列渲染（T-M36.2：lambda 模式列→属性）

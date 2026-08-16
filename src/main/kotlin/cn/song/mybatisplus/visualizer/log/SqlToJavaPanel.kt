@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
@@ -28,9 +29,11 @@ import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.FlowLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import javax.swing.DefaultComboBoxModel
@@ -71,6 +74,16 @@ class SqlToJavaPanel(
                 regenerateWithNewFormat()
             }
         }
+    }
+
+    /** T-M36.7：调用类输入（Service/Mapper 类名，非必选——留空生成纯表达式）。 */
+    private val callerField = JBTextField(12).apply {
+        emptyText.text = MpSqlVisualizerBundle.message("reverse.panel.callerHint")
+    }
+
+    /** T-M36.7：返回 VO 类名输入（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
+    private val voField = JBTextField(8).apply {
+        emptyText.text = MpSqlVisualizerBundle.message("reverse.panel.voHint")
     }
 
     /** 设置 → 下拉同步期间的抑制标志（refreshFormatFromSettings 不触发重生成）。 */
@@ -115,9 +128,15 @@ class SqlToJavaPanel(
         val toolbar = ActionManager.getInstance()
             .createActionToolbar(TOOLBAR_ID_INPUT, group, true)
             .apply { targetComponent = this@SqlToJavaPanel }
+        // T-M36.7：调用类 / VO 输入（非必选）+ 形态下拉
+        val right = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 4)).apply {
+            add(callerField)
+            add(voField)
+            add(formatCombo)
+        }
         val bar = JPanel(BorderLayout())
         bar.add(toolbar.component, BorderLayout.WEST)
-        bar.add(formatCombo, BorderLayout.EAST)
+        bar.add(right, BorderLayout.EAST)
         return bar
     }
 
@@ -273,14 +292,23 @@ class SqlToJavaPanel(
         }
     }
 
+    /** T-M36.7：调用上下文（调用类 + VO 均非必选；留空返回 null → 纯表达式）。 */
+    private fun buildInvocation(): JavaCodeGenerator.InvocationTarget? {
+        val caller = callerField.text.trim()
+        if (caller.isEmpty()) return null
+        val vo = voField.text.trim().ifEmpty { null }
+        return JavaCodeGenerator.InvocationTarget(caller, vo)
+    }
+
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
     private fun render(
         result: SqlReverseResult,
         candidates: List<SqlToJavaConverter.EntityCandidate>,
         format: ReverseWrapperFormat,
     ) {
+        val invocation = buildInvocation()
         val generate = { candidate: SqlToJavaConverter.EntityCandidate? ->
-            SqlToJavaConverter.generateCode(result, candidate, format)
+            SqlToJavaConverter.generateCode(result, candidate, format, invocation)
         }
         when (candidates.size) {
             0 -> {
@@ -360,6 +388,12 @@ class SqlToJavaPanel(
     internal fun selectFormatForTest(persisted: String) {
         formatCombo.selectedItem = formatOptions().first { it.persisted == persisted }
     }
+
+    /** 测试访问器：调用类输入框。 */
+    internal fun callerFieldForTest(): JBTextField = callerField
+
+    /** 测试访问器：返回 VO 输入框。 */
+    internal fun voFieldForTest(): JBTextField = voField
 
     /** 状态行（错误红字 / 提示主题色）。 */
     private fun status(message: String, error: Boolean) {

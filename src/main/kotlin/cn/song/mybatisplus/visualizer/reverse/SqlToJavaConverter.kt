@@ -41,12 +41,14 @@ object SqlToJavaConverter {
      * 生成代码：候选非 null → 按设置形态生成 lambda 版本；null → 字符串列名形态
      * （QUERY → new QueryWrapper；WRAPPERS → Wrappers.<E>query()，T-M36.6）。
      *
-     * @param format 设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
+     * @param format     设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
+     * @param invocation T-M36.7：调用上下文（Service/Mapper + 可选 VO），null → 纯表达式
      */
     fun generateCode(
         result: SqlReverseResult,
         candidate: EntityCandidate?,
         format: ReverseWrapperFormat,
+        invocation: JavaCodeGenerator.InvocationTarget? = null,
     ): String {
         val wrapper = resolveWrapperFormat(format, hasEntity = candidate != null)
         val target = candidate?.let {
@@ -55,6 +57,6 @@ object SqlToJavaConverter {
                 columnToField = it.tableInfo.columns.associate { col -> col.columnName to col.fieldName },
             )
         }
-        return JavaCodeGenerator.generate(result, target, wrapper)
+        return JavaCodeGenerator.generate(result, target, wrapper, invocation)
     }
 }

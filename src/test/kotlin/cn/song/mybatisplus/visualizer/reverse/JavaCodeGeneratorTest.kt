@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import cn.song.mybatisplus.visualizer.reverse.ReverseSet
+import cn.song.mybatisplus.visualizer.reverse.ReverseStatementKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -326,8 +328,8 @@ class JavaCodeGeneratorTest {
         val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.MPJ_LAMBDA)
         assertTrue(code, code.contains("new MPJLambdaWrapper<User>()"))
         assertTrue(code, code.contains(".eq(User::getName, \"x\")"))
-        assertTrue(code, code.contains("// SQL → MyBatis-Plus-Join MPJLambdaWrapper 反向生成"))
-        assertTrue(code, code.contains("// 实体类 User 由表名 user 匹配（需引入 MPJ 依赖）"))
+        assertTrue(code, code.contains("// SQL → MyBatis-Plus QueryWrapper 反向生成") && code.contains("（MPJ 形态）"))
+        assertTrue(code, code.contains("// 需引入 MyBatis-Plus-Join（MPJ）依赖"))
     }
 
     @Test
@@ -335,7 +337,7 @@ class JavaCodeGeneratorTest {
         val result = SqlReverseResult(tableName = "user", selectColumns = null)
         val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.MPJ_LAMBDA)
         assertTrue(code, code.contains("new QueryWrapper<User>()"))
-        assertTrue(code, !code.contains("MPJ"))
+        assertTrue(code, !code.contains("MPJLambdaWrapper"))
     }
 
     // ------------------------------------------------------------------
@@ -355,7 +357,7 @@ class JavaCodeGeneratorTest {
         val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.WRAPPERS_LAMBDA)
         assertTrue(code, code.contains("Wrappers.<User>lambdaQuery()"))
         assertTrue(code, code.contains(".eq(User::getName, \"x\")"))
-        assertTrue(code, code.contains("// SQL → MyBatis-Plus Wrappers 工厂形态（Wrappers.lambdaQuery）反向生成"))
+        assertTrue(code, code.contains("// SQL → MyBatis-Plus QueryWrapper 反向生成") && code.contains("（Wrappers 工厂形态）"))
     }
 
     @Test
@@ -371,5 +373,146 @@ class JavaCodeGeneratorTest {
         assertTrue(code, code.contains("Wrappers.<User>query()"))
         assertTrue(code, code.contains(".eq(\"name\", \"x\")"))
         assertTrue(code, !code.contains("LambdaQueryWrapper"))
+    }
+
+    // ------------------------------------------------------------------
+    // 增删改查（T-M36.7）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `UPDATE_字符串形态生成UpdateWrapper链`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(
+                ReverseSet("name", SqlValue.Literal("'李四'", "李四")),
+                ReverseSet("update_time", null, rawSql = "update_time = NOW()"),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains("new UpdateWrapper<User>()"))
+        assertTrue(code, code.contains(".set(\"name\", \"李四\")"))
+        assertTrue(code, code.contains(".setSql(\"update_time = NOW()\")"))
+        assertTrue(code, code.contains(".eq(\"id\", 1)"))
+    }
+
+    @Test
+    fun `UPDATE_lambda形态生成LambdaUpdateWrapper`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(ReverseSet("name", SqlValue.Literal("'李四'", "李四"))),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("id" to "id", "name" to "name"))
+        val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.LAMBDA)
+        assertTrue(code, code.contains("new LambdaUpdateWrapper<User>()"))
+        assertTrue(code, code.contains(".set(User::getName, \"李四\")"))
+        assertTrue(code, code.contains(".eq(User::getId, 1)"))
+    }
+
+    @Test
+    fun `UPDATE_无WHERE_全表更新警告注释`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            sets = listOf(ReverseSet("name", SqlValue.Literal("'x'", "x"))),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains("⚠ 无 WHERE 条件，将更新全表数据"))
+    }
+
+    @Test
+    fun `DELETE_生成条件wrapper`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.DELETE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("id" to "id"))
+        val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.LAMBDA)
+        assertTrue(code, code.contains("new LambdaQueryWrapper<User>()"))
+        assertTrue(code, code.contains(".eq(User::getId, 1)"))
+    }
+
+    @Test
+    fun `INSERT_生成实体setter链`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name", "age"),
+            insertValues = listOf(SqlValue.Literal("'张三'", "张三"), SqlValue.Literal("18")),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(code, code.contains("new User().setName(\"张三\")\n    .setAge(18);"))
+    }
+
+    // ------------------------------------------------------------------
+    // 调用类 / VO（T-M36.7）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `SELECT带Service调用_生成完整语句`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x"))),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.LAMBDA,
+            JavaCodeGenerator.InvocationTarget("UserService"),
+        )
+        assertTrue(code, code.contains("LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()"))
+        assertTrue(code, code.contains("List<User> list = UserService.list(wrapper);"))
+    }
+
+    @Test
+    fun `SELECT带Mapper和VO_生成selectVoList`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x"))),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.LAMBDA,
+            JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo"),
+        )
+        assertTrue(code, code.contains("List<UserVo> list = UserMapper.selectVoList(wrapper, UserVo.class);"))
+        assertTrue(code, code.contains("// VO 查询需 MyBatis-Plus-Join"))
+    }
+
+    @Test
+    fun `UPDATE带Mapper调用_生成update调用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(ReverseSet("name", SqlValue.Literal("'x'", "x"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper"),
+        )
+        assertTrue(code, code.contains("UpdateWrapper<User> wrapper = new UpdateWrapper<User>()"))
+        assertTrue(code, code.contains("UserMapper.update(null, wrapper);"))
+    }
+
+    @Test
+    fun `INSERT带Service调用_生成save调用`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name"),
+            insertValues = listOf(SqlValue.Literal("'张三'", "张三")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService"),
+        )
+        assertTrue(code, code.contains("User user = new User().setName(\"张三\");"))
+        assertTrue(code, code.contains("UserService.save(user);"))
     }
 }

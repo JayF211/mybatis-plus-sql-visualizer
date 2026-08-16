@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.reverse
 
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.reverse.ReverseStatementKind
 import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SqlValue
@@ -241,8 +242,8 @@ class SqlReverseParserTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `非SELECT语句_报错`() {
-        val ex = assertThrows { SqlReverseParser.parse("UPDATE user SET name = 'x' WHERE id = 1") }
+    fun `非CRUD语句_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("CREATE TABLE t (id INT)") }
         assertEquals(SqlReverseParser.KEY_NOT_SELECT, ex.key)
     }
 
@@ -396,8 +397,71 @@ class SqlReverseParserTest {
     }
 
     // ------------------------------------------------------------------
-    // 工具
+    // 增删改查（T-M36.7）
     // ------------------------------------------------------------------
+
+    @Test
+    fun `UPDATE_解析SET与条件`() {
+        val result = SqlReverseParser.parse("UPDATE user SET name = '李四', age = 20 WHERE id = 1")
+        assertEquals(ReverseStatementKind.UPDATE, result.kind)
+        assertEquals("user", result.tableName)
+        assertEquals(2, result.sets.size)
+        val set1 = result.sets[0]
+        assertEquals("name", set1.column)
+        assertEquals("李四", (set1.value as SqlValue.Literal).unquoted)
+        assertEquals("age", result.sets[1].column)
+        val cond = result.conditions.single() as Condition.Simple
+        assertEquals("id", cond.column.columnName)
+        assertEquals("1", (cond.value as SqlValue.Literal).raw)
+    }
+
+    @Test
+    fun `UPDATE_SET函数值_降级rawSql透传`() {
+        val result = SqlReverseParser.parse("UPDATE user SET update_time = NOW(), name = 'x' WHERE id = 1")
+        assertEquals(2, result.sets.size)
+        val raw = result.sets[0]
+        assertEquals("update_time", raw.column)
+        assertTrue(raw.rawSql!!.contains("update_time = NOW()"))
+        assertEquals("name", result.sets[1].column)
+    }
+
+    @Test
+    fun `UPDATE_SET NULL_值解析为null`() {
+        val result = SqlReverseParser.parse("UPDATE user SET deleted = NULL WHERE id = 1")
+        assertNull(result.sets[0].value)
+    }
+
+    @Test
+    fun `DELETE_解析条件`() {
+        val result = SqlReverseParser.parse("DELETE FROM user WHERE id = 1")
+        assertEquals(ReverseStatementKind.DELETE, result.kind)
+        assertEquals("user", result.tableName)
+        assertEquals(1, result.conditions.size)
+    }
+
+    @Test
+    fun `INSERT_解析列与值`() {
+        val result = SqlReverseParser.parse("INSERT INTO user (name, age) VALUES ('张三', 18)")
+        assertEquals(ReverseStatementKind.INSERT, result.kind)
+        assertEquals(listOf("name", "age"), result.insertColumns)
+        assertEquals("张三", (result.insertValues[0] as SqlValue.Literal).unquoted)
+        assertEquals("18", (result.insertValues[1] as SqlValue.Literal).raw)
+    }
+
+    @Test
+    fun `INSERT_列值数量不一致_报错`() {
+        assertThrows { SqlReverseParser.parse("INSERT INTO user (name, age) VALUES ('张三')") }
+    }
+
+    @Test
+    fun `UPDATE缺少SET_报错`() {
+        assertThrows { SqlReverseParser.parse("UPDATE user WHERE id = 1") }
+    }
+
+    @Test
+    fun `INSERT多行VALUES_报错`() {
+        assertThrows { SqlReverseParser.parse("INSERT INTO user (name) VALUES ('a'), ('b')") }
+    }
 
     private fun assertThrows(block: () -> Unit): SqlReverseException =
         try {
