@@ -398,6 +398,9 @@ class SqlToJavaPanel(
             add(actionButton)
         }
 
+        /** T-M44 增量：模型实例提为字段（弹窗与测试缝共用；元素级方法的 PSI 读取在委托内包 ReadAction）。 */
+        internal val callerModel: ChooseByNameModel = CallerClassByNameModel()
+
         init {
             isOpaque = false
             preferredSize = Dimension(1, JBUI.scale(24))
@@ -444,27 +447,33 @@ class SqlToJavaPanel(
          * `this`（service 内调用）与 `baseMapper`（ServiceImpl 的 baseMapper 字段）两个固定项。
          */
         private fun pickClass() {
-            val popup = ChooseByNamePopup.createPopup(projectRef, CallerClassByNameModel(), null)
+            // T-M44 增量：模型提为字段（测试缝 callerModelForTest 复用同一实例）
+            val popup = ChooseByNamePopup.createPopup(projectRef, callerModel, null)
             popup.invoke(object : ChooseByNamePopupComponent.Callback() {
                 override fun elementChosen(element: Any?) {
                     when (element) {
                         // T-M42：特殊调用值（字符串元素）——this=当前 service 类内、baseMapper=ServiceImpl
                         // 字段；tooltip = 用途说明（非类名，无全限定名），图标 = 字段图标（字段语义）
                         is String -> setPicked(element, SPECIAL_TOOLTIPS[element], AllIcons.Nodes.Field)
-                        is PsiClass -> {
-                            // T-M44 审计兜底（用户实测堆栈：elementChosen → getQualifiedName → stub 树遍历
-                            // 断言硬抛）：选择器回调的 PSI 读取须在 ReadAction 内（EDT 上同步执行，语义不变）
-                            val picked = ReadAction.compute<Triple<String, String?, Icon?>?, Throwable> {
-                                val name = element.name ?: return@compute null
-                                Triple(name, element.qualifiedName, element.getIcon(0))
-                            } ?: return
-                            setPicked(picked.first, picked.second, picked.third)
-                        }
+                        is PsiClass -> pickPsiClassForTest(element)
                     }
                 }
 
                 override fun onClose() {}
             }, ModalityState.current(), false)
+        }
+
+        /**
+         * T-M44 审计兜底（用户实测堆栈：elementChosen → getQualifiedName → stub 树遍历断言硬抛）：
+         * 选择器回调的 PSI 读取（name/qualifiedName/getIcon）须在 ReadAction 内（EDT 上同步执行，
+         * 语义不变）。internal 供测试缝直接调用（Light 可建 PsiClass 验证选取行为）。
+         */
+        internal fun pickPsiClassForTest(cls: PsiClass) {
+            val picked = ReadAction.compute<Triple<String, String?, Icon?>?, Throwable> {
+                val name = cls.name ?: return@compute null
+                Triple(name, cls.qualifiedName, cls.getIcon(0))
+            } ?: return
+            setPicked(picked.first, picked.second, picked.third)
         }
 
         /**
@@ -995,6 +1004,12 @@ class SqlToJavaPanel(
 
     /** 测试访问器：调用类选择字段。 */
     internal fun callerFieldForTest(): ClassPickerField = callerField
+
+    /** T-M44 增量测试缝：选择器模型（ChooseByNameModel 接口——getFullName/getElementName 的 ReadAction 委托行为测试）。 */
+    internal fun callerModelForTest(): ChooseByNameModel = callerField.callerModel
+
+    /** T-M44 增量测试缝：委托调用类选择器的 ReadAction 选取（elementChosen 的 PsiClass 分支同一路径）。 */
+    internal fun pickPsiClassForTest(cls: PsiClass) = callerField.pickPsiClassForTest(cls)
 
     /** 测试访问器：注入调用类 MPJ 能力（真实解析依赖索引，Light 环境不可测——见 InvocationMpjHeavyTest）。 */
     internal fun setCallerMpjForTest(value: Boolean) {

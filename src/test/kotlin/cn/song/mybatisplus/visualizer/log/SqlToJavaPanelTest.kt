@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ReadAction
+import com.intellij.psi.PsiClass
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
@@ -590,5 +592,38 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue(SqlToJavaConverter.invocationHasMpj(project, "baseMapper"))
         // isBlank 守卫仍先于特殊分支：空串 false
         assertFalse(SqlToJavaConverter.invocationHasMpj(project, ""))
+    }
+
+    fun testCallerModelGetFullNameReadActionSafe() {
+        // T-M44 增量：ChooseByNamePopup.close（EDT）→ getFullName → GotoClassModel2 委托读 PSI 全限定名，
+        // 262 平台 stub 断言硬抛（用户实测堆栈 SqlToJavaPanel.kt CallerClassByNameModel.getFullName）——
+        // 生产实现已包 ReadAction（EDT 同步执行）；测试在非 read 上下文直接调用（模拟无 read access
+        // 的调用线程；unit test 模式平台豁免断言，此测试验证委托行为与特殊项直出，断言缺陷由沙盒/真机兜底）
+        val model = panel.callerModelForTest()
+        // 特殊项直出（不触 PSI）
+        assertEquals("this", model.getFullName("this"))
+        // PsiClass 委托：ReadAction 内取全限定名（configureByText 建内存 Java 文件，仿 psi 包测试约定）
+        val psiClass = psiClassFixture()
+        assertEquals("demo.UserService", model.getFullName(psiClass))
+    }
+
+    fun testCallerModelGetElementNameReadActionSafe() {
+        val model = panel.callerModelForTest()
+        assertEquals("this", model.getElementName("this"))
+        val psiClass = psiClassFixture()
+        assertEquals("UserService", model.getElementName(psiClass))
+    }
+
+    fun testPickPsiClassForTestSelection() {
+        // elementChosen 的 PsiClass 分支同一路径：ReadAction 内读取 name/qualifiedName/getIcon 并写入字段
+        val psiClass = psiClassFixture()
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue(panel.callerFieldForTest().text == "UserService")
+    }
+
+    /** 内存 Java 类（仿 EntityResolverCommentTest.resolveEntity 约定：configureByText + PsiTreeUtil 取类）。 */
+    private fun psiClassFixture(): PsiClass {
+        myFixture.configureByText("UserService.java", "package demo; public class UserService {}")
+        return PsiTreeUtil.findChildOfType(myFixture.file, PsiClass::class.java)!!
     }
 }
