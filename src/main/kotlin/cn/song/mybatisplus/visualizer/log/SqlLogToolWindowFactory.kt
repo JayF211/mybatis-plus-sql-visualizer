@@ -79,6 +79,17 @@ class SqlLogPanel(
         addActionListener { manager.entries.dedupeEnabled = isSelected }
     }
 
+    /**
+     * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
+     * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
+     */
+    internal val toolbarGroup = DefaultActionGroup(
+        CaptureAction(),
+        ClearAction(),
+        SettingsAction(),
+        HelpAction(),
+    )
+
     init {
         // 标签 1：SQL 日志（工具栏 + 条目列表）
         val logPanel = JPanel(BorderLayout())
@@ -106,13 +117,8 @@ class SqlLogPanel(
 
     private fun buildToolbar(): JPanel {
         // T-M31.16：暂停按钮移除（捕捉开关已覆盖——用户方案 A）
-        val group = DefaultActionGroup(
-            CaptureAction(),
-            ClearAction(),
-            SettingsAction(),
-        )
         val toolbar = ActionManager.getInstance()
-            .createActionToolbar(TOOLBAR_ID, group, true)
+            .createActionToolbar(TOOLBAR_ID, toolbarGroup, true)
             .apply { targetComponent = this@SqlLogPanel }
 
         val bar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4))
@@ -153,6 +159,18 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             ShowSettingsUtil.getInstance().showSettingsDialog(project, PluginSettingsConfigurable::class.java)
+        }
+    }
+
+    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 帮助弹窗（核心功能/使用方法/默认快捷键）。 */
+    private inner class HelpAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.General.ContextHelp
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            HelpDialog(project).show()
         }
     }
 

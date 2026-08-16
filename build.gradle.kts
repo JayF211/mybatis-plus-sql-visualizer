@@ -166,6 +166,7 @@ tasks {
         changeNotes = """
             <h2>v2026.8.15</h2>
             <ul>
+                <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」按钮打开帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语）</li>
                 <li><b>日志转 SQL Tab</b>（T-M38）：侧边栏工具窗口「SQL 预览」改造为「日志转 SQL」——粘贴 MyBatis 日志（Preparing/Parameters 行）批量还原可执行 SQL（多组语句分隔/默认多行格式化 + 单行切换/参数不足警告/一键复制）；日志列表右键一键发送转换</li>
                 <li><b>MyBatis XML mapper 动态 SQL 预览</b>（M24~M26）：mapper XML / 注解 SQL（@Select 等含 &lt;script&gt;）gutter 图标 + 右键预览——复刻 MyBatis 3.5.19 渲染算法（if/choose/trim/where/set/foreach/bind/sql+include 全兼容、受限 OGNL 求值、动态条件勾选/foreach 次数/bind 覆盖/参数回填）；${'$'}{ew.customSqlSegment} 等 MP 占位按调用处 Wrapper 全链路展开；文件级多注解候选选择</li>
                 <li><b>XML/注解 SQL 代码补全</b>（M27）：mapper XML 与 Java SQL 注解字符串内 Ctrl+Space——SQL 关键字、表名/列名位置感知、别名前缀列、#{} 参数名、XML 动态标签与 OGNL；预览面板输入自动弹补全（含 @TableName 联表候选）</li>
