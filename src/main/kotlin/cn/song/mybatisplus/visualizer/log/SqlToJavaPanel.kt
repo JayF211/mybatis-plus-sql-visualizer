@@ -39,6 +39,7 @@ import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -50,10 +51,14 @@ import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.DefaultComboBoxModel
+import javax.swing.DefaultListCellRenderer
 import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComboBox
+import javax.swing.JComponent
+import javax.swing.JList
 import javax.swing.JPanel
+import javax.swing.ListCellRenderer
 
 /**
  * 「SQL → Java」tab 面板（T-M36.4）：粘贴 SQL → 格式化/自动补全 → 转换 →
@@ -80,7 +85,25 @@ class SqlToJavaPanel(
     /** T-M36.6：生成形态下拉（与设置页 reverseWrapperFormat 双向同步：写穿持久化 + tab 重选刷新）。 */
     private val formatCombo = JComboBox<FormatOption>().apply {
         model = DefaultComboBoxModel(formatOptions())
+        // T-M39 五次增量：长选项截断时完整文案可见——弹出列表项（JList cell renderer tooltip）
+        // 与选中态（combo 自身 tooltip）都带完整 label；选中变化时同步 combo tooltip
+        renderer = object : ListCellRenderer<FormatOption> {
+            private val delegate = DefaultListCellRenderer()
+            override fun getListCellRendererComponent(
+                list: JList<out FormatOption>?,
+                value: FormatOption?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean,
+            ): Component {
+                val c = delegate.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                (c as? JComponent)?.toolTipText = value?.label
+                return c
+            }
+        }
         addActionListener {
+            // 选中项截断时 hover 显示完整文案（先于写穿/重生成，suppress 态同样生效）
+            toolTipText = (selectedItem as? FormatOption)?.label
             if (suppressFormatSync) return@addActionListener
             val value = (selectedItem as? FormatOption)?.persisted
             if (value != null && value != settingsState().reverseWrapperFormat) {
@@ -89,6 +112,8 @@ class SqlToJavaPanel(
                 regenerateWithNewFormat()
             }
         }
+        // 初始选中（model 首项，无 selection 事件）也带完整文案 tooltip
+        toolTipText = (selectedItem as? FormatOption)?.label
     }
 
     /** T-M36.7：调用类选择（Service/Mapper 类名，非必选——留空生成纯表达式）。 */
@@ -367,12 +392,15 @@ class SqlToJavaPanel(
                 iconLabel.icon = null
                 textLabel.text = placeholder
                 textLabel.foreground = UIUtil.getInactiveTextColor()
+                // 占位文案被截断时 hover 显示完整提示（选中后字段级 tooltip 为全限定名，不遮蔽）
+                textLabel.toolTipText = placeholder
                 actionButton.icon = AllIcons.General.Ellipsis
                 actionButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
             } else {
                 iconLabel.icon = pickedIcon
                 textLabel.text = currentText
                 textLabel.foreground = UIUtil.getLabelForeground()
+                textLabel.toolTipText = null
                 actionButton.icon = AllIcons.Actions.Cancel
                 actionButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.clearClass")
             }
@@ -387,6 +415,9 @@ class SqlToJavaPanel(
 
         /** 测试访问器：当前显示的类图标（null = 空值占位态）。 */
         internal fun iconForTest(): Icon? = iconLabel.icon
+
+        /** 测试访问器：文本标签 tooltip（占位态 = 完整占位文案；选中态 = null 不遮蔽字段级全限定名）。 */
+        internal fun textTooltipForTest(): String? = textLabel.toolTipText
     }
 
     // ------------------------------------------------------------------

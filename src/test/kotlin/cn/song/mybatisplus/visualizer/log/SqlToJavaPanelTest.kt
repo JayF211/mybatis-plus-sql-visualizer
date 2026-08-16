@@ -10,6 +10,8 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import javax.swing.JList
+import javax.swing.ListCellRenderer
 
 /**
  * 「SQL → Java」tab 面板行为测试（T-M36.4；T-M37 P1 扩展）。
@@ -198,6 +200,39 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue("选项行应为 GridBag 拉伸布局（窄窗口各自收缩互不挤压）", row.layout is java.awt.GridBagLayout)
         assertEquals("调用类输入框应位于同一选项行", row, panel.callerFieldForTest().parent)
         assertEquals("VO 输入框应位于同一选项行", row, panel.voFieldForTest().parent)
+    }
+
+    fun testFormatComboCellTooltipShowsFullLabel() {
+        // T-M39 五次增量：弹出列表长选项截断时 hover 应显示完整文案（JList cell renderer tooltip）
+        val combo = panel.formatComboForTest()
+        val renderer = combo.renderer as ListCellRenderer<Any>
+        for (i in 0 until combo.model.size) {
+            val option = combo.model.getElementAt(i)
+            // DefaultListCellRenderer 要求非 null list（读 componentOrientation）
+            val cell = renderer.getListCellRendererComponent(JList<Any>(), option, i, false, false)
+            assertEquals("第 $i 项 tooltip 应为完整文案", option.toString(), (cell as javax.swing.JComponent).toolTipText)
+        }
+    }
+
+    fun testFormatComboTooltipTracksSelection() {
+        // 选中态（关闭态）截断时 hover 显示完整文案——combo tooltip 跟随选中项
+        val combo = panel.formatComboForTest()
+        assertEquals("初始选中项 tooltip 应为完整文案", combo.selectedItem.toString(), combo.toolTipText)
+        combo.selectedItem = combo.model.getElementAt(combo.model.size - 1)
+        assertEquals("切换后 tooltip 应跟随", combo.selectedItem.toString(), combo.toolTipText)
+    }
+
+    fun testClassPickerPlaceholderTooltip() {
+        // 占位文案截断时 hover 显示完整提示；选中后不遮蔽字段级全限定名 tooltip
+        val caller = panel.callerFieldForTest()
+        assertNull(caller.toolTipText)
+        assertEquals(
+            "占位态文本标签 tooltip 应为完整占位文案",
+            MpSqlVisualizerBundle.message("reverse.panel.callerHint"),
+            caller.textTooltipForTest(),
+        )
+        caller.pickForTest("UserService", "com.demo.UserService")
+        assertNull("选中态文本标签不应有 tooltip（字段级全限定名不遮蔽）", caller.textTooltipForTest())
     }
 
     fun testFormatComboInitialFromSettings() {
