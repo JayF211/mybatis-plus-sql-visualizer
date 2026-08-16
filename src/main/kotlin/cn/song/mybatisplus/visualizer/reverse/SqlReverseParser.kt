@@ -283,6 +283,14 @@ object SqlReverseParser {
                     cursor.advance()
                     limit = parseLimit(cursor)
                 }
+                cursor.isKeyword(t, "OFFSET") -> {
+                    cursor.advance()
+                    limit = parseOffsetFetch(cursor)
+                }
+                cursor.isKeyword(t, "FETCH") -> {
+                    cursor.advance()
+                    limit = parseFetchFirst(cursor)
+                }
                 allowJoin && isJoinStart(cursor) -> joins.add(parseJoin(cursor, warnings))
                 cursor.isKeyword(t, "GROUP") -> unsupported(cursor, "GROUP BY")
                 cursor.isKeyword(t, "HAVING") -> unsupported(cursor, "HAVING")
@@ -543,6 +551,8 @@ object SqlReverseParser {
             !cursor.isKeyword(t, "ORDER") && !cursor.isKeyword(t, "LIMIT") && !cursor.isKeyword(t, "HAVING") &&
             !cursor.isKeyword(t, "UNION") && !cursor.isKeyword(t, "JOIN") && !cursor.isKeyword(t, "FOR") &&
             !cursor.isKeyword(t, "SET") && !cursor.isKeyword(t, "INTO") &&
+            // T-M43：分页关键字不当作表别名（`FROM t OFFSET 5 ROWS...` 的 OFFSET 是分页子句）
+            !cursor.isKeyword(t, "OFFSET") && !cursor.isKeyword(t, "FETCH") &&
             !cursor.isKeyword(t, "LEFT") && !cursor.isKeyword(t, "RIGHT") && !cursor.isKeyword(t, "INNER") &&
             !cursor.isKeyword(t, "FULL") && !cursor.isKeyword(t, "CROSS")
         ) {
@@ -600,14 +610,22 @@ object SqlReverseParser {
     /**
      * 条件序列中的子句起点判定：`ORDER BY` / `GROUP BY`（须成对出现——`WHERE order = 1`
      * 的列名 order 不误判）与 HAVING / LIMIT / UNION / FOR。
+     * T-M43：`OFFSET`（后随数字/`?` 才判定，列名 offset 不误判）与 `FETCH`（后随 FIRST/NEXT）。
      */
     private fun isClauseStart(cursor: Cursor): Boolean {
         val t = cursor.current ?: return false
         val by = cursor.isKeyword(cursor.peek(), "BY")
         return (cursor.isKeyword(t, "ORDER") && by) || (cursor.isKeyword(t, "GROUP") && by) ||
             cursor.isKeyword(t, "HAVING") || cursor.isKeyword(t, "LIMIT") ||
-            cursor.isKeyword(t, "UNION") || cursor.isKeyword(t, "FOR")
+            cursor.isKeyword(t, "UNION") || cursor.isKeyword(t, "FOR") ||
+            (cursor.isKeyword(t, "OFFSET") && isLimitValueStart(cursor.peek())) ||
+            (cursor.isKeyword(t, "FETCH") &&
+                (cursor.isKeyword(cursor.peek(), "FIRST") || cursor.isKeyword(cursor.peek(), "NEXT")))
     }
+
+    /** 分页子句值起点判定：数字字面量或 `?` 占位符（`OFFSET 5 ROWS` / `OFFSET ? ROWS`）。 */
+    private fun isLimitValueStart(t: Token?): Boolean =
+        t != null && (t.type == TokenType.NUMBER || (t.type == TokenType.SYMBOL && t.text == "?"))
 
     /**
      * 单个条件（T-M36.1 升级）：括号组 / NOT 组 / 普通条件。
@@ -751,7 +769,7 @@ object SqlReverseParser {
         while (idx < cursor.tokens.size) {
             val tk = cursor.tokens[idx]
             if (depth == 0 && (
-                    (tk.type == TokenType.WORD && (isKeyword(tk, "AND") || isKeyword(tk, "OR") || isClauseToken(tk))) ||
+                    (tk.type == TokenType.WORD && (isKeyword(tk, "AND") || isKeyword(tk, "OR") || isClauseToken(tk, cursor.tokens.getOrNull(idx + 1)))) ||
                         (tk.type == TokenType.SYMBOL && (tk.text == ";" || tk.text == ")"))
                     )
             ) {
@@ -776,9 +794,15 @@ object SqlReverseParser {
     private fun isKeyword(t: Token, kw: String): Boolean =
         t.type == TokenType.WORD && t.text.equals(kw, ignoreCase = true)
 
-    private fun isClauseToken(t: Token): Boolean =
+    /**
+     * 降级扫描的子句边界（T-M43 加 OFFSET/FETCH，须带后继判定防列名误判——offset 是常见列名）。
+     */
+    private fun isClauseToken(t: Token, next: Token?): Boolean =
         isKeyword(t, "ORDER") || isKeyword(t, "GROUP") || isKeyword(t, "HAVING") ||
-            isKeyword(t, "LIMIT") || isKeyword(t, "UNION") || isKeyword(t, "FOR")
+            isKeyword(t, "LIMIT") || isKeyword(t, "UNION") || isKeyword(t, "FOR") ||
+            (isKeyword(t, "OFFSET") && next != null && isLimitValueStart(next)) ||
+            (isKeyword(t, "FETCH") && next != null &&
+                (isKeyword(next, "FIRST") || isKeyword(next, "NEXT")))
 
     /**
      * 二元比较（T-M37：`=` 右侧为裸标识符 → 列对列 [Condition.ColumnComparison]——
@@ -999,7 +1023,13 @@ object SqlReverseParser {
         return items
     }
 
-    /** LIMIT n / LIMIT offset, count（n/offset/count 可为数字或 `?` 占位符——分页参数运行期值）。 */
+    /**
+     * LIMIT 形态（T-M43 输入侧方言宽容）：
+     *  - `LIMIT count`（通用）
+     *  - `LIMIT offset, count`（MySQL/MariaDB/DM）
+     *  - `LIMIT count OFFSET offset`（PostgreSQL/H2/SQLite/KingBase）
+     * 值可为数字或 `?` 占位符（分页参数运行期值）。
+     */
     private fun parseLimit(cursor: Cursor): LimitClause {
         val first = parseLimitValue(cursor)
         if (cursor.isSymbol(cursor.current, ",")) {
@@ -1010,7 +1040,43 @@ object SqlReverseParser {
                 count = second,
             )
         }
+        if (cursor.isKeyword(cursor.current, "OFFSET")) {
+            cursor.advance()
+            return LimitClause(
+                offset = parseLimitValue(cursor),
+                count = first,
+            )
+        }
         return LimitClause(count = first)
+    }
+
+    /**
+     * `OFFSET n ROWS FETCH NEXT m ROWS ONLY`（SQL Server 2012+ / Oracle 12c+ / DM；n/m 可为数字或 `?`）。
+     */
+    private fun parseOffsetFetch(cursor: Cursor): LimitClause {
+        val offset = parseLimitValue(cursor)
+        expectKeyword(cursor, "ROWS")
+        expectKeyword(cursor, "FETCH")
+        expectKeyword(cursor, "NEXT")
+        val count = parseLimitValue(cursor)
+        expectKeyword(cursor, "ROWS")
+        expectKeyword(cursor, "ONLY")
+        return LimitClause(offset = offset, count = count)
+    }
+
+    /**
+     * `FETCH FIRST n ROWS ONLY`（Oracle 12c+ 无 offset 形态；`FETCH NEXT` 亦接受）。
+     */
+    private fun parseFetchFirst(cursor: Cursor): LimitClause {
+        val t = cursor.current
+        if (t == null || !(isKeyword(t, "FIRST") || isKeyword(t, "NEXT"))) {
+            throw SqlReverseException(t?.offset ?: cursor.offsetAtEnd(), KEY_PARSE, "FETCH 后缺少 FIRST/NEXT")
+        }
+        cursor.advance()
+        val count = parseLimitValue(cursor)
+        expectKeyword(cursor, "ROWS")
+        expectKeyword(cursor, "ONLY")
+        return LimitClause(count = count)
     }
 
     /** LIMIT 值：数字字面量或 `?` 占位符（日志场景分页参数）。 */

@@ -71,7 +71,7 @@
 | 方法 / 重载形态 | 目标状态 | 对应任务编号 | 备注 |
 |------|:----:|------|------|
 | `save` / `saveBatch` | ✅ | —（M19.5 / T-M15-08） | INSERT 全列模板；T-M23-02 参数面板每 `?` 登记 `实体.列名` 输入行；T-M23-04 参数列级勾选——`@TableId(type = IdType.AUTO)` 主键默认不勾选（对齐 MP：自增主键不进 INSERT 列清单）；T-M23.3 列顺序角色分组（主键置顶/业务居中/fill 与逻辑删除沉底，面板同序）；T-M23.4 保留字按方言引用（`table` → `` `table` ``，列清单/表名/ON CONFLICT/EXCLUDED） |
-| `saveOrUpdate` / `saveOrUpdateBatch` | ✅ | —（T-M15-08） | UPSERT 模板；T-M23.2 主键**可选**（toggle 列默认勾选渲染完整 upsert，取消 → 纯 INSERT 新记录路径），非主键列可勾选（取消 → 同步退出 INSERT 列清单与 DO UPDATE SET） |
+| `saveOrUpdate` / `saveOrUpdateBatch` | ✅ | —（T-M15-08） | UPSERT 模板；T-M23.2 主键**可选**（toggle 列默认勾选渲染完整 upsert，取消 → 纯 INSERT 新记录路径），非主键列可勾选（取消 → 同步退出 INSERT 列清单与冲突子句）；**T-M43 冲突子句按方言渲染**——MySQL 系 `ON DUPLICATE KEY UPDATE 列 = VALUES(列)`、PG 系 `ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列`、Oracle/SQL Server/DM 降级纯 INSERT（无原生简洁 upsert） |
 | `saveOrUpdate(T, Wrapper)` | ✅ | T-M20-10 | UPSERT + wrapper 条件 + 实体字段展开 SET |
 | `removeById` / `removeByIds` / `remove` / `removeByMap` | ✅ | —（T-M15-08 / T-M20-07） | removeByMap：Map 等值链（字面量展开 / 变量占位）；T-M23-01 @TableLogic 实体软删除（UPDATE SET deleted=1 + AND deleted=0，无 @TableLogic 维持 DELETE）；T-M23-02 实参字面量内联 / 变量参数行 |
 | `updateById` | ✅ | —（既有能力） | UPDATE 主键等值；T-M23-04 SET 列级勾选（默认全勾选，可按需取消——近似 NOT_NULL"只更新需要修改的字段"），WHERE 主键固定 |
@@ -292,7 +292,7 @@
 | `select(Class, Predicate)` / `selectFilter` 谓词精确求值 | 🟡 | 静态近似（T-M21-01）：psi 层识别 predicate lambda 体的字段白/黑名单，复杂谓词回退全列 |
 | `fill` 6 形态 | ⬜ | M22 远期（T-M22-01） |
 | `@Version` 乐观锁 / 拦截器模拟 | ✅ | T-M22-02（M22）——@Version 注入已交付；Tenant/DataPermission/DynamicTableName 仍 ⬜ |
-| 方言扩展（SQL Server / H2 / SQLite / MariaDB / 达梦 / KingBase） | ✅ | T-M22-03（M22），未知方言回退 MySQL |
+| 方言扩展（SQL Server / H2 / SQLite / MariaDB / 达梦 / KingBase） | ✅ | T-M22-03（M22），未知方言回退 MySQL；T-M43 补 upsert 按方言（MySQL 系 ON DUPLICATE KEY UPDATE / PG 系 ON CONFLICT / Oracle·SQLServer·DM 降级纯 INSERT）+ 达梦分页官方实证 + 反向解析分页三形态宽容（LIMIT..OFFSET / OFFSET..FETCH / FETCH FIRST） |
 | `Db` kit / `SimpleQuery` / ActiveRecord | ✅ | T-M22-04（M22）——Db.getById/类字面量/lambdaQuery 链、SimpleQuery wrapper 消费、ActiveRecord 无参形态 |
 | XML `${ew.customSqlSegment}` | ⬜ | 远期（T-M22-05） |
 | Kotlin 侧（`KtQueryWrapper` / `KtUpdateWrapper` / `ktQuery()` / `ktUpdate()` / MPJ Kotlin 扩展） | ⬜ | 远期（T-M22-06） |

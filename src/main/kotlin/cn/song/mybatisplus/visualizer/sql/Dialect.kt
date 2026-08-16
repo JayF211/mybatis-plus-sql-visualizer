@@ -10,8 +10,9 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
  *  - 分页子句：[renderLimit]（MySQL 用 LIMIT，PostgreSQL 用 LIMIT+OFFSET，Oracle 用 FETCH）
  *  - 标识符引用：[quoteIdentifier]（MySQL 反引号，PG/Oracle 双引号；默认不引用，按需启用）
  *  - 关键字判定：[reservedWords]（T-M23.4 按方言保留字集合，[quoteIfKeyword] 只判本方言）
+ *  - upsert 冲突子句：[renderUpsert]（T-M43 方言差异点第 4 项；null → 无原生 upsert，渲染降级纯 INSERT）
  *
- * 新增方言：实现本接口并注册进 [DialectRegistry]。
+ * 新增方言：实现本接口并注册进 [DialectRegistry]（五件套：分页形态、引用符号、保留字集合、upsert 形态、测试）。
  */
 interface Dialect {
 
@@ -47,6 +48,17 @@ interface Dialect {
      */
     fun quoteIfKeyword(identifier: String): String =
         if (identifier.lowercase() in reservedWords) quoteIdentifier(identifier) else identifier
+
+    /**
+     * UPSERT 冲突子句（T-M43：设置里出现 = 承诺可用）。
+     *
+     * 返回 null → 本方言无原生 upsert 语法（Oracle/SQL Server/DM 的原生形态是复杂 MERGE），
+     * 渲染方降级为纯 INSERT（保证 SQL 在本方言可执行）；非 null → 追加到 INSERT 语句末尾的冲突子句。
+     *
+     * @param conflictKey    冲突键列名（原始值，实现内按需引用；MySQL 形态无冲突键列表，仍须传入用于勾选判定）
+     * @param updateColumns  冲突后更新列名（原始值，不含冲突键；实现内按需引用）
+     */
+    fun renderUpsert(conflictKey: String, updateColumns: List<String>): String? = null
 }
 
 /**
@@ -74,6 +86,21 @@ private fun renderLimitValue(value: SqlValue): String = when (value) {
 }
 
 /**
+ * 共享 upsert 辅助：MySQL 形态 `ON DUPLICATE KEY UPDATE col = VALUES(col), ...`。
+ * 供 MySQL / MariaDB 复用（VALUES() 对 5.7~8.0+/MariaDB 全版本可用）。
+ */
+private fun Dialect.renderMySqlStyleUpsert(updateColumns: List<String>): String =
+    "ON DUPLICATE KEY UPDATE " + updateColumns.joinToString(", ") { "${quoteIfKeyword(it)} = VALUES(${quoteIfKeyword(it)})" }
+
+/**
+ * 共享 upsert 辅助：PostgreSQL 形态 `ON CONFLICT (pk) DO UPDATE SET col = EXCLUDED.col, ...`。
+ * 供 PostgreSQL / H2 / SQLite / KingBase 复用。
+ */
+private fun Dialect.renderPgStyleUpsert(conflictKey: String, updateColumns: List<String>): String =
+    "ON CONFLICT (${quoteIfKeyword(conflictKey)}) DO UPDATE SET " +
+        updateColumns.joinToString(", ") { "${quoteIfKeyword(it)} = EXCLUDED.${quoteIfKeyword(it)}" }
+
+/**
  * MySQL 方言：`LIMIT [offset,] count`。
  */
 object MySqlDialect : Dialect {
@@ -84,6 +111,9 @@ object MySqlDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 
     override val reservedWords: Set<String> = MYSQL_RESERVED
+
+    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
+        renderMySqlStyleUpsert(updateColumns)
 }
 
 /**
@@ -97,6 +127,9 @@ object PostgreSQLDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = PG_RESERVED
+
+    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
+        renderPgStyleUpsert(conflictKey, updateColumns)
 }
 
 /**
@@ -147,6 +180,9 @@ object H2Dialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = PG_RESERVED
+
+    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
+        renderPgStyleUpsert(conflictKey, updateColumns)
 }
 
 /**
@@ -162,6 +198,9 @@ object SqliteDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = SQLITE_RESERVED
+
+    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
+        renderPgStyleUpsert(conflictKey, updateColumns)
 }
 
 /**
@@ -178,13 +217,18 @@ object MariaDbDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 
     override val reservedWords: Set<String> = MYSQL_RESERVED
+
+    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
+        renderMySqlStyleUpsert(updateColumns)
 }
 
 /**
  * DM（达梦）方言：同 MySQL 的 `LIMIT [offset,] count`。
  *
- * 依据：T-M22-03（假设性标注：达梦兼容 MySQL LIMIT 语法）。标识符引用双引号 `"x"`。
- * 关键字判定：按 Oracle 集合近似（达梦兼容 Oracle，文档化近似）。
+ * 依据：T-M22-03；T-M43 达梦官方社区实证——DM8 原生支持 4 种分页写法（`LIMIT N` / `LIMIT M, N` /
+ * `LIMIT M OFFSET N` / `OFFSET..FETCH`），本实现取 `LIMIT [offset,] count` 形态（官方支持的写法之一）。
+ * 标识符引用双引号 `"x"`。关键字判定：按 Oracle 集合近似（达梦兼容 Oracle，文档化近似）。
+ * upsert：无原生简洁形态（MERGE 复杂）→ 默认 null 降级纯 INSERT。
  */
 object DmDialect : Dialect {
     override val name: String = "DM（达梦）"
@@ -201,6 +245,7 @@ object DmDialect : Dialect {
  *
  * 依据：T-M22-03（假设性标注：人大金仓兼容 PostgreSQL）。标识符引用双引号 `"x"`。
  * 关键字判定：按 PostgreSQL 集合（人大金仓兼容 PG，文档化近似）。
+ * upsert：同 PG 的 `ON CONFLICT` 形态（金仓兼容 PG 语法）。
  */
 object KingBaseDialect : Dialect {
     override val name: String = "KingBase（人大金仓）"
@@ -210,6 +255,9 @@ object KingBaseDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = PG_RESERVED
+
+    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
+        renderPgStyleUpsert(conflictKey, updateColumns)
 }
 
 /**

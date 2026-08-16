@@ -2502,7 +2502,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """
             INSERT INTO task_record_entity (id, task_name, dic_status)
             VALUES (?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET task_name = EXCLUDED.task_name, dic_status = EXCLUDED.dic_status
+            ON DUPLICATE KEY UPDATE task_name = VALUES(task_name), dic_status = VALUES(dic_status)
             """.trimIndent(),
             result!!.sql,
         )
@@ -2660,8 +2660,9 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
-    fun testSaveOrUpdateRendersPgUpsert() {
-        // U12（T-M15-08）：service.saveOrUpdate(entity) → PG 方言 ON CONFLICT upsert
+    fun testSaveOrUpdateRendersMysqlUpsert() {
+        // U12（T-M15-08）：service.saveOrUpdate(entity) → 默认（MySQL）方言 ON DUPLICATE KEY UPDATE upsert
+        // （T-M43：PG 系方言才渲染 ON CONFLICT；Oracle/SQL Server/DM 降级纯 INSERT，见 upsertFollowsDialect）
         myFixture.configureByText(
             "Demo.java",
             """
@@ -2692,7 +2693,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """
             INSERT INTO station_occupy_info_entity (id, station_id, dic_status)
             VALUES (?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET station_id = EXCLUDED.station_id, dic_status = EXCLUDED.dic_status
+            ON DUPLICATE KEY UPDATE station_id = VALUES(station_id), dic_status = VALUES(dic_status)
             """.trimIndent(),
             result!!.sql,
         )
@@ -2810,8 +2811,9 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
-    fun testInsertOrUpdateRendersPgUpsert() {
-        // T-M20-08：BaseMapper.insertOrUpdate(entity)（MP 3.5.7+）→ 与 saveOrUpdate 同 PG ON CONFLICT upsert
+    fun testInsertOrUpdateRendersMysqlUpsert() {
+        // T-M20-08：BaseMapper.insertOrUpdate(entity)（MP 3.5.7+）→ 与 saveOrUpdate 同 MySQL 方言 upsert
+        // （T-M43：冲突子句按方言渲染）
         myFixture.configureByText(
             "Demo.java",
             """
@@ -2844,7 +2846,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """
             INSERT INTO device_info_entity (id, name, dic_status)
             VALUES (?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, dic_status = EXCLUDED.dic_status
+            ON DUPLICATE KEY UPDATE name = VALUES(name), dic_status = VALUES(dic_status)
             """.trimIndent(),
             result!!.sql,
         )

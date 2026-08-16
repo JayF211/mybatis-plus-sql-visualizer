@@ -6,6 +6,10 @@
 
 ### Added
 
+- **UPSERT 按方言渲染（T-M43）**：`saveOrUpdate` / `insertOrUpdate` 预览的冲突子句按当前方言生成——MySQL/MariaDB 渲染 `ON DUPLICATE KEY UPDATE 列 = VALUES(列)`（VALUES() 对 5.7~8.0+/MariaDB 全版本可用），PostgreSQL/H2/SQLite/KingBase 渲染 `ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列`，Oracle/SQL Server/DM 无原生简洁 upsert 语法（MERGE 复杂）→ 降级纯 INSERT——保证「设置里出现 = 承诺可用」：任何可选方言下预览 SQL 均可在该数据库执行
+- **SQL→Java 反向分页解析方言宽容（T-M43）**：粘贴 SQL 的分页子句支持全部主流方言形态——`LIMIT n OFFSET m`（PG/H2/SQLite/KingBase）、`OFFSET n ROWS FETCH NEXT m ROWS ONLY`（SQL Server/Oracle 12c/DM）、`FETCH FIRST n ROWS ONLY`（Oracle），值可为数字或 `?` 占位符（日志分页参数场景）；模型归一化后 `.last("LIMIT offset, count")` 渲染不变（round-trip 自洽）；列名 `offset`/`fetch`（含 LIKE 降级场景）不误判为分页子句
+- **达梦方言实证化（T-M43）**：DM8 官方社区实证支持 4 种分页写法（`LIMIT N` / `LIMIT M, N` / `LIMIT M OFFSET N` / OFFSET..FETCH），当前 `LIMIT [offset,] count` 形态为官方支持写法之一——「假设性标注」注释更新为官方实证依据（MP 对 DM 用 Oracle ROWNUM 方言为历史选择，不采用）
+- **Dialect SPI 方言差异点扩展为 4 项（T-M43）**：接口新增 `renderUpsert`（默认 null = 无原生 upsert），「新增方言」文档由四步升级为五件套（分页形态 / 引用符号 / 保留字集合 / upsert 形态 / 测试）
 - **双击日志 SQL 弹窗自动识别参数（T-M42）**：双击日志列表条目弹出的 SQL 预览弹窗自动识别参数——左侧参数区显示 `#param1`… 参数行并**预填日志中的参数值**（类型感知引号：String 加引号、数值/布尔原样），修改参数值实时回填 SQL；参数数量与占位符不匹配时保持原状（未解析警告）
 - **日志列表 Ctrl+C 复制纯 SQL（T-M42）**：选中日志条目按 Ctrl+C 复制的是纯 SQL 文本（还原后 SQL + 分号，与右键「复制」一致，多选逐条换行拼接）——不再复制列表渲染用的 HTML 源码
 - **预览弹窗 EDT 报错修复（T-M42）**：双击日志 SQL 弹窗在 IDEA 2026.2 上报 "Read access is allowed from inside read-action only" 的异常已修复——编辑器 PSI 文件创建包读操作（Wrapper/gutter/XML/注解全部预览弹窗入口统一受益）

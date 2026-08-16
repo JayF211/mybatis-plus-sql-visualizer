@@ -432,9 +432,10 @@ object BatchOperationConverter {
 
     /**
      * UPSERT 模板（saveOrUpdate / saveOrUpdateBatch，U12，T-M15-08；insertOrUpdate，T-M20-08）：
-     * INSERT + PG 方言 `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`。
+     * INSERT + 方言冲突子句（T-M43——PG 系 `ON CONFLICT`、MySQL 系 `ON DUPLICATE KEY UPDATE`、
+     * Oracle/SQL Server/DM 降级纯 INSERT，由 [BatchModel.renderSql] 按 [cn.song.mybatisplus.visualizer.sql.Dialect.renderUpsert] 渲染）。
      * T-M23.2（用户实测：saveOrUpdate 主键应为可选）：主键纳入 toggleColumns（默认勾选，完整 upsert；
-     * 取消勾选 → 纯 INSERT 新记录路径，无 ON CONFLICT——[BatchModel.conflictColumn] 判活跃态）；
+     * 取消勾选 → 纯 INSERT 新记录路径——[BatchModel.conflictColumn] 判活跃态）；
      * 初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
     private fun buildUpsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {

@@ -239,6 +239,58 @@ class SqlReverseParserTest {
         assertEquals("10", (paged.limit?.count as SqlValue.Literal).raw)
     }
 
+    @Test
+    fun `LIMIT_方言形态_宽容解析`() {
+        // T-M43 输入侧方言宽容：PG 系 `LIMIT count OFFSET offset`
+        val pg = SqlReverseParser.parse("SELECT * FROM t LIMIT 10 OFFSET 5")
+        assertEquals("5", (pg.limit?.offset as SqlValue.Literal).raw)
+        assertEquals("10", (pg.limit?.count as SqlValue.Literal).raw)
+
+        // SQL Server / Oracle 12c 系 `OFFSET n ROWS FETCH NEXT m ROWS ONLY`
+        val offsetFetch = SqlReverseParser.parse("SELECT * FROM t OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY")
+        assertEquals("5", (offsetFetch.limit?.offset as SqlValue.Literal).raw)
+        assertEquals("10", (offsetFetch.limit?.count as SqlValue.Literal).raw)
+
+        // Oracle 无 offset 形态 `FETCH FIRST n ROWS ONLY`（FETCH NEXT 亦接受）
+        val fetchFirst = SqlReverseParser.parse("SELECT * FROM t FETCH FIRST 10 ROWS ONLY")
+        assertNull(fetchFirst.limit?.offset)
+        assertEquals("10", (fetchFirst.limit?.count as SqlValue.Literal).raw)
+        val fetchNext = SqlReverseParser.parse("SELECT * FROM t FETCH NEXT 10 ROWS ONLY")
+        assertNull(fetchNext.limit?.offset)
+        assertEquals("10", (fetchNext.limit?.count as SqlValue.Literal).raw)
+
+        // WHERE 之后的分页同样识别（OFFSET 作子句边界不吞进条件）
+        val withWhere = SqlReverseParser.parse("SELECT * FROM t WHERE a = 1 OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY")
+        assertEquals(1, withWhere.conditions.size)
+        assertEquals("5", (withWhere.limit?.offset as SqlValue.Literal).raw)
+        assertEquals("10", (withWhere.limit?.count as SqlValue.Literal).raw)
+
+        // 列名 offset / fetch 不误判为分页子句
+        val columnOffset = SqlReverseParser.parse("SELECT * FROM t WHERE offset = 1")
+        assertEquals("offset", (columnOffset.conditions.single() as Condition.Simple).column.columnName)
+        val columnFetch = SqlReverseParser.parse("SELECT * FROM t WHERE fetch = 1")
+        assertEquals("fetch", (columnFetch.conditions.single() as Condition.Simple).column.columnName)
+        // 列名 offset 参与表达式降级（LIKE 无通配符）同样不吞分页后续
+        val likeOffset = SqlReverseParser.parse("SELECT * FROM t WHERE offset LIKE 'x'")
+        assertEquals("offset LIKE 'x'", (likeOffset.conditions.single() as Condition.Raw).sqlText)
+    }
+
+    @Test
+    fun `LIMIT_方言形态_占位符`() {
+        // T-M43：方言形态 + `?` 占位符（日志分页参数场景）
+        val pg = SqlReverseParser.parse("SELECT * FROM t LIMIT ? OFFSET ?")
+        assertTrue(pg.limit?.offset is SqlValue.Placeholder)
+        assertTrue(pg.limit?.count is SqlValue.Placeholder)
+
+        val offsetFetch = SqlReverseParser.parse("SELECT * FROM t OFFSET ? ROWS FETCH NEXT ? ROWS ONLY")
+        assertTrue(offsetFetch.limit?.offset is SqlValue.Placeholder)
+        assertTrue(offsetFetch.limit?.count is SqlValue.Placeholder)
+
+        val fetchFirst = SqlReverseParser.parse("SELECT * FROM t FETCH FIRST ? ROWS ONLY")
+        assertNull(fetchFirst.limit?.offset)
+        assertTrue(fetchFirst.limit?.count is SqlValue.Placeholder)
+    }
+
     // ------------------------------------------------------------------
     // 错误场景（P1+ 范围明确报错）
     // ------------------------------------------------------------------

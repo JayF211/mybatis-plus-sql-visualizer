@@ -166,6 +166,9 @@ tasks {
         changeNotes = """
             <h2>v2026.8.17</h2>
             <ul>
+                <li><b>UPSERT 按方言渲染</b>（T-M43）：saveOrUpdate/insertOrUpdate 预览的冲突子句按当前方言生成——MySQL/MariaDB 渲染 <code>ON DUPLICATE KEY UPDATE 列 = VALUES(列)</code>，PostgreSQL/H2/SQLite/KingBase 渲染 <code>ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列</code>，Oracle/SQL Server/DM 降级纯 INSERT（无原生简洁 upsert 语法，保证 SQL 可执行）；「设置里出现 = 承诺可用」</li>
+                <li><b>SQL→Java 反向分页解析方言宽容</b>（T-M43）：粘贴 SQL 的分页子句支持全部主流方言形态——<code>LIMIT n OFFSET m</code>（PG 系）、<code>OFFSET n ROWS FETCH NEXT m ROWS ONLY</code>（SQL Server/Oracle 12c）、<code>FETCH FIRST n ROWS ONLY</code>（Oracle），含 <code>?</code> 占位符；列名 offset/fetch 不误判</li>
+                <li><b>达梦方言实证化</b>（T-M43）：DM8 官方支持 <code>LIMIT M, N</code> 分页写法（4 种写法之一）——原「假设性标注」更新为官方实证依据</li>
                 <li><b>日志 SQL 预览弹窗自动识别参数</b>（T-M42）：双击日志条目弹出的 SQL 预览自动识别参数——左侧参数区显示 #param1… 参数行并预填日志参数值（类型感知引号），修改参数值实时回填 SQL</li>
                 <li><b>日志列表 Ctrl+C 复制纯 SQL</b>（T-M42）：复制内容为还原后 SQL 文本（与右键复制一致），不再复制列表渲染 HTML 源码</li>
                 <li><b>预览弹窗 EDT 报错修复</b>（T-M42）：2026.2 双击日志 SQL 报 Read access 异常已修复（PSI 文件创建包读操作，全部预览弹窗入口统一受益）</li>
@@ -173,7 +176,7 @@ tasks {
                 <li><b>serialVersionUID 默认忽略</b>（T-M42）：SQL→Java 反向与实体解析对 serialVersionUID 系列字段/列名（serial_version_uid / serial_version_u_i_d 等全形态）默认忽略——不再生成 User::getSerialVersionUID 编译不过的引用</li>
                 <li><b>SQL→Java 右键预览高亮 + 快捷键可配置</b>（T-M41）：结果弹窗升级为 IDEA 只读编辑器（Java 词法高亮 + 行号）；设置页新增「SQL→Java 快捷键」行（录制式修改 Alt+Shift+J）</li>
                 <li><b>SQL→Java 性能与设置页优化</b>：实体反查项目级缓存（PsiModificationTracker 失效）+ 类名去首段启发式 + 跳过接口枚举；「更新与诊断」分区统一缓存管理（大小显示 + 清除反馈）</li>
-                <li>1170 测试全绿</li>
+                <li>1175 测试全绿</li>
             </ul>
             <h2>v2026.8.16</h2>
             <ul>

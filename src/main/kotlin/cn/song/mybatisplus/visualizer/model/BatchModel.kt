@@ -15,7 +15,8 @@ enum class BatchKind {
     UPDATE,
 
     /**
-     * UPSERT：`INSERT ... ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`。
+     * UPSERT：`INSERT ...` + 方言冲突子句（T-M43：PG 系 `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`、
+     * MySQL 系 `ON DUPLICATE KEY UPDATE 列 = VALUES(列)`；Oracle/SQL Server/DM 无原生简洁形态 → 降级纯 INSERT）。
      * T-M23.2：主键在 [BatchModel.toggleColumns] 内**可勾选**（默认勾选渲染完整 upsert；
      * 取消勾选 → 渲染纯 INSERT 新记录路径），冲突键见 [BatchModel.conflictColumn]。
      */
@@ -59,9 +60,9 @@ data class BatchModel(
     /** UPDATE @Version 列名：SET 追加 `version = version + 1`（字面量，固定；WHERE 侧见 fixedColumns）。 */
     val versionColumn: String? = null,
     /**
-     * UPSERT 冲突键列名（ON CONFLICT 目标，通常为主键；T-M23.2 用户实测：saveOrUpdate 主键**可选**——
+     * UPSERT 冲突键列名（冲突子句目标，通常为主键；T-M23.2 用户实测：saveOrUpdate 主键**可选**——
      * 主键在 [toggleColumns] 内默认勾选，取消勾选 → 渲染纯 INSERT（新记录路径），不再固定必填）。
-     * INSERT/UPDATE 为 null。
+     * INSERT/UPDATE 为 null。方言无原生 upsert（Oracle/SQL Server/DM）时渲染亦降级纯 INSERT。
      */
     val conflictColumn: String? = null,
     /**
@@ -115,16 +116,17 @@ data class BatchModel(
             val toggles = toggleColumns.filter { it.columnName in activeColumns }
             val conflict = conflictColumn?.takeIf { it in activeColumns }
             val cols = toggles.map { dialect.quoteIfKeyword(it.columnName) }
+            val base = "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
             if (conflict == null) {
-                // 主键未勾选（新记录插入路径）→ 纯 INSERT，无 ON CONFLICT
-                "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
+                // 主键未勾选（新记录插入路径）→ 纯 INSERT，无冲突子句
+                base
             } else {
-                // `列 = EXCLUDED.列`：列名按需引用（EXCLUDED 前缀不包）
-                val conflictSet = toggles.filter { it.columnName != conflict }
-                    .joinToString(", ") { "${dialect.quoteIfKeyword(it.columnName)} = EXCLUDED.${dialect.quoteIfKeyword(it.columnName)}" }
-                "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\n" +
-                    "VALUES (${cols.joinToString(", ") { "?" }})\n" +
-                    "ON CONFLICT (${dialect.quoteIfKeyword(conflict)}) DO UPDATE SET $conflictSet"
+                // T-M43：冲突子句按方言渲染——方言无原生 upsert（Oracle/SQL Server/DM）→ null 降级纯 INSERT
+                val suffix = dialect.renderUpsert(
+                    conflict,
+                    toggles.filter { it.columnName != conflict }.map { it.columnName },
+                )
+                if (suffix == null) base else "$base\n$suffix"
             }
         }
     }

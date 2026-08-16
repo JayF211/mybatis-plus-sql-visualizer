@@ -1,7 +1,13 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.DmDialect
+import cn.song.mybatisplus.visualizer.sql.H2Dialect
+import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
+import cn.song.mybatisplus.visualizer.sql.MariaDbDialect
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+import cn.song.mybatisplus.visualizer.sql.SqliteDialect
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -145,6 +151,7 @@ class BatchModelTest {
     fun upsertConflictKeyFollowsActive() {
         // T-M23.2（用户实测：saveOrUpdate 主键应为可选）：主键为 toggle 列（默认勾选渲染完整 upsert；
         // 取消勾选 → 纯 INSERT 新记录路径，无 ON CONFLICT）
+        // T-M43：PG 方言下断言 ON CONFLICT 形态（MySQL 形态断言见 upsertFollowsDialect）
         val model = BatchModel(
             kind = BatchKind.UPSERT,
             tableName = "task_record",
@@ -154,6 +161,7 @@ class BatchModelTest {
                 BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
             ),
             conflictColumn = "id",
+            dialect = PostgreSQLDialect,
         )
         // 主键勾选（默认）：完整 upsert
         assertEquals(
@@ -260,7 +268,7 @@ class BatchModelTest {
             "UPDATE `order`\nSET `group` = ?, name = ?\nWHERE `key` = ?",
             update.renderSql(setOf("group", "name")),
         )
-        // UPSERT：ON CONFLICT 冲突键 + EXCLUDED 列名（只包列名本体）
+        // UPSERT（T-M43）：默认 MySQL 方言 → ON DUPLICATE KEY UPDATE + VALUES()；列名按需引用
         val upsert = BatchModel(
             kind = BatchKind.UPSERT,
             tableName = "biz_banner",
@@ -272,8 +280,41 @@ class BatchModelTest {
         )
         assertEquals(
             "INSERT INTO biz_banner (`table`, name)\nVALUES (?, ?)\n" +
-                "ON CONFLICT (`table`) DO UPDATE SET name = EXCLUDED.name",
+                "ON DUPLICATE KEY UPDATE name = VALUES(name)",
             upsert.renderSql(setOf("table", "name")),
         )
+    }
+
+    @Test
+    fun upsertFollowsDialect() {
+        // T-M43「设置里出现 = 承诺可用」：UPSERT 冲突子句按方言渲染全量断言
+        val columns = listOf(
+            BatchColumn("id", "entity.id", quote = false, checked = true),
+            BatchColumn("name", "entity.name", quote = true, checked = true),
+        )
+        val active = setOf("id", "name")
+        // MySQL（默认）/ MariaDB：ON DUPLICATE KEY UPDATE + VALUES()
+        val dupKeySql = "INSERT INTO t (id, name)\nVALUES (?, ?)\nON DUPLICATE KEY UPDATE name = VALUES(name)"
+        assertEquals(dupKeySql, BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id").renderSql(active))
+        assertEquals(
+            dupKeySql,
+            BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = MariaDbDialect).renderSql(active),
+        )
+        // PostgreSQL / H2 / SQLite / KingBase：ON CONFLICT + EXCLUDED
+        val conflictSql = "INSERT INTO t (id, name)\nVALUES (?, ?)\nON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
+        for (dialect in listOf(PostgreSQLDialect, H2Dialect, SqliteDialect, KingBaseDialect)) {
+            assertEquals(
+                conflictSql,
+                BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = dialect).renderSql(active),
+            )
+        }
+        // Oracle / SQL Server / DM：无原生 upsert → 降级纯 INSERT（SQL 在本方言可执行）
+        val plainSql = "INSERT INTO t (id, name)\nVALUES (?, ?)"
+        for (dialect in listOf(OracleDialect, SqlServerDialect, DmDialect)) {
+            assertEquals(
+                plainSql,
+                BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = dialect).renderSql(active),
+            )
+        }
     }
 }

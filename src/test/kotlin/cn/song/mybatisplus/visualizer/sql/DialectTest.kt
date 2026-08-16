@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -99,6 +100,46 @@ class DialectTest {
         assertEquals("`id`", MariaDbDialect.quoteIdentifier("id"))
         assertEquals("\"id\"", DmDialect.quoteIdentifier("id"))
         assertEquals("\"id\"", KingBaseDialect.quoteIdentifier("id"))
+    }
+
+    /**
+     * UPSERT 冲突子句（T-M43）：MySQL 系 ON DUPLICATE KEY UPDATE + VALUES()；
+     * PG 系 ON CONFLICT + EXCLUDED；Oracle/SQL Server/DM 无原生形态 → null（渲染方降级纯 INSERT）。
+     * 列名按需引用（`table` 保留字命中本方言符号）。
+     */
+    @Test
+    fun `upsert冲突子句`() {
+        // MySQL / MariaDB：VALUES()（冲突键不入子句；5.7~8.0+/MariaDB 全版本可用）
+        assertEquals(
+            "ON DUPLICATE KEY UPDATE `table` = VALUES(`table`), name = VALUES(name)",
+            MySqlDialect.renderUpsert("id", listOf("table", "name")),
+        )
+        assertEquals(
+            "ON DUPLICATE KEY UPDATE `table` = VALUES(`table`)",
+            MariaDbDialect.renderUpsert("id", listOf("table")),
+        )
+        // PostgreSQL / H2 / SQLite / KingBase：ON CONFLICT (冲突键) + EXCLUDED（`table` 命中 PG 保留字 → 双引号）
+        assertEquals(
+            "ON CONFLICT (\"table\") DO UPDATE SET id = EXCLUDED.id",
+            PostgreSQLDialect.renderUpsert("table", listOf("id")),
+        )
+        // H2/SQLite/KingBase 与 PG 同形态（近似集合），抽查引用符号（id 非保留字 → 不包）
+        assertEquals(
+            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
+            H2Dialect.renderUpsert("id", listOf("name")),
+        )
+        assertEquals(
+            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
+            SqliteDialect.renderUpsert("id", listOf("name")),
+        )
+        assertEquals(
+            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
+            KingBaseDialect.renderUpsert("id", listOf("name")),
+        )
+        // Oracle / SQL Server / DM：无原生简洁 upsert → null（MERGE 复杂，渲染降级纯 INSERT）
+        assertNull(OracleDialect.renderUpsert("id", listOf("name")))
+        assertNull(SqlServerDialect.renderUpsert("id", listOf("name")))
+        assertNull(DmDialect.renderUpsert("id", listOf("name")))
     }
 
     /**
