@@ -437,16 +437,230 @@ class JavaCodeGeneratorTest {
         assertTrue(code, code.contains(".eq(User::getId, 1)"))
     }
 
+    // ------------------------------------------------------------------
+    // 多表删除（DELETE_JOIN → MPJ DeleteJoinWrapper）
+    // ------------------------------------------------------------------
+
+    /** 多表删除结果样本：DELETE t, t1 FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1。 */
+    private fun multiTableDeleteResult() = SqlReverseResult(
+        tableName = "user",
+        kind = ReverseStatementKind.DELETE,
+        deleteTargets = listOf("t", "t1"),
+        conditions = listOf(
+            Condition.Simple(ColumnRef(tableAlias = "t", columnName = "status"), "=", SqlValue.Literal("1")),
+        ),
+        joins = listOf(
+            ReverseJoin(
+                type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                tableName = "address",
+                alias = "t1",
+                onConditions = listOf(
+                    Condition.ColumnComparison(
+                        ColumnRef(tableAlias = "t1", columnName = "user_id"),
+                        ColumnRef(tableAlias = "t", columnName = "id"),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    @Test
+    fun `DELETE_多表_生成DeleteJoinWrapper与join链`() {
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id", "status" to "status"),
+            subEntities = mapOf(
+                "t1" to JavaCodeGenerator.EntityTarget(
+                    className = "Address",
+                    columnToField = mapOf("user_id" to "userId"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new DeleteJoinWrapper<>(User.class, Address.class)"))
+        assertTrue(code, code.contains(".leftJoin(Address.class, Address::getUserId, User::getId)"))
+        assertTrue(code, code.contains(".eq(User::getStatus, 1)"))
+        assertTrue(code, code.contains("（MPJ 形态）"))
+    }
+
+    @Test
+    fun `DELETE_多表_副实体缺失回落主类并注释`() {
+        val result = multiTableDeleteResult()
+        val main = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("id" to "id", "status" to "status"))
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new DeleteJoinWrapper<>(User.class, User.class)"))
+        assertTrue(code, code.contains("// 注意：联表 address 未找到对应实体，DeleteJoinWrapper 副类回落 User"))
+        assertTrue(code, code.contains(".leftJoin(\"address t1 ON t1.user_id = t.id\")"))
+    }
+
+    @Test
+    fun `DELETE_多表_主实体不可用_报错`() {
+        val ex = try {
+            JavaCodeGenerator.generate(multiTableDeleteResult(), null, GeneratedWrapper.QUERY)
+            throw AssertionError("expected SqlReverseException")
+        } catch (e: SqlReverseException) {
+            e
+        }
+        assertEquals(SqlReverseParser.KEY_UNSUPPORTED, ex.key)
+        assertTrue(ex.detail.contains("多表删除需要实体类上下文"))
+    }
+
+    @Test
+    fun `DELETE_多表带Mapper_生成deleteJoin调用`() {
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id", "status" to "status"),
+            subEntities = mapOf(
+                "t1" to JavaCodeGenerator.EntityTarget(
+                    className = "Address",
+                    columnToField = mapOf("user_id" to "userId"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(
+            multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget("UserMapper"),
+        )
+        assertTrue(code, code.contains("DeleteJoinWrapper<User> wrapper = new DeleteJoinWrapper<>(User.class, Address.class)"))
+        assertTrue(code, code.contains("UserMapper.deleteJoin(wrapper);"))
+    }
+
+    @Test
+    fun `DELETE_多表带Service_生成deleteJoin调用`() {
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id", "status" to "status"),
+            subEntities = mapOf(
+                "t1" to JavaCodeGenerator.EntityTarget(
+                    className = "Address",
+                    columnToField = mapOf("user_id" to "userId"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(
+            multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget("UserService"),
+        )
+        assertTrue(code, code.contains("DeleteJoinWrapper<User> wrapper = new DeleteJoinWrapper<>(User.class, Address.class)"))
+        assertTrue(code, code.contains("UserService.deleteJoin(wrapper);"))
+    }
+
+    @Test
+    fun `DELETE_多表_无调用类纯表达式分号结尾`() {
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("id" to "id", "status" to "status"),
+            subEntities = mapOf(
+                "t1" to JavaCodeGenerator.EntityTarget(
+                    className = "Address",
+                    columnToField = mapOf("user_id" to "userId"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(multiTableDeleteResult(), main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.endsWith(".eq(User::getStatus, 1);"))
+    }
+
     @Test
     fun `INSERT_生成实体setter链`() {
         val result = SqlReverseResult(
             tableName = "user",
             kind = ReverseStatementKind.INSERT,
             insertColumns = listOf("name", "age"),
-            insertValues = listOf(SqlValue.Literal("'张三'", "张三"), SqlValue.Literal("18")),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'张三'", "张三"), SqlValue.Literal("18")),
+            ),
         )
         val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
         assertTrue(code, code.contains("new User().setName(\"张三\")\n    .setAge(18);"))
+    }
+
+    @Test
+    fun `INSERT_多行_逐行setter语句`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name", "age"),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'张三'", "张三"), SqlValue.Literal("18")),
+                listOf(SqlValue.Literal("'李四'", "李四"), SqlValue.Literal("20")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+        assertTrue(
+            code,
+            code.contains(
+                "new User().setName(\"张三\")\n    .setAge(18);\nnew User().setName(\"李四\")\n    .setAge(20);",
+            ),
+        )
+    }
+
+    @Test
+    fun `INSERT_多行_lambda实体字段映射`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name", "nick_name"),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'a'", "a"), SqlValue.Literal("'b'", "b")),
+                listOf(SqlValue.Literal("'c'", "c"), SqlValue.Literal("'d'", "d")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "User",
+            columnToField = mapOf("name" to "name", "nick_name" to "nickName"),
+        )
+        val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.LAMBDA)
+        // 每行实体独立语句；多列 setter 换行（对齐单行 INSERT 既有格式）
+        assertTrue(
+            code,
+            code.contains("new User().setName(\"a\")\n    .setNickName(\"b\");\nnew User().setName(\"c\")\n    .setNickName(\"d\");"),
+        )
+    }
+
+    @Test
+    fun `INSERT_多行带Service_生成saveBatch`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name", "age"),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'张三'", "张三"), SqlValue.Literal("18")),
+                listOf(SqlValue.Literal("'李四'", "李四"), SqlValue.Literal("20")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService"),
+        )
+        assertTrue(
+            code,
+            code.contains(
+                "User user1 = new User().setName(\"张三\")\n    .setAge(18);\n" +
+                    "User user2 = new User().setName(\"李四\")\n    .setAge(20);\n\n" +
+                    "UserService.saveBatch(Arrays.asList(user1, user2));",
+            ),
+        )
+    }
+
+    @Test
+    fun `INSERT_多行带Mapper_逐条insert`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.INSERT,
+            insertColumns = listOf("name"),
+            insertValues = listOf(
+                listOf(SqlValue.Literal("'a'", "a")),
+                listOf(SqlValue.Literal("'b'", "b")),
+                listOf(SqlValue.Literal("'c'", "c")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper"),
+        )
+        assertTrue(code, code.contains("User user1 = new User().setName(\"a\");\nUser user2 = new User().setName(\"b\");\nUser user3 = new User().setName(\"c\");\n\n"))
+        assertTrue(code, code.contains("UserMapper.insert(user1);\nUserMapper.insert(user2);\nUserMapper.insert(user3);"))
     }
 
     // ------------------------------------------------------------------
@@ -507,7 +721,7 @@ class JavaCodeGeneratorTest {
             tableName = "user",
             kind = ReverseStatementKind.INSERT,
             insertColumns = listOf("name"),
-            insertValues = listOf(SqlValue.Literal("'张三'", "张三")),
+            insertValues = listOf(listOf(SqlValue.Literal("'张三'", "张三"))),
         )
         val code = JavaCodeGenerator.generate(
             result, null, GeneratedWrapper.QUERY,

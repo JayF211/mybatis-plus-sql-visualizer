@@ -106,26 +106,51 @@ object SqlReverseParser {
         )
     }
 
-    /** DELETE 主体：FROM 表 + 子句序列（T-M36.7）。 */
+    /**
+     * DELETE 主体（T-M36.7 + 多表删除）：
+     * `DELETE FROM 表 [WHERE ...]`（无目标清单，单表，现状不变）或
+     * `DELETE t, t1 FROM 表 [别名] [JOIN 链] [WHERE ...]`（目标清单 → deleteTargets，联表删除）。
+     */
     private fun parseDeleteBody(cursor: Cursor): SqlReverseResult {
+        val deleteTargets = mutableListOf<String>()
+        if (!cursor.isKeyword(cursor.current, "FROM")) {
+            // DELETE 目标清单：逗号分隔的别名/表名（剥反引号）
+            while (true) {
+                val t = cursor.current
+                    ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "DELETE 缺少 FROM 子句")
+                if (t.type != TokenType.WORD) {
+                    throw SqlReverseException(t.offset, KEY_PARSE, "DELETE 目标格式不正确")
+                }
+                deleteTargets.add(t.text.trim('`'))
+                cursor.advance()
+                if (cursor.isSymbol(cursor.current, ",")) {
+                    cursor.advance()
+                    continue
+                }
+                break
+            }
+        }
         if (!cursor.isKeyword(cursor.current, "FROM")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "DELETE 缺少 FROM 子句")
         }
         cursor.advance()
         val tableName = parseTableName(cursor)
         consumeOptionalAlias(cursor)
-        val (conditions, orderBy, limit, warnings) = parseTailClauses(cursor)
+        // 联表删除：DELETE 的尾子句放开 JOIN（UPDATE 的 JOIN 保持报错不变）
+        val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
             conditions = conditions,
             orderBy = orderBy,
             limit = limit,
             warnings = warnings,
+            joins = joins,
             kind = ReverseStatementKind.DELETE,
+            deleteTargets = deleteTargets,
         )
     }
 
-    /** INSERT 主体：INTO 表 (列清单) VALUES (值清单)（T-M36.7；多 VALUES 行 P1）。 */
+    /** INSERT 主体：INTO 表 (列清单) VALUES (值清单)（T-M36.7；多行 VALUES 支持）。 */
     private fun parseInsertBody(cursor: Cursor): SqlReverseResult {
         if (!cursor.isKeyword(cursor.current, "INTO")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "INSERT 缺少 INTO 子句")
@@ -153,31 +178,38 @@ object SqlReverseParser {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "INSERT 缺少 VALUES")
         }
         cursor.advance()
-        expectSymbol(cursor, "(")
-        val values = mutableListOf<SqlValue>()
+        // VALUES 多行：`(v1, v2), (v3, v4)`——每行独立值列表；行内列数须与列清单一致，不齐报 KEY_PARSE
+        val rows = mutableListOf<List<SqlValue>>()
         while (true) {
-            val value = parseValue(cursor)
-                ?: throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 值不支持 NULL")
-            values.add(value)
+            expectSymbol(cursor, "(")
+            val values = mutableListOf<SqlValue>()
+            while (true) {
+                val value = parseValue(cursor)
+                    ?: throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 值不支持 NULL")
+                values.add(value)
+                if (cursor.isSymbol(cursor.current, ",")) {
+                    cursor.advance()
+                    continue
+                }
+                break
+            }
+            expectSymbol(cursor, ")")
+            if (columns.size != values.size) {
+                throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 列数与值数不一致")
+            }
+            rows.add(values)
             if (cursor.isSymbol(cursor.current, ",")) {
                 cursor.advance()
                 continue
             }
             break
         }
-        expectSymbol(cursor, ")")
-        if (columns.size != values.size) {
-            throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 列数与值数不一致")
-        }
-        if (cursor.isSymbol(cursor.current, ",")) {
-            unsupported(cursor, "多行 VALUES（一次转换一行）")
-        }
         return SqlReverseResult(
             tableName = tableName,
             warnings = emptyList(),
             kind = ReverseStatementKind.INSERT,
             insertColumns = columns,
-            insertValues = values,
+            insertValues = rows,
         )
     }
 
@@ -224,7 +256,7 @@ object SqlReverseParser {
 
     /**
      * 尾子句序列（SELECT/UPDATE/DELETE 共用）：WHERE / ORDER BY / LIMIT 及不支持子句报错。
-     * T-M37：allowJoin=true（SELECT）时解析 JOIN 链。
+     * T-M37：allowJoin=true（SELECT）时解析 JOIN 链；DELETE 多表删除同样放开（UPDATE 保持报错）。
      */
     private fun parseTailClauses(cursor: Cursor, allowJoin: Boolean = false): TailClauses {
         val warnings = mutableListOf<String>()
@@ -1084,7 +1116,8 @@ object SqlReverseParser {
     }
 }
 
-/** 解析结果（T-M36.7 起支持增删改查；T-M37 支持多表 JOIN）：语句类型 + 表名 / select 列 / 条件 / 排序 / 分页。 */
+/** 解析结果（T-M36.7 起支持增删改查；T-M37 支持多表 JOIN）：语句类型 + 表名 / select 列 / 条件 / 排序 / 分页 /
+ * 插入多行值（insertValues 行 × 列）/ 多表删除目标（deleteTargets）。 */
 data class SqlReverseResult(
     val tableName: String,
     val selectColumns: List<String>? = null,
@@ -1095,8 +1128,11 @@ data class SqlReverseResult(
     val kind: ReverseStatementKind = ReverseStatementKind.SELECT,
     val sets: List<ReverseSet> = emptyList(),
     val insertColumns: List<String> = emptyList(),
-    val insertValues: List<SqlValue> = emptyList(),
+    /** INSERT 值（多行支持）：行 × 列；单行时仅一行。 */
+    val insertValues: List<List<SqlValue>> = emptyList(),
     val joins: List<ReverseJoin> = emptyList(),
+    /** DELETE 多表删除目标（别名/表名清单，剥反引号；空 = 单表删除）。 */
+    val deleteTargets: List<String> = emptyList(),
 )
 
 /** 反向转换语句类型（T-M36.7）：增删改查全支持。 */

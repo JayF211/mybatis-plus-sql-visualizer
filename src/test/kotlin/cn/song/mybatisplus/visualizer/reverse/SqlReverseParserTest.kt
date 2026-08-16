@@ -443,8 +443,8 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `UPDATE与DELETE含JOIN_报错`() {
-        // T-M37：仅 SELECT 支持 JOIN；UPDATE/DELETE 联表为 P1 范围
+    fun `UPDATE含JOIN_报错`() {
+        // T-M37：仅 SELECT/DELETE 支持 JOIN；UPDATE 联表保持报错不变
         assertThrows { SqlReverseParser.parse("UPDATE t SET a = 1 LEFT JOIN u ON t.id = u.tid") }
     }
 
@@ -507,6 +507,43 @@ class SqlReverseParserTest {
         assertEquals(ReverseStatementKind.DELETE, result.kind)
         assertEquals("user", result.tableName)
         assertEquals(1, result.conditions.size)
+        assertTrue(result.deleteTargets.isEmpty())
+    }
+
+    @Test
+    fun `DELETE_多表目标_解析目标清单与JOIN`() {
+        val result = SqlReverseParser.parse(
+            "DELETE t, t1 FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1",
+        )
+        assertEquals(ReverseStatementKind.DELETE, result.kind)
+        assertEquals("user", result.tableName)
+        assertEquals(listOf("t", "t1"), result.deleteTargets)
+        assertEquals(1, result.joins.size)
+        assertEquals("t1", result.joins[0].alias)
+        val cond = result.conditions.single() as Condition.Simple
+        assertEquals("t", cond.column.tableAlias)
+    }
+
+    @Test
+    fun `DELETE_多表目标_无JOIN`() {
+        val result = SqlReverseParser.parse("DELETE t FROM user t WHERE t.id = 1")
+        assertEquals(listOf("t"), result.deleteTargets)
+        assertTrue(result.joins.isEmpty())
+        assertEquals(1, result.conditions.size)
+    }
+
+    @Test
+    fun `DELETE_多表目标_反引号剥壳`() {
+        val result = SqlReverseParser.parse(
+            "DELETE `t`, `t1` FROM user t LEFT JOIN address t1 ON t1.user_id = t.id",
+        )
+        assertEquals(listOf("t", "t1"), result.deleteTargets)
+    }
+
+    @Test
+    fun `DELETE_多表目标_缺少FROM_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("DELETE t, t1 WHERE id = 1") }
+        assertEquals(SqlReverseParser.KEY_PARSE, ex.key)
     }
 
     @Test
@@ -514,8 +551,27 @@ class SqlReverseParserTest {
         val result = SqlReverseParser.parse("INSERT INTO user (name, age) VALUES ('张三', 18)")
         assertEquals(ReverseStatementKind.INSERT, result.kind)
         assertEquals(listOf("name", "age"), result.insertColumns)
-        assertEquals("张三", (result.insertValues[0] as SqlValue.Literal).unquoted)
-        assertEquals("18", (result.insertValues[1] as SqlValue.Literal).raw)
+        assertEquals(1, result.insertValues.size)
+        assertEquals("张三", (result.insertValues[0][0] as SqlValue.Literal).unquoted)
+        assertEquals("18", (result.insertValues[0][1] as SqlValue.Literal).raw)
+    }
+
+    @Test
+    fun `INSERT_多行VALUES_解析为行列表`() {
+        val result = SqlReverseParser.parse("INSERT INTO user (name, age) VALUES ('张三', 18), ('李四', 20)")
+        assertEquals(2, result.insertValues.size)
+        assertEquals(2, result.insertValues[0].size)
+        assertEquals("张三", (result.insertValues[0][0] as SqlValue.Literal).unquoted)
+        assertEquals("18", (result.insertValues[0][1] as SqlValue.Literal).raw)
+        assertEquals("李四", (result.insertValues[1][0] as SqlValue.Literal).unquoted)
+        assertEquals("20", (result.insertValues[1][1] as SqlValue.Literal).raw)
+    }
+
+    @Test
+    fun `INSERT_多行VALUES_列数不齐_报错`() {
+        val ex = assertThrows { SqlReverseParser.parse("INSERT INTO user (name, age) VALUES ('张三', 18), ('李四')") }
+        assertEquals(SqlReverseParser.KEY_PARSE, ex.key)
+        assertTrue(ex.detail.contains("列数"))
     }
 
     @Test
@@ -526,11 +582,6 @@ class SqlReverseParserTest {
     @Test
     fun `UPDATE缺少SET_报错`() {
         assertThrows { SqlReverseParser.parse("UPDATE user WHERE id = 1") }
-    }
-
-    @Test
-    fun `INSERT多行VALUES_报错`() {
-        assertThrows { SqlReverseParser.parse("INSERT INTO user (name) VALUES ('a'), ('b')") }
     }
 
     private fun assertThrows(block: () -> Unit): SqlReverseException =

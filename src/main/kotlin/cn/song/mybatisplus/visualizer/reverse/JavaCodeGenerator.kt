@@ -211,7 +211,12 @@ object JavaCodeGenerator {
         }
     }
 
-    /** DELETE：条件 wrapper；带调用类 → Service.remove / Mapper.delete。 */
+    /**
+     * DELETE：单表（deleteTargets 为空）→ 条件 wrapper + Service.remove / Mapper.delete（现状不变）；
+     * 多表（deleteTargets 非空）→ MPJ DeleteJoinWrapper 形态（对齐正向链路 DELETE_JOIN）：
+     * `new DeleteJoinWrapper<>(主实体.class, 副实体.class, ...)` + join 链 + 条件链；
+     * 调用类存在 → `xxxMapper.deleteJoin(wrapper)` / `xxxService.deleteJoin(wrapper)`。
+     */
     private fun generateDelete(
         result: SqlReverseResult,
         entity: EntityTarget?,
@@ -223,6 +228,39 @@ object JavaCodeGenerator {
         if (result.conditions.isEmpty()) {
             sb.append("// ⚠ 无 WHERE 条件，将删除全表数据！\n")
         }
+        val multiTable = result.deleteTargets.isNotEmpty()
+        if (multiTable) {
+            if (entity == null) {
+                // DeleteJoinWrapper 构造需要实体类（无字符串形态），无实体上下文无法生成
+                throw SqlReverseException(0, SqlReverseParser.KEY_UNSUPPORTED, "多表删除需要实体类上下文")
+            }
+            // 副实体类：按 join 别名在 subEntities 查找；缺失回落主实体类名并注释提醒
+            val subClasses = result.joins.map { join ->
+                val sub = join.alias?.let { entity.subEntities[it] }
+                if (sub != null) {
+                    sub.className
+                } else {
+                    sb.append("// 注意：联表 ${join.tableName} 未找到对应实体，DeleteJoinWrapper 副类回落 ${entity.className}\n")
+                    entity.className
+                }
+            }
+            val subPart = if (subClasses.isEmpty()) "" else ", " + subClasses.joinToString(", ") { "$it.class" }
+            val chain = buildString {
+                renderJoins(result, entity).forEach { append("\n    .").append(it) }
+                result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+            }
+            return appendWrapperAndInvocation(
+                sb,
+                "DeleteJoinWrapper",
+                entity.className,
+                wrapperKind,
+                chain,
+                invocation,
+                invocationLine = { "${invocation!!.callerClass}.deleteJoin(wrapper);" },
+                headOverride = { "new DeleteJoinWrapper<>(${entity.className}.class$subPart)" },
+            )
+        }
+        // 单表删除：现状不变
         val chain = buildString {
             result.conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
             renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
@@ -239,7 +277,13 @@ object JavaCodeGenerator {
         }
     }
 
-    /** INSERT：实体 setter 链；带调用类 → Service.save / Mapper.insert。 */
+    /**
+     * INSERT：实体 setter 链。
+     *  - 单行：`new User().setName("a").setAge(1);`；带调用类 → `User user = ...;` + Service.save / Mapper.insert；
+     *  - 多行：无调用类 → 每行一个实体 setter 语句，逐行换行输出；
+     *    Service 调用类 → `User user1 = ...; User user2 = ...;` + saveBatch(Arrays.asList(user1, user2))；
+     *    Mapper 调用类 → 逐条 insert(user1); insert(user2);。
+     */
     private fun generateInsert(
         result: SqlReverseResult,
         entity: EntityTarget?,
@@ -249,33 +293,61 @@ object JavaCodeGenerator {
         val sb = StringBuilder()
         appendHeader(sb, result, entity, wrapperKind, invocation)
         val entityName = entity?.className ?: entityClassName(result.tableName)
-        val setterChain = buildString {
+        val entityVar = entityName.replaceFirstChar { it.lowercaseChar() }
+        val rows = result.insertValues
+
+        // 单行实体 setter 链（列→字段：实体映射优先，缺失按列名驼峰推断）
+        fun setterChain(row: List<SqlValue>): String = buildString {
             result.insertColumns.forEachIndexed { i, column ->
                 val field = entity?.columnToField?.get(column)
                     ?: column.split('_').joinToString("") { seg -> seg.replaceFirstChar { it.uppercase() } }
                     .replaceFirstChar { it.lowercaseChar() }
-                val value = result.insertValues.getOrNull(i)
+                val value = row.getOrNull(i)
                 append(if (i == 0) "new $entityName()" else "\n    ")
                 append(".set").append(field.replaceFirstChar { it.uppercase() }).append("(")
                     .append(value?.let { javaValue(it) } ?: "null")
                     .append(")")
             }
         }
-        val invocationLine = invocation?.let {
-            val entityVar = entityName.replaceFirstChar { it.lowercaseChar() }
-            "$entityName $entityVar = $setterChain;\n\n" + if (isMapper(invocation)) {
-                "${invocation.callerClass}.insert($entityVar);"
+
+        if (rows.size <= 1) {
+            // 单行：现状形态不变
+            val chain = setterChain(rows.firstOrNull() ?: emptyList())
+            val invocationLine = invocation?.let {
+                "$entityName $entityVar = $chain;\n\n" + if (isMapper(invocation)) {
+                    "${invocation.callerClass}.insert($entityVar);"
+                } else {
+                    "${invocation.callerClass}.save($entityVar);"
+                }
+            }
+            return if (invocationLine != null) {
+                sb.append(invocationLine)
+                sb.toString()
             } else {
-                "${invocation.callerClass}.save($entityVar);"
+                sb.append(chain).append(";")
+                sb.toString()
             }
         }
-        return if (invocationLine != null) {
-            sb.append(invocationLine)
-            sb.toString()
-        } else {
-            sb.append(setterChain).append(";")
-            sb.toString()
+        if (invocation == null) {
+            // 多行无调用类：每行一个实体 setter 语句，逐行换行输出
+            sb.append(rows.joinToString("\n") { setterChain(it) + ";" })
+            return sb.toString()
         }
+        // 多行 + 调用类：变量 user1/user2... + 批量（Service）/ 逐条（Mapper）调用
+        rows.forEachIndexed { i, row ->
+            sb.append("$entityName $entityVar${i + 1} = ").append(setterChain(row)).append(";\n")
+        }
+        sb.append("\n")
+        if (isMapper(invocation)) {
+            rows.indices.forEach { i ->
+                sb.append("${invocation.callerClass}.insert($entityVar${i + 1});")
+                if (i < rows.lastIndex) sb.append("\n")
+            }
+        } else {
+            val vars = rows.indices.joinToString(", ") { "$entityVar${it + 1}" }
+            sb.append("${invocation.callerClass}.saveBatch(Arrays.asList($vars));")
+        }
+        return sb.toString()
     }
 
     /** SELECT 调用行：Service → list/listVo；Mapper → selectList/selectVoList（VO 需 MPJ）。 */
@@ -297,7 +369,7 @@ object JavaCodeGenerator {
             if (vo != null) "  // VO 查询需 MyBatis-Plus-Join" else ""
     }
 
-    /** wrapper 变量化 + 调用行；无调用 → 纯表达式。 */
+    /** wrapper 变量化 + 调用行；无调用 → 纯表达式。headOverride 可定制构造表达式（如 DeleteJoinWrapper 多类构造）。 */
     private fun appendWrapperAndInvocation(
         sb: StringBuilder,
         wrapperClass: String,
@@ -305,9 +377,10 @@ object JavaCodeGenerator {
         wrapperKind: GeneratedWrapper,
         chain: String,
         invocation: InvocationTarget?,
+        headOverride: (() -> String)? = null,
         invocationLine: () -> String,
     ): String {
-        val head = wrapperHead(wrapperClass, entityName, wrapperKind)
+        val head = headOverride?.invoke() ?: wrapperHead(wrapperClass, entityName, wrapperKind)
         if (invocation == null) {
             sb.append(head).append(chain).append(";")
             return sb.toString()
