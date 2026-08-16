@@ -3,6 +3,22 @@
 **MyBatis-Plus SQL Visualizer** —— 一个 IntelliJ IDEA 插件，将 MyBatis-Plus（含 MyBatis-Plus-Join）的
 Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**，解决调试困难、参数不可见、联表验证繁琐等痛点。
 
+## 📸 功能截图
+
+> 占位图（微信二维码），替换 `docs/images/screenshot-*.png` 同名文件即可更新，尺寸建议 **1200×760**。
+
+**Wrapper → SQL 预览弹窗**（动态条件勾选 / 参数回填 / 格式化）
+<img src="docs/images/screenshot-01-sql-preview.png" width="720" alt="Wrapper→SQL 预览弹窗"/>
+
+**SQL 日志工具窗口**（控制台日志捕获还原、日志转 SQL）
+<img src="docs/images/screenshot-02-log-panel.png" width="720" alt="SQL 日志工具窗口"/>
+
+**SQL → MP Java 代码反向转换**（右键 / Alt+Shift+J / 侧边栏 tab）
+<img src="docs/images/screenshot-03-sql-to-java.png" width="720" alt="SQL→Java 反向转换"/>
+
+**XML / 注解动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
+<img src="docs/images/screenshot-04-xml-preview.png" width="720" alt="XML/注解动态 SQL 预览"/>
+
 ## ✨ 功能特性
 
 - **Wrapper 全覆盖**：`LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper` /

@@ -46,6 +46,19 @@
             <li>安全警示：UPDATE / DELETE 无 WHERE 条件时红色提示全表操作风险</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
+        <!-- 功能截图（占位）：图片存于仓库 docs/images/，raw 直链（与 M18 二维码同理，相对路径在插件描述中不可用）；
+             当前为微信二维码占位图（docs/images/screenshot-*.png，1200x760），
+             替换同名文件后重新发布即可（URL 不变，无需修改描述） -->
+        <hr/>
+        <h2>Screenshots / 功能截图</h2>
+        <p>Wrapper to SQL preview / Wrapper→SQL 预览弹窗</p>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-01-sql-preview.png" width="720" height="456"/>
+        <p>SQL log tool window (capture &amp; restore, Log to SQL) / SQL 日志工具窗口（捕获还原、日志转 SQL）</p>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-02-log-panel.png" width="720" height="456"/>
+        <p>SQL to MP Java code conversion / SQL→Java 反向转换</p>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-03-sql-to-java.png" width="720" height="456"/>
+        <p>XML / annotation dynamic SQL preview / XML·注解动态 SQL 预览</p>
+        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-04-xml-preview.png" width="720" height="456"/>
         <!-- M18 联系作者：外链二维码（base64/相对路径在插件描述中不可用，官方推荐外部 URL；
              图片存于仓库 docs/images/，raw 直链；二维码为限时码，更新图片后重新发布即可，URL 不变） -->
         <hr/>
