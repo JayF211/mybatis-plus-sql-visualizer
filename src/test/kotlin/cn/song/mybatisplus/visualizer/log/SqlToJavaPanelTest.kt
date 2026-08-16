@@ -1,18 +1,26 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
+import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ReadAction
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 
 /**
- * 「SQL → Java」tab 面板行为测试（T-M36.4）。
+ * 「SQL → Java」tab 面板行为测试（T-M36.4；T-M37 P1 扩展）。
  *
  * Light fixture 下项目无实体类 → 实体查找返回空 → 回落字符串列名 QueryWrapper 路径可测；
  * 异步路径（AUTO 形态后台查找实体）用轮询等待（UIUtil.dispatchAllInvocationEvents +
  * 超时兜底）；QUERY 形态为同步路径（直测）。
+ *
+ * 覆盖边界说明（T-M37 P1）：
+ *  - 副表多候选弹 [SqlSelectionDialog] 的 UI 交互在 Light 下无法真实弹出（无实体 → 候选恒空），
+ *    面板级仅覆盖候选为空 → 回落路径；多候选逻辑（findSubEntityCandidates 候选列表/别名键）在
+ *    converter 层直测（本项目测试工程无实体类，候选列表恒为空——弹窗分支属纯 UI 分发，靠代码走查）。
  */
 class SqlToJavaPanelTest : BasePlatformTestCase() {
 
@@ -108,6 +116,73 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue(MpSqlVisualizerBundle.message("log.tab.sqlToJava").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.convert").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.status.noEntity").isNotBlank())
+        // T-M37 P1：日志列表右键「发送到 SQL → Java 转换」key（中英 bundle 均存在）
+        assertTrue(MpSqlVisualizerBundle.message("log.panel.sendToReverse").isNotBlank())
+    }
+
+    // ------------------------------------------------------------------
+    // 日志列表联动 setInputSql（T-M37 P1）
+    // ------------------------------------------------------------------
+
+    fun testSetInputSqlWritesInputArea() {
+        val sql = "SELECT id FROM user WHERE id = 1"
+        panel.setInputSql(sql)
+        // 写入输入区 + 清空结果区与状态行提示
+        assertEquals(sql, panel.inputEditorForTest().text)
+        assertEquals("", panel.resultTextForTest())
+        assertEquals(" ", panel.statusForTest())
+    }
+
+    fun testSetInputSqlThenConvertGeneratesResult() {
+        // 发送 SQL 后用户点「转换」→ 完整链路产出（输入区已写入，无需再手动 setSql）
+        panel.setInputSql("SELECT id, name FROM user WHERE name = '张三'")
+        panel.convertForTest()
+        val result = awaitResult()
+        assertTrue(result, result.contains("new QueryWrapper<User>()"))
+        assertTrue(result, result.contains(".eq(\"name\", \"张三\")"))
+    }
+
+    // ------------------------------------------------------------------
+    // 副表多候选（T-M37 P1）——Light 无实体 → 回落路径 + converter 层直测
+    // ------------------------------------------------------------------
+
+    fun testConvertJoinFallsBackToMpjQueryWithoutEntities() {
+        // 无实体：副表候选为空 → 跳过（该表列回落字符串），主表也无候选 → MPJ_QUERY raw join
+        panel.inputEditorForTest().setSql("SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1")
+        panel.convertForTest()
+        val result = awaitResult()
+        assertTrue(result, result.contains("new MPJQueryWrapper<>"))
+        assertTrue(result, result.contains("leftJoin(\"address t1 ON t1.user_id = t.id\")"))
+    }
+
+    fun testFindSubEntityCandidatesKeysByAlias() {
+        val result = SqlToJavaConverter.parse(
+            "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id",
+        )
+        assertEquals(1, result.joins.size)
+        val candidates = ReadAction.compute<Map<String, List<SqlToJavaConverter.EntityCandidate>>, Throwable> {
+            SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
+        }
+        // 别名键存在（Light 无实体 → 空列表；面板层据此回落字符串列名）
+        assertTrue(candidates.containsKey("t1"))
+        assertTrue(candidates["t1"].orEmpty().isEmpty())
+        // 向后兼容：findSubEntities 仍返回同语义结果（空副实体表）
+        val sub = ReadAction.compute<Map<String, JavaCodeGenerator.EntityTarget>, Throwable> {
+            SqlToJavaConverter.findSubEntities(project, result.joins)
+        }
+        assertTrue(sub.isEmpty())
+    }
+
+    fun testFindSubEntityCandidatesSkipsNoAliasJoin() {
+        // 无别名的 join 不归属（P1 默认别名规则）→ 结果 map 为空
+        val result = SqlToJavaConverter.parse(
+            "SELECT t.id, a.city FROM user t LEFT JOIN address ON a.user_id = t.id",
+        )
+        assertTrue(result.joins.isNotEmpty())
+        val candidates = ReadAction.compute<Map<String, List<SqlToJavaConverter.EntityCandidate>>, Throwable> {
+            SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
+        }
+        assertTrue(candidates.isEmpty())
     }
 
     // ------------------------------------------------------------------

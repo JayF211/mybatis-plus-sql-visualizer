@@ -6,7 +6,6 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -14,13 +13,9 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
-import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import java.text.SimpleDateFormat
 import java.util.Date
-import com.intellij.openapi.editor.ex.EditorEx
-import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
@@ -41,18 +36,26 @@ import javax.swing.JPanel
 import javax.swing.JPopupMenu
 
 /**
- * MyBatis SQL 日志工具窗口（T-M31-04）：双标签页（SQL 日志列表 / SQL 预览），
+ * MyBatis SQL 日志工具窗口（T-M31-04）：三标签页（SQL 日志列表 / 日志转 SQL / SQL → Java），
  * 全部使用 IDEA 原生组件（[JBTabbedPane] 主题化标签页 + ActionToolbar 扁平图标工具栏 + tooltip，
  * T-M31.6 用户要求 UI 与 IDE 原生风格统一）；双击列表项打开现有预览弹窗
- * （高亮/格式化/复制/执行全复用），右键菜单复制/删除单条。
+ * （高亮/格式化/复制/执行全复用），右键菜单复制/删除/发送到转换 tab。
  */
 class SqlLogToolWindowFactory : ToolWindowFactory {
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        toolWindow.setTitle(MpSqlVisualizerBundle.message("log.toolwindow.title"))
+        // 窗口标题（stripe 标签）：显示 bundle 文案而非窗口 ID（cn.song.mybatisplus.visualizer.log）；
+        // T-M38：invokeLater 二次设置——部分平台版本 createToolWindowContent 阶段 setTitle 后
+        // 新 UI 仍按注册 ID 渲染标题栏，延迟到 UI 派发完成后覆盖
+        val title = MpSqlVisualizerBundle.message("log.toolwindow.title")
+        toolWindow.setTitle(title)
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+            if (!toolWindow.isDisposed) toolWindow.setTitle(title)
+        }
         val manager = project.getService(SqlLogManager::class.java)
         val panel = SqlLogPanel(project, manager)
-        val content = toolWindow.contentManager.factory.createContent(panel, null, false)
+        // content 标题同文案（多 content/部分渲染路径的兜底显示）
+        val content = toolWindow.contentManager.factory.createContent(panel, title, false)
         content.setDisposer(panel)
         toolWindow.contentManager.addContent(content)
     }
@@ -67,8 +70,8 @@ class SqlLogPanel(
     private val listModel = DefaultListModel<LogSqlEntry>()
     private val list = JBList(listModel)
     private val tabs = JBTabbedPane()
-    private var formatToggled = false // T-M31.15 工具栏「格式化」按钮切换态
-    private val previewEditor: Editor = createPreviewEditor()
+    /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
+    private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
     private val sqlToJavaPanel = SqlToJavaPanel(project)
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
@@ -82,12 +85,9 @@ class SqlLogPanel(
         logPanel.add(buildToolbar(), BorderLayout.NORTH)
         logPanel.add(buildListPane(), BorderLayout.CENTER)
 
-        // 标签 2：SQL 预览（选中条目的还原 SQL，只读高亮）
-        val previewPanel = JPanel(BorderLayout())
-        previewPanel.add(previewEditor.component, BorderLayout.CENTER)
-
+        // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.preview"), previewPanel)
+        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
         add(tabs, BorderLayout.CENTER)
 
@@ -108,7 +108,6 @@ class SqlLogPanel(
         // T-M31.16：暂停按钮移除（捕捉开关已覆盖——用户方案 A）
         val group = DefaultActionGroup(
             CaptureAction(),
-            FormatAction(),
             ClearAction(),
             SettingsAction(),
         )
@@ -132,19 +131,6 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             if (manager.capturing) manager.stopCapture() else manager.startCapture()
-        }
-    }
-
-    /** T-M31.15：格式化按钮——切换预览标签页 SQL 的格式化/单行显示。 */
-    private inner class FormatAction : AnAction() {
-        override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.ReformatCode
-            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.format")
-        }
-
-        override fun actionPerformed(e: AnActionEvent) {
-            formatToggled = !formatToggled
-            updatePreview(list.selectedValue)
         }
     }
 
@@ -211,40 +197,7 @@ class SqlLogPanel(
                 if (e.isPopupTrigger) showContextMenu(e)
             }
         })
-        // 选中联动 SQL 预览标签页
-        list.addListSelectionListener { updatePreview(list.selectedValue) }
         return JBScrollPane(list)
-    }
-
-    // ---------- SQL 预览标签页 ----------
-
-    private fun createPreviewEditor(): Editor {
-        val editor = EditorFactory.getInstance()
-            .createEditor(EditorFactory.getInstance().createDocument(""), project)
-        (editor as EditorEx).apply {
-            highlighter = LexerEditorHighlighter(
-                SqlSyntaxHighlighter(),
-                EditorColorsManager.getInstance().globalScheme,
-            )
-            settings.isLineNumbersShown = true
-            settings.isFoldingOutlineShown = true
-            settings.isIndentGuidesShown = false
-            settings.isAdditionalPageAtBottom = false
-        }
-        editor.document.setReadOnly(true)
-        return editor
-    }
-
-    private fun updatePreview(entry: LogSqlEntry?) {
-        val document = previewEditor.document
-        val base = withTerminator(entry?.restoredSql ?: "")
-        // T-M31.15：工具栏「格式化」按钮 toggle——格式化多行/单行切换
-        val text = if (formatToggled && entry != null) SqlFormatter.format(base) else base
-        if (document.text != text) {
-            document.setReadOnly(false)
-            document.setText(text)
-            document.setReadOnly(true)
-        }
     }
 
     // ---------- 刷新与动作 ----------
@@ -253,7 +206,6 @@ class SqlLogPanel(
         val snapshot = manager.entries.snapshot()
         listModel.clear()
         snapshot.forEach { listModel.addElement(it) }
-        updatePreview(list.selectedValue)
     }
 
     /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复）。 */
@@ -321,12 +273,30 @@ class SqlLogPanel(
                 addActionListener { manager.entries.removeEntry(entry) }
             },
         )
+        // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
+        menu.add(
+            JMenuItem(MpSqlVisualizerBundle.message("log.panel.sendToReverse")).apply {
+                addActionListener {
+                    sqlToJavaPanel.setInputSql(entry.restoredSql)
+                    tabs.selectedComponent = sqlToJavaPanel
+                }
+            },
+        )
+        // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
+        menu.add(
+            JMenuItem(MpSqlVisualizerBundle.message("logToSql.sendTo")).apply {
+                addActionListener {
+                    logToSqlPanel.loadFromEntry(entry)
+                    tabs.selectedComponent = logToSqlPanel
+                }
+            },
+        )
         menu.show(list, e.x, e.y)
     }
 
-    /** 面板销毁：释放预览编辑器与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
+    /** 面板销毁：释放日志转 SQL 与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
-        EditorFactory.getInstance().releaseEditor(previewEditor)
+        logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
     }
 

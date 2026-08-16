@@ -38,21 +38,38 @@ object SqlToJavaConverter {
         }
 
     /**
-     * 副表实体查找（T-M37 多表 JOIN，须在 ReadAction 内）：按 join 表名查找并解析，
+     * 副表实体候选（T-M37 P1，须在 ReadAction 内调用）：按 join 表名查找**全部**匹配实体
+     * （复用 [findCandidates]：EntityClassFinder.find + EntityResolver.resolve），
+     * 键 = SQL 表别名（无别名的 join 不归属——P1 默认别名规则；未找到 → 空列表）。
+     * 面板层按 joins 顺序逐表分发：多候选弹 [SqlSelectionDialog]，单候选直取，零候选回落。
+     */
+    fun findSubEntityCandidates(
+        project: Project,
+        joins: List<ReverseJoin>,
+    ): Map<String, List<EntityCandidate>> {
+        val result = mutableMapOf<String, List<EntityCandidate>>()
+        for (join in joins) {
+            val alias = join.alias ?: continue
+            result[alias] = findCandidates(project, join.tableName)
+        }
+        return result
+    }
+
+    /**
+     * 副表实体查找（T-M37 多表 JOIN，须在 ReadAction 内调用）：按 join 表名查找并解析，
      * 键 = SQL 表别名（无别名的 join 不归属——P1 默认别名规则）；副表取首个匹配。
+     * 重构为复用 [findSubEntityCandidates] 取 first（行为与签名保持向后兼容）。
      */
     fun findSubEntities(
         project: Project,
         joins: List<ReverseJoin>,
     ): Map<String, JavaCodeGenerator.EntityTarget> {
         val result = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
-        for (join in joins) {
-            val alias = join.alias ?: continue
-            val clazz = EntityClassFinder(project).find(join.tableName).firstOrNull() ?: continue
-            val table = EntityResolver().resolve(clazz)
+        for ((alias, candidates) in findSubEntityCandidates(project, joins)) {
+            val first = candidates.firstOrNull() ?: continue
             result[alias] = JavaCodeGenerator.EntityTarget(
-                className = clazz.name ?: continue,
-                columnToField = table.columns.associate { it.columnName to it.fieldName },
+                className = first.psiClass.name ?: continue,
+                columnToField = first.tableInfo.columns.associate { it.columnName to it.fieldName },
             )
         }
         return result

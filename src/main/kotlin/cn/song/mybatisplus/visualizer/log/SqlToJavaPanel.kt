@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
+import cn.song.mybatisplus.visualizer.reverse.ReverseJoin
 import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult
@@ -248,21 +249,95 @@ class SqlToJavaPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Pair<List<SqlToJavaConverter.EntityCandidate>, Map<String, JavaCodeGenerator.EntityTarget>>, Throwable> {
+                ReadAction.compute<Pair<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>>, Throwable> {
                     val candidates = SqlToJavaConverter.findCandidates(project, result.tableName)
-                    // T-M37：多表 JOIN 副实体（别名 → 实体；无别名/未找到 → 该表列回落字符串）
-                    val subEntities = SqlToJavaConverter.findSubEntities(project, result.joins)
-                    candidates to subEntities
+                    // T-M37 P1：副表**全部**候选（alias → 列表；零/无别名 → 空），EDT 层按 joins 顺序分发
+                    val subCandidates = SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
+                    candidates to subCandidates
                 }
             } catch (t: Throwable) {
                 emptyList<SqlToJavaConverter.EntityCandidate>() to emptyMap()
             }
             ApplicationManager.getApplication().invokeLater {
                 cacheCandidates = payload.first
-                cacheSubEntities = payload.second
-                render(result, payload.first, format, payload.second)
+                // 副表候选按 joins 顺序逐个处理：多候选弹窗（onSelect 里继续下一个），
+                // ≤1 直接并入，全部处理完统一 render（EDT 异步回调链）
+                resolveSubEntities(payload.second, result.joins) { subEntities ->
+                    cacheSubEntities = subEntities
+                    render(result, payload.first, format, subEntities)
+                }
             }
         }
+    }
+
+    /**
+     * T-M37 P1：副表实体按 joins 顺序逐表解析（EDT 线程）——
+     *  - 候选数 > 1：弹 [SqlSelectionDialog]（displayTexts 仿主表候选格式「类名（表 表名）」+ 文件名），
+     *    选中后写入 subEntities 并在 onSelect 里继续处理后续副表（异步回调链）；
+     *  - 候选数 == 1：直接并入；== 0 或该 join 无别名：跳过（该表列回落字符串列名，现状）；
+     *  - 全部处理完 → [onComplete]（最后统一 render；副表选择结果同时进 cacheSubEntities，
+     *    切换形态重生成时复用不再弹）。
+     */
+    private fun resolveSubEntities(
+        subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
+        joins: List<ReverseJoin>,
+        onComplete: (Map<String, JavaCodeGenerator.EntityTarget>) -> Unit,
+    ) {
+        // 按 joins 顺序的别名列表（无别名的 join 无候选，直接跳过）
+        val aliases = joins.mapNotNull { it.alias }
+        val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+        var index = 0
+        fun next() {
+            while (index < aliases.size) {
+                val alias = aliases[index]
+                index++
+                val candidates = subCandidates[alias].orEmpty()
+                when (candidates.size) {
+                    0 -> continue // 未找到实体 → 该表列回落字符串列名
+                    1 -> {
+                        toSubEntity(candidates[0])?.let { subEntities[alias] = it }
+                        continue
+                    }
+                    else -> {
+                        // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
+                        val displayTexts = candidates.map { c ->
+                            SqlSelectionDialog.displayText(
+                                "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
+                                c.psiClass.containingFile?.name ?: "",
+                            )
+                        }
+                        SqlSelectionDialog(project, candidates, displayTexts) { selected ->
+                            toSubEntity(selected)?.let { subEntities[alias] = it }
+                            next()
+                        }.show()
+                        return
+                    }
+                }
+            }
+            onComplete(subEntities)
+        }
+        next()
+    }
+
+    /** 副表候选 → 生成用实体目标（类名缺失则跳过该表——回落字符串列名）。 */
+    private fun toSubEntity(
+        candidate: SqlToJavaConverter.EntityCandidate,
+    ): JavaCodeGenerator.EntityTarget? {
+        val className = candidate.psiClass.name ?: return null
+        return JavaCodeGenerator.EntityTarget(
+            className = className,
+            columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
+        )
+    }
+
+    /**
+     * 供 SQL 日志列表联动（T-M37 P1）：写入输入区，并清空结果区与状态行提示
+     * （不自动触发转换——用户点「转换」或切换形态后生成）。
+     */
+    fun setInputSql(sql: String) {
+        inputEditor.setSql(sql)
+        setResultText("")
+        status(" ", error = false)
     }
 
     /**
