@@ -17,7 +17,8 @@ Wrapper 构造链**实时转换为可读、可复制、参数已替换的 SQL**�
 <img src="docs/images/screenshot-03-sql-to-java.png" width="720" alt="SQL→Java 反向转换"/>
 
 **XML / 注解动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
-<img src="docs/images/screenshot-04-xml-preview.png" width="720" alt="XML/注解动态 SQL 预览"/>
+<img src="docs/images/screenshot-04-xml-preview.png" width="720" alt="XML动态 SQL 预览"/>
+<img src="docs/images/screenshot-05-annotation-preview.png" width="720" alt="注解动态 SQL 预览"/>
 
 ## ✨ 功能特性
 

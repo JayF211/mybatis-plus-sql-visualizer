@@ -6,6 +6,10 @@
 
 ### Added
 
+- **设置页标签修正（T-M41 增量）**：「版本信息」标签与内容错位修复——更新分区为多行组件，GridBag 默认垂直居中把标签错位到「启动时自动检查更新」行，改顶部对齐；「快捷键」行标签改为「Convert to SQL 快捷键」——明确写明是哪个功能的快捷键（与「SQL→Java 快捷键」行对应）
+- **SQL→Java 右键预览高亮 + 快捷键可配置**（T-M41）：右键「Convert SQL to MP Java Code」结果弹窗升级为 IDEA 只读编辑器——生成代码带完整 Java 词法高亮（关键字/字符串/数字着色 + 行号，与侧边栏「SQL → Java」tab 结果区同款高亮器）；插件设置页「界面与操作」组新增「SQL→Java 快捷键」行——录制式修改 Alt+Shift+J（与 Convert to SQL 快捷键同款交互，冲突检测/强制使用保留，保存写入 IDE Keymap）
+- **设置页插件缓存管理与更新分区布局**：「更新与诊断」分区新增统一缓存管理——显示缓存大小（B/KB/MB）+「清除缓存」按钮（统一清空插件全部缓存，点击后信息行显示「已清除」状态文本），缓存行位于版本信息上方；版本行改为「版本信息」标签 + 「当前版本：X [检查更新]」内容行
+- **SQL→Java 无实体场景性能修复**：实体反查全量扫描（O(项目类数)）结果项目级缓存（PsiModificationTracker 失效，类名+全限定名存储）；类名推断快路径增加「去首段」启发式候选（sys_/biz_ 前缀命名直接命中）；扫描跳过接口/枚举/注解类——无实体匹配场景不再每次转换全量扫描
 - **类选择字段整块可点 + 空态灰字引导**：调用类/VO 字段点击任意位置（图标/文本/按钮区，含手型光标）弹 Goto Class 选择器，清除图标缩至 12×12 紧凑尺寸；「SQL → Java」与「日志 → SQL」两个 tab 的输入区/结果区在空文档时显示灰色引导提示（「在此粘贴 SQL，点击转换…」等），输入内容后自动隐藏
 - **调用类继承链实证 MP/MPJ 能力**：选择调用类后自动解析其继承体系（`MPJBaseService`/`JoinService`/`MPJBaseMapper`/`JoinMapper`）——有 MPJ 能力时 VO 查询生成 `selectJoinList` 族 + MPJ wrapper；无 MPJ 能力时 VO 自动回落实体查询（`list/page`）并注释提示，多表 JOIN/删除明确报错——生成的代码只调用真实存在的方法
 - **MP/MPJ 全量 API 实证审计**：对生成器全部调用方法逐一反编译核实（MP 3.5.14 + MPJ 1.5.6）——MP 侧全部通过（list/page/selectList/selectPage/save/saveBatch/update/remove/insert/delete 及全部条件方法）；MPJ 侧修复两处编译隐患：字符串 raw join（副实体缺失/ON 多条件）统一回落 MPJQueryWrapper（MPJLambdaWrapper 无 leftJoin(String)）；多表删除改 `new DeleteJoinWrapper<>(User.class)` + `.delete("t", "t1")`（1.5.6 无多类构造），无法映射时明确报错——保证生成的代码可编译

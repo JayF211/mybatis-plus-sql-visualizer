@@ -94,7 +94,8 @@ class PluginDistributionSelfCheckTest {
         // 测试环境无 PluginSettings service → runCatching 兜底中文（用户要求默认中文）
         assertEquals("简体中文", MpSqlVisualizerBundle.message("settings.language.zh"))
         assertEquals("界面语言", MpSqlVisualizerBundle.message("settings.language"))
-        assertEquals("快捷键", MpSqlVisualizerBundle.message("settings.shortcut"))
+        // T-M41：快捷键标签须写明功能（用户反馈「快捷键」不知道是哪个的）
+        assertEquals("Convert to SQL 快捷键", MpSqlVisualizerBundle.message("settings.shortcut"))
     }
 
     @Test

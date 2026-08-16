@@ -20,6 +20,7 @@ import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.RestartDialogImpl
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.FlowLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
@@ -129,13 +130,16 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             add(component, gbc)
         }
 
-        row(versionLabel)
+        // 版本内容行（当前版本 + 检查/安装按钮 + 状态反馈）；「版本信息」标签由设置面板
+        // addRow 提供（统一标签列——与插件缓存/内部构建号左对齐，用户反馈对齐问题）
+        row(JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(versionLabel)
+            add(checkButton)
+            add(installButton)
+            add(statusLabel)
+        })
         row(autoCheckCheck)
-        val actions = JPanel(BorderLayout(8, 0)).apply {
-            add(JPanel().apply { add(checkButton); add(installButton) }, BorderLayout.WEST)
-            add(statusLabel, BorderLayout.CENTER)
-        }
-        row(actions)
         row(progressBar)
         row(notesContainer)
         row(doneContainer)

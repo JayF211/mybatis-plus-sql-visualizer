@@ -4899,7 +4899,8 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         settings.state.language = "en"
         try {
             assertEquals("Interface language", MpSqlVisualizerBundle.message("settings.language"))
-            assertEquals("Shortcut", MpSqlVisualizerBundle.message("settings.shortcut"))
+            // T-M41：快捷键标签须写明功能（「Convert to SQL Shortcut」）
+            assertEquals("Convert to SQL Shortcut", MpSqlVisualizerBundle.message("settings.shortcut"))
         } finally {
             settings.state.language = old
         }

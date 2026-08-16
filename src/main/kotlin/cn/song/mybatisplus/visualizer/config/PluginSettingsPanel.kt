@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
+import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
@@ -9,6 +11,7 @@ import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
@@ -17,6 +20,7 @@ import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.FlowLayout
 import java.awt.Dialog
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -146,6 +150,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     private val manualEntityCheck = JBCheckBox()
 
+    /** 插件缓存信息（统一条目总数——所有打开项目汇总；不细分缓存类型）。 */
+    private val cacheInfoLabel = JBLabel(" ")
+
+    /** 插件缓存统一清除按钮（清全部缓存，下次使用自动重建）。 */
+    private val clearCacheButton = JButton(MpSqlVisualizerBundle.message("settings.cache.clear"))
+
     // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
     private val logSqlPrefixField = JBTextField(12)
     private val logParamPrefixField = JBTextField(12)
@@ -167,7 +177,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private var languagePending = false
 
     /** 快捷键内嵌编辑（M14.1：录制式修改 Convert to SQL 的 KeyboardShortcut，保存写入 Keymap）。 */
-    private val shortcutEditor = ShortcutEditor()
+    private val shortcutEditor = ShortcutEditor(ConvertToSqlAction.ACTION_ID)
+
+    /** T-M41：SQL→Java 快捷键内嵌编辑（同款录制式，目标 action = ConvertSqlToJava）。 */
+    private val reverseShortcutEditor = ShortcutEditor(ConvertSqlToJavaAction.ACTION_ID)
 
     /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
     private val updateSection = UpdateSection(settings)
@@ -183,6 +196,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     init {
         buildSections(rootPanel)
         reset()
+        refreshCacheInfo()
         // M19（用户实测：设置切语言确定后重开仍原样——平台 Settings 框架 OK 仅对「当前选中页」且
         // isModified()==true 的 configurable 调用 apply()，改完语言切到其他页再确定即被静默跳过；
         // M16.3 roaming 修复只覆盖磁盘持久化链路）：
@@ -368,13 +382,38 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                     ?: languageOptions().first()
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
+            // T-M41：SQL→Java 反向转换快捷键（同款录制式内嵌编辑，保存写入 Keymap）
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sqlToJava"), reverseShortcutEditor.apply { updateTexts() })
         }
 
         // 组 6：更新与诊断（最低频）
         titleRow("settings.section.updateDiagnostics")
         section { p, g ->
-            // M28：更新分区（检查更新/下载安装/重启提示/启动自动检查开关）
-            addRow(p, g, "", updateSection.apply { updateTexts() })
+            // 插件缓存（用户反馈：移至版本信息上方）：大小展示 + 统一清除
+            // （统一入口，新增缓存类型在 PluginCacheManager 注册即可；清除后信息行变「已清除」状态文本）
+            addRow(
+                p, g,
+                MpSqlVisualizerBundle.message("settings.cache.label"),
+                JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                    isOpaque = false
+                    add(cacheInfoLabel)
+                    add(clearCacheButton.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.cache.tip")
+                        addActionListener {
+                            ProjectManager.getInstance().openProjects.forEach { PluginCacheManager.clearAll(it) }
+                            cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.cleared")
+                        }
+                    })
+                },
+            )
+
+            // M28：更新分区（检查更新/下载安装/重启提示/启动自动检查开关）——
+            // 「版本信息」标签走 addRow 标签列（与插件缓存/内部构建号左对齐）。
+            // T-M41 修复：updateSection 为多行组件，GridBag 默认 WEST（垂直居中）会把标签
+            // 垂直居中到整块中间（错位到「启动时自动检查更新」行——用户截图实证）→ 顶部对齐
+            g.anchor = GridBagConstraints.NORTHWEST
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.update.versionInfo"), updateSection.apply { updateTexts() })
+            g.anchor = GridBagConstraints.WEST
 
             // T-M23.14：内部构建号（MPV-Build，jar manifest 注入的构建时刻时间戳）——只读信息行，
             // 用户反馈问题时可直接报出定位具体产物；非 jar 环境（开发/测试）显示 "—"。
@@ -409,8 +448,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      * 快捷键内嵌编辑行（M14.1）：只读显示当前快捷键 + 「修改」按钮弹出录制对话框，
      * 捕获按键组合后回填（保存时由 [PluginSettingsPanel.apply] 写入 Keymap）。
      * 不依赖 impl 包（KeyboardShortcutPanel 为包私有），全公开 API 实现。
+     *
+     * T-M41：actionId 参数化——同一组件服务多个 action（Convert to SQL / SQL→Java），
+     * 冲突检测与保存写入均以各自 actionId 为准。internal：测试访问器返回类型（行存在/修改检测）。
      */
-    private inner class ShortcutEditor : JPanel(BorderLayout(6, 0)) {
+    internal inner class ShortcutEditor(
+        private val actionId: String,
+    ) : JPanel(BorderLayout(6, 0)) {
 
         var shortcut: KeyboardShortcut? = null
             set(value) {
@@ -520,7 +564,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         private fun conflictActionName(newShortcut: KeyboardShortcut): String? = runCatching {
             val keymap = KeymapManager.getInstance().activeKeymap
             keymap.getActionIds()
-                .filter { it != ConvertToSqlAction.ACTION_ID }
+                .filter { it != actionId }
                 .firstOrNull { actionId -> keymap.getShortcuts(actionId).any { it == newShortcut } }
                 ?.let { actionId ->
                     ActionManager.getInstance().getAction(actionId)?.templatePresentation?.text ?: actionId
@@ -532,10 +576,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     // 快捷键读写（M14.1：内嵌编辑，直接写当前 Keymap）
     // ------------------------------------------------------------------
 
-    /** 当前 Convert to SQL 的键盘快捷键（activeKeymap 中第一个 KeyboardShortcut；环境异常兜底 null）。 */
-    private fun currentShortcut(): KeyboardShortcut? = runCatching {
+    /** 指定 action 的当前键盘快捷键（activeKeymap 中第一个 KeyboardShortcut；环境异常兜底 null）。 */
+    private fun currentShortcut(actionId: String): KeyboardShortcut? = runCatching {
         KeymapManager.getInstance().activeKeymap
-            .getShortcuts(ConvertToSqlAction.ACTION_ID)
+            .getShortcuts(actionId)
             .filterIsInstance<KeyboardShortcut>()
             .firstOrNull()
     }.getOrNull()
@@ -548,24 +592,23 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      * 抢占原理：IDEA keymap 支持"负绑定"——[Keymap.removeShortcut] 对继承自父级 keymap（$default）的
      * 快捷键会在当前（用户级）keymap 写入禁用覆盖，与 IDE Keymap 设置页"绑定冲突键时自动移除旧绑定"一致。
      */
-    private fun applyShortcut() {
+    private fun applyShortcut(editor: ShortcutEditor, actionId: String) {
         runCatching {
             val keymap = KeymapManager.getInstance().activeKeymap
-            val actionId = ConvertToSqlAction.ACTION_ID
             // 1) 清理本 action 的旧键盘快捷键
             keymap.getShortcuts(actionId).filterIsInstance<KeyboardShortcut>()
                 .forEach { keymap.removeShortcut(actionId, it) }
             // 2) 绑定新组合；「强制使用」时先抢占（从所有其他 action 移除，含默认继承绑定）
-            val newShortcut = shortcutEditor.shortcut
+            val newShortcut = editor.shortcut
             if (newShortcut != null) {
-                if (shortcutEditor.forceOnApply) {
+                if (editor.forceOnApply) {
                     keymap.getActionIds().filter { it != actionId }.forEach { other ->
                         keymap.getShortcuts(other).filter { it == newShortcut }
                             .forEach { keymap.removeShortcut(other, it) }
                     }
                 }
                 keymap.addShortcut(actionId, newShortcut)
-                shortcutEditor.forceOnApply = false
+                editor.forceOnApply = false
             }
         }
     }
@@ -577,6 +620,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         rootPanel.removeAll()
         buildSections(rootPanel)
         reset()
+        refreshCacheInfo()
         rootPanel.revalidate()
         rootPanel.repaint()
     }
@@ -595,6 +639,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == value } ?: return
     }
 
+    /** T-M41 测试访问器：SQL→Java 快捷键编辑行（断言行存在 / 修改检测 / apply 写入 Keymap）。 */
+    internal fun reverseShortcutEditorForTest(): ShortcutEditor = reverseShortcutEditor
+
     /** T-xx：启动自动监听复选框设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     internal fun setLogAutoCaptureCheck(checked: Boolean) {
         logAutoCaptureCheck.isSelected = checked
@@ -604,6 +651,19 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     internal fun setManualEntityCheck(checked: Boolean) {
         manualEntityCheck.isSelected = checked
     }
+
+    /** 刷新插件缓存信息（缓存大小——所有打开项目汇总；面板构造与清除按钮共用）。 */
+    private fun refreshCacheInfo() {
+        val projects = ProjectManager.getInstance().openProjects
+        val total = projects.sumOf { PluginCacheManager.sizeBytes(it) }
+        cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.info", PluginCacheManager.formatSize(total))
+    }
+
+    /** 测试访问器：缓存信息文本（断言展示与清除后刷新）。 */
+    internal fun cacheInfoForTest(): String = cacheInfoLabel.text
+
+    /** 测试访问器：清除缓存按钮（断言存在与点击行为）。 */
+    internal fun clearCacheButtonForTest(): JButton = clearCacheButton
 
     // ------------------------------------------------------------------
     // 配置读写
@@ -641,7 +701,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || removeTableSuffixField.text.trim() != s.removeTableSuffix
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
             || updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate
-            || shortcutEditor.shortcut != currentShortcut()
+            || shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)
+            || reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
             || logSqlPrefixField.text.trim() != s.logSqlPrefix
             || logParamPrefixField.text.trim() != s.logParamPrefix
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
@@ -692,7 +753,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logFilterKeywords = logFilterKeywordsField.text.trim()
         s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
         s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
-        if (shortcutEditor.shortcut != currentShortcut()) applyShortcut()
+        if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
+            applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
+        }
+        if (reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)) {
+            applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID)
+        }
         languagePending = false
         return languageChanged
     }
@@ -720,7 +786,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             ?: reverseFormatOptions().first()
         manualEntityCheck.isSelected = s.reverseManualEntitySelection
         updateSection.resetState()
-        shortcutEditor.shortcut = currentShortcut()
+        shortcutEditor.shortcut = currentShortcut(ConvertToSqlAction.ACTION_ID)
+        reverseShortcutEditor.shortcut = currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
         logSqlPrefixField.text = s.logSqlPrefix
         logParamPrefixField.text = s.logParamPrefix
         logMixedPrefixCheck.isSelected = s.logMixedPrefix
