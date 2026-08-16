@@ -6,6 +6,7 @@ import com.intellij.ide.util.gotoByName.ChooseByNamePopup
 import com.intellij.ide.util.gotoByName.ChooseByNamePopupComponent
 import com.intellij.ide.util.gotoByName.GotoClassModel2
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.psi.PsiClass
@@ -123,8 +124,13 @@ class EntitySelectionDialog(
     private fun refreshRow(row: TableRow, selectedLabel: JBLabel) {
         val selected = selections[row.key]
         if (selected != null) {
-            selectedLabel.text = selected.name ?: "?"
-            selectedLabel.toolTipText = selected.qualifiedName
+            // T-M44 审计兜底：label 显示读 PSI（name/qualifiedName 触发 stub 访问）须在 ReadAction 内（EDT 同步）
+            val info = ReadAction.compute<Pair<String, String?>?, Throwable> {
+                val name = selected.name ?: return@compute null
+                name to selected.qualifiedName
+            }
+            selectedLabel.text = info?.first ?: "?"
+            selectedLabel.toolTipText = info?.second
             selectedLabel.foreground = UIUtil.getLabelForeground()
         } else {
             selectedLabel.text = MpSqlVisualizerBundle.message("dialog.selectEntity.none")

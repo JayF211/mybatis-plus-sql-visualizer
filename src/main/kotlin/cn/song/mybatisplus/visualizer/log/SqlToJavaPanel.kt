@@ -435,9 +435,13 @@ class SqlToJavaPanel(
                         // 字段；tooltip = 用途说明（非类名，无全限定名），图标 = 字段图标（字段语义）
                         is String -> setPicked(element, SPECIAL_TOOLTIPS[element], AllIcons.Nodes.Field)
                         is PsiClass -> {
-                            val simpleName = element.name ?: return
-                            // flags=0：按可见性取类/接口/枚举原生图标（Iconable 类不在编译 classpath，不引用）
-                            setPicked(simpleName, element.qualifiedName, element.getIcon(0))
+                            // T-M44 审计兜底（用户实测堆栈：elementChosen → getQualifiedName → stub 树遍历
+                            // 断言硬抛）：选择器回调的 PSI 读取须在 ReadAction 内（EDT 上同步执行，语义不变）
+                            val picked = ReadAction.compute<Triple<String, String?, Icon?>?, Throwable> {
+                                val name = element.name ?: return@compute null
+                                Triple(name, element.qualifiedName, element.getIcon(0))
+                            } ?: return
+                            setPicked(picked.first, picked.second, picked.third)
                         }
                     }
                 }
@@ -747,11 +751,14 @@ class SqlToJavaPanel(
                             continue
                         }
                         // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
-                        val displayTexts = candidates.map { c ->
-                            SqlSelectionDialog.displayText(
-                                "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
-                                c.psiClass.containingFile?.name ?: "",
-                            )
+                        // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
+                        val displayTexts = ReadAction.compute<List<String>, Throwable> {
+                            candidates.map { c ->
+                                SqlSelectionDialog.displayText(
+                                    "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
+                                    c.psiClass.containingFile?.name ?: "",
+                                )
+                            }
                         }
                         SqlSelectionDialog(project, candidates, displayTexts) { selected ->
                             toSubEntity(selected)?.let { subEntities[alias] = it }
@@ -870,11 +877,14 @@ class SqlToJavaPanel(
                     )
                     return
                 }
-                val displayTexts = candidates.map { c ->
-                    SqlSelectionDialog.displayText(
-                        "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
-                        c.psiClass.containingFile?.name ?: "",
-                    )
+                // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
+                val displayTexts = ReadAction.compute<List<String>, Throwable> {
+                    candidates.map { c ->
+                        SqlSelectionDialog.displayText(
+                            "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
+                            c.psiClass.containingFile?.name ?: "",
+                        )
+                    }
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->
                     setResultText(generateCode(result, selected, format, subEntities))
