@@ -177,7 +177,6 @@ tasks {
                 <li><b>serialVersionUID 默认忽略</b>（T-M42）：SQL→Java 反向与实体解析对 serialVersionUID 系列字段/列名（serial_version_uid / serial_version_u_i_d 等全形态）默认忽略——不再生成 User::getSerialVersionUID 编译不过的引用</li>
                 <li><b>SQL→Java 右键预览高亮 + 快捷键可配置</b>（T-M41）：结果弹窗升级为 IDEA 只读编辑器（Java 词法高亮 + 行号）；设置页新增「SQL→Java 快捷键」行（录制式修改 Alt+Shift+J）</li>
                 <li><b>SQL→Java 性能与设置页优化</b>：实体反查项目级缓存（PsiModificationTracker 失效）+ 类名去首段启发式 + 跳过接口枚举；「更新与诊断」分区统一缓存管理（大小显示 + 清除反馈）</li>
-                <li>1175 测试全绿</li>
             </ul>
             <h2>v2026.8.16</h2>
             <ul>
@@ -187,7 +186,6 @@ tasks {
                 <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语、主题化渲染）；工具窗口标题、类选择字段原生观感等体验修复</li>
                 <li><b>兼容下限降至 IDEA 2024.3</b>（T-M30）：支持范围由 2025.3+ 扩展至 2024.3~2026.2；Plugin Verifier 三版本（243/253/262）全 Compatible</li>
                 <li><b>更新链路与预览修复</b>（T-M28.3~28.6 + T-M29.5/29.6）：更新后插件消失、安装守卫误拒、通知变更日志有序列表与 Gitee 关联；XML 参数回填类型感知（按方法签名参数 Java 类型判引号）；选择区多 SQL 选择栏覆盖 XML 与注解</li>
-                <li>1063 测试全绿（830 → 1063）</li>
             </ul>
             <h2>v2026.8.15</h2>
             <ul>
