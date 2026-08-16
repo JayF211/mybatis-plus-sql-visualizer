@@ -189,6 +189,16 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     // 形态下拉（T-M36.6）
     // ------------------------------------------------------------------
 
+    fun testOptionsRowUsesStretchLayout() {
+        // T-M39 增量：选项（形态下拉/调用类/VO）独立成行 GridBag 拉伸——
+        // 防回退到原 BorderLayout.EAST + FlowLayout 三控件挤一行（窄窗口下拉被挤压截断）
+        val combo = panel.formatComboForTest()
+        val row = combo.parent
+        assertTrue("选项行应为 GridBag 拉伸布局（窄窗口各自收缩互不挤压）", row.layout is java.awt.GridBagLayout)
+        assertEquals("调用类输入框应位于同一选项行", row, panel.callerFieldForTest().parent)
+        assertEquals("VO 输入框应位于同一选项行", row, panel.voFieldForTest().parent)
+    }
+
     fun testFormatComboInitialFromSettings() {
         val state = PluginSettings.getInstance().state
         val original = state.reverseWrapperFormat

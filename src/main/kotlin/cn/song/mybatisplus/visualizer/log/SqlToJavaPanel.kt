@@ -34,7 +34,8 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
-import java.awt.FlowLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import javax.swing.DefaultComboBoxModel
@@ -130,16 +131,33 @@ class SqlToJavaPanel(
         val toolbar = ActionManager.getInstance()
             .createActionToolbar(TOOLBAR_ID_INPUT, group, true)
             .apply { targetComponent = this@SqlToJavaPanel }
-        // T-M36.7：调用类 / VO 输入（非必选）+ 形态下拉
-        val right = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 4)).apply {
-            add(callerField)
-            add(voField)
-            add(formatCombo)
-        }
+        // T-M39 增量：选项（形态下拉/调用类/VO）独立成行——原 BorderLayout.EAST + FlowLayout
+        // 三控件挤一行，窄侧边栏下形态下拉被挤压截断（用户截图只见「→ 字符串列名）」）
         val bar = JPanel(BorderLayout())
-        bar.add(toolbar.component, BorderLayout.WEST)
-        bar.add(right, BorderLayout.EAST)
+        bar.add(toolbar.component, BorderLayout.NORTH)
+        bar.add(buildOptionsRow(), BorderLayout.SOUTH)
         return bar
+    }
+
+    /**
+     * 选项行：形态下拉独占整行（高频、选项文本长须完整显示）+ 调用类/VO 各半行
+     * （低频可选，占位提示截断无妨）——GridBag 拉伸，窄窗口各自收缩互不挤压。
+     */
+    private fun buildOptionsRow(): JPanel = JPanel(GridBagLayout()).apply {
+        val c = GridBagConstraints().apply {
+            fill = GridBagConstraints.HORIZONTAL
+            weightx = 1.0
+            insets = JBUI.insets(0, 4, 4, 4)
+        }
+        c.gridx = 0
+        c.gridwidth = 2
+        add(formatCombo, c)
+        c.gridy = 1
+        c.gridwidth = 1
+        c.weightx = 1.0
+        add(callerField, c)
+        c.gridx = 1
+        add(voField, c)
     }
 
     private fun buildResultToolbar(): JPanel {
@@ -472,6 +490,9 @@ class SqlToJavaPanel(
     /** 测试访问器：当前形态下拉选中值。 */
     internal fun selectedFormatForTest(): String =
         (formatCombo.selectedItem as? FormatOption)?.persisted ?: ""
+
+    /** 测试访问器：形态下拉组件（布局断言——选项行 GridBag 拉伸）。 */
+    internal fun formatComboForTest(): JComboBox<*> = formatCombo
 
     /** 测试访问器：模拟用户下拉选择（触发写穿 + 重生成完整链路）。 */
     internal fun selectFormatForTest(persisted: String) {

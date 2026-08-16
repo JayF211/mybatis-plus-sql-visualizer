@@ -45,12 +45,18 @@ class SqlLogToolWindowFactory : ToolWindowFactory {
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         // 窗口标题（stripe 标签）：显示 bundle 文案而非窗口 ID（cn.song.mybatisplus.visualizer.log）；
+        // 2026.2 源码实证：setTitle 只改当前 content 的 displayName（标题栏/浮动标题），
+        // 侧边栏 stripe 标题走独立 stripeTitleProvider（默认 = 工具窗口 id）——须再调 setStripeTitle；
         // T-M38：invokeLater 二次设置——部分平台版本 createToolWindowContent 阶段 setTitle 后
         // 新 UI 仍按注册 ID 渲染标题栏，延迟到 UI 派发完成后覆盖
         val title = MpSqlVisualizerBundle.message("log.toolwindow.title")
         toolWindow.setTitle(title)
+        toolWindow.setStripeTitle(title)
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            if (!toolWindow.isDisposed) toolWindow.setTitle(title)
+            if (!toolWindow.isDisposed) {
+                toolWindow.setTitle(title)
+                toolWindow.setStripeTitle(title)
+            }
         }
         val manager = project.getService(SqlLogManager::class.java)
         val panel = SqlLogPanel(project, manager)

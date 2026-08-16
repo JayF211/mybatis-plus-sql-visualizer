@@ -166,6 +166,7 @@ tasks {
         changeNotes = """
             <h2>v2026.8.15</h2>
             <ul>
+                <li><b>工具窗口标题与面板布局修复</b>（T-M39 增量）：标题栏不再显示插件包名（侧边栏标题单独设置）；「SQL → Java」tab 上方选项行重排——形态下拉完整显示不再被截断</li>
                 <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」按钮打开帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语、主题化渲染）；「日志转 SQL」tab 改名「日志 → SQL」</li>
                 <li><b>日志转 SQL Tab</b>（T-M38）：侧边栏工具窗口「SQL 预览」改造为「日志转 SQL」——粘贴 MyBatis 日志（Preparing/Parameters 行）批量还原可执行 SQL（多组语句分隔/默认多行格式化 + 单行切换/参数不足警告/一键复制）；日志列表右键一键发送转换</li>
                 <li><b>MyBatis XML mapper 动态 SQL 预览</b>（M24~M26）：mapper XML / 注解 SQL（@Select 等含 &lt;script&gt;）gutter 图标 + 右键预览——复刻 MyBatis 3.5.19 渲染算法（if/choose/trim/where/set/foreach/bind/sql+include 全兼容、受限 OGNL 求值、动态条件勾选/foreach 次数/bind 覆盖/参数回填）；${'$'}{ew.customSqlSegment} 等 MP 占位按调用处 Wrapper 全链路展开；文件级多注解候选选择</li>
