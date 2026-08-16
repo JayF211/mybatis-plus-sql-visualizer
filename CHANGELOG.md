@@ -6,6 +6,7 @@
 
 ### Added
 
+- **SQL→Java 调用方法按调用类真实 API 选择（T-M44）**：生成调用前反查调用类继承链方法集——`selectPage`/`selectList`/`page`/`list` 等普通方法不存在时自动回落 MPJ join 方法族（`selectJoinPage(page, Class, wrapper)` / `selectJoinList(Class, wrapper)` / `selectJoinListPage` / `updateJoin(null, wrapper)` / `deleteJoin(wrapper)`，签名经 MPJ 1.4.13/1.5.6 双版本 jar 实证）——兼容 MPJBaseMapper 与 BaseMapper API 不同的项目（用户实证：部分 MPJ 依赖的 mapper 无 selectPage）；顺带修复反引号列名在「未映射回落」提示中的误报
 - **UPSERT 按方言渲染（T-M43）**：`saveOrUpdate` / `insertOrUpdate` 预览的冲突子句按当前方言生成——MySQL/MariaDB 渲染 `ON DUPLICATE KEY UPDATE 列 = VALUES(列)`（VALUES() 对 5.7~8.0+/MariaDB 全版本可用），PostgreSQL/H2/SQLite/KingBase 渲染 `ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列`，Oracle/SQL Server/DM 无原生简洁 upsert 语法（MERGE 复杂）→ 降级纯 INSERT——保证「设置里出现 = 承诺可用」：任何可选方言下预览 SQL 均可在该数据库执行
 - **SQL→Java 反向分页解析方言宽容（T-M43）**：粘贴 SQL 的分页子句支持全部主流方言形态——`LIMIT n OFFSET m`（PG/H2/SQLite/KingBase）、`OFFSET n ROWS FETCH NEXT m ROWS ONLY`（SQL Server/Oracle 12c/DM）、`FETCH FIRST n ROWS ONLY`（Oracle），值可为数字或 `?` 占位符（日志分页参数场景）；模型归一化后 `.last("LIMIT offset, count")` 渲染不变（round-trip 自洽）；列名 `offset`/`fetch`（含 LIKE 降级场景）不误判为分页子句
 - **达梦方言实证化（T-M43）**：DM8 官方社区实证支持 4 种分页写法（`LIMIT N` / `LIMIT M, N` / `LIMIT M OFFSET N` / OFFSET..FETCH），当前 `LIMIT [offset,] count` 形态为官方支持写法之一——「假设性标注」注释更新为官方实证依据（MP 对 DM 用 Oracle ROWNUM 方言为历史选择，不采用）

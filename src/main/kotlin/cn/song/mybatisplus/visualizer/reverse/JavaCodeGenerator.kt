@@ -49,7 +49,18 @@ object JavaCodeGenerator {
          * 由调用方解析（SqlToJavaConverter.invocationHasMpj）；false 时 VO 查询回落实体查询
          * （严禁生成不存在的 selectJoinList 族方法）。 */
         val mpj: Boolean = false,
+        /** T-M44：调用类继承链方法名集合（SqlToJavaConverter.invocationMethods 后台 ReadAction 反查）——
+         * 方法选择先查集合（真实存在的 API），缺失时沿 join 回退链（如 selectPage → selectJoinPage）；
+         * 空集 = 特殊值 this/baseMapper 或类不可解析 → 保守用普通方法。 */
+        val methods: Set<String> = emptySet(),
     )
+
+    /** T-M44：按调用类真实方法集选择调用方法——优先链中第一个真实存在的方法；
+     *  方法集为空（特殊值/类不可解析）→ 保守返回首选（普通方法）。 */
+    private fun InvocationTarget.prefer(primary: String, vararg fallbacks: String): String {
+        if (methods.isEmpty()) return primary
+        return (listOf(primary) + fallbacks).firstOrNull { it in methods } ?: primary
+    }
 
     /** 生成完整代码片段（字符串列名 QueryWrapper 形态）。 */
     fun generate(result: SqlReverseResult): String = generate(result, null)
@@ -255,10 +266,12 @@ object JavaCodeGenerator {
         val wrapperClass = wrapperClassFor(UPDATE_WRAPPER_CLASSES, entity, wrapperKind)
         val entityName = entity?.className ?: entityClassName(result.tableName)
         return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
-            if (isMapper(invocation!!)) {
-                "${callerVar(invocation)}.update(null, wrapper);"
-            } else {
-                "${callerVar(invocation)}.update(wrapper);"
+            // T-M44：update 缺失时回落 JoinMapper/JoinService 的 updateJoin(null, wrapper)（实体参数 null，同形）
+            val m = invocation!!.prefer("update", "updateJoin")
+            when {
+                m == "updateJoin" -> "${callerVar(invocation)}.updateJoin(null, wrapper);"
+                isMapper(invocation) -> "${callerVar(invocation)}.update(null, wrapper);"
+                else -> "${callerVar(invocation)}.update(wrapper);"
             }
         }
     }
@@ -333,10 +346,12 @@ object JavaCodeGenerator {
         val wrapperClass = wrapperClassFor(QUERY_WRAPPER_CLASSES, entity, wrapperKind)
         val entityName = entity?.className ?: entityClassName(result.tableName)
         return appendWrapperAndInvocation(sb, wrapperClass, entityName, wrapperKind, chain, invocation) {
-            if (isMapper(invocation!!)) {
-                "${callerVar(invocation)}.delete(wrapper);"
+            // T-M44：delete/remove 缺失时回落 deleteJoin(wrapper)（JoinMapper/JoinService 同形单参）
+            val m = invocation!!
+            if (isMapper(m)) {
+                "${callerVar(m)}.${m.prefer("delete", "deleteJoin")}(wrapper);"
             } else {
-                "${callerVar(invocation)}.remove(wrapper);"
+                "${callerVar(m)}.${m.prefer("remove", "deleteJoin")}(wrapper);"
             }
         }
     }
@@ -447,27 +462,30 @@ object JavaCodeGenerator {
         val voUnsupported = voRequested != null && vo == null
         val generic = vo ?: entityName
         val paged = result.limit != null
+        // T-M44：方法选择按调用类真实方法集（prefer 回退链）——部分 MPJ 依赖的 MPJBaseMapper
+        // 无 BaseMapper 的 selectPage/selectList 等普通方法，缺失时回落 JoinMapper/JoinService 的
+        // selectJoin 族（join 方法需 Class 参数，args 按方法形态构建）；特殊值/类不可解析 → 普通方法
         val method = if (isMapper(invocation)) {
             when {
                 paged && vo != null -> "selectJoinPage"
-                paged -> "selectPage"
+                paged -> invocation.prefer("selectPage", "selectJoinPage")
                 vo != null -> "selectJoinList"
-                else -> "selectList"
+                else -> invocation.prefer("selectList", "selectJoinList")
             }
         } else {
             when {
                 paged && vo != null -> "selectJoinListPage"
-                paged -> "page"
+                paged -> invocation.prefer("page", "selectJoinListPage")
                 vo != null -> "selectJoinList"
-                else -> "list"
+                else -> invocation.prefer("list", "selectJoinList")
             }
         }
         // 参数顺序（1.5.6 实证）：普通 `(wrapper)`；分页 `(page, wrapper)`；
-        // VO `(Vo.class, wrapper)`；分页+VO `(page, Vo.class, wrapper)`
+        // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体
         val pageArg = if (paged) renderPageArg(result.limit!!) else ""
         val args = buildString {
             if (paged) append(pageArg).append(", ")
-            if (vo != null) append("$vo.class, ")
+            if (vo != null || method.startsWith("selectJoin")) append("${vo ?: entityName}.class, ")
             append("wrapper")
         }
         val prefix = if (paged) "Page<$generic> page = " else "List<$generic> list = "
@@ -707,9 +725,14 @@ object JavaCodeGenerator {
         }
         result.conditions.forEach { collect(it) }
         result.orderBy.forEach { used.add(it.column.columnName) }
-        // T-M42：被过滤的 serialVersionUID 系列列不计入「未映射回落」提示（实际是跳过而非回落字符串列名）
-        return used.distinct().filter { !isIgnoredColumn(it) && entity.columnToField[it] == null }
+        // T-M42：被过滤的 serialVersionUID 系列列不计入「未映射回落」提示（实际是跳过而非回落字符串列名）；
+        // 列名匹配前归一化（剥反引号/别名前缀）——selectColumns 原文可能带反引号（如 `` `signal` ``），
+        // 不剥会导致映射成功却误报「未找到对应字段」（用户 T-M43 复现实证）
+        return used.distinct().filter { !isIgnoredColumn(it) && entity.columnToField[normalizedColumnName(it)] == null }
     }
+
+    /** 列名归一化：剥别名前缀与反引号（`t1.city` → `city`、`` `signal` `` → `signal`）。 */
+    private fun normalizedColumnName(expr: String): String = expr.substringAfterLast('.').trim('`')
 
     // ------------------------------------------------------------------
     // 条件渲染

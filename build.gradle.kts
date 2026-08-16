@@ -166,6 +166,7 @@ tasks {
         changeNotes = """
             <h2>v2026.8.17</h2>
             <ul>
+                <li><b>SQL→Java 调用方法按调用类真实 API 选择</b>（T-M44）：调用前反查调用类继承链方法集——selectPage/selectList/page/list 缺失时自动回落 selectJoinPage/selectJoinList/updateJoin/deleteJoin 族（含 Class 参数形态，MPJ 1.4.13/1.5.6 双版本实证），兼容 MPJBaseMapper 与 BaseMapper API 不同的项目；反引号列名提示误报修复</li>
                 <li><b>UPSERT 按方言渲染</b>（T-M43）：saveOrUpdate/insertOrUpdate 预览的冲突子句按当前方言生成——MySQL/MariaDB 渲染 <code>ON DUPLICATE KEY UPDATE 列 = VALUES(列)</code>，PostgreSQL/H2/SQLite/KingBase 渲染 <code>ON CONFLICT (主键) DO UPDATE SET 列 = EXCLUDED.列</code>，Oracle/SQL Server/DM 降级纯 INSERT（无原生简洁 upsert 语法，保证 SQL 可执行）；「设置里出现 = 承诺可用」</li>
                 <li><b>SQL→Java 反向分页解析方言宽容</b>（T-M43）：粘贴 SQL 的分页子句支持全部主流方言形态——<code>LIMIT n OFFSET m</code>（PG 系）、<code>OFFSET n ROWS FETCH NEXT m ROWS ONLY</code>（SQL Server/Oracle 12c）、<code>FETCH FIRST n ROWS ONLY</code>（Oracle），含 <code>?</code> 占位符；列名 offset/fetch 不误判</li>
                 <li><b>达梦方言实证化</b>（T-M43）：DM8 官方支持 <code>LIMIT M, N</code> 分页写法（4 种写法之一）——原「假设性标注」更新为官方实证依据</li>

@@ -167,6 +167,9 @@ class SqlToJavaPanel(
     /** 调用类 MPJ 能力（后台 ReadAction 继承链实证；QUERY 形态/未解析默认 false）。 */
     private var callerMpj = false
 
+    /** T-M44：调用类继承链方法名集合（后台 ReadAction 反查；生成器按真实 API 选择调用方法）。 */
+    private var callerMethods: Set<String> = emptySet()
+
     init {
         // 上：输入区（工具栏 + 灰字提示 + 编辑器——空文档显示引导文案）
         val inputPanel = JPanel(BorderLayout())
@@ -618,20 +621,23 @@ class SqlToJavaPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Triple<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>, Boolean>, Throwable> {
+                ReadAction.compute<Triple<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>, Pair<Boolean, Set<String>>>, Throwable> {
                     val candidates = SqlToJavaConverter.findCandidates(project, result.tableName)
                     // T-M37 P1：副表**全部**候选（alias → 列表；零/无别名 → 空），EDT 层按 joins 顺序分发
                     val subCandidates = SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
                     // 调用类 MPJ 能力（继承链实证）——VO 查询/多表生成据此选合法方法
                     val callerMpj = SqlToJavaConverter.invocationHasMpj(project, callerField.text)
-                    Triple(candidates, subCandidates, callerMpj)
+                    // T-M44：调用类真实方法集（继承链）——生成器按真实 API 选择调用方法（selectPage 缺失回落 selectJoinPage 族）
+                    val callerMethods = SqlToJavaConverter.invocationMethods(project, callerField.text)
+                    Triple(candidates, subCandidates, callerMpj to callerMethods)
                 }
             } catch (t: Throwable) {
-                Triple(emptyList<SqlToJavaConverter.EntityCandidate>(), emptyMap(), false)
+                Triple(emptyList<SqlToJavaConverter.EntityCandidate>(), emptyMap(), false to emptySet())
             }
             ApplicationManager.getApplication().invokeLater {
                 cacheCandidates = payload.first
-                callerMpj = payload.third
+                callerMpj = payload.third.first
+                callerMethods = payload.third.second
                 val manualEnabled = manualEntitySelectionEnabled()
                 // 手动选择实体弹窗分支（开关开启时）：
                 //  - JOIN 多表 → 主表 + 副表一次多选（替代 T-M37 逐表弹窗）；
@@ -826,7 +832,7 @@ class SqlToJavaPanel(
         val caller = callerField.text.trim()
         if (caller.isEmpty()) return null
         val vo = voField.text.trim().ifEmpty { null }
-        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj)
+        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods)
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */

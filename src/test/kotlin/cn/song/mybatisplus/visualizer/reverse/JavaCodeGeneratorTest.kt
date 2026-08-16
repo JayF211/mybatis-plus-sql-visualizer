@@ -1566,4 +1566,132 @@ class JavaCodeGeneratorTest {
         // serial_version_uid（非逐字母拆分形态）归一化后同样命中
         assertTrue(code, !code.contains("serial_version_uid"))
     }
+
+    // ------------------------------------------------------------------
+    // T-M44：调用方法按调用类真实方法集选择（selectPage 缺失回落 selectJoin 族）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `mapper方法集含selectPage_保持普通分页`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", methods = setOf("selectPage", "selectList")),
+        )
+        assertTrue(code, code.contains("Page<User> page = userMapper.selectPage(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `mapper方法集仅join_分页回落selectJoinPage带Class参数`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", methods = setOf("selectJoinPage", "selectJoinList")),
+        )
+        assertTrue(code, code.contains("Page<User> page = userMapper.selectJoinPage(new Page<>(1, 10), User.class, wrapper);"))
+    }
+
+    @Test
+    fun `mapper方法集空_保守生成普通方法`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper"),
+        )
+        assertTrue(code, code.contains("Page<User> page = userMapper.selectPage(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `mapper列表回落selectJoinList`() {
+        val result = SqlReverseResult(tableName = "user")
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", methods = setOf("selectJoinList")),
+        )
+        assertTrue(code, code.contains("List<User> list = userMapper.selectJoinList(User.class, wrapper);"))
+    }
+
+    @Test
+    fun `service分页回落selectJoinListPage`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", methods = setOf("selectJoinListPage")),
+        )
+        assertTrue(code, code.contains("Page<User> page = userService.selectJoinListPage(new Page<>(1, 10), User.class, wrapper);"))
+    }
+
+    @Test
+    fun `service列表回落selectJoinList`() {
+        val result = SqlReverseResult(tableName = "user")
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", methods = setOf("selectJoinList")),
+        )
+        assertTrue(code, code.contains("List<User> list = userService.selectJoinList(User.class, wrapper);"))
+    }
+
+    @Test
+    fun `update缺失回落updateJoin`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.UPDATE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+            sets = listOf(ReverseSet("name", SqlValue.Literal("'x'", "x"))),
+        )
+        val mapper = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", methods = setOf("updateJoin")),
+        )
+        assertTrue(mapper, mapper.contains("userMapper.updateJoin(null, wrapper);"))
+        val service = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", methods = setOf("updateJoin")),
+        )
+        assertTrue(service, service.contains("userService.updateJoin(null, wrapper);"))
+    }
+
+    @Test
+    fun `delete缺失回落deleteJoin`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            kind = ReverseStatementKind.DELETE,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
+        )
+        val mapper = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", methods = setOf("deleteJoin")),
+        )
+        assertTrue(mapper, mapper.contains("userMapper.deleteJoin(wrapper);"))
+        val service = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserService", methods = setOf("deleteJoin")),
+        )
+        assertTrue(service, service.contains("userService.deleteJoin(wrapper);"))
+    }
+
+    @Test
+    fun `VO分页方法集含selectJoinPage_保持不变`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            limit = LimitClause(offset = SqlValue.Placeholder("?"), count = SqlValue.Placeholder("?")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo", mpj = true, methods = setOf("selectJoinPage")),
+        )
+        assertTrue(code, code.contains("Page<UserVo> page = userMapper.selectJoinPage(new Page<>(1, 10), UserVo.class, wrapper);"))
+    }
 }

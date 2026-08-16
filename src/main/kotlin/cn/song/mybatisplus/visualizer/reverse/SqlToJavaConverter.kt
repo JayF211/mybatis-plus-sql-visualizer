@@ -69,6 +69,30 @@ object SqlToJavaConverter {
         return clazz.superClass?.let { hasMpjInterface(it, seen) } ?: false
     }
 
+    /**
+     * T-M44：调用类继承链方法名集合（须 ReadAction 内调用——PSI 索引访问）——
+     * 生成器按调用类**真实存在**的方法选择调用（用户实证：部分 MPJ 依赖的 MPJBaseMapper
+     * 无 BaseMapper 的 selectPage 等普通方法，硬编码生成编译失败）。
+     * 覆盖：本类方法 + 父接口 default/abstract 方法（递归）+ 父类方法；特殊值
+     * `this`/`baseMapper` 非类名无法反查 → 空集（生成器保守用普通方法）；类找不到 → 空集。
+     */
+    fun invocationMethods(project: Project, callerClass: String): Set<String> {
+        if (callerClass.isBlank()) return emptySet()
+        if (callerClass == "this" || callerClass == "baseMapper") return emptySet()
+        val clazz = PsiShortNamesCache.getInstance(project)
+            .getClassesByName(callerClass, GlobalSearchScope.projectScope(project))
+            .firstOrNull() ?: return emptySet()
+        return collectMethodNames(clazz, mutableSetOf())
+    }
+
+    /** 继承链方法名收集（接口 + 父类递归，seen 防循环继承）。 */
+    private fun collectMethodNames(clazz: PsiClass, seen: MutableSet<PsiClass>): Set<String> {
+        if (!seen.add(clazz)) return emptySet()
+        return clazz.methods.map { it.name }.toSet() +
+            clazz.interfaces.flatMap { collectMethodNames(it, seen) } +
+            (clazz.superClass?.let { collectMethodNames(it, seen) } ?: emptySet())
+    }
+
     /** MPJ 1.5.6 能力接口（javap 实证全限定名）。 */
     private val MPJ_INTERFACES = setOf(
         "com.github.yulichang.base.MPJBaseService",
