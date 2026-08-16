@@ -91,6 +91,13 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
         add(tabs, BorderLayout.CENTER)
 
+        // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
+        tabs.addChangeListener {
+            if (tabs.selectedComponent == sqlToJavaPanel) {
+                sqlToJavaPanel.refreshFormatFromSettings()
+            }
+        }
+
         manager.addUiListener { refreshList() }
         refreshList()
     }

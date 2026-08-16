@@ -337,4 +337,39 @@ class JavaCodeGeneratorTest {
         assertTrue(code, code.contains("new QueryWrapper<User>()"))
         assertTrue(code, !code.contains("MPJ"))
     }
+
+    // ------------------------------------------------------------------
+    // Wrappers 工厂形态（T-M36.6）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `Wrappers形态_有实体生成lambdaQuery工厂`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("name" to "name"))
+        val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.WRAPPERS_LAMBDA)
+        assertTrue(code, code.contains("Wrappers.<User>lambdaQuery()"))
+        assertTrue(code, code.contains(".eq(User::getName, \"x\")"))
+        assertTrue(code, code.contains("// SQL → MyBatis-Plus Wrappers 工厂形态（Wrappers.lambdaQuery）反向生成"))
+    }
+
+    @Test
+    fun `Wrappers形态_无实体生成query工厂字符串列`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'x'", "x")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.WRAPPERS_QUERY)
+        assertTrue(code, code.contains("Wrappers.<User>query()"))
+        assertTrue(code, code.contains(".eq(\"name\", \"x\")"))
+        assertTrue(code, !code.contains("LambdaQueryWrapper"))
+    }
 }

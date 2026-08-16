@@ -38,7 +38,8 @@ object SqlToJavaConverter {
         }
 
     /**
-     * 生成代码：候选非 null → 按设置形态生成 lambda 版本；null → 字符串列名 QueryWrapper。
+     * 生成代码：候选非 null → 按设置形态生成 lambda 版本；null → 字符串列名形态
+     * （QUERY → new QueryWrapper；WRAPPERS → Wrappers.<E>query()，T-M36.6）。
      *
      * @param format 设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
      */
@@ -47,12 +48,13 @@ object SqlToJavaConverter {
         candidate: EntityCandidate?,
         format: ReverseWrapperFormat,
     ): String {
-        if (candidate == null) return JavaCodeGenerator.generate(result)
-        val wrapper = resolveWrapperFormat(format, hasEntity = true)
-        val target = JavaCodeGenerator.EntityTarget(
-            className = candidate.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
-            columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
-        )
+        val wrapper = resolveWrapperFormat(format, hasEntity = candidate != null)
+        val target = candidate?.let {
+            JavaCodeGenerator.EntityTarget(
+                className = it.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
+                columnToField = it.tableInfo.columns.associate { col -> col.columnName to col.fieldName },
+            )
+        }
         return JavaCodeGenerator.generate(result, target, wrapper)
     }
 }

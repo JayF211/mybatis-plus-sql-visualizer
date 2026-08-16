@@ -40,6 +40,19 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         return result
     }
 
+    /** 等待结果区包含目标文本（区分新旧结果——切换形态重生成的异步路径）。 */
+    private fun awaitContains(substring: String): String {
+        var result = panel.resultTextForTest()
+        var waited = 0
+        while (!result.contains(substring) && waited < 100) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(50)
+            result = panel.resultTextForTest()
+            waited++
+        }
+        return result
+    }
+
     fun testConvertNoEntityFallsBackToQueryWrapper() {
         panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
         panel.convertForTest()
@@ -95,5 +108,55 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue(MpSqlVisualizerBundle.message("log.tab.sqlToJava").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.convert").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.status.noEntity").isNotBlank())
+    }
+
+    // ------------------------------------------------------------------
+    // 形态下拉（T-M36.6）
+    // ------------------------------------------------------------------
+
+    fun testFormatComboInitialFromSettings() {
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_WRAPPERS
+            // 面板重建后下拉应反映设置值（创建时 refreshFormatFromSettings）
+            val panel2 = SqlToJavaPanel(project)
+            try {
+                assertEquals(PluginSettings.REVERSE_WRAPPERS, panel2.selectedFormatForTest())
+            } finally {
+                panel2.dispose()
+            }
+        } finally {
+            state.reverseWrapperFormat = original
+        }
+    }
+
+    fun testFormatComboWriteThroughAndRegenerate() {
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            assertEquals(PluginSettings.REVERSE_QUERY, panel.selectedFormatForTest())
+
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.convertForTest()
+            val queryResult = panel.resultTextForTest()
+            assertTrue(queryResult, queryResult.contains("new QueryWrapper<User>()"))
+
+            // 模拟用户下拉选择 WRAPPERS → 写穿设置 + 立即重生成（无实体 → Wrappers.query 字符串形态）
+            panel.selectFormatForTest(PluginSettings.REVERSE_WRAPPERS)
+            assertEquals(PluginSettings.REVERSE_WRAPPERS, state.reverseWrapperFormat)
+            val wrappersResult = awaitContains("Wrappers.<User>query()")
+            assertTrue(wrappersResult, wrappersResult.contains(".eq(\"name\", \"张三\")"))
+
+            // 再切 LAMBDA（无实体 → 回落 new QueryWrapper；无候选缓存 → 异步完整流程）
+            panel.selectFormatForTest(PluginSettings.REVERSE_LAMBDA)
+            assertEquals(PluginSettings.REVERSE_LAMBDA, state.reverseWrapperFormat)
+            val lambdaResult = awaitContains("new QueryWrapper<User>()")
+            assertTrue(lambdaResult, lambdaResult.contains(".eq(\"name\", \"张三\")"))
+        } finally {
+            state.reverseWrapperFormat = original
+        }
     }
 }

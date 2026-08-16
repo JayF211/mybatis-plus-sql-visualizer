@@ -61,6 +61,10 @@ object JavaCodeGenerator {
                     sb.append("// SQL → MyBatis-Plus-Join MPJLambdaWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
                     sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配（需引入 MPJ 依赖）\n")
                 }
+                GeneratedWrapper.WRAPPERS_LAMBDA -> {
+                    sb.append("// SQL → MyBatis-Plus Wrappers 工厂形态（Wrappers.lambdaQuery）反向生成（MyBatis-Plus SQL Visualizer）\n")
+                    sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
+                }
                 else -> {
                     sb.append("// SQL → MyBatis-Plus LambdaQueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）\n")
                     sb.append("// 实体类 ${entity.className} 由表名 ${result.tableName} 匹配\n")
@@ -73,13 +77,21 @@ object JavaCodeGenerator {
         }
         result.warnings.forEach { sb.append("// 注意：$it\n") }
 
-        val wrapperName = when {
-            entity == null -> "QueryWrapper"
-            wrapperKind == GeneratedWrapper.MPJ_LAMBDA -> "MPJLambdaWrapper"
-            else -> "LambdaQueryWrapper"
-        }
+        // 包装形态（T-M36.6：Wrappers 工厂 → `Wrappers.<E>query()` / `Wrappers.<E>lambdaQuery()`）
         val entityName = entity?.className ?: entityClassName(result.tableName)
-        sb.append("new $wrapperName<$entityName>()")
+        val head = when (wrapperKind) {
+            GeneratedWrapper.WRAPPERS_QUERY -> "Wrappers.<$entityName>query()"
+            GeneratedWrapper.WRAPPERS_LAMBDA -> "Wrappers.<$entityName>lambdaQuery()"
+            else -> {
+                val wrapperName = when {
+                    entity == null -> "QueryWrapper"
+                    wrapperKind == GeneratedWrapper.MPJ_LAMBDA -> "MPJLambdaWrapper"
+                    else -> "LambdaQueryWrapper"
+                }
+                "new $wrapperName<$entityName>()"
+            }
+        }
+        sb.append(head)
         if (result.selectColumns != null && result.selectColumns.isNotEmpty()) {
             sb.append("\n    .select(")
                 .append(result.selectColumns.joinToString(", ") { renderColumnRef(it, entity) })

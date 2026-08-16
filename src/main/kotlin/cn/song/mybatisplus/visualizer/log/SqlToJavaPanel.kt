@@ -33,6 +33,8 @@ import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import javax.swing.DefaultComboBoxModel
+import javax.swing.JComboBox
 import javax.swing.JPanel
 
 /**
@@ -57,6 +59,28 @@ class SqlToJavaPanel(
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
 
+    /** T-M36.6：生成形态下拉（与设置页 reverseWrapperFormat 双向同步：写穿持久化 + tab 重选刷新）。 */
+    private val formatCombo = JComboBox<FormatOption>().apply {
+        model = DefaultComboBoxModel(formatOptions())
+        addActionListener {
+            if (suppressFormatSync) return@addActionListener
+            val value = (selectedItem as? FormatOption)?.persisted
+            if (value != null && value != settingsState().reverseWrapperFormat) {
+                // 写穿式持久化（对齐语言下拉 M19.1 实证模式）——面板是设置值的快捷入口
+                settingsState().reverseWrapperFormat = value
+                regenerateWithNewFormat()
+            }
+        }
+    }
+
+    /** 设置 → 下拉同步期间的抑制标志（refreshFormatFromSettings 不触发重生成）。 */
+    private var suppressFormatSync = false
+
+    /** T-M36.6：上次成功解析缓存（输入文本未变时切换形态只重生成，不重新 parse/查实体）。 */
+    private var cacheText: String? = null
+    private var cacheResult: SqlReverseResult? = null
+    private var cacheCandidates: List<SqlToJavaConverter.EntityCandidate>? = null
+
     init {
         // 上：输入区（工具栏 + 编辑器）
         val inputPanel = JPanel(BorderLayout())
@@ -75,6 +99,7 @@ class SqlToJavaPanel(
         }
         add(splitter, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
+        refreshFormatFromSettings()
     }
 
     // ------------------------------------------------------------------
@@ -90,9 +115,10 @@ class SqlToJavaPanel(
         val toolbar = ActionManager.getInstance()
             .createActionToolbar(TOOLBAR_ID_INPUT, group, true)
             .apply { targetComponent = this@SqlToJavaPanel }
-        return JPanel(BorderLayout()).apply {
-            add(toolbar.component, BorderLayout.WEST)
-        }
+        val bar = JPanel(BorderLayout())
+        bar.add(toolbar.component, BorderLayout.WEST)
+        bar.add(formatCombo, BorderLayout.EAST)
+        return bar
     }
 
     private fun buildResultToolbar(): JPanel {
@@ -191,8 +217,12 @@ class SqlToJavaPanel(
             )
             return
         }
+        // T-M36.6：缓存成功解析（输入文本未变时切换形态复用）
+        cacheText = text
+        cacheResult = result
         val format = reverseFormat()
         if (format == ReverseWrapperFormat.QUERY) {
+            cacheCandidates = null
             render(result, emptyList(), format)
             return
         }
@@ -205,9 +235,35 @@ class SqlToJavaPanel(
                 emptyList()
             }
             ApplicationManager.getApplication().invokeLater {
+                cacheCandidates = candidates
                 render(result, candidates, format)
             }
         }
+    }
+
+    /**
+     * T-M36.6：切换形态 → 用当前输入与缓存立即重生成（输入文本未变不重新 parse/查实体）；
+     * 无缓存（QUERY 路径未查过实体）或输入已变化 → 走完整转换流程。
+     */
+    private fun regenerateWithNewFormat() {
+        val text = inputEditor.text
+        if (text.isBlank()) return
+        if (cacheText != text || cacheResult == null) {
+            convert()
+            return
+        }
+        val format = reverseFormat()
+        val candidates = cacheCandidates
+        if (format == ReverseWrapperFormat.QUERY || candidates == null) {
+            // QUERY 形态或从未查过实体（QUERY 切换来）→ 重新走完整流程（同步/后台自适应）
+            if (format == ReverseWrapperFormat.QUERY) {
+                render(cacheResult!!, emptyList(), format)
+            } else {
+                convert()
+            }
+            return
+        }
+        render(cacheResult!!, candidates, format)
     }
 
     /** 结果区写文本（WriteCommandAction——平台线程检查强制 write action）。 */
@@ -261,8 +317,49 @@ class SqlToJavaPanel(
 
     /** 反向转换配置形态（测试环境 settings 未注册时默认 AUTO）。 */
     private fun reverseFormat(): ReverseWrapperFormat = runCatching {
-        ReverseWrapperFormat.fromPersisted(PluginSettings.getInstance().state.reverseWrapperFormat)
+        ReverseWrapperFormat.fromPersisted(settingsState().reverseWrapperFormat)
     }.getOrDefault(ReverseWrapperFormat.AUTO)
+
+    private fun settingsState(): PluginSettings.State = PluginSettings.getInstance().state
+
+    /**
+     * 形态下拉选项（值与设置页同源；label 复用 settings.reverseWrapperFormat.* keys）。
+     * 必须为 data class（JDK17 JComboBox 按 equals 匹配，M19 实证）。
+     */
+    private data class FormatOption(val persisted: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun formatOptions(): Array<FormatOption> = arrayOf(
+        FormatOption(ReverseWrapperFormat.AUTO.persistedValue, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.auto")),
+        FormatOption(ReverseWrapperFormat.QUERY.persistedValue, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.query")),
+        FormatOption(ReverseWrapperFormat.LAMBDA.persistedValue, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.lambda")),
+        FormatOption(ReverseWrapperFormat.WRAPPERS.persistedValue, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.wrappers")),
+        FormatOption(ReverseWrapperFormat.MPJ_LAMBDA.persistedValue, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.mpjLambda")),
+    )
+
+    /** 从设置刷新下拉选中（面板创建 / tab 重选时调用；不触发重生成）。 */
+    fun refreshFormatFromSettings() {
+        val current = settingsState().reverseWrapperFormat
+        val option = formatOptions().firstOrNull { it.persisted == current } ?: formatOptions().first()
+        if ((formatCombo.selectedItem as? FormatOption)?.persisted != option.persisted) {
+            suppressFormatSync = true
+            try {
+                formatCombo.selectedItem = option
+            } finally {
+                suppressFormatSync = false
+            }
+        }
+    }
+
+    /** 测试访问器：当前形态下拉选中值。 */
+    internal fun selectedFormatForTest(): String =
+        (formatCombo.selectedItem as? FormatOption)?.persisted ?: ""
+
+    /** 测试访问器：模拟用户下拉选择（触发写穿 + 重生成完整链路）。 */
+    internal fun selectFormatForTest(persisted: String) {
+        formatCombo.selectedItem = formatOptions().first { it.persisted == persisted }
+    }
 
     /** 状态行（错误红字 / 提示主题色）。 */
     private fun status(message: String, error: Boolean) {

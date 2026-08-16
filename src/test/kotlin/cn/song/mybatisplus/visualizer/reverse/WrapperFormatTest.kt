@@ -33,9 +33,16 @@ class WrapperFormatTest {
     }
 
     @Test
+    fun `WRAPPERS_有实体lambdaQuery工厂无实体query工厂`() {
+        assertEquals(GeneratedWrapper.WRAPPERS_LAMBDA, resolveWrapperFormat(ReverseWrapperFormat.WRAPPERS, hasEntity = true))
+        assertEquals(GeneratedWrapper.WRAPPERS_QUERY, resolveWrapperFormat(ReverseWrapperFormat.WRAPPERS, hasEntity = false))
+    }
+
+    @Test
     fun `持久化值解析_未知值回落AUTO`() {
         assertEquals(ReverseWrapperFormat.AUTO, ReverseWrapperFormat.fromPersisted(null))
         assertEquals(ReverseWrapperFormat.AUTO, ReverseWrapperFormat.fromPersisted("UNKNOWN"))
         assertEquals(ReverseWrapperFormat.MPJ_LAMBDA, ReverseWrapperFormat.fromPersisted("MPJ_LAMBDA"))
+        assertEquals(ReverseWrapperFormat.WRAPPERS, ReverseWrapperFormat.fromPersisted("WRAPPERS"))
     }
 }

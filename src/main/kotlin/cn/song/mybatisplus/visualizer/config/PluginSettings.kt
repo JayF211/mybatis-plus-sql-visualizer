@@ -176,6 +176,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 反向转换 Wrapper 形态：LambdaQueryWrapper（无实体回落字符串）。 */
         const val REVERSE_LAMBDA = "LAMBDA"
 
+        /** 反向转换 Wrapper 形态：Wrappers 静态工厂（有实体 lambdaQuery / 无实体 query，T-M36.6）。 */
+        const val REVERSE_WRAPPERS = "WRAPPERS"
+
         /** 反向转换 Wrapper 形态：MPJLambdaWrapper（无实体回落字符串）。 */
         const val REVERSE_MPJ_LAMBDA = "MPJ_LAMBDA"
 
