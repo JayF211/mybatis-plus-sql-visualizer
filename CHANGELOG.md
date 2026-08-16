@@ -2,7 +2,7 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
-## [2026.8.15] - 2026-08-15
+## [2026.8.16] - 2026-08-16
 
 ### Added
 
@@ -14,11 +14,24 @@
 - **帮助入口体验修复（T-M39 增量）**：帮助按钮图标换为与设置/清空按钮同色系的纯灰问号（原灰蓝圆圈与旁边按钮色相不一致）；帮助弹窗主题化渲染——HTML 渲染走 IDE 主题（JBHtmlEditorKit，字体/前景跟随 LAF）、背景透出面板色（消除白底割裂）、排版对齐 IDEA 帮助信息观感（行高/标题间距/列表缩进）；「日志转 SQL」tab 改名「日志 → SQL」（英文 Log → SQL）
 - **侧边栏帮助入口（T-M39）**：SQL 日志工具窗口工具栏新增「?」帮助按钮（设置按钮旁）→ 帮助弹窗集中展示核心功能（Wrapper 预览 / 日志捕获还原 / SQL→Java 反向转换 / XML·注解动态 SQL 预览 / 代码补全 / 执行与更新）、使用方法与默认快捷键（Convert to SQL: Alt+Shift+Q；Convert SQL to MP Java Code: Alt+Shift+J，macOS Cmd+Shift+J，可在 Keymap 修改）；i18n 双语、离线可用
 - **日志转 SQL Tab（T-M38）**：侧边栏工具窗口「SQL 预览」tab 改造为「日志转 SQL」输入转换工具——粘贴 MyBatis 日志（`Preparing:`/`Parameters:` 行，前缀与自动捕获同源读取设置）批量还原为可执行 SQL（多组语句 `-- SQL #N` 分隔、默认多行格式化 + 单行切换、参数不足红字警告、SQL 高亮 + 一键复制）；日志列表右键「发送到日志转 SQL」联动（条目渲染回日志文本自动填入并转换）；tab 标题改为「日志转 SQL / Log → SQL」
+- **SQL→Java 多表 JOIN 与增删补全（T-M37）**：SQL 反向转换支持多表——JOIN 链解析（LEFT/RIGHT/INNER/FULL [OUTER] JOIN 副表[别名] ON 等值列对，多条件原文透传），生成 MPJLambdaWrapper + selectAll + leftJoin 链（ON 多条件回落字符串形态）；INSERT 多行 VALUES 生成实体 setter 链（Service saveBatch / Mapper 逐条 insert）、DELETE 多表目标生成 MPJ DeleteJoinWrapper + join 链（主实体不可用明确报错）；副表多候选逐个弹选择框（按 JOIN 顺序选择实体，选择结果缓存复用）；`a = b` 列对列比较升级为结构化 ColumnComparison（函数右值仍降级）
+- **SQL 反向转 MP Java 代码（T-M36）**：选中 SQL 文本右键 / Alt+Shift+J 一键生成 MyBatis-Plus Java 代码（QueryWrapper/LambdaQueryWrapper/Wrappers/MPJ 形态，设置页可配默认形态）——SELECT/UPDATE/DELETE/INSERT 全语句支持（嵌套组与顶层 OR 递归还原为 nested/not、实体列→lambda 映射、复杂表达式降级 apply() 透传并注释警告、全表更新警告）；可指定调用类与返回 VO（Service/Mapper 调用形态：list/selectList/update/remove/save/insert 等）；侧边栏工具窗口「SQL → Java」tab 粘贴即转（形态快捷切换下拉 + SQL 输入补全/高亮 + 结果复制）
+- **SQL 日志工具窗口（T-M31）**：侧边栏新增「MyBatis SQL Log」工具窗口——运行控制台 SQL 自动捕获（`Preparing:`/`Parameters:` 解析还原为可执行 SQL；时间戳 + SQL 词法着色列表；双击弹窗 / 右键复制删除；去重窗口；捕捉开关与格式化/清空工具栏；侧边栏图标）；设置页新增「SQL 日志」组 11 项（前缀/时间戳/自动监听/发现 SQL 自动打开窗口/移除包含关键字等）+「逻辑删除值」可配置（注入 `deleted = 值`）+ 设置生效性全量审计（29 项全部有读取点，修复 5 个真实缺陷）；挂载链路兼容 2026.2（execution 包移动/接口变化反射桥）并真机验证通过（用户实测正常识别 SQL）
+- **兼容下限降至 IDEA 2024.3（T-M30）**：构建基准 2024.3.7.1 + since-build=243（用户要求）——兼容范围由 2025.3+ 扩展至 2024.3~2026.2；Plugin Verifier 三版本（243/253/262）全 Compatible（含 verifyPlugin 暴露的 uninstallAfterRestart 反射分发修复）
 - **选择区多 SQL 选择栏覆盖 XML 与注解**（T-M29.6）：XML mapper 选中含多条语句的代码段落弹出选择栏（与 Java 选择区交互一致——选择区内 `<select|insert|update|delete>` 候选 0/1/多分发，展示行号 + 语句摘要，选中后自动定位到语句行）；Java 选择区内无 Wrapper 候选时回落选择区内 SQL 注解候选（`@Select/@Update` 等）；候选选中后编辑器定位跳转（光标到行首 + 滚动居中 + 整行选中）覆盖 XML 语句 / 注解 / 全文件候选全部路径
 - **通知变更日志有序列表**（T-M28.6）：更新通知弹框变更日志改为每行一个标题 + 自动编号的有序列表（清单 changeNotes 按行维护短标题）
-- **更新后插件消失修复**（T-M28.5）：更新安装调度解压目标改为插件目录根（发布 zip 顶层自带插件名目录，原解压路径多嵌套一层导致平台扫描不到、重启后插件消失）
 - **变更日志关联 Gitee**（T-M28.4）：设置页变更日志区与更新通知均可点击跳转 Gitee 发布页；通知只显示最新版变更日志、每个功能点一行（带换行符）；修复更新失败（2026.2 平台 descriptorPath 为 null 致守卫误拒——null 放行）
+- **XML 参数回填类型感知**（T-M29.5）：按 mapper 方法签名解析参数 Java 类型——DTO 字段类型判定引号（LocalDate → `'2025-08-01'`、Integer → `2`，贴近真实绑定效果）；Map/无类型信息参数兜底默认引号
+
+### Fixed
+
+- **更新后插件消失修复**（T-M28.5）：更新安装调度解压目标改为插件目录根（发布 zip 顶层自带插件名目录，原解压路径多嵌套一层导致平台扫描不到、重启后插件消失）
 - **更新安装失败与通知修复**（T-M28.3，含二修）：修复「更新失败: current installation is not under the IDE plugins directory」——安装守卫改黑名单式判定（真实安装任意形态放行，仅拒绝开发态构建产物路径）；更新通知优化——标题带插件名、内容每行一个版本标题（HTML 换行）、失败通知用「更新失败」标题；下载包权限加固（POSIX 644，Mac/sudo 场景防安装失败）：修复「更新失败: current installation is not under the IDE plugins directory」——目录守卫路径归一化（2026.2 平台 descriptorPath 为 URL 风格，Windows 驱动字母前导斜杠误拒正常安装）；更新通知优化——标题带插件名、内容只保留变更日志标题行、失败通知用「更新失败」标题；下载包权限加固（POSIX 644，Mac/sudo 场景防安装失败）
+
+## [2026.8.15] - 2026-08-15
+
+### Added
+
 - **构建号复制按钮**（T-M28.2）：内部构建号行新增「复制」按钮，一键复制构建号文本（反馈问题直接粘贴）；无构建号时按钮禁用
 - **设置页检查更新与自动安装更新**（M28）：插件设置页新增「更新」分区——当前版本展示、「检查更新」按钮（已最新/发现新版/失败原因状态反馈）、新版变更日志展示、「下载并安装」一键完成（下载进度条）→ 安装完成后提示「重启 IDE 生效」+ 重启按钮（IDE 原生确认框，可选稍后）；「启动时自动检查更新」开关（默认开）——启动静默检查，发现新版弹通知可「立即更新」后台下载安装；更新源 = 发布仓库 `update/update.json` 清单 + Gitee Release 附件（发布流程新增清单维护步骤，`./gradlew writeUpdateManifest`）
 - **注解 `<script>` 动态标签补全**（T-M27.5）：`@Select("<script>…")` 内输入 `<` 补动态标签名、标签内补属性、test/collection 值内补参数名与实体字段——与 XML mapper 体验一致
@@ -49,7 +62,6 @@
 
 ### Fixed
 
-- **XML 参数回填类型感知**（T-M29.5）：按 mapper 方法签名解析参数 Java 类型——DTO 字段类型判定引号（LocalDate → `'2025-08-01'`、Integer → `2`，贴近真实绑定效果）；Map/无类型信息参数兜底默认引号
 - **XML 预览参数回填默认引号**（T-M29.4）：Map 等无类型信息入参的参数输入默认渲染带引号（`2025` → `'2025'`）——LocalDate/字符串列比较不再被数字启发式误判为数值（数值列隐式转换语义不变）
 - **SQL 格式化逗号丢失修复**（T-M29.2）：格式化后 SELECT 列清单/分页参数逗号丢失（非法 SQL）修复——列清单逗号保留行尾换行、`LIMIT ?, ?` / `GROUP BY a, b` 逗号保持同行；默认显示与点击格式化结果不再漂移（格式化幂等）
 - **动态条件面板组行合并**（T-M29.1）：and 布尔组开关行与组内子条件行重复展示修复——组带开关时子条件并入组行（组复选框 + 组内值输入框，同源去重），不再重复成行；组内子条件与 HAVING 子条件在面板流程恒丢失的预存缺陷一并修复（按各自默认态渲染）

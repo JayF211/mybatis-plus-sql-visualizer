@@ -164,26 +164,22 @@ tasks {
     // 保留最近两个版本，更早历史见 CHANGELOG.md。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.8.16</h2>
+            <ul>
+                <li><b>SQL 日志工具窗口</b>（T-M31）：运行控制台 SQL 自动捕获还原为可执行 SQL（Preparing/Parameters 解析、时间戳 + 词法着色列表、去重窗口、捕捉开关）；设置页「SQL 日志」组 11 项 + 逻辑删除值可配置 + 设置生效性审计 29 项；2026.2 执行体系反射桥兼容（真机验证通过）</li>
+                <li><b>SQL 反向转 MP Java 代码</b>（T-M36/T-M37）：选中 SQL 右键 / Alt+Shift+J 生成 MyBatis-Plus Java 代码——SELECT/UPDATE/DELETE/INSERT 全语句、QueryWrapper/LambdaQueryWrapper/Wrappers/MPJ 形态可配、多表 JOIN 生成 MPJLambdaWrapper + leftJoin 链、嵌套组/顶层 OR/复杂表达式降级 apply、调用类与返回 VO 类选择器；侧边栏「SQL → Java」tab 粘贴即转（形态快捷切换）</li>
+                <li><b>日志转 SQL Tab</b>（T-M38）：侧边栏「SQL 预览」改造为「日志转 SQL」——粘贴 Preparing/Parameters 日志批量还原可执行 SQL（多组语句分隔、参数不足警告、一键复制），日志列表右键一键发送转换</li>
+                <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语、主题化渲染）；工具窗口标题、类选择字段原生观感等体验修复</li>
+                <li><b>兼容下限降至 IDEA 2024.3</b>（T-M30）：支持范围由 2025.3+ 扩展至 2024.3~2026.2；Plugin Verifier 三版本（243/253/262）全 Compatible</li>
+                <li><b>更新链路与预览修复</b>（T-M28.3~28.6 + T-M29.5/29.6）：更新后插件消失、安装守卫误拒、通知变更日志有序列表与 Gitee 关联；XML 参数回填类型感知（按方法签名参数 Java 类型判引号）；选择区多 SQL 选择栏覆盖 XML 与注解</li>
+                <li>1063 测试全绿（830 → 1063）</li>
+            </ul>
             <h2>v2026.8.15</h2>
             <ul>
-                <li><b>截断文案悬停显示完整信息</b>（T-M39 增量）：形态下拉长选项、选中态与类字段占位提示截断时鼠标悬停显示完整文案</li>
-                <li><b>调用类/VO 改项目类选择器</b>（T-M39 增量）：SQL→Java 的调用类与返回 VO 点击弹 IDE 类选择器（项目内 Java 类直接选，选中显示类图标 + 类名、✕ 一键清除，选中后自动重新生成）；标题栏插件名重复修复</li>
-                <li><b>工具窗口标题与面板布局修复</b>（T-M39 增量）：标题栏不再显示插件包名（侧边栏标题单独设置）；「SQL → Java」tab 上方选项行重排——形态下拉完整显示不再被截断</li>
-                <li><b>侧边栏帮助入口</b>（T-M39）：工具窗口工具栏「?」按钮打开帮助弹窗——核心功能/使用方法/默认快捷键一览（i18n 双语、主题化渲染）；「日志转 SQL」tab 改名「日志 → SQL」</li>
-                <li><b>日志转 SQL Tab</b>（T-M38）：侧边栏工具窗口「SQL 预览」改造为「日志转 SQL」——粘贴 MyBatis 日志（Preparing/Parameters 行）批量还原可执行 SQL（多组语句分隔/默认多行格式化 + 单行切换/参数不足警告/一键复制）；日志列表右键一键发送转换</li>
                 <li><b>MyBatis XML mapper 动态 SQL 预览</b>（M24~M26）：mapper XML / 注解 SQL（@Select 等含 &lt;script&gt;）gutter 图标 + 右键预览——复刻 MyBatis 3.5.19 渲染算法（if/choose/trim/where/set/foreach/bind/sql+include 全兼容、受限 OGNL 求值、动态条件勾选/foreach 次数/bind 覆盖/参数回填）；${'$'}{ew.customSqlSegment} 等 MP 占位按调用处 Wrapper 全链路展开；文件级多注解候选选择</li>
                 <li><b>XML/注解 SQL 代码补全</b>（M27）：mapper XML 与 Java SQL 注解字符串内 Ctrl+Space——SQL 关键字、表名/列名位置感知、别名前缀列、#{} 参数名、XML 动态标签与 OGNL；预览面板输入自动弹补全（含 @TableName 联表候选）</li>
                 <li><b>设置页检查更新与自动安装</b>（M28）：设置页「更新」分区——检查更新/变更日志展示/下载并安装一键完成 + 重启提示；「启动时自动检查更新」开关（默认开）发现新版弹通知后台安装；构建号一键复制</li>
                 <li><b>预览 SQL 修复</b>（M29）：分组布尔条件重载不再静默丢弃（and/or/nested/not/func 开关化）、分页 LIMIT 渲染（9 方言）、格式化逗号/空格修复（幂等）、动态条件面板组行合并、XML 参数回填默认引号</li>
-            </ul>
-            <h2>v2026.8.14</h2>
-            <ul>
-                <li><b>官方 API 覆盖差距清零</b>（MP 3.5.17 / MPJ 1.5.9）：实体单条 CRUD（save/getById/listByIds/deleteByIds）、JoinWrappers/MPJWrappers/ChainWrappers 工厂、Map 条件消费、UpdateJoinWrapper/DeleteJoinWrapper 联表更新删除全链路、allEq/eqOrIsNull/selectFunc 枚举/union/selectSub 等全量 API 补全</li>
-                <li><b>批量操作增强</b>（用户实测驱动）：@TableLogic 批量软删除对齐、批量参数面板（列级勾选/全选全不选/saveOrUpdate 主键可选）、字段顺序角色分组</li>
-                <li><b>多数据库方言</b>：新增 SQL Server/H2/SQLite/MariaDB/DM 达梦/KingBase 人大金仓（共 9 方言）；@Version 乐观锁注入；Db/SimpleQuery/ActiveRecord 识别</li>
-                <li><b>SQL 关键字方言化引用</b>：table 等保留字按方言自动加引号（反引号/双引号/方括号）</li>
-                <li><b>多 SQL 选择</b>：选择代码块弹候选框（代码行预览 + 定位跳转）、任意位置触发预览、复制/执行提示一键关闭 SQL 面板</li>
-                <li>弹窗关闭按钮文案随插件语言；</li>
             </ul>
         """.trimIndent()
     }
