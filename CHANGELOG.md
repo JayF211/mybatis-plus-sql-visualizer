@@ -6,6 +6,7 @@
 
 ### Added
 
+- **类选择字段整块可点 + 空态灰字引导**：调用类/VO 字段点击任意位置（图标/文本/按钮区，含手型光标）弹 Goto Class 选择器，清除图标缩至 12×12 紧凑尺寸；「SQL → Java」与「日志 → SQL」两个 tab 的输入区/结果区在空文档时显示灰色引导提示（「在此粘贴 SQL，点击转换…」等），输入内容后自动隐藏
 - **调用类继承链实证 MP/MPJ 能力**：选择调用类后自动解析其继承体系（`MPJBaseService`/`JoinService`/`MPJBaseMapper`/`JoinMapper`）——有 MPJ 能力时 VO 查询生成 `selectJoinList` 族 + MPJ wrapper；无 MPJ 能力时 VO 自动回落实体查询（`list/page`）并注释提示，多表 JOIN/删除明确报错——生成的代码只调用真实存在的方法
 - **MP/MPJ 全量 API 实证审计**：对生成器全部调用方法逐一反编译核实（MP 3.5.14 + MPJ 1.5.6）——MP 侧全部通过（list/page/selectList/selectPage/save/saveBatch/update/remove/insert/delete 及全部条件方法）；MPJ 侧修复两处编译隐患：字符串 raw join（副实体缺失/ON 多条件）统一回落 MPJQueryWrapper（MPJLambdaWrapper 无 leftJoin(String)）；多表删除改 `new DeleteJoinWrapper<>(User.class)` + `.delete("t", "t1")`（1.5.6 无多类构造），无法映射时明确报错——保证生成的代码可编译
 - **SQL→Java 调用形态按 MPJ 1.5.6 实证重写**：方法名表经用户本地 MPJ 1.5.6 jar 反编译核实——移除了不存在的 `listVo/pageVo/selectVoPage/selectVoList`，改用真实方法：VO 查询 `selectJoinList(Vo.class, wrapper)`、分页+VO `selectJoinListPage(page, Vo.class, wrapper)`（Mapper 为 `selectJoinPage`）；VO 场景自动强制 MPJ wrapper（selectJoinList 参数类型要求）；调用类改为驼峰首字母小写实例变量调用（`bannerService.page(...)` 而非 `BannerService.page(...)`），复制即可编译使用

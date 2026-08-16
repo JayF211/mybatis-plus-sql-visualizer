@@ -10,11 +10,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.psi.PsiClass
 import com.intellij.ui.components.JBLabel
+import cn.song.mybatisplus.visualizer.util.IconScaler
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.BoxLayout
+import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -81,16 +83,16 @@ class EntitySelectionDialog(
         rowPanel.add(JButton(MpSqlVisualizerBundle.message("dialog.selectEntity.browse")).apply {
             addActionListener { pickClass(row, selectedLabel) }
         })
-        rowPanel.add(JButton(AllIcons.Actions.Cancel).apply {
+        rowPanel.add(JButton(CANCEL_ICON).apply {
             isBorderPainted = false
             isContentAreaFilled = false
             isFocusPainted = false
             margin = JBUI.emptyInsets()
             border = JBUI.Borders.empty()
             iconTextGap = 0
-            preferredSize = Dimension(16, 16)
-            minimumSize = Dimension(16, 16)
-            maximumSize = Dimension(16, 16)
+            preferredSize = Dimension(12, 12)
+            minimumSize = Dimension(12, 12)
+            maximumSize = Dimension(12, 12)
             toolTipText = MpSqlVisualizerBundle.message("reverse.panel.clearClass")
             addActionListener { clearSelection(row, selectedLabel) }
         })
@@ -149,6 +151,9 @@ class EntitySelectionDialog(
     companion object {
         /** 主表行键（副表行键 = join 别名）。 */
         const val MAIN_KEY = ""
+
+        /** 清除按钮图标（12px 缩放——与面板类选择字段一致）。 */
+        private val CANCEL_ICON: Icon = IconScaler.scale(AllIcons.Actions.Cancel, 12f / 16f)
 
         private const val DIALOG_WIDTH = 560
         private const val ROW_HEIGHT = 40

@@ -317,6 +317,37 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertNull(caller.iconForTest())
     }
 
+    fun testClassPickerWholeFieldClickable() {
+        // 整块可点：iconLabel/textLabel/按钮宿主均挂鼠标监听 + 手型光标（Swing 事件不冒泡——
+        // 仅挂父面板时子组件区域点击失效，用户反馈「只能点三点」）
+        val targets = panel.pickerClickTargetsForTest()
+        assertEquals("可点击子组件应为 3 个（图标 + 文本 + 按钮宿主）", 3, targets.size)
+        targets.forEach { target ->
+            assertTrue("${target.javaClass.simpleName} 应挂鼠标监听", target.mouseListeners.isNotEmpty())
+            assertEquals(
+                "${target.javaClass.simpleName} 应有手型光标",
+                java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR).type,
+                target.cursor.type,
+            )
+        }
+        // 清除按钮 12×12 紧凑尺寸（16px 偏大反馈）
+        val button = panel.pickerActionButtonForTest()
+        assertEquals(12, button.preferredSize.width)
+        assertEquals(12, button.preferredSize.height)
+        assertEquals(12, button.icon.iconWidth)
+    }
+
+    fun testHintLabelsShowWhenEmptyAndHideOnContent() {
+        // 空文档 → 提示可见且灰字；输入 SQL 后 → 隐藏（结果区同理）
+        assertTrue("初始输入区空 → 提示应可见", panel.inputHintLabelForTest().isVisible)
+        assertTrue("初始结果区空 → 提示应可见", panel.resultHintLabelForTest().isVisible)
+        panel.inputEditorForTest().setSql("SELECT id FROM user")
+        assertTrue("输入 SQL 后输入区提示应隐藏", !panel.inputHintLabelForTest().isVisible)
+        assertTrue("结果区仍空 → 提示保持可见", panel.resultHintLabelForTest().isVisible)
+        panel.inputEditorForTest().setSql("")
+        assertTrue("清空输入 → 提示恢复可见", panel.inputHintLabelForTest().isVisible)
+    }
+
     fun testClassPickerSelectionRegenerates() {
         val state = PluginSettings.getInstance().state
         val original = state.reverseWrapperFormat

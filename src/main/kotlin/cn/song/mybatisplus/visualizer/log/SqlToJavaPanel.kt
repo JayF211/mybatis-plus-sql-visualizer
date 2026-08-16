@@ -28,6 +28,8 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.HighlighterColors
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
@@ -37,10 +39,12 @@ import com.intellij.openapi.ui.Splitter
 import com.intellij.psi.PsiClass
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.JBColor
+import cn.song.mybatisplus.visualizer.util.IconScaler
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Graphics
@@ -84,6 +88,18 @@ class SqlToJavaPanel(
     private val inputEditor = SqlInputEditor(project, "")
     private val resultEditor: Editor = createJavaEditor()
     private val statusLabel = JBLabel(" ").apply {
+        border = JBUI.Borders.empty(2, 6, 2, 6)
+    }
+
+    /** 输入区空文档灰字提示（用户交互引导；有内容自动隐藏）。 */
+    private val inputHintLabel = JBLabel(MpSqlVisualizerBundle.message("reverse.panel.hint.input")).apply {
+        foreground = UIUtil.getInactiveTextColor()
+        border = JBUI.Borders.empty(2, 6, 2, 6)
+    }
+
+    /** 结果区空文档灰字提示。 */
+    private val resultHintLabel = JBLabel(MpSqlVisualizerBundle.message("reverse.panel.hint.result")).apply {
+        foreground = UIUtil.getInactiveTextColor()
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
 
@@ -150,14 +166,26 @@ class SqlToJavaPanel(
     private var callerMpj = false
 
     init {
-        // 上：输入区（工具栏 + 编辑器）
+        // 上：输入区（工具栏 + 灰字提示 + 编辑器——空文档显示引导文案）
         val inputPanel = JPanel(BorderLayout())
-        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH)
+        inputPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildInputToolbar(), BorderLayout.NORTH)
+                add(inputHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         inputPanel.add(inputEditor.component, BorderLayout.CENTER)
 
-        // 下：结果区（工具栏 + Java 编辑器）
+        // 下：结果区（工具栏 + 灰字提示 + Java 编辑器）
         val resultPanel = JPanel(BorderLayout())
-        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH)
+        resultPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildResultToolbar(), BorderLayout.NORTH)
+                add(resultHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         resultPanel.add(resultEditor.component, BorderLayout.CENTER)
 
         val splitter = Splitter(true, 0.5f).apply {
@@ -167,6 +195,17 @@ class SqlToJavaPanel(
         }
         add(splitter, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
+        // 空态提示显隐跟随文档内容
+        inputEditor.editor.document.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(e: DocumentEvent) {
+                inputHintLabel.isVisible = inputEditor.text.isBlank()
+            }
+        })
+        resultEditor.document.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(e: DocumentEvent) {
+                resultHintLabel.isVisible = resultEditor.document.text.isBlank()
+            }
+        })
         refreshFormatFromSettings()
     }
 
@@ -313,17 +352,18 @@ class SqlToJavaPanel(
         private val textLabel = JBLabel(" ")
         // T-M39 增量修复：关闭/浏览按钮改原生紧凑图标按钮——IDEA 图标按钮类
         // （JBIconButton/SmallIconButton/InlineIconButton）在 IPGP 发行版全部被裁剪（编译实证），
-        // 用 JButton + IDEA 原生图标 + 16×16 固定尺寸 + FlowLayout 宿主防 BorderLayout 拉伸
-        private val actionButton = JButton(AllIcons.General.Ellipsis).apply {
+        // 用 JButton + IDEA 原生图标 + 12×12 固定尺寸（IconUtil.scale 缩放——16px 偏大实证反馈）
+        // + FlowLayout 宿主防 BorderLayout 拉伸
+        private val actionButton = JButton(PICKER_ELLIPSIS_ICON).apply {
             isBorderPainted = false
             isContentAreaFilled = false
             isFocusPainted = false
             margin = JBUI.emptyInsets()
             border = JBUI.Borders.empty()
             iconTextGap = 0
-            preferredSize = Dimension(16, 16)
-            minimumSize = Dimension(16, 16)
-            maximumSize = Dimension(16, 16)
+            preferredSize = Dimension(12, 12)
+            minimumSize = Dimension(12, 12)
+            maximumSize = Dimension(12, 12)
             toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
             addActionListener {
                 if (currentText.isEmpty()) pickClass() else clearPicked()
@@ -345,12 +385,11 @@ class SqlToJavaPanel(
             add(iconLabel, BorderLayout.WEST)
             add(textLabel, BorderLayout.CENTER)
             add(actionButtonHost, BorderLayout.EAST)
-            // 点击字段任意位置弹选择器（按钮区域由按钮自身消费事件，不会触发）
-            addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) {
-                    pickClass()
-                }
-            })
+            // 点击字段任意位置弹选择器：Swing 鼠标事件不冒泡（子组件 JLabel 铺满后
+            // 父面板监听收不到——实证反馈「只能点三点」）——监听挂到每个子组件 + 手型光标
+            attachClick(iconLabel)
+            attachClick(textLabel)
+            attachClick(actionButtonHost)
             refresh()
         }
 
@@ -400,6 +439,16 @@ class SqlToJavaPanel(
             onChanged()
         }
 
+        /** 子组件点击统一入口：单次点击弹选择器 + 手型光标（按钮自身消费事件，不重复触发）。 */
+        private fun attachClick(component: JComponent) {
+            component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            component.addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (e.button == MouseEvent.BUTTON1 && e.clickCount == 1) pickClass()
+                }
+            })
+        }
+
         /** 清除选中值（✕ 按钮触发）。 */
         private fun clearPicked() {
             currentText = ""
@@ -417,17 +466,23 @@ class SqlToJavaPanel(
                 textLabel.foreground = UIUtil.getInactiveTextColor()
                 // 占位文案被截断时 hover 显示完整提示（选中后字段级 tooltip 为全限定名，不遮蔽）
                 textLabel.toolTipText = placeholder
-                actionButton.icon = AllIcons.General.Ellipsis
+                actionButton.icon = PICKER_ELLIPSIS_ICON
                 actionButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
             } else {
                 iconLabel.icon = pickedIcon
                 textLabel.text = currentText
                 textLabel.foreground = UIUtil.getLabelForeground()
                 textLabel.toolTipText = null
-                actionButton.icon = AllIcons.Actions.Cancel
+                actionButton.icon = PICKER_CANCEL_ICON
                 actionButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.clearClass")
             }
         }
+
+        /** 测试访问器：可点击子组件清单（iconLabel/textLabel/按钮宿主）。 */
+        internal fun clickTargetsForTest(): List<JComponent> = listOf(iconLabel, textLabel, actionButtonHost)
+
+        /** 测试访问器：清除/浏览按钮（断言紧凑尺寸）。 */
+        internal fun actionButtonForTest(): JButton = actionButton
 
         /** 测试访问器：模拟选择器选中（类图标 + 简单类名 + 全限定名 + 变更回调）。 */
         internal fun pickForTest(simpleName: String, qualifiedName: String?, icon: Icon? = AllIcons.Nodes.Class) =
@@ -808,6 +863,18 @@ class SqlToJavaPanel(
         callerMpj = value
     }
 
+    /** 测试访问器：输入区空态提示行（断言灰字文案与空态显隐）。 */
+    internal fun inputHintLabelForTest(): JBLabel = inputHintLabel
+
+    /** 测试访问器：结果区空态提示行。 */
+    internal fun resultHintLabelForTest(): JBLabel = resultHintLabel
+
+    /** 测试访问器：类选择字段可点击子组件（断言整块可点——监听挂到每个子组件）。 */
+    internal fun pickerClickTargetsForTest(): List<JComponent> = callerField.clickTargetsForTest()
+
+    /** 测试访问器：类选择字段清除按钮（断言 12×12 紧凑尺寸）。 */
+    internal fun pickerActionButtonForTest(): JButton = callerField.actionButtonForTest()
+
     /** 测试访问器：返回 VO 选择字段。 */
     internal fun voFieldForTest(): ClassPickerField = voField
 
@@ -874,5 +941,9 @@ class SqlToJavaPanel(
 
         /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。 */
         private const val PICKER_CORNER = 10
+
+        /** 类选择字段按钮图标（12px 缩放——AllIcons 原生 16px 偏大，用户反馈）。 */
+        private val PICKER_ELLIPSIS_ICON: Icon = IconScaler.scale(AllIcons.General.Ellipsis, 12f / 16f)
+        private val PICKER_CANCEL_ICON: Icon = IconScaler.scale(AllIcons.Actions.Cancel, 12f / 16f)
     }
 }

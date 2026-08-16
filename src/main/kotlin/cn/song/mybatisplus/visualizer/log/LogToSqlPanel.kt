@@ -13,6 +13,8 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.HighlighterColors
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
@@ -22,6 +24,7 @@ import com.intellij.openapi.ui.Splitter
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import java.awt.Toolkit
@@ -51,18 +54,42 @@ class LogToSqlPanel(
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
 
+    /** 输入区空文档灰字提示（用户交互引导；有内容自动隐藏）。 */
+    private val inputHintLabel = JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.input")).apply {
+        foreground = UIUtil.getInactiveTextColor()
+        border = JBUI.Borders.empty(2, 6, 2, 6)
+    }
+
+    /** 结果区空文档灰字提示。 */
+    private val resultHintLabel = JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.result")).apply {
+        foreground = UIUtil.getInactiveTextColor()
+        border = JBUI.Borders.empty(2, 6, 2, 6)
+    }
+
     /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样单行。 */
     private var formatToggled = true
 
     init {
-        // 上：日志输入区（工具栏 + 编辑器）
+        // 上：日志输入区（工具栏 + 灰字提示 + 编辑器——空文档显示引导文案）
         val inputPanel = JPanel(BorderLayout())
-        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH)
+        inputPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildInputToolbar(), BorderLayout.NORTH)
+                add(inputHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         inputPanel.add(inputEditor.component, BorderLayout.CENTER)
 
-        // 下：SQL 结果区（工具栏 + 编辑器）
+        // 下：SQL 结果区（工具栏 + 灰字提示 + 编辑器）
         val resultPanel = JPanel(BorderLayout())
-        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH)
+        resultPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildResultToolbar(), BorderLayout.NORTH)
+                add(resultHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         resultPanel.add(resultEditor.component, BorderLayout.CENTER)
 
         val splitter = Splitter(true, 0.5f).apply {
@@ -72,6 +99,17 @@ class LogToSqlPanel(
         }
         add(splitter, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
+        // 空态提示显隐跟随文档内容
+        inputEditor.document.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(e: DocumentEvent) {
+                inputHintLabel.isVisible = inputEditor.document.text.isBlank()
+            }
+        })
+        resultEditor.document.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(e: DocumentEvent) {
+                resultHintLabel.isVisible = resultEditor.document.text.isBlank()
+            }
+        })
     }
 
     // ------------------------------------------------------------------
@@ -271,6 +309,12 @@ class LogToSqlPanel(
         }
         return editor
     }
+
+    /** 测试访问器：输入区空态提示行（断言灰字文案与空态显隐）。 */
+    internal fun inputHintLabelForTest(): JBLabel = inputHintLabel
+
+    /** 测试访问器：结果区空态提示行。 */
+    internal fun resultHintLabelForTest(): JBLabel = resultHintLabel
 
     override fun dispose() {
         if (disposed) return

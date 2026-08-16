@@ -141,4 +141,14 @@ class LogToSqlPanelTest : BasePlatformTestCase() {
         assertTrue(MpSqlVisualizerBundle.message("logToSql.panel.toggleFormat").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("logToSql.sendTo").isNotBlank())
     }
+
+    fun testHintLabelsShowWhenEmptyAndHideOnContent() {
+        // 空文档 → 提示可见；输入日志后 → 隐藏（结果区同理）
+        assertTrue("初始输入区空 → 提示应可见", panel.inputHintLabelForTest().isVisible)
+        assertTrue("初始结果区空 → 提示应可见", panel.resultHintLabelForTest().isVisible)
+        panel.setInputForTest("==>  Preparing: SELECT * FROM user WHERE id = ?")
+        assertTrue("输入日志后输入区提示应隐藏", !panel.inputHintLabelForTest().isVisible)
+        panel.setInputForTest("")
+        assertTrue("清空输入 → 提示恢复可见", panel.inputHintLabelForTest().isVisible)
+    }
 }
