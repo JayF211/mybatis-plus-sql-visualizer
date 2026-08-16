@@ -252,17 +252,19 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
 
     fun testClassPickerSelectAndClear() {
         val caller = panel.callerFieldForTest()
-        // 初始：空值 → … 浏览扩展按钮
+        // 初始：空值 → 占位提示 + 无类图标
         assertEquals("", caller.text)
-        assertTrue("空值应有扩展按钮（… 浏览）", caller.extensions.isNotEmpty())
-        // 模拟 Goto Class 选择器选中（简单类名 + tooltip 全限定名）
+        assertNull("空值不应显示类图标", caller.iconForTest())
+        // 模拟 Goto Class 选择器选中（类图标 + 简单类名 + tooltip 全限定名）
         caller.pickForTest("UserService", "com.demo.UserService")
         assertEquals("UserService", caller.text)
         assertEquals("com.demo.UserService", caller.toolTipText)
+        assertNotNull("选中后应显示类图标（IDEA 原生观感）", caller.iconForTest())
         // 模拟 ✕ 清除
         caller.clearForTest()
         assertEquals("", caller.text)
         assertNull(caller.toolTipText)
+        assertNull(caller.iconForTest())
     }
 
     fun testClassPickerSelectionRegenerates() {

@@ -35,18 +35,23 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
 import com.intellij.psi.PsiClass
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.fields.ExtendableTextField
-import com.intellij.ui.components.fields.ExtendableTextComponent.Extension
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.Graphics
+import java.awt.Graphics2D
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
+import java.awt.RenderingHints
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.DefaultComboBoxModel
+import javax.swing.Icon
+import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JPanel
 
@@ -87,17 +92,19 @@ class SqlToJavaPanel(
     }
 
     /** T-M36.7：调用类选择（Service/Mapper 类名，非必选——留空生成纯表达式）。 */
-    private val callerField = ClassPickerField(project) {
+    private val callerField = ClassPickerField(
+        project,
+        MpSqlVisualizerBundle.message("reverse.panel.callerHint"),
+    ) {
         if (cacheResult != null) regenerateWithNewFormat()
-    }.apply {
-        emptyText.text = MpSqlVisualizerBundle.message("reverse.panel.callerHint")
     }
 
     /** T-M36.7：返回 VO 类名选择（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
-    private val voField = ClassPickerField(project) {
+    private val voField = ClassPickerField(
+        project,
+        MpSqlVisualizerBundle.message("reverse.panel.voHint"),
+    ) {
         if (cacheResult != null) regenerateWithNewFormat()
-    }.apply {
-        emptyText.text = MpSqlVisualizerBundle.message("reverse.panel.voHint")
     }
 
     /** 设置 → 下拉同步期间的抑制标志（refreshFormatFromSettings 不触发重生成）。 */
@@ -255,25 +262,71 @@ class SqlToJavaPanel(
     /**
      * 类选择字段：点击弹项目类选择器（Goto Class 弹窗，[GotoClassModel2]）。
      *
-     * 只读展示选中类的简单类名（tooltip 显示全限定名便于区分同名类）；扩展按钮——
-     * 空值显示 … 浏览（弹选择器）、有值显示 ✕ 清除；[onChanged] 在选中/清除后回调
-     * （面板侧接入「已有转换结果时重新生成」）。
+     * T-M39 三次增量：**「类图标 + 类名」的 IDEA 原生观感**（用户反馈纯文本样式不原生）——
+     * 选中后左侧显示 [PsiClass.getIcon]（类/接口/枚举各有原生图标，如 AllIcons.Nodes.Class），
+     * 右侧 ✕ 清除；空值显示占位提示（灰字）+ … 浏览；自绘输入框样式
+     * （圆角底色 + 主题边框色，对齐 IDEA TextField——只读无焦点态）。
      */
     internal inner class ClassPickerField(
         private val projectRef: Project,
+        private val placeholder: String,
         private val onChanged: () -> Unit = {},
-    ) : ExtendableTextField() {
+    ) : JPanel(BorderLayout()) {
+
+        private var currentText = ""
+        private var pickedIcon: Icon? = null
+
+        private val iconLabel = JBLabel()
+        private val textLabel = JBLabel(" ")
+        private val actionButton = JButton().apply {
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            border = JBUI.Borders.empty(0, 4)
+            addActionListener {
+                if (currentText.isEmpty()) pickClass() else clearPicked()
+            }
+        }
 
         init {
-            isEditable = false
-            // 点击字段任意位置弹选择器（扩展按钮区域由按钮自身消费事件，不会触发）
+            isOpaque = false
+            preferredSize = Dimension(1, JBUI.scale(24))
+            minimumSize = Dimension(1, JBUI.scale(24))
+            iconLabel.border = JBUI.Borders.empty(0, 5, 0, 0)
+            textLabel.border = JBUI.Borders.empty(0, 4, 0, 0)
+            add(iconLabel, BorderLayout.WEST)
+            add(textLabel, BorderLayout.CENTER)
+            add(actionButton, BorderLayout.EAST)
+            // 点击字段任意位置弹选择器（按钮区域由按钮自身消费事件，不会触发）
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     pickClass()
                 }
             })
-            refreshExtensions()
+            refresh()
         }
+
+        /** 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）。 */
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.color = UIUtil.getTextFieldBackground()
+                g2.fillRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
+                g2.color = JBColor.namedColor("Component.borderColor", JBColor(0xC8C8C8, 0x5C5C5C))
+                g2.drawRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
+            } finally {
+                g2.dispose()
+            }
+        }
+
+        /** 对外文本（生成器读取类名；测试 setText 兼容——直接赋值不触发变更回调）。 */
+        var text: String
+            get() = currentText
+            set(value) {
+                currentText = value
+                refresh()
+            }
 
         /** 弹 Goto Class 选择器（IDE 标准类搜索弹窗，候选 = 项目内全部 Java 类）。 */
         private fun pickClass() {
@@ -282,53 +335,58 @@ class SqlToJavaPanel(
                 override fun elementChosen(element: Any?) {
                     val cls = element as? PsiClass ?: return
                     val simpleName = cls.name ?: return
-                    setPicked(simpleName, cls.qualifiedName)
+                    // flags=0：按可见性取类/接口/枚举原生图标（Iconable 类不在编译 classpath，不引用）
+                    setPicked(simpleName, cls.qualifiedName, cls.getIcon(0))
                 }
 
                 override fun onClose() {}
             }, ModalityState.current(), false)
         }
 
-        /** 选中结果写入（文本 = 简单类名，tooltip = 全限定名）+ 扩展按钮刷新 + 变更回调。 */
-        private fun setPicked(simpleName: String, qualifiedName: String?) {
-            text = simpleName
+        /** 选中结果写入（类图标 + 简单类名，tooltip = 全限定名）+ 变更回调。 */
+        private fun setPicked(simpleName: String, qualifiedName: String?, icon: Icon?) {
+            currentText = simpleName
             toolTipText = qualifiedName
-            refreshExtensions()
+            pickedIcon = icon
+            refresh()
             onChanged()
         }
 
-        /** 清除选中值（✕ 扩展按钮触发）。 */
+        /** 清除选中值（✕ 按钮触发）。 */
         private fun clearPicked() {
-            text = ""
+            currentText = ""
             toolTipText = null
-            refreshExtensions()
+            pickedIcon = null
+            refresh()
             onChanged()
         }
 
-        /** 扩展按钮：空值 → … 浏览（弹选择器）；有值 → ✕ 清除。 */
-        private fun refreshExtensions() {
-            setExtensions(
-                if (text.isEmpty()) {
-                    Extension.create(
-                        AllIcons.General.Ellipsis,
-                        MpSqlVisualizerBundle.message("reverse.panel.pickClass"),
-                        Runnable { pickClass() },
-                    )
-                } else {
-                    Extension.create(
-                        AllIcons.Actions.Cancel,
-                        MpSqlVisualizerBundle.message("reverse.panel.clearClass"),
-                        Runnable { clearPicked() },
-                    )
-                },
-            )
+        /** 按状态刷新显示：空值 → 占位灰字 + … 浏览；有值 → 类图标 + 类名 + ✕ 清除。 */
+        private fun refresh() {
+            if (currentText.isEmpty()) {
+                iconLabel.icon = null
+                textLabel.text = placeholder
+                textLabel.foreground = UIUtil.getInactiveTextColor()
+                actionButton.icon = AllIcons.General.Ellipsis
+                actionButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
+            } else {
+                iconLabel.icon = pickedIcon
+                textLabel.text = currentText
+                textLabel.foreground = UIUtil.getLabelForeground()
+                actionButton.icon = AllIcons.Actions.Cancel
+                actionButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.clearClass")
+            }
         }
 
-        /** 测试访问器：模拟选择器选中（写入文本 + tooltip + 变更回调）。 */
-        internal fun pickForTest(simpleName: String, qualifiedName: String?) = setPicked(simpleName, qualifiedName)
+        /** 测试访问器：模拟选择器选中（类图标 + 简单类名 + 全限定名 + 变更回调）。 */
+        internal fun pickForTest(simpleName: String, qualifiedName: String?, icon: Icon? = AllIcons.Nodes.Class) =
+            setPicked(simpleName, qualifiedName, icon)
 
         /** 测试访问器：模拟 ✕ 清除。 */
         internal fun clearForTest() = clearPicked()
+
+        /** 测试访问器：当前显示的类图标（null = 空值占位态）。 */
+        internal fun iconForTest(): Icon? = iconLabel.icon
     }
 
     // ------------------------------------------------------------------
@@ -660,5 +718,8 @@ class SqlToJavaPanel(
     companion object {
         private const val TOOLBAR_ID_INPUT = "cn.song.mybatisplus.visualizer.reverse.input.toolbar"
         private const val TOOLBAR_ID_RESULT = "cn.song.mybatisplus.visualizer.reverse.result.toolbar"
+
+        /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。 */
+        private const val PICKER_CORNER = 10
     }
 }
