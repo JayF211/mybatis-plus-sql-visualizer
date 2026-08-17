@@ -1209,6 +1209,53 @@ class JavaCodeGeneratorTest {
         val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
         assertTrue(code, code.contains(".selectAs(BikeDeviceInfoEntity::getName, \"productName\")"))
         assertTrue(code, code.contains(".selectAs(BikeDeviceProductInfoEntity::getModel, \"productModel\")"))
+        // t.model 已归属副实体 → 不再误报「未在实体中找到对应字段」
+        assertTrue(code, !code.contains("已回落字符串列名"))
+        assertTrue(code, !code.contains("t.model"))
+    }
+
+    @Test
+    fun `SELECT列_选中VO_selectAs引用VO方法`() {
+        // 用户场景：选了调用类 + VO 后，selectAs 第二参应为 VO 属性方法引用（对齐正向 selectAs(列, VO::getXxx)）
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("t.model", "productModel")),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId", "name" to "name"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id", "model" to "model"),
+                ),
+            ),
+        )
+        val invocation = JavaCodeGenerator.InvocationTarget(
+            callerClass = "BikeDeviceInfoService",
+            voClass = "BikeDeviceInfoVO",
+            mpj = true,
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA, invocation)
+        assertTrue(code, code.contains(".selectAs(BikeDeviceInfoEntity::getName, BikeDeviceInfoVO::getProductName)"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceProductInfoEntity::getModel, BikeDeviceInfoVO::getProductModel)"))
+        // VO 查询调用形态（selectJoinList 族）
+        assertTrue(code, code.contains("bikeDeviceInfoService.selectJoinList(BikeDeviceInfoVO.class, wrapper)"))
+        // 选 VO 后不再用字符串别名（无 VO 时字符串别名行为由 SELECT列带别名_生成selectAs 覆盖）
+        assertTrue(code, !code.contains("BikeDeviceInfoVO::getProductName\"") && !code.contains("\"productName\""))
     }
 
     @Test

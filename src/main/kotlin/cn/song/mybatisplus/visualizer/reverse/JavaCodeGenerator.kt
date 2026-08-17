@@ -105,6 +105,9 @@ object JavaCodeGenerator {
         val voQuery = invocation != null && invocation.mpj &&
             invocation.voClass != null &&
             invocation.voClass != (entity?.className ?: entityClassName(result.tableName))
+        // T-M47：选中 VO 且为真实 VO 查询时，selectAs 第二参用 VO 属性方法引用（Vo::getXxx）——
+        // 对齐正向 selectAs(列, Vo::getXxx)；否则字符串别名
+        val selectAsVoClass = if (voQuery) invocation?.voClass else null
         // 多表 JOIN 依赖 MPJ wrapper 库类——调用类已选定且无 MPJ 能力时无法生成可编译代码，明确报错
         if (isJoin && invocation != null && !invocation.mpj) {
             throw SqlReverseException(
@@ -137,7 +140,7 @@ object JavaCodeGenerator {
                         .append(".class)")
                 } else {
                     selectColumns.forEach {
-                        append("\n    .").append(renderSelectCall(it, entity))
+                        append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass))
                     }
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
@@ -152,7 +155,7 @@ object JavaCodeGenerator {
                     if (selectColumns.any { it.alias != null }) {
                         // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                         selectColumns.forEach {
-                            append("\n    .").append(renderSelectCall(it, entity))
+                            append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass))
                         }
                     } else {
                         append("\n    .select(")
@@ -724,22 +727,29 @@ object JavaCodeGenerator {
         }
 
     /**
-     * 列引用渲染（T-M37 列归属）：lambda 模式且列有字段映射 → `Entity::getField`——
-     * alias 非空时按表别名归属副实体（subEntities），否则主实体；
-     * 未映射 → 字符串列名（多表带别名前缀 `"t1.city"`）。
+     * 列归属解析（T-M37/T-M46）：返回 (实体类名, 字段名)；null = 未映射。
+     * alias 非空时按表别名归属副实体（subEntities），否则主实体；主/对应副实体无该列时，
+     * 若 alias 非某副实体键（主表别名或 null）则扫全部副实体——恰一个副实体有该列才归属
+     * （如主表别名 `t.model` 实为副表 model 列）；同名歧义（多副实体都有）返回 null（回落字符串）。
      */
-    private fun renderColumnRef(columnName: String, entity: EntityTarget?, alias: String? = null): String {
+    private fun resolveColumn(columnName: String, entity: EntityTarget?, alias: String?): Pair<String, String>? {
         val target = if (alias != null) entity?.subEntities?.get(alias) ?: entity else entity
         val field = target?.columnToField?.get(columnName)
-        if (field != null && target != null) {
-            return "${target.className}::get${field.replaceFirstChar { it.uppercase() }}"
-        }
-        // 未归属到主表/对应副表 → 扫全部副实体找该列（如主表别名 `t.model` 实为副表 model 列）。
-        // 仅当 alias 非某副实体键（主表别名或 null）时扫描，且恰好一个副实体有该列才归属（同名歧义回落字符串）。
+        if (field != null && target != null) return target.className to field
         if (alias == null || entity?.subEntities?.containsKey(alias) == false) {
             entity?.subEntities?.values?.filter { it.columnToField.containsKey(columnName) }?.singleOrNull()?.let {
-                return "${it.className}::get${it.columnToField[columnName]!!.replaceFirstChar { x -> x.uppercase() }}"
+                return it.className to it.columnToField[columnName]!!
             }
+        }
+        return null
+    }
+
+    /** 列引用渲染（T-M37 列归属）：lambda 模式且列有字段映射 → `Entity::getField`；
+     * 未映射 → 字符串列名（多表带别名前缀 `"t1.city"`）。 */
+    private fun renderColumnRef(columnName: String, entity: EntityTarget?, alias: String? = null): String {
+        val resolved = resolveColumn(columnName, entity, alias)
+        if (resolved != null) {
+            return "${resolved.first}::get${resolved.second.replaceFirstChar { it.uppercase() }}"
         }
         val qualified = if (alias != null) "$alias.$columnName" else columnName
         return javaString(qualified)
@@ -757,37 +767,57 @@ object JavaCodeGenerator {
         return renderColumnRef(column, entity, alias)
     }
 
-    /** SELECT 列整条调用（T-M46）：带 AS 别名 → `.selectAs(列, "别名")`，否则 `.select(列)`。 */
-    private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?): String {
+    /** SELECT 列整条调用（T-M46/T-M47）：带 AS 别名 → `.selectAs(列, <别名>)`，否则 `.select(列)`。
+     * 别名引用：选中 VO（voClass 非空）→ VO 属性方法引用 `Vo::getXxx`（对齐正向 selectAs 的 VO 字段）；
+     * 未选 VO → 字符串别名 `"xxx"`。 */
+    private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?, voClass: String?): String {
         val ref = renderSelectRef(sel, entity)
-        return if (sel.alias != null) "selectAs($ref, ${javaString(sel.alias)})" else "select($ref)"
+        return if (sel.alias != null) {
+            val aliasRef = if (voClass != null) {
+                "${voClass}::get${sel.alias.replaceFirstChar { it.uppercase() }}"
+            } else {
+                javaString(sel.alias)
+            }
+            "selectAs($ref, $aliasRef)"
+        } else {
+            "select($ref)"
+        }
     }
 
-    /** 未映射列（lambda 模式）：结果中引用但实体映射缺失的列名，按出现顺序去重。 */
+    /** 未映射列（lambda 模式）：结果中引用但实体/副实体归属缺失的列名，按出现顺序去重。
+     * 判定与渲染共用 [resolveColumn]（主表 + 对应副表 + 唯一副实体兜底）——避免「渲染已归属副实体却仍误报」。 */
     private fun unmappedColumns(result: SqlReverseResult, entity: EntityTarget): List<String> {
         val used = mutableListOf<String>()
         result.selectColumns?.let { used.addAll(it.map { c -> c.expr }) }
         fun collect(condition: Condition) {
             when (condition) {
-                is Condition.Simple -> used.add(condition.column.columnName)
-                is Condition.Unary -> used.add(condition.column.columnName)
-                is Condition.In -> used.add(condition.column.columnName)
-                is Condition.Between -> used.add(condition.column.columnName)
-                is Condition.Like -> used.add(condition.column.columnName)
+                is Condition.Simple -> used.add(condition.column.qualifiedName)
+                is Condition.Unary -> used.add(condition.column.qualifiedName)
+                is Condition.In -> used.add(condition.column.qualifiedName)
+                is Condition.Between -> used.add(condition.column.qualifiedName)
+                is Condition.Like -> used.add(condition.column.qualifiedName)
                 is Condition.Group -> condition.children.forEach { collect(it) }
                 else -> Unit
             }
         }
         result.conditions.forEach { collect(it) }
-        result.orderBy.forEach { used.add(it.column.columnName) }
+        result.orderBy.forEach { used.add(it.column.qualifiedName) }
         // T-M42：被过滤的 serialVersionUID 系列列不计入「未映射回落」提示（实际是跳过而非回落字符串列名）；
         // 列名匹配前归一化（剥反引号/别名前缀）——selectColumns 原文可能带反引号（如 `` `signal` ``），
         // 不剥会导致映射成功却误报「未找到对应字段」（用户 T-M43 复现实证）
-        return used.distinct().filter { !isIgnoredColumn(it) && entity.columnToField[normalizedColumnName(it)] == null }
+        return used.distinct()
+            .filter { !isIgnoredColumn(it) }
+            .filter { resolveColumn(normalizedColumnName(it), entity, columnAliasOf(it)) == null }
     }
 
     /** 列名归一化：剥别名前缀与反引号（`t1.city` → `city`、`` `signal` `` → `signal`）。 */
     private fun normalizedColumnName(expr: String): String = expr.substringAfterLast('.').trim('`')
+
+    /** 引用串的表别名前缀（`t1.city` → `t1`；`` `t`.`x` `` → `t`；`city` → null）。 */
+    private fun columnAliasOf(expr: String): String? {
+        val parts = expr.split('.')
+        return if (parts.size > 1) parts.dropLast(1).joinToString(".").trim('`') else null
+    }
 
     // ------------------------------------------------------------------
     // 条件渲染
