@@ -392,9 +392,11 @@ class SqlToJavaPanel(
             }
         }
 
-        /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）。 */
+        /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）；右侧 4px 边距
+         *  防 ✕/… 按钮贴边（对齐 IDEA SearchTextField 的 JTextField.Search.Gap 间距）。 */
         private val actionButtonHost = JPanel(FlowLayout(FlowLayout.CENTER, 0, 4)).apply {
             isOpaque = false
+            border = JBUI.Borders.empty(0, 0, 0, JBUI.scale(4))
             add(actionButton)
         }
 
