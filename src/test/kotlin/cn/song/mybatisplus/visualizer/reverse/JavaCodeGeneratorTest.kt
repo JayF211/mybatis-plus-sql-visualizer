@@ -1300,6 +1300,103 @@ class JavaCodeGeneratorTest {
     }
 
     @Test
+    fun `多表JOIN_ON含逻辑删除_生成lambda形态selectAs引用VO`() {
+        // isSubLogicalDelete 过滤 ON 里副表 deleted = 0 → 可 lambda 化 → MPJLambdaWrapper。
+        // selectAs 第二参引用 VO 属性方法（对齐正向 selectAs(Sub::getX, VO::getY)）
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("t.model", "productModel")),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                        // ON 额外条件 deleted = 0 被 isSubLogicalDelete 过滤 → 可 lambda 化
+                        Condition.Simple(ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "deleted"), "=", SqlValue.Literal("0")),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId", "name" to "name"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id", "model" to "model", "deleted" to "deleted"),
+                ),
+            ),
+        )
+        val invocation = JavaCodeGenerator.InvocationTarget(
+            callerClass = "BikeDeviceInfoService",
+            voClass = "BikeDeviceInfoVO",
+            mpj = true,
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA, invocation)
+        // lambda 联接形态（deleted = 0 被过滤 → 可 lambda 化）
+        assertTrue(code, code.contains("new MPJLambdaWrapper<BikeDeviceInfoEntity>()"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceInfoEntity::getName, BikeDeviceInfoVO::getProductName)"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceProductInfoEntity::getModel, BikeDeviceInfoVO::getProductModel)"))
+        assertTrue(code, code.contains(".leftJoin(BikeDeviceProductInfoEntity.class, BikeDeviceProductInfoEntity::getId, BikeDeviceInfoEntity::getProductId)"))
+        assertTrue(code, code.contains("bikeDeviceInfoService.selectJoinList(BikeDeviceInfoVO.class, wrapper)"))
+    }
+
+    @Test
+    fun `多表JOIN_字符串形态_非逻辑删除条件_别名列渲染为selectAS别名`() {
+        // T-M48：ON 含非逻辑删除额外条件（type = 1）→ 无法 lambda 化 → MPJQueryWrapper（字符串联接）。
+        // MPJQueryWrapper 无 selectAs(String, SFunction) 重载，别名列应渲染为 .select("col AS alias") 字符串形式
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("t.model", "productModel")),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                        // ON 额外条件 type = 1（非逻辑删除）→ 挡住 lambda 化 → 回落 MPJQueryWrapper
+                        Condition.Simple(ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "type"), "=", SqlValue.Literal("1")),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId", "name" to "name"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id", "model" to "model", "type" to "type"),
+                ),
+            ),
+        )
+        val invocation = JavaCodeGenerator.InvocationTarget(
+            callerClass = "BikeDeviceInfoService",
+            voClass = "BikeDeviceInfoVO",
+            mpj = true,
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA, invocation)
+        // 字符串联接形态
+        assertTrue(code, code.contains("new MPJQueryWrapper<>(BikeDeviceInfoEntity.class)"))
+        assertTrue(code, code.contains(".select(\"t.name AS productName\")"))
+        assertTrue(code, code.contains(".select(\"t.model AS productModel\")"))
+        // 不可出现非法的 selectAs(String, SFunction)
+        assertTrue(code, !code.contains("selectAs(\"t.name\""))
+        assertTrue(code, !code.contains("selectAs(\"t.model\""))
+        // 字符串 JOIN
+        assertTrue(code, code.contains(".leftJoin(\"biz_bike_device_product_info bikeDeviceProductInfoEntity ON"))
+    }
+
+    @Test
     fun `SELECT列_多副实体同名列_不归属回落字符串`() {
         // name 在多个副实体都有 → singleOrNull 判歧义 → 回落字符串（不误判归属）
         val result = SqlReverseResult(

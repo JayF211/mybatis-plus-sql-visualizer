@@ -127,6 +127,8 @@ object JavaCodeGenerator {
             voQuery -> if (entity != null) GeneratedWrapper.MPJ_LAMBDA else GeneratedWrapper.MPJ_QUERY
             else -> wrapperKind
         }
+        // T-M48：MPJQueryWrapper（字符串联接）形态下列必须是字符串，不可用 lambda/selectAs(String, SFunction)
+        val rawMode = effectiveKind == GeneratedWrapper.MPJ_QUERY
         val chain = buildString {
             // T-M42：serialVersionUID 系列列过滤后渲染（全部被过滤 → 空列表 → 自然回落 selectAll/不生成
             // select 调用，MP 全列语义）
@@ -140,7 +142,7 @@ object JavaCodeGenerator {
                         .append(".class)")
                 } else {
                     selectColumns.forEach {
-                        append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass))
+                        append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass, rawMode))
                     }
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
@@ -155,7 +157,7 @@ object JavaCodeGenerator {
                     if (selectColumns.any { it.alias != null }) {
                         // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                         selectColumns.forEach {
-                            append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass))
+                            append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass, rawMode))
                         }
                     } else {
                         append("\n    .select(")
@@ -767,10 +769,19 @@ object JavaCodeGenerator {
         return renderColumnRef(column, entity, alias)
     }
 
-    /** SELECT 列整条调用（T-M46/T-M47）：带 AS 别名 → `.selectAs(列, <别名>)`，否则 `.select(列)`。
-     * 别名引用：选中 VO（voClass 非空）→ VO 属性方法引用 `Vo::getXxx`（对齐正向 selectAs 的 VO 字段）；
-     * 未选 VO → 字符串别名 `"xxx"`。 */
-    private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?, voClass: String?): String {
+    /** SELECT 列整条调用（T-M46/T-M47/T-M48）：
+     * - 字符串联接形态（MPJQueryWrapper，rawMode）：列必须是字符串——
+     *   非别名 `.select("t.id")`，带 AS 别名 `.select("t.name AS productName")`
+     *   （MPJQueryWrapper 无 selectAs(String, SFunction) 重载，不可用 lambda 别名）。
+     * - lambda 联接形态（MPJLambdaWrapper）：
+     *   非别名 `.select(Entity::getId)`，带 AS 别名且选中 VO → `.selectAs(Sub::getX, VO::getY)`
+     *   对齐正向 selectAs 的 VO 字段；未选 VO → `.selectAs(Sub::getX, "alias")`。 */
+    private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?, voClass: String?, rawMode: Boolean): String {
+        if (rawMode) {
+            // MPJQueryWrapper 原生形态：列取原始表达式字符串（保留反引号等 SQL 形态）
+            val col = sel.expr
+            return if (sel.alias != null) "select(${javaString("$col AS ${sel.alias}")})" else "select(${javaString(col)})"
+        }
         val ref = renderSelectRef(sel, entity)
         return if (sel.alias != null) {
             val aliasRef = if (voClass != null) {
