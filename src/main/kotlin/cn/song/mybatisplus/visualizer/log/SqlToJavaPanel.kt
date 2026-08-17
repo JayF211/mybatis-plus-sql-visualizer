@@ -680,7 +680,19 @@ class SqlToJavaPanel(
                 //  - JOIN 多表 → 主表 + 副表一次多选（替代 T-M37 逐表弹窗）；
                 //  - 主表 0 候选（无 JOIN）→ 单行主表手动挑选（自动推断兜底）。
                 if (manualEnabled && result.joins.isNotEmpty()) {
-                    showEntitySelection(result, payload.first, payload.second, format)
+                    // T-M49：唯一可推断（主表 1 候选 + 每个副表各 1 候选）→ 跳过弹窗直接渲染，
+                    // 减少规范命名项目每次转换的确认打扰；有歧义（0/多候选）仍弹手动选择。
+                    if (canAutoInferEntitySelection(payload.first, payload.second)) {
+                        val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                        for ((alias, candidates) in payload.second) {
+                            toSubEntity(candidates[0])?.let { subEntities[alias] = it }
+                        }
+                        cacheCandidates = payload.first
+                        cacheSubEntities = subEntities
+                        render(result, payload.first, format, subEntities)
+                    } else {
+                        showEntitySelection(result, payload.first, payload.second, format)
+                    }
                     return@invokeLater
                 }
                 if (manualEnabled && payload.first.isEmpty()) {
@@ -696,10 +708,19 @@ class SqlToJavaPanel(
         }
     }
 
-    /** 手动选择实体类开关（测试环境 settings 未注册时默认开）。 */
+    /** 手动选择实体类开关（测试 environment settings 未注册时默认开）。 */
     private fun manualEntitySelectionEnabled(): Boolean = runCatching {
         settingsState().reverseManualEntitySelection
     }.getOrDefault(true)
+
+    /**
+     * T-M49：JOIN 多表实体是否唯一可推断（主表 1 候选 + 每个副表各 1 候选）——是则可跳过手动选择弹窗，
+     * 直接自动渲染。internal 供单元测试直接验证判定逻辑（不依赖面板实例/EDT）。
+     */
+    internal fun canAutoInferEntitySelection(
+        mainCandidates: List<SqlToJavaConverter.EntityCandidate>,
+        subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
+    ): Boolean = mainCandidates.size == 1 && subCandidates.values.all { it.size == 1 }
 
     /**
      * 实体选择弹窗（自动推断兜底/多表一次多选）：
