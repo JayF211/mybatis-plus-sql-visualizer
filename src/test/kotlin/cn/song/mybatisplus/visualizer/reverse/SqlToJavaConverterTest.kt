@@ -20,7 +20,7 @@ class SqlToJavaConverterTest {
     @Test
     fun `解析_结构与生成输入完整`() {
         assertEquals("user", result.tableName)
-        assertEquals(listOf("id", "name"), result.selectColumns)
+        assertEquals(listOf(SelectColumn("id"), SelectColumn("name")), result.selectColumns)
         assertEquals(2, result.conditions.size)
         assertEquals(1, result.orderBy.size)
         assertEquals("10", (result.limit?.count as SqlValue.Literal).raw)

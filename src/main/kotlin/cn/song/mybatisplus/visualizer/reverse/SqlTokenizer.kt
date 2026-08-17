@@ -65,7 +65,10 @@ internal class SqlTokenizer {
                 }
                 c.isLetterOrDigit() || c == '_' -> {
                     var j = i + 1
-                    while (j < sql.length && (sql[j].isLetterOrDigit() || sql[j] == '_' || sql[j] == '.')) j++
+                    // 点号仅在「后一字符不是反引号」时并入 WORD——`t.`signal`` 须拆成 `t`、`.`、`` `signal` ``
+                    // 三个 token（consumeQualified 会按 `.` 合并），否则反引号列会被 consumeSelectAlias 误当别名吞掉
+                    while (j < sql.length && (sql[j].isLetterOrDigit() || sql[j] == '_' ||
+                            (sql[j] == '.' && j + 1 < sql.length && sql[j + 1] != '`'))) j++
                     tokens.add(Token(TokenType.WORD, sql.substring(i, j), i))
                     i = j
                 }

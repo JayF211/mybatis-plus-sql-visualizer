@@ -127,7 +127,7 @@ object JavaCodeGenerator {
         val chain = buildString {
             // T-M42：serialVersionUID 系列列过滤后渲染（全部被过滤 → 空列表 → 自然回落 selectAll/不生成
             // select 调用，MP 全列语义）
-            val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it) }
+            val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it.expr) }
             val conditions = filterConditions(result.conditions)
             if (isJoin) {
                 // 多表：主表 selectAll（列清单未显式指定时）——MPJ 语义
@@ -137,7 +137,7 @@ object JavaCodeGenerator {
                         .append(".class)")
                 } else {
                     selectColumns.forEach {
-                        append("\n    .select(").append(renderSelectColumn(it, entity)).append(")")
+                        append("\n    .").append(renderSelectCall(it, entity))
                     }
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
@@ -149,9 +149,16 @@ object JavaCodeGenerator {
                 }
             } else {
                 if (selectColumns != null && selectColumns.isNotEmpty()) {
-                    append("\n    .select(")
-                        .append(selectColumns.joinToString(", ") { renderSelectColumn(it, entity) })
-                        .append(")")
+                    if (selectColumns.any { it.alias != null }) {
+                        // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
+                        selectColumns.forEach {
+                            append("\n    .").append(renderSelectCall(it, entity))
+                        }
+                    } else {
+                        append("\n    .select(")
+                            .append(selectColumns.joinToString(", ") { renderSelectRef(it, entity) })
+                            .append(")")
+                    }
                 }
                 conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
@@ -181,7 +188,7 @@ object JavaCodeGenerator {
     }
 
     /**
-     * JOIN 链渲染（T-M37）：ON 单等值列对且主副实体均可映射 → MPJ 三参
+     * JOIN 链渲染（T-M37）：ON 等值列对（忽略副表逻辑删除条件）且主副实体均可映射 → MPJ 三参
      * `leftJoin(副实体.class, 副::getX, 主::getY)`；否则字符串 raw join
      * `leftJoin("address t1 ON <原文>")`（仅 StringJoin 形态——MPJQueryWrapper 合法，
      * MPJLambdaWrapper 无 leftJoin(String)，1.5.6 实证；形态分发见 generateSelect.canLambdaJoin）。
@@ -189,28 +196,61 @@ object JavaCodeGenerator {
     private fun renderJoins(result: SqlReverseResult, entity: EntityTarget?): List<String> =
         result.joins.map { join ->
             if (canLambdaJoin(join, entity)) {
-                val single = join.onConditions.single() as Condition.ColumnComparison
                 val sub = entity!!.subEntities[join.alias]!!
+                val single = joinKeyComparison(join, sub)
+                    ?: return@map "${joinMethod(join.type)}(\"${javaEscape(joinString(join))}\")"
                 val leftField = sub.columnToField[single.left.columnName]!!
                 val rightField = entity.columnToField[single.right.columnName]!!
                 "${joinMethod(join.type)}(${sub.className}.class, " +
                     "${sub.className}::get${leftField.replaceFirstChar { it.uppercase() }}, " +
                     "${entity.className}::get${rightField.replaceFirstChar { it.uppercase() }})"
             } else {
-                val onText = join.rawOn ?: join.onConditions.joinToString(" AND ") { renderRawCondition(it) }
-                val tablePart = join.tableName + (join.alias?.let { " $it" } ?: "")
-                "${joinMethod(join.type)}(\"$tablePart ON $onText\")"
+                "${joinMethod(join.type)}(\"${javaEscape(joinString(join))}\")"
             }
         }
 
-    /** join 是否可三参 lambda 化（单等值列对 + 主副实体列均可映射）——否则须字符串形态（StringJoin）。 */
+    /** 字符串形态 join 的完整参数文本（`表 [别名] ON 原文`）；空白归一为单空格、换行折叠，防 Java 字面量非法。 */
+    private fun joinString(join: ReverseJoin): String {
+        val onText = (join.rawOn ?: join.onConditions.joinToString(" AND ") { renderRawCondition(it) })
+            .replace(Regex("\\s+"), " ").trim()
+        val tablePart = join.tableName + (join.alias?.let { " $it" } ?: "")
+        return "$tablePart ON $onText"
+    }
+
+    /** join 是否可三参 lambda 化（ON 等值列对 + 主副实体列均可映射，忽略副表逻辑删除条件）——否则须字符串形态。 */
     private fun canLambdaJoin(join: ReverseJoin, entity: EntityTarget?): Boolean {
-        val single = join.onConditions.singleOrNull() as? Condition.ColumnComparison ?: return false
         val sub = join.alias?.let { entity?.subEntities?.get(it) } ?: return false
+        val single = joinKeyComparison(join, sub) ?: return false
         val leftField = sub.columnToField[single.left.columnName]
         val rightField = entity?.columnToField?.get(single.right.columnName)
         return leftField != null && rightField != null
     }
+
+    /**
+     * 从 ON 条件里提取联表键等值列对（ColumnComparison）——滤除「副表逻辑删除类条件」
+     * （如 MPJ 自动追加的 `bikeX.deleted = 0`，三参 lambda 形态会由 MPJ 自动补，不能当作多条件拦截）。
+     * 取唯一键对；多键对/主表附加条件 → null（回落字符串形态）。
+     */
+    private fun joinKeyComparison(join: ReverseJoin, sub: EntityTarget): Condition.ColumnComparison? {
+        val keyConditions = join.onConditions.filterNot { isSubLogicalDelete(it, sub, join.alias) }
+        return keyConditions.singleOrNull() as? Condition.ColumnComparison
+    }
+
+    /** 常见逻辑删除列名（MPJ 联表自动追加的 `deleted = 0` 等 ON 过滤）——归一化（去下划线）后比对；
+     * 仅命中这些名字才当作「副表逻辑删除条件」容忍丢弃——`type = 1`、`status = 1` 等真过滤条件不误吞（回落字符串形态）。 */
+    private val LOGICAL_DELETE_COLUMNS =
+        setOf("deleted", "is_deleted", "is_delete", "del_flag", "deleted_flag", "del", "is_del")
+            .map { it.replace("_", "") }
+            .toSet()
+
+    /** 副表逻辑删除类条件：逻辑删除列 `= 字面量 0/1` 且该列为副实体真实列（deleted 等）。 */
+    private fun isSubLogicalDelete(condition: Condition, sub: EntityTarget, joinAlias: String?): Boolean =
+        condition is Condition.Simple &&
+            condition.op == "=" &&
+            condition.column.tableAlias == joinAlias &&
+            sub.columnToField.containsKey(condition.column.columnName) &&
+            condition.column.columnName.lowercase().replace("_", "") in LOGICAL_DELETE_COLUMNS &&
+            (condition.value as? SqlValue.Literal)?.raw in setOf("0", "1")
 
     /** 条件 → SQL 文本（raw join 的 ON 原文重建；仅 ColumnComparison/Simple 等结构化形态）。 */
     private fun renderRawCondition(condition: Condition): String = when (condition) {
@@ -694,25 +734,39 @@ object JavaCodeGenerator {
         if (field != null && target != null) {
             return "${target.className}::get${field.replaceFirstChar { it.uppercase() }}"
         }
+        // 未归属到主表/对应副表 → 扫全部副实体找该列（如主表别名 `t.model` 实为副表 model 列）。
+        // 仅当 alias 非某副实体键（主表别名或 null）时扫描，且恰好一个副实体有该列才归属（同名歧义回落字符串）。
+        if (alias == null || entity?.subEntities?.containsKey(alias) == false) {
+            entity?.subEntities?.values?.filter { it.columnToField.containsKey(columnName) }?.singleOrNull()?.let {
+                return "${it.className}::get${it.columnToField[columnName]!!.replaceFirstChar { x -> x.uppercase() }}"
+            }
+        }
         val qualified = if (alias != null) "$alias.$columnName" else columnName
         return javaString(qualified)
     }
 
-    /** SELECT 列表达式渲染（T-M37）：原文拆分别名前缀后走列归属；反引号剥壳。 */
-    private fun renderSelectColumn(expr: String, entity: EntityTarget?): String {
+    /** SELECT 列列引用（T-M37 列归属）：原文拆分别名前缀后走列归属；反引号剥壳。 */
+    private fun renderSelectRef(sel: SelectColumn, entity: EntityTarget?): String {
+        val expr = sel.expr
         val parts = expr.split('.')
-        if (parts.size > 1) {
-            val alias = parts.dropLast(1).joinToString(".").trim('`')
-            val column = parts.last().trim('`')
-            return renderColumnRef(column, entity, alias)
+        val (alias, column) = if (parts.size > 1) {
+            parts.dropLast(1).joinToString(".").trim('`') to parts.last().trim('`')
+        } else {
+            null to expr.trim('`')
         }
-        return renderColumnRef(expr.trim('`'), entity, null)
+        return renderColumnRef(column, entity, alias)
+    }
+
+    /** SELECT 列整条调用（T-M46）：带 AS 别名 → `.selectAs(列, "别名")`，否则 `.select(列)`。 */
+    private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?): String {
+        val ref = renderSelectRef(sel, entity)
+        return if (sel.alias != null) "selectAs($ref, ${javaString(sel.alias)})" else "select($ref)"
     }
 
     /** 未映射列（lambda 模式）：结果中引用但实体映射缺失的列名，按出现顺序去重。 */
     private fun unmappedColumns(result: SqlReverseResult, entity: EntityTarget): List<String> {
         val used = mutableListOf<String>()
-        result.selectColumns?.let { used.addAll(it) }
+        result.selectColumns?.let { used.addAll(it.map { c -> c.expr }) }
         fun collect(condition: Condition) {
             when (condition) {
                 is Condition.Simple -> used.add(condition.column.columnName)

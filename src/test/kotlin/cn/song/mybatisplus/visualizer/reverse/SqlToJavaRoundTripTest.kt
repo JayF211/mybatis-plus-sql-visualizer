@@ -32,7 +32,7 @@ class SqlToJavaRoundTripTest {
         val parsed = SqlReverseParser.parse(sql1)
         val rebuilt = SelectStatement(
             table = table,
-            selectColumns = parsed.selectColumns?.map { ColumnRef(columnName = it) } ?: listOf(ColumnRef(columnName = "id")),
+            selectColumns = parsed.selectColumns?.map { ColumnRef(columnName = it.expr) } ?: listOf(ColumnRef(columnName = "id")),
             conditions = parsed.conditions,
             orderBy = parsed.orderBy,
             limit = parsed.limit,

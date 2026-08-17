@@ -33,7 +33,7 @@ class SqlReverseParserTest {
     @Test
     fun `简单列清单_保留顺序`() {
         val result = SqlReverseParser.parse("SELECT id, name, age FROM user")
-        assertEquals(listOf("id", "name", "age"), result.selectColumns)
+        assertEquals(listOf(SelectColumn("id"), SelectColumn("name"), SelectColumn("age")), result.selectColumns)
     }
 
     @Test
@@ -48,7 +48,24 @@ class SqlReverseParserTest {
         // T-M37：select 列保留原文（多表归属由生成器拆分）
         val result = SqlReverseParser.parse("SELECT `id`, t.name FROM `my_db`.`user`")
         assertEquals("user", result.tableName)
-        assertEquals(listOf("`id`", "t.name"), result.selectColumns)
+        assertEquals(listOf(SelectColumn("`id`"), SelectColumn("t.name")), result.selectColumns)
+    }
+
+    @Test
+    fun `反引号列紧跟表别名_不吞列`() {
+        // 回归：t.`signal` 先前分词成 WORD(t.) + WORD(`signal`)，反引号列被当别名吞掉 → 只产 t.
+        val result = SqlReverseParser.parse("SELECT t.`signal`, id FROM user t")
+        assertEquals(listOf(SelectColumn("t.`signal`"), SelectColumn("id")), result.selectColumns)
+    }
+
+    @Test
+    fun `SELECT列别名_捕获为SelectColumn别名`() {
+        // T-M46：AS 别名与省略 AS 的直接别名都捕获 → 生成 selectAs
+        val result = SqlReverseParser.parse("SELECT t.name AS productName, t.model productModel, id FROM user t")
+        assertEquals(
+            listOf(SelectColumn("t.name", "productName"), SelectColumn("t.model", "productModel"), SelectColumn("id")),
+            result.selectColumns,
+        )
     }
 
     @Test
@@ -73,7 +90,7 @@ class SqlReverseParserTest {
             WHERE age > 18
             """.trimIndent(),
         )
-        assertEquals(listOf("id", "name"), result.selectColumns)
+        assertEquals(listOf(SelectColumn("id"), SelectColumn("name")), result.selectColumns)
         assertEquals(1, result.conditions.size)
     }
 
@@ -422,7 +439,7 @@ class SqlReverseParserTest {
         val cond = result.conditions.single() as Condition.Simple
         assertEquals("t", cond.column.tableAlias)
         // SELECT 列保留原文
-        assertEquals(listOf("t.id", "t1.city"), result.selectColumns)
+        assertEquals(listOf(SelectColumn("t.id"), SelectColumn("t1.city")), result.selectColumns)
         assertNotNull(join.rawOn)
         assertNotNull(join.rawOn)
         assertTrue(join.rawOn!!.contains("t1.user_id = t.id"))

@@ -166,6 +166,7 @@ tasks {
         changeNotes = """
             <h2>v2026.8.17</h2>
             <ul>
+                <li>SQL→Java 联表反向转换修复（反引号列吞列/换行转义/三参联表/selectAs/副表列归属）</li>
                 <li>SQL→Java 生成代码三改进（T-M45）</li>
                 <li>三处图标统一优化（T-M40）</li>
                 <li>调用方法按调用类真实 API 选择（T-M44）</li>

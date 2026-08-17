@@ -23,7 +23,7 @@ class JavaCodeGeneratorTest {
     fun `完整链路_条件全家与排序分页`() {
         val result = SqlReverseResult(
             tableName = "user",
-            selectColumns = listOf("id", "name"),
+            selectColumns = listOf(SelectColumn("id"), SelectColumn("name")),
             conditions = listOf(
                 Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'张三'", "张三")),
                 Condition.Simple(ColumnRef(columnName = "age"), ">", SqlValue.Literal("18")),
@@ -244,7 +244,7 @@ class JavaCodeGeneratorTest {
     fun `lambda模式_列映射为Entity方法引用`() {
         val result = SqlReverseResult(
             tableName = "user",
-            selectColumns = listOf("id", "name"),
+            selectColumns = listOf(SelectColumn("id"), SelectColumn("name")),
             conditions = listOf(
                 Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("'张三'", "张三")),
                 Condition.Unary(ColumnRef(columnName = "deleted"), "IS NULL"),
@@ -1091,6 +1091,155 @@ class JavaCodeGeneratorTest {
         assertTrue(code, code.contains(".eq(\"t1.extra_col\", 1)"))
     }
 
+    @Test
+    fun `多表JOIN_ON含副表逻辑删除_生成三参leftJoin`() {
+        // 用户场景：ON 里带 MPJ 自动追加的副表 deleted = 0，仍应三参 lambda 化（MPJ 自动补，不当多条件拦截）
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = null,
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                        Condition.Simple(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "deleted"),
+                            "=", SqlValue.Literal("0"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id", "deleted" to "deleted"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new MPJLambdaWrapper<BikeDeviceInfoEntity>()"))
+        assertTrue(
+            code,
+            code.contains(
+                ".leftJoin(BikeDeviceProductInfoEntity.class, BikeDeviceProductInfoEntity::getId, BikeDeviceInfoEntity::getProductId)",
+            ),
+        )
+    }
+
+    @Test
+    fun `多表JOIN_字符串形态_多行ON换行折叠转义`() {
+        val result = SqlReverseResult(
+            tableName = "a",
+            selectColumns = null,
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "b",
+                    alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(ColumnRef(tableAlias = "t1", columnName = "a_id"), ColumnRef(tableAlias = "t", columnName = "id")),
+                        Condition.Simple(ColumnRef(tableAlias = "t1", columnName = "type"), "=", SqlValue.Literal("1")),
+                    ),
+                    rawOn = "t1.a_id = t.id\n    AND t1.type = 1",
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "A",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("B", mapOf("a_id" to "aId", "type" to "type"))),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        // 真过滤条件（type=1 非逻辑删除）→ 字符串形态；多行 ON 折叠为单空格、无裸换行（可编译 Java 字面量）
+        assertTrue(code, code.contains(".leftJoin(\"b t1 ON t1.a_id = t.id AND t1.type = 1\")"))
+        // 换行已被折叠（不再残留原始多行 ON 文本中的 `\n    AND`）
+        assertTrue(code, !code.contains("t1.a_id = t.id\n"))
+    }
+
+    @Test
+    fun `SELECT列带别名_生成selectAs`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("id")),
+        )
+        val code = JavaCodeGenerator.generate(result, JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id", "name" to "name")), GeneratedWrapper.LAMBDA)
+        assertTrue(code, code.contains(".selectAs(User::getName, \"productName\")"))
+        assertTrue(code, code.contains(".select(User::getId)"))
+    }
+
+    @Test
+    fun `SELECT列_主表别名下副表列_归属副实体`() {
+        // 用户场景：t.model 主实体无该列，仅产品副实体有 → 归属副实体；主表有 name → 仍归属主实体（SQL 字面正确）
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("t.model", "productModel")),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId", "name" to "name"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id", "model" to "model"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains(".selectAs(BikeDeviceInfoEntity::getName, \"productName\")"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceProductInfoEntity::getModel, \"productModel\")"))
+    }
+
+    @Test
+    fun `SELECT列_多副实体同名列_不归属回落字符串`() {
+        // name 在多个副实体都有 → singleOrNull 判歧义 → 回落字符串（不误判归属）
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = listOf(SelectColumn("t.model")),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "p",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(ColumnRef(tableAlias = "p", columnName = "id"), ColumnRef(tableAlias = "t", columnName = "product_id")),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId"),
+            subEntities = mapOf(
+                "p" to JavaCodeGenerator.EntityTarget("BikeDeviceProductInfoEntity", mapOf("id" to "id", "model" to "model")),
+                "s" to JavaCodeGenerator.EntityTarget("BikeStationInfoEntity", mapOf("id" to "id", "model" to "model")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains(".select(\"t.model\")"))
+    }
+
     // ------------------------------------------------------------------
     // ? 参数占位符（P0+P1：WHERE/SET/INSERT/LIMIT）
     // ------------------------------------------------------------------
@@ -1099,7 +1248,7 @@ class JavaCodeGeneratorTest {
     fun `占位符条件_渲染eq占位与头注释`() {
         val result = SqlReverseResult(
             tableName = "sys_account_role_rel",
-            selectColumns = listOf("id", "account_id", "role_id"),
+            selectColumns = listOf(SelectColumn("id"), SelectColumn("account_id"), SelectColumn("role_id")),
             conditions = listOf(
                 Condition.Simple(ColumnRef(columnName = "role_id"), "=", SqlValue.Placeholder("?")),
                 Condition.Simple(ColumnRef(columnName = "status"), ">", SqlValue.Placeholder("?")),
@@ -1361,7 +1510,7 @@ class JavaCodeGeneratorTest {
     fun `SELECT含serial_version_u_i_d_无实体_不生成该列引用`() {
         val result = SqlReverseResult(
             tableName = "user",
-            selectColumns = listOf("id", "serial_version_u_i_d", "username"),
+            selectColumns = listOf(SelectColumn("id"), SelectColumn("serial_version_u_i_d"), SelectColumn("username")),
             conditions = listOf(
                 Condition.Simple(ColumnRef(columnName = "username"), "=", SqlValue.Literal("'admin'", "admin")),
             ),
@@ -1376,7 +1525,7 @@ class JavaCodeGeneratorTest {
     fun `SELECT含serialVersionUID列_有实体_不生成getter引用`() {
         val result = SqlReverseResult(
             tableName = "user",
-            selectColumns = listOf("id", "serial_version_u_i_d", "username"),
+            selectColumns = listOf(SelectColumn("id"), SelectColumn("serial_version_u_i_d"), SelectColumn("username")),
         )
         // 模拟旧行为：实体映射仍含该列（层 2 兜底须跳过，防 User::getSerialVersionUID 编译失败）
         val entity = JavaCodeGenerator.EntityTarget(
@@ -1533,7 +1682,7 @@ class JavaCodeGeneratorTest {
     @Test
     fun `SELECT仅含serial_version_u_i_d_不生成select调用`() {
         // 全部列被过滤 → selectColumns 空 → 现有 isNotEmpty 分支自然回落（不生成 select，MP 全列语义）
-        val result = SqlReverseResult(tableName = "user", selectColumns = listOf("serial_version_u_i_d"))
+        val result = SqlReverseResult(tableName = "user", selectColumns = listOf(SelectColumn("serial_version_u_i_d")))
         val code = JavaCodeGenerator.generate(result)
         assertTrue(code, !code.contains(".select("))
         assertTrue(code, !code.contains("serial_version_u_i_d"))
@@ -1543,7 +1692,7 @@ class JavaCodeGeneratorTest {
     fun `SELECT反引号与别名形态_同过滤`() {
         val result = SqlReverseResult(
             tableName = "user",
-            selectColumns = listOf("id", "`serial_version_u_i_d`", "t.serial_version_u_i_d", "SERIAL_VERSION_UID"),
+            selectColumns = listOf(SelectColumn("id"), SelectColumn("`serial_version_u_i_d`"), SelectColumn("t.serial_version_u_i_d"), SelectColumn("SERIAL_VERSION_UID")),
         )
         val code = JavaCodeGenerator.generate(result)
         assertTrue(code, code.contains(".select(\"id\")"))
@@ -1555,7 +1704,7 @@ class JavaCodeGeneratorTest {
     fun `正常业务列不受影响_serial_version_uid同形态过滤`() {
         val result = SqlReverseResult(
             tableName = "user",
-            selectColumns = listOf("username", "serial_version_uid"),
+            selectColumns = listOf(SelectColumn("username"), SelectColumn("serial_version_uid")),
             conditions = listOf(
                 Condition.Simple(ColumnRef(columnName = "username"), "=", SqlValue.Literal("'admin'", "admin")),
             ),

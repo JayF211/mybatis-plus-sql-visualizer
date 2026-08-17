@@ -431,10 +431,11 @@ object SqlReverseParser {
      * 仅收集「简单列」（标识符 / 点分 / 反引号，可带 AS 别名）；出现函数调用
      * （`COUNT(...)` 等）或 `*` 时整体放弃（返回 null——生成器不生成 select() 调用）。
      * 复杂表达式整体跳过（平衡括号消费至逗号/FROM）。
-     * T-M37：保留原文（含表别名前缀与反引号）——多表列归属由生成器拆分（renderSelectColumn）。
+     * T-M37：保留原文（含表别名前缀与反引号）——多表列归属由生成器拆分（renderSelectRef）。
+     * T-M46：捕获 AS 别名（SelectColumn.alias）——生成 selectAs。
      */
-    private fun parseSelectColumns(cursor: Cursor): List<String>? {
-        val columns = mutableListOf<String>()
+    private fun parseSelectColumns(cursor: Cursor): List<SelectColumn>? {
+        val columns = mutableListOf<SelectColumn>()
         var anyComplex = false
         while (true) {
             val t = cursor.current ?: break
@@ -461,8 +462,9 @@ object SqlReverseParser {
                         skipExpression(cursor)
                         continue
                     }
-                    columns.add(consumeQualified(cursor))
-                    consumeSelectAlias(cursor)
+                    val expr = consumeQualified(cursor)
+                    val alias = consumeSelectAlias(cursor)
+                    columns.add(SelectColumn(expr = expr, alias = alias))
                 }
                 t.type == TokenType.SYMBOL && t.text == "(" -> {
                     // 裸括号表达式（少见）→ 放弃 select 生成，整体跳过
@@ -481,17 +483,20 @@ object SqlReverseParser {
         return next != null && next.type == TokenType.SYMBOL && next.text == "("
     }
 
-    /** 消费 `AS 别名` 或直接别名（`a AS x` / `a x`；别名是普通 WORD）。 */
-    private fun consumeSelectAlias(cursor: Cursor) {
+    /** 消费 `AS 别名` 或直接别名（`a AS x` / `a x`；别名是普通 WORD），返回别名（无别名返回 null）。 */
+    private fun consumeSelectAlias(cursor: Cursor): String? {
         val t = cursor.current
-        if (t == null || t.type != TokenType.WORD) return
+        if (t == null || t.type != TokenType.WORD) return null
         if (cursor.isKeyword(t, "AS")) {
             cursor.advance()
-            cursor.advance() // 别名
-        } else if (!cursor.isKeyword(t, "FROM")) {
+            return cursor.advance()?.text?.trim('`')
+        }
+        if (!cursor.isKeyword(t, "FROM")) {
             // `a x` 形态：x 是别名（无关键字风险——FROM 已在上层判定）
             cursor.advance()
+            return t.text.trim('`')
         }
+        return null
     }
 
     /**
@@ -1206,7 +1211,7 @@ object SqlReverseParser {
  * 插入多行值（insertValues 行 × 列）/ 多表删除目标（deleteTargets）。 */
 data class SqlReverseResult(
     val tableName: String,
-    val selectColumns: List<String>? = null,
+    val selectColumns: List<SelectColumn>? = null,
     val conditions: List<Condition> = emptyList(),
     val orderBy: List<OrderByItem> = emptyList(),
     val limit: LimitClause? = null,
@@ -1219,6 +1224,12 @@ data class SqlReverseResult(
     val joins: List<ReverseJoin> = emptyList(),
     /** DELETE 多表删除目标（别名/表名清单，剥反引号；空 = 单表删除）。 */
     val deleteTargets: List<String> = emptyList(),
+)
+
+/** SELECT 列项（T-M46 保留列别名）：`expr` 列原文（含表别名前缀与反引号），`alias` 可选 AS 别名。 */
+data class SelectColumn(
+    val expr: String,
+    val alias: String? = null,
 )
 
 /** 反向转换语句类型（T-M36.7）：增删改查全支持。 */
