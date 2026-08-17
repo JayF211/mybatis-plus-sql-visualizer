@@ -61,12 +61,32 @@ object SqlToJavaConverter {
         return hasMpjInterface(clazz)
     }
 
-    /** 继承链遍历（接口 + 父类递归）匹配 MPJ 接口；internal 供 Heavy 测试直接以 PsiClass 验证。 */
+    /** 继承链遍历（超类 + 超接口递归）匹配 MPJ 接口；internal 供 Heavy 测试直接以 PsiClass 验证。
+     * 主路径用 getInterfaces() + getSuperClass()（源文件→源文件解析可靠，既有测试覆盖）；
+     * jar-loaded 泛型超类型在 getInterfaces() 返回空时，回退到 superTypes + PsiClassType.resolve() 兜底
+     * （resolve() 失败时从 canonicalText 剥泛型取 raw 全限定名直接匹配）。 */
     internal fun hasMpjInterface(clazz: PsiClass, seen: MutableSet<PsiClass> = mutableSetOf()): Boolean {
         if (!seen.add(clazz)) return false
         if (clazz.qualifiedName in MPJ_INTERFACES) return true
+        // 主路径：getInterfaces() + getSuperClass()（源文件解析可靠）
         if (clazz.interfaces.any { hasMpjInterface(it, seen) }) return true
-        return clazz.superClass?.let { hasMpjInterface(it, seen) } ?: false
+        if (clazz.superClass?.let { hasMpjInterface(it, seen) } == true) return true
+        // 回退：jar-loaded 泛型超类型（getInterfaces() 因泛型实参解析失败返回空数组）
+        return clazz.superTypes.any { superType ->
+            superType.resolve()?.let { resolved ->
+                resolved.qualifiedName in MPJ_INTERFACES || hasMpjInterfaceFallback(resolved)
+            } ?: superType.canonicalText.substringBefore('<') in MPJ_INTERFACES
+        }
+    }
+
+    /** superTypes 回退遍历（独立于主路径的 seen，防主路径已访问节点阻断；深度限防循环继承）。 */
+    private fun hasMpjInterfaceFallback(clazz: PsiClass, depth: Int = 0): Boolean {
+        if (depth > 10) return false
+        return clazz.superTypes.any { superType ->
+            superType.resolve()?.let { resolved ->
+                resolved.qualifiedName in MPJ_INTERFACES || hasMpjInterfaceFallback(resolved, depth + 1)
+            } ?: superType.canonicalText.substringBefore('<') in MPJ_INTERFACES
+        }
     }
 
     /**

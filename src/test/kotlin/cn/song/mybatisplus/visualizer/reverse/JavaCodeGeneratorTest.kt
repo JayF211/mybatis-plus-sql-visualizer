@@ -1259,6 +1259,47 @@ class JavaCodeGeneratorTest {
     }
 
     @Test
+    fun `多表JOIN_调用类有MPJ能力_不报错生成selectJoinList`() {
+        // 端到端：调用类具备 MPJ 能力（mpj=true）时，多表 JOIN 不应抛「无 MPJ 能力」，应生成 selectJoinList 族
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = null,
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id"),
+                ),
+            ),
+        )
+        val invocation = JavaCodeGenerator.InvocationTarget(
+            callerClass = "BikeDeviceInfoService",
+            voClass = "BikeDeviceInfoVO",
+            mpj = true,
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA, invocation)
+        assertTrue(code, code.contains("new MPJLambdaWrapper<BikeDeviceInfoEntity>()"))
+        assertTrue(code, code.contains(".leftJoin(BikeDeviceProductInfoEntity.class, BikeDeviceProductInfoEntity::getId, BikeDeviceInfoEntity::getProductId)"))
+        assertTrue(code, code.contains("bikeDeviceInfoService.selectJoinList(BikeDeviceInfoVO.class, wrapper)"))
+    }
+
+    @Test
     fun `SELECT列_多副实体同名列_不归属回落字符串`() {
         // name 在多个副实体都有 → singleOrNull 判歧义 → 回落字符串（不误判归属）
         val result = SqlReverseResult(

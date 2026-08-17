@@ -79,4 +79,17 @@ class InvocationMpjHeavyTest : HeavyPlatformTestCase() {
         val plain = addClassFile("demo", "PlainService.java", "package demo; public interface PlainService {}")
         assertTrue("无 MPJ 接口的调用类应返回 false", !SqlToJavaConverter.hasMpjInterface(plain))
     }
+
+    fun testGenericSupertypeWithUnresolvableArg() {
+        // 模拟 jar-loaded 场景：MPJ 能力接口以全限定名引用但不可解析（未在测试项目定义）→
+        // getInterfaces() 返回空数组（旧实现误判为无 MPJ 能力），
+        // superTypes + canonicalText 回退应从 raw 全命名识别 MPJ 能力。
+        // 注意：必须用全限定名直接 extends（不可用 import，否则 canonicalText 退化为简单名）。
+        val svc = addClassFile("demo", "UserService.java", """
+            package demo;
+            public interface UserService extends com.github.yulichang.base.MPJBaseService {}
+        """)
+        assertTrue("MPJ 接口不可解析时应通过 superTypes/canonicalText 回退识别 MPJ 能力",
+            SqlToJavaConverter.hasMpjInterface(svc))
+    }
 }
