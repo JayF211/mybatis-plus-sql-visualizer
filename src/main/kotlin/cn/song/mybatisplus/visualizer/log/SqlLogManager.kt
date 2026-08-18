@@ -30,13 +30,9 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     private val buffer = SqlLogEntryBuffer()
     private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings) { onConsoleAppeared() }.apply {
-        onConsoleRemoved = { onConsoleRemoved() }
+        onConsoleRemoved = { this@SqlLogManager.onConsoleRemoved() }
     }
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
-
-    /** 进程终止监听（ExecutionManager.EXECUTION_TOPIC 反射挂载）——项目停止时自动停止监听。 */
-    private var executionConnection: Any? = null
-    private var executionListenerAttached = false
 
     /** 缓冲变更 → 面板刷新（EDT 调度）；仅面板订阅时登记（命名引用——可被 removeListener 精确移除）。 */
     private val uiNotifyListener: () -> Unit = { notifyUi() }
@@ -57,38 +53,6 @@ class SqlLogManager(private val project: Project) : Disposable {
         // SqlLogPanel → addUiListener），若监听只在 addUiListener 时接线，窗口从未打开的场景
         // （启动自动监听 + logAutoOpenOnCapture）自动打开永不触发（该设置形同虚设）
         buffer.addListener(autoOpenListener)
-        attachProcessTerminatedListener()
-    }
-
-    /** 反射挂载 ExecutionManager.EXECUTION_TOPIC 的 processTerminated——项目停止时自动停止监听。 */
-    private fun attachProcessTerminatedListener() {
-        if (executionListenerAttached) return
-        executionListenerAttached = true
-        try {
-            val executionManagerClass = Class.forName(
-                "com.intellij.execution.ExecutionManager",
-                true, com.intellij.openapi.project.ProjectManager::class.java.classLoader,
-            )
-            val topic = executionManagerClass.getField("EXECUTION_TOPIC").get(null)
-            val listenerInterface = executionManagerClass.classLoader.loadClass("com.intellij.execution.ExecutionListener")
-            val proxy = java.lang.reflect.Proxy.newProxyInstance(
-                listenerInterface.classLoader, arrayOf(listenerInterface),
-            ) { _, method, _ ->
-                if (method.name == "processTerminated") {
-                    LOG.info("processTerminated: 检测到进程终止，自动停止监听（project=${project.name}）")
-                    stopCapture()
-                }
-                null
-            }
-            // topic.subscribe(listenerInterface, proxy) —— 用 messageBus.connect(this) 管理生命周期
-            val connection = ApplicationManager.getApplication().messageBus.connect(this)
-            executionConnection = connection
-            val subscribeMethod = topic.javaClass.getMethod("subscribe", Class::class.java, java.lang.Object::class.java)
-            subscribeMethod.invoke(topic, listenerInterface, proxy)
-            LOG.info("attachProcessTerminatedListener: EXECUTION_TOPIC 已挂载")
-        } catch (t: Throwable) {
-            LOG.warn("attachProcessTerminatedListener: 挂载失败（${t.javaClass.simpleName}: ${t.message}）")
-        }
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
@@ -159,7 +123,10 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调——停止捕捉。 */
     fun onConsoleRemoved() {
-        if (!capturing) return
+        if (!capturing) {
+            LOG.debug("onConsoleRemoved: 已非捕捉态（capturing=false），跳过停止")
+            return
+        }
         LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（project=${project.name}）")
         stopCapture()
     }

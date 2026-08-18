@@ -138,62 +138,101 @@ open class SqlLogConsoleBridge(
         }
     }
 
-    /** 上一次扫描到的控制台 identityHashCode 集合（用于检测移除）。 */
-    private var lastConsoleIds = mutableSetOf<Int>()
+    /** 上一轮是否检测到主运行控制台（ConsoleViewImpl——Spring Boot 等 run 进程）。 */
+    private var lastHadMainConsole = false
 
-    /** 遍历 RunContentManager 全部运行描述符，对每个 console 挂载 filter（幂等）。 */
-    private fun scanAll() {
-        val rcm = runContentManager ?: return
+    /**
+     * 实时查询 RunContentManager 当前是否有**进程存活的**主运行控制台。
+     * 经实证：getAllDescriptors() 在进程终止后仍返回旧 tab（tab 保留），
+     * 故须额外检查 ProcessHandler.isProcessTerminated()——进程死即视为「无主控制台」。
+     */
+    fun hasMainConsole(): Boolean {
+        val rcm = runContentManager ?: return false
         val descriptors = try {
             val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
             when (raw) {
-                // 2024.3/2025.3 返回 Array；2026.2 返回 List（T-M31.10 实证）——as? 失败返回 null 不抛异常，
-                // 必须显式分支，否则 Collection 兜底永不执行
                 is Array<*> -> raw
                 is Collection<*> -> raw.toTypedArray()
-                else -> {
-                    LOG.warn("scanAll: unexpected getAllDescriptors return type: ${raw?.javaClass?.name}")
-                    null
-                }
+                else -> null
             }
-        } catch (t: Throwable) {
-            LOG.warn("scanAll: getAllDescriptors failed on ${rcm.javaClass.name}", t)
+        } catch (_: Throwable) {
             null
-        } ?: return
-        LOG.debug("scanAll: ${descriptors.size} run descriptors")
-        val currentConsoleIds = mutableSetOf<Int>() // 当前扫描到的控制台 identityHashCode
+        } ?: return false
         for (descriptor in descriptors) {
             val component = try {
                 descriptor?.javaClass?.getMethod("getComponent")?.invoke(descriptor) as? Component
-            } catch (t: Throwable) {
-                LOG.warn("scanAll: getComponent failed on ${descriptor?.javaClass?.name}", t)
+            } catch (_: Throwable) {
                 null
             } ?: continue
-            LOG.debug("scanAll: descriptor component=${component.javaClass.name}")
-            val console = findConsoleView(component)
-            if (console != null) {
-                currentConsoleIds.add(System.identityHashCode(console))
-            }
-            scanComponent(component)
+            val isMain = component.javaClass.name.contains("ConsoleViewImpl") ||
+                !component.javaClass.name.contains("HttpSingleResponseConsole")
+            if (!isMain) continue
+            // 主控制台存在 → 检查进程是否还活着
+            if (isProcessAlive(descriptor)) return true
         }
-        // 检测控制台移除：上一轮有控制台、当前轮无 → 项目停止
-        if (lastConsoleIds.isNotEmpty() && currentConsoleIds.isEmpty()) {
-            LOG.info("scanAll: 所有控制台已移除（上轮 ${lastConsoleIds.size} 个），触发 onConsoleRemoved")
+        return false
+    }
+
+    /** 反射检查 RunContentDescriptor 关联的进程是否存活（ProcessHandler.isProcessTerminated == false 且 isProcessTerminating == false）。 */
+    private fun isProcessAlive(descriptor: Any?): Boolean {
+        if (descriptor == null) return false
+        return try {
+            val processHandler = descriptor.javaClass.getMethod("getProcessHandler").invoke(descriptor) ?: return false
+            val terminated = processHandler.javaClass.getMethod("isProcessTerminated").invoke(processHandler) as? Boolean ?: true
+            val terminating = processHandler.javaClass.getMethod("isProcessTerminating").invoke(processHandler) as? Boolean ?: true
+            val alive = !terminated && !terminating
+            LOG.debug("isProcessAlive: alive=$alive, descriptor=${descriptor.javaClass.simpleName}")
+            alive
+        } catch (t: Throwable) {
+            LOG.debug("isProcessAlive: 反射失败（${t.javaClass.simpleName}），默认视为存活")
+            true // 反射失败时保守视为存活（避免误停）
+        }
+    }
+
+    /**
+     * 遍历 RunContentManager 全部运行描述符，对每个 console 挂载 filter（幂等）。
+     * 主控制台移除检测：HttpSingleResponseConsole（HTTP 请求工具窗口）常驻，
+     * 即使 Spring Boot 停止也不消失——故检测「ConsoleViewImpl 主控制台消失」而非「所有控制台消失」。
+     */
+    private fun scanAll() {
+        val hasMain = hasMainConsole()
+        // 每轮状态日志（debug——诊断主控制台移除检测）
+        LOG.debug("scanAll: hasMainConsole=$hasMain, lastHadMainConsole=$lastHadMainConsole")
+        // 主控制台移除：上一轮有、当前轮无 → 项目停止
+        if (lastHadMainConsole && !hasMain) {
+            LOG.info("scanAll: 主控制台已移除（上轮有、当前无），触发 onConsoleRemoved")
             onConsoleRemoved()
         }
-        // 新控制台出现 → 回调通知（自动重新监听 / 挂载 filter）
-        if (currentConsoleIds.isNotEmpty() && currentConsoleIds.size > lastConsoleIds.size) {
-            val newCount = currentConsoleIds.size - lastConsoleIds.size
-            LOG.info("scanAll: 检测到新控制台（+$newCount），触发 onConsoleAppeared")
+        // 主控制台出现 → 自动重新监听
+        if (!lastHadMainConsole && hasMain) {
+            LOG.info("scanAll: 主控制台出现，触发 onConsoleAppeared")
             onConsoleAppeared()
-            // 检测到控制台 → 从快速轮询切到常规轮询
             if (catchUpTimer != null) {
                 LOG.info("scanAll: 检测到控制台，快速轮询 → 常规轮询（2s）")
                 startNormalPolling()
             }
         }
-        // 更新上一次扫描结果
-        lastConsoleIds = currentConsoleIds
+        // 挂载 filter（幂等）
+        val rcm = runContentManager ?: return
+        val descriptors = try {
+            val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
+            when (raw) {
+                is Array<*> -> raw
+                is Collection<*> -> raw.toTypedArray()
+                else -> null
+            }
+        } catch (_: Throwable) {
+            null
+        } ?: return
+        for (descriptor in descriptors) {
+            val component = try {
+                descriptor?.javaClass?.getMethod("getComponent")?.invoke(descriptor) as? Component
+            } catch (_: Throwable) {
+                null
+            } ?: continue
+            scanComponent(component)
+        }
+        lastHadMainConsole = hasMain
     }
 
     /** 组件树中查找 ConsoleView 实现并挂载（供 contentAdded 与扫描复用）。 */
