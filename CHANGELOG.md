@@ -6,14 +6,25 @@
 
 ### Fixed
 
-- **监听启动时机与窗口关闭停止及日志顺序**：① 自动监听增加主运行控制台守卫——打开项目（未启动运行）不再自动进入监听，项目真正启动运行（主运行控制台出现）时才自动开始，停止运行自动停止（此前项目一打开就显示「监听中」，无控制台可捕获是假象）；② 「关闭工具窗口时停止监听」设置生效——此前只监听 content 移除（新 UI 关闭/折叠面板只是隐藏 ToolWindow，content 仍在，事件不触发），改为监听 ToolWindow 可见性变化（沿「可见 → 不可见」转换沿按设置停止）；③ SQL 日志列表改为正序（最早在前，最新在底部）——此前最新在前为倒序
+- **监听启动时机修正**：自动监听增加主运行控制台守卫——打开项目（未启动运行）不再自动进入监听，项目真正启动运行（主运行控制台出现）时才自动开始，停止运行自动停止（此前项目一打开就显示「监听中」，无控制台可捕获是假象）
+- **「关闭工具窗口时停止监听」设置生效**：此前只监听 content 移除（新 UI 关闭/折叠面板只是隐藏 ToolWindow，content 仍在，事件不触发），改为监听 ToolWindow 可见性变化（沿「可见 → 不可见」转换沿按设置停止）
+- **SQL 日志列表改为正序**：最早在前、最新在底部（此前最新在前为倒序）
 - **工具栏「捕捉/停止」按钮状态实时刷新**：SQL 日志开启/停止监听后，工具栏捕捉按钮的图标/文案立即同步（不再慢一拍、无需点击或悬停触发）——根因是此前用反射调 `ActionToolbarImpl.updateActionsAll()`/`updateActions()`，这两个方法不存在于此平台（恒抛 `NoSuchMethodException`，刷新从未执行）；改为直接调用 `ActionToolbar` 接口公开方法 `updateActionsImmediately()`（三平台 243/253/262 皆有，`javap` 证实）
+- **项目停止后监听不关闭修复**：① `SqlLogConsoleBridge.hasMainConsole()` 新增进程存活检查（`ProcessHandler.isProcessTerminated()`——getAllDescriptors 进程死后仍返回旧 tab，须额外检查进程状态）；② scanAll 移除检测从「所有控制台消失」改为「主运行控制台（ConsoleViewImpl）消失」——HttpSingleResponseConsole 常驻干扰移除检测；③ 移除 processTerminated 监听（误触发：HTTP 请求/profiler 等短命进程致 stopCapture 反复调用 + filter 重复挂载 + 图标不同步）；④ onConsoleRemoved 回调显式 `this@SqlLogManager` 限定（`.apply{}` 作用域陷阱）
+- **第一条 SQL 丢失修复**：`MyBatisLogParser.feed()` 在 Parameters 行后立即闭合（原等下一句 Preparing 才闭合，致第一条 SQL 延迟显示 + 同 SQL 去重时序错乱）
+- **手动停止监听后重启 IDEA 不再自动开启**：CaptureAction 手动停止时同步将 `logAutoCaptureOnStart` 设为 false（原仅设 `capturing=false`，但设置仍为 true，重启后 LogStartupActivity 检查设置仍自动开启）
+- **设置生效性机制重写**：① `ProjectListenerRegistrar` 改 object + registerIfNeeded（`@Service(APP)` 懒加载致 listener 永不注册）；② `apply()` 仅「关→开」且项目有控制台时启动，避免无项目运行时误开；③ `SqlLogManager.dispose` 重置 `capturing`；④ `Class.forName` 显式用平台 classloader（execution API 在平台 classloader，插件 classloader 子类看不到父类）
+- **notificationGroup schema 报错修复**：243 平台 `NotificationGroupEP` 属性集为 `id/displayType/icon/toolWindowId/isLogByDefault/hideFromSettings/bundle/key`，无 `displayName`（`javap` 实证）；分组显示名改用 `bundle + key` 本地化
+- **invocationHasMpj 接口继承误判修复**：jar-loaded 泛型超类型（`MPJBaseService<BikeDeviceInfoEntity>`）在 `getInterfaces()` 因泛型实参解析失败返回空数组 → 继承链第一层断裂 → 误判无 MPJ 能力 → 多表 JOIN 报错；新增 superTypes + `PsiClassType.resolve()` 回退路径（resolve() 失败时从 canonicalText 剥泛型取 raw 全命名匹配）
+- **invocationHasMpj jar-loaded 泛型超类型解析失败修复**：CarDeviceInfoService 误判无 MPJ 能力（`getInterfaces()` 返回空数组因泛型实参解析失败）
+- **selectAs 字符串联接形态修复**（T-M48）：MPJQueryWrapper（字符串联接）无 `selectAs(String, SFunction)` 重载——ON 含额外条件（无法 lambda 化）回落字符串联接时，别名列改渲染为 `.select("t.name AS productName")`（lambda 形态保持 `.selectAs(Entity::getX, VO::getY)`）；同时 `isSubLogicalDelete` 过滤 `deleted = 0` 后若可 lambda 化则生成更优的 lambda 形态
+- **SQL→Java 反向 selectAs 选中 VO 时引用 VO 属性方法**：选了调用类 + VO 后生成 `.selectAs(列, Vo::getAlias)`（不再字符串别名）；消除 `t.model` 未映射误报（提取 `resolveColumn` 共享归属解析——主表 + 对应副表 + 唯一副实体兜底）
+- **VO-only selectAs 引用 VO 方法**（T-M50）：只选 VO 不选调用类时返回 VO-only `InvocationTarget`（callerClass="", mpj=true），selectAs 用 `Vo::getXxx`，不生成调用行
+- **实体选择弹窗优化**（T-M49）：多表联查唯一可推断（主表 1 候选 + 每个副表各 1 候选）时跳过弹窗直接自动渲染；任一表 0/多候选仍有歧义时保留弹窗手动选择
+- **SQL→Java 联表反向转换修复**：① 反引号列紧跟表别名不吞列（`t.`signal`` 分词器 WORD 续读：点号后紧跟反引号时不并入）；② raw join 字符串换行未转义不编译（`joinString()` 空白归一 + `javaEscape`）；③ 开启三参 lambda 联表（容忍 ON 副表逻辑删除条件——`isSubLogicalDelete` 仅放行逻辑删除列名集合 `deleted/is_deleted/del_flag` 等 + 副表别名 + =0/1 + 副实体真实列，`type=1`/`status=1` 真过滤条件不误吞）；④ SELECT 别名保留 → selectAs（新增 `SelectColumn(expr, alias)` 模型）；⑤ 主表别名下副表列归属推断（`renderColumnRef` 兜底：未归属且 alias 非副实体键时扫全部副实体，恰一个副实体有该列则归属）
+- **ClassPickerField ✕/… 按钮贴右边框**：actionButtonHost 补右侧 4px 边距
 
 ## [2026.8.17] - 2026-08-17
-
-### Fixed
-
-- **工具栏「捕捉/停止」按钮状态实时刷新**：SQL 日志开启/停止监听后，工具栏捕捉按钮的图标/文案立即同步（不再慢一拍、无需点击或悬停触发）——根因是此前用反射调 `ActionToolbarImpl.updateActionsAll()`/`updateActions()`，这两个方法不存在于此平台（恒抛 `NoSuchMethodException`，刷新从未执行）；改为直接调用 `ActionToolbar` 接口公开方法 `updateActionsImmediately()`（三平台 243/253/262 皆有，`javap` 证实）
 
 ### Added
 

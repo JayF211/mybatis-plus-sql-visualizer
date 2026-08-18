@@ -164,36 +164,29 @@ tasks {
     // 保留最近两个版本，更早历史见 CHANGELOG.md。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.8.18</h2>
+            <ul>
+                <li>监听启动时机修正（打开项目不监听，启动运行才监听；停止运行自动停止）</li>
+                <li>关闭工具窗口时停止监听设置生效（监听 ToolWindow 可见性变化）</li>
+                <li>SQL 日志列表改为正序（最早在前）+ 工具栏捕捉按钮状态实时刷新</li>
+                <li>项目停止后监听不关闭修复（进程存活检查 + 移除 processTerminated 误触发）</li>
+                <li>第一条 SQL 丢失修复 + 手动停止后重启不再自动开启</li>
+                <li>SQL→Java 联表反向转换修复（反引号列/换行转义/三参联表/selectAs/副表列归属）</li>
+                <li>invocationHasMpj 接口继承 + 泛型超类型误判修复</li>
+                <li>selectAs 字符串联接 + VO-only + VO 属性方法引用修复（T-M48~M50）</li>
+                <li>实体选择弹窗唯一推断时跳过（T-M49）+ notificationGroup schema 报错修复</li>
+                <li>插件描述与最新变化优化 + README 去 AI 味重写</li>
+            </ul>
             <h2>v2026.8.17</h2>
             <ul>
-                <li>VO-only selectAs 引用 VO 方法（只选 VO 不选调用类时 selectAs 用 Vo::getXxx，不生成调用行）</li>
-                <li>实体选择弹窗优化（多表联查唯一可推断时跳过弹窗，歧义时仍弹手动选择）</li>
-                <li>selectAs 字符串联接形态修复（MPJQueryWrapper 别名列改 render select(col AS alias)，lambda 形态保持 selectAs lambda）</li>
-                <li>invocationHasMpj 接口继承误判修复（jar-loaded 泛型超类型 MPJ 能力识别）</li>
-                <li>SQL→Java 反向 selectAs 选中 VO 时引用 VO 属性方法（Vo::getXxx），消除副表列未映射误报</li>
-                <li>SQL→Java 联表反向转换修复（反引号列吞列/换行转义/三参联表/selectAs/副表列归属）</li>
-                <li>SQL→Java 生成代码三改进（T-M45）</li>
-                <li>三处图标统一优化（T-M40）</li>
+                <li>SQL→Java 生成代码三改进（T-M45：复制纯代码/格式化代码按钮/行尾注释）</li>
                 <li>调用方法按调用类真实 API 选择（T-M44）</li>
-                <li>UPSERT 按方言渲染（T-M43）</li>
-                <li>SQL→Java 反向分页解析方言宽容（T-M43）</li>
-                <li>达梦方言实证化（T-M43）</li>
-                <li>日志 SQL 预览弹窗自动识别参数（T-M42）</li>
-                <li>日志列表 Ctrl+C 复制纯 SQL（T-M42）</li>
-                <li>预览弹窗 EDT 报错修复（T-M42）</li>
-                <li>调用类支持 this / baseMapper（T-M42）</li>
-                <li>serialVersionUID 默认忽略（T-M42）</li>
+                <li>UPSERT 按方言渲染与反向分页宽容（T-M43）</li>
+                <li>日志五项修复（T-M42：弹窗自动识别参数/Ctrl+C 复制/EDT 报错/this·baseMapper/serialVersionUID 忽略）</li>
+                <li>三处图标统一优化 + 功能截图 5 张入库（T-M40）</li>
                 <li>SQL→Java 右键预览高亮 + 快捷键可配置（T-M41）</li>
-                <li>SQL→Java 性能与设置页优化</li>
-            </ul>
-            <h2>v2026.8.16</h2>
-            <ul>
-                <li>SQL 日志工具窗口与日志还原（T-M31）</li>
-                <li>SQL 反向转 MP Java 代码（T-M36/T-M37）</li>
-                <li>日志转 SQL Tab（T-M38）</li>
-                <li>侧边栏帮助入口（T-M39）</li>
-                <li>兼容下限降至 IDEA 2024.3（T-M30）</li>
-                <li>更新链路与预览修复（T-M28.3~28.6 + T-M29.5/29.6）</li>
+                <li>SQL→Java 调用形态按 MPJ 1.5.6 实证重写 + 性能修复</li>
+                <li>手动选择实体类 + AUTO 形态 @TableName 反查 + ? 占位符反向识别</li>
             </ul>
         """.trimIndent()
     }
