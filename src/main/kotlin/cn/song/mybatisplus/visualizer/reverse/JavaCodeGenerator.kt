@@ -567,7 +567,9 @@ object JavaCodeGenerator {
         invocationLine: () -> String,
     ): String {
         val head = headOverride?.invoke() ?: wrapperHead(wrapperClass, entityName, wrapperKind)
-        if (invocation == null) {
+        // T-M50：无调用类（仅选 VO）→ 不生成调用行，仅输出 wrapper 表达式
+        val hasCaller = invocation?.callerClass?.isNotEmpty() == true
+        if (invocation == null || !hasCaller) {
             sb.append(head).append(chain).append(";")
             return sb.toString()
         }

@@ -1300,6 +1300,48 @@ class JavaCodeGeneratorTest {
     }
 
     @Test
+    fun `多表JOIN_仅选VO_生成selectAs引用VO方法且不生成调用行`() {
+        // T-M50：只选 VO 不选调用类 -> selectAs 第二参引用 VO 属性方法，不生成调用行
+        val result = SqlReverseResult(
+            tableName = "biz_bike_device_info",
+            selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("t.model", "productModel")),
+            joins = listOf(
+                ReverseJoin(
+                    type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                    tableName = "biz_bike_device_product_info",
+                    alias = "bikeDeviceProductInfoEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef(tableAlias = "bikeDeviceProductInfoEntity", columnName = "id"),
+                            ColumnRef(tableAlias = "t", columnName = "product_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "BikeDeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "product_id" to "productId", "name" to "name"),
+            subEntities = mapOf(
+                "bikeDeviceProductInfoEntity" to JavaCodeGenerator.EntityTarget(
+                    className = "BikeDeviceProductInfoEntity",
+                    columnToField = mapOf("id" to "id", "model" to "model"),
+                ),
+            ),
+        )
+        // 仅选 VO，无调用类（callerClass 为空）
+        val voOnly = JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = "BikeDeviceInfoVO", mpj = true)
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA, voOnly)
+        // lambda 形态 + VO 方法引用
+        assertTrue(code, code.contains("new MPJLambdaWrapper<BikeDeviceInfoEntity>()"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceInfoEntity::getName, BikeDeviceInfoVO::getProductName)"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceProductInfoEntity::getModel, BikeDeviceInfoVO::getProductModel)"))
+        // 无调用行（无调用类）
+        assertTrue(code, !code.contains("bikeDeviceInfoService."))
+        assertTrue(code, !code.contains("selectJoinList"))
+    }
+
+    @Test
     fun `多表JOIN_ON含逻辑删除_生成lambda形态selectAs引用VO`() {
         // isSubLogicalDelete 过滤 ON 里副表 deleted = 0 → 可 lambda 化 → MPJLambdaWrapper。
         // selectAs 第二参引用 VO 属性方法（对齐正向 selectAs(Sub::getX, VO::getY)）

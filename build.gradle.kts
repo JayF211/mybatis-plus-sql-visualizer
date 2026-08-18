@@ -166,6 +166,7 @@ tasks {
         changeNotes = """
             <h2>v2026.8.17</h2>
             <ul>
+                <li>VO-only selectAs 引用 VO 方法（只选 VO 不选调用类时 selectAs 用 Vo::getXxx，不生成调用行）</li>
                 <li>实体选择弹窗优化（多表联查唯一可推断时跳过弹窗，歧义时仍弹手动选择）</li>
                 <li>selectAs 字符串联接形态修复（MPJQueryWrapper 别名列改 render select(col AS alias)，lambda 形态保持 selectAs lambda）</li>
                 <li>invocationHasMpj 接口继承误判修复（jar-loaded 泛型超类型 MPJ 能力识别）</li>

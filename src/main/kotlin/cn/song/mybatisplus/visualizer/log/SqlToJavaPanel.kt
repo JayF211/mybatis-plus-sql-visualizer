@@ -902,8 +902,13 @@ class SqlToJavaPanel(
     /** T-M36.7：调用上下文（调用类 + VO 均非必选；留空返回 null → 纯表达式）。 */
     private fun buildInvocation(): JavaCodeGenerator.InvocationTarget? {
         val caller = callerField.text.trim()
-        if (caller.isEmpty()) return null
         val vo = voField.text.trim().ifEmpty { null }
+        if (caller.isEmpty() && vo == null) return null
+        if (caller.isEmpty()) {
+            // T-M50：仅选 VO（无调用类）→ VO 用于 selectAs 字段引用（Vo::getXxx），不生成调用行。
+            // mpj = true 放开 JOIN/VO 判定（selectAs VO 引用不依赖调用类 MPJ 能力）
+            return JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = vo, mpj = true)
+        }
         return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods)
     }
 
