@@ -3,10 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.wm.ToolWindowManager
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -23,15 +22,21 @@ import java.util.concurrent.CopyOnWriteArrayList
  * T-xx（设置生效性审计）：
  *  - 自动打开监听与面板解耦——窗口从未打开（启动自动监听旗舰场景）时同样触发 [maybeAutoOpenWindow]；
  *  - capturing 仅在桥挂载成功后置位——attach 失败不进入「已捕捉但无监听」的假状态（可重试）；
- *  - [startAutoCaptureForOpenProjects]：设置「启动自动监听」开启后对已打开项目立即生效
- *    （postStartupActivity 仅项目打开时触发，不重开项目也能本会话捕捉）。
+ *  - 启动自动监听（logAutoCaptureOnStart）仅由 [LogStartupCapture]（postStartupActivity）在项目打开时触发，
+ *    项目关闭后 [dispose] 自动停止——语义为「随项目生命周期」，设置页勾选后不立即监听。
  */
 @Service(Service.Level.PROJECT)
 class SqlLogManager(private val project: Project) : Disposable {
 
     private val buffer = SqlLogEntryBuffer()
-    private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings)
+    private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings) { onConsoleAppeared() }.apply {
+        onConsoleRemoved = { onConsoleRemoved() }
+    }
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
+
+    /** 进程终止监听（ExecutionManager.EXECUTION_TOPIC 反射挂载）——项目停止时自动停止监听。 */
+    private var executionConnection: Any? = null
+    private var executionListenerAttached = false
 
     /** 缓冲变更 → 面板刷新（EDT 调度）；仅面板订阅时登记（命名引用——可被 removeListener 精确移除）。 */
     private val uiNotifyListener: () -> Unit = { notifyUi() }
@@ -52,6 +57,38 @@ class SqlLogManager(private val project: Project) : Disposable {
         // SqlLogPanel → addUiListener），若监听只在 addUiListener 时接线，窗口从未打开的场景
         // （启动自动监听 + logAutoOpenOnCapture）自动打开永不触发（该设置形同虚设）
         buffer.addListener(autoOpenListener)
+        attachProcessTerminatedListener()
+    }
+
+    /** 反射挂载 ExecutionManager.EXECUTION_TOPIC 的 processTerminated——项目停止时自动停止监听。 */
+    private fun attachProcessTerminatedListener() {
+        if (executionListenerAttached) return
+        executionListenerAttached = true
+        try {
+            val executionManagerClass = Class.forName(
+                "com.intellij.execution.ExecutionManager",
+                true, com.intellij.openapi.project.ProjectManager::class.java.classLoader,
+            )
+            val topic = executionManagerClass.getField("EXECUTION_TOPIC").get(null)
+            val listenerInterface = executionManagerClass.classLoader.loadClass("com.intellij.execution.ExecutionListener")
+            val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                listenerInterface.classLoader, arrayOf(listenerInterface),
+            ) { _, method, _ ->
+                if (method.name == "processTerminated") {
+                    LOG.info("processTerminated: 检测到进程终止，自动停止监听（project=${project.name}）")
+                    stopCapture()
+                }
+                null
+            }
+            // topic.subscribe(listenerInterface, proxy) —— 用 messageBus.connect(this) 管理生命周期
+            val connection = ApplicationManager.getApplication().messageBus.connect(this)
+            executionConnection = connection
+            val subscribeMethod = topic.javaClass.getMethod("subscribe", Class::class.java, java.lang.Object::class.java)
+            subscribeMethod.invoke(topic, listenerInterface, proxy)
+            LOG.info("attachProcessTerminatedListener: EXECUTION_TOPIC 已挂载")
+        } catch (t: Throwable) {
+            LOG.warn("attachProcessTerminatedListener: 挂载失败（${t.javaClass.simpleName}: ${t.message}）")
+        }
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
@@ -62,6 +99,7 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 开始捕捉：挂载控制台监听 + 轮询兜底（幂等）。 */
     fun startCapture() {
+        LOG.info("startCapture: 调用开始（capturing=$capturing, project=${project.name}）")
         if (capturing) return
         applySettings()
         // T-xx（设置生效性审计）：**先挂载成功再置 capturing**——attach 失败（环境缺 execution API /
@@ -70,17 +108,60 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (bridge.attach(project)) {
             capturing = true
             bridge.startPolling()
+            LOG.info("startCapture: 已进入捕捉态（capturing=true, consoles=${attachedConsoles.size}）")
         } else {
             LOG.warn("startCapture: 控制台监听挂载失败（execution API 不可用）——未进入捕捉态，可稍后手动重试")
         }
     }
 
-    /** 停止捕捉：移除挂载并停止轮询，保留已捕获条目。 */
+    /** 是否有活跃控制台（用于 apply() 判断是否立即启动监听）。 */
+    fun hasConsoles(): Boolean = attachedConsoles.isNotEmpty() || SqlLogConsoleBridge.runContentManagerOrNull(project).let { rcm ->
+        if (rcm == null) return@let false
+        try {
+            val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
+            val count = when (raw) {
+                is Array<*> -> raw.size
+                is Collection<*> -> raw.size
+                else -> 0
+            }
+            count > 0
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * 停止捕捉：重置 capturing 标志 + 清空已挂载 console 记录。
+     * 性能优化：
+     *  - 243/253（ContentManagerListener 可用）→ 停止轮询，改用事件回调检测新控制台（零开销）
+     *  - 262+（无 ContentManagerListener）→ 保持轮询兜底（2s 间隔，轻量 reflection）
+     */
     fun stopCapture() {
         if (!capturing) return
         capturing = false
-        bridge.stopPolling()
-        bridge.detach()
+        attachedConsoles.clear()
+        if (bridge.contentListenerRegistered) {
+            bridge.stopPolling() // 243/253：事件回调替代轮询
+        }
+        // 262+：保持轮询兜底（contentAdded 不可用）
+    }
+
+    /** 新控制台出现（contentAdded / 轮询检测）时回调——设置开启且未捕捉则自动重启。 */
+    fun onConsoleAppeared() {
+        if (capturing) return
+        if (!PluginSettings.getInstance().state.logAutoCaptureOnStart) return
+        LOG.info("onConsoleAppeared: 检测到新控制台 + 设置开启，自动重启捕捉（project=${project.name}）")
+        startCapture()
+    }
+
+    /** 已挂载的 console 集合（bridge 访问）。 */
+    val attachedConsoles: MutableMap<Any, Boolean> get() = bridge.attachedConsoles
+
+    /** 控制台被移除（项目停止 / 用户关闭 tab）时回调——停止捕捉。 */
+    fun onConsoleRemoved() {
+        if (!capturing) return
+        LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（project=${project.name}）")
+        stopCapture()
     }
 
     /** 应用设置（前缀/去重窗口/过滤——捕捉中修改设置后重新装配生效）。 */
@@ -137,8 +218,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         )
     }
 
-    /** 面板销毁/项目关闭时移除挂载。 */
+    /** 面板销毁/项目关闭时移除挂载（capturing 同步重置——状态机闭环）。 */
     override fun dispose() {
+        capturing = false
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
         buffer.removeListener(autoOpenListener)
@@ -150,22 +232,6 @@ class SqlLogManager(private val project: Project) : Disposable {
 
         /** plugin.xml `<toolWindow id>`（自动打开用）。 */
         const val TOOL_WINDOW_ID = "cn.song.mybatisplus.visualizer.log"
-
-        /**
-         * T-xx（设置生效性审计）：启动自动监听开关开启后对**全部已打开项目**立即生效——
-         * [cn.song.mybatisplus.visualizer.log.LogStartupCapture]（postStartupActivity）只在项目打开时触发，
-         * 用户在设置页勾选后不重开项目也要能本会话捕捉（「开了没生效」的主因之一）；
-         * 幂等（startCapture 由 capturing 守卫）；开→关不传播（工具栏手动捕捉独立于启动开关，避免误停）。
-         *
-         * @param provider 内部测试缝：默认 project.getService；测试注入受控 manager 断言传播语义。
-         */
-        internal fun startAutoCaptureForOpenProjects(
-            provider: (Project) -> SqlLogManager = { it.getService(SqlLogManager::class.java) },
-        ) {
-            ProjectManager.getInstance().openProjects.forEach { project ->
-                runCatching { provider(project).startCapture() }
-            }
-        }
     }
 
     private var autoOpenFired = false

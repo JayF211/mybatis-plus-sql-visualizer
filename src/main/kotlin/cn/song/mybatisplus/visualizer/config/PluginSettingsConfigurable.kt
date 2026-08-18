@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.config
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.ProjectManager
@@ -19,9 +20,8 @@ import javax.swing.JComponent
  *  - 界面语言变化 → 重建表单（设置页自身文案即时切换）；
  *  - gutter 图标开关变化 → 遍历所有打开项目的编辑器触发重分析（line marker 立即刷新，无需重开文件）。
  *
- * T-xx（设置生效性审计）：启动自动监听开关「关→开」→ 对全部已打开项目立即生效
- * （postStartupActivity 只在项目打开时触发——不重开项目也要本会话能捕捉，见
- * [SqlLogManager.startAutoCaptureForOpenProjects]）。
+ * 启动自动监听（logAutoCaptureOnStart）仅由 [cn.song.mybatisplus.visualizer.log.LogStartupCapture]
+ * （postStartupActivity）在项目打开时触发——设置页勾选后不立即监听，项目关闭后自动停止（Disposable）。
  */
 class PluginSettingsConfigurable : Configurable {
 
@@ -38,17 +38,27 @@ class PluginSettingsConfigurable : Configurable {
 
     /**
      * 保存配置；按变更类型联动（语言 → 重建表单；gutter 开关 → 全局刷新行标记；
-     * 启动自动监听开启 → 已打开项目立即开始捕捉）。
+     * 自动监听「关→开」→ 已打开项目立即开始捕捉——项目打开时设置未开启的场景）。
      */
     override fun apply() {
         val settings = PluginSettings.getInstance()
         val gutterIconBefore = settings.state.showGutterIcon
         val autoCaptureBefore = settings.state.logAutoCaptureOnStart
         if (panel.apply()) panel.rebuild()
-        // T-xx：自动监听「关→开」→ 全部已打开项目立即 startCapture（幂等）；
-        // 「开→关」不传播——工具栏手动捕捉独立于启动开关，避免误停用户手动监听
+        LOG.info("PluginSettingsConfigurable.apply: logAutoCaptureOnStart=${settings.state.logAutoCaptureOnStart}")
+        // 自动监听「关→开」→ 遍历已打开项目，幂等 startCapture（capturing 守卫）
+        // 仅当项目有运行中的控制台时才启动（无控制台时跳过，避免按钮显示「监听中」但无 SQL 可捕获）
         if (!autoCaptureBefore && settings.state.logAutoCaptureOnStart) {
-            SqlLogManager.startAutoCaptureForOpenProjects()
+            ProjectManager.getInstance().openProjects.forEach { project ->
+                val manager = project.getService(SqlLogManager::class.java)
+                if (manager.hasConsoles()) {
+                    runCatching { manager.startCapture() }.onFailure {
+                        LOG.warn("apply: startCapture 跳过（项目关闭/服务不可用）", it)
+                    }
+                } else {
+                    LOG.info("apply: 项目 ${project.name} 无控制台，跳过 startCapture（项目运行时自动监听）")
+                }
+            }
         }
         // M14.7：gutter 图标开关变化 → 触发已打开编辑器的重分析（line marker 立即生效，无需重开文件）
         if (settings.state.showGutterIcon != gutterIconBefore) refreshGutterIcons()
@@ -70,4 +80,8 @@ class PluginSettingsConfigurable : Configurable {
     /** M23.9：internal 测试访问器（仿 SqlPreviewDialog.panelForTest——createComponent 返回
      * 的是 getRoot() 的 JComponent，测试需经此取回表单面板断言 apply 幂等）。 */
     internal fun panelForTest(): PluginSettingsPanel = panel
+
+    companion object {
+        private val LOG = Logger.getInstance(PluginSettingsConfigurable::class.java)
+    }
 }

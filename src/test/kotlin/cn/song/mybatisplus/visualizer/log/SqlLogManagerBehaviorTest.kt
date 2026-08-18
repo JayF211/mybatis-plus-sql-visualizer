@@ -13,8 +13,8 @@ import org.junit.Assert.assertTrue
  *    （修复前 capturing 先置 true、attach 失败静默无监听且无感知无重试）；
  *  - 自动打开决策与面板解耦（D2）：窗口从未打开（未 addUiListener）时首条捕获也触发自动打开
  *    （修复前自动打开监听仅在面板创建时接线——启动自动监听场景永不触发，logAutoOpenOnCapture 形同虚设）；
- *  - 启动自动监听传播（D4）：设置页开启后对已打开项目立即生效
- *    （postStartupActivity 仅项目打开时触发——不重开项目也要本会话能捕捉）。
+ *  - 项目生命周期语义（D4）：启动自动监听仅由 LogStartupCapture（postStartupActivity）在项目打开时触发，
+ *    项目关闭（dispose）后 capturing 自动重置——设置页勾选后不立即监听已打开项目。
  */
 class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
 
@@ -79,10 +79,16 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         }
     }
 
-    fun testStartAutoCapturePropagatesToOpenProjects() {
+    /**
+     * 项目生命周期语义：startCapture 进入捕捉态后，dispose（项目关闭）应自动停止并重置 capturing。
+     * 回归防护：启动自动监听仅由 LogStartupCapture（postStartupActivity）在项目打开时触发，
+     * 不得在设置页 apply 时立即传播到已打开项目。
+     */
+    fun testDisposeResetsCapturing() {
         val manager = managerWith(FakeBridge(attachResult = true))
-        SqlLogManager.startAutoCaptureForOpenProjects(provider = { manager })
-        assertTrue("传播应调用已打开项目的 startCapture（幂等）", manager.capturing)
-        manager.stopCapture()
+        manager.startCapture()
+        assertTrue("startCapture 后应进入捕捉态", manager.capturing)
+        manager.dispose()
+        assertFalse("dispose（项目关闭）后 capturing 应重置为 false", manager.capturing)
     }
 }

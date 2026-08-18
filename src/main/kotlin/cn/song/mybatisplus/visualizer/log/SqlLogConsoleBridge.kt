@@ -29,24 +29,36 @@ open class SqlLogConsoleBridge(
     private val buffer: SqlLogEntryBuffer,
     private val parserConfig: () -> ParserConfig = { ParserConfig("Preparing:", "Parameters:", true, 20000) },
     private val syncBufferConfig: () -> Unit = {},
+    private val onConsoleAppeared: () -> Unit = {},
 ) {
 
     private var runContentManager: Any? = null
-    private val attachedConsoles = IdentityHashMap<Any, Boolean>()
+    val attachedConsoles = IdentityHashMap<Any, Boolean>()
     private val contentListener = object : ContentManagerListener {
         override fun contentAdded(event: ContentManagerEvent) {
             val component = event.content.component
-            LOG.debug("contentAdded: ${component.javaClass.name}")
+            LOG.info("contentAdded: ${component.javaClass.name}")
             scanComponent(component)
+            onConsoleAppeared()
+        }
+        override fun contentRemoved(event: ContentManagerEvent) {
+            LOG.info("contentRemoved: ${event.content.component.javaClass.name}")
+            onConsoleRemoved()
         }
     }
+
     private var pollTimer: Timer? = null
+    /** 高频补捞定时器（attach 后短暂运行，捕获第一条 SQL）。 */
+    private var catchUpTimer: Timer? = null
+    /** 新控制台出现回调（由 manager 设置）。 */
+    var onConsoleRemoved: () -> Unit = {}
 
     /** 反射取 RunContentManager 实例（双包名候选）并挂载现有 console；环境缺 execution API 时返回 false。
      *  T-xx：`open` 供测试受控桥覆写（attach 恒成功/恒失败）。 */
     open fun attach(project: Project): Boolean {
+        LOG.info("attach: 开始（project=${project.name}, runContentManager=${runContentManager?.javaClass?.name ?: "null"}）")
         if (runContentManager != null) {
-            LOG.debug("attach: already attached")
+            LOG.info("attach: already attached")
             return true
         }
         val rcm = runContentManagerOrNull(project)
@@ -57,20 +69,42 @@ open class SqlLogConsoleBridge(
         runContentManager = rcm
         attachContentListener(rcm)
         scanAll()
-        LOG.info("attach: RCM=${rcm.javaClass.name}, consolesAttached=${attachedConsoles.size}")
+        LOG.info("attach: 成功 RCM=${rcm.javaClass.name}, consolesAttached=${attachedConsoles.size}")
         return true
     }
 
-    /** 轮询兜底（262 无 contentAdded 监听接口；2s 周期 scanAll，幂等——新 console 出现即挂载）。 */
+    /** 停止快速轮询定时器。 */
+    private fun stopCatchUpPolling() {
+        catchUpTimer?.stop()
+        catchUpTimer = null
+    }
+
+    /**
+     * 启动轮询：无控制台时快速轮询（500ms）→ 检测到新控制台后切换常规轮询（2s）。
+     * 性能：500ms 间隔仅在有项目运行且未检测到控制台时运行，检测到后立即切 2s。
+     */
     fun startPolling() {
-        if (pollTimer != null) return
-        pollTimer = Timer(POLL_INTERVAL_MS) { scanAll() }.apply { isRepeats = true; start() }
-        LOG.debug("startPolling: 2s scan fallback started")
+        if (catchUpTimer != null || pollTimer != null) return
+        startFastPolling()
+        LOG.debug("startPolling: 快速轮询已启动（500ms）")
     }
 
     fun stopPolling() {
         pollTimer?.stop()
         pollTimer = null
+        stopCatchUpPolling()
+    }
+
+    /** 快速轮询（500ms）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
+    private fun startFastPolling() {
+        stopCatchUpPolling()
+        catchUpTimer = Timer(FAST_POLL_INTERVAL_MS) { scanAll() }.apply { isRepeats = true; start() }
+    }
+
+    /** 常规轮询（2s）—— 已检测到控制台后，低频兜底。 */
+    private fun startNormalPolling() {
+        stopCatchUpPolling()
+        pollTimer = Timer(POLL_INTERVAL_MS) { scanAll() }.apply { isRepeats = true; start() }
     }
 
     /** 移除挂载（项目关闭/面板销毁时）。 */
@@ -87,16 +121,25 @@ open class SqlLogConsoleBridge(
         attachedConsoles.clear()
     }
 
+    /** ContentManagerListener 是否注册成功（243/253=成功，262+=失败→需轮询兜底）。 */
+    var contentListenerRegistered = false
+        private set
+
     private fun attachContentListener(rcm: Any) {
         try {
             rcm.javaClass.getMethod("addContentManagerListener", CONTENT_LISTENER_CLASS)
                 .invoke(rcm, contentListener)
-            LOG.debug("attach: contentAdded listener registered on ${rcm.javaClass.name}")
+            contentListenerRegistered = true
+            LOG.info("attach: ContentManagerListener 注册成功（${rcm.javaClass.name}）")
         } catch (t: Throwable) {
             // 2026.2 接口无此方法（不 extends ContentManager）→ 轮询兜底
-            LOG.debug("attach: addContentManagerListener unavailable on ${rcm.javaClass.name} — polling fallback covers new consoles", t)
+            contentListenerRegistered = false
+            LOG.warn("attach: ContentManagerListener 不可用（${rcm.javaClass.name}）— 轮询兜底")
         }
     }
+
+    /** 上一次扫描到的控制台 identityHashCode 集合（用于检测移除）。 */
+    private var lastConsoleIds = mutableSetOf<Int>()
 
     /** 遍历 RunContentManager 全部运行描述符，对每个 console 挂载 filter（幂等）。 */
     private fun scanAll() {
@@ -118,6 +161,7 @@ open class SqlLogConsoleBridge(
             null
         } ?: return
         LOG.debug("scanAll: ${descriptors.size} run descriptors")
+        val currentConsoleIds = mutableSetOf<Int>() // 当前扫描到的控制台 identityHashCode
         for (descriptor in descriptors) {
             val component = try {
                 descriptor?.javaClass?.getMethod("getComponent")?.invoke(descriptor) as? Component
@@ -126,8 +170,30 @@ open class SqlLogConsoleBridge(
                 null
             } ?: continue
             LOG.debug("scanAll: descriptor component=${component.javaClass.name}")
+            val console = findConsoleView(component)
+            if (console != null) {
+                currentConsoleIds.add(System.identityHashCode(console))
+            }
             scanComponent(component)
         }
+        // 检测控制台移除：上一轮有控制台、当前轮无 → 项目停止
+        if (lastConsoleIds.isNotEmpty() && currentConsoleIds.isEmpty()) {
+            LOG.info("scanAll: 所有控制台已移除（上轮 ${lastConsoleIds.size} 个），触发 onConsoleRemoved")
+            onConsoleRemoved()
+        }
+        // 新控制台出现 → 回调通知（自动重新监听 / 挂载 filter）
+        if (currentConsoleIds.isNotEmpty() && currentConsoleIds.size > lastConsoleIds.size) {
+            val newCount = currentConsoleIds.size - lastConsoleIds.size
+            LOG.info("scanAll: 检测到新控制台（+$newCount），触发 onConsoleAppeared")
+            onConsoleAppeared()
+            // 检测到控制台 → 从快速轮询切到常规轮询
+            if (catchUpTimer != null) {
+                LOG.info("scanAll: 检测到控制台，快速轮询 → 常规轮询（2s）")
+                startNormalPolling()
+            }
+        }
+        // 更新上一次扫描结果
+        lastConsoleIds = currentConsoleIds
     }
 
     /** 组件树中查找 ConsoleView 实现并挂载（供 contentAdded 与扫描复用）。 */
@@ -148,7 +214,7 @@ open class SqlLogConsoleBridge(
         attachedConsoles[console] = true
         for (filterIfaceName in FILTER_IFACE_CANDIDATES) {
             try {
-                val filterIface = Class.forName(filterIfaceName)
+                val filterIface = Class.forName(filterIfaceName, true, platformClassLoader)
                 val config = parserConfig()
                 val parser = MyBatisLogParser(
                     sqlPrefix = config.sqlPrefix,
@@ -168,10 +234,13 @@ open class SqlLogConsoleBridge(
                         parser.paramPrefix = cfg.paramPrefix
                         parser.mixedPrefix = cfg.mixedPrefix
                         parser.maxParseLength = cfg.maxParseLength
+                        LOG.debug("FilterProxy: line=${line.take(120)}")
                         parser.feed(line)
                         // T-M31.18：每次入队前同步设置（去重窗口/过滤关键字即时生效，不再依赖重新捕捉）
                         syncBufferConfig()
-                        parser.takeEntries().forEach { buffer.addEntry(it) }
+                        val taken = parser.takeEntries()
+                        if (taken.isNotEmpty()) LOG.debug("FilterProxy: 捕获到 ${taken.size} 条 SQL: ${taken.first().restoredSql.take(80)}")
+                        taken.forEach { buffer.addEntry(it) }
                     },
                 )
                 console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
@@ -199,29 +268,37 @@ open class SqlLogConsoleBridge(
             "com.intellij.execution.filters.Filter",
         )
         private val CONTENT_LISTENER_CLASS = ContentManagerListener::class.java
-        private const val POLL_INTERVAL_MS = 2000
+        private const val POLL_INTERVAL_MS = 2000 // 常规轮询间隔
+        private const val FAST_POLL_INTERVAL_MS = 100 // 快速轮询间隔（未检测到控制台时）——捕获第一条 SQL
+
+        /** 平台 classloader（execution API 在此 classloader 中，不在插件 classloader 中）。 */
+        private val platformClassLoader: ClassLoader =
+            com.intellij.openapi.project.ProjectManager::class.java.classLoader
 
         /** 执行体系 API 在当前环境是否可用（测试环境/SDK 发行版为 false）。 */
         fun isConsoleApiAvailable(): Boolean = RCM_CLASS_CANDIDATES.any {
             try {
-                Class.forName(it)
+                Class.forName(it, true, platformClassLoader)
                 true
             } catch (_: Throwable) {
                 false
             }
         }
 
-        private fun runContentManagerOrNull(project: Project): Any? {
+        fun runContentManagerOrNull(project: Project): Any? {
+            LOG.info("runContentManagerOrNull: 尝试解析 RCM（candidates=$RCM_CLASS_CANDIDATES, cl=${platformClassLoader.javaClass.simpleName}）")
             for (className in RCM_CLASS_CANDIDATES) {
                 try {
-                    val clazz = Class.forName(className)
+                    val clazz = Class.forName(className, true, platformClassLoader)
+                    LOG.info("runContentManagerOrNull: $className 已加载，调用 getInstance")
                     val rcm = clazz.getMethod("getInstance", Project::class.java).invoke(null, project)
                     if (rcm != null) {
                         LOG.info("attach: RCM resolved via $className")
                         return rcm
                     }
+                    LOG.warn("runContentManagerOrNull: $className.getInstance 返回 null")
                 } catch (t: Throwable) {
-                    LOG.debug("RCM candidate $className unavailable", t)
+                    LOG.warn("runContentManagerOrNull: $className 不可用（${t.javaClass.simpleName}: ${t.message}）")
                 }
             }
             return null

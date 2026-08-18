@@ -19,7 +19,8 @@ import javax.swing.KeyStroke
  *
  *  - 反向转换形态（reverseWrapperFormat）：此前**漏挂 isModified**——仅改此项时 Apply 按钮不启用，
  *    改动被平台静默丢弃（字段有真实读取点（ConvertSqlToJavaAction/SqlToJavaPanel）但保存链路断裂，形同假开关）；
- *  - 启动自动监听开关（logAutoCaptureOnStart）：勾选/取消 → apply 写回 state（D4 传播入口的状态部分）。
+ *  - 启动自动监听开关（logAutoCaptureOnStart）：勾选/取消 → apply 写回 state（状态持久化，
+ *    实际生效由 LogStartupCapture postStartupActivity 在项目打开时触发）。
  */
 class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
 

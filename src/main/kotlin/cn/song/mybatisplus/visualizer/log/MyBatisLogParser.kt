@@ -46,6 +46,9 @@ class MyBatisLogParser(
         if (paramsText != null) {
             if (pendingSql == null) return // 无上下文（未捕获到 Preparing），忽略
             pendingParams += parseParams(paramsText)
+            // 立即闭合——MyBatis 单条语句 Parameters 行后参数完整，立即生成条目避免去重窗口时序问题；
+            // 多 Parameters 行（极端）合并逻辑：若下一行仍是 Parameters，pendingParams 已被清空后重开。
+            closePending()
         }
     }
 
