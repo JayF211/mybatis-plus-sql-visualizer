@@ -21,12 +21,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.wm.ToolWindow
-import com.intellij.openapi.wm.ToolWindowFactory
-import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapi.wm.ex.ToolWindowManagerListener
-import com.intellij.ui.content.ContentManagerEvent
-import com.intellij.ui.content.ContentManagerListener
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
@@ -42,81 +36,6 @@ import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
 import javax.swing.ListModel
-
-/**
- * MyBatis SQL 日志工具窗口（T-M31-04）：三标签页（SQL 日志列表 / 日志转 SQL / SQL → Java），
- * 全部使用 IDEA 原生组件（[JBTabbedPane] 主题化标签页 + ActionToolbar 扁平图标工具栏 + tooltip，
- * T-M31.6 用户要求 UI 与 IDE 原生风格统一）；双击列表项打开现有预览弹窗
- * （高亮/格式化/复制/执行全复用），右键菜单复制/删除/发送到转换 tab。
- */
-class SqlLogToolWindowFactory : ToolWindowFactory {
-
-    companion object {
-        internal val LOG = Logger.getInstance(SqlLogToolWindowFactory::class.java)
-    }
-
-    override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        // 窗口标题（stripe 标签）：显示 bundle 文案而非窗口 ID（cn.song.mybatisplus.visualizer.log）；
-        // 2026.2 源码实证：setTitle 只改当前 content 的 displayName，侧边栏 stripe 标题走独立
-        // stripeTitleProvider（默认 = 工具窗口 id）——须 setStripeTitle；
-        // T-M39 二次增量：**content displayName 置空**——新 UI 标题栏 = [stripe 标题] + [content displayName]，
-        // 两者同文案会重复显示（用户反馈），标题只由 stripe 承担；
-        // T-M38：invokeLater 二次设置——部分平台版本 createToolWindowContent 阶段设置后
-        // 新 UI 仍按注册 ID 渲染标题栏，延迟到 UI 派发完成后覆盖
-        val title = MpSqlVisualizerBundle.message("log.toolwindow.title")
-        toolWindow.setStripeTitle(title)
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            if (!toolWindow.isDisposed) toolWindow.setStripeTitle(title)
-        }
-        val manager = project.getService(SqlLogManager::class.java)
-        val panel = SqlLogPanel(project, manager)
-        // content 标题留空（T-M39 二次增量：标题栏由 stripe 标题唯一承担，避免重复显示）
-        val content = toolWindow.contentManager.factory.createContent(panel, "", false)
-        content.setDisposer(panel)
-        toolWindow.contentManager.addContent(content)
-
-        // 工具窗口关闭（content 移除）→ 设置开启时停止捕捉（兜底：部分平台把关闭实现为移除 content）
-        toolWindow.contentManager.addContentManagerListener(object : ContentManagerListener {
-            override fun contentRemoved(event: ContentManagerEvent) {
-                if (event.content == content) {
-                    val settings = PluginSettings.getInstance()
-                    if (settings.state.logStopOnToolWindowClose && manager.capturing) {
-                        manager.stopCapture()
-                        LOG.info("ToolWindow 关闭（content 移除）：已停止捕捉（project=${project.name}）")
-                    }
-                }
-            }
-        })
-        // 关闭/折叠侧边栏面板（ToolWindow 隐藏，content 仍在）→ 设置开启时停止捕捉。
-        // contentRemoved 在新 UI 折叠/隐藏时不触发，须监听 ToolWindow 可见性——沿
-        // 「曾经可见 → 当前不可见」转换沿 stop（新建窗口/注册/布局等中间态不误停）。
-        // 该监听用 project messageBus 编程注册（plugin.xml 不支持 <listener>），
-        // connect(content.disposer) 随窗口真正销毁自动断开。
-        var wasVisible = false
-        val tw = toolWindow
-        project.messageBus.connect(content.disposer!!).subscribe(
-            ToolWindowManagerListener.TOPIC,
-            object : ToolWindowManagerListener {
-                override fun stateChanged(
-                    toolWindowManager: ToolWindowManager,
-                    toolWindow: ToolWindow,
-                    type: ToolWindowManagerListener.ToolWindowManagerEventType,
-                ) {
-                    if (toolWindow != tw) return
-                    val visible = tw.isVisible
-                    if (wasVisible && !visible) {
-                        val settings = PluginSettings.getInstance()
-                        if (settings.state.logStopOnToolWindowClose && manager.capturing) {
-                            manager.stopCapture()
-                            LOG.info("ToolWindow 隐藏：已停止捕捉（project=${project.name}, type=$type）")
-                        }
-                    }
-                    wasVisible = visible
-                }
-            },
-        )
-    }
-}
 
 /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复；T-M42 提为顶层，openPreview/右键复制/列表复制共用）。 */
 internal fun withTerminator(sql: String): String =
@@ -183,18 +102,18 @@ class SqlLogPanel(
         manager.addUiListener { refreshList() }
         refreshList()
 
-        // capturing 变化 → 刷新工具栏按钮图标/文案（调用 ActionToolbar.updateActionsImmediately()；
-        // 该方法为 ActionToolbar 接口公开 API，三平台（243/253/262）皆存——此前反射调
-        // updateActionsAll/updateActions 均不存在于此平台（日志实证 NoSuchMethodException））
+        // capturing 变化 → 刷新工具栏按钮图标/文案（调用 ActionToolbar.updateActionsAsync()；
+        // T-M51-06：updateActionsImmediately() 已弃用，改用 updateActionsAsync()（接口公开方法，
+        // 三平台 243/253/262 皆存——javap 实证）
         manager.addCapturingListener {
             LOG.info("SqlLogPanel.capturingListener: 触发")
             ApplicationManager.getApplication().invokeLater {
                 _toolbarRef?.let { toolbar ->
                     runCatching {
-                        toolbar.updateActionsImmediately()
-                        LOG.info("SqlLogPanel.capturingListener: updateActionsImmediately 调用成功")
+                        toolbar.updateActionsAsync()
+                        LOG.info("SqlLogPanel.capturingListener: updateActionsAsync 调用成功")
                     }.onFailure {
-                        LOG.warn("SqlLogPanel.capturingListener: updateActionsImmediately 失败 - ${it.message}")
+                        LOG.warn("SqlLogPanel.capturingListener: updateActionsAsync 失败 - ${it.message}")
                     }
                 }
             }

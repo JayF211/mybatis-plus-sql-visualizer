@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.util.ui.JBHtmlEditorKit
 import com.intellij.util.ui.UIUtil
 import java.awt.Dimension
 import javax.swing.Action
@@ -15,7 +16,7 @@ import javax.swing.JEditorPane
  *
  * 内容来自 bundle（i18n 双语，核心功能 / 使用方法 / 默认快捷键 / 反馈入口）。
  * 渲染跟随 IDE 主题（用户反馈「样式割裂」后改造，对齐 IDEA 帮助信息观感）：
- *  - [UIUtil.getHTMLEditorKit]（JBHtmlEditorKit）——HTML 渲染使用 IDE 字体解析，非 Swing 默认；
+ *  - [JBHtmlEditorKit]——HTML 渲染使用 IDE 字体解析，非 Swing 默认；
  *  - `isOpaque = false`——背景透出面板色（默认白底与弹窗灰底割裂）；
  *  - 前景取 Label 前景色（LAF 主题文字色），未指定颜色的文本/标题继承；
  *  - `HONOR_DISPLAY_PROPERTIES`——HTML 相对字号从组件字体（Label 字体）派生。
@@ -25,7 +26,7 @@ class HelpDialog(project: Project?) : DialogWrapper(project, true) {
     private val editorPane = JEditorPane().apply {
         contentType = "text/html"
         // 主题化 HTML 渲染 kit（字体/颜色解析走 IDE 主题）
-        editorKit = UIUtil.getHTMLEditorKit()
+        editorKit = JBHtmlEditorKit()
         isEditable = false
         // 背景透出面板色（JDK 默认 EditorPane 白底，与弹窗背景割裂）
         isOpaque = false

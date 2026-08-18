@@ -36,9 +36,9 @@ object PlatformPluginInstaller {
      * 卸载旧版 + 解压新版（脚本按序执行：先删后装）。
      */
     fun install(zip: Path): PluginUpdateRunner.InstallResult = runCatching {
-        val pluginId = PluginId.findId(UpdateSource.PLUGIN_ID)
+        val pluginId = PluginId.getId(UpdateSource.PLUGIN_ID)
             ?: return PluginUpdateRunner.InstallResult.Failed("plugin id not found")
-        val old = PluginManagerCore.getPlugin(pluginId)
+        val old = com.intellij.ide.plugins.PluginManager.getPlugin(pluginId)
         if (old != null && isDevInstallation(old.descriptorPath)) {
             // 开发态安装（runIde/测试从 build/classes 加载）——卸载调度会误删构建产物，拒绝；
             // 错误消息带 descriptorPath 便于诊断格式差异（T-M28.3 二修：白名单判定误拒实证）

@@ -153,7 +153,7 @@ class SqlInputEditor(
                 }
             }
         }
-        created.document.addDocumentListener(listener)
+        created.document.addDocumentListener(listener, this)
         autoPopupListener = listener
     }
 

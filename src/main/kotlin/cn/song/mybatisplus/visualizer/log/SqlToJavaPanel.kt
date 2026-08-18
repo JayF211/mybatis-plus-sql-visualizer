@@ -207,12 +207,12 @@ class SqlToJavaPanel(
             override fun documentChanged(e: DocumentEvent) {
                 inputHintLabel.isVisible = inputEditor.text.isBlank()
             }
-        })
+        }, this)
         resultEditor.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(e: DocumentEvent) {
                 resultHintLabel.isVisible = resultEditor.document.text.isBlank()
             }
-        })
+        }, this)
         refreshFormatFromSettings()
     }
 

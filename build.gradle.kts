@@ -94,6 +94,11 @@ kotlin {
     jvmToolchain(17)
 }
 
+// Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+}
+
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：
 // LightPlatform 测试沙盒会无条件加载所有 bundled 插件，Vue 的 LSP 扩展（VueLspServerSupportProvider）
 // 在无 node 的测试环境初始化失败，被 TestLogger 计入断言失败（随机污染测试结果）。

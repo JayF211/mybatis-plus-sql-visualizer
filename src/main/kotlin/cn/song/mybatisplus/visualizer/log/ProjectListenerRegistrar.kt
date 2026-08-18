@@ -32,6 +32,12 @@ object ProjectListenerRegistrar {
 
         val connection = ApplicationManager.getApplication().messageBus.connect()
         val listener = object : ProjectManagerListener {
+            // T-M51-04：projectOpened() 标记 @Deprecated(forRemoval=true)，但 IntelliJ Platform 当前
+            // 没有任何非 deprecated API 能提供"每次项目打开都触发"的语义：
+            //   - postStartupActivity 仅在 IDE 启动时触发一次（仅初始项目），无法覆盖同会话后续打开的项目
+            //   - beforeProjectOpened() 不存在于此接口
+            //   - ProjectLifecycleListener 只有 afterProjectClosed
+            // 因此保持使用 + Suppress，待 JetBrains 提供迁移路径后再切换。
             @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
             override fun projectOpened(project: Project) {
                 LOG.info("ProjectListenerRegistrar.projectOpened: 触发（project=${project.name}, logAutoCaptureOnStart=${PluginSettings.getInstance().state.logAutoCaptureOnStart}）")
