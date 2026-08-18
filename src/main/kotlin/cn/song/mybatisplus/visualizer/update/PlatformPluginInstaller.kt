@@ -1,27 +1,23 @@
 package cn.song.mybatisplus.visualizer.update
 
-import com.intellij.ide.plugins.IdeaPluginDescriptor
-import com.intellij.ide.plugins.PluginInstaller
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.ide.startup.StartupActionScriptManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.extensions.PluginId
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
- * 平台安装封装（M28）：调度「下次启动替换插件」——卸载旧版（[PluginInstaller.uninstallAfterRestart]）
+ * 平台安装封装（M28）：调度「下次启动替换插件」——删除旧版（[StartupActionScriptManager.DeleteCommand]）
  * + 解压新版（[StartupActionScriptManager.UnzipCommand]），随后由调用方提示重启
  * （[com.intellij.util.ui.RestartDialogImpl.restartWithConfirmation]，环境否决动态卸载，
  * 覆盖更新必重启——T-M23.10 定论，不做动态加载）。
  *
- * 版本兼容（T-M30.1 Plugin Verifier 实证）：`uninstallAfterRestart` 参数类型跨版本
- * 不同（2024.3 为 IdeaPluginDescriptorImpl / 2025.3+ 仅 IdeaPluginDescriptor）——反射分发；
- * `StartupActionScriptManager.addActionCommand` / `PluginId`（openapi.extensions）两端
- * 签名一致；**单测不调用本类**（编排层 [PluginUpdateRunner] 以 install seam 注入替代），
+ * T-M51-01-ALT：使用 [ProtectionDomain] 获取当前插件 jar/目录路径 +
+ * [StartupActionScriptManager.DeleteCommand] 删除旧版，避免 PluginManager.getPlugin()
+ * （262 标记 @ApiStatus.Internal，无跨版本公开替代）。标准 Java API，三平台可用。
+ * **单测不调用本类**（编排层 [PluginUpdateRunner] 以 install seam 注入替代），
  * 由 runIde 沙盒端到端验证真实安装链路。
  */
 object PlatformPluginInstaller {
@@ -36,32 +32,30 @@ object PlatformPluginInstaller {
      * 卸载旧版 + 解压新版（脚本按序执行：先删后装）。
      */
     fun install(zip: Path): PluginUpdateRunner.InstallResult = runCatching {
-        val pluginId = PluginId.getId(UpdateSource.PLUGIN_ID)
-            ?: return PluginUpdateRunner.InstallResult.Failed("plugin id not found")
-        val old = com.intellij.ide.plugins.PluginManager.getPlugin(pluginId)
-        if (old != null && isDevInstallation(old.descriptorPath)) {
-            // 开发态安装（runIde/测试从 build/classes 加载）——卸载调度会误删构建产物，拒绝；
-            // 错误消息带 descriptorPath 便于诊断格式差异（T-M28.3 二修：白名单判定误拒实证）
-            LOG.warn("plugin update rejected: dev-mode installation (descriptorPath=${old.descriptorPath})")
-            return PluginUpdateRunner.InstallResult.Failed(
-                "updates are not supported for a development-mode installation (descriptorPath: " +
-                    "${old.descriptorPath ?: "null"}); install from the plugin zip first"
-            )
+        // T-M51-01-ALT：用 ProtectionDomain 获取当前类所在 jar/目录路径，替代
+        // PluginManager.getPlugin()（262 标记 @ApiStatus.Internal）。标准 Java API，
+        // 三平台（243/253/262）皆可用，无需 IDE 特定 API。
+        val jarPath = getPluginJarPath()
+        if (jarPath != null) {
+            val pathStr = jarPath.toString().replace('\\', '/')
+            if (isDevInstallation(pathStr)) {
+                // 开发态安装（runIde/测试从 build/classes 加载）——卸载调度会误删构建产物，拒绝；
+                // 错误消息带路径便于诊断
+                LOG.warn("plugin update rejected: dev-mode installation (jarPath=$pathStr)")
+                return PluginUpdateRunner.InstallResult.Failed(
+                    "updates are not supported for a development-mode installation (path: " +
+                        "$pathStr); install from the plugin zip first"
+                )
+            }
         }
         val persistent = persistZip(zip)
-        if (old != null) {
-            // T-M30.1：跨版本签名差异（Plugin Verifier 实证）——2024.3 的
-            // `PluginInstaller.uninstallAfterRestart` 参数为具体实现类 IdeaPluginDescriptorImpl；
-            // 2025.3+ 该重载已移除，仅保留接口 IdeaPluginDescriptor 版（按 243 编译的
-            // Impl 版调用在 253/2026.2 运行期 NoSuchMethodError）。反射按运行期实际重载
-            // 分发：先按描述符运行时类型找（243 命中 Impl 版），找不到回落接口版（253+）。
-            // 不直接引用 IdeaPluginDescriptorImpl（Internal API），与 M17 执行 SQL 反射隔离手法一致。
-            val method = runCatching {
-                PluginInstaller::class.java.getMethod("uninstallAfterRestart", old.javaClass)
-            }.getOrElse {
-                PluginInstaller::class.java.getMethod("uninstallAfterRestart", IdeaPluginDescriptor::class.java)
-            }
-            method.invoke(null, old)
+        if (jarPath != null) {
+            // T-M51-01-ALT：用 DeleteCommand 替代 PluginInstaller.uninstallAfterRestart(old)
+            // （后者需要 IdeaPluginDescriptor，获取途径在 262 全部为 Internal API）。
+            // DeleteCommand 是公开 API，三平台可用；删除旧 jar 后 IDE 下次启动不会加载旧版。
+            StartupActionScriptManager.addActionCommand(
+                StartupActionScriptManager.DeleteCommand(jarPath)
+            )
         }
         // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
         // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand
@@ -83,6 +77,20 @@ object PlatformPluginInstaller {
      * 才能解出正确形态（见 install() 注释）。internal 供测试断言。
      */
     internal fun unzipTargetDir(): Path = PathManager.getPluginsDir()
+
+    /**
+     * 获取当前插件的 jar/目录路径（T-M51-01-ALT）。
+     * 使用标准 Java ProtectionDomain API，三平台（243/253/262）皆可用。
+     * 返回 null 表示无法获取（安全管理器限制等极端场景）。
+     */
+    private fun getPluginJarPath(): Path? = runCatching {
+        val location = PlatformPluginInstaller::class.java.protectionDomain?.codeSource?.location
+            ?: return null
+        val uri = location.toURI()
+        // 处理 jar:file:/path/to/jar.jar!/com/... 格式 → 提取 jar 路径
+        val pathStr = uri.schemeSpecificPart.substringBefore('!')
+        Path.of(pathStr)
+    }.getOrNull()
 
     /** 下载包复制到 system 目录下持久位置（重启后启动脚本读取；留在原处不删——脚本引用）。 */
     private fun persistZip(zip: Path): Path {
@@ -111,12 +119,13 @@ object PlatformPluginInstaller {
     }
 
     /**
-     * 规范化 descriptorPath（T-M28.3）：剥离 `!` 后缀（jar 内路径）、`jar:file:`/`file:` 前缀
+     * 规范化路径（T-M28.3）：剥离 `!` 后缀（jar 内路径）、`jar:file:`/`file:` 前缀
      * （大小写不敏感）、Windows 驱动字母前导斜杠（`/C:/` → `C:/`）。
      *
      * 背景：2026.2 平台返回 URL 风格路径（用户日常 IDE 实证——未归一化时
      * `Path.of("/C:/...")` 在 Windows 解析为 `\C:\...`，与 `C:\...` 比较失败 → 守卫误拒
      * 正常安装，更新失败）。纯函数（单测直接覆盖）。
+     * T-M51-01-ALT：原用于 descriptorPath，现用于 jarPath（ProtectionDomain）。
      */
     internal fun normalizeDescriptorPath(raw: String): String {
         var s = raw.substringBefore('!').trim()
