@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiClassType
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
 
@@ -58,35 +59,36 @@ object SqlToJavaConverter {
         val scope = GlobalSearchScope.projectScope(project)
         val clazz = PsiShortNamesCache.getInstance(project).getClassesByName(callerClass, scope)
             .firstOrNull() ?: return false
-        return hasMpjInterface(clazz)
+        return hasMpjInterface(clazz, project)
     }
 
-    /** 继承链遍历（超类 + 超接口递归）匹配 MPJ 接口；internal 供 Heavy 测试直接以 PsiClass 验证。
-     * 主路径用 getInterfaces() + getSuperClass()（源文件→源文件解析可靠，既有测试覆盖）；
-     * jar-loaded 泛型超类型在 getInterfaces() 返回空时，回退到 superTypes + PsiClassType.resolve() 兜底
-     * （resolve() 失败时从 canonicalText 剥泛型取 raw 全限定名直接匹配）。 */
-    internal fun hasMpjInterface(clazz: PsiClass, seen: MutableSet<PsiClass> = mutableSetOf()): Boolean {
-        if (!seen.add(clazz)) return false
-        if (clazz.qualifiedName in MPJ_INTERFACES) return true
-        // 主路径：getInterfaces() + getSuperClass()（源文件解析可靠）
-        if (clazz.interfaces.any { hasMpjInterface(it, seen) }) return true
-        if (clazz.superClass?.let { hasMpjInterface(it, seen) } == true) return true
-        // 回退：jar-loaded 泛型超类型（getInterfaces() 因泛型实参解析失败返回空数组）
-        return clazz.superTypes.any { superType ->
-            superType.resolve()?.let { resolved ->
-                resolved.qualifiedName in MPJ_INTERFACES || hasMpjInterfaceFallback(resolved)
-            } ?: superType.canonicalText.substringBefore('<') in MPJ_INTERFACES
+    /**
+     * 继承链遍历（超类 + 超接口递归）匹配 MPJ 接口；internal 供 Heavy 测试直接以 PsiClass 验证。
+     * 使用 [PsiClass.superTypes]（PsiClassType[]）遍历——比 getInterfaces() 更稳：即使 jar-loaded
+     * 泛型超类型因类型实参未完全解析导致 resolve() 失败，仍可通过 PsiShortNamesCache 按原始类名全项目查找匹配。
+     * @param project PsiShortNamesCache 查找 scope 来源（resolve() 失败兜底用）。
+     */
+    internal fun hasMpjInterface(clazz: PsiClass, project: Project, seen: MutableSet<String> = mutableSetOf()): Boolean {
+        val qn = clazz.qualifiedName ?: return false
+        if (!seen.add(qn)) return false
+        if (qn in MPJ_INTERFACES) return true
+        return clazz.superTypes.any { type ->
+            type.resolve()?.let { hasMpjInterface(it, project, seen) }
+                ?: matchesMpjInterfaceFallback(type, project)
         }
     }
 
-    /** superTypes 回退遍历（独立于主路径的 seen，防主路径已访问节点阻断；深度限防循环继承）。 */
-    private fun hasMpjInterfaceFallback(clazz: PsiClass, depth: Int = 0): Boolean {
-        if (depth > 10) return false
-        return clazz.superTypes.any { superType ->
-            superType.resolve()?.let { resolved ->
-                resolved.qualifiedName in MPJ_INTERFACES || hasMpjInterfaceFallback(resolved, depth + 1)
-            } ?: superType.canonicalText.substringBefore('<') in MPJ_INTERFACES
-        }
+    /** resolve() 失败时的回退：先以 canonicalText 剥泛型直接匹配全限定名（源文件 FQN 场景）；
+     * 未命中时按简单名经 PsiShortNamesCache 全项目查找（jar-loaded 场景 canonicalText 退化为简单名）。 */
+    private fun matchesMpjInterfaceFallback(type: PsiClassType, project: Project): Boolean {
+        val raw = type.canonicalText.substringBefore('<')
+        // 直接匹配全限定名（源文件 extends com.github.yulichang.base.MPJBaseService 场景）
+        if (raw in MPJ_INTERFACES) return true
+        // 按简单名全项目查找（jar-loaded 未解析泛型场景 canonicalText 退化为简单名）
+        val rawName = raw.substringAfterLast('.')
+        return PsiShortNamesCache.getInstance(project)
+            .getClassesByName(rawName, GlobalSearchScope.allScope(project))
+            .any { it.qualifiedName in MPJ_INTERFACES || hasMpjInterface(it, project) }
     }
 
     /**

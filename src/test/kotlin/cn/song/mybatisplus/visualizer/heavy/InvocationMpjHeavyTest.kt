@@ -47,8 +47,8 @@ class InvocationMpjHeavyTest : HeavyPlatformTestCase() {
             public interface UserService extends MPJBaseService<User> {}
         """)
         addClassFile("demo", "User.java", "package demo; public class User {}")
-        assertTrue("直接 extends MPJBaseService 应识别 MPJ 能力", SqlToJavaConverter.hasMpjInterface(svc))
-        assertTrue("MPJ 接口自身应识别", SqlToJavaConverter.hasMpjInterface(iface))
+        assertTrue("直接 extends MPJBaseService 应识别 MPJ 能力", SqlToJavaConverter.hasMpjInterface(svc, project))
+        assertTrue("MPJ 接口自身应识别", SqlToJavaConverter.hasMpjInterface(iface, project))
     }
 
     fun testIndirectMpjInterfaceMatch() {
@@ -71,13 +71,13 @@ class InvocationMpjHeavyTest : HeavyPlatformTestCase() {
         val ifaces = userSvc.interfaces.map { it.qualifiedName ?: "?" }
         assertTrue(
             "隔层继承应识别 MPJ 能力：ifaces=$ifaces",
-            SqlToJavaConverter.hasMpjInterface(userSvc),
+            SqlToJavaConverter.hasMpjInterface(userSvc, project),
         )
     }
 
     fun testPlainAndMissingReturnFalse() {
         val plain = addClassFile("demo", "PlainService.java", "package demo; public interface PlainService {}")
-        assertTrue("无 MPJ 接口的调用类应返回 false", !SqlToJavaConverter.hasMpjInterface(plain))
+        assertTrue("无 MPJ 接口的调用类应返回 false", !SqlToJavaConverter.hasMpjInterface(plain, project))
     }
 
     fun testGenericSupertypeWithUnresolvableArg() {
@@ -90,6 +90,6 @@ class InvocationMpjHeavyTest : HeavyPlatformTestCase() {
             public interface UserService extends com.github.yulichang.base.MPJBaseService {}
         """)
         assertTrue("MPJ 接口不可解析时应通过 superTypes/canonicalText 回退识别 MPJ 能力",
-            SqlToJavaConverter.hasMpjInterface(svc))
+            SqlToJavaConverter.hasMpjInterface(svc, project))
     }
 }
