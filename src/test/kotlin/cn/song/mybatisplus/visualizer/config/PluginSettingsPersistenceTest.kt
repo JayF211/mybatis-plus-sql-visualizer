@@ -138,8 +138,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
-            // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）
-            assertEquals("复选框总数应为 11（+手动选择实体类开关）", 11, texts.size)
+            // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1
+            assertEquals("复选框总数应为 12（+关闭工具窗口停止监听）", 12, texts.size)
         } finally {
             settings.state.language = old
         }

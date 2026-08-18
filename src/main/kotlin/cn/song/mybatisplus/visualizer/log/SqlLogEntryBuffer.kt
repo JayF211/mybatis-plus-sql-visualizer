@@ -4,7 +4,7 @@ import java.util.ArrayDeque
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 日志条目缓冲（T-M31-03，纯逻辑，不依赖平台）：条目列表（最新在前、上限裁剪）、
+ * 日志条目缓冲（T-M31-03，纯逻辑，不依赖平台）：条目列表（最早在前、上限裁剪）、
  * 暂停态、去重（对齐 MybatisCodeHelper-Pro「移除重复的sql」——相同 SQL 在窗口内重复丢弃）、
  * 监听器登记——线程安全（任意线程可 [addEntry]，监听器回调不在此处调度）。
  *
@@ -33,14 +33,14 @@ class SqlLogEntryBuffer(
     @Volatile
     var filterKeywords: List<String> = emptyList()
 
-    /** 新条目入队（最新在前；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
+    /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
         if (isFiltered(entry.restoredSql)) return false
         if (dedupeEnabled && isDuplicate(entry)) return false
         synchronized(entries) {
-            entries.addFirst(entry)
-            while (entries.size > maxEntries) entries.removeLast()
+            entries.addLast(entry)
+            while (entries.size > maxEntries) entries.removeFirst()
         }
         notifyChanged()
         return true
@@ -54,7 +54,7 @@ class SqlLogEntryBuffer(
         return entries.firstOrNull { it.restoredSql == entry.restoredSql && now - it.timestamp < dedupeWindowMs } != null
     }
 
-    /** 最新在前的快照。 */
+    /** 最早在前的快照（正序）。 */
     fun snapshot(): List<LogSqlEntry> = synchronized(entries) { entries.toList() }
 
     /** 清空全部。 */

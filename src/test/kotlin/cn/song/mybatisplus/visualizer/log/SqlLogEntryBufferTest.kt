@@ -22,13 +22,13 @@ class SqlLogEntryBufferTest {
     )
 
     @Test
-    fun `新增条目最新在前`() {
+    fun `新增条目最早在前`() {
         buffer.addEntry(entry("SELECT 1"))
         buffer.addEntry(entry("SELECT 2"))
         val snap = buffer.snapshot()
         assertEquals(2, snap.size)
-        assertEquals("SELECT 2", snap[0].restoredSql)
-        assertEquals("SELECT 1", snap[1].restoredSql)
+        assertEquals("SELECT 1", snap[0].restoredSql)
+        assertEquals("SELECT 2", snap[1].restoredSql)
     }
 
     @Test
@@ -39,7 +39,7 @@ class SqlLogEntryBufferTest {
         buffer.addEntry(entry("SELECT 4"))
         val snap = buffer.snapshot()
         assertEquals(3, snap.size)
-        assertEquals("SELECT 4", snap[0].restoredSql)
+        assertEquals("SELECT 2", snap[0].restoredSql)
         assertFalse(snap.any { it.restoredSql == "SELECT 1" })
     }
 

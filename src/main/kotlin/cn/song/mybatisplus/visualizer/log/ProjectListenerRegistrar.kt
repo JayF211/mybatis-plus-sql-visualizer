@@ -18,6 +18,7 @@ import com.intellij.openapi.project.ProjectManagerListener
  *
  * 与 [LogStartupCapture]（postStartupActivity）双保险——startCapture() 幂等（capturing 守卫），
  * 双触发不重复挂载；项目关闭（isDisposed）时停止重试。
+ * 无运行中的主控制台时 startCapture 守卫跳过（项目打开不监听，启动运行由 onConsoleAppeared 自动捕捉）。
  */
 object ProjectListenerRegistrar {
 

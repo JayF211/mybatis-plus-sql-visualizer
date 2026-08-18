@@ -22,8 +22,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * T-xx（设置生效性审计）：
  *  - 自动打开监听与面板解耦——窗口从未打开（启动自动监听旗舰场景）时同样触发 [maybeAutoOpenWindow]；
  *  - capturing 仅在桥挂载成功后置位——attach 失败不进入「已捕捉但无监听」的假状态（可重试）；
- *  - 启动自动监听（logAutoCaptureOnStart）仅由 [LogStartupCapture]（postStartupActivity）在项目打开时触发，
- *    项目关闭后 [dispose] 自动停止——语义为「随项目生命周期」，设置页勾选后不立即监听。
+ *  - 启动自动监听（logAutoCaptureOnStart）由 [LogStartupCapture]（postStartupActivity）在项目打开时触发，
+ *    但 [startCapture] 带主控制台守卫——项目未运行（无主控制台）时不进入捕捉态，项目关闭后 [dispose] 自动停止；
+ *    设置页勾选后不立即监听。
  */
 @Service(Service.Level.PROJECT)
 class SqlLogManager(private val project: Project) : Disposable {
@@ -61,10 +62,24 @@ class SqlLogManager(private val project: Project) : Disposable {
         this.bridge = bridge
     }
 
-    /** 开始捕捉：挂载控制台监听 + 轮询兜底（幂等）。 */
+    /** 开始捕捉：挂载控制台监听 + 轮询兜底（幂等）。
+     *  自动启动路径守卫：项目尚无运行中的主控制台时不进入捕捉态——三条自动启动路径
+     *  （postStartupActivity / projectOpened / 兜底遍历）都不区分时机，统一收敛在此。
+     *  但守卫只跳过「捕捉」不跳过「监听」：仍挂载桥（contentAdded 监听/轮询检测），
+     *  否则无任何检测机制，项目真正启动运行时 onConsoleAppeared 不会被触发（日志实证：
+     *  守卫直接 return 后主控制台出现，日志再无 scanAll/contentAdded——图标不变）。 */
     fun startCapture() {
         LOG.info("startCapture: 调用开始（capturing=$capturing, project=${project.name}）")
         if (capturing) return
+        if (!hasMainConsole()) {
+            // 项目尚未运行（无主运行控制台）：不进入捕捉态，但挂载桥监听——
+            // 主控制台出现（contentAdded 监听 / 轮询检测）时由 onConsoleAppeared 自动进入捕捉态
+            LOG.info("startCapture: 无运行中的主控制台——挂载监听等待项目运行（不进入捕捉态）")
+            if (bridge.attach(project)) {
+                bridge.startPolling()
+            }
+            return
+        }
         applySettings()
         // T-xx（设置生效性审计）：**先挂载成功再置 capturing**——attach 失败（环境缺 execution API /
         // 反射目标不可用）时保持「未捕捉」态并 warn（可诊断），工具栏仍显示「捕捉」可手动重试；
@@ -72,7 +87,10 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (bridge.attach(project)) {
             capturing = true
             bridge.startPolling()
+            // 关键：attach 成功后扫描现有控制台挂载 filter（attach 已 attached 时返回 true 但不扫描）
+            bridge.scanAll()
             LOG.info("startCapture: 已进入捕捉态（capturing=true, consoles=${attachedConsoles.size}）")
+            refreshToolbar()
         } else {
             LOG.warn("startCapture: 控制台监听挂载失败（execution API 不可用）——未进入捕捉态，可稍后手动重试")
         }
@@ -94,6 +112,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         }
     }
 
+    /** 是否有进程存活的**主**运行控制台（ConsoleViewImpl；含进程存活检查，见桥实现）。 */
+    fun hasMainConsole(): Boolean = bridge.hasMainConsole()
+
     /**
      * 停止捕捉：重置 capturing 标志 + 清空已挂载 console 记录。
      * 性能优化：
@@ -108,6 +129,23 @@ class SqlLogManager(private val project: Project) : Disposable {
             bridge.stopPolling() // 243/253：事件回调替代轮询
         }
         // 262+：保持轮询兜底（contentAdded 不可用）
+        refreshToolbar()
+    }
+
+    /** capturing 变化回调（面板注册 → 刷新工具栏按钮图标/文案）。 */
+    private val capturingListeners = CopyOnWriteArrayList<() -> Unit>()
+
+    /** 注册 capturing 变化监听（面板调用）。 */
+    fun addCapturingListener(listener: () -> Unit) {
+        capturingListeners += listener
+    }
+
+    /** 强制刷新工具栏 action 状态（capturing 变化时按钮图标/文案同步）。 */
+    private fun refreshToolbar() {
+        LOG.info("refreshToolbar: 通知 ${capturingListeners.size} 个监听器")
+        ApplicationManager.getApplication().invokeLater {
+            capturingListeners.forEach { it() }
+        }
     }
 
     /** 新控制台出现（contentAdded / 轮询检测）时回调——设置开启且未捕捉则自动重启。 */

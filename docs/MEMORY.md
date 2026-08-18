@@ -56,6 +56,11 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 里程碑/内容 | 当前状态 |
 |------|-------------|----------|
+| [20260818-2105-监听启动时机与窗口关闭停止及日志顺序-开发计划.md](./开发计划/20260818-2105-监听启动时机与窗口关闭停止及日志顺序-开发计划.md) | **日志监听生命周期收敛**：①自动监听加主运行控制台守卫（打开项目不监听，启动运行才监听；startCapture 收敛点）②关闭侧边栏面板停止监听改监听 ToolWindow 可见性（contentRemoved 不触发；ToolWindowManagerListener ex 包 + isVisible 转换沿）③日志正序（SqlLogEntryBuffer addLast/removeFirst + 测试断言翻转）④下午 13 次迭代提交合并为单次（软重置重写未推送历史，保留 aec71f2 内容） | ✅ 已实施（2026-08-18，1224 全绿，待提交） |
+| [20260818-2030-工具栏按钮状态实时刷新-开发计划.md](./开发计划/20260818-2030-工具栏按钮状态实时刷新-开发计划.md) | **工具栏「捕捉/停止」按钮状态实时刷新**：根因=刷新方法名错误（updateActionsAll/updateActions 不存在，日志实证 NoSuchMethodException）→ 改调接口公开方法 ActionToolbar.updateActionsImmediately()（243 javap 实证，三平台皆存，事件驱动无轮询）；capturingListeners + invokeLater 回调 | ✅ 已修复（2026-08-18，aec71f2，全量测试通过） |
+| [20260816-2300-T-M45-复制纯代码与格式化-开发计划.md](./开发计划/20260816-2300-T-M45-复制纯代码与格式化-开发计划.md) | **T-M45 任务源**：SQL→Java ①复制只复制 Java 代码（JavaCommentStripper 纯文本剥离：整行注释行删/行尾注释保代码/字符串内斜杠不误伤/空行保留；弹窗+面板复制统一）②行尾说明注释改独立行注释 ③结果区「格式化代码」按钮（JavaCodeFormatter：代码包合成类方法体再 reformat；PSI 创建包 ReadAction；默认风格不折行，折行依赖用户风格） | ✅ 已交付（2026-08-16，5e1c8b2，1207 全绿） |
+| [20260816-2200-T-M43-方言全兼容与反向分页-开发计划.md](./开发计划/20260816-2200-T-M43-方言全兼容与反向分页-开发计划.md) | **T-M43 任务源**：① UPSERT 按方言渲染——Dialect SPI 第 4 差异点 renderUpsert（MySQL/MariaDB ON DUPLICATE KEY UPDATE+VALUES()、PG/H2/SQLite/KingBase ON CONFLICT+EXCLUDED、Oracle/SQLServer/DM 降级纯 INSERT，BatchModel.renderSql 分支+modelBuild 注入零面板改动）；② 反向分页解析宽容——LIMIT n OFFSET m / OFFSET..FETCH / FETCH FIRST 三形态（含 ? 占位），consumeOptionalAlias 防护列表补 OFFSET/FETCH + isClauseStart/isClauseToken 列名防误判；③ DM 实证（DM8 支持 LIMIT M,N 为 4 种写法之一） | ✅ 已交付（2026-08-16，ab06bed，1175 全绿领地验证，并入 v2026.8.17） |
+| [20260816-2140-调用方法按调用类真实API选择-T-M44-开发计划.md](./开发计划/20260816-2140-调用方法按调用类真实API选择-T-M44-开发计划.md) | **T-M44 任务源**：SQL→Java 调用方法按调用类真实 API 选择——invocationHasMpj 判断 MPJ 能力（getSuperClass() 对接口返回 null → getSuperTypes() 修正）；unmappedColumns 反引号误报顺带修复（normalizedColumnName） | ✅ 已交付（2026-08-16，1183 全绿，并入 v2026.8.17） |
 | [20260815-2230-设置面板布局分组调整-T-M31.8-开发计划.md](./开发计划/20260815-2230-设置面板布局分组调整-T-M31.8-开发计划.md) | **T-M31.8 任务源**：设置面板布局分组——高频上/低频下/同类相聚 + TitledSeparator 分隔线（对齐 SQL 预览面板左侧分区）；5 组（SQL 预览/表名映射/代码生成/界面与操作/更新与诊断）；现有测试依赖已核实无风险 | ⬜ 待实施（方案定稿待确认） |
 | [20260815-1900-日志SQL还原与Wrapper实时提示及P2深化-开发计划.md](./开发计划/20260815-1900-日志SQL还原与Wrapper实时提示及P2深化-开发计划.md) | **T-M31~T-M35 任务源**：T-M31 日志还原已交付（938 全绿，含 T-M31.1~7 迭代：verifyPlugin 三态提速/侧边栏图标/原生 UI/捕捉默认关/去重默认关）；T-M32 实时提示 / T-M33 拦截器模拟 / T-M34 Kotlin / T-M35 Database 待实施 | T-M31 已交付，其余待实施 |
 | [20260815-1734-兼容IDEA243-T-M30-开发计划.md](./开发计划/20260815-1734-兼容IDEA243-T-M30-开发计划.md) | **T-M30 任务源**：最低兼容从 2025.3 降至 2024.3——构建基准 2024.3.7.1 + since-build=243 + update 清单；API 适配 4 处（XML 模块名、PluginInstaller.uninstallAfterRestart 签名、Messages 嵌套 DoNotAskOption、DaemonCodeAnalyzer.restart）；Kotlin 方案 A（编译目标 stdlib 2.0.21） | 实施中 |
@@ -130,6 +135,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-17 | 开发计划表格补录 T-M43/T-M44/T-M45 条目（含新建开发计划文档）；T-M44 状态更新为已交付 |
 | 2026-08-16 | 新增索引条目：Marketplace发布流程-说明文档.md（首次发布全流程，含双仓库同步方案） |
 | 2026-08-16 | 新增「架构设计」分区：docs/架构设计/01-项目架构总览 / 02-核心流程详解 / 03-开发与测试指南（Mermaid 架构图+流程图系列文档） |
 | 2026-08-15 | 更新索引条目：20260815-1416-检查更新无反应与构建号不显示修复-T-M28.1-开发计划.md（T-M28.1 已交付 792 测试全绿） |

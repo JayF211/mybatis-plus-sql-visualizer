@@ -132,6 +132,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 项目启动时自动开始监听（默认关——手动点「捕捉」）。 */
         var logAutoCaptureOnStart: Boolean = false,
 
+        /** 关闭工具窗口时自动停止监听（默认关——关闭工具窗口不影响监听状态）。 */
+        var logStopOnToolWindowClose: Boolean = false,
+
         /** 发现 SQL 时自动打开日志工具窗口（默认关）。 */
         var logAutoOpenOnCapture: Boolean = false,
 

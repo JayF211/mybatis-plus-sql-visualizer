@@ -145,8 +145,9 @@ open class SqlLogConsoleBridge(
      * 实时查询 RunContentManager 当前是否有**进程存活的**主运行控制台。
      * 经实证：getAllDescriptors() 在进程终止后仍返回旧 tab（tab 保留），
      * 故须额外检查 ProcessHandler.isProcessTerminated()——进程死即视为「无主控制台」。
+     * `open` 供测试受控桥覆写（见 [SqlLogManager] 内部测试缝）。
      */
-    fun hasMainConsole(): Boolean {
+    open fun hasMainConsole(): Boolean {
         val rcm = runContentManager ?: return false
         val descriptors = try {
             val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
@@ -194,7 +195,7 @@ open class SqlLogConsoleBridge(
      * 主控制台移除检测：HttpSingleResponseConsole（HTTP 请求工具窗口）常驻，
      * 即使 Spring Boot 停止也不消失——故检测「ConsoleViewImpl 主控制台消失」而非「所有控制台消失」。
      */
-    private fun scanAll() {
+    fun scanAll() {
         val hasMain = hasMainConsole()
         // 每轮状态日志（debug——诊断主控制台移除检测）
         LOG.debug("scanAll: hasMainConsole=$hasMain, lastHadMainConsole=$lastHadMainConsole")

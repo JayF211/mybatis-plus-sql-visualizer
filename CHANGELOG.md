@@ -2,7 +2,18 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
+## [2026.8.18] - 2026-08-18
+
+### Fixed
+
+- **监听启动时机与窗口关闭停止及日志顺序**：① 自动监听增加主运行控制台守卫——打开项目（未启动运行）不再自动进入监听，项目真正启动运行（主运行控制台出现）时才自动开始，停止运行自动停止（此前项目一打开就显示「监听中」，无控制台可捕获是假象）；② 「关闭工具窗口时停止监听」设置生效——此前只监听 content 移除（新 UI 关闭/折叠面板只是隐藏 ToolWindow，content 仍在，事件不触发），改为监听 ToolWindow 可见性变化（沿「可见 → 不可见」转换沿按设置停止）；③ SQL 日志列表改为正序（最早在前，最新在底部）——此前最新在前为倒序
+- **工具栏「捕捉/停止」按钮状态实时刷新**：SQL 日志开启/停止监听后，工具栏捕捉按钮的图标/文案立即同步（不再慢一拍、无需点击或悬停触发）——根因是此前用反射调 `ActionToolbarImpl.updateActionsAll()`/`updateActions()`，这两个方法不存在于此平台（恒抛 `NoSuchMethodException`，刷新从未执行）；改为直接调用 `ActionToolbar` 接口公开方法 `updateActionsImmediately()`（三平台 243/253/262 皆有，`javap` 证实）
+
 ## [2026.8.17] - 2026-08-17
+
+### Fixed
+
+- **工具栏「捕捉/停止」按钮状态实时刷新**：SQL 日志开启/停止监听后，工具栏捕捉按钮的图标/文案立即同步（不再慢一拍、无需点击或悬停触发）——根因是此前用反射调 `ActionToolbarImpl.updateActionsAll()`/`updateActions()`，这两个方法不存在于此平台（恒抛 `NoSuchMethodException`，刷新从未执行）；改为直接调用 `ActionToolbar` 接口公开方法 `updateActionsImmediately()`（三平台 243/253/262 皆有，`javap` 证实）
 
 ### Added
 

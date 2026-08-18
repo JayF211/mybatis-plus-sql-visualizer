@@ -10,9 +10,12 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,6 +23,10 @@ import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.wm.ex.ToolWindowManagerListener
+import com.intellij.ui.content.ContentManagerEvent
+import com.intellij.ui.content.ContentManagerListener
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
@@ -44,6 +51,10 @@ import javax.swing.ListModel
  */
 class SqlLogToolWindowFactory : ToolWindowFactory {
 
+    companion object {
+        internal val LOG = Logger.getInstance(SqlLogToolWindowFactory::class.java)
+    }
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         // 窗口标题（stripe 标签）：显示 bundle 文案而非窗口 ID（cn.song.mybatisplus.visualizer.log）；
         // 2026.2 源码实证：setTitle 只改当前 content 的 displayName，侧边栏 stripe 标题走独立
@@ -63,6 +74,47 @@ class SqlLogToolWindowFactory : ToolWindowFactory {
         val content = toolWindow.contentManager.factory.createContent(panel, "", false)
         content.setDisposer(panel)
         toolWindow.contentManager.addContent(content)
+
+        // 工具窗口关闭（content 移除）→ 设置开启时停止捕捉（兜底：部分平台把关闭实现为移除 content）
+        toolWindow.contentManager.addContentManagerListener(object : ContentManagerListener {
+            override fun contentRemoved(event: ContentManagerEvent) {
+                if (event.content == content) {
+                    val settings = PluginSettings.getInstance()
+                    if (settings.state.logStopOnToolWindowClose && manager.capturing) {
+                        manager.stopCapture()
+                        LOG.info("ToolWindow 关闭（content 移除）：已停止捕捉（project=${project.name}）")
+                    }
+                }
+            }
+        })
+        // 关闭/折叠侧边栏面板（ToolWindow 隐藏，content 仍在）→ 设置开启时停止捕捉。
+        // contentRemoved 在新 UI 折叠/隐藏时不触发，须监听 ToolWindow 可见性——沿
+        // 「曾经可见 → 当前不可见」转换沿 stop（新建窗口/注册/布局等中间态不误停）。
+        // 该监听用 project messageBus 编程注册（plugin.xml 不支持 <listener>），
+        // connect(content.disposer) 随窗口真正销毁自动断开。
+        var wasVisible = false
+        val tw = toolWindow
+        project.messageBus.connect(content.disposer!!).subscribe(
+            ToolWindowManagerListener.TOPIC,
+            object : ToolWindowManagerListener {
+                override fun stateChanged(
+                    toolWindowManager: ToolWindowManager,
+                    toolWindow: ToolWindow,
+                    type: ToolWindowManagerListener.ToolWindowManagerEventType,
+                ) {
+                    if (toolWindow != tw) return
+                    val visible = tw.isVisible
+                    if (wasVisible && !visible) {
+                        val settings = PluginSettings.getInstance()
+                        if (settings.state.logStopOnToolWindowClose && manager.capturing) {
+                            manager.stopCapture()
+                            LOG.info("ToolWindow 隐藏：已停止捕捉（project=${project.name}, type=$type）")
+                        }
+                    }
+                    wasVisible = visible
+                }
+            },
+        )
     }
 }
 
@@ -112,7 +164,7 @@ class SqlLogPanel(
     init {
         // 标签 1：SQL 日志（工具栏 + 条目列表）
         val logPanel = JPanel(BorderLayout())
-        logPanel.add(buildToolbar(), BorderLayout.NORTH)
+        logPanel.add(buildToolbar(), BorderLayout.NORTH) // JPanel（工具栏 + 去重勾选开关）
         logPanel.add(buildListPane(), BorderLayout.CENTER)
 
         // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
@@ -130,6 +182,23 @@ class SqlLogPanel(
 
         manager.addUiListener { refreshList() }
         refreshList()
+
+        // capturing 变化 → 刷新工具栏按钮图标/文案（调用 ActionToolbar.updateActionsImmediately()；
+        // 该方法为 ActionToolbar 接口公开 API，三平台（243/253/262）皆存——此前反射调
+        // updateActionsAll/updateActions 均不存在于此平台（日志实证 NoSuchMethodException））
+        manager.addCapturingListener {
+            LOG.info("SqlLogPanel.capturingListener: 触发")
+            ApplicationManager.getApplication().invokeLater {
+                _toolbarRef?.let { toolbar ->
+                    runCatching {
+                        toolbar.updateActionsImmediately()
+                        LOG.info("SqlLogPanel.capturingListener: updateActionsImmediately 调用成功")
+                    }.onFailure {
+                        LOG.warn("SqlLogPanel.capturingListener: updateActionsImmediately 失败 - ${it.message}")
+                    }
+                }
+            }
+        }
     }
 
     // ---------- 工具栏（IDEA 原生 ActionToolbar：扁平图标按钮 + tooltip） ----------
@@ -139,12 +208,16 @@ class SqlLogPanel(
         val toolbar = ActionManager.getInstance()
             .createActionToolbar(TOOLBAR_ID, toolbarGroup, true)
             .apply { targetComponent = this@SqlLogPanel }
+        _toolbarRef = toolbar // 保存引用供 capturing 监听刷新
 
         val bar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4))
         bar.add(toolbar.component)
-        bar.add(dedupeCheckBox)
+        bar.add(dedupeCheckBox) // 去重勾选开关（T-M31.5）
         return bar
     }
+
+    /** 工具栏引用（capturing 变化时刷新按钮状态）。 */
+    private var _toolbarRef: ActionToolbar? = null
 
     private inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
@@ -157,11 +230,6 @@ class SqlLogPanel(
         override fun actionPerformed(e: AnActionEvent) {
             if (manager.capturing) {
                 manager.stopCapture()
-                // 手动停止同步关闭「项目启动时自动开始监听」设置——避免重启后自动开启
-                val settings = PluginSettings.getInstance()
-                if (settings.state.logAutoCaptureOnStart) {
-                    settings.state.logAutoCaptureOnStart = false
-                }
             } else {
                 manager.startCapture()
             }
@@ -368,6 +436,7 @@ class SqlLogPanel(
     }
 
     companion object {
+        private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
     }

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.project.Project
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
@@ -18,9 +19,20 @@ import org.junit.Assert.assertTrue
  */
 class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
 
-    /** 受控桥（生产桥 open 化——内部测试缝）：attach 结果注入，验证 capturing 状态机。 */
-    private class FakeBridge(private val attachResult: Boolean) : SqlLogConsoleBridge(SqlLogEntryBuffer()) {
-        override fun attach(project: Project): Boolean = attachResult
+    /** 受控桥（生产桥 open 化——内部测试缝）：attach 结果注入 + 主控制台存在性注入，验证 capturing 状态机。 */
+    private class FakeBridge(
+        private val attachResult: Boolean,
+        private val hasMainConsoleResult: Boolean = true,
+    ) : SqlLogConsoleBridge(SqlLogEntryBuffer()) {
+        var attachCalls = 0
+            private set
+
+        override fun attach(project: Project): Boolean {
+            attachCalls++
+            return attachResult
+        }
+
+        override fun hasMainConsole(): Boolean = hasMainConsoleResult
     }
 
     /** 装配注入受控桥的 manager（生产构造 + 测试缝替换桥——不触碰轻服务构造函数解析）。 */
@@ -36,10 +48,25 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         )
     }
 
+    fun testStartCaptureSkipsWithoutMainConsole() {
+        val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertFalse(
+            "无运行中的主控制台时不得进入捕捉态（项目打开未运行不监听，等待主控制台出现）",
+            manager.capturing,
+        )
+        assertEquals(
+            "无主控制台时仍须挂载桥监听（否则主控制台出现时检测不到——图标不刷新，日志实证）",
+            1,
+            bridge.attachCalls,
+        )
+    }
+
     fun testStartCaptureSetsCapturingWhenAttachSucceeds() {
         val manager = managerWith(FakeBridge(attachResult = true))
         manager.startCapture()
-        assertTrue("attach 成功才进入捕捉态", manager.capturing)
+        assertTrue("attach 成功且存在主控制台才进入捕捉态", manager.capturing)
         manager.stopCapture()
         assertFalse("停止后恢复未捕捉态", manager.capturing)
     }
