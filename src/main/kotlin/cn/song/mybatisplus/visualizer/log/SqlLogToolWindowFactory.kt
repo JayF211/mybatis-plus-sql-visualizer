@@ -155,7 +155,16 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            if (manager.capturing) manager.stopCapture() else manager.startCapture()
+            if (manager.capturing) {
+                manager.stopCapture()
+                // 手动停止同步关闭「项目启动时自动开始监听」设置——避免重启后自动开启
+                val settings = PluginSettings.getInstance()
+                if (settings.state.logAutoCaptureOnStart) {
+                    settings.state.logAutoCaptureOnStart = false
+                }
+            } else {
+                manager.startCapture()
+            }
         }
     }
 
