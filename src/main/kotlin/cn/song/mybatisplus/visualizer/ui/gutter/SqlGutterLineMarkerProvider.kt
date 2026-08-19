@@ -53,9 +53,25 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
     /**
      * 点击处理：在 EDT 捕获锚点元素，转换走后台线程 + ReadAction（EDT 禁止 PSI 慢操作），
      * 结果按显示方式配置（F-16）展示，与 ConvertToSqlAction 完全同链路。
+     *
+     * 防抖（200ms 全局窗口）：连续点击同一 / 不同 gutter 图标时，仅首次触发 PSI resolve + 弹窗，
+     * 窗口内后续点击静默丢弃，避免多后台线程并发执行同一解析 / 多弹窗叠加。
      */
     private object SqlGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
+
+        /** 防抖窗口（毫秒）。 */
+        private const val DEBOUNCE_MS = 200L
+
+        /** 最近一次成功导航的时间戳（volatile 保证多线程可见性）。 */
+        @Volatile
+        private var lastNavigateTime = 0L
+
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
+            val now = System.currentTimeMillis()
+            // 防抖：200ms 内重复点击丢弃
+            if (!shouldNavigate(lastNavigateTime, now)) return
+            lastNavigateTime = now
+
             val project: Project = elt.project
             SqlPreviewService.previewAsync(project, {
                 project.getService(SqlPreviewService::class.java).preview(elt)
@@ -70,3 +86,14 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             IconLoader.getIcon("/icons/sqlGutter.svg", SqlGutterLineMarkerProvider::class.java)
     }
 }
+
+/**
+ * 防抖判定（纯函数，便于单测）。
+ *
+ * @param lastTimeMs 上次导航时间戳（毫秒）
+ * @param nowMs     当前时间戳（毫秒）
+ * @param windowMs  防抖窗口（毫秒）
+ * @return 是否应执行导航（true = 执行，false = 丢弃）
+ */
+internal fun shouldNavigate(lastTimeMs: Long, nowMs: Long, windowMs: Long = 200L): Boolean =
+    nowMs - lastTimeMs >= windowMs

@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **Gutter 图标点击防抖（T-GutterDeb）**：`SqlGutterNavigationHandler.navigate` 增加 200ms 全局时间戳哨兵防抖——连续点击 gutter 图标时仅首次触发 PSI resolve + 弹窗，窗口内重复点击静默丢弃，避免多后台线程并发解析 / 多弹窗叠加；快速路径 `getLineMarkerInfo` 保持 O(1) 纯语法零 resolve（性能红线不变）；提取 `shouldNavigate` 纯函数便于单测，新增 9 个测试用例
 - **废弃API全量清理（T-M51 + T-M52）**：Marketplace 审核阻断级修复全部完成——三版本（243/253/262）达成 **0 Internal + 0 Scheduled-for-removal**；Deprecated 由 9/11/27 降至 3/4/20（剩余 5 类无跨版本非废弃替代，保留 @Suppress）
   - **ToolWindowFactory synthetic bridge 消除**：`SqlLogToolWindowFactory.kt` 删除 → 改写为 Java（`SqlLogToolWindowFactory.java`），消除 Kotlin 生成的 `properties` synthetic bridge（262 标记 Internal）；新建 `ToolWindowVisibilityListener.java`（两参版 `stateChanged`）；`SqlLogPanel.kt` 新建迁移面板逻辑
   - **PluginManager.getPlugin() 完全消除**：用标准 Java `ProtectionDomain.codeSource.location` 替代 `PluginManager.getPlugin()` 获取当前类所在 jar/目录路径；用 `DeleteCommand` 替代 `PluginManager.uninstallAfterRestart()`——两者皆为公开 API，三平台可用；verifyPlugin 实证：243 Internal 1→0, 262 Internal 2→0
