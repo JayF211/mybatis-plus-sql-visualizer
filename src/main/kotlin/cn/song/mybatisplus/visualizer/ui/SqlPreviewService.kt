@@ -34,7 +34,10 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.util.PsiTreeUtil
 
 /**
  * SQL 预览服务（M3-01 整合层，F-07 统一入口）。
@@ -166,13 +169,18 @@ class SqlPreviewService(private val project: Project) {
             // AND version = ?；不依赖配置开关，对齐 MP OptimisticLockerInnerInterceptor 默认行为；
             // 与逻辑删除注入串行调用——二者按语句类型互斥：逻辑删除仅 SELECT/DELETE、乐观锁仅 UPDATE）
             val finalStatement = injectOptimisticLockCondition(table, baseStatement)
+            // T-TenantLine：多租户注入（TenantLineInnerInterceptor 模拟）——SELECT/UPDATE/DELETE 自动追加
+            // `AND {tenantColumn} = ?`（语句已显式引用租户列时不重复注入）；@InterceptorIgnore(tenantLine=true)
+            // 方法级注解命中时跳过（保守策略：检测失败→注入，宁可多不可少）
+            val hasInterceptorIgnore = hasInterceptorIgnoreAnnotation(anchor, "tenantLine")
+            val tenantStatement = injectTenantLineCondition(table, finalStatement, hasInterceptorIgnore)
             // T-M29-02/03：分页消费（`service.page(Page, wrapper)` / `selectPage` / 链式 `page()`）→ LIMIT 子句
             // （覆盖 last("limit ...")——MP 运行时两者并存属错误用法，预览以分页为准，文档化边界；
             // count/exists 消费不追加分页）
             val pagedStatement = if (located.chain.countConsumed || located.chain.existsConsumed) {
-                finalStatement
+                tenantStatement
             } else {
-                applyPageLimit(finalStatement, located.chain.pageLimit)
+                applyPageLimit(tenantStatement, located.chain.pageLimit)
             }
             val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
@@ -197,6 +205,7 @@ class SqlPreviewService(private val project: Project) {
                 it,
                 injectLogicDelete = settings?.state?.injectLogicDelete ?: true,
                 resolveVariables = settings?.state?.replaceParams ?: true,
+                injectTenantLine = settings?.state?.injectTenantLine ?: true,
             )
         } ?: return null
         return PreviewResult(
@@ -355,6 +364,79 @@ class SqlPreviewService(private val project: Project) {
             ),
         )
     }
+
+    /**
+     * T-TenantLine：多租户条件注入（TenantLineInnerInterceptor 模拟）——
+     *  - SELECT/UPDATE/DELETE：WHERE 末尾追加 `AND {tenantColumn} = ?`
+     *    （语句已显式引用租户列时不重复注入）；
+     *  - INSERT：不在本方法处理（INSERT 无 WHERE，租户列追加见 [BatchOperationConverter]）。
+     *
+     * 仅 [PluginSettings.injectTenantLine] = true 时生效；调用链方法标注
+     * `@InterceptorIgnore(tenantLine = true)` 时跳过。
+     *
+     * 与 injectLogicDeleteCondition / injectOptimisticLockCondition 三层串行——
+     * 三者按语句类型互补：逻辑删除仅 SELECT/DELETE、乐观锁仅 UPDATE、租户 SELECT/UPDATE/DELETE。
+     */
+    private fun injectTenantLineCondition(
+        table: TableInfo,
+        statement: SqlStatement,
+        hasInterceptorIgnore: Boolean,
+    ): SqlStatement {
+        if (!PluginSettings.getInstance().state.injectTenantLine) return statement
+        if (hasInterceptorIgnore) return statement
+        val tenantColumn = PluginSettings.getInstance().state.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
+        return when (statement) {
+            is SelectStatement -> {
+                if (conditionReferencesColumn(statement.conditions, tenantColumn)) return statement
+                statement.copy(
+                    conditions = statement.conditions + Condition.Simple(
+                        ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
+                        "=", SqlValue.Placeholder("$tenantColumn (= ?)"),
+                    ),
+                )
+            }
+            is UpdateStatement -> {
+                // SET 已含 tenant 或 WHERE 已含 tenant → 跳过（与乐观锁同模式）
+                if (statement.sets.any { it.column?.columnName == tenantColumn }) return statement
+                if (conditionReferencesColumn(statement.conditions, tenantColumn)) return statement
+                statement.copy(
+                    conditions = statement.conditions + Condition.Simple(
+                        ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
+                        "=", SqlValue.Placeholder("$tenantColumn (= ?)"),
+                    ),
+                )
+            }
+            is DeleteStatement -> {
+                if (conditionReferencesColumn(statement.conditions, tenantColumn)) return statement
+                statement.copy(
+                    conditions = statement.conditions + Condition.Simple(
+                        ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
+                        "=", SqlValue.Placeholder("$tenantColumn (= ?)"),
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * T-TenantLine：检测调用链所在方法是否标注 @InterceptorIgnore(tenantLine=true)——
+     * 从 anchor 向上查找包含它的 PsiMethod，检查 modifierList 注解。
+     * 注解类不可解析时按短名 "InterceptorIgnore" 兜底（与 EntityResolver.findAnnotationByShortName 同模式）；
+     * 属性名 = [attrName]（如 "tenantLine"），值 = true 时返回 true。
+     *
+     * 边界（文档化，保守策略）：
+     *  - 注解在类级别 → 不做类级检测（仅方法级，与 MP 实际行为对齐）；
+     *  - 注解类不可解析 / 属性缺失 → 兜底 false（不跳过，保持注入——宁可多不可少）；
+     *  - 扫描抛异常 → catch 兜底返回 false。
+     */
+    private fun hasInterceptorIgnoreAnnotation(anchor: PsiElement, attrName: String): Boolean = runCatching {
+        val method = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java) ?: return false
+        method.modifierList?.annotations?.any { annotation ->
+            val simpleName = annotation.nameReferenceElement?.referenceName
+            simpleName == "InterceptorIgnore" &&
+                (annotation.findAttributeValue(attrName) as? PsiLiteralExpression)?.value as? Boolean == true
+        } ?: false
+    }.getOrDefault(false)
 
     /** T-M29-03：分页 LIMIT 注入——仅 SELECT 语句生效（UPDATE/DELETE 不追加，维持现状）。 */
     private fun applyPageLimit(statement: SqlStatement, pageLimit: LimitClause?): SqlStatement {
@@ -526,6 +608,9 @@ class SqlPreviewService(private val project: Project) {
         private const val METHOD_ENABLE_SUB_LOGIC_DEL = "enableSubLogicDel"
         private const val METHOD_LOGIC_DEL_TO_ON = "logicDelToOn"
         private const val METHOD_LOGIC_DEL_TO_WHERE = "logicDelToWhere"
+
+        /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
+        private const val DEFAULT_TENANT_COLUMN = "tenant_id"
 
         /**
          * 统一展示入口（M10-03）：恒以弹窗（[SqlPreviewDialog]）展示预览结果，

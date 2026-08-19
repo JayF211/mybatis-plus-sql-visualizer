@@ -138,8 +138,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
-            // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1
-            assertEquals("复选框总数应为 12（+关闭工具窗口停止监听）", 12, texts.size)
+            // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
+            // T-TenantLine：多租户注入开关 +1
+            assertEquals("复选框总数应为 13（+多租户注入开关）", 13, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -294,6 +295,30 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         }
         if (component is java.awt.Container) {
             component.components.forEach { collectTextFieldEmptyTexts(it, out) }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-TenantLine：多租户注入配置持久化
+    // ------------------------------------------------------------------
+
+    fun testTenantLineConfigPersistence() {
+        // T-TenantLine：injectTenantLine + tenantColumnName 随 State 持久化往返保留
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.injectTenantLine = false
+            settings.state.tenantColumnName = "org_id"
+            val saved = settings.getState()
+            assertEquals("getState 应反映最新 injectTenantLine", false, saved.injectTenantLine)
+            assertEquals("getState 应反映最新 tenantColumnName", "org_id", saved.tenantColumnName)
+            // 模拟重启：新实例 loadState（IDE 从磁盘反序列化后调用）
+            val fresh = PluginSettings()
+            fresh.loadState(saved)
+            assertEquals("loadState 后 injectTenantLine 保留", false, fresh.state.injectTenantLine)
+            assertEquals("loadState 后 tenantColumnName 保留", "org_id", fresh.state.tenantColumnName)
+        } finally {
+            settings.loadState(snapshot)
         }
     }
 }

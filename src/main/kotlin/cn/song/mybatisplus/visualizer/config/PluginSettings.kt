@@ -58,6 +58,20 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var logicDeleteValue: String = DEFAULT_LOGIC_DELETE_VALUE,
 
         /**
+         * 多租户注入（TenantLineInnerInterceptor 模拟，T-TenantLine）：开启后 SELECT/UPDATE/DELETE 自动追加
+         * `AND {tenantColumnName} = ?`、INSERT 列清单追加租户列（对齐 MP 多租户拦截器默认行为）；
+         * false 时保持纯 wrapper 语义。
+         * 默认关——避免破坏既有测试的 SQL 断言；用户可按需开启。
+         */
+        var injectTenantLine: Boolean = false,
+
+        /**
+         * 租户列名（T-TenantLine）：注入的租户列列名（默认 tenant_id；可按业务调整，如 org_id / shop_id——
+         * 对齐 MP `TenantLineInnerInterceptor.column` 配置语义）。
+         */
+        var tenantColumnName: String = DEFAULT_TENANT_COLUMN_NAME,
+
+        /**
          * 表前缀（T-M16.2-03）：统一加在所有表名**前**（如 `sys_` + device_info → `sys_device_info`）。
          * 全局语义——`@TableName` 显式表名同样被修饰（文档说明）；空字符串表示不修饰。
          */
@@ -199,6 +213,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOGIC_DELETE_VALUE = "0"
+
+        /** 默认租户列名（T-TenantLine，对齐 MP TenantLineInnerInterceptor 默认列名）。 */
+        const val DEFAULT_TENANT_COLUMN_NAME = "tenant_id"
 
         /**
          * 获取全局配置实例。

@@ -123,6 +123,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
     private val logicDeleteValueField = JBTextField(6)
 
+    /** 多租户注入开关（T-TenantLine）：SELECT/UPDATE/DELETE 自动追加 `AND tenant_id = ?`、INSERT 列清单追加租户列。 */
+    private val injectTenantLineCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectTenantLine"))
+
+    /** 租户列名输入框（T-TenantLine）：默认 tenant_id；可按业务调整，如 org_id / shop_id。 */
+    private val tenantColumnNameField = JBTextField(10)
+
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private val tablePrefixField = JBTextField(12)
 
@@ -285,6 +291,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
+            })
+            // T-TenantLine：多租户注入开关 + 租户列名输入框
+            addRow(p, g, "", injectTenantLineCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectTenantLine") })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnName"), tenantColumnNameField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnName.tip")
             })
         }
 
@@ -652,6 +663,16 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         manualEntityCheck.isSelected = checked
     }
 
+    /** T-TenantLine：多租户注入开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setInjectTenantLineCheck(checked: Boolean) {
+        injectTenantLineCheck.isSelected = checked
+    }
+
+    /** T-TenantLine：租户列名输入框设置入口（测试用）——与用户输入同一路径（isModified/apply 检测）。 */
+    internal fun setTenantColumnName(value: String) {
+        tenantColumnNameField.text = value
+    }
+
     /** 刷新插件缓存信息（缓存大小——所有打开项目汇总；面板构造与清除按钮共用）。 */
     private fun refreshCacheInfo() {
         val projects = ProjectManager.getInstance().openProjects
@@ -689,6 +710,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || gutterIconCheck.isSelected != s.showGutterIcon
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
+            || injectTenantLineCheck.isSelected != s.injectTenantLine
+            || tenantColumnNameField.text.trim() != s.tenantColumnName
             || tablePrefixField.text.trim() != s.tablePrefix
             || tableSuffixField.text.trim() != s.tableSuffix
             || (inferenceCombo.selectedItem as? InferenceOption)?.value != s.tableNameInference
@@ -733,6 +756,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.showGutterIcon = gutterIconCheck.isSelected
         s.injectLogicDelete = injectLogicDeleteCheck.isSelected
         s.logicDeleteValue = logicDeleteValueField.text.trim()
+        s.injectTenantLine = injectTenantLineCheck.isSelected
+        s.tenantColumnName = tenantColumnNameField.text.trim()
         s.tablePrefix = tablePrefixField.text.trim()
         s.tableSuffix = tableSuffixField.text.trim()
         s.tableNameInference = (inferenceCombo.selectedItem as? InferenceOption)?.value ?: PluginSettings.INFERENCE_SNAKE
@@ -776,6 +801,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         gutterIconCheck.isSelected = s.showGutterIcon
         injectLogicDeleteCheck.isSelected = s.injectLogicDelete
         logicDeleteValueField.text = s.logicDeleteValue
+        injectTenantLineCheck.isSelected = s.injectTenantLine
+        tenantColumnNameField.text = s.tenantColumnName
         tablePrefixField.text = s.tablePrefix
         tableSuffixField.text = s.tableSuffix
         inferenceCombo.selectedItem = inferenceOptions().firstOrNull { it.value == s.tableNameInference }

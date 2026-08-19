@@ -208,4 +208,59 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         if (component is Container) component.components.forEach { labels += collectLabels(it) }
         return labels
     }
+
+    // ------------------------------------------------------------------
+    // T-TenantLine：多租户注入面板绑定生效性
+    // ------------------------------------------------------------------
+
+    fun testTenantLinePanelIsModified() {
+        // T-TenantLine：改 injectTenantLine → isModified=true → apply 写回配置
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.injectTenantLine = true
+            val configurable = PluginSettingsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            assertFalse("初始应与配置一致（无变化）", configurable.isModified())
+
+            // 取消勾选多租户注入开关（与用户勾选同一路径）
+            panel.setInjectTenantLineCheck(false)
+            assertTrue("改 injectTenantLine 后应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals("apply 后 state.injectTenantLine 应为 false", false, settings.state.injectTenantLine)
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致（无变化）", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testTenantLinePanelApplyReset() {
+        // T-TenantLine：面板 apply/reset 写入配置 + 回读
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.tenantColumnName = "tenant_id"
+            val configurable = PluginSettingsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            // 改租户列名（与用户输入同一路径）
+            panel.setTenantColumnName("org_id")
+            assertTrue("改 tenantColumnName 后应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals("apply 后 state.tenantColumnName 应为 org_id", "org_id", settings.state.tenantColumnName)
+
+            // reset 回读
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致（无变化）", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
 }

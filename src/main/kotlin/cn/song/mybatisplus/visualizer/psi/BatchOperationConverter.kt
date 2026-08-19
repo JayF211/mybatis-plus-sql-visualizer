@@ -166,6 +166,7 @@ object BatchOperationConverter {
         call: PsiMethodCallExpression,
         injectLogicDelete: Boolean = true,
         resolveVariables: Boolean = true,
+        injectTenantLine: Boolean = true,
     ): BatchPreview? {
         val methodName = call.methodExpression.referenceName ?: return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
@@ -176,7 +177,7 @@ object BatchOperationConverter {
         } else {
             when (operation) {
                 Operation.UPDATE -> buildUpdateBatch(call, methodName, table)
-                Operation.INSERT -> buildInsertBatch(call, methodName, table)
+                Operation.INSERT -> buildInsertBatch(call, methodName, table, injectTenantLine)
                 Operation.DELETE -> buildDeleteBatch(call, methodName, table, injectLogicDelete, resolveVariables)
                 Operation.UPSERT -> buildUpsertBatch(call, methodName, table)
                 Operation.SELECT -> buildSelectBatch(call, methodName, table, injectLogicDelete, resolveVariables)
@@ -327,14 +328,34 @@ object BatchOperationConverter {
      * T-M23-04：全列可勾选，**主键默认不勾选**（`@TableId(type = IdType.AUTO)` 自增场景，对齐 MP INSERT 不含主键列）；
      * 初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
      */
-    private fun buildInsertBatch(call: PsiMethodCallExpression, methodName: String, table: TableInfo): BatchBuild {
+    private fun buildInsertBatch(
+        call: PsiMethodCallExpression,
+        methodName: String,
+        table: TableInfo,
+        injectTenantLine: Boolean = true,
+    ): BatchBuild {
         val columns = if (methodName == "insertBatchSomeColumn") {
             table.columns.filter { it.fill != "UPDATE" }
         } else {
             table.columns
         }
         val prefix = entityPrefix(call)
-        val toggleColumns = batchColumns(prefix, table, columns) { col -> !(col.isId && col.idTypeAuto) }
+        var toggleColumns = batchColumns(prefix, table, columns) { col -> !(col.isId && col.idTypeAuto) }
+        // T-TenantLine：INSERT 列清单追加租户列（固定列、默认勾选、恒参与——对齐 MP INSERT 含租户列语义）；
+        // 实体已有 tenant 列（字段）时不重复追加（toggleColumns.none 检测去重）
+        val tenantColumn = if (injectTenantLine) {
+            PluginSettings.getInstance().state.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
+        } else {
+            null
+        }
+        if (tenantColumn != null && toggleColumns.none { it.columnName == tenantColumn }) {
+            toggleColumns = toggleColumns + BatchColumn(
+                columnName = tenantColumn,
+                source = "$prefix.$tenantColumn",
+                quote = null,  // tenant_id 类型未知，面板走数字启发式
+                checked = true,
+            )
+        }
         val paramGroups = buildParamGroups(columns.map { it.columnName })
         return modelBuild(BatchModel(BatchKind.INSERT, table.tableName, toggleColumns)).copy(paramGroups = paramGroups)
     }
@@ -513,5 +534,8 @@ object BatchOperationConverter {
         val group = columns.joinToString(", ") { "$it=?" }
         return "-- 实际参数: [$group] × N（每行一组，运行时值不可静态获取）"
     }
+
+    /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
+    private const val DEFAULT_TENANT_COLUMN = "tenant_id"
 
 }
