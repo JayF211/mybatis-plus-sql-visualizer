@@ -169,6 +169,33 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 日志行解析最大长度（超长截断，防控制台大输出卡顿；默认 20000 对齐参考插件）。 */
         var logMaxParseLength: Int = DEFAULT_LOG_MAX_PARSE_LENGTH,
+
+        // ---------- P-06 日志智能分组 / 高频折叠 ----------
+
+        /**
+         * 日志高频折叠阈值（P-06）：同一 SQL 模板出现次数 >= 该值时启用折叠。
+         * 默认 3。
+         */
+        var logFrequencyThreshold: Int = DEFAULT_LOG_FREQUENCY_THRESHOLD,
+
+        /**
+         * 日志高频折叠开关（P-06）：启用后高频 SQL 模板折叠显示。
+         * 默认关（用户手动启用）。
+         */
+        var logFrequencyFoldEnabled: Boolean = false,
+
+        /**
+         * 日志耗时排序开关（P-06）：启用后按耗时降序排序。
+         * 默认关。
+         */
+        var logDurationSortEnabled: Boolean = false,
+
+        /**
+         * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
+         * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
+         * 空字符串表示无历史。
+         */
+        var paramHistoryJson: String = "",
     )
 
     private var state = State()
@@ -212,6 +239,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
+        const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
         const val DEFAULT_LOGIC_DELETE_VALUE = "0"
 
         /** 默认租户列名（T-TenantLine，对齐 MP TenantLineInnerInterceptor 默认列名）。 */

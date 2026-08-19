@@ -1,0 +1,500 @@
+# 日志智能分组 / 高频折叠（P-06）开发计划
+
+> 状态：📋 待开发（2026-08-20）
+> 需求来源：用户新需求「日志面板支持按语句类型过滤、高频 SQL 折叠、按耗时排序」。
+
+## 1. 目标与范围
+
+在 SQL 日志工具窗口（`SqlLogPanel`）增加三项能力：
+
+1. **按语句类型过滤**：SELECT / INSERT / UPDATE / DELETE 分别计数，点击类型标签切换过滤（类似 IDE Problem View 的 severity 过滤）。
+2. **高频 SQL 折叠**：同一窗口内同一 SQL 模板出现 N 次以上（N 可配置，默认 3），高亮提示并支持一键折叠相同模板（只显示一条 + 折叠计数）。
+3. **按耗时排序**：如果日志含 `Executing...` 耗时行（如 MyBatis-Plus `p6spy` / `druid` 格式），解析耗时并支持降序排序。
+
+**已确认决策**：
+- 类型过滤 UI：工具栏下方新增一行过滤条（`JPanel(FlowLayout.LEFT)`），4 个 toggle 按钮（SELECT / INSERT / UPDATE / DELETE）+ 1 个「全部」按钮，按钮文本含计数（如 `SELECT (12)`）。
+- 高频折叠 UI：折叠态显示为一条条目，右侧显示 `⨉ N` 徽章；点击展开恢复全部。
+- 耗时排序：仅在检测到耗时信息时启用排序按钮（动态显示/隐藏）。
+- 过滤/折叠/排序三者独立，可叠加（如：只看 SELECT + 高频折叠 + 耗时降序）。
+
+## 2. 架构与数据流
+
+```
+SqlLogEntryBuffer（数据源，不变）
+  → SqlLogPanel 新增过滤/排序层
+      ├── LogStatementClassifier.classify(sql) → StatementType
+      ├── LogFrequencyGrouper.group(entries, threshold) → List<GroupedEntry>
+      │     ├── 普通条目：直接透传
+      │     └── 高频条目：合并为 GroupedEntry(template, count, entries[], expanded)
+      └── LogDurationParser.parse(entry) → DurationMs?（nullable）
+
+UI 层：
+  过滤条（类型按钮组）
+    → 点击 → 更新 activeFilter: Set<StatementType>
+    → 触发 refreshList()
+
+  列表渲染
+    → 遍历 filtered + grouped entries
+    → 高频折叠条目渲染为单行 + 折叠徽章
+    → 点击徽章 → 切换 expanded → refreshList()
+
+  排序按钮
+    → 点击 → 切换 sortMode: NONE / DURATION_DESC
+    → 触发 refreshList()
+```
+
+## 3. 模块设计
+
+### 3.1 LogStatementClassifier（纯逻辑，可独立单测）
+
+新增 `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogStatementClassifier.kt`：
+
+```kotlin
+enum class StatementType { SELECT, INSERT, UPDATE, DELETE, OTHER }
+
+object LogStatementClassifier {
+    fun classify(sql: String): StatementType
+    fun classify(entry: LogSqlEntry): StatementType = classify(entry.restoredSql)
+}
+```
+
+**分类规则**：
+- 取 `restoredSql` trim 后首 token（空格/换行/制表符分割）。
+- `SELECT` / `WITH`（CTE）→ SELECT
+- `INSERT` → INSERT
+- `UPDATE` → UPDATE
+- `DELETE` → DELETE
+- 其他（`MERGE` / `TRUNCATE` / `CREATE` 等）→ OTHER
+
+### 3.2 LogFrequencyGrouper（纯逻辑，可独立单测）
+
+新增 `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogFrequencyGrouper.kt`：
+
+```kotlin
+data class GroupedEntry(
+    val template: LogSqlEntry,           // 模板条目（展示用）
+    val count: Int,                       // 出现次数
+    val entries: List<LogSqlEntry>,       // 全部相同模板条目（含时间戳）
+    var expanded: Boolean = false,        // 展开态（UI 状态）
+)
+
+object LogFrequencyGrouper {
+    /**
+     * 按 SQL 模板指纹分组，出现次数 >= threshold 的合并为 GroupedEntry。
+     * @param entries 原始条目（正序）
+     * @param threshold 高频阈值（默认 3）
+     * @return 分组后列表（保持原始顺序，高频组合并为一条）
+     */
+    fun group(entries: List<LogSqlEntry>, threshold: Int = DEFAULT_THRESHOLD): List<GroupedEntry>
+
+    /** 计算 SQL 模板指纹（归一化：去多余空白 + 小写）。 */
+    fun fingerprint(sql: String): String
+
+    companion object {
+        const val DEFAULT_THRESHOLD = 3
+    }
+}
+```
+
+**分组规则**：
+- 指纹 = `restoredSql` 去除多余空白（`\\s+` → 单空格）+ 转小写。
+- 相同指纹出现 >= threshold → 合并为 `GroupedEntry`。
+- 合并后只保留第一条位置，后续相同模板条目隐藏（展开后显示）。
+- 不同时间戳的相同模板：保留各自时间戳（展开后可见）。
+
+### 3.3 LogDurationParser（纯逻辑，可独立单测）
+
+新增 `src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogDurationParser.kt`：
+
+```kotlin
+object LogDurationParser {
+    /**
+     * 尝试从条目中解析耗时（毫秒）。
+     * 支持格式：
+     *   - p6spy: "1723456789012|123|statement|select ..."
+     *   - druid:  "WallStatEx-{...,\"executeMillis\":123,...}"
+     *   - MyBatis-Plus debug: 需日志含 "Executing SQL cost 123 ms" 行（需桥层扩展）
+     * @return 耗时毫秒，无法解析返回 null
+     */
+    fun parse(entry: LogSqlEntry): Long?
+
+    /** 检测条目是否含耗时信息（用于决定是否显示排序按钮）。 */
+    fun hasDurationInfo(entry: LogSqlEntry): Boolean
+}
+```
+
+**注意**：当前 `LogSqlEntry` 不含耗时字段。若日志格式不含耗时行，本模块返回 null，排序按钮隐藏（降级）。后续如需精确耗时，可在桥层扩展 `LogSqlEntry` 增加可选 `durationMs` 字段。
+
+### 3.4 SqlLogPanel 改造
+
+**新增字段**：
+
+```kotlin
+// 过滤状态
+private val activeFilter = mutableSetOf(StatementType.SELECT, StatementType.INSERT, StatementType.UPDATE, StatementType.DELETE)
+
+// 高频折叠状态
+private var frequencyThreshold = ParamHistoryCache.DEFAULT_THRESHOLD  // 复用 3
+private var frequencyFoldEnabled = false
+
+// 排序状态
+private var sortMode = SortMode.NONE
+
+enum class SortMode { NONE, DURATION_DESC }
+```
+
+**新增方法**：
+
+```kotlin
+/** 构建过滤条（工具栏下方）。 */
+private fun buildFilterBar(): JPanel
+
+/** 按当前过滤条件筛选条目。 */
+private fun applyFilter(entries: List<LogSqlEntry>): List<LogSqlEntry>
+
+/** 按当前排序模式排序条目。 */
+private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry>
+
+/** 应用高频折叠。 */
+private fun applyFrequencyFold(entries: List<LogSqlEntry>): List<GroupedEntry>
+
+/** 刷新列表（过滤 + 排序 + 折叠 全管线）。 */
+private fun refreshList()
+
+/** 切换类型过滤。 */
+private fun toggleTypeFilter(type: StatementType, enabled: Boolean)
+
+/** 切换高频折叠。 */
+private fun toggleFrequencyFold()
+
+/** 切换耗时排序。 */
+private fun toggleDurationSort()
+```
+
+**refreshList() 管线**（替代现有直接 `snapshot()` 逻辑）：
+
+```kotlin
+private fun refreshList() {
+    val snapshot = manager.entries.snapshot()
+    val filtered = applyFilter(snapshot)
+    val sorted = applySort(filtered)
+    val grouped = if (frequencyFoldEnabled) applyFrequencyFold(sorted) else sorted.map { GroupedEntry(it, 1, listOf(it)) }
+
+    listModel.clear()
+    grouped.forEach { ge ->
+        if (ge.expanded) {
+            ge.entries.forEach { listModel.addElement(it) }
+        } else {
+            listModel.addElement(ge.template) // 折叠态只显示模板
+        }
+    }
+}
+```
+
+**过滤条 UI**：
+
+```
+[全部] [SELECT (12)] [INSERT (3)] [UPDATE (1)] [DELETE (0)]  |  [高频折叠 ⨉] [耗时排序 ↕]
+```
+
+- 类型按钮：`JToggleButton`，选中态 = 过滤生效，文本动态更新计数。
+- 「全部」按钮：一键选中/取消全部类型。
+- 高频折叠按钮：`JToggleButton`，启用后列表折叠高频模板。
+- 耗时排序按钮：`JButton`，点击切换 NONE → DURATION_DESC → NONE（仅在 `hasDurationInfo` 检测通过时可见）。
+
+**高频折叠渲染**：
+
+- 折叠态条目右侧显示徽章（`JLabel` + 圆角背景）：`⨉ 5`（表示该模板出现 5 次）。
+- 点击徽章 → 切换 `expanded` → `refreshList()`。
+- 展开后显示全部条目（按时间戳排序）。
+
+### 3.5 LogSqlEntry 扩展（可选，耗时字段）
+
+若需支持精确耗时排序，扩展 `LogSqlModels.kt`：
+
+```kotlin
+data class LogSqlEntry(
+    // ... 现有字段 ...
+    /** 执行耗时（毫秒），null 表示无耗时信息。 */
+    val durationMs: Long? = null,
+)
+```
+
+**注意**：新增字段设默认值 `null`，既有构造调用点零影响。耗时解析由桥层在捕获时填充（需识别 `Executing...` 行或 p6spy/druid 格式）。
+
+### 3.6 PluginSettings.State 扩展
+
+新增字段：
+
+```kotlin
+/**
+ * 日志高频折叠阈值（P-06）：同一 SQL 模板出现次数 >= 该值时启用折叠。
+ * 默认 3。
+ */
+var logFrequencyThreshold: Int = DEFAULT_LOG_FREQUENCY_THRESHOLD
+
+/**
+ * 日志高频折叠开关（P-06）：启用后高频 SQL 模板折叠显示。
+ * 默认关（用户手动启用）。
+ */
+var logFrequencyFoldEnabled: Boolean = false
+
+/**
+ * 日志耗时排序开关（P-06）：启用后按耗时降序排序。
+ * 默认关。
+ */
+var logDurationSortEnabled: Boolean = false
+
+// companion object 新增
+const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
+```
+
+## 4. UI 交互设计
+
+### 4.1 过滤条布局
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ [Capture] [Clear] [Settings] [Help]     [Remove duplicate SQL] │  ← 既有工具栏
+├─────────────────────────────────────────────────────────────────┤
+│ [全部] [SELECT (12)] [INSERT (3)] [UPDATE (1)] [DELETE (0)]   │  ← 新增过滤条
+│ [高频折叠 ⨉] [耗时排序 ↕]                                        │  ← 新增操作条
+├─────────────────────────────────────────────────────────────────┤
+│ [2026-08-20 10:00:01] SELECT * FROM user WHERE id = 1;        │
+│ [2026-08-20 10:00:02] SELECT * FROM user WHERE id = 2;        │
+│ [2026-08-20 10:00:03] SELECT * FROM user WHERE id = 3; ⨉ 5   │  ← 高频折叠
+│ ...                                                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 类型按钮计数更新
+
+- 每次 `refreshList()` 重新计算各类型计数（遍历 `snapshot()` 全量）。
+- 计数为 0 的按钮显示灰色（`foreground = UIUtil.getLabelDisabledForeground()`），但仍可点击。
+
+### 4.3 高频折叠徽章
+
+- 折叠态：条目右侧显示 `JLabel("⨉ N")`，背景浅灰（`JBColor(0xF0F0F0, 0x3C3F41)`），圆角边框。
+- 鼠标悬停：tooltip "该 SQL 模板出现 N 次，点击展开"。
+- 点击：切换 `expanded` 状态，图标变为 `⨉ N ▼`（展开态）。
+
+### 4.4 耗时排序按钮
+
+- 仅在检测到任意条目含 `durationMs != null` 时显示。
+- 按钮文本：`耗时排序`（无排序）→ `耗时 ↓`（降序）。
+- 排序仅对当前过滤结果生效。
+
+## 5. 边界与已知限制
+
+- 耗时解析依赖日志格式：当前仅支持 p6spy / druid 格式；原生 MyBatis 日志无耗时信息（需桥层扩展）。
+- 高频折叠阈值最小 2（< 2 无意义，全部折叠）。
+- 过滤 + 折叠 + 排序三者叠加时，执行顺序：过滤 → 排序 → 折叠。
+- 折叠态下时间戳显示第一条的时间（展开后各条目独立时间戳）。
+- 清空日志（Clear）后折叠状态保留（用户偏好），但折叠条目清空。
+- 暂停态（paused）下过滤/折叠/排序仍可用（操作已有条目）。
+
+## 6. 测试策略
+
+### 6.1 LogStatementClassifier 单元测试
+
+新增 `src/test/kotlin/cn/song/mybatisplus/visualizer/log/LogStatementClassifierTest.kt`：
+
+| 用例 | 输入 | 预期 |
+|------|------|------|
+| SELECT 标准 | `SELECT * FROM user` | SELECT |
+| SELECT 小写 | `select * from user` | SELECT |
+| SELECT 前导空白 | `\n  SELECT * FROM user` | SELECT |
+| WITH CTE | `WITH t AS (SELECT 1) SELECT * FROM t` | SELECT |
+| INSERT | `INSERT INTO user VALUES (1, 'a')` | INSERT |
+| UPDATE | `UPDATE user SET name = 'x'` | UPDATE |
+| DELETE | `DELETE FROM user WHERE id = 1` | DELETE |
+| MERGE | `MERGE INTO target USING source` | OTHER |
+| TRUNCATE | `TRUNCATE TABLE user` | OTHER |
+| 空串 | `` | OTHER |
+| 仅空白 | `   ` | OTHER |
+
+### 6.2 LogFrequencyGrouper 单元测试
+
+新增 `src/test/kotlin/cn/song/mybatisplus/visualizer/log/LogFrequencyGrouperTest.kt`：
+
+| 用例 | 预期 |
+|------|------|
+| 无高频（全部 < threshold） | 返回 N 个 count=1 的 GroupedEntry |
+| 有高频（某模板 >= threshold） | 该模板合并为 1 个 GroupedEntry，count = 出现次数 |
+| 多个高频模板 | 各自独立合并 |
+| 指纹归一化（空白差异） | `SELECT * FROM t` 与 `SELECT  *  FROM  t` 视为相同模板 |
+| 指纹归一化（大小写） | `select * from t` 与 `SELECT * FROM T` 视为相同模板 |
+| 顺序保持 | 合并后 GroupedEntry 顺序 = 首次出现顺序 |
+| expanded 默认 false | 新 GroupedEntry.expanded = false |
+| threshold = 2 | 出现 2 次即合并 |
+| threshold = 1 | 全部合并（边界，实际最小 2） |
+| 空列表 | 返回空列表 |
+
+### 6.3 LogDurationParser 单元测试
+
+新增 `src/test/kotlin/cn/song/mybatisplus/visualizer/log/LogDurationParserTest.kt`：
+
+| 用例 | 输入 | 预期 |
+|------|------|------|
+| p6spy 格式 | rawSql 含 `1723456789012|123|statement|...` | 123 |
+| druid 格式 | rawSql 含 `executeMillis:456` | 456 |
+| 无耗时信息 | 普通 SQL | null |
+| 空串 | `` | null |
+| hasDurationInfo true | p6spy 格式 | true |
+| hasDurationInfo false | 普通 SQL | false |
+
+### 6.4 SqlLogPanel 集成测试
+
+扩展既有 `SqlLogPanelTest`（或新增 `SqlLogPanelFilterTest.kt`）：
+
+| 用例 | 预期 |
+|------|------|
+| 过滤条存在性 | 工具栏下方含过滤条 |
+| 点击 SELECT 过滤 | 列表仅显示 SELECT 条目 |
+| 点击 INSERT 过滤 | 列表仅显示 INSERT 条目 |
+| 多类型同时过滤 | 选中 SELECT + UPDATE → 显示两者 |
+| 全部按钮 | 点击后选中全部类型 |
+| 计数更新 | 捕获新条目后对应类型计数 +1 |
+| 高频折叠启用 | 高频模板折叠为一条 + 徽章显示 |
+| 点击折叠徽章 | 展开显示全部相同模板条目 |
+| 再次点击 | 重新折叠 |
+| 耗时排序启用 | 条目按耗时降序排列 |
+| 过滤 + 折叠叠加 | 先过滤再折叠 |
+| 清空后状态保留 | 过滤/折叠状态保留，条目清空 |
+
+### 6.5 测试辅助
+
+```kotlin
+// 测试辅助：构造指定类型的 LogSqlEntry
+private fun entryOfType(type: StatementType, sql: String? = null): LogSqlEntry {
+    val actualSql = sql ?: when (type) {
+        StatementType.SELECT -> "SELECT * FROM t"
+        StatementType.INSERT -> "INSERT INTO t VALUES (1)"
+        StatementType.UPDATE -> "UPDATE t SET x = 1"
+        StatementType.DELETE -> "DELETE FROM t"
+        StatementType.OTHER -> "TRUNCATE TABLE t"
+    }
+    return LogSqlEntry(rawSql = actualSql, restoredSql = actualSql, params = emptyList(), timestamp = 0L)
+}
+```
+
+## 7. i18n 清单
+
+### 7.1 英文（MpSqlVisualizerBundle.properties）
+
+```properties
+# P-06 Log smart grouping / high-frequency folding
+log.filter.bar=Filter
+log.filter.all=All
+log.filter.select=SELECT
+log.filter.insert=INSERT
+log.filter.update=UPDATE
+log.filter.delete=DELETE
+log.filter.other=OTHER
+log.fold.frequency=High-freq Fold
+log.fold.badge=× {0}
+log.fold.tooltip.folded=This SQL template appears {0} times, click to expand
+log.fold.tooltip.expanded=Click to collapse
+log.sort.duration=Sort by Duration
+log.sort.duration.desc=Duration ↓
+log.sort.none=Sort
+log.duration.ms={0} ms
+log.duration.unavailable=N/A
+```
+
+### 7.2 中文（MpSqlVisualizerBundle_zh.properties）
+
+```properties
+# P-06 日志智能分组 / 高频折叠
+log.filter.bar=过滤
+log.filter.all=全部
+log.filter.select=查询
+log.filter.insert=插入
+log.filter.update=更新
+log.filter.delete=删除
+log.filter.other=其他
+log.fold.frequency=高频折叠
+log.fold.badge=⨉ {0}
+log.fold.tooltip.folded=该 SQL 模板出现 {0} 次，点击展开
+log.fold.tooltip.expanded=点击折叠
+log.sort.duration=耗时排序
+log.sort.duration.desc=耗时 ↓
+log.sort.none=排序
+log.duration.ms={0} ms
+log.duration.unavailable=无
+```
+
+## 8. 实施步骤与工时估算
+
+### 波次 A：LogStatementClassifier（纯逻辑 + 单测）
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| A1 | 实现 `LogStatementClassifier.classify` + `StatementType` 枚举 | 0.5h |
+| A2 | 编写 `LogStatementClassifierTest`（11 用例） | 0.5h |
+
+**小计**：1h
+
+### 波次 B：LogFrequencyGrouper（纯逻辑 + 单测）
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| B1 | 实现 `LogFrequencyGrouper.group` + `GroupedEntry` + `fingerprint` | 1h |
+| B2 | 编写 `LogFrequencyGrouperTest`（10 用例） | 0.8h |
+
+**小计**：1.8h
+
+### 波次 C：LogDurationParser（纯逻辑 + 单测）
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| C1 | 实现 `LogDurationParser.parse` + `hasDurationInfo` | 0.8h |
+| C2 | 编写 `LogDurationParserTest`（6 用例） | 0.5h |
+
+**小计**：1.3h
+
+### 波次 D：SqlLogPanel UI 集成
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| D1 | 实现 `buildFilterBar()` + 类型按钮 + 计数更新 | 1h |
+| D2 | 实现 `applyFilter()` + `toggleTypeFilter()` | 0.5h |
+| D3 | 实现 `applyFrequencyFold()` + 折叠徽章渲染 | 1.2h |
+| D4 | 实现 `applySort()` + 耗时排序按钮 | 0.8h |
+| D5 | 重构 `refreshList()` 为全管线（过滤→排序→折叠） | 0.8h |
+| D6 | `PluginSettings.State` 扩展 3 个字段 | 0.3h |
+
+**小计**：4.6h
+
+### 波次 E：集成测试 + i18n + 文档
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| E1 | 编写 `SqlLogPanelFilterTest`（12+ 用例） | 1.2h |
+| E2 | i18n 双语文案（中/英） | 0.5h |
+| E3 | 文档三处同步（变更记录 / CHANGELOG / 剩余立项） | 0.5h |
+| E4 | 全量测试回归 + 修复 | 0.5h |
+
+**小计**：2.7h
+
+### 总工时估算
+
+| 波次 | 工时 |
+|------|------|
+| A（LogStatementClassifier） | 1h |
+| B（LogFrequencyGrouper） | 1.8h |
+| C（LogDurationParser） | 1.3h |
+| D（UI 集成） | 4.6h |
+| E（测试 + i18n + 文档） | 2.7h |
+| **合计** | **~11.4h** |
+
+## 9. 交付检查清单
+
+- [ ] `LogStatementClassifier` 11+ 测试全绿
+- [ ] `LogFrequencyGrouper` 10+ 测试全绿
+- [ ] `LogDurationParser` 6+ 测试全绿
+- [ ] `SqlLogPanelFilterTest` 12+ 测试全绿
+- [ ] 全量测试套件（1227+）全绿
+- [ ] i18n 中英双语无遗漏
+- [ ] 文档三处同步完成
+- [ ] 开发计划归档至 `docs/开发计划/`
