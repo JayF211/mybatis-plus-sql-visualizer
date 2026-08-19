@@ -180,6 +180,15 @@ tasks {
     // 保留最近两个版本，更早历史见 CHANGELOG.md。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.8.19</h2>
+            <ul>
+                <li>废弃API全量清理（T-M51 + T-M52）：三版本 0 Internal + 0 Scheduled-removal + Deprecated 9/11/27→3/4/20</li>
+                <li>IService 内置 CRUD 方法预览支持无 Entity 后缀实体类</li>
+                <li>PluginManager.getPlugin() 完全消除（ProtectionDomain.codeSource.location + DeleteCommand 替代）</li>
+                <li>ProjectListenerRegistrar 删除（projectOpened() 无公开替代）</li>
+                <li>ToolWindowFactory Kotlin→Java 改写消除 synthetic bridge</li>
+                <li>功能截图 5 张替换真实截图 + Marketplace Custom Page + plugin.xml 清理内嵌图</li>
+            </ul>
             <h2>v2026.8.18</h2>
             <ul>
                 <li>监听启动时机修正（打开项目不监听，启动运行才监听；停止运行自动停止）</li>
