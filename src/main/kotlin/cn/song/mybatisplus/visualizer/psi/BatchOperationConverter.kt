@@ -227,7 +227,9 @@ object BatchOperationConverter {
             }
             if (entityFromArg != null && isLikelyEntity(entityFromArg)) return EntityResolver().resolve(entityFromArg)
         }
-        // 3. service qualifier 泛型（getById(id) 等单参非实体场景）
+        // 3. service qualifier 泛型（getById(id) 等单参非实体场景）——
+        // 含 Entity 后缀 / @TableName 的实体走 isLikelyEntity 快速路径；
+        // 不含后缀的实体（如 User）由 resolveServiceEntityClass 步骤 3b 兜底（仅排除 JDK 包）
         val entityFromService = resolveServiceEntityClass(call)
         if (entityFromService != null) return EntityResolver().resolve(entityFromService)
         // 4. qualifier 实体类型（T-M22-04，ActiveRecord 无参形态）
@@ -264,7 +266,8 @@ object BatchOperationConverter {
 
     /**
      * 从 service qualifier 解析实体类（`XxxService extends IService<Entity>` / `ServiceImpl<Mapper, Entity>`）：
-     * 变量类型自身泛型参数优先（`XxxService<Entity>`），否则沿父类型链取「类名以 Entity 结尾的最后一个类型参数」。
+     * 变量类型自身泛型参数优先（`XxxService<Entity>`），否则沿父类型链取「最后一个类型参数」
+     * （T-Mxx 放宽：不再要求 Entity 后缀，由 [isLikelyEntity] 排除 JDK 基础类型防误判）。
      */
     private fun resolveServiceEntityClass(call: PsiMethodCallExpression): PsiClass? {
         val qualifier = call.methodExpression.qualifierExpression as? PsiReferenceExpression ?: return null
@@ -279,7 +282,12 @@ object BatchOperationConverter {
             val params = superType.parameters
             val candidate = params.lastOrNull() as? PsiClassType ?: continue
             val resolved = candidate.resolve() ?: continue
-            if (resolved.name?.endsWith(ENTITY_SUFFIX) == true) return resolved
+            // T-Mxx（2026-08-19）：放宽后缀限定——IService<User> / ServiceImpl<M, User>
+            // 的泛型参数在 service + 白名单方法名上下文下高置信度指向实体；
+            // 仅排除 java./javax. 包（防基础类型误判），不再要求 Entity 后缀或 @TableName
+            val qualifiedName = resolved.qualifiedName ?: continue
+            if (qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.")) continue
+            return resolved
         }
         return null
     }
@@ -506,5 +514,4 @@ object BatchOperationConverter {
         return "-- 实际参数: [$group] × N（每行一组，运行时值不可静态获取）"
     }
 
-    private const val ENTITY_SUFFIX = "Entity"
 }

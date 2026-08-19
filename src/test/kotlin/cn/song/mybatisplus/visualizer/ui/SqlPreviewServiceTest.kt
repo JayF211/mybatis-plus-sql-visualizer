@@ -1940,6 +1940,111 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
     }
 
+    fun testGetByIdWithoutEntitySuffix() {
+        // T-Mxx（2026-08-19 用户实测）：实体类名不含 Entity 后缀、无 @TableName ——
+        // 原有 resolveServiceEntityClass() 步骤 3b 限定 endsWith("Entity") 致 User 无法识别为实体。
+        // 修复后走"方法返回类型"解析源（UserService extends IService<User>，getById 返回 User）。
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private UserService userService;
+
+                public void query() {
+                    userService.getById(1001L);
+                }
+
+                static class User {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                    private Integer age;
+                }
+
+                static class UserService extends BaseService<User> {}
+                static class BaseService<T> {
+                    public T getById(Long id) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById 应产出预览结果（实体 User 无 Entity 后缀）", result)
+        assertEquals(
+            """
+            SELECT id, name, age
+            FROM `user`
+            WHERE id = 1001
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testRemoveByIdWithoutEntitySuffix() {
+        // T-Mxx（2026-08-19 补充）：removeById 同 getById，实体 User 无 Entity 后缀 → DELETE
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private UserService userService;
+
+                public void query() {
+                    userService.removeById(2L);
+                }
+
+                static class User {
+                    @com.baomidou.mybatisplus.annotation.TableId
+                    private Long id;
+                    private String name;
+                }
+
+                static class UserService extends BaseService<User> {}
+                static class BaseService<T> {
+                    public boolean removeById(Long id) { return false; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("removeById 应产出预览结果（实体 User 无 Entity 后缀）", result)
+        assertEquals(
+            """
+            DELETE FROM `user`
+            WHERE id = 2
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
+    fun testSaveWithEntitySuffixStillWorks() {
+        // 回归测试：含 Entity 后缀的实体走原有路径（不被新代码破坏）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private DeviceInfoService deviceInfoService;
+
+                public void ops() {
+                    DeviceInfoEntity entity = new DeviceInfoEntity();
+                    deviceInfoService.save(entity);
+                }
+
+                static class DeviceInfoEntity {
+                    private Long id;
+                    private String name;
+                }
+
+                static class DeviceInfoService {
+                    public void save(DeviceInfoEntity entity) {}
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("save 应产出预览结果（含 Entity 后缀回归）", result)
+        assertTrue("save 应为 INSERT: ${result!!.sql}", result.sql.startsWith("INSERT INTO"))
+    }
+
     fun testListByIdsRendersSelectIn() {
         // M19.5（T-M19.5-03，P1-02/P2-08 合并项）：service.listByIds(ids) / selectByIds(ids) 主键 IN 查询
         myFixture.configureByText(
