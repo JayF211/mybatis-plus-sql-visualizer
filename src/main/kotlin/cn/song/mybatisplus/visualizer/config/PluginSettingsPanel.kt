@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
@@ -163,6 +164,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val clearCacheButton = JButton(MpSqlVisualizerBundle.message("settings.cache.clear"))
 
     // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
+    private val logFilterBarCheck = JBCheckBox()
     private val logSqlPrefixField = JBTextField(12)
     private val logParamPrefixField = JBTextField(12)
     private val logMixedPrefixCheck = JBCheckBox()
@@ -354,6 +356,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         // 组 4：SQL 日志（T-M31.14 日志还原配置，参考 MybatisCodeHelper-Pro Log Setting）
         titleRow("settings.section.sqlLog")
         section { p, g ->
+            addRow(p, g, "", logFilterBarCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.filterBar")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.filterBar.tip")
+            })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
             })
@@ -738,6 +744,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logFilterKeywordsField.text.trim() != s.logFilterKeywords
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
             || logMaxParseField.text.trim().toIntOrNull() != s.logMaxParseLength
+            || logFilterBarCheck.isSelected != s.logFilterBarEnabled
     }
 
     /**
@@ -780,6 +787,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logFilterKeywords = logFilterKeywordsField.text.trim()
         s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
         s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
+        s.logFilterBarEnabled = logFilterBarCheck.isSelected
         if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
             applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
         }
@@ -787,6 +795,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID)
         }
         languagePending = false
+        // 发布设置变更通知（订阅方如 SqlLogPanel 据此即时刷新 UI）
+        ApplicationManager.getApplication().messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
         return languageChanged
     }
 
@@ -829,5 +839,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logFilterKeywordsField.text = s.logFilterKeywords
         logDedupeField.text = s.logDedupeWindowMs.toString()
         logMaxParseField.text = s.logMaxParseLength.toString()
+        logFilterBarCheck.isSelected = s.logFilterBarEnabled
     }
 }

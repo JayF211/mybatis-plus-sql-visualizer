@@ -6,6 +6,7 @@ import com.intellij.openapi.components.RoamingType
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.util.messages.Topic
 
 /**
  * 插件配置状态（T-M5-01，F-16 配置项持久化）。
@@ -173,6 +174,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         // ---------- P-06 日志智能分组 / 高频折叠 ----------
 
         /**
+         * 筛选条显隐开关（P-06）：开启后 SQL 日志面板顶部显示类型筛选条
+         * （全部/SELECT/INSERT/UPDATE/DELETE + 高频折叠 + 耗时排序）。
+         * 默认关（低频项，需要时手动开启）。
+         */
+        var logFilterBarEnabled: Boolean = false,
+
+        /**
          * 日志高频折叠阈值（P-06）：同一 SQL 模板出现次数 >= 该值时启用折叠。
          * 默认 3。
          */
@@ -208,6 +216,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
+
+        /** 设置变更通知 Topic（订阅方据此即时刷新 UI）。 */
+        @JvmField
+        val SETTINGS_CHANGE_TOPIC: Topic<SettingsChangeListener> = Topic.create(
+            "MpSqlVisualizerSettingsChange",
+            SettingsChangeListener::class.java,
+        )
 
         /** 默认界面语言（M14，用户要求默认中文）。 */
         const val DEFAULT_LANGUAGE = "zh"
@@ -252,4 +267,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         fun getInstance(): PluginSettings =
             ApplicationManager.getApplication().getService(PluginSettings::class.java)
     }
+}
+
+/** 设置变更监听器（订阅方据此即时刷新 UI）。 */
+fun interface SettingsChangeListener {
+    fun settingsChanged()
 }

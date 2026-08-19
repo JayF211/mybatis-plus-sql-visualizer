@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable
+import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
@@ -23,6 +24,8 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
 import java.awt.BorderLayout
+import java.awt.Container
+import java.awt.Insets
 import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
@@ -34,6 +37,10 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
 import java.util.Date
+import com.intellij.ui.JBColor
+import javax.swing.BorderFactory
+import com.intellij.util.messages.Topic
+import javax.swing.BoxLayout
 import javax.swing.DefaultListModel
 import javax.swing.JCheckBox
 import javax.swing.JComponent
@@ -41,6 +48,7 @@ import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
+import javax.swing.JSeparator
 import javax.swing.JToggleButton
 import javax.swing.ListModel
 import javax.swing.SwingConstants
@@ -114,7 +122,7 @@ class SqlLogPanel(
 
     // ---------- P-06 UI 组件引用（供刷新计数/可见性用） ----------
 
-    /** 类型按钮映射（类型 → 按钮；供动态更新文案/选中态）。 */
+    /** 类型按钮映射（类型 → JToggleButton；供动态更新文案/选中态）。 */
     private val typeButtons = mutableMapOf<StatementType, JToggleButton>()
 
     /** 「全部」按钮（一键全选/全取消）。 */
@@ -123,8 +131,8 @@ class SqlLogPanel(
     /** 高频折叠切换按钮。 */
     private var foldButton: JToggleButton? = null
 
-    /** 耗时排序按钮（动态显隐）。 */
-    private var sortButton: JLabel? = null
+    /** 耗时排序按钮（JToggleButton，原生 LaF 渲染选中态；动态显隐）。 */
+    private var sortButton: JToggleButton? = null
 
     // ---------- P-06 测试访问器（headless 测试断言用） ----------
 
@@ -157,7 +165,7 @@ class SqlLogPanel(
     internal val foldToggleButton: JToggleButton? get() = foldButton
 
     /** 耗时排序按钮（测试点击用）。 */
-    internal val durationSortLabel: JLabel? get() = sortButton
+    internal val durationSortLabel: JToggleButton? get() = sortButton
 
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
@@ -173,9 +181,8 @@ class SqlLogPanel(
     init {
         // 标签 1：SQL 日志（工具栏 + 过滤条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
-        logPanel.add(buildToolbar(), BorderLayout.NORTH) // JPanel（工具栏 + 去重勾选开关）
-        logPanel.add(buildFilterBar(), BorderLayout.CENTER) // P-06：过滤条（类型按钮 + 折叠/排序）
-        logPanel.add(buildListPane(), BorderLayout.SOUTH) // 条目列表
+        logPanel.add(buildTopPanel(), BorderLayout.NORTH) // 工具栏 + 分割线 + 过滤条
+        logPanel.add(buildListPane(), BorderLayout.CENTER) // 条目列表铺满剩余空间
 
         // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
@@ -188,7 +195,15 @@ class SqlLogPanel(
             if (tabs.selectedComponent == sqlToJavaPanel) {
                 sqlToJavaPanel.refreshFormatFromSettings()
             }
+            // 筛选条显隐跟随设置（设置页修改后切回即同步）
+            refreshFilterBarVisibility()
         }
+
+        // 设置变更即时刷新筛选条显隐（无需切 tab）
+        val settingsListener = SettingsChangeListener {
+            ApplicationManager.getApplication().invokeLater { refreshFilterBarVisibility() }
+        }
+        project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
 
         manager.addUiListener { refreshList() }
         refreshList()
@@ -224,6 +239,43 @@ class SqlLogPanel(
         bar.add(toolbar.component)
         bar.add(dedupeCheckBox) // 去重勾选开关（T-M31.5）
         return bar
+    }
+
+    /** 筛选条容器（按设置显隐）。 */
+    private var filterBarPanel: JPanel? = null
+
+    /** 筛选条上方分割线（按设置显隐，与筛选条同步）。 */
+    private var filterSeparator: JSeparator? = null
+
+    /**
+     * 顶部竖向容器（工具栏 + 分割线 + 过滤条）。
+     * BoxLayout(Y_AXIS) 保证三者竖向堆叠、各拿首选高度；
+     * 分割线全宽，maximumSize 限制竖向不被拉伸。
+     * 筛选条与分割线仅在设置开启时可见。
+     */
+    private fun buildTopPanel(): JPanel {
+        val panel = JPanel()
+        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+        panel.alignmentX = Component.LEFT_ALIGNMENT
+        val toolbar = buildToolbar().apply { alignmentX = Component.LEFT_ALIGNMENT }
+        filterSeparator = JSeparator(SwingConstants.HORIZONTAL).apply {
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = EmptyBorder(3, 4, 3, 4)
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }
+        filterBarPanel = buildFilterBar().apply { alignmentX = Component.LEFT_ALIGNMENT }
+        panel.add(toolbar)
+        panel.add(filterSeparator!!)
+        panel.add(filterBarPanel!!)
+        refreshFilterBarVisibility()
+        return panel
+    }
+
+    /** 按当前设置同步筛选条与分割线的可见性（runCatching 兜底：测试环境服务不可用时默认隐藏）。 */
+    fun refreshFilterBarVisibility() {
+        val enabled = runCatching { PluginSettings.getInstance().state.logFilterBarEnabled }.getOrDefault(false)
+        filterSeparator?.isVisible = enabled
+        filterBarPanel?.isVisible = enabled
     }
 
     /** 工具栏引用（capturing 变化时刷新按钮状态）。 */
@@ -282,17 +334,17 @@ class SqlLogPanel(
         }
     }
 
-    // ---------- P-06 过滤条（工具栏下方：类型按钮组 + 高频折叠 + 耗时排序） ----------
-
     /**
-     * 构建过滤条（P-06）：类型按钮组（全部 + SELECT/INSERT/UPDATE/DELETE）+ 高频折叠切换 + 耗时排序按钮。
+     * 构建过滤条（P-06）：JToggleButton + IntelliJ 原生 LaF = 文字按钮 + 选中态。
+     * 类型按钮（全部 + SELECT/INSERT/UPDATE/DELETE）+ 高频折叠切换 + 耗时排序按钮。
      */
     private fun buildFilterBar(): JPanel {
-        val bar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2))
+        val bar = JPanel(WrapLayout())
 
         // 「全部」按钮
         allButton = JToggleButton(MpSqlVisualizerBundle.message("log.filter.all")).apply {
             isSelected = activeFilter.size >= 4
+            toolTipText = MpSqlVisualizerBundle.message("log.filter.all")
             addActionListener {
                 if (isSelected) {
                     activeFilter.clear()
@@ -306,17 +358,12 @@ class SqlLogPanel(
         }
         bar.add(allButton)
 
-        // 类型按钮（SELECT / INSERT / UPDATE / DELETE）
+        // 类型按钮
         listOf(StatementType.SELECT, StatementType.INSERT, StatementType.UPDATE, StatementType.DELETE).forEach { type ->
-            val label = when (type) {
-                StatementType.SELECT -> MpSqlVisualizerBundle.message("log.filter.select")
-                StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
-                StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
-                StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
-                else -> "OTHER"
-            }
+            val label = labelForType(type)
             val button = JToggleButton(label).apply {
                 isSelected = type in activeFilter
+                toolTipText = label
                 addActionListener {
                     if (isSelected) activeFilter.add(type) else activeFilter.remove(type)
                     syncAllButtonSelection()
@@ -333,6 +380,7 @@ class SqlLogPanel(
         // 高频折叠切换按钮
         foldButton = JToggleButton(MpSqlVisualizerBundle.message("log.fold.frequency")).apply {
             isSelected = frequencyFoldEnabled
+            toolTipText = MpSqlVisualizerBundle.message("log.fold.frequency")
             addActionListener {
                 frequencyFoldEnabled = isSelected
                 refreshList()
@@ -340,23 +388,40 @@ class SqlLogPanel(
         }
         bar.add(foldButton)
 
-        // 耗时排序按钮（用 JLabel 模拟按钮；动态显隐）
-        sortButton = JLabel(MpSqlVisualizerBundle.message("log.sort.duration")).apply {
+        // 耗时排序按钮
+        sortButton = JToggleButton(MpSqlVisualizerBundle.message("log.sort.duration")).apply {
+            isSelected = sortMode == SortMode.DURATION_DESC
             toolTipText = MpSqlVisualizerBundle.message("log.sort.duration")
-            border = EmptyBorder(2, 6, 2, 6)
-            isOpaque = true
-            background = Color(0xE0E0E0)
-            font = font.deriveFont(font.size2D - 1f)
-            cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-            addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) {
-                    toggleDurationSort()
-                }
-            })
+            addActionListener {
+                toggleDurationSort()
+            }
         }
         bar.add(sortButton)
 
         return bar
+    }
+
+    /**
+     * 更新过滤条计数（refreshList 后调用）：各类型按钮文案 + 耗时排序按钮可见性。
+     */
+    private fun updateFilterBar() {
+        typeButtons.forEach { (type, button) ->
+            val baseLabel = labelForType(type)
+            val count = typeCounts[type] ?: 0
+            button.text = "$baseLabel ($count)"
+            button.toolTipText = baseLabel
+        }
+        // 排序按钮显隐 + 文案 + 选中态
+        sortButton?.isVisible = hasAnyDurationInfo
+        sortButton?.let {
+            val sortLabel = when (sortMode) {
+                SortMode.NONE -> MpSqlVisualizerBundle.message("log.sort.duration")
+                SortMode.DURATION_DESC -> MpSqlVisualizerBundle.message("log.sort.duration.desc")
+            }
+            it.text = sortLabel
+            it.toolTipText = sortLabel
+            it.isSelected = sortMode == SortMode.DURATION_DESC
+        }
     }
 
     /** 同步类型按钮选中态（外部操作后刷新按钮 UI）。 */
@@ -371,37 +436,12 @@ class SqlLogPanel(
         allButton?.isSelected = activeFilter.size >= 4
     }
 
-    /**
-     * 更新过滤条计数（refreshList 后调用）：各类型按钮文案 + 耗时排序按钮可见性。
-     */
-    private fun updateFilterBar() {
-        typeButtons.forEach { (type, button) ->
-            val baseLabel = when (type) {
-                StatementType.SELECT -> MpSqlVisualizerBundle.message("log.filter.select")
-                StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
-                StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
-                StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
-                else -> "OTHER"
-            }
-            val count = typeCounts[type] ?: 0
-            button.text = "$baseLabel ($count)"
-        }
-        // 排序按钮显隐
-        sortButton?.isVisible = hasAnyDurationInfo
-        sortButton?.let {
-            val sortLabel = when (sortMode) {
-                SortMode.NONE -> MpSqlVisualizerBundle.message("log.sort.duration")
-                SortMode.DURATION_DESC -> MpSqlVisualizerBundle.message("log.sort.duration.desc")
-            }
-            it.text = sortLabel
-            it.toolTipText = sortLabel
-        }
-    }
-
     // ---------- 条目列表 ----------
 
     private fun buildListPane(): JBScrollPane {
         list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
+        // 多行 SQL 预览：启用可变行高（条目高度按内容自适应，支持 SQL 自动换行）
+        list.fixedCellHeight = -1
         list.cellRenderer = object : javax.swing.DefaultListCellRenderer() {
             /** P-06 折叠徽章标签（复用于每个折叠态模板行）。 */
             private val badgeLabel = JLabel().apply {
@@ -431,13 +471,18 @@ class SqlLogPanel(
                         val badge = MpSqlVisualizerBundle.message("log.fold.badge", foldedGroup.count)
                         val tooltip = MpSqlVisualizerBundle.message("log.fold.tooltip.folded", foldedGroup.count)
                         this.text = "<html>" + timestamp + "<br>" + sql +
-                            "&nbsp;<span style='color:#888888;background:#E8E8E8;'>$badge</span><br></html>"
+                            "&nbsp;<span style='color:#888888;background:#E8E8E8;'>$badge</span></html>"
                         toolTipText = tooltip + "\n" + entry.restoredSql
                     } else {
-                        this.text = "<html>" + timestamp + "<br>" + sql + "<br></html>"
+                        this.text = "<html>" + timestamp + "<br>" + sql + "</html>"
                         toolTipText = entry.restoredSql
                     }
                 }
+                // 行底分隔线 + 四周内边距（条目视觉分隔清晰，解决"区分不清"）
+                border = BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+                    EmptyBorder(5, 8, 5, 8),
+                )
                 return this
             }
         }
@@ -513,6 +558,8 @@ class SqlLogPanel(
 
         rebuildListModel()
         updateFilterBar()
+        // 筛选条显隐跟随设置（设置页修改后立即生效，无需切 tab）
+        refreshFilterBarVisibility()
     }
 
     /** 按当前过滤条件筛选条目。 */
@@ -665,9 +712,75 @@ class SqlLogPanel(
         sqlToJavaPanel.dispose()
     }
 
+    // ---------- WrapLayout（过滤条自动换行） ----------
+
+    /**
+     * WrapLayout：FlowLayout 的换行变体——空间不足时组件自动折到下一行。
+     * 用于过滤条，解决侧边栏收缩时按钮被截断的问题。
+     */
+    private class WrapLayout : FlowLayout(LEFT, 4, 2) {
+
+        override fun preferredLayoutSize(target: Container): Dimension {
+            return computeSize(target, preferred = true)
+        }
+
+        override fun minimumLayoutSize(target: Container): Dimension {
+            return computeSize(target, preferred = false)
+        }
+
+        private fun computeSize(target: Container, preferred: Boolean): Dimension {
+            synchronized(target.treeLock) {
+                val insets = target.getInsets()
+                val availWidth = (target.parent?.width ?: Int.MAX_VALUE) - insets.left - insets.right
+                var x = 0; var y = insets.top + vgap; var rowHeight = 0; var maxRowWidth = 0
+                for (i in 0 until target.componentCount) {
+                    val m = target.getComponent(i)
+                    if (!m.isVisible) continue
+                    val d = if (preferred) m.preferredSize else m.minimumSize
+                    if (x + d.width > availWidth && x > 0) {
+                        maxRowWidth = maxOf(maxRowWidth, x - hgap)
+                        x = 0; y += rowHeight + vgap; rowHeight = 0
+                    }
+                    x += d.width + hgap; rowHeight = maxOf(rowHeight, d.height)
+                }
+                maxRowWidth = maxOf(maxRowWidth, x - hgap)
+                return Dimension(maxRowWidth + insets.left + insets.right, y + rowHeight + insets.bottom)
+            }
+        }
+
+        override fun layoutContainer(target: Container) {
+            synchronized(target.treeLock) {
+                val insets: Insets = target.getInsets()
+                val availWidth: Int = target.width - insets.left - insets.right
+                var x: Int = insets.left; var y: Int = insets.top; var rowHeight = 0
+                for (i in 0 until target.componentCount) {
+                    val m = target.getComponent(i)
+                    if (!m.isVisible) continue
+                    val d: Dimension = m.preferredSize
+                    val rightEdge: Int = x + d.width
+                    val maxRight: Int = insets.left + availWidth
+                    if (rightEdge > maxRight && x > insets.left) {
+                        x = insets.left; y += rowHeight + vgap; rowHeight = 0
+                    }
+                    m.setBounds(x, y, d.width, d.height)
+                    x += d.width + hgap; rowHeight = maxOf(rowHeight, d.height)
+                }
+            }
+        }
+    }
+
     companion object {
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
+
+        /** 类型 → 文案。 */
+        private fun labelForType(type: StatementType): String = when (type) {
+            StatementType.SELECT -> MpSqlVisualizerBundle.message("log.filter.select")
+            StatementType.INSERT -> MpSqlVisualizerBundle.message("log.filter.insert")
+            StatementType.UPDATE -> MpSqlVisualizerBundle.message("log.filter.update")
+            StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
+            else -> "OTHER"
+        }
     }
 }
