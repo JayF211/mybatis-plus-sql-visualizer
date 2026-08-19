@@ -23,6 +23,9 @@ import javax.swing.JEditorPane
  */
 class HelpDialog(project: Project?) : DialogWrapper(project, true) {
 
+    // T-M52：JBHtmlEditorKit() 无参构造器在三版本均废弃但均可用（boolean 版 262 已移除；
+    // 3 参构造器 package-private）。Suppress 保留，无跨版本非废弃替代。
+    @Suppress("DEPRECATION")
     private val editorPane = JEditorPane().apply {
         contentType = "text/html"
         // 主题化 HTML 渲染 kit（字体/颜色解析走 IDE 主题）

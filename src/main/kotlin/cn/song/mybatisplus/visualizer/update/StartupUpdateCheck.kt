@@ -52,6 +52,7 @@ class StartupUpdateCheck : ProjectActivity {
     }
 
     /** 「发现新版本」通知：标题带插件名（T-M28.3 用户要求）；内容只保留变更日志标题行；立即更新 / 稍后。 */
+    @Suppress("DEPRECATION") // T-M52：setListener 在 243/262 标 deprecated，无替代 API（4 参数构造器 262 也废弃）
     private fun showAvailable(project: Project, manifest: UpdateManifest) {
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)
@@ -71,6 +72,7 @@ class StartupUpdateCheck : ProjectActivity {
                 NotificationAction.createSimpleExpiring(MpSqlVisualizerBundle.message("update.notification.later")) { }
             )
         // T-M28.4：内容内 Gitee 链接点击跳转（URL_OPENING_LISTENER 打开浏览器）
+        // setListener 在 243 标 deprecated，262 verifyPlugin 报 deprecated；无替代 API，Suppress 保留
         notification.setListener(NotificationListener.URL_OPENING_LISTENER)
         runCatching { notification.notify(project) }
     }

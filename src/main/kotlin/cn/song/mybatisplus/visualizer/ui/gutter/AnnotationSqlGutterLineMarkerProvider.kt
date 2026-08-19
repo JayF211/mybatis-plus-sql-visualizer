@@ -30,7 +30,6 @@ import javax.swing.Icon
  */
 class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
 
-    @Suppress("DEPRECATION")
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
         // LineMarker 必须注册在 leaf 元素：注解的 `@` token
         val token = element as? PsiJavaToken ?: return null
@@ -38,6 +37,7 @@ class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
         val annotation = PsiTreeUtil.getParentOfType(token, PsiAnnotation::class.java, false) ?: return null
         if (!AnnotationSqlPreviewService.isSqlAnnotation(annotation)) return null
         if (!gutterEnabled()) return null
+        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
             element.textRange,
@@ -45,6 +45,7 @@ class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.annotation.tooltip") },
             AnnotationGutterNavigationHandler,
             GutterIconRenderer.Alignment.CENTER,
+            { MpSqlVisualizerBundle.message("gutter.annotation.accessible.name") },
         )
     }
 

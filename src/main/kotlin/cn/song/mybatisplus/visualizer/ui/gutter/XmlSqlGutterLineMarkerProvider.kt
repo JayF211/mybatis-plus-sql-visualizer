@@ -32,7 +32,6 @@ import javax.swing.Icon
  */
 class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
 
-    @Suppress("DEPRECATION")
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
         // LineMarker 必须注册在 leaf 元素：只接受语句标签的 name token（O(1) 判定，零 resolve）
         val token = element as? XmlToken ?: return null
@@ -42,6 +41,7 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         if (tag.name !in STATEMENT_TAGS) return null
         if (tag.parentTag?.name != "mapper") return null
         if (!gutterEnabled()) return null
+        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
             element.textRange,
@@ -49,6 +49,7 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.xml.tooltip") },
             XmlGutterNavigationHandler,
             GutterIconRenderer.Alignment.CENTER,
+            { MpSqlVisualizerBundle.message("gutter.xml.accessible.name") },
         )
     }
 

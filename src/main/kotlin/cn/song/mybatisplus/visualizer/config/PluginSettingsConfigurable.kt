@@ -65,13 +65,14 @@ class PluginSettingsConfigurable : Configurable {
     }
 
     /** 遍历所有打开项目中的编辑器文件，触发 Daemon 重分析（重新计算 line markers）。 */
+    @Suppress("DEPRECATION") // T-M52：restart(PsiFile) 在 253/262 标 deprecated，243 安全；无跨版本非废弃替代
     private fun refreshGutterIcons() {
         ProjectManager.getInstance().openProjects.forEach { project ->
             EditorFactory.getInstance().getAllEditors()
                 .filter { it.project === project }
                 .mapNotNull { PsiDocumentManager.getInstance(project).getPsiFile(it.document) }
                 .distinct()
-                .forEach { DaemonCodeAnalyzer.getInstance(project).restart() }
+                .forEach { psiFile -> DaemonCodeAnalyzer.getInstance(project).restart(psiFile) }
         }
     }
 

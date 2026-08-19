@@ -31,7 +31,9 @@ import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.actionSystem.Shortcut
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
@@ -107,6 +109,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
     private val paramFields = mutableListOf<JBTextField>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
+    private var autoPopupDisposable: Disposable? = null
     private val conditionValueFields = mutableListOf<JBTextField>()
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
@@ -591,15 +594,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
         }
-        created.document.addDocumentListener(listener)
+        // T-M52：双参数版（Disposable 管理监听生命周期，releaseEditor 时自动移除）
+        if (autoPopupDisposable != null) Disposer.dispose(autoPopupDisposable!!)
+        autoPopupDisposable = Disposer.newDisposable("SqlPreviewPanel.autoPopup")
+        created.document.addDocumentListener(listener, autoPopupDisposable!!)
         autoPopupListener = listener
     }
 
     /** 释放当前编辑器（幂等）。 */
     private fun releaseEditor() {
         editor?.let {
-            autoPopupListener?.let { l -> it.document.removeDocumentListener(l) }
+            // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener）
             autoPopupListener = null
+            autoPopupDisposable?.let { d -> Disposer.dispose(d) }
+            autoPopupDisposable = null
             EditorFactory.getInstance().releaseEditor(it)
             editor = null
         }

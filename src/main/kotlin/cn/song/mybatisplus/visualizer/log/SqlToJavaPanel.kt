@@ -548,7 +548,7 @@ class SqlToJavaPanel(
 
             override fun getPromptText(): String = delegate.getPromptText() ?: ""
             override fun getCheckBoxName(): String? = delegate.getCheckBoxName()
-            override fun getCheckBoxMnemonic(): Char = delegate.getCheckBoxMnemonic()
+            // getCheckBoxMnemonic() 已废弃（Goto Class 弹窗移除 checkbox UI），删除覆写使用接口默认实现
             override fun getNotInMessage(): String = delegate.getNotInMessage() ?: ""
             override fun getNotFoundMessage(): String = delegate.getNotFoundMessage() ?: ""
             override fun loadInitialCheckBoxState(): Boolean = delegate.loadInitialCheckBoxState()

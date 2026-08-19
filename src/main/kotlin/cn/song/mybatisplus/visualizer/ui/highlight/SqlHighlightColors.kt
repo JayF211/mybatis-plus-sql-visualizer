@@ -27,9 +27,9 @@ object SqlHighlightColors {
     val OPERATOR = key("MP_SQL.OPERATOR", light = Color(0x000000), dark = Color(0xABB2BF))
     val PAREN = key("MP_SQL.PAREN", light = Color(0x000000), dark = Color(0xABB2BF))
 
-    // 2025.3 弃用 createTextAttributesKey(id, TextAttributes)：新 API（继承另一 key 的默认属性）
-    // 不适用本场景——插件注册**固定自定义配色**（One Dark 风格，默认属性即最终渲染颜色），
-    // 平台暂无等价"注册任意默认属性"API，弃用非移除，Suppress 保留语义（M23.9）。
+    // T-M52：createTextAttributesKey(id, TextAttributes) 废弃，新 API createTextAttributesKey(id, TextAttributesKey)
+    // 以已有 key 为 fallback 模板，不适用本场景——插件注册**固定自定义配色**（One Dark 风格），
+    // 平台暂无等价"注册任意默认属性"API，弃用非移除，Suppress 保留。
     @Suppress("DEPRECATION")
     private fun key(id: String, light: Color, dark: Color, bold: Boolean = false): TextAttributesKey =
         TextAttributesKey.createTextAttributesKey(

@@ -231,7 +231,7 @@ object XmlSqlCompletionContextResolver {
             if (annotationClass != null) {
                 AnnotatedElementsSearch.searchPsiClasses(annotationClass, scope).findAll().toList()
             } else {
-                JavaAnnotationIndex.getInstance().get(TABLE_NAME_ANNOTATION, project, scope)
+                JavaAnnotationIndex.getInstance().getAnnotations(TABLE_NAME_ANNOTATION, project, scope)
                     .mapNotNull { PsiTreeUtil.getParentOfType(it, PsiClass::class.java) }
             }
         }.getOrElse { emptyList() }

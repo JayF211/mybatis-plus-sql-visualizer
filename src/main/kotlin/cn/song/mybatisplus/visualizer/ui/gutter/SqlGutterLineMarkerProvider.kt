@@ -30,12 +30,10 @@ import javax.swing.Icon
  */
 class SqlGutterLineMarkerProvider : LineMarkerProvider {
 
-    // 注：LineMarkerInfo 的新构造器（Supplier tooltip 版）在 2025.3.5 为 package-private，
-    // 公共可用仅剩 deprecated 6 参版本（平台内部仍广泛使用），故保留并抑制 deprecation 警告。
-    @Suppress("DEPRECATION")
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
         val anchor = WrapperAnchorDetector.anchorElement(element) ?: return null
         if (!gutterEnabled()) return null
+        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             anchor,
             anchor.textRange,
@@ -43,6 +41,7 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.tooltip") },
             SqlGutterNavigationHandler,
             GutterIconRenderer.Alignment.CENTER,
+            { MpSqlVisualizerBundle.message("gutter.accessible.name") },
         )
     }
 
