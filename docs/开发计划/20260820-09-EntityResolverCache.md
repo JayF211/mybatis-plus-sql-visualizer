@@ -1,0 +1,251 @@
+# 实体解析缓存增强（P1）开发计划
+
+> 状态：📋 待立项
+> 需求来源：用户反馈「大项目（几百个实体类）首次预览响应慢，怀疑重复 PSI 遍历」。
+
+## 1. 目标与范围
+
+把 `EntityResolver.resolve(clazz)` 的结果（字段名→列名映射、`@TableLogic`/`@Version`/`@TableId` 标注、主键列）按 **PsiClass + PsiModificationTracker** 缓存，避免重复 PSI 遍历。对大项目（几百个实体类）的预览响应速度有明显提升。
+
+**已确认决策**：
+- 缓存粒度：**按 PsiClass 实例**（同文件不同 PsiClass 独立缓存）；
+- 失效机制：`PsiModificationTracker` 修改计数 + 配置签名（`configSignature`，沿用 `WrapperCache` 双维度失效模式）；
+- 存储位置：`EntityResolver` 内部 `ConcurrentHashMap`（项目级，跟随 `EntityResolver` 生命周期）；
+- 内存安全：以 `PsiClass` 为键的 `WeakHashMap` 变体，或强引用 + 项目关闭时 `clear()`；
+- 配置变更：沿用 `WrapperCache.configSignature` 模式（表名推断策略 / 忽略字段 / 表前缀后缀拼接串）。
+
+## 2. 现状分析
+
+### 2.1 当前调用链路
+
+```
+SqlToJavaConverter.findCandidates(project, tableName)
+  → EntityClassFinder.find(tableName)          // PSI 索引查找候选类
+  → 每个候选 clazz → EntityResolver().resolve(clazz)   // ⚠️ 每次都做完整 PSI 遍历
+      → collectFieldsIncludingSuper(clazz)     // 递归父类字段收集
+      → fields.mapNotNull { resolveColumn(it) } // 每个字段：注解查找 + 命名策略 + 角色分组
+      → sortedWith(compareBy { it.role })       // 稳定排序
+```
+
+### 2.2 性能瓶颈定位
+
+`EntityResolver.resolve(clazz)` 的 PSI 操作：
+- `collectFieldsIncludingSuper`：递归 `superClass`（通常 1-2 层）；
+- 每个 `PsiField`：`findAnnotation`（遍历 `modifierList.annotations`）+ `NamingStrategy.toSnakeCase`；
+- 注解查找涉及 `PsiShortNamesCache` / `PsiAnnotation` 解析。
+
+**实测估算**（100 个实体类，平均 10 字段）：
+- 单类 resolve ≈ 0.5ms（PSI 操作）；
+- 100 类 × 0.5ms = 50ms（单次预览）；
+- 批量转换（如 10 条 SQL × 10 候选/条）= 100 次 resolve ≈ 50ms；
+- 高频操作（gutter 悬停、快捷键、重复预览）会放大。
+
+### 2.3 既有缓存（`WrapperCache`）对比
+
+| 维度 | WrapperCache | EntityResolver 缓存（新） |
+|------|--------------|---------------------------|
+| 缓存键 | PsiFile + anchorOffset + resolveVariables + configSignature | PsiClass + configSignature |
+| 失效机制 | `file.modificationStamp` | `PsiModificationTracker` 修改计数 |
+| 并发 | `ConcurrentHashMap` | `ConcurrentHashMap` |
+| 生命周期 | 项目级 | 项目级 |
+| 容量 | 锚点数 × 配置版本数 | 实体类数 × 配置版本数 |
+
+### 2.4 关键约束
+
+- **IPGP 裁剪后 `PsiModificationTracker` 所在包**：`com.intellij.psi.util.PsiModificationTracker`（非 `com.intellij.psi`）；
+- 项目级 `PsiModificationTracker` 获取：`PsiManager.getInstance(project).getModificationTracker()`；
+- `PsiClass` 作为 `Map` 键：PsiClass 对象在 PSI 重建时会变（文件编辑后旧 PsiClass 失效），需弱引用或按 `PsiFile + classQualifiedName` 作键。
+
+## 3. 架构与数据流
+
+```
+EntityResolver.resolve(clazz)
+  → 计算 cacheKey = CacheKey(psiFile, classQualifiedName, configSignature)
+  → 计算 stamp = psiFile.getModificationStamp()  // 文件级修改戳（PSI 树变化即变）
+  → cache[key]?.let { entry ->
+      if (entry.stamp == stamp) return entry.value   // ✅ 缓存命中
+    }
+  → value = resolveInternal(clazz)                   // 完整 PSI 遍历
+  → cache[key] = Entry(stamp, value)
+  → return value
+```
+
+## 4. 详细实施方案
+
+### 4.1 缓存键设计
+
+```kotlin
+/**
+ * 实体解析缓存键。
+ *
+ * @param file               PsiClass 所在文件（文件修改戳作为失效依据）
+ * @param classQualifiedName 类全限定名（PsiClass 对象不稳定，用全限定名跨 PSI 重建保持同一性）
+ * @param configSignature   配置签名（表名推断策略 + 忽略字段 + 表前缀后缀拼接串）
+ */
+private data class EntityCacheKey(
+    val file: PsiFile,
+    val classQualifiedName: String,
+    val configSignature: String,
+)
+```
+
+**为何不用 PsiClass 对象作键**：
+- PSI 树编辑后旧 PsiClass 对象失效（`PsiFile` 重建），但 `PsiFile` 对象在单版本内稳定；
+- 同一文件内多个 PsiClass（内部类）通过 `classQualifiedName` 区分；
+- 跨 PSI 重建（编辑文件后），`file.modificationStamp` 变化 → 缓存自然失效。
+
+### 4.2 缓存存储
+
+```kotlin
+class EntityResolver {
+
+    /** 缓存条目：文件修改戳 + 解析结果。 */
+    private data class Entry(val stamp: Long, val value: TableInfo)
+
+    /** 缓存键 → 条目。 */
+    private val cache = ConcurrentHashMap<EntityCacheKey, Entry>()
+
+    /**
+     * 解析实体类为表信息（带缓存）。
+     *
+     * @param entityClass 实体 PsiClass
+     * @return 表信息（缓存命中时直接返回，避免 PSI 遍历）
+     */
+    fun resolve(entityClass: PsiClass): TableInfo {
+        val className = entityClass.name ?: return TableInfo("", "", emptyList())
+        val file = entityClass.containingFile ?: return resolveInternal(entityClass)
+        val qName = entityClass.qualifiedName ?: className
+        val configSig = configSignature()
+
+        val key = EntityCacheKey(file, qName, configSig)
+        val stamp = file.modificationStamp
+        cache[key]?.let { entry ->
+            if (entry.stamp == stamp) return entry.value
+        }
+
+        val value = resolveInternal(entityClass)
+        cache[key] = Entry(stamp, value)
+        return value
+    }
+
+    /** 内部解析（完整 PSI 遍历，缓存未命中时调用）。 */
+    private fun resolveInternal(entityClass: PsiClass): TableInfo {
+        // 现有 resolve 逻辑整体迁移至此
+        ...
+    }
+}
+```
+
+### 4.3 配置签名
+
+沿用 `WrapperCache.configSignature` 模式（需与 `WrapperCache` 共享同一签名生成函数，防漂移）：
+
+```kotlin
+/**
+ * 影响实体解析结果的配置签名（与 WrapperCache 共享模式）。
+ * 设置变更后缓存失效（文件戳不变的场景）。
+ */
+private fun configSignature(): String = buildString {
+    append(runCatching { PluginSettings.getInstance().state.tableNameInference }.getOrDefault("SNAKE"))
+    append('|')
+    append(runCatching { PluginSettings.getInstance().state.ignoredFields }.getOrDefault(""))
+    append('|')
+    append(runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault(""))
+    append('|')
+    append(runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault(""))
+    append('|')
+    append(runCatching { PluginSettings.getInstance().state.removeTablePrefix }.getOrDefault(""))
+    append('|')
+    append(runCatching { PluginSettings.getInstance().state.removeTableSuffix }.getOrDefault(""))
+}
+```
+
+**建议**：将 `configSignature()` 提取为公共工具函数（如 `TableConfigSignature.projectSignature(project)`），供 `WrapperCache` 与 `EntityResolver` 共享，防漂移。
+
+### 4.4 缓存清空
+
+```kotlin
+/** 清空缓存（配置变更 / 项目关闭时调用）。 */
+fun clearCache() = cache.clear()
+
+/** 当前缓存条目数（测试 / 诊断用）。 */
+fun cacheSize(): Int = cache.size
+```
+
+**调用时机**：
+- 设置页配置变更时（`PluginSettings` 状态持久化后）；
+- 项目关闭时（`@Service` 的 `dispose` 或 `ProjectListenerRegistrar`）。
+
+### 4.5 线程安全
+
+- `ConcurrentHashMap` 保证并发读写安全；
+- `resolve()` 本身无状态（除缓存），EDT / 后台线程均可调用；
+- PSI 读取（`file.modificationStamp`）为线程安全操作。
+
+## 5. 边界与已知限制
+
+- **跨文件同名类**：`classQualifiedName` 包含包名，区分全限定名相同的类（罕见，同一文件内不可能）；
+- **匿名内部类 / 局部类**：`qualifiedName` 为 null → 回退 `className`，缓存命中率降低但不影响正确性；
+- **Light 测试环境**：PSI 文件修改戳行为可能不同，缓存 key 改用 `System.identityHashCode(file)` 兜底；
+- **缓存容量**：大项目（500 实体类 × 10 配置版本）≈ 5000 条目，内存占用 < 1MB，无需 LRU 淘汰；
+- **PSI 重建**：文件编辑后旧 `PsiFile` 对象可能仍被 `cache` 强引用 → 建议用 `WeakReference<PsiFile>` 作键的一部分，或定期清理。
+
+## 6. 测试策略
+
+### 6.1 纯逻辑单测（`EntityResolverTest` 扩展）
+
+| 用例 | 操作 | 预期 |
+|------|------|------|
+| 缓存命中 | 同类连续 resolve 2 次 | 第 2 次命中缓存（不重复 PSI 遍历） |
+| 缓存失效（PSI 变更） | resolve → 修改文件 modificationStamp → 再 resolve | 第 2 次未命中，重新解析 |
+| 缓存失效（配置变更） | resolve → 改配置签名 → 再 resolve | 第 2 次未命中 |
+| 跨类独立缓存 | 解析 ClassA → 解析 ClassB → 再解析 ClassA | ClassA 命中缓存 |
+| 空类名兜底 | 传入 name=null 的 PsiClass | 返回空 TableInfo，不进缓存 |
+
+### 6.2 性能测试（Heavy 测试）
+
+| 用例 | 操作 | 预期 |
+|------|------|------|
+| 大项目首次解析 | 500 实体类 × 10 字段，首次全部 resolve | 记录耗时 T1 |
+| 大项目二次解析 | 同类再次全部 resolve | 耗时 T2 << T1（缓存命中，PSI 零遍历） |
+| 缓存内存占用 | 500 类 resolve 后检查 cacheSize() | ≈ 500 条目 |
+
+### 6.3 既有测试回归
+
+- `EntityResolverTableConfigTest` / `EntityResolverCommentTest` / `EntityResolverColumnOrderTest` / `EntityResolverSerialVersionUidTest` 全量绿；
+- `SqlToJavaConverterTest` / `JavaCodeGeneratorTest` 全量绿（缓存不影响生成结果）。
+
+## 7. i18n 清单
+
+本任务无新增 UI 文案，无需 i18n 扩展。
+
+**注**：设置页「缓存信息」行（`settings.cache.info` / `settings.cache.label` / `settings.cache.clear`）已存在，如需新增「实体解析缓存」独立统计，扩展以下 key：
+
+| key | 英文 | 中文 |
+|-----|------|------|
+| `settings.cache.entityInfo` | Entity cache: {0} classes | 实体解析缓存：{0} 个类 |
+
+## 8. 实施步骤与工时估算
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| 1 | 缓存键 `EntityCacheKey` + `Entry` 数据结构 | 0.5h |
+| 2 | `resolve()` 缓存逻辑（命中 / 失效 / 写入） | 1h |
+| 3 | `configSignature()` 抽取 + 与 `WrapperCache` 共享 | 0.5h |
+| 4 | `clearCache()` 调用点（设置变更 / 项目关闭） | 0.5h |
+| 5 | 单测（缓存命中 / 失效 / 跨类独立） | 1.5h |
+| 6 | Heavy 性能测试 + 既有测试回归 | 1h |
+| 7 | 文档三处同步 | 0.25h |
+| **合计** | | **5.25h** |
+
+## 9. 文档三处同步
+
+- 本计划归档：`docs/开发计划/20260820-09-EntityResolverCache.md`
+- CHANGELOG.md：新增 `### Added` 条目（实体解析缓存）
+- README.md：无需修改（性能优化，无功能变更）
+
+## 10. 后续迭代（P2+）
+
+- **跨 PsiFile 重建缓存**：以 `classQualifiedName` 为全局键 + `PsiFile` 弱引用，PSI 重建后保留缓存（文件内容未变时修改戳不变，无需重建）；
+- **缓存预热**：项目打开时后台预解析 `@TableName` 标注的类（减少首次预览延迟）；
+- **缓存统计**：设置页展示「缓存命中率 / 命中次数 / PSI 遍历节省次数」诊断信息。

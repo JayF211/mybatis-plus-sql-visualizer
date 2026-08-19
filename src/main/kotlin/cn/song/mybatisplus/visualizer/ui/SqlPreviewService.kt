@@ -27,6 +27,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
@@ -59,19 +60,10 @@ class SqlPreviewService(private val project: Project) {
     /**
      * T-M19.4（用户实测：表名配置修改后预览不生效——缓存按文件戳失效，设置变更不触发）：
      * 影响解析结果的表相关设置签名，作为 [WrapperCache] 缓存维度。
-     * 字段：推断策略 / 忽略字段名 / 添加表前缀 / 添加表后缀 / 移除表前缀 / 移除表后缀。
+     * 复用 [cn.song.mybatisplus.visualizer.util.TableConfigSignature.projectSignature] 统一来源，
+     * 与 [cn.song.mybatisplus.visualizer.psi.EntityResolver] 的解析缓存防漂移。
      */
-    private fun tableConfigSignature(): String {
-        val s = settings?.state
-        return listOf(
-            s?.tableNameInference ?: PluginSettings.INFERENCE_SNAKE,
-            s?.ignoredFields ?: "",
-            s?.tablePrefix ?: "",
-            s?.tableSuffix ?: "",
-            s?.removeTablePrefix ?: "",
-            s?.removeTableSuffix ?: "",
-        ).joinToString("|")
-    }
+    private fun tableConfigSignature(): String = TableConfigSignature.projectSignature()
 
     /**
      * 全局配置（测试环境未注册 service 时为 null，使用默认值）。
@@ -251,6 +243,8 @@ class SqlPreviewService(private val project: Project) {
             paramHints = generated.paramHints,
             // T-SqlPerf：性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]；UPDATE/DELETE 走既有 buildWarning 路径
             perfSuggestions = analyzePerf(generated.sql, statement),
+            // T-MpjFill：fill 附加查询子句（MPJ 1.5.1+）——透传至面板追加渲染
+            fillClauses = (statement as? SelectStatement)?.fillClauses,
         )
     }
 

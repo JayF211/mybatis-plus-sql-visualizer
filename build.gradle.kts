@@ -298,6 +298,8 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.xml.ForeachSqlNodeTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverTableConfigTest")
+                    // T-EntityCache：实体解析缓存测试（缓存命中/失效/跨类独立/清空）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCacheTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.converter.MpjJoinExtConverterTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatterTest")

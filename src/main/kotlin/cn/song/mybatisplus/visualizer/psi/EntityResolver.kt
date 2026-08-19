@@ -5,13 +5,16 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiField
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiWhiteSpace
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 实体类解析器（F-13）：从实体 [PsiClass] 解析出 [TableInfo]。
@@ -33,16 +36,45 @@ import com.intellij.psi.PsiWhiteSpace
  *  - T-M19.4：表名推断策略（无注解时 SNAKE 驼峰转下划线 / CAMEL 纯保留驼峰）、忽略字段名
  *    （`;` 分隔 Java 字段名）、移除表名前缀/后缀（`;` 分隔首匹配）；添加表前缀/后缀为**单值**
  *    （用户反馈定稿，不再 `;` 分隔）
+ *  - T-EntityCache：解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
+ *    文件修改戳（modificationStamp）+ 配置签名双维度失效，避免大项目重复 PSI 遍历
  */
 class EntityResolver {
 
     /**
-     * 解析实体类为表信息。
+     * 解析实体类为表信息（带缓存）。
+     *
+     * 缓存键：PsiFile + classQualifiedName + configSignature（三维）。
+     * 失效机制：
+     *  - 文件修改（modificationStamp 变化）→ 缓存自然失效
+     *  - 配置签名变化（tablePrefix/tableSuffix/tableNameInference 等设置变更）→ 缓存失效
      *
      * @param entityClass 实体 PsiClass（如 DeviceInfoEntity）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     fun resolve(entityClass: PsiClass): TableInfo {
+        val className = entityClass.name ?: return TableInfo("", "", emptyList())
+        val file = entityClass.containingFile ?: return resolveInternal(entityClass)
+        val qName = entityClass.qualifiedName ?: className
+        val configSig = TableConfigSignature.projectSignature()
+
+        val key = EntityCacheKey(file, qName, configSig)
+        val stamp = file.modificationStamp
+        cache[key]?.let { entry ->
+            if (entry.stamp == stamp) return entry.value
+        }
+
+        val value = resolveInternal(entityClass)
+        cache[key] = Entry(stamp, value)
+        return value
+    }
+
+    /**
+     * 内部解析（完整 PSI 遍历，缓存未命中时调用）。
+     *
+     * 原有 resolve 逻辑整体迁移至此——缓存层透明，调用方无感。
+     */
+    private fun resolveInternal(entityClass: PsiClass): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
         // T-M19.4（用户反馈：@TableName 应为最高优先级）：**显式 @TableName 即最终表名**——
         // 豁免推断策略与修饰链（添加/移除表名前缀后缀仅作用于**推断表名**；
@@ -144,7 +176,7 @@ class EntityResolver {
     /**
      * 注释来源优先级（M16，schema 预留）：
      * SCHEMA（数据源 schema 列/表注释，方案 B 接入后自动覆盖一切代码内注释）最高，
-     * 当前实现 schema 源返回 null——实际生效顺序 = 注解 > javadoc > 行注释。
+     * 当前实现 schema 返回 null——实际生效顺序 = 注解 > javadoc > 行注释。
      */
     enum class CommentSource { SCHEMA, ANNOTATION, JAVADOC, LINE_COMMENT }
 
@@ -333,6 +365,37 @@ class EntityResolver {
         // T-M22-02：乐观锁版本注解（OptimisticLockerInnerInterceptor 的 @Version 字段识别；
         // 与 TABLE_LOGIC 同模式走 findAnnotation 短名兜底）
         private const val VERSION = "com.baomidou.mybatisplus.annotation.Version"
+
+        // ------------------------------------------------------------------
+        // T-EntityCache：实体解析缓存（三维键 + 双维度失效）
+        // ------------------------------------------------------------------
+
+        /**
+         * 实体解析缓存键。
+         *
+         * @param file               PsiClass 所在文件（文件修改戳作为失效依据）
+         * @param classQualifiedName 类全限定名（PsiClass 对象不稳定，用全限定名跨 PSI 重建保持同一性）
+         * @param configSignature   配置签名（表名推断策略 + 忽略字段 + 表前缀后缀拼接串）
+         */
+        private data class EntityCacheKey(
+            val file: PsiFile,
+            val classQualifiedName: String,
+            val configSignature: String,
+        )
+
+        /** 缓存条目：文件修改戳 + 解析结果。 */
+        private data class Entry(val stamp: Long, val value: TableInfo)
+
+        /** 缓存键 → 条目（项目级，跟随 EntityResolver 生命周期）。 */
+        private val cache = ConcurrentHashMap<EntityCacheKey, Entry>()
+
+        /** 清空缓存（配置变更 / 项目关闭时调用）。 */
+        @JvmStatic
+        fun clearCache() = cache.clear()
+
+        /** 当前缓存条目数（测试 / 诊断用）。 */
+        @JvmStatic
+        fun cacheSize(): Int = cache.size
 
         // ------------------------------------------------------------------
         // T-M19.4：表名推断策略 + 统一修饰链（companion 静态化——实体类不可解析的兜底路径复用，
