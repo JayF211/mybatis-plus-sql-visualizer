@@ -4,6 +4,7 @@ import org.gradle.jvm.tasks.Jar
 import org.gradle.process.CommandLineArgumentProvider
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
 
 plugins {
@@ -88,6 +89,16 @@ intellijPlatform {
         // 无公共替代（官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
         failureLevel = listOf(FailureLevel.COMPATIBILITY_PROBLEMS)
     }
+}
+
+// Plugin Verifier 是独立子进程，systemProp 代理不自动透传——显式注入（Clash 7890）
+tasks.named<VerifyPluginTask>("verifyPlugin") {
+    jvmArgs(
+        "-Dhttp.proxyHost=127.0.0.1",
+        "-Dhttp.proxyPort=7890",
+        "-Dhttps.proxyHost=127.0.0.1",
+        "-Dhttps.proxyPort=7890"
+    )
 }
 
 kotlin {
