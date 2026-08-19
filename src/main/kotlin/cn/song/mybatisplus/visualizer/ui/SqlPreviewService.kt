@@ -24,6 +24,8 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
+import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
@@ -238,7 +240,19 @@ class SqlPreviewService(private val project: Project) {
             tableComment = table.comment,
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
             paramHints = generated.paramHints,
+            // T-SqlPerf：性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]；UPDATE/DELETE 走既有 buildWarning 路径
+            perfSuggestions = analyzePerf(generated.sql, statement),
         )
+    }
+
+    /**
+     * 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]（T-SqlPerf）。
+     * UPDATE/DELETE 走既有 buildWarning 路径，不重复分析。
+     */
+    private fun analyzePerf(sql: String, statement: SqlStatement): List<PerfSuggestion>? {
+        if (statement !is SelectStatement) return null
+        val result = SqlPerfAnalyzer.analyze(sql)
+        return result.suggestions.ifEmpty { null }
     }
 
     /** 收集语句中的动态条件行（M12）：遍历 WHERE 条件树，扁平化 toggle 元数据（含嵌套 Group 内）。 */

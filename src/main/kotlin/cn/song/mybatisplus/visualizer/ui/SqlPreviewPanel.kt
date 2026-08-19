@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.PerfLevel
+import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
@@ -1111,10 +1113,41 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        metaLabel.text = meta + warningLine
+        // T-SqlPerf：性能建议文案拼接
+        val perfLine = buildPerfLine(result)
+        metaLabel.text = meta + warningLine + perfLine
         metaLabel.foreground = if (currentWarning != null) JBColor.RED else JBUI.CurrentTheme.Label.foreground()
         // T-M25.3：错误复制按钮随警示可见
         errorCopyButton?.isVisible = currentWarning != null
+    }
+
+    /**
+     * T-SqlPerf：构建性能建议展示文本（拼接为单行摘要，供元信息标签展示）。
+     * WARNING 标红前缀 ⚠，INFO 前缀 ℹ；多条建议以分号分隔。
+     */
+    private fun buildPerfLine(result: PreviewResult): String {
+        val suggestions = result.perfSuggestions ?: return ""
+        if (suggestions.isEmpty()) return ""
+        val sb = StringBuilder()
+        suggestions.forEach { suggestion ->
+            val prefix = if (suggestion.level == PerfLevel.WARNING) "⚠ " else "ℹ "
+            val localized = localizeSuggestion(suggestion)
+            sb.append("   ").append(prefix).append(localized)
+            if (suggestion != suggestions.last()) sb.append("；")
+        }
+        return sb.toString()
+    }
+
+    /**
+     * T-SqlPerf：本地化单条性能建议（取 i18n 文案 + 参数替换）。
+     */
+    private fun localizeSuggestion(suggestion: PerfSuggestion): String {
+        val args = suggestion.messageArgs.toTypedArray()
+        return if (args.isNotEmpty()) {
+            MpSqlVisualizerBundle.message(suggestion.message, *args)
+        } else {
+            MpSqlVisualizerBundle.message(suggestion.message)
+        }
     }
 
     /**
