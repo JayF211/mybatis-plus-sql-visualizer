@@ -31,6 +31,8 @@ import com.intellij.openapi.ui.Messages
  * （无候选回落 QueryWrapper / 唯一候选直接生成 / 多候选 [SqlSelectionDialog] 选择）→
  * [JavaCodePreviewDialog] 预览（复制/关闭）。
  *
+ * T-BatchSql：多语句（顶层分号拆分）走批量路径（错误隔离 + 单次 ReadAction 批量查找 + 拼接输出）。
+ *
  * 与 [ConvertToSqlAction]（Wrapper→SQL 正向）互补。
  */
 class ConvertSqlToJavaAction : AnAction() {
@@ -46,6 +48,13 @@ class ConvertSqlToJavaAction : AnAction() {
         val text = selectionModel.selectedText ?: return
         if (text.isBlank()) {
             showNoSelection(project)
+            return
+        }
+
+        // T-BatchSql：多语句走批量路径（顶层分号拆分）
+        val statements = SqlToJavaConverter.splitStatements(text)
+        if (statements.size > 1) {
+            convertBatch(project, statements)
             return
         }
 
@@ -80,6 +89,34 @@ class ConvertSqlToJavaAction : AnAction() {
             }
             ApplicationManager.getApplication().invokeLater {
                 showResult(project, result, payload.first, format, payload.second)
+            }
+        }
+    }
+
+    /**
+     * T-BatchSql：批量转换（编辑器 Action 入口）。
+     *
+     * 多语句时不弹实体选择弹窗（交互复杂度过高），统一走自动推断 + 字符串列名回落；
+     * 输出代码块到 [JavaCodePreviewDialog]（复制/关闭）。
+     */
+    private fun convertBatch(project: Project, statements: List<String>) {
+        // 1. 批量解析（EDT 纯函数；错误隔离）
+        val parseResults = SqlToJavaConverter.parseBatch(statements)
+        // 2. 后台单次 ReadAction 实体查找（所有语句共享）
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val (mainCandidates, subCandidates) = ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
+                SqlToJavaConverter.findCandidatesBatch(project, parseResults)
+            }
+            // 3. EDT 生成 + 拼接 + 弹窗
+            ApplicationManager.getApplication().invokeLater {
+                val format = reverseFormat()
+                val code = SqlToJavaConverter.generateBatchCode(
+                    parseResults,
+                    mainCandidates,
+                    subCandidates,
+                    format,
+                )
+                JavaCodePreviewDialog(project, code).show()
             }
         }
     }

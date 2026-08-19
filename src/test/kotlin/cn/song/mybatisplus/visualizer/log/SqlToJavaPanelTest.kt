@@ -580,6 +580,66 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-BatchSql：批量 SQL → Java 转换（面板 fixture）
+    // ------------------------------------------------------------------
+
+    fun testBatchConvertTwoStatementsShowsTwoCodeBlocks() {
+        // 2 条有效 SQL → 结果区显示 2 段代码（双换行分隔）
+        val state = PluginSettings.getInstance().state
+        val originalFormat = state.reverseWrapperFormat
+        val originalManual = state.reverseManualEntitySelection
+        state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+        state.reverseManualEntitySelection = false
+        try {
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'; SELECT id FROM user WHERE age > 18")
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("new QueryWrapper<User>()"))
+            val wrapperCount = result.split("new QueryWrapper").size - 1
+            assertEquals("应生成 2 个 QueryWrapper", 2, wrapperCount)
+        } finally {
+            state.reverseWrapperFormat = originalFormat
+            state.reverseManualEntitySelection = originalManual
+        }
+    }
+
+    fun testBatchConvertPartialFailureShowsStatus() {
+        // 1 有效 + 1 无效 → 状态行显示「1/2 条成功」
+        val state = PluginSettings.getInstance().state
+        val originalFormat = state.reverseWrapperFormat
+        val originalManual = state.reverseManualEntitySelection
+        state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+        state.reverseManualEntitySelection = false
+        try {
+            panel.inputEditorForTest().setSql("SELECT id FROM user WHERE id = 1; INVALID SQL")
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("new QueryWrapper<User>()"))
+            assertTrue(result, result.contains("// 第 2 条 SQL 转换失败"))
+            assertTrue(panel.statusForTest(), panel.statusForTest().contains("1/2"))
+        } finally {
+            state.reverseWrapperFormat = originalFormat
+            state.reverseManualEntitySelection = originalManual
+        }
+    }
+
+    fun testSingleStatementDoesNotEnterBatchPath() {
+        // 单条 SQL → 走现有单条路径（缓存生效，状态行显示「未找到对应实体」）
+        val state = PluginSettings.getInstance().state
+        val originalManual = state.reverseManualEntitySelection
+        state.reverseManualEntitySelection = false
+        try {
+            panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
+            panel.convertForTest()
+            val result = awaitResult()
+            assertTrue(result, result.contains("new QueryWrapper<User>()"))
+            assertTrue(panel.statusForTest(), panel.statusForTest().contains("未找到对应实体"))
+        } finally {
+            state.reverseManualEntitySelection = originalManual
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 调用类特殊值（T-M42：this / baseMapper）
     // ------------------------------------------------------------------
 

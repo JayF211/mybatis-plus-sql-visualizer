@@ -638,6 +638,13 @@ class SqlToJavaPanel(
             status(MpSqlVisualizerBundle.message("reverse.panel.empty"), error = true)
             return
         }
+        // T-BatchSql：顶层分号拆分 → 多语句走批量路径
+        val statements = SqlToJavaConverter.splitStatements(text)
+        if (statements.size > 1) {
+            convertBatch(statements)
+            return
+        }
+        // 单条 SQL：尝试快速 parse 提供精确错误提示（保持既有单条错误行号定位体验）
         val result = try {
             SqlToJavaConverter.parse(text)
         } catch (ex: SqlReverseException) {
@@ -705,6 +712,51 @@ class SqlToJavaPanel(
                     cacheSubEntities = subEntities
                     render(result, payload.first, format, subEntities)
                 }
+            }
+        }
+    }
+
+    /**
+     * T-BatchSql：批量 SQL → Java 转换（多语句路径）。
+     *
+     * 流程：
+     *  1. 批量 parse（EDT 纯函数，错误隔离）；
+     *  2. 后台单次 ReadAction 查找全部语句的实体候选；
+     *  3. EDT 批量生成 + 拼接为代码块写入结果区。
+     *
+     * 边界（P1）：
+     *  - 不弹实体选择弹窗（交互复杂度过高）——统一走自动推断 + 字符串列名回落；
+     *  - 不缓存（cacheResult/cacheText 仅单条路径使用）；
+     *  - 超过 20 条时状态行提示「语句较多，实体查找可能耗时较长」。
+     */
+    private fun convertBatch(statements: List<String>) {
+        // 1. 批量解析（EDT 纯函数；错误隔离——失败项 error 非 null）
+        val parseResults = SqlToJavaConverter.parseBatch(statements)
+        val successCount = parseResults.count { it.result != null }
+        // 2. 后台单次 ReadAction 实体查找（所有语句共享）
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val (mainCandidates, subCandidates) = ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
+                SqlToJavaConverter.findCandidatesBatch(project, parseResults)
+            }
+            // 3. EDT 生成 + 拼接
+            ApplicationManager.getApplication().invokeLater {
+                val format = reverseFormat()
+                val code = SqlToJavaConverter.generateBatchCode(
+                    parseResults,
+                    mainCandidates,
+                    subCandidates,
+                    format,
+                    buildInvocation(),
+                )
+                setResultText(code)
+                val finalSuccess = parseResults.count { it.result != null }
+                val failed = statements.size - finalSuccess
+                val msg = if (failed > 0) {
+                    MpSqlVisualizerBundle.message("reverse.batch.partial", finalSuccess, statements.size, failed)
+                } else {
+                    MpSqlVisualizerBundle.message("reverse.batch.success", finalSuccess, statements.size)
+                }
+                status(msg, error = failed > 0)
             }
         }
     }

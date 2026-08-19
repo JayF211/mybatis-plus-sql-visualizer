@@ -4,12 +4,16 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * SQL → Java 共享编排单元测试（T-M36.4）：parse/generateCode 组合行为
  * （实体查找为 PSI 索引访问，见 EntityClassFinderHeavyTest）。
+ *
+ * T-BatchSql：批量 SQL → Java 转换（splitStatements / parseBatch / generateBatchCode）。
  */
 class SqlToJavaConverterTest {
 
@@ -101,4 +105,137 @@ class SqlToJavaConverterTest {
         ) { _, method, _ ->
             if (method.name == "name") className else null
         } as com.intellij.psi.PsiClass
+
+    // ------------------------------------------------------------------
+    // T-BatchSql：批量 SQL → Java 转换
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `splitStatements_双语句拆分`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT * FROM user; SELECT * FROM order")
+        assertEquals(2, stmts.size)
+        assertEquals("SELECT * FROM user", stmts[0])
+        assertEquals("SELECT * FROM order", stmts[1])
+    }
+
+    @Test
+    fun `splitStatements_字符串内分号不拆分`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT 'a;b' FROM t")
+        assertEquals(1, stmts.size)
+        assertEquals("SELECT 'a;b' FROM t", stmts[0])
+    }
+
+    @Test
+    fun `splitStatements_行注释内分号不拆分`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT 1; -- a; comment\nSELECT 2")
+        assertEquals(2, stmts.size)
+        assertEquals("SELECT 1", stmts[0])
+        assertEquals("-- a; comment\nSELECT 2", stmts[1])
+    }
+
+    @Test
+    fun `splitStatements_块注释内分号不拆分`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT 1; /* a; */ SELECT 2")
+        assertEquals(2, stmts.size)
+        assertEquals("SELECT 1", stmts[0])
+        assertEquals("/* a; */ SELECT 2", stmts[1])
+    }
+
+    @Test
+    fun `splitStatements_空语句跳过`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT 1;; SELECT 2")
+        assertEquals(2, stmts.size)
+        assertEquals("SELECT 1", stmts[0])
+        assertEquals("SELECT 2", stmts[1])
+    }
+
+    @Test
+    fun `splitStatements_末段无分号`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT 1")
+        assertEquals(1, stmts.size)
+        assertEquals("SELECT 1", stmts[0])
+    }
+
+    @Test
+    fun `splitStatements_单条不拆分`() {
+        val stmts = SqlToJavaConverter.splitStatements("SELECT * FROM user WHERE id = 1")
+        assertEquals(1, stmts.size)
+        assertEquals("SELECT * FROM user WHERE id = 1", stmts[0])
+    }
+
+    @Test
+    fun `splitStatements_纯空白跳过`() {
+        val stmts = SqlToJavaConverter.splitStatements(";;;")
+        assertEquals(0, stmts.size)
+    }
+
+    @Test
+    fun `parseBatch_错误隔离`() {
+        val results = SqlToJavaConverter.parseBatch(
+            listOf("SELECT * FROM user", "INVALID SQL"),
+        )
+        assertEquals(2, results.size)
+        // 第 1 条成功
+        assertNotNull(results[0].result)
+        assertNull(results[0].error)
+        assertEquals(0, results[0].sourceIndex)
+        // 第 2 条失败（不抛，error 非 null）
+        assertNull(results[1].result)
+        assertNotNull(results[1].error)
+        assertEquals(1, results[1].sourceIndex)
+    }
+
+    @Test
+    fun `parseBatch_全部成功`() {
+        val results = SqlToJavaConverter.parseBatch(
+            listOf("SELECT * FROM user", "SELECT * FROM order"),
+        )
+        assertEquals(2, results.size)
+        assertTrue(results.all { it.result != null && it.error == null })
+    }
+
+    @Test
+    fun `generateBatchCode_两条有效SELECT输出两段代码`() {
+        val results = SqlToJavaConverter.parseBatch(
+            listOf("SELECT id, name FROM user WHERE name = '张三'", "SELECT id FROM user WHERE age > 18"),
+        )
+        val code = SqlToJavaConverter.generateBatchCode(
+            results,
+            emptyMap(),
+            emptyMap(),
+            ReverseWrapperFormat.QUERY,
+        )
+        // 输出含 2 段代码（双换行分隔）
+        assertTrue(code, code.contains("new QueryWrapper<User>()"))
+        assertTrue(code, code.contains(".eq(\"name\", \"张三\")"))
+        val wrapperCount = code.split("new QueryWrapper").size - 1
+        assertEquals("应生成 2 个 QueryWrapper", 2, wrapperCount)
+    }
+
+    @Test
+    fun `generateBatchCode_错误占位不中断整体`() {
+        val results = SqlToJavaConverter.parseBatch(
+            listOf("SELECT id FROM user WHERE id = 1", "INVALID SQL"),
+        )
+        val code = SqlToJavaConverter.generateBatchCode(
+            results,
+            emptyMap(),
+            emptyMap(),
+            ReverseWrapperFormat.QUERY,
+        )
+        // 输出含 1 段代码 + 1 行错误注释占位
+        assertTrue(code, code.contains("new QueryWrapper<User>()"))
+        assertTrue(code, code.contains("// 第 2 条 SQL 转换失败"))
+    }
+
+    @Test
+    fun `generateBatchCode_空列表输出空串`() {
+        val code = SqlToJavaConverter.generateBatchCode(
+            emptyList(),
+            emptyMap(),
+            emptyMap(),
+            ReverseWrapperFormat.QUERY,
+        )
+        assertEquals("", code)
+    }
 }

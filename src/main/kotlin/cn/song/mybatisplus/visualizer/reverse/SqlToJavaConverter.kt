@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.reverse
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
@@ -19,6 +20,9 @@ import com.intellij.psi.search.PsiShortNamesCache
  *
  * 编排约定：parse / generateCode 为纯函数（EDT 安全）；findCandidates 访问 PSI 索引，
  * 必须在后台 ReadAction 内调用（2025.3+ 慢操作守卫）。
+ *
+ * T-BatchSql：批量 SQL → Java 转换（splitStatements 顶层分号拆分 + parseBatch 错误隔离 +
+ * findCandidatesBatch 单次 ReadAction 批量查找 + generateBatchCode 拼接）。
  */
 object SqlToJavaConverter {
 
@@ -33,6 +37,154 @@ object SqlToJavaConverter {
 
     /** 错误偏移量 → 行号（1 起）。 */
     fun errorLine(sqlText: String, offset: Int): Int = SqlReverseParser.lineOf(sqlText, offset)
+
+    // ------------------------------------------------------------------
+    // T-BatchSql：批量 SQL → Java 转换
+    // ------------------------------------------------------------------
+
+    /**
+     * 按顶层分号拆分多语句文本（不拆分字符串/注释内的分号）。
+     *
+     * 空语句（纯空白）自动跳过；保留语句首尾空白 trim。
+     * 拆分逻辑在调用层处理（不污染纯函数解析器 [SqlReverseParser]）。
+     *
+     * 边界处理：
+     *  - 字符串内分号（`'a;b'`）不拆分；
+     *  - 注释内分号（`-- a;` / `/* a; */`）不拆分；
+     *  - 空语句（`SELECT 1;; SELECT 2`）跳过中间空段；
+     *  - 末段无分号（`SELECT 1`）也作为一条。
+     */
+    fun splitStatements(text: String): List<String> {
+        val statements = mutableListOf<String>()
+        val current = StringBuilder()
+        var inSingleQuote = false
+        var inDoubleQuote = false
+        var lineComment = false
+        var blockComment = false
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            val next = text.getOrNull(i + 1)
+            when {
+                // 行注释开始
+                !inSingleQuote && !inDoubleQuote && !blockComment && c == '-' && next == '-' -> {
+                    lineComment = true; current.append(c); i++
+                }
+                // 行注释结束
+                lineComment && c == '\n' -> {
+                    lineComment = false; current.append(c); i++
+                }
+                // 块注释开始
+                !inSingleQuote && !inDoubleQuote && !lineComment && c == '/' && next == '*' -> {
+                    blockComment = true; current.append(c); i++
+                }
+                // 块注释结束
+                blockComment && c == '*' && next == '/' -> {
+                    blockComment = false; current.append(c); i++
+                }
+                // 单引号字符串
+                !inDoubleQuote && !lineComment && !blockComment && c == '\'' -> {
+                    inSingleQuote = !inSingleQuote; current.append(c); i++
+                }
+                // 双引号字符串
+                !inSingleQuote && !lineComment && !blockComment && c == '"' -> {
+                    inDoubleQuote = !inDoubleQuote; current.append(c); i++
+                }
+                // 顶层分号 → 拆分
+                !inSingleQuote && !inDoubleQuote && !lineComment && !blockComment && c == ';' -> {
+                    val stmt = current.toString().trim()
+                    if (stmt.isNotEmpty()) statements.add(stmt)
+                    current.clear(); i++
+                }
+                else -> { current.append(c); i++ }
+            }
+        }
+        // 末段（无尾分号）
+        val tail = current.toString().trim()
+        if (tail.isNotEmpty()) statements.add(tail)
+        return statements
+    }
+
+    /** 单条解析结果（成功 or 失败）。 */
+    data class BatchItemResult(
+        val result: SqlReverseResult? = null,
+        val error: SqlReverseException? = null,
+        val sourceIndex: Int,
+    )
+
+    /**
+     * 批量解析（纯函数，EDT 安全；错误隔离）。
+     *
+     * 单条解析失败不阻塞其他条——失败项 [BatchItemResult.error] 非 null，
+     * 后续由 [generateBatchCode] 输出错误注释占位。
+     */
+    fun parseBatch(statements: List<String>): List<BatchItemResult> {
+        return statements.mapIndexed { index, stmt ->
+            try {
+                BatchItemResult(result = SqlReverseParser.parse(stmt), sourceIndex = index)
+            } catch (e: SqlReverseException) {
+                BatchItemResult(error = e, sourceIndex = index)
+            }
+        }
+    }
+
+    /**
+     * 批量实体查找（单次 ReadAction，所有语句共享）。
+     *
+     * @return 语句索引 → 主表候选 to 语句索引 → 副表候选（别名 → 列表）
+     */
+    fun findCandidatesBatch(
+        project: Project,
+        results: List<BatchItemResult>,
+    ): Pair<Map<Int, List<EntityCandidate>>, Map<Int, Map<String, List<EntityCandidate>>>> {
+        val mainCandidates = mutableMapOf<Int, List<EntityCandidate>>()
+        val subCandidates = mutableMapOf<Int, Map<String, List<EntityCandidate>>>()
+        results.forEachIndexed { index, item ->
+            val result = item.result ?: return@forEachIndexed
+            mainCandidates[index] = findCandidates(project, result.tableName)
+            subCandidates[index] = findSubEntityCandidates(project, result.joins)
+        }
+        return mainCandidates to subCandidates
+    }
+
+    /**
+     * 批量生成代码（单条失败输出错误注释占位，不中断整体）。
+     *
+     * 每条 SQL 独立生成一个 Wrapper 表达式/调用语句，按顺序拼接为一个代码块（双换行分隔）。
+     * 失败语句输出 `// 第 N 条 SQL 转换失败：原因` 注释占位。
+     *
+     * @param format      设置页形态配置（对所有语句统一生效）
+     * @param invocation  调用上下文（null → 纯表达式）
+     */
+    fun generateBatchCode(
+        results: List<BatchItemResult>,
+        mainCandidates: Map<Int, List<EntityCandidate>>,
+        subCandidates: Map<Int, Map<String, List<EntityCandidate>>>,
+        format: ReverseWrapperFormat,
+        invocation: JavaCodeGenerator.InvocationTarget? = null,
+    ): String {
+        return results.mapIndexed { index, item ->
+            val result = item.result
+            if (result == null) {
+                val err = item.error!!
+                val message = MpSqlVisualizerBundle.message(err.key, err.detail)
+                MpSqlVisualizerBundle.message("reverse.batch.error.placeholder", index + 1, message)
+            } else {
+                val candidates = mainCandidates[index].orEmpty()
+                val subs = subCandidates[index].orEmpty()
+                val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                for ((alias, candidateList) in subs) {
+                    val first = candidateList.firstOrNull() ?: continue
+                    val className = first.psiClass.name ?: continue
+                    subEntities[alias] = JavaCodeGenerator.EntityTarget(
+                        className = className,
+                        columnToField = first.tableInfo.columns.associate { it.columnName to it.fieldName },
+                    )
+                }
+                generateCode(result, candidates.firstOrNull(), format, invocation, subEntities)
+            }
+        }.joinToString("\n\n")
+    }
 
     /** 实体查找（须在 ReadAction 内；表名来自解析结果）。 */
     fun findCandidates(project: Project, tableName: String): List<EntityCandidate> =
