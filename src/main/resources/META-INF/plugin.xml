@@ -46,28 +46,7 @@
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
-        <!-- 功能截图：图片存于仓库 docs/images/，raw 直链（与 M18 二维码同理，相对路径在插件描述中不可用）；
-             替换 docs/images/screenshot-*.png 同名文件后重新发布即可（URL 不变，无需修改描述） -->
-        <hr/>
-        <h2>Screenshots / 功能截图</h2>
-        <p>Wrapper to SQL preview / Wrapper→SQL 预览弹窗</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-01-sql-preview.png" width="720" height="456"/>
-        <p>SQL log tool window (capture &amp; restore, Log to SQL) / SQL 日志工具窗口（捕获还原、日志转 SQL）</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-02-log-panel.png" width="720" height="456"/>
-        <p>SQL to MP Java code conversion / SQL→Java 反向转换</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-03-sql-to-java.png" width="720" height="456"/>
-        <p>XML dynamic SQL preview / XML 动态 SQL 预览</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-04-xml-preview.png" width="720" height="456"/>
-        <p>Java annotation SQL preview / Java 注解 SQL 预览</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/screenshot-05-annotation-preview.png" width="720" height="456"/>
-        <!-- M18 联系作者：外链二维码（base64/相对路径在插件描述中不可用，官方推荐外部 URL；
-             图片存于仓库 docs/images/，raw 直链；二维码为限时码，更新图片后重新发布即可，URL 不变） -->
-        <hr/>
-        <h2>Author / 联系作者</h2>
-        <p>Scan to add the author's WeChat / 扫码添加作者微信</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/wechat-qr.png" width="220" height="220"/>
-        <p>Scan to join the WeChat group / 扫码加入交流群</p>
-        <img src="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/raw/master/docs/images/group-qr.png" width="220" height="220"/>
+        <p>Screenshots are available on the <a href="https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer">plugin Marketplace page</a>.</p>
         <!-- M18.1 问题反馈入口：跳转仓库 Issues 页（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
         <p>Found an issue? Please report it at <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues">Gitee Issues</a> / 遇到问题？请到仓库 Issues 页提交反馈</p>
         ]]></description>

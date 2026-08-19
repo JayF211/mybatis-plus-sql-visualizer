@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+                 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    line-height: 1.6;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+    color: #333;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #ccc; }
+    h2 { border-bottom-color: #444; }
+    table th { background: #2d2d2d; }
+    table td, table th { border-color: #444; }
+    code { background: #2d2d2d; }
+  }
+  h2 {
+    font-size: 20px;
+    margin: 36px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #e8e8e8;
+  }
+  h3 { font-size: 15px; margin: 20px 0 8px; }
+  p { margin: 8px 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 20px;
+    font-size: 14px;
+  }
+  table th, table td {
+    border: 1px solid #e0e0e0;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  table th {
+    background: #f7f7f7;
+    font-weight: 600;
+  }
+  table tr:hover td { background: #fafafa; }
+  code {
+    background: #f0f0f0;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 4px;
+    font-weight: 500;
+  }
+  .tag-new { background: #e6f7e6; color: #2a7d2a; }
+  .tag-beta { background: #fff3e0; color: #c77700; }
+  .tag-ultimate { background: #e8eaf6; color: #3949ab; }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  a { color: #337ab7; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid #e8e8e8; margin: 32px 0; }
+
+  /* FAQ accordion — pure CSS checkbox hack (no <details>, no JS) */
+  .faq-toggle {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+  .faq-question {
+    display: block;
+    cursor: pointer;
+    padding: 10px 14px 10px 32px;
+    font-weight: 500;
+    border: 1px solid #e8e8e8;
+    border-radius: 6px;
+    margin: 8px 0 0;
+    position: relative;
+    user-select: none;
+    transition: background 0.15s;
+  }
+  .faq-question::before {
+    content: "▶";
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    font-size: 11px;
+    transition: transform 0.2s;
+  }
+  .faq-toggle:checked + .faq-question::before {
+    transform: rotate(90deg);
+  }
+  .faq-question:hover { background: #fafafa; }
+  .faq-answer {
+    display: none;
+    padding: 10px 14px 14px 32px;
+    font-size: 14px;
+    border: 1px solid #e8e8e8;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    margin: 0 0 8px;
+  }
+  .faq-toggle:checked ~ .faq-answer {
+    display: block;
+  }
+  @media (prefers-color-scheme: dark) {
+    .faq-question { border-color: #444; }
+    .faq-question:hover { background: #2d2d2d; }
+    .faq-answer { border-color: #444; }
+  }
+  .section-desc { color: #666; font-size: 14px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<!-- ========== FEATURE MATRIX ========== -->
+<h2 id="features">Feature Matrix / 功能对照表</h2>
+<p class="section-desc">以下矩阵列出各功能的支持范围与触发方式，帮助你快速判断是否满足需求。</p>
+
+<h3>SQL 预览</h3>
+<table>
+  <thead>
+    <tr><th style="width:160px">功能</th><th>触发方式</th><th>支持范围</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Wrapper → SQL</td>
+      <td>gutter 图标 / 右键 / <code>Alt+Shift+Q</code></td>
+      <td>
+        <code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> /
+        字符串 <code>QueryWrapper</code> / <code>UpdateWrapper</code> / <code>DeleteWrapper</code> /
+        <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表 /
+        <code>service.lambdaQuery()</code> 等服务链
+      </td>
+    </tr>
+    <tr>
+      <td>XML 动态 SQL</td>
+      <td><code>&lt;select&gt;</code> 等行 gutter 图标</td>
+      <td><code>if</code> / <code>choose</code> / <code>where</code> / <code>set</code> /
+          <code>foreach</code> / <code>bind</code> / <code>sql</code>+<code>include</code> 等全动态标签；
+          OGNL 表达式面板勾选</td>
+    </tr>
+    <tr>
+      <td>注解 SQL</td>
+      <td>注解行 gutter 图标</td>
+      <td><code>@Select</code> / <code>@Update</code> / <code>@Delete</code> / <code>@Insert</code>
+          （含 <code>&lt;script&gt;</code> 与 Provider 注解）</td>
+    </tr>
+    <tr>
+      <td>参数替换</td>
+      <td>面板左侧输入框</td>
+      <td><code>?</code> 占位符替换为实际值；LIKE 自动拼百分号；按字段类型加引号</td>
+    </tr>
+    <tr>
+      <td>批量参数</td>
+      <td>面板逐列勾选</td>
+      <td><code>save</code> / <code>updateBatchById</code> 等批量 SQL 按列展开；<code>saveOrUpdate</code> 冲突子句按方言渲染</td>
+    </tr>
+    <tr>
+      <td>SQL 格式化</td>
+      <td>弹窗内切换</td>
+      <td>多行缩进 / 单行；分页子句按 9 种方言差异渲染
+          （MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase）</td>
+    </tr>
+    <tr>
+      <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
+      <td>弹窗内「执行」按钮</td>
+      <td>自动创建临时 .sql 文件，选数据源后 <code>Ctrl+Enter</code> 执行
+          （需 IntelliJ IDEA Ultimate + Database 插件）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>SQL 日志</h3>
+<table>
+  <thead>
+    <tr><th style="width:160px">功能</th><th>触发方式</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>自动捕获</td>
+      <td>侧边栏「SQL Logs」→ 捕捉</td>
+      <td>监听运行控制台 <code>Preparing:</code> / <code>Parameters:</code> 行还原可执行 SQL；支持混合前缀宽容匹配</td>
+    </tr>
+    <tr>
+      <td>日志 → SQL</td>
+      <td>侧边栏「Log → SQL」tab</td>
+      <td>粘贴整段日志批量还原；多组语句自动分隔</td>
+    </tr>
+    <tr>
+      <td>去重 / 过滤</td>
+      <td>设置页配置</td>
+      <td>去重窗口可调；按关键字过滤；移除包含指定关键字的 SQL</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>SQL → Java 反向转换 <span class="tag tag-beta">Beta</span></h3>
+<table>
+  <thead>
+    <tr><th style="width:160px">功能</th><th>触发方式</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>四形态输出</td>
+      <td>右键 / <code>Alt+Shift+J</code> / 侧边栏</td>
+      <td><code>QueryWrapper</code> / <code>LambdaQueryWrapper</code> /
+          <code>Wrappers</code> 工厂 / <code>MPJLambdaWrapper</code>；默认形态可配置</td>
+    </tr>
+    <tr>
+      <td>语句类型</td>
+      <td>-</td>
+      <td>SELECT / UPDATE / DELETE / INSERT / 多表 JOIN</td>
+    </tr>
+    <tr>
+      <td>调用类与 VO</td>
+      <td>面板选填</td>
+      <td>可选 Service / Mapper 调用类与返回 VO；生成代码可直接编译</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>其他能力</h3>
+<table>
+  <thead>
+    <tr><th style="width:160px">功能</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>SQL 代码补全</td>
+      <td>预览面板输入区 + mapper XML/注解 SQL 内 <code>Ctrl+Space</code> 补全：表名、列名、<code>#{}</code> 参数名、XML 动态标签</td>
+    </tr>
+    <tr>
+      <td>逻辑删除注入</td>
+      <td>实体含 <code>@TableLogic</code> 时自动追加 <code>AND deleted = 值</code>（值可配置，默认 0）</td>
+    </tr>
+    <tr>
+      <td>UPDATE/DELETE 警示</td>
+      <td>无 WHERE 条件时红色警示全表操作风险</td>
+    </tr>
+    <tr>
+      <td>检查更新</td>
+      <td>设置页一键检查更新，后台下载安装（重启生效）；支持启动时自动检查</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<!-- ========== FAQ ========== -->
+<h2 id="faq">FAQ / 常见问题</h2>
+
+<input type="checkbox" id="faq-1" class="faq-toggle">
+<label for="faq-1" class="faq-question">插件支持哪些 IDE 版本？</label>
+<div class="faq-answer">
+  IntelliJ IDEA 2024.3 及以上（<code>since-build=243</code>）。
+  兼容 2024.3 / 2025.3 / 2026.2 全系列。
+  Community 与 Ultimate 均支持，但「执行 SQL」功能需 Ultimate + Database 插件。
+</div>
+
+<input type="checkbox" id="faq-2" class="faq-toggle">
+<label for="faq-2" class="faq-question">为什么 gutter 图标不显示？</label>
+<div class="faq-answer">
+  Gutter 图标仅在以下位置出现：
+  <ul>
+    <li>Wrapper 链末尾行（<code>.eq()</code> 等终止调用所在行）</li>
+    <li>mapper XML 的 <code>&lt;select&gt;</code> / <code>&lt;update&gt;</code> 等语句行</li>
+    <li>Java Mapper 接口中 <code>@Select</code> 等注解行</li>
+  </ul>
+  确认光标位于上述位置；如仍不显示，检查设置页「代码左侧显示预览 SQL 图标」是否开启。
+</div>
+
+<input type="checkbox" id="faq-3" class="faq-toggle">
+<label for="faq-3" class="faq-question">支持 MyBatis-Plus-Join（MPJ）联表查询吗？</label>
+<div class="faq-answer">
+  支持。<code>MPJLambdaWrapper</code> 与 <code>MPJQueryWrapper</code> 联表预览、
+  以及 MPJ 形态的 SQL→Java 反向转换均已实现。
+  反向转换选择 MPJ 形态时，项目需引入 <code>mybatis-plus-join</code> 依赖（1.5.6+）。
+</div>
+
+<input type="checkbox" id="faq-4" class="faq-toggle">
+<label for="faq-4" class="faq-question">预览 SQL 与实际运行 SQL 有差异吗？</label>
+<div class="faq-answer">
+  预览目标是对齐 MP 运行时语义，以下差异是静态求值的固有特性，语义等价、仅文本不同：
+  <ul>
+    <li><b>静态常量内联</b>：<code>in(col, DicConstants.A)</code> 等静态 final 常量被求值内联（预览 <code>IN (1)</code>）；MP 运行时渲染 <code>IN (?)</code></li>
+    <li><b>集合单占位符</b>：<code>in(col, 集合变量)</code> 运行时大小无法静态展开 → 预览 <code>IN (?)</code>；面板输入框支持逗号分隔回填</li>
+    <li><b>分页字面量计算</b>：<code>page(new Page&lt;&gt;(1, 10), wrapper)</code> 直接计算 <code>LIMIT 0, 10</code>；运行时渲染 <code>LIMIT ?, ?</code></li>
+  </ul>
+</div>
+
+<input type="checkbox" id="faq-5" class="faq-toggle">
+<label for="faq-5" class="faq-question"><code>?</code> 占位符能不能识别并替换为实际值？</label>
+<div class="faq-answer">
+  可以。左侧面板输入框支持逗号分隔多值回填（输入 <code>1,2,3</code> → 渲染为 <code>(1, 2, 3)</code>）。
+  LIKE 参数自动拼百分号。按字段类型决定是否加引号。
+  设置页「替换 ? 占位符」默认开启，关闭后变量也渲染为 <code>?</code>。
+</div>
+
+<input type="checkbox" id="faq-6" class="faq-toggle">
+<label for="faq-6" class="faq-question">SQL 日志捕获不到 SQL 怎么办？</label>
+<div class="faq-answer">
+  排查步骤：
+  <ul>
+    <li>确认已点击侧边栏「捕捉」按钮开始监听（按钮变为「停止」）</li>
+    <li>确认应用日志包含 <code>Preparing:</code> / <code>Parameters:</code> 格式</li>
+    <li>如日志格式为 <code>==&gt; Preparing:</code>，需开启设置页「启用混合前缀」</li>
+    <li>检查是否被「移除包含关键字」过滤规则命中</li>
+    <li>确认日志输出到运行控制台（非独立日志文件）</li>
+  </ul>
+</div>
+
+<input type="checkbox" id="faq-7" class="faq-toggle">
+<label for="faq-7" class="faq-question">SQL → Java 反向转换生成的代码能直接编译吗？</label>
+<div class="faq-answer">
+  可以。生成代码严格基于 MyBatis-Plus 公开 API（以本地 jar 反编译为唯一权威），
+  不含虚构方法。自动推断实体类后使用 Lambda 形态生成类型安全代码；
+  找不到实体时回退字符串列 <code>QueryWrapper</code>。
+  可在设置页配置默认 Wrapper 形态与是否允许手动选择实体类。
+</div>
+
+<input type="checkbox" id="faq-8" class="faq-toggle">
+<label for="faq-8" class="faq-question">如何切换插件界面语言？</label>
+<div class="faq-answer">
+  <code>Settings → Tools → MyBatis-Plus SQL Visualizer → 界面语言</code>。
+  支持 简体中文 / English / 跟随系统。
+  插件语言独立于 IDE 语言设置，切换后重新打开预览弹窗即生效。
+</div>
+
+<input type="checkbox" id="faq-9" class="faq-toggle">
+<label for="faq-9" class="faq-question">支持哪些数据库方言的分页语法？</label>
+<div class="faq-answer">
+  9 种：MySQL、PostgreSQL、Oracle、SQL Server、H2、SQLite、MariaDB、DM（达梦）、KingBase（金仓）。
+  分页子句和 upsert 冲突子句按方言差异渲染
+  （如 MySQL <code>ON DUPLICATE KEY UPDATE</code> / PG <code>ON CONFLICT</code>）。
+</div>
+
+<input type="checkbox" id="faq-10" class="faq-toggle">
+<label for="faq-10" class="faq-question">快捷键冲突怎么办？</label>
+<div class="faq-answer">
+  在 <code>Settings → Tools → MyBatis-Plus SQL Visualizer</code> 点击快捷键旁的「编辑」按钮重新录制。
+  若与其他插件冲突，弹窗提供「使用」（共存）或「强制使用」（抢占）选项。
+  也可在 <code>Settings → Keymap</code> 中直接修改。
+</div>
+
+<input type="checkbox" id="faq-11" class="faq-toggle">
+<label for="faq-11" class="faq-question">反馈问题需要提供什么信息？</label>
+<div class="faq-answer">
+  请到 <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues" target="_blank">Gitee Issues</a> 提交反馈。
+  建议附上：
+  <ul>
+    <li>插件版本号（设置页「内部构建号」可一键复制）</li>
+    <li>IDE 版本（<code>Help → About</code>）</li>
+    <li>复现步骤与示例代码</li>
+    <li>相关日志或截图</li>
+  </ul>
+</div>
+
+<hr/>
+
+<!-- ========== SHORTCUTS ========== -->
+<h2 id="shortcuts">Default Shortcuts / 默认快捷键</h2>
+<table>
+  <thead>
+    <tr><th>功能</th><th>Windows / Linux</th><th>macOS</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Wrapper 转 SQL 预览</td>
+      <td><code>Alt+Shift+Q</code></td>
+      <td><code>Option+Shift+Q</code></td>
+    </tr>
+    <tr>
+      <td>SQL → Java 反向转换</td>
+      <td><code>Alt+Shift+J</code></td>
+      <td><code>Cmd+Shift+J</code></td>
+    </tr>
+  </tbody>
+</table>
+<p>可在 <code>Settings → Keymap</code> 或插件设置页修改。</p>
+
+<hr/>
+
+<!-- ========== LINKS ========== -->
+<h2 id="links">Links / 相关链接</h2>
+<ul>
+  <li><b>源码</b>：<a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer" target="_blank">Gitee</a></li>
+  <li><b>问题反馈</b>：<a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues" target="_blank">Gitee Issues</a></li>
+  <li><b>变更日志</b>：<a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/blob/master/CHANGELOG.md" target="_blank">CHANGELOG.md</a></li>
+  <li><b>Marketplace</b>：<a href="https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer" target="_blank">JetBrains Plugin Page</a></li>
+</ul>
+
+</body>
+</html>
