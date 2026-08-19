@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionToggle
 import cn.song.mybatisplus.visualizer.model.Connector
+import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
@@ -479,5 +480,65 @@ class SqlGeneratorTest {
         assertEquals(listOf("table"), generated.unresolvedParams)
         // keywordTable 列无 fieldType → 引号提示 null（列类型未知，面板走数字启发式）
         assertEquals(listOf(ParamHint(quote = null)), generated.paramHints)
+    }
+
+    // ------------------------------------------------------------------
+    // T-MpjFill：fill 附加 SELECT 生成
+    // ------------------------------------------------------------------
+
+    /** 测试用关联表。 */
+    private val stationTable = TableInfo(
+        entityClassName = "StationEntity",
+        tableName = "station",
+        columns = listOf(
+            ColumnInfo("id", "id", isId = true),
+            ColumnInfo("stationName", "station_name"),
+        ),
+    )
+
+    @Test
+    fun `generateFill_基础形态`() {
+        val fill = FillClause(
+            childTable = stationTable,
+            childAlias = "s",
+            selectColumns = listOf(
+                ColumnRef(tableAlias = "s", columnName = "id"),
+                ColumnRef(tableAlias = "s", columnName = "station_name"),
+            ),
+            tagField = "id",
+        )
+        assertEquals(
+            "SELECT s.id, s.station_name FROM station s WHERE s.id IN (?)",
+            SqlGenerator.generateFill(fill),
+        )
+    }
+
+    @Test
+    fun `generateFill_带limit`() {
+        val fill = FillClause(
+            childTable = stationTable,
+            childAlias = "s",
+            selectColumns = listOf(ColumnRef(tableAlias = "s", columnName = "id")),
+            tagField = "id",
+            limit = 10,
+        )
+        assertEquals(
+            "SELECT s.id FROM station s WHERE s.id IN (?) LIMIT 10",
+            SqlGenerator.generateFill(fill),
+        )
+    }
+
+    @Test
+    fun `generateFill_默认方言为MySQL`() {
+        // 验证默认参数：不传方言时走 MySQL（标识符引用反引号）
+        val fill = FillClause(
+            childTable = stationTable,
+            childAlias = "s",
+            selectColumns = listOf(ColumnRef(tableAlias = "s", columnName = "id")),
+            tagField = "id",
+        )
+        // 非关键字列名 → 不引用
+        val sql = SqlGenerator.generateFill(fill)
+        assertEquals("SELECT s.id FROM station s WHERE s.id IN (?)", sql)
     }
 }

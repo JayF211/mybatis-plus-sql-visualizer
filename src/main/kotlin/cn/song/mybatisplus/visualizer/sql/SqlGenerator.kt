@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.DeleteStatement
+import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SelectStatement
@@ -278,6 +279,37 @@ object SqlGenerator {
             sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds, dialect))
         }
         appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table, dialect)
+        return sb.toString()
+    }
+
+    // ------------------------------------------------------------------
+    // T-MpjFill：fill 附加 SELECT 生成（MPJ 1.5.1+）
+    // ------------------------------------------------------------------
+
+    /**
+     * 生成 fill 附加 SELECT SQL（MPJ 1.5.1+，T-MpjFill）。
+     *
+     * 渲染形态：
+     * ```
+     * SELECT <列> FROM <表> <别名> WHERE <tagField> IN (?)[ LIMIT <n>]
+     * ```
+     *
+     * IN 列表为主查询结果集关联键，静态预览无法获取，统一渲染 `IN (?)` 占位符（与面板参数对照表语义一致）。
+     *
+     * @param fillClause  fill 子句模型
+     * @param dialect     数据库方言（影响标识符引用与 LIMIT 形态，默认 MySQL）
+     * @return fill 附加 SELECT SQL（无末尾分号）
+     */
+    fun generateFill(fillClause: FillClause, dialect: Dialect = MySqlDialect): String {
+        val sb = StringBuilder("SELECT ")
+        sb.append(fillClause.selectColumns.joinToString(", ") { renderColumnRef(it, dialect) })
+        sb.append(" FROM ").append(renderTableName(fillClause.childTable.tableName, dialect))
+        sb.append(" ").append(fillClause.childAlias)
+        sb.append(" WHERE ").append(
+            renderQualified(ColumnRef(tableAlias = fillClause.childAlias, columnName = fillClause.tagField), dialect),
+        )
+        sb.append(" IN (?)")
+        fillClause.limit?.let { sb.append(" LIMIT ").append(it) }
         return sb.toString()
     }
 

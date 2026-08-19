@@ -25,6 +25,8 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
  *                         面板勾选重建 SQL；无列级选择（Wrapper 预览 / SELECT·DELETE 批量）为 null
  * @param xmlModel         XML 动态 SQL 预览模型（T-M24-04）：mapper 语句的条件开关/foreach/bind
  *                         面板勾选重建；非 XML 预览为 null（与 previewModel/batchModel 互斥）
+ * @param fillClauses      fill 附加查询子句列表（MPJ 1.5.1+，T-MpjFill）：按调用顺序；
+ *                         null 表示无 fill 调用。面板在主 SQL 之后追加渲染 fill 附加 SELECT 段。
  */
 data class PreviewResult(
     val sql: String,
@@ -48,4 +50,6 @@ data class PreviewResult(
     val initialParamValues: Map<String, String> = emptyMap(),
     /** T-SqlPerf：性能分析建议列表（面板展示用）；null 表示未分析/无建议。 */
     val perfSuggestions: List<PerfSuggestion>? = null,
+    /** T-MpjFill：fill 附加查询子句列表（MPJ 1.5.1+）；null 表示无 fill 调用。 */
+    val fillClauses: List<FillClause>? = null,
 )

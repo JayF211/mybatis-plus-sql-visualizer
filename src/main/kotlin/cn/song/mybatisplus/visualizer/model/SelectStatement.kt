@@ -64,6 +64,8 @@ enum class JoinType { INNER, LEFT, RIGHT, FULL }
  * @param fromSubQuery  from 子查询主表（`from(w -> ...)`，MPJ 官方 API，T-M21-07）：first=子查询 SQL
  *                      （compact 单行渲染）、second=外层别名（主表别名）；非 null 时生成器渲染
  *                      `FROM (子查询SQL) 外层别名`（忽略主表 tableName，主表实体表名在子查询内部）
+ * @param fillClauses   fill 附加查询子句列表（MPJ 1.5.1+，T-MpjFill）：按调用顺序；
+ *                      非 null 时生成器在主 SELECT 之后追加渲染 fill 附加 SELECT 段
  */
 data class SelectStatement(
     override val table: TableInfo,
@@ -81,6 +83,7 @@ data class SelectStatement(
     val comment: String? = null,
     val unions: List<UnionClause> = emptyList(),
     val fromSubQuery: Pair<String, String>? = null,
+    val fillClauses: List<FillClause>? = null,
 ) : SqlStatement()
 
 /**
@@ -92,4 +95,28 @@ data class SelectStatement(
 data class UnionClause(
     val keyword: String,
     val sql: String,
+)
+
+/**
+ * fill 附加查询子句（MPJ 1.5.1+，T-MpjFill）。
+ *
+ * MPJ `fill(field, tagField)` 语义：主查询执行后收集结果集中关联键 → 对关联表发起 IN 附加查询 →
+ * 内存回填到主结果集合。静态预览无法获取主查询结果集，IN 列表统一渲染 `IN (?)` 占位符。
+ *
+ * @param childTable    关联表 TableInfo（psi 解析或类名推断）
+ * @param childAlias    关联表别名（实体类名首字母小写）
+ * @param selectColumns 关联表 SELECT 列列表（默认全列）
+ * @param tagField      关联表 IN 条件列（关联键字段名，列名）
+ * @param limit         附加查询条数限制（null 表示不限制）
+ * @param condition     条件控制（null 表示无条件，true 执行/false 跳过）
+ * @param data          指定数据源对象（null 表示从主查询结果收集）
+ */
+data class FillClause(
+    val childTable: TableInfo,
+    val childAlias: String,
+    val selectColumns: List<ColumnRef>,
+    val tagField: String,
+    val limit: Int? = null,
+    val condition: Boolean? = null,
+    val data: SqlValue? = null,
 )

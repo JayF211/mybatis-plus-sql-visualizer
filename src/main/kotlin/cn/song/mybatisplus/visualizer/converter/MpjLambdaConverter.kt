@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.converter
 
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SqlStatement
@@ -59,6 +60,8 @@ object MpjLambdaConverter : WrapperConverter {
         val collectionCalls = chain.calls.filter { it.methodName == SELECT_COLLECTION }
             .filterNot { it.args.getOrNull(0) is WrapperArg.ColumnArg || it.args.getOrNull(0) is WrapperArg.AliasArg }
         val selectAllCalls = chain.calls.filter { it.methodName == SELECT_ALL }
+        // T-MpjFill：fill 调用收集（MPJ 1.5.1+）——独立于其余管线，不介入主查询形态
+        val fillCalls = chain.calls.filter { it.methodName == FILL_METHOD }
 
         // 其余调用（eq/select/orderBy/distinct/selectMax 等）委托 Query 解析，列自动带主表别名。
         // selectAssociation 不产生额外 SQL（leftJoin 已体现关联，仅作结果映射标记），从解析链中剔除。
@@ -120,6 +123,11 @@ object MpjLambdaConverter : WrapperConverter {
         // ORDER BY 后、LIMIT 前（rawAround）
         val around = chain.calls.firstOrNull { it.methodName == AROUND_METHOD }?.let { parseAround(it) }
 
+        // T-MpjFill：fill 调用解析（MPJ 1.5.1+）→ FillClause 列表（按调用顺序）；解析失败返回 null 不崩溃
+        // 构建关联表别名 → TableInfo 映射（来自 join 调用的 EntityRefArg）
+        val aliasToTable = buildAliasToTable(joinCalls)
+        val fillClauses = fillCalls.mapNotNull { parseFill(it, aliasToTable) }.ifEmpty { null }
+
         return base.copy(
             tableAlias = mainAlias,
             selectColumns = selectColumns,
@@ -128,6 +136,7 @@ object MpjLambdaConverter : WrapperConverter {
             fromSubQuery = fromSubQuery,
             rawAround = around?.second,
             rawFirst = around?.first?.let { listOfNotNull(base.rawFirst, it).joinToString(" ") } ?: base.rawFirst,
+            fillClauses = fillClauses,
         )
     }
 
@@ -186,6 +195,124 @@ object MpjLambdaConverter : WrapperConverter {
         }
         // 模板形态：模板 + {i} 绑定参数替换
         return null to renderJoinSql(first, call.args.drop(1))
+    }
+
+    /**
+     * T-MpjFill：解析 fill 调用 → FillClause（MPJ 1.5.1+）。
+     *
+     * 6 种形态分派（按参数量与末参类型）：
+     *  1. fill(field, tagField) — 2 参：主表字段 lambda + 关联表字段 lambda
+     *  2. fill(field, tagField, mapperTagField) — 3 参：第 3 参为字符串列名（关联表字段名）
+     *  3. fill(field, tagField, mapperTagField, limit) — 4 参：第 4 参整数 LIMIT
+     *  4. fill(field, tagField, mapperTagField, condition) — 4 参：第 4 参布尔条件
+     *  5. fill(field, tagField, mapperTagField, data) — 4 参：第 4 参数据源对象
+     *  6. fill(field, tagField, mapperTagField, limit, data) — 5 参：LIMIT + 数据源
+     *
+     * 关联表推断：第 2 参为 lambda 字段引用（ColumnArg）→ 取其 tableAlias 作为关联表别名，
+     * 从 [aliasToTable] 映射查找 TableInfo（由 join 调用的 EntityRefArg 构建）；
+     * 第 2 参为字符串值时无实体上下文 → 返回 null（容错，文档化边界）。
+     *
+     * @param call         fill 调用
+     * @param aliasToTable 关联表别名 → TableInfo 映射（来自 join 调用的 EntityRefArg）
+     * @return FillClause；解析失败返回 null（容错，不中断主查询渲染）
+     */
+    private fun parseFill(call: WrapperCall, aliasToTable: Map<String, TableInfo>): FillClause? {
+        val args = call.args
+        if (args.size < 2) return null
+
+        // 第 1 参：主表字段（MFunction<T>）→ 关联键来源列（仅用于语义理解，不参与 SQL 生成）
+        val fieldColumn = (args.getOrNull(0) as? WrapperArg.ColumnArg)?.column ?: return null
+
+        // 第 2 参：关联表字段（SFunction<R, Object>）→ 推断关联表 + 关联键
+        val tagFieldArg = args.getOrNull(1)
+        val childTable: TableInfo
+        val childAlias: String
+        val tagField: String
+        when (tagFieldArg) {
+            is WrapperArg.ColumnArg -> {
+                // lambda 字段引用 → 取列的 tableAlias 作为关联表别名，从映射查找 TableInfo
+                val alias = tagFieldArg.column.tableAlias ?: return null
+                childTable = aliasToTable[alias] ?: return null
+                childAlias = alias
+                tagField = tagFieldArg.column.columnName
+            }
+            is WrapperArg.ValueArg -> {
+                // 字符串列名形态（2/3/4/5/6）→ 无实体上下文，无法推断关联表（文档化边界）
+                return null
+            }
+            else -> return null
+        }
+
+        // 可选参数解析：limit / condition / data（第 3 参在形态 2~6 为 mapperTagField 字符串，此处跳过）
+        var limit: Int? = null
+        var condition: Boolean? = null
+        var data: SqlValue? = null
+
+        when (args.size) {
+            2 -> { /* 形态 1：无可选参数 */ }
+            3 -> { /* 形态 2：第 3 参为 mapperTagField 字符串列名（仅覆盖 tagField，无需处理） */ }
+            4 -> {
+                // 形态 3/4/5：第 4 参为 limit(整型) / condition(布尔) / data(值)
+                val arg3 = args.getOrNull(3)
+                val value3 = (arg3 as? WrapperArg.ValueArg)?.value
+                when {
+                    value3 is SqlValue.Literal && value3.unquoted.toIntOrNull() != null ->
+                        limit = value3.unquoted.toIntOrNull()
+                    value3 is SqlValue.Literal && (value3.unquoted == "true" || value3.unquoted == "false") ->
+                        condition = value3.unquoted.toBooleanStrictOrNull()
+                    else -> data = arg3.asValue()
+                }
+            }
+            5 -> {
+                // 形态 6：第 4 参 limit + 第 5 参 data
+                val value3 = (args.getOrNull(3) as? WrapperArg.ValueArg)?.value
+                if (value3 is SqlValue.Literal && value3.unquoted.toIntOrNull() != null) {
+                    limit = value3.unquoted.toIntOrNull()
+                }
+                data = args.getOrNull(4).asValue()
+            }
+        }
+
+        // condition = false → fill 被条件禁用，不生成 FillClause
+        if (condition == false) return null
+
+        // 关联表 SELECT 列：默认全列（带关联表别名前缀）
+        val selectColumns = childTable.columns.map { col ->
+            ColumnRef(tableAlias = childAlias, columnName = col.columnName)
+        }
+
+        return FillClause(
+            childTable = childTable,
+            childAlias = childAlias,
+            selectColumns = selectColumns,
+            tagField = tagField,
+            limit = limit,
+            condition = condition,
+            data = data,
+        )
+    }
+
+    /**
+     * T-MpjFill：构建关联表别名 → TableInfo 映射。
+     *
+     * 从 join 调用的 EntityRefArg（psi 解析实体）提取别名与 TableInfo 对应关系，
+     * 供 [parseFill] 按 tagField 的 tableAlias 查找关联表。
+     * 四参显式别名（`leftJoin(Class, "st", ...)`）以显式别名为准，否则取实体类名首字母小写。
+     *
+     * @param joinCalls join 调用列表
+     * @return 别名 → TableInfo 映射
+     */
+    private fun buildAliasToTable(joinCalls: List<WrapperCall>): Map<String, TableInfo> {
+        val map = mutableMapOf<String, TableInfo>()
+        for (call in joinCalls) {
+            val tableInfo = (call.args.getOrNull(0) as? WrapperArg.EntityRefArg)?.tableInfo ?: continue
+            // 别名：四参显式别名（第 2 参为 ValueArg）> 实体类名首字母小写
+            val alias = (call.args.getOrNull(1) as? WrapperArg.ValueArg)?.value.let { value ->
+                (value as? SqlValue.Literal)?.unquoted?.takeIf { it.isNotEmpty() }
+            } ?: tableInfo.entityClassName.replaceFirstChar { it.lowercaseChar() }
+            map[alias] = tableInfo
+        }
+        return map
     }
 
     /**
@@ -514,6 +641,9 @@ object MpjLambdaConverter : WrapperConverter {
     private const val SELECT_ALL = "selectAll"
     private const val SELECT_SUB = "selectSub"
     private const val SET_ALIAS = "setAlias"
+
+    /** T-MpjFill：fill 关联填充方法名（MPJ 1.5.1+）。 */
+    private const val FILL_METHOD = "fill"
 
     /** T-M21-07：from 子查询主表（MPJ 官方 API，JoinAbstractLambdaWrapper.from(MFunction)）。 */
     private const val FROM_METHOD = "from"

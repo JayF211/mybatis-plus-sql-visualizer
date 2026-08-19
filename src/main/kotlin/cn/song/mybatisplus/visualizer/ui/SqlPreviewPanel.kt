@@ -4,8 +4,10 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.ConditionView
+import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.PerfLevel
 import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
@@ -496,10 +498,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 渲染 SQL 到可编辑编辑器；已存在时更新文档（保留焦点/撤销）。 */
     private fun showSql(sql: String) {
+        // T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）——在主 SQL 之后渲染 fill 附加 SELECT
+        val withFill = appendFillSection(sql)
         // T-M27.4：渲染自动格式化（设置开启且非单行模式）——XML 动态标签展开残留的空行/缩进
         // 由格式化器归一（关键字大写、主子句顶格、列清单换行缩进、AND 缩进、子查询缩进）；
         // 单行模式保持紧凑（格式化会引入换行）
-        val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(sql) else sql
+        val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(withFill) else withFill
         val existing = editor
         if (existing != null) {
             if (existing.document.text != text) {
@@ -513,6 +517,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             return
         }
         createEditor(text)
+    }
+
+    /**
+     * T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）。
+     *
+     * 在主 SQL 之后追加 fill 附加 SELECT 渲染（每 fill 调用独立一行），
+     * 以注释头 `-- fill additional query (MPJ 1.5.1+)` 标识。
+     * 无 fill 调用时原样返回。
+     */
+    private fun appendFillSection(sql: String): String {
+        val result = current ?: return sql
+        val fills = result.fillClauses ?: return sql
+        if (fills.isEmpty()) return sql
+        val dialect = result.previewModel?.dialect ?: MySqlDialect
+        val sb = StringBuilder(sql)
+        sb.append("\n\n-- ").append(MpSqlVisualizerBundle.message("panel.fill.section")).append("\n")
+        fills.forEach { fill ->
+            sb.append(SqlGenerator.generateFill(fill, dialect))
+            sb.append("\n")
+        }
+        return sb.toString()
     }
 
     /** 首次创建：SqlPreviewLanguage PSI 文件 → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
