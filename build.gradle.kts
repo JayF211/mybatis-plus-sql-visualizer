@@ -70,7 +70,12 @@ intellijPlatform {
     // smoke 只 243 构建基准（约 1.5min，日常每次开发后兼容冒烟；高版本 API 移除风险由发布前全量兜底）。
     pluginVerification {
         ides {
-            val verifyIdes = providers.gradleProperty("verifyIdes").orNull
+            // T-VerifyPlugin：从任务名推断验证模式（./gradlew verifySmoke / verifyMinimal 自动选择对应 IDE 集合）
+            val verifyIdes = when {
+                gradle.startParameter.taskNames.contains("verifySmoke") -> "smoke"
+                gradle.startParameter.taskNames.contains("verifyMinimal") -> "minimal"
+                else -> providers.gradleProperty("verifyIdes").orNull
+            }
             when (verifyIdes) {
                 "smoke" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
                 "minimal" -> {
@@ -214,6 +219,18 @@ tasks {
                 <li>手动选择实体类 + AUTO 形态 @TableName 反查 + ? 占位符反向识别</li>
             </ul>
         """.trimIndent()
+    }
+
+    // T-VerifyPlugin：封装 verifyPlugin 三态验证为独立 task（方便 ./gradlew verifySmoke / verifyFull 调用）
+    register("verifySmoke") {
+        group = "verification"
+        description = "日常开发快速兼容冒烟（仅 243，约 1.5min，等同于 verifyPlugin -PverifyIdes=smoke）"
+        dependsOn("verifyPlugin")
+    }
+    register("verifyFull") {
+        group = "verification"
+        description = "发布前全量验证（三版本 243+253+262，约 14min）"
+        dependsOn("verifyPlugin")
     }
 
     // M28：生成更新清单 update/update.json（插件设置页「检查更新」的数据源；发布时执行）——

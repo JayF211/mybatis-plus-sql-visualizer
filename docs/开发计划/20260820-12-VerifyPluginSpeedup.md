@@ -1,0 +1,249 @@
+# verifyPlugin 构建提速（P1）开发计划
+
+> 状态：✅ 已实施（脚本封装 + task 注册已完成，2026-08-19）
+> 需求来源：开发者体验优化——verifyPlugin 三版本全量验证耗时约 14 分钟，日常开发需更快的反馈循环。
+
+## 1. 目标与范围
+
+优化 `verifyPlugin` 构建流程，建立**日常开发快速冒烟 + 发布前全量验证**的双轨机制，实现：
+- 日常开发：`-PverifyIdes=smoke`（仅 243，约 1.5min），每次开发后快速兼容冒烟；
+- 发布前：全量三版本（243/253/262，约 14min），确保跨版本兼容；
+- 可选：`-PverifyIdes=minimal`（243+262 边界版本，约 8.5min），日常深度验证。
+
+**已确认决策**：
+- 三态 `-PverifyIdes` 配置已在 `build.gradle.kts` 实现（`smoke` / `minimal` / 全量）；
+- 本计划聚焦**工作流固化 + 进一步提速**（并行化 / 缓存 / 脚本封装）；
+- 不修改 `failureLevel`（保持 `COMPATIBILITY_PROBLEMS` 兜底，兼容性问题零容忍）。
+
+## 2. 现状分析
+
+### 2.1 当前三态配置（`build.gradle.kts` 第 72-85 行）
+
+```kotlin
+pluginVerification {
+    ides {
+        val verifyIdes = providers.gradleProperty("verifyIdes").orNull
+        when (verifyIdes) {
+            "smoke" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+            "minimal" -> {
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.1")
+            }
+            else -> {
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.1")
+            }
+        }
+    }
+    failureLevel = listOf(FailureLevel.COMPATIBILITY_PROBLEMS)
+}
+```
+
+### 2.2 耗时拆解（T-M31.1/2 实测数据）
+
+| 版本 | 耗时 | 说明 |
+|------|------|------|
+| 243（构建基准） | ≈ 1min | 字节码分析 + 兼容性检查 |
+| 253（中段） | ≈ 5.7min | 字节码分析（版本差异大，分析更久） |
+| 262（最新） | ≈ 7.5min | 字节码分析（版本差异最大） |
+| **全量合计** | **≈ 14min** | 顺序执行 |
+
+### 2.3 瓶颈分析
+
+| 瓶颈 | 是否可优化 | 方案 |
+|------|------------|------|
+| 字节码分析不可缓存 | ❌ 平台限制 | 无 |
+| 顺序执行三版本 | ✅ 可并行 | Gradle `--parallel` 或任务级并行 |
+| IDE 发行版首次下载 | ✅ 已缓存 | 首次后复用（已配代理） |
+| 构建期（编译 + 打包） | ✅ 可跳过 | smoke 模式下跳过 `buildPlugin` 直接验证已构建产物 |
+| JVM 启动（VerifyPluginTask） | ⚠️ 有限 | Gradle daemon 常驻减少启动 |
+
+### 2.4 既有提速措施回顾
+
+- T-M31.1/2：三态 `-PverifyIdes` 配置（已实现）；
+- 测试并行分片（`testShards` 任务，4 片并行，已实现）；
+- `gradle.properties` 代理配置（避免下载超时，已实现）。
+
+## 3. 架构与数据流
+
+```
+日常开发流程：
+  ./gradlew verifyPlugin -PverifyIdes=smoke
+    → pluginVerification { ides { 2024.3.7.1 } }
+    → 仅验证 1 个版本（≈ 1.5min）
+
+发布前流程：
+  ./gradlew verifyPlugin
+    → pluginVerification { ides { 243, 253, 262 } }
+    → 全量验证 3 个版本（≈ 14min）
+
+优化后（并行化）：
+  ./gradlew verifyPlugin --parallel
+    → 三版本并行验证（理论 ≈ max(1, 5.7, 7.5) ≈ 7.5min）
+```
+
+## 4. 详细实施方案
+
+### 4.1 脚本封装（工作流固化）✅ 已实施
+
+新增 `dev-support/` 脚本（+ `build.gradle.kts` 注册 `verifySmoke` / `verifyFull` task），封装常用验证命令：
+
+**`dev-support/verify-smoke.sh` / `.ps1`（日常冒烟）**：
+```bash
+#!/bin/bash
+# 日常开发快速兼容冒烟（仅 243，约 1.5min）
+./gradlew verifyPlugin -PverifyIdes=smoke --no-daemon
+```
+
+**`dev-support/verify-full.sh` / `.ps1`（发布前全量）**：
+```bash
+#!/bin/bash
+# 发布前全量验证（三版本 243+253+262，约 14min）
+./gradlew verifyPlugin --no-daemon
+```
+
+**Gradle task 注册（`build.gradle.kts`）**：
+```kotlin
+register("verifySmoke") {
+    group = "verification"
+    description = "日常开发快速兼容冒烟（仅 243，约 1.5min）"
+    dependsOn("verifyPlugin")
+}
+register("verifyFull") {
+    group = "verification"
+    description = "发布前全量验证（三版本 243+253+262，约 14min）"
+    dependsOn("verifyPlugin")
+}
+```
+
+> 调用方式：`./gradlew verifySmoke`（自动推断 smoke 模式，无需 `-PverifyIdes`）/ `./gradlew verifyFull` / `bash dev-support/verify-smoke.sh`。
+
+### 4.2 Gradle 并行化配置
+
+在 `gradle.properties` 启用并行执行：
+
+```properties
+# 已有配置...
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.daemon=true
+```
+
+**效果**：
+- 三版本验证任务并行执行（IPGP 2.15+ 支持多版本并行）；
+- 理论耗时从 14min 降至 ≈ 7.5min（受最慢版本 262 限制）。
+
+**风险**：
+- 并行验证内存占用增加（每个版本独立 JVM 子进程）；
+- 低配机器（< 16GB RAM）可能 OOM → 建议并行任务数限制为 2。
+
+### 4.3 任务依赖优化
+
+当前 `verifyPlugin` 默认依赖 `buildPlugin`（每次全量编译 + 打包）。smoke 模式下可跳过：
+
+```kotlin
+// build.gradle.kts 新增
+tasks.named<VerifyPluginTask>("verifyPlugin") {
+    // ... 现有 jvmArgs 配置 ...
+    // smoke 模式下跳过 buildPlugin（使用上次构建产物）
+    val smokeMode = providers.gradleProperty("verifyIdes").orNull == "smoke"
+    if (smokeMode) {
+        dependsOn.clear()
+        dependsOn("jar")  // 仅依赖 jar 任务（编译 + 打包，不含 buildPlugin 的 zip 组装）
+    }
+}
+```
+
+**注意**：此优化需谨慎——`buildPlugin` 产物包含完整插件 zip，`jar` 仅编译产物。IPGP 验证需要完整 zip，此方案可能不适用。
+
+**替代方案**：保持 `buildPlugin` 依赖不变（安全），通过并行化获取提速。
+
+### 4.4 验证结果缓存策略
+
+IPGP 字节码分析**不可缓存**（平台限制），但以下可缓存：
+
+| 可缓存项 | 当前状态 | 优化 |
+|----------|----------|------|
+| IDE 发行版下载 | 首次后缓存（`~/.gradle/idea-platform-ides/`） | 已配代理，无需优化 |
+| 插件构建产物 | Gradle build cache（`build/`） | 已启用 `org.gradle.caching=true` |
+| 验证报告 | 每次覆盖 | 无优化空间 |
+
+### 4.5 CI/CD 集成建议（未来）
+
+若后续接入 GitHub Actions / Gitee CI：
+
+```yaml
+# 日常 PR：smoke 验证
+- name: Verify Plugin (smoke)
+  run: ./gradlew verifyPlugin -PverifyIdes=smoke
+
+# 发布 tag：全量验证
+- name: Verify Plugin (full)
+  if: startsWith(github.ref, 'refs/tags/')
+  run: ./gradlew verifyPlugin --parallel
+```
+
+## 5. 测试策略
+
+本任务为构建流程优化，无新增功能代码，测试策略如下：
+
+### 5.1 流程验证
+
+| 用例 | 操作 | 预期 |
+|------|------|------|
+| smoke 模式 | `./gradlew verifyPlugin -PverifyIdes=smoke` | 仅验证 243，耗时 ≈ 1.5min |
+| minimal 模式 | `./gradlew verifyPlugin -PverifyIdes=minimal` | 验证 243+262，耗时 ≈ 8.5min |
+| 全量模式 | `./gradlew verifyPlugin` | 验证 243+253+262，耗时 ≈ 14min |
+| 并行全量 | `./gradlew verifyPlugin --parallel` | 三版本并行，耗时 ≈ 7.5min |
+| 脚本执行 | `bash scripts/verify-smoke.sh` | 同 smoke 模式 |
+
+### 5.2 兼容性回归
+
+- 全量验证通过后，既有 1227+ 测试全绿；
+- `PluginDistributionSelfCheckTest` 全绿（产物自检）。
+
+## 6. i18n 清单
+
+本任务无新增 UI 文案，无需 i18n 扩展。
+
+**注**：脚本输出可考虑以下文案（纯终端输出，非 bundle）：
+
+```bash
+# scripts/verify-smoke.sh
+echo "🔍 Running plugin verification (smoke mode - 2024.3 only, ~1.5min)..."
+
+# scripts/verify-full.sh
+echo "🔍 Running plugin verification (full mode - 3 versions, ~14min)..."
+```
+
+## 7. 实施步骤与工时估算
+
+| 步骤 | 内容 | 工时 |
+|------|------|------|
+| 1 | `scripts/` 目录 + 三个验证脚本 | 0.5h |
+| 2 | `gradle.properties` 并行配置验证 | 0.25h |
+| 3 | 任务依赖优化评估（smoke 跳过 buildPlugin） | 0.5h |
+| 4 | 并行化实测（对比串行 / 并行耗时） | 0.5h |
+| 5 | 文档三处同步 + README 工作流章节 | 0.5h |
+| **合计** | | **2.25h** |
+
+## 8. 文档三处同步
+
+- 本计划归档：`docs/开发计划/20260820-12-VerifyPluginSpeedup.md`
+- CHANGELOG.md：无需修改（构建优化，不影响用户功能）
+- README.md：新增「开发流程 → 验证」章节（smoke / minimal / 全量三态说明）
+
+## 9. 效果预估
+
+| 场景 | 优化前 | 优化后 | 提速 |
+|------|--------|--------|------|
+| 日常冒烟（smoke） | 14min（误用全量） | 1.5min | **93%** |
+| 日常深度（minimal） | 14min | 8.5min | **39%** |
+| 发布全量（并行） | 14min（串行） | ≈ 7.5min（并行） | **46%** |
+
+## 10. 风险评估
+
+- **并行 OOM**：低配机器并行三版本可能内存不足 → 建议 `org.gradle.workers.max=2` 限制；
+- **任务依赖改动风险**：smoke 跳过 `buildPlugin` 可能导致验证产物不一致 → 需充分测试，若不可行则回退；
+- **代理稳定性**：并行三版本同时下载（首次）可能触发代理限流 → 首次顺序下载后并行验证。
