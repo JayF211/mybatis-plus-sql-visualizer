@@ -427,7 +427,8 @@ class SqlToJavaPanel(
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.color = UIUtil.getTextFieldBackground()
                 g2.fillRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
-                g2.color = JBColor.namedColor("Component.borderColor", JBColor(0xC8C8C8, 0x5C5C5C))
+                // T-DarkTheme：命名色优先 + JBColor.border() 兜底（亮/暗主题自适应，与 IDEA TextField 边框一致）
+                g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
                 g2.drawRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
             } finally {
                 g2.dispose()

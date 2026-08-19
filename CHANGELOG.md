@@ -14,6 +14,7 @@
   - **跨版本 Deprecated 替代**（T-M52）：`LineMarkerInfo` 六参→七参构造（+accessibleNameProvider）；`DaemonCodeAnalyzer.restart()`→`restart(psiFile)`；`JavaAnnotationIndex.get()`→`getAnnotations()`；`ChooseByNameModel.getCheckBoxMnemonic()` 删除覆写；`Document.addDocumentListener` 单参→双参 + Disposable 生命周期管理；`Notification.setListener` 移入 `createNotification` 3 参数
   - **verifyPlugin 实证（三版本）**：243/253/262 全部 0 Internal + 0 Scheduled-removal，1227 测试全绿
 - **IService 内置 CRUD 方法预览支持无 Entity 后缀实体类**：`BatchOperationConverter.resolveServiceEntityClass()` 步骤 3b 原硬限定实体类名以 "Entity" 结尾——`User`/`Order` 等不含后缀的真实实体类解析失败（gutter 图标点击报"未找到 Wrapper"）；修复：去掉 `endsWith("Entity")` 限定，在 service 上下文 + 白名单方法名双重约束下仅排除 `java./javax.` 包前缀（防基础类型误判）；同步更新中英文错误提示文案为泛化描述；新增 3 个测试用例
+- **暗色主题适配（T-DarkTheme）**：预览弹窗与 SQL→Java 面板的硬编码色值替换为 IDE 命名色（亮/暗主题自适应）——① `SqlPreviewPanel.updateMeta` 警示色 `JBColor.RED` → `JBColor.namedColor("ErrorForeground", JBColor.RED)`（暗色下非亮红不刺眼）；② `ClassPickerField.paintComponent` 边框兜底色 `JBColor(0xC8C8C8, 0x5C5C5C)` → `JBColor.border()`（亮/暗主题自适应，与 IDEA TextField 边框一致）；③ `SqlPreviewPanel` 实现 `Disposable` + 注册 `LafManagerListener`——工具窗口模式下用户切换主题时面板实时重绘响应
 
 ### Added
 

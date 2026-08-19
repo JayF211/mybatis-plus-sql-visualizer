@@ -34,6 +34,7 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.actionSystem.Shortcut
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.Disposable
+import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.editor.EditorFactory
@@ -86,7 +87,7 @@ import javax.swing.event.DocumentListener
  *
  * 说明：编辑器生命周期在 [removeNotify] 时释放，避免泄漏（EditorFactory.releaseEditor）。
  */
-class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreviewPanel>(BorderLayout()) {
+class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreviewPanel>(BorderLayout()), Disposable {
 
     private val metaLabel = JBLabel()
 
@@ -180,6 +181,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             CustomShortcutSet(*reformatShortcuts()),
             this,
         )
+
+        // T-DarkTheme：主题切换时重绘（工具窗口模式下实时响应；命名色自动更新，仅需触发重绘）
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(LafManagerListener.TOPIC, LafManagerListener { lookAndFeelChanged() })
+    }
+
+    /** T-DarkTheme：主题变更回调——重绘面板（命名色已自动更新，仅需触发 UI 刷新）。 */
+    private fun lookAndFeelChanged() {
+        revalidate()
+        repaint()
     }
 
     private lateinit var modeButton: JButton
@@ -1116,7 +1127,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-SqlPerf：性能建议文案拼接
         val perfLine = buildPerfLine(result)
         metaLabel.text = meta + warningLine + perfLine
-        metaLabel.foreground = if (currentWarning != null) JBColor.RED else JBUI.CurrentTheme.Label.foreground()
+        metaLabel.foreground = if (currentWarning != null) {
+            // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
+            JBColor.namedColor("ErrorForeground", JBColor.RED)
+        } else {
+            JBUI.CurrentTheme.Label.foreground()
+        }
         // T-M25.3：错误复制按钮随警示可见
         errorCopyButton?.isVisible = currentWarning != null
     }
@@ -1164,6 +1180,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     override fun removeNotify() {
         super.removeNotify()
         releaseEditor()
+    }
+
+    /**
+     * T-DarkTheme：释放主题监听（messageBus.connect(this) 随 Disposable 销毁自动取消订阅）。
+     * 工具窗口模式下面板可能长期存活，由 [SqlPreviewDialog] 或工具窗口工厂调用释放。
+     */
+    override fun dispose() {
+        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
+        Disposer.dispose(this)
     }
 
     // ------------------------------------------------------------------
