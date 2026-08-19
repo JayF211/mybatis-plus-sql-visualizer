@@ -8,7 +8,7 @@
 >
 > **状态说明**：矩阵中「目标状态」为里程碑完成后应达成的最终状态；当前实现快照以《[MPJ 用法收集与兼容性测试清单](./MPJ用法收集与兼容性测试清单.md)》§5.6 为准。**状态随开发计划（[docs/开发计划/20260813-1730-全量API预览支持-开发计划.md](./开发计划/20260813-1730-全量API预览支持-开发计划.md)）各里程碑（M20/M21/M22）交付更新**：交付一项、对应行 🟡/⬜ → ✅ 或标注文档化边界，并同步新增 A 段 fixture 测试（沿用 P/Q/U 编号惯例，新增段建议 **A01~Axx**，测试先行）。
 >
-> **交付记录**：**M20 ✅（2026-08-13，379 测试全绿）**——P0 差距清零（JoinWrappers 工厂/entity 构造/批量族/Map 消费/eqOrIsNull/selectIgnore/逻辑删除六方法/消费全集）；**M21 ✅（2026-08-13，420 测试全绿）**——中等成本补全（allEq/setEntity/selectFilter/枚举 selectFunc/rightAlias/子表 MConsumer/ext/prefix-free/from/around/UpdateJoin+DeleteJoin）；**M22 ✅（2026-08-14，444 测试全绿）**——P2 项（方言 6 种扩展、@Version 乐观锁注入、Db kit/SimpleQuery/ActiveRecord 识别）。剩余 ⬜（fill、Tenant/DataPermission/DynamicTableName 拦截器模拟、XML customSqlSegment、Kotlin 侧、方言实测）按《[剩余立项开发计划](./开发计划/20260814-0804-剩余立项-开发计划.md)》**按需立项**实施。
+> **交付记录**：**M20 ✅（2026-08-13，379 测试全绿）**——P0 差距清零（JoinWrappers 工厂/entity 构造/批量族/Map 消费/eqOrIsNull/selectIgnore/逻辑删除六方法/消费全集）；**M21 ✅（2026-08-13，420 测试全绿）**——中等成本补全（allEq/setEntity/selectFilter/枚举 selectFunc/rightAlias/子表 MConsumer/ext/prefix-free/from/around/UpdateJoin+DeleteJoin）；**M22 ✅（2026-08-14，444 测试全绿）**——P2 项（方言 6 种扩展、@Version 乐观锁注入、Db kit/SimpleQuery/ActiveRecord 识别）。剩余 ⬜（fill、Tenant/DataPermission/DynamicTableName 拦截器模拟、Kotlin 侧、方言实测）按《[剩余立项开发计划](./开发计划/20260814-0804-剩余立项-开发计划.md)》**按需立项**实施。
 >
 > 关联文档：《MPJ 用法收集与兼容性测试清单.md》（§5.6 为现状矩阵）、《20260813-0829-低频复杂API后期实现计划.md》（P 分组背景）、《20260813-1730-全量API预览支持-开发计划.md》（M20~M22 任务来源，本矩阵任务编号均出自该文档）。
 
@@ -162,7 +162,7 @@
 | 面 | 目标状态 | 对应任务编号 | 备注 |
 |------|:----:|------|------|
 | `Page` 构造（无参 / current,size / 带 OrderItem）与 `addOrder` / `optimizeCountSql` / `maxLimit` | ✅ | —（既有能力） | 分页渲染驱动；addOrder → ORDER BY；optimizeCountSql/maxLimit 语义开关近似 |
-| XML `${ew.customSqlSegment}` / `${ew.sqlSelect}` / `${ew.sqlSet}`（配套 `@Param("ew")`） | ⬜ | T-M22-05 | 远期：需 XML PSI 支持面（独立立项） |
+| XML `${ew.customSqlSegment}` / `${ew.sqlSelect}` / `${ew.sqlSet}`（配套 `@Param("ew")`） | ✅ | T-M22-05（M26-B） | M26-B：Java↔XML 关联（Mapper `@Param("ew")` 解析 + WrapperLocator 展开 + 语句 id 关联） |
 | `Db` kit（`Db.getById/list/remove/update/saveBatch` 等静态 CRUD） | ⬜ | T-M22-04 | M22 远期：实体模板消费（复用 Operation.SELECT/INSERT 模板） |
 | `SimpleQuery`（`keyMap` / `map` / `group`） | ✅ | T-M22-04（M22） | wrapper 消费形态（默认 SELECT） |
 | ActiveRecord（`AbstractModel.insert()/updateById()/deleteById()/selectAll()`） | ✅ | T-M22-04（M22） | qualifier 实体类型解析（无参形态）+ 注册表（selectAll 全列无 WHERE / deleteById 主键等值） |
@@ -294,7 +294,7 @@
 | `@Version` 乐观锁 / 拦截器模拟 | ✅ | T-M22-02（M22）——@Version 注入已交付；Tenant/DataPermission/DynamicTableName 仍 ⬜ |
 | 方言扩展（SQL Server / H2 / SQLite / MariaDB / 达梦 / KingBase） | ✅ | T-M22-03（M22），未知方言回退 MySQL；T-M43 补 upsert 按方言（MySQL 系 ON DUPLICATE KEY UPDATE / PG 系 ON CONFLICT / Oracle·SQLServer·DM 降级纯 INSERT）+ 达梦分页官方实证 + 反向解析分页三形态宽容（LIMIT..OFFSET / OFFSET..FETCH / FETCH FIRST） |
 | `Db` kit / `SimpleQuery` / ActiveRecord | ✅ | T-M22-04（M22）——Db.getById/类字面量/lambdaQuery 链、SimpleQuery wrapper 消费、ActiveRecord 无参形态 |
-| XML `${ew.customSqlSegment}` | ⬜ | 远期（T-M22-05） |
+| XML `${ew.customSqlSegment}` | ✅ | 远期（T-M22-05，M26-B 已交付） |
 | Kotlin 侧（`KtQueryWrapper` / `KtUpdateWrapper` / `ktQuery()` / `ktUpdate()` / MPJ Kotlin 扩展） | ⬜ | 远期（T-M22-06） |
 | `allEq` / `selectFunc(BaseFuncEnum)` / `from` / 子表 MConsumer / rightAlias / prefix / free 等 | ✅ | 对应 T-M21-xx 任务（T-M21-04 / 06 / 07 / 02 / 03），里程碑 M21 交付 |
 
