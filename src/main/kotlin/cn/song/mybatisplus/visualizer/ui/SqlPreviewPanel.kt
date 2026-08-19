@@ -62,7 +62,9 @@ import java.awt.Font
 import java.awt.FontMetrics
 import java.awt.Graphics
 import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
+import java.awt.datatransfer.UnsupportedFlavorException
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import javax.swing.BoxLayout
@@ -153,6 +155,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
 
+    // P-05：参数历史缓存 + debounce 写回
+    private val paramHistoryCache = ParamHistoryCache()
+    /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
+    private val historyAlarm = javax.swing.Timer(500) { flushHistoryToCache() }.apply { isRepeats = false }
+
     init {
         // 顶部元信息行 + 工具栏
         metaLabel.border = JBUI.Borders.empty(0, 8, 4, 8)
@@ -214,7 +221,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** 顶部工具栏：复制错误（有警示时可见）/ 单行多行切换 / 格式化 / 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
+    /** 顶部工具栏：复制错误（有警示时可见）/ 单行多行切换 / 格式化 / 导入（P-05）/ 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.X_AXIS)
         errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
@@ -227,6 +234,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         add(modeButton)
         add(smallButton(MpSqlVisualizerBundle.message("panel.format")) { formatSql() })
+        // P-05：导入按钮（默认点击 = 从剪贴板导入）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
     }
 
@@ -296,6 +305,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
             }
         }
+        // P-05：历史召回（在 initialParamValues 之后，用户输入之前）
+        recallFromHistory()
         // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
         result.previewModel?.let { compactMode = !it.formatSql }
         modeButton.text = modeButtonText()
@@ -882,6 +893,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun onConditionValueChanged(view: ConditionView, source: String, text: String) {
         paramValues[source] = text
         renderSql()
+        saveToHistory()
     }
 
     /**
@@ -1041,6 +1053,188 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun onParamChanged(source: String, value: String) {
         paramValues[source] = value
         renderSql()
+        saveToHistory()
+    }
+
+    // ------------------------------------------------------------------
+    // P-05：参数批量导入 / 历史召回
+    // ------------------------------------------------------------------
+
+    /**
+     * P-05：从剪贴板批量导入参数值（工具栏按钮触发）。
+     *
+     * 读取剪贴板文本 → [ParamImportParser.parse] → [importParams] 回填。
+     * 剪贴板无文本 / 无有效参数时提示用户。
+     */
+    fun importParamsFromClipboard() {
+        val text = runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard
+                .getContents(null)?.getTransferData(DataFlavor.stringFlavor) as? String
+        }.getOrNull()
+        if (text.isNullOrBlank()) {
+            showImportResult(0, 0, emptyList(), isEmptyClipboard = true)
+            return
+        }
+        importParams(ParamImportParser.parse(text))
+    }
+
+    /**
+     * P-05：按 source 模糊匹配导入参数值并回填。
+     *
+     * 模糊匹配规则：key ≡ source 或 key ≡ `#source`。
+     * 回填 paramValues + 更新对应输入框文本 + 触发 renderSql()。
+     * 未匹配项计入通知。
+     *
+     * @param params 导入的参数映射（key → value）
+     */
+    internal fun importParams(params: Map<String, String>) {
+        if (params.isEmpty()) {
+            showImportResult(0, 0, emptyList(), isEmptyClipboard = true)
+            return
+        }
+        val allSources = buildAllSources()
+        var matched = 0
+        val unmatchedKeys = mutableListOf<String>()
+        params.forEach { (key, value) ->
+            val source = resolveSource(key, allSources)
+            if (source != null) {
+                paramValues[source] = value
+                syncParamFieldText(source, value)
+                matched++
+            } else {
+                unmatchedKeys += key
+            }
+        }
+        renderSql()
+        showImportResult(matched, unmatchedKeys.size, unmatchedKeys, isEmptyClipboard = false)
+    }
+
+    /** P-05：构建当前面板所有参数 source 集合（用于模糊匹配）。 */
+    private fun buildAllSources(): Set<String> {
+        val result = current ?: return emptySet()
+        val sources = linkedSetOf<String>()
+        sources += result.unresolvedParams
+        result.previewModel?.conditionViews?.forEach { view ->
+            view.valueSources.ifEmpty { listOfNotNull(view.valueSource) }.forEach { sources += it }
+        }
+        result.batchModel?.toggleColumns?.forEach { sources += it.source }
+        result.batchModel?.fixedColumns?.forEach { sources += it.source }
+        result.xmlModel?.forEachViews?.forEach { sources += it.collectionExpr }
+        return sources
+    }
+
+    /**
+     * P-05：模糊匹配 source（key ≡ source 或 key ≡ `#source`）。
+     * 精确命中优先，其次去 `#` 前缀匹配。
+     */
+    private fun resolveSource(key: String, sources: Set<String>): String? {
+        if (sources.contains(key)) return key
+        val stripped = if (key.startsWith("#")) key.substring(1) else key
+        if (sources.contains(stripped)) return stripped
+        return null
+    }
+
+    /** P-05：同步参数输入框文本（导入回填时更新 UI 显示）。 */
+    private fun syncParamFieldText(source: String, value: String) {
+        val idx = currentParamFieldIndex(source)
+        if (idx >= 0) {
+            paramFields.getOrNull(idx)?.text = value
+        }
+    }
+
+    /** P-05：按 source 查找 paramFields 索引（与 paramValues 按 source 绑定顺序一致）。 */
+    private fun currentParamFieldIndex(source: String): Int {
+        // paramFields 按 buildParamRow/buildBatchColumnRow/buildXmlForEachRow 追加顺序排列，
+        // 与 unresolvedParams + 条件值来源的顺序一致；但 source 可能出现在多个场景，
+        // 此处按 paramValues 键顺序定位（与输入框构建顺序一致）
+        val sources = paramValues.keys.toList()
+        return sources.indexOf(source)
+    }
+
+    /**
+     * P-05：显示导入结果通知。
+     *
+     * @param matched    匹配数
+     * @param unmatched  未匹配数
+     * @param unmatchedKeys 未匹配的 key 列表
+     * @param isEmptyClipboard 是否剪贴板无有效内容（true=空内容提示，false=匹配结果提示）
+     */
+    private fun showImportResult(matched: Int, unmatched: Int, unmatchedKeys: List<String>, isEmptyClipboard: Boolean) {
+        // 测试环境跳过弹窗（Messages 在 test mode 下触发 TestDialog 拦截器抛异常）
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
+        val proj = project ?: return
+        when {
+            isEmptyClipboard -> Messages.showErrorDialog(
+                proj, MpSqlVisualizerBundle.message("panel.param.import.result.empty"), title,
+            )
+            unmatched == 0 -> Messages.showInfoMessage(
+                proj, MpSqlVisualizerBundle.message("panel.param.import.result.success", matched), title,
+            )
+            else -> Messages.showMessageDialog(
+                proj, MpSqlVisualizerBundle.message(
+                    "panel.param.import.result.partial", matched, unmatched, unmatchedKeys.joinToString(", "),
+                ), title, Messages.getWarningIcon(),
+            )
+        }
+    }
+
+    /** P-05：计算当前预览的缓存键（无表名返回 null，不缓存）。 */
+    private fun historyCacheKey(): String? {
+        val result = current ?: return null
+        val tableName = result.tableName
+        val rawSql = result.sql
+        return paramHistoryCache.computeKey(tableName, rawSql)
+    }
+
+    /**
+     * P-05：从历史缓存召回参数值（showResult 后调用）。
+     *
+     * 命中时按 source 回填（用户已输入值优先，不覆盖）。
+     * 召回成功显示淡入提示。
+     */
+    private fun recallFromHistory() {
+        val key = historyCacheKey() ?: return
+        val history = paramHistoryCache.recall(key) ?: return
+        if (history.isEmpty()) return
+        var applied = 0
+        history.forEach { (source, value) ->
+            // 用户已输入值优先（不覆盖）
+            if (paramValues[source].isNullOrEmpty()) {
+                paramValues[source] = value
+                syncParamFieldText(source, value)
+                applied++
+            }
+        }
+        if (applied > 0) {
+            renderSql()
+            showRecalledHint(applied)
+        }
+    }
+
+    /** P-05：显示历史召回提示。 */
+    private fun showRecalledHint(count: Int) {
+        // 测试环境跳过弹窗
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
+        val msg = MpSqlVisualizerBundle.message("panel.param.history.recalled", count)
+        // 无 project（弹窗外部）时不弹；有 project 弹 info
+        project?.let { Messages.showInfoMessage(it, msg, title) }
+    }
+
+    /**
+     * P-05：保存当前参数值到历史缓存（debounce 500ms）。
+     *
+     * 每次击键 restart 计时器（取消前次 + 重新调度），避免频繁序列化。
+     */
+    private fun saveToHistory() {
+        historyAlarm.restart()
+    }
+
+    /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。 */
+    private fun flushHistoryToCache() {
+        val key = historyCacheKey() ?: return
+        paramHistoryCache.save(key, paramValues.toMap())
     }
 
     /**
@@ -1229,6 +1423,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun splitPaneForTest(): JSplitPane? = components.filterIsInstance<JSplitPane>().firstOrNull()
     /** T-M26.6：格式化快捷键 action（注册断言 + 触发格式化测试用）。 */
     internal fun reformatActionForTest(): AnAction = reformatAction
+    /** P-05：参数导入入口（测试调用用，绕过剪贴板）。 */
+    internal fun importParamsForTest(params: Map<String, String>) = importParams(params)
+    /** P-05：参数历史缓存（大小断言用）。 */
+    internal fun paramHistoryCacheForTest(): ParamHistoryCache = paramHistoryCache
+    /** P-05：当前 paramValues 快照（断言用）。 */
+    internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
+    /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
+    internal fun flushHistoryForTest() = flushHistoryToCache()
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
