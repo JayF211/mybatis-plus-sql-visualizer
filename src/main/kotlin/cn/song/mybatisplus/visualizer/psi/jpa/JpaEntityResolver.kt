@@ -74,6 +74,9 @@ class JpaEntityResolver {
         // 按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，组内保持声明顺序）
         val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames()) }
             .sortedWith(compareBy { it.role })
+            // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
+            // 示例：departmentId(@Column) 和 department(@ManyToOne+@JoinColumn) 同映射 department_id
+            .distinctBy { it.columnName }
         // 表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
         return TableInfo(className, tableName, columns, null, null, comment)

@@ -239,12 +239,50 @@ class SqlPreviewService(private val project: Project) {
         val entityClass = methodInfo.entityClass ?: return null
         val table = JpaEntityResolver().resolve(entityClass) ?: return null
         val partTree = PartTreeParser.parse(methodInfo.methodName)
-        val statement = DerivedQueryConverter.convert(partTree, table)
+        var statement = DerivedQueryConverter.convert(partTree, table)
+        // Pageable 参数 → 添加 LIMIT 占位符（运行时由 Spring Data JPA 注入实际分页值）
+        val hasPageable = method.parameterList.parameters.any { param ->
+            val typeName = param.type.canonicalText
+            typeName == "org.springframework.data.domain.Pageable" || typeName.endsWith(".Pageable")
+        }
+        if (hasPageable) {
+            statement = applyPageableLimit(statement, method)
+        }
         // 使用实际方法参数名（而非通用的 param1/param2）
-        val paramNames = method.parameterList.parameters.map { it.name }
+        // Pageable 方法：排除 Pageable 参数本身，添加 pageSize/pageOffset 占位
+        val paramNames = if (hasPageable) {
+            method.parameterList.parameters
+                .filter { param -> param.type.canonicalText != "org.springframework.data.domain.Pageable" && !param.type.canonicalText.endsWith(".Pageable") }
+                .map { it.name } + listOf("pageSize", "pageOffset")
+        } else {
+            method.parameterList.parameters.map { it.name }
+        }
         // DerivedQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
         return buildJpaPreviewResult(statement, sql, table.tableName, paramNames, method)
+    }
+
+    /**
+     * 如果方法含 Pageable 参数，为 SELECT 语句添加 LIMIT 占位符。
+     * Spring Data JPA 在运行时根据 Pageable 注入实际分页值；静态分析阶段用 ? 占位。
+     */
+    private fun applyPageableLimit(statement: SqlStatement, method: PsiMethod): SqlStatement {
+        val hasPageable = method.parameterList.parameters.any { param ->
+            val typeName = param.type.canonicalText
+            typeName == "org.springframework.data.domain.Pageable" ||
+                typeName.endsWith(".Pageable")
+        }
+        if (!hasPageable) return statement
+        // 只对 SELECT 语句添加 LIMIT（COUNT/EXISTS 不分页）
+        return when (statement) {
+            is SelectStatement -> statement.copy(
+                limit = cn.song.mybatisplus.visualizer.model.LimitClause(
+                    offset = cn.song.mybatisplus.visualizer.model.SqlValue.Placeholder("pageOffset"),
+                    count = cn.song.mybatisplus.visualizer.model.SqlValue.Placeholder("pageSize"),
+                ),
+            )
+            else -> statement
+        }
     }
 
     /**

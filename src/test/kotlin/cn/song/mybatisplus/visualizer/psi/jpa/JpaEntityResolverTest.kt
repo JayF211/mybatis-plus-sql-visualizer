@@ -672,4 +672,54 @@ class JpaEntityResolverTest : BasePlatformTestCase() {
             assertNull("@Transient 字段应被排除", table.columnByField("tempToken"))
         }
     }
+
+    // ------------------------------------------------------------------
+    // 重复列去重测试（P2 修复）
+    // ------------------------------------------------------------------
+
+    /**
+     * 实体同时有简单字段（@Column) 和关联字段（@ManyToOne + @JoinColumn）映射到同一列时，
+     * 应去重——只保留简单字段，SELECT 中不出现重复列名。
+     * UserEntity 用例：departmentId(@Column) + department(@ManyToOne) 同映射 department_id。
+     */
+    fun testColumnDeduplication_sameColumnFromSimpleAndRelation() {
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "UserEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "user")
+                public class UserEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.Column(name = "username")
+                    private String username;
+
+                    // 简单字段：department_id 列
+                    @jakarta.persistence.Column(name = "department_id")
+                    private Long departmentId;
+
+                    // 关联字段：也映射到 department_id 列
+                    @jakarta.persistence.ManyToOne(fetch = jakarta.persistence.FetchType.LAZY)
+                    @jakarta.persistence.JoinColumn(name = "department_id", insertable = false, updatable = false)
+                    private DepartmentEntity department;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            // department_id 只出现一次（简单字段优先）
+            assertEquals(
+                "department_id 应只出现一次",
+                1,
+                table.allColumnNames.count { it == "department_id" },
+            )
+            // 完整列清单
+            assertEquals(
+                listOf("id", "username", "department_id"),
+                table.allColumnNames,
+            )
+        }
+    }
 }

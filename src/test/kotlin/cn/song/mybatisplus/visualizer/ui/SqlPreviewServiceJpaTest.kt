@@ -258,4 +258,39 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
         assertTrue("SQL 应含 SELECT NEW: ${result!!.sql}", result.sql.contains("SELECT"))
         assertTrue("SQL 应含 GROUP BY: ${result.sql}", result.sql.contains("GROUP BY", ignoreCase = true))
     }
+
+    // ------------------------------------------------------------------
+    // Pageable 分页 LIMIT 测试（P2 修复）
+    // ------------------------------------------------------------------
+
+    /**
+     * 派生查询含 Pageable 参数时，应生成 LIMIT 占位符。
+     * findByDepartmentIdAndStatusOrderByCreateTimeDesc 用例。
+     */
+    fun testPreviewDerivedQuery_pageableAddsLimit() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                Page<UserEntity> findByDepartmentIdAndStatusOrderByCreateTimeDesc(Long departmentId, Integer status, org.springframework.data.domain.Pageable pageable);
+            }
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+                private String username;
+                private Long departmentId;
+                private Integer status;
+                private java.time.LocalDateTime createTime;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("findByDepartmentIdAndStatusOrderByCreateTimeDesc")
+        val result = newService().previewDerivedQuery(method)
+        assertNotNull("Pageable 方法应产出预览结果", result)
+        // SQL 应含 LIMIT（分页占位符）
+        assertTrue("SQL 应含 LIMIT: ${result!!.sql}", result.sql.contains("LIMIT", ignoreCase = true))
+        // 参数名应含分页参数
+        assertTrue("参数应含 pageSize: ${result.unresolvedParams}", result.unresolvedParams.contains("pageSize"))
+        assertTrue("参数应含 pageOffset: ${result.unresolvedParams}", result.unresolvedParams.contains("pageOffset"))
+    }
 }
