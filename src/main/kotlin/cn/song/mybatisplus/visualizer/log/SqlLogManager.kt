@@ -79,9 +79,19 @@ class SqlLogManager(private val project: Project) : Disposable {
      *  但守卫只跳过「捕捉」不跳过「监听」：仍挂载桥（contentAdded 监听/轮询检测），
      *  否则无任何检测机制，项目真正启动运行时 onConsoleAppeared 不会被触发（日志实证：
      *  守卫直接 return 后主控制台出现，日志再无 scanAll/contentAdded——图标不变）。 */
+    /** 仅挂载桥+轮询（不进入 armed 态）——suppressed=true 时检测项目启动用。 */
+    fun startListeningOnly() {
+        if (bridge.attach(project)) {
+            bridge.startPolling()
+            LOG.info("startListeningOnly: 桥挂载+轮询已启动（suppressed 模式，不进入 armed 态）")
+        }
+    }
+
     fun startCapture(manual: Boolean = false) {
         LOG.info("startCapture: 调用开始（capturing=$capturing, waiting=$isWaitingForConsole, manual=$manual, project=${project.name}）")
         if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
+        // 手动点击捕捉→清除自动启动抑制标志（用户主动开启，重启后应恢复自动启动）
+        if (manual) PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
         if (!hasMainConsole()) {
             // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
             // 主控制台出现（contentAdded 监听 / 轮询检测）时自动附着 filter 开始捕捉 SQL
@@ -140,6 +150,10 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (!capturing && !userArmed) return // armed 态也须幂等守卫
         userArmed = false
         isWaitingForConsole = false
+        // 自动启动开启时，用户显式停止→置持久化抑制标志（重启后 LogStartupCapture 检查此标志跳过）
+        if (PluginSettings.getInstance().state.logAutoCaptureOnStart) {
+            PluginSettings.getInstance().state.logAutoCaptureSuppressed = true
+        }
         if (!capturing) {
             refreshToolbar() // 等待态 → 空闲：刷新工具栏恢复「捕捉」文案
             return
@@ -174,6 +188,10 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
         if (!autoStart && !userArmed) return
+        // 注意：不清空 logAutoCaptureSuppressed！
+        // suppressed 仅阻止 LogStartupCapture 进入 armed 态，不阻止项目启动自动捕捉。
+        // 清零 suppressed 的唯一方式是显式用户操作：手动点捕捉 / 设置里开关切换。
+        // 若在此清零 → 项目停止后 suppressed=false → 重启后 armed 态复现（用户"停止"意图丢失）。
         LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
         startCapture()
     }

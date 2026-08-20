@@ -18,11 +18,18 @@ import com.intellij.openapi.startup.ProjectActivity
 class LogStartupCapture : ProjectActivity {
 
     override suspend fun execute(project: Project) {
-        LOG.info("LogStartupCapture.execute: 触发（project=${project.name}, logAutoCaptureOnStart=${PluginSettings.getInstance().state.logAutoCaptureOnStart}）")
+        val settings = PluginSettings.getInstance().state
+        LOG.info("LogStartupCapture.execute: 触发（project=${project.name}, logAutoCaptureOnStart=${settings.logAutoCaptureOnStart}, suppressed=${settings.logAutoCaptureSuppressed}）")
 
-        // 自动启动条件：设置开启（手动停止不影响此设置）
-        if (!PluginSettings.getInstance().state.logAutoCaptureOnStart) return
+        // 自动启动条件：设置开启 且 用户未显式停止
+        if (!settings.logAutoCaptureOnStart) return
         val manager = project.getService(SqlLogManager::class.java)
+        if (settings.logAutoCaptureSuppressed) {
+            // 用户已显式停止：仍挂载桥+轮询（检测项目启动），但不进入 armed 态
+            LOG.info("LogStartupCapture: 用户已显式停止，仅挂载桥+轮询（project=${project.name}）")
+            manager.startListeningOnly()
+            return
+        }
         tryStartCapture(manager, project, attempt = 0)
     }
 

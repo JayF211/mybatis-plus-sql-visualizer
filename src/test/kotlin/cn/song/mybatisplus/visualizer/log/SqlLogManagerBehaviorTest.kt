@@ -356,4 +356,34 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = old
         }
     }
+
+    /** T13：自动启动 + 用户显式停止 → suppressed 阻止 armed 态，但项目启动时设置优先自动捕捉。 */
+    fun testT13_AutoStart_UserStop_SettingPriority() {
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+
+            // 模拟 LogStartupCapture 触发（项目打开）→ armed 态
+            manager.startCapture()  // auto-start, manual=false
+            assertTrue("自动启动进入 armed 态", manager.capturing)
+
+            // 用户点击停止 → suppressed=true, capturing=false
+            manager.stopCapture()
+            assertFalse("已停止", manager.capturing)
+            assertTrue("抑制标志已设置", settings.state.logAutoCaptureSuppressed)
+
+            // 项目启动 → 自动捕捉但不清 suppressed（用户停止意图持久）
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("项目启动后 suppressed 保持 true（不被自动事件清除）", settings.state.logAutoCaptureSuppressed)
+            assertTrue("项目启动自动捕捉（autoStart 优先）", manager.capturing)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
 }

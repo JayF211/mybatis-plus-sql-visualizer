@@ -147,6 +147,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 项目启动时自动开始监听（默认关——手动点「捕捉」）。 */
         var logAutoCaptureOnStart: Boolean = false,
 
+        /** 用户显式停止自动启动监听（默认关）。重启后 logAutoCaptureOnStart 开启时此标志阻止自动启动；项目启动或手动点捕捉时清零。 */
+        var logAutoCaptureSuppressed: Boolean = false,
+
         /** 关闭工具窗口时自动停止监听（默认关——关闭工具窗口不影响监听状态）。 */
         var logStopOnToolWindowClose: Boolean = false,
 
