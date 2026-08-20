@@ -19,6 +19,7 @@ import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
+import com.intellij.psi.util.PsiTreeUtil
 
 /**
  * 批量/单实体操作转换器（F-15，M6-01 + T-M15-08 扩展 + M19.5 实体单条 CRUD）：识别
@@ -97,13 +98,22 @@ object BatchOperationConverter {
         "selectByIds" to Operation.SELECT,
         "selectByMap" to Operation.SELECT,
         "listByMap" to Operation.SELECT,
+        // T-Mxx：BaseMapper 核心方法（MP 3.5.x）——补全单数/列表/计数
+        "selectById" to Operation.SELECT,
+        "selectList" to Operation.SELECT,
+        "selectMaps" to Operation.SELECT,
+        "selectObjs" to Operation.SELECT,
+        "selectCount" to Operation.SELECT,
     )
 
     /** T-M20-07：Map 等值条件操作方法名（独立 builder，不并入主键等值/IN 分支）。 */
     private val MAP_CONDITION_METHODS = setOf("removeByMap", "deleteByMap", "selectByMap", "listByMap")
 
     /** T-M20-10：主键等值单条查询方法名（getById / getOptById，其余批量查询走主键 IN）。 */
-    private val SINGLE_ID_SELECT_METHODS = setOf("getById", "getOptById")
+    private val SINGLE_ID_SELECT_METHODS = setOf("getById", "getOptById", "selectById")
+
+    /** T-Mxx：全列查询无 WHERE 方法名（selectList / selectMaps / selectObjs——BaseMapper 列表查询）。 */
+    private val FULL_COLUMN_SELECT_METHODS = setOf("selectList", "selectMaps", "selectObjs")
 
     /** T-M22-04：主键等值删除方法名（removeById / deleteById——Mapper 单删与 ActiveRecord 无参形态同模板，其余走主键 IN）。 */
     private val SINGLE_ID_DELETE_METHODS = setOf("removeById", "deleteById")
@@ -234,9 +244,68 @@ object BatchOperationConverter {
         // 不含后缀的实体（如 User）由 resolveServiceEntityClass 步骤 3b 兜底（仅排除 JDK 包）
         val entityFromService = resolveServiceEntityClass(call)
         if (entityFromService != null) return EntityResolver().resolve(entityFromService)
+        // 3b. 隐式 this 回退（this.getById(id) —— qualifierExpression 为 null）：
+        // 从 containing class 的父类/接口泛型参数解析实体（ServiceImpl<M, User> → User）
+        val entityFromImplicitThis = resolveEntityFromImplicitThis(call)
+        if (entityFromImplicitThis != null) return EntityResolver().resolve(entityFromImplicitThis)
+        // 3c. 方法调用 qualifier 回退（getBaseMapper().selectById(id) —— qualifier 是 PsiMethodCallExpression）：
+        // 从 qualifier 方法的返回类型泛型参数解析实体（BaseMapper<User> → User）
+        val entityFromMethodQualifier = resolveEntityFromMethodQualifier(call)
+        if (entityFromMethodQualifier != null) return EntityResolver().resolve(entityFromMethodQualifier)
         // 4. qualifier 实体类型（T-M22-04，ActiveRecord 无参形态）
         val entityFromQualifier = resolveQualifierEntityClass(call) ?: return null
         return EntityResolver().resolve(entityFromQualifier)
+    }
+
+    /**
+     * T-Mxx：隐式/显式 this 调用的实体解析——`getById(id)`（隐式 this，qualifierExpression 为 null）
+     * 或 `this.getById(id)`（显式 this，qualifierExpression 为 PsiThisExpression）时，
+     * 从 containing class 的父类/接口泛型参数解析实体（ServiceImpl<M, User> → User）。
+     * 高置信度：方法名已在 BATCH_OPERATIONS 白名单中 + 调用者自身是 ServiceImpl/IService 子类。
+     */
+    private fun resolveEntityFromImplicitThis(call: PsiMethodCallExpression): PsiClass? {
+        val qualifier = call.methodExpression.qualifierExpression
+        // 仅当 qualifier 为 null（隐式 this）或 PsiThisExpression（显式 this）时触发
+        if (qualifier != null && qualifier !is com.intellij.psi.PsiThisExpression) return null
+        val containingClass = PsiTreeUtil.getParentOfType(call, PsiClass::class.java) ?: return null
+        // 沿父类/接口链取最后一个类型参数（ServiceImpl<M, User> → User）
+        for (superType in containingClass.superTypes) {
+            val params = superType.parameters
+            val candidate = params.lastOrNull() as? PsiClassType ?: continue
+            val resolved = candidate.resolve() ?: continue
+            val qualifiedName = resolved.qualifiedName ?: continue
+            if (qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.")) continue
+            return resolved
+        }
+        return null
+    }
+
+    /**
+     * T-Mxx：方法调用 qualifier 的实体解析——`getBaseMapper().selectById(id)` 时 qualifier 是
+     * PsiMethodCallExpression，从 qualifier 方法的返回类型泛型参数解析实体（BaseMapper<User> → User）。
+     * 返回类型自身无泛型参数时（如 UserMapper extends BaseMapper<User>），回退到父类/接口泛型参数。
+     */
+    private fun resolveEntityFromMethodQualifier(call: PsiMethodCallExpression): PsiClass? {
+        val qualifier = call.methodExpression.qualifierExpression as? PsiMethodCallExpression ?: return null
+        // 解析 qualifier 方法的返回类型
+        val returnType = qualifier.methodExpression.type ?: return null
+        val classType = returnType as? PsiClassType ?: return null
+        // 返回类型自身泛型参数（BaseMapper<User> → User）
+        (classType.parameters.firstOrNull() as? PsiClassType)?.resolve()?.let { resolved ->
+            val qualifiedName = resolved.qualifiedName ?: return@let
+            if (!qualifiedName.startsWith("java.") && !qualifiedName.startsWith("javax.")) return resolved
+        }
+        // 回退：返回类型的父类/接口泛型参数（UserMapper extends BaseMapper<User> → User）
+        val resolved = classType.resolve() ?: return null
+        for (superType in resolved.superTypes) {
+            val params = superType.parameters
+            val candidate = params.lastOrNull() as? PsiClassType ?: continue
+            val entity = candidate.resolve() ?: continue
+            val qualifiedName = entity.qualifiedName ?: continue
+            if (qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.")) continue
+            return entity
+        }
+        return null
     }
 
     /**
@@ -427,9 +496,13 @@ object BatchOperationConverter {
         val selectColumns = table.columns.joinToString(", ") { dialect.quoteIfKeyword(it.columnName) }
         val logicCond = if (injectLogicDelete) table.logicDeleteColumn?.let { "${dialect.quoteIfKeyword(it)} = 0" } else null
         return when {
-            methodName == "selectAll" -> {
+            methodName == "selectAll" || methodName in FULL_COLUMN_SELECT_METHODS -> {
                 val where = logicCond?.let { "\nWHERE $it" } ?: ""
                 BatchBuild("SELECT $selectColumns\nFROM ${dialect.quoteIfKeyword(table.tableName)}$where")
+            }
+            methodName == "selectCount" -> {
+                val where = logicCond?.let { "WHERE $it" } ?: ""
+                BatchBuild("SELECT COUNT(*)\nFROM ${dialect.quoteIfKeyword(table.tableName)}${if (where.isNotEmpty()) "\n$where" else ""}")
             }
             methodName in SINGLE_ID_SELECT_METHODS -> {
                 val (idWhere, idParams) = renderIdCondition(call, idColumn, resolveVariables, dialect)

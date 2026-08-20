@@ -216,6 +216,122 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertTrue("批量更新应转 UPDATE 模板", result!!.sql.startsWith("UPDATE"))
     }
 
+    // ---------------------------------------------------------------
+    // T-Mxx：隐式 this 与链式调用修复
+    // ---------------------------------------------------------------
+
+    fun testImplicitThisGetById() {
+        // 在 ServiceImpl 内部 this.getById(id) —— 隐式 this，qualifierExpression 为 null
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class UserServiceImpl extends BaseService<User> {
+                    public User getOne(Long id) {
+                        return this.getById(id);
+                    }
+                }
+                static class BaseService<T> {
+                    public T getById(Long id) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("this.getById(id) 应产出预览结果", result)
+        assertTrue("隐式 this.getById 应转 SELECT", result!!.sql.startsWith("SELECT"))
+        assertTrue("应包含 WHERE id = ?", result.sql.contains("WHERE id = ?"))
+    }
+
+    fun testGetBaseMapperSelectById() {
+        // getBaseMapper().selectById(id) —— qualifier 是方法调用，返回 BaseMapper<User>
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class BaseMapper<T> {
+                    public T selectById(Long id) { return null; }
+                }
+                static class UserMapper extends BaseMapper<User> {}
+                static class UserServiceImpl {
+                    public UserMapper getBaseMapper() { return null; }
+                    public User findOne(Long id) {
+                        return getBaseMapper().selectById(id);
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getBaseMapper().selectById(id) 应产出预览结果", result)
+        assertTrue("selectById 应转 SELECT", result!!.sql.startsWith("SELECT"))
+        assertTrue("应包含 WHERE id = ?", result.sql.contains("WHERE id = ?"))
+    }
+
+    fun testGetBaseMapperSelectList() {
+        // getBaseMapper().selectList(wrapper) —— 链式调用 + 全列查询
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class BaseMapper<T> {
+                    public java.util.List<T> selectList(Object wrapper) { return null; }
+                }
+                static class UserMapper extends BaseMapper<User> {}
+                static class UserServiceImpl {
+                    public UserMapper getBaseMapper() { return null; }
+                    public java.util.List<User> findAll() {
+                        return getBaseMapper().selectList(null);
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getBaseMapper().selectList() 应产出预览结果", result)
+        assertTrue("selectList 应转 SELECT", result!!.sql.startsWith("SELECT"))
+        // user 是 SQL 关键字，方言自动加反引号 → 断言匹配 `user`（含反引号）
+        assertTrue("应包含 FROM `user`, actual: ${result.sql}", result.sql.contains("FROM `user`"))
+    }
+
+    fun testImplicitThisSave() {
+        // this.save(entity) —— 隐式 this 插入
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class UserServiceImpl extends BaseService<User> {
+                    public boolean create(User user) {
+                        return this.save(user);
+                    }
+                }
+                static class BaseService<T> {
+                    public boolean save(T entity) { return true; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("this.save(entity) 应产出预览结果", result)
+        assertTrue("save 应转 INSERT", result!!.sql.startsWith("INSERT"))
+    }
+
     fun testInlineRemoveWrappersFactoryRendersDelete() {
         // 用户场景：service.remove(Wrappers.<X>lambdaQuery().eq(...)) 内联工厂 → 应转 DELETE
         myFixture.configureByText(
