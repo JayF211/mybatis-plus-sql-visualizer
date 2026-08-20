@@ -607,6 +607,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * @param sql  预览 SQL 文本
      * @return 创建的 PsiFile
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     internal fun createPreviewFileForTest(proj: Project, sql: String): PsiFile {
         return ReadAction.compute<PsiFile, Throwable> {
             PsiFileFactory.getInstance(proj)

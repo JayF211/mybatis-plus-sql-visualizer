@@ -872,6 +872,7 @@ class SqlPreviewService(private val project: Project) {
          * @param compute  在 ReadAction 内执行转换（锚点元素可先在 EDT 捕获，块内读取）
          * @param onResult 在 EDT 上回调转换结果（未找到 Wrapper 时为 null）
          */
+        @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
         fun previewAsync(project: Project, compute: () -> PreviewResult?, onResult: (PreviewResult?) -> Unit) {
             ApplicationManager.getApplication().executeOnPooledThread {
                 val result = try {

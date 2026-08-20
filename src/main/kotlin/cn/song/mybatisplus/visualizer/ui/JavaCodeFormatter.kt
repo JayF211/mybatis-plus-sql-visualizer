@@ -33,6 +33,7 @@ object JavaCodeFormatter {
     private const val WRAPPER_SUFFIX = "\n    }\n}"
 
     /** 格式化代码片段；project 为空或内容为空 → 原样返回。 */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     fun format(project: Project?, code: String): String {
         if (code.isBlank() || project == null) return code
         val psiFile = ReadAction.compute<PsiFile, Throwable> {

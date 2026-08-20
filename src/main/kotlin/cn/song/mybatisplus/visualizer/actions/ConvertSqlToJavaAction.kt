@@ -37,6 +37,7 @@ import com.intellij.openapi.ui.Messages
  */
 class ConvertSqlToJavaAction : AnAction() {
 
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
@@ -99,6 +100,7 @@ class ConvertSqlToJavaAction : AnAction() {
      * 多语句时不弹实体选择弹窗（交互复杂度过高），统一走自动推断 + 字符串列名回落；
      * 输出代码块到 [JavaCodePreviewDialog]（复制/关闭）。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun convertBatch(project: Project, statements: List<String>) {
         // 1. 批量解析（EDT 纯函数；错误隔离）
         val parseResults = SqlToJavaConverter.parseBatch(statements)

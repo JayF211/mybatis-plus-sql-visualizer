@@ -550,6 +550,7 @@ class SqlToJavaPanel(
          *
          * T-Mxx：入口加调用类校验——VO/DTO/Utils/Controller 等不合法类拒绝选中 + 友好提示。
          */
+        @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
         internal fun pickPsiClassForTest(cls: PsiClass) {
             // T-Mxx：校验是否为合法调用类，不合法则弹友好提示并拒绝选中
             val rejectReason = validateCallerClass(cls)
@@ -608,6 +609,7 @@ class SqlToJavaPanel(
          *  - [getListCellRenderer]：字符串元素走纯文本 + 字段图标渲染（委托渲染器对非
          *    NavigationItem 值在 showIcon=true 时 ModuleRendererFactory 返回 null → NPE）。
          */
+        @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
         inner class CallerClassByNameModel : ChooseByNameModel {
             private val delegate = GotoClassModel2(projectRef)
             private val delegateRenderer = delegate.getListCellRenderer() as ListCellRenderer<Any>
@@ -757,6 +759,7 @@ class SqlToJavaPanel(
     // 转换流程
     // ------------------------------------------------------------------
 
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun convert() {
         val text = inputEditor.text
         if (text.isBlank()) {
@@ -854,6 +857,7 @@ class SqlToJavaPanel(
      *  - 不缓存（cacheResult/cacheText 仅单条路径使用）；
      *  - 超过 20 条时状态行提示「语句较多，实体查找可能耗时较长」。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun convertBatch(statements: List<String>) {
         // 1. 批量解析（EDT 纯函数；错误隔离——失败项 error 非 null）
         val parseResults = SqlToJavaConverter.parseBatch(statements)
@@ -956,6 +960,7 @@ class SqlToJavaPanel(
      *  - 全部处理完 → [onComplete]（最后统一 render；副表选择结果同时进 cacheSubEntities，
      *    切换形态重生成时复用不再弹）。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun resolveSubEntities(
         subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
         joins: List<ReverseJoin>,
@@ -1091,6 +1096,7 @@ class SqlToJavaPanel(
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun render(
         result: SqlReverseResult,
         candidates: List<SqlToJavaConverter.EntityCandidate>,

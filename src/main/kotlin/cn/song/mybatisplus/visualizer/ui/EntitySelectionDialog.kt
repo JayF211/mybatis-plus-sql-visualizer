@@ -144,6 +144,7 @@ class EntitySelectionDialog(
      * @param psiClass 目标 PsiClass
      * @return Pair(显示名, 全合格名)；name 为 null 时返回 null
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     internal fun resolveQualifiedNameForTest(psiClass: PsiClass): Pair<String, String?>? {
         return ReadAction.compute<Pair<String, String?>?, Throwable> {
             val name = psiClass.name ?: return@compute null

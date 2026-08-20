@@ -44,6 +44,7 @@ import com.intellij.psi.xml.XmlTag
  */
 class ConvertToSqlAction : AnAction() {
 
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val file = e.getData(CommonDataKeys.PSI_FILE) ?: return
@@ -167,6 +168,7 @@ class ConvertToSqlAction : AnAction() {
      * 仿 T-M23.7 选择区候选交互）；摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫）。
      * T-M29.6：选中确定后编辑器定位（对齐选择区候选交互）。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
@@ -202,6 +204,7 @@ class ConvertToSqlAction : AnAction() {
      * （@Select/@Update 等，startOffset 在选区范围），0/1/多分发（多条弹 [SqlSelectionDialog]，
      * 选中确定 → 编辑器定位 → 预览）；摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫，仿 M26-A）。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun showAnnotationSelectionCandidates(
         project: Project,
         file: com.intellij.psi.PsiFile,
@@ -252,6 +255,7 @@ class ConvertToSqlAction : AnAction() {
      * startOffset 在选区范围），0/1/多分发（多条弹 [SqlSelectionDialog]，仿 Java 选择区候选交互）；
      * 摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫，仿 T-M23.8）。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun previewXmlSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
@@ -289,6 +293,7 @@ class ConvertToSqlAction : AnAction() {
      * T-M24-04/M25-01：XML mapper 语句预览——光标所在语句优先；不在语句内时
      * 收集全部语句（0/1/多分发，多候选走 [SqlSelectionDialog]，仿 Java 选择区候选交互）。
      */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor) {
         val element = file.findElementAt(editor.caretModel.offset)
         val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
