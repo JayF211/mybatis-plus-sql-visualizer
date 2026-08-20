@@ -35,6 +35,23 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         override fun hasMainConsole(): Boolean = hasMainConsoleResult
     }
 
+    /** 可变主控制台存在性桥（T02/T04 模拟控制台动态出现）。 */
+    private class MutableFakeBridge(
+        private val attachResult: Boolean,
+        hasMainConsoleInitial: Boolean = false,
+    ) : SqlLogConsoleBridge(SqlLogEntryBuffer()) {
+        var hasMainConsoleResult = hasMainConsoleInitial
+        var attachCalls = 0
+            private set
+
+        override fun attach(project: Project): Boolean {
+            attachCalls++
+            return attachResult
+        }
+
+        override fun hasMainConsole(): Boolean = hasMainConsoleResult
+    }
+
     /** 装配注入受控桥的 manager（生产构造 + 测试缝替换桥——不触碰轻服务构造函数解析）。 */
     private fun managerWith(bridge: SqlLogConsoleBridge): SqlLogManager =
         SqlLogManager(project).apply { installBridgeForTest(bridge) }
@@ -117,5 +134,85 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         assertTrue("startCapture 后应进入捕捉态", manager.capturing)
         manager.dispose()
         assertFalse("dispose（项目关闭）后 capturing 应重置为 false", manager.capturing)
+    }
+
+    // ===== T-13：手动捕捉无需等待项目运行（userRequestedCapture 意图传递） =====
+
+    /** T01：无控制台手动启动 → 等待态，桥已挂载。 */
+    fun testT01_ManualCaptureWithoutConsole_EnterWaitingState() {
+        val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertFalse("无控制台时不得进入捕捉态", manager.capturing)
+        assertTrue("应进入等待态（isWaitingForConsole=true）", manager.isWaitingForConsole)
+        assertEquals("仍须挂载桥监听", 1, bridge.attachCalls)
+    }
+
+    /** T02：等待中控制台出现 → onConsoleAppeared 触发 → 自动进入捕捉态。 */
+    fun testT02_WaitingConsoleAppeared_AutoEntersCapture() {
+        val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertTrue("应处于等待态", manager.isWaitingForConsole)
+
+        // 模拟控制台出现
+        bridge.hasMainConsoleResult = true
+        manager.onConsoleAppeared()
+        assertTrue("控制台出现后应自动进入捕捉态", manager.capturing)
+        assertFalse("等待态应清除", manager.isWaitingForConsole)
+    }
+
+    /** T03：等待中手动停止 → 全部标志清零。 */
+    fun testT03_WaitingManualStop_ClearsAllFlags() {
+        val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertTrue("应处于等待态", manager.isWaitingForConsole)
+
+        manager.stopCapture()
+        assertFalse("stop 后 capturing=false", manager.capturing)
+        assertFalse("stop 后 isWaitingForConsole=false", manager.isWaitingForConsole)
+    }
+
+    /** T04：自动启动设置不受影响——autoStart=true 时 onConsoleAppeared 独立触发捕捉。 */
+    fun testT04_AutoStartSetting_UnaffectedByNewFeature() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.logAutoCaptureOnStart
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            // 自动路径：LogStartupCapture 触发 startCapture（无控制台）
+            manager.startCapture()
+            assertFalse("无控制台时自动路径也不得进入捕捉态", manager.capturing)
+            // 控制台出现
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("autoStart=true：控制台出现后应自动进入捕捉态", manager.capturing)
+        } finally {
+            settings.state.logAutoCaptureOnStart = old
+        }
+    }
+
+    /** T05：有控制台手动启动（回归）→ 直接进入捕捉态，不经过等待态。 */
+    fun testT05_HasConsoleManualCapture_DirectCapture() {
+        val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = true)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertTrue("有控制台时应直接进入捕捉态", manager.capturing)
+        assertFalse("有控制台时不应处于等待态", manager.isWaitingForConsole)
+        manager.stopCapture()
+    }
+
+    /** T06：等待中 dispose → 全部标志清零（无泄漏）。 */
+    fun testT06_DisposeWhileWaiting_ClearsAllFlags() {
+        val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertTrue("应处于等待态", manager.isWaitingForConsole)
+
+        manager.dispose()
+        assertFalse("dispose 后 capturing=false", manager.capturing)
+        assertFalse("dispose 后 isWaitingForConsole=false", manager.isWaitingForConsole)
     }
 }

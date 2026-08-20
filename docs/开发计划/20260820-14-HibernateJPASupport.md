@@ -1,0 +1,495 @@
+# Hibernate/JPA 全面支持开发计划
+
+> 创建日期：2026-08-20
+> 状态：**计划中**
+> 优先级：P1（用户主动请求，扩展 ORM 覆盖面）
+
+## 目标
+
+在当前插件已支持 MyBatis-Plus 和 MyBatis-Plus-Join 的基础上，新增 Hibernate/JPA 查询预览能力。覆盖三种主流 JPA 查询风格：
+
+1. **Spring Data JPA 推导查询**（Derived Query）—— `findByLastNameAndFirstName`
+2. **CriteriaBuilder 强类型查询** —— `cb.equal(root.get("name"), "John")`
+3. **JPQL / `@Query` 注解** —— `@Query("SELECT u FROM User u WHERE u.name = ?1")`
+
+## 架构决策：纯静态分析
+
+**结论**：采用与现有 MP 插件一致的纯 PSI 静态分析方案，不依赖运行时 Hibernate SessionFactory。
+
+| 评估维度 | 静态分析 | 运行时 Hibernate |
+|---------|---------|-----------------|
+| 依赖 | 无外部 JAR | 需引入 hibernate-core + 配置 SessionFactory |
+| 速度 | 即时 | 需构建 metamodel、扫描实体 |
+| 准确性 | 覆盖 90% 常用模式 | 100% 准确 |
+| 版本兼容 | 无版本耦合 | 内 API 随 Hibernate 版本变动 |
+| 复杂度 | 中 | 高（SQM 管线 7+ 内部类，构造参数复杂） |
+
+选择静态分析的核心原因：
+- 插件已在 MP/MPJ 上验证了静态分析路线可行
+- JPA 注解体系（`@Table`、`@Column`、`@JoinColumn`）可通过 PSI 直接读取，无需运行时 metamodel
+- 避免引入 hibernate-core 依赖导致插件体积膨胀和类加载冲突
+- Hibernate 6 的 SQM 翻译管线全在 `*.internal.*` 包，版本兼容风险高
+
+## 现有架构映射
+
+当前插件的分层结构可以直接映射到 JPA 支持：
+
+| 层级 | MP 现有实现 | JPA 新增/复用 |
+|------|-----------|-------------|
+| 实体解析 | `EntityResolver`（MP 注解） | 扩展支持 JPA 注解（`@Entity/@Table/@Column`） |
+| 查询定位 | `WrapperLocator` | 新增 `DerivedMethodLocator`、`CriteriaQueryLocator` |
+| 查询转换 | `ConverterRegistry` + `WrapperConverter` SPI | 新增三个 JPA Converter |
+| SQL 生成 | `SqlGenerator` + `SqlStatement` 模型 | **直接复用**现有模型 |
+| 预览 UI | `SqlPreviewService` + `SqlPreviewDialog` | **直接复用** |
+| Gutter 图标 | `SqlGutterLineMarkerProvider` | 新增 JPA 专用 LineMarker |
+| 日志捕获 | `SqlLogManager` | **直接复用**（Hibernate SQL 日志格式兼容） |
+
+## JPA 三种查询风格分析
+
+### 风格一：Spring Data JPA 推导查询
+
+**原理**：Spring Data JPA 的 `PartTree` 解析器将方法名拆分为 Subject（操作类型）+ Predicate（条件树），然后转为 CriteriaQuery 执行。
+
+**PartTree 解析规则**：
+- 方法名按第一个 `By` 分割为 Subject 和 Predicate
+- Subject 支持：`find`/`read`/`get`/`query`/`search`/`stream`/`count`/`exists`/`delete`/`remove`
+- 可选修饰符：`Distinct`、`Top N`/`First N`
+- Predicate 按 `Or`/`And` 拆分为 `Part` 列表
+- 每个 `Part` 包含 `PropertyPath`（属性路径）+ `Type`（条件类型，共 27 种）
+- 支持 `OrderBy` 排序
+
+**Part.Type 条件类型全集（27 种）**：
+
+| 类型 | 关键字 | 语义 |
+|------|--------|------|
+| `BETWEEN` | Between, IsBetween | BETWEEN ? AND ? |
+| `IS_NOT_NULL` | NotNull, IsNotNull | IS NOT NULL |
+| `IS_NULL` | Null, IsNull | IS NULL |
+| `LESS_THAN` | LessThan, IsLessThan | < ? |
+| `LESS_THAN_EQUAL` | LessThanEqual, IsLessThanEqual | <= ? |
+| `GREATER_THAN` | GreaterThan, IsGreaterThan | > ? |
+| `GREATER_THAN_EQUAL` | GreaterThanEqual, IsGreaterThanEqual | >= ? |
+| `BEFORE` | Before, IsBefore | < ? |
+| `AFTER` | After, IsAfter | > ? |
+| `NOT_LIKE` | NotLike, IsNotLike | NOT LIKE ? |
+| `LIKE` | Like, IsLike | LIKE ? |
+| `STARTING_WITH` | StartingWith, IsStartingWith, StartsWith | LIKE ?% |
+| `ENDING_WITH` | EndingWith, IsEndingWith, EndsWith | LIKE %? |
+| `CONTAINING` | Containing, IsContaining, Contains | LIKE %?% |
+| `NOT_CONTAINING` | NotContaining, IsNotContaining, NotContains | NOT LIKE %?% |
+| `IS_NOT_EMPTY` | NotEmpty, IsNotEmpty | IS NOT EMPTY |
+| `IS_EMPTY` | Empty, IsEmpty | IS EMPTY |
+| `NOT_IN` | NotIn, IsNotIn | NOT IN (?) |
+| `IN` | In, IsIn | IN (?) |
+| `NEAR` | Near, IsNear | 空间近邻 |
+| `WITHIN` | Within, IsWithin | 空间范围内 |
+| `REGEX` | Regex, MatchesRegex, Matches | REGEXP |
+| `EXISTS` | Exists | EXISTS |
+| `TRUE` | True, IsTrue | = true |
+| `FALSE` | False, IsFalse | = false |
+| `NEGATING_SIMPLE_PROPERTY` | Not, IsNot | != ? |
+| `SIMPLE_PROPERTY` | Equals, Is（默认） | = ? |
+
+**额外特性**：
+- `IgnoreCase`/`AllIgnoreCase`：条件忽略大小写
+- `OrderBy field1AscAndField2Desc`：排序
+- `findAddressCity`：嵌套属性路径（点号分隔表关联）
+
+**PSI 识别要点**：
+- 目标：Spring Data Repository 接口（继承 `JpaRepository`/`CrudRepository`/`PagingAndSortingRepository`/`Repository`）
+- 位置：接口方法声明处（光标在方法名上）
+- 识别依据：方法的 containing class 是接口 + 接口的 superTypes 包含上述基类
+
+### 风格二：CriteriaBuilder 强类型查询
+
+**原理**：通过 JPA Criteria API 的 Builder 模式构建查询。
+
+**PSI 识别要点**：
+- `cb.createQuery(Xxx.class)` 或 `cb.createQuery()` 创建查询
+- `cq.from(Xxx.class)` 设置根实体
+- `root.get("fieldName")` 或 `root.get(Xxx_.fieldName)` 引用列
+- `join.get("fieldName")` 引用关联表列
+- `cb.equal/greaterThan/lessThan/in/like...` 构建条件
+- `cq.where(predicate...)` 设置 WHERE
+- `cq.orderBy(cb.asc(root.get("field")))` 设置排序
+- `cq.multiselect(root.get("a"), root.get("b"))` 或 `cq.select(root)` 设置 SELECT
+- `root.join("xxx", JoinType.LEFT)` 设置 JOIN
+
+**CriteriaBuilder 方法 → 条件映射**：
+
+| CriteriaBuilder 方法 | 生成的 SQL |
+|---------------------|-----------|
+| `cb.equal(a, b)` | `a = b` |
+| `cb.notEqual(a, b)` | `a <> b` |
+| `cb.greaterThan(a, b)` | `a > b` |
+| `cb.greaterThanOrEqualTo(a, b)` | `a >= b` |
+| `cb.lessThan(a, b)` | `a < b` |
+| `cb.lessThanOrEqualTo(a, b)` | `a <= b` |
+| `cb.between(a, lo, hi)` | `a BETWEEN lo AND hi` |
+| `cb.isNull(a)` | `a IS NULL` |
+| `cb.isNotNull(a)` | `a IS NOT NULL` |
+| `cb.like(a, pattern)` | `a LIKE pattern` |
+| `cb.notLike(a, pattern)` | `a NOT LIKE pattern` |
+| `cb.in(a).value(b)` | `a IN (b)` |
+| `cb.and(p1, p2)` | `p1 AND p2` |
+| `cb.or(p1, p2)` | `p1 OR p2` |
+| `cb.not(p)` | `NOT p` |
+| `cb.concat(a, b)` | `CONCAT(a, b)` |
+| `cb.substring(a, from, len)` | `SUBSTRING(a, from, len)` |
+| `cb.lower(a)` | `LOWER(a)` |
+| `cb.upper(a)` | `UPPER(a)` |
+| `cb.trim(a)` | `TRIM(a)` |
+| `cb.length(a)` | `LENGTH(a)` |
+| `cb.count(root)` | `COUNT(...)` |
+| `cb.sum/max/min/avg(a)` | 聚合函数 |
+
+### 风格三：JPQL / @Query 注解
+
+**原理**：用户在 `@Query` 注解中直接写 JPQL，或在 XML 中定义命名查询。
+
+**PSI 识别要点**：
+- 识别 `@Query` 注解（`org.springframework.data.jpa.repository.Query`）
+- 提取 `value` 属性中的 JPQL 字符串
+- 识别 `@Query(nativeQuery = true)` 标记（原生 SQL，直接展示）
+- 识别 `namedQueries` / `@NamedQuery` 注解
+
+**JPQL → SQL 转换思路**：
+- JPQL 语法与 SQL 高度相似，主要差异：
+  - JPQL 用实体名和属性名 → 需替换为数据库表名和列名
+  - `JOIN FETCH` → `JOIN` + 包含关联表列
+  - `NEW com.xxx.VO(a, b)` → `SELECT a, b`
+  - `MEMBER OF` → `IN` 或子查询
+  - 命名参数 `:param` → `?`
+  - 位置参数 `?1` → `?`
+- 对于 `@Query` 预览，可做轻度转换（实体名→表名映射 + 参数占位符替换）
+
+## 实体解析扩展
+
+### 当前 EntityResolver 的局限
+
+当前 `EntityResolver` 仅识别 MyBatis Plus 注解：`@TableName`、`@TableField`、`@TableId`、`@TableLogic`。
+
+### 需要新增的 JPA 注解支持
+
+| JPA 注解 | 用途 | 映射到 TableInfo |
+|---------|------|-----------------|
+| `@Entity` | 标记实体类 | 识别为表实体 |
+| `@Table(name="xxx")` | 指定表名 | `TableInfo.tableName`（缺失时按驼峰转下划线） |
+| `@Column(name="xxx")` | 指定列名 | `ColumnInfo.columnName`（缺失时按驼峰转下划线） |
+| `@Id` | 主键标记 | `ColumnInfo.primaryKey = true` |
+| `@GeneratedValue` | 主键生成策略 | 可选展示 |
+| `@Transient` | 非持久化字段 | 排除 |
+| `@JoinColumn(name="xxx")` | 外键列名 | 联表列映射 |
+| `@ManyToOne` | 多对一关联 | 联表 JOIN |
+| `@OneToMany` | 一对多关联 | 联表 JOIN |
+| `@OneToOne` | 一对一关联 | 联表 JOIN |
+| `@ManyToMany` | 多对多关联 | 联表 JOIN（通过中间表） |
+| `@JoinTable(name="xxx")` | 中间表名 | 多对多 JOIN 中间表 |
+| `@TableField(exist=false)` (MP) | 非持久化字段 | 排除 |
+
+### 命名策略
+
+JPA 默认使用驼峰转下划线命名（Hibernate 的 `ImplicitNamingStrategy`）：
+- `userName` → `user_name`
+- `OrderItem` → `order_item`
+
+物理命名策略（`PhysicalNamingStrategy`）可能有额外转换（如前缀、后缀），但插件层面采用默认策略即可覆盖 90% 场景。配置化的命名策略作为后续增强。
+
+## 分阶段交付计划
+
+### 阶段一：实体解析 + 推导查询（P0，预计最大）
+
+**目标**：在 Repository 接口的推导方法名旁显示 gutter 图标，点击预览生成的 SQL。
+
+**涉及文件**：
+
+新增：
+- `psi/jpa/JpaEntityResolver.kt` — JPA 实体注解解析器（`@Entity`、`@Table`、`@Column`、`@Id`、`@Transient`）
+- `psi/jpa/DerivedMethodLocator.kt` — Spring Data Repository 推导方法定位器
+- `converter/jpa/DerivedQueryConverter.kt` — 推导方法 → SqlStatement 转换器
+- `converter/jpa/PartTreeParser.kt` — 方法名解析器（Subject + Predicate + Part 树）
+
+修改：
+- `converter/WrapperConverter.kt` — 在 `ConverterRegistry` 注册新 Converter
+- `psi/EntityResolver.kt` — 重构提取公共接口 `IEntityResolver`，使 MP 和 JPA 解析器共享 `TableInfo`/`ColumnInfo` 模型
+- `resources/META-INF/plugin.xml` — 注册 JPA gutter LineMarker
+- `resources/messages/MpSqlVisualizerBundle*.properties` — 新增文案
+
+**核心工作**：
+
+1. **JpaEntityResolver**：
+   - 读取 `@Entity` 注解的 PsiClass
+   - 读取 `@Table(name=...)` 获取表名，缺失时驼峰转下划线
+   - 遍历字段/方法读取 `@Column(name=...)` 获取列名
+   - 处理 `@Id` 标记主键、`@Transient` 排除非持久化字段
+   - 处理 `@ManyToOne`/`@JoinColumn` 等关联注解，构建 JoinClause 模型
+   - 使用 `PsiModificationTracker` 缓存解析结果（与 MP 缓存策略一致）
+
+2. **PartTreeParser**：
+   - 实现 Spring Data 的 `PartTree` 等价逻辑
+   - Subject 解析：`find`/`count`/`exists`/`delete`/`remove` + `Distinct` + `Top N`
+   - Predicate 解析：按 `Or`/`And` 拆分，每个 Part 按 camelCase 边界切分并匹配条件关键字
+   - 输出：`PartTree` 数据类（`subject: Subject`, `predicates: List<Part>`, `sortSpec: List<SortPart>`）
+   - 支持 `IgnoreCase` 检测
+   - 支持 `OrderBy` 解析
+
+3. **DerivedQueryConverter**：
+   - 将 `PartTree` → `SelectStatement`（或 `DeleteStatement`）
+   - Subject 映射：`find`/`query` → SELECT，`count` → SELECT COUNT(*)，`delete`/`remove` → DELETE
+   - Predicate 映射：每个 `Part` → `Condition` 树（复用现有 `Condition` sealed class）
+   - Part.Type → Condition 映射：
+     - `SIMPLE_PROPERTY` → `Condition.Simple(col, EQ, Placeholder)`
+     - `LIKE` → `Condition.Like(col, false, Placeholder, Any)`
+     - `STARTING_WITH` → `Condition.Like(col, false, Placeholder, Start)`
+     - `ENDING_WITH` → `Condition.Like(col, false, Placeholder, End)`
+     - `CONTAINING` → `Condition.Like(col, false, Placeholder, Both)`
+     - `BETWEEN` → `Condition.Between(col, false, Placeholder, Placeholder)`
+     - `IN` → `Condition.In(col, false, listOf(Placeholder))`
+     - `IS_NULL` → `Condition.Unary(col, IS_NULL)`
+     - `IS_NOT_NULL` → `Condition.Unary(col, IS_NOT_NULL)`
+     - `LESS_THAN` → `Condition.Simple(col, LT, Placeholder)`
+     - `GREATER_THAN` → `Condition.Simple(col, GT, Placeholder)`
+     - 其他依此类推
+   - 嵌套属性路径（`addressCity`）→ 需要 JOIN 解析（Phase 1 可暂不支持，显示提示）
+   - `OrderBy` → `SelectStatement.orderBy`
+
+4. **DerivedMethodLocator**：
+   - 从光标位置找到 PsiMethod
+   - 判断 containing class 是否为 Repository 接口
+   - 判断方法是否为推导查询（非 `@Query` 注解、非 default 方法、非 static 方法）
+   - 解析返回类型确定实体类
+   - 调用 `PartTreeParser` + `DerivedQueryConverter` 生成 SQL
+
+### 阶段二：CriteriaBuilder 查询（P0）
+
+**目标**：在 CriteriaBuilder 调用链旁显示 gutter 图标，点击预览 SQL。
+
+**涉及文件**：
+
+新增：
+- `psi/jpa/CriteriaQueryLocator.kt` — CriteriaBuilder 查询定位器
+- `converter/jpa/CriteriaQueryConverter.kt` — CriteriaQuery → SqlStatement 转换器
+
+修改：
+- `converter/WrapperConverter.kt` — 注册新 Converter
+- `resources/META-INF/plugin.xml` — 注册 CriteriaBuilder gutter LineMarker
+
+**核心工作**：
+
+1. **CriteriaQueryLocator**：
+   - 从光标位置定位到 `CriteriaQuery`/`CriteriaBuilder` 调用
+   - 识别 `cq.from(Xxx.class)` 确定根实体
+   - 识别 `cq.where(...)` 提取条件
+   - 识别 `cq.select(...)`/`cq.multiselect(...)` 提取投影列
+   - 识别 `root.join(...)` 提取 JOIN 信息
+   - 识别 `cq.orderBy(...)` 提取排序
+   - 识别 `cq.groupBy(...)` 提取分组
+   - 识别 `cq.having(...)` 提取 HAVING 条件
+
+2. **CriteriaQueryConverter**：
+   - 将 PSI 解析的 CriteriaQuery 模型转换为 `SelectStatement`
+   - `root.get("field")` → 通过 JpaEntityResolver 解析为列引用
+   - `join.get("field")` → 解析为关联表列引用
+   - `cb.equal/greaterThan/lessThan...` → 映射为 `Condition` 子类
+   - `cb.and/or/not` → 映射为 `Condition.Group`
+   - `cb.like/notLike` → 映射为 `Condition.Like`
+   - `cb.between` → 映射为 `Condition.Between`
+   - `cb.in` → 映射为 `Condition.In`
+   - `cb.isNull/isNotNull` → 映射为 `Condition.Unary`
+
+### 阶段三：JPQL / @Query 注解（P1）
+
+**目标**：在 `@Query` 注解旁显示 gutter 图标，点击预览转换后的 SQL。
+
+**涉及文件**：
+
+新增：
+- `psi/jpa/JpqlQueryLocator.kt` — @Query 注解定位器
+- `converter/jpa/JpqlConverter.kt` — JPQL → SQL 转换器
+
+**核心工作**：
+
+1. **JpqlQueryLocator**：
+   - 识别方法或类上的 `@Query` 注解
+   - 提取 `value` 属性中的 JPQL 字符串
+   - 检测 `nativeQuery = true`（原生 SQL，直接展示无需转换）
+   - 提取 `name` 属性（命名查询引用）
+
+2. **JpqlConverter**：
+   - 实体名 → 表名映射（通过 JpaEntityResolver 反查 `@Table` 注解决定的表名）
+   - 属性名 → 列名映射
+   - `:param` / `?1` → `?` 占位符替换
+   - `SELECT e FROM Entity e` → `SELECT e.* FROM table e`
+   - `JOIN FETCH e.relation r` → `LEFT JOIN table r ON ...`
+   - `WHERE e.name = :name` → `WHERE e.name = ?`
+   - `ORDER BY e.createTime DESC` → 保持不变
+   - 对复杂 JPQL（子查询、`MEMBER OF`、`NEW DTO(...)`）展示为"包含高级特性，以下为基础转换"并做尽力而为的替换
+
+### 阶段四：增强与集成（P1）
+
+**目标**：完善体验，与现有功能集成。
+
+**涉及工作**：
+
+1. **关联表解析增强**：
+   - 推导查询中 `findByAddressCity`（嵌套属性）→ 自动 JOIN `address` 表
+   - `PartTreeParser` 的 `PropertyPath` 支持点多级解析
+   - `JpaEntityResolver` 补充 `@ManyToOne`/`@OneToMany`/`@JoinColumn` 关联解析
+
+2. **Gutter 图标与交互**：
+   - Repository 方法名左侧显示 SQL 预览图标
+   - CriteriaBuilder 调用链起始行显示图标
+   - `@Query` 注解旁显示图标
+   - 点击行为与 MP 一致：弹出预览弹窗
+
+3. **日志捕获集成**：
+   - Hibernate 日志格式：`DEBUG org.hibernate.SQL - select ...` 或 `DEBUG o.h.sql - select ...`
+   - 已有 `SqlLogManager` 的 process listener 机制可直接复用
+   - 无需修改日志捕获代码，Hibernate 日志格式已兼容
+
+4. **设置页新增**：
+   - JPA 命名策略配置（可选，默认驼峰转下划线）
+   - 推导查询预览开关
+   - CriteriaBuilder 预览开关
+
+5. **i18n**：
+   - 所有新增 UI 文案支持中英文
+   - 复用现有 `MpSqlVisualizerBundle` 机制
+
+6. **SQL → Java 反向**（可选）：
+   - 将 JPA 查询反向转为 Repository 方法签名或 CriteriaBuilder 代码
+   - 此为 T-M 级任务，视阶段 1-3 完成情况决定
+
+## 共享模型复用策略
+
+当前 `SqlStatement` sealed class 及其子类可以直接复用：
+
+```
+SqlStatement (sealed)
+├── SelectStatement  ← Derived 推导查询（SELECT/COUNT）、CriteriaBuilder（SELECT）
+├── UpdateStatement  ← CriteriaBuilder（cb.createCriteriaUpdate）[未来]
+└── DeleteStatement  ← Derived 推导查询（delete/remove）
+```
+
+`Condition` sealed class 的 8 个子类可覆盖大部分 JPA 条件：
+
+| Condition 子类 | JPA 对应场景 |
+|---------------|------------|
+| `Simple` | equal, notEqual, greaterThan, lessThan 等二元比较 |
+| `Unary` | isNull, isNotNull |
+| `In` | IN, NOT IN |
+| `Between` | BETWEEN |
+| `Like` | LIKE, NOT LIKE, STARTS_WITH, ENDS_WITH, CONTAINING |
+| `Group` | AND, OR, NOT 组合 |
+| `ColumnComparison` | CriteriaBuilder 中列对列比较 |
+| `Raw` | 无法解析的条件（降级展示原始文本） |
+
+## 测试策略
+
+遵循现有测试约定（参见 `project-test-conventions` 记忆）：
+
+1. **PartTreeParser 单元测试**：
+   - 覆盖全部 27 种 Part.Type
+   - Subject 解析（find/count/exists/delete + Distinct + Top N）
+   - OrderBy 解析
+   - IgnoreCase 检测
+   - 嵌套属性路径
+   - 边界情况（空谓词、单条件、多 And/Or 组合）
+
+2. **JpaEntityResolver 单元测试**：
+   - `@Entity` + `@Table` 注解解析
+   - `@Column` 注解解析
+   - `@Id` 主键标记
+   - `@Transient` 排除
+   - 无注解时的默认命名策略（驼峰转下划线）
+   - 继承场景（`@MappedSuperclass`）
+
+3. **DerivedQueryConverter 集成测试**：
+   - `findByLastName` → `SELECT ... FROM user WHERE last_name = ?`
+   - `findByLastNameAndFirstName` → `WHERE last_name = ? AND first_name = ?`
+   - `findByAgeBetween` → `WHERE age BETWEEN ? AND ?`
+   - `findByNameLike` → `WHERE name LIKE ?`
+   - `findByStatusIn` → `WHERE status IN (?)`
+   - `countByDepartmentId` → `SELECT COUNT(*) FROM ... WHERE department_id = ?`
+   - `deleteByStatus` → `DELETE FROM ... WHERE status = ?`
+   - `findTop10ByOrderByCreateTimeDesc` → `SELECT ... ORDER BY create_time DESC LIMIT 10`
+
+4. **CriteriaQueryConverter 集成测试**：
+   - 简单等值条件
+   - AND/OR 组合
+   - JOIN 查询
+   - 聚合函数（COUNT/SUM）
+   - 排序和分组
+
+5. **PSI 定位测试**：
+   - Repository 接口方法识别
+   - CriteriaBuilder 调用链识别
+   - @Query 注解识别
+
+## 风险与缓解
+
+| 风险 | 影响 | 缓解 |
+|------|------|------|
+| Part.Type 27 种关键字覆盖不全 | 部分方法名解析失败 | 降级展示"无法解析"提示，`Raw` 条件保留原文 |
+| 嵌套属性路径需 JOIN 解析 | `findByAddressCity` 无法生成 JOIN | Phase 1 显示提示"关联查询需阶段二支持"，Phase 2 补全 |
+| CriteriaBuilder 链式调用复杂 | 深层嵌套条件解析困难 | 限制解析深度，超出部分用 `Raw` 降级 |
+| JPA 注解组合多样 | 实体解析遗漏边界情况 | 渐进式补充，测试驱动 |
+| 与 MP 功能并行开发冲突 | 文件冲突 | 新文件为主，仅 `ConverterRegistry` 和 `plugin.xml` 需合并 |
+| 驼峰转下划线命名策略不匹配 | 表名/列名错误 | 设置页提供命名策略配置 |
+
+## 文件清单预估
+
+### 新增文件（约 15 个）
+
+```
+src/main/kotlin/cn/song/mybatisplus/visualizer/
+├── psi/jpa/
+│   ├── JpaEntityResolver.kt          — JPA 实体注解解析
+│   ├── DerivedMethodLocator.kt       — 推导方法定位
+│   ├── CriteriaQueryLocator.kt       — CriteriaBuilder 定位
+│   └── JpqlQueryLocator.kt           — @Query 注解定位
+├── converter/jpa/
+│   ├── PartTreeParser.kt             — 方法名解析器
+│   ├── DerivedQueryConverter.kt      — 推导查询转换器
+│   ├── CriteriaQueryConverter.kt     — CriteriaBuilder 转换器
+│   └── JpqlConverter.kt              — JPQL 转换器
+├── psi/
+│   └── IEntityResolver.kt            — 实体解析公共接口（重构）
+src/test/kotlin/cn/song/mybatisplus/visualizer/
+├── psi/jpa/
+│   ├── JpaEntityResolverTest.kt
+│   ├── DerivedMethodLocatorTest.kt
+│   └── CriteriaQueryLocatorTest.kt
+├── converter/jpa/
+│   ├── PartTreeParserTest.kt
+│   ├── DerivedQueryConverterTest.kt
+│   └── CriteriaQueryConverterTest.kt
+```
+
+### 修改文件（约 5 个）
+
+```
+src/main/kotlin/cn/song/mybatisplus/visualizer/
+├── converter/WrapperConverter.kt      — 注册 JPA Converter
+├── psi/EntityResolver.kt              — 实现 IEntityResolver 接口
+src/main/resources/
+├── META-INF/plugin.xml                — 注册 JPA LineMarker
+├── messages/MpSqlVisualizerBundle.properties       — 英文文案
+└── messages/MpSqlVisualizerBundle_zh.properties    — 中文文案
+```
+
+## 工作量估算
+
+| 阶段 | 核心工作 | 预估工时 |
+|------|---------|---------|
+| 阶段一 | 实体解析 + 推导查询 | 16h |
+| 阶段二 | CriteriaBuilder 查询 | 12h |
+| 阶段三 | JPQL / @Query | 8h |
+| 阶段四 | 增强与集成 | 8h |
+| 测试 | 全量测试 + 边界补充 | 8h |
+| **合计** | | **~52h** |
+
+按波次并行可压缩至 3 波：
+- 波次 1：阶段一（实体解析 + 推导查询，最大且独立）
+- 波次 2：阶段二（CriteriaBuilder，依赖阶段一的 JpaEntityResolver）
+- 波次 3：阶段三 + 阶段四（JPQL + 增强，可并行）

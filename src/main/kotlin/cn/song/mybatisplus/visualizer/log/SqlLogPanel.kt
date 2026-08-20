@@ -208,18 +208,19 @@ class SqlLogPanel(
         manager.addUiListener { refreshList() }
         refreshList()
 
-        // capturing 变化 → 刷新工具栏按钮图标/文案（调用 ActionToolbar.updateActionsAsync()；
-        // T-M51-06：updateActionsImmediately() 已弃用，改用 updateActionsAsync()（接口公开方法，
-        // 三平台 243/253/262 皆存——javap 实证）
+        // capturing 变化 → 刷新工具栏按钮图标/文案
+        // 注意：updateActionsAsync() 在工具栏首次渲染后可能不触发 update()（myNeedActions=false），
+        // 故改用 updateActionsImmediately() 直接刷新（虽弃用但可靠，EDT 内调用安全）
         manager.addCapturingListener {
             LOG.info("SqlLogPanel.capturingListener: 触发")
             ApplicationManager.getApplication().invokeLater {
                 _toolbarRef?.let { toolbar ->
                     runCatching {
-                        toolbar.updateActionsAsync()
-                        LOG.info("SqlLogPanel.capturingListener: updateActionsAsync 调用成功")
+                        @Suppress("DEPRECATION")
+                        toolbar.updateActionsImmediately()
+                        LOG.info("SqlLogPanel.capturingListener: updateActionsImmediately 调用成功")
                     }.onFailure {
-                        LOG.warn("SqlLogPanel.capturingListener: updateActionsAsync 失败 - ${it.message}")
+                        LOG.warn("SqlLogPanel.capturingListener: 刷新失败 - ${it.message}")
                     }
                 }
             }
@@ -283,10 +284,21 @@ class SqlLogPanel(
 
     private inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = if (manager.capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
-            e.presentation.text = MpSqlVisualizerBundle.message(
-                if (manager.capturing) "log.panel.stop" else "log.panel.capture",
-            )
+            when {
+                manager.capturing -> {
+                    e.presentation.icon = AllIcons.Actions.Suspend
+                    e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
+                }
+                manager.isWaitingForConsole -> {
+                    e.presentation.icon = AllIcons.Actions.Execute
+                    e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture.waiting")
+                    e.presentation.description = MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc")
+                }
+                else -> {
+                    e.presentation.icon = AllIcons.Actions.Execute
+                    e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")
+                }
+            }
         }
 
         override fun actionPerformed(e: AnActionEvent) {
