@@ -19,6 +19,21 @@ enum class ColumnRole {
 }
 
 /**
+ * 关联信息（JPA @ManyToOne / @OneToOne 关联）。
+ *
+ * @param fieldName    关联字段名（Java 字段名，如 "address"）
+ * @param joinColumn   外键列名（主表侧，如 "address_id"）
+ * @param targetTable  目标表名（副表，如 "address"）
+ * @param targetAlias  建议别名（实体类名首字母小写，如 "address"）
+ */
+data class AssociationInfo(
+    val fieldName: String,
+    val joinColumn: String,
+    val targetTable: String,
+    val targetAlias: String,
+)
+
+/**
  * 表信息（F-13 实体解析产物）。
  *
  * 由实体类解析得到：表名（@TableName 注解或命名策略推断）、字段列映射（@TableField 或命名策略）。
@@ -29,6 +44,7 @@ enum class ColumnRole {
  * @param logicDeleteColumn 逻辑删除列（@TableLogic 标注字段的列名，T-M15-07）；null 表示无逻辑删除
  * @param versionColumn     乐观锁版本列（@Version 标注字段的列名，T-M22-02）；null 表示无乐观锁
  * @param comment         表注释（M16：类级注解/javadoc/行注释提取，schema 预留最高优先级）
+ * @param associations    关联信息列表（@ManyToOne / @OneToOne 关联元数据，用于 JOIN 构建）
  */
 data class TableInfo(
     val entityClassName: String,
@@ -37,12 +53,17 @@ data class TableInfo(
     val logicDeleteColumn: String? = null,
     val versionColumn: String? = null,
     val comment: String? = null,
+    val associations: List<AssociationInfo> = emptyList(),
 ) {
     /** 便捷查找：按实体字段名取列信息，找不到返回 null。 */
     fun columnByField(fieldName: String): ColumnInfo? = columns.firstOrNull { it.fieldName == fieldName }
 
     /** 全部列名（用于 SELECT * 展开）。 */
     val allColumnNames: List<String> get() = columns.map { it.columnName }
+
+    /** 按字段名查找关联信息。 */
+    fun associationByField(fieldName: String): AssociationInfo? =
+        associations.firstOrNull { it.fieldName == fieldName }
 }
 
 /**

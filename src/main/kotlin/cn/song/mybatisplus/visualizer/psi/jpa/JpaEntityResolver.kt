@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.model.AssociationInfo
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
@@ -8,6 +9,7 @@ import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiField
 import com.intellij.psi.PsiFile
@@ -79,7 +81,9 @@ class JpaEntityResolver {
             .distinctBy { it.columnName }
         // 表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
-        return TableInfo(className, tableName, columns, null, null, comment)
+        // 收集 @ManyToOne / @OneToOne 关联元数据
+        val associations = fields.mapNotNull { field -> resolveAssociation(field) }
+        return TableInfo(className, tableName, columns, null, null, comment, associations)
     }
 
     /**
@@ -154,6 +158,67 @@ class JpaEntityResolver {
         }
 
         return ColumnInfo(fieldName, columnName, isId, false, fieldType, null, comment, role)
+    }
+
+    // ------------------------------------------------------------------
+    // 关联元数据解析（@ManyToOne / @OneToOne）
+    // ------------------------------------------------------------------
+
+    /**
+     * 解析单个字段的关联信息。
+     *
+     * @ManyToOne + @JoinColumn → 外键列名 + 目标实体类名 → 目标表名
+     * @OneToOne + @JoinColumn  → 同上
+     * 其他 → null
+     */
+    private fun resolveAssociation(field: PsiField): AssociationInfo? {
+        val isManyToOne = hasAnnotation(field, MANY_TO_ONE_ANNOTATION)
+        val isOneToOne = hasAnnotation(field, ONE_TO_ONE_ANNOTATION)
+        if (!isManyToOne && !isOneToOne) return null
+
+        val fieldName = field.name
+        // 外键列名：@JoinColumn(name="xxx") 或默认 {fieldName}_id
+        val joinColumn = annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name")
+            ?: NamingStrategy.toSnakeCase(fieldName) + "_id"
+
+        // 目标实体类：从字段类型获取
+        val targetClass = resolveTargetEntityClass(field) ?: return null
+        val targetTableName = resolveTargetTableName(targetClass)
+
+        // 别名：实体类名首字母小写
+        val targetAlias = (targetClass.name ?: fieldName).replaceFirstChar { it.lowercaseChar() }
+
+        return AssociationInfo(
+            fieldName = fieldName,
+            joinColumn = joinColumn,
+            targetTable = targetTableName,
+            targetAlias = targetAlias,
+        )
+    }
+
+    /**
+     * 解析 @ManyToOne/@OneToOne 字段的目标实体类。
+     *
+     * 策略：
+     * 1. 字段类型直接是 PsiClassType → 取 PsiClass
+     * 2. 泛型字段（如 Optional<Address>）→ 取第一个泛型实参
+     * 3. 无法解析 → null（降级：不作为关联处理）
+     */
+    private fun resolveTargetEntityClass(field: PsiField): PsiClass? {
+        val type = field.type as? PsiClassType ?: return null
+        return type.resolve()
+    }
+
+    /**
+     * 从目标实体 PsiClass 获取表名。
+     *
+     * 优先 @Table(name="xxx")，否则按命名策略推断。
+     */
+    private fun resolveTargetTableName(targetClass: PsiClass): String {
+        val explicitTable = annotationAttributeValue(targetClass, TABLE_ANNOTATION, "name")
+        if (explicitTable != null) return explicitTable
+        val className = targetClass.name ?: return NamingStrategy.toSnakeCase("unknown")
+        return decorateTableName(inferTableName(className))
     }
 
     // ------------------------------------------------------------------

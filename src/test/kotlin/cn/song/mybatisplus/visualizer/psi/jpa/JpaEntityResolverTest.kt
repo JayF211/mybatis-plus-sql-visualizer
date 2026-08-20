@@ -682,6 +682,69 @@ class JpaEntityResolverTest : BasePlatformTestCase() {
      * 应去重——只保留简单字段，SELECT 中不出现重复列名。
      * UserEntity 用例：departmentId(@Column) + department(@ManyToOne) 同映射 department_id。
      */
+    // ------------------------------------------------------------------
+    // 关联元数据解析测试（JPA 嵌套对象 JOIN 查询支持）
+    // ------------------------------------------------------------------
+
+    fun testAssociationByField_按字段名查找关联() {
+        // 验证 associationByField 方法能正确查找关联
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "UserEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_user")
+                public class UserEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.ManyToOne
+                    @jakarta.persistence.JoinColumn(name = "address_id")
+                    private AddressEntity address;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "address_entity")
+                public class AddressEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+
+            // 存在的关联
+            val assoc = table.associationByField("address")
+            assertNotNull("应找到 address 关联", assoc)
+            assertEquals("address_id", assoc?.joinColumn)
+            assertEquals("address_entity", assoc?.targetTable)
+
+            // 不存在的关联
+            assertNull("不存在的关联应返回 null", table.associationByField("nonExistent"))
+        }
+    }
+
+    fun testAssociations_无关联字段时为空() {
+        // 无 @ManyToOne 字段 → associations 为空
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntity(
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_user")
+                public class UserEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                    private String userName;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertTrue("无关联字段时 associations 应为空", table.associations.isEmpty())
+        }
+    }
+
     fun testColumnDeduplication_sameColumnFromSimpleAndRelation() {
         withTableConfig() {
             JpaEntityResolver.clearCache()

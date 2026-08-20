@@ -801,4 +801,56 @@ class PartTreeParserTest {
         val tree = PartTreeParser.parse("findTopByLastName")
         assertNull(tree.subject.limit)
     }
+
+    // ========================================================================
+    // splitNestedPath 测试（JPA 嵌套对象 JOIN 查询支持）
+    // ========================================================================
+
+    @Test
+    fun `splitNestedPath_AddressCity → address + City`() {
+        val result = PartTreeParser.splitNestedPath("AddressCity")
+        assertEquals("address", result.associationPath)
+        assertEquals("City", result.remainingPath)
+        assertTrue(result.isNested)
+    }
+
+    @Test
+    fun `splitNestedPath_Name → 非嵌套`() {
+        val result = PartTreeParser.splitNestedPath("Name")
+        assertNull(result.associationPath)
+        assertEquals("Name", result.remainingPath)
+        assertFalse(result.isNested)
+    }
+
+    @Test
+    fun `splitNestedPath_DepartmentName → department + Name`() {
+        val result = PartTreeParser.splitNestedPath("DepartmentName")
+        assertEquals("department", result.associationPath)
+        assertEquals("Name", result.remainingPath)
+        assertTrue(result.isNested)
+    }
+
+    @Test
+    fun `splitNestedPath_空字符串 → 非嵌套`() {
+        val result = PartTreeParser.splitNestedPath("")
+        assertNull(result.associationPath)
+        assertEquals("", result.remainingPath)
+        assertFalse(result.isNested)
+    }
+
+    @Test
+    fun `splitNestedPath_单字符 → 非嵌套`() {
+        val result = PartTreeParser.splitNestedPath("A")
+        assertNull(result.associationPath)
+        assertEquals("A", result.remainingPath)
+        assertFalse(result.isNested)
+    }
+
+    @Test
+    fun `splitNestedPath_三token → 首token为关联`() {
+        val result = PartTreeParser.splitNestedPath("AddressCityStreet")
+        assertEquals("address", result.associationPath)
+        assertEquals("CityStreet", result.remainingPath)
+        assertTrue(result.isNested)
+    }
 }

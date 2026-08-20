@@ -56,16 +56,31 @@ data class PredicatePart(
 )
 
 /**
+ * 嵌套属性路径解析产物。
+ *
+ * @param associationPath 关联路径段（如 "address"），null 表示非嵌套属性
+ * @param remainingPath   剩余属性路径（如 "City"），非嵌套时等于原始 propertyPath
+ */
+data class NestedPropertyPath(
+    val associationPath: String?,
+    val remainingPath: String,
+) {
+    val isNested: Boolean get() = associationPath != null
+}
+
+/**
  * 单个条件。
  *
  * @param propertyPath 属性路径（如 "lastName" 或 "address.city"）
  * @param type         条件类型（27 种）
  * @param ignoreCase   是否忽略大小写
+ * @param nestedPath   嵌套路径解析结果（null 表示未尝试拆分）
  */
 data class Condition(
     val propertyPath: String,
     val type: PartType,
     val ignoreCase: Boolean,
+    val nestedPath: NestedPropertyPath? = null,
 )
 
 /**
@@ -667,6 +682,7 @@ object PartTreeParser {
                 propertyPath = decamelize(propertyPart),
                 type = partType,
                 ignoreCase = globalIgnoreCase,
+                nestedPath = splitNestedPath(propertyPart),
             )
         }
 
@@ -675,6 +691,7 @@ object PartTreeParser {
             propertyPath = decamelize(part),
             type = PartType.SIMPLE_PROPERTY,
             ignoreCase = globalIgnoreCase,
+            nestedPath = splitNestedPath(part),
         )
     }
 
@@ -787,4 +804,35 @@ object PartTreeParser {
         val requiresParameter: Boolean,
         val type: PartType,
     )
+
+    // ------------------------------------------------------------------
+    // 嵌套属性路径拆分
+    // ------------------------------------------------------------------
+
+    /**
+     * 拆分嵌套属性路径。
+     *
+     * 策略：按 camelCase 边界切分 token，从头部开始匹配关联字段名。
+     * 例如 "AddressCity" → tokens: [Address, City]
+     *       第一个 token "Address" 的小写 "address" 匹配到关联字段 → associationPath="address", remainingPath="City"
+     *
+     * @param propertyPart 属性部分（驼峰形式，如 "AddressCity"）
+     * @return 嵌套路径解析结果（非嵌套时 associationPath=null）
+     */
+    fun splitNestedPath(propertyPart: String): NestedPropertyPath {
+        if (propertyPart.isEmpty()) return NestedPropertyPath(null, propertyPart)
+        val tokens = splitCamelCase(propertyPart)
+        if (tokens.size < 2) return NestedPropertyPath(null, propertyPart)
+
+        // 第一个 token 小写后作为候选关联字段名
+        val firstToken = tokens[0]
+        val candidateAssociation = firstToken.replaceFirstChar { it.lowercaseChar() }
+        val remainingTokens = tokens.subList(1, tokens.size)
+        val remainingPath = remainingTokens.joinToString("")
+
+        return NestedPropertyPath(
+            associationPath = candidateAssociation,  // 仅候选，需 TableInfo 确认
+            remainingPath = remainingPath,
+        )
+    }
 }
