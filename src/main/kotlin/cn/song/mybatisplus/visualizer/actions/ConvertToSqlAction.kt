@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
@@ -121,11 +124,42 @@ class ConvertToSqlAction : AnAction() {
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result)
-            } else {
-                // M26-A：Wrapper 未命中 → 回落文件级 SQL 注解候选（Mapper 接口场景）
+            } else if (!tryJpaFallback(service, project, element)) {
+                // JPA 均未命中（tryJpaFallback 返回 false）→ 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
                 showAnnotationCandidates(project, file, editor)
             }
+            // tryJpaFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
         }
+    }
+
+    /**
+     * JPA 三态回落（波次一）：派生查询 / @Query / CriteriaQuery —— 命中任一即触发预览并返回 true。
+     * 调用方在返回 true 后立即 return，不再走 MyBatis 注解候选回落。
+     */
+    private fun tryJpaFallback(service: SqlPreviewService, project: Project, element: PsiElement): Boolean {
+        // 1. JPA 回落：派生查询
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false)
+        if (method != null && DerivedMethodLocator.isDerivedQuery(method)) {
+            SqlPreviewService.previewAsync(project, { service.previewDerivedQuery(method) }) { result ->
+                SqlPreviewService.showResult(project, result)
+            }
+            return true
+        }
+        // 2. JPA 回落：@Query
+        if (method != null && JpqlQueryLocator.hasQueryAnnotation(method)) {
+            SqlPreviewService.previewAsync(project, { service.previewJpql(method) }) { result ->
+                SqlPreviewService.showResult(project, result)
+            }
+            return true
+        }
+        // 3. JPA 回落：CriteriaQuery
+        if (CriteriaQueryLocator.locate(element) != null) {
+            SqlPreviewService.previewAsync(project, { service.previewCriteriaQuery(element) }) { result ->
+                SqlPreviewService.showResult(project, result)
+            }
+            return true
+        }
+        return false
     }
 
     /**

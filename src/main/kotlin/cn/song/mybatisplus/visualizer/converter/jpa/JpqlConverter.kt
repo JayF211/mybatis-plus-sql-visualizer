@@ -109,25 +109,34 @@ object JpqlConverter {
     /**
      * 处理 `JOIN FETCH e.relation r` → `LEFT JOIN relation_table r ON ...`。
      *
-     * JPQL 的 JOIN FETCH 用于急切加载关联，对应 SQL 的 LEFT JOIN。
-     * 转换时生成基础 LEFT JOIN 框架（ON 条件在无法解析关联时降级为注释）。
+     * 增强版（P1-3 JOIN FETCH ON 条件推断）：
+     *  - 推断 ON 条件：从关联属性名推断外键列
+     *    （如 `JOIN FETCH u.department d` → ON d.id = u.department_id）
      */
-    private fun handleJoinFetch(jpql: String): String {
-        // 匹配 "JOIN FETCH entity.alias" 或 "LEFT JOIN FETCH entity.alias" 或 "INNER JOIN FETCH entity.alias"
+    fun handleJoinFetch(jpql: String): String {
         val joinFetchPattern = Regex(
             "(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
             RegexOption.IGNORE_CASE,
         )
         return joinFetchPattern.replace(jpql) { matchResult ->
             val joinType = matchResult.groupValues[1].uppercase()
+            val rootAlias = matchResult.groupValues[2]
             val alias = matchResult.groupValues[3]
             val keyword = when (joinType) {
                 "INNER" -> "INNER JOIN"
                 "LEFT" -> "LEFT JOIN"
                 else -> "LEFT JOIN"
             }
-            "$keyword /* 关联表_$alias */ $alias /* ON 关联条件需手动补充 */"
+            val inferredOn = inferJoinOnCondition(rootAlias, alias)
+            "$keyword /* 关联表_$alias */ $alias ON $inferredOn"
         }
+    }
+
+    /**
+     * 推断 JOIN FETCH 的 ON 条件（P1-3）。
+     */
+    private fun inferJoinOnCondition(rootAlias: String, joinAlias: String): String {
+        return "$joinAlias.id = $rootAlias.${joinAlias}_id /* 推断的ON条件，请验证 */"
     }
 
     /**
@@ -164,33 +173,74 @@ object JpqlConverter {
     /**
      * 将 JPQL 中的属性名映射为数据库列名。
      *
-     * 策略：
+     * 策略（增强版 P1-3）：
      *  - 从 TableInfo.columns 获取属性名 → 列名映射
      *  - 对 `alias.property` 形式的引用，将 property 替换为 columnName
+     *  - SELECT 多别名展开：处理 `SELECT a.prop, b.prop` 多实体别名场景
      */
-    private fun mapPropertyToColumn(jpql: String, table: TableInfo): String {
+    fun mapPropertyToColumn(jpql: String, table: TableInfo): String {
         var result = jpql
+        val mappedColumnNames = mutableSetOf<String>()
         for (column in table.columns) {
-            if (column.fieldName == column.columnName) continue
-            // 匹配 alias.property 形式（点号前缀确保是属性访问，非子串匹配）
+            if (column.fieldName == column.columnName) {
+                mappedColumnNames.add(column.columnName)
+                continue
+            }
+            if (column.columnName in mappedColumnNames) continue
+
             val propertyPattern = Regex("\\.\\b${Regex.escape(column.fieldName)}\\b")
             result = propertyPattern.replace(result, ".${column.columnName}")
+            mappedColumnNames.add(column.columnName)
         }
+
+        result = expandSelectAliases(result, table)
         return result
     }
 
     /**
-     * 检测 JPQL 是否包含复杂语法结构。
-     *
-     * 复杂结构包括：子查询（SELECT 嵌套）、MEMBER OF、NEW DTO 等。
+     * SELECT 子句多别名展开（增强版 P1-3）。
      */
-    private fun hasComplexConstruct(jpql: String): Boolean {
+    private fun expandSelectAliases(jpql: String, table: TableInfo): String {
+        val selectMatch = Regex("SELECT\\s+(.+?)\\s+FROM", RegexOption.IGNORE_CASE).find(jpql)
+            ?: return jpql
+        val selectClause = selectMatch.groupValues[1].trim()
+
+        if (!selectClause.contains(",")) return jpql
+
+        val items = selectClause.split(",").map { it.trim() }
+        var expandedSelect = selectClause
+        for (item in items) {
+            if (item.contains(".")) continue
+
+            val colMatch = table.columns.firstOrNull { it.fieldName == item }
+            if (colMatch != null && colMatch.fieldName != colMatch.columnName) {
+                expandedSelect = expandedSelect.replace(item, colMatch.columnName)
+            }
+        }
+
+        return jpql.replace("SELECT $selectClause", "SELECT $expandedSelect")
+    }
+
+    /**
+     * 检测 JPQL 是否包含复杂语法结构（增强版 P1-3）。
+     *
+     * 增强：更精确的子查询检测（排除字符串字面量中的 SELECT 误报）。
+     */
+    fun hasComplexConstruct(jpql: String): Boolean {
+        val hasSubquery = detectSubquery(jpql)
         val upperJpql = jpql.uppercase()
-        // 子查询检测：FROM 后再次出现 SELECT（简单启发式）
-        val hasSubquery = upperJpql.indexOf("SELECT", upperJpql.indexOf("SELECT") + 1) != -1
         val hasMemberOf = upperJpql.contains("MEMBER OF")
         val hasNew = upperJpql.contains("NEW ")
         return hasSubquery || hasMemberOf || hasNew
+    }
+
+    /**
+     * 检测 JPQL 中的子查询（增强版 P1-3）。
+     */
+    private fun detectSubquery(jpql: String): Boolean {
+        val cleaned = jpql.replace(Regex("'[^']*'"), "''")
+        val subqueryPattern = Regex("\\(\\s*SELECT\\b", RegexOption.IGNORE_CASE)
+        return subqueryPattern.containsMatchIn(cleaned)
     }
 
     /**

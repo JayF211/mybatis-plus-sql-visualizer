@@ -187,9 +187,22 @@ object DerivedMethodLocator {
      *  - `Optional<Entity>` → Entity
      *  - `List<Entity>` → Entity
      *  - `Entity` → Entity（直接返回类型）
+     *
+     * void 返回类型（如 deleteByStatus）：无法从返回类型推断实体，直接返回 null。
+     * 调用方应优先使用 [resolveEntityClass]（从 Repository 泛型参数解析）作为主要路径，
+     * 本方法仅作兜底——void 时跳过以避免误判。
      */
     private fun resolveEntityFromReturnType(method: PsiMethod): PsiClass? {
         val returnType = method.returnType ?: return null
+
+        // void 返回类型（P2-2：void 兜底）：PsiPrimitiveType.VOID 非 PsiClassType，
+        // 无法提取泛型参数，直接返回 null，让 locateFromMethod 链保持 entityClass=null。
+        // 调用方 resolveEntityClass(containingClass) 已优先尝试 Repository 泛型解析；
+        // 若也失败，entityClass 为 null，但定位不失败——下游 converter 会按名称/文本兜底。
+        if (returnType is com.intellij.psi.PsiPrimitiveType && returnType == com.intellij.psi.PsiType.VOID) {
+            return null
+        }
+
         // 直接返回类型是实体类（非泛型包装）
         val directClass = (returnType as? PsiClassType)?.resolve()
         if (directClass != null && !isCommonType(directClass)) return directClass
