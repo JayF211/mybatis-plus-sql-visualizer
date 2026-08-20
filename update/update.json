@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.18",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.18/mybatis-plus-sql-visualizer-2026.8.18.zip",
-  "changeNotes": "监听启动时机修正（打开项目不监听，启动运行才监听）\n关闭工具窗口时停止监听设置生效\nSQL 日志列表正序 + 工具栏按钮状态实时刷新\n项目停止后监听不关闭 + 第一条 SQL 丢失修复\nSQL→Java 联表反向转换修复（T-M48~M50）\ninvocationHasMpj 接口继承 + 泛型超类型误判修复\n实体选择弹窗优化 + notificationGroup schema 报错修复\n插件描述与 README 升级",
-  "publishDate": "2026-08-18",
+  "version": "2026.8.19",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.19/mybatis-plus-sql-visualizer-2026.8.19.zip",
+  "changeNotes": "参数导入交互体验升级（P-05.1）：手动输入弹窗（格式化/清除按钮+灰色占位示例）+ 驼峰/下划线自动匹配（三级fallback）+ 清除按钮（一键清空参数值）\n内存泄漏修复：面板注册到 Disposer 树，父面板 dispose 级联释放子面板及 DocumentListener\nSQL 监听手动启动无需等待项目运行（armed 态）+ 解析兼容前缀与 SQL 分行形态",
+  "publishDate": "2026-08-19",
   "sinceBuild": "243"
 }

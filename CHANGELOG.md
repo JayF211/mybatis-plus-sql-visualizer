@@ -2,6 +2,25 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
+## [2026.8.20] - 2026-08-20
+
+### Added
+
+- **参数导入手动输入弹窗（P-05.1）**：`ParamImportDialog` 取代直接读取剪贴板——点击「导入参数」弹输入框（顶部工具栏含格式化/清除图标按钮 + 多行输入框带灰色占位示例）；剪贴板有合适参数时预填原文，用户可修改后确认导入
+- **驼峰/下划线自动匹配（P-05.1）**：`CaseFormatUtil` 工具类实现 camelCase ↔ snake_case 双向互转；`resolveSource` 三级 fallback（精确命中 → 去`#`前缀精确命中 → 互转命中），解决数据库列名与 Java 字段名风格不一致导致漏匹配
+- **参数清除按钮**：动态条件分区和批量参数列分区标题行新增「清除」按钮——一键清空该分区所有参数值（不影响勾选态），清空后 SQL 恢复 `?` 占位形态
+- **参数面板顶部对齐**：参数行由垂直居中改为顶部对齐（`BorderLayout.NORTH` 包裹），参数少时不再悬在面板中央
+
+### Fixed
+
+- **内存泄漏修复（面板 Disposer 树）**：`SqlPreviewDialog` 的面板注册到弹窗 disposable 树；`SqlLogPanel` 的 `logToSqlPanel`/`sqlToJavaPanel` 注册到父面板；`SqlToJavaPanel` 的 `inputEditor` 注册到父面板——父面板 dispose 时级联释放子面板及其 DocumentListener，避免 IDE 退出时 ObjectTree 报 "Memory leak detected"
+- **SQL 监听手动启动无需等待项目运行（armed 态）**：点击捕捉按钮立即进入 capturing 态（⏸），项目启动后自动捕 SQL；`userArmed` + `logAutoCaptureSuppressed` 持久标志区分手动/自动行为；autoStart=true 时项目启动始终自动捕捉
+- **SQL 日志解析兼容性**：兼容前缀（框架附加的时间/线程前缀）与 SQL 分行形态（多行 SQL 正确合并解析）
+
+### Removed
+
+- **历史召回弹窗移除**：`showRecalledHint` 移除（仅在非 unitTestMode 弹 info，测试缝绕过导致该路径从未被验证；弹窗交互也由新弹窗取代）
+
 ## [2026.8.19] - 2026-08-19
 
 ### Fixed
