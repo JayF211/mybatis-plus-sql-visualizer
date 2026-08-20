@@ -6054,4 +6054,76 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertTrue("WHERE 应含 version = ?：$sql", sql.contains("AND version = ?"))
         assertTrue("WHERE 应含 tenant_id = ?：$sql", sql.contains("AND tenant_id = ?"))
     }
+
+    // ------------------------------------------------------------------
+    // T-TenantLine：端到端测试——设置 UI → Apply → 预览完整链路
+    // ------------------------------------------------------------------
+
+    fun testTenantLineEndToEndViaSettingsApply() {
+        // T-TenantLine：模拟完整 UI 链路——先确认关闭态不注入，再通过 settings.state 模拟 Apply 开启
+        val settings = PluginSettings.getInstance()
+        // 1. 基线：关闭态
+        settings.state.injectTenantLine = false
+        settings.state.tenantColumnName = "tenant_id"
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<OrderEntity> w = new LambdaQueryWrapper<OrderEntity>()
+                        .eq(OrderEntity::getOrderCode, code);
+                    orderService.getOne(w);
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String orderCode;
+                }
+            }
+            """.trimIndent(),
+        )
+        val resultOff = newService().preview(anchor())
+        assertNotNull("关闭态也应产出预览结果", resultOff)
+        assertFalse("关闭态不应注入 tenant_id：${resultOff!!.sql}", resultOff.sql.contains("AND tenant_id = ?"))
+
+        // 2. 模拟 UI Apply：开启租户注入（写 settings.state 同一引用，等同 panel.apply() 写入）
+        settings.state.injectTenantLine = true
+        assertTrue("settings.state.injectTenantLine 应为 true", settings.state.injectTenantLine)
+
+        // 3. 新服务实例（模拟 IDE 重新触发 preview）
+        val resultOn = newService().preview(anchor())
+        assertNotNull("开启态应产出预览结果", resultOn)
+        assertTrue("开启态应注入 tenant_id：${resultOn!!.sql}", resultOn.sql.contains("AND tenant_id = ?"))
+    }
+
+    fun testTenantLineEndToEndCustomColumnName() {
+        // T-TenantLine：自定义列名 org_id——模拟 UI 设置列名 + Apply
+        val settings = PluginSettings.getInstance()
+        settings.state.injectTenantLine = true
+        settings.state.tenantColumnName = "org_id"
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void query() {
+                    orderService.lambdaQuery()
+                        .eq(OrderEntity::getOrderCode, code)
+                        .list();
+                }
+
+                static class OrderEntity {
+                    private Long id;
+                    private String orderCode;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("应产出预览结果", result)
+        assertTrue("应注入 org_id（自定义列名）：${result!!.sql}", result.sql.contains("AND org_id = ?"))
+        assertFalse("不应同时存在 tenant_id：${result.sql}", result.sql.contains("tenant_id"))
+
+        // 还原
+        settings.state.tenantColumnName = PluginSettings.DEFAULT_TENANT_COLUMN_NAME
+    }
 }

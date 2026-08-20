@@ -31,6 +31,7 @@ import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
@@ -56,6 +57,9 @@ class SqlPreviewService(private val project: Project) {
 
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
     private val cache = WrapperCache()
+
+    // T-TenantLine 诊断日志：输出注入决策链路（开关值/列名/语句类型/跳过原因），
+    // 供沙盒排查「开启租户但不拼接」问题（无日志 = 本方法未被调用）。
 
     /**
      * T-M19.4（用户实测：表名配置修改后预览不生效——缓存按文件戳失效，设置变更不触发）：
@@ -102,7 +106,11 @@ class SqlPreviewService(private val project: Project) {
 
         // 1. Wrapper 转换（优先）
         effectiveLocated?.let { located ->
-            val table = located.table ?: return null
+            val table = located.table ?: run {
+                LOG.info("preview: RETURN_NULL table=null, wrapperType=${located.chain.wrapperType}, " +
+                         "anchor=${anchor.textRange}")
+                return null
+            }
             val statement = when {
                 // 计数消费：service.count(wrapper) / selectJoinCount(wrapper) / lambdaQuery()...count() → SELECT COUNT(*) FROM ...（保留联表与条件）
                 located.chain.countConsumed && located.chain.wrapperType.isQueryLike() -> {
@@ -376,12 +384,23 @@ class SqlPreviewService(private val project: Project) {
         statement: SqlStatement,
         hasInterceptorIgnore: Boolean,
     ): SqlStatement {
-        if (!PluginSettings.getInstance().state.injectTenantLine) return statement
-        if (hasInterceptorIgnore) return statement
-        val tenantColumn = PluginSettings.getInstance().state.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
+        val settings = PluginSettings.getInstance().state
+        if (!settings.injectTenantLine) {
+            LOG.info("injectTenantLine: SKIP switch=off, stmt=${statement::class.simpleName}, table=${table.tableName}")
+            return statement
+        }
+        if (hasInterceptorIgnore) {
+            LOG.info("injectTenantLine: SKIP @InterceptorIgnore(tenantLine=true), stmt=${statement::class.simpleName}")
+            return statement
+        }
+        val tenantColumn = settings.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
         return when (statement) {
             is SelectStatement -> {
-                if (conditionReferencesColumn(statement.conditions, tenantColumn)) return statement
+                if (conditionReferencesColumn(statement.conditions, tenantColumn)) {
+                    LOG.info("injectTenantLine: SKIP column already in WHERE, col=$tenantColumn, stmt=SELECT")
+                    return statement
+                }
+                LOG.info("injectTenantLine: INJECT col=$tenantColumn, stmt=SELECT, table=${table.tableName}")
                 statement.copy(
                     conditions = statement.conditions + Condition.Simple(
                         ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
@@ -390,9 +409,15 @@ class SqlPreviewService(private val project: Project) {
                 )
             }
             is UpdateStatement -> {
-                // SET 已含 tenant 或 WHERE 已含 tenant → 跳过（与乐观锁同模式）
-                if (statement.sets.any { it.column?.columnName == tenantColumn }) return statement
-                if (conditionReferencesColumn(statement.conditions, tenantColumn)) return statement
+                if (statement.sets.any { it.column?.columnName == tenantColumn }) {
+                    LOG.info("injectTenantLine: SKIP column in SET, col=$tenantColumn, stmt=UPDATE")
+                    return statement
+                }
+                if (conditionReferencesColumn(statement.conditions, tenantColumn)) {
+                    LOG.info("injectTenantLine: SKIP column already in WHERE, col=$tenantColumn, stmt=UPDATE")
+                    return statement
+                }
+                LOG.info("injectTenantLine: INJECT col=$tenantColumn, stmt=UPDATE, table=${table.tableName}")
                 statement.copy(
                     conditions = statement.conditions + Condition.Simple(
                         ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
@@ -401,7 +426,11 @@ class SqlPreviewService(private val project: Project) {
                 )
             }
             is DeleteStatement -> {
-                if (conditionReferencesColumn(statement.conditions, tenantColumn)) return statement
+                if (conditionReferencesColumn(statement.conditions, tenantColumn)) {
+                    LOG.info("injectTenantLine: SKIP column already in WHERE, col=$tenantColumn, stmt=DELETE")
+                    return statement
+                }
+                LOG.info("injectTenantLine: INJECT col=$tenantColumn, stmt=DELETE, table=${table.tableName}")
                 statement.copy(
                     conditions = statement.conditions + Condition.Simple(
                         ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
@@ -425,7 +454,7 @@ class SqlPreviewService(private val project: Project) {
      */
     private fun hasInterceptorIgnoreAnnotation(anchor: PsiElement, attrName: String): Boolean = runCatching {
         val method = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java) ?: return false
-        method.modifierList?.annotations?.any { annotation ->
+        method.modifierList.annotations?.any { annotation ->
             val simpleName = annotation.nameReferenceElement?.referenceName
             simpleName == "InterceptorIgnore" &&
                 (annotation.findAttributeValue(attrName) as? PsiLiteralExpression)?.value as? Boolean == true
@@ -595,6 +624,8 @@ class SqlPreviewService(private val project: Project) {
     fun clearCache() = cache.clear()
 
     companion object {
+        private val LOG = Logger.getInstance(SqlPreviewService::class.java)
+
         /** 逻辑删除控制方法名（T-M20-05，MPJ 官方六方法；单一来源，评估逻辑 [evaluateLogicDeleteState] 使用）。 */
         private const val METHOD_DISABLE_LOGIC_DEL = "disableLogicDel"
         private const val METHOD_ENABLE_LOGIC_DEL = "enableLogicDel"

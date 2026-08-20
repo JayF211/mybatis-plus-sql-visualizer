@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParamQuote
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
@@ -346,15 +347,21 @@ object BatchOperationConverter {
         val tenantColumn = if (injectTenantLine) {
             PluginSettings.getInstance().state.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
         } else {
+            LOG.info("buildInsertBatch: SKIP injectTenantLine=false, method=$methodName, table=${table.tableName}")
             null
         }
-        if (tenantColumn != null && toggleColumns.none { it.columnName == tenantColumn }) {
-            toggleColumns = toggleColumns + BatchColumn(
-                columnName = tenantColumn,
-                source = "$prefix.$tenantColumn",
-                quote = null,  // tenant_id 类型未知，面板走数字启发式
-                checked = true,
-            )
+        if (tenantColumn != null) {
+            if (toggleColumns.none { it.columnName == tenantColumn }) {
+                LOG.info("buildInsertBatch: INJECT col=$tenantColumn, method=$methodName, table=${table.tableName}")
+                toggleColumns = toggleColumns + BatchColumn(
+                    columnName = tenantColumn,
+                    source = "$prefix.$tenantColumn",
+                    quote = null,  // tenant_id 类型未知，面板走数字启发式
+                    checked = true,
+                )
+            } else {
+                LOG.info("buildInsertBatch: DEDUP col=$tenantColumn already in entity columns, method=$methodName")
+            }
         }
         val paramGroups = buildParamGroups(columns.map { it.columnName })
         return modelBuild(BatchModel(BatchKind.INSERT, table.tableName, toggleColumns)).copy(paramGroups = paramGroups)
@@ -537,5 +544,8 @@ object BatchOperationConverter {
 
     /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
     private const val DEFAULT_TENANT_COLUMN = "tenant_id"
+
+    /** T-TenantLine 诊断日志：INSERT 列清单追加租户列决策。 */
+    private val LOG = Logger.getInstance(BatchOperationConverter::class.java)
 
 }

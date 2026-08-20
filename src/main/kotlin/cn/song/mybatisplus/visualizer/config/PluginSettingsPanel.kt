@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
@@ -103,6 +104,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         ReverseFormatOption(PluginSettings.REVERSE_WRAPPERS, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.wrappers")),
         ReverseFormatOption(PluginSettings.REVERSE_MPJ_LAMBDA, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.mpjLambda")),
     )
+
+    // T-TenantLine 诊断日志：输出 UI Apply 决策链路。
+    private val LOG = Logger.getInstance(PluginSettingsPanel::class.java)
 
     // ------------------------------------------------------------------
     // 表单控件
@@ -754,6 +758,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      */
     fun apply(): Boolean {
         val s = settings.state
+        // T-TenantLine 诊断：输出 apply 调用时的表单值，确认 UI → state 写入链路
+        LOG.info("PluginSettingsPanel.apply: injectTenantLineCheck=${injectTenantLineCheck.isSelected}, " +
+                 "tenantColumnNameField=${tenantColumnNameField.text.trim()}, " +
+                 "state.before=${s.injectTenantLine}")
         // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
         val languageChanged = languagePending || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
@@ -795,6 +803,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID)
         }
         languagePending = false
+        // 强制触发持久化：原地修改 state 属性后，框架可能不检测引用变化导致 XML 未写入（实证：
+        // injectTenantLine=true 未持久化到 mp-sql-visualizer.xml，仅 showGutterIcon 等部分字段生效）。
+        // 替换 state 引用使 XmlSerializer 检测到「状态变更」并在下一次持久化周期写入。
+        LOG.info("PluginSettingsPanel.apply: state.after=${s.injectTenantLine}, tenantColumn=${s.tenantColumnName}, " +
+                 "calling loadState(s.copy())")
+        settings.loadState(s.copy())
         // 发布设置变更通知（订阅方如 SqlLogPanel 据此即时刷新 UI）
         ApplicationManager.getApplication().messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
         return languageChanged
