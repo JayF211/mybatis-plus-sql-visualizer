@@ -83,7 +83,7 @@ class ConvertToSqlAction : AnAction() {
                         }
                     }
                 } catch (t: Throwable) {
-                    emptyList<PsiMethodCallExpression>() to emptyList()
+                    emptyList<PsiMethodCallExpression>() to emptyList<String>()
                 }
                 val (chainHeads, displayTexts) = payload
                 ApplicationManager.getApplication().invokeLater {
@@ -181,7 +181,7 @@ class ConvertToSqlAction : AnAction() {
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<PsiAnnotation>() to emptyList()
+                emptyList<PsiAnnotation>() to emptyList<String>()
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -222,7 +222,7 @@ class ConvertToSqlAction : AnAction() {
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<PsiAnnotation>() to emptyList()
+                emptyList<PsiAnnotation>() to emptyList<String>()
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -268,7 +268,7 @@ class ConvertToSqlAction : AnAction() {
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList()
+                emptyList<XmlTag>() to emptyList<String>()
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
