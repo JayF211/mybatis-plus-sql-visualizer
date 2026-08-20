@@ -138,11 +138,11 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
 
     // ===== T-13：手动捕捉无需等待项目运行（userRequestedCapture 意图传递） =====
 
-    /** T01：无控制台手动启动 → 等待态，桥已挂载。 */
+    /** T01：无控制台手动启动 → armed 态（capturing=true, isWaitingForConsole=true, userArmed=true）。 */
     fun testT01_ManualCaptureWithoutConsole_EnterWaitingState() {
         val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
         val manager = managerWith(bridge)
-        manager.startCapture()
+        manager.startCapture(manual = true)
         // Option A：无控制台时立即进入 armed 态（capturing=true + isWaitingForConsole=true）
         assertTrue("无控制台时应进入 armed 态（capturing=true）", manager.capturing)
         assertTrue("应进入等待态（isWaitingForConsole=true）", manager.isWaitingForConsole)
@@ -153,7 +153,7 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
     fun testT02_WaitingConsoleAppeared_AutoEntersCapture() {
         val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
         val manager = managerWith(bridge)
-        manager.startCapture()
+        manager.startCapture(manual = true)
         assertTrue("应处于等待态", manager.isWaitingForConsole)
 
         // 模拟控制台出现
@@ -167,7 +167,7 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
     fun testT03_WaitingManualStop_ClearsAllFlags() {
         val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
         val manager = managerWith(bridge)
-        manager.startCapture()
+        manager.startCapture(manual = true)
         assertTrue("应处于等待态", manager.isWaitingForConsole)
 
         manager.stopCapture()
@@ -201,7 +201,7 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
     fun testT05_HasConsoleManualCapture_DirectCapture() {
         val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = true)
         val manager = managerWith(bridge)
-        manager.startCapture()
+        manager.startCapture(manual = true)
         assertTrue("有控制台时应直接进入捕捉态", manager.capturing)
         assertFalse("有控制台时不应处于等待态", manager.isWaitingForConsole)
         manager.stopCapture()
@@ -211,11 +211,149 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
     fun testT06_DisposeWhileWaiting_ClearsAllFlags() {
         val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
         val manager = managerWith(bridge)
-        manager.startCapture()
+        manager.startCapture(manual = true)
         assertTrue("应处于等待态", manager.isWaitingForConsole)
 
         manager.dispose()
         assertFalse("dispose 后 capturing=false", manager.capturing)
         assertFalse("dispose 后 isWaitingForConsole=false", manager.isWaitingForConsole)
+    }
+
+    // ===== 项目停止后回到 armed 态，重启自动恢复捕捉 =====
+
+    /** T07：项目停止（控制台移除）→ 回到 armed 态（capturing=true, isWaitingForConsole=true）。 */
+    fun testT07_ProjectStop_GoesBackToArmedState() {
+        val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+        val manager = managerWith(bridge)
+        // 点击捕捉 → armed
+        manager.startCapture(manual = true)
+        assertTrue("armed 态", manager.capturing)
+        // 项目启动 → 控制台出现 → 捕捉
+        bridge.hasMainConsoleResult = true
+        manager.onConsoleAppeared()
+        assertTrue("捕捉中", manager.capturing)
+        assertFalse("等待态已清除", manager.isWaitingForConsole)
+        // 项目停止 → 控制台移除 → 回到 armed 态
+        bridge.hasMainConsoleResult = false
+        manager.onConsoleRemoved()
+        assertTrue("回到 armed 态（capturing=true）", manager.capturing)
+        assertTrue("等待态恢复", manager.isWaitingForConsole)
+    }
+
+    /** T08：项目重启 → 控制台出现 → 自动恢复捕捉（无需再次点击）。 */
+    fun testT08_ProjectRestart_AutoResumesCapture() {
+        val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+        val manager = managerWith(bridge)
+        // 点击捕捉 → armed → 项目启动 → 捕捉
+        manager.startCapture(manual = true)
+        bridge.hasMainConsoleResult = true
+        manager.onConsoleAppeared()
+        assertTrue("第一次捕捉", manager.capturing)
+        // 项目停止 → armed
+        bridge.hasMainConsoleResult = false
+        manager.onConsoleRemoved()
+        assertTrue("armed 态", manager.capturing)
+        // 项目重启 → 自动恢复捕捉
+        bridge.hasMainConsoleResult = true
+        manager.onConsoleAppeared()
+        assertTrue("自动恢复捕捉", manager.capturing)
+        assertFalse("等待态已清除", manager.isWaitingForConsole)
+    }
+
+    /** T09：armed 态手动停止 → 项目重启不会自动捕捉。 */
+    fun testT09_AfterManualStop_NoAutoCapture() {
+        val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+        val manager = managerWith(bridge)
+        // 点击捕捉 → armed → 项目启动 → 捕捉
+        manager.startCapture(manual = true)
+        bridge.hasMainConsoleResult = true
+        manager.onConsoleAppeared()
+        // 手动停止
+        manager.stopCapture()
+        assertFalse("已停止", manager.capturing)
+        // 项目重启 → 不会自动捕捉
+        bridge.hasMainConsoleResult = true
+        manager.onConsoleAppeared()
+        assertFalse("不会自动捕捉", manager.capturing)
+    }
+
+    // ===== 自动启动（logAutoCaptureOnStart=true）行为 =====
+
+    /** T10：自动启动 → 项目停止（控制台移除）→ 完全停止（非 armed 态）。 */
+    fun testT10_AutoStart_ProjectStop_StopsCompletely() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.logAutoCaptureOnStart
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            // 自动启动：项目打开时进入 armed 态（manual=false, userArmed=false）
+            manager.startCapture()  // manual=false
+            assertTrue("armed 态", manager.capturing)
+            assertFalse("自动启动不设置 userArmed", manager.userArmed)
+            // 项目启动 → 控制台出现 → 捕捉
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("捕捉中", manager.capturing)
+            // 项目停止 → 控制台移除 → 完全停止（非 armed）
+            bridge.hasMainConsoleResult = false
+            manager.onConsoleRemoved()
+            assertFalse("自动启动：项目停止后完全停止", manager.capturing)
+            assertFalse("等待态清除", manager.isWaitingForConsole)
+        } finally {
+            settings.state.logAutoCaptureOnStart = old
+        }
+    }
+
+    /** T11：自动启动 → 项目重启 → 再次自动捕捉。 */
+    fun testT11_AutoStart_ProjectRestart_AutoCapturesAgain() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.logAutoCaptureOnStart
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            // 第一次：armed → 启动 → 捕捉
+            manager.startCapture()
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("第一次捕捉", manager.capturing)
+            // 项目停止 → 完全停止
+            bridge.hasMainConsoleResult = false
+            manager.onConsoleRemoved()
+            assertFalse("停止", manager.capturing)
+            // 项目重启 → 再次自动捕捉
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertFalse("userArmed 未设置", manager.userArmed)
+            assertTrue("再次自动捕捉", manager.capturing)
+        } finally {
+            settings.state.logAutoCaptureOnStart = old
+        }
+    }
+
+    /** T12：手动开启 + 自动启动同时启用 → 项目停止后完全停止（自动启动优先）。 */
+    fun testT12_ManualAndAutoStart_ProjectStop_StopsCompletely() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.logAutoCaptureOnStart
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            // 手动点击捕捉（manual=true）+ 自动启动开启
+            manager.startCapture(manual = true)
+            assertTrue("armed 态", manager.capturing)
+            assertTrue("userArmed 已设置", manager.userArmed)
+            // 项目启动 → 捕捉
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("捕捉中", manager.capturing)
+            // 项目停止 → 完全停止（自动启动优先于手动 armed）
+            bridge.hasMainConsoleResult = false
+            manager.onConsoleRemoved()
+            assertFalse("手动+自动同时开启：项目停止后完全停止", manager.capturing)
+        } finally {
+            settings.state.logAutoCaptureOnStart = old
+        }
     }
 }

@@ -317,7 +317,7 @@ class SqlLogPanel(
             if (manager.capturing) {
                 manager.stopCapture()
             } else {
-                manager.startCapture()
+                manager.startCapture(manual = true)  // 手动点击：设置 userArmed 持久标志
             }
         }
     }

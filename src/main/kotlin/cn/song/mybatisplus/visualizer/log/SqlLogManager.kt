@@ -49,9 +49,11 @@ class SqlLogManager(private val project: Project) : Disposable {
     var capturing: Boolean = false
         private set
 
-    /** 用户主动点击「捕捉」请求标志——项目未运行时置 true，主控制台出现时自动进入捕捉态。 */
+    /** 用户主动开启 SQL 监听标志——点击「捕捉」后置 true，点击「停止」或 dispose 时清零。
+     *  跨控制台生命周期持久：项目停止后回到 armed 态，下次启动时自动恢复捕捉。 */
     @Volatile
-    private var userRequestedCapture = false
+    var userArmed = false
+        private set
 
     /** 是否处于「等待主控制台出现」中间态（测试断言）。 */
     @Volatile
@@ -77,16 +79,16 @@ class SqlLogManager(private val project: Project) : Disposable {
      *  但守卫只跳过「捕捉」不跳过「监听」：仍挂载桥（contentAdded 监听/轮询检测），
      *  否则无任何检测机制，项目真正启动运行时 onConsoleAppeared 不会被触发（日志实证：
      *  守卫直接 return 后主控制台出现，日志再无 scanAll/contentAdded——图标不变）。 */
-    fun startCapture() {
-        LOG.info("startCapture: 调用开始（capturing=$capturing, waiting=$isWaitingForConsole, project=${project.name}）")
+    fun startCapture(manual: Boolean = false) {
+        LOG.info("startCapture: 调用开始（capturing=$capturing, waiting=$isWaitingForConsole, manual=$manual, project=${project.name}）")
         if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         if (!hasMainConsole()) {
             // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
             // 主控制台出现（contentAdded 监听 / 轮询检测）时自动附着 filter 开始捕捉 SQL
             capturing = true  // ← 立即进入捕捉态（按钮显示 ⏸）
-            userRequestedCapture = true
+            if (manual) userArmed = true  // 仅手动点击时设置持久标志
             isWaitingForConsole = true
-            LOG.info("startCapture: 无运行中的主控制台——进入 armed 态（已开启，等待项目运行）")
+            LOG.info("startCapture: 无运行中的主控制台——进入 armed 态（已开启，等待项目运行, armed=$userArmed）")
             if (bridge.attach(project)) {
                 bridge.startPolling()
             }
@@ -135,8 +137,8 @@ class SqlLogManager(private val project: Project) : Disposable {
      *  - 262+（无 ContentManagerListener）→ 保持轮询兜底（2s 间隔，轻量 reflection）
      */
     fun stopCapture() {
-        if (!capturing && !userRequestedCapture) return // 等待态也须幂等守卫
-        userRequestedCapture = false
+        if (!capturing && !userArmed) return // armed 态也须幂等守卫
+        userArmed = false
         isWaitingForConsole = false
         if (!capturing) {
             refreshToolbar() // 等待态 → 空闲：刷新工具栏恢复「捕捉」文案
@@ -171,23 +173,34 @@ class SqlLogManager(private val project: Project) : Disposable {
     fun onConsoleAppeared() {
         if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
-        if (!autoStart && !userRequestedCapture) return
-        userRequestedCapture = false // 消费意图（无论哪个路径触发，只消费一次）
-        LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, waiting=$isWaitingForConsole, project=${project.name}）")
+        if (!autoStart && !userArmed) return
+        LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
         startCapture()
     }
 
     /** 已挂载的 console 集合（bridge 访问）。 */
     val attachedConsoles: MutableMap<Any, Boolean> get() = bridge.attachedConsoles
 
-    /** 控制台被移除（项目停止 / 用户关闭 tab）时回调——停止捕捉。 */
+    /** 控制台被移除（项目停止 / 用户关闭 tab）时回调。 */
     fun onConsoleRemoved() {
         if (!capturing || isWaitingForConsole) {
-            LOG.debug("onConsoleRemoved: 非捕捉态或仍在等待（capturing=$capturing, waiting=$isWaitingForConsole），跳过停止")
+            LOG.debug("onConsoleRemoved: 非捕捉态或仍在等待（capturing=$capturing, waiting=$isWaitingForConsole），跳过")
             return
         }
-        LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（project=${project.name}）")
-        stopCapture()
+        val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
+        if (userArmed && !autoStart) {
+            // 手动开启 + 未启用自动启动：回到 armed 态（capturing=true, isWaitingForConsole=true）
+            // 项目再次启动时 onConsoleAppeared 自动恢复捕捉
+            LOG.info("onConsoleRemoved: 控制台被移除，回到 armed 态（手动开启，等待项目重新运行）")
+            isWaitingForConsole = true
+            attachedConsoles.clear()
+        } else {
+            // 自动开启（或手动+自动同时开启）：项目停止则完全停止
+            LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（autoStart=$autoStart, armed=$userArmed）")
+            capturing = false
+            attachedConsoles.clear()
+        }
+        refreshToolbar()
     }
 
     /** 应用设置（前缀/去重窗口/过滤——捕捉中修改设置后重新装配生效）。 */
@@ -246,7 +259,7 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 面板销毁/项目关闭时移除挂载（capturing 同步重置——状态机闭环）。 */
     override fun dispose() {
-        userRequestedCapture = false
+        userArmed = false
         isWaitingForConsole = false
         capturing = false
         bridge.detach()

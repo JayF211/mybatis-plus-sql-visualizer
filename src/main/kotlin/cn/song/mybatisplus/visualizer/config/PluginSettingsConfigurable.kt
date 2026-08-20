@@ -37,29 +37,16 @@ class PluginSettingsConfigurable : Configurable {
     override fun isModified(): Boolean = panel.isModified()
 
     /**
-     * 保存配置；按变更类型联动（语言 → 重建表单；gutter 开关 → 全局刷新行标记；
-     * 自动监听「关→开」→ 已打开项目立即开始捕捉——项目打开时设置未开启的场景）。
+     * 保存配置；按变更类型联动（语言 → 重建表单；gutter 开关 → 全局刷新行标记）。
+     * 注意：自动监听（logAutoCaptureOnStart）不在 apply 时立即启动——
+     * 由 LogStartupCapture（postStartupActivity）在项目打开时进入 armed 态，
+     * onConsoleAppeared 在项目启动运行后自动开始捕捉。
      */
     override fun apply() {
         val settings = PluginSettings.getInstance()
         val gutterIconBefore = settings.state.showGutterIcon
-        val autoCaptureBefore = settings.state.logAutoCaptureOnStart
         if (panel.apply()) panel.rebuild()
         LOG.info("PluginSettingsConfigurable.apply: logAutoCaptureOnStart=${settings.state.logAutoCaptureOnStart}")
-        // 自动监听「关→开」→ 遍历已打开项目，幂等 startCapture（capturing 守卫）
-        // 仅当项目有运行中的控制台时才启动（无控制台时跳过，避免按钮显示「监听中」但无 SQL 可捕获）
-        if (!autoCaptureBefore && settings.state.logAutoCaptureOnStart) {
-            ProjectManager.getInstance().openProjects.forEach { project ->
-                val manager = project.getService(SqlLogManager::class.java)
-                if (manager.hasConsoles()) {
-                    runCatching { manager.startCapture() }.onFailure {
-                        LOG.warn("apply: startCapture 跳过（项目关闭/服务不可用）", it)
-                    }
-                } else {
-                    LOG.info("apply: 项目 ${project.name} 无控制台，跳过 startCapture（项目运行时自动监听）")
-                }
-            }
-        }
         // M14.7：gutter 图标开关变化 → 触发已打开编辑器的重分析（line marker 立即生效，无需重开文件）
         if (settings.state.showGutterIcon != gutterIconBefore) refreshGutterIcons()
     }
