@@ -124,11 +124,7 @@ class EntitySelectionDialog(
     private fun refreshRow(row: TableRow, selectedLabel: JBLabel) {
         val selected = selections[row.key]
         if (selected != null) {
-            // T-M44 审计兜底：label 显示读 PSI（name/qualifiedName 触发 stub 访问）须在 ReadAction 内（EDT 同步）
-            val info = ReadAction.compute<Pair<String, String?>?, Throwable> {
-                val name = selected.name ?: return@compute null
-                name to selected.qualifiedName
-            }
+            val info = resolveQualifiedNameForTest(selected)
             selectedLabel.text = info?.first ?: "?"
             selectedLabel.toolTipText = info?.second
             selectedLabel.foreground = UIUtil.getLabelForeground()
@@ -136,6 +132,22 @@ class EntitySelectionDialog(
             selectedLabel.text = MpSqlVisualizerBundle.message("dialog.selectEntity.none")
             selectedLabel.toolTipText = null
             selectedLabel.foreground = UIUtil.getInactiveTextColor()
+        }
+    }
+
+    /**
+     * 解析 PsiClass 的显示名与全限定名（测试缝）：抽取 [refreshRow] 中的 PSI 读取逻辑为独立方法，
+     * 供测试直接调用（绕过 EDT 回调 + UI 渲染）。
+     *
+     * T-M44 审计兜底：name/qualifiedName 读取（触发 stub 访问）包在 ReadAction 内。
+     *
+     * @param psiClass 目标 PsiClass
+     * @return Pair(显示名, 全合格名)；name 为 null 时返回 null
+     */
+    internal fun resolveQualifiedNameForTest(psiClass: PsiClass): Pair<String, String?>? {
+        return ReadAction.compute<Pair<String, String?>?, Throwable> {
+            val name = psiClass.name ?: return@compute null
+            name to psiClass.qualifiedName
         }
     }
 

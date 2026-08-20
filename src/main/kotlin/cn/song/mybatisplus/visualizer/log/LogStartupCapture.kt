@@ -22,7 +22,7 @@ class LogStartupCapture : ProjectActivity {
         LOG.info("LogStartupCapture.execute: 触发（project=${project.name}, logAutoCaptureOnStart=${settings.logAutoCaptureOnStart}, suppressed=${settings.logAutoCaptureSuppressed}）")
 
         // 自动启动条件：设置开启 且 用户未显式停止
-        if (!settings.logAutoCaptureOnStart) return
+        if (!shouldStartCapture(settings.logAutoCaptureSuppressed, settings.logAutoCaptureOnStart, hasOpenProject = true)) return
         val manager = project.getService(SqlLogManager::class.java)
         if (settings.logAutoCaptureSuppressed) {
             // 用户已显式停止：仍挂载桥+轮询（检测项目启动），但不进入 armed 态
@@ -51,5 +51,27 @@ class LogStartupCapture : ProjectActivity {
         private val LOG = Logger.getInstance(LogStartupCapture::class.java)
         private const val MAX_RETRIES = 3
         private const val RETRY_DELAY_MS = 5000L
+
+        /**
+         * 判断是否应启动自动捕捉（测试缝）：纯函数，从 [execute] 抽取的条件判断逻辑，
+         * 供测试直接调用（无需 PSI 环境、无需 PluginSettings/SqlLogManager 服务）。
+         *
+         * 条件矩阵：
+         *  - suppressed=true → 不启动（用户已显式停止）
+         *  - suppressed=false, autoStart=true → 启动
+         *  - suppressed=false, autoStart=false, hasOpenProject=true → 不启动（设置未开启）
+         *  - suppressed=false, autoStart=false, hasOpenProject=false → 不启动（无打开项目）
+         *
+         * @param suppressed    用户是否已显式停止自动启动
+         * @param autoStart     设置「项目启动时自动开始监听」是否开启
+         * @param hasOpenProject 当前是否有打开的项目
+         * @return true 应启动自动捕捉
+         */
+        internal fun shouldStartCapture(suppressed: Boolean, autoStart: Boolean, hasOpenProject: Boolean): Boolean {
+            if (!autoStart) return false
+            if (suppressed) return false
+            if (!hasOpenProject) return false
+            return true
+        }
     }
 }

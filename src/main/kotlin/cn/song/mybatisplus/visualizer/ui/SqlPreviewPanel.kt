@@ -553,13 +553,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun createEditor(sql: String) {
         val proj = project
         val created = if (proj != null) {
-            // T-M42（用户实测堆栈）：双击日志弹窗 EDT 路径上 PsiFileFactory.createFileFromText 直接调用
-            // 触发 2026.2 平台 markGenerated 树遍历 softAssertReadAccess 硬抛 RuntimeExceptionWithAttachments——
-            // 包 ReadAction（EDT 上同步执行，语义不变；项目为空分支为纯文本编辑器不涉及 PSI）
-            val psi = ReadAction.compute<PsiFile, Throwable> {
-                PsiFileFactory.getInstance(proj)
-                    .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
-            }
+            val psi = createPreviewFileForTest(proj, sql)
             psiFile = psi
             val doc = PsiDocumentManager.getInstance(proj).getDocument(psi)
                 ?: EditorFactory.getInstance().createDocument(sql)
@@ -599,6 +593,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editorHolder.repaint()
         editor = created
         bindAutoPopup(created)
+    }
+
+    /**
+     * 创建预览 PSI 文件（测试缝）：抽取 [createEditor] 中的 PsiFileFactory 创建逻辑为独立方法，
+     * 供测试直接调用（绕过 EDT 回调 + EditorFactory 创建）。
+     *
+     * T-M42（用户实测堆栈）：PsiFileFactory.createFileFromText 在 EDT 上直接调用会触发
+     * 2026.2 平台 markGenerated 树遍历 softAssertReadAccess 硬抛 RuntimeExceptionWithAttachments——
+     * 包 ReadAction（EDT 上同步执行，语义不变）。
+     *
+     * @param proj 当前项目（非 null）
+     * @param sql  预览 SQL 文本
+     * @return 创建的 PsiFile
+     */
+    internal fun createPreviewFileForTest(proj: Project, sql: String): PsiFile {
+        return ReadAction.compute<PsiFile, Throwable> {
+            PsiFileFactory.getInstance(proj)
+                .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
+        }
     }
 
     /**

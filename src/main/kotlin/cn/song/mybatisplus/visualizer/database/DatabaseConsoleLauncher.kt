@@ -47,10 +47,28 @@ object DatabaseConsoleLauncher {
      * internal 供测试（测试沙盒无 database 插件，仅编译期可引用）。
      */
     internal fun createTempFile(sql: String): VirtualFile {
-        val ioFile = FileUtil.createTempFile("mpsql-exec-", ".sql", true)
-        FileUtil.writeToFile(ioFile, sql)
+        val ioFile = createTempFile()
+        writeSqlToFile(ioFile, sql)
         return LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
             ?: error("临时文件创建失败: ${ioFile.absolutePath}")
+    }
+
+    /**
+     * 创建空的临时 .sql 文件（系统临时目录，测试缝）：纯平台 API，不依赖 Database 插件。
+     * 文件名格式 `mpsql-exec-*.sql`。
+     *
+     * @return 创建的临时文件
+     */
+    internal fun createTempFile(): java.io.File = FileUtil.createTempFile("mpsql-exec-", ".sql", true)
+
+    /**
+     * 将 SQL 文本写入指定文件（测试缝）：纯平台 I/O，不依赖 Database 插件。
+     *
+     * @param file 目标文件
+     * @param sql  SQL 文本
+     */
+    internal fun writeSqlToFile(file: java.io.File, sql: String) {
+        FileUtil.writeToFile(file, sql)
     }
 
     /**
