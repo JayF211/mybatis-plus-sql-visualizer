@@ -242,11 +242,9 @@ class DerivedQueryJoinConverterTest {
         // 验证不生成 JOIN
         assertTrue("无关联时应生成空 JOIN 列表", statement.joins.isEmpty())
 
-        // 验证降级为 Raw
+        // 验证降级为普通列解析（不生成 Raw，避免误判驼峰属性名如 lastName 为嵌套关联）
         val condition = statement.conditions[0]
-        assertTrue("应生成 Raw 条件", condition is cn.song.mybatisplus.visualizer.model.Condition.Raw)
-        val raw = condition as cn.song.mybatisplus.visualizer.model.Condition.Raw
-        assertTrue("应提示关联查询", raw.sqlText.contains("关联查询"))
+        assertTrue("关联未找到时应降级为普通列解析", condition !is cn.song.mybatisplus.visualizer.model.Condition.Raw)
     }
 
     // ------------------------------------------------------------------
