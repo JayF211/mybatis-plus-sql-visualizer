@@ -1,0 +1,460 @@
+# SQL→Java 调用类校验 + 智能识别当前打开类
+
+**创建时间**：2026-08-20
+**优先级**：P1（用户体验：VO 报错不友好 / 选择器不智能）
+**影响范围**：SqlToJavaPanel（调用类选择器）+ SqlToJavaConverter（MPJ 能力判定）+ 测试
+
+---
+
+## 问题描述
+
+### 问题一：选择 VO 导致插件报错（不友好）
+
+用户在 SQL→Java 工具窗口的「调用类」字段中，通过 Goto Class 弹窗选中了一个 VO（如 `UserVO`）。当前调用类选择**无任何校验**，只有在生成代码阶段才暴露问题：
+
+- **多表 JOIN 场景**：`JavaCodeGenerator.generateSelect()` 检测到 `invocation.mpj == false` 后抛 `SqlReverseException`，用户看到错误状态行「Unsupported SQL structure: 多表 JOIN 需要 MyBatis-Plus-Join（MPJ）依赖，但调用类 UserVO 无 MPJ 能力」——文案把 VO 当类名拼接进 MPJ 错误提示， VO 与 MPJ 能力无关，用户困惑。
+- **单表场景**：VO 也有 `@TableName` 注解（值对象常复用实体表名），生成器走 `callerVar()` 生成 `userVO.selectAll()` ——类名首字母小写变成变量名，语义荒谬但**不报错**，用户复制到项目后编译失败。
+
+**根因**：`ClassPickerField.pickClass()` 选中 PsiClass 后直接 `setPicked`，不区分 Mapper/Service/Controller/VO/DTO。
+
+### 问题二：`this`/`baseMapper` 选择器不智能
+
+用户选中 `this` 或 `baseMapper` 时，面板仅显示固定文案 tooltip，无法感知当前编辑器打开的是哪个类。用户期望：
+
+- 选中 `this` 时，如果当前打开的是 `UserServiceImpl`，面板能展示「当前：UserServiceImpl」。
+- 选中 `baseMapper` 时，能展示当前类的实体信息——**兼顾 PM 与 MPJ**：
+  - PM 场景：当前打开 `UserServiceImpl extends ServiceImpl<UserMapper, User>` → 取第 2 个泛型参数 = User
+  - PM 场景：当前打开独立 `UserMapper extends BaseMapper<User>` → 取第 1 个泛型参数 = User
+  - MPJ 场景：当前打开 `UserMapper extends MPJBaseMapper<User>` → 取第 1 个泛型参数 = User
+
+**根因**：`CallerClassByNameModel` 和 `ClassPickerField` 没有获取当前编辑器打开文件/类的逻辑。
+
+---
+
+## 影响范围
+
+### 问题一影响
+所有在调用类选择器中选中了非 Mapper/Service 类（VO/DTO/Utils/Controller 等）的用户。当前仅多表 JOIN 路径有报错提示（且文案不友好），单表路径静默生成不可编译代码。
+
+### 问题二影响
+所有使用 `this`/`baseMapper` 选项的用户。当前无法感知上下文，需要记忆固定选项语义。
+
+---
+
+## 修复方案
+
+### 方案概述：两处改动
+
+1. **调用类校验** — 选中 PsiClass 后立即校验是否为合理的调用类（Mapper/Service/ServiceImpl），VO/DTO/Utils 等给出友好提示并拒绝选中。
+2. **智能识别当前打开类** — 选择器初始化时和选中 `this`/`baseMapper` 时，尝试从当前编辑器解析打开的类，提供上下文感知。
+
+---
+
+### 改动点 1：调用类校验（选择时即时校验 + 友好拒绝）
+
+**文件**：`src/main/kotlin/.../log/SqlToJavaPanel.kt`
+
+#### 1.1 新增 `isValidCallerClass()` 校验函数
+
+在 `ClassPickerField` 内部新增校验方法：
+
+```kotlin
+/**
+ * 校验选中的类是否为合法的 SQL→Java 调用类（T-Mxx）：
+ * 合法 = Mapper（XxxMapper）/ Service（XxxService）/ ServiceImpl（XxxServiceImpl）/
+ *         继承 MPJBaseService/MPJBaseMapper 的类。
+ * 不合法 = VO/DTO/Utils/Controller/Config 等无 CRUD 能力的类。
+ *
+ * @return null = 合法；非 null = 拒绝原因（bundle key 参数化）
+ */
+private fun validateCallerClass(cls: PsiClass): String? {
+    val name = cls.name ?: return "reverse.panel.callerReject.unknown"
+    // 1. 快速白名单：类名以 Mapper/Service/ServiceImpl/Impl 结尾 → 放行
+    if (name.endsWith("Mapper") || name.endsWith("Service") ||
+        name.endsWith("ServiceImpl") || name.endsWith("Impl")) return null
+    // 2. 黑名单：VO/DTO/BO/PO/Utils/Controller/Config/Interceptor 等 → 拒绝
+    if (name.endsWith("VO") || name.endsWith("DTO") || name.endsWith("BO") ||
+        name.endsWith("PO") || name.endsWith("Utils") || name.endsWith("Util") ||
+        name.endsWith("Controller") || name.endsWith("Config") ||
+        name.endsWith("Interceptor") || name.endsWith("Filter") ||
+        name.endsWith("Handler") || name.endsWith("Aspect")) {
+        return "reverse.panel.callerReject.voDto"
+    }
+    // 3. 接口/抽象类 → 拒绝（MPJ 能力判定基于具体类）
+    if (cls.isInterface || cls.hasModifierProperty(PsiModifier.ABSTRACT)) {
+        return "reverse.panel.callerReject.interface"
+    }
+    // 4. 无 MPJ 能力 + 非 Mapper/Service 命名 → 警告但允许（避免误杀自定义命名）
+    return null  // 放开——第 1 步已覆盖主流命名
+}
+```
+
+**设计决策**：
+- 白名单优先：主流命名（Mapper/Service/ServiceImpl/Impl）直接放行，不做额外 PSI 检查（性能友好）。
+- 黑名单兜底：VO/DTO/BO/PO/Utils/Controller 等常见非 CRUD 类直接拒绝，给出 bundle 化友好提示。
+- 不强制 MPJ 能力检查：`this`/`baseMapper` 恒视为有 MPJ，普通类由后续生成阶段判定 MPJ（`invocationHasMpj` 已有逻辑），校验层不重复。
+
+#### 1.2 修改 `pickPsiClassForTest()` 加入校验
+
+```kotlin
+internal fun pickPsiClassForTest(cls: PsiClass) {
+    // T-Mxx：校验是否为合法调用类，不合法则弹友好提示并拒绝选中
+    val rejectReason = validateCallerClass(cls)
+    if (rejectReason != null) {
+        // 在状态行显示友好提示（不选中该类）
+        showCallerRejectMessage(rejectReason, cls.name ?: "")
+        return
+    }
+    val picked = ReadAction.compute<Triple<String, String?, Icon?>?, Throwable> {
+        val name = cls.name ?: return@compute null
+        Triple(name, cls.qualifiedName, cls.getIcon(0))
+    } ?: return
+    setPicked(picked.first, picked.second, picked.third)
+}
+```
+
+#### 1.3 新增状态行提示方法
+
+```kotlin
+/** T-Mxx：调用类选择被拒绝的友好提示（状态行显示）。 */
+private fun showCallerRejectMessage(reasonKey: String, className: String) {
+    val message = MpSqlVisualizerBundle.message(reasonKey, className)
+    status(message, error = true)
+}
+```
+
+#### 1.4 新增 bundle 文案
+
+`MpSqlVisualizerBundle.properties`（英文）：
+```properties
+reverse.panel.callerReject.voDto={0} 看起来是 VO/DTO，不具备 CRUD 能力。请选择 Mapper/Service/ServiceImpl 类，或使用 this/baseMapper
+reverse.panel.callerReject.interface={0} 是接口/抽象类，请选择具体的 Mapper/Service 实现类
+reverse.panel.callerReject.unknown=无法识别该类的名称
+```
+
+`MpSqlVisualizerBundle_zh.properties`（中文）：
+```properties
+reverse.panel.callerReject.voDto={0} 看起来是 VO/DTO，不具备 CRUD 能力。请选择 Mapper/Service/ServiceImpl 类，或使用 this/baseMapper
+reverse.panel.callerReject.interface={0} 是接口/抽象类，请选择具体的 Mapper/Service 实现类
+reverse.panel.callerReject.unknown=无法识别该类的名称
+```
+
+---
+
+### 改动点 2：智能识别当前打开类
+
+**文件**：`src/main/kotlin/.../log/SqlToJavaPanel.kt`
+
+#### 2.1 新增 `detectCurrentEditorClass()` 工具方法
+
+在 `SqlToJavaPanel` 中新增方法，获取当前编辑器打开的类：
+
+```kotlin
+/**
+ * T-Mxx：获取当前编辑器打开的 Java/Kotlin 类的 PsiClass（如有）。
+ * 多编辑器时取活动编辑器；非 Java/Kotlin 文件返回 null。
+ * 须在 ReadAction 内调用（PSI 访问）。
+ */
+private fun detectCurrentEditorClass(): PsiClass? {
+    val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
+    val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return null
+    if (psiFile !is PsiClassOwner) return null
+    // 取主类（文件名对应的类）
+    return psiFile.classes.firstOrNull { it.name?.let { n -> psiFile.name.startsWith(n) } == true }
+        ?: psiFile.classes.firstOrNull()
+}
+```
+
+#### 2.2 修改 `CallerClassByNameModel` —— `this`/`baseMapper` 感知当前类
+
+在 `CallerClassByNameModel.getElementsByName()` 中，当 `this`/`baseMapper` 被选中时，附加当前类信息：
+
+```kotlin
+// 新增字段：当前编辑器打开的类（选择器打开前检测一次）
+private var currentEditorClass: PsiClass? = null
+
+/** T-Mxx：设置当前编辑器打开的类（选择器打开前调用一次）。 */
+fun setCurrentEditorClass(cls: PsiClass?) { currentEditorClass = cls }
+```
+
+#### 2.3 修改 `ClassPickerField.pickClass()` —— 选择器打开前检测当前类
+
+```kotlin
+private fun pickClass() {
+    // T-Mxx：选择器打开前检测当前编辑器打开的类，供 this/baseMapper 选项使用
+    callerModel.setCurrentEditorClass(detectCurrentEditorClass())
+    val popup = ChooseByNamePopup.createPopup(projectRef, callerModel, null)
+    // ... 其余不变
+}
+```
+
+#### 2.4 修改 `elementChosen` 回调 —— `this`/`baseMapper` 展示上下文信息
+
+```kotlin
+override fun elementChosen(element: Any?) {
+    when (element) {
+        is String -> {
+            // T-Mxx：this/baseMapper 选中时，附加当前编辑器类信息到 tooltip
+            val tooltip = buildSpecialTooltip(element)
+            setPicked(element, tooltip, AllIcons.Nodes.Field)
+        }
+        is PsiClass -> pickPsiClassForTest(element)
+    }
+}
+```
+
+#### 2.5 新增 `buildSpecialTooltip()` 构造带上下文的 tooltip
+
+```kotlin
+/**
+ * T-Mxx：构造 this/baseMapper 的 tooltip 文本，含当前编辑器类信息。
+ *
+ * 兼顾 PM（Plain MyBatis-Plus）与 MPJ（MyBatis-Plus-Join）两种依赖：
+ * - this：「当前 service 类内使用（生成 this.list(...) / this.save(...) 等）」
+ *         + 检测到当前类时追加「当前：UserServiceImpl」
+ * - baseMapper：「ServiceImpl 的 baseMapper 字段（生成 baseMapper.selectList(...) 等）」
+ *         + 检测到当前类时追加实体信息：
+ *           · PM 场景（ServiceImpl<UserMapper, User>）→ 取父类第 2 个泛型参数 = User
+ *           · PM 场景（UserMapper extends BaseMapper<User>）→ 取父类第 1 个泛型参数 = User
+ *           · MPJ 场景（ServiceImpl 继承 MPJBaseService）→ 同 PM 取第 2 个泛型参数
+ */
+private fun buildSpecialTooltip(special: String): String {
+    val base = SPECIAL_TOOLTIPS[special] ?: return special
+    val currentCls = callerModel.currentEditorClass ?: return base
+    val clsName = currentCls.name ?: return base
+    val context = when (special) {
+        CALLER_THIS -> "（当前：$clsName）"
+        CALLER_BASE_MAPPER -> buildBaseMapperContext(currentCls, clsName)
+        else -> ""
+    }
+    return "$base\n$context"
+}
+
+/**
+ * T-Mxx：baseMapper 选项的上下文提取——兼顾 PM 与 MPJ 两种依赖。
+ * 优先匹配 ServiceImpl<A, B>（取 B=实体），回落 BaseMapper<A>（取 A=实体）。
+ */
+private fun buildBaseMapperContext(currentCls: PsiClass, clsName: String): String {
+    val superTypes = currentCls.superTypes
+    // 优先：ServiceImpl<X, Entity> / MPJBaseService<X, Entity> → 取第 2 个泛型参数（实体）
+    superTypes.firstOrNull { type ->
+        type.className?.let {
+            it.contains("ServiceImpl") || it.contains("MPJBaseService") ||
+                it.contains("JoinService")
+        } == true
+    }?.let { type ->
+        val params = type.parameters
+        if (params.size >= 2) {
+            return "（当前：$clsName，表：${params[1].presentableText}）"
+        }
+    }
+    // 回落：BaseMapper<Entity> / MPJBaseMapper<Entity> → 取第 1 个泛型参数（实体）
+    superTypes.firstOrNull { type ->
+        type.className?.let {
+            it.contains("BaseMapper") || it.contains("MPJBaseMapper")
+        } == true
+    }?.let { type ->
+        val params = type.parameters
+        if (params.isNotEmpty()) {
+            return "（当前：$clsName，表：${params[0].presentableText}）"
+        }
+    }
+    // 无泛型信息 → 仅展示类名
+    return "（当前：$clsName）"
+}
+```
+
+**设计决策**：
+- **兼顾 PM 与 MPJ**：`baseMapper` 分支优先匹配 `ServiceImpl<A, B>`/`MPJBaseService<A, B>`（取 B=实体），回落到 `BaseMapper<A>`/`MPJBaseMapper<A>`（取 A=实体），两种依赖下都能正确提取实体信息。
+- 仅在选中 `this`/`baseMapper` 时追加当前类信息，不改变面板显示文本（类名仍为 `this`/`baseMapper`），仅在 tooltip 展示。
+- 不预选/自动选择：避免干扰用户主动选择。如果用户想选当前类，可以直接从 Goto Class 找到它。
+- 检测时机：选择器打开时一次性检测（`pickClass()` 开头），不在 `getElementsByName` 中调用（性能友好，避免平台频繁回调触发 PSI 访问）。
+
+---
+
+## 实施步骤
+
+### 步骤 1：新增测试用例（TDD 先行）
+
+#### 测试 1：VO 被拒绝选中
+
+文件：`SqlToJavaPanelTest.kt`（或新建 `CallerClassValidationTest.kt`）
+
+```kotlin
+fun testVoClassRejected() {
+    // 选中 UserVO → 不被选中（text 不变更），状态行显示拒绝提示
+    val psiClass = createPsiClass("UserVO")  // fixture 创建
+    callerField.pickPsiClassForTest(psiClass)
+    assertTrue("VO 不应被选中", callerField.text.isEmpty())
+    assertTrue("状态行应显示拒绝提示", statusForTest().contains("VO/DTO"))
+}
+
+fun testDtoClassRejected() {
+    val psiClass = createPsiClass("UserDTO")
+    callerField.pickPsiClassForTest(psiClass)
+    assertTrue("DTO 不应被选中", callerField.text.isEmpty())
+}
+
+fun testUtilsClassRejected() {
+    val psiClass = createPsiClass("StringUtils")
+    callerField.pickPsiClassForTest(psiClass)
+    assertTrue("Utils 不应被选中", callerField.text.isEmpty())
+}
+
+fun testControllerClassRejected() {
+    val psiClass = createPsiClass("UserController")
+    callerField.pickPsiClassForTest(psiClass)
+    assertTrue("Controller 不应被选中", callerField.text.isEmpty())
+}
+```
+
+#### 测试 2：合法类正常选中
+
+```kotlin
+fun testMapperClassAccepted() {
+    val psiClass = createPsiClass("UserMapper")
+    callerField.pickPsiClassForTest(psiClass)
+    assertEquals("UserMapper", callerField.text)
+}
+
+fun testServiceClassAccepted() {
+    val psiClass = createPsiClass("UserService")
+    callerField.pickPsiClassForTest(psiClass)
+    assertEquals("UserService", callerField.text)
+}
+
+fun testServiceImplClassAccepted() {
+    val psiClass = createPsiClass("UserServiceImpl")
+    callerField.pickPsiClassForTest(psiClass)
+    assertEquals("UserServiceImpl", callerField.text)
+}
+```
+
+#### 测试 3：`this`/`baseMapper` tooltip 包含当前类信息
+
+```kotlin
+fun testThisTooltipWithCurrentClass() {
+    // 模拟当前打开 UserServiceImpl
+    val currentClass = createPsiClass("UserServiceImpl")
+    callerModelForTest().setCurrentEditorClass(currentClass)
+    // 选中 this → tooltip 应包含「当前：UserServiceImpl」
+    callerField.pickForTest("this", SPECIAL_TOOLTIPS["this"], AllIcons.Nodes.Field)
+    // 验证 tooltip（需要反射或公开访问器）
+    assertTrue("tooltip 应含当前类名",
+        callerField.textTooltipForTest()?.contains("UserServiceImpl") == true)
+}
+
+fun testBaseMapperTooltipWithServiceImpl() {
+    // PM 场景：当前打开 UserServiceImpl extends ServiceImpl<UserMapper, User>
+    val currentClass = createPsiClassWithSuper("UserServiceImpl", "ServiceImpl<UserMapper, User>")
+    callerModelForTest().setCurrentEditorClass(currentClass)
+    callerField.pickForTest("baseMapper", SPECIAL_TOOLTIPS["baseMapper"], AllIcons.Nodes.Field)
+    assertTrue("tooltip 应含当前类名",
+        callerField.textTooltipForTest()?.contains("UserServiceImpl") == true)
+    assertTrue("tooltip 应含实体信息（第 2 个泛型参数 = User）",
+        callerField.textTooltipForTest()?.contains("User") == true)
+}
+
+fun testBaseMapperTooltipWithBaseMapper() {
+    // PM 场景：当前打开独立 UserMapper extends BaseMapper<User>
+    // （无 ServiceImpl 继承，纯 Mapper 类直接选 baseMapper）
+    val currentClass = createPsiClassWithSuper("UserMapper", "BaseMapper<User>")
+    callerModelForTest().setCurrentEditorClass(currentClass)
+    callerField.pickForTest("baseMapper", SPECIAL_TOOLTIPS["baseMapper"], AllIcons.Nodes.Field)
+    assertTrue("tooltip 应含当前类名",
+        callerField.textTooltipForTest()?.contains("UserMapper") == true)
+    assertTrue("tooltip 应含实体信息（第 1 个泛型参数 = User）",
+        callerField.textTooltipForTest()?.contains("User") == true)
+}
+
+fun testBaseMapperTooltipWithMpjMapper() {
+    // MPJ 场景：当前打开 UserMapper extends MPJBaseMapper<User>
+    val currentClass = createPsiClassWithSuper("UserMapper", "MPJBaseMapper<User>")
+    callerModelForTest().setCurrentEditorClass(currentClass)
+    callerField.pickForTest("baseMapper", SPECIAL_TOOLTIPS["baseMapper"], AllIcons.Nodes.Field)
+    assertTrue("tooltip 应含实体信息（MPJ 第 1 个泛型参数 = User）",
+        callerField.textTooltipForTest()?.contains("User") == true)
+}
+
+fun testBaseMapperTooltipNoSuperType() {
+    // 无泛型父类 → 仅展示类名，不报错
+    val currentClass = createPsiClass("UserMapper")
+    callerModelForTest().setCurrentEditorClass(currentClass)
+    callerField.pickForTest("baseMapper", SPECIAL_TOOLTIPS["baseMapper"], AllIcons.Nodes.Field)
+    assertTrue("tooltip 应含当前类名",
+        callerField.textTooltipForTest()?.contains("UserMapper") == true)
+}
+```
+
+**预期**：以上测试在当前代码下**失败**（VO 被选中 / tooltip 无当前类信息 / PM BaseMapper 场景无实体提取），修复后通过。
+
+### 步骤 2：实现 `validateCallerClass()` 校验逻辑
+
+在 `ClassPickerField` 新增 `validateCallerClass()` + 修改 `pickPsiClassForTest()` 加入校验。
+
+### 步骤 3：实现 `detectCurrentEditorClass()` + 选择器上下文感知
+
+在 `SqlToJavaPanel` 新增 `detectCurrentEditorClass()` + 修改 `pickClass()` + 扩展 tooltip 逻辑。
+
+### 步骤 4：新增 bundle 文案
+
+在 `MpSqlVisualizerBundle.properties` 和 `MpSqlVisualizerBundle_zh.properties` 新增 3 条拒绝提示文案。
+
+### 步骤 5：全量测试
+
+```bash
+./gradlew clean test
+```
+
+预期：
+- 新增 7+ 个测试通过
+- 存量测试不受影响（原有合法类选择路径不变）
+
+### 步骤 6：提交
+
+按 commit-rhythm 约定：增量测试 → 全量 → 全绿后提交。
+
+---
+
+## 验证清单
+
+### 问题一：调用类校验
+
+- [ ] 选中 `UserVO` → 不被选中，状态行显示「UserVO 看起来是 VO/DTO，不具备 CRUD 能力…」
+- [ ] 选中 `UserDTO` → 不被选中，状态行显示拒绝提示
+- [ ] 选中 `StringUtils` / `UserController` → 不被选中，状态行显示拒绝提示
+- [ ] 选中 `UserMapper` / `UserService` / `UserServiceImpl` → 正常选中
+
+### 问题二：`this`/`baseMapper` 上下文感知（兼顾 PM + MPJ）
+
+- [ ] 选中 `this` + 当前打开 `UserServiceImpl` → tooltip 含「当前：UserServiceImpl」
+- [ ] 选中 `baseMapper` + 当前打开 `UserServiceImpl extends ServiceImpl<UserMapper, User>`（PM ServiceImpl）→ tooltip 含「当前：UserServiceImpl，表：User」
+- [ ] 选中 `baseMapper` + 当前打开 `UserMapper extends BaseMapper<User>`（PM 独立 Mapper）→ tooltip 含「当前：UserMapper，表：User」
+- [ ] 选中 `baseMapper` + 当前打开 `UserMapper extends MPJBaseMapper<User>`（MPJ Mapper）→ tooltip 含「当前：UserMapper，表：User」
+- [ ] 选中 `baseMapper` + 当前打开无泛型父类的类 → tooltip 仅含「当前：XXX」（不报错）
+- [ ] 选中 `this` / `baseMapper` + 当前无打开 Java 文件 → tooltip 保持原样（无追加）
+
+### 回归
+
+- [ ] 存量测试全绿
+
+---
+
+## 风险评估
+
+- **低风险**：校验逻辑基于类名后缀匹配，不涉及 PSI 深度遍历，性能可忽略。
+- **低风险**：`detectCurrentEditorClass()` 仅在用户点击选择器时触发一次，不引入后台轮询。
+- **低风险**：tooltip 信息追加不影响面板布局和生成逻辑（仅展示层）。
+- **潜在误杀**：用户有自定义命名的 Service（如 `UserBiz` 不叫 `Service`）——白名单未覆盖时会被放行（第 4 步 return null），不拒绝但也不提示；若需更严格校验，后续可加 MPJ 能力反查（`hasMpjInterface`）。
+- **无回归**：合法类（Mapper/Service/ServiceImpl/Impl）路径完全不变。
+
+---
+
+## 附录：改动文件清单
+
+| 文件 | 改动类型 | 说明 |
+|------|----------|------|
+| `SqlToJavaPanel.kt` | 修改 | 新增 `validateCallerClass()`、`detectCurrentEditorClass()`、`buildSpecialTooltip()`；修改 `pickPsiClassForTest()`、`pickClass()` |
+| `MpSqlVisualizerBundle.properties` | 修改 | 新增 3 条拒绝提示文案（英文） |
+| `MpSqlVisualizerBundle_zh.properties` | 修改 | 新增 3 条拒绝提示文案（中文） |
+| `SqlToJavaPanelTest.kt` | 新增测试 | VO/DTO/Utils/Controller 拒绝测试 + 合法类接受测试 + tooltip 上下文测试 |

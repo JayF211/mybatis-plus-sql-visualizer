@@ -762,4 +762,147 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         myFixture.configureByText("UserService.java", "package demo; public class UserService {}")
         return PsiTreeUtil.findChildOfType(myFixture.file, PsiClass::class.java)!!
     }
+
+    // ------------------------------------------------------------------
+    // T-Mxx：调用类校验——VO/DTO/Utils/Controller 拒绝 + 合法类接受
+    // ------------------------------------------------------------------
+
+    fun testVoClassRejected() {
+        val psiClass = createPsiClassNamed("UserVO")
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue("VO 不应被选中", panel.callerFieldForTest().text.isEmpty())
+        assertTrue("状态行应显示拒绝提示", panel.statusForTest().contains("VO/DTO"))
+    }
+
+    fun testDtoClassRejected() {
+        val psiClass = createPsiClassNamed("UserDTO")
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue("DTO 不应被选中", panel.callerFieldForTest().text.isEmpty())
+    }
+
+    fun testBoClassRejected() {
+        val psiClass = createPsiClassNamed("UserBO")
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue("BO 不应被选中", panel.callerFieldForTest().text.isEmpty())
+    }
+
+    fun testPoClassRejected() {
+        val psiClass = createPsiClassNamed("UserPO")
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue("PO 不应被选中", panel.callerFieldForTest().text.isEmpty())
+    }
+
+    fun testUtilsClassRejected() {
+        val psiClass = createPsiClassNamed("StringUtils")
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue("Utils 不应被选中", panel.callerFieldForTest().text.isEmpty())
+    }
+
+    fun testControllerClassRejected() {
+        val psiClass = createPsiClassNamed("UserController")
+        panel.pickPsiClassForTest(psiClass)
+        assertTrue("Controller 不应被选中", panel.callerFieldForTest().text.isEmpty())
+    }
+
+    fun testMapperClassAccepted() {
+        val psiClass = createPsiClassNamed("UserMapper")
+        panel.pickPsiClassForTest(psiClass)
+        assertEquals("UserMapper", panel.callerFieldForTest().text)
+    }
+
+    fun testServiceClassAccepted() {
+        val psiClass = createPsiClassNamed("UserService")
+        panel.pickPsiClassForTest(psiClass)
+        assertEquals("UserService", panel.callerFieldForTest().text)
+    }
+
+    fun testServiceImplClassAccepted() {
+        val psiClass = createPsiClassNamed("UserServiceImpl")
+        panel.pickPsiClassForTest(psiClass)
+        assertEquals("UserServiceImpl", panel.callerFieldForTest().text)
+    }
+
+    fun testImplClassAccepted() {
+        val psiClass = createPsiClassNamed("UserImpl")
+        panel.pickPsiClassForTest(psiClass)
+        assertEquals("UserImpl", panel.callerFieldForTest().text)
+    }
+
+    // ------------------------------------------------------------------
+    // T-Mxx：this/baseMapper tooltip 上下文感知（兼顾 PM + MPJ）
+    // ------------------------------------------------------------------
+
+    fun testThisTooltipWithCurrentClass() {
+        val currentClass = createPsiClassWithSuper("UserServiceImpl", "ServiceImpl<UserMapper, User>")
+        panel.setCurrentEditorClassForTest(currentClass)
+        panel.callerFieldForTest().pickSpecialForTest("this")
+        assertTrue("tooltip 应含当前类名",
+            panel.callerFieldForTest().toolTipText?.contains("UserServiceImpl") == true)
+    }
+
+    fun testBaseMapperTooltipWithServiceImpl() {
+        // PM 场景：UserServiceImpl extends ServiceImpl<UserMapper, User>
+        val currentClass = createPsiClassWithSuper("UserServiceImpl", "ServiceImpl<UserMapper, User>")
+        panel.setCurrentEditorClassForTest(currentClass)
+        panel.callerFieldForTest().pickSpecialForTest("baseMapper")
+        assertTrue("tooltip 应含当前类名",
+            panel.callerFieldForTest().toolTipText?.contains("UserServiceImpl") == true)
+        assertTrue("tooltip 应含实体信息（第 2 个泛型参数 = User）",
+            panel.callerFieldForTest().toolTipText?.contains("User") == true)
+    }
+
+    fun testBaseMapperTooltipWithBaseMapper() {
+        // PM 场景：独立 UserMapper extends BaseMapper<User>
+        val currentClass = createPsiClassWithSuper("UserMapper", "BaseMapper<User>")
+        panel.setCurrentEditorClassForTest(currentClass)
+        panel.callerFieldForTest().pickSpecialForTest("baseMapper")
+        assertTrue("tooltip 应含当前类名",
+            panel.callerFieldForTest().toolTipText?.contains("UserMapper") == true)
+        assertTrue("tooltip 应含实体信息（第 1 个泛型参数 = User）",
+            panel.callerFieldForTest().toolTipText?.contains("User") == true)
+    }
+
+    fun testBaseMapperTooltipWithMpjMapper() {
+        // MPJ 场景：UserMapper extends MPJBaseMapper<User>
+        val currentClass = createPsiClassWithSuper("UserMapper", "MPJBaseMapper<User>")
+        panel.setCurrentEditorClassForTest(currentClass)
+        panel.callerFieldForTest().pickSpecialForTest("baseMapper")
+        assertTrue("tooltip 应含当前类名",
+            panel.callerFieldForTest().toolTipText?.contains("UserMapper") == true)
+        assertTrue("tooltip 应含实体信息（MPJ 第 1 个泛型参数 = User）",
+            panel.callerFieldForTest().toolTipText?.contains("User") == true)
+    }
+
+    fun testBaseMapperTooltipNoSuperType() {
+        // 无泛型父类 → 仅展示类名，不报错
+        val currentClass = createPsiClassNamed("UserMapper")
+        panel.setCurrentEditorClassForTest(currentClass)
+        panel.callerFieldForTest().pickSpecialForTest("baseMapper")
+        assertTrue("tooltip 应含当前类名",
+            panel.callerFieldForTest().toolTipText?.contains("UserMapper") == true)
+    }
+
+    fun testThisTooltipNoCurrentClass() {
+        // 当前无打开 Java 文件 → tooltip 保持原样（无追加）
+        panel.callerFieldForTest().pickSpecialForTest("this")
+        assertTrue("无当前类时 tooltip 不含「当前：」",
+            panel.callerFieldForTest().toolTipText?.contains("当前：") != true)
+    }
+
+    // ------------------------------------------------------------------
+    // 测试辅助
+    // ------------------------------------------------------------------
+
+    private fun createPsiClassNamed(simpleName: String): PsiClass {
+        myFixture.configureByText("$simpleName.java", "package demo; public class $simpleName {}")
+        return PsiTreeUtil.findChildOfType(myFixture.file, PsiClass::class.java)!!
+    }
+
+    private fun createPsiClassWithSuper(simpleName: String, superDecl: String): PsiClass {
+        myFixture.configureByText(
+            "$simpleName.java",
+            "package demo; public class $simpleName extends $superDecl {}",
+        )
+        return PsiTreeUtil.findChildOfType(myFixture.file, PsiClass::class.java)!!
+    }
 }
