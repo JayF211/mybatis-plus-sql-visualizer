@@ -12,6 +12,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiIdentifier
+import com.intellij.psi.PsiMethod
+import com.intellij.psi.util.PsiTreeUtil
 import java.awt.event.MouseEvent
 import javax.swing.Icon
 
@@ -32,6 +34,10 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
         // 其它 leaf（关键字、括号、字面量等）不可能位于 CriteriaQuery 调用链上——早退。
         if (element !is PsiIdentifier) return null
         if (!gutterEnabled()) return null
+        // 【去重关键】锚定在包含 CriteriaQuery 调用的方法名上——仅当 element 是方法名 token 时才创建 marker，
+        // 避免方法体内每个 PsiIdentifier（变量名、字段名等）都产生重复图标。
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java) ?: return null
+        if (method.nameIdentifier !== element) return null
         // 复用 CriteriaQueryLocator.locate 非 null 判定（完整扫描代码块，开销可控）
         if (CriteriaQueryLocator.locate(element) == null) return null
         return LineMarkerInfo(

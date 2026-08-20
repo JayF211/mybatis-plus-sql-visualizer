@@ -241,10 +241,12 @@ class SqlPreviewService(private val project: Project) {
         val partTree = PartTreeParser.parse(methodInfo.methodName)
         val statement = DerivedQueryConverter.convert(partTree, table)
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        // 使用实际方法参数名（而非通用的 param1/param2）
+        val paramNames = method.parameterList.parameters.map { it.name }
         return PreviewResult(
             sql = sql,
             compactSql = sql,
-            unresolvedParams = extractPlaceholders(sql),
+            unresolvedParams = paramNames,
             paramTable = null,
             wrapperType = null,
             tableName = table.tableName,
@@ -261,12 +263,14 @@ class SqlPreviewService(private val project: Project) {
             JpqlQueryLocator.locate(file, method.textRange.startOffset)
         } ?: return null
         val jpql = info.jpql
+        // 参数名提取：优先 @Param 注解值，否则用方法参数名
+        val paramNames = extractJpqlParamNames(method)
         // 原生 SQL：直接展示 jpql 字符串作为 SQL（无需转换）
         if (info.isNative) {
             return PreviewResult(
                 sql = jpql,
                 compactSql = jpql,
-                unresolvedParams = extractPlaceholders(jpql),
+                unresolvedParams = paramNames,
                 paramTable = null,
                 wrapperType = null,
                 tableName = info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
@@ -285,11 +289,32 @@ class SqlPreviewService(private val project: Project) {
         return PreviewResult(
             sql = sql,
             compactSql = sql,
-            unresolvedParams = extractPlaceholders(sql),
+            unresolvedParams = paramNames,
             paramTable = null,
             wrapperType = null,
             tableName = table?.tableName ?: "",
         )
+    }
+
+    /**
+     * 提取 JPQL/@Query 方法的参数名。
+     * 优先 @Param 注解值（@Param("foo") → "foo"），无注解时用方法参数名。
+     */
+    private fun extractJpqlParamNames(method: PsiMethod): List<String> {
+        val parameters = method.parameterList.parameters
+        val paramAnnotationQName = "org.springframework.data.repository.query.Param"
+        return parameters.map { param ->
+            val annotation = param.modifierList?.findAnnotation(paramAnnotationQName)
+                ?: param.modifierList?.annotations?.firstOrNull {
+                    it.nameReferenceElement?.referenceName == "Param"
+                }
+            if (annotation != null) {
+                val value = annotation.findAttributeValue("value") as? com.intellij.psi.PsiLiteralExpression
+                value?.value as? String ?: param.name
+            } else {
+                param.name
+            }
+        }
     }
 
     /**
@@ -304,10 +329,13 @@ class SqlPreviewService(private val project: Project) {
         val statement = CriteriaQueryConverter.convert(model)
         // 3. SqlGenerator.generate(statement) → SQL 字符串
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        // 4. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
+        val paramNames = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java)
+            ?.parameterList?.parameters?.map { it.name } ?: emptyList()
         return PreviewResult(
             sql = sql,
             compactSql = sql,
-            unresolvedParams = extractPlaceholders(sql),
+            unresolvedParams = paramNames,
             paramTable = null,
             wrapperType = null,
             tableName = model.entityClassName ?: "",

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -42,6 +43,10 @@ class JpqlGutterLineMarkerProvider : LineMarkerProvider {
         if (annotationName != "Query") return null
         // 校验所属方法含 @Query 注解（排除普通 import 的 Query 类型引用等误判）
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java, false) ?: return null
+        // 【去重关键】派生查询（findByXxx）已由 JpaGutterLineMarkerProvider 负责图标；
+        // 本 provider 仅处理非派生查询的 @Query 方法，避免同行双图标。
+        // 注意：isDerivedQuery 必须在 hasQueryAnnotation 之前检查——某些方法可能同时满足两者。
+        if (DerivedMethodLocator.isDerivedQuery(method)) return null
         if (!JpqlQueryLocator.hasQueryAnnotation(method)) return null
         if (!gutterEnabled()) return null
         return LineMarkerInfo(

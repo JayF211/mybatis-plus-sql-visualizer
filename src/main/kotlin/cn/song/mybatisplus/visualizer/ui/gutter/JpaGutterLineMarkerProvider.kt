@@ -30,11 +30,13 @@ private val JPA_SQL_PREVIEW_ICON: Icon =
 class JpaGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
-        // LineMarker 回调的 element 是叶子元素（PsiIdentifier / PsiMethod 名称 token），
-        // 向上查找 PsiMethod——与 AnnotationSqlGutterLineMarkerProvider 同模式（ getParentOfType）。
-        val method = element as? PsiMethod
-            ?: PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)
-            ?: return null
+        // 【去重关键】LineMarker 框架对 PSI 树的每个叶子元素回调本方法。
+        // 必须锚定在方法名 PsiIdentifier 上——仅当 element 是方法的名称 token 时才创建 marker，
+        // 避免方法声明内的每个叶子（返回类型、参数名、关键字等）都产生重复图标。
+        if (element !is com.intellij.psi.PsiIdentifier) return null
+        val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java) ?: return null
+        // 确认当前 leaf 就是方法名（而非方法体内某个变量名 / 类型名）
+        if (method.nameIdentifier !== element) return null
         if (!gutterEnabled()) return null
         if (!DerivedMethodLocator.isDerivedQuery(method)) return null
 

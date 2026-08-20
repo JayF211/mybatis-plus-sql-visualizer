@@ -58,38 +58,42 @@ class CriteriaQueryGutterLineMarkerProviderTest : BasePlatformTestCase() {
         PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
             .firstOrNull { it.text == name }
 
-    fun testCriteriaMethodCallProducesMarker() {
+    fun testCriteriaMethodProducesMarker() {
         myFixture.configureByText("CriteriaDemo.java", criteriaCode)
-        // createQuery 方法名 identifier 在 CriteriaQuery 调用链上
-        val createQueryId = findIdentifier("createQuery")
-        assertNotNull("应找到 createQuery 标识符", createQueryId)
+        // 去重：仅方法名 PsiIdentifier 产生 marker（query 是包含 CriteriaQuery 的方法名）
+        val queryId = findIdentifier("query")
+        assertNotNull("应找到 query 方法名标识符", queryId)
         assertNotNull(
-            "CriteriaQuery 调用链上的 PsiIdentifier 应产生 gutter marker",
-            provider.getLineMarkerInfo(createQueryId!!),
+            "包含 CriteriaQuery 调用的方法名应产生 gutter marker",
+            provider.getLineMarkerInfo(queryId!!),
         )
     }
 
-    fun testFromCallProducesMarker() {
+    fun testBodyIdentifiersProduceNoMarker() {
         myFixture.configureByText("CriteriaDemo.java", criteriaCode)
+        // 去重：方法体内的 PsiIdentifier（createQuery、from 等）不产生重复 marker
+        val createQueryId = findIdentifier("createQuery")
+        assertNotNull("应找到 createQuery 标识符", createQueryId)
+        assertNull(
+            "方法体内的 PsiIdentifier 不应产生重复 marker（仅方法名产生）",
+            provider.getLineMarkerInfo(createQueryId!!),
+        )
         val fromId = findIdentifier("from")
         assertNotNull("应找到 from 标识符", fromId)
-        assertNotNull(
-            "cq.from(...) 中的 from 标识符应产生 gutter marker",
+        assertNull(
+            "方法体内的 from 标识符不应产生重复 marker",
             provider.getLineMarkerInfo(fromId!!),
         )
     }
 
     fun testPlainMethodZeroMarker() {
         myFixture.configureByText("CriteriaDemo.java", criteriaCode)
-        // plainMethod 中的标识符（如 "println" 或 "out"）不在 CriteriaQuery 调用链上
-        val printlnId = findIdentifier("println")
-        // println 可能不存在（System.out.println 是方法调用，println 是方法名 reference 非 identifier leaf），
-        // 改用 plainMethod 方法体中的 "out" 标识符
-        val outId = findIdentifier("out")
-        val leafToCheck = printlnId ?: outId
+        // plainMethod 方法名不含 CriteriaQuery 调用 → 零 marker
+        val plainMethodId = findIdentifier("plainMethod")
+        assertNotNull("应找到 plainMethod 标识符", plainMethodId)
         assertNull(
-            "普通方法中的标识符不应产生 CriteriaQuery marker",
-            leafToCheck?.let { provider.getLineMarkerInfo(it) },
+            "不含 CriteriaQuery 的方法名不应产生 marker",
+            provider.getLineMarkerInfo(plainMethodId!!),
         )
     }
 }

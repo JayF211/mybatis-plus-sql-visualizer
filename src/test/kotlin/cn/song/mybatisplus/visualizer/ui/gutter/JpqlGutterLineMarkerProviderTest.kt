@@ -21,13 +21,19 @@ class JpqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
 
     private val repository = """
         public interface UserRepository extends JpaRepository<UserEntity, Long> {
+            // 非派生查询的 @Query 方法（方法名不含 By）→ JPQL provider 负责图标
             @Query("SELECT u FROM UserEntity u WHERE u.username = ?1")
-            UserEntity findByUsername(String username);
+            UserEntity findByUsernameCustom(String username);
 
             @Query(value = "SELECT * FROM users WHERE name = ?1", nativeQuery = true)
-            UserEntity findByName(String name);
+            UserEntity findByNameCustom(String name);
 
+            // 派生查询 + @Query → JPA provider 负责，JPQL provider 跳过（去重）
+            @Query("SELECT u FROM UserEntity u WHERE u.email = ?1")
             UserEntity findByEmail(String email);
+
+            // 纯派生查询（无 @Query）→ JPA provider 负责
+            UserEntity findByLastName(String lastName);
         }
 
         @interface Query {
@@ -40,6 +46,7 @@ class JpqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
             private String username;
             private String name;
             private String email;
+            private String lastName;
         }
     """.trimIndent()
 
@@ -54,16 +61,25 @@ class JpqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
 
     fun testQueryAnnotationProducesMarker() {
         myFixture.configureByText("UserRepository.java", repository)
+        // findByUsernameCustom 是非派生查询的 @Query 方法 → JPQL provider 产生 marker
         val queryAt = atTokenOfAnnotation("Query")
-        assertNotNull("@Query 注解应产生 gutter marker", provider.getLineMarkerInfo(queryAt))
+        assertNotNull("@Query 注解（非派生查询）应产生 gutter marker", provider.getLineMarkerInfo(queryAt))
+    }
+
+    fun testDerivedQueryWithQueryAnnotationSkipped() {
+        myFixture.configureByText("UserRepository.java", repository)
+        // findByEmail 是派生查询 + @Query → JPQL provider 跳过（去重，由 JPA provider 负责）
+        val identifier = PsiTreeUtil.findChildrenOfType(myFixture.file, com.intellij.psi.PsiIdentifier::class.java)
+            .first { it.text == "findByEmail" }
+        assertNull("派生查询 + @Query 方法应由 JPA provider 负责，JPQL provider 跳过", provider.getLineMarkerInfo(identifier))
     }
 
     fun testMethodWithoutQueryAnnotationZeroMarker() {
         myFixture.configureByText("UserRepository.java", repository)
-        // 找 findByEmail 方法名的标识符 leaf —— 该方法无 @Query 注解
+        // findByLastName 是纯派生查询（无 @Query）→ JPQL provider 不产生 marker
         val identifier = PsiTreeUtil.findChildrenOfType(myFixture.file, com.intellij.psi.PsiIdentifier::class.java)
-            .first { it.text == "findByEmail" }
-        assertNull("无 @Query 注解的方法标识符不应产生 marker", provider.getLineMarkerInfo(identifier))
+            .first { it.text == "findByLastName" }
+        assertNull("无 @Query 注解的方法标识符不应产生 JPQL marker", provider.getLineMarkerInfo(identifier))
     }
 
     fun testNonQueryAnnotationZeroMarker() {
