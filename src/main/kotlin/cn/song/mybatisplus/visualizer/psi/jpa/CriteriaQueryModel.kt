@@ -5,7 +5,7 @@ import cn.song.mybatisplus.visualizer.model.JoinType
 /**
  * JPA CriteriaQuery 中间表示（CriteriaQueryLocator 产物，CriteriaQueryConverter 输入）。
  *
- * 从 PSI 调用链中提取的结构化查询模型，涵盖 FROM / SELECT / WHERE / ORDER BY / JOIN。
+ * 从 PSI 调用链中提取的结构化查询模型，涵盖 FROM / SELECT / WHERE / GROUP BY / HAVING / ORDER BY / JOIN。
  */
 data class CriteriaQueryModel(
     /** 实体类全限定名（from 的实体类）。 */
@@ -16,6 +16,10 @@ data class CriteriaQueryModel(
     val selectColumns: List<SelectColumn> = emptyList(),
     /** WHERE 条件中间列表。 */
     val predicates: List<PredicateModel> = emptyList(),
+    /** GROUP BY 列列表。 */
+    val groupBys: List<GroupByModel> = emptyList(),
+    /** HAVING 条件中间列表（顶层以 AND 连接）。 */
+    val havings: List<PredicateModel> = emptyList(),
     /** ORDER BY 列表。 */
     val orderBys: List<OrderByModel> = emptyList(),
     /** JOIN 列表。 */
@@ -27,12 +31,27 @@ data class CriteriaQueryModel(
 /**
  * SELECT 列中间表示。
  *
- * @param fieldName  实体字段名（驼峰，如 shareSchemeId）
+ * @param fieldName  实体字段名（驼峰，如 shareSchemeId）；聚合函数时为 null
  * @param alias      列别名（当前未使用，预留）
+ * @param aggregate  聚合函数信息；null 表示非聚合列
  */
 data class SelectColumn(
-    val fieldName: String,
+    val fieldName: String?,
     val alias: String? = null,
+    val aggregate: AggregateInfo? = null,
+)
+
+/**
+ * 聚合函数信息（P1-5 CriteriaQuery 聚合函数支持）。
+ *
+ * @param function  聚合函数名（COUNT / SUM / MAX / MIN / AVG）
+ * @param fieldName  聚合目标字段名；COUNT(*) 时为 null
+ * @param distinct   是否 DISTINCT
+ */
+data class AggregateInfo(
+    val function: String,
+    val fieldName: String? = null,
+    val distinct: Boolean = false,
 )
 
 /**
@@ -89,6 +108,15 @@ sealed class PredicateModel {
 
 /** 条件组连接符。 */
 enum class GroupConnector { AND, OR }
+
+/**
+ * GROUP BY 中间表示。
+ *
+ * @param fieldName 实体字段名（驼峰，如 "status"）
+ */
+data class GroupByModel(
+    val fieldName: String,
+)
 
 /**
  * ORDER BY 中间表示。

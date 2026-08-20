@@ -56,14 +56,18 @@ object CriteriaQueryConverter {
     fun convert(model: CriteriaQueryModel, overrideTable: TableInfo? = null): SqlStatement {
         val tableInfo = overrideTable ?: resolveTableInfo(model)
         val conditions = convertPredicates(model.predicates, tableInfo)
+        val groupBy = convertGroupBy(model.groupBys, tableInfo)
+        val having = convertHaving(model.havings, tableInfo)
         val orderBy = convertOrderBy(model.orderBys, tableInfo)
-        val joins = convertJoins(model.joins)
+        val joins = convertJoins(model.joins, tableInfo)
         val selectColumns = convertSelectColumns(model.selectColumns, tableInfo)
 
         return SelectStatement(
             table = tableInfo,
             selectColumns = selectColumns,
             conditions = conditions,
+            groupBy = groupBy,
+            having = having,
             orderBy = orderBy,
             joins = joins,
         )
@@ -99,9 +103,12 @@ object CriteriaQueryConverter {
     /**
      * 转换 SELECT 列为 ColumnRef 列表。
      *
-     * 规则：
+     * 规则（增强版 P1-5 聚合函数支持）：
      *  - 空列表 → 空（converter 层全列语义，生成器展开为 SELECT *）
-     *  - 有列 → 按字段名查找实体列映射，找不到时按命名策略兜底
+     *  - 普通列 → 按字段名查找实体列映射，找不到时按命名策略兜底
+     *  - 聚合列 → ColumnRef.function 设置为聚合函数名
+     *    - COUNT(*) → function="COUNT", columnName="*"
+     *    - SUM(field) → function="SUM", columnName=解析后列名
      */
     private fun convertSelectColumns(
         columns: List<cn.song.mybatisplus.visualizer.psi.jpa.SelectColumn>,
@@ -109,7 +116,23 @@ object CriteriaQueryConverter {
     ): List<ColumnRef> {
         if (columns.isEmpty()) return emptyList()
         return columns.map { sel ->
-            val columnName = resolveColumnName(sel.fieldName, tableInfo)
+            // 聚合函数处理
+            if (sel.aggregate != null) {
+                val agg = sel.aggregate
+                val columnName = when {
+                    agg.fieldName == null -> "*" // COUNT(*) 语义
+                    else -> resolveColumnName(agg.fieldName, tableInfo)
+                }
+                return@map ColumnRef(
+                    columnName = columnName,
+                    function = agg.function,
+                    alias = sel.alias,
+                )
+            }
+
+            // 普通列处理
+            val fieldName = sel.fieldName ?: return@map ColumnRef(columnName = "*")
+            val columnName = resolveColumnName(fieldName, tableInfo)
             ColumnRef(columnName = columnName, alias = sel.alias)
         }
     }
@@ -190,6 +213,51 @@ object CriteriaQueryConverter {
     }
 
     // ------------------------------------------------------------------
+    // GROUP BY 转换
+    // ------------------------------------------------------------------
+
+    /**
+     * 转换 GroupByModel 列表为 ColumnRef 列表。
+     */
+    private fun convertGroupBy(
+        groupBys: List<cn.song.mybatisplus.visualizer.psi.jpa.GroupByModel>,
+        tableInfo: TableInfo,
+    ): List<ColumnRef> {
+        return groupBys.map { groupBy ->
+            val columnName = resolveColumnName(groupBy.fieldName, tableInfo)
+            ColumnRef(columnName = columnName)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // HAVING 转换
+    // ------------------------------------------------------------------
+
+    /**
+     * 转换 HAVING 谓词列表为单个 Condition（AND 连接）。
+     *
+     * 规则：
+     *  - 空列表 → null（无 HAVING）
+     *  - 单条件 → 直接使用
+     *  - 多条件 → AND 连接的 Group
+     */
+    private fun convertHaving(
+        havings: List<PredicateModel>,
+        tableInfo: TableInfo,
+    ): cn.song.mybatisplus.visualizer.model.Condition? {
+        if (havings.isEmpty()) return null
+        val conditions = havings.map { convertPredicate(it, tableInfo) }
+        return if (conditions.size == 1) {
+            conditions[0]
+        } else {
+            cn.song.mybatisplus.visualizer.model.Condition.Group(
+                connector = cn.song.mybatisplus.visualizer.model.Connector.AND,
+                children = conditions,
+            )
+        }
+    }
+
+    // ------------------------------------------------------------------
     // ORDER BY 转换
     // ------------------------------------------------------------------
 
@@ -213,21 +281,69 @@ object CriteriaQueryConverter {
     /**
      * 转换 JoinModel 列表为 JoinClause 列表。
      *
-     * 关联实体走 JpaEntityResolver 解析；不可解析时按类名推断表名。
+     * 增强版（JOIN ON 条件推断 P1-6）：
+     *  - 从 root.join("department") 的 fieldName 推断关联表名
+     *  - 读取主实体列映射推断外键列
+     *  - 生成 ON 条件: alias.id = root_fk_column
+     *
+     * @param tableInfo 主实体表信息（用于列映射和 JOIN ON 推断）
      */
-    private fun convertJoins(joins: List<cn.song.mybatisplus.visualizer.psi.jpa.JoinModel>): List<JoinClause> {
+    private fun convertJoins(
+        joins: List<cn.song.mybatisplus.visualizer.psi.jpa.JoinModel>,
+        tableInfo: TableInfo,
+    ): List<JoinClause> {
         return joins.map { join ->
             val entityClassName = join.entityClassName ?: join.fieldName
             val tableName = JpaEntityResolver.inferDecoratedTableName(entityClassName)
-            val alias = join.alias ?: entityClassName.replaceFirstChar { it.lowercaseChar() }
+            val alias = join.alias ?: join.fieldName.replaceFirstChar { it.lowercaseChar() }
+
+            // JOIN ON 条件推断
+            val onConditions = inferJoinOnConditions(join, tableInfo, alias)
 
             JoinClause(
                 type = join.joinType,
                 tableName = tableName,
                 alias = alias,
-                onConditions = emptyList(), // CriteriaQuery join ON 条件需运行时关联，当前留空
+                onConditions = onConditions,
             )
         }
+    }
+
+    /**
+     * 推断 CriteriaQuery JOIN 的 ON 条件。
+     *
+     * 启发式规则（JPA @JoinColumn 默认命名）：
+     *  - root.join("department") → 从主实体 department 属性推断外键列
+     *    - 查找主实体 TableInfo 中名为 "department" 的字段
+     *    - 若无精确匹配，按命名策略生成：department → department_id
+     *  - ON 条件: alias.id = root_fk_column
+     */
+    private fun inferJoinOnConditions(
+        join: cn.song.mybatisplus.visualizer.psi.jpa.JoinModel,
+        tableInfo: TableInfo,
+        alias: String,
+    ): List<Condition> {
+        val fieldName = join.fieldName
+
+        // 策略 1：在主实体列映射中查找同名字段
+        val matchedColumn = tableInfo.columnByField(fieldName)
+        if (matchedColumn != null) {
+            return listOf(
+                Condition.ColumnComparison(
+                    left = ColumnRef(columnName = "id", tableAlias = alias),
+                    right = ColumnRef(columnName = matchedColumn.columnName),
+                ),
+            )
+        }
+
+        // 策略 2：按命名策略推断外键列名
+        val inferredFkColumn = NamingStrategy.toSnakeCase(fieldName) + "_id"
+        return listOf(
+            Condition.ColumnComparison(
+                left = ColumnRef(columnName = "id", tableAlias = alias),
+                right = ColumnRef(columnName = inferredFkColumn),
+            ),
+        )
     }
 
     // ------------------------------------------------------------------

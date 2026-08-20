@@ -1,0 +1,280 @@
+package cn.song.mybatisplus.visualizer.psi.jpa
+
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiCodeBlock
+import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.PsiLocalVariable
+import com.intellij.psi.PsiMethod
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiVariable
+import com.intellij.psi.util.PsiTreeUtil
+
+/**
+ * Hibernate HQL 查询信息（HqlQueryLocator 产物）。
+ *
+ * @param methodName     HQL 所在方法名
+ * @param hql            HQL 字符串（字面量直接取值；变量引用时为变量名）
+ * @param isLiteralHql   hql 是否为字面量（true=已提取到字符串；false=变量引用，需运行时确定）
+ * @param entityClass    返回实体类（createQuery(Xxx.class) 解析）；null 表示未指定
+ * @param entityClassName 返回实体类名（可解析时非 null）
+ * @param parameters     参数设置列表（setParameter/setInteger 等）
+ * @param method         HQL 所在 PsiMethod
+ */
+data class HqlQueryInfo(
+    val methodName: String,
+    val hql: String,
+    val isLiteralHql: Boolean,
+    val entityClass: PsiClass?,
+    val entityClassName: String?,
+    val parameters: List<HqlParameter>,
+    val method: PsiMethod,
+)
+
+/**
+ * HQL 参数设置信息（setParameter/setInteger 等调用）。
+ *
+ * @param paramName 参数名（命名参数）或位置索引字符串（位置参数）
+ * @param valueExpr 参数值表达式文本
+ * @param isPositional 是否为位置参数（setInteger(0, value) 等）
+ */
+data class HqlParameter(
+    val paramName: String,
+    val valueExpr: String,
+    val isPositional: Boolean = false,
+)
+
+/**
+ * Hibernate HQL 定位器（F-JPA-02 / Wave2-P1）。
+ *
+ * 从光标位置识别 Hibernate Session.createQuery() 调用链，提取 HQL 字符串与实体上下文。
+ *
+ * 识别模式：
+ *  - `session.createQuery("HQL字符串", Entity.class)` 或 `session.createQuery("HQL字符串")`
+ *  - `sessionFactory.getCurrentSession().createQuery(...)`
+ *  - `session.createNamedQuery("name")`（命名查询，hql 字段存查询名）
+ *  - 参数设置：`query.setParameter("name", value)` / `query.setInteger("name", value)` 等
+ *
+ * 定位策略：
+ *  1. 从光标向上查找包含 createQuery 调用的代码块或方法体；
+ *  2. 扫描范围内全部 PsiMethodCallExpression；
+ *  3. 识别 `createQuery` / `createNamedQuery` 调用并提取 HQL 字符串与实体类型；
+ *  4. 追踪 Query 变量上的 setParameter/setXxx 调用提取参数信息。
+ */
+object HqlQueryLocator {
+
+    // Hibernate Session.createQuery / createNamedQuery 方法名
+    private val CREATE_QUERY_METHODS = setOf("createQuery", "createNamedQuery")
+
+    // Query 接口参数设置方法名
+    private val SET_PARAM_METHODS = setOf(
+        "setParameter", "setString", "setInteger", "setLong", "setDouble",
+        "setFloat", "setBoolean", "setByte", "setShort", "setCharacter",
+        "setDate", "setTime", "setTimestamp", "setCalendar",
+    )
+
+    // 位置参数设置方法名（第一个参数为 int 索引）
+    private val SET_POSITIONAL_METHODS = setOf(
+        "setString", "setInteger", "setLong", "setDouble",
+        "setFloat", "setBoolean", "setByte", "setShort", "setCharacter",
+    )
+
+    /**
+     * 从光标位置定位 HQL 查询调用链。
+     *
+     * @param anchor 光标所在 PSI 元素
+     * @return HqlQueryInfo；未识别到 HQL 调用链时返回 null
+     */
+    fun locate(anchor: PsiElement): HqlQueryInfo? {
+        val block = findRelevantBlock(anchor) ?: return null
+        val allCalls = PsiTreeUtil.collectElementsOfType(block, PsiMethodCallExpression::class.java)
+
+        // 第一遍：识别 createQuery / createNamedQuery 调用
+        for (call in allCalls) {
+            val methodName = call.methodExpression.referenceName ?: continue
+            if (methodName !in CREATE_QUERY_METHODS) continue
+
+            val method = PsiTreeUtil.getParentOfType(call, PsiMethod::class.java) ?: continue
+            val (hql, isLiteral) = extractHqlString(call)
+            val (entityClass, entityClassName) = extractEntityInfo(call)
+
+            if (hql.isNullOrBlank()) continue
+
+            // 追踪 Query 变量
+            val queryVars = mutableSetOf<String>()
+            findAssignedVariable(call)?.let { queryVars += it }
+
+            // 第二遍：收集参数设置
+            val parameters = mutableListOf<HqlParameter>()
+            if (queryVars.isNotEmpty()) {
+                for (paramCall in allCalls) {
+                    val paramMethodName = paramCall.methodExpression.referenceName ?: continue
+                    if (paramMethodName !in SET_PARAM_METHODS) continue
+                    val qualifier = paramCall.methodExpression.qualifierExpression ?: continue
+                    val qualifierRef = qualifier as? PsiReferenceExpression ?: continue
+                    if (qualifierRef.referenceName in queryVars) {
+                        extractParameter(paramCall, paramMethodName)?.let { parameters += it }
+                    }
+                }
+            }
+
+            return HqlQueryInfo(
+                methodName = method.name,
+                hql = hql,
+                isLiteralHql = isLiteral,
+                entityClass = entityClass,
+                entityClassName = entityClassName,
+                parameters = parameters,
+                method = method,
+            )
+        }
+
+        return null
+    }
+
+    // ------------------------------------------------------------------
+    // 作用域查找
+    // ------------------------------------------------------------------
+
+    /**
+     * 从锚点向上查找包含 HQL 调用的代码块或方法体。
+     */
+    private fun findRelevantBlock(anchor: PsiElement): PsiElement? {
+        var current: PsiElement? = anchor
+        while (current != null) {
+            when (current) {
+                is PsiCodeBlock -> return current
+                is PsiMethod -> return current.body
+                is com.intellij.psi.PsiFile -> return current
+            }
+            current = current.parent
+        }
+        return null
+    }
+
+    // ------------------------------------------------------------------
+    // HQL 字符串提取
+    // ------------------------------------------------------------------
+
+    /**
+     * 从 createQuery/createNamedQuery 调用提取 HQL 字符串。
+     *
+     * @return Pair(hql字符串, 是否为字面量)
+     */
+    private fun extractHqlString(call: PsiMethodCallExpression): Pair<String?, Boolean> {
+        val args = call.argumentList.expressions
+        if (args.isEmpty()) return null to false
+
+        val firstArg = args[0]
+        return when (firstArg) {
+            is PsiLiteralExpression -> {
+                val value = firstArg.value as? String
+                (value ?: firstArg.text) to true
+            }
+            is PsiReferenceExpression -> {
+                // 变量引用：尝试解析为常量
+                val resolved = firstArg.resolve()
+                if (resolved is PsiVariable) {
+                    val initializer = resolved.initializer
+                    if (initializer is PsiLiteralExpression) {
+                        (initializer.value as? String ?: initializer.text) to true
+                    } else {
+                        firstArg.referenceName to false
+                    }
+                } else {
+                    firstArg.referenceName to false
+                }
+            }
+            else -> firstArg.text to false
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 实体类型提取
+    // ------------------------------------------------------------------
+
+    /**
+     * 从 createQuery(Xxx.class) 提取返回实体类信息。
+     */
+    private fun extractEntityInfo(call: PsiMethodCallExpression): Pair<PsiClass?, String?> {
+        val methodName = call.methodExpression.referenceName
+        // createNamedQuery 无实体参数
+        if (methodName == "createNamedQuery") return null to null
+
+        // 查找第二个参数（Entity.class）
+        val args = call.argumentList.expressions
+        if (args.size >= 2) {
+            val entityArg = args[1]
+            if (entityArg is com.intellij.psi.PsiClassObjectAccessExpression) {
+                val psiClass = (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.resolve()
+                return psiClass to (psiClass?.name ?: (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.className)
+            }
+        }
+
+        // 尝试从类型参数推断
+        val typeArg = call.typeArguments.firstOrNull() as? com.intellij.psi.PsiClassType
+        if (typeArg != null) {
+            return typeArg.resolve() to typeArg.className
+        }
+
+        return null to null
+    }
+
+    // ------------------------------------------------------------------
+    // 变量追踪
+    // ------------------------------------------------------------------
+
+    /**
+     * 查找方法调用被赋值给的局部变量名（如 `Query q = session.createQuery(...)` 的 q）。
+     */
+    private fun findAssignedVariable(call: PsiMethodCallExpression): String? {
+        val parent = call.parent ?: return null
+        // 局部变量声明：Type var = call;
+        if (parent is PsiLocalVariable && parent.initializer === call) {
+            return parent.name
+        }
+        // 赋值语句：var = call;
+        if (parent is com.intellij.psi.PsiAssignmentExpression) {
+            val lhs = parent.lExpression as? PsiReferenceExpression ?: return null
+            return lhs.referenceName
+        }
+        return null
+    }
+
+    // ------------------------------------------------------------------
+    // 参数提取
+    // ------------------------------------------------------------------
+
+    /**
+     * 从 setParameter/setInteger 等调用提取参数信息。
+     */
+    private fun extractParameter(call: PsiMethodCallExpression, methodName: String): HqlParameter? {
+        val args = call.argumentList.expressions
+        if (args.isEmpty()) return null
+
+        val isPositional = methodName in SET_POSITIONAL_METHODS && args.size >= 2
+
+        return if (isPositional) {
+            // 位置参数：setInteger(0, value) → paramName = "0"
+            val indexArg = args[0]
+            val indexText = when (indexArg) {
+                is PsiLiteralExpression -> indexArg.value?.toString() ?: "0"
+                else -> indexArg.text
+            }
+            val valueExpr = args[1].text
+            HqlParameter(paramName = indexText, valueExpr = valueExpr, isPositional = true)
+        } else {
+            // 命名参数：setParameter("name", value) → paramName = "name"
+            val nameArg = args[0]
+            val paramName = when (nameArg) {
+                is PsiLiteralExpression -> nameArg.value as? String ?: nameArg.text
+                is PsiReferenceExpression -> nameArg.referenceName
+                else -> nameArg.text
+            } ?: return null
+            val valueExpr = if (args.size > 1) args[1].text else ""
+            HqlParameter(paramName = paramName, valueExpr = valueExpr, isPositional = false)
+        }
+    }
+}

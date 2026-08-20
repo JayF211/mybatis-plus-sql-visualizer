@@ -3,8 +3,11 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
+import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.JpqlConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser
+import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -24,6 +27,7 @@ import cn.song.mybatisplus.visualizer.psi.WrapperCache
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
+import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
@@ -244,6 +248,69 @@ class SqlPreviewService(private val project: Project) {
             paramTable = null,
             wrapperType = null,
             tableName = table.tableName,
+        )
+    }
+
+    /**
+     * JPQL/@Query 预览（波次一）：解析 @Query 注解方法 → JPQL 字符串 → SQL → PreviewResult。
+     *
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.JpqlGutterLineMarkerProvider] 点击调用。
+     */
+    fun previewJpql(method: PsiMethod): PreviewResult? {
+        val info = method.containingFile?.let { file ->
+            JpqlQueryLocator.locate(file, method.textRange.startOffset)
+        } ?: return null
+        val jpql = info.jpql
+        // 原生 SQL：直接展示 jpql 字符串作为 SQL（无需转换）
+        if (info.isNative) {
+            return PreviewResult(
+                sql = jpql,
+                compactSql = jpql,
+                unresolvedParams = extractPlaceholders(jpql),
+                paramTable = null,
+                wrapperType = null,
+                tableName = info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
+            )
+        }
+        // JPQL → 解析实体类 → JpaEntityResolver.resolve → TableInfo
+        val entityClass = info.entityClass
+        val table = if (entityClass != null) {
+            JpaEntityResolver().resolve(entityClass)
+        } else {
+            null
+        }
+        // JpqlConverter.convert(jpql, tableInfo) → SelectStatement
+        val statement = JpqlConverter.convert(jpql, table)
+        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        return PreviewResult(
+            sql = sql,
+            compactSql = sql,
+            unresolvedParams = extractPlaceholders(sql),
+            paramTable = null,
+            wrapperType = null,
+            tableName = table?.tableName ?: "",
+        )
+    }
+
+    /**
+     * CriteriaQuery 预览（波次一）：定位 CriteriaQueryModel → CriteriaQueryConverter → SQL → PreviewResult。
+     *
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.CriteriaQueryGutterLineMarkerProvider] 点击调用。
+     */
+    fun previewCriteriaQuery(anchor: PsiElement): PreviewResult? {
+        // 1. 用 CriteriaQueryLocator.locate(anchor) 获取 CriteriaQueryModel
+        val model = CriteriaQueryLocator.locate(anchor) ?: return null
+        // 2. CriteriaQueryConverter.convert(model) → SelectStatement
+        val statement = CriteriaQueryConverter.convert(model)
+        // 3. SqlGenerator.generate(statement) → SQL 字符串
+        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        return PreviewResult(
+            sql = sql,
+            compactSql = sql,
+            unresolvedParams = extractPlaceholders(sql),
+            paramTable = null,
+            wrapperType = null,
+            tableName = model.entityClassName ?: "",
         )
     }
 

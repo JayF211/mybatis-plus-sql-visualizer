@@ -78,6 +78,8 @@ object CriteriaQueryLocator {
         val criteriaQueryVars = mutableSetOf<String>()
         val roots = mutableSetOf<String>() // from 引入的 Root 变量名
         val predicates = mutableListOf<PredicateModel>()
+        val groupBys = mutableListOf<GroupByModel>()
+        val havings = mutableListOf<PredicateModel>()
         val orderBys = mutableListOf<OrderByModel>()
         val selectColumns = mutableListOf<SelectColumn>()
         val joins = mutableListOf<JoinModel>()
@@ -132,6 +134,20 @@ object CriteriaQueryLocator {
                     }
                 }
 
+                // cq.groupBy(root.get("field"))
+                methodName == "groupBy" && qualifierText in criteriaQueryVars -> {
+                    for (arg in call.argumentList.expressions) {
+                        extractGroupBy(arg)?.let { groupBys += it }
+                    }
+                }
+
+                // cq.having(predicate...)
+                methodName == "having" && qualifierText in criteriaQueryVars -> {
+                    for (arg in call.argumentList.expressions) {
+                        extractPredicate(arg)?.let { havings += it }
+                    }
+                }
+
                 // cq.orderBy(cb.asc(...)/cb.desc(...))
                 methodName == "orderBy" && qualifierText in criteriaQueryVars -> {
                     for (arg in call.argumentList.expressions) {
@@ -165,6 +181,8 @@ object CriteriaQueryLocator {
             entityClass = entityClass,
             selectColumns = selectColumns,
             predicates = predicates,
+            groupBys = groupBys,
+            havings = havings,
             orderBys = orderBys,
             joins = joins,
             resultClassName = resultClassName,
@@ -299,6 +317,10 @@ object CriteriaQueryLocator {
 
     /**
      * 从 cq.select(...) / cq.multiselect(...) 提取 SELECT 列。
+     *
+     * 增强版（P1-5 聚合函数支持）：
+     *  - cb.count(root) → SelectColumn(null, aggregate=AggregateInfo("COUNT"))
+     *  - cb.sum(root.get("field")) → SelectColumn(null, aggregate=AggregateInfo("SUM", "field"))
      */
     private fun extractSelectColumns(
         call: PsiMethodCallExpression,
@@ -316,14 +338,46 @@ object CriteriaQueryLocator {
             }
         }
 
-        // cq.multiselect(root.get(...), ...) 或 cq.select(root.get(...))
+        // cq.multiselect(...) / cq.select(...) 各参数
         return args.mapNotNull { arg ->
+            // 尝试解析为聚合函数调用
+            val aggregate = extractAggregate(arg)
+            if (aggregate != null) {
+                return@mapNotNull SelectColumn(fieldName = aggregate.fieldName, aggregate = aggregate)
+            }
+
+            // 否则尝试 root.get(...)
             val getCall = arg as? PsiMethodCallExpression ?: return@mapNotNull null
             if (getCall.methodExpression.referenceName != "get") return@mapNotNull null
             val fieldName = extractFieldName(getCall) ?: return@mapNotNull null
             SelectColumn(fieldName)
         }
     }
+
+    /**
+     * 尝试从 SELECT 参数表达式提取聚合函数信息。
+     */
+    private fun extractAggregate(arg: PsiExpression): AggregateInfo? {
+        val call = arg as? PsiMethodCallExpression ?: return null
+        val methodName = call.methodExpression.referenceName ?: return null
+
+        val upperName = methodName.uppercase()
+        if (upperName !in AGGREGATE_FUNCTIONS) return null
+
+        val qualifier = call.methodExpression.qualifierExpression
+        if (qualifier !is PsiReferenceExpression) return null
+
+        val args = call.argumentList.expressions
+        if (args.isEmpty()) return AggregateInfo(function = upperName)
+
+        val firstArg = args[0]
+        val fieldName = extractFieldNameFromArg(firstArg)
+
+        return AggregateInfo(function = upperName, fieldName = fieldName)
+    }
+
+    // CriteriaBuilder 聚合函数名
+    private val AGGREGATE_FUNCTIONS = setOf("COUNT", "SUM", "MAX", "MIN", "AVG")
 
     // ------------------------------------------------------------------
     // WHERE / Predicate 解析
@@ -472,6 +526,19 @@ object CriteriaQueryLocator {
             return arg.value as? String
         }
         return null
+    }
+
+    // ------------------------------------------------------------------
+    // GROUP BY 解析
+    // ------------------------------------------------------------------
+
+    /**
+     * 从 cq.groupBy(...) 的实参提取 GroupByModel。
+     */
+    private fun extractGroupBy(expr: PsiExpression?): GroupByModel? {
+        if (expr == null) return null
+        val fieldName = extractFieldNameFromArg(expr) ?: return null
+        return GroupByModel(fieldName)
     }
 
     // ------------------------------------------------------------------
