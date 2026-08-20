@@ -57,22 +57,22 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         SqlLogManager(project).apply { installBridgeForTest(bridge) }
 
     fun testStartCaptureKeepsCapturingOffWhenAttachFails() {
-        val manager = managerWith(FakeBridge(attachResult = false))
+        // Option A：无控制台 + attach 失败仍进入 armed 态（capturing=true），用户可重试
+        val bridge = FakeBridge(attachResult = false, hasMainConsoleResult = false)
+        val manager = managerWith(bridge)
         manager.startCapture()
-        assertFalse(
-            "attach 失败不得进入「已捕捉但无监听」的假状态（修复前 capturing 恒被置 true，静默失败）",
-            manager.capturing,
-        )
+        assertTrue("attach 失败仍应进入 armed 态（capturing=true，用户可重试）", manager.capturing)
+        assertTrue("attach 失败应保持等待态", manager.isWaitingForConsole)
+        assertEquals("attach 失败仍须尝试挂载", 1, bridge.attachCalls)
     }
 
     fun testStartCaptureSkipsWithoutMainConsole() {
+        // Option A：无控制台时立即进入 armed 态（capturing=true, isWaitingForConsole=true）
         val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
         val manager = managerWith(bridge)
         manager.startCapture()
-        assertFalse(
-            "无运行中的主控制台时不得进入捕捉态（项目打开未运行不监听，等待主控制台出现）",
-            manager.capturing,
-        )
+        assertTrue("无控制台时应进入 armed 态（capturing=true）", manager.capturing)
+        assertTrue("无控制台时应处于等待态", manager.isWaitingForConsole)
         assertEquals(
             "无主控制台时仍须挂载桥监听（否则主控制台出现时检测不到——图标不刷新，日志实证）",
             1,
@@ -143,7 +143,8 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         val bridge = FakeBridge(attachResult = true, hasMainConsoleResult = false)
         val manager = managerWith(bridge)
         manager.startCapture()
-        assertFalse("无控制台时不得进入捕捉态", manager.capturing)
+        // Option A：无控制台时立即进入 armed 态（capturing=true + isWaitingForConsole=true）
+        assertTrue("无控制台时应进入 armed 态（capturing=true）", manager.capturing)
         assertTrue("应进入等待态（isWaitingForConsole=true）", manager.isWaitingForConsole)
         assertEquals("仍须挂载桥监听", 1, bridge.attachCalls)
     }
@@ -184,11 +185,13 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             val manager = managerWith(bridge)
             // 自动路径：LogStartupCapture 触发 startCapture（无控制台）
             manager.startCapture()
-            assertFalse("无控制台时自动路径也不得进入捕捉态", manager.capturing)
+            // Option A：自动路径无控制台时也进入 armed 态（capturing=true）
+            assertTrue("autoStart=true：无控制台时应进入 armed 态（capturing=true）", manager.capturing)
             // 控制台出现
             bridge.hasMainConsoleResult = true
             manager.onConsoleAppeared()
-            assertTrue("autoStart=true：控制台出现后应自动进入捕捉态", manager.capturing)
+            assertTrue("autoStart=true：控制台出现后应自动捕捉", manager.capturing)
+            assertFalse("控制台出现后等待态应清除", manager.isWaitingForConsole)
         } finally {
             settings.state.logAutoCaptureOnStart = old
         }

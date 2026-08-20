@@ -7,9 +7,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.notification.Notification
-import com.intellij.notification.NotificationType
-import com.intellij.notification.Notifications
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -81,58 +78,34 @@ class SqlLogManager(private val project: Project) : Disposable {
      *  否则无任何检测机制，项目真正启动运行时 onConsoleAppeared 不会被触发（日志实证：
      *  守卫直接 return 后主控制台出现，日志再无 scanAll/contentAdded——图标不变）。 */
     fun startCapture() {
-        LOG.info("startCapture: 调用开始（capturing=$capturing, project=${project.name}）")
-        if (capturing) return
+        LOG.info("startCapture: 调用开始（capturing=$capturing, waiting=$isWaitingForConsole, project=${project.name}）")
+        if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         if (!hasMainConsole()) {
-            // 项目尚未运行（无主运行控制台）：记录用户意图 + 挂载桥监听——
-            // 主控制台出现（contentAdded 监听 / 轮询检测）时由 onConsoleAppeared 自动进入捕捉态
+            // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
+            // 主控制台出现（contentAdded 监听 / 轮询检测）时自动附着 filter 开始捕捉 SQL
+            capturing = true  // ← 立即进入捕捉态（按钮显示 ⏸）
             userRequestedCapture = true
             isWaitingForConsole = true
-            LOG.info("startCapture: 无运行中的主控制台——挂载监听等待项目运行（用户已请求捕捉）")
+            LOG.info("startCapture: 无运行中的主控制台——进入 armed 态（已开启，等待项目运行）")
             if (bridge.attach(project)) {
                 bridge.startPolling()
             }
-            refreshToolbar() // 等待态也须刷新工具栏——通知 UI 切换「等待中...」文案
-            // 通知气泡：明确反馈已进入等待态（按钮图标变化可能不易察觉）
-            Notifications.Bus.notify(
-                Notification(
-                    "mybatis-plus-sql-visualizer",
-                    "SQL 捕捉",
-                    "等待项目运行——控制台出现后自动开始捕捉",
-                    NotificationType.INFORMATION,
-                ),
-                project,
-            )
+            refreshToolbar()
             return
         }
-        // 已在捕捉路径（控制台已存在或刚出现）——清除等待态
+        // 控制台已存在（或刚出现）——清除等待态，附着 filter 开始捕捉
         val wasWaiting = isWaitingForConsole
         isWaitingForConsole = false
+        if (!capturing) capturing = true  // 非 armed 态则置 true
         applySettings()
-        // T-xx（设置生效性审计）：**先挂载成功再置 capturing**——attach 失败（环境缺 execution API /
-        // 反射目标不可用）时保持「未捕捉」态并 warn（可诊断），工具栏仍显示「捕捉」可手动重试；
-        // 原实现先置 true 再 attach，失败后进入「已捕捉但无任何监听」的假状态（静默失败，无感知无重试）
         if (bridge.attach(project)) {
-            capturing = true
-            bridge.startPolling()
-            // 关键：attach 成功后扫描现有控制台挂载 filter（attach 已 attached 时返回 true 但不扫描）
+            if (!wasWaiting) bridge.startPolling()  // 已在轮询则跳过
+            // 关键：扫描现有控制台挂载 filter（attach 已 attached 时返回 true 但不扫描）
             bridge.scanAll()
-            LOG.info("startCapture: 已进入捕捉态（capturing=true, consoles=${attachedConsoles.size}）")
-            // 通知气泡：从等待态进入捕捉态（控制台出现后自动捕捉）
-            if (wasWaiting) {
-                Notifications.Bus.notify(
-                    Notification(
-                        "mybatis-plus-sql-visualizer",
-                        "SQL 捕捉",
-                        "已检测到运行控制台，自动开始捕捉 SQL",
-                        NotificationType.INFORMATION,
-                    ),
-                    project,
-                )
-            }
+            LOG.info("startCapture: 已开始捕捉 SQL（capturing=true, consoles=${attachedConsoles.size}）")
             refreshToolbar()
         } else {
-            LOG.warn("startCapture: 控制台监听挂载失败（execution API 不可用）——未进入捕捉态，可稍后手动重试")
+            LOG.warn("startCapture: 控制台监听挂载失败（execution API 不可用）——保持 armed 态，可稍后手动重试")
         }
     }
 
@@ -194,13 +167,13 @@ class SqlLogManager(private val project: Project) : Disposable {
         }
     }
 
-    /** 新控制台出现（contentAdded / 轮询检测）时回调——设置开启或用户主动请求则自动重启。 */
+    /** 新控制台出现（contentAdded / 轮询检测）时回调——armed 态时自动附着 filter 开始捕捉 SQL。 */
     fun onConsoleAppeared() {
-        if (capturing) return
+        if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
         if (!autoStart && !userRequestedCapture) return
         userRequestedCapture = false // 消费意图（无论哪个路径触发，只消费一次）
-        LOG.info("onConsoleAppeared: 检测到新控制台，自动重启捕捉（autoStart=$autoStart, project=${project.name}）")
+        LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, waiting=$isWaitingForConsole, project=${project.name}）")
         startCapture()
     }
 
@@ -209,8 +182,8 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调——停止捕捉。 */
     fun onConsoleRemoved() {
-        if (!capturing) {
-            LOG.debug("onConsoleRemoved: 已非捕捉态（capturing=false），跳过停止")
+        if (!capturing || isWaitingForConsole) {
+            LOG.debug("onConsoleRemoved: 非捕捉态或仍在等待（capturing=$capturing, waiting=$isWaitingForConsole），跳过停止")
             return
         }
         LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（project=${project.name}）")

@@ -54,12 +54,6 @@ class SqlInputEditor(
 
     val editor: Editor = createEditor(initialSql)
 
-    companion object {
-        /** 解析 SQL 文件类型（Database 插件可用时返回 SQL 语言，否则 null —— 测试环境无 Database 插件）。 */
-        fun resolveSqlFileType(): com.intellij.lang.Language? =
-            com.intellij.lang.Language.findLanguageByID("SQL")
-    }
-
     /** DataProvider 包装后的组件（供面板布局；补全经此拿 CommonDataKeys.EDITOR）。 */
     val component: JComponent = editorHolder
 

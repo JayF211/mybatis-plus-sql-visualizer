@@ -209,20 +209,13 @@ class SqlLogPanel(
         refreshList()
 
         // capturing 变化 → 刷新工具栏按钮图标/文案
-        // 注意：updateActionsAsync() 在工具栏首次渲染后可能不触发 update()（myNeedActions=false），
-        // 故改用 updateActionsImmediately() 直接刷新（虽弃用但可靠，EDT 内调用安全）
+        // 注意：updateActionsAsync()/updateActionsImmediately() 在组件不可见时会跳过更新
+        // （ToolbarUpdater$MyUpdateRunnable 检查 isShowing，沙盒中工具栏可能不可见），
+        // 故直接遍历 ActionButton 设置图标（绕过平台更新机制）
         manager.addCapturingListener {
             LOG.info("SqlLogPanel.capturingListener: 触发")
             ApplicationManager.getApplication().invokeLater {
-                _toolbarRef?.let { toolbar ->
-                    runCatching {
-                        @Suppress("DEPRECATION")
-                        toolbar.updateActionsImmediately()
-                        LOG.info("SqlLogPanel.capturingListener: updateActionsImmediately 调用成功")
-                    }.onFailure {
-                        LOG.warn("SqlLogPanel.capturingListener: 刷新失败 - ${it.message}")
-                    }
-                }
+                updateCaptureButtonIcon()
             }
         }
     }
@@ -240,6 +233,31 @@ class SqlLogPanel(
         bar.add(toolbar.component)
         bar.add(dedupeCheckBox) // 去重勾选开关（T-M31.5）
         return bar
+    }
+
+    /** 直接更新捕捉按钮图标（绕过 ActionToolbar 更新机制——沙盒中 isShowing 检查会导致更新被跳过）。 */
+    private fun updateCaptureButtonIcon() {
+        val toolbar = _toolbarRef ?: return
+        val capturing = manager.capturing
+        val icon = if (capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
+        val text = MpSqlVisualizerBundle.message(if (capturing) "log.panel.stop" else "log.panel.capture")
+        // 遍历工具栏组件树，找到 ActionButton 并通过 getAction() 匹配 CaptureAction
+        com.intellij.util.ui.UIUtil.uiTraverser(toolbar.component)
+            .preOrderDfsTraversal()
+            .filter { it.javaClass.simpleName == "ActionButton" }
+            .forEach { btn ->
+                val action = try {
+                    btn.javaClass.getMethod("getAction").invoke(btn)
+                } catch (_: Throwable) { null }
+                if (action is CaptureAction) {
+                    (btn as? javax.swing.AbstractButton)?.let {
+                        it.icon = icon
+                        it.text = text
+                        it.repaint()
+                    }
+                    LOG.info("updateCaptureButtonIcon: 设置图标=${if (capturing) "停止" else "捕捉"}")
+                }
+            }
     }
 
     /** 筛选条容器（按设置显隐）。 */
@@ -284,20 +302,14 @@ class SqlLogPanel(
 
     private inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            when {
-                manager.capturing -> {
-                    e.presentation.icon = AllIcons.Actions.Suspend
-                    e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
-                }
-                manager.isWaitingForConsole -> {
-                    e.presentation.icon = AllIcons.Actions.Execute
-                    e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture.waiting")
-                    e.presentation.description = MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc")
-                }
-                else -> {
-                    e.presentation.icon = AllIcons.Actions.Execute
-                    e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")
-                }
+            if (manager.capturing) {
+                e.presentation.icon = AllIcons.Actions.Suspend
+                e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
+                e.presentation.description = if (manager.isWaitingForConsole) "已开启 SQL 监听，等待项目运行" else null
+            } else {
+                e.presentation.icon = AllIcons.Actions.Execute
+                e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")
+                e.presentation.description = null
             }
         }
 
