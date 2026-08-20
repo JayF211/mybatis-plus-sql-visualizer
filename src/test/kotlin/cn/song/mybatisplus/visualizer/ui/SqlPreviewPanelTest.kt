@@ -454,6 +454,46 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testClearButtonClearsConditionValues() {
+        // 清除按钮：填写条件值 → 点击清除 → 输入框清空、勾选态保留、SQL 恢复含 ?
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
+                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
+                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Placeholder("stationIdVar"),
+                        toggle = ConditionToggle("c1", "stationId != null", false, "station_id = ?", "stationIdVar")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
+                    ConditionView("c1", "station_id = ?", "stationId != null", false, "stationIdVar"),
+                ),
+            ),
+        )
+        // 清除按钮存在
+        assertNotNull("清除按钮应存在", panel.clearButtonForTest())
+        // 填写条件值
+        panel.conditionValueFieldForTest(0)!!.text = "zhang"
+        panel.conditionValueFieldForTest(1)!!.text = "100"
+        // 值回填到 SQL
+        assertTrue(panel.editorForTest()!!.document.text.contains("name = 'zhang'"))
+        // 点击清除
+        panel.clearButtonForTest()!!.doClick()
+        // 输入框清空
+        assertEquals("清除后输入框应为空", "", panel.conditionValueFieldForTest(0)!!.text)
+        assertEquals("清除后输入框应为空", "", panel.conditionValueFieldForTest(1)!!.text)
+        // paramValues 清空
+        assertEquals("paramValues 应为空字符串", "", panel.paramValuesForTest()["nameVar"])
+        assertEquals("paramValues 应为空字符串", "", panel.paramValuesForTest()["stationIdVar"])
+        // 勾选态保留（c0 默认勾选，c1 默认不勾选）
+        assertTrue("清除不影响勾选态", panel.conditionCheckboxForTest(0)!!.isSelected)
+        assertFalse("清除不影响勾选态", panel.conditionCheckboxForTest(1)!!.isSelected)
+        // SQL 恢复含 ? 形态
+        assertTrue("清除后 SQL 应恢复 ?", panel.editorForTest()!!.document.text.contains("name = ?"))
+        panel.clear()
+    }
+
     fun testDynamicConditionValueBlankKeepsChecked() {
         // M13 复选框纯手动：值空不联动勾选态——默认勾选保留 `?`，填写拼接，清空仍勾选，手动取消才排除
         val panel = SqlPreviewPanel(project)
