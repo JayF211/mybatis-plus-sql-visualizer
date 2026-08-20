@@ -1051,8 +1051,8 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             """.trimIndent(),
             result!!.sql,
         )
-        // dto.getPhone() 为运行时方法调用 → 未解析参数
-        assertEquals(listOf("dto.getPhone()"), result.unresolvedParams)
+        // dto.getPhone() 经 getter→字段引用转换后解析为 phone（master 分支 getter 方法字段名修复）
+        assertEquals(listOf("phone"), result.unresolvedParams)
         assertEquals(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, result.wrapperType)
     }
 
@@ -3946,12 +3946,13 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
             2,
             betweenView!!.valueSources.size,
         )
-        assertTrue("值来源应含 startTime", betweenView.valueSources.any { it.contains("StartTime") })
-        assertTrue("值来源应含 endTime", betweenView.valueSources.any { it.contains("EndTime") })
+        // master 分支 getter→字段引用修复：getStartTime() → startTime（非 dto.getStartTime()）
+        assertTrue("值来源应含 startTime", betweenView.valueSources.any { it.contains("startTime") })
+        assertTrue("值来源应含 endTime", betweenView.valueSources.any { it.contains("endTime") })
         assertEquals(
             "between 两个值应进入未解析参数",
             2,
-            result.unresolvedParams.count { it.contains("StartTime") || it.contains("EndTime") },
+            result.unresolvedParams.count { it.contains("startTime") || it.contains("endTime") },
         )
     }
 
