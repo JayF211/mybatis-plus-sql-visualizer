@@ -87,6 +87,65 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // previewJpql：原生 SQL 参数转换（P2 修复）
+    // ------------------------------------------------------------------
+
+    fun testPreviewJpql_nativeQuery_parameterConversion() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                @Query(value = "SELECT * FROM user WHERE username LIKE CONCAT('%', :keyword, '%') AND status = :status", nativeQuery = true)
+                List<UserEntity> findByKeywordNative(@org.springframework.data.repository.query.Param("keyword") String keyword, @org.springframework.data.repository.query.Param("status") Integer status);
+            }
+
+            @interface Query {
+                String value();
+                boolean nativeQuery() default false;
+            }
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; private String username; private Integer status; }
+            """.trimIndent(),
+        )
+        val method = findMethod("findByKeywordNative")
+        val result = newService().previewJpql(method)
+        assertNotNull("原生 SQL 应产出预览结果", result)
+        // 原生 SQL 的命名参数应被转换为 ?
+        assertFalse("原生 SQL 不应包含 :keyword, 实际: ${result!!.sql}", result!!.sql.contains(":keyword"))
+        assertFalse("原生 SQL 不应包含 :status, 实际: ${result!!.sql}", result!!.sql.contains(":status"))
+        assertTrue("原生 SQL 应包含 ?", result!!.sql.contains("?"))
+        // 参数名应从 @Param 注解提取
+        assertEquals("参数名应为 [@Param] keyword, status", listOf("keyword", "status"), result.unresolvedParams)
+    }
+
+    // ------------------------------------------------------------------
+    // previewJpql：参数名从方法参数提取（P2 修复）
+    // ------------------------------------------------------------------
+
+    fun testPreviewJpql_parameterNamesFromMethod() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                @Query("DELETE FROM UserEntity u WHERE u.age < :maxAge")
+                int deleteByAgeLessThanJpql(@org.springframework.data.repository.query.Param("maxAge") Integer maxAge);
+            }
+
+            @interface Query { String value(); }
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; private Integer age; }
+            """.trimIndent(),
+        )
+        val method = findMethod("deleteByAgeLessThanJpql")
+        val result = newService().previewJpql(method)
+        assertNotNull("DELETE JPQL 应产出预览结果", result)
+        // DELETE JPQL 应生成 DELETE SQL
+        assertTrue("应生成 DELETE SQL, 实际: ${result!!.sql}", result!!.sql.contains("DELETE", ignoreCase = true))
+        // 参数名应从 @Param 注解提取
+        assertEquals("参数名应为 [@Param] maxAge", listOf("maxAge"), result.unresolvedParams)
+    }
+
+    // ------------------------------------------------------------------
     // previewCriteriaQuery
     // ------------------------------------------------------------------
 

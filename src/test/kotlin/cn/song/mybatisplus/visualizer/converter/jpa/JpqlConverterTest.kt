@@ -168,8 +168,7 @@ class JpqlConverterTest {
     @Test
     fun `newExpression_extracted`() {
         val jpql = "SELECT NEW com.example.UserDTO(u.username, u.email) FROM UserEntity u"
-        val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
         // NEW DTO 应触发复杂语法注释
         assertNotNull("NEW DTO 应生成注释提示", result.comment)
         assertTrue(
@@ -185,8 +184,7 @@ class JpqlConverterTest {
     @Test
     fun `memberOf_degradedWithComment`() {
         val jpql = "SELECT u FROM UserEntity u WHERE :role MEMBER OF u.roles"
-        val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
         // MEMBER OF 应触发复杂语法注释
         assertNotNull("MEMBER OF 应生成注释提示", result.comment)
     }
@@ -198,8 +196,7 @@ class JpqlConverterTest {
     @Test
     fun `complexSyntax_subquery_detected`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.id IN (SELECT o.customerId FROM OrderEntity o)"
-        val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
         // 子查询应触发复杂语法注释
         assertNotNull("子查询应生成注释提示", result.comment)
     }
@@ -207,7 +204,7 @@ class JpqlConverterTest {
     @Test
     fun `simpleSyntax_noComment`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
-        val result = JpqlConverter.convert(jpql, userTable)
+        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
         // 简单 JPQL 不应有注释
         assertNull("简单 JPQL 不应有注释", result.comment)
     }
@@ -274,7 +271,7 @@ class JpqlConverterTest {
     @Test
     fun `selectStatement_defaultValues`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
-        val result = JpqlConverter.convert(jpql, userTable)
+        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
         // 默认值验证
         assertFalse(result.distinct)
         assertTrue(result.selectColumns.isEmpty())
@@ -283,5 +280,33 @@ class JpqlConverterTest {
         assertTrue(result.groupBy.isEmpty())
         assertTrue(result.orderBy.isEmpty())
         assertNull(result.limit)
+    }
+
+    // ------------------------------------------------------------------
+    // DELETE JPQL（P2 修复）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `deleteJpql_returnsDeleteStatement`() {
+        val jpql = "DELETE FROM UserEntity u WHERE u.age < :maxAge"
+        val result = JpqlConverter.convert(jpql, userTable)
+        // DELETE JPQL 应返回 DeleteStatement（而非 SelectStatement）
+        assertTrue("DELETE JPQL 应返回 DeleteStatement, 实际: ${result::class.simpleName}",
+            result is cn.song.mybatisplus.visualizer.model.DeleteStatement)
+    }
+
+    // ------------------------------------------------------------------
+    // NEW DTO + GROUP BY + HAVING（statByCustomer 用例）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `newDtoGroupByHaving_complexSyntax`() {
+        val jpql = "SELECT NEW cn.song.jpademo.dto.OrderStatDTO(o.customerId, COUNT(o), SUM(o.totalAmount)) " +
+            "FROM OrderEntity o GROUP BY o.customerId HAVING COUNT(o) > 1"
+        val result = JpqlConverter.convert(jpql, orderTable) as SelectStatement
+        // NEW DTO 应被提取为列引用
+        assertTrue("NEW DTO 参数应被提取为列引用", result.selectColumns.isNotEmpty() || result.comment != null)
+        // 复杂语法应触发注释
+        assertNotNull("NEW DTO + GROUP BY + HAVING 应生成复杂语法注释", result.comment)
     }
 }

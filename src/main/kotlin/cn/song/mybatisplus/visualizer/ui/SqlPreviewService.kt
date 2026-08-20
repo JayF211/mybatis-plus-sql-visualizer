@@ -240,17 +240,9 @@ class SqlPreviewService(private val project: Project) {
         val table = JpaEntityResolver().resolve(entityClass) ?: return null
         val partTree = PartTreeParser.parse(methodInfo.methodName)
         val statement = DerivedQueryConverter.convert(partTree, table)
-        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
         // 使用实际方法参数名（而非通用的 param1/param2）
         val paramNames = method.parameterList.parameters.map { it.name }
-        return PreviewResult(
-            sql = sql,
-            compactSql = sql,
-            unresolvedParams = paramNames,
-            paramTable = null,
-            wrapperType = null,
-            tableName = table.tableName,
-        )
+        return buildJpaPreviewResult(statement, table.tableName, paramNames, method)
     }
 
     /**
@@ -265,35 +257,37 @@ class SqlPreviewService(private val project: Project) {
         val jpql = info.jpql
         // 参数名提取：优先 @Param 注解值，否则用方法参数名
         val paramNames = extractJpqlParamNames(method)
-        // 原生 SQL：直接展示 jpql 字符串作为 SQL（无需转换）
-        if (info.isNative) {
-            return PreviewResult(
-                sql = jpql,
-                compactSql = jpql,
-                unresolvedParams = paramNames,
-                paramTable = null,
-                wrapperType = null,
-                tableName = info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
-            )
-        }
-        // JPQL → 解析实体类 → JpaEntityResolver.resolve → TableInfo
+        // 解析实体类 → TableInfo
         val entityClass = info.entityClass
         val table = if (entityClass != null) {
             JpaEntityResolver().resolve(entityClass)
         } else {
             null
         }
-        // JpqlConverter.convert(jpql, tableInfo) → SelectStatement
+        // 原生 SQL：转换命名参数 :param → ? 后展示（保持可读性）
+        if (info.isNative) {
+            val convertedSql = convertNativeSqlParameters(jpql)
+            return PreviewResult(
+                sql = convertedSql,
+                compactSql = convertedSql,
+                unresolvedParams = paramNames,
+                paramTable = ParameterReplacer.buildParamTable(paramNames),
+                wrapperType = null,
+                tableName = table?.tableName ?: info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
+                columns = table?.allColumnNames ?: emptyList(),
+            )
+        }
+        // JPQL → JpqlConverter.convert → SqlStatement（SelectStatement 或 DeleteStatement）
         val statement = JpqlConverter.convert(jpql, table)
-        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
-        return PreviewResult(
-            sql = sql,
-            compactSql = sql,
-            unresolvedParams = paramNames,
-            paramTable = null,
-            wrapperType = null,
-            tableName = table?.tableName ?: "",
-        )
+        return buildJpaPreviewResult(statement, table?.tableName ?: "", paramNames, method)
+    }
+
+    /**
+     * 将原生 SQL 中的命名参数 :paramName 转换为 ? 占位符。
+     * 示例：`:keyword` → `?`，`CONCAT('%', :keyword, '%')` → `CONCAT('%', ?, '%')`
+     */
+    private fun convertNativeSqlParameters(nativeSql: String): String {
+        return nativeSql.replace(Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)"), "?")
     }
 
     /**
@@ -327,19 +321,50 @@ class SqlPreviewService(private val project: Project) {
         val model = CriteriaQueryLocator.locate(anchor) ?: return null
         // 2. CriteriaQueryConverter.convert(model) → SelectStatement
         val statement = CriteriaQueryConverter.convert(model)
-        // 3. SqlGenerator.generate(statement) → SQL 字符串
-        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
-        // 4. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
+        // 3. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
         val paramNames = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java)
             ?.parameterList?.parameters?.map { it.name } ?: emptyList()
+        val tableName = model.entityClassName?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: ""
+        return buildJpaPreviewResult(statement, tableName, paramNames, PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java))
+    }
+
+    /**
+     * JPA 预览结果构建统一入口（派生查询 / JPQL / CriteriaQuery 共用）。
+     *
+     * 与 MP 路径的 [buildPreviewResult] 对齐：生成 SQL + 收集动态条件视图 + 构建参数对照表，
+     * 使面板支持交互式参数输入与条件 toggle。
+     */
+    private fun buildJpaPreviewResult(
+        statement: SqlStatement,
+        tableName: String,
+        paramNames: List<String>,
+        method: PsiMethod?,
+    ): PreviewResult {
+        val dialect = currentDialect()
+        val generated = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generateWithParams(statement, compact = false, dialect = dialect)
+        val views = collectConditionViews(statement)
+        // JPQL/派生查询的参数名来自方法签名（paramNames），而非 SQL 生成器。
+        // 原因：JpqlConverter/DerivedQueryConverter 不解析条件树（conditions 为空），
+        // SQL 生成器无法从空条件中提取参数来源。方法签名是唯一可靠来源。
+        val effectiveParams = paramNames.ifEmpty { generated.unresolvedParams }
         return PreviewResult(
-            sql = sql,
-            compactSql = sql,
-            unresolvedParams = paramNames,
-            paramTable = null,
+            sql = generated.sql,
+            compactSql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement, compact = true, dialect = dialect),
+            unresolvedParams = effectiveParams,
+            paramTable = ParameterReplacer.buildParamTable(effectiveParams),
             wrapperType = null,
-            tableName = model.entityClassName ?: "",
+            tableName = tableName,
+            warning = buildJpaWarning(statement),
+            columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
+            previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+            paramHints = generated.paramHints,
         )
+    }
+
+    /** JPA 语句风险警示：DELETE 无 WHERE 时提示全表删除。 */
+    private fun buildJpaWarning(statement: SqlStatement): String? = when (statement) {
+        is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ 无 WHERE 条件，将删除全表数据！" else null
+        else -> null
     }
 
     /** 从 SQL 字符串提取 `?` 占位符参数名（简化：param1, param2, ...）。 */

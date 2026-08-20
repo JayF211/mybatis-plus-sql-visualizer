@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.converter.jpa
 
 import cn.song.mybatisplus.visualizer.model.ColumnRef
+import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
@@ -28,20 +29,22 @@ import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 object JpqlConverter {
 
     /**
-     * 转换 JPQL 字符串为 SelectStatement。
+     * 转换 JPQL 字符串为 SqlStatement。
      *
      * @param jpql       JPQL 查询字符串
      * @param tableInfo  实体表信息（列映射用）；可为 null，此时仅做简单字符串替换
-     * @return SELECT 语句模型
+     * @return SELECT 或 DELETE 语句模型
      */
-    fun convert(jpql: String, tableInfo: TableInfo? = null): SelectStatement {
+    fun convert(jpql: String, tableInfo: TableInfo? = null): SqlStatement {
         return convertInternal(jpql, tableInfo)
     }
 
     /**
      * 内部转换实现。
+     *
+     * @return SqlStatement（SelectStatement 或 DeleteStatement）
      */
-    private fun convertInternal(jpql: String, tableInfo: TableInfo?): SelectStatement {
+    private fun convertInternal(jpql: String, tableInfo: TableInfo?): SqlStatement {
         val table = tableInfo ?: createFallbackTable()
 
         // 1. 替换命名参数 :param → ?
@@ -64,6 +67,14 @@ object JpqlConverter {
 
         // 7. 属性名 → 列名映射
         sql = mapPropertyToColumn(sql, table)
+
+        // 8. 检测 DELETE JPQL → DeleteStatement
+        if (sql.trimStart().uppercase().startsWith("DELETE")) {
+            return DeleteStatement(
+                table = table,
+                conditions = emptyList(),
+            )
+        }
 
         return SelectStatement(
             table = table,
