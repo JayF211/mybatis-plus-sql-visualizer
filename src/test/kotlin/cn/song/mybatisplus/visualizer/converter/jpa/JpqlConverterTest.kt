@@ -61,23 +61,26 @@ class JpqlConverterTest {
     fun `namedParameter_replacedWithPlaceholder`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
         val result = JpqlConverter.convert(jpql, userTable)
-        // 验证 SelectStatement 构造成功
+        // 验证转换成功：SQL 中含 ? 占位符，statement 表名正确
         assertNotNull(result)
-        assertEquals("user", result.table.tableName)
+        assertEquals("user", result.statement.table.tableName)
+        assertTrue("转换后 SQL 应含 ? 占位符: ${result.sql}", result.sql.contains("?"))
+        assertFalse("转换后 SQL 不应含 :username: ${result.sql}", result.sql.contains(":username"))
     }
 
     @Test
     fun `namedParameter_multipleParams`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username AND u.age = :age"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        // 两个命名参数都应被替换为 ?
+        assertEquals("两个参数应生成两个 ?", 2, result.sql.count { it == '?' })
     }
 
     @Test
     fun `namedParameter_noParams`() {
         val jpql = "SELECT u FROM UserEntity u"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        assertFalse("无参数 SQL 不应含 ?: ${result.sql}", result.sql.contains("?"))
     }
 
     // ------------------------------------------------------------------
@@ -88,14 +91,15 @@ class JpqlConverterTest {
     fun `positionalParameter_replacedWithPlaceholder`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = ?1"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        assertTrue("位置参数应转换为 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应含 ?1: ${result.sql}", result.sql.contains("?1"))
     }
 
     @Test
     fun `positionalParameter_multipleParams`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = ?1 AND u.age = ?2"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
+        assertEquals("两个位置参数应生成两个 ?", 2, result.sql.count { it == '?' })
     }
 
     // ------------------------------------------------------------------
@@ -106,15 +110,15 @@ class JpqlConverterTest {
     fun `entityName_mappedToTableName`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertEquals("user", result.table.tableName)
-        assertEquals("UserEntity", result.table.entityClassName)
+        assertEquals("user", result.statement.table.tableName)
+        assertEquals("UserEntity", result.statement.table.entityClassName)
     }
 
     @Test
     fun `entityName_withCustomTableName`() {
         val jpql = "SELECT o FROM OrderEntity o WHERE o.orderNo = :orderNo"
         val result = JpqlConverter.convert(jpql, orderTable)
-        assertEquals("t_order", result.table.tableName)
+        assertEquals("t_order", result.statement.table.tableName)
     }
 
     // ------------------------------------------------------------------
@@ -126,14 +130,14 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u WHERE u.departmentId = :deptId"
         val result = JpqlConverter.convert(jpql, userTable)
         // departmentId → department_id 映射应生效
-        assertEquals("user", result.table.tableName)
+        assertEquals("user", result.statement.table.tableName)
     }
 
     @Test
     fun `propertyName_snakeCaseMapping`() {
         val jpql = "SELECT o FROM OrderEntity o WHERE o.totalAmount > :minAmount"
         val result = JpqlConverter.convert(jpql, orderTable)
-        assertEquals("t_order", result.table.tableName)
+        assertEquals("t_order", result.statement.table.tableName)
     }
 
     // ------------------------------------------------------------------
@@ -168,13 +172,17 @@ class JpqlConverterTest {
     @Test
     fun `newExpression_extracted`() {
         val jpql = "SELECT NEW com.example.UserDTO(u.username, u.email) FROM UserEntity u"
-        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
+        val result = JpqlConverter.convert(jpql, userTable)
+        val selectStmt = result.statement as SelectStatement
         // NEW DTO 应触发复杂语法注释
-        assertNotNull("NEW DTO 应生成注释提示", result.comment)
+        assertNotNull("NEW DTO 应生成注释提示", selectStmt.comment)
         assertTrue(
             "注释应提示复杂语法",
-            result.comment!!.contains("复杂语法"),
+            selectStmt.comment!!.contains("复杂语法"),
         )
+        // NEW DTO 构造表达式应被提取为列引用
+        assertTrue("NEW DTO 参数应被提取: ${result.sql}",
+            result.sql.contains("u.username") && result.sql.contains("u.email"))
     }
 
     // ------------------------------------------------------------------
@@ -184,9 +192,10 @@ class JpqlConverterTest {
     @Test
     fun `memberOf_degradedWithComment`() {
         val jpql = "SELECT u FROM UserEntity u WHERE :role MEMBER OF u.roles"
-        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
+        val result = JpqlConverter.convert(jpql, userTable)
+        val selectStmt = result.statement as SelectStatement
         // MEMBER OF 应触发复杂语法注释
-        assertNotNull("MEMBER OF 应生成注释提示", result.comment)
+        assertNotNull("MEMBER OF 应生成注释提示", selectStmt.comment)
     }
 
     // ------------------------------------------------------------------
@@ -196,17 +205,19 @@ class JpqlConverterTest {
     @Test
     fun `complexSyntax_subquery_detected`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.id IN (SELECT o.customerId FROM OrderEntity o)"
-        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
+        val result = JpqlConverter.convert(jpql, userTable)
+        val selectStmt = result.statement as SelectStatement
         // 子查询应触发复杂语法注释
-        assertNotNull("子查询应生成注释提示", result.comment)
+        assertNotNull("子查询应生成注释提示", selectStmt.comment)
     }
 
     @Test
     fun `simpleSyntax_noComment`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
-        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
+        val result = JpqlConverter.convert(jpql, userTable)
+        val selectStmt = result.statement as SelectStatement
         // 简单 JPQL 不应有注释
-        assertNull("简单 JPQL 不应有注释", result.comment)
+        assertNull("简单 JPQL 不应有注释", selectStmt.comment)
     }
 
     // ------------------------------------------------------------------
@@ -218,7 +229,7 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
         val result = JpqlConverter.convert(jpql, null)
         assertNotNull(result)
-        assertEquals("unknown_table", result.table.tableName)
+        assertEquals("unknown_table", result.statement.table.tableName)
     }
 
     // ------------------------------------------------------------------
@@ -229,16 +240,16 @@ class JpqlConverterTest {
     fun `complexQuery_multipleTransformations`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username AND u.age > ?1 AND u.departmentId = :deptId"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
-        assertEquals("user", result.table.tableName)
+        assertEquals("user", result.statement.table.tableName)
+        // 3 个参数（2 命名 + 1 位置）应生成 3 个 ?
+        assertEquals("应生成 3 个 ?", 3, result.sql.count { it == '?' })
     }
 
     @Test
     fun `countQuery_converted`() {
         val jpql = "SELECT COUNT(u) FROM UserEntity u WHERE u.departmentId = :deptId"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertNotNull(result)
-        assertEquals("user", result.table.tableName)
+        assertEquals("user", result.statement.table.tableName)
     }
 
     @Test
@@ -263,23 +274,24 @@ class JpqlConverterTest {
     fun `selectStatement_tableInfoCorrect`() {
         val jpql = "SELECT u FROM UserEntity u"
         val result = JpqlConverter.convert(jpql, userTable)
-        assertEquals("UserEntity", result.table.entityClassName)
-        assertEquals("user", result.table.tableName)
-        assertEquals(6, result.table.columns.size)
+        assertEquals("UserEntity", result.statement.table.entityClassName)
+        assertEquals("user", result.statement.table.tableName)
+        assertEquals(6, result.statement.table.columns.size)
     }
 
     @Test
     fun `selectStatement_defaultValues`() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.username = :username"
-        val result = JpqlConverter.convert(jpql, userTable) as SelectStatement
+        val result = JpqlConverter.convert(jpql, userTable)
+        val selectStmt = result.statement as SelectStatement
         // 默认值验证
-        assertFalse(result.distinct)
-        assertTrue(result.selectColumns.isEmpty())
-        assertTrue(result.joins.isEmpty())
-        assertTrue(result.conditions.isEmpty())
-        assertTrue(result.groupBy.isEmpty())
-        assertTrue(result.orderBy.isEmpty())
-        assertNull(result.limit)
+        assertFalse(selectStmt.distinct)
+        assertTrue(selectStmt.selectColumns.isEmpty())
+        assertTrue(selectStmt.joins.isEmpty())
+        assertTrue(selectStmt.conditions.isEmpty())
+        assertTrue(selectStmt.groupBy.isEmpty())
+        assertTrue(selectStmt.orderBy.isEmpty())
+        assertNull(selectStmt.limit)
     }
 
     // ------------------------------------------------------------------
@@ -291,8 +303,10 @@ class JpqlConverterTest {
         val jpql = "DELETE FROM UserEntity u WHERE u.age < :maxAge"
         val result = JpqlConverter.convert(jpql, userTable)
         // DELETE JPQL 应返回 DeleteStatement（而非 SelectStatement）
-        assertTrue("DELETE JPQL 应返回 DeleteStatement, 实际: ${result::class.simpleName}",
-            result is cn.song.mybatisplus.visualizer.model.DeleteStatement)
+        assertTrue("DELETE JPQL 应返回 DeleteStatement, 实际: ${result.statement::class.simpleName}",
+            result.statement is cn.song.mybatisplus.visualizer.model.DeleteStatement)
+        // 转换后 SQL 应含 ? 占位符
+        assertTrue("DELETE SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
     }
 
     // ------------------------------------------------------------------
@@ -303,10 +317,12 @@ class JpqlConverterTest {
     fun `newDtoGroupByHaving_complexSyntax`() {
         val jpql = "SELECT NEW cn.song.jpademo.dto.OrderStatDTO(o.customerId, COUNT(o), SUM(o.totalAmount)) " +
             "FROM OrderEntity o GROUP BY o.customerId HAVING COUNT(o) > 1"
-        val result = JpqlConverter.convert(jpql, orderTable) as SelectStatement
-        // NEW DTO 应被提取为列引用
-        assertTrue("NEW DTO 参数应被提取为列引用", result.selectColumns.isNotEmpty() || result.comment != null)
+        val result = JpqlConverter.convert(jpql, orderTable)
+        val selectStmt = result.statement as SelectStatement
         // 复杂语法应触发注释
-        assertNotNull("NEW DTO + GROUP BY + HAVING 应生成复杂语法注释", result.comment)
+        assertNotNull("NEW DTO + GROUP BY + HAVING 应生成复杂语法注释", selectStmt.comment)
+        // NEW DTO 构造表达式应被提取（属性名已映射为列名：customerId → customer_id）
+        assertTrue("NEW DTO 参数应被提取: ${result.sql}",
+            result.sql.contains("o.customer_id") && result.sql.contains("COUNT(o)"))
     }
 }

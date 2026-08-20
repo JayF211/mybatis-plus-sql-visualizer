@@ -212,7 +212,7 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
         assertTrue("JPQL 应含 JOIN FETCH: ${info.jpql}", info.jpql.contains("JOIN FETCH"))
 
         // 转换：验证不抛异常且生成 SelectStatement
-        val stmt = JpqlConverter.convert(info.jpql, userTable) as SelectStatement
+        val stmt = JpqlConverter.convert(info.jpql, userTable).statement as SelectStatement
         assertNotNull("JPQL 转换应生成 SelectStatement", stmt)
     }
 
@@ -222,7 +222,7 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
 
     fun testFindByStatusAndAgeRange多条件排序JPQL识别并转换() {
         val jpql = "SELECT u FROM UserEntity u WHERE u.status = :status AND u.age BETWEEN :minAge AND :maxAge ORDER BY u.age DESC"
-        val stmt = JpqlConverter.convert(jpql, userTable) as SelectStatement
+        val stmt = JpqlConverter.convert(jpql, userTable).statement as SelectStatement
         // 验证转换成功生成 SelectStatement（JPQL 复杂语法可能降级为基础 SELECT，但转换不抛异常）
         assertNotNull("JPQL 转换应生成 SelectStatement", stmt)
         // 验证表名正确映射
@@ -245,14 +245,14 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
         assertNotNull("原生 SQL 方法应被识别", info)
         assertEquals("findByKeywordNative", info!!.methodName)
 
-        val stmt = JpqlConverter.convert(info.jpql, userTable) as SelectStatement
+        val stmt = JpqlConverter.convert(info.jpql, userTable).statement as SelectStatement
         assertNotNull("原生 SQL 转换应生成 SelectStatement", stmt)
     }
 
     fun testStatByCustomerNEWDTOT构造JPQL识别并转换() {
         val jpql = "SELECT NEW cn.song.jpademo.dto.OrderStatDTO(o.customerId, COUNT(o), SUM(o.totalAmount)) " +
             "FROM OrderEntity o GROUP BY o.customerId HAVING COUNT(o) > 1"
-        val stmt = JpqlConverter.convert(jpql, orderTable) as SelectStatement
+        val stmt = JpqlConverter.convert(jpql, orderTable).statement as SelectStatement
         // 验证转换成功（NEW DTO 复杂语法可能降级，但转换不抛异常）
         assertNotNull("JPQL NEW DTO 转换应生成 SelectStatement", stmt)
         assertEquals("t_order", stmt.table.tableName)

@@ -29,22 +29,35 @@ import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 object JpqlConverter {
 
     /**
-     * 转换 JPQL 字符串为 SqlStatement。
+     * JPQL 转换产物：转换后的 SQL 字符串（含 ? 占位符）+ 语句模型。
+     *
+     * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?，可直接用于面板参数回填）
+     * @param statement  语句模型（SelectStatement 或 DeleteStatement，用于 previewModel）
+     */
+    data class Result(
+        val sql: String,
+        val statement: SqlStatement,
+    )
+
+    /**
+     * 转换 JPQL 字符串为 SQL + 语句模型。
      *
      * @param jpql       JPQL 查询字符串
      * @param tableInfo  实体表信息（列映射用）；可为 null，此时仅做简单字符串替换
-     * @return SELECT 或 DELETE 语句模型
+     * @return Result（转换后 SQL + 语句模型）
      */
-    fun convert(jpql: String, tableInfo: TableInfo? = null): SqlStatement {
+    fun convert(jpql: String, tableInfo: TableInfo? = null): Result {
         return convertInternal(jpql, tableInfo)
     }
 
     /**
      * 内部转换实现。
      *
-     * @return SqlStatement（SelectStatement 或 DeleteStatement）
+     * 关键设计：返回的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
+     * JPQL 转换器在字符串层面完成参数替换（:param → ?），但不会解析条件树
+     * （conditions 为空），因此必须使用转换后的 SQL 字符串而非重新生成。
      */
-    private fun convertInternal(jpql: String, tableInfo: TableInfo?): SqlStatement {
+    private fun convertInternal(jpql: String, tableInfo: TableInfo?): Result {
         val table = tableInfo ?: createFallbackTable()
 
         // 1. 替换命名参数 :param → ?
@@ -70,15 +83,21 @@ object JpqlConverter {
 
         // 8. 检测 DELETE JPQL → DeleteStatement
         if (sql.trimStart().uppercase().startsWith("DELETE")) {
-            return DeleteStatement(
-                table = table,
-                conditions = emptyList(),
+            return Result(
+                sql = sql,
+                statement = DeleteStatement(
+                    table = table,
+                    conditions = emptyList(),
+                ),
             )
         }
 
-        return SelectStatement(
-            table = table,
-            comment = if (hasComplexConstruct(jpql)) "/* JPQL 含复杂语法，仅做基础转换 */" else null,
+        return Result(
+            sql = sql,
+            statement = SelectStatement(
+                table = table,
+                comment = if (hasComplexConstruct(jpql)) "/* JPQL 含复杂语法，仅做基础转换 */" else null,
+            ),
         )
     }
 
@@ -107,14 +126,38 @@ object JpqlConverter {
      * JPQL 的构造函数表达式映射为 SELECT 列提取。
      * 示例：`SELECT NEW com.example.UserDTO(u.name, u.age) FROM User u`
      * → `SELECT u.name, u.age FROM User u`
+     *
+     * 支持嵌套括号（如 `NEW DTO(o.id, COUNT(o), SUM(o.totalAmount))`）——
+     * 使用括号计数法找到匹配的闭合括号，避免正则 `[^)]+` 在嵌套括号处截断。
      */
     private fun handleNewExpression(jpql: String): String {
-        // 匹配 NEW package.ClassName(args) 并提取参数列表
-        val newPattern = Regex("NEW\\s+[a-zA-Z_][a-zA-Z0-9_.]*\\(([^)]+)\\)")
-        return newPattern.replace(jpql) { matchResult ->
-            val args = matchResult.groupValues[1].trim()
-            args
+        val prefix = "NEW"
+        var searchStart = 0
+        while (true) {
+            val newIndex = jpql.indexOf(prefix, searchStart)
+            if (newIndex < 0) break
+            // 找到 NEW 后的第一个 '('
+            val parenOpen = jpql.indexOf('(', newIndex + prefix.length)
+            if (parenOpen < 0) break
+            // 括号计数法找到匹配的 ')'
+            var depth = 1
+            var i = parenOpen + 1
+            while (i < jpql.length && depth > 0) {
+                when (jpql[i]) {
+                    '(' -> depth++
+                    ')' -> depth--
+                }
+                i++
+            }
+            if (depth != 0) break // 括号不匹配，跳过
+            val parenClose = i - 1
+            // 提取括号内的参数列表
+            val args = jpql.substring(parenOpen + 1, parenClose).trim()
+            // 替换 `NEW ClassName(args)` → `args`
+            val replacement = jpql.substring(0, newIndex) + args + jpql.substring(parenClose + 1)
+            return handleNewExpression(replacement) // 递归处理多个 NEW（罕见）
         }
+        return jpql
     }
 
     /**
