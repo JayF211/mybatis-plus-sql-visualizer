@@ -137,17 +137,17 @@ class ConvertToSqlAction : AnAction() {
      * 调用方在返回 true 后立即 return，不再走 MyBatis 注解候选回落。
      */
     private fun tryJpaFallback(service: SqlPreviewService, project: Project, element: PsiElement): Boolean {
-        // 1. JPA 回落：派生查询
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false)
-        if (method != null && DerivedMethodLocator.isDerivedQuery(method)) {
-            SqlPreviewService.previewAsync(project, { service.previewDerivedQuery(method) }) { result ->
+        // 1. JPA 回落：@Query（优先检查——@Query 方法即使方法名匹配派生查询模式，也走 JPQL 路径）
+        if (method != null && JpqlQueryLocator.hasQueryAnnotation(method)) {
+            SqlPreviewService.previewAsync(project, { service.previewJpql(method) }) { result ->
                 SqlPreviewService.showResult(project, result)
             }
             return true
         }
-        // 2. JPA 回落：@Query
-        if (method != null && JpqlQueryLocator.hasQueryAnnotation(method)) {
-            SqlPreviewService.previewAsync(project, { service.previewJpql(method) }) { result ->
+        // 2. JPA 回落：派生查询（无 @Query 的方法名推导）
+        if (method != null && DerivedMethodLocator.isDerivedQuery(method)) {
+            SqlPreviewService.previewAsync(project, { service.previewDerivedQuery(method) }) { result ->
                 SqlPreviewService.showResult(project, result)
             }
             return true

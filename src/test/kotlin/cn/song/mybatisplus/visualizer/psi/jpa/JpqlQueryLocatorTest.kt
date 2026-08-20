@@ -365,6 +365,39 @@ class JpqlQueryLocatorTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // 字符串拼接 @Query 提取测试（P2 修复）
+    // ------------------------------------------------------------------
+
+    /**
+     * @Query("..." + "...") 拼接字符串应正确提取完整 JPQL。
+     * statByCustomer 用例：NEW DTO + GROUP BY + HAVING。
+     */
+    fun testExtractJpql_concatenatedString() {
+        myFixture.configureByText(
+            "OrderRepository.java",
+            """
+            public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
+                @Query("SELECT NEW cn.song.jpademo.dto.OrderStatDTO(o.customerId, COUNT(o), SUM(o.totalAmount)) " +
+                        "FROM OrderEntity o GROUP BY o.customerId HAVING COUNT(o) > 1")
+                List<Object[]> statByCustomer();
+            }
+
+            @interface Query { String value(); }
+            class JpaRepository<T, ID> {}
+            class OrderEntity { private Long id; }
+            """.trimIndent(),
+        )
+        val method = findMethod("statByCustomer")
+        val info = JpqlQueryLocator.locate(myFixture.file, method.textRange.startOffset)
+        assertNotNull("拼接 @Query 应被识别", info)
+        // 两段字符串应被拼接为完整 JPQL
+        assertTrue("JPQL 应含 SELECT NEW: ${info!!.jpql}", info.jpql.contains("SELECT NEW"))
+        assertTrue("JPQL 应含 FROM: ${info.jpql}", info.jpql.contains("FROM"))
+        assertTrue("JPQL 应含 GROUP BY: ${info.jpql}", info.jpql.contains("GROUP BY"))
+        assertTrue("JPQL 应含 HAVING: ${info.jpql}", info.jpql.contains("HAVING"))
+    }
+
+    // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
 

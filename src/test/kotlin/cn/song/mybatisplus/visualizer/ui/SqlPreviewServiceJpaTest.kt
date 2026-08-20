@@ -199,4 +199,63 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
                 result.sql.contains("FROM", ignoreCase = true),
         )
     }
+
+    // ------------------------------------------------------------------
+    // 路由正确性：@Query + 派生查询方法名 → JPQL 路径（P2 修复）
+    // ------------------------------------------------------------------
+
+    /**
+     * findByMinAmount 同时满足：方法名匹配派生查询（find + By）且有 @Query 注解。
+     * 应走 JPQL 路径（@Query 优先），生成的 SQL 应含 @Query 注解中的 WHERE 条件。
+     */
+    fun testPreviewJpql_routingQueryTakesPrecedenceOverDerived() {
+        myFixture.configureByText(
+            "OrderRepository.java",
+            """
+            public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
+                @Query("SELECT o FROM OrderEntity o WHERE o.totalAmount >= :minAmount ORDER BY o.totalAmount DESC")
+                List<OrderEntity> findByMinAmount(@Param("minAmount") BigDecimal minAmount);
+            }
+            @interface Query { String value(); }
+            @interface Param { String value(); }
+            class JpaRepository<T, ID> {}
+            class OrderEntity { private Long id; private BigDecimal totalAmount; }
+            class BigDecimal {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByMinAmount")
+        val result = newService().previewJpql(method)
+        assertNotNull("@Query 方法应产出预览结果", result)
+        // SQL 应含 @Query 注解的 WHERE 条件（JPQL 路径），而非派生查询的 min_amount = ?
+        assertTrue("SQL 应含 total_amount >= ?: ${result!!.sql}",
+            result.sql.contains("total_amount") && result.sql.contains(">="))
+        // 参数名应从 @Param 提取
+        assertEquals("参数名应为 minAmount", listOf("minAmount"), result.unresolvedParams)
+    }
+
+    /**
+     * 字符串拼接 @Query("..." + "...") 应正确提取完整 JPQL。
+     * statByCustomer 用例：NEW DTO + GROUP BY + HAVING。
+     */
+    fun testPreviewJpql_concatenatedStringValueExtracted() {
+        myFixture.configureByText(
+            "OrderRepository.java",
+            """
+            public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
+                @Query("SELECT NEW cn.song.jpademo.dto.OrderStatDTO(o.customerId, COUNT(o), SUM(o.totalAmount)) " +
+                        "FROM OrderEntity o GROUP BY o.customerId HAVING COUNT(o) > 1")
+                List<Object[]> statByCustomer();
+            }
+            @interface Query { String value(); }
+            class JpaRepository<T, ID> {}
+            class OrderEntity { private Long id; private Long customerId; }
+            """.trimIndent(),
+        )
+        val method = findMethod("statByCustomer")
+        val result = newService().previewJpql(method)
+        assertNotNull("拼接 @Query 应产出预览结果", result)
+        // 两段 JPQL 应被拼接
+        assertTrue("SQL 应含 SELECT NEW: ${result!!.sql}", result.sql.contains("SELECT"))
+        assertTrue("SQL 应含 GROUP BY: ${result.sql}", result.sql.contains("GROUP BY", ignoreCase = true))
+    }
 }

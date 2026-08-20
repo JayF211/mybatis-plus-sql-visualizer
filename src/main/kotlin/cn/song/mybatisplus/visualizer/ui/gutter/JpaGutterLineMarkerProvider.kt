@@ -55,15 +55,24 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
         PluginSettings.getInstance().state.showGutterIcon
     }.getOrDefault(true)
 
+    /**
+     * 导航处理：@Query 方法走 JPQL 路径，纯派生查询走 PartTree 路径。
+     * 注意：某些方法可能同时满足两者（如 findByMinAmount 有 @Query 且方法名匹配派生查询），
+     * 此时必须走 JPQL 路径——@Query 注解的 SQL 才是用户意图。
+     */
     private object JpaGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
             val project: Project = elt.project
             val method = PsiTreeUtil.getParentOfType(elt, PsiMethod::class.java, false) ?: return
             val service = project.getService(SqlPreviewService::class.java)
-            SqlPreviewService.previewAsync(project, {
-                service.previewDerivedQuery(method)
-            }) { result ->
-                SqlPreviewService.showResult(project, result)
+            if (cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator.hasQueryAnnotation(method)) {
+                SqlPreviewService.previewAsync(project, { service.previewJpql(method) }) { result ->
+                    SqlPreviewService.showResult(project, result)
+                }
+            } else {
+                SqlPreviewService.previewAsync(project, { service.previewDerivedQuery(method) }) { result ->
+                    SqlPreviewService.showResult(project, result)
+                }
             }
         }
     }

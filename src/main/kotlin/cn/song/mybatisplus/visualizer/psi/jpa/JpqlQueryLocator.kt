@@ -158,10 +158,32 @@ object JpqlQueryLocator {
 
     /**
      * 从注解属性值中提取字符串。
+     * 支持：
+     *  - 单字符串字面量：@Query("SELECT ...")
+     *  - 字符串拼接：@Query("SELECT ..." + "FROM ...")（Java 编译时常量折叠前的形式）
      */
     private fun extractStringValue(memberValue: PsiAnnotationMemberValue): String? {
-        val literal = memberValue as? PsiLiteralExpression ?: return null
-        val value = literal.value as? String ?: return null
-        return value.takeIf { it.isNotBlank() }
+        // 路径 1：直接字面量
+        val literal = memberValue as? PsiLiteralExpression
+        if (literal != null) {
+            val value = literal.value as? String ?: return null
+            return value.takeIf { it.isNotBlank() }
+        }
+        // 路径 2：字符串拼接表达式——递归收集所有 PsiLiteralExpression 子节点的字符串值
+        val parts = collectStringLiterals(memberValue)
+        if (parts.isNotEmpty()) return parts.joinToString("")
+        return null
+    }
+
+    /**
+     * 递归收集 PSI 树中所有 PsiLiteralExpression 的字符串值。
+     * 用于处理 @Query("..." + "...") 拼接表达式。
+     */
+    private fun collectStringLiterals(element: com.intellij.psi.PsiElement): List<String> {
+        if (element is PsiLiteralExpression) {
+            val value = element.value as? String ?: return emptyList()
+            return listOf(value)
+        }
+        return element.children.flatMap { collectStringLiterals(it) }
     }
 }
