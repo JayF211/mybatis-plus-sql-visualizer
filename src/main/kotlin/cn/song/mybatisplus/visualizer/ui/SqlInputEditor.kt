@@ -168,4 +168,13 @@ class SqlInputEditor(
     }
 
     private var released = false
+
+    companion object {
+        /** 解析 SQL 文件类型（测试环境无 Database 插件时返回 null）。 */
+        @JvmStatic
+        fun resolveSqlFileType(): com.intellij.openapi.fileTypes.FileType? {
+            return com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+                .findFileTypeByName("SQL")
+        }
+    }
 }
