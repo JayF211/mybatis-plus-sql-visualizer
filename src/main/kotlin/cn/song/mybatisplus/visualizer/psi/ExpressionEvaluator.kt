@@ -100,13 +100,14 @@ object ExpressionEvaluator {
     }
 
     /**
-     * T-Mxx：方法调用求值——识别 getter 方法（getXxx/isXxx）为字段引用。
-     *  - `user.getId()` → Placeholder("user.id")
-     *  - `user.getName()` → Placeholder("user.name")
+     * T-Mxx：方法调用求值——识别 getter 方法（getXxx/isXxx）为字段名。
+     *  - `user.getId()` → Placeholder("id")
+     *  - `user.getName()` → Placeholder("name")
      *  - `isActive()` → Placeholder("active")
      *  - 非 getter 方法（`user.toString()`、`list.get(0)`）→ Placeholder(expression.text)
      *
      * 仅处理无实参方法（getter 特征），有实参或无前缀匹配时降级为完整表达式文本。
+     * 返回纯字段名（不带 qualifier 前缀），与 SQL 列名对齐。
      */
     private fun evaluateMethodCall(call: PsiMethodCallExpression): SqlValue {
         val methodName = call.methodExpression.referenceName ?: return SqlValue.Placeholder(call.text)
@@ -118,15 +119,8 @@ object ExpressionEvaluator {
             else -> return SqlValue.Placeholder(call.text)
         }
         if (fieldName.isEmpty()) return SqlValue.Placeholder(call.text)
-        // 首字母小写 → 字段名
-        val fieldNameDecapitalized = fieldName.replaceFirstChar { it.lowercaseChar() }
-        // 有 qualifier → `user.id`，无 qualifier → `id`
-        val qualifier = call.methodExpression.qualifierExpression?.text
-        return if (qualifier != null) {
-            SqlValue.Placeholder("$qualifier.$fieldNameDecapitalized")
-        } else {
-            SqlValue.Placeholder(fieldNameDecapitalized)
-        }
+        // 首字母小写 → 字段名（纯字段名，不带 qualifier）
+        return SqlValue.Placeholder(fieldName.replaceFirstChar { it.lowercaseChar() })
     }
 
     /**

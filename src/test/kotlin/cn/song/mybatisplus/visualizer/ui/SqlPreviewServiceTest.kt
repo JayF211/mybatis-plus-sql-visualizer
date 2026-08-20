@@ -334,7 +334,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
     }
 
     fun testBatchGetByIdWithGetterParam() {
-        // getById(user.getId()) —— 参数 source 应为 user.id（getter → 字段名）
+        // getById(user.getId()) —— 参数 source 应为 id（getter → 纯字段名）
         myFixture.configureByText(
             "Demo.java",
             """
@@ -357,8 +357,8 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull("getById(user.getId()) 应产出预览结果", result)
         assertTrue(
-            "参数 source 应为 user.id, actual: ${result!!.unresolvedParams}",
-            result.unresolvedParams.any { it == "user.id" },
+            "参数 source 应为 id, actual: ${result!!.unresolvedParams}",
+            result.unresolvedParams.any { it == "id" },
         )
     }
 
