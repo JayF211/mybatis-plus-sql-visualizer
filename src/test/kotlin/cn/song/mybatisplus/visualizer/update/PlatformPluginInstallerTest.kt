@@ -97,4 +97,51 @@ class PlatformPluginInstallerTest : BasePlatformTestCase() {
             PlatformPluginInstaller.unzipTargetDir(),
         )
     }
+
+    // ---------------- getPluginJarPath Windows 路径归一化（2026-08-20 修复） ----------------
+
+    fun testNormalizeForWindowsFilePrefixWithLeadingSlash() {
+        // Windows 真实形态：file:/C:/Users/…（uri.schemeSpecificPart 含 file: 前缀 + 驱动字母前导斜杠）——
+        // 未归一化时 Path.of("file:/C:/…") 抛 InvalidPathException → getPluginJarPath 返回 null → DeleteCommand 不调度
+        assertEquals(
+            "C:/Users/USER/plugins/p/lib/xxx.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath("file:/C:/Users/USER/plugins/p/lib/xxx.jar"),
+        )
+    }
+
+    fun testNormalizeForWindowsJarFilePrefixWithInternalPath() {
+        // jar:file: 前缀 + 内部路径（substringBefore('!') 后由 normalizeDescriptorPath 处理）
+        assertEquals(
+            "C:/Users/USER/plugins/p/lib/xxx.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath(
+                "jar:file:/C:/Users/USER/plugins/p/lib/xxx.jar!/com/example/Class.class"
+            ),
+        )
+    }
+
+    fun testNormalizeForWindowsTripleSlashFilePrefix() {
+        // 部分 JVM 返回 file:///C:/…（三斜杠）—— 必须正确剥离为 C:/…
+        assertEquals(
+            "C:/Users/USER/plugins/p/lib/xxx.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath("file:///C:/Users/USER/plugins/p/lib/xxx.jar"),
+        )
+    }
+
+    fun testNormalizePreservesMacAbsolutePath() {
+        // Mac 绝对路径 /Users/… —— 不得剥离前导斜杠
+        assertEquals(
+            "/Users/me/plugins/p/lib/xxx.jar",
+            PlatformPluginInstaller.normalizeDescriptorPath("/Users/me/plugins/p/lib/xxx.jar"),
+        )
+    }
+
+    // ---------------- pluginDirPath 回退方案（2026-08-20） ----------------
+
+    fun testPluginDirPathUsesPluginsDirAndInstallDirName() {
+        // 262 平台 codeSource.location 实证为 null —— 回退到 PathManager.getPluginsDir() / zip 顶层目录名
+        // （实测安装目录为短名 mybatis-plus-sql-visualizer，非 <id> FQN）
+        val expected = com.intellij.openapi.application.PathManager.getPluginsDir()
+            .resolve("mybatis-plus-sql-visualizer")
+        assertEquals(expected, PlatformPluginInstaller.pluginDirPath())
+    }
 }

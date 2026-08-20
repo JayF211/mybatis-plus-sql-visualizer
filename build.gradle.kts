@@ -187,18 +187,16 @@ tasks {
         changeNotes = """
             <h2>v2026.8.20</h2>
             <ul>
-                <li>参数导入交互体验升级（P-05.1）：手动输入弹窗（格式化/清除按钮 + 灰色占位示例）+ 驼峰/下划线自动匹配（CaseFormatUtil 三级 fallback）+ 清除按钮（动态条件/批量参数列分区一键清空）</li>
-                <li>内存泄漏修复：预览弹窗/日志面板/SQL→Java 面板注册到 Disposer 树，父面板 dispose 级联释放子面板及 DocumentListener</li>
+                <li>参数导入交互体验升级（手动输入弹窗 + 驼峰/下划线自动匹配 + 清除按钮）</li>
+                <li>内存泄漏修复（面板 Disposer 树注册）</li>
                 <li>SQL 监听手动启动无需等待项目运行（armed 态）+ 解析兼容前缀与 SQL 分行形态</li>
+                <li>插件自更新静默失败修复（改用 PathManager 定位插件目录 + zip 顶层短名）</li>
             </ul>
             <h2>v2026.8.19</h2>
             <ul>
-                <li>废弃API全量清理（T-M51 + T-M52）：三版本 0 Internal + 0 Scheduled-removal + Deprecated 9/11/27→3/4/20</li>
+                <li>废弃API全量清理（T-M51 + T-M52）+ 插件更新机制修复（2026.8.19，ProtectionDomain.codeSource.location 定位 + DeleteCommand）</li>
                 <li>IService 内置 CRUD 方法预览支持无 Entity 后缀实体类</li>
-                <li>PluginManager.getPlugin() 完全消除（ProtectionDomain.codeSource.location + DeleteCommand 替代）</li>
-                <li>ProjectListenerRegistrar 删除（projectOpened() 无公开替代）</li>
-                <li>ToolWindowFactory Kotlin→Java 改写消除 synthetic bridge</li>
-                <li>功能截图 5 张替换真实截图 + Marketplace Custom Page + plugin.xml 清理内嵌图</li>
+                <li>功能截图替换 + Marketplace Custom Page</li>
             </ul>
             <h2>v2026.8.18</h2>
             <ul>

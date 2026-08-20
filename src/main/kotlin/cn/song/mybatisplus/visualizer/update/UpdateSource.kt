@@ -31,4 +31,13 @@ object UpdateSource {
 
     /** Gitee Release 附件下载文件名（与 buildPlugin 产物命名一致）。 */
     fun downloadFileName(version: String): String = "mybatis-plus-sql-visualizer-$version.zip"
+
+    /**
+     * 插件安装目录名（2026-08-20 修复）：zip 顶层目录名（= 插件安装时解压出的目录名）。
+     * 实证：zip 顶层为 `mybatis-plus-sql-visualizer/`，Install from Disk 后插件目录为
+     * `plugins/mybatis-plus-sql-visualizer`（**短名**，取自 zip 顶层目录名）。
+     * 不能直接用 `<id>`（FQN `cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer`）——
+     * 目录名与 id 不同名，DeleteCommand 按 FQN 删除会扑空，旧 JAR 不删、版本不变。
+     */
+    const val INSTALL_DIR_NAME = "mybatis-plus-sql-visualizer"
 }

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.update
 
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.util.io.FileUtil
 import java.io.File
@@ -14,6 +15,8 @@ import java.util.zip.ZipFile
  * 本类交互，不在 UI 类里写网络/文件逻辑。
  */
 object PluginUpdateRunner {
+
+    private val LOG = Logger.getInstance(PluginUpdateRunner::class.java)
 
     /** 检查结果。 */
     sealed interface CheckResult {
@@ -77,13 +80,17 @@ object PluginUpdateRunner {
             return InstallResult.Failed(e.message ?: e.toString())
         }
         return try {
+            LOG.info("downloadAndInstall: downloading ${manifest.downloadUrl}")
             download(manifest.downloadUrl, temp.toPath())
+            LOG.info("downloadAndInstall: downloaded to $temp (${temp.length()} bytes)")
             if (!isValidZip(temp)) {
                 InstallResult.Failed("download is not a valid plugin archive")
             } else {
+                LOG.info("downloadAndInstall: zip valid, calling install")
                 install(temp.toPath())
             }
         } catch (e: Exception) {
+            LOG.warn("downloadAndInstall: failed — ${e.message}", e)
             InstallResult.Failed(e.message ?: e.toString())
         } finally {
             FileUtil.delete(temp)

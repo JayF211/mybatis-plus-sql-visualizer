@@ -16,6 +16,7 @@
 - **内存泄漏修复（面板 Disposer 树）**：`SqlPreviewDialog` 的面板注册到弹窗 disposable 树；`SqlLogPanel` 的 `logToSqlPanel`/`sqlToJavaPanel` 注册到父面板；`SqlToJavaPanel` 的 `inputEditor` 注册到父面板——父面板 dispose 时级联释放子面板及其 DocumentListener，避免 IDE 退出时 ObjectTree 报 "Memory leak detected"
 - **SQL 监听手动启动无需等待项目运行（armed 态）**：点击捕捉按钮立即进入 capturing 态（⏸），项目启动后自动捕 SQL；`userArmed` + `logAutoCaptureSuppressed` 持久标志区分手动/自动行为；autoStart=true 时项目启动始终自动捕捉
 - **SQL 日志解析兼容性**：兼容前缀（框架附加的时间/线程前缀）与 SQL 分行形态（多行 SQL 正确合并解析）
+- **插件自更新静默失败修复（Windows 实测）**：更新后旧版 JAR 残留、版本号不变——三处叠加断点彻底修复：① `PlatformPluginInstaller` 改用 `PathManager.getPluginsDir()` 定位插件目录（IDEA 2026.2 实证 `codeSource.location` 返回 null，`getPath` 类工具无法兜底）；② 目录名用 zip 顶层短名 `mybatis-plus-sql-visualizer`（新增 `UpdateSource.INSTALL_DIR_NAME`）而非 `<id>` FQN——安装目录名与插件 ID 不同名，删除扑空；③ 删除整个插件目录而非单个 JAR + 全程诊断日志（真实 IDE 断点定位，单元测试测不到真实路径形态）
 
 ### Removed
 

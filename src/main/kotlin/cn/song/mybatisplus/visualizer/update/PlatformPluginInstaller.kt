@@ -32,44 +32,59 @@ object PlatformPluginInstaller {
      * 卸载旧版 + 解压新版（脚本按序执行：先删后装）。
      */
     fun install(zip: Path): PluginUpdateRunner.InstallResult = runCatching {
-        // T-M51-01-ALT：用 ProtectionDomain 获取当前类所在 jar/目录路径，替代
-        // PluginManager.getPlugin()（262 标记 @ApiStatus.Internal）。标准 Java API，
-        // 三平台（243/253/262）皆可用，无需 IDE 特定 API。
+        // 插件目录定位：优先用 ProtectionDomain 获取精确 JAR 路径；
+        // 262 平台 codeSource.location 实证返回 null（日志实证），此时回退到
+        // PathManager.getPluginsDir() + PLUGIN_ID 定位插件目录根。
+        // 删除整个目录（DeleteCommand 递归删除）——比删单个 JAR 更可靠，
+        // 不依赖 classloader 实现细节，三平台（Win/Mac/Linux）通用。
         val jarPath = getPluginJarPath()
-        if (jarPath != null) {
-            val pathStr = jarPath.toString().replace('\\', '/')
-            if (isDevInstallation(pathStr)) {
-                // 开发态安装（runIde/测试从 build/classes 加载）——卸载调度会误删构建产物，拒绝；
-                // 错误消息带路径便于诊断
-                LOG.warn("plugin update rejected: dev-mode installation (jarPath=$pathStr)")
-                return PluginUpdateRunner.InstallResult.Failed(
-                    "updates are not supported for a development-mode installation (path: " +
-                        "$pathStr); install from the plugin zip first"
-                )
+        val pluginDir = pluginDirPath()
+        LOG.info("install: jarPath=$jarPath | pluginDir=$pluginDir | zip=$zip")
+
+        // 开发态守卫：任一可用路径命中构建特征段即拒绝
+        listOfNotNull(jarPath?.toString()?.replace('\\', '/'), pluginDir.toString().replace('\\', '/'))
+            .forEach { pathStr ->
+                if (isDevInstallation(pathStr)) {
+                    LOG.warn("plugin update rejected: dev-mode installation (path=$pathStr)")
+                    return PluginUpdateRunner.InstallResult.Failed(
+                        "updates are not supported for a development-mode installation (path: " +
+                            "$pathStr); install from the plugin zip first"
+                    )
+                }
             }
-        }
+
         val persistent = persistZip(zip)
-        if (jarPath != null) {
-            // T-M51-01-ALT：用 DeleteCommand 替代 PluginInstaller.uninstallAfterRestart(old)
-            // （后者需要 IdeaPluginDescriptor，获取途径在 262 全部为 Internal API）。
-            // DeleteCommand 是公开 API，三平台可用；删除旧 jar 后 IDE 下次启动不会加载旧版。
-            StartupActionScriptManager.addActionCommand(
-                StartupActionScriptManager.DeleteCommand(jarPath)
-            )
-        }
+        LOG.info("install: persistent=$persistent")
+
+        // 删除旧版：优先精确删除 JAR，回退删除整个目录
+        val deleteTarget = jarPath ?: pluginDir
+        LOG.info("install: scheduling DeleteCommand for $deleteTarget")
+        StartupActionScriptManager.addActionCommand(
+            StartupActionScriptManager.DeleteCommand(deleteTarget)
+        )
+
         // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
         // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand
         // 纯解压不剥顶层；解压到 `<plugins>/<pluginId>/` 会多嵌套一层（用户实测：重启后插件
         // 列表消失——平台扫描不到嵌套 jar 内的 plugin.xml）。解压到根后 zip 顶层目录名
         // 与旧安装目录名一致，删旧解新即正确替换。
+        LOG.info("install: scheduling UnzipCommand (target=${unzipTargetDir()})")
         StartupActionScriptManager.addActionCommand(
             StartupActionScriptManager.UnzipCommand(persistent, unzipTargetDir())
         )
+        LOG.info("install: commands scheduled successfully — Installed")
         PluginUpdateRunner.InstallResult.Installed
     }.getOrElse { error ->
         LOG.warn("plugin update install failed — ${error.message}", error)
         PluginUpdateRunner.InstallResult.Failed(error.message ?: error.toString())
     }
+
+    /**
+     * 插件安装目录（2026-08-20 回退方案）：PathManager.getPluginsDir() / zip 顶层目录名。
+     * 不依赖 classloader CodeSource（262 平台实证返回 null），三平台通用。
+     * 目录名 = zip 顶层目录名（Install from Disk 剥顶层后的短名），不能用 <id> FQN。
+     */
+    internal fun pluginDirPath(): Path = PathManager.getPluginsDir().resolve(UpdateSource.INSTALL_DIR_NAME)
 
     /**
      * 解压目标目录（T-M28.5）：插件目录**根**——发布 zip 顶层含插件名目录
@@ -85,12 +100,19 @@ object PlatformPluginInstaller {
      */
     private fun getPluginJarPath(): Path? = runCatching {
         val location = PlatformPluginInstaller::class.java.protectionDomain?.codeSource?.location
-            ?: return null
+            ?: run {
+                LOG.warn("getPluginJarPath: codeSource.location is null")
+                return null
+            }
         val uri = location.toURI()
-        // 处理 jar:file:/path/to/jar.jar!/com/... 格式 → 提取 jar 路径
-        val pathStr = uri.schemeSpecificPart.substringBefore('!')
+        val rawPart = uri.schemeSpecificPart.substringBefore('!')
+        val pathStr = normalizeDescriptorPath(rawPart)
+        LOG.info("getPluginJarPath: location=$location | schemeSpecificPart=${uri.schemeSpecificPart} | normalized=$pathStr")
         Path.of(pathStr)
-    }.getOrNull()
+    }.getOrElse { error ->
+        LOG.warn("getPluginJarPath: failed — ${error.message}", error)
+        null
+    }
 
     /** 下载包复制到 system 目录下持久位置（重启后启动脚本读取；留在原处不删——脚本引用）。 */
     private fun persistZip(zip: Path): Path {
@@ -136,9 +158,14 @@ object PlatformPluginInstaller {
                 break
             }
         }
-        // Windows 驱动字母前导斜杠：/C:/Users/... → C:/Users/...（Mac 绝对路径 /Users/... 不匹配）
-        if (s.length >= 3 && s[0] == '/' && s[2] == ':') {
-            s = s.substring(1)
+        // 剥离前导斜杠（Windows 驱动器字母路径）——
+        // 兼容 file:/C:/…（单斜杠）和 file:///C:/…（三斜杠）等 JVM 差异形态；
+        // Mac 绝对路径 /Users/… 不剥离（首段非驱动器字母）
+        if (s.startsWith("/")) {
+            val stripped = s.trimStart('/')
+            if (stripped.length >= 2 && stripped[1] == ':') {
+                s = stripped  // /C:/… 或 ///C:/… → C:/…
+            }
         }
         return s
     }
