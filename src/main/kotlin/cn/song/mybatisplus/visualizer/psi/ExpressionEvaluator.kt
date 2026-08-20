@@ -5,6 +5,7 @@ import com.intellij.psi.JavaTokenType
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
@@ -36,6 +37,8 @@ object ExpressionEvaluator {
         is PsiClassObjectAccessExpression -> evaluateClassLiteral(expression)
         // 字符串拼接表达式（`"LIMIT " + N`、`ALIAS + ".username"`）→ 静态拼接
         is PsiPolyadicExpression -> evaluatePolyadic(expression)
+        // T-Mxx：getter 方法调用（`user.getId()`）→ 字段引用格式（`user.id`）
+        is PsiMethodCallExpression -> evaluateMethodCall(expression)
         else -> SqlValue.Placeholder(expression.text)
     }
 
@@ -93,6 +96,36 @@ object ExpressionEvaluator {
 
             // 其他（如文本块等）按文本原样
             else -> SqlValue.Literal(literal.text)
+        }
+    }
+
+    /**
+     * T-Mxx：方法调用求值——识别 getter 方法（getXxx/isXxx）为字段引用。
+     *  - `user.getId()` → Placeholder("user.id")
+     *  - `user.getName()` → Placeholder("user.name")
+     *  - `isActive()` → Placeholder("active")
+     *  - 非 getter 方法（`user.toString()`、`list.get(0)`）→ Placeholder(expression.text)
+     *
+     * 仅处理无实参方法（getter 特征），有实参或无前缀匹配时降级为完整表达式文本。
+     */
+    private fun evaluateMethodCall(call: PsiMethodCallExpression): SqlValue {
+        val methodName = call.methodExpression.referenceName ?: return SqlValue.Placeholder(call.text)
+        // 仅处理无实参的 getter/is 方法
+        if (call.argumentList.expressions.isNotEmpty()) return SqlValue.Placeholder(call.text)
+        val fieldName = when {
+            methodName.startsWith("get") && methodName.length > 3 -> methodName.removePrefix("get")
+            methodName.startsWith("is") && methodName.length > 2 -> methodName.removePrefix("is")
+            else -> return SqlValue.Placeholder(call.text)
+        }
+        if (fieldName.isEmpty()) return SqlValue.Placeholder(call.text)
+        // 首字母小写 → 字段名
+        val fieldNameDecapitalized = fieldName.replaceFirstChar { it.lowercaseChar() }
+        // 有 qualifier → `user.id`，无 qualifier → `id`
+        val qualifier = call.methodExpression.qualifierExpression?.text
+        return if (qualifier != null) {
+            SqlValue.Placeholder("$qualifier.$fieldNameDecapitalized")
+        } else {
+            SqlValue.Placeholder(fieldNameDecapitalized)
         }
     }
 

@@ -333,6 +333,35 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertTrue("应包含 FROM `user`, actual: ${result.sql}", result.sql.contains("FROM `user`"))
     }
 
+    fun testBatchGetByIdWithGetterParam() {
+        // getById(user.getId()) —— 参数 source 应为 user.id（getter → 字段名）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class UserServiceImpl extends BaseService<User> {
+                    public User findOne(User user) {
+                        return getById(user.getId());
+                    }
+                }
+                static class BaseService<T> {
+                    public T getById(Long id) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById(user.getId()) 应产出预览结果", result)
+        assertTrue(
+            "参数 source 应为 user.id, actual: ${result!!.unresolvedParams}",
+            result.unresolvedParams.any { it == "user.id" },
+        )
+    }
+
     fun testImplicitThisSave() {
         // this.save(entity) —— 隐式 this 插入
         myFixture.configureByText(
