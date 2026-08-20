@@ -314,6 +314,8 @@ class DerivedQueryConverterTest {
         // 验证 LIMIT
         assertNotNull(statement.limit)
         assertEquals(SqlValue.Literal("10"), statement.limit?.count)
+        // LIMIT 值应为 10（Top N 场景）
+        assertEquals("10", (statement.limit?.count as SqlValue.Literal).raw)
 
         val sql = SqlGenerator.generate(statement)
         assertEquals(

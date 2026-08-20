@@ -4,6 +4,7 @@ import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 
@@ -95,5 +96,18 @@ class CriteriaQueryGutterLineMarkerProviderTest : BasePlatformTestCase() {
             "不含 CriteriaQuery 的方法名不应产生 marker",
             provider.getLineMarkerInfo(plainMethodId!!),
         )
+    }
+
+    // ------------------------------------------------------------------
+    // 去重验证：方法体内每个 PsiIdentifier 都不应产生第二个 marker
+    // ------------------------------------------------------------------
+
+    fun testMethodBodyLeavesProduceNoDuplicateMarker() {
+        myFixture.configureByText("CriteriaDemo.java", criteriaCode)
+        // 去重验证：方法体内每个 PsiIdentifier 都不应产生第二个 marker
+        val allMethodLeaves = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
+        val markers = allMethodLeaves.mapNotNull { provider.getLineMarkerInfo(it) }
+        // 一个方法应只有一个 gutter marker（仅方法名产生）
+        assertEquals("一个方法应只有一个 gutter marker", 1, markers.size)
     }
 }

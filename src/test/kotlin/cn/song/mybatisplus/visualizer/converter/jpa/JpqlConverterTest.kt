@@ -66,6 +66,11 @@ class JpqlConverterTest {
         assertEquals("user", result.statement.table.tableName)
         assertTrue("转换后 SQL 应含 ? 占位符: ${result.sql}", result.sql.contains("?"))
         assertFalse("转换后 SQL 不应含 :username: ${result.sql}", result.sql.contains(":username"))
+        // 占位符数量应 == 参数数量
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
+        // statement 类型验证
+        assertTrue("statement 类型应为 SelectStatement",
+            result.statement is SelectStatement)
     }
 
     @Test
@@ -93,6 +98,10 @@ class JpqlConverterTest {
         val result = JpqlConverter.convert(jpql, userTable)
         assertTrue("位置参数应转换为 ?: ${result.sql}", result.sql.contains("?"))
         assertFalse("不应含 ?1: ${result.sql}", result.sql.contains("?1"))
+        // 占位符数量应 == 参数数量
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
+        // statement 表名验证
+        assertEquals("user", result.statement.table.tableName)
     }
 
     @Test
@@ -119,6 +128,10 @@ class JpqlConverterTest {
         val jpql = "SELECT o FROM OrderEntity o WHERE o.orderNo = :orderNo"
         val result = JpqlConverter.convert(jpql, orderTable)
         assertEquals("t_order", result.statement.table.tableName)
+        // 参数应被替换为 ?
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应残留 :orderNo: ${result.sql}", result.sql.contains(":orderNo"))
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
     }
 
     // ------------------------------------------------------------------
@@ -131,6 +144,10 @@ class JpqlConverterTest {
         val result = JpqlConverter.convert(jpql, userTable)
         // departmentId → department_id 映射应生效
         assertEquals("user", result.statement.table.tableName)
+        // 参数应被替换为 ?
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应残留 :deptId: ${result.sql}", result.sql.contains(":deptId"))
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
     }
 
     @Test
@@ -138,6 +155,10 @@ class JpqlConverterTest {
         val jpql = "SELECT o FROM OrderEntity o WHERE o.totalAmount > :minAmount"
         val result = JpqlConverter.convert(jpql, orderTable)
         assertEquals("t_order", result.statement.table.tableName)
+        // 参数应被替换为 ?
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应残留 :minAmount: ${result.sql}", result.sql.contains(":minAmount"))
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
     }
 
     // ------------------------------------------------------------------
@@ -149,6 +170,9 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u JOIN FETCH u.department d"
         val result = JpqlConverter.convert(jpql, userTable)
         assertNotNull(result)
+        // JOIN FETCH 应转换为 LEFT JOIN
+        assertTrue("SQL 应含 JOIN: ${result.sql}", result.sql.contains("JOIN", ignoreCase = true))
+        assertEquals("user", result.statement.table.tableName)
     }
 
     @Test
@@ -156,6 +180,9 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u LEFT JOIN FETCH u.department d"
         val result = JpqlConverter.convert(jpql, userTable)
         assertNotNull(result)
+        // LEFT JOIN FETCH 应转换为 LEFT JOIN
+        assertTrue("SQL 应含 LEFT JOIN: ${result.sql}", result.sql.contains("LEFT", ignoreCase = true))
+        assertEquals("user", result.statement.table.tableName)
     }
 
     @Test
@@ -163,6 +190,9 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u INNER JOIN FETCH u.department d"
         val result = JpqlConverter.convert(jpql, userTable)
         assertNotNull(result)
+        // INNER JOIN FETCH 应转换为 INNER JOIN
+        assertTrue("SQL 应含 INNER JOIN: ${result.sql}", result.sql.contains("INNER", ignoreCase = true))
+        assertEquals("user", result.statement.table.tableName)
     }
 
     // ------------------------------------------------------------------
@@ -250,6 +280,10 @@ class JpqlConverterTest {
         val jpql = "SELECT COUNT(u) FROM UserEntity u WHERE u.departmentId = :deptId"
         val result = JpqlConverter.convert(jpql, userTable)
         assertEquals("user", result.statement.table.tableName)
+        // COUNT 查询参数应被替换为 ?
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应残留 :deptId: ${result.sql}", result.sql.contains(":deptId"))
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
     }
 
     @Test
@@ -257,6 +291,11 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u JOIN u.department d WHERE d.name = :deptName"
         val result = JpqlConverter.convert(jpql, userTable)
         assertNotNull(result)
+        // JOIN 应存在，参数应被替换为 ?
+        assertTrue("SQL 应含 JOIN: ${result.sql}", result.sql.contains("JOIN", ignoreCase = true))
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应残留 :deptName: ${result.sql}", result.sql.contains(":deptName"))
+        assertEquals("占位符数量应为 1", 1, result.sql.count { it == '?' })
     }
 
     @Test
@@ -264,6 +303,11 @@ class JpqlConverterTest {
         val jpql = "SELECT u FROM UserEntity u WHERE u.departmentId = :deptId ORDER BY u.createTime DESC"
         val result = JpqlConverter.convert(jpql, userTable)
         assertNotNull(result)
+        // ORDER BY 应存在，参数应被替换为 ?
+        assertTrue("SQL 应含 ORDER BY: ${result.sql}", result.sql.contains("ORDER BY", ignoreCase = true))
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        assertFalse("不应残留 :deptId: ${result.sql}", result.sql.contains(":deptId"))
+        assertEquals("user", result.statement.table.tableName)
     }
 
     // ------------------------------------------------------------------

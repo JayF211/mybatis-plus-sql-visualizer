@@ -3,9 +3,11 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.psi.JavaTokenType
 import com.intellij.psi.PsiAnnotation
+import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiJavaToken
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 
@@ -103,5 +105,25 @@ class JpqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
         assertNull("@Override 注解不应产生 JPQL marker", provider.getLineMarkerInfo(overrideAt))
         val deprecatedAt = atTokenOfAnnotation("Deprecated")
         assertNull("@Deprecated 注解不应产生 JPQL marker", provider.getLineMarkerInfo(deprecatedAt))
+    }
+
+    // ------------------------------------------------------------------
+    // 去重验证：每个方法的 @ token 最多只有一个 marker
+    // ------------------------------------------------------------------
+
+    fun testMethodBodyLeavesProduceNoDuplicateMarker() {
+        myFixture.configureByText("UserRepository.java", repository)
+        // 去重验证：JPQL provider 仅在 @Query 注解的 @ token 上产生 marker
+        // 同一方法内不应产生多个 marker
+        val atTokens = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiJavaToken::class.java)
+            .filter { it.tokenType == JavaTokenType.AT }
+        // 每个 @ token 最多产生一个 marker（同一方法内无重复）
+        val markersPerToken = atTokens.map { token ->
+            provider.getLineMarkerInfo(token) != null
+        }
+        // 所有 @ token 中，只有 @Query 注解的产生 marker
+        val markerCount = markersPerToken.count { it }
+        // fixture 中 3 个 @Query 注解 → 3 个 marker（每个 @ token 一个）
+        assertEquals("应有 3 个 JPQL gutter marker（每个 @Query 注解一个）", 3, markerCount)
     }
 }

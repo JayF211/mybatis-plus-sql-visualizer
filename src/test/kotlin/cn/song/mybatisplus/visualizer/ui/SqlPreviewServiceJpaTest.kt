@@ -4,6 +4,7 @@ import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 
@@ -30,10 +31,11 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
             """
             public interface UserRepository extends JpaRepository<UserEntity, Long> {
                 @Query("SELECT u FROM UserEntity u WHERE u.username = ?1")
-                UserEntity findByUsername(String username);
+                UserEntity findByUsername(@Param("username") String username);
             }
 
             @interface Query { String value(); }
+            @interface Param { String value(); }
             class JpaRepository<T, ID> {}
             class UserEntity {
                 private Long id;
@@ -50,6 +52,19 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
             result!!.sql.contains("FROM", ignoreCase = true),
         )
         assertEquals("findByUsername", method.name)
+        // SQL 应含 ? 占位符
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        // 参数名应 == 方法参数名
+        assertEquals("参数名应为 username", listOf("username"), result.unresolvedParams)
+        // paramTable 非 null（有参数时）
+        assertNotNull("有参数时 paramTable 不应为 null", result.paramTable)
+        // columns 非空
+        assertTrue("columns 不应为空", result.columns.isNotEmpty())
+        // compactSql 应含 ?
+        assertTrue("compactSql 应含 ?: ${result.compactSql}", result.compactSql.contains("?"))
+        // compactSql 不应含多行空白
+        assertFalse("compactSql 不应含多行空白: ${result.compactSql}",
+            result.compactSql.contains("\n\n"))
     }
 
     // ------------------------------------------------------------------
@@ -62,13 +77,14 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
             """
             public interface UserRepository extends JpaRepository<UserEntity, Long> {
                 @Query(value = "SELECT * FROM users WHERE name = ?1", nativeQuery = true)
-                UserEntity findByName(String name);
+                UserEntity findByName(@Param("name") String name);
             }
 
             @interface Query {
                 String value();
                 boolean nativeQuery() default false;
             }
+            @interface Param { String value(); }
             class JpaRepository<T, ID> {}
             class UserEntity {
                 private Long id;
@@ -84,6 +100,14 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
             "原生 SQL 应直接包含原始查询字符串, 实际: ${result!!.sql}",
             result!!.sql.contains("SELECT * FROM users"),
         )
+        // SQL 应含 ? 占位符
+        assertTrue("SQL 应含 ?: ${result.sql}", result.sql.contains("?"))
+        // 参数名应 == 方法参数名
+        assertEquals("参数名应为 name", listOf("name"), result.unresolvedParams)
+        // paramTable 非 null
+        assertNotNull("有参数时 paramTable 不应为 null", result.paramTable)
+        // columns 非空
+        assertTrue("columns 不应为空", result.columns.isNotEmpty())
     }
 
     // ------------------------------------------------------------------
@@ -198,6 +222,8 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
             result!!.sql.contains("SELECT", ignoreCase = true) &&
                 result.sql.contains("FROM", ignoreCase = true),
         )
+        // columns 非空
+        assertTrue("columns 不应为空", result.columns.isNotEmpty())
     }
 
     // ------------------------------------------------------------------
@@ -257,6 +283,34 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
         // 两段 JPQL 应被拼接
         assertTrue("SQL 应含 SELECT NEW: ${result!!.sql}", result.sql.contains("SELECT"))
         assertTrue("SQL 应含 GROUP BY: ${result.sql}", result.sql.contains("GROUP BY", ignoreCase = true))
+    }
+
+    // ------------------------------------------------------------------
+    // DELETE JPQL 无 WHERE 警告测试
+    // ------------------------------------------------------------------
+
+    fun testPreviewJpql_deleteWithoutWhere_showsWarning() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                @Query("DELETE FROM UserEntity u")
+                int deleteAllUsers();
+            }
+
+            @interface Query { String value(); }
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; private String username; }
+            """.trimIndent(),
+        )
+        val method = findMethod("deleteAllUsers")
+        val result = newService().previewJpql(method)
+        assertNotNull("DELETE JPQL 应产出预览结果", result)
+        // DELETE 无 WHERE 时 warning 应非 null
+        assertNotNull("DELETE 无 WHERE 时应显示警告", result!!.warning)
+        assertTrue("警告应含 WHERE 或全表信息: ${result.warning}",
+            result.warning!!.contains("WHERE", ignoreCase = true) ||
+                result.warning!!.contains("全表", ignoreCase = true))
     }
 
     // ------------------------------------------------------------------
