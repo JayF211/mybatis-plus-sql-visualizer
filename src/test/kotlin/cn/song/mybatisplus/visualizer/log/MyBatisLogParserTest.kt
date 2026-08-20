@@ -220,4 +220,126 @@ class MyBatisLogParserTest {
         val entries = p.takeEntries()
         assertEquals(20, entries[0].rawSql.length)
     }
+
+    // ---------- T-M31.xx 前缀与 SQL 分行兼容 ----------
+
+    @Test
+    fun `MP 前缀分行 Preparing 独占一行加 SQL 在下一行`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing:",
+            "SELECT * FROM user WHERE id = ?",
+            "==> Parameters: 1(Long)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM user WHERE id = 1", entries[0].restoredSql)
+        assertEquals(1, entries[0].params.size)
+        assertEquals("1", entries[0].params[0].value)
+        assertEquals("Long", entries[0].params[0].type)
+    }
+
+    @Test
+    fun `原生前缀分行`() {
+        val entries = feedAll(
+            parser(),
+            "Preparing:",
+            "DELETE FROM t WHERE id = ?",
+            "Parameters: 7(Integer)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("DELETE FROM t WHERE id = 7", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `带日志框架前缀分行`() {
+        val entries = feedAll(
+            parser(),
+            "2026-08-15 10:00:00.123 INFO --- [main] c.s.m.Log : ==>  Preparing:",
+            "SELECT * FROM user WHERE id = ?",
+            "2026-08-15 10:00:00.124 INFO --- [main] c.s.m.Log : ==> Parameters: 42(Long)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM user WHERE id = 42", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `前缀与 SQL 间有空白行`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing:",
+            "",
+            "SELECT * FROM t WHERE id = ?",
+            "==> Parameters: 3(Long)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM t WHERE id = 3", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `无参语句分行`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing:",
+            "SELECT COUNT(*) FROM user",
+            "<== Total: 1",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT COUNT(*) FROM user", entries[0].restoredSql)
+        assertEquals(emptyList<LogSqlParam>(), entries[0].params)
+    }
+
+    @Test
+    fun `多条语句每条 Preparing 分行`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing:",
+            "SELECT * FROM a WHERE x = ?",
+            "==> Parameters: 1(Integer)",
+            "==>  Preparing:",
+            "SELECT * FROM b WHERE y = ?",
+            "==> Parameters: 2(Integer)",
+        )
+        assertEquals(2, entries.size)
+        assertEquals("SELECT * FROM a WHERE x = 1", entries[0].restoredSql)
+        assertEquals("SELECT * FROM b WHERE y = 2", entries[1].restoredSql)
+    }
+
+    @Test
+    fun `Parameters 也分行极端形态`() {
+        val entries = feedAll(
+            parser(),
+            "==>  Preparing:",
+            "SELECT * FROM t WHERE id = ?",
+            "==> Parameters:",
+            "5(Long)",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM t WHERE id = 5", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `分行混合噪声行正确识别`() {
+        val entries = feedAll(
+            parser(),
+            "2026-08-15 INFO started",
+            "==>  Preparing:",
+            "SELECT * FROM user WHERE id = ?",
+            "==> Parameters: 9(Long)",
+            "<== Total: 1",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM user WHERE id = 9", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `严格模式下前缀分行仍生效`() {
+        val p = MyBatisLogParser(mixedPrefix = false)
+        p.feed("Preparing:")
+        p.feed("SELECT * FROM t WHERE id = ?")
+        p.feed("Parameters: 3(Long)")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT * FROM t WHERE id = 3", entries[0].restoredSql)
+    }
 }

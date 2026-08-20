@@ -32,24 +32,76 @@ class MyBatisLogParser(
     private val entries = mutableListOf<LogSqlEntry>()
     private var pendingSql: String? = null
     private val pendingParams = mutableListOf<LogSqlParam>()
+    /**
+     * 前缀独占一行兼容（T-M31.xx）：`Preparing:` 行 remainder 为空时置 true，
+     * 等待下一行作为 SQL。下一行非空非关键字行视为 SQL 文本。
+     */
+    private var prefixMatched: Boolean = false
+    /**
+     * Parameters 也独占一行（极端形态）：`Parameters:` 行 remainder 为空时置 true，
+     * 等待下一行作为参数文本。
+     */
+    private var paramPrefixMatched: Boolean = false
 
     /** 喂入一行控制台输出（任意线程，内部无共享可变状态——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
+        // 分支 1：Preparing 行（有 SQL 同行）
         val sql = extractAfterKeyword(line, sqlPrefix)
         if (sql != null) {
-            closePending() // 上一条未闭合（无 Parameters 或异常日志）先闭合
+            closePending() // 上一条未闭合先闭合（无 Parameters 或异常日志）
             pendingSql = sql.take(maxParseLength)
+            pendingParams.clear()
+            prefixMatched = false
+            return
+        }
+
+        // 分支 2：Preparing 独占一行（remainder 为空）→ 进入等待 SQL 态
+        if (!prefixMatched && isPrefixOnly(line, sqlPrefix)) {
+            prefixMatched = true
             pendingParams.clear()
             return
         }
+
+        // 分支 3：Parameters 独占一行（极端形态）→ 等待下一行参数文本
+        if (!paramPrefixMatched && isPrefixOnly(line, paramPrefix)) {
+            if (prefixMatched) {
+                // 等待 SQL 中看到 Parameters（中间无 SQL 行）→ 放弃等待
+                prefixMatched = false
+                return
+            }
+            paramPrefixMatched = true
+            return
+        }
+        if (paramPrefixMatched) {
+            paramPrefixMatched = false
+            if (line.isBlank()) return // 跳过空行
+            if (pendingSql == null) return // 无 SQL 上下文，忽略
+            pendingParams += parseParams(line.trim())
+            closePending()
+            return
+        }
+
+        // 分支 4：Parameters 行（有参数同行）——正常形态
         val paramsText = extractAfterKeyword(line, paramPrefix)
         if (paramsText != null) {
+            prefixMatched = false // 清除等待态（罕见：Preparing 独占一行后紧跟正常 Parameters）
             if (pendingSql == null) return // 无上下文（未捕获到 Preparing），忽略
             pendingParams += parseParams(paramsText)
             // 立即闭合——MyBatis 单条语句 Parameters 行后参数完整，立即生成条目避免去重窗口时序问题；
             // 多 Parameters 行（极端）合并逻辑：若下一行仍是 Parameters，pendingParams 已被清空后重开。
             closePending()
+            return
         }
+
+        // 分支 5：等待 SQL 态 → 此行即 SQL
+        if (prefixMatched) {
+            if (line.isBlank()) return // 跳过空行
+            pendingSql = line.trim().take(maxParseLength)
+            prefixMatched = false
+            return
+        }
+
+        // 分支 6：噪声行（现有逻辑不变）
     }
 
     /** 闭合当前未完成条目（新语句到来 / 面板刷新时调用）。 */
@@ -83,6 +135,19 @@ class MyBatisLogParser(
         if (idx < 0) return null
         val text = line.substring(idx + keyword.length).trim()
         return text.ifEmpty { null }
+    }
+
+    /**
+     * 行仅含前缀关键字（remainder 为空/纯空白）——分行形态信号。
+     * 与 [extractAfterKeyword] 使用相同的 mixedPrefix 判断路径，保证两种模式下行为一致。
+     */
+    private fun isPrefixOnly(line: String, keyword: String): Boolean {
+        if (keyword.isEmpty()) return false
+        val idx = if (mixedPrefix) line.indexOf(keyword) else {
+            if (line.startsWith(keyword)) 0 else -1
+        }
+        if (idx < 0) return false
+        return line.substring(idx + keyword.length).trim().isEmpty()
     }
 
     companion object {
