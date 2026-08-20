@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
+import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -20,6 +22,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.BatchOperationConverter
 import cn.song.mybatisplus.visualizer.psi.WrapperCache
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
@@ -218,6 +222,35 @@ class SqlPreviewService(private val project: Project) {
             paramHints = batch.paramHints,
             batchModel = batch.batchModel,
         )
+    }
+
+    /**
+     * JPA 推导查询预览（F-14 阶段四）：解析 Repository 方法名 → PartTree → SqlStatement → PreviewResult。
+     *
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider] 点击调用。
+     */
+    fun previewDerivedQuery(method: PsiMethod): PreviewResult? {
+        val methodInfo = DerivedMethodLocator.locate(method.containingFile ?: return null, method.textRange.startOffset)
+            ?: return null
+        val entityClass = methodInfo.entityClass ?: return null
+        val table = JpaEntityResolver().resolve(entityClass) ?: return null
+        val partTree = PartTreeParser.parse(methodInfo.methodName)
+        val statement = DerivedQueryConverter.convert(partTree, table)
+        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        return PreviewResult(
+            sql = sql,
+            compactSql = sql,
+            unresolvedParams = extractPlaceholders(sql),
+            paramTable = null,
+            wrapperType = null,
+            tableName = table.tableName,
+        )
+    }
+
+    /** 从 SQL 字符串提取 `?` 占位符参数名（简化：param1, param2, ...）。 */
+    private fun extractPlaceholders(sql: String): List<String> {
+        val count = sql.count { it == '?' }
+        return (1..count).map { "param$it" }
     }
 
     /**

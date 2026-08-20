@@ -21,11 +21,12 @@
 
     <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
-        MyBatis-Plus SQL Visualizer is a debugging tool for MyBatis-Plus (and MyBatis-Plus-Join) inside IntelliJ IDEA: preview Wrapper chains, XML mappers and annotation SQL as readable SQL with resolved parameters, restore SQL from console logs, and convert SQL back to MP Java code.
+        MyBatis-Plus SQL Visualizer is a debugging tool for MyBatis-Plus, MyBatis-Plus-Join, Hibernate and JPA inside IntelliJ IDEA: preview Wrapper chains, XML mappers, annotation SQL, Spring Data JPA derived queries, CriteriaBuilder queries and JPQL/@Query as readable SQL with resolved parameters, restore SQL from console logs, and convert SQL back to MP Java code.
         <br/>
         <h2>Core capabilities</h2>
         <ul>
             <li>Wrapper chains to SQL: LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / string QueryWrapper / UpdateWrapper / MPJLambdaWrapper / MPJQueryWrapper joins / service chains</li>
+            <li>JPA / Hibernate: Spring Data derived query methods (findByXxx), CriteriaBuilder queries, JPQL/@Query annotations — preview generated SQL with entity annotation resolution (@Entity/@Table/@Column/@ManyToOne)</li>
             <li>XML mapper dynamic SQL and Java annotation SQL (@Select/@Insert/...) preview (dynamic tags, OGNL conditions, parameter backfill)</li>
             <li>Replace <code>?</code> placeholders with actual parameter values; dynamic condition checkboxes; SQL auto formatting</li>
             <li>Console SQL log capture &amp; restore; Log-to-SQL batch conversion</li>
@@ -99,6 +100,10 @@
         <!-- T-M24-04 XML 预览：mapper 语句（select/insert/update/delete）行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider"/>
+
+        <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider"/>
 
         <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
         <lang.parserDefinition language="MP_SQL_Preview"
