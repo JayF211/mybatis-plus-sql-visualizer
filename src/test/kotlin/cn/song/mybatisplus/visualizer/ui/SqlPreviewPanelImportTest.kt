@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.awt.datatransfer.Transferable
 import javax.swing.JButton
 
 /**
@@ -18,13 +19,18 @@ import javax.swing.JButton
  */
 class SqlPreviewPanelImportTest : BasePlatformTestCase() {
 
+    // 测试前快照系统剪贴板，tearDown 恢复，避免剪贴板导入测试污染用户剪贴板
+    private var clipboardSnapshot: Transferable? = null
+
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
+        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
+        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 

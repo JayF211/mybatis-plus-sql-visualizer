@@ -9,6 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.awt.Toolkit
+import java.awt.datatransfer.Transferable
 
 /**
  * SqlPreviewPanel XML 分支测试（T-M24-04）：
@@ -18,15 +20,20 @@ import org.junit.Assert.assertTrue
  */
 class XmlPreviewPanelTest : BasePlatformTestCase() {
 
+    // 测试前快照系统剪贴板，tearDown 恢复，避免 copyError 污染用户剪贴板
+    private var clipboardSnapshot: Transferable? = null
+
     // T-M27.4：渲染文本断言类测试关闭自动格式化（格式化行为由 SqlFormatterTest +
     // SqlPreviewPanelTest.testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
+        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
+        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 

@@ -18,6 +18,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
 import com.intellij.testFramework.EditorTestUtil
 import com.intellij.util.ui.UIUtil
@@ -37,6 +38,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Color
+import java.awt.Toolkit
+import java.awt.datatransfer.Transferable
 import java.awt.image.BufferedImage
 import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicSplitPaneUI
@@ -48,15 +51,20 @@ import javax.swing.plaf.basic.BasicSplitPaneUI
  */
 class SqlPreviewPanelTest : BasePlatformTestCase() {
 
+    // 测试前快照系统剪贴板，tearDown 恢复，避免 copySql/copyError 污染用户剪贴板
+    private var clipboardSnapshot: Transferable? = null
+
     // T-M27.4：渲染文本断言类测试关闭自动格式化（默认开启的格式化行为由
     // SqlFormatterTest + testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
+        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
+        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 
@@ -909,6 +917,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testPanelEditorCompletionOffersKeywordsAndColumns() {
+        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())
         val editor = panel.editorForTest()!!
@@ -958,6 +967,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testTypingTriggersAutoPopup() {
+        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
         val panel = SqlPreviewPanel(project)
         // SQL 末尾空白处输入（新词起始，前缀 S 命中 SELECT）
         panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl"))
@@ -986,6 +996,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testTypingTriggersAutoPopupXmlScene() {
+        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
         // XML 预览场景：tableName/columns 为空（XmlPreviewService 不关联实体）——
         // 关键字补全应仍弹出（预览补全不依赖实体上下文）
         val panel = SqlPreviewPanel(project)
@@ -1014,6 +1025,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testTypingTriggersAutoPopupXmlSceneWithEntity() {
+        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
         // T-M27.3：XML 预览注入实体上下文后——输入应弹**列名**（不止关键字）
         val panel = SqlPreviewPanel(project)
         panel.showResult(
@@ -1068,6 +1080,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testTableNameCompletionInWhereClauseWithCandidates() {
+        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
         // T-M27.4：表名全位置提示——WHERE 后输入表名前缀也提示（主表 + 联表候选），
         // 不再限定 FROM/JOIN 后（输入 me → merchant_entity 命中）
         val panel = SqlPreviewPanel(project)
