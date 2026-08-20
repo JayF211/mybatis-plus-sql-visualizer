@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.util.Disposer
 import java.awt.Dimension
 import java.awt.Toolkit
 import javax.swing.Action
@@ -28,6 +29,8 @@ class SqlPreviewDialog(
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.showResult(result)
+        // 注册面板到弹窗 Disposer 树：弹窗 dispose 时级联释放面板及其 messageBus 连接
+        Disposer.register(disposable, panel)
         // T-M23.6：复制/执行 SQL 成功提示的「关闭 SQL 面板」按钮 → 关闭预览弹窗
         panel.onClosePanelRequested = { dispose() }
         // 最小尺寸兜底（防止拉伸时缩没；DialogWrapper 无 setMinimumSize，对中心面板设置）

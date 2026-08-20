@@ -21,6 +21,7 @@ import com.intellij.ide.util.gotoByName.GotoClassModel2
 import com.intellij.lang.java.JavaLanguage
 import com.intellij.lang.java.JavaSyntaxHighlighterFactory
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -177,6 +178,9 @@ class SqlToJavaPanel(
     private var callerMethods: Set<String> = emptySet()
 
     init {
+        // 注册到 Disposer 树：面板 dispose 时级联释放 SqlInputEditor 的 DocumentListener
+        Disposer.register(this, inputEditor)
+
         // 上：输入区（工具栏 + 灰字提示 + 编辑器——空文档显示引导文案）
         val inputPanel = JPanel(BorderLayout())
         inputPanel.add(

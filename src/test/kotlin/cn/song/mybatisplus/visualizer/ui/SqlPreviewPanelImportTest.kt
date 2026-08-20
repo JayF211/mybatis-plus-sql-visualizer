@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.model.BatchColumn
+import cn.song.mybatisplus.visualizer.model.BatchKind
+import cn.song.mybatisplus.visualizer.model.BatchModel
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -86,6 +89,52 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
         panel.showResult(result(sql = sql, compact = sql, params = listOf("name")))
         panel.importParamsForTest(mapOf("#name" to "zhang"))
         assertEquals("模糊匹配 #name → name", "zhang", panel.paramFieldForTest(0)!!.text)
+        panel.clear()
+    }
+
+    // ------------------------------------------------------------------
+    // P-05.1：驼峰/下划线自动匹配
+    // ------------------------------------------------------------------
+
+    fun testImportCamelToSnakeMatch() {
+        // P-05.1：source 为 snake_case `user_name`，导入 key 为 camelCase `userName` → 应匹配
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE user_name = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("user_name")))
+        panel.importParamsForTest(mapOf("userName" to "zhang"))
+        assertEquals("camelCase key 应匹配 snake_case source", "zhang", panel.paramFieldForTest(0)!!.text)
+        panel.clear()
+    }
+
+    fun testImportSnakeToCamelMatch() {
+        // P-05.1：source 为 camelCase `createTime`，导入 key 为 snake_case `create_time` → 应匹配
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE createTime = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("createTime")))
+        panel.importParamsForTest(mapOf("create_time" to "2024-01-01"))
+        assertEquals("snake_case key 应匹配 camelCase source", "2024-01-01", panel.paramFieldForTest(0)!!.text)
+        panel.clear()
+    }
+
+    fun testImportCamelMatchWithHashPrefix() {
+        // P-05.1：key 为 `#userName`（带 # 前缀 + 驼峰）→ 应匹配 snake_case source `user_name`
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE user_name = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("user_name")))
+        panel.importParamsForTest(mapOf("#userName" to "zhang"))
+        assertEquals("#前缀 + camelCase 应匹配 snake_case source", "zhang", panel.paramFieldForTest(0)!!.text)
+        panel.clear()
+    }
+
+    fun testImportExactMatchTakesPriority() {
+        // P-05.1：精确匹配优先于驼峰/下划线互转
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE user_name = ? AND userName = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("user_name", "userName")))
+        panel.importParamsForTest(mapOf("userName" to "exact"))
+        // userName 精确命中第二个参数（互转会命中第一个，但精确优先）
+        assertEquals("精确匹配优先：userName 命中自身", "exact", panel.paramFieldForTest(1)!!.text)
+        assertEquals("精确匹配优先：user_name 不受影响", "", panel.paramFieldForTest(0)!!.text)
         panel.clear()
     }
 
@@ -188,21 +237,126 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // 清除按钮（批量参数列分区）
+    // ------------------------------------------------------------------
+
+    fun testClearButtonClearsBatchValues() {
+        // 清除按钮：填写列值 → 点击清除 → 输入框清空、勾选态保留
+        val model = BatchModel(
+            kind = BatchKind.INSERT,
+            tableName = "biz_store_coupon",
+            toggleColumns = listOf(
+                BatchColumn("name", "entity.name", quote = true, checked = true),
+                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            ),
+        )
+        val active = model.toggleColumns.filter { it.checked }.map { it.columnName }.toSet()
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            PreviewResult(
+                sql = model.renderSql(active),
+                compactSql = model.renderSql(active),
+                unresolvedParams = model.orderedSources(active),
+                paramTable = null,
+                wrapperType = null,
+                tableName = model.tableName,
+                columns = model.toggleColumns.map { it.columnName },
+                batchModel = model,
+            ),
+        )
+        // 清除按钮存在
+        assertNotNull("批量清除按钮应存在", panel.batchClearButtonForTest())
+        // 填写列值
+        panel.paramFieldForTest(0)!!.text = "testName"
+        panel.paramFieldForTest(1)!!.text = "1"
+        // 点击清除
+        panel.batchClearButtonForTest()!!.doClick()
+        // 输入框清空
+        assertEquals("清除后输入框应为空", "", panel.paramFieldForTest(0)!!.text)
+        assertEquals("清除后输入框应为空", "", panel.paramFieldForTest(1)!!.text)
+        // paramValues 清空（key 为 BatchColumn.source，即 SpEL 表达式）
+        assertEquals("paramValues 应为空字符串", "", panel.paramValuesForTest()["entity.name"])
+        assertEquals("paramValues 应为空字符串", "", panel.paramValuesForTest()["entity.dic_status"])
+        // 勾选态保留
+        assertTrue("清除不影响勾选态", panel.batchCheckboxForTest(0)!!.isSelected)
+        assertTrue("清除不影响勾选态", panel.batchCheckboxForTest(1)!!.isSelected)
+        panel.clear()
+    }
+
+    // ------------------------------------------------------------------
     // 剪贴板导入（端到端）
     // ------------------------------------------------------------------
 
-    fun testImportFromClipboardEndToEnd() {
-        // P-05：端到端——设置剪贴板 → importParamsFromClipboard → 回填
+    fun testImportFromClipboardShowsDialog() {
+        // P-05.1：点击导入参数 → 弹框（不读取剪贴板，用户手动粘贴）
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE name = ? AND age = ?"
         panel.showResult(result(sql = sql, compact = sql, params = listOf("name", "age")))
-        // 模拟剪贴板
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection("""{"name":"clip","age":99}"""), null)
-        // 触发导入
+        // 触发导入 → 弹框（不直接回填，用户需确认）
         panel.importParamsFromClipboard()
-        assertEquals("剪贴板导入应填充 name", "clip", panel.paramFieldForTest(0)!!.text)
-        assertEquals("剪贴板导入应填充 age", "99", panel.paramFieldForTest(1)!!.text)
+        // 弹框态：参数框尚未填充（等待用户在弹框中确认）
+        assertEquals("弹框态：name 不应直接填充", "", panel.paramFieldForTest(0)!!.text)
+        assertEquals("弹框态：age 不应直接填充", "", panel.paramFieldForTest(1)!!.text)
+        panel.clear()
+    }
+
+    // ------------------------------------------------------------------
+    // P-05.1：默认回显当前参数（JSON 格式）
+    // ------------------------------------------------------------------
+
+    fun testImportDialogPrefill_currentParamsAsJson() {
+        // P-05.1：有参数值时 → 弹框预填 JSON
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE name = ? AND age = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("name", "age")))
+        // 模拟用户输入参数值
+        panel.paramFieldForTest(0)!!.text = "张三"
+        panel.paramFieldForTest(1)!!.text = "28"
+        // 触发导入 → 弹框应预填 JSON
+        val dialog = ParamImportDialog(project, panel.serializeParamsToJsonForTest()) {}
+        try {
+            assertTrue("弹框应预填 name", dialog.textForTest().contains("\"name\""))
+            assertTrue("弹框应预填 张三", dialog.textForTest().contains("张三"))
+            assertTrue("弹框应预填 age", dialog.textForTest().contains("\"age\""))
+            assertTrue("弹框应预填 28", dialog.textForTest().contains("28"))
+        } finally {
+            dialog.dispose() // 释放 Editor
+        }
+        panel.clear()
+    }
+
+    fun testImportDialogPrefill_emptyParamsNoPrefill() {
+        // P-05.1：无参数值时 → 弹框为空 + 占位示例
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE name = ? AND age = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("name", "age")))
+        // 不输入参数值
+        assertEquals("无参数值时 serializeParamsToJson 应返回空串", "", panel.serializeParamsToJsonForTest())
+        panel.clear()
+    }
+
+    fun testSerializeParamsToJson_filtersEmptyValues() {
+        // P-05.1：部分参数有值 → 仅序列化非空参数
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE name = ? AND age = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("name", "age")))
+        panel.paramFieldForTest(0)!!.text = "张三"
+        // age 保持空串
+        val json = panel.serializeParamsToJsonForTest()
+        assertTrue("应包含 name", json.contains("\"name\""))
+        assertTrue("应包含 张三", json.contains("张三"))
+        assertFalse("不应包含 age（空值过滤）", json.contains("\"age\""))
+        panel.clear()
+    }
+
+    fun testSerializeParamsToJson_escapesQuotes() {
+        // P-05.1：参数值含引号 → 应转义
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("name")))
+        panel.paramFieldForTest(0)!!.text = "say \"hello\""
+        val json = panel.serializeParamsToJsonForTest()
+        assertTrue("应转义引号", json.contains("\\\"hello\\\""))
         panel.clear()
     }
 

@@ -161,7 +161,9 @@ class SqlInputEditor(
     override fun dispose() {
         if (released) return
         released = true
-        autoPopupListener?.let { l -> editor.document.removeDocumentListener(l) }
+        // 注意：autoPopupListener 经 addDocumentListener(listener, this) 注册，
+        // Disposer 释放本对象时自动移除 listener——此处不能再手动 removeDocumentListener，
+        // 否则 listener 已被自动移除后二次移除报 "Can't remove document listener"
         autoPopupListener = null
         EditorFactory.getInstance().releaseEditor(editor)
         psiFile = null

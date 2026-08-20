@@ -16,6 +16,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
@@ -107,9 +108,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val paramPanel = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
     }
+    // 顶部对齐容器：BoxLayout Y_AXIS 在视口高于内容时默认垂直居中；
+    // 用 BorderLayout.NOWRAP 包裹后固定参数行在顶部（用户要求"向上靠"）
+    private val paramTopAlign = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        add(paramPanel, BorderLayout.NORTH)
+        isOpaque = false
+    }
     // T-M26.3：滚动区提升为字段——截断上限（标签列/复选框文本）按视口宽度计算，
     // 保证行宽不超出视口（标题行右侧按钮不被推出）
-    private val paramScroll = JBScrollPane(paramPanel).apply {
+    private val paramScroll = JBScrollPane(paramTopAlign).apply {
         preferredSize = Dimension(240, 200)
         isOpaque = false
         viewport.isOpaque = false
@@ -121,9 +128,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
     // T-M26.3：全选/全不选按钮回挂分区标题行右侧（IDEA 组操作惯例，T-M23.2 原生形态；
-    // T-M26.2 曾固定面板右上角——长文本截断后按钮不再被推出视口，回归标题行）——每次 rebuild 重建
+    // T-M26.2 曾固定面板右上角，长文本截断后按钮不再被推出视口）。
     private var selectAllButton: JButton? = null
     private var selectNoneButton: JButton? = null
+    private var clearButton: JButton? = null        // 动态条件分区清除按钮
+    private var batchClearButton: JButton? = null    // 批量参数列分区清除按钮
     // T-M23.2：批量「参数列」区全选/全不选按钮
     private var batchSelectAllButton: JButton? = null
     private var batchSelectNoneButton: JButton? = null
@@ -677,8 +686,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
         selectAllButton = null
         selectNoneButton = null
+        clearButton = null
         batchSelectAllButton = null
         batchSelectNoneButton = null
+        batchClearButton = null
         val views = result.previewModel?.conditionViews.orEmpty()
         val batchModel = result.batchModel
 
@@ -818,9 +829,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun batchSectionHeader(): JBPanel<JBPanel<*>> {
         batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
         batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
+        batchClearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear")) { clearBatchValues() }
         return sectionHeaderRow(
             MpSqlVisualizerBundle.message("panel.batch.columns"),
-            listOf(batchSelectAllButton!!, batchSelectNoneButton!!),
+            listOf( batchClearButton!!,batchSelectAllButton!!, batchSelectNoneButton!!),
         )
     }
 
@@ -844,9 +856,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun conditionSectionHeader(): JBPanel<JBPanel<*>> {
         selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
         selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+        clearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear")) { clearConditionValues() }
         return sectionHeaderRow(
             MpSqlVisualizerBundle.message("panel.condition.section"),
-            listOf(selectAllButton!!, selectNoneButton!!),
+            listOf(clearButton!!,selectAllButton!!, selectNoneButton!!),
         )
     }
 
@@ -904,6 +917,30 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             override fun removeUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
             override fun changedUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
         })
+    }
+
+    /** 清除按钮：清空动态条件分区所有参数值（不影响勾选态）。 */
+    private fun clearConditionValues() {
+        val views = current?.previewModel?.conditionViews.orEmpty()
+        views.forEach { view ->
+            view.valueSources.ifEmpty { listOfNotNull(view.valueSource) }.forEach { source ->
+                paramValues[source] = ""
+                syncParamFieldText(source, "")
+            }
+        }
+        renderSql()
+        saveToHistory()
+    }
+
+    /** 清除按钮：清空批量参数列分区所有参数值（不影响勾选态）。 */
+    private fun clearBatchValues() {
+        val model = current?.batchModel ?: return
+        (model.toggleColumns + model.fixedColumns).forEach { col ->
+            paramValues[col.source] = ""
+            syncParamFieldText(col.source, "")
+        }
+        renderSql()
+        saveToHistory()
     }
 
     /** 动态条件复选框 tooltip：布尔条件源码提示（M13 起无判空语义提示，复选框纯手动）。 */
@@ -1086,21 +1123,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     /**
-     * P-05：从剪贴板批量导入参数值（工具栏按钮触发）。
-     *
-     * 读取剪贴板文本 → [ParamImportParser.parse] → [importParams] 回填。
-     * 剪贴板无文本 / 无有效参数时提示用户。
+     * P-05.1：弹参数导入手动输入弹窗（工具栏按钮触发）。
+     * 默认回显当前 SQL 参数（JSON 格式），用户可在此基础上修改后导入。
+     * 用户粘贴/编辑文本后走 [ParamImportParser.parse] → [importParams] 回填。
      */
     fun importParamsFromClipboard() {
-        val text = runCatching {
-            Toolkit.getDefaultToolkit().systemClipboard
-                .getContents(null)?.getTransferData(DataFlavor.stringFlavor) as? String
-        }.getOrNull()
-        if (text.isNullOrBlank()) {
-            showImportResult(0, 0, emptyList(), isEmptyClipboard = true)
-            return
-        }
-        importParams(ParamImportParser.parse(text))
+        val proj = project ?: return
+        // 有参数时预填当前 paramValues（JSON 格式），无参数时弹空框 + 占位示例
+        val preFill = if (paramValues.isEmpty()) null else serializeParamsToJson()
+        ParamImportDialog(proj, preFill) { input ->
+            importParams(ParamImportParser.parse(input))
+        }.show()
+    }
+
+    /**
+     * P-05.1：将当前 paramValues 序列化为 JSON 字符串（自实现，不依赖 Jackson）。
+     * 过滤空值参数（未填写的不显示），key 按插入顺序排列。
+     */
+    private fun serializeParamsToJson(): String {
+        val entries = paramValues.entries
+            .filter { it.value.isNotEmpty() }
+            .joinToString(",\n") { (key, value) ->
+                val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+                """  "${key}": "${escaped}""""
+            }
+        return if (entries.isEmpty()) "" else "{\n$entries\n}"
     }
 
     /**
@@ -1149,13 +1196,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * P-05：模糊匹配 source（key ≡ source 或 key ≡ `#source`）。
-     * 精确命中优先，其次去 `#` 前缀匹配。
+     * P-05.1：模糊匹配 source（三级 fallback）。
+     *
+     *  1. 精确命中（key ≡ source）
+     *  2. 去 `#` 前缀精确命中（key ≡ `#source`）
+     *  3. 驼峰/下划线互转命中（`userName` ≡ `user_name`）
+     *
+     * 精确匹配优先，互转匹配兜底，避免风格差异导致漏匹配。
      */
     private fun resolveSource(key: String, sources: Set<String>): String? {
+        // 1. 精确命中
         if (sources.contains(key)) return key
+        // 2. 去 # 前缀精确命中
         val stripped = if (key.startsWith("#")) key.substring(1) else key
         if (sources.contains(stripped)) return stripped
+        // 3. 驼峰/下划线互转命中
+        val snake = CaseFormatUtil.camelToSnake(stripped)
+        if (sources.contains(snake)) return snake
+        val camel = CaseFormatUtil.snakeToCamel(stripped)
+        if (sources.contains(camel)) return camel
         return null
     }
 
@@ -1233,18 +1292,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         if (applied > 0) {
             renderSql()
-            showRecalledHint(applied)
         }
-    }
-
-    /** P-05：显示历史召回提示。 */
-    private fun showRecalledHint(count: Int) {
-        // 测试环境跳过弹窗
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
-        val msg = MpSqlVisualizerBundle.message("panel.param.history.recalled", count)
-        // 无 project（弹窗外部）时不弹；有 project 弹 info
-        project?.let { Messages.showInfoMessage(it, msg, title) }
     }
 
     /**
@@ -1444,6 +1492,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
     internal fun selectAllButtonForTest(): JButton? = selectAllButton
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
+    internal fun clearButtonForTest(): JButton? = clearButton
+    internal fun batchClearButtonForTest(): JButton? = batchClearButton
     /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。 */
     internal fun splitPaneForTest(): JSplitPane? = components.filterIsInstance<JSplitPane>().firstOrNull()
     /** T-M26.6：格式化快捷键 action（注册断言 + 触发格式化测试用）。 */
@@ -1456,6 +1506,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
     internal fun flushHistoryForTest() = flushHistoryToCache()
+    /** P-05.1：当前 paramValues 序列化为 JSON（测试调用用）。 */
+    internal fun serializeParamsToJsonForTest(): String = serializeParamsToJson()
 
     companion object {
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")

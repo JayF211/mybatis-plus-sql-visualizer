@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
@@ -179,6 +180,11 @@ class SqlLogPanel(
     )
 
     init {
+        // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
+        // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
+        Disposer.register(this, logToSqlPanel)
+        Disposer.register(this, sqlToJavaPanel)
+
         // 标签 1：SQL 日志（工具栏 + 过滤条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
         logPanel.add(buildTopPanel(), BorderLayout.NORTH) // 工具栏 + 分割线 + 过滤条
