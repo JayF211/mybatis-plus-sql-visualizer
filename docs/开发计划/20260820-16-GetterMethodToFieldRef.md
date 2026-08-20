@@ -1,0 +1,161 @@
+# 参数面板 getter 方法显示字段名——ExpressionEvaluator 增强
+
+**创建时间**：2026-08-20
+**优先级**：P1（用户体验优化：参数面板 `#user.getId()` → `#user.id`）
+**影响范围**：ExpressionEvaluator + 测试
+
+---
+
+## 问题描述
+
+`getById(user.getId())` / `getBaseMapper().selectById(user.getId())` 的参数面板显示 `#user.getId()`，用户希望和普通 Wrapper 查询一样显示字段名格式 `#user.id`。
+
+**当前行为**：
+- `getById(user.getId())` → SQL: `WHERE id = ?`，参数面板: `#user.getId()`
+- `wrapper.eq(User::getId, user.getId())` → SQL: `WHERE id = ?`，参数面板: `#user.getId()`（同样问题）
+
+**期望行为**：
+- `getById(user.getId())` → 参数面板: `#user.id`（getter 方法名 → 字段名）
+
+---
+
+## 根因分析
+
+`ExpressionEvaluator.evaluate()` 对 `PsiMethodCallExpression` 走 `else` 分支：
+
+```kotlin
+else -> SqlValue.Placeholder(expression.text)  // "user.getId()"
+```
+
+没有识别 getter 方法模式（`getXxx()` / `isXxx()`），直接将完整表达式文本作为 source。
+
+---
+
+## 修复方案
+
+### 改动点：ExpressionEvaluator.evaluate() 新增 getter 方法识别
+
+**文件**：`src/main/kotlin/.../psi/ExpressionEvaluator.kt`
+
+在 `evaluate()` 的 `when` 表达式中，`else` 之前新增 `PsiMethodCallExpression` 分支：
+
+```kotlin
+is PsiMethodCallExpression -> evaluateMethodCall(expression)
+```
+
+新增函数 `evaluateMethodCall()`：
+
+```kotlin
+/**
+ * T-Mxx：方法调用求值——识别 getter 方法（getXxx/isXxx）为字段引用。
+ *  - `user.getId()` → Placeholder("user.id")
+ *  - `user.getName()` → Placeholder("user.name")
+ *  - `isActive()` → Placeholder("active")
+ *  - 非 getter 方法（`user.toString()`、`list.get(0)`）→ Placeholder(expression.text)
+ */
+private fun evaluateMethodCall(call: PsiMethodCallExpression): SqlValue {
+    val methodName = call.methodExpression.referenceName ?: return SqlValue.Placeholder(call.text)
+    // 仅处理无实参的 getter/is 方法
+    if (call.argumentList.expressions.isNotEmpty()) return SqlValue.Placeholder(call.text)
+    val fieldName = when {
+        methodName.startsWith("get") && methodName.length > 3 -> methodName.removePrefix("get")
+        methodName.startsWith("is") && methodName.length > 2 -> methodName.removePrefix("is")
+        else -> return SqlValue.Placeholder(call.text)
+    }
+    // 首字母小写 → 字段名
+    val fieldNameDecapitalized = fieldName.replaceFirstChar { it.lowercaseChar() }
+    // 有 qualifier → `user.id`，无 qualifier → `id`
+    val qualifier = call.methodExpression.qualifierExpression?.text
+    return if (qualifier != null) {
+        SqlValue.Placeholder("$qualifier.$fieldNameDecapitalized")
+    } else {
+        SqlValue.Placeholder(fieldNameDecapitalized)
+    }
+}
+```
+
+**设计决策**：
+- 仅处理无实参方法（getter 特征）→ `list.get(0)` 不转换
+- 仅处理 `get`/`is` 前缀 → `user.toString()` 不转换
+- 有 qualifier 时保留前缀 → `user.getId()` → `user.id`
+- 无 qualifier 时仅字段名 → `getId()` → `id`
+- 影响范围：Wrapper 路径 + 批量路径同时受益（统一改进）
+
+**边界情况**：
+- `user.getSalary()` → `user.salary` ✅
+- `user.isSet()` → `user.set` ⚠️（is + 非布尔语义，但无参数时仍转换——保守策略：仅识别模式不验证语义）
+- `user.get(0)` → 有实参 → 不转换 ✅
+- `user.toString()` → 非 get/is 前缀 → 不转换 ✅
+- `user.getId()` 在 batch 路径 → `user.id` ✅
+- `user.getId()` 在 Wrapper 路径 → `user.id` ✅
+
+---
+
+## 实施步骤
+
+### 步骤 1：新增测试用例
+
+在 `SqlPreviewServiceTest.kt` 新增：
+
+```kotlin
+fun testBatchGetByIdWithGetterParam() {
+    // getById(user.getId()) —— 参数 source 应为 user.id（getter → 字段名）
+    myFixture.configureByText(
+        "Demo.java",
+        """
+        public class Demo {
+            static class User {
+                private Long id;
+                private String name;
+            }
+            static class UserServiceImpl extends BaseService<User> {
+                public User findOne(User user) {
+                    return getById(user.getId());
+                }
+            }
+            static class BaseService<T> {
+                public T getById(Long id) { return null; }
+            }
+        }
+        """.trimIndent(),
+    )
+    val result = newService().preview(anchor())
+    assertNotNull("getById(user.getId()) 应产出预览结果", result)
+    assertTrue("参数 source 应为 user.id", result!!.unresolvedParams.any { it == "user.id" })
+}
+```
+
+### 步骤 2：实现 evaluateMethodCall()
+
+在 `ExpressionEvaluator.kt` 新增函数 + 修改 `evaluate()` when 表达式。
+
+### 步骤 3：全量测试
+
+```bash
+./gradlew clean test
+```
+
+预期：新增测试通过 + 存量测试不受影响（原有 Placeholder source 格式不变，除非是 getter 方法调用）。
+
+### 步骤 4：提交
+
+---
+
+## 验证清单
+
+- [ ] `getById(user.getId())` → 参数面板显示 `#user.id`
+- [ ] `getById(user.getName())` → 参数面板显示 `#user.name`
+- [ ] `getById(id)`（简单变量）→ 参数面板显示 `#id`（不变）
+- [ ] `getById(1L)`（字面量）→ 内联进 SQL `WHERE id = 1`（不变）
+- [ ] `wrapper.eq(User::getId, user.getId())` → 参数面板显示 `#user.id`（Wrapper 路径同步受益）
+- [ ] `list.get(0)` → 不转换，保持 `#list.get(0)`
+- [ ] `user.toString()` → 不转换，保持 `#user.toString()`
+- [ ] 存量 1407 测试全绿
+
+---
+
+## 风险评估
+
+- **低风险**：新增分支仅影响 getter 方法调用的 source 格式，不影响 SQL 生成逻辑
+- **低风险**：`else` 分支仍作为兜底，非 getter 方法调用保持原有行为
+- **可能的副作用**：存量测试中如果有 getter 方法调用作为参数，source 格式会改变（需要检查并更新断言）

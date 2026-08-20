@@ -31,6 +31,7 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.HighlighterColors
@@ -40,6 +41,9 @@ import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiClassOwner
+import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.IconScaler
@@ -403,6 +407,9 @@ class SqlToJavaPanel(
         /** T-M44 增量：模型实例提为字段（弹窗与测试缝共用；元素级方法的 PSI 读取在委托内包 ReadAction）。 */
         internal val callerModel: ChooseByNameModel = CallerClassByNameModel()
 
+        /** T-Mxx：模型实例的 concrete 引用（供 setCurrentEditorClass / currentEditorClass 访问）。 */
+        internal val callerModelConcrete: CallerClassByNameModel get() = callerModel as CallerClassByNameModel
+
         init {
             isOpaque = false
             preferredSize = Dimension(1, JBUI.scale(24))
@@ -450,14 +457,16 @@ class SqlToJavaPanel(
          * `this`（service 内调用）与 `baseMapper`（ServiceImpl 的 baseMapper 字段）两个固定项。
          */
         private fun pickClass() {
+            // T-Mxx：选择器打开前检测当前编辑器打开的类，供 this/baseMapper tooltip 使用
+            callerModelConcrete.currentEditorClass = detectCurrentEditorClass()
             // T-M44 增量：模型提为字段（测试缝 callerModelForTest 复用同一实例）
             val popup = ChooseByNamePopup.createPopup(projectRef, callerModel, null)
             popup.invoke(object : ChooseByNamePopupComponent.Callback() {
                 override fun elementChosen(element: Any?) {
                     when (element) {
                         // T-M42：特殊调用值（字符串元素）——this=当前 service 类内、baseMapper=ServiceImpl
-                        // 字段；tooltip = 用途说明（非类名，无全限定名），图标 = 字段图标（字段语义）
-                        is String -> setPicked(element, SPECIAL_TOOLTIPS[element], AllIcons.Nodes.Field)
+                        // 字段；tooltip = 用途说明 + T-Mxx 当前编辑器类上下文
+                        is String -> setPicked(element, buildSpecialTooltip(element), AllIcons.Nodes.Field)
                         is PsiClass -> pickPsiClassForTest(element)
                     }
                 }
@@ -467,16 +476,121 @@ class SqlToJavaPanel(
         }
 
         /**
+         * T-Mxx：获取当前编辑器打开的 Java/Kotlin 类的 PsiClass（如有）。
+         * 多编辑器时取活动编辑器；非 Java/Kotlin 文件返回 null。
+         * 须在 ReadAction 内调用（PSI 访问）。
+         */
+        private fun detectCurrentEditorClass(): PsiClass? {
+            val editor = FileEditorManager.getInstance(projectRef).selectedTextEditor ?: return null
+            val psiFile = PsiDocumentManager.getInstance(projectRef).getPsiFile(editor.document) ?: return null
+            if (psiFile !is PsiClassOwner) return null
+            // 取主类（文件名对应的类）
+            return psiFile.classes.firstOrNull { cls ->
+                cls.name?.let { psiFile.name.startsWith(it) } == true
+            } ?: psiFile.classes.firstOrNull()
+        }
+
+        /**
+         * T-Mxx：构造 this/baseMapper 的 tooltip 文本，含当前编辑器类信息。
+         * 兼顾 PM（Plain MyBatis-Plus）与 MPJ（MyBatis-Plus-Join）两种依赖。
+         */
+        private fun buildSpecialTooltip(special: String): String {
+            val base = SPECIAL_TOOLTIPS[special] ?: return special
+            val currentCls = callerModelConcrete.currentEditorClass ?: return base
+            val clsName = currentCls.name ?: return base
+            val context = when (special) {
+                CALLER_THIS -> "（当前：$clsName）"
+                CALLER_BASE_MAPPER -> buildBaseMapperContext(currentCls, clsName)
+                else -> ""
+            }
+            return "$base\n$context"
+        }
+
+        /**
+         * T-Mxx：baseMapper 选项的上下文提取——兼顾 PM 与 MPJ 两种依赖。
+         * 优先匹配 ServiceImpl<A, B>（取 B=实体），回落 BaseMapper<A>（取 A=实体）。
+         */
+        private fun buildBaseMapperContext(currentCls: PsiClass, clsName: String): String {
+            val superTypes = currentCls.superTypes
+            // 优先：ServiceImpl<X, Entity> / MPJBaseService<X, Entity> → 取第 2 个泛型参数（实体）
+            superTypes.firstOrNull { type ->
+                type.className?.let {
+                    it.contains("ServiceImpl") || it.contains("MPJBaseService") ||
+                        it.contains("JoinService")
+                } == true
+            }?.let { type ->
+                val params = type.parameters
+                if (params.size >= 2) {
+                    return "（当前：$clsName，表：${params[1].presentableText}）"
+                }
+            }
+            // 回落：BaseMapper<Entity> / MPJBaseMapper<Entity> → 取第 1 个泛型参数（实体）
+            superTypes.firstOrNull { type ->
+                type.className?.let {
+                    it.contains("BaseMapper") || it.contains("MPJBaseMapper")
+                } == true
+            }?.let { type ->
+                val params = type.parameters
+                if (params.isNotEmpty()) {
+                    return "（当前：$clsName，表：${params[0].presentableText}）"
+                }
+            }
+            // 无泛型信息 → 仅展示类名
+            return "（当前：$clsName）"
+        }
+
+        /**
          * T-M44 审计兜底（用户实测堆栈：elementChosen → getQualifiedName → stub 树遍历断言硬抛）：
          * 选择器回调的 PSI 读取（name/qualifiedName/getIcon）须在 ReadAction 内（EDT 上同步执行，
          * 语义不变）。internal 供测试缝直接调用（Light 可建 PsiClass 验证选取行为）。
+         *
+         * T-Mxx：入口加调用类校验——VO/DTO/Utils/Controller 等不合法类拒绝选中 + 友好提示。
          */
         internal fun pickPsiClassForTest(cls: PsiClass) {
+            // T-Mxx：校验是否为合法调用类，不合法则弹友好提示并拒绝选中
+            val rejectReason = validateCallerClass(cls)
+            if (rejectReason != null) {
+                showCallerRejectMessage(rejectReason, cls.name ?: "")
+                return
+            }
             val picked = ReadAction.compute<Triple<String, String?, Icon?>?, Throwable> {
                 val name = cls.name ?: return@compute null
                 Triple(name, cls.qualifiedName, cls.getIcon(0))
             } ?: return
             setPicked(picked.first, picked.second, picked.third)
+        }
+
+        /**
+         * T-Mxx：校验选中的类是否为合法的 SQL→Java 调用类。
+         * 合法 = Mapper/Service/ServiceImpl/Impl（白名单后缀）或继承 MPJ 接口的具体类。
+         * 不合法 = VO/DTO/BO/PO/Utils/Controller/Config 等无 CRUD 能力的类。
+         *
+         * @return null = 合法；非 null = 拒绝原因 bundle key
+         */
+        private fun validateCallerClass(cls: PsiClass): String? {
+            val name = cls.name ?: return "reverse.panel.callerReject.unknown"
+            // 1. 快速白名单：类名以 Mapper/Service/ServiceImpl/Impl 结尾 → 放行
+            if (name.endsWith("Mapper") || name.endsWith("Service") ||
+                name.endsWith("ServiceImpl") || name.endsWith("Impl")
+            ) return null
+            // 2. 黑名单：VO/DTO/BO/PO/Utils/Util/Controller/Config/Interceptor 等 → 拒绝
+            if (name.endsWith("VO") || name.endsWith("DTO") || name.endsWith("BO") ||
+                name.endsWith("PO") || name.endsWith("Utils") || name.endsWith("Util") ||
+                name.endsWith("Controller") || name.endsWith("Config") ||
+                name.endsWith("Interceptor") || name.endsWith("Filter") ||
+                name.endsWith("Handler") || name.endsWith("Aspect")
+            ) return "reverse.panel.callerReject.voDto"
+            // 3. 接口/抽象类 → 拒绝
+            if (cls.isInterface || cls.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                return "reverse.panel.callerReject.interface"
+            }
+            // 4. 其他具体类 → 放行（避免误杀自定义命名）
+            return null
+        }
+
+        /** T-Mxx：调用类选择被拒绝的友好提示（状态行显示）。 */
+        private fun showCallerRejectMessage(reasonKey: String, className: String) {
+            status(MpSqlVisualizerBundle.message(reasonKey, className), error = true)
         }
 
         /**
@@ -490,9 +604,12 @@ class SqlToJavaPanel(
          *  - [getListCellRenderer]：字符串元素走纯文本 + 字段图标渲染（委托渲染器对非
          *    NavigationItem 值在 showIcon=true 时 ModuleRendererFactory 返回 null → NPE）。
          */
-        private inner class CallerClassByNameModel : ChooseByNameModel {
+        inner class CallerClassByNameModel : ChooseByNameModel {
             private val delegate = GotoClassModel2(projectRef)
             private val delegateRenderer = delegate.getListCellRenderer() as ListCellRenderer<Any>
+
+            /** T-Mxx：当前编辑器打开的类（选择器打开前检测一次，供 this/baseMapper tooltip 使用）。 */
+            var currentEditorClass: PsiClass? = null
 
             /** 特殊项渲染：纯文本 + 字段图标 + 用途说明 tooltip。 */
             private val specialRenderer = object : DefaultListCellRenderer() {
@@ -617,6 +734,10 @@ class SqlToJavaPanel(
         /** 测试访问器：模拟选择器选中（类图标 + 简单类名 + 全限定名 + 变更回调）。 */
         internal fun pickForTest(simpleName: String, qualifiedName: String?, icon: Icon? = AllIcons.Nodes.Class) =
             setPicked(simpleName, qualifiedName, icon)
+
+        /** T-Mxx 测试缝：模拟选中 this/baseMapper（走 buildSpecialTooltip 完整路径，含当前编辑器类上下文）。 */
+        internal fun pickSpecialForTest(special: String) =
+            setPicked(special, buildSpecialTooltip(special), AllIcons.Nodes.Field)
 
         /** 测试访问器：模拟 ✕ 清除。 */
         internal fun clearForTest() = clearPicked()
@@ -1088,6 +1209,11 @@ class SqlToJavaPanel(
 
     /** T-M44 增量测试缝：选择器模型（ChooseByNameModel 接口——getFullName/getElementName 的 ReadAction 委托行为测试）。 */
     internal fun callerModelForTest(): ChooseByNameModel = callerField.callerModel
+
+    /** T-Mxx 测试缝：设置当前编辑器打开的类（供 this/baseMapper tooltip 上下文测试）。 */
+    internal fun setCurrentEditorClassForTest(cls: PsiClass?) {
+        callerField.callerModelConcrete.currentEditorClass = cls
+    }
 
     /** T-M44 增量测试缝：委托调用类选择器的 ReadAction 选取（elementChosen 的 PsiClass 分支同一路径）。 */
     internal fun pickPsiClassForTest(cls: PsiClass) = callerField.pickPsiClassForTest(cls)

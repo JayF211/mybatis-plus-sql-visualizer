@@ -221,7 +221,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
     // ---------------------------------------------------------------
 
     fun testImplicitThisGetById() {
-        // 在 ServiceImpl 内部 this.getById(id) —— 隐式 this，qualifierExpression 为 null
+        // 在 ServiceImpl 内部 this.getById(id) —— 显式 this，qualifierExpression 为 PsiThisExpression
         myFixture.configureByText(
             "Demo.java",
             """
@@ -243,6 +243,33 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull("this.getById(id) 应产出预览结果", result)
+        assertTrue("显式 this.getById 应转 SELECT", result!!.sql.startsWith("SELECT"))
+        assertTrue("应包含 WHERE id = ?", result.sql.contains("WHERE id = ?"))
+    }
+
+    fun testNoThisGetById() {
+        // 在 ServiceImpl 内部直接 getById(id) —— 隐式 this，qualifierExpression 为 null
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class UserServiceImpl extends BaseService<User> {
+                    public User getOne(Long id) {
+                        return getById(id);
+                    }
+                }
+                static class BaseService<T> {
+                    public T getById(Long id) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById(id)（无 this）应产出预览结果", result)
         assertTrue("隐式 this.getById 应转 SELECT", result!!.sql.startsWith("SELECT"))
         assertTrue("应包含 WHERE id = ?", result.sql.contains("WHERE id = ?"))
     }
@@ -304,6 +331,35 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertTrue("selectList 应转 SELECT", result!!.sql.startsWith("SELECT"))
         // user 是 SQL 关键字，方言自动加反引号 → 断言匹配 `user`（含反引号）
         assertTrue("应包含 FROM `user`, actual: ${result.sql}", result.sql.contains("FROM `user`"))
+    }
+
+    fun testBatchGetByIdWithGetterParam() {
+        // getById(user.getId()) —— 参数 source 应为 id（getter → 纯字段名）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                static class User {
+                    private Long id;
+                    private String name;
+                }
+                static class UserServiceImpl extends BaseService<User> {
+                    public User findOne(User user) {
+                        return getById(user.getId());
+                    }
+                }
+                static class BaseService<T> {
+                    public T getById(Long id) { return null; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("getById(user.getId()) 应产出预览结果", result)
+        assertTrue(
+            "参数 source 应为 id, actual: ${result!!.unresolvedParams}",
+            result.unresolvedParams.any { it == "id" },
+        )
     }
 
     fun testImplicitThisSave() {
