@@ -655,6 +655,52 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
     }
 
+    fun testJoinWrappersFactoryWithMethodRefArgsDeduped() {
+        // T-Mxx（用户复现）：MPJ 工厂变量赋值 + select(方法引用) + leftJoin(类字面量/字符串实参) 跨行链——
+        // 原 isInsideWrapperVariableInitializer 沿 parent 单链遍历，遇到非 PsiExpression 节点中断返回 false →
+        // 场景 C 工厂方法名未被去重 → 变量声明 + 工厂方法名双图标。修复=改用 getParentOfType 直接定位变量祖先。
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public void query() {
+                    MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
+                            .selectAll(DeviceInfoEntity.class)
+                            .select(StationInfoEntity::getStationName)
+                            .leftJoin(StationInfoEntity.class, "st",
+                                    StationInfoEntity::getStationId, "t", DeviceInfoEntity::getId)
+                            .eq(DeviceInfoEntity::getId, 1);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+                static class StationInfoEntity { private Long stationId; private String stationName; }
+            }
+            """.trimIndent(),
+        )
+        val variable = firstVariable()
+        assertSame(
+            "变量名应为锚点",
+            variable.nameIdentifier,
+            WrapperAnchorDetector.anchorElement(variable.nameIdentifier),
+        )
+        val factoryCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambda" }
+        assertNull(
+            "MPJ 工厂方法名应与变量声明去重（避免双图标）",
+            WrapperAnchorDetector.anchorElement(factoryCall.methodExpression.referenceNameElement),
+        )
+        // 第二图标根因：链上 selectAll 同时收录于批量注册表（场景 D）——校验其也不标批量锚点
+        // （原 initializerHeadIsWrapper 回溯停在 qualifier 引用返回 false → selectAll 未去重 → 第二个图标）
+        val selectAllCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "selectAll" }
+        assertNull(
+            "链上 selectAll(Class) 不应标批量锚点（与变量声明去重）",
+            WrapperAnchorDetector.anchorElement(selectAllCall.methodExpression.referenceNameElement),
+        )
+    }
+
     fun testLambdaParameterWrapperIsNotAnchor() {
         // T-M23.12（用户实测）：`wrapper.and(o -> ...)` 嵌套条件 lambda 参数（显式声明 wrapper 类型，
         // LightPlatform 可解析类型文本）不应标锚点——真实 IDE 推断类型为 LambdaQueryWrapper 会被

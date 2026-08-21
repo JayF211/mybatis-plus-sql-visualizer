@@ -10,6 +10,7 @@ import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiParameter
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
+import com.intellij.psi.util.PsiTreeUtil
 
 /**
  * Wrapper 锚点判定器（M10-01，gutter 预览图标用）。
@@ -121,16 +122,27 @@ object WrapperAnchorDetector {
     /**
      * 初始化表达式链首是否为具体 Wrapper（语法级）：沿 `methodExpression.qualifierExpression`
      * 回溯到链起点，判断是 wrapper 构造（new）或 `Wrappers.<T>lambdaQuery()` 等工厂调用。
+     *
+     * 修复（T-Mxx）：原回溯终点停在 qualifier 引用而不继续判定工厂调用——`JoinWrappers.lambda(...)
+     * .selectAll(...)` 的链头是 `lambda` 工厂**调用**，但回溯沿 qualifier 落在 `JoinWrappers`
+     * （PsiReferenceExpression）即停止 → 返回 false → 场景 D 的 selectAll 未被去重 → 双图标。
+     * 现改为先列为**调用自身**即是工厂方法名的情况（链头 = 工厂调用，无需再沿 qualifier 回溯）。
      */
     private fun initializerHeadIsWrapper(init: PsiElement): Boolean {
         var expr: PsiElement = init
+        // 链头可以是工厂方法调用自身（`JoinWrappers.lambda(...)`）；此时 expr 保持为该调用
+        var headCall: PsiMethodCallExpression? = null
         while (expr is PsiMethodCallExpression) {
+            headCall = expr
             val qualifier = expr.methodExpression.qualifierExpression ?: break
+            // 若当前方法名即工厂方法（如 JoinWrappers.lambda）→ 该调用即链头，无需再回溯
+            if (expr.methodExpression.referenceName in WrapperLocator.wrapperFactoryMethodNames) break
             expr = qualifier
         }
-        return when (expr) {
-            is PsiNewExpression -> WrapperLocator.detectWrapperType(expr.type) != null
-            is PsiMethodCallExpression -> expr.methodExpression.referenceName in WrapperLocator.wrapperFactoryMethodNames
+        return when {
+            headCall?.methodExpression?.referenceName in WrapperLocator.wrapperFactoryMethodNames -> true
+            expr is PsiNewExpression -> WrapperLocator.detectWrapperType(expr.type) != null
+            expr is PsiMethodCallExpression -> expr.methodExpression.referenceName in WrapperLocator.wrapperFactoryMethodNames
             else -> false
         }
     }
@@ -138,23 +150,22 @@ object WrapperAnchorDetector {
     /**
      * 判定表达式（new 构造或工厂调用）是否位于某 **Wrapper 变量**的初始化表达式内。
      *
-     * 沿表达式链向上：全为 `PsiExpression` 直到 `PsiVariable` → 在初始化内（去重）；
-     * 中途遇到语句/方法/类边界（内联场景，如 `list(...)`）→ 不在（应标该表达式锚点）。
+     * 沿 PSI 树向上查找最近的 `PsiVariable` 祖先：是 Wrapper 变量 → 在初始化内（去重）；
+     * 无变量祖先（内联场景，如 `list(...)`）→ 不在（应标该表达式锚点）。
      *
      * M19.5（T-M19.5-01，2026-08-13 用户实测）：**仅当变量本身是 Wrapper 变量才去重**——
      * 结果变量赋值形态（`XxxEntity e = service.lambdaQuery()...one()` / `boolean b = service.lambdaUpdate()...update()`）
      * 变量类型非 Wrapper（场景 B 不标变量），此时去重会整条链失去锚点；`isWrapperVariable` 为 O(1)
      * 纯语法判定（文本匹配 + initializer 链首回溯，无 resolve），符合性能红线。
+     *
+     * 修复（T-Mxx）：原实现沿 `expr.parent` 单链逐层判断 `is PsiExpression` 才继续，链式调用中
+     * `PsiReferenceExpression` / `PsiMethodCallExpression` 交替，遇到 lambda 参数列表等非 Expression
+     * 节点即中断返回 false → 场景 C 工厂方法名未被去重 → 双图标。改用 [PsiTreeUtil.getParentOfType]
+     * 直接定位最近变量祖先，健壮处理跨行链与方法引用/类字面量实参。
      */
     private fun isInsideWrapperVariableInitializer(expr: PsiElement): Boolean {
-        var cursor: PsiElement? = expr.parent
-        while (cursor != null) {
-            when (cursor) {
-                is PsiVariable -> return WrapperLocator.isWrapperVariable(cursor)
-                is PsiExpression -> cursor = cursor.parent
-                else -> return false
-            }
-        }
-        return false
+        val variable = PsiTreeUtil.getParentOfType(expr, PsiVariable::class.java, false)
+            ?: return false
+        return WrapperLocator.isWrapperVariable(variable)
     }
 }
