@@ -287,4 +287,157 @@ class SqlFormatterTest {
             formatted,
         )
     }
+
+    // ------------------------------------------------------------------
+    // M-KeywordWrap：关键字换行格式化（formatClauseLine）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testClauseLineBasicSelect() {
+        // 基本 SELECT/FROM/WHERE/ORDER BY 主子句换行，列清单同行逗号无空格
+        val input = """
+            SELECT
+                id,
+                password,
+                age,
+                email,
+                role_id,
+                dept_id,
+                status,
+                username,
+                create_time,
+                update_time,
+                deleted,
+                version
+            FROM `user`
+            WHERE username = ?
+                AND status = ?
+                AND age >= ?
+                AND deleted = 0
+            ORDER BY id DESC
+        """.trimIndent()
+        val expected = """
+            SELECT id,password,age,email,role_id,dept_id,status,username,create_time,update_time,deleted,version
+            FROM `user`
+            WHERE username = ?  AND status = ?  AND age >= ?  AND deleted = 0
+            ORDER BY id DESC
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineColumnListNoSpaceAfterComma() {
+        // SELECT 列清单同行逗号无空格；FROM 关键字换行（主子句顶格）
+        val input = "select id, name, age from t"
+        val expected = """
+            SELECT id,name,age
+            FROM t
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineWhereAndOrInline() {
+        // WHERE 后 AND/OR 同行，双空格分隔
+        val input = "select id from t where a = 1 and b = 2 or c = 3"
+        val expected = """
+            SELECT id
+            FROM t
+            WHERE a = 1  AND b = 2  OR c = 3
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineBacktickTableName() {
+        // 反引号表名保留
+        val input = "select * from `order` where id = 1"
+        val expected = """
+            SELECT *
+            FROM `order`
+            WHERE id = 1
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineSingleLineInput() {
+        // 单行输入 → 关键字处拆行
+        val input = "select id,name from t where a=1 and b=2 order by id desc"
+        val expected = """
+            SELECT id,name
+            FROM t
+            WHERE a = 1  AND b = 2
+            ORDER BY id DESC
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineSubqueryInline() {
+        // 子查询括号内容不展开（同行）；关键字大写规则同顶层
+        val input = "select id from t where id in (select user_id from orders where status = 1)"
+        val expected = """
+            SELECT id
+            FROM t
+            WHERE id IN (SELECT user_id FROM orders WHERE status = 1)
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineJoinInline() {
+        // LEFT JOIN 同行（LEFT 修饰符 + JOIN 保持同行；表名+别名完整保留）
+        val input = "select t.id, t.name from t1 t left join t2 b on t.id = b.id where t.id = 1"
+        val expected = """
+            SELECT t.id,t.name
+            FROM t1 t
+            LEFT JOIN t2 b ON t.id = b.id
+            WHERE t.id = 1
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineUpdateSet() {
+        // UPDATE SET 列清单同行逗号无空格
+        val input = "update t set name = 'x', age = 1, status = 2 where id = 1"
+        val expected = """
+            UPDATE t
+            SET name = 'x',age = 1,status = 2
+            WHERE id = 1
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineInsertValues() {
+        // INSERT/INTO/VALUES 各占一行（均为 NEW_LINE_KEYWORDS）；括号内逗号无空格
+        val input = "insert into t (a, b, c) values (1, 2, 3)"
+        val expected = """
+            INSERT
+            INTO t (a,b,c)
+            VALUES (1,2,3)
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineLimitCommaSpace() {
+        // LIMIT 参数同行逗号+空格
+        val input = "select id from t limit 10, 20"
+        val expected = """
+            SELECT id
+            FROM t
+            LIMIT 10, 20
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatClauseLine(input))
+    }
+
+    @Test
+    fun testClauseLineEmptyInput() {
+        // 空输入 → 原样返回（trim）
+        assertEquals("", SqlFormatter.formatClauseLine(""))
+        assertEquals("", SqlFormatter.formatClauseLine("   "))
+    }
 }

@@ -82,7 +82,7 @@ class ParamImportDialog(
             override fun documentChanged(event: DocumentEvent) {
                 updatePlaceholderVisibility()
             }
-        })
+        }, this)
         updatePlaceholderVisibility()
 
         // 格式化快捷键 Ctrl+Enter（焦点在编辑器内时触发）

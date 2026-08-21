@@ -193,6 +193,166 @@ object SqlFormatter {
         return sb.toString().trim()
     }
 
+    /**
+     * 关键字换行格式化（M-KeywordWrap）：只在主子句关键字处换行，子句内容同行。
+     *
+     * 与 [format]（全展开）互补——前者用于阅读细节，后者用于快速总览。
+     * 规则：
+     *  - 关键字大写；主子句（SELECT/FROM/WHERE/GROUP/ORDER/HAVING/LIMIT/JOIN/UPDATE/SET/DELETE 等）各占一行
+     *  - SELECT/SET 后列清单同行，逗号无空格（`id,password,age`）
+     *  - WHERE 后条件同行，AND/OR 前双空格（`=?  AND status=?`）
+     *  - LIMIT/GROUP/ORDER 参数同行，逗号+空格
+     *  - JOIN 修饰符（LEFT/RIGHT/INNER/FULL/CROSS）与 JOIN 同行
+     *  - 括号内内容同行（子查询不展开）
+     *  - 运算符两侧空格、字符串/数字/标识符原文保留
+     *  - 空白剔除
+     */
+    fun formatClauseLine(sql: String): String {
+        val tokens = lex(sql)
+        if (tokens.isEmpty()) return sql.trim()
+        val sb = StringBuilder(sql.length + 64)
+        var pendingSpace = false
+        var atLineStart = true
+        var prevText = ""
+        var currentClause = ""
+        var depth = 0  // 括号嵌套深度（括号内不换行 — 子查询同行）
+        // SELECT/SET 列清单中刚经过逗号 → 下一个标识符前不空格（逗号紧贴列名）
+        var pendingComma = false
+
+        fun flushSpace() {
+            if (pendingSpace && !atLineStart && sb.isNotEmpty() && sb.last() != ' ') sb.append(' ')
+            pendingSpace = false
+        }
+
+        /** 换行顶格（仅顶层触发；括号内不换行）。 */
+        fun newline() {
+            sb.append('\n')
+            atLineStart = true
+            pendingSpace = false
+        }
+
+        for ((type, text) in tokens) {
+            val upper = text.uppercase()
+            when {
+                // JOIN：前一个 token 是 LEFT/RIGHT/INNER 等 → 保持同行；否则顶层新行
+                type == SqlTokenTypes.KEYWORD && upper == "JOIN" -> {
+                    val qualifier = prevText.uppercase() in JOIN_QUALIFIERS
+                    if (qualifier) {
+                        flushSpace()
+                    } else if (depth == 0 && !atLineStart) {
+                        newline()
+                    }
+                    currentClause = "JOIN"
+                    sb.append(upper)
+                    atLineStart = false
+                    pendingSpace = true
+                }
+
+                // 主子句 → 顶层新行（括号内不换行 — 子查询同行，保留前导空格）
+                type == SqlTokenTypes.KEYWORD && upper in NEW_LINE_KEYWORDS -> {
+                    if (depth == 0) {
+                        if (!atLineStart) newline()
+                        pendingSpace = false
+                    } else {
+                        flushSpace()
+                    }
+                    currentClause = upper
+                    sb.append(upper)
+                    atLineStart = false
+                    pendingSpace = true
+                }
+
+                // AND/OR：不换行，保持同行（前导双空格 — 子句分隔视觉醒目）
+                type == SqlTokenTypes.KEYWORD && (upper == "AND" || upper == "OR") -> {
+                    // 清除待处理空格，手动添加双空格（不依赖 flushSpace 的单空格）
+                    pendingSpace = false
+                    if (!atLineStart) {
+                        sb.append(' ')
+                        sb.append(' ')
+                    }
+                    sb.append(upper)
+                    atLineStart = false
+                    pendingSpace = true
+                }
+
+                // 其余关键字
+                type == SqlTokenTypes.KEYWORD -> {
+                    flushSpace()
+                    sb.append(upper)
+                    pendingSpace = true
+                }
+
+                // 左括号：运算符关键字后留空格（IN (）；函数名后不留（COUNT(）；深度+1
+                type == SqlTokenTypes.PAREN && text == "(" -> {
+                    if (prevText.uppercase() !in FUNCTION_NAMES) flushSpace()
+                    sb.append('(')
+                    depth++
+                    pendingSpace = false
+                    atLineStart = false
+                }
+                // 右括号：同行，深度-1（不 flushSpace — 避免 `1 )` 前多余空格）
+                type == SqlTokenTypes.PAREN && text == ")" -> {
+                    pendingSpace = false
+                    sb.append(')')
+                    depth--
+                    pendingSpace = true
+                    atLineStart = false
+                }
+
+                // 逗号：SELECT/SET 列清单或括号内 → 逗号紧贴（无空格）；其余 → 逗号+空格
+                type == SqlTokenTypes.OPERATOR && text == "," -> {
+                    if (sb.isNotEmpty() && sb.last() == ' ') sb.deleteCharAt(sb.length - 1)
+                    sb.append(',')
+                    pendingComma = currentClause == "SELECT" || currentClause == "SET" || depth > 0
+                    atLineStart = false
+                    if (!pendingComma) pendingSpace = true
+                }
+
+                // 点号：无空格
+                type == SqlTokenTypes.OPERATOR && text == "." -> {
+                    sb.append('.')
+                    pendingSpace = false
+                    pendingComma = false
+                    atLineStart = false
+                }
+
+                // 其他运算符
+                type == SqlTokenTypes.OPERATOR -> {
+                    flushSpace()
+                    sb.append(text)
+                    pendingSpace = true
+                    pendingComma = false
+                    atLineStart = false
+                }
+
+                // 注释
+                type == SqlTokenTypes.COMMENT -> {
+                    if (!atLineStart) sb.append('\n')
+                    sb.append(text)
+                    sb.append('\n')
+                    atLineStart = true
+                    pendingSpace = false
+                    pendingComma = false
+                }
+
+                // 标识符 / 字符串 / 数字 / 表名
+                else -> {
+                    if (pendingComma) {
+                        // SELECT/SET 逗号后紧贴列名（无空格）
+                        pendingComma = false
+                    } else {
+                        flushSpace()
+                    }
+                    sb.append(text)
+                    pendingSpace = true
+                    atLineStart = false
+                }
+            }
+            prevText = text
+        }
+        return sb.toString().trim()
+    }
+
     /** 分词（剔除空白——含 XML 动态标签展开残留空行）。 */
     private fun lex(sql: String): List<Pair<IElementType, String>> {
         val lexer = SqlLexer()

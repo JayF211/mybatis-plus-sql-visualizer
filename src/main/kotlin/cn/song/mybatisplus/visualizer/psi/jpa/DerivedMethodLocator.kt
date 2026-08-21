@@ -5,6 +5,7 @@ import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiType
+import com.intellij.psi.PsiTypes
 import com.intellij.psi.util.PsiTreeUtil
 
 /**
@@ -199,7 +200,7 @@ object DerivedMethodLocator {
         // 无法提取泛型参数，直接返回 null，让 locateFromMethod 链保持 entityClass=null。
         // 调用方 resolveEntityClass(containingClass) 已优先尝试 Repository 泛型解析；
         // 若也失败，entityClass 为 null，但定位不失败——下游 converter 会按名称/文本兜底。
-        if (returnType is com.intellij.psi.PsiPrimitiveType && returnType == com.intellij.psi.PsiType.VOID) {
+        if (returnType is com.intellij.psi.PsiPrimitiveType && returnType == PsiTypes.voidType()) {
             return null
         }
 
