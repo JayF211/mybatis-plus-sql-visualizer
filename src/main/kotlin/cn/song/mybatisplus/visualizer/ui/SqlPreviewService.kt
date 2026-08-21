@@ -947,11 +947,12 @@ class SqlPreviewService(private val project: Project) {
             return resolver.resolve(entityClass)
         }
         // 路径 2：按类名查找 @Entity 类
-        // 注意：使用 anchor 所在的项目（而非 openProjects.first），确保多项目环境下查找正确
         val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return null
         val className = entityClassName ?: extractEntityNameFromHql(hql) ?: return null
-        val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project)
-            .findClass(className, com.intellij.psi.search.GlobalSearchScope.allScope(project))
+        val scope = com.intellij.psi.search.GlobalSearchScope.allScope(project)
+        // 优先精确匹配全限定名
+        val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project).findClass(className, scope)
+            ?: findClassByShortName(project, className, scope)
             ?: return null
         return resolver.resolve(psiClass)
     }
@@ -963,6 +964,20 @@ class SqlPreviewService(private val project: Project) {
     private fun extractEntityNameFromHql(hql: String): String? {
         val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
         return fromPattern.find(hql)?.groupValues?.get(1)
+    }
+
+    /**
+     * 按短类名查找 PsiClass（JavaPsiFacade.findClass 需要全限定名）。
+     * 使用 PsiShortNamesManager 按短名搜索，返回第一个匹配的类。
+     */
+    private fun findClassByShortName(
+        project: com.intellij.openapi.project.Project,
+        shortName: String,
+        scope: com.intellij.psi.search.GlobalSearchScope,
+    ): PsiClass? {
+        val shortNamesCache = com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
+        val classes = shortNamesCache.getClassesByName(shortName, scope)
+        return classes.firstOrNull()
     }
 
     /**
