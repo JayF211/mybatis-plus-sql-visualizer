@@ -119,8 +119,9 @@ object JavaCodeGenerator {
         // T-M37：多表强制 MPJ 形态；字符串 raw join（副实体缺失/ON 多条件）仅 StringJoin（MPJQueryWrapper）
         // 合法——MPJLambdaWrapper 无 leftJoin(String)（1.5.6 实证），不能 lambda 化时一律回落 MPJ_QUERY
         // 保证编译（含用户显式选择 MPJ_LAMBDA 的场景）
+        // MConsumer 子查询形态也属于 lambda 形态，需纳入判定
         val effectiveKind = when {
-            isJoin && !result.joins.all { canLambdaJoin(it, entity) } -> GeneratedWrapper.MPJ_QUERY
+            isJoin && !result.joins.all { canLambdaJoin(it, entity) || canMConsumerJoin(it, entity) } -> GeneratedWrapper.MPJ_QUERY
             wrapperKind in JOIN_WRAPPERS -> wrapperKind
             isJoin && entity != null -> GeneratedWrapper.MPJ_LAMBDA
             isJoin -> GeneratedWrapper.MPJ_QUERY
@@ -200,19 +201,99 @@ object JavaCodeGenerator {
      */
     private fun renderJoins(result: SqlReverseResult, entity: EntityTarget?): List<String> =
         result.joins.map { join ->
+            // 优先尝试 MConsumer 子查询形态
+            if (join.subQuery != null && entity != null) {
+                val mConsumer = renderMConsumerJoin(join, entity)
+                if (mConsumer != null) return@map mConsumer
+            }
+            // 其次尝试 ext 条件 lambda 形态
             if (canLambdaJoin(join, entity)) {
                 val sub = entity!!.subEntities[join.alias]!!
-                val single = joinKeyComparison(join, sub)
-                    ?: return@map "${joinMethod(join.type)}(\"${javaEscape(joinString(join))}\")"
-                val leftField = sub.columnToField[single.left.columnName]!!
-                val rightField = entity.columnToField[single.right.columnName]!!
-                "${joinMethod(join.type)}(${sub.className}.class, " +
-                    "${sub.className}::get${leftField.replaceFirstChar { it.uppercase() }}, " +
-                    "${entity.className}::get${rightField.replaceFirstChar { it.uppercase() }})"
+                val info = extractJoinKey(join, sub)!!
+                val leftField = sub.columnToField[info.key.left.columnName]!!.replaceFirstChar { it.uppercase() }
+                val rightField = entity.columnToField[info.key.right.columnName]!!.replaceFirstChar { it.uppercase() }
+                val base = "${joinMethod(join.type)}(${sub.className}.class, " +
+                    "${sub.className}::get$leftField, " +
+                    "${entity.className}::get$rightField"
+                if (info.extConditions.isEmpty()) {
+                    "$base)"
+                } else {
+                    val extChain = info.extConditions.joinToString("\n            ") { ext ->
+                        val colName = sub.columnToField[ext.column.columnName]?.replaceFirstChar { it.uppercase() }
+                            ?: ext.column.columnName
+                        "ext.${opMethod(ext.op)}(${sub.className}::get$colName, ${javaValue(ext.value)})"
+                    }
+                    "$base,\n            ext -> $extChain)"
+                }
             } else {
                 "${joinMethod(join.type)}(\"${javaEscape(joinString(join))}\")"
             }
         }
+
+    /**
+     * 渲染 MConsumer 子查询 JOIN 形态。
+     * 前置条件：join.subQuery 非 null。
+     * 成功返回代码字符串，失败（实体/字段映射缺失）返回 null（回落上层逻辑）。
+     *
+     * 形态：`leftJoin(SubClass.class, t -> t.setAlias("tt").selectAll().ge(...), Sub::getX, Main::getY)`
+     */
+    private fun renderMConsumerJoin(join: ReverseJoin, entity: EntityTarget): String? {
+        val subQuery = join.subQuery ?: return null
+        // 查找副实体：按 subEntity key（别名）→ className → 表名推导 三档匹配
+        val sub = entity.subEntities[subQuery.alias]
+            ?: entity.subEntities.values.find { it.className.equals(subQuery.alias, ignoreCase = true) }
+            ?: entity.subEntities.values.find { it.className.contains(subQuery.tableName.replace("_", "").replaceFirstChar { it.uppercase() }, ignoreCase = true) }
+            ?: return null
+
+        // 提取 join key（ON 等值列对）
+        val key = extractJoinKey(join, sub)?.key ?: join.onConditions.filterIsInstance<Condition.ColumnComparison>().singleOrNull()
+            ?: return null
+        val leftField = sub.columnToField[key.left.columnName]?.replaceFirstChar { it.uppercase() } ?: return null
+        val rightField = entity.columnToField[key.right.columnName]?.replaceFirstChar { it.uppercase() } ?: return null
+
+        // 构建 MConsumer 链（aliasExpr 以 t. 开头，后续每段由 builder 加 . 连接）
+        val aliasExpr = "t.setAlias(\"${subQuery.alias}\")"
+        val selectExpr = if (subQuery.selectAll) {
+            "selectAll()"
+        } else {
+            val cols = subQuery.selectColumns.map { col ->
+                val field = sub.columnToField[col]?.replaceFirstChar { it.uppercase() } ?: col
+                "${sub.className}::get$field"
+            }
+            "select(${cols.joinToString(", ")})"
+        }
+        val whereChain = subQuery.whereConditions.mapNotNull { cond ->
+            when (cond) {
+                is Condition.Simple -> {
+                    val colName = sub.columnToField[cond.column.columnName]?.replaceFirstChar { it.uppercase() }
+                        ?: cond.column.columnName
+                    "${opMethod(cond.op)}(${sub.className}::get$colName, ${javaValue(cond.value)})"
+                }
+                is Condition.ColumnComparison -> {
+                    val colName = sub.columnToField[cond.left.columnName]?.replaceFirstChar { it.uppercase() }
+                        ?: cond.left.columnName
+                    "eq(${sub.className}::get$colName, ${cond.right.columnName})"
+                }
+                else -> null
+            }
+        }.joinToString("\n                ")
+
+        val consumerChain = buildString {
+            append(aliasExpr)
+            append("\n                .").append(selectExpr)
+            if (whereChain.isNotEmpty()) {
+                append("\n                .").append(whereChain)
+            }
+        }
+
+        return "${joinMethod(join.type)}(${sub.className}.class, t -> $consumerChain,\n            ${sub.className}::get$leftField, ${entity.className}::get$rightField)"
+    }
+
+    /** 子查询 JOIN 是否能渲染 MConsumer 形态（用于 effectiveKind 判定）。 */
+    private fun canMConsumerJoin(join: ReverseJoin, entity: EntityTarget?): Boolean {
+        if (join.subQuery == null || entity == null) return false
+        return renderMConsumerJoin(join, entity) != null
+    }
 
     /** 字符串形态 join 的完整参数文本（`表 [别名] ON 原文`）；空白归一为单空格、换行折叠，防 Java 字面量非法。 */
     private fun joinString(join: ReverseJoin): String {
@@ -225,20 +306,29 @@ object JavaCodeGenerator {
     /** join 是否可三参 lambda 化（ON 等值列对 + 主副实体列均可映射，忽略副表逻辑删除条件）——否则须字符串形态。 */
     private fun canLambdaJoin(join: ReverseJoin, entity: EntityTarget?): Boolean {
         val sub = join.alias?.let { entity?.subEntities?.get(it) } ?: return false
-        val single = joinKeyComparison(join, sub) ?: return false
-        val leftField = sub.columnToField[single.left.columnName]
-        val rightField = entity?.columnToField?.get(single.right.columnName)
+        val info = extractJoinKey(join, sub) ?: return false
+        val leftField = sub.columnToField[info.key.left.columnName]
+        val rightField = entity?.columnToField?.get(info.key.right.columnName)
         return leftField != null && rightField != null
     }
 
+    /** JOIN 键信息：等值列对（key）+ 副表额外 ext 条件。 */
+    private data class JoinKeyInfo(
+        val key: Condition.ColumnComparison,
+        val extConditions: List<Condition.Simple>,
+    )
+
     /**
-     * 从 ON 条件里提取联表键等值列对（ColumnComparison）——滤除「副表逻辑删除类条件」
-     * （如 MPJ 自动追加的 `bikeX.deleted = 0`，三参 lambda 形态会由 MPJ 自动补，不能当作多条件拦截）。
-     * 取唯一键对；多键对/主表附加条件 → null（回落字符串形态）。
+     * 从 ON 条件提取 join key + ext 条件。
+     * 要求：恰好 1 个 ColumnComparison（key），其余均为副表 Simple 条件（ext）。
+     * 不满足 → null（回落字符串形态）。
      */
-    private fun joinKeyComparison(join: ReverseJoin, sub: EntityTarget): Condition.ColumnComparison? {
+    private fun extractJoinKey(join: ReverseJoin, sub: EntityTarget): JoinKeyInfo? {
         val keyConditions = join.onConditions.filterNot { isSubLogicalDelete(it, sub, join.alias) }
-        return keyConditions.singleOrNull() as? Condition.ColumnComparison
+        val key = keyConditions.singleOrNull { it is Condition.ColumnComparison } as? Condition.ColumnComparison ?: return null
+        val ext = keyConditions.filterIsInstance<Condition.Simple>()
+            .filter { it.column.tableAlias == join.alias }
+        return JoinKeyInfo(key, ext)
     }
 
     /** 常见逻辑删除列名（MPJ 联表自动追加的 `deleted = 0` 等 ON 过滤）——归一化（去下划线）后比对；

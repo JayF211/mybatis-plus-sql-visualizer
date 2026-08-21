@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -723,6 +724,132 @@ class SqlReverseParserTest {
     @Test
     fun `UPDATE缺少SET_报错`() {
         assertThrows { SqlReverseParser.parse("UPDATE user WHERE id = 1") }
+    }
+
+    // ------------------------------------------------------------------
+    // 子查询 JOIN / FROM 子查询
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `子查询JOIN_解析为rawJoin`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t LEFT JOIN (SELECT id FROM u WHERE u.type = 1) sub ON sub.id = t.id",
+        )
+        assertEquals(1, result.joins.size)
+        val join = result.joins[0]
+        assertTrue("tableName 应包含子查询文本", join.tableName.contains("(SELECT"))
+        assertNull("子查询 JOIN 的 alias 应为 null", join.alias)
+        assertNotNull(join.rawOn)
+        assertTrue(join.rawOn!!.contains("sub.id = t.id"))
+    }
+
+    @Test
+    fun `子查询JOIN_嵌套括号`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t LEFT JOIN (SELECT * FROM (SELECT id FROM v) x) sub ON sub.id = t.id",
+        )
+        assertEquals(1, result.joins.size)
+        val join = result.joins[0]
+        assertTrue("应正确解析嵌套括号", join.tableName.contains("(SELECT"))
+        assertNull(join.alias)
+    }
+
+    @Test
+    fun `子查询JOIN_无别名`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t LEFT JOIN (SELECT id FROM u) ON u.id = t.id",
+        )
+        assertEquals(1, result.joins.size)
+        val join = result.joins[0]
+        assertTrue("tableName 应包含子查询文本", join.tableName.contains("(SELECT"))
+        assertNull(join.alias)
+    }
+
+    @Test
+    fun `FROM子查询_解析`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM (SELECT id, name FROM user WHERE status = 1) t LEFT JOIN addr ON addr.user_id = t.id",
+        )
+        assertTrue("FROM 子查询 tableName 应包含子查询文本", result.tableName.contains("(SELECT"))
+        assertEquals(1, result.joins.size)
+        assertEquals("addr", result.joins[0].tableName)
+    }
+
+    @Test
+    fun `子查询JOIN_多表链`() {
+        val result = SqlReverseParser.parse(
+            "SELECT t.id, t.station_id, t.share_scheme_id, t.device_name\n" +
+                "FROM car_device_info t\n" +
+                "LEFT JOIN station_info stationInfoEntity ON stationInfoEntity.id = t.station_id\n" +
+                "    AND stationInfoEntity.station_name = '中心站'\n" +
+                "LEFT JOIN (\n" +
+                "    SELECT tt.id, tt.station_id, tt.station_name, tt.merchant_id\n" +
+                "    FROM station_info tt\n" +
+                "    WHERE tt.merchant_id >= 0\n" +
+                ") tt ON tt.station_id = t.station_id\n" +
+                "WHERE t.id = 1",
+        )
+        assertEquals(2, result.joins.size)
+        // 第一个 JOIN 是普通 JOIN
+        assertEquals("station_info", result.joins[0].tableName)
+        assertEquals("stationInfoEntity", result.joins[0].alias)
+        // 第二个 JOIN 是子查询 JOIN
+        val secondTableName = result.joins[1].tableName
+        assertTrue("第二个 JOIN 应为子查询, 实际: $secondTableName", secondTableName.contains("(") && secondTableName.contains("SELECT"))
+        assertNull(result.joins[1].alias)
+        // WHERE 条件正常
+        assertEquals(1, result.conditions.size)
+    }
+
+    @Test
+    fun `子查询JOIN_紧跟WHERE`() {
+        val result = SqlReverseParser.parse(
+            "SELECT * FROM t LEFT JOIN (SELECT id FROM u) sub ON sub.id = t.id WHERE t.status = 1",
+        )
+        assertEquals(1, result.joins.size)
+        assertEquals(1, result.conditions.size)
+        val cond = result.conditions.single() as Condition.Simple
+        assertEquals("status", cond.column.columnName)
+    }
+
+    // ------------------------------------------------------------------
+    // MConsumer 子查询结构解析
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `子查询JOIN_解析MConsumer结构`() {
+        val result = SqlReverseParser.parse(
+            "SELECT t.id FROM t LEFT JOIN (SELECT tt.id, tt.station_id FROM station_info tt WHERE tt.merchant_id >= 0) tt ON tt.station_id = t.station_id",
+        )
+        assertEquals(1, result.joins.size)
+        val join = result.joins[0]
+        assertNotNull("子查询结构应被解析", join.subQuery)
+        val subQuery = join.subQuery!!
+        assertEquals("station_info", subQuery.tableName)
+        assertEquals("tt", subQuery.alias)
+        assertFalse("显式列 → selectAll=false", subQuery.selectAll)
+        assertEquals(listOf("id", "station_id"), subQuery.selectColumns)
+        assertEquals(1, subQuery.whereConditions.size)
+    }
+
+    @Test
+    fun `子查询JOIN_selectAll`() {
+        val result = SqlReverseParser.parse(
+            "SELECT t.id FROM t LEFT JOIN (SELECT * FROM station_info tt WHERE tt.merchant_id >= 0) tt ON tt.station_id = t.station_id",
+        )
+        val join = result.joins[0]
+        assertNotNull(join.subQuery)
+        assertTrue("SELECT * → selectAll=true", join.subQuery!!.selectAll)
+    }
+
+    @Test
+    fun `子查询JOIN_含嵌套子查询_回落null`() {
+        val result = SqlReverseParser.parse(
+            "SELECT t.id FROM t LEFT JOIN (SELECT * FROM (SELECT id FROM u) x) tt ON tt.id = t.id",
+        )
+        val join = result.joins[0]
+        // 嵌套子查询 → parseSubqueryStructure 失败 → subQuery 为 null
+        assertNull("嵌套子查询应回落 null", join.subQuery)
     }
 
     private fun assertThrows(block: () -> Unit): SqlReverseException =

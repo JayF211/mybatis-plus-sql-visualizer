@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.reverse.ReverseJoin
 import cn.song.mybatisplus.visualizer.reverse.ReverseSet
 import cn.song.mybatisplus.visualizer.reverse.ReverseStatementKind
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -1035,9 +1036,10 @@ class JavaCodeGeneratorTest {
             subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("B", mapOf("a_id" to "aId", "type" to "type"))),
         )
         val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
-        // ON 多条件无法三参 lambda 化 → 回落 MPJQueryWrapper（字符串 join 仅 StringJoin 合法，1.5.6 实证）
-        assertTrue(code, code.contains("new MPJQueryWrapper<>(A.class)"))
-        assertTrue(code, code.contains(".leftJoin(\"b t1 ON t1.a_id = t.id AND t1.type = 1\")"))
+        // ON 多条件（join key + ext 条件）→ 4 参 lambda leftJoin(Class, left, right, ext -> ext.eq(...))
+        assertTrue(code, code.contains("new MPJLambdaWrapper<A>()"))
+        assertTrue(code, code.contains(".leftJoin(B.class, B::getAId, A::getId,"))
+        assertTrue(code, code.contains("ext -> ext.eq(B::getType, 1)"))
     }
 
     @Test
@@ -1159,10 +1161,10 @@ class JavaCodeGeneratorTest {
             subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget("B", mapOf("a_id" to "aId", "type" to "type"))),
         )
         val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
-        // 真过滤条件（type=1 非逻辑删除）→ 字符串形态；多行 ON 折叠为单空格、无裸换行（可编译 Java 字面量）
-        assertTrue(code, code.contains(".leftJoin(\"b t1 ON t1.a_id = t.id AND t1.type = 1\")"))
-        // 换行已被折叠（不再残留原始多行 ON 文本中的 `\n    AND`）
-        assertTrue(code, !code.contains("t1.a_id = t.id\n"))
+        // 真过滤条件（type=1 非逻辑删除）→ 4 参 lambda leftJoin(Class, left, right, ext -> ext.eq(...))
+        assertTrue(code, code.contains("new MPJLambdaWrapper<A>()"))
+        assertTrue(code, code.contains(".leftJoin(B.class, B::getAId, A::getId,"))
+        assertTrue(code, code.contains("ext -> ext.eq(B::getType, 1)"))
     }
 
     @Test
@@ -1427,15 +1429,16 @@ class JavaCodeGeneratorTest {
             mpj = true,
         )
         val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA, invocation)
-        // 字符串联接形态
-        assertTrue(code, code.contains("new MPJQueryWrapper<>(BikeDeviceInfoEntity.class)"))
-        assertTrue(code, code.contains(".select(\"t.name AS productName\")"))
-        assertTrue(code, code.contains(".select(\"t.model AS productModel\")"))
+        // lambda 形态：VO 查询 + 4 参 lambda join
+        assertTrue(code, code.contains("new MPJLambdaWrapper<BikeDeviceInfoEntity>()"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceInfoEntity::getName, BikeDeviceInfoVO::getProductName)"))
+        assertTrue(code, code.contains(".selectAs(BikeDeviceProductInfoEntity::getModel, BikeDeviceInfoVO::getProductModel)"))
+        // 4 参 lambda leftJoin
+        assertTrue(code, code.contains(".leftJoin(BikeDeviceProductInfoEntity.class, BikeDeviceProductInfoEntity::getId, BikeDeviceInfoEntity::getProductId,"))
+        assertTrue(code, code.contains("ext -> ext.eq(BikeDeviceProductInfoEntity::getType, 1)"))
         // 不可出现非法的 selectAs(String, SFunction)
         assertTrue(code, !code.contains("selectAs(\"t.name\""))
         assertTrue(code, !code.contains("selectAs(\"t.model\""))
-        // 字符串 JOIN
-        assertTrue(code, code.contains(".leftJoin(\"biz_bike_device_product_info bikeDeviceProductInfoEntity ON"))
     }
 
     @Test
@@ -2071,5 +2074,160 @@ class JavaCodeGeneratorTest {
             JavaCodeGenerator.InvocationTarget("UserMapper", voClass = "UserVo", mpj = true, methods = setOf("selectJoinPage")),
         )
         assertTrue(code, code.contains("Page<UserVo> page = userMapper.selectJoinPage(new Page<>(1, 10), UserVo.class, wrapper);"))
+    }
+
+    // ------------------------------------------------------------------
+    // 子查询 JOIN 生成测试
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `子查询JOIN_生成rawJoin字符串`() {
+        // 构造一个含子查询 JOIN 的解析结果
+        val join = ReverseJoin(
+            type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+            tableName = "(SELECT tt.id, tt.station_id, tt.station_name, tt.merchant_id\n    FROM station_info tt\n    WHERE tt.merchant_id >= 0)",
+            alias = null,
+            onConditions = listOf(
+                Condition.ColumnComparison(
+                    ColumnRef("tt", "station_id"),
+                    ColumnRef("t", "station_id"),
+                ),
+            ),
+            rawOn = "tt.station_id = t.station_id",
+        )
+        val result = SqlReverseResult(
+            tableName = "car_device_info",
+            selectColumns = listOf(SelectColumn("t.id"), SelectColumn("t.station_id")),
+            joins = listOf(join),
+            conditions = listOf(
+                Condition.Simple(ColumnRef("t", "id"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        // 子查询 JOIN 应生成 raw join 字符串
+        assertTrue("应生成 leftJoin 字符串", code.contains("leftJoin(\""))
+        assertTrue("应包含子查询文本", code.contains("(") && code.contains("SELECT"))
+        assertTrue("应包含 ON 条件", code.contains("tt.station_id = t.station_id"))
+    }
+
+    // ------------------------------------------------------------------
+    // ext 条件 lambda 化测试
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `ext条件_生成4参lambda`() {
+        val sub = JavaCodeGenerator.EntityTarget(
+            className = "StationInfoEntity",
+            columnToField = mapOf("id" to "id", "station_name" to "stationName"),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "station_id" to "stationId"),
+            subEntities = mapOf("ext" to sub),
+        )
+        val join = ReverseJoin(
+            type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+            tableName = "station_info",
+            alias = "ext",
+            onConditions = listOf(
+                Condition.ColumnComparison(
+                    ColumnRef("ext", "id"),
+                    ColumnRef("t", "station_id"),
+                ),
+                Condition.Simple(
+                    ColumnRef("ext", "station_name"),
+                    "=",
+                    SqlValue.Literal("'中心站'", "中心站"),
+                ),
+            ),
+            rawOn = "ext.id = t.station_id AND ext.station_name = '中心站'",
+        )
+        val result = SqlReverseResult(
+            tableName = "car_device_info",
+            selectColumns = listOf(SelectColumn("t.id")),
+            joins = listOf(join),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("应生成 4 参 leftJoin", code.contains("leftJoin(StationInfoEntity.class, StationInfoEntity::getId, DeviceInfoEntity::getStationId,"))
+        assertTrue("应包含 ext lambda", code.contains("ext -> ext.eq(StationInfoEntity::getStationName,"))
+        assertTrue("应包含 ext 值", code.contains("\"中心站\""))
+    }
+
+    @Test
+    fun `ext条件_无ext仍生成3参`() {
+        val sub = JavaCodeGenerator.EntityTarget(
+            className = "AddressDO",
+            columnToField = mapOf("user_id" to "userId"),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "UserDO",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to sub),
+        )
+        val join = ReverseJoin(
+            type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+            tableName = "user_address",
+            alias = "t1",
+            onConditions = listOf(
+                Condition.ColumnComparison(
+                    ColumnRef("t1", "user_id"),
+                    ColumnRef("t", "id"),
+                ),
+            ),
+            rawOn = "t1.user_id = t.id",
+        )
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("t.id")),
+            joins = listOf(join),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        // 无 ext 条件 → 3 参，无 ext lambda
+        assertTrue("应生成 3 参 leftJoin", code.contains("leftJoin(AddressDO.class, AddressDO::getUserId, UserDO::getId)"))
+        assertFalse("不应包含 ext lambda", code.contains("ext ->"))
+    }
+
+    @Test
+    fun `ext条件_多ext条件`() {
+        val sub = JavaCodeGenerator.EntityTarget(
+            className = "StationInfoEntity",
+            columnToField = mapOf("id" to "id", "station_name" to "stationName", "merchant_id" to "merchantId"),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "station_id" to "stationId"),
+            subEntities = mapOf("ext" to sub),
+        )
+        val join = ReverseJoin(
+            type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+            tableName = "station_info",
+            alias = "ext",
+            onConditions = listOf(
+                Condition.ColumnComparison(
+                    ColumnRef("ext", "id"),
+                    ColumnRef("t", "station_id"),
+                ),
+                Condition.Simple(
+                    ColumnRef("ext", "station_name"),
+                    "=",
+                    SqlValue.Literal("'中心站'", "中心站"),
+                ),
+                Condition.Simple(
+                    ColumnRef("ext", "merchant_id"),
+                    ">=",
+                    SqlValue.Literal("0"),
+                ),
+            ),
+            rawOn = "ext.id = t.station_id AND ext.station_name = '中心站' AND ext.merchant_id >= 0",
+        )
+        val result = SqlReverseResult(
+            tableName = "car_device_info",
+            selectColumns = listOf(SelectColumn("t.id")),
+            joins = listOf(join),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("应生成 4 参 leftJoin", code.contains("leftJoin(StationInfoEntity.class,"))
+        assertTrue("应包含 stationName ext", code.contains("ext.eq(StationInfoEntity::getStationName,"))
+        assertTrue("应包含 merchantId ext", code.contains("ext.ge(StationInfoEntity::getMerchantId,"))
     }
 }

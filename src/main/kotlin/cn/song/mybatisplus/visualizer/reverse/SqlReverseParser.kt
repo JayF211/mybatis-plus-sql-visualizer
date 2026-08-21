@@ -74,8 +74,13 @@ object SqlReverseParser {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "缺少 FROM 子句")
         }
         cursor.advance()
-        val tableName = parseTableName(cursor)
-        consumeOptionalAlias(cursor)
+        val tableName = if (cursor.current?.type == TokenType.SYMBOL && cursor.current?.text == "(") {
+            parseSubqueryTable(cursor).first
+        } else {
+            val name = parseTableName(cursor)
+            consumeOptionalAlias(cursor)
+            name
+        }
         val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
@@ -366,8 +371,7 @@ object SqlReverseParser {
                 }
             }
         }
-        val tableName = parseTableName(cursor)
-        val alias = consumeJoinAlias(cursor)
+        val (tableName, alias, subQuery) = parseJoinTableExpression(cursor)
         if (!cursor.isKeyword(cursor.current, "ON")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "JOIN 缺少 ON 子句")
         }
@@ -385,7 +389,7 @@ object SqlReverseParser {
         } else {
             null
         }
-        return ReverseJoin(type, tableName, alias, onConditions, rawOn)
+        return ReverseJoin(type, tableName, alias, onConditions, rawOn, subQuery)
     }
 
     /** JOIN 副表别名（ON 为边界；无别名返回 null）。 */
@@ -547,6 +551,85 @@ object SqlReverseParser {
             throw SqlReverseException(t.offset, KEY_PARSE, "表名格式不正确")
         }
         return stripQualified(consumeQualified(cursor))
+    }
+
+    /**
+     * 解析子查询表表达式：`(SELECT ...) [别名]`。
+     * 前置条件：当前 token 为 `(`。
+     * 返回 (完整文本, 子查询结构)：子查询结构在简单单表查询时非 null，否则 null（回落字符串形态）。
+     *
+     * @throws SqlReverseException 括号不匹配（KEY_PARSE）
+     */
+    private fun parseSubqueryTable(cursor: Cursor): Pair<String, JoinSubQuery?> {
+        val startToken = cursor.current
+            ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "缺少子查询")
+        val startOffset = startToken.offset
+        var depth = 0
+        while (cursor.current != null) {
+            val tk = cursor.current!!
+            if (tk.type == TokenType.SYMBOL && tk.text == "(") depth++
+            if (tk.type == TokenType.SYMBOL && tk.text == ")") {
+                depth--
+                if (depth == 0) {
+                    val endOffset = tk.offset + 1
+                    cursor.advance()
+                    val subqueryText = cursor.source.substring(startOffset, endOffset)
+                    val alias = consumeJoinAlias(cursor)
+                    val structure = parseSubqueryStructure(subqueryText, alias ?: "")
+                    return (if (alias != null) "$subqueryText $alias" else subqueryText) to structure
+                }
+            }
+            cursor.advance()
+        }
+        throw SqlReverseException(startOffset, KEY_PARSE, "子查询括号不匹配")
+    }
+
+    /**
+     * 尝试解析子查询内部结构（简单单表查询）。
+     * 成功返回 [JoinSubQuery]，不满足条件（含 JOIN/嵌套子查询/复杂 SELECT）返回 null。
+     */
+    private fun parseSubqueryStructure(subqueryText: String, alias: String): JoinSubQuery? {
+        // 去掉外层括号
+        val inner = subqueryText.trim()
+        if (!inner.startsWith("(") || !inner.endsWith(")")) return null
+        val selectSql = inner.substring(1, inner.length - 1).trim()
+        if (!selectSql.uppercase().startsWith("SELECT")) return null
+
+        return try {
+            val result = parse(selectSql)
+            // 必须是简单单表查询：无 JOIN、无嵌套子查询、表名是简单 WORD
+            if (result.joins.isNotEmpty()) return null
+            if (result.tableName.startsWith("(")) return null
+
+            val selectColumns = result.selectColumns?.map { stripQualified(it.expr) } ?: emptyList()
+            val selectAll = result.selectColumns == null
+
+            JoinSubQuery(
+                tableName = result.tableName,
+                alias = alias,
+                selectAll = selectAll,
+                selectColumns = selectColumns,
+                whereConditions = result.conditions,
+            )
+        } catch (e: SqlReverseException) {
+            null  // 无法解析 → 回落字符串形态
+        }
+    }
+
+    /**
+     * 解析 JOIN 表表达式：普通表名 或 子查询 `(SELECT ...) [别名]`。
+     * 返回 (tableName, alias, subQuery)：
+     *   - 普通表：("table", "alias", null)
+     *   - 子查询：("(SELECT ...) alias", null, JoinSubQuery?)
+     */
+    private fun parseJoinTableExpression(cursor: Cursor): Triple<String, String?, JoinSubQuery?> {
+        val t = cursor.current
+            ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "缺少 JOIN 表名")
+        if (t.type == TokenType.SYMBOL && t.text == "(") {
+            val (text, structure) = parseSubqueryTable(cursor)
+            return Triple(text, null, structure)
+        }
+        return Triple(parseTableName(cursor), consumeJoinAlias(cursor), null)
     }
 
     /** 可选表别名：`FROM user u`——u 非子句关键字时视为别名消费（T-M36.7：SET/INTO 亦为边界）。 */
@@ -1244,10 +1327,30 @@ data class ReverseSet(
 )
 
 /**
+ * 子查询 JOIN 的 MConsumer 形态信息。
+ * 当子查询是简单单表查询（无 JOIN、无嵌套子查询）时解析，用于生成
+ * `leftJoin(SubClass.class, t -> t.setAlias(...).selectAll().ge(...), left, right)`。
+ *
+ * @param tableName       子查询内的表名（如 "station_info"）
+ * @param alias           子查询别名（如 "tt"）
+ * @param selectAll       是否 SELECT *
+ * @param selectColumns   显式列名（selectAll=false 时）
+ * @param whereConditions WHERE 条件
+ */
+data class JoinSubQuery(
+    val tableName: String,
+    val alias: String,
+    val selectAll: Boolean,
+    val selectColumns: List<String>,
+    val whereConditions: List<Condition>,
+)
+
+/**
  * 联表子句（T-M37 多表 JOIN）：`[LEFT|RIGHT|INNER|FULL] JOIN 副表 [别名] ON 条件`。
  *
  * @param onConditions ON 条件（等值列对 → ColumnComparison；其他 → 普通条件/Raw 降级）
  * @param rawOn        ON 条件原文（token 区间收集，供生成器 raw join 字符串透传）
+ * @param subQuery    子查询结构（简单单表查询时非 null，用于生成 MConsumer 形态）
  */
 data class ReverseJoin(
     val type: cn.song.mybatisplus.visualizer.model.JoinType,
@@ -1255,6 +1358,7 @@ data class ReverseJoin(
     val alias: String?,
     val onConditions: List<Condition>,
     val rawOn: String? = null,
+    val subQuery: JoinSubQuery? = null,
 )
 
 /**

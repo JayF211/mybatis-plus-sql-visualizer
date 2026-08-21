@@ -10,8 +10,12 @@ import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
+import cn.song.mybatisplus.visualizer.reverse.SqlReverseParser
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -297,5 +301,254 @@ class SqlToJavaRoundTripTest {
             conditions = parsed.conditions,
         )
         assertEquals(sql1, SqlGenerator.generate(rebuilt))
+    }
+
+    // ------------------------------------------------------------------
+    // 子查询 JOIN / FROM 子查询端到端测试（对齐 demo 项目用例）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `demo_joinExtAndSubTable_子查询JOIN不报错`() {
+        val sql = "SELECT\n" +
+            "    t.id,\n" +
+            "    t.station_id,\n" +
+            "    t.share_scheme_id,\n" +
+            "    t.device_name\n" +
+            "FROM car_device_info t\n" +
+            "LEFT JOIN station_info stationInfoEntity ON stationInfoEntity.id = t.station_id\n" +
+            "    AND stationInfoEntity.station_name = '中心站'\n" +
+            "LEFT JOIN (\n" +
+            "    SELECT\n" +
+            "        tt.id, tt.station_id, tt.station_name, tt.merchant_id\n" +
+            "    FROM station_info tt\n" +
+            "    WHERE tt.merchant_id >= 0\n" +
+            ") tt ON tt.station_id = t.station_id\n" +
+            "WHERE t.id = 1"
+        val result = SqlReverseParser.parse(sql)
+        assertEquals(2, result.joins.size)
+        val secondJoinName = result.joins[1].tableName
+        assertTrue("第二个 JOIN 应为子查询, 实际: $secondJoinName", secondJoinName.contains("(") && secondJoinName.contains("SELECT"))
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue("生成代码应包含 leftJoin", code.contains("leftJoin"))
+    }
+
+    @Test
+    fun `demo_selectJoinSubQuery_子查询JOIN不报错`() {
+        val sql = "SELECT t.id, t.name, addr.tel\n" +
+            "FROM user t\n" +
+            "LEFT JOIN (\n" +
+            "    SELECT user_id, tel, address FROM user_address WHERE status >= 0\n" +
+            ") addr ON addr.user_id = t.id\n" +
+            "WHERE t.id = 1"
+        val result = SqlReverseParser.parse(sql)
+        assertEquals(1, result.joins.size)
+        val joinName = result.joins[0].tableName
+        assertTrue("JOIN 应为子查询, 实际: $joinName", joinName.contains("(") && joinName.contains("SELECT"))
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue("生成代码应包含 leftJoin", code.contains("leftJoin"))
+    }
+
+    @Test
+    fun `demo_joinFromAndPage_FROM子查询不报错`() {
+        val sql = "SELECT t.id, t.device_name\n" +
+            "FROM (\n" +
+            "    SELECT id, device_name FROM car_device_info WHERE id >= 0 LIMIT 100\n" +
+            ") t\n" +
+            "LEFT JOIN station_info ON station_info.id = t.station_id"
+        val result = SqlReverseParser.parse(sql)
+        val fromTable = result.tableName
+        assertTrue("FROM 子查询 tableName 应包含子查询文本, 实际: $fromTable", fromTable.contains("(") && fromTable.contains("SELECT"))
+        assertEquals(1, result.joins.size)
+    }
+
+    @Test
+    fun `demo_selectJoinFrom_FROM子查询不报错`() {
+        val sql = "SELECT t.id, t.name, addr.tel\n" +
+            "FROM (\n" +
+            "    SELECT id, name FROM user WHERE id >= 0 LIMIT 10\n" +
+            ") t\n" +
+            "LEFT JOIN user_address addr ON addr.user_id = t.id\n" +
+            "WHERE t.id >= 0"
+        val result = SqlReverseParser.parse(sql)
+        val fromTable = result.tableName
+        assertTrue("FROM 子查询 tableName 应包含子查询文本, 实际: $fromTable", fromTable.contains("(") && fromTable.contains("SELECT"))
+        assertEquals(1, result.joins.size)
+        assertEquals("user_address", result.joins[0].tableName)
+    }
+
+    // ------------------------------------------------------------------
+    // ext 条件 lambda 化端到端测试
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `demo_joinExtAndSubTable_ext条件生成4参lambda`() {
+        val sql = "SELECT\n" +
+            "    t.id,\n" +
+            "    t.station_id,\n" +
+            "    t.share_scheme_id,\n" +
+            "    t.device_name\n" +
+            "FROM car_device_info t\n" +
+            "LEFT JOIN station_info stationInfoEntity ON stationInfoEntity.id = t.station_id\n" +
+            "    AND stationInfoEntity.station_name = '中心站'\n" +
+            "LEFT JOIN (\n" +
+            "    SELECT\n" +
+            "        tt.id, tt.station_id, tt.station_name, tt.merchant_id\n" +
+            "    FROM station_info tt\n" +
+            "    WHERE tt.merchant_id >= 0\n" +
+            ") tt ON tt.station_id = t.station_id\n" +
+            "WHERE t.id = 1"
+        val result = SqlReverseParser.parse(sql)
+        assertEquals(2, result.joins.size)
+        // 第一个 JOIN 有 ext 条件（station_name = '中心站'）→ 应生成 4 参 lambda
+        // 第二个 JOIN 是子查询 → 仍回落字符串
+
+        // 构造实体上下文
+        val stationSub = JavaCodeGenerator.EntityTarget(
+            className = "StationInfoEntity",
+            columnToField = mapOf(
+                "id" to "id",
+                "station_id" to "stationId",
+                "station_name" to "stationName",
+                "merchant_id" to "merchantId",
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf(
+                "id" to "id",
+                "station_id" to "stationId",
+                "share_scheme_id" to "shareSchemeId",
+                "device_name" to "deviceName",
+            ),
+            subEntities = mapOf("stationInfoEntity" to stationSub),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        // 第一个 JOIN：ext 条件 lambda 化
+        assertTrue("第一个 JOIN 应生成 4 参 leftJoin", code.contains("leftJoin(StationInfoEntity.class,"))
+        assertTrue("应包含 ext lambda", code.contains("ext -> ext.eq(StationInfoEntity::getStationName,"))
+        // 第二个 JOIN：MConsumer 子查询形态（按表名推导匹配到副实体）
+        assertTrue("第二个 JOIN 应生成 MConsumer 形态", code.contains("t -> t.setAlias(\"tt\")"))
+        assertTrue("应包含 ge 条件", code.contains(".ge(StationInfoEntity::getMerchantId,"))
+    }
+
+    @Test
+    fun `demo_selectJoinWithOnCondition_ext条件生成4参lambda`() {
+        // 对齐 UserServiceImpl.selectJoinWithOnCondition
+        val sql = "SELECT t.id, t.name, t1.tel, t1.address\n" +
+            "FROM user t\n" +
+            "LEFT JOIN user_address t1 ON t1.user_id = t.id AND t1.status = 1\n" +
+            "LEFT JOIN area t2 ON t2.id = t1.area_id AND t2.city = '杭州'\n" +
+            "WHERE t.sex = 1"
+        val result = SqlReverseParser.parse(sql)
+        assertEquals(2, result.joins.size)
+        // 两个 JOIN 都有 ext 条件
+
+        val addressSub = JavaCodeGenerator.EntityTarget(
+            className = "AddressDO",
+            columnToField = mapOf("user_id" to "userId", "tel" to "tel", "address" to "address", "status" to "status", "area_id" to "areaId"),
+        )
+        val areaSub = JavaCodeGenerator.EntityTarget(
+            className = "AreaDO",
+            columnToField = mapOf("id" to "id", "city" to "city"),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "UserDO",
+            columnToField = mapOf("id" to "id", "name" to "name", "sex" to "sex"),
+            subEntities = mapOf("t1" to addressSub, "t2" to areaSub),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        // 第一个 JOIN：ext 条件 lambda 化
+        assertTrue("第一个 JOIN 应生成 4 参 leftJoin", code.contains("leftJoin(AddressDO.class,"))
+        assertTrue("第一个 JOIN 应包含 status ext", code.contains("ext.eq(AddressDO::getStatus,"))
+        // 第二个 JOIN：right 字段在 address 副实体（非主实体）→ canLambdaJoin 回落字符串
+        assertTrue("第二个 JOIN 应为字符串形态", code.contains("(SELECT") || code.contains("leftJoin(\"area t2 ON"))
+    }
+
+    // ------------------------------------------------------------------
+    // MConsumer 子查询 JOIN 端到端测试
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `demo_joinExtAndSubTable_MConsumer子查询形态`() {
+        val sql = "SELECT\n" +
+            "    t.id,\n" +
+            "    t.station_id,\n" +
+            "    t.share_scheme_id,\n" +
+            "    t.device_name\n" +
+            "FROM car_device_info t\n" +
+            "LEFT JOIN station_info stationInfoEntity ON stationInfoEntity.id = t.station_id\n" +
+            "    AND stationInfoEntity.station_name = '中心站'\n" +
+            "LEFT JOIN (\n" +
+            "    SELECT\n" +
+            "        tt.id, tt.station_id, tt.station_name, tt.merchant_id\n" +
+            "    FROM station_info tt\n" +
+            "    WHERE tt.merchant_id >= 0\n" +
+            ") tt ON tt.station_id = t.station_id\n" +
+            "WHERE t.id = 1"
+        val result = SqlReverseParser.parse(sql)
+        assertEquals(2, result.joins.size)
+        // 第二个 JOIN 应解析出 MConsumer 结构
+        assertNotNull("第二个 JOIN 应有 subQuery", result.joins[1].subQuery)
+        val subQuery = result.joins[1].subQuery!!
+        assertEquals("station_info", subQuery.tableName)
+        assertEquals("tt", subQuery.alias)
+        assertFalse(subQuery.selectAll)
+        assertEquals(1, subQuery.whereConditions.size)
+
+        // 构造实体上下文
+        val stationSub = JavaCodeGenerator.EntityTarget(
+            className = "StationInfoEntity",
+            columnToField = mapOf(
+                "id" to "id",
+                "station_id" to "stationId",
+                "station_name" to "stationName",
+                "merchant_id" to "merchantId",
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf(
+                "id" to "id",
+                "station_id" to "stationId",
+                "share_scheme_id" to "shareSchemeId",
+                "device_name" to "deviceName",
+            ),
+            subEntities = mapOf("stationInfoEntity" to stationSub, "tt" to stationSub),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        // 第二个 JOIN 应生成 MConsumer 形态
+        assertTrue("第二个 JOIN 应生成 MConsumer 形态", code.contains("t -> t.setAlias(\"tt\")"))
+        assertTrue("应包含 select（显式列）", code.contains(".select("))
+        assertTrue("应包含 ge 条件", code.contains(".ge(StationInfoEntity::getMerchantId,"))
+        // 第一个 JOIN 应生成 ext lambda 形态
+        assertTrue("第一个 JOIN 应生成 ext lambda", code.contains("ext -> ext.eq(StationInfoEntity::getStationName,"))
+    }
+
+    @Test
+    fun `demo_selectJoinSubQuery_MConsumer形态`() {
+        // 对齐 UserServiceImpl.selectJoinSubQuery
+        val sql = "SELECT t.id, t.name, addr.tel\n" +
+            "FROM user t\n" +
+            "LEFT JOIN (\n" +
+            "    SELECT user_id, tel, address FROM user_address WHERE status >= 0\n" +
+            ") addr ON addr.user_id = t.id\n" +
+            "WHERE t.id = 1"
+        val result = SqlReverseParser.parse(sql)
+        assertEquals(1, result.joins.size)
+        assertNotNull("应有 subQuery", result.joins[0].subQuery)
+
+        val addressSub = JavaCodeGenerator.EntityTarget(
+            className = "AddressDO",
+            columnToField = mapOf("user_id" to "userId", "tel" to "tel", "address" to "address", "status" to "status"),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "UserDO",
+            columnToField = mapOf("id" to "id", "name" to "name"),
+            subEntities = mapOf("addr" to addressSub),
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("应生成 MConsumer 形态", code.contains("t -> t.setAlias(\"addr\")"))
+        assertTrue("应包含 select 列", code.contains(".select("))
+        assertTrue("应包含 ge 条件", code.contains(".ge(AddressDO::getStatus,"))
     }
 }
