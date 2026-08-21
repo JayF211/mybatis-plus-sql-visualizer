@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import com.intellij.psi.PsiField
+import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiKeyword
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -9,6 +10,7 @@ import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiParameter
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -35,6 +37,22 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
     /** 文件内第一个 new 表达式。 */
     private fun firstNewExpression(): PsiNewExpression =
         PsiTreeUtil.findChildOfType(myFixture.file, PsiNewExpression::class.java)!!
+
+    /**
+     * 全文件锚点扫描：遍历全部 PsiIdentifier + PsiKeyword 叶子（daemon 快速路径传入的元素类型），
+     * 收集所有产生锚点的元素文本。
+     *
+     * 整体不变量断言用（T-Mxx 教训：逐个方法名断言会漏检——selectAll 双图标曾因只断言
+     * lambda 而去重通过）；集合恰好等于预期即「无多余图标」。
+     */
+    private fun collectedAnchors(): Set<String> {
+        val anchors = mutableSetOf<String>()
+        PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
+            .forEach { anchors += (WrapperAnchorDetector.anchorElement(it)?.text ?: return@forEach) }
+        PsiTreeUtil.collectElementsOfType(myFixture.file, PsiKeyword::class.java)
+            .forEach { anchors += (WrapperAnchorDetector.anchorElement(it)?.text ?: return@forEach) }
+        return anchors
+    }
 
     fun testChainStyleAnchorsOnVariableDeclaration() {
         // 链式：变量初始化即 wrapper 构造（同行）→ 只标变量声明，new 关键字去重
@@ -730,5 +748,150 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             "lambda 参数不应是锚点（嵌套条件非独立 wrapper 变量）",
             WrapperAnchorDetector.anchorElement(lambdaParam.nameIdentifier),
         )
+    }
+
+    /**
+     * 整体不变量：用户真实 MPJ 工厂链形态——全文件恰好 1 个锚点（wrapper 变量声明）。
+     *
+     * T-Mxx（用户实测回归）：`wrapper = JoinWrappers.lambda(...).selectAll(...).leftJoin(...)` 曾出现双图标——
+     * 链上 selectAll 撞批量注册表（场景 D），initializerHeadIsWrapper 回溯停在 qualifier 引用返回 false
+     * 未去重。逐个方法名断言（lambda 去重）无法暴露此问题；本用例扫描全文件叶子断言锚点集合
+     * 恰好 = {wrapper}，任何多余锚点（selectAll/lambda/leftJoin 等）都会失败。
+     */
+    fun testMpjFactoryChainWholeFileSingleAnchorRightAlias() {
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public Map<Object, Object> query() {
+                    MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
+                            .selectAll(DeviceInfoEntity.class)
+                            .select(StationInfoEntity::getStationName)
+                            .leftJoin(StationInfoEntity.class, "st",
+                                    StationInfoEntity::getStationId, "t", DeviceInfoEntity::getId)
+                            .eq(DeviceInfoEntity::getId, 1);
+                    return deviceInfoMapper.selectJoinMaps(wrapper);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+                static class StationInfoEntity { private Long stationId; private String stationName; }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("MPJ 工厂链全文件应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+    }
+
+    fun testMpjFactoryChainWholeFileSingleAnchorJoinExt() {
+        // joinExtAndSubTable：lambda 参数子表 + ext 追加 ON 条件的细分形态
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public Object query() {
+                    MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
+                            .selectAll(DeviceInfoEntity.class)
+                            .leftJoin(StationInfoEntity.class,
+                                    StationInfoEntity::getId, DeviceInfoEntity::getStationId,
+                                    ext -> ext.eq(StationInfoEntity::getStationName, "中心站"))
+                            .leftJoin(StationInfoEntity.class, t -> t
+                                            .setAlias("tt")
+                                            .selectAll()
+                                            .ge(StationInfoEntity::getMerchantId, 0),
+                                    StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)
+                            .eq(DeviceInfoEntity::getId, 1);
+                    return deviceInfoMapper.selectJoinMaps(wrapper);
+                }
+
+                static class DeviceInfoEntity { private Long id; private Long stationId; }
+                static class StationInfoEntity { private Long stationId; private Long id; private String stationName; private Integer merchantId; }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("joinExtAndSubTable 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+    }
+
+    fun testMpjFactoryChainWholeFileSingleAnchorFromPage() {
+        // joinFromAndPage：from(子查询) + setTableName + around + pageByMain 细分形态
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public Object query() {
+                    MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
+                            .selectAll()
+                            .from(from -> from
+                                    .selectAll()
+                                    .ge(DeviceInfoEntity::getId, 0)
+                                    .last("LIMIT 100"))
+                            .leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)
+                            .setTableName(name -> name + "_archive")
+                            .pageByMain()
+                            .around("/* mpj hint */ ", " /* end */");
+                    return deviceInfoMapper.selectJoinMapsPage(wrapper);
+                }
+
+                static class DeviceInfoEntity { private Long id; private Long stationId; }
+                static class StationInfoEntity { private Long stationId; }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("joinFromAndPage 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+    }
+
+    fun testMpjFactoryChainWholeFileSingleAnchorOneAndCount() {
+        // joinOneAndCount：selectJoinMap + selectJoinCount + 实体返回细分形态
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public Object query(Integer id) {
+                    MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
+                            .selectAll(DeviceInfoEntity.class)
+                            .select(StationInfoEntity::getStationName, StationInfoEntity::getMerchantId)
+                            .leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)
+                            .eq(DeviceInfoEntity::getId, id);
+                    Object one = deviceInfoMapper.selectJoinMap(wrapper);
+                    return deviceInfoMapper.selectJoinCount(wrapper);
+                }
+
+                static class DeviceInfoEntity { private Long id; private Long stationId; }
+                static class StationInfoEntity { private Long stationId; private String stationName; private Integer merchantId; }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("joinOneAndCount 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+    }
+
+    fun testMpjFactoryChainWholeFileSingleAnchorListEntity() {
+        // joinListEntity：实体返回 + orderByAsc 细分形态
+        configure(
+            """
+            import com.github.yulichang.toolkit.JoinWrappers;
+            import com.github.yulichang.wrapper.MPJLambdaWrapper;
+
+            public class Demo {
+                public Object query() {
+                    MPJLambdaWrapper<DeviceInfoEntity> wrapper = JoinWrappers.lambda(DeviceInfoEntity.class)
+                            .selectAll(DeviceInfoEntity.class)
+                            .leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)
+                            .eq(DeviceInfoEntity::getShareSchemeId, 1)
+                            .orderByAsc(DeviceInfoEntity::getId);
+                    return deviceInfoMapper.selectJoinList(DeviceInfoEntity.class, wrapper);
+                }
+
+                static class DeviceInfoEntity { private Long id; private Long stationId; private Long shareSchemeId; }
+                static class StationInfoEntity { private Long stationId; }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("joinListEntity 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
     }
 }
