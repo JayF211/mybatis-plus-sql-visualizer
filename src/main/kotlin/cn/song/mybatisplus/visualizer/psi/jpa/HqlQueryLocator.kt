@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import com.intellij.psi.PsiBinaryExpression
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiCodeBlock
 import com.intellij.psi.PsiElement
@@ -268,6 +269,12 @@ object HqlQueryLocator {
                 val value = firstArg.value as? String
                 (value ?: firstArg.text) to true
             }
+            is PsiBinaryExpression -> {
+                // 字符串拼接："..." + "..." → 递归收集所有字符串字面量并拼接
+                val parts = collectStringLiterals(firstArg)
+                if (parts.isNotEmpty()) parts.joinToString("") to true
+                else firstArg.text to false
+            }
             is PsiReferenceExpression -> {
                 // 变量引用：尝试解析为常量
                 val resolved = firstArg.resolve()
@@ -284,6 +291,18 @@ object HqlQueryLocator {
             }
             else -> firstArg.text to false
         }
+    }
+
+    /**
+     * 递归收集 PSI 树中所有 PsiLiteralExpression 的字符串值。
+     * 用于处理字符串拼接表达式（"..." + "..."）。
+     */
+    private fun collectStringLiterals(element: com.intellij.psi.PsiElement): List<String> {
+        if (element is PsiLiteralExpression) {
+            val value = element.value as? String ?: return emptyList()
+            return listOf(value)
+        }
+        return element.children.flatMap { collectStringLiterals(it) }
     }
 
     // ------------------------------------------------------------------
