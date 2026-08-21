@@ -61,26 +61,29 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
     }
 
     /**
-     * 检查方法调用的第一个参数是否为字符串字面量（HQL/JPQL）。
+     * 检查方法调用的第一个参数是否为字符串（HQL/JPQL）。
      * 排除 cb.createQuery(Class) 等 CriteriaBuilder 调用。
      */
     private fun hasStringFirstArgument(call: PsiMethodCallExpression): Boolean {
         val args = call.argumentList.expressions
         if (args.isEmpty()) return false
         val firstArg = args[0]
-        // 字符串字面量
         if (firstArg is com.intellij.psi.PsiLiteralExpression) {
             return firstArg.value is String
         }
-        // 字符串拼接表达式（"..." + "..."）
         if (firstArg is com.intellij.psi.PsiBinaryExpression) {
-            return true
+            return true // 字符串拼接
         }
-        // 变量引用（可能是 HQL 字符串变量）
         if (firstArg is PsiReferenceExpression) {
-            return true
+            // 变量引用：仅 String 类型视为有效 HQL 参数（排除 cq 等 CriteriaQuery 变量）
+            val resolved = firstArg.resolve()
+            if (resolved is com.intellij.psi.PsiVariable) {
+                val typeName = resolved.type.canonicalText
+                return typeName == "java.lang.String" || typeName == "String"
+            }
+            return false
         }
-        return false
+        return false // Class 字面量等
     }
 
     private fun gutterEnabled(): Boolean = runCatching {

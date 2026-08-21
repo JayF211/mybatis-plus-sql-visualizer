@@ -85,27 +85,36 @@ object HqlQueryLocator {
      * 从光标位置定位 HQL 查询调用链。
      *
      * 定位策略（精确匹配）：
-     *  1. 优先查找包含 anchor 的最内层 createQuery 调用（沿 PSI 树向上查找）；
-     *  2. 若 anchor 本身是 PsiMethod（测试场景），回退为方法体内第一个匹配。
+     *  1. anchor 是 PsiMethodCallExpression → 精确匹配该调用（验证字符串参数）
+     *  2. anchor 是 PsiIdentifier（gutter 图标）→ 向上查找包含它的 createQuery 调用
+     *  3. anchor 是 PsiMethod（测试场景）→ 取方法体内第一个匹配
      *
      * @param anchor 光标所在 PSI 元素
      * @return HqlQueryInfo；未识别到 HQL 调用链时返回 null
      */
     fun locate(anchor: PsiElement): HqlQueryInfo? {
-        // 路径 1：anchor 是 PsiMethod 自身（测试场景）→ 取方法体内第一个 createQuery
-        if (anchor is PsiMethod) {
-            return locateFirstInBody(anchor)
+        // 路径 1：anchor 是 PsiMethodCallExpression → 精确匹配该调用
+        if (anchor is PsiMethodCallExpression) {
+            if (anchor.methodExpression.referenceName !in CREATE_QUERY_METHODS) return null
+            if (!hasStringHqlArgument(anchor)) return null
+            return locateFromCall(anchor)
         }
 
-        // 路径 2：查找包含 anchor 的最内层 createQuery 调用
+        // 路径 2：anchor 是 PsiMethod 自身（测试场景）→ 取方法体内第一个 createQuery
+        if (anchor is PsiMethod) {
+            return locateFirstInBody(anchor, null)
+        }
+
+        // 路径 3：查找包含 anchor 的最内层 createQuery 调用
         val containingCall = findContainingCreateQueryCall(anchor)
         if (containingCall != null) {
+            if (!hasStringHqlArgument(containingCall)) return null
             return locateFromCall(containingCall)
         }
 
-        // 路径 3：anchor 位于方法体内但不在某个 createQuery 调用内 → 取方法体内第一个
+        // 路径 4：anchor 位于方法体内但不在某个 createQuery 调用内 → 取方法体内第一个
         val method = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java) ?: return null
-        return locateFirstInBody(method)
+        return locateFirstInBody(method, null)
     }
 
     /**
@@ -127,17 +136,50 @@ object HqlQueryLocator {
     }
 
     /**
-     * 从指定 PsiMethod 体内查找第一个 createQuery 调用。
+     * 从指定 PsiMethod 体内查找 createQuery 调用。
+     *
+     * @param method 目标方法
+     * @param anchor 锚点元素（非 null 时查找包含该锚点的调用；null 时返回第一个匹配）
      */
-    private fun locateFirstInBody(method: PsiMethod): HqlQueryInfo? {
+    private fun locateFirstInBody(method: PsiMethod, anchor: PsiElement?): HqlQueryInfo? {
         val body = method.body ?: return null
         val allCalls = PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
         for (call in allCalls) {
             val methodName = call.methodExpression.referenceName ?: continue
             if (methodName !in CREATE_QUERY_METHODS) continue
+            // 有锚点时：仅返回包含该锚点的调用
+            if (anchor != null && !call.textRange.contains(anchor.textRange)) continue
+            // 验证字符串参数（排除 cb.createQuery(Class) 等）
+            if (!hasStringHqlArgument(call)) continue
             return locateFromCall(call, allCalls.toList())
         }
         return null
+    }
+
+    /**
+     * 检查 createQuery 调用的第一个参数是否为字符串（HQL/JPQL）。
+     * 排除 cb.createQuery(Class) 等 CriteriaBuilder 调用。
+     */
+    private fun hasStringHqlArgument(call: PsiMethodCallExpression): Boolean {
+        val args = call.argumentList.expressions
+        if (args.isEmpty()) return false
+        val firstArg = args[0]
+        return when (firstArg) {
+            is com.intellij.psi.PsiLiteralExpression -> firstArg.value is String
+            is com.intellij.psi.PsiBinaryExpression -> true // 字符串拼接
+            is PsiReferenceExpression -> {
+                // 变量引用：尝试解析类型，仅 String 类型视为有效 HQL 参数
+                val resolved = firstArg.resolve()
+                if (resolved is com.intellij.psi.PsiVariable) {
+                    val typeName = resolved.type.canonicalText
+                    typeName == "java.lang.String" || typeName == "String"
+                } else {
+                    // 无法解析时保守视为无效（避免 cq 等 CriteriaQuery 变量被误判）
+                    false
+                }
+            }
+            else -> false // Class 字面量等
+        }
     }
 
     /**

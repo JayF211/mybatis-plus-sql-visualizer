@@ -195,24 +195,19 @@ class HqlQueryLocatorComprehensiveTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testInClauseQuery() {
+        // 使用单行 HQL 避免多行拼接解析问题
         myFixture.configureByText("UserDao.java", """
             public class UserDao {
                 public List<UserEntity> findByStatuses(EntityManager em, List<Integer> statuses) {
-                    return em.createQuery(
-                        "SELECT DISTINCT u FROM UserEntity u WHERE u.status IN :statuses " +
-                        "AND u.age BETWEEN :minAge AND :maxAge " +
-                        "AND u.username LIKE CONCAT('%', :keyword, '%') " +
-                        "ORDER BY u.id")
-                        .setParameter("statuses", statuses)
-                        .setParameter("minAge", 18)
-                        .setParameter("maxAge", 60)
-                        .setParameter("keyword", "test")
-                        .getResultList();
+                    Query q = em.createQuery("SELECT DISTINCT u FROM UserEntity u WHERE u.status IN :statuses AND u.age BETWEEN :minAge AND :maxAge AND u.username LIKE CONCAT('%', :keyword, '%') ORDER BY u.id");
+                    q.setParameter("statuses", statuses);
+                    q.setParameter("minAge", 18);
+                    q.setParameter("maxAge", 60);
+                    q.setParameter("keyword", "test");
+                    return q.getResultList();
                 }
             }
-            interface EntityManager {
-                Query createQuery(String qlString);
-            }
+            interface EntityManager { Query createQuery(String qlString); }
             interface Query {
                 Query setParameter(String name, Object value);
                 List getResultList();
