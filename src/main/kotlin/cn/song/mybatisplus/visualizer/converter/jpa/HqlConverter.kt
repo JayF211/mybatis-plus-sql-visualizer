@@ -1,42 +1,54 @@
 package cn.song.mybatisplus.visualizer.converter.jpa
 
-import cn.song.mybatisplus.visualizer.model.ColumnRef
+import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
-import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 
 /**
  * HQL → SQL 转换器（F-JPA-02 / Wave2-P1）。
  *
- * Hibernate HQL 与 JPQL 高度相似，复用 [JpqlConverter] 的核心逻辑，并扩展：
- *  - HQL 聚合函数：COUNT/SUM/MAX/MIN/AVG 识别与转换
- *  - GROUP BY 子句提取
- *  - HAVING 条件提取与转换
+ * 核心设计：**保留原始 HQL 结构**，仅做安全的字符串级变换：
+ *  1. 命名参数 `:param` → `?`
+ *  2. 位置参数 `?1` → `?`
+ *  3. IN 子句修正：`IN ?` → `IN (?)`
+ *  4. NEW DTO(...) 表达式 → 提取构造参数
+ *  5. JOIN FETCH → LEFT JOIN（保留别名，推断 ON 条件）
+ *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
+ *  7. 属性名 → 列名映射（仅当有有效 TableInfo 时）
+ *
+ * 关键：返回的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
+ * 转换器不解析条件树（conditions 为空），因此必须使用转换后的 SQL 字符串。
  *
  * 无状态单例，纯函数逻辑，可独立单测。
  */
 object HqlConverter {
 
-    // HQL 聚合函数名（大小写不敏感）
-    private val AGGREGATE_FUNCTIONS = setOf("COUNT", "SUM", "MAX", "MIN", "AVG")
+    /**
+     * HQL 转换产物。
+     *
+     * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?）
+     * @param statement  语句模型（SelectStatement 或 DeleteStatement）
+     * @param inClauseParams 使用 IN 子句的参数名集合
+     */
+    data class Result(
+        val sql: String,
+        val statement: SqlStatement,
+        val inClauseParams: Set<String> = emptySet(),
+    )
 
     /**
-     * 转换 HQL 字符串为 SelectStatement。
+     * 转换 HQL 字符串为 Result。
      *
      * @param hql       HQL 查询字符串
-     * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做简单字符串替换
-     * @return SELECT 语句模型
+     * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
+     * @return Result（转换后 SQL + 语句模型）
      */
-    fun convert(hql: String, tableInfo: TableInfo? = null): SelectStatement {
-        return convertInternal(hql, tableInfo)
-    }
-
-    /**
-     * 内部转换实现。
-     */
-    private fun convertInternal(hql: String, tableInfo: TableInfo?): SelectStatement {
+    fun convert(hql: String, tableInfo: TableInfo? = null): Result {
         val table = tableInfo ?: createFallbackTable()
+
+        // 0. 检测 IN 子句参数（在命名参数替换前检测）
+        val inClauseParams = findInClauseParams(hql)
 
         // 1. 替换命名参数 :param → ?
         var sql = replaceNamedParameters(hql)
@@ -44,39 +56,50 @@ object HqlConverter {
         // 2. 替换位置参数 ?1 → ?
         sql = replacePositionalParameters(sql)
 
-        // 3. 处理 NEW DTO(...) 表达式
+        // 3. 处理 IN 子句：IN ? → IN (?)
+        sql = handleInClause(sql)
+
+        // 4. 处理 NEW DTO(...) 表达式
         sql = handleNewExpression(sql)
 
-        // 4. 处理 JOIN FETCH → LEFT JOIN
+        // 5. 处理 JOIN FETCH → LEFT JOIN
         sql = handleJoinFetch(sql)
 
-        // 5. 处理 MEMBER OF（降级为注释提示）
+        // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql)
 
-        // 6. 实体名 → 表名映射
-        sql = mapEntityToTable(sql, table)
+        // 7. 实体名 → 表名映射
+        if (!table.entityClassName.isBlank()) {
+            sql = mapEntityToTable(sql, table)
+            // 8. 属性名 → 列名映射
+            sql = mapPropertyToColumn(sql, table)
+        } else {
+            // Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table
+            sql = mapFallbackEntityToTable(sql, table.tableName)
+        }
 
-        // 7. 属性名 → 列名映射
-        sql = mapPropertyToColumn(sql, table)
+        // 9. 检测 DELETE HQL → DeleteStatement
+        if (sql.trimStart().uppercase().startsWith("DELETE")) {
+            return Result(
+                sql = sql,
+                statement = DeleteStatement(table = table, conditions = emptyList()),
+                inClauseParams = inClauseParams,
+            )
+        }
 
-        // 8. 处理聚合函数语法（HQL 特有的大小写变体等）
-        sql = handleAggregateFunctions(sql)
-
-        // 9. 提取 GROUP BY / HAVING（以注释形式标记）
-        val hasGroupBy = containsGroupBy(sql)
-        val hasHaving = containsHaving(sql)
-
-        val comment = buildComment(hql, hasGroupBy, hasHaving)
-
-        return SelectStatement(
-            table = table,
-            comment = comment,
+        return Result(
+            sql = sql,
+            statement = SelectStatement(table = table),
+            inClauseParams = inClauseParams,
         )
     }
 
+    // ------------------------------------------------------------------
+    // 参数替换
+    // ------------------------------------------------------------------
+
     /**
-     * 替换命名参数 `:paramName` → `?`。
-     * 复用 JpqlConverter 的命名参数替换逻辑。
+     * 替换命名参数 `:paramName` → `?`（排除 `::` 类型转换运算符）。
      */
     private fun replaceNamedParameters(hql: String): String {
         return hql.replace(Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)"), "?")
@@ -84,44 +107,106 @@ object HqlConverter {
 
     /**
      * 替换位置参数 `?1`, `?2` 等 → `?`。
-     * 复用 JpqlConverter 的位置参数替换逻辑。
      */
     private fun replacePositionalParameters(hql: String): String {
         return hql.replace(Regex("\\?\\d+"), "?")
     }
 
+    // ------------------------------------------------------------------
+    // IN 子句
+    // ------------------------------------------------------------------
+
     /**
-     * 处理 `NEW com.xxx.VO(a, b)` 表达式。
-     * 复用 JpqlConverter 的 NEW 表达式处理逻辑。
+     * 检测 HQL 中使用 IN 子句的命名参数。
      */
-    private fun handleNewExpression(hql: String): String {
-        val newPattern = Regex("NEW\\s+[a-zA-Z_][a-zA-Z0-9_.]*\\(([^)]+)\\)")
-        return newPattern.replace(hql) { matchResult ->
-            val args = matchResult.groupValues[1].trim()
-            args
-        }
+    private fun findInClauseParams(hql: String): Set<String> {
+        val pattern = Regex("(?i)\\bIN\\s+:([a-zA-Z_][a-zA-Z0-9_]*)")
+        return pattern.findAll(hql).map { it.groupValues[1] }.toSet()
     }
 
     /**
-     * 处理 `JOIN FETCH e.relation r` → `LEFT JOIN relation_table r ON ...`。
-     * 复用 JpqlConverter 的 JOIN FETCH 处理逻辑。
+     * 处理 `IN ?` → `IN (?)`。
+     */
+    private fun handleInClause(hql: String): String {
+        return hql.replace(Regex("(?i)\\bIN\\s+\\?"), "IN (?)")
+    }
+
+    // ------------------------------------------------------------------
+    // NEW DTO 表达式
+    // ------------------------------------------------------------------
+
+    /**
+     * 处理 `NEW com.xxx.VO(a, b)` 表达式 → 提取构造参数。
+     * 使用括号计数法支持嵌套括号。
+     */
+    private fun handleNewExpression(hql: String): String {
+        val prefix = "NEW"
+        var searchStart = 0
+        while (true) {
+            val newIndex = hql.indexOf(prefix, searchStart)
+            if (newIndex < 0) break
+            val parenOpen = hql.indexOf('(', newIndex + prefix.length)
+            if (parenOpen < 0) break
+            var depth = 1
+            var i = parenOpen + 1
+            while (i < hql.length && depth > 0) {
+                when (hql[i]) {
+                    '(' -> depth++
+                    ')' -> depth--
+                }
+                i++
+            }
+            if (depth != 0) break
+            val parenClose = i - 1
+            val args = hql.substring(parenOpen + 1, parenClose).trim()
+            val replacement = hql.substring(0, newIndex) + args + hql.substring(parenClose + 1)
+            return handleNewExpression(replacement)
+        }
+        return hql
+    }
+
+    // ------------------------------------------------------------------
+    // JOIN FETCH
+    // ------------------------------------------------------------------
+
+    /**
+     * 处理 `JOIN FETCH alias.relation [alias2]` → `LEFT JOIN relation_table alias2 ON ...`。
+     *
+     * 示例：`JOIN FETCH u.department d` → `LEFT JOIN department d ON d.id = u.department_id`
      */
     private fun handleJoinFetch(hql: String): String {
         val joinFetchPattern = Regex(
-            "(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+            "(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)(\\s+[a-zA-Z_][a-zA-Z0-9_]*)?",
             RegexOption.IGNORE_CASE,
         )
         return joinFetchPattern.replace(hql) { matchResult ->
             val joinType = matchResult.groupValues[1].uppercase()
-            val alias = matchResult.groupValues[3]
+            val rootAlias = matchResult.groupValues[2]
+            val relationName = matchResult.groupValues[3]
+            val alias = matchResult.groupValues[4].trim()
             val keyword = when (joinType) {
                 "INNER" -> "INNER JOIN"
                 "LEFT" -> "LEFT JOIN"
                 else -> "LEFT JOIN"
             }
-            "$keyword /* 关联表_$alias */ $alias /* ON 关联条件需手动补充 */"
+            // 推断表名：relationName → snake_case
+            val tableName = relationName.replace(Regex("([a-z])([A-Z])")) {
+                "${it.groupValues[1]}_${it.groupValues[2].lowercase()}"
+            }
+            // 构建 ON 条件（别名只出现一次）
+            val onCondition = if (alias.isNotEmpty()) {
+                "$alias.id = $rootAlias.${relationName}_id /* 推断的ON条件，请验证 */"
+            } else {
+                "${relationName}_id = $rootAlias.${relationName}_id /* 推断的ON条件，请验证 */"
+            }
+            val aliasPart = if (alias.isNotEmpty()) " $alias" else ""
+            "$keyword $tableName$aliasPart ON $onCondition"
         }
     }
+
+    // ------------------------------------------------------------------
+    // MEMBER OF
+    // ------------------------------------------------------------------
 
     /**
      * 处理 `MEMBER OF` 语法（降级为注释提示）。
@@ -136,9 +221,13 @@ object HqlConverter {
         return hql
     }
 
+    // ------------------------------------------------------------------
+    // 实体名 → 表名映射
+    // ------------------------------------------------------------------
+
     /**
      * 将 HQL 中的实体类名映射为数据库表名。
-     * 复用 JpqlConverter 的实体映射逻辑。
+     * 仅在 TableInfo 有效时调用。
      */
     private fun mapEntityToTable(hql: String, table: TableInfo): String {
         if (table.entityClassName.isBlank()) return hql
@@ -146,9 +235,13 @@ object HqlConverter {
         return entityPattern.replace(hql, table.tableName)
     }
 
+    // ------------------------------------------------------------------
+    // 属性名 → 列名映射
+    // ------------------------------------------------------------------
+
     /**
      * 将 HQL 中的属性名映射为数据库列名。
-     * 复用 JpqlConverter 的属性映射逻辑。
+     * 仅在 TableInfo 有效时调用。
      */
     private fun mapPropertyToColumn(hql: String, table: TableInfo): String {
         var result = hql
@@ -161,60 +254,19 @@ object HqlConverter {
     }
 
     /**
-     * 处理 HQL 聚合函数的语法规范化。
-     *
-     * HQL 聚合函数与 SQL 基本一致，但 HQL 支持：
-     *  - COUNT(DISTINCT alias.property)
-     *  - 大小写不敏感（count/COUNT/Count）
-     *
-     * 此处确保聚合函数调用格式正确（不做额外转换，仅规范化空白）。
+     * Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table。
      */
-    private fun handleAggregateFunctions(hql: String): String {
-        // 规范化聚合函数名后的空白：COUNT (x) → COUNT(x)
-        var result = hql
-        for (aggFunc in AGGREGATE_FUNCTIONS) {
-            val pattern = Regex("$aggFunc\\s+\\(", RegexOption.IGNORE_CASE)
-            result = pattern.replace(result, "$aggFunc(")
+    private fun mapFallbackEntityToTable(hql: String, tableName: String): String {
+        val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
+        return fromPattern.replace(hql) { matchResult ->
+            val entityName = matchResult.groupValues[1]
+            hql.replaceFirst(entityName, tableName)
         }
-        return result
     }
 
-    /**
-     * 检测 HQL 是否包含 GROUP BY 子句。
-     */
-    private fun containsGroupBy(hql: String): Boolean {
-        return Regex("\\bGROUP\\s+BY\\b", RegexOption.IGNORE_CASE).containsMatchIn(hql)
-    }
-
-    /**
-     * 检测 HQL 是否包含 HAVING 子句。
-     */
-    private fun containsHaving(hql: String): Boolean {
-        return Regex("\\bHAVING\\b", RegexOption.IGNORE_CASE).containsMatchIn(hql)
-    }
-
-    /**
-     * 构建转换注释（标记复杂语法结构）。
-     */
-    private fun buildComment(hql: String, hasGroupBy: Boolean, hasHaving: Boolean): String? {
-        val upperHql = hql.uppercase()
-        val hasSubquery = upperHql.indexOf("SELECT", upperHql.indexOf("SELECT") + 1) != -1
-        val hasMemberOf = upperHql.contains("MEMBER OF")
-        val hasNew = upperHql.contains("NEW ")
-
-        if (!hasSubquery && !hasMemberOf && !hasNew && !hasGroupBy && !hasHaving) {
-            return null
-        }
-
-        val parts = mutableListOf<String>()
-        if (hasSubquery) parts += "含子查询"
-        if (hasMemberOf) parts += "含MEMBER OF"
-        if (hasNew) parts += "含NEW DTO"
-        if (hasGroupBy) parts += "含GROUP BY"
-        if (hasHaving) parts += "含HAVING"
-
-        return "/* HQL ${parts.joinToString("、")}，仅做基础转换 */"
-    }
+    // ------------------------------------------------------------------
+    // 辅助
+    // ------------------------------------------------------------------
 
     /**
      * 创建兜底 TableInfo（当实体类不可解析时使用）。

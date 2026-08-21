@@ -8,6 +8,9 @@ import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.JpqlConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
+import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -43,6 +46,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLiteralExpression
@@ -382,6 +386,64 @@ class SqlPreviewService(private val project: Project) {
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
         val tableName = model.entityClassName?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: ""
         return buildJpaPreviewResult(statement, sql, tableName, paramNames, PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java))
+    }
+
+    /**
+     * Hibernate HQL 预览（session.createQuery）。
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.HqlGutterLineMarkerProvider] 点击调用。
+     */
+    fun previewHql(anchor: PsiElement): PreviewResult? {
+        val info = HqlQueryLocator.locate(anchor) ?: return null
+        val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
+        val result = HqlConverter.convert(info.hql, table)
+        // 参数名提取：优先使用 setParameter 追踪结果；若为空（链式调用场景），直接从 HQL 提取
+        val paramNames = info.parameters.map { it.paramName }.ifEmpty {
+            extractParamNamesFromHql(info.hql)
+        }
+        // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
+        // HqlConverter 在字符串层面完成参数替换，但 statement 的 conditions/selectColumns 为空，
+        // 若用 SqlGenerator.generate(statement) 会丢失 SELECT 列和 WHERE 条件。
+        return buildJpaPreviewResult(
+            statement = result.statement,
+            convertedSql = result.sql,
+            tableName = table?.tableName ?: "",
+            paramNames = paramNames,
+            method = info.method,
+            inClauseParams = result.inClauseParams,
+        )
+    }
+
+    /**
+     * 自定义 DAO HQL 预览（commonDao.findByQuery 等）。
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider] 点击调用。
+     */
+    fun previewCustomDaoHql(anchor: PsiElement): PreviewResult? {
+        val info = CustomDaoHqlLocator.locate(anchor) ?: return null
+        val table = resolveHqlTable(null, info.entityClassName, info.hql)
+        val result = HqlConverter.convert(info.hql, table)
+        val paramNames = info.parameters.map { it.paramName }.ifEmpty {
+            extractParamNamesFromHql(info.hql)
+        }
+        return buildJpaPreviewResult(
+            statement = result.statement,
+            convertedSql = result.sql,
+            tableName = table?.tableName ?: "",
+            paramNames = paramNames,
+            method = info.method,
+            inClauseParams = result.inClauseParams,
+        )
+    }
+
+    /**
+     * 从 HQL 字符串中提取参数名。
+     * 支持命名参数（:paramName）和位置参数（?1, ?2）。
+     */
+    private fun extractParamNamesFromHql(hql: String): List<String> {
+        val namedParams = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)").findAll(hql)
+            .map { it.groupValues[1] }.toList()
+        val positionalParams = Regex("\\?(\\d+)").findAll(hql)
+            .map { "param${it.groupValues[1]}" }.toList()
+        return (namedParams + positionalParams).distinct()
     }
 
     /**
@@ -869,6 +931,29 @@ class SqlPreviewService(private val project: Project) {
             }
         }
         return state
+    }
+
+    /**
+     * 解析 HQL 对应的实体表信息。
+     *
+     * 优先使用 entityClass（PsiClass 直接解析）；
+     * 否则按 entityClassName 查找 @Entity 类；
+     * 最后从 HQL 的 FROM 子句提取类名查找。
+     */
+    private fun resolveHqlTable(entityClass: PsiClass?, entityClassName: String?, hql: String): TableInfo? {
+        val resolver = JpaEntityResolver()
+        // 路径 1：有 PsiClass 直接解析
+        if (entityClass != null) {
+            return resolver.resolve(entityClass)
+        }
+        // 路径 2：按类名查找 @Entity 类
+        val className = entityClassName ?: return null
+        // 通过 PsiShortNamesManager 或 JavaPsiFacade 按类名查找
+        val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return null
+        val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project)
+            .findClass(className, com.intellij.psi.search.GlobalSearchScope.allScope(project))
+            ?: return null
+        return resolver.resolve(psiClass)
     }
 
     /**

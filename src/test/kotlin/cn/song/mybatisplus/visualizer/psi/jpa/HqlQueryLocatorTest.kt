@@ -73,7 +73,8 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         val info = HqlQueryLocator.locate(method)
         assertNotNull("createQuery(无实体类) 应被识别", info)
         assertEquals("from UserEntity", info!!.hql)
-        assertNull("无实体类参数时 entityClassName 应为 null", info.entityClassName)
+        // 无 Entity.class 二参时，fallback 从 FROM 子句提取实体类名
+        assertEquals("UserEntity", info.entityClassName)
     }
 
     fun testCreateQuery_sessionFactoryGetCurrentSession() {
@@ -212,6 +213,199 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         val info = HqlQueryLocator.locate(method)
         assertNotNull("createNamedQuery 应被识别", info)
         assertEquals("User.findByStatus", info!!.hql)
+    }
+
+    fun testCreateQuery_sessionFactoryGetCurrentSessionChain() {
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public List<UserEntity> findByUsername(SessionFactory sf, String username) {
+                    Query q = sf.getCurrentSession().createQuery(
+                        "from UserEntity u where u.username = :username",
+                        UserEntity.class
+                    );
+                    q.setParameter("username", username);
+                    return q.list();
+                }
+            }
+            interface SessionFactory {
+                Session getCurrentSession();
+            }
+            interface Session {
+                Query createQuery(String hql, Class resultClass);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List list();
+            }
+            class UserEntity {
+                private Long id;
+                private String username;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("findByUsername")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("sessionFactory.getCurrentSession().createQuery 应被识别", info)
+        assertEquals("from UserEntity u where u.username = :username", info!!.hql)
+        assertEquals("UserEntity", info.entityClassName)
+    }
+
+    // ------------------------------------------------------------------
+    // EntityManager.createQuery（JPA 标准 API）
+    // ------------------------------------------------------------------
+
+    fun testEntityManager_createQuery_namedParam() {
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByUsername(EntityManager em, String username) {
+                    Query q = em.createQuery(
+                        "SELECT u FROM UserEntity u WHERE u.username = :username",
+                        UserEntity.class
+                    );
+                    q.setParameter("username", username);
+                    return q.getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {
+                private Long id;
+                private String username;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("findByUsername")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("em.createQuery (JPQL) 应被识别", info)
+        assertEquals("SELECT u FROM UserEntity u WHERE u.username = :username", info!!.hql)
+        assertEquals("UserEntity", info.entityClassName)
+        assertTrue("参数列表不应为空", info.parameters.isNotEmpty())
+        assertEquals("username", info.parameters[0].paramName)
+    }
+
+    fun testEntityManager_createQuery_positionalParam() {
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByUsername(EntityManager em, String username, Integer minAge) {
+                    Query q = em.createQuery(
+                        "SELECT u FROM UserEntity u WHERE u.username = ?1 AND u.age >= ?2",
+                        UserEntity.class
+                    );
+                    q.setParameter(1, username);
+                    q.setParameter(2, minAge);
+                    return q.getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query {
+                Query setParameter(int position, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByUsername")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("em.createQuery (位置参数 JPQL) 应被识别", info)
+        assertTrue("HQL 应含 SELECT", info!!.hql.contains("SELECT"))
+        assertEquals("UserEntity", info.entityClassName)
+    }
+
+    fun testEntityManager_createQuery_joinFetch() {
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByDept(EntityManager em, String deptName) {
+                    return em.createQuery(
+                        "SELECT u FROM UserEntity u JOIN FETCH u.department d WHERE d.name = :deptName",
+                        UserEntity.class
+                    ).setParameter("deptName", deptName).getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByDept")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("em.createQuery (JOIN FETCH) 应被识别", info)
+        assertTrue("HQL 应含 JOIN FETCH", info!!.hql.contains("JOIN FETCH"))
+        assertEquals("UserEntity", info.entityClassName)
+    }
+
+    fun testEntityManager_createQuery_newDto() {
+        myFixture.configureByText(
+            "OrderService.java",
+            """
+            public class OrderService {
+                public List<Object[]> orderStat(EntityManager em) {
+                    return em.createQuery(
+                        "SELECT NEW cn.song.dto.OrderStatDTO(o.customerId, COUNT(o), SUM(o.totalAmount)) " +
+                        "FROM OrderEntity o GROUP BY o.customerId HAVING COUNT(o) > 1"
+                    ).getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString);
+            }
+            interface Query {
+                List getResultList();
+            }
+            class OrderEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("orderStat")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("em.createQuery (NEW DTO) 应被识别", info)
+        assertTrue("HQL 应含 NEW", info!!.hql.contains("NEW "))
+        assertEquals("OrderEntity", info.entityClassName)
+    }
+
+    fun testEntityManager_createNamedQuery() {
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByNamed(EntityManager em) {
+                    Query q = em.createNamedQuery("UserEntity.findByStatus");
+                    q.setParameter("status", 1);
+                    return q.getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createNamedQuery(String name);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByNamed")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("em.createNamedQuery 应被识别", info)
+        assertEquals("UserEntity.findByStatus", info!!.hql)
     }
 
     private fun findMethod(methodName: String): PsiMethod {

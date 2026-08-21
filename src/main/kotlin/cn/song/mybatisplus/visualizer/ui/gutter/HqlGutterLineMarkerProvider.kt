@@ -1,0 +1,84 @@
+package cn.song.mybatisplus.visualizer.ui.gutter
+
+import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
+import com.intellij.codeInsight.daemon.LineMarkerInfo
+import com.intellij.codeInsight.daemon.LineMarkerProvider
+import com.intellij.openapi.editor.markup.GutterIconRenderer
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.IconLoader
+import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiIdentifier
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiReferenceExpression
+import java.awt.event.MouseEvent
+import javax.swing.Icon
+
+/**
+ * Hibernate HQL gutter 预览图标：在每个 `createQuery(...)` / `createNamedQuery(...)`
+ * 调用的方法名行显示预览图标，点击弹出 SQL 预览。
+ *
+ * **锚点策略**：与 [CustomDaoHqlGutterLineMarkerProvider] 一致——锚定在方法调用的方法名 PsiIdentifier 上。
+ * 一个方法体内可能有多个 createQuery 调用，每个调用各有独立图标，点击展示对应 SQL。
+ *
+ * **去重保证**：同一个 PsiMethodCallExpression 有且仅有一个方法名 identifier。
+ * 其他 provider（CustomDao / Jpql / Jpa / CriteriaQuery）的锚点策略与此不冲突。
+ *
+ * 注册见 plugin.xml `<codeInsight.lineMarkerProvider language="JAVA" .../>`。
+ */
+class HqlGutterLineMarkerProvider : LineMarkerProvider {
+
+    override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+        // LineMarker 框架只传递 leaf 元素：锚点为 PsiIdentifier。
+        if (element !is PsiIdentifier) return null
+        // 锚定在方法调用的方法名 PsiIdentifier 上：
+        // element = "createQuery" 等方法名 identifier
+        // element.parent = PsiReferenceExpression（方法调用的方法名引用）
+        // element.parent.parent = PsiMethodCallExpression
+        val parent = element.parent as? PsiReferenceExpression ?: return null
+        val grandParent = parent.parent as? PsiMethodCallExpression ?: return null
+        // 确认 element 是方法名而非 qualifier
+        if (grandParent.methodExpression.referenceName != element.text) return null
+        // 仅处理 createQuery / createNamedQuery 调用
+        if (element.text !in setOf("createQuery", "createNamedQuery")) return null
+        if (!gutterEnabled()) return null
+        // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
+        if (HqlQueryLocator.locate(grandParent) == null) return null
+        return LineMarkerInfo(
+            element,
+            element.textRange,
+            HQL_SQL_PREVIEW_ICON,
+            { MpSqlVisualizerBundle.message("gutter.hql.tooltip") },
+            HqlGutterNavigationHandler,
+            GutterIconRenderer.Alignment.CENTER,
+            { MpSqlVisualizerBundle.message("gutter.hql.accessible.name") },
+        )
+    }
+
+    private fun gutterEnabled(): Boolean = runCatching {
+        PluginSettings.getInstance().state.showGutterIcon
+    }.getOrDefault(true)
+
+    private object HqlGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
+        override fun navigate(e: MouseEvent?, elt: PsiElement) {
+            val project: Project = elt.project
+            // 直接从锚点向上查找 PsiMethodCallExpression（不依赖 locate() 反查）
+            val parent = elt.parent as? PsiReferenceExpression ?: return
+            val call = parent.parent as? PsiMethodCallExpression ?: return
+            val service = project.getService(SqlPreviewService::class.java)
+            SqlPreviewService.previewAsync(project, {
+                service.previewHql(call)
+            }) { result ->
+                SqlPreviewService.showResult(project, result)
+            }
+        }
+    }
+
+    companion object {
+        private val HQL_SQL_PREVIEW_ICON: Icon =
+            IconLoader.getIcon("/icons/sqlGutter.svg", HqlGutterLineMarkerProvider::class.java)
+    }
+}

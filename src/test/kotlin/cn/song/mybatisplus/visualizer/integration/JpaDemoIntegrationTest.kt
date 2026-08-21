@@ -482,7 +482,7 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
         assertTrue("HQL 应含命名参数: ${info.hql}", info.hql.contains(":username"))
 
         // 验证转换成功
-        val stmt = HqlConverter.convert(info.hql, userTable) as SelectStatement
+        val stmt = HqlConverter.convert(info.hql, userTable).statement as SelectStatement
         assertNotNull("HQL 转换应生成 SelectStatement", stmt)
     }
 
@@ -516,7 +516,7 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
         assertTrue("HQL 应含 JOIN FETCH: ${info!!.hql}", info.hql.contains("JOIN FETCH"))
 
         // 验证转换成功
-        val stmt = HqlConverter.convert(info.hql, userTable) as SelectStatement
+        val stmt = HqlConverter.convert(info.hql, userTable).statement as SelectStatement
         assertNotNull("HQL JOIN FETCH 转换应生成 SelectStatement", stmt)
     }
 
@@ -552,7 +552,7 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
         assertTrue("HQL 应含 AVG: ${info.hql}", info.hql.contains("AVG"))
 
         // 验证转换成功
-        val stmt = HqlConverter.convert(info.hql, userTable) as SelectStatement
+        val stmt = HqlConverter.convert(info.hql, userTable).statement as SelectStatement
         assertNotNull("HQL 聚合转换应生成 SelectStatement", stmt)
     }
 

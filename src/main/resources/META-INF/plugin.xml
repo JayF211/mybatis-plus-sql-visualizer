@@ -113,6 +113,14 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.CriteriaQueryGutterLineMarkerProvider"/>
 
+        <!-- 波次二：Hibernate HQL（session.createQuery）行显示预览图标 -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.HqlGutterLineMarkerProvider"/>
+
+        <!-- 波次二：自定义 DAO HQL（commonDao.findByQuery 等）行显示预览图标 -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider"/>
+
         <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
         <lang.parserDefinition language="MP_SQL_Preview"
                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlParserDefinition"/>

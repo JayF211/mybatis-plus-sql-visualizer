@@ -84,54 +84,103 @@ object HqlQueryLocator {
     /**
      * 从光标位置定位 HQL 查询调用链。
      *
+     * 定位策略（精确匹配）：
+     *  1. 优先查找包含 anchor 的最内层 createQuery 调用（沿 PSI 树向上查找）；
+     *  2. 若 anchor 本身是 PsiMethod（测试场景），回退为方法体内第一个匹配。
+     *
      * @param anchor 光标所在 PSI 元素
      * @return HqlQueryInfo；未识别到 HQL 调用链时返回 null
      */
     fun locate(anchor: PsiElement): HqlQueryInfo? {
-        val block = findRelevantBlock(anchor) ?: return null
-        val allCalls = PsiTreeUtil.collectElementsOfType(block, PsiMethodCallExpression::class.java)
+        // 路径 1：anchor 是 PsiMethod 自身（测试场景）→ 取方法体内第一个 createQuery
+        if (anchor is PsiMethod) {
+            return locateFirstInBody(anchor)
+        }
 
-        // 第一遍：识别 createQuery / createNamedQuery 调用
+        // 路径 2：查找包含 anchor 的最内层 createQuery 调用
+        val containingCall = findContainingCreateQueryCall(anchor)
+        if (containingCall != null) {
+            return locateFromCall(containingCall)
+        }
+
+        // 路径 3：anchor 位于方法体内但不在某个 createQuery 调用内 → 取方法体内第一个
+        val method = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java) ?: return null
+        return locateFirstInBody(method)
+    }
+
+    /**
+     * 查找包含 anchor 的最内层 createQuery/createNamedQuery 调用。
+     * 沿 PSI 树向上遍历，返回第一个匹配的方法调用表达式。
+     */
+    private fun findContainingCreateQueryCall(anchor: PsiElement): PsiMethodCallExpression? {
+        var current: PsiElement? = anchor
+        while (current != null) {
+            if (current is PsiMethodCallExpression) {
+                val methodName = current.methodExpression.referenceName
+                if (methodName in CREATE_QUERY_METHODS) {
+                    return current
+                }
+            }
+            current = current.parent
+        }
+        return null
+    }
+
+    /**
+     * 从指定 PsiMethod 体内查找第一个 createQuery 调用。
+     */
+    private fun locateFirstInBody(method: PsiMethod): HqlQueryInfo? {
+        val body = method.body ?: return null
+        val allCalls = PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression::class.java)
         for (call in allCalls) {
             val methodName = call.methodExpression.referenceName ?: continue
             if (methodName !in CREATE_QUERY_METHODS) continue
+            return locateFromCall(call, allCalls.toList())
+        }
+        return null
+    }
 
-            val method = PsiTreeUtil.getParentOfType(call, PsiMethod::class.java) ?: continue
-            val (hql, isLiteral) = extractHqlString(call)
-            val (entityClass, entityClassName) = extractEntityInfo(call)
+    /**
+     * 从指定的 createQuery 调用提取 HqlQueryInfo。
+     *
+     * @param call 目标 createQuery 调用
+     * @param allCalls 方法体内全部方法调用（用于参数追踪）；为 null 时自动收集
+     */
+    private fun locateFromCall(call: PsiMethodCallExpression, allCalls: List<PsiMethodCallExpression>? = null): HqlQueryInfo? {
+        val method = PsiTreeUtil.getParentOfType(call, PsiMethod::class.java) ?: return null
+        val (hql, isLiteral) = extractHqlString(call)
+        val (entityClass, entityClassName) = extractEntityInfo(call)
 
-            if (hql.isNullOrBlank()) continue
+        if (hql.isNullOrBlank()) return null
 
-            // 追踪 Query 变量
-            val queryVars = mutableSetOf<String>()
-            findAssignedVariable(call)?.let { queryVars += it }
+        // 追踪 Query 变量
+        val queryVars = mutableSetOf<String>()
+        findAssignedVariable(call)?.let { queryVars += it }
 
-            // 第二遍：收集参数设置
-            val parameters = mutableListOf<HqlParameter>()
-            if (queryVars.isNotEmpty()) {
-                for (paramCall in allCalls) {
-                    val paramMethodName = paramCall.methodExpression.referenceName ?: continue
-                    if (paramMethodName !in SET_PARAM_METHODS) continue
-                    val qualifier = paramCall.methodExpression.qualifierExpression ?: continue
-                    val qualifierRef = qualifier as? PsiReferenceExpression ?: continue
-                    if (qualifierRef.referenceName in queryVars) {
-                        extractParameter(paramCall, paramMethodName)?.let { parameters += it }
-                    }
+        // 第二遍：收集参数设置
+        val parameters = mutableListOf<HqlParameter>()
+        if (queryVars.isNotEmpty()) {
+            val calls = allCalls ?: PsiTreeUtil.collectElementsOfType(method.body, PsiMethodCallExpression::class.java)
+            for (paramCall in calls) {
+                val paramMethodName = paramCall.methodExpression.referenceName ?: continue
+                if (paramMethodName !in SET_PARAM_METHODS) continue
+                val qualifier = paramCall.methodExpression.qualifierExpression ?: continue
+                val qualifierRef = qualifier as? PsiReferenceExpression ?: continue
+                if (qualifierRef.referenceName in queryVars) {
+                    extractParameter(paramCall, paramMethodName)?.let { parameters += it }
                 }
             }
-
-            return HqlQueryInfo(
-                methodName = method.name,
-                hql = hql,
-                isLiteralHql = isLiteral,
-                entityClass = entityClass,
-                entityClassName = entityClassName,
-                parameters = parameters,
-                method = method,
-            )
         }
 
-        return null
+        return HqlQueryInfo(
+            methodName = method.name,
+            hql = hql,
+            isLiteralHql = isLiteral,
+            entityClass = entityClass,
+            entityClassName = entityClassName,
+            parameters = parameters,
+            method = method,
+        )
     }
 
     // ------------------------------------------------------------------
@@ -197,6 +246,11 @@ object HqlQueryLocator {
 
     /**
      * 从 createQuery(Xxx.class) 提取返回实体类信息。
+     *
+     * 提取策略（三级 fallback）：
+     *  1. 第二个参数（Entity.class）→ PsiClass 解析
+     *  2. 类型参数推断 → 编译器泛型信息
+     *  3. 从 HQL/JPQL 字符串的 FROM 子句提取实体类名（单参数 createQuery 场景）
      */
     private fun extractEntityInfo(call: PsiMethodCallExpression): Pair<PsiClass?, String?> {
         val methodName = call.methodExpression.referenceName
@@ -217,6 +271,16 @@ object HqlQueryLocator {
         val typeArg = call.typeArguments.firstOrNull() as? com.intellij.psi.PsiClassType
         if (typeArg != null) {
             return typeArg.resolve() to typeArg.className
+        }
+
+        // 三级 fallback：从 HQL/JPQL 字符串的 FROM 子句提取实体类名
+        // 适用于 em.createQuery("JPQL") 单参数场景（无 Entity.class 二参）
+        if (args.isNotEmpty()) {
+            val (hql, _) = extractHqlString(call)
+            if (!hql.isNullOrBlank()) {
+                val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
+                fromPattern.find(hql)?.let { return null to it.groupValues[1] }
+            }
         }
 
         return null to null
