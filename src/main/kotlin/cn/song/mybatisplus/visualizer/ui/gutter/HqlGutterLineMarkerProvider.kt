@@ -44,6 +44,8 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         if (grandParent.methodExpression.referenceName != element.text) return null
         // 仅处理 createQuery / createNamedQuery 调用
         if (element.text !in setOf("createQuery", "createNamedQuery")) return null
+        // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL），排除 cb.createQuery(Class)
+        if (!hasStringFirstArgument(grandParent)) return null
         if (!gutterEnabled()) return null
         // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
         if (HqlQueryLocator.locate(grandParent) == null) return null
@@ -56,6 +58,29 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
             GutterIconRenderer.Alignment.CENTER,
             { MpSqlVisualizerBundle.message("gutter.hql.accessible.name") },
         )
+    }
+
+    /**
+     * 检查方法调用的第一个参数是否为字符串字面量（HQL/JPQL）。
+     * 排除 cb.createQuery(Class) 等 CriteriaBuilder 调用。
+     */
+    private fun hasStringFirstArgument(call: PsiMethodCallExpression): Boolean {
+        val args = call.argumentList.expressions
+        if (args.isEmpty()) return false
+        val firstArg = args[0]
+        // 字符串字面量
+        if (firstArg is com.intellij.psi.PsiLiteralExpression) {
+            return firstArg.value is String
+        }
+        // 字符串拼接表达式（"..." + "..."）
+        if (firstArg is com.intellij.psi.PsiBinaryExpression) {
+            return true
+        }
+        // 变量引用（可能是 HQL 字符串变量）
+        if (firstArg is PsiReferenceExpression) {
+            return true
+        }
+        return false
     }
 
     private fun gutterEnabled(): Boolean = runCatching {

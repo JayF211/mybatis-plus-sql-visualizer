@@ -390,10 +390,30 @@ object CriteriaQueryLocator {
         if (expr == null) return null
         // 直接是方法调用：cb.equal(...) / cb.and(...) / cb.or(...) / cb.not(...)
         if (expr is PsiMethodCallExpression) {
-            return extractPredicateFromCall(expr)
+            val methodName = expr.methodExpression.referenceName
+            // 仅处理 CriteriaBuilder 条件方法，排除 Java 集合工具方法（toArray 等）
+            if (methodName in CB_CONDITION_METHODS || methodName in setOf("and", "or", "not")) {
+                return extractPredicateFromCall(expr)
+            }
+            return null
         }
-        // 其他表达式（变量引用等）→ 降级
-        return PredicateModel.Raw(expr.text)
+        // 变量引用（如 predicates）→ 尝试解析为谓词数组
+        if (expr is PsiReferenceExpression) {
+            return resolvePredicateVariable(expr)
+        }
+        // 其他表达式 → 忽略（不生成 Raw 谓词）
+        return null
+    }
+
+    /**
+     * 尝试解析谓词变量（如 predicates）为谓词列表。
+     * 场景：cq.where(predicates.toArray(new Predicate[0]))
+     * 由于 StaticPredicateModel 不支持列表展开，此处返回 null 避免生成错误的 Raw 谓词。
+     * 实际谓词已通过 CB_CONDITION_METHODS 路径提取（cb.equal/greaterThan 等）。
+     */
+    private fun resolvePredicateVariable(expr: PsiReferenceExpression): PredicateModel? {
+        // 变量引用不生成 Raw 谓词，避免 "predicates.toArray(...)" 出现在 WHERE 子句
+        return null
     }
 
     /**
