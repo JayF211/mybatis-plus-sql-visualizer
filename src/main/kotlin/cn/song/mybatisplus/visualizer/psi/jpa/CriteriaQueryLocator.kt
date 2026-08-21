@@ -518,21 +518,39 @@ object CriteriaQueryLocator {
         return PredicateModel.Like(fieldName, negated, args[1].text)
     }
 
-    /** 构建 IN / NOT IN 条件（cb.in(root.get(...)) → 单列；value 追加通过链式调用，当前简化为单值）。 */
+    /**
+     * 构建 IN / NOT IN 条件。
+     * 支持两种形态：
+     *  - cb.in(root.get("a"), v1, v2, ...) → 直接参数
+     *  - cb.in(root.get("a")).value(statuses) → 链式调用（提取 .value() 的参数）
+     */
     private fun buildIn(
         call: PsiMethodCallExpression,
         args: Array<PsiExpression>,
         negated: Boolean,
     ): PredicateModel {
         if (args.isEmpty()) return PredicateModel.Raw(call.text)
-        // cb.in(root.get("a")) 或 cb.in(root.get("a"), v1, v2, ...)
         val fieldName = args.getOrNull(0)?.let { extractFieldNameFromArg(it) } ?: return PredicateModel.Raw(call.text)
-        val values = if (args.size > 1) {
-            args.drop(1).map { it.text }
-        } else {
-            emptyList()
+        // 直接参数：cb.in(root.get("a"), v1, v2, ...)
+        val directValues = if (args.size > 1) args.drop(1).map { it.text } else emptyList()
+        // 链式调用：cb.in(root.get("a")).value(statuses)
+        val chainedValues = extractInValuesFromChain(call)
+        val values = (directValues + chainedValues).ifEmpty {
+            // 无值时添加占位符标记，面板可输入多值
+            listOf("__IN_PLACEHOLDER__")
         }
         return PredicateModel.In(fieldName, negated, values)
+    }
+
+    /**
+     * 从 cb.in(...).value(x) 链式调用中提取 IN 值列表。
+     * 如果 cb.in() 的父方法是 .value()，提取其参数作为 IN 值。
+     */
+    private fun extractInValuesFromChain(call: PsiMethodCallExpression): List<String> {
+        val parent = call.parent as? PsiMethodCallExpression ?: return emptyList()
+        val parentName = parent.methodExpression.referenceName ?: return emptyList()
+        if (parentName != "value") return emptyList()
+        return parent.argumentList.expressions.map { it.text }
     }
 
     /** 构建 AND / OR 条件组。 */

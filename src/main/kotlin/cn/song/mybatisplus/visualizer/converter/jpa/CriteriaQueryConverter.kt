@@ -188,10 +188,17 @@ object CriteriaQueryConverter {
 
         is PredicateModel.In -> {
             val column = resolveColumnRef(predicate.fieldName, tableInfo)
+            val rawValues = predicate.valueExpressions
+            // 处理占位符标记（无值时面板可输入多值）
+            val values = if (rawValues == listOf("__IN_PLACEHOLDER__")) {
+                listOf(SqlValue.Placeholder("statuses"))
+            } else {
+                rawValues.map { sqlValue(it) }
+            }
             Condition.In(
                 column = column,
                 negated = predicate.negated,
-                values = predicate.valueExpressions.map { sqlValue(it) },
+                values = values,
             )
         }
 
