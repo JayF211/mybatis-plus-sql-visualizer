@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.converter.jpa.JpqlConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
 import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter
 import cn.song.mybatisplus.visualizer.model.ColumnRef
@@ -394,6 +395,12 @@ class SqlPreviewService(private val project: Project) {
      */
     fun previewHql(anchor: PsiElement): PreviewResult? {
         val info = HqlQueryLocator.locate(anchor) ?: return null
+
+        // 原生 SQL：不做实体→表名映射，仅做参数替换
+        if (info.isNativeQuery) {
+            return previewNativeSql(info)
+        }
+
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
         val result = HqlConverter.convert(info.hql, table)
         // 参数名提取：
@@ -411,6 +418,36 @@ class SqlPreviewService(private val project: Project) {
             method = info.method,
             inClauseParams = result.inClauseParams,
         )
+    }
+
+    /**
+     * 原生 SQL 预览（createNativeQuery）。
+     * 不做实体→表名映射，仅替换 :param → ? 并解析实体表名。
+     */
+    private fun previewNativeSql(info: HqlQueryInfo): PreviewResult? {
+        val sql = convertNativeSqlParameters(info.hql)
+        val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
+            extractParamNamesFromHql(info.hql)
+        }
+        // 解析实体表名（用于显示）
+        val tableName = resolveHqlEntityTable(info.entityClass) ?: info.entityClassName ?: ""
+        return PreviewResult(
+            sql = sql,
+            compactSql = sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = paramNames,
+            paramTable = ParameterReplacer.buildParamTable(paramNames),
+            paramHints = paramNames.map { ParamHint(quote = !isNumericParam(info.method, it)) },
+            wrapperType = null,
+            tableName = tableName,
+        )
+    }
+
+    /**
+     * 解析原生 SQL 对应的实体表名。
+     */
+    private fun resolveHqlEntityTable(entityClass: PsiClass?): String? {
+        if (entityClass == null) return null
+        return JpaEntityResolver().resolve(entityClass).tableName
     }
 
     /**

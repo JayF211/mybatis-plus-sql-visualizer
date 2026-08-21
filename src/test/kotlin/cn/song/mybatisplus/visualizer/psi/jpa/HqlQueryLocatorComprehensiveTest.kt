@@ -308,8 +308,10 @@ class HqlQueryLocatorComprehensiveTest : BasePlatformTestCase() {
         """.trimIndent())
         val method = findMethod("findByKeyword")
         val info = HqlQueryLocator.locate(method)
-        // createNativeQuery 不在 CREATE_QUERY_METHODS 中，应返回 null
-        assertNull("createNativeQuery 不应被 HqlQueryLocator 识别（由 JpqlGutterLineMarkerProvider 处理）", info)
+        // createNativeQuery 现在被 HqlQueryLocator 识别（原生 SQL 路径）
+        assertNotNull("createNativeQuery 应被识别", info)
+        assertTrue("应为原生查询", info!!.isNativeQuery)
+        assertEquals("SELECT * FROM user WHERE username LIKE CONCAT('%', :keyword, '%') AND status = :status", info.hql)
     }
 
     // ------------------------------------------------------------------

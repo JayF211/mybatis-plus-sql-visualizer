@@ -31,6 +31,7 @@ data class HqlQueryInfo(
     val entityClassName: String?,
     val parameters: List<HqlParameter>,
     val method: PsiMethod,
+    val isNativeQuery: Boolean = false,
 )
 
 /**
@@ -65,8 +66,8 @@ data class HqlParameter(
  */
 object HqlQueryLocator {
 
-    // Hibernate Session.createQuery / createNamedQuery 方法名
-    private val CREATE_QUERY_METHODS = setOf("createQuery", "createNamedQuery")
+    // Hibernate Session.createQuery / createNamedQuery / createNativeQuery 方法名
+    private val CREATE_QUERY_METHODS = setOf("createQuery", "createNamedQuery", "createNativeQuery")
 
     // Query 接口参数设置方法名
     private val SET_PARAM_METHODS = setOf(
@@ -214,6 +215,8 @@ object HqlQueryLocator {
             }
         }
 
+        val isNativeQuery = call.methodExpression.referenceName == "createNativeQuery"
+
         return HqlQueryInfo(
             methodName = method.name,
             hql = hql,
@@ -222,6 +225,7 @@ object HqlQueryLocator {
             entityClassName = entityClassName,
             parameters = parameters,
             method = method,
+            isNativeQuery = isNativeQuery,
         )
     }
 
