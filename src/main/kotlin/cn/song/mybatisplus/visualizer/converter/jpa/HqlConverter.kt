@@ -175,15 +175,17 @@ object HqlConverter {
      * 示例：`JOIN FETCH u.department d` → `LEFT JOIN department d ON d.id = u.department_id`
      */
     private fun handleJoinFetch(hql: String): String {
+        // 捕获前导空白（组1），避免替换后丢失空格（如 uLEFT JOIN → u LEFT JOIN）
         val joinFetchPattern = Regex(
-            "(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)(\\s+[a-zA-Z_][a-zA-Z0-9_]*)?",
+            "(\\s+)(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)(\\s+[a-zA-Z_][a-zA-Z0-9_]*)?",
             RegexOption.IGNORE_CASE,
         )
         return joinFetchPattern.replace(hql) { matchResult ->
-            val joinType = matchResult.groupValues[1].uppercase()
-            val rootAlias = matchResult.groupValues[2]
-            val relationName = matchResult.groupValues[3]
-            val alias = matchResult.groupValues[4].trim()
+            val leadingWhitespace = matchResult.groupValues[1]
+            val joinType = matchResult.groupValues[2].uppercase()
+            val rootAlias = matchResult.groupValues[3]
+            val relationName = matchResult.groupValues[4]
+            val alias = matchResult.groupValues[5].trim()
             val keyword = when (joinType) {
                 "INNER" -> "INNER JOIN"
                 "LEFT" -> "LEFT JOIN"
@@ -200,7 +202,7 @@ object HqlConverter {
                 "${relationName}_id = $rootAlias.${relationName}_id /* 推断的ON条件，请验证 */"
             }
             val aliasPart = if (alias.isNotEmpty()) " $alias" else ""
-            "$keyword $tableName$aliasPart ON $onCondition"
+            "$leadingWhitespace$keyword $tableName$aliasPart ON $onCondition"
         }
     }
 
@@ -255,13 +257,13 @@ object HqlConverter {
 
     /**
      * Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table。
+     * 仅替换第一个匹配（主表），避免重复替换导致 SQL 异常。
      */
     private fun mapFallbackEntityToTable(hql: String, tableName: String): String {
         val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
-        return fromPattern.replace(hql) { matchResult ->
-            val entityName = matchResult.groupValues[1]
-            hql.replaceFirst(entityName, tableName)
-        }
+        val match = fromPattern.find(hql) ?: return hql
+        val entityName = match.groupValues[1]
+        return hql.replaceFirst(entityName, tableName)
     }
 
     // ------------------------------------------------------------------
