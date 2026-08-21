@@ -48,9 +48,9 @@ class CustomDaoHqlGutterLineMarkerProvider : LineMarkerProvider {
         val grandParent = parent.parent as? PsiMethodCallExpression ?: return null
         // 确认 element 是方法名而非 qualifier：方法调用的 referenceName 必须等于 element 的文本
         if (grandParent.methodExpression.referenceName != element.text) return null
-        // 【关键排除】标准 JPA/Hibernate 方法（createQuery/createNamedQuery）由 HqlGutterLineMarkerProvider 负责，
+        // 【关键排除】标准 JPA/Hibernate 方法（createQuery/createNamedQuery/createNativeQuery）由 HqlGutterLineMarkerProvider 负责，
         // 本 provider 仅处理自定义 DAO 方法（findByQuery/executeHql 等），避免同行双图标。
-        if (element.text in setOf("createQuery", "createNamedQuery")) return null
+        if (element.text in setOf("createQuery", "createNamedQuery", "createNativeQuery")) return null
         if (!gutterEnabled()) return null
         if (CustomDaoHqlLocator.locate(grandParent) == null) return null
         return LineMarkerInfo(
