@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SetClause
@@ -307,11 +308,15 @@ class SqlPreviewService(private val project: Project) {
         // 原生 SQL：转换命名参数 :param → ? 后展示（保持可读性）
         if (info.isNative) {
             val convertedSql = convertNativeSqlParameters(jpql)
+            // 检测 IN 子句参数（在命名参数替换前检测 :paramName）
+            val inParams = JpqlConverter.findInClauseParams(jpql)
+            val hints = if (inParams.isNotEmpty()) paramNames.map { ParamHint(quote = true, inList = it in inParams) } else emptyList()
             return PreviewResult(
                 sql = convertedSql,
                 compactSql = convertedSql,
                 unresolvedParams = paramNames,
                 paramTable = ParameterReplacer.buildParamTable(paramNames),
+                paramHints = hints,
                 wrapperType = null,
                 tableName = table?.tableName ?: info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
                 columns = table?.allColumnNames ?: emptyList(),
@@ -327,6 +332,7 @@ class SqlPreviewService(private val project: Project) {
             tableName = table?.tableName ?: "",
             paramNames = paramNames,
             method = method,
+            inClauseParams = result.inClauseParams,
         )
     }
 
@@ -399,13 +405,21 @@ class SqlPreviewService(private val project: Project) {
         tableName: String,
         paramNames: List<String>,
         method: PsiMethod?,
+        inClauseParams: Set<String> = emptySet(),
     ): PreviewResult {
         val views = collectConditionViews(statement)
+        // IN 子句参数需标记 inList=true，面板回填时按逗号分割多值
+        val paramHints = if (inClauseParams.isNotEmpty()) {
+            paramNames.map { name ->
+                ParamHint(quote = true, inList = name in inClauseParams)
+            }
+        } else emptyList()
         return PreviewResult(
             sql = convertedSql,
             compactSql = convertedSql.replace(Regex("\\s+"), " ").trim(),
             unresolvedParams = paramNames,
             paramTable = ParameterReplacer.buildParamTable(paramNames),
+            paramHints = paramHints,
             wrapperType = null,
             tableName = tableName,
             warning = buildJpaWarning(statement),

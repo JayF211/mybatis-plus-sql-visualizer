@@ -33,10 +33,12 @@ object JpqlConverter {
      *
      * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?，可直接用于面板参数回填）
      * @param statement  语句模型（SelectStatement 或 DeleteStatement，用于 previewModel）
+     * @param inClauseParams 使用 IN 子句的参数名集合（面板回填时逗号分割多值）
      */
     data class Result(
         val sql: String,
         val statement: SqlStatement,
+        val inClauseParams: Set<String> = emptySet(),
     )
 
     /**
@@ -59,6 +61,9 @@ object JpqlConverter {
      */
     private fun convertInternal(jpql: String, tableInfo: TableInfo?): Result {
         val table = tableInfo ?: createFallbackTable()
+
+        // 0. 检测 IN 子句参数（在命名参数替换前检测 :paramName）
+        val inClauseParams = findInClauseParams(jpql)
 
         // 1. 替换命名参数 :param → ?
         var sql = replaceNamedParameters(jpql)
@@ -92,6 +97,7 @@ object JpqlConverter {
                     table = table,
                     conditions = emptyList(),
                 ),
+                inClauseParams = inClauseParams,
             )
         }
 
@@ -101,7 +107,19 @@ object JpqlConverter {
                 table = table,
                 comment = if (hasComplexConstruct(jpql)) "/* JPQL 含复杂语法，仅做基础转换 */" else null,
             ),
+            inClauseParams = inClauseParams,
         )
+    }
+
+    /**
+     * 检测 JPQL 中使用 IN 子句的命名参数（`:paramName` 跟在 `IN` 关键字后）。
+     *
+     * 匹配 `IN :paramName` 模式，返回参数名集合。
+     * 面板回填时这些参数需按逗号分割多值渲染为 `IN (v1, v2, ...)`。
+     */
+    fun findInClauseParams(jpql: String): Set<String> {
+        val pattern = Regex("(?i)\\bIN\\s+:([a-zA-Z_][a-zA-Z0-9_]*)")
+        return pattern.findAll(jpql).map { it.groupValues[1] }.toSet()
     }
 
     /**
