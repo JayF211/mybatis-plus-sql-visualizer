@@ -27,7 +27,9 @@ import javax.swing.Timer
  */
 open class SqlLogConsoleBridge(
     private val buffer: SqlLogEntryBuffer,
-    private val parserConfig: () -> ParserConfig = { ParserConfig("Preparing:", "Parameters:", true, 20000) },
+    private val parserConfig: () -> ParserConfig = {
+        ParserConfig("Preparing:", "Parameters:", true, 20000)
+    },
     private val syncBufferConfig: () -> Unit = {},
     private val onConsoleAppeared: () -> Unit = {},
 ) {
@@ -256,12 +258,20 @@ open class SqlLogConsoleBridge(
             try {
                 val filterIface = Class.forName(filterIfaceName, true, platformClassLoader)
                 val config = parserConfig()
-                val parser = MyBatisLogParser(
+                // 双解析器：MyBatis + Hibernate 并列运行，互不干扰
+                val myBatisParser = MyBatisLogParser(
                     sqlPrefix = config.sqlPrefix,
                     paramPrefix = config.paramPrefix,
                     mixedPrefix = config.mixedPrefix,
                     maxParseLength = config.maxParseLength,
                 )
+                val hibernateParser = HibernateLogParser(
+                    sqlPrefix = config.hibernateSqlPrefix,
+                    paramPrefix = config.hibernateParamPrefix,
+                    mixedPrefix = config.mixedPrefix,
+                    maxParseLength = config.maxParseLength,
+                )
+                val hibernateEnabled = config.hibernateEnabled
                 val filter = Proxy.newProxyInstance(
                     filterIface.classLoader,
                     arrayOf(filterIface),
@@ -270,15 +280,21 @@ open class SqlLogConsoleBridge(
                         // 对齐 filterKeywords/去重窗口的 T-M31.18 实时同步策略；此前 parser 挂载时固化配置，
                         // 捕捉中修改仅对**之后新挂载**的 console 生效（读缓存旧值），现同策略修齐
                         val cfg = parserConfig()
-                        parser.sqlPrefix = cfg.sqlPrefix
-                        parser.paramPrefix = cfg.paramPrefix
-                        parser.mixedPrefix = cfg.mixedPrefix
-                        parser.maxParseLength = cfg.maxParseLength
+                        myBatisParser.sqlPrefix = cfg.sqlPrefix
+                        myBatisParser.paramPrefix = cfg.paramPrefix
+                        myBatisParser.mixedPrefix = cfg.mixedPrefix
+                        myBatisParser.maxParseLength = cfg.maxParseLength
+                        hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
+                        hibernateParser.paramPrefix = cfg.hibernateParamPrefix
+                        hibernateParser.mixedPrefix = cfg.mixedPrefix
+                        hibernateParser.maxParseLength = cfg.maxParseLength
                         LOG.debug("FilterProxy: line=${line.take(120)}")
-                        parser.feed(line)
+                        // 喂行到两个解析器（各自忽略不匹配的行）
+                        myBatisParser.feed(line)
+                        if (hibernateEnabled) hibernateParser.feed(line)
                         // T-M31.18：每次入队前同步设置（去重窗口/过滤关键字即时生效，不再依赖重新捕捉）
                         syncBufferConfig()
-                        val taken = parser.takeEntries()
+                        val taken = myBatisParser.takeEntries() + hibernateParser.takeEntries()
                         if (taken.isNotEmpty()) LOG.debug("FilterProxy: 捕获到 ${taken.size} 条 SQL: ${taken.first().restoredSql.take(80)}")
                         taken.forEach { buffer.addEntry(it) }
                     },

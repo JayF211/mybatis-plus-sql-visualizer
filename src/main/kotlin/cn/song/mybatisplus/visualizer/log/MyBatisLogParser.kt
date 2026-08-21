@@ -112,6 +112,7 @@ class MyBatisLogParser(
             rawSql = sql,
             restoredSql = restorer.restore(sql, pendingParams),
             params = pendingParams.toList(),
+            source = SqlSource.MYBATIS,
         )
         entries += entry
         pendingParams.clear()

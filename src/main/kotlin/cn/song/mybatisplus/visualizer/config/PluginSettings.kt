@@ -207,6 +207,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 空字符串表示无历史。
          */
         var paramHistoryJson: String = "",
+
+        // ---------- Hibernate/JPA 日志捕获 ----------
+
+        /** 启用 Hibernate/JPA 日志解析（默认开）。 */
+        var logHibernateEnabled: Boolean = true,
+
+        /** Hibernate SQL 行前缀（默认 `Hibernate:`）。 */
+        var logHibernateSqlPrefix: String = DEFAULT_LOG_HIBERNATE_SQL_PREFIX,
+
+        /** Hibernate 参数行前缀（默认 `binding parameter`）。 */
+        var logHibernateParamPrefix: String = DEFAULT_LOG_HIBERNATE_PARAM_PREFIX,
     )
 
     private var state = State()
@@ -258,6 +269,10 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
+
+        // ---------- Hibernate/JPA 日志默认值 ----------
+        const val DEFAULT_LOG_HIBERNATE_SQL_PREFIX = "Hibernate:"
+        const val DEFAULT_LOG_HIBERNATE_PARAM_PREFIX = "binding parameter"
         const val DEFAULT_LOGIC_DELETE_VALUE = "0"
 
         /** 默认租户列名（T-TenantLine，对齐 MP TenantLineInnerInterceptor 默认列名）。 */
