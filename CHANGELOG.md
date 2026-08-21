@@ -10,6 +10,8 @@
 - **驼峰/下划线自动匹配（P-05.1）**：`CaseFormatUtil` 工具类实现 camelCase ↔ snake_case 双向互转；`resolveSource` 三级 fallback（精确命中 → 去`#`前缀精确命中 → 互转命中），解决数据库列名与 Java 字段名风格不一致导致漏匹配
 - **参数清除按钮**：动态条件分区和批量参数列分区标题行新增「清除」按钮——一键清空该分区所有参数值（不影响勾选态），清空后 SQL 恢复 `?` 占位形态
 - **参数面板顶部对齐**：参数行由垂直居中改为顶部对齐（`BorderLayout.NORTH` 包裹），参数少时不再悬在面板中央
+- **SQL→Java 调用类校验与智能识别**：调用类选择器选中 VO/DTO/BO/PO/Utils/Controller 等不合法类时拒绝选中 + 状态行友好提示（白名单 Mapper/Service/ServiceImpl/Impl 直接放行）；选中 `this`/`baseMapper` 时 tooltip 追加当前类上下文，兼顾 PM 与 MPJ 两种依赖；新增 16 个测试用例
+- **关键字换行格式化**：`SqlFormatter.formatClauseLine` + 工具栏「关键字换行」按钮——只在主子句关键字处换行（SELECT/FROM/WHERE/GROUP/ORDER/HAVING/LIMIT/JOIN/UPDATE/SET/DELETE），列清单与 WHERE 条件压一行；与「全展开」格式化互补
 
 ### Fixed
 
@@ -17,10 +19,17 @@
 - **SQL 监听手动启动无需等待项目运行（armed 态）**：点击捕捉按钮立即进入 capturing 态（⏸），项目启动后自动捕 SQL；`userArmed` + `logAutoCaptureSuppressed` 持久标志区分手动/自动行为；autoStart=true 时项目启动始终自动捕捉
 - **SQL 日志解析兼容性**：兼容前缀（框架附加的时间/线程前缀）与 SQL 分行形态（多行 SQL 正确合并解析）
 - **插件自更新静默失败修复（Windows 实测）**：更新后旧版 JAR 残留、版本号不变——三处叠加断点彻底修复：① `PlatformPluginInstaller` 改用 `PathManager.getPluginsDir()` 定位插件目录（IDEA 2026.2 实证 `codeSource.location` 返回 null，`getPath` 类工具无法兜底）；② 目录名用 zip 顶层短名 `mybatis-plus-sql-visualizer`（新增 `UpdateSource.INSTALL_DIR_NAME`）而非 `<id>` FQN——安装目录名与插件 ID 不同名，删除扑空；③ 删除整个插件目录而非单个 JAR + 全程诊断日志（真实 IDE 断点定位，单元测试测不到真实路径形态）
+- **MPJ 工厂链 selectAll 双图标修复**：`JoinWrappers.lambda(...).selectAll(...)` 出现双 gutter 图标——根因场景 D 批量锚点去重靠 `initializerHeadIsWrapper` 回溯链首，工厂链 qualifier 是引用（非 new/工厂调用）→ 回溯返回 false → selectAll 未去重；修复：先识别调用自身即工厂方法名（链头=工厂调用无需回溯）
+- **IN 子句参数多值回填（XML/MP/MPJ）**：新增 `detectInClauseParams` 检测 `IN (?, ?, ...)` 模式参数索引，面板回填时标记 `inList=true`，逗号分割多值自动渲染为 `IN (1, 2, 3)`（`renderParamValue` 分支处理）
+- **ReadAction.compute 废弃 API 修复（T-M52 补充）**：verifyPlugin 262 平台报 `ReadAction.compute(ThrowableComputable)` deprecated，243 编译目标仅此重载可用（javap 实证）——保留显式 `<T, Throwable>` 类型参数 + `@Suppress("DEPRECATION")`；涉及 8 个文件 17 处调用点
 
 ### Removed
 
 - **历史召回弹窗移除**：`showRecalledHint` 移除（仅在非 unitTestMode 弹 info，测试缝绕过导致该路径从未被验证；弹窗交互也由新弹窗取代）
+
+### Test
+
+- **测试覆盖缺口体系化修复（T0045，四类缺口分 4 波修复）**：波次一从 EDT/UI 回调中抽取 6 个测试缝方法；波次二新增 5 个测试文件（NamedQueryLocatorTest / DatabaseConsoleLauncherTest / PluginCacheManagerTest / LogStartupCaptureTest / PluginSettingsConfigurableTest）；波次三新增 3 个接缝测试文件（SqlPreviewServiceRoutingTest / GutterPreviewConsistencyTest / EntityClassFinderIntegrationTest，共 22 用例）；波次四新增沙盒验证清单文档
 
 ## [2026.8.19] - 2026-08-19
 

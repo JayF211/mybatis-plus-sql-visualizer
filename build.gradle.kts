@@ -191,6 +191,10 @@ tasks {
                 <li>内存泄漏修复（面板 Disposer 树注册）</li>
                 <li>SQL 监听手动启动无需等待项目运行（armed 态）+ 解析兼容前缀与 SQL 分行形态</li>
                 <li>插件自更新静默失败修复（改用 PathManager 定位插件目录 + zip 顶层短名）</li>
+                <li>SQL→Java 调用类校验（VO/DTO 拒绝 + 白名单放行）+ 当前打开类智能识别（this/baseMapper 上下文感知）</li>
+                <li>MPJ 工厂链 selectAll 双图标修复（initializerHeadIsWrapper 回溯停在 qualifier 引用）</li>
+                <li>IN 子句参数多值回填（XML/MP/MPJ inList 标记 + 逗号分割渲染）+ 关键字换行格式化</li>
+                <li>ReadAction.compute 废弃 API 修复（T-M52 补充，@Suppress DEPRECATION）+ 测试覆盖缺口体系化修复（T0045，四类缺口 4 波修复）</li>
             </ul>
             <h2>v2026.8.19</h2>
             <ul>
