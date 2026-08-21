@@ -33,6 +33,7 @@ data class HqlQueryInfo(
     val parameters: List<HqlParameter>,
     val method: PsiMethod,
     val isNativeQuery: Boolean = false,
+    val createQueryMethodName: String = "",
 )
 
 /**
@@ -216,7 +217,8 @@ object HqlQueryLocator {
             }
         }
 
-        val isNativeQuery = call.methodExpression.referenceName == "createNativeQuery"
+        val createQueryMethodName = call.methodExpression.referenceName ?: ""
+        val isNativeQuery = createQueryMethodName == "createNativeQuery"
 
         return HqlQueryInfo(
             methodName = method.name,
@@ -227,6 +229,7 @@ object HqlQueryLocator {
             parameters = parameters,
             method = method,
             isNativeQuery = isNativeQuery,
+            createQueryMethodName = createQueryMethodName,
         )
     }
 

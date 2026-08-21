@@ -397,7 +397,8 @@ class SqlPreviewService(private val project: Project) {
         val info = HqlQueryLocator.locate(anchor) ?: return null
 
         // 原生 SQL：不做实体→表名映射，仅做参数替换
-        if (info.isNativeQuery) {
+        // 双重检测：isNativeQuery 标志 + 方法名 fallback（防止 IDE 环境中标志未正确设置）
+        if (info.isNativeQuery || info.createQueryMethodName == "createNativeQuery") {
             return previewNativeSql(info)
         }
 

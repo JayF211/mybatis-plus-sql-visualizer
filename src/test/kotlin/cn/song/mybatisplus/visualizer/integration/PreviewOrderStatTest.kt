@@ -77,8 +77,11 @@ class PreviewOrderStatTest : BasePlatformTestCase() {
         val call = findMethodCall("createNativeQuery")
         val result = service.previewHql(call)
         assertNotNull("nativeQuery 应被识别", result)
-        // 表名应为 user（来自 @Table 注解）
-        assertTrue("应含 FROM user", result!!.sql.contains("FROM user"))
+        println("NATIVE SQL: ${result!!.sql}")
+        println("NATIVE PARAMS: ${result.unresolvedParams}")
+        println("NATIVE TABLE: ${result.tableName}")
+        // 原生 SQL 应保留原始表名 user（不做实体→表名映射）
+        assertTrue("应含 FROM user", result.sql.contains("FROM user"))
         assertFalse("不应含 unknown_table", result.sql.contains("unknown_table"))
         // 参数应为 ? 占位符
         assertTrue("应含 ?", result.sql.contains("?"))

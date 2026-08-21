@@ -42,9 +42,9 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         val grandParent = parent.parent as? PsiMethodCallExpression ?: return null
         // 确认 element 是方法名而非 qualifier
         if (grandParent.methodExpression.referenceName != element.text) return null
-        // 仅处理 createQuery / createNamedQuery 调用
-        if (element.text !in setOf("createQuery", "createNamedQuery")) return null
-        // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL），排除 cb.createQuery(Class)
+        // 仅处理 createQuery / createNamedQuery / createNativeQuery 调用
+        if (element.text !in setOf("createQuery", "createNamedQuery", "createNativeQuery")) return null
+        // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
         if (!hasStringFirstArgument(grandParent)) return null
         if (!gutterEnabled()) return null
         // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
