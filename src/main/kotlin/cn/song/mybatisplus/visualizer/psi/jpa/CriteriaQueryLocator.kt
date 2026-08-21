@@ -168,7 +168,10 @@ object CriteriaQueryLocator {
                 // CriteriaBuilder 条件方法（cb.equal / cb.greaterThan ...）
                 methodName in CB_CONDITION_METHODS &&
                     isCriteriaBuilderCall(call) -> {
-                    extractPredicate(call)?.let { predicates += it }
+                    // 排除作为 cb.not/cb.and/cb.or 参数的嵌套调用（避免重复提取）
+                    if (!isNestedInParentPredicate(call)) {
+                        extractPredicate(call)?.let { predicates += it }
+                    }
                 }
             }
         }
@@ -246,6 +249,16 @@ object CriteriaQueryLocator {
             return true
         }
         return false
+    }
+
+    /**
+     * 检查 call 是否嵌套在父级 CriteriaBuilder 谓词内（cb.not/cb.and/cb.or）。
+     * 嵌套调用会在处理父级时被 extractPredicate(args[0]) 提取，避免重复。
+     */
+    private fun isNestedInParentPredicate(call: PsiMethodCallExpression): Boolean {
+        val parent = call.parent as? PsiMethodCallExpression ?: return false
+        val parentName = parent.methodExpression.referenceName ?: return false
+        return parentName in setOf("and", "or", "not")
     }
 
     // ------------------------------------------------------------------

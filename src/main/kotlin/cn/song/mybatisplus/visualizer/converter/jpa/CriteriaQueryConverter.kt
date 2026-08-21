@@ -391,9 +391,11 @@ object CriteriaQueryConverter {
         // 布尔
         if (trimmed == "true" || trimmed == "false") return SqlValue.Literal(trimmed)
 
-        // 字符串字面量（单引号或双引号）
-        if ((trimmed.startsWith("'") && trimmed.endsWith("'")) ||
-            (trimmed.startsWith("\"") && trimmed.endsWith("\""))
+        // 字符串字面量（单引号或双引号，且不含 + 拼接）
+        // 注意：含 + 的表达式（如 "%" + username + "%）是运行时拼接，应视为占位符
+        if (!trimmed.contains("+") &&
+            ((trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+                (trimmed.startsWith("\"") && trimmed.endsWith("\"")))
         ) {
             val unquoted = trimmed.substring(1, trimmed.length - 1)
             return SqlValue.Literal(
@@ -402,14 +404,14 @@ object CriteriaQueryConverter {
             )
         }
 
-        // 数字
-        if (trimmed.matches(Regex("^-?\\d+(\\.\\d+)?[LlFfDd]?$"))) {
+        // 数字（且不含 + 拼接）
+        if (!trimmed.contains("+") && trimmed.matches(Regex("^-?\\d+(\\.\\d+)?[LlFfDd]?$"))) {
             // 去除类型后缀 L/F/D
             val numeric = trimmed.trimEnd('L', 'l', 'F', 'f', 'D', 'd')
             return SqlValue.Literal(numeric)
         }
 
-        // 运行时值 → 占位符
+        // 运行时值 → 占位符（含变量引用、字符串拼接、方法调用等）
         return SqlValue.Placeholder(trimmed)
     }
 }
