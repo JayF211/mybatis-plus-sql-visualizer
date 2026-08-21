@@ -396,13 +396,13 @@ class SqlPreviewService(private val project: Project) {
         val info = HqlQueryLocator.locate(anchor) ?: return null
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
         val result = HqlConverter.convert(info.hql, table)
-        // 参数名提取：优先使用 setParameter 追踪结果；若为空（链式调用场景），直接从 HQL 提取
-        val paramNames = info.parameters.map { it.paramName }.ifEmpty {
+        // 参数名提取：
+        // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
+        // 2. 若为空（链式调用场景），直接从 HQL 提取
+        val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
-        // HqlConverter 在字符串层面完成参数替换，但 statement 的 conditions/selectColumns 为空，
-        // 若用 SqlGenerator.generate(statement) 会丢失 SELECT 列和 WHERE 条件。
         return buildJpaPreviewResult(
             statement = result.statement,
             convertedSql = result.sql,
@@ -421,7 +421,7 @@ class SqlPreviewService(private val project: Project) {
         val info = CustomDaoHqlLocator.locate(anchor) ?: return null
         val table = resolveHqlTable(null, info.entityClassName, info.hql)
         val result = HqlConverter.convert(info.hql, table)
-        val paramNames = info.parameters.map { it.paramName }.ifEmpty {
+        val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
         return buildJpaPreviewResult(
@@ -436,7 +436,7 @@ class SqlPreviewService(private val project: Project) {
 
     /**
      * 从 HQL 字符串中提取参数名。
-     * 支持命名参数（:paramName）和位置参数（?1, ?2）。
+     * 支持命名参数（:paramName）和位置参数（?1 → param1, ?2 → param2）。
      */
     private fun extractParamNamesFromHql(hql: String): List<String> {
         val namedParams = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)").findAll(hql)
@@ -470,13 +470,16 @@ class SqlPreviewService(private val project: Project) {
         inClauseParams: Set<String> = emptySet(),
     ): PreviewResult {
         val views = collectConditionViews(statement)
-        // IN 子句参数需标记 inList=true，面板回填时按逗号分割多值
-        // quote 根据参数类型判定：数值类型（Integer/Long/BigDecimal 等）不加引号，字符串加引号
-        val paramHints = if (inClauseParams.isNotEmpty()) {
+        // 参数回填提示：根据方法签名参数类型判定是否需要引号
+        // - IN 子句参数：数值类型不加引号，字符串加引号
+        // - 非 IN 参数：数值类型不加引号，字符串加引号（quote=true）
+        // - 无法判定类型时默认加引号（保守策略）
+        val paramHints = if (paramNames.isNotEmpty()) {
             paramNames.map { name ->
                 val inList = name in inClauseParams
-                val quote = if (inList) !isNumericParam(method, name) else true
-                ParamHint(quote = quote, inList = inList)
+                val isNumeric = isNumericParam(method, name)
+                // 数值类型不加引号，其他类型（String/Date 等）加引号
+                ParamHint(quote = !isNumeric, inList = inList)
             }
         } else emptyList()
         return PreviewResult(
