@@ -1,13 +1,26 @@
 package cn.song.mybatisplus.visualizer.log
 
 /**
- * 日志 SQL 条目模型（T-M31）：一条 `Preparing:` 语句 + 其 `Parameters:` 参数列表。
+ * SQL 日志条目来源（区分不同 ORM 框架的捕获结果）。
+ */
+enum class SqlSource {
+    /** MyBatis-Plus 控制台日志（`Preparing:` / `Parameters:` 格式）。 */
+    MYBATIS,
+    /** Hibernate/JPA 控制台日志（`Hibernate:` / `binding parameter` 格式）。 */
+    HIBERNATE,
+    /** 未知来源（兼容旧版本条目）。 */
+    UNKNOWN,
+}
+
+/**
+ * 日志 SQL 条目模型（T-M31）：一条 SQL 语句 + 其参数列表。
  *
- * 来源：MyBatis 控制台日志（MP 前缀 `==>  Preparing:` / 原生 `Preparing:`），
- * 经 [MyBatisLogParser] 配对、[LogSqlRestorer] 还原后进入工具窗口面板。
+ * 来源：MyBatis 控制台日志（MP 前缀 `==>  Preparing:` / 原生 `Preparing:`）或
+ * Hibernate 控制台日志（`Hibernate:` / `binding parameter`），
+ * 经解析器配对、[LogSqlRestorer] 还原后进入工具窗口面板。
  */
 data class LogSqlEntry(
-    /** Preparing 原文（未替换占位符）。 */
+    /** 原始 SQL 文本（未替换占位符）。 */
     val rawSql: String,
     /** 还原后的可执行 SQL（参数已替换；无法替换的 `?` 保留）。 */
     val restoredSql: String,
@@ -17,6 +30,8 @@ data class LogSqlEntry(
     val timestamp: Long = System.currentTimeMillis(),
     /** 摘要（列表展示用，单行截断）。 */
     val summary: String = restoredSql.take(MAX_SUMMARY_LENGTH),
+    /** 条目来源（MyBatis / Hibernate / 未知）。 */
+    val source: SqlSource = SqlSource.UNKNOWN,
 ) {
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160

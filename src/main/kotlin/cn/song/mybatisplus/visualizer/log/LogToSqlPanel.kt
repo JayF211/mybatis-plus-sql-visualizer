@@ -208,7 +208,12 @@ class LogToSqlPanel(
     // 转换流程
     // ------------------------------------------------------------------
 
-    /** 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/单行切换）→ 写结果区。 */
+    /**
+     * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/单行切换）→ 写结果区。
+     *
+     * 双解析器并列：MyBatis + Hibernate 同时喂行，各自识别匹配的格式，结果合并输出。
+     * 一段混合日志（同时含两种格式）也能正确转换。
+     */
     private fun convert() {
         val text = inputEditor.document.text
         if (text.isBlank()) {
@@ -217,15 +222,25 @@ class LogToSqlPanel(
         }
         // 前缀/混合/截断与自动捕获同源（每次转换即时读取，改设置立即生效）
         val state = PluginSettings.getInstance().state
-        val parser = MyBatisLogParser(
+        val myBatisParser = MyBatisLogParser(
             sqlPrefix = state.logSqlPrefix,
             paramPrefix = state.logParamPrefix,
             mixedPrefix = state.logMixedPrefix,
             maxParseLength = state.logMaxParseLength,
         )
-        text.lineSequence().forEach { parser.feed(it) }
-        parser.closePending()
-        val entries = parser.takeEntries()
+        val hibernateParser = HibernateLogParser(
+            sqlPrefix = state.logHibernateSqlPrefix,
+            paramPrefix = state.logHibernateParamPrefix,
+            mixedPrefix = state.logMixedPrefix,
+            maxParseLength = state.logMaxParseLength,
+        )
+        text.lineSequence().forEach { line ->
+            myBatisParser.feed(line)
+            hibernateParser.feed(line)
+        }
+        myBatisParser.closePending()
+        hibernateParser.closePending()
+        val entries = myBatisParser.takeEntries() + hibernateParser.takeEntries()
         if (entries.isEmpty()) {
             status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), error = true)
             return

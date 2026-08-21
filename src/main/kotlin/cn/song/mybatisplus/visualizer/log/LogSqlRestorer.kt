@@ -49,11 +49,26 @@ class LogSqlRestorer {
         private const val TRUE = "true"
         private const val FALSE = "false"
 
-        /** 原样直出（数值/布尔）；其余类型标注一律引号（String/时间/枚举/byte[] 等）。 */
+        /**
+         * 原样直出（数值/布尔）；其余类型标注一律引号（String/时间/枚举/byte[] 等）。
+         *
+         * 包含两类类型名：
+         * - Java 类型（MyBatis 日志）：Long, Integer, String 等
+         * - JDBC 类型（Hibernate 日志）：BIGINT, INTEGER, VARCHAR 等
+         */
         internal val PLAIN_TYPES = setOf(
+            // Java 类型（MyBatis 日志）
             "Long", "Integer", "Short", "Byte", "BigDecimal", "BigInteger", "Double", "Float", "Number",
             "long", "int", "short", "byte", "double", "float",
             "Boolean", "boolean",
+            // JDBC 类型（Hibernate 日志）—— 数值/布尔型原样直出
+            "BIGINT", "INTEGER", "SMALLINT", "TINYINT", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL",
+            "BIT", "BOOLEAN",
+            "REAL",
+            // Java 全限定类型（Hibernate 偶尔输出）
+            "java.lang.Long", "java.lang.Integer", "java.lang.Short", "java.lang.Byte",
+            "java.lang.Double", "java.lang.Float", "java.lang.Boolean",
+            "java.math.BigDecimal", "java.math.BigInteger",
         )
 
         /** 数值字面量（含小数与科学计数，如 `1.0E10`）。 */

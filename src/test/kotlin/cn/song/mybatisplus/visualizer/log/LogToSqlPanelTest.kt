@@ -129,6 +129,60 @@ class LogToSqlPanelTest : BasePlatformTestCase() {
         )
     }
 
+    // ---------- Hibernate 日志格式支持 ----------
+
+    fun testConvertHibernateFormatWithParams() {
+        panel.setInputForTest(
+            "Hibernate: select user0_.id as id1_0_0_, user0_.name as name2_0_0_ from users user0_ where user0_.id=?\n" +
+                "binding parameter [1] as [BIGINT] - [1]",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        // 默认多行格式化（= 两侧有空格）
+        assertTrue(result, result.contains("user0_.id = 1"))
+        assertEquals(
+            MpSqlVisualizerBundle.message("logToSql.status.converted", 1),
+            panel.statusForTest(),
+        )
+    }
+
+    fun testConvertHibernateFormatNullParam() {
+        panel.setInputForTest(
+            "Hibernate: select * from users where email=?\n" +
+                "binding parameter [1] as [VARCHAR] - [null]",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        assertTrue(result, result.contains("email = NULL"))
+    }
+
+    fun testConvertHibernateCommentPrefix() {
+        panel.setInputForTest(
+            "/* load com.example.User */ select user0_.id from users user0_ where user0_.name=?\n" +
+                "binding parameter [1] as [VARCHAR] - [Alice]",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        assertTrue(result, result.contains("name = 'Alice'"))
+    }
+
+    fun testConvertMixedMyBatisAndHibernate() {
+        panel.setInputForTest(
+            "==>  Preparing: SELECT * FROM config WHERE key = ?\n" +
+                "==> Parameters: timeout(Integer)\n" +
+                "Hibernate: select user0_.id from users user0_ where user0_.id=?\n" +
+                "binding parameter [1] as [BIGINT] - [42]",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        assertTrue(result, result.contains("KEY = timeout"))
+        assertTrue(result, result.contains("user0_.id = 42"))
+        assertEquals(
+            MpSqlVisualizerBundle.message("logToSql.status.converted", 2),
+            panel.statusForTest(),
+        )
+    }
+
     fun testPanelDisposeReleasesEditors() {
         panel.dispose()
         panel.dispose()

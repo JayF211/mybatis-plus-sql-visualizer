@@ -272,6 +272,9 @@ class SqlLogManager(private val project: Project) : Disposable {
             paramPrefix = state.logParamPrefix,
             mixedPrefix = state.logMixedPrefix,
             maxParseLength = state.logMaxParseLength,
+            hibernateSqlPrefix = state.logHibernateSqlPrefix,
+            hibernateParamPrefix = state.logHibernateParamPrefix,
+            hibernateEnabled = state.logHibernateEnabled,
         )
     }
 
@@ -298,8 +301,13 @@ class SqlLogManager(private val project: Project) : Disposable {
 
 /** 解析器配置（桥创建 parser 用；纯数据）。 */
 data class ParserConfig(
+    // MyBatis 解析器配置
     val sqlPrefix: String,
     val paramPrefix: String,
     val mixedPrefix: Boolean,
     val maxParseLength: Int,
+    // Hibernate 解析器配置
+    val hibernateSqlPrefix: String = HibernateLogParser.DEFAULT_SQL_PREFIX,
+    val hibernateParamPrefix: String = HibernateLogParser.DEFAULT_PARAM_PREFIX,
+    val hibernateEnabled: Boolean = true,
 )

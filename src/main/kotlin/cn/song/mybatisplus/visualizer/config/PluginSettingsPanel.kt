@@ -181,6 +181,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val logFilterKeywordsField = JBTextField(12)
     private val logDedupeField = JBTextField(12)
     private val logMaxParseField = JBTextField(12)
+    private val logHibernateEnabledCheck = JBCheckBox()
+    private val logHibernateSqlPrefixField = JBTextField(12)
+    private val logHibernateParamPrefixField = JBTextField(12)
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -391,6 +394,17 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
+            })
+            // Hibernate/JPA 日志捕获配置
+            addRow(p, g, "", logHibernateEnabledCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix"), logHibernateSqlPrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
             })
         }
 
@@ -749,6 +763,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
             || logMaxParseField.text.trim().toIntOrNull() != s.logMaxParseLength
             || logFilterBarCheck.isSelected != s.logFilterBarEnabled
+            || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
+            || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
+            || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
     }
 
     /**
@@ -796,6 +813,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
         s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
         s.logFilterBarEnabled = logFilterBarCheck.isSelected
+        s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
+        s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
+        s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
         if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
             applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
         }
@@ -854,5 +874,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logDedupeField.text = s.logDedupeWindowMs.toString()
         logMaxParseField.text = s.logMaxParseLength.toString()
         logFilterBarCheck.isSelected = s.logFilterBarEnabled
+        logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
+        logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
+        logHibernateParamPrefixField.text = s.logHibernateParamPrefix
     }
 }
