@@ -409,9 +409,12 @@ class SqlPreviewService(private val project: Project) {
     ): PreviewResult {
         val views = collectConditionViews(statement)
         // IN 子句参数需标记 inList=true，面板回填时按逗号分割多值
+        // quote 根据参数类型判定：数值类型（Integer/Long/BigDecimal 等）不加引号，字符串加引号
         val paramHints = if (inClauseParams.isNotEmpty()) {
             paramNames.map { name ->
-                ParamHint(quote = true, inList = name in inClauseParams)
+                val inList = name in inClauseParams
+                val quote = if (inList) !isNumericParam(method, name) else true
+                ParamHint(quote = quote, inList = inList)
             }
         } else emptyList()
         return PreviewResult(
@@ -427,6 +430,36 @@ class SqlPreviewService(private val project: Project) {
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, currentDialect(), formatSql(), views),
         )
     }
+
+    /**
+     * 判断方法参数是否为数值类型（Integer/Long/BigDecimal 等）。
+     *
+     * 用于 IN 子句参数回填时决定是否需要引号：数值类型不加引号，字符串加引号。
+     * 支持 Collection<NumericType>、NumericType[] 等集合/数组形态。
+     */
+    private fun isNumericParam(method: PsiMethod?, paramName: String): Boolean {
+        if (method == null) return false
+        val param = method.parameterList.parameters.firstOrNull { it.name == paramName } ?: return false
+        val type = param.type
+        // 提取集合/数组元素类型
+        val elementType = when {
+            type is com.intellij.psi.PsiClassType -> {
+                val className = type.canonicalText
+                // 常见集合类型：Collection<X>, List<X>, Set<X>
+                val genericPattern = Regex("""(?:Collection|List|Set)<(.+)>""")
+                val match = genericPattern.find(className)
+                if (match != null) match.groupValues[1] else className
+            }
+            type is com.intellij.psi.PsiArrayType -> type.componentType.canonicalText
+            else -> type.canonicalText
+        }
+        return NUMERIC_TYPES.any { elementType.endsWith(it) }
+    }
+
+    private val NUMERIC_TYPES = setOf(
+        "Integer", "int", "Long", "long", "Short", "short", "Byte", "byte",
+        "Float", "float", "Double", "double", "BigDecimal", "BigInteger", "Number",
+    )
 
     /** JPA 语句风险警示：DELETE 无 WHERE 时提示全表删除。 */
     private fun buildJpaWarning(statement: SqlStatement): String? = when (statement) {
