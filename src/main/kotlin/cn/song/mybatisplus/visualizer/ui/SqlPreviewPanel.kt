@@ -245,6 +245,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         add(modeButton)
         add(smallButton(MpSqlVisualizerBundle.message("panel.format")) { formatSql() })
+        // M-KeywordWrap：关键字换行（子句顶格换行、同行内容压一行）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
         // P-05：导入按钮（默认点击 = 从剪贴板导入）
         add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
@@ -374,7 +376,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 // T-M29.5：参数回填引号按 mapper 方法参数 Java 类型判定（XmlParamTypeResolver 注入
                 // model.paramQuotes：DTO 字段 LocalDate→引号/Integer→裸渲染，贴近真实绑定效果）；
                 // 未命中（Map/无类型信息）→ 兜底引号（T-M29.4：日期/字符串列安全，数值列隐式转换等价）
-                val xmlHints = sources.map { ParamHint(quote = xml.quoteFor(it) ?: true) }
+                val inListIndices = detectInClauseParams(sql)
+                val xmlHints = sources.mapIndexed { index, source ->
+                    ParamHint(quote = xml.quoteFor(source) ?: true, inList = index in inListIndices)
+                }
                 showSql(backfillParamsBySource(sql, sources, xmlHints))
             }
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
@@ -421,6 +426,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     fun formatSql() {
         val editor = editor ?: return
         val formatted = SqlFormatter.format(editor.document.text)
+        if (formatted != editor.document.text) {
+            WriteCommandAction.runWriteCommandAction(project) { editor.document.setText(formatted) }
+        }
+    }
+
+    /** 关键字换行格式化：子句顶格换行、同行内容压一行（[SqlFormatter.formatClauseLine]）。 */
+    private fun formatClauseLine() {
+        val editor = editor ?: return
+        val formatted = SqlFormatter.formatClauseLine(editor.document.text)
         if (formatted != editor.document.text) {
             WriteCommandAction.runWriteCommandAction(project) { editor.document.setText(formatted) }
         }
@@ -1329,6 +1343,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 值渲染按回填提示 [ParamHint]（M13）：LIKE 位置拼 `%`、String 列恒引号、数值列恒原样；
      * 提示缺失/类型未知 → 数字启发式；空值一律保留 `?`（复选框纯手动，不联动勾选态）。
      */
+    /**
+     * 检测 SQL 中 IN 子句的参数索引。
+     *
+     * 扫描 `IN (?, ?, ...)` 模式，返回 IN 子句内 `?` 的参数索引集合。
+     * 面板回填时这些参数按逗号分割多值渲染。
+     */
+    private fun detectInClauseParams(sql: String): Set<Int> {
+        val result = mutableSetOf<Int>()
+        var paramIndex = 0
+        var i = 0
+        while (i < sql.length) {
+            val c = sql[i]
+            if (c == '?') {
+                // 检查前面是否有 IN ( 关键字
+                val prefix = sql.substring(0, i).trimEnd().uppercase()
+                if (prefix.endsWith("IN (") || prefix.endsWith("IN(")) {
+                    result.add(paramIndex)
+                }
+                paramIndex++
+            }
+            i++
+        }
+        return result
+    }
+
     private fun backfillParamsBySource(sql: String, sources: List<String>, hints: List<ParamHint> = emptyList()): String {
         if (sources.isEmpty()) return sql
         val sb = StringBuilder(sql.length + 32)
