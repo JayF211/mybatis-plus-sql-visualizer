@@ -947,13 +947,22 @@ class SqlPreviewService(private val project: Project) {
             return resolver.resolve(entityClass)
         }
         // 路径 2：按类名查找 @Entity 类
-        val className = entityClassName ?: return null
-        // 通过 PsiShortNamesManager 或 JavaPsiFacade 按类名查找
+        // 注意：使用 anchor 所在的项目（而非 openProjects.first），确保多项目环境下查找正确
         val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return null
+        val className = entityClassName ?: extractEntityNameFromHql(hql) ?: return null
         val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project)
             .findClass(className, com.intellij.psi.search.GlobalSearchScope.allScope(project))
             ?: return null
         return resolver.resolve(psiClass)
+    }
+
+    /**
+     * 从 HQL 的 FROM 子句提取实体类名。
+     * 适用于 createQuery(HQL) 单参数场景（无 Entity.class 二参）。
+     */
+    private fun extractEntityNameFromHql(hql: String): String? {
+        val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
+        return fromPattern.find(hql)?.groupValues?.get(1)
     }
 
     /**

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -465,7 +466,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。 */
     fun copySql(): Boolean {
-        val text = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return false
+        val raw = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return false
+        // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
+        val text = SqlCommentStripper.strip(raw)
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
         clipboard.setContents(StringSelection(text), null)
         project?.let {
