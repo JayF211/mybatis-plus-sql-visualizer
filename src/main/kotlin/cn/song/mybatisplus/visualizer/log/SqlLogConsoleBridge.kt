@@ -32,10 +32,15 @@ open class SqlLogConsoleBridge(
     },
     private val syncBufferConfig: () -> Unit = {},
     private val onConsoleAppeared: () -> Unit = {},
+    private val isCapturing: () -> Boolean = { true },
 ) {
 
     private var runContentManager: Any? = null
-    val attachedConsoles = IdentityHashMap<Any, Boolean>()
+    /**
+     * 已挂载的控制台 → Filter 代理映射。
+     * 值从 Boolean 改为 Pair<filter, ifaceClass>，供 [detachAllFilters] 移除 Filter 使用。
+     */
+    val attachedConsoles = IdentityHashMap<Any, Pair<Any, Class<*>>>()
     private val contentListener = object : ContentManagerListener {
         override fun contentAdded(event: ContentManagerEvent) {
             val component = event.content.component
@@ -97,6 +102,9 @@ open class SqlLogConsoleBridge(
         stopCatchUpPolling()
     }
 
+    /** 轮询是否活跃（测试断言用：验证 stop 后轮询已停止）。 */
+    val isPollingActive: Boolean get() = pollTimer != null || catchUpTimer != null
+
     /** 快速轮询（500ms）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
     private fun startFastPolling() {
         stopCatchUpPolling()
@@ -112,6 +120,7 @@ open class SqlLogConsoleBridge(
     /** 移除挂载（项目关闭/面板销毁时）。 */
     fun detach() {
         stopPolling()
+        detachAllFilters()
         val rcm = runContentManager ?: return
         try {
             rcm.javaClass.getMethod("removeContentManagerListener", CONTENT_LISTENER_CLASS)
@@ -120,7 +129,6 @@ open class SqlLogConsoleBridge(
             LOG.debug("detach: removeContentManagerListener failed", t)
         }
         runContentManager = null
-        attachedConsoles.clear()
     }
 
     /** ContentManagerListener 是否注册成功（243/253=成功，262+=失败→需轮询兜底）。 */
@@ -197,7 +205,7 @@ open class SqlLogConsoleBridge(
      * 主控制台移除检测：HttpSingleResponseConsole（HTTP 请求工具窗口）常驻，
      * 即使 Spring Boot 停止也不消失——故检测「ConsoleViewImpl 主控制台消失」而非「所有控制台消失」。
      */
-    fun scanAll() {
+    open fun scanAll() {
         val hasMain = hasMainConsole()
         // 每轮状态日志（debug——诊断主控制台移除检测）
         LOG.debug("scanAll: hasMainConsole=$hasMain, lastHadMainConsole=$lastHadMainConsole")
@@ -249,11 +257,15 @@ open class SqlLogConsoleBridge(
     }
 
     private fun attachFilter(console: Any) {
+        // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
+        if (!isCapturing()) {
+            LOG.debug("attachFilter: 非捕捉态，跳过挂载 ${console.javaClass.name}")
+            return
+        }
         if (attachedConsoles.containsKey(console)) {
             LOG.debug("attachFilter: already attached ${console.javaClass.name}")
             return
         }
-        attachedConsoles[console] = true
         for (filterIfaceName in FILTER_IFACE_CANDIDATES) {
             try {
                 val filterIface = Class.forName(filterIfaceName, true, platformClassLoader)
@@ -300,14 +312,32 @@ open class SqlLogConsoleBridge(
                     },
                 )
                 console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
+                attachedConsoles[console] = filter to filterIface
                 LOG.info("attachFilter: filter($filterIfaceName) attached to ${console.javaClass.name}")
                 return
             } catch (t: Throwable) {
                 LOG.debug("attachFilter: candidate $filterIfaceName failed on ${console.javaClass.name}", t)
             }
         }
-        attachedConsoles.remove(console) // 全部候选失败允许下次重试
         LOG.warn("attachFilter: all filter candidates failed on ${console.javaClass.name}")
+    }
+
+    /**
+     * BUG FIX（停止后仍捕获）：移除所有已挂载控制台上的 Filter。
+     * 遍历 [attachedConsoles]，对每个 console 调用 removeMessageFilter 反射移除 Filter 代理，
+     * 然后清空映射——确保 stop 后控制台不再向 buffer 喂 SQL。
+     */
+    open fun detachAllFilters() {
+        for ((console, filterPair) in attachedConsoles) {
+            val (filter, filterIface) = filterPair
+            try {
+                console.javaClass.getMethod("removeMessageFilter", filterIface).invoke(console, filter)
+                LOG.info("detachAllFilters: filter removed from ${console.javaClass.name}")
+            } catch (t: Throwable) {
+                LOG.debug("detachAllFilters: removeMessageFilter failed on ${console.javaClass.name}", t)
+            }
+        }
+        attachedConsoles.clear()
     }
 
     companion object {

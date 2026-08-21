@@ -2,6 +2,32 @@
 
 # Mybatis-plus-sql-visualizer Changelog
 
+## [2026.8.21] - 2026-08-21
+
+### Added
+
+- **JPA/Hibernate SQL 预览支持（三种查询风格全覆盖）**：Derived 派生查询（`findByXxx` 方法 gutter 图标点击预览，含嵌套对象属性路径自动展开 JOIN、`Pageable` 分页 LIMIT 生成、重复列去重）/ CriteriaQuery 强类型查询（gutter 过滤 `CriteriaBuilder` 内部方法）/ HQL 自定义 DAO 方法（参数名自动推断 + 类型感知引号 + `JOIN FETCH` 解析）；`@Query` 路由优先 + 多行拼接字符串提取
+- **Hibernate/JPA SQL 日志捕获支持（双解析器并列架构）**：新增独立 `HibernateLogParser`，与 `MyBatisLogParser` 并列运行——每行控制台输出同时喂入两个解析器，互不干扰；支持三种 SQL 行前缀 + 参数绑定行解析（`binding parameter [N] as [TYPE] - [VALUE]`）；JDBC 类型映射扩展；条目来源标记（`LogSqlEntry.source`）；设置页新增 Hibernate 配置分区；`LogToSqlPanel` 同步兼容
+- **SQL→Java 反向子查询 JOIN 解析**：新增 `JoinSubQuery` 模型 + `parseSubqueryStructure` 解析简单单表子查询结构；`renderJoins` 优先 MConsumer 形态，其次 ext lambda，最后字符串；ext 条件 lambda 化增强；新增 11 个测试
+- **SQL 预览复制时剥离注释**：新增 `SqlCommentStripper` 工具类（`--` 行注释 + `/* */` 块注释），复制 SQL 时自动忽略注释
+
+### Fixed
+
+- **HQL/JPA SQL 预览全链路修复**：HQL 参数名自动推断（从 HQL 字符串提取 `:paramName` 命名参数）；参数类型自动推断（数值/布尔/String 类型感知引号）；HQL `JOIN FETCH` 语法正确解析；`CriteriaQuery` 预览修复 + gutter 图标过滤 `CriteriaBuilder` 内部方法
+- **JPA 分页修复**：`Pageable` 参数 → `LIMIT pageSize OFFSET pageOffset` 占位符生成（`findByDepartmentIdAndStatusOrderByCreateTimeDesc` 等分页方法正确生成 LIMIT）；`JpaEntityResolver` 重复列去重（简单字段优先于 `@ManyToOne` 关联字段）
+- **@Query 路由优先 + 拼接字符串提取**：`@Query` 方法即使方法名匹配派生查询模式也走 JPQL 路径；`@Query("..." + "...")` 多行拼接正确提取完整 JPQL
+- **SQL 预览表名按短类名查找实体**：`resolveHqlTable` 新增从 HQL FROM 子句提取实体类名查找 `@Entity` 类，解决 `createQuery(HQL)` 单参数场景表名显示 `unknown_table`
+- **JPQL IN 子句三层修复**：括号补全（`IN :param` → `IN (?)`）；数值参数不加引号（`Collection<Integer>` → `quote=false`）；inList 标记 + 逗号分割多值渲染（`IN (1, 2, 3)`）
+- **ReadAction.compute 废弃 API 修复（T-M52 补充）**：262 平台报 deprecated，243 编译目标仅此重载可用——保留显式类型参数 + `@Suppress("DEPRECATION")`
+
+### Test
+
+- **JPA 测试体系三层加固**：组件契约升级（断言参数名内容/数量）+ 端到端集成（gutter 点击到弹窗渲染全链路）+ 面板行为测试
+- **HibernateLogParserTest**：620 行单元测试覆盖全路径（前缀/注释/纯 SQL/参数绑定/JDBC 类型/噪声行/超长截断/来源标记）
+- **DualParserIntegrationTest**：双解析器互不干扰 + 配置同步
+- **MPJ 工厂链回归测试**：整体不变量锚点断言覆盖
+- **测试覆盖缺口修复延续**：波次三接缝测试 + 波次四沙盒验证清单
+
 ## [2026.8.20] - 2026-08-20
 
 ### Added

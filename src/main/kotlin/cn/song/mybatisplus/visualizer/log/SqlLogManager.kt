@@ -30,7 +30,13 @@ import java.util.concurrent.CopyOnWriteArrayList
 class SqlLogManager(private val project: Project) : Disposable {
 
     private val buffer = SqlLogEntryBuffer()
-    private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(buffer, ::parserConfig, ::applySettings) { onConsoleAppeared() }.apply {
+    private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(
+        buffer,
+        ::parserConfig,
+        ::applySettings,
+        { onConsoleAppeared() },
+        { capturing },
+    ).apply {
         onConsoleRemoved = { this@SqlLogManager.onConsoleRemoved() }
     }
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
@@ -141,29 +147,26 @@ class SqlLogManager(private val project: Project) : Disposable {
     fun hasMainConsole(): Boolean = bridge.hasMainConsole()
 
     /**
-     * 停止捕捉：重置 capturing 标志 + 清空已挂载 console 记录。
-     * 性能优化：
-     *  - 243/253（ContentManagerListener 可用）→ 停止轮询，改用事件回调检测新控制台（零开销）
-     *  - 262+（无 ContentManagerListener）→ 保持轮询兜底（2s 间隔，轻量 reflection）
+     * 停止捕捉：重置 capturing 标志 + 移除所有控制台上的 Filter + 停止轮询 + 清空已挂载 console 记录。
+     *
+     * BUG FIX（停止后仍捕获）：
+     *  - 移除所有已挂载控制台上的 Filter（stop 后控制台不再向 buffer 喂 SQL）
+     *  - 无条件停止轮询（262+ 平台原设计保持轮询兜底，但 stop 后轮询会重新挂载 Filter——
+     *    与 capturing 守卫双保险：detachAllFilters 清现有 + 守卫防新挂 + 停轮询彻底消除）
      */
     fun stopCapture() {
         if (!capturing && !userArmed) return // armed 态也须幂等守卫
+        capturing = false  // ← 先置位：attachFilter 守卫生效，轮询/事件回调不再挂载新 Filter
         userArmed = false
         isWaitingForConsole = false
         // 自动启动开启时，用户显式停止→置持久化抑制标志（重启后 LogStartupCapture 检查此标志跳过）
         if (PluginSettings.getInstance().state.logAutoCaptureOnStart) {
             PluginSettings.getInstance().state.logAutoCaptureSuppressed = true
         }
-        if (!capturing) {
-            refreshToolbar() // 等待态 → 空闲：刷新工具栏恢复「捕捉」文案
-            return
-        }
-        capturing = false
-        attachedConsoles.clear()
-        if (bridge.contentListenerRegistered) {
-            bridge.stopPolling() // 243/253：事件回调替代轮询
-        }
-        // 262+：保持轮询兜底（contentAdded 不可用）
+        // 移除所有已挂载控制台上的 Filter（核心修复：stop 后控制台不再捕获 SQL）
+        bridge.detachAllFilters()
+        // 无条件停止轮询（不再区分 243/253 vs 262+——stop 后不应有任何残留活动）
+        bridge.stopPolling()
         refreshToolbar()
     }
 
@@ -197,7 +200,7 @@ class SqlLogManager(private val project: Project) : Disposable {
     }
 
     /** 已挂载的 console 集合（bridge 访问）。 */
-    val attachedConsoles: MutableMap<Any, Boolean> get() = bridge.attachedConsoles
+    val attachedConsoles: MutableMap<Any, Pair<Any, Class<*>>> get() = bridge.attachedConsoles
 
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调。 */
     fun onConsoleRemoved() {
@@ -211,12 +214,12 @@ class SqlLogManager(private val project: Project) : Disposable {
             // 项目再次启动时 onConsoleAppeared 自动恢复捕捉
             LOG.info("onConsoleRemoved: 控制台被移除，回到 armed 态（手动开启，等待项目重新运行）")
             isWaitingForConsole = true
-            attachedConsoles.clear()
+            bridge.detachAllFilters()
         } else {
             // 自动开启（或手动+自动同时开启）：项目停止则完全停止
             LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（autoStart=$autoStart, armed=$userArmed）")
             capturing = false
-            attachedConsoles.clear()
+            bridge.detachAllFilters()
         }
         refreshToolbar()
     }

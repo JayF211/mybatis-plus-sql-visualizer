@@ -386,4 +386,98 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureSuppressed = oldSuppressed
         }
     }
+
+    // ===== BUG FIX：stopCapture 后 Filter 移除 + 轮询停止 =====
+
+    /** 间谍桥：追踪 detachAllFilters 调用 + 暴露轮询状态 + 可控 isCapturing 回调。 */
+    private class SpyBridge(
+        private val attachResult: Boolean,
+        private val hasMainConsoleResult: Boolean = true,
+        isCapturing: () -> Boolean = { true },
+    ) : SqlLogConsoleBridge(SqlLogEntryBuffer(), isCapturing = isCapturing) {
+        var detachAllFiltersCalls = 0
+            private set
+        var scanAllCalls = 0
+            private set
+
+        override fun attach(project: Project): Boolean = attachResult
+
+        override fun hasMainConsole(): Boolean = hasMainConsoleResult
+
+        override fun scanAll() {
+            scanAllCalls++
+            super.scanAll()
+        }
+
+        override fun detachAllFilters() {
+            detachAllFiltersCalls++
+            super.detachAllFilters()
+        }
+    }
+
+    /** T14：stopCapture 后 attachedConsoles 被清空（Filter 从控制台移除，不再捕获 SQL）。 */
+    fun testT14_StopCapture_clearsAttachedConsoles() {
+        val bridge = SpyBridge(attachResult = true)
+        val manager = managerWith(bridge)
+        // 先启动捕捉（设置 capturing=true）
+        manager.startCapture()
+        assertTrue("precondition: capturing=true", manager.capturing)
+        // 模拟已挂载的 Filter（直接写入 attachedConsoles 模拟 scanAll 挂载结果）
+        val mockConsole = Any()
+        val mockFilter = Any()
+        val mockFilterClass = Class.forName("java.lang.Object")
+        bridge.attachedConsoles[mockConsole] = mockFilter to mockFilterClass
+        assertTrue("precondition: attachedConsoles 非空", bridge.attachedConsoles.isNotEmpty())
+
+        manager.stopCapture()
+        assertTrue("stopCapture 应清空 attachedConsoles（Filter 从控制台移除）", bridge.attachedConsoles.isEmpty())
+        assertTrue("stopCapture 应调用 detachAllFilters", bridge.detachAllFiltersCalls >= 1)
+    }
+
+    /** T15：stopCapture 后轮询停止（262+ 平台原设计保持轮询，现统一停止）。 */
+    fun testT15_StopCapture_stopsPolling() {
+        val bridge = SpyBridge(attachResult = true)
+        val manager = managerWith(bridge)
+        // 启动捕捉 → 启动轮询
+        manager.startCapture()
+        // 手动启动轮询（模拟 attach 成功后的 startPolling）
+        bridge.startPolling()
+        assertTrue("precondition: 轮询应活跃", bridge.isPollingActive)
+
+        manager.stopCapture()
+        assertFalse("stopCapture 后轮询应停止", bridge.isPollingActive)
+    }
+
+    /** T16：attachFilter 的 isCapturing 守卫——非捕捉态时不挂载 Filter。 */
+    fun testT16_AttachFilter_notCapturing_skipsAttach() {
+        val bridge = SpyBridge(attachResult = true, isCapturing = { false })
+        // 通过反射调用私有 attachFilter 方法验证守卫
+        val method = SqlLogConsoleBridge::class.java.getDeclaredMethod("attachFilter", Any::class.java)
+        method.isAccessible = true
+        method.invoke(bridge, Any())
+        assertTrue("非捕捉态时 attachFilter 不应挂载", bridge.attachedConsoles.isEmpty())
+    }
+
+    /** T17：stop 后可重新开始捕捉——capturing 恢复 true，attachFilter 守卫放行。 */
+    fun testT17_StopThenRestart_reAttachesFilters() {
+        val bridge = SpyBridge(attachResult = true)
+        val manager = managerWith(bridge)
+        // 先启动捕捉
+        manager.startCapture()
+        assertTrue("precondition: capturing=true", manager.capturing)
+        // 模拟挂载
+        val mockConsole = Any()
+        val mockFilter = Any()
+        val mockFilterClass = Class.forName("java.lang.Object")
+        bridge.attachedConsoles[mockConsole] = mockFilter to mockFilterClass
+
+        // 停止 → 清空
+        manager.stopCapture()
+        assertFalse("停止后 capturing=false", manager.capturing)
+        assertTrue("停止后 attachedConsoles 为空", bridge.attachedConsoles.isEmpty())
+
+        // 重新开始 → capturing=true，attachFilter 守卫放行
+        manager.startCapture(manual = true)
+        assertTrue("重新开始后 capturing=true", manager.capturing)
+    }
 }

@@ -185,6 +185,14 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.8.21</h2>
+            <ul>
+                <li>JPA/Hibernate SQL 预览支持（Derived / CriteriaQuery / HQL 三种查询风格）</li>
+                <li>Hibernate/JPA SQL 日志捕获支持（双解析器并列架构）</li>
+                <li>SQL→Java 反向子查询 JOIN 解析 + MConsumer 形态</li>
+                <li>JPA 分页修复（Pageable → LIMIT）+ @Query 路由优先</li>
+                <li>JPQL IN 子句三层修复 + 复制时剥离注释</li>
+            </ul>
             <h2>v2026.8.20</h2>
             <ul>
                 <li>参数导入交互体验升级（手动输入弹窗 + 驼峰/下划线自动匹配 + 清除按钮）</li>

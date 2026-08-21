@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.19",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.19/mybatis-plus-sql-visualizer-2026.8.19.zip",
-  "changeNotes": "参数导入交互体验升级（P-05.1）：手动输入弹窗（格式化/清除按钮+灰色占位示例）+ 驼峰/下划线自动匹配（三级fallback）+ 清除按钮（一键清空参数值）\n内存泄漏修复：面板注册到 Disposer 树，父面板 dispose 级联释放子面板及 DocumentListener\nSQL 监听手动启动无需等待项目运行（armed 态）+ 解析兼容前缀与 SQL 分行形态",
-  "publishDate": "2026-08-19",
+  "version": "2026.8.20",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.20/mybatis-plus-sql-visualizer-2026.8.20.zip",
+  "changeNotes": "参数导入交互体验升级（P-05.1）：手动输入弹窗（格式化/清除按钮+灰色占位示例）+ 驼峰/下划线自动匹配（三级fallback）+ 清除按钮（一键清空参数值）\n内存泄漏修复：面板注册到 Disposer 树，父面板 dispose 级联释放子面板及 DocumentListener\nSQL 监听手动启动无需等待项目运行（armed 态）+ 解析兼容前缀与 SQL 分行形态\nSQL→Java 调用类校验（VO/DTO 拒绝+白名单放行）+ 当前打开类智能识别（this/baseMapper 上下文感知）\nMPJ 工厂链 selectAll 双图标修复（initializerHeadIsWrapper 回溯停在 qualifier 引用）\nIN 子句参数多值回填（XML/MP/MPJ inList 标记+逗号分割渲染）+ 关键字换行格式化\nReadAction.compute 废弃 API 修复（T-M52 补充）+ 测试覆盖缺口体系化修复（T0045，4波修复）",
+  "publishDate": "2026-08-20",
   "sinceBuild": "243"
 }
