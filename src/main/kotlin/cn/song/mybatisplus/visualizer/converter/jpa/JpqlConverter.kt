@@ -66,6 +66,9 @@ object JpqlConverter {
         // 2. 替换位置参数 ?1 → ?
         sql = replacePositionalParameters(sql)
 
+        // 2.5 处理 IN 子句：IN ? → IN (?)（集合参数应展开为多占位符）
+        sql = handleInClause(sql)
+
         // 3. 处理 NEW DTO(...) 表达式
         sql = handleNewExpression(sql)
 
@@ -118,6 +121,16 @@ object JpqlConverter {
      */
     private fun replacePositionalParameters(jpql: String): String {
         return jpql.replace(Regex("\\?\\d+"), "?")
+    }
+
+    /**
+     * 处理 `IN ?` → `IN (?)`。
+     *
+     * 参数替换后 `IN :param` 变为 `IN ?`，但 SQL 标准写法是 `IN (?)`。
+     * 此处在字符串层面修正，确保面板参数回填时正确展开为多占位符。
+     */
+    private fun handleInClause(jpql: String): String {
+        return jpql.replace(Regex("(?i)\\bIN\\s+\\?"), "IN (?)")
     }
 
     /**

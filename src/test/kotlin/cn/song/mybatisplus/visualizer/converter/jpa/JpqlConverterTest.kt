@@ -369,4 +369,34 @@ class JpqlConverterTest {
         assertTrue("NEW DTO 参数应被提取: ${result.sql}",
             result.sql.contains("o.customer_id") && result.sql.contains("COUNT(o)"))
     }
+
+    // ------------------------------------------------------------------
+    // IN 子句测试
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `inClause_namedParameter_inParens`() {
+        val jpql = "SELECT u FROM UserEntity u WHERE u.status IN :statuses"
+        val result = JpqlConverter.convert(jpql, userTable)
+        // IN 子句应展开为 IN (?) 而非 IN ?
+        assertTrue("IN 子句应为 IN (?): ${result.sql}", result.sql.contains("IN (?)"))
+    }
+
+    @Test
+    fun `inClause_positionalParameter_inParens`() {
+        val jpql = "SELECT u FROM UserEntity u WHERE u.status IN ?1"
+        val result = JpqlConverter.convert(jpql, userTable)
+        // 位置参数 IN ?1 → IN (?)
+        assertTrue("位置参数 IN 应为 IN (?): ${result.sql}", result.sql.contains("IN (?)"))
+    }
+
+    @Test
+    fun `inClause_multipleInClauses_allExpanded`() {
+        val jpql = "SELECT u FROM UserEntity u WHERE u.status IN :statuses AND u.role IN :roles"
+        val result = JpqlConverter.convert(jpql, userTable)
+        // 两个 IN 子句都应展开
+        val count = result.sql.count { it == '?' }
+        assertEquals("应有 2 个 IN (?) 占位符", 2, count)
+        assertFalse("不应有裸 IN ?: ${result.sql}", result.sql.contains("IN ?)"))
+    }
 }
