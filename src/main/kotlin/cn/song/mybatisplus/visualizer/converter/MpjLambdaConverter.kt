@@ -96,14 +96,15 @@ object MpjLambdaConverter : WrapperConverter {
         // join + selectCollection 子查询 JOIN（复用同子表 leftJoin 的 ON）；按源码调用顺序合并。
         // T-M15-06：① 此前 join 全在 collection 前，与源码顺序不符；
         //           ② selectCollection 子查询已替代同子表普通 join（P06 两写并存），普通 join 不重复渲染
+        // T-1800（Bug2 修复）：去重比较改为类名直接比较（不再比较推断表名 vs 真实表名，避免地址_d_o ≠ user_address 不匹配）。
         val collectionChildClasses = collectionCalls.mapNotNull { collectionChildClassOf(it) }
         val joins = mutableListOf<JoinClause>()
         for (call in chain.calls) {
             when (call.methodName) {
                 in JOIN_METHODS -> {
+                    // T-1800：先按类名比较去重（可靠），再 fallback 到表名比较（兼容旧逻辑）
+                    if (collectionChildClasses.any { cls -> joinEntityClassName(call) == cls }) continue
                     val join = parseJoin(call, mainAlias) ?: continue
-                    // T-M19.4：子表推断走统一入口（策略 + 修饰链），与 join.tableName 已修饰名可比对
-                    if (collectionChildClasses.any { cls -> EntityResolver.inferDecoratedTableName(cls) == join.tableName }) continue
                     joins += join
                 }
                 SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias)?.let { joins += it }
@@ -713,13 +714,54 @@ object MpjLambdaConverter : WrapperConverter {
     }
 
     /**
+     * T-1800：判断 selectCollection 调用是否为 prefix 形态（第 1 参为字符串 prefix，第 2 参为类参）。
+     * 兼容 EntityRefArg 与 ValueArg 两种类参形态：
+     *  - EntityRefArg 在第 2 参 → prefix 形态
+     *  - ValueArg 在第 2 参且为类名字面量 → prefix 形态（旧逻辑）
+     *  - 否则 → 普通形态（第 1 参为类参）
+     */
+    private fun isPrefixForm(call: WrapperCall): Boolean {
+        val arg1 = call.args.getOrNull(1)
+        if (arg1 is WrapperArg.EntityRefArg) return true
+        return isClassNameArg(arg1)
+    }
+
+    /**
      * selectCollection 调用对应的子表类名（T-M21-03：prefix 形态子表类在第 2 参，普通形态在第 1 参）。
+     * T-1800：EntityRefArg 优先取 entityClassName，ValueArg 取类名字符串。
      * 用于「selectCollection 子查询已替代同子表普通 join」的去重判定。
      */
-    private fun collectionChildClassOf(call: WrapperCall): String? = if (isClassNameArg(call.args.getOrNull(1))) {
-        (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted
-    } else {
-        (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted
+    private fun collectionChildClassOf(call: WrapperCall): String? {
+        val childArg = if (isPrefixForm(call)) call.args.getOrNull(1) else call.args.getOrNull(0)
+        return when (childArg) {
+            is WrapperArg.EntityRefArg -> childArg.tableInfo.entityClassName
+            else -> (childArg?.asValue() as? SqlValue.Literal)?.unquoted
+        }
+    }
+
+    /**
+     * T-1800：从 selectCollection / selectAssociation 调用提取子表 TableInfo（EntityRefArg 优先）。
+     * prefix 形态在第 2 参，普通形态在第 1 参。无 EntityRefArg 时返回 null。
+     */
+    private fun collectionTableInfo(call: WrapperCall): TableInfo? {
+        val entityRef = if (isPrefixForm(call)) {
+            call.args.getOrNull(1) as? WrapperArg.EntityRefArg
+        } else {
+            call.args.getOrNull(0) as? WrapperArg.EntityRefArg
+        }
+        return entityRef?.tableInfo
+    }
+
+    /**
+     * T-1800：从 join 调用提取关联实体类名（用于去重比较）。
+     * EntityRefArg 取 entityClassName，ValueArg 取类名字符串。
+     */
+    private fun joinEntityClassName(call: WrapperCall): String? {
+        val first = call.args.getOrNull(0)
+        return when (first) {
+            is WrapperArg.EntityRefArg -> first.tableInfo.entityClassName
+            else -> (first.asValue() as? SqlValue.Literal)?.unquoted
+        }
     }
 
     /**
@@ -740,22 +782,34 @@ object MpjLambdaConverter : WrapperConverter {
      * free 形态（首参 VO 方法引用、无子表类）已在 convert 从 collectionCalls 剔除，不产生子查询。
      */
     private fun parseCollection(call: WrapperCall, joinCalls: List<WrapperCall>, mainAlias: String): JoinClause? {
-        // T-M21-03：prefix 形态判定——第 2 参为类名字面量（普通形态第 2 参是 VO getter：AliasArg/ColumnArg）
-        val prefixForm = isClassNameArg(call.args.getOrNull(1))
+        // T-M21-03：prefix 形态判定——第 2 参为类参（EntityRefArg 或类名字面量）
+        // T-1800：兼容 EntityRefArg 形态（isPrefixForm 内部处理）
+        val prefixForm = isPrefixForm(call)
         val childClass: String
         val alias: String
         val mapIndex: Int
         if (prefixForm) {
-            childClass = (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            // prefix 形态：第 2 参为类参，第 1 参为 prefix 别名
+            val classArg = call.args.getOrNull(1)
+            childClass = when (classArg) {
+                is WrapperArg.EntityRefArg -> classArg.tableInfo.entityClassName
+                else -> (classArg?.asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            }
             alias = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
             mapIndex = 3
         } else {
-            childClass = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            // 普通形态：第 1 参为类参
+            val classArg = call.args.getOrNull(0)
+            childClass = when (classArg) {
+                is WrapperArg.EntityRefArg -> classArg.tableInfo.entityClassName
+                else -> (classArg?.asValue() as? SqlValue.Literal)?.unquoted ?: return null
+            }
             alias = childClass.replaceFirstChar { it.lowercaseChar() }
             mapIndex = 2
         }
-        // T-M19.4：子表推断走统一入口（策略 + 修饰链，全局语义）
-        val childTable = EntityResolver.inferDecoratedTableName(childClass)
+        // T-1800（Bug1 修复）：优先从 EntityRefArg 取真实 @TableName，不再仅靠 snake_case 推断。
+        // 例：AddressDO(@TableName("user_address")) → EntityRefArg 直接得 user_address，避免 address_d_o。
+        val childTable = collectionTableInfo(call)?.tableName ?: EntityResolver.inferDecoratedTableName(childClass)
 
         val subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex)
 
@@ -763,6 +817,7 @@ object MpjLambdaConverter : WrapperConverter {
         // 三参（ColumnArg 对）/ 四参带别名 / on(col1, col2) / lambda ON，统一经 parseJoin 提取，
         // 并交换左右使主表列在左（与 on(col1, col2) 形态一致；等值比较交换无副作用）。
         // 修复前仅匹配 on(col1, col2)（OnConditionArg），P06 主形态三参 leftJoin 下子查询无 ON（笛卡尔积）。
+        // T-1800（Bug3 修复）：ON 条件中的 leftJoin 别名替换为 collection 别名（prefix 形态别名可能不同）。
         val onConditions = joinCalls
             .filter { joinCall ->
                 val first = joinCall.args.getOrNull(0)
@@ -772,11 +827,17 @@ object MpjLambdaConverter : WrapperConverter {
                 }
             }
             .flatMap { joinCall ->
-                parseJoin(joinCall, mainAlias)?.onConditions?.map { cond ->
+                val joinClause = parseJoin(joinCall, mainAlias) ?: return@flatMap emptyList<Condition>()
+                val joinAlias = joinClause.alias  // leftJoin 的默认别名（如 addressDO）
+                joinClause.onConditions.map { cond ->
                     (cond as? Condition.ColumnComparison)?.let { cc ->
-                        Condition.ColumnComparison(left = cc.right, right = cc.left)
+                        // 替换 leftJoin 别名为 collection 别名，使 ON 条件与子查询别名一致
+                        val newLeft = if (cc.left.tableAlias == joinAlias) cc.left.copy(tableAlias = alias) else cc.left
+                        val newRight = if (cc.right.tableAlias == joinAlias) cc.right.copy(tableAlias = alias) else cc.right
+                        // 交换左右使主表列在左
+                        Condition.ColumnComparison(left = newRight, right = newLeft)
                     } ?: cond
-                } ?: emptyList()
+                }
             }
 
         return JoinClause(JoinType.LEFT, "($subSelect)", alias, onConditions)

@@ -310,6 +310,158 @@ class MpjJoinExtConverterTest {
     }
 
     // ------------------------------------------------------------------
+    // T-1800：selectCollection 三缺陷修复（EntityRefArg 携带 @TableName）
+    // ------------------------------------------------------------------
+
+    /** T-1800 测试 fixture：AddressDO 实体（@TableName("user_address")）。 */
+    private val addressTable = TableInfo(
+        entityClassName = "AddressDO",
+        tableName = "user_address",
+        columns = listOf(
+            ColumnInfo("id", "id", isId = true),
+            ColumnInfo("userId", "user_id"),
+            ColumnInfo("tel", "tel"),
+            ColumnInfo("address", "address"),
+            ColumnInfo("areaId", "area_id"),
+            ColumnInfo("status", "status"),
+        ),
+    )
+
+    @Test
+    fun `mpjJoin_selectCollectionEntityRefArg子查询表名正确`() {
+        // T-1800（Bug1）：EntityRefArg 携带 @TableName("user_address") 时子查询表名应为 user_address（非 address_d_o）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "UserDO",
+            listOf(
+                WrapperCall("selectCollection", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("user_address")),  // prefix 别名
+                    WrapperArg.EntityRefArg(addressTable),                   // 子表类（EntityRefArg）
+                    WrapperArg.AliasArg("addressList"),                      // VO getter
+                    WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, null, listOf(
+                        WrapperCall("id", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "id")))),
+                        WrapperCall("result", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "address")))),
+                    ))),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        // Bug1 修复：子查询表名 = user_address（来自 @TableName），而非 address_d_o（snake_case 推断）
+        assertTrue("子查询表名应为用户真实表名 user_address", sql.contains("FROM user_address user_address"))
+        assertFalse("不应出现 snake_case 推断名 address_d_o", sql.contains("address_d_o"))
+    }
+
+    @Test
+    fun `mpjJoin_selectCollectionPrefix去重普通join`() {
+        // T-1800（Bug2）：selectCollection + 同子表 leftJoin 不应重复渲染（去重比较改为类名直接比较）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "UserDO",
+            listOf(
+                WrapperCall("selectCollection", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("user_address")),  // prefix 别名
+                    WrapperArg.EntityRefArg(addressTable),                   // 子表类
+                    WrapperArg.AliasArg("addressList"),                      // VO getter
+                    WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, null, listOf(
+                        WrapperCall("id", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "id")))),
+                        WrapperCall("result", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "address")))),
+                    ))),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(addressTable),  // 同子表 leftJoin
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "addressDO", columnName = "user_id")),
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "t", columnName = "id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        // Bug2 修复：LEFT JOIN 只出现一次（子查询），不应有额外的普通 LEFT JOIN
+        val leftJoinCount = Regex("LEFT JOIN").findAll(sql).count()
+        assertEquals("LEFT JOIN 应只出现一次（子查询）", 1, leftJoinCount)
+        // 子查询内表名正确
+        assertTrue("子查询表名应为用户真实表名", sql.contains("FROM user_address user_address"))
+    }
+
+    @Test
+    fun `mpjJoin_selectCollectionPrefixOn条件别名一致`() {
+        // T-1800（Bug3）：ON 条件别名应使用 collection 别名（prefix），而非 leftJoin 默认别名
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "UserDO",
+            listOf(
+                WrapperCall("selectCollection", listOf(
+                    WrapperArg.ValueArg(SqlValue.Literal("user_address")),  // prefix 别名
+                    WrapperArg.EntityRefArg(addressTable),                   // 子表类
+                    WrapperArg.AliasArg("addressList"),                      // VO getter
+                    WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, null, listOf(
+                        WrapperCall("id", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "id")))),
+                        WrapperCall("result", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "address")))),
+                    ))),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(addressTable),
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "addressDO", columnName = "user_id")),
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "t", columnName = "id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        // Bug3 修复：ON 条件应使用 collection 别名 user_address，而非 leftJoin 默认别名 addressDO
+        assertTrue(
+            "ON 条件应使用 collection 别名 user_address.user_id，实际 SQL:\n$sql",
+            sql.contains("ON t.id = user_address.user_id") || sql.contains("ON user_address.user_id = t.id"),
+        )
+        assertFalse(
+            "ON 条件不应使用 leftJoin 默认别名 addressDO，实际 SQL:\n$sql",
+            sql.contains("addressDO.user_id"),
+        )
+    }
+
+    @Test
+    fun `mpjJoin_selectCollection普通形态EntityRefArg`() {
+        // T-1800（Bug4）：普通形态（非 prefix）EntityRefArg 兼容 + 表名正确
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "UserDO",
+            listOf(
+                WrapperCall("selectCollection", listOf(
+                    WrapperArg.EntityRefArg(addressTable),     // 普通形态：首参为 EntityRefArg
+                    WrapperArg.AliasArg("addressList"),          // VO getter
+                    WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, null, listOf(
+                        WrapperCall("id", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "id")))),
+                        WrapperCall("result", listOf(WrapperArg.ColumnArg(ColumnRef(columnName = "address")))),
+                    ))),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        // 普通形态别名 = 类名首字母小写（addressDO），表名 = 真实 @TableName（user_address）
+        assertTrue("子查询表名应为用户真实表名", sql.contains("FROM user_address addressDO"))
+        assertFalse("不应出现 snake_case 推断名 address_d_o", sql.contains("address_d_o"))
+    }
+
+    @Test
+    fun `mpjJoin_selectAssociationEntityRefArg不产生重复join`() {
+        // T-1800（Bug5）：selectAssociation EntityRefArg 形态不产生重复 join
+        // （selectAssociation 不产生额外 SQL，leftJoin 已体现关联）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "UserDO",
+            listOf(
+                WrapperCall("selectAssociation", listOf(
+                    WrapperArg.EntityRefArg(addressTable),
+                    WrapperArg.AliasArg("defaultAddress"),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(addressTable),
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "addressDO", columnName = "user_id")),
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "t", columnName = "id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        // selectAssociation 不产生子查询，leftJoin 正常渲染
+        assertFalse("selectAssociation 不应产生 LEFT JOIN 子查询", sql.contains("LEFT JOIN (SELECT"))
+        // leftJoin 应存在
+        assertTrue("leftJoin 应正常渲染", sql.contains("LEFT JOIN user_address addressDO"))
+    }
+
+    // ------------------------------------------------------------------
     // T-M21-07：from(子查询主表)
     // ------------------------------------------------------------------
 

@@ -269,6 +269,16 @@ object ArgResolver {
                     expressions.size >= 3 &&
                     expressions.getOrNull(2) is PsiLambdaExpression ->
                     resolveJoinClass(expr, resolveVariables)
+                // T-1800：selectCollection / selectAssociation 的类参解析为 EntityRefArg（携带 @TableName 注解）。
+                // prefix 形态（第 2 参为类名）> 普通形态（第 1 参为类名）> free 形态（无类参，不产生子查询）。
+                (methodName == SELECT_COLLECTION || methodName == SELECT_ASSOCIATION) &&
+                    isCollectionClassArg(expr, expressions, index) ->
+                    resolveJoinClass(expr, resolveVariables)
+                // T-1800：selectCollection / selectAssociation 的 VO getter（prefix 形态第 3 参 / 普通形态第 2 参）
+                // 解析为 AliasArg（保留驼峰属性名）。
+                (methodName == SELECT_COLLECTION || methodName == SELECT_ASSOCIATION) &&
+                    isCollectionVoGetter(expressions, index) ->
+                    resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
                 // selectSub 的第三参为结果别名（方法引用 → AliasArg 驼峰属性名）
                 methodName == SELECT_SUB && index == 2 ->
                     resolve(expr, table, entityClass, asAlias = true, resolveVariables = resolveVariables)
@@ -286,6 +296,39 @@ object ArgResolver {
     private fun isBooleanLiteral(expression: PsiExpression): Boolean =
         (expression as? PsiLiteralExpression)?.value is Boolean
 
+    /**
+     * T-1800：判断 selectCollection / selectAssociation 的当前实参是否为类参（需解析为 EntityRefArg）。
+     *
+     * 形态判定：
+     *  - prefix 形态：第 2 参（index=1）为类参（第 1 参为字符串 prefix）
+     *  - 普通形态：第 1 参（index=0）为类参
+     *  - free 形态：无类参（首参为 VO 方法引用），返回 false
+     *
+     * 判定规则：当前实参是 PsiClassObjectAccessExpression（XxxEntity.class）即视为类参。
+     */
+    private fun isCollectionClassArg(expr: PsiExpression, allArgs: Array<PsiExpression>, index: Int): Boolean {
+        if (expr !is PsiClassObjectAccessExpression) return false
+        // prefix 形态：第 2 参（index=1）且第 1 参为字符串字面量
+        if (index == 1 && allArgs.getOrNull(0) is PsiLiteralExpression) return true
+        // 普通形态：第 1 参（index=0）
+        if (index == 0) return true
+        return false
+    }
+
+    /**
+     * T-1800：判断 selectCollection / selectAssociation 的当前实参是否为 VO getter（解析为 AliasArg）。
+     *
+     * 形态判定：
+     *  - prefix 形态：第 3 参（index=2）为 VO getter
+     *  - 普通形态：第 2 参（index=1）为 VO getter
+     */
+    private fun isCollectionVoGetter(allArgs: Array<PsiExpression>, index: Int): Boolean {
+        // prefix 形态：第 1 参为字符串字面量 → VO getter 在第 3 参
+        if (allArgs.getOrNull(0) is PsiLiteralExpression) return index == 2
+        // 普通形态：VO getter 在第 2 参
+        return index == 1
+    }
+
     /** MPJ join 方法名集合（第一参为关联实体类引用；join 为自定义关键字形态，第一参为关键字字符串）。 */
     private val JOIN_METHODS = setOf("leftJoin", "innerJoin", "rightJoin", "fullJoin", "join")
 
@@ -302,6 +345,10 @@ object ArgResolver {
             resolveValueArg(expr, resolveVariables)
         }
     }
+
+    /** T-1800：selectCollection / selectAssociation 方法名（类参需解析为 EntityRefArg）。 */
+    private const val SELECT_COLLECTION = "selectCollection"
+    private const val SELECT_ASSOCIATION = "selectAssociation"
 
     /** MPJ selectAs 方法名（第二参为别名位置）。 */
     private const val SELECT_AS = "selectAs"
