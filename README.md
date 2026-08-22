@@ -232,6 +232,14 @@ M28 起发布流程新增一步（插件设置页「检查更新」的数据源�
 
 见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 友情插件推荐
+
+如果你也在做后端 API 开发，推荐试试 [Cool Request](https://www.coolrequest.dev)——一款 IDEA 内置的 HTTP 客户端插件，类似 Postman 但直接嵌在 IDE 里。支持 Spring Boot、Spring MVC、JAX-RS 等框架，一键发送请求、调用任意对象方法、统计 API 耗时、生成在线文档，总下载量已超百万次。
+
+<a href="https://www.coolrequest.dev" target="_blank"><img src="docs/images/cool-request-icon.svg" width="32" height="32" alt="Cool Request Logo" style="vertical-align:middle;margin-right:8px;"/>Cool Request — 让 API 调试变得简单</a>
+
+---
+
 ## 联系作者
 
 扫码添加作者微信或加入交流群（二维码为限时码，仓库内图片定期更新）：
