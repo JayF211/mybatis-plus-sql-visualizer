@@ -42,8 +42,8 @@ class UpdateSectionTest : BasePlatformTestCase() {
         val expected = MpSqlVisualizerBundle.message("settings.update.currentVersion") +
             ": " + (PluginVersion.current() ?: "—")
         assertEquals(expected, section.versionLabel.text)
-        // 启动自动检查默认开（State 默认值）
-        assertTrue(section.autoCheckCheck.isSelected)
+        // 抢先体验默认关（稳定版由 Marketplace 推送）
+        assertFalse(section.autoCheckCheck.isSelected)
         assertEquals(UpdateSection.State.Idle, section.state)
         // 未检查前：安装按钮隐藏、重启按钮隐藏、状态空白
         assertFalse(section.installButton.isVisible)

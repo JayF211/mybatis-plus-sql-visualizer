@@ -1,8 +1,11 @@
 package cn.song.mybatisplus.visualizer.update
 
 /**
- * 更新源配置（M28）：清单 URL 与下载文件名约定集中于此——发布者维护，未来迁移更新源
- * （如改 GitHub 或上架市场）只改本文件。
+ * 更新源配置（M28 → 内测通道改造）：清单 URL 与下载文件名约定集中于此。
+ *
+ * 内部更新通道已转为「Gitee 抢先体验通道」，检查 [MANIFEST_PATH] 指向 [update/update.json]
+ *（含 `-beta.N` 内测版与正式版提前推送）；稳定版由 JetBrains Marketplace 接管，本通道不参与。
+ * 草稿请写 [update/preview.update.json]（不参与检查），发布时复制到 [update/update.json]。
  *
  * 系统属性 `mpvs.update.manifest.url` 可覆盖清单 URL（沙盒/本地 HTTP server 验证用，
  * 与项目「发布前本地验证」惯例一致）。

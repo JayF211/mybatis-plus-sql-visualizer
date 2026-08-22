@@ -113,11 +113,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var removeTableSuffix: String = "",
 
         /**
-         * 启动时自动检查更新（M28）：勾选时 IDE 启动静默检查（[update.StartupUpdateCheck]），
-         * 仅在发现新版本时通知；不勾选则完全跳过启动检查（设置页手动检查不受影响）。
-         * 默认开（用户拍板）。
+         * 抢先体验：启用 Gitee 更新通道（M28 改造）：勾选时 IDE 启动静默检查 Gitee 通道
+         * （[update.StartupUpdateCheck]，含 `-beta.N` 内测版与正式版提前推送），
+         * 仅在发现可用更新时通知；不勾选则完全跳过启动检查（设置页手动检查不受影响）。
+         * 默认关——稳定版更新由 JetBrains Marketplace 推送，本通道仅服务抢先体验。
+         * 也可通过 JetBrains Marketplace 获取正式版更新。
          */
-        var autoCheckUpdate: Boolean = true,
+        var autoCheckUpdate: Boolean = false,
+
+        /**
+         * Gitee 更新通道已忽略的版本号集合（`;` 分隔）；仅抑制这些版本的自动启动通知，
+         * 手动在设置页检查更新时不受影响。为空字符串表示无忽略。
+         */
+        var ignoredUpdateVersions: String = "",
 
         /**
          * SQL 反向转换的默认 Wrapper 形态（T-M36.3）：[REVERSE_AUTO] 自动 /

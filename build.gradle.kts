@@ -174,7 +174,14 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
+        // 本地清单测试：-Dmpvs.update.manifest.url=... 转发到沙盒 IDE 的 systemProperty（不影响 Gitee 用户）
+        val manifestUrl = System.getProperty("mpvs.update.manifest.url")
+        if (!manifestUrl.isNullOrBlank()) {
+            systemProperty("mpvs.update.manifest.url", manifestUrl)
+        }
     }
+
+    // 本地清单测试集成见 dev-support/run-ide-local-manifest.sh（自动起/停 Python 服务器）
 
     // M18.2 变更说明修复（用户实测：插件详情页「最新变化」显示停留在 M12）——
     // 根因：patchPluginXml 未显式配置时，org.jetbrains.changelog 自动从 CHANGELOG.md [Unreleased]
@@ -272,13 +279,15 @@ tasks {
         dependsOn("verifyPlugin")
     }
 
-    // M28：生成更新清单 update/update.json（插件设置页「检查更新」的数据源；发布时执行）——
+    // M28（内测通道改造）：生成更新清单 update/update.json（Gitee 抢先体验通道数据源）——
     // 版本号/下载地址/发布日期自动生成，changeNotes 生成后**人工补充**本次发布说明（纯文本，
-    // \n 换行）。发布流程：改 gradle.properties 版本号 → buildPlugin 并上传 Gitee Release 附件 →
-    // 执行本任务 → 补 changeNotes → 提交推送（清单 URL 固定，见 update/UpdateSource.kt）。
+    // \n 换行）。发布流程：改 gradle.properties 版本号（内测加 -beta.N 后缀）→ buildPlugin 并
+    // 上传 Gitee Release 附件 → 执行本任务 → 补 changeNotes → 提交推送（清单 URL 固定，
+    // 见 update/UpdateSource.kt）。稳定版由 JetBrains Marketplace 推送，本通道不参与。
+    // 草稿请写 update/preview.update.json（不参与检查），发布时复制到 update/update.json。
     register("writeUpdateManifest") {
         group = "publishing"
-        description = "生成更新清单 update/update.json（M28 检查更新数据源）"
+        description = "生成更新清单 update/update.json（Gitee 抢先体验通道数据源，版本号带 -beta.N 后缀）"
         // 配置期捕获（configuration cache 兼容：doLast 不触达 project/providers）
         val version = providers.gradleProperty("version").get()
         val outputFile = layout.projectDirectory.file("update/update.json").asFile
