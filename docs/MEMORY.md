@@ -143,6 +143,18 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 - [group-qr.png](./images/group-qr.png) / [wechat-qr.png](./images/wechat-qr.png) — 插件介绍页群二维码/微信二维码
 
+## 归档记忆（docs/memory-archive/，2026-08-22）
+
+> 从本地记忆系统归档的已完成/已交付内容（54 个文件），不再每次会话加载，按需查阅。
+> 全局通用记忆（41 个）备份在 `~/.zcode/cli/memories/global/`。
+
+| 文档 | 用途 |
+|------|------|
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 22 个 + 已解决踩坑 31 个 + 用户环境 1 个） |
+| [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
+| [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
+| [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
+
 ---
 
 ## 检索指引（按需求找文档）
@@ -157,6 +169,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 文档命名 / 格式规范 | `文档命名规范-说明文档.md` |
 | 产品介绍 / 使用说明 | `README.md`（产品定位、功能特性、截图、已知差异） |
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
+| 已修复 Bug / 已解决踩坑（归档） | `docs/memory-archive/README.md` |
+| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（41 个文件，手动查阅） |
 
 ## 变更记录
 
@@ -176,6 +190,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 2026-08-15 | 更新索引条目：20260815-1630-XML与注解SQL代码补全-M27-开发计划.md（M27 已交付 714 测试全绿，T-M27-01~06） |
 | 2026-08-15 | 新增索引条目：20260815-1630-XML与注解SQL代码补全-M27-开发计划.md（M27 任务源 T-M27-xx，方案 B 自研补全 + 联表支持；方案 C 立项 P-立项-06） |
 | 2026-08-14 | 新增索引条目：20260814-1130-多SQL选择弹窗代码行预览与定位-开发计划.md（T-M23.8，已交付 499 测试全绿） |
+| 2026-08-22 | 记忆精简（107→12）：新增「归档记忆」分区（docs/memory-archive/，54 个文件）；全局通用记忆 41 个备份到 `~/.zcode/cli/memories/global/`；全局经验精炼入 `~/.zcode/AGENTS.md` |
 | 2026-08-14 | 新增索引条目：20260814-1115-任意位置触发与多SQL选择-开发计划.md（T-M23.7，已交付 497 测试全绿） |
 | 2026-08-14 | 新增索引条目：20260814-1100-弹窗提示一键关闭SQL面板-开发计划.md（T-M23.6，已交付 492 测试全绿） |
 | 2026-08-14 | 更新索引条目：20260814-1015-SQL关键字标识符引用-开发计划.md（T-M23.5 增量交付，490 测试全绿；查询路径引用补齐） |
