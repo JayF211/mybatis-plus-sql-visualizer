@@ -66,4 +66,5 @@ object SqlListHtmlRenderer {
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
+        .replace("\n", "<br>")  // 换行转 <br>（multiline SQL 在列表 cell 中正确渲染）
 }

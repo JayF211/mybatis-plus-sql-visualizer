@@ -28,8 +28,18 @@ data class LogSqlEntry(
     val params: List<LogSqlParam>,
     /** 捕获时间戳。 */
     val timestamp: Long = System.currentTimeMillis(),
-    /** 摘要（列表展示用，单行截断）。 */
-    val summary: String = restoredSql.take(MAX_SUMMARY_LENGTH),
+    /**
+     * 摘要（列表展示用，智能截断：在第一行末尾或 MAX_SUMMARY_LENGTH 处取较小值，
+     * 避免 mid-line 截断导致 multiline SQL 列表展示不完整）。
+     */
+    val summary: String = run {
+        val newlineIdx = restoredSql.indexOf('\n')
+        val endIdx = when {
+            newlineIdx in 0 until MAX_SUMMARY_LENGTH -> newlineIdx  // 在第一行末尾截断
+            else -> minOf(restoredSql.length, MAX_SUMMARY_LENGTH)
+        }
+        if (endIdx < restoredSql.length) restoredSql.substring(0, endIdx) + "…" else restoredSql
+    },
     /** 条目来源（MyBatis / Hibernate / 未知）。 */
     val source: SqlSource = SqlSource.UNKNOWN,
 ) {

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -103,6 +104,59 @@ class DualParserIntegrationTest {
     }
 
     @Test
+    fun `多行 Hibernate 条目模型：summary 在第一行末尾截断`() {
+        // 模拟 HibernateLogParser 改造后输出的 multiline SQL 条目
+        val multilineSql = run {
+            val rawSql = buildString {
+                append("select\n")
+                append("            userentity0_.id as id1_2_,\n")
+                append("            userentity0_.username as username9_2_\n")
+                append("        from\n")
+                append("            user userentity0_\n")
+                append("        where\n")
+                append("            userentity0_.username=?")
+            }
+            val restoredSql = buildString {
+                append("select\n")
+                append("            userentity0_.id as id1_2_,\n")
+                append("            userentity0_.username as username9_2_\n")
+                append("        from\n")
+                append("            user userentity0_\n")
+                append("        where\n")
+                append("            userentity0_.username='1'")
+            }
+            LogSqlEntry(
+                rawSql = rawSql,
+                restoredSql = restoredSql,
+                params = listOf(LogSqlParam("1", "VARCHAR")),
+                source = SqlSource.HIBERNATE,
+            )
+        }
+
+        assertEquals(SqlSource.HIBERNATE, multilineSql.source)
+        assertTrue(multilineSql.restoredSql.contains("select"))
+        assertTrue(multilineSql.restoredSql.contains("from"))
+        assertTrue(multilineSql.restoredSql.contains("where"))
+        assertEquals(1, multilineSql.params.size)
+        assertEquals("1", multilineSql.params[0].value)
+        assertEquals("VARCHAR", multilineSql.params[0].type)
+        // summary 应在第一行末尾截断（换行符处）
+        assertTrue(multilineSql.summary.endsWith("select…"))
+        assertTrue(!multilineSql.summary.contains("userentity0_"))
+    }
+
+    @Test
+    fun `多行 Hibernate 条目模型：短 SQL 不截断`() {
+        val shortEntry = LogSqlEntry(
+            rawSql = "select 1",
+            restoredSql = "select 1",
+            params = emptyList(),
+            source = SqlSource.HIBERNATE,
+        )
+        assertEquals("select 1", shortEntry.summary)
+    }
+
+    @Test
     fun `Hibernate 解析器关闭时不产出`() {
         val myBatis = MyBatisLogParser()
         val hibernate = HibernateLogParser()
@@ -139,5 +193,99 @@ class DualParserIntegrationTest {
         assertEquals(2, entries.size)
         assertTrue(entries.any { it.source == SqlSource.MYBATIS })
         assertTrue(entries.any { it.source == SqlSource.HIBERNATE })
+    }
+
+    // ========== 多模块并发干扰测试（Maven 多模块同时跑 JPA + MyBatis-Plus）==========
+
+    @Test
+    fun `干扰：原生 MyBatis Preparing 行混入 Hibernate COLLECTING 态不污染 buffer`() {
+        val entries = feedDual(
+            MyBatisLogParser(),
+            HibernateLogParser(),
+            // Hibernate multiline SQL 开始
+            "Hibernate: ",
+            "    /* SELECT",
+            "        u ",
+            "    FROM",
+            "        UserEntity u ",
+            "    WHERE",
+            "        u.username = :username */ select",
+            "            userentity0_.id as id1_2_,",
+            // ← 原生 MyBatis 行（无 ==> 前缀）混入
+            "Preparing: SELECT id FROM config WHERE key = ?",
+            "Parameters: timeout(Integer)",
+            // Hibernate SQL 续行
+            "            userentity0_.username as username9_2_ ",
+            "        from",
+            "            user userentity0_ ",
+            "        where",
+            "            userentity0_.username=?",
+            "binding parameter [1] as [VARCHAR] - [1]",
+        )
+        // Hibernate 应产出 1 条完整 SQL（不含 MyBatis 内容），MyBatis 也应产出 1 条
+        val hbEntries = entries.filter { it.source == SqlSource.HIBERNATE }
+        val mpEntries = entries.filter { it.source == SqlSource.MYBATIS }
+        assertEquals(1, hbEntries.size)
+        assertEquals(1, mpEntries.size)
+        // Hibernate SQL 不含 MyBatis 行的内容
+        assertFalse(hbEntries[0].rawSql.contains("Preparing"))
+        assertFalse(hbEntries[0].rawSql.contains("config"))
+        assertTrue(hbEntries[0].rawSql.contains("userentity0_"))
+        assertTrue(hbEntries[0].rawSql.contains("from"))
+        assertTrue(hbEntries[0].rawSql.contains("where"))
+        // MyBatis 条目正确
+        assertEquals("SELECT id FROM config WHERE key = timeout", mpEntries[0].restoredSql)
+    }
+
+    @Test
+    fun `干扰：Hibernate 行混入 MyBatis prefixMatched 等待态不误收`() {
+        // 仅测 MyBatis 解析器（不测 Hibernate，避免 bare SQL 被 Hibernate 误收的干扰）
+        val myBatis = MyBatisLogParser()
+
+        myBatis.feed("Preparing:")  // 独占一行 → 进入 prefixMatched
+        // ← Hibernate 行（不应被当作 MyBatis SQL）
+        myBatis.feed("Hibernate: select user0_.id from users user0_ where user0_.id=?")
+        myBatis.feed("binding parameter [1] as [BIGINT] - [1]")
+        // ← 块注释行（不应被当作 MyBatis SQL）
+        myBatis.feed("/* load com.example.User */")
+        // ← 真正的 MyBatis SQL
+        myBatis.feed("SELECT id FROM config WHERE key = ?")
+        myBatis.feed("Parameters: timeout(Integer)")
+
+        val entries = mutableListOf<LogSqlEntry>()
+        myBatis.closePending()?.let { entries += it }
+        entries += myBatis.takeEntries()
+
+        // MyBatis 应只产出 1 条（真正的 SQL），Hibernate 行全部被跳过
+        assertEquals(1, entries.size)
+        assertEquals("SELECT id FROM config WHERE key = timeout", entries[0].restoredSql)
+    }
+
+    @Test
+    fun `干扰：MP 格式 MyBatis 行混入 Hibernate COLLECTING 态不污染 buffer`() {
+        val entries = feedDual(
+            MyBatisLogParser(),
+            HibernateLogParser(),
+            // Hibernate multiline SQL
+            "Hibernate: select",
+            "            userentity0_.id as id1_2_,",
+            // ← MP 格式 MyBatis 行混入
+            "==>  Preparing: SELECT * FROM orders WHERE user_id = ?",
+            "==> Parameters: 42(Long)",
+            // Hibernate 续行
+            "        from",
+            "            user userentity0_",
+            "binding parameter [1] as [BIGINT] - [1]",
+        )
+        val hbEntries = entries.filter { it.source == SqlSource.HIBERNATE }
+        val mpEntries = entries.filter { it.source == SqlSource.MYBATIS }
+        assertEquals(1, hbEntries.size)
+        assertEquals(1, mpEntries.size)
+        // Hibernate SQL 不含 MyBatis 内容
+        assertFalse(hbEntries[0].rawSql.contains("orders"))
+        assertFalse(hbEntries[0].rawSql.contains("==>"))
+        assertTrue(hbEntries[0].rawSql.contains("userentity0_"))
+        // MyBatis 条目正确
+        assertEquals("SELECT * FROM orders WHERE user_id = 42", mpEntries[0].restoredSql)
     }
 }

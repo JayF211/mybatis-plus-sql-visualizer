@@ -96,6 +96,10 @@ class MyBatisLogParser(
         // 分支 5：等待 SQL 态 → 此行即 SQL
         if (prefixMatched) {
             if (line.isBlank()) return // 跳过空行
+            // 多模块并发时，Hibernate 行可能出现在 Preparing: 独占一行后的等待态 → 跳过并继续等待
+            if (looksLikeHibernateLine(line)) {
+                return // 不重置 prefixMatched，继续等 MyBatis SQL
+            }
             pendingSql = line.trim().take(maxParseLength)
             prefixMatched = false
             return
@@ -151,10 +155,30 @@ class MyBatisLogParser(
         return line.substring(idx + keyword.length).trim().isEmpty()
     }
 
+    /**
+     * 是否为 Hibernate 日志行（多模块并发时可能混入 MyBatis 控制台）。
+     * 在 prefixMatched 等待态中跳过此类行，避免将 Hibernate 行误认为 MyBatis SQL。
+     */
+    private fun looksLikeHibernateLine(line: String): Boolean {
+        val trimmed = line.trim()
+        // Hibernate: 前缀 / 块注释开头 / 参数绑定行
+        return trimmed.startsWith("Hibernate:", ignoreCase = true) ||
+            trimmed.startsWith("/*") ||
+            HIBERNATE_BINDING_PATTERN.containsMatchIn(trimmed)
+    }
+
     companion object {
         private const val DEFAULT_SQL_PREFIX = "Preparing:"
         private const val DEFAULT_PARAM_PREFIX = "Parameters:"
         private const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        /**
+         * Hibernate 参数绑定行模式：`binding parameter [N] as [TYPE] - [VALUE]`
+         */
+        private val HIBERNATE_BINDING_PATTERN = Regex(
+            """binding parameter\s+\[(\d+)\]\s+as\s+\[(\w+)\]\s+-\s+\[(.*)\]""",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }
 

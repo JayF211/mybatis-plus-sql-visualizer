@@ -156,6 +156,25 @@ class LogToSqlPanelTest : BasePlatformTestCase() {
         assertTrue(result, result.contains("email = NULL"))
     }
 
+    fun testConvertHibernateLogFormattedToMultiline() {
+        // 验证 Hibernate 日志转换后 SQL 格式化为多行（面板需正确渲染多行输出）
+        panel.setInputForTest(
+            "Hibernate: select user0_.id as id1_0_0_, user0_.name as name2_0_0_, user0_.email as email3_0_0_ from users user0_ where user0_.id=? and user0_.name=?\n" +
+                "binding parameter [1] as [BIGINT] - [42]\n" +
+                "binding parameter [2] as [VARCHAR] - [Alice]",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        // SqlFormatter 格式化为多行输出
+        assertTrue("应格式化为多行", result.contains("\n"))
+        assertTrue(result, result.contains("user0_.id = 42"))
+        assertTrue(result, result.contains("user0_.name = 'Alice'"))
+        assertEquals(
+            MpSqlVisualizerBundle.message("logToSql.status.converted", 1),
+            panel.statusForTest(),
+        )
+    }
+
     fun testConvertHibernateCommentPrefix() {
         panel.setInputForTest(
             "/* load com.example.User */ select user0_.id from users user0_ where user0_.name=?\n" +

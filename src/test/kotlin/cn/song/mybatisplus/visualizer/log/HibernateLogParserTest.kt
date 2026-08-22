@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -616,5 +617,194 @@ class HibernateLogParserTest {
         assertEquals(1, entries.size)
         assertEquals("select user0_.id from users user0_ where user0_.id=1", entries[0].restoredSql)
         assertEquals(SqlSource.HIBERNATE, entries[0].source)
+    }
+
+    // ========== Multiline SQL 解析（状态机改造） ==========
+
+    @Test
+    fun `用户日志完整复刻：多行 HQL 注释 + 多行 SQL + 参数`() {
+        val entries = feedAll(
+            parser(),
+            "Hibernate: ",
+            "    /* SELECT",
+            "        u ",
+            "    FROM",
+            "        UserEntity u ",
+            "    WHERE",
+            "        u.username = :username */ select",
+            "            userentity0_.id as id1_2_,",
+            "            userentity0_.age as age2_2_,",
+            "        from",
+            "            user userentity0_",
+            "        where",
+            "            userentity0_.username=?",
+            "binding parameter [1] as [VARCHAR] - [1]",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].rawSql.startsWith("select"))
+        assertTrue(entries[0].rawSql.contains("userentity0_.id as id1_2_"))
+        assertTrue(entries[0].rawSql.contains("user userentity0_"))
+        assertTrue(entries[0].rawSql.contains("userentity0_.username=?"))
+        // 注释块不应出现在最终 SQL 中
+        assertTrue(!entries[0].rawSql.contains("UserEntity"))
+        assertEquals(1, entries[0].params.size)
+        assertEquals("1", entries[0].params[0].value)
+        assertEquals("VARCHAR", entries[0].params[0].type)
+    }
+
+    @Test
+    fun `Hibernate 独占一行 + 单行 SQL`() {
+        val entries = feedAll(
+            parser(),
+            "Hibernate:",
+            "select id from user where id = ?",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("select id from user where id = ?", entries[0].rawSql)
+    }
+
+    @Test
+    fun `Hibernate 独占一行 + 多行 SQL`() {
+        val entries = feedAll(
+            parser(),
+            "Hibernate:",
+            "select id, name",
+            "from user",
+            "where id = ?",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].rawSql.startsWith("select"))
+        assertTrue(entries[0].rawSql.contains("id, name"))
+        assertTrue(entries[0].rawSql.contains("from user"))
+        assertTrue(entries[0].rawSql.contains("where id = ?"))
+    }
+
+    @Test
+    fun `同行注释 + 多行 SQL 续行`() {
+        val entries = feedAll(
+            parser(),
+            "/* load User */ select id",
+            ", name",
+            "from user",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("select id , name from user", entries[0].rawSql)
+        // 注释不应出现在最终 SQL 中
+        assertTrue(!entries[0].rawSql.contains("load User"))
+    }
+
+    @Test
+    fun `注释块含 SQL 关键字不误判`() {
+        val entries = feedAll(
+            parser(),
+            "/* SELECT u FROM UserEntity */ select id from user",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("select id from user", entries[0].rawSql)
+    }
+
+    @Test
+    fun `多条多行语句连续`() {
+        val entries = feedAll(
+            parser(),
+            // 第一条 multiline SQL
+            "Hibernate: select id, name",
+            "from user",
+            "where id = ?",
+            "binding parameter [1] as [BIGINT] - [1]",
+            // 第二条 multiline SQL
+            "Hibernate: select id, age",
+            "from user",
+            "where age = ?",
+            "binding parameter [1] as [INTEGER] - [25]",
+        )
+        assertEquals(2, entries.size)
+        assertEquals("select id, name from user where id = 1", entries[0].restoredSql)
+        assertEquals("select id, age from user where age = 25", entries[1].restoredSql)
+    }
+
+    @Test
+    fun `单行 SQL 仍正常（回归）`() {
+        val entries = feedAll(
+            parser(),
+            "Hibernate: select id from user",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("select id from user", entries[0].rawSql)
+    }
+
+    @Test
+    fun `纯 SQL 多行无前缀（bare SQL 续行）`() {
+        val entries = feedAll(
+            parser(),
+            "select id from user",
+            "where id = ?",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].rawSql.startsWith("select id from user"))
+        assertTrue(entries[0].rawSql.contains("where id = ?"))
+    }
+
+    @Test
+    fun `混合注释+bare SQL 续行`() {
+        val entries = feedAll(
+            parser(),
+            "/* load User */ select id from user",
+            "where name = ?",
+            "binding parameter [1] as [VARCHAR] - [abc]",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].rawSql.startsWith("select id from user"))
+        assertTrue(entries[0].rawSql.contains("where name = ?"))
+        assertEquals(1, entries[0].params.size)
+        assertEquals("abc", entries[0].params[0].value)
+        assertEquals("VARCHAR", entries[0].params[0].type)
+    }
+
+    @Test
+    fun `Hibernate 独占一行出现在 COLLECTING 态中应闭合前条目开启新条目`() {
+        // 复现真实场景：org.hibernate.SQL 输出 comment+SQL 后，Hibernate: 独占一行再输出第二份
+        val entries = feedAll(
+            parser(),
+            // 第一份（来自 org.hibernate.SQL logger，无 Hibernate: 前缀）
+            "    /* SELECT",
+            "        u ",
+            "    FROM",
+            "        UserEntity u ",
+            "    WHERE",
+            "        u.username = :username */ select",
+            "            userentity0_.id as id1_2_,",
+            "            userentity0_.username as username9_2_ ",
+            "        from",
+            "            user userentity0_ ",
+            "        where",
+            "            userentity0_.username=?",
+            // Hibernate: 独占一行 → 应闭合第一条，开启新收集
+            "Hibernate: ",
+            // 第二份（来自 Hibernate: logger）
+            "    /* SELECT",
+            "        u ",
+            "    FROM",
+            "        UserEntity u ",
+            "    WHERE",
+            "        u.username = :username */ select",
+            "            userentity0_.id as id1_2_,",
+            "            userentity0_.username as username9_2_ ",
+            "        from",
+            "            user userentity0_ ",
+            "        where",
+            "            userentity0_.username=?",
+            "binding parameter [1] as [VARCHAR] - [1]",
+        )
+        // 应产出 2 条，且都不含 "Hibernate:" 文本
+        assertEquals(2, entries.size)
+        assertFalse(entries[0].rawSql.contains("Hibernate"))
+        assertFalse(entries[1].rawSql.contains("Hibernate"))
+        assertTrue(entries[0].rawSql.contains("userentity0_"))
+        assertTrue(entries[1].rawSql.contains("userentity0_"))
+        // 第二条有参数
+        assertEquals(1, entries[1].params.size)
+        assertEquals("1", entries[1].params[0].value)
+        assertEquals("VARCHAR", entries[1].params[0].type)
     }
 }
