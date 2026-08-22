@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.22-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.22-beta.1/mybatis-plus-sql-visualizer-2026.8.22-beta.1.zip",
-  "changeNotes": "v2026.8.22：更新机制改为 Gitee 抢先体验通道（内测版）\n通知弹窗优化：标题精简 + 版本号行 + 忽略此版本按钮\n双 JSON 文件：update/update.json 为检查源，preview.update.json 为草稿\n支持同日多版本（-beta.N 序号递增）\n忽略此版本仅抑制自动通知，手动检查不受影响",
-  "publishDate": "2026-08-22",
+  "version": "2026.8.21",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.21/mybatis-plus-sql-visualizer-2026.8.21.zip",
+  "changeNotes": "JPA/Hibernate SQL 预览支持（Derived 派生查询 / CriteriaQuery 强类型 / HQL 自定义 DAO，gutter 图标点击直接弹窗看 SQL）\nHibernate/JPA SQL 日志捕获支持（双解析器并列架构：MyBatis + Hibernate 日志同时解析互不干扰）\nSQL→Java 反向子查询 JOIN 解析 + MConsumer 形态 + ext 条件 lambda 化增强\nJPA 分页修复（Pageable → LIMIT）+ @Query 路由优先 + 拼接字符串提取\nJPQL IN 子句三层修复（括号补全 + 数值引号 + inList 逗号分割多值）+ 复制时剥离注释",
+  "publishDate": "2026-08-21",
   "sinceBuild": "243"
 }
