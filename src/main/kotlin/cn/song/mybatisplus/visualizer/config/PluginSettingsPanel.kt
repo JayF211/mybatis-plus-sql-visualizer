@@ -985,11 +985,31 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      * 导出当前设置到 JSON 文件（文件选择器 → 写入）。
      */
     private fun exportSettings() {
-        // TEMP STUB (F-7): O-5 export body has FileChooser API mismatches; restored after F-7 tests pass.
-        com.intellij.openapi.ui.Messages.showInfoMessage(
-            rootPanel,
-            "Export not available in this build",
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
             MpSqlVisualizerBundle.message("settings.export"),
+            "JSON (*.json)",
+            "json",
         )
+        val baseDir = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .findFileByIoFile(java.io.File(System.getProperty("user.home")))
+        val wrapper = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance().createSaveFileDialog(descriptor, null)
+        val saved = wrapper.save(baseDir, "mp-sql-visualizer-settings.json")
+        if (saved != null) {
+            runCatching {
+                java.io.File(saved.file.absolutePath).writeText(PluginSettings.toJson(), Charsets.UTF_8)
+            }.onSuccess {
+                com.intellij.openapi.ui.Messages.showInfoMessage(
+                    rootPanel,
+                    MpSqlVisualizerBundle.message("settings.export.success"),
+                    MpSqlVisualizerBundle.message("settings.export"),
+                )
+            }.onFailure { e ->
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    rootPanel,
+                    MpSqlVisualizerBundle.message("settings.export.failed", e.message ?: "unknown"),
+                    MpSqlVisualizerBundle.message("settings.export"),
+                )
+            }
+        }
     }
 }

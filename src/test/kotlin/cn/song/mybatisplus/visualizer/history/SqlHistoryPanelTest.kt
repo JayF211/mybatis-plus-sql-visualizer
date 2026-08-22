@@ -25,7 +25,8 @@ class SqlHistoryPanelTest {
 
     @Before
     fun setUp() {
-        manager = SqlHistoryManager.getInstance()
+        // 直接构造（非平台单例）：本测试仅验证视图编排逻辑，不涉及跨会话持久化（由 SqlHistoryManagerTest 覆盖）。
+        manager = SqlHistoryManager()
         manager.clear()
     }
 

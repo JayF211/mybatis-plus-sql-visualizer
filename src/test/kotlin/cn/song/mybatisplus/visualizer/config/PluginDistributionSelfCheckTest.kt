@@ -43,10 +43,16 @@ class PluginDistributionSelfCheckTest {
     fun `pluginXml_不依赖kotlin插件_支持动态加载`() {
         // M14.7：移除 org.jetbrains.kotlin 运行时依赖（Kotlin 插件非动态 → 依赖它会导致免重启失败）；
         // 本插件不处理 Kotlin PSI，kotlin-stdlib 由构建自动打包
+        // M32-F-4：添加 org.jetbrains.kotlin 可选依赖 + supportsKotlinPluginMode 扩展（Marketplace 要求）
         val xml = resourceText("META-INF/plugin.xml")
         assertTrue("应保留 com.intellij.java 依赖", xml.contains("<depends>com.intellij.java</depends>"))
-        assertTrue("不应依赖 org.jetbrains.kotlin 插件", !xml.contains("<depends>org.jetbrains.kotlin"))
-        assertTrue("不应注册 kotlin 扩展命名空间", !xml.contains("defaultExtensionNs=\"org.jetbrains.kotlin\""))
+        // 不应有硬性 Kotlin 依赖（无 optional 标记的 <depends>org.jetbrains.kotlin</depends>）
+        assertTrue("不应硬性依赖 org.jetbrains.kotlin 插件",
+            !xml.contains("<depends>org.jetbrains.kotlin</depends>"))
+        // 允许可选 Kotlin 依赖（optional="true"）+ supportsKotlinPluginMode 扩展（Marketplace 合规）
+        assertTrue("应有可选 Kotlin 依赖", xml.contains("optional=\"true\""))
+        assertTrue("应有 Kotlin plugin mode 声明",
+            xml.contains("supportsKotlinPluginMode"))
     }
 
     @Test

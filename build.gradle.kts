@@ -114,13 +114,6 @@ kotlin {
     jvmToolchain(17)
 }
 
-// O-5：临时排除 F-7 智能体负责的 history 测试文件（编译错误阻塞全部测试编译；不修改其源码）
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    if (name == "compileTestKotlin") {
-        excludes.addAll(listOf("**/history/SqlHistoryPanelTest.kt"))
-    }
-}
-
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"

@@ -168,7 +168,7 @@ object PerfRulesBatch3 {
             val warnings = mutableListOf<PerfWarning>()
             collectSelects(ast).forEach { select ->
                 if (select is PlainSelect) {
-                    val groupByCount = select.groupBy?.groupByExpressions?.size ?: 0
+                    val groupByCount = select.groupBy?.groupByExpressionList?.size ?: 0
                     val orderByCount = select.orderByElements?.size ?: 0
                     if (groupByCount >= 3 && orderByCount >= 2) {
                         warnings += PerfWarning(

@@ -183,6 +183,11 @@
                     factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/>
     </extensions>
 
+    <!-- F-4：Kotlin plugin mode 声明（Marketplace 要求：依赖 Kotlin 插件需声明兼容模式） -->
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsKotlinPluginMode="true"/>
+    </extensions>
+
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
     <actions>
         <!-- M16 i18n：text/description 引用 bundle 键（action.<id>.<prop> 约定，messages.MpSqlVisualizerBundle）；

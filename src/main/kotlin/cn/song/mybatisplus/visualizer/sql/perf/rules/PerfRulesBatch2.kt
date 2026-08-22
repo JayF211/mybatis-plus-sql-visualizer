@@ -167,7 +167,7 @@ object PerfRulesBatch2 {
             val warnings = mutableListOf<PerfWarning>()
             collectSelects(ast).forEach { select ->
                 val hasGroupBy = select.groupBy != null &&
-                    !select.groupBy.groupByExpressions?.expressions.isNullOrEmpty()
+                    !select.groupBy.groupByExpressionList.isNullOrEmpty()
                 val hasAggregate = hasAggregateFunction(select)
                 if (hasGroupBy && !hasAggregate) {
                     warnings += PerfWarning(
@@ -353,13 +353,13 @@ object PerfRulesBatch2 {
         val result = mutableListOf<String>()
         when (expr) {
             is Function -> {
-                expr.parameters?.expressions?.forEach { param ->
+                expr.parameters?.forEach { param ->
                     if (param is Column) {
                         result += expr.name + "(" + param.columnName + ")"
                     }
                 }
                 // Also check nested parameters for functions
-                expr.parameters?.expressions?.forEach { param ->
+                expr.parameters?.forEach { param ->
                     result += findFunctionOnColumn(param)
                 }
             }
