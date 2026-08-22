@@ -74,6 +74,90 @@ class ParameterReplacerTest {
     }
 
     @Test
+    fun `buildExecutableSql_数值参数_不加引号`() {
+        val sql = "SELECT id FROM tbl WHERE id = ? AND age > ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("id", "age"),
+            paramValues = mapOf("id" to "1001", "age" to "18"),
+            hints = listOf(ParamHint(quote = false), ParamHint(quote = false)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE id = 1001 AND age > 18", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_字符串参数_加引号`() {
+        val sql = "SELECT id FROM tbl WHERE name = ? AND city = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("name", "city"),
+            paramValues = mapOf("name" to "John", "city" to "Beijing"),
+            hints = listOf(ParamHint(quote = true), ParamHint(quote = true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'John' AND city = 'Beijing'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_空值保留占位符`() {
+        val sql = "SELECT id FROM tbl WHERE id = ? AND name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("id", "name"),
+            paramValues = mapOf("id" to "1001"),
+            hints = listOf(ParamHint(quote = false), ParamHint(quote = true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE id = 1001 AND name = ?", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_单引号转义防注入`() {
+        val sql = "SELECT id FROM tbl WHERE name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("name"),
+            paramValues = mapOf("name" to "O'Brien"),
+            hints = listOf(ParamHint(quote = true)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE name = 'O''Brien'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_无参数原样返回`() {
+        val sql = "SELECT id FROM tbl"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = emptyList(),
+            paramValues = emptyMap(),
+        )
+        assertEquals("SELECT id FROM tbl", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_启发式数值判定_无hint时`() {
+        val sql = "SELECT id FROM tbl WHERE id = ? AND name = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("id", "name"),
+            paramValues = mapOf("id" to "42", "name" to "Alice"),
+            hints = emptyList(),
+        )
+        // 无 hint 时走启发式：纯数字不加引号，非数字加引号
+        assertEquals("SELECT id FROM tbl WHERE id = 42 AND name = 'Alice'", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_参数多于占位符_忽略多余参数`() {
+        val sql = "SELECT id FROM tbl WHERE id = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql = sql,
+            sources = listOf("id"),
+            paramValues = mapOf("id" to "1", "extra" to "x"),
+            hints = listOf(ParamHint(quote = false)),
+        )
+        assertEquals("SELECT id FROM tbl WHERE id = 1", result)
+    }
+
+    @Test
     fun `单行模式_子句空格连接`() {
         val statement = SelectStatement(
             table = table,

@@ -5946,7 +5946,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
     }
 
     fun testTenantLineInjectedForUpdate() {
-        // T-TenantLine：UPDATE WHERE 追加 `AND tenant_id = ?`
+        // T-TenantLine + F-6：UPDATE SET 追加 `tenant_id = 1` + WHERE 追加 `AND tenant_id = ?`
         enableTenantLine()
         myFixture.configureByText(
             "Demo.java",
@@ -5980,7 +5980,7 @@ class SqlPreviewServiceTest : BasePlatformTestCase() {
         assertEquals(
             """
             UPDATE user_entity
-            SET dic_status = 2
+            SET dic_status = 2, tenant_id = 1
             WHERE id = 1001
                 AND tenant_id = ?
             """.trimIndent(),

@@ -209,6 +209,21 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var logDurationSortEnabled: Boolean = false,
 
+        // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
+
+        /**
+         * 日志耗时前缀（O-1 Phase B）：自定义耗时行的前缀关键字（如 `Time:` / `duration:`），
+         * 用于从日志文本中解析执行耗时。空串表示不匹配自定义格式。
+         * 默认 `Time:`（对齐常见 p6spy / MP TimeCount 格式）。
+         */
+        var logTimePrefix: String = DEFAULT_LOG_TIME_PREFIX,
+
+        /**
+         * 慢查询阈值（O-1 Phase C）：耗时 >= 该值（毫秒）判定为慢查询。
+         * 默认 1000ms。
+         */
+        var slowQueryThresholdMs: Long = DEFAULT_SLOW_QUERY_THRESHOLD_MS,
+
         /**
          * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
          * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
@@ -226,6 +241,48 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** Hibernate 参数行前缀（默认 `binding parameter`）。 */
         var logHibernateParamPrefix: String = DEFAULT_LOG_HIBERNATE_PARAM_PREFIX,
+
+        // ---------- F-6 拦截器模拟增强（TenantLine / DynamicTableName / DataPermission） ----------
+
+        /**
+         * 租户列默认值（F-6 Phase A）：UPDATE SET 追加 `tenantColumn = {值}` 时的字面量（默认 "1"）；
+         * INSERT 追加租户列时同样作为面板回填默认值。对齐 MP 多租户运行时租户 ID 取值语义。
+         */
+        var tenantColumnDefault: String = DEFAULT_TENANT_COLUMN_DEFAULT,
+
+        /**
+         * INSERT 也追加租户列（F-6 Phase A）：开启后 INSERT 列清单追加租户列（对齐 MP
+         * TenantLineInnerInterceptor INSERT 含租户列语义）；关闭后 INSERT 不追加。
+         * 默认开——与 injectTenantLine 开关独立（WHERE 注入 / INSERT 追加可分别控制）。
+         */
+        var injectTenantOnInsert: Boolean = true,
+
+        /**
+         * 动态表名映射规则（F-6 Phase B）：预览时按规则替换表名（正则 → 替换模板）。
+         * 空列表表示不替换。规则按列表顺序逐条应用（首个匹配即停）。
+         */
+        var dynamicTableNameRules: List<TableNameRule> = emptyList(),
+
+        /**
+         * 数据权限占位提示（F-6 Phase C）：开启后 SELECT/UPDATE/DELETE 预览时在警告区显示
+         * DataPermissionInterceptor 运行时差异提示；并提供占位条件输入框供用户手动填写模拟条件。
+         * 默认关（低频项，需要时手动开启）。
+         */
+        var dataPermissionHint: Boolean = false,
+
+        /**
+         * 数据权限模拟条件（F-6 Phase C）：用户手动填写的 WHERE 片段（如 `dept_id IN (1,2,3)`），
+         * 开启 dataPermissionHint 后追加到 SELECT/UPDATE/DELETE 语句末尾。空字符串表示无模拟条件。
+         */
+        var dataPermissionMockCondition: String = "",
+
+        // ---------- F-7 SQL 历史记录 ----------
+
+        /**
+         * SQL 历史记录上限（F-7）：非收藏条目的最大数量（默认 200）。超出自动淘汰最旧非收藏条目。
+         * 收藏条目无数量上限。
+         */
+        var historyMaxSize: Int = DEFAULT_HISTORY_MAX_SIZE,
     )
 
     private var state = State()
@@ -278,6 +335,10 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
 
+        // ---------- O-1 日志窗口差异化默认值 ----------
+        const val DEFAULT_LOG_TIME_PREFIX = "Time:"
+        const val DEFAULT_SLOW_QUERY_THRESHOLD_MS = 1000L
+
         // ---------- Hibernate/JPA 日志默认值 ----------
         const val DEFAULT_LOG_HIBERNATE_SQL_PREFIX = "Hibernate:"
         const val DEFAULT_LOG_HIBERNATE_PARAM_PREFIX = "binding parameter"
@@ -286,12 +347,36 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 默认租户列名（T-TenantLine，对齐 MP TenantLineInnerInterceptor 默认列名）。 */
         const val DEFAULT_TENANT_COLUMN_NAME = "tenant_id"
 
+        /** 默认租户列值（F-6 Phase A）：UPDATE SET / INSERT 追加租户列时的字面量默认值。 */
+        const val DEFAULT_TENANT_COLUMN_DEFAULT = "1"
+
+        /** 默认 SQL 历史记录上限（F-7，非收藏条目）。 */
+        const val DEFAULT_HISTORY_MAX_SIZE = 200
+
         /**
          * 获取全局配置实例。
          */
         @JvmStatic
         fun getInstance(): PluginSettings =
             ApplicationManager.getApplication().getService(PluginSettings::class.java)
+
+        /**
+         * 序列化为 JSON 字符串（O-5：设置导入导出）；委托 [SettingsIO.exportToJson]。
+         */
+        fun toJson(): String = SettingsIO.exportToJson(getInstance().state)
+
+        /**
+         * 从 JSON 字符串导入并覆盖当前全局配置（O-5：设置导入导出）；委托 [SettingsIO.importFromJson]。
+         *
+         * @throws SettingsIO.ImportException JSON 格式错误或版本不兼容
+         */
+        fun fromJson(json: String) {
+            val imported = SettingsIO.importFromJson(json)
+            val instance = getInstance()
+            // 保留全局项（language 等），仅覆盖可覆盖项
+            imported.language = instance.state.language
+            instance.loadState(imported)
+        }
     }
 }
 
@@ -299,3 +384,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 fun interface SettingsChangeListener {
     fun settingsChanged()
 }
+
+/**
+ * 动态表名映射规则（F-6 Phase B）：预览时按正则替换表名。
+ *
+ * @param pattern     正则表达式（匹配原始表名或带前缀/后缀的表名）
+ * @param replacement 替换模板（支持 `$1`/`$2` 引用正则捕获组，`$tableName` 引用完整原始表名）
+ * @param enabled     是否启用（false 时跳过该规则）
+ */
+data class TableNameRule(
+    val pattern: String,
+    val replacement: String,
+    val enabled: Boolean = true,
+)

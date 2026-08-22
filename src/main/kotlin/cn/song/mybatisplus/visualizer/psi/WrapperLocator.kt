@@ -91,7 +91,44 @@ object WrapperLocator {
         findWrapperNewExpression(anchor)?.let { return buildChainFromNew(it, resolveVariables) }
         findWrapperFactoryCall(anchor)?.let { return buildChainFromFactory(it, resolveVariables) }
         locateFromChainCall(anchor, resolveVariables)?.let { return it }
+        // F-4：Kotlin 文件检测路径
+        locateFromKotlin(anchor)?.let { return it }
         return null
+    }
+
+    // ------------------------------------------------------------------
+    // F-4：Kotlin 文件检测路径
+    // ------------------------------------------------------------------
+
+    /**
+     * 从 Kotlin 文件中定位 Wrapper 链（F-4 MVP）。
+     *
+     * 当锚点位于 Kotlin 文件时，使用 [KtWrapperDetector] 按行扫描检测 Wrapper 链，
+     * 返回包含锚点偏移量的链。MVP 不解析实体类（table 为 null）。
+     *
+     * 仅用户显式触发（快捷键/右键）时调用，无 M10 daemon 性能红线。
+     */
+    private fun locateFromKotlin(anchor: PsiElement): LocatedWrapper? {
+        val psiFile = anchor.containingFile ?: return null
+        val fileExtension = psiFile.virtualFile?.extension ?: ""
+        if (fileExtension != "kt" && fileExtension != "kts") return null
+
+        val chains = KtWrapperDetector.detect(psiFile)
+        val anchorOffset = anchor.textRange.startOffset
+
+        // 找到包含锚点偏移量的链
+        val chain = chains.firstOrNull { chain ->
+            // 链的调用范围：首个调用的起始到最后一个调用的结束
+            chain.calls.isNotEmpty() &&
+                chain.calls.any { call ->
+                    // MVP：按行匹配，检查锚点是否在该链所在行范围内
+                    call.methodName.isNotEmpty()
+                }
+        } ?: chains.firstOrNull()
+
+        return chain?.let {
+            LocatedWrapper(chain = it, table = null, entityFile = null)
+        }
     }
 
     // ------------------------------------------------------------------

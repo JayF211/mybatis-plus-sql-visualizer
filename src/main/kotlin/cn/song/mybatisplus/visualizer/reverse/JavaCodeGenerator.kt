@@ -380,7 +380,7 @@ object JavaCodeGenerator {
         val sb = StringBuilder()
         appendHeader(sb, result, entity, wrapperKind, invocation)
         if (result.conditions.isEmpty()) {
-            sb.append("// ⚠ 无 WHERE 条件，将更新全表数据！\n")
+            sb.append("// ⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！\n")
         }
         val chain = buildString {
             // T-M42：serialVersionUID 系列 SET 列与条件列跳过（不生成该列 set/setSql）
@@ -426,7 +426,7 @@ object JavaCodeGenerator {
         val sb = StringBuilder()
         appendHeader(sb, result, entity, wrapperKind, invocation)
         if (result.conditions.isEmpty()) {
-            sb.append("// ⚠ 无 WHERE 条件，将删除全表数据！\n")
+            sb.append("// ⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！\n")
         }
         val multiTable = result.deleteTargets.isNotEmpty()
         if (multiTable) {

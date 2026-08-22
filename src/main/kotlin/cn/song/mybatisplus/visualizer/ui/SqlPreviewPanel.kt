@@ -8,11 +8,18 @@ import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
-import cn.song.mybatisplus.visualizer.sql.PerfLevel
-import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
+import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
+import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
+import cn.song.mybatisplus.visualizer.ui.diff.DiffHighlighter
+import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
+import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
+import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
@@ -76,6 +83,7 @@ import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JSplitPane
+import javax.swing.JTabbedPane
 import javax.swing.KeyStroke
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -153,6 +161,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var current: PreviewResult? = null
     private var compactMode = false
 
+    // O-4：差异高亮状态（会话级缓存上一次 SQL + diff 开关）
+    /** O-4：上一次渲染的 SQL（会话缓存，用于 diff 对比）。 */
+    private var previousSql: String? = null
+    /** O-4：差异高亮开关（默认开启）。 */
+    private var diffHighlightEnabled = true
+
+    // F-1：JOIN 关系图（仅 SELECT 含 JOIN 时显示标签页）
+    private val diagramPanel = DiagramPanel(project)
+    /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
+    private var contentPane: JBPanel<JBPanel<*>>? = null
+    private var contentTabPane: JTabbedPane? = null
+
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     private val enabledIds = mutableSetOf<String>()
     private val paramValues = mutableMapOf<String, String>()
@@ -204,6 +224,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-DarkTheme：主题切换时重绘（工具窗口模式下实时响应；命名色自动更新，仅需触发重绘）
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(LafManagerListener.TOPIC, LafManagerListener { lookAndFeelChanged() })
+
+        // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
+        Disposer.register(this, diagramPanel)
     }
 
     /** T-DarkTheme：主题变更回调——重绘面板（命名色已自动更新，仅需触发 UI 刷新）。 */
@@ -250,6 +273,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
         // P-05：导入按钮（默认点击 = 从剪贴板导入）
         add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
+        // O-4：复制可执行 SQL（替换占位符为字面值，含类型处理）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.copyExecutableSql")) { copyExecutableSql() })
+        // O-4：差异高亮开关（本次 vs 上次预览）
+        add(smallButton("Diff") { toggleDiffHighlight() })
+        // O-4：SQL Diff 并排对比
+        add(smallButton("Compare") { showSqlDiff() })
+        // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
     }
 
@@ -327,7 +358,66 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         rebuildLeftPanel(result)
         refreshCompletionContext()
         renderSql()
+        // O-4：差异高亮（本次 vs 上次预览）
+        if (diffHighlightEnabled) {
+            applyDiffHighlight(result.previousSql)
+        }
         updateMeta(result)
+        // F-1：更新 JOIN 图标签页（仅 SELECT 含 JOIN 时显示）
+        updateDiagramTab(result)
+        // O-4：缓存当前 SQL 供下次 diff
+        previousSql = editor?.document?.text
+    }
+
+    /**
+     * F-1：根据当前预览结果更新 JOIN 图标签页。
+     *
+     * 仅当 previewModel.statement 为 [SelectStatement] 且含非空 joins 时显示"JOIN 图"标签页；
+     * 否则移除标签页（如有）。PlantUML 文本由 [JoinDiagramGenerator] 生成，渲染由 [DiagramPanel] 后台完成。
+     */
+    private fun updateDiagramTab(result: PreviewResult) {
+        val statement = result.previewModel?.statement
+        val hasJoins = statement is SelectStatement && statement.joins.isNotEmpty()
+        if (hasJoins) {
+            // 确保内容区已切换为标签页模式
+            ensureTabbedContent()
+            // 生成 PlantUML 文本并展示
+            val plantUml = JoinDiagramGenerator.generatePlantUml(statement as SelectStatement)
+            diagramPanel.showDiagram(plantUml)
+        } else {
+            // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
+            removeDiagramTab()
+            diagramPanel.clear()
+        }
+    }
+
+    /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
+    private fun ensureTabbedContent() {
+        val tabPane = contentTabPane
+        if (tabPane != null) return // 已切换
+        // 从当前布局中取出 split（SQL 视图）
+        val center = (layout as BorderLayout).getLayoutComponent(BorderLayout.CENTER)
+        if (center != null) remove(center)
+        // 构建标签页
+        val pane = JTabbedPane().apply {
+            addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
+            addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel)
+        }
+        add(pane, BorderLayout.CENTER)
+        contentTabPane = pane
+        revalidate()
+        repaint()
+    }
+
+    /** 移除 JOIN 图标签页（恢复纯 SQL 视图）。 */
+    private fun removeDiagramTab() {
+        val tabPane = contentTabPane ?: return
+        val sqlContent = tabPane.getComponentAt(0)
+        remove(tabPane)
+        add(sqlContent, BorderLayout.CENTER)
+        contentTabPane = null
+        revalidate()
+        repaint()
     }
 
     /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。 */
@@ -487,6 +577,90 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * O-4：一键复制可执行 SQL（替换 `?` 为带类型处理的字面值，复制到剪贴板 + toast 提示）。
+     * 委托 [CopyExecutableSqlAction] 处理替换逻辑与通知。
+     */
+    fun copyExecutableSql() {
+        CopyExecutableSqlAction(project).execute(this)
+    }
+
+    /**
+     * F-8：显示分享选项对话框（Markdown / HTML / 可执行 SQL）。
+     * 委托 [cn.song.mybatisplus.visualizer.share.ui.ShareDialog]。
+     */
+    fun showShareDialog() {
+        ShareDialog(project, this).show()
+    }
+
+    // ------------------------------------------------------------------
+    // O-4：差异高亮（本次 vs 上次预览）
+    // ------------------------------------------------------------------
+
+    /**
+     * O-4：对当前编辑器应用差异高亮（本次 SQL vs [oldSql]）。
+     * 首次预览（oldSql=null）不显示差异。
+     *
+     * @param oldSql 上一次预览的 SQL（null = 首次预览）
+     */
+    private fun applyDiffHighlight(oldSql: String?) {
+        val ed = editor ?: return
+        if (oldSql.isNullOrEmpty()) return
+        val newSql = ed.document.text
+        // 后台计算 diff（< 100ms for < 1000 lines），EDT 渲染高亮
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val diff = SqlDiffer.computeDiff(oldSql, newSql)
+            ApplicationManager.getApplication().invokeLater {
+                if (!ed.isDisposed) {
+                    DiffHighlighter.highlight(ed, diff, newSql)
+                }
+            }
+        }
+    }
+
+    /** O-4：切换差异高亮开关。 */
+    fun toggleDiffHighlight() {
+        diffHighlightEnabled = !diffHighlightEnabled
+        val ed = editor ?: return
+        if (!diffHighlightEnabled) {
+            DiffHighlighter.clear(ed.markupModel)
+        } else {
+            applyDiffHighlight(previousSql)
+        }
+    }
+
+    /**
+     * O-4：显示 SQL 并排 Diff 弹窗（当前 SQL vs 上次预览 SQL）。
+     * 无上次预览时 toast 提示。
+     */
+    fun showSqlDiff() {
+        val proj = project ?: return
+        val currentSql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        val oldSql = previousSql ?: run {
+            showDiffToast(MpSqlVisualizerBundle.message("preview.diff.noPrevious"))
+            return
+        }
+        SqlDiffDialog(
+            project = proj,
+            leftSql = oldSql,
+            rightSql = currentSql,
+            leftTitle = "Previous",
+            rightTitle = "Current",
+        ).show()
+    }
+
+    /** O-4：显示 diff 相关 toast 通知。 */
+    private fun showDiffToast(message: String) {
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) return
+        val proj = project ?: return
+        runCatching {
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                .createNotification(message, com.intellij.notification.NotificationType.INFORMATION)
+                .notify(proj)
+        }
+    }
+
+    /**
      * T-M23.6：提示「关闭 SQL 面板」按钮回调（由预览弹窗 [cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog]
      * 注入 `dispose()`；null 时提示不出现关闭按钮链路，回调为空操作）。
      */
@@ -511,9 +685,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         batchSelectAllButton = null
         batchSelectNoneButton = null
         paramPanel.removeAll()
+        // O-4：清除差异高亮 + 重置会话缓存
+        editor?.let { DiffHighlighter.clear(it.markupModel) }
+        previousSql = null
         releaseEditor()
         editorHolder.removeAll()
         metaLabel.text = ""
+        // F-1：清除图集 + 恢复纯 SQL 视图
+        removeDiagramTab()
+        diagramPanel.clear()
         revalidate()
         repaint()
     }
@@ -1461,31 +1641,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-SqlPerf：构建性能建议展示文本（拼接为单行摘要，供元信息标签展示）。
-     * WARNING 标红前缀 ⚠，INFO 前缀 ℹ；多条建议以分号分隔。
+     * F-2：构建性能警告展示文本（拼接为单行摘要，供元信息标签展示）。
+     * ERROR/WARN 标红前缀 ⚠，INFO 前缀 ℹ；多条警告以分号分隔。
      */
     private fun buildPerfLine(result: PreviewResult): String {
-        val suggestions = result.perfSuggestions ?: return ""
-        if (suggestions.isEmpty()) return ""
+        val warnings = result.perfWarnings ?: return ""
+        if (warnings.isEmpty()) return ""
         val sb = StringBuilder()
-        suggestions.forEach { suggestion ->
-            val prefix = if (suggestion.level == PerfLevel.WARNING) "⚠ " else "ℹ "
-            val localized = localizeSuggestion(suggestion)
+        warnings.forEach { warning ->
+            val prefix = if (warning.severity == PerfSeverity.ERROR || warning.severity == PerfSeverity.WARN) "⚠ " else "ℹ "
+            val localized = localizeWarning(warning)
             sb.append("   ").append(prefix).append(localized)
-            if (suggestion != suggestions.last()) sb.append("；")
+            if (warning != warnings.last()) sb.append("；")
         }
         return sb.toString()
     }
 
     /**
-     * T-SqlPerf：本地化单条性能建议（取 i18n 文案 + 参数替换）。
+     * F-2：本地化单条性能警告（取 i18n 文案 + 参数替换）。
      */
-    private fun localizeSuggestion(suggestion: PerfSuggestion): String {
-        val args = suggestion.messageArgs.toTypedArray()
+    private fun localizeWarning(warning: PerfWarning): String {
+        val args = warning.messageArgs.toTypedArray()
         return if (args.isNotEmpty()) {
-            MpSqlVisualizerBundle.message(suggestion.message, *args)
+            MpSqlVisualizerBundle.message(warning.messageKey, *args)
         } else {
-            MpSqlVisualizerBundle.message(suggestion.message)
+            MpSqlVisualizerBundle.message(warning.messageKey)
         }
     }
 
@@ -1522,6 +1702,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun psiFileForTest(): PsiFile? = psiFile
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
+
+    // ------------------------------------------------------------------
+    // O-4：预览弹窗 UX 增强（外部组件访问面板状态）
+    // ------------------------------------------------------------------
+
+    /** O-4：当前编辑器 SQL 文本（含手动编辑与参数回填）；编辑器未创建时返回 null。 */
+    fun editorDocumentText(): String? = editor?.document?.text
+
+    /** O-4：当前预览的未解析参数来源列表（与 SQL 中 `?` 按出现顺序对应）。 */
+    fun unresolvedParams(): List<String> = current?.unresolvedParams ?: emptyList()
+
+    /** O-4：当前参数值快照（source → 用户输入值）。 */
+    fun paramValuesSnapshot(): Map<String, String> = paramValues.toMap()
+
+    /** F-8：当前预览的表名（可 null）。 */
+    fun currentTableName(): String? = current?.tableName
+
+    /** F-8：当前预览的方言名称（可 null）。 */
+    fun currentDialect(): String? = current?.previewModel?.dialect?.name
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
@@ -1566,6 +1765,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun serializeParamsToJsonForTest(): String = serializeParamsToJson()
 
     companion object {
+        /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")

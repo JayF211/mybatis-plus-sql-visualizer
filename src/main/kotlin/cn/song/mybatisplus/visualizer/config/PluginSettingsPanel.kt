@@ -134,6 +134,18 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 租户列名输入框（T-TenantLine）：默认 tenant_id；可按业务调整，如 org_id / shop_id。 */
     private val tenantColumnNameField = JBTextField(10)
 
+    /** 租户列默认值输入框（F-6 Phase A）：UPDATE SET / INSERT 追加租户列时的字面量默认值。 */
+    private val tenantColumnDefaultField = JBTextField(6)
+
+    /** INSERT 也追加租户列开关（F-6 Phase A）：INSERT 列清单追加租户列。 */
+    private val injectTenantOnInsertCheck = JBCheckBox()
+
+    /** 数据权限占位提示开关（F-6 Phase C）：显示 DataPermissionInterceptor 运行时差异提示。 */
+    private val dataPermissionHintCheck = JBCheckBox()
+
+    /** 数据权限模拟条件输入框（F-6 Phase C）：用户手动填写的 WHERE 片段。 */
+    private val dataPermissionMockConditionField = JBTextField(20)
+
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private val tablePrefixField = JBTextField(12)
 
@@ -184,6 +196,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val logHibernateEnabledCheck = JBCheckBox()
     private val logHibernateSqlPrefixField = JBTextField(12)
     private val logHibernateParamPrefixField = JBTextField(12)
+
+    // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
+    private val logTimePrefixField = JBTextField(12)
+    private val slowQueryThresholdField = JBTextField(12)
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -306,6 +322,22 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnName"), tenantColumnNameField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnName.tip")
             })
+            // F-6 Phase A：租户列默认值 + INSERT 追加开关
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnDefault"), tenantColumnDefaultField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnDefault.tip")
+            })
+            addRow(p, g, "", injectTenantOnInsertCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert")
+                toolTipText = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert.tip")
+            })
+            // F-6 Phase C：数据权限占位提示开关 + 模拟条件输入框
+            addRow(p, g, "", dataPermissionHintCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.dataPermissionHint")
+                toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionHint.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition"), dataPermissionMockConditionField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition.tip")
+            })
         }
 
         // 组 2：表名映射（预览相关，低频——配置一次长期不变）
@@ -395,6 +427,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
             })
+            // O-1：日志耗时前缀 + 慢查询阈值
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.timePrefix.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
+            })
             // Hibernate/JPA 日志捕获配置
             addRow(p, g, "", logHibernateEnabledCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
@@ -470,6 +509,19 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                         javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
                     }
                 }, BorderLayout.EAST)
+            })
+
+            // O-5：导入/导出按钮
+            addRow(p, g, "", JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                isOpaque = false
+                add(JButton(MpSqlVisualizerBundle.message("settings.import")).apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.import.tip")
+                    addActionListener { importSettings() }
+                })
+                add(JButton(MpSqlVisualizerBundle.message("settings.export")).apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.export.tip")
+                    addActionListener { exportSettings() }
+                })
             })
         }
 
@@ -736,6 +788,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
             || injectTenantLineCheck.isSelected != s.injectTenantLine
             || tenantColumnNameField.text.trim() != s.tenantColumnName
+            || tenantColumnDefaultField.text.trim() != s.tenantColumnDefault
+            || injectTenantOnInsertCheck.isSelected != s.injectTenantOnInsert
+            || dataPermissionHintCheck.isSelected != s.dataPermissionHint
+            || dataPermissionMockConditionField.text.trim() != s.dataPermissionMockCondition
             || tablePrefixField.text.trim() != s.tablePrefix
             || tableSuffixField.text.trim() != s.tableSuffix
             || (inferenceCombo.selectedItem as? InferenceOption)?.value != s.tableNameInference
@@ -763,6 +819,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
             || logMaxParseField.text.trim().toIntOrNull() != s.logMaxParseLength
             || logFilterBarCheck.isSelected != s.logFilterBarEnabled
+            || logTimePrefixField.text.trim() != s.logTimePrefix
+            || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -790,6 +848,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logicDeleteValue = logicDeleteValueField.text.trim()
         s.injectTenantLine = injectTenantLineCheck.isSelected
         s.tenantColumnName = tenantColumnNameField.text.trim()
+        s.tenantColumnDefault = tenantColumnDefaultField.text.trim()
+        s.injectTenantOnInsert = injectTenantOnInsertCheck.isSelected
+        s.dataPermissionHint = dataPermissionHintCheck.isSelected
+        s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
         s.tablePrefix = tablePrefixField.text.trim()
         s.tableSuffix = tableSuffixField.text.trim()
         s.tableNameInference = (inferenceCombo.selectedItem as? InferenceOption)?.value ?: PluginSettings.INFERENCE_SNAKE
@@ -813,6 +875,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
         s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
         s.logFilterBarEnabled = logFilterBarCheck.isSelected
+        s.logTimePrefix = logTimePrefixField.text.trim()
+        s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
+            ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
         s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
         s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
         s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -847,6 +912,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logicDeleteValueField.text = s.logicDeleteValue
         injectTenantLineCheck.isSelected = s.injectTenantLine
         tenantColumnNameField.text = s.tenantColumnName
+        tenantColumnDefaultField.text = s.tenantColumnDefault
+        injectTenantOnInsertCheck.isSelected = s.injectTenantOnInsert
+        dataPermissionHintCheck.isSelected = s.dataPermissionHint
+        dataPermissionMockConditionField.text = s.dataPermissionMockCondition
         tablePrefixField.text = s.tablePrefix
         tableSuffixField.text = s.tableSuffix
         inferenceCombo.selectedItem = inferenceOptions().firstOrNull { it.value == s.tableNameInference }
@@ -874,8 +943,73 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logDedupeField.text = s.logDedupeWindowMs.toString()
         logMaxParseField.text = s.logMaxParseLength.toString()
         logFilterBarCheck.isSelected = s.logFilterBarEnabled
+        logTimePrefixField.text = s.logTimePrefix
+        slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
         logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
         logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
         logHibernateParamPrefixField.text = s.logHibernateParamPrefix
+    }
+
+    // ------------------------------------------------------------------
+    // O-5：设置导入/导出
+    // ------------------------------------------------------------------
+
+    /**
+     * 从 JSON 文件导入设置（文件选择器 → 读取 → 覆盖当前全局配置 → 刷新表单）。
+     */
+    private fun importSettings() {
+        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(true, false, false, false, false, false)
+            .withFileFilter { it.extension?.lowercase() == "json" }
+            .withTitle(MpSqlVisualizerBundle.message("settings.import"))
+        val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, null, null) ?: return
+        runCatching {
+            val text = String(file.contentsToByteArray(), Charsets.UTF_8)
+            PluginSettings.fromJson(text)
+        }.onSuccess {
+            reset()
+            com.intellij.openapi.ui.Messages.showInfoMessage(
+                rootPanel,
+                MpSqlVisualizerBundle.message("settings.import.success"),
+                MpSqlVisualizerBundle.message("settings.import"),
+            )
+        }.onFailure { e ->
+            com.intellij.openapi.ui.Messages.showErrorDialog(
+                rootPanel,
+                MpSqlVisualizerBundle.message("settings.import.failed", e.message ?: "unknown"),
+                MpSqlVisualizerBundle.message("settings.import"),
+            )
+        }
+    }
+
+    /**
+     * 导出当前设置到 JSON 文件（文件选择器 → 写入）。
+     */
+    private fun exportSettings() {
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
+            MpSqlVisualizerBundle.message("settings.export"),
+            "JSON (*.json)",
+            "json",
+        )
+        val baseDir = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .findFileByIoFile(java.io.File(System.getProperty("user.home")))
+        val wrapper = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance().createSaveFileDialog(descriptor, null)
+        val saved = wrapper.save(baseDir, "mp-sql-visualizer-settings.json")
+        if (saved != null) {
+            runCatching {
+                java.io.File(saved.file.absolutePath).writeText(PluginSettings.toJson(), Charsets.UTF_8)
+            }.onSuccess {
+                com.intellij.openapi.ui.Messages.showInfoMessage(
+                    rootPanel,
+                    MpSqlVisualizerBundle.message("settings.export.success"),
+                    MpSqlVisualizerBundle.message("settings.export"),
+                )
+            }.onFailure { e ->
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    rootPanel,
+                    MpSqlVisualizerBundle.message("settings.export.failed", e.message ?: "unknown"),
+                    MpSqlVisualizerBundle.message("settings.export"),
+                )
+            }
+        }
     }
 }

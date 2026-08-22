@@ -42,6 +42,11 @@ data class LogSqlEntry(
     },
     /** 条目来源（MyBatis / Hibernate / 未知）。 */
     val source: SqlSource = SqlSource.UNKNOWN,
+    /**
+     * 执行耗时（毫秒）；null 表示未解析到耗时信息。
+     * 由 [ExecutionTimeParser] 从日志文本解析后填入（O-1 Phase B）。
+     */
+    val executionTimeMs: Long? = null,
 ) {
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
