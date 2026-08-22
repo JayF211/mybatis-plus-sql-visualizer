@@ -50,6 +50,11 @@ object WrapperAnchorDetector {
      * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
      */
     fun anchorElement(element: PsiElement?): PsiElement? {
+        // F-4：Kotlin 文件快速路径（文本级匹配，O(1)，符合 M10 性能红线）
+        if (element != null && isKotlinFile(element)) {
+            return anchorElementKotlin(element)
+        }
+
         // 场景 B 优先：变量名（PsiLocalVariable / PsiField / PsiParameter 的 nameIdentifier）
         if (element is PsiIdentifier && element.parent is PsiVariable) {
             val variable = element.parent as PsiVariable
@@ -168,4 +173,82 @@ object WrapperAnchorDetector {
             ?: return false
         return WrapperLocator.isWrapperVariable(variable)
     }
+
+    // ------------------------------------------------------------------
+    // F-4：Kotlin 文件 gutter 锚点检测（MVP，文本级 O(1) 匹配）
+    // ------------------------------------------------------------------
+
+    /** 元素所在文件是否为 Kotlin 文件（按扩展名判断，O(1)）。 */
+    private fun isKotlinFile(element: PsiElement): Boolean {
+        val file = element.containingFile ?: return false
+        val ext = file.virtualFile?.extension ?: ""
+        return ext == "kt" || ext == "kts"
+    }
+
+    /**
+     * Kotlin 文件锚点检测（F-4 MVP）。
+     *
+     * 策略：按行文本匹配，检测元素所在行是否包含 Wrapper 链起点（ktQuery/ktUpdate/LambdaQueryWrapper 等），
+     * 若是则返回该元素作为锚点。O(1) 文本级，无 PSI resolve，符合 M10 性能红线。
+     */
+    private fun anchorElementKotlin(element: PsiElement): PsiElement? {
+        // 只处理叶子元素（标识符/方法名）
+        val elementText = element.text ?: return null
+        if (elementText.isEmpty()) return null
+
+        // 获取元素所在行文本
+        val lineText = getLineText(element) ?: return null
+
+        // 检查是否为 Wrapper 链起点方法名
+        val isChainStart = extensionFactoryMethodNames.contains(elementText) &&
+            lineText.contains(".${elementText}(")
+        val isConstructor = wrapperConstructorNames.contains(elementText) &&
+            (lineText.contains("$elementText<") || lineText.contains("$elementText("))
+
+        if (!isChainStart && !isConstructor) return null
+
+        // 检查该行是否包含 Wrapper 操作（eq/like/set 等），确认是 Wrapper 链
+        val hasWrapperOp = wrapperOperationMethodNames.any { op ->
+            lineText.contains(".$op(")
+        }
+        if (!hasWrapperOp) return null
+
+        return element
+    }
+
+    /** 获取元素所在行文本（O(1) 按偏移量计算）。 */
+    private fun getLineText(element: PsiElement): String? {
+        val file = element.containingFile ?: return null
+        val text = file.text ?: return null
+        val offset = element.textRange.startOffset
+        if (offset < 0 || offset >= text.length) return null
+
+        // 找到行首和行尾
+        var lineStart = offset
+        while (lineStart > 0 && text[lineStart - 1] != '\n') lineStart--
+        var lineEnd = offset
+        while (lineEnd < text.length && text[lineEnd] != '\n') lineEnd++
+
+        return text.substring(lineStart, lineEnd)
+    }
+
+    /** Kotlin 扩展函数工厂方法名（ktQuery/ktUpdate）。 */
+    private val extensionFactoryMethodNames: Set<String> = setOf("ktQuery", "ktUpdate")
+
+    /** Wrapper 构造函数名集合。 */
+    private val wrapperConstructorNames: Set<String> = setOf(
+        "LambdaQueryWrapper", "LambdaUpdateWrapper", "LambdaDeleteWrapper",
+        "QueryWrapper", "UpdateWrapper", "MPJLambdaWrapper", "MPJQueryWrapper",
+    )
+
+    /** Wrapper 操作条件方法名（用于确认是 Wrapper 链）。 */
+    private val wrapperOperationMethodNames: Set<String> = setOf(
+        "eq", "ne", "gt", "ge", "lt", "le",
+        "like", "notLike", "likeLeft", "likeRight",
+        "notIn", "in", "between", "notBetween",
+        "isNull", "isNotNull",
+        "groupBy", "orderByAsc", "orderByDesc", "orderBy",
+        "having", "or", "and", "apply", "last",
+        "select", "set", "setSql",
+    )
 }

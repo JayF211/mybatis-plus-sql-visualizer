@@ -140,7 +140,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
             // T-TenantLine：多租户注入开关 +1；筛选条显隐开关 +1；Hibernate 日志捕获开关 +1
-            assertEquals("复选框总数应为 15（+Hibernate日志捕获开关）", 15, texts.size)
+            // F-6：INSERT 追加租户列开关 +1；数据权限占位提示开关 +1
+            assertEquals("复选框总数应为 17（+F-6 租户/数据权限开关）", 17, texts.size)
         } finally {
             settings.state.language = old
         }

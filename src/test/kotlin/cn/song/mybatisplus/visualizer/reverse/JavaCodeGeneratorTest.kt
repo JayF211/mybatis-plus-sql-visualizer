@@ -422,7 +422,7 @@ class JavaCodeGeneratorTest {
             sets = listOf(ReverseSet("name", SqlValue.Literal("'x'", "x"))),
         )
         val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
-        assertTrue(code, code.contains("⚠ 无 WHERE 条件，将更新全表数据"))
+        assertTrue(code, code.contains("⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据"))
     }
 
     @Test

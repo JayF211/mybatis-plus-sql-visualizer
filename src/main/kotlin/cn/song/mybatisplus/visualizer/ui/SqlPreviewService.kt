@@ -1,7 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
+import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder
+import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
+import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
@@ -37,8 +43,8 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
-import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
+import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.application.ApplicationManager
@@ -80,14 +86,63 @@ class SqlPreviewService(private val project: Project) {
      * 影响解析结果的表相关设置签名，作为 [WrapperCache] 缓存维度。
      * 复用 [cn.song.mybatisplus.visualizer.util.TableConfigSignature.projectSignature] 统一来源，
      * 与 [cn.song.mybatisplus.visualizer.psi.EntityResolver] 的解析缓存防漂移。
+     *
+     * O-5：项目级设置开启时追加项目级表配置签名——项目设置变更后缓存同样失效。
      */
-    private fun tableConfigSignature(): String = TableConfigSignature.projectSignature()
+    private fun tableConfigSignature(): String {
+        val base = TableConfigSignature.projectSignature()
+        val ps = projectSettings
+        if (ps == null || !ps.isEnabled()) return base
+        val s = ps.state
+        // 项目级表配置（空 = 与全局一致，无需追加差异）
+        val projectPart = listOf(
+            s.tableNameInference.ifBlank { "" },
+            s.ignoredFields.ifBlank { "" },
+            s.tablePrefix.ifBlank { "" },
+            s.tableSuffix.ifBlank { "" },
+        ).joinToString("|")
+        return if (projectPart.isBlank() || projectPart == "|||") base else "$base|proj:$projectPart"
+    }
 
     /**
      * 全局配置（测试环境未注册 service 时为 null，使用默认值）。
      */
     private val settings: PluginSettings? =
         runCatching { PluginSettings.getInstance() }.getOrNull()
+
+    /**
+     * O-5：项目级配置（project-level 轻服务；未启用时回退全局）。
+     * 读取设置时优先查项目级（[ProjectPluginSettings]），开启时覆盖全局值。
+     */
+    private val projectSettings: ProjectPluginSettings? =
+        runCatching { ProjectPluginSettings.getInstance(project) }.getOrNull()
+
+    /**
+     * O-5：获取有效的设置值（项目级优先，关闭/空值回退全局）。
+     *
+     * 项目级未启用或值为空/null 时使用全局 [PluginSettings] 值，保证单来源决策。
+     */
+    private fun <T> effective(global: () -> T, project: () -> T?): T {
+        val ps = projectSettings
+        return if (ps != null && ps.isEnabled()) {
+            project() ?: global()
+        } else {
+            global()
+        }
+    }
+
+    /**
+     * O-5：获取有效的字符串设置值（项目级优先，空值回退全局）。
+     * 专门用于 String 类型，避免泛型推断问题。
+     */
+    private fun effectiveString(global: String, project: String?): String {
+        val ps = projectSettings
+        return if (ps != null && ps.isEnabled() && !project.isNullOrBlank()) {
+            project
+        } else {
+            global
+        }
+    }
 
     /**
      * 预览锚点元素处的 Wrapper 转换结果。
@@ -187,16 +242,30 @@ class SqlPreviewService(private val project: Project) {
             // `AND {tenantColumn} = ?`（语句已显式引用租户列时不重复注入）；@InterceptorIgnore(tenantLine=true)
             // 方法级注解命中时跳过（保守策略：检测失败→注入，宁可多不可少）
             val hasInterceptorIgnore = hasInterceptorIgnoreAnnotation(anchor, "tenantLine")
-            val tenantStatement = injectTenantLineCondition(table, finalStatement, hasInterceptorIgnore)
+            val tenantWhereStatement = injectTenantLineCondition(table, finalStatement, hasInterceptorIgnore)
+            // F-6 Phase A：UPDATE 追加租户列 SET（`tenantColumn = tenantDefault`）——对齐 MP 运行时行为
+            val tenantStatement = if (settings?.state?.injectTenantLine == true && tenantWhereStatement is UpdateStatement) {
+                val tenantColumn = settings.state.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
+                TenantLineEnhancer.enhanceUpdateSet(
+                    tenantWhereStatement, tenantColumn, settings.state.tenantColumnDefault.ifBlank { "1" },
+                )
+            } else {
+                tenantWhereStatement
+            }
+            // F-6 Phase B：动态表名替换（按用户配置的正则规则替换表名）
+            val tableNameStatement = processDynamicTableName(table, tenantStatement)
+            // F-6 Phase C：数据权限占位提示（追加警告 + 模拟条件）
+            val dataPermissionStatement = injectDataPermissionCondition(table, tableNameStatement)
             // T-M29-02/03：分页消费（`service.page(Page, wrapper)` / `selectPage` / 链式 `page()`）→ LIMIT 子句
             // （覆盖 last("limit ...")——MP 运行时两者并存属错误用法，预览以分页为准，文档化边界；
             // count/exists 消费不追加分页）
             val pagedStatement = if (located.chain.countConsumed || located.chain.existsConsumed) {
-                tenantStatement
+                dataPermissionStatement
             } else {
-                applyPageLimit(tenantStatement, located.chain.pageLimit)
+                applyPageLimit(dataPermissionStatement, located.chain.pageLimit)
             }
             val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement)
+            recordHistory(result, anchor)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
                 result.copy(
@@ -222,7 +291,7 @@ class SqlPreviewService(private val project: Project) {
                 injectTenantLine = settings?.state?.injectTenantLine ?: true,
             )
         } ?: return null
-        return PreviewResult(
+        val result = PreviewResult(
             sql = batch.sql,
             compactSql = batch.sql,
             unresolvedParams = batch.paramSources,
@@ -232,6 +301,8 @@ class SqlPreviewService(private val project: Project) {
             paramHints = batch.paramHints,
             batchModel = batch.batchModel,
         )
+        recordHistory(result, anchor)
+        return result
     }
 
     /**
@@ -564,9 +635,9 @@ class SqlPreviewService(private val project: Project) {
         "Float", "float", "Double", "double", "BigDecimal", "BigInteger", "Number",
     )
 
-    /** JPA 语句风险警示：DELETE 无 WHERE 时提示全表删除。 */
+    /** JPA 语句风险警示：DELETE 无 WHERE 时提示全表删除（BlockAttack 风格）。 */
     private fun buildJpaWarning(statement: SqlStatement): String? = when (statement) {
-        is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ 无 WHERE 条件，将删除全表数据！" else null
+        is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
         else -> null
     }
 
@@ -605,21 +676,21 @@ class SqlPreviewService(private val project: Project) {
             tableComment = table.comment,
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
             paramHints = generated.paramHints,
-            // T-SqlPerf：性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]；UPDATE/DELETE 走既有 buildWarning 路径
-            perfSuggestions = analyzePerf(generated.sql, statement),
+            // F-2：SQL 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]；UPDATE/DELETE 走既有 buildWarning 路径
+            perfWarnings = analyzePerf(generated.sql, statement),
             // T-MpjFill：fill 附加查询子句（MPJ 1.5.1+）——透传至面板追加渲染
             fillClauses = (statement as? SelectStatement)?.fillClauses,
         )
     }
 
     /**
-     * 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]（T-SqlPerf）。
+     * 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]（F-2）。
      * UPDATE/DELETE 走既有 buildWarning 路径，不重复分析。
      */
-    private fun analyzePerf(sql: String, statement: SqlStatement): List<PerfSuggestion>? {
+    private fun analyzePerf(sql: String, statement: SqlStatement): List<PerfWarning>? {
         if (statement !is SelectStatement) return null
-        val result = SqlPerfAnalyzer.analyze(sql)
-        return result.suggestions.ifEmpty { null }
+        val warnings = SqlPerfAnalyzer.analyze(sql)
+        return warnings.ifEmpty { null }
     }
 
     /** 收集语句中的动态条件行（M12）：遍历 WHERE 条件树，扁平化 toggle 元数据（含嵌套 Group 内）。 */
@@ -798,6 +869,47 @@ class SqlPreviewService(private val project: Project) {
     }
 
     /**
+     * F-6 Phase B：动态表名替换——按用户配置的 [TableNameRule] 列表逐条匹配替换表名。
+     *
+     * 规则按列表顺序应用（首个匹配即停）；正则编译失败时跳过该规则并日志警告（不中断预览）。
+     * 替换模板支持 `$1`/`$2` 引用捕获组、`$tableName` 引用完整原始表名。
+     *
+     * @param table     当前语句关联的实体表（用于 DynamicTableNameProcessor 的上下文）
+     * @param statement 当前语句模型
+     * @return 表名替换后的新语句（无规则命中时返回原实例）
+     */
+    private fun processDynamicTableName(table: TableInfo, statement: SqlStatement): SqlStatement {
+        val rules = settings?.state?.dynamicTableNameRules?.filter { it.enabled && it.pattern.isNotBlank() }
+            ?: return statement
+        if (rules.isEmpty()) return statement
+        return DynamicTableNameProcessor.process(table.tableName, rules)?.let { newTableName ->
+            rewriteTableName(statement, newTableName)
+        } ?: statement
+    }
+
+    /**
+     * 将语句模型中的表名替换为新的表名（浅拷贝涉及表名的字段）。
+     */
+    private fun rewriteTableName(statement: SqlStatement, newTableName: String): SqlStatement = when (statement) {
+        is SelectStatement -> statement.copy(table = statement.table.copy(tableName = newTableName))
+        is UpdateStatement -> statement.copy(table = statement.table.copy(tableName = newTableName))
+        is DeleteStatement -> statement.copy(table = statement.table.copy(tableName = newTableName))
+    }
+
+    /**
+     * F-6 Phase C：数据权限模拟条件注入——开启 dataPermissionHint 后，追加用户填写的模拟 WHERE 片段。
+     *
+     * 运行时 DataPermissionInterceptor 根据用户角色动态追加条件，无法静态模拟；提供占位提示 +
+     * 用户手动填写模拟条件（`dataPermissionMockCondition`），追加到 WHERE 末尾。
+     *
+     * 委托 [DataPermissionPlaceholder.injectMockCondition] 纯函数实现。
+     */
+    private fun injectDataPermissionCondition(table: TableInfo, statement: SqlStatement): SqlStatement {
+        if (settings?.state?.dataPermissionHint != true) return statement
+        return DataPermissionPlaceholder.injectMockCondition(statement, settings.state.dataPermissionMockCondition)
+    }
+
+    /**
      * T-TenantLine：检测调用链所在方法是否标注 @InterceptorIgnore(tenantLine=true)——
      * 从 anchor 向上查找包含它的 PsiMethod，检查 modifierList 注解。
      * 注解类不可解析时按短名 "InterceptorIgnore" 兜底（与 EntityResolver.findAnnotationByShortName 同模式）；
@@ -887,20 +999,37 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 当前方言（配置未加载时默认 MySQL）。
      */
-    fun currentDialect(): Dialect = settings?.let { DialectRegistry.byName(it.state.dialect) } ?: DialectRegistry.byName(null)
+    /**
+     * O-5：当前方言（项目级优先，回退全局）。
+     */
+    fun currentDialect(): Dialect = DialectRegistry.byName(effectiveDialectName())
+
+    /** O-5：有效方言名称（项目级优先，回退全局）。 */
+    private fun effectiveDialectName(): String =
+        effective({ settings?.state?.dialect ?: PluginSettings.DEFAULT_DIALECT },
+                  { projectSettings?.effectiveDialect() })
 
     /**
-     * 是否格式化输出（true=多行缩进，false=单行）。
+     * 是否格式化输出（true=多行缩进，false=单行；O-5：项目级优先）。
      */
-    fun formatSql(): Boolean = settings?.state?.formatSql ?: true
+    fun formatSql(): Boolean =
+        effective({ settings?.state?.formatSql ?: true },
+                  { projectSettings?.effectiveFormatSql() })
 
     /**
-     * 风险警示（F-09/F-10）：UPDATE / DELETE 无 WHERE 条件时提示全表操作。
+     * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示）。
+     *
+     * BlockAttackInnerInterceptor 阻止无 WHERE 的 UPDATE/DELETE——现有警示已覆盖核心功能；
+     * 增强：标记为 BlockAttack 风格（拦截器名称标注）+ DataPermission 运行时差异提示。
      */
-    private fun buildWarning(statement: SqlStatement): String? = when (statement) {
-        is UpdateStatement -> if (statement.conditions.isEmpty()) "⚠ 无 WHERE 条件，将更新全表数据！" else null
-        is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ 无 WHERE 条件，将删除全表数据！" else null
-        else -> null
+    private fun buildWarning(statement: SqlStatement): String? {
+        val baseWarning = when (statement) {
+            is UpdateStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！" else null
+            is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
+            else -> null
+        }
+        val dataPermissionWarning = DataPermissionPlaceholder.buildWarning(settings?.state?.dataPermissionHint ?: false)
+        return listOfNotNull(baseWarning, dataPermissionWarning).joinToString("\n").ifBlank { null }
     }
 
     /**
@@ -1025,6 +1154,36 @@ class SqlPreviewService(private val project: Project) {
      * 清空缓存（编辑器文件切换/项目关闭时由持有方调用）。
      */
     fun clearCache() = cache.clear()
+
+    /**
+     * F-7：预览完成后自动记录历史。
+     *
+     * 从锚点元素提取来源文件名/行号，与预览结果一并写入 [SqlHistoryManager]。
+     * 服务不可用时静默跳过（不阻塞预览）。
+     */
+    private fun recordHistory(result: PreviewResult, anchor: PsiElement) {
+        runCatching {
+            val manager = SqlHistoryManager.getInstance()
+            manager.maxSize = settings?.state?.historyMaxSize ?: SqlHistoryManager.DEFAULT_MAX_SIZE
+            val file = anchor.containingFile
+            val sourceFile = file?.name ?: ""
+            val sourceLine = anchor.textRange.startOffset.let { offset ->
+                file?.text?.let { text ->
+                    text.substring(0, offset.coerceAtMost(text.length)).count { it == '\n' } + 1
+                } ?: 0
+            }
+            manager.add(
+                SqlHistoryEntry(
+                    sql = result.sql,
+                    compactSql = result.compactSql,
+                    timestamp = System.currentTimeMillis(),
+                    sourceFile = sourceFile,
+                    sourceLine = sourceLine,
+                    tableName = result.tableName ?: "",
+                ),
+            )
+        }
+    }
 
     companion object {
         private val LOG = Logger.getInstance(SqlPreviewService::class.java)

@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint
-import cn.song.mybatisplus.visualizer.sql.PerfSuggestion
+import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 
 /**
@@ -48,8 +48,10 @@ data class PreviewResult(
     /** T-M42：参数行初始值预填（source → 初始值，如日志识别 `param1` → `admin`）；
      *  面板初始化参数输入框时优先取本表，缺失回落空串。默认空 map，既有调用点零影响。 */
     val initialParamValues: Map<String, String> = emptyMap(),
-    /** T-SqlPerf：性能分析建议列表（面板展示用）；null 表示未分析/无建议。 */
-    val perfSuggestions: List<PerfSuggestion>? = null,
+    /** F-2：SQL 性能分析警告列表（面板展示用）；null 表示未分析/无警告。 */
+    val perfWarnings: List<PerfWarning>? = null,
     /** T-MpjFill：fill 附加查询子句列表（MPJ 1.5.1+）；null 表示无 fill 调用。 */
     val fillClauses: List<FillClause>? = null,
+    /** O-4：会话级缓存的上一次预览 SQL（null = 首次预览，不显示差异）。 */
+    val previousSql: String? = null,
 )

@@ -63,6 +63,8 @@
     <depends>com.intellij.java</depends>
     <!-- T-M24-04 XML 预览：com.intellij.modules.xml（平台 bundled 模块，IDE 恒启用）——XML PSI 定位语句 + XML gutter 注册 -->
     <depends>com.intellij.modules.xml</depends>
+    <!-- F-4：Kotlin Wrapper 链 gutter + 预览（org.jetbrains.kotlin 平台 bundled 插件，IDE 恒启用） -->
+    <depends optional="true" config-file="kotlin-optional.xml">org.jetbrains.kotlin</depends>
 
     <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
          官方规范（Plugin Dependencies）：可选依赖须声明 optional="true" + config-file，
@@ -89,8 +91,18 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
+        <!-- O-5：项目级设置（projectConfigurable，按项目覆盖全局设置） -->
+        <projectConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                             id="cn.song.mybatisplus.visualizer.projectSettings"
+                             bundle="messages.MpSqlVisualizerBundle"
+                             key="configurable.settings.displayName"
+                             instance="cn.song.mybatisplus.visualizer.config.ProjectPluginSettingsConfigurable"/>
+
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
+        <!-- F-4：Kotlin Wrapper 链 gutter 图标（复用 SqlGutterLineMarkerProvider，Kotlin 语言注册） -->
+        <codeInsight.lineMarkerProvider language="Kotlin"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
 
         <!-- T-M25-03 注解预览：MyBatis SQL 注解（@Select/@Insert/@Update/@Delete 及 Provider 族）行显示预览图标（O(1) 语法判定） -->
@@ -137,12 +149,21 @@
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributor"/>
 
+        <!-- F-5 Wrapper 方法链智能补全：Java 文件中 Wrapper 链上下文感知的方法名/实体字段补全（O(1) 文本判定，无 resolve） -->
+        <completion.contributor language="JAVA"
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor"/>
+
         <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
              仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
              （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.updates"
+                           displayType="BALLOON"/>
+        <!-- O-4：预览弹窗操作 toast（复制可执行 SQL / Diff 结果提示） -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.preview"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.preview"
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
@@ -156,6 +177,10 @@
         <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
                     icon="/icons/sqlLog.svg"
                     factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
+        <!-- F-7：SQL 历史记录（自动记录每次预览，支持收藏/标签/搜索） -->
+        <toolWindow id="cn.song.mybatisplus.visualizer.history" anchor="right"
+                    icon="/icons/sqlGutter.svg"
+                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/>
     </extensions>
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->

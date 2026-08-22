@@ -1,0 +1,52 @@
+package cn.song.mybatisplus.visualizer.history
+
+import java.util.UUID
+
+/**
+ * SQL 历史记录条目（F-7）：一次预览的不可变快照 + 用户标注（收藏/标签）。
+ *
+ * 持久化友好：全部字段为基本类型 / String / List，XmlSerializer 可直接序列化。
+ * [tags] 用 MutableList 而非 Set（XmlSerializer 对 Set 支持不稳定），[SqlHistoryManager] 维护唯一性。
+ *
+ * @param id         唯一标识（空白时由 [SqlHistoryManager.add] 自动分配 UUID）
+ * @param sql        完整 SQL（多行格式化）
+ * @param compactSql 单行 SQL（摘要展示用）
+ * @param timestamp  预览时间戳（毫秒）
+ * @param sourceFile 来源文件名（如 UserMapper.java）
+ * @param sourceLine 来源文件行号（0 表示未知）
+ * @param tableName  目标表名（可为空）
+ * @param favorite   是否收藏（收藏条目不参与上限淘汰）
+ * @param tags       用户自定义标签列表（唯一、有序）
+ */
+data class SqlHistoryEntry(
+    var id: String = "",
+    var sql: String = "",
+    var compactSql: String = "",
+    var timestamp: Long = 0L,
+    var sourceFile: String = "",
+    var sourceLine: Int = 0,
+    var tableName: String = "",
+    var favorite: Boolean = false,
+    var tags: MutableList<String> = mutableListOf(),
+) {
+    /** 分配唯一 id（仅当当前为空白时）。 */
+    fun ensureId() {
+        if (id.isBlank()) id = UUID.randomUUID().toString()
+    }
+
+    /** 摘要文本：取 compactSql 首行，截断至 [MAX_SUMMARY_LEN] 字符。 */
+    fun summary(): String {
+        val firstLine = compactSql.trim().split("\n").firstOrNull()?.trim() ?: ""
+        return if (firstLine.length <= MAX_SUMMARY_LEN) firstLine
+        else firstLine.substring(0, MAX_SUMMARY_LEN) + "..."
+    }
+
+    /** 来源描述文案（如 "UserMapper.java:10"）。 */
+    fun sourceLabel(): String =
+        if (sourceFile.isBlank()) "" else if (sourceLine > 0) "$sourceFile:$sourceLine" else sourceFile
+
+    companion object {
+        /** 摘要最大字符数（列表渲染用）。 */
+        const val MAX_SUMMARY_LEN = 80
+    }
+}

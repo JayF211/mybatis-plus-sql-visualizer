@@ -1,0 +1,4 @@
+<!-- F-4：Kotlin 可选依赖配置（org.jetbrains.kotlin 存在时激活） -->
+<idea-plugin>
+    <!-- 当前无扩展点注册，Kotlin 支持通过既有 SqlGutterLineMarkerProvider + KtWrapperDetector 实现 -->
+</idea-plugin>

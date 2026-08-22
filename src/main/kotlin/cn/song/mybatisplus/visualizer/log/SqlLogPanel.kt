@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
@@ -20,7 +21,10 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
@@ -120,6 +124,16 @@ class SqlLogPanel(
 
     /** 是否含耗时信息（决定是否显示排序按钮）。 */
     private var hasAnyDurationInfo = false
+
+    // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
+
+    /** 慢查询计数器（O-1 Phase C）。 */
+    private val slowQueryCounter = SlowQueryCounter(
+        PluginSettings.getInstance().state.slowQueryThresholdMs,
+    )
+
+    /** 工具栏慢查询计数标签（动态更新）。 */
+    private var slowQueryLabel: JLabel? = null
 
     // ---------- P-06 UI 组件引用（供刷新计数/可见性用） ----------
 
@@ -238,6 +252,13 @@ class SqlLogPanel(
         val bar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4))
         bar.add(toolbar.component)
         bar.add(dedupeCheckBox) // 去重勾选开关（T-M31.5）
+        // O-1：工具栏慢查询计数标签
+        slowQueryLabel = JLabel().apply {
+            foreground = Color(0xD32F2F) // 红色
+            font = font.deriveFont(Font.BOLD)
+            isVisible = false // 默认隐藏，有慢查询时显示
+        }
+        bar.add(slowQueryLabel)
         return bar
     }
 
@@ -495,16 +516,18 @@ class SqlLogPanel(
                     // T-M31.13/14：SQL 词法着色（插件自身 SqlHighlightColors 配色，随 IDE 主题）+ 可选时间戳前缀
                     val timestamp = timestampHtml(entry.timestamp)
                     val sql = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+                    // O-1：执行耗时叠加（着色：绿/黄/红）
+                    val durationStr = durationHtml(entry.executionTimeMs)
                     // P-06：检测是否为折叠态模板（高频折叠态：count > 1 && !expanded）
                     val foldedGroup = findFoldedGroup(entry)
                     if (foldedGroup != null) {
                         val badge = MpSqlVisualizerBundle.message("log.fold.badge", foldedGroup.count)
                         val tooltip = MpSqlVisualizerBundle.message("log.fold.tooltip.folded", foldedGroup.count)
-                        this.text = "<html>" + timestamp + "<br>" + sql +
+                        this.text = "<html>" + timestamp + durationStr + "<br>" + sql +
                             "&nbsp;<span style='color:#888888;background:#E8E8E8;'>$badge</span></html>"
                         toolTipText = tooltip + "\n" + entry.restoredSql
                     } else {
-                        this.text = "<html>" + timestamp + "<br>" + sql + "</html>"
+                        this.text = "<html>" + timestamp + durationStr + "<br>" + sql + "</html>"
                         toolTipText = entry.restoredSql
                     }
                 }
@@ -590,6 +613,12 @@ class SqlLogPanel(
         updateFilterBar()
         // 筛选条显隐跟随设置（设置页修改后立即生效，无需切 tab）
         refreshFilterBarVisibility()
+
+        // O-1：同步慢查询阈值 + 更新计数（Phase C）
+        slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
+        slowQueryCounter.reset()
+        snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
+        updateSlowQueryLabel()
     }
 
     /** 按当前过滤条件筛选条目。 */
@@ -649,6 +678,100 @@ class SqlLogPanel(
         val g = Integer.toHexString(color.green).padStart(2, '0')
         val b = Integer.toHexString(color.blue).padStart(2, '0')
         return "#$r$g$b"
+    }
+
+    /**
+     * O-1：执行耗时 HTML 片段（着色：< 100ms 绿、100-1000ms 黄、> 1000ms 红；无耗时显示 N/A 灰色）。
+     */
+    private fun durationHtml(executionTimeMs: Long?): String {
+        val level = SlowQueryDetector.level(executionTimeMs)
+        val color = when (level) {
+            SlowQueryDetector.DurationLevel.FAST -> "#4CAF50"      // 绿
+            SlowQueryDetector.DurationLevel.MODERATE -> "#FF9800"  // 黄
+            SlowQueryDetector.DurationLevel.SLOW -> "#D32F2F"      // 红
+            SlowQueryDetector.DurationLevel.NONE -> "#9E9E9E"      // 灰
+        }
+        val text = when (executionTimeMs) {
+            null -> MpSqlVisualizerBundle.message("log.duration.unavailable")
+            else -> MpSqlVisualizerBundle.message("log.duration.ms", executionTimeMs.toString())
+        }
+        return "&nbsp;<span style='color:$color'>[$text]</span> "
+    }
+
+    /**
+     * O-1：日志 ↔ 源码关联跳转（Phase A）：提取表名 → 搜索 Wrapper → 跳转。
+     */
+    private fun jumpToSource(entry: LogSqlEntry) {
+        val tableName = SqlTableExtractor.extractFirst(entry.restoredSql)
+        if (tableName == null) {
+            Messages.showInfoMessage(
+                project,
+                MpSqlVisualizerBundle.message("log.panel.jumpToSource.noTable"),
+                MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+            )
+            return
+        }
+        // 后台搜索（ReferencesSearch 可能耗时，不阻塞 EDT）
+        object : Task.Backgroundable(
+            project,
+            "Searching Wrappers for table \"$tableName\"",
+            false,
+        ) {
+            private var result: WrapperSearchResult = WrapperSearchResult.None
+
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = "Searching Wrappers..."
+                result = ReadAction.compute<WrapperSearchResult, Throwable> {
+                    WrapperSearchService.search(project, tableName)
+                }
+            }
+
+            override fun onSuccess() {
+                when (val r = result) {
+                    is WrapperSearchResult.Single ->
+                        WrapperSearchService.navigateTo(project, r.candidate)
+                    is WrapperSearchResult.Multiple ->
+                        showCandidateChooser(r.candidates)
+                    is WrapperSearchResult.None ->
+                        Messages.showInfoMessage(
+                            project,
+                            MpSqlVisualizerBundle.message("log.panel.jumpToSource.noWrapper", tableName),
+                            MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+                        )
+                }
+            }
+        }.queue()
+    }
+
+    /** 多候选选择弹窗（O-1 Phase A）。 */
+    private fun showCandidateChooser(candidates: List<WrapperCandidate>) {
+        val options = candidates.map {
+            "${it.anchorMethod.name}  (${it.file.name})"
+        }.toTypedArray()
+        val choice = Messages.showChooseDialog(
+            project,
+            MpSqlVisualizerBundle.message("log.panel.jumpToSource.multipleHeader", candidates.size, candidates.first().table.tableName),
+            MpSqlVisualizerBundle.message("log.panel.jumpToSource.multipleTitle"),
+            Messages.getQuestionIcon(),
+            options,
+            options.firstOrNull() ?: "",
+        )
+        if (choice >= 0 && choice < candidates.size) {
+            WrapperSearchService.navigateTo(project, candidates[choice])
+        }
+    }
+
+    /** 更新工具栏慢查询计数标签（O-1 Phase C）。 */
+    private fun updateSlowQueryLabel() {
+        val count = slowQueryCounter.slowCount
+        slowQueryLabel?.let {
+            if (count > 0) {
+                it.text = MpSqlVisualizerBundle.message("log.toolbar.slowQueryCount", count.toString())
+                it.isVisible = true
+            } else {
+                it.isVisible = false
+            }
+        }
     }
 
     private fun openPreview(entry: LogSqlEntry) {
@@ -731,6 +854,12 @@ class SqlLogPanel(
                     logToSqlPanel.loadFromEntry(entry)
                     tabs.selectedComponent = logToSqlPanel
                 }
+            },
+        )
+        // O-1：日志 ↔ 源码关联跳转（Phase A）
+        menu.add(
+            JMenuItem(MpSqlVisualizerBundle.message("log.panel.jumpToSource")).apply {
+                addActionListener { jumpToSource(entry) }
             },
         )
         menu.show(list, e.x, e.y)
