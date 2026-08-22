@@ -326,18 +326,55 @@ open class SqlLogConsoleBridge(
      * BUG FIX（停止后仍捕获）：移除所有已挂载控制台上的 Filter。
      * 遍历 [attachedConsoles]，对每个 console 调用 removeMessageFilter 反射移除 Filter 代理，
      * 然后清空映射——确保 stop 后控制台不再向 buffer 喂 SQL。
+     *
+     * 改进：尝试所有候选 Filter 接口（不依赖存储的接口），防止因接口不匹配导致移除失败。
+     * 失败时输出 WARN 日志（非 DEBUG），便于用户/开发者诊断。
      */
     open fun detachAllFilters() {
         for ((console, filterPair) in attachedConsoles) {
             val (filter, filterIface) = filterPair
+            var removed = false
+            // 优先尝试存储的接口
             try {
                 console.javaClass.getMethod("removeMessageFilter", filterIface).invoke(console, filter)
+                removed = true
                 LOG.info("detachAllFilters: filter removed from ${console.javaClass.name}")
-            } catch (t: Throwable) {
-                LOG.debug("detachAllFilters: removeMessageFilter failed on ${console.javaClass.name}", t)
+            } catch (_: Throwable) {
+                // 存储的接口失败，尝试所有候选接口
+                for (candidateName in FILTER_IFACE_CANDIDATES) {
+                    try {
+                        val candidate = Class.forName(candidateName, true, platformClassLoader)
+                        console.javaClass.getMethod("removeMessageFilter", candidate).invoke(console, filter)
+                        removed = true
+                        LOG.info("detachAllFilters: filter removed via fallback $candidateName from ${console.javaClass.name}")
+                        break
+                    } catch (_: Throwable) {
+                        // continue trying
+                    }
+                }
+            }
+            if (!removed) {
+                LOG.warn("detachAllFilters: FAILED to remove filter from ${console.javaClass.name} (filter will remain active!)")
             }
         }
         attachedConsoles.clear()
+    }
+
+    /**
+     * BUG FIX（停止后仍捕获）：移除 contentManagerListener（243/253 平台）。
+     * stop 后若不移除，控制台事件（contentAdded）会触发 onConsoleAppeared 重启捕捉。
+     */
+    open fun detachContentListener() {
+        if (!contentListenerRegistered) return
+        val rcm = runContentManager ?: return
+        try {
+            rcm.javaClass.getMethod("removeContentManagerListener", CONTENT_LISTENER_CLASS)
+                .invoke(rcm, contentListener)
+            LOG.info("detachContentListener: contentManagerListener removed")
+        } catch (t: Throwable) {
+            LOG.debug("detachContentListener: removeContentManagerListener failed", t)
+        }
+        contentListenerRegistered = false
     }
 
     companion object {

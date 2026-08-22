@@ -19,7 +19,7 @@ class SqlLogEntryBuffer(
 
     @Volatile
     var paused: Boolean = false
-        private set
+        internal set
 
     /** 去重开关（默认开——用户实测后要求默认勾选，T-M31.13）。 */
     @Volatile

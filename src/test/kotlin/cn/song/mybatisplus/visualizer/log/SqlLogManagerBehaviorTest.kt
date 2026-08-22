@@ -357,8 +357,14 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         }
     }
 
-    /** T13：自动启动 + 用户显式停止 → suppressed 阻止 armed 态，但项目启动时设置优先自动捕捉。 */
-    fun testT13_AutoStart_UserStop_SettingPriority() {
+    /**
+     * T13：自动启动 + 用户显式停止 → suppressed 阻止 onConsoleAppeared 重启捕捉。
+     *
+     * BUG FIX 变更：此前 suppressed 仅阻止 LogStartupCapture，不阻止 onConsoleAppeared——
+     * 导致 autoStart=true 时用户停止后，项目启动仍自动捕捉（按钮显示已停止但实际在捕获）。
+     * 修复后：suppressed=true 时 onConsoleAppeared 不重启捕捉，用户"停止"意图被尊重。
+     */
+    fun testT13_AutoStart_UserStop_SuppressedPreventsRestart() {
         val settings = PluginSettings.getInstance()
         val oldAutoStart = settings.state.logAutoCaptureOnStart
         val oldSuppressed = settings.state.logAutoCaptureSuppressed
@@ -376,11 +382,11 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             assertFalse("已停止", manager.capturing)
             assertTrue("抑制标志已设置", settings.state.logAutoCaptureSuppressed)
 
-            // 项目启动 → 自动捕捉但不清 suppressed（用户停止意图持久）
+            // 项目启动 → suppressed 阻止自动捕捉（BUG FIX 核心行为）
             bridge.hasMainConsoleResult = true
             manager.onConsoleAppeared()
             assertTrue("项目启动后 suppressed 保持 true（不被自动事件清除）", settings.state.logAutoCaptureSuppressed)
-            assertTrue("项目启动自动捕捉（autoStart 优先）", manager.capturing)
+            assertFalse("suppressed=true 时项目启动不应自动捕捉", manager.capturing)
         } finally {
             settings.state.logAutoCaptureOnStart = oldAutoStart
             settings.state.logAutoCaptureSuppressed = oldSuppressed
@@ -479,5 +485,131 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         // 重新开始 → capturing=true，attachFilter 守卫放行
         manager.startCapture(manual = true)
         assertTrue("重新开始后 capturing=true", manager.capturing)
+    }
+
+    // ===== BUG FIX：buffer.paused 安全网 =====
+
+    /** T18：stopCapture 设置 buffer.paused=true——即使 Filter 未被移除也无法入队。 */
+    fun testT18_StopCapture_setsBufferPaused() {
+        val bridge = SpyBridge(attachResult = true)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        assertFalse("捕捉中 paused=false", manager.entries.paused)
+
+        manager.stopCapture()
+        assertTrue("stopCapture 后 paused=true", manager.entries.paused)
+    }
+
+    /** T19：paused=true 时 addEntry 返回 false——安全网生效。 */
+    fun testT19_PausedBuffer_rejectsAddEntry() {
+        val bridge = SpyBridge(attachResult = true)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        // 先成功入队一条
+        val entry = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = 0L)
+        assertTrue("paused=false 时 addEntry 成功", manager.entries.addEntry(entry))
+
+        // 停止后 paused=true，addEntry 被拒绝
+        manager.stopCapture()
+        val entry2 = LogSqlEntry(rawSql = "SELECT 2", restoredSql = "SELECT 2", params = emptyList(), timestamp = 1L)
+        assertFalse("paused=true 时 addEntry 应被拒绝", manager.entries.addEntry(entry2))
+    }
+
+    /** T20：startCapture 清除 paused——恢复正常入队。 */
+    fun testT20_StartCapture_clearsPaused() {
+        val bridge = SpyBridge(attachResult = true)
+        val manager = managerWith(bridge)
+        manager.startCapture()
+        manager.stopCapture()
+        assertTrue("停止后 paused=true", manager.entries.paused)
+
+        manager.startCapture(manual = true)
+        assertFalse("startCapture 后 paused=false", manager.entries.paused)
+    }
+
+    // ===== BUG FIX：onConsoleAppeared 尊重 suppressed 标志 =====
+
+    /** T21：autoStart=true + suppressed=true → onConsoleAppeared 不重启捕捉。 */
+    fun testT21_SuppressedPreventsAutoRestart() {
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            settings.state.logAutoCaptureSuppressed = true
+            val bridge = SpyBridge(attachResult = true)
+            val manager = managerWith(bridge)
+
+            // 模拟控制台出现 → 不应重启捕捉
+            manager.onConsoleAppeared()
+            assertFalse("suppressed=true 时 onConsoleAppeared 不应重启捕捉", manager.capturing)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
+
+    /** T22：autoStart=true + suppressed=false → onConsoleAppeared 正常重启捕捉。 */
+    fun testT22_NotSuppressed_allowsAutoRestart() {
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            settings.state.logAutoCaptureSuppressed = false
+            val bridge = SpyBridge(attachResult = true)
+            val manager = managerWith(bridge)
+
+            // 模拟控制台出现 → 应重启捕捉
+            manager.onConsoleAppeared()
+            assertTrue("suppressed=false 时 onConsoleAppeared 应重启捕捉", manager.capturing)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
+
+    /**
+     * T23：armed 态（capturing=true, isWaitingForConsole=true, userArmed=true）下
+     * onConsoleAppeared 仍重启捕捉（用户手动启动的 armed 态应自动恢复）。
+     *
+     * 流转：手动启动（无控制台）→ userArmed=true → 控制台出现 → 控制台移除 → armed 态 → 控制台出现 → 恢复捕捉
+     */
+    fun testT23_ArmedState_allowsAutoRestart() {
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        try {
+            // autoStart=false + manual=true：模拟手动开启但未启用自动启动
+            settings.state.logAutoCaptureOnStart = false
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+
+            // 手动启动（无控制台）→ capturing=true, userArmed=true, isWaitingForConsole=true
+            manager.startCapture(manual = true)
+            assertTrue("手动启动后 capturing=true", manager.capturing)
+            assertTrue("手动启动后 userArmed=true", manager.userArmed)
+            assertTrue("手动启动后 isWaitingForConsole=true", manager.isWaitingForConsole)
+
+            // 控制台出现 → 等待态清除
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("控制台出现后 capturing=true", manager.capturing)
+            assertFalse("控制台出现后等待态清除", manager.isWaitingForConsole)
+
+            // 控制台移除 → armed 态（capturing 保持 true, isWaitingForConsole=true, userArmed 保持 true）
+            bridge.hasMainConsoleResult = false
+            manager.onConsoleRemoved()
+            assertTrue("armed 态 capturing 保持 true", manager.capturing)
+            assertTrue("armed 态 userArmed=true", manager.userArmed)
+            assertTrue("armed 态 isWaitingForConsole=true", manager.isWaitingForConsole)
+
+            // 控制台出现 → 应自动重启捕捉（等待态清除）
+            bridge.hasMainConsoleResult = true
+            manager.onConsoleAppeared()
+            assertTrue("armed 态下 onConsoleAppeared 应重启捕捉", manager.capturing)
+            assertFalse("等待态应清除", manager.isWaitingForConsole)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+        }
     }
 }

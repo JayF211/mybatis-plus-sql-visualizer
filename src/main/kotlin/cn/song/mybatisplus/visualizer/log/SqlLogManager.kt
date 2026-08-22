@@ -98,6 +98,8 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         // 手动点击捕捉→清除自动启动抑制标志（用户主动开启，重启后应恢复自动启动）
         if (manual) PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
+        // 解除缓冲暂停（stop 时设置 paused=true 阻止任何入队）
+        buffer.paused = false
         if (!hasMainConsole()) {
             // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
             // 主控制台出现（contentAdded 监听 / 轮询检测）时自动附着 filter 开始捕捉 SQL
@@ -155,10 +157,13 @@ class SqlLogManager(private val project: Project) : Disposable {
      *    与 capturing 守卫双保险：detachAllFilters 清现有 + 守卫防新挂 + 停轮询彻底消除）
      */
     fun stopCapture() {
+        LOG.info("stopCapture: 调用开始（capturing=$capturing, armed=$userArmed, waiting=$isWaitingForConsole, paused=${buffer.paused}）")
         if (!capturing && !userArmed) return // armed 态也须幂等守卫
         capturing = false  // ← 先置位：attachFilter 守卫生效，轮询/事件回调不再挂载新 Filter
         userArmed = false
         isWaitingForConsole = false
+        // 安全网：暂停缓冲区——即使 Filter 未被成功移除，也无法向缓冲区添加条目
+        buffer.paused = true
         // 自动启动开启时，用户显式停止→置持久化抑制标志（重启后 LogStartupCapture 检查此标志跳过）
         if (PluginSettings.getInstance().state.logAutoCaptureOnStart) {
             PluginSettings.getInstance().state.logAutoCaptureSuppressed = true
@@ -167,6 +172,8 @@ class SqlLogManager(private val project: Project) : Disposable {
         bridge.detachAllFilters()
         // 无条件停止轮询（不再区分 243/253 vs 262+——stop 后不应有任何残留活动）
         bridge.stopPolling()
+        // 移除 contentListener（243/253 平台注册了控制台事件监听，不移除会触发 onConsoleAppeared 重启捕捉）
+        bridge.detachContentListener()
         refreshToolbar()
     }
 
@@ -190,12 +197,16 @@ class SqlLogManager(private val project: Project) : Disposable {
     fun onConsoleAppeared() {
         if (capturing && !isWaitingForConsole) return  // 已在捕捉态（非等待）则幂等
         val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
+        val suppressed = PluginSettings.getInstance().state.logAutoCaptureSuppressed
+        // BUG FIX（停止后仍捕获）：suppressed 标志阻止 onConsoleAppeared 重启捕捉。
+        // 此前 suppressed 仅阻止 LogStartupCapture，不阻止 onConsoleAppeared——导致 autoStart=true
+        // 时用户停止后，任何控制台事件都会重启捕捉。
         if (!autoStart && !userArmed) return
-        // 注意：不清空 logAutoCaptureSuppressed！
-        // suppressed 仅阻止 LogStartupCapture 进入 armed 态，不阻止项目启动自动捕捉。
-        // 清零 suppressed 的唯一方式是显式用户操作：手动点捕捉 / 设置里开关切换。
+        if (suppressed && !userArmed) return
+        // 不清空 logAutoCaptureSuppressed！
+        // suppressed 仅阻止自动启动，不清零。清零的唯一方式是显式用户操作：手动点捕捉 / 设置里开关切换。
         // 若在此清零 → 项目停止后 suppressed=false → 重启后 armed 态复现（用户"停止"意图丢失）。
-        LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
+        LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, suppressed=$suppressed, armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
         startCapture()
     }
 
@@ -286,6 +297,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         userArmed = false
         isWaitingForConsole = false
         capturing = false
+        buffer.paused = true
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
         buffer.removeListener(autoOpenListener)
