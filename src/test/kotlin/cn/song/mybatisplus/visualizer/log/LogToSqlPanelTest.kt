@@ -185,6 +185,34 @@ class LogToSqlPanelTest : BasePlatformTestCase() {
         assertTrue(result, result.contains("name = 'Alice'"))
     }
 
+    // ---------- JdbcTemplate 日志格式支持（M47） ----------
+
+    fun testConvertJdbcTemplateFormatWithParams() {
+        panel.setInputForTest(
+            "Executing prepared SQL statement [SELECT * FROM users WHERE id = ? AND name = ?]\n" +
+                "Setting SQL statement parameter value: column index 1, parameter value [42], value class [java.lang.Integer], SQL type unknown\n" +
+                "Setting SQL statement parameter value: column index 2, parameter value [Alice], value class [java.lang.String], SQL type unknown",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        assertTrue(result, result.contains("id = 42"))
+        assertTrue(result, result.contains("name = 'Alice'"))
+        assertEquals(
+            MpSqlVisualizerBundle.message("logToSql.status.converted", 1),
+            panel.statusForTest(),
+        )
+    }
+
+    fun testConvertJdbcTemplateNullParam() {
+        panel.setInputForTest(
+            "Executing prepared SQL statement [SELECT * FROM users WHERE deleted = ?]\n" +
+                "Setting SQL statement parameter value: column index 1, parameter value [null], value class [null], SQL type unknown",
+        )
+        panel.convertForTest()
+        val result = panel.resultTextForTest()
+        assertTrue(result, result.contains("deleted = NULL"))
+    }
+
     fun testConvertMixedMyBatisAndHibernate() {
         panel.setInputForTest(
             "==>  Preparing: SELECT * FROM config WHERE key = ?\n" +

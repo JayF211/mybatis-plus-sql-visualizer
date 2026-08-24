@@ -211,8 +211,8 @@ class LogToSqlPanel(
     /**
      * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/单行切换）→ 写结果区。
      *
-     * 双解析器并列：MyBatis + Hibernate 同时喂行，各自识别匹配的格式，结果合并输出。
-     * 一段混合日志（同时含两种格式）也能正确转换。
+     * 三解析器并列：MyBatis + Hibernate + JdbcTemplate 同时喂行，各自识别匹配的格式，结果合并输出。
+     * 一段混合日志（同时含多种格式）也能正确转换。
      */
     private fun convert() {
         val text = inputEditor.document.text
@@ -234,13 +234,19 @@ class LogToSqlPanel(
             mixedPrefix = state.logMixedPrefix,
             maxParseLength = state.logMaxParseLength,
         )
+        val jdbcParser = JdbcTemplateLogParser(
+            enabled = state.logJdbcEnabled,
+            maxParseLength = state.logMaxParseLength,
+        )
         text.lineSequence().forEach { line ->
             myBatisParser.feed(line)
             hibernateParser.feed(line)
+            jdbcParser.feed(line)
         }
         myBatisParser.closePending()
         hibernateParser.closePending()
-        val entries = myBatisParser.takeEntries() + hibernateParser.takeEntries()
+        jdbcParser.closePending()
+        val entries = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
         if (entries.isEmpty()) {
             status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), error = true)
             return
