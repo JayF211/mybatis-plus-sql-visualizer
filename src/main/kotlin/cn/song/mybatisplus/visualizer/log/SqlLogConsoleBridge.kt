@@ -270,7 +270,7 @@ open class SqlLogConsoleBridge(
             try {
                 val filterIface = Class.forName(filterIfaceName, true, platformClassLoader)
                 val config = parserConfig()
-                // 双解析器：MyBatis + Hibernate 并列运行，互不干扰
+                // 三解析器：MyBatis + Hibernate + JdbcTemplate 并列运行，互不干扰（M47）
                 val myBatisParser = MyBatisLogParser(
                     sqlPrefix = config.sqlPrefix,
                     paramPrefix = config.paramPrefix,
@@ -281,6 +281,10 @@ open class SqlLogConsoleBridge(
                     sqlPrefix = config.hibernateSqlPrefix,
                     paramPrefix = config.hibernateParamPrefix,
                     mixedPrefix = config.mixedPrefix,
+                    maxParseLength = config.maxParseLength,
+                )
+                val jdbcParser = JdbcTemplateLogParser(
+                    enabled = config.jdbcEnabled,
                     maxParseLength = config.maxParseLength,
                 )
                 val hibernateEnabled = config.hibernateEnabled
@@ -300,13 +304,16 @@ open class SqlLogConsoleBridge(
                         hibernateParser.paramPrefix = cfg.hibernateParamPrefix
                         hibernateParser.mixedPrefix = cfg.mixedPrefix
                         hibernateParser.maxParseLength = cfg.maxParseLength
+                        jdbcParser.enabled = cfg.jdbcEnabled
+                        jdbcParser.maxParseLength = cfg.maxParseLength
                         LOG.debug("FilterProxy: line=${line.take(120)}")
-                        // 喂行到两个解析器（各自忽略不匹配的行）
+                        // 喂行到三个解析器（各自忽略不匹配的行）
                         myBatisParser.feed(line)
                         if (hibernateEnabled) hibernateParser.feed(line)
+                        jdbcParser.feed(line)
                         // T-M31.18：每次入队前同步设置（去重窗口/过滤关键字即时生效，不再依赖重新捕捉）
                         syncBufferConfig()
-                        val taken = myBatisParser.takeEntries() + hibernateParser.takeEntries()
+                        val taken = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
                         if (taken.isNotEmpty()) LOG.debug("FilterProxy: 捕获到 ${taken.size} 条 SQL: ${taken.first().restoredSql.take(80)}")
                         taken.forEach { buffer.addEntry(it) }
                     },

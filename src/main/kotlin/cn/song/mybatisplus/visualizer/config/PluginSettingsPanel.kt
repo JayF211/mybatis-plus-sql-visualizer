@@ -197,6 +197,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val logHibernateEnabledCheck = JBCheckBox()
     private val logHibernateSqlPrefixField = JBTextField(12)
     private val logHibernateParamPrefixField = JBTextField(12)
+    private val logJdbcEnabledCheck = JBCheckBox()
 
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private val logTimePrefixField = JBTextField(12)
@@ -448,6 +449,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
+            })
+            // M47：Spring JdbcTemplate 日志捕获开关
+            addRow(p, g, "", logJdbcEnabledCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.jdbc")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
             })
         }
 
@@ -829,6 +835,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
+            || logJdbcEnabledCheck.isSelected != s.logJdbcEnabled
     }
 
     /**
@@ -887,6 +894,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
         s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
         s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
+        s.logJdbcEnabled = logJdbcEnabledCheck.isSelected
         if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
             applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
         }
@@ -955,6 +963,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
         logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
         logHibernateParamPrefixField.text = s.logHibernateParamPrefix
+        logJdbcEnabledCheck.isSelected = s.logJdbcEnabled
     }
 
     // ------------------------------------------------------------------

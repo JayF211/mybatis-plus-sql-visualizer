@@ -292,6 +292,7 @@ class SqlLogManager(private val project: Project) : Disposable {
             hibernateSqlPrefix = state.logHibernateSqlPrefix,
             hibernateParamPrefix = state.logHibernateParamPrefix,
             hibernateEnabled = state.logHibernateEnabled,
+            jdbcEnabled = state.logJdbcEnabled,
         )
     }
 
@@ -328,4 +329,6 @@ data class ParserConfig(
     val hibernateSqlPrefix: String = HibernateLogParser.DEFAULT_SQL_PREFIX,
     val hibernateParamPrefix: String = HibernateLogParser.DEFAULT_PARAM_PREFIX,
     val hibernateEnabled: Boolean = true,
+    // JdbcTemplate 解析器配置（M47）
+    val jdbcEnabled: Boolean = true,
 )

@@ -245,6 +245,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** Hibernate 参数行前缀（默认 `binding parameter`）。 */
         var logHibernateParamPrefix: String = DEFAULT_LOG_HIBERNATE_PARAM_PREFIX,
 
+        // ---------- Spring JdbcTemplate 日志捕获（M47） ----------
+
+        /** 启用 Spring JdbcTemplate 日志解析（默认开）。 */
+        var logJdbcEnabled: Boolean = true,
+
         // ---------- F-6 拦截器模拟增强（TenantLine / DynamicTableName / DataPermission） ----------
 
         /**

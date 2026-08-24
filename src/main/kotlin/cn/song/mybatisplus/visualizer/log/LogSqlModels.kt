@@ -8,6 +8,8 @@ enum class SqlSource {
     MYBATIS,
     /** Hibernate/JPA 控制台日志（`Hibernate:` / `binding parameter` 格式）。 */
     HIBERNATE,
+    /** Spring JdbcTemplate 控制台日志（`Executing prepared SQL statement [SQL]` / `Setting SQL statement parameter value: ...` 格式）。 */
+    JDBC,
     /** 未知来源（兼容旧版本条目）。 */
     UNKNOWN,
 }
