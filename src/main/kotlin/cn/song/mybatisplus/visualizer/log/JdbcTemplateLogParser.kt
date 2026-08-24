@@ -9,11 +9,14 @@ package cn.song.mybatisplus.visualizer.log
  * - SQL 行（存储过程）：`Calling stored procedure [{call ...}]`
  * - 参数行（StatementCreatorUtils）：
  *   `Setting SQL statement parameter value: column index 1, parameter value [0], value class [java.lang.Integer], SQL type unknown`
+ * - NamedParameterJdbcTemplate 单行格式：
+ *   `sql = SELECT ... WHERE col = :param1 , parameters = {param1=0, param2=abc}`
  *
  * 不匹配的行（MyBatis/Hibernate/纯噪声）自然忽略。
  *
  * 参数按 `column index`（1-based）升序排列后回填 `?`。
  * 类型还原：`value class [java.lang.Integer]` → 去 `java.lang.` 前缀 → `Integer` → 查 [LogSqlRestorer.PLAIN_TYPES] 判定引号。
+ * NamedParameter 格式：命名参数 `:paramName` 直接替换为 Map 中对应值（启发式判定引号）。
  *
  * [maxParseLength] 超长截断（防控制台大输出卡顿）。
  */
@@ -35,7 +38,15 @@ class JdbcTemplateLogParser(
     fun feed(line: String) {
         if (!enabled) return
 
-        // 分支 1：SQL 行（有 [SQL] 文本）
+        // 分支 1：NamedParameterJdbcTemplate 单行格式（sql = ... , parameters = {...}）
+        val namedEntry = extractNamedParamEntry(line)
+        if (namedEntry != null) {
+            closePending()
+            entries += namedEntry
+            return
+        }
+
+        // 分支 2：SQL 行（有 [SQL] 文本）
         val sql = extractSqlFromLine(line)
         if (sql != null) {
             closePending()
@@ -44,7 +55,7 @@ class JdbcTemplateLogParser(
             return
         }
 
-        // 分支 2：参数行
+        // 分支 3：参数行
         val param = extractParamFromLine(line)
         if (param != null) {
             if (pendingSql == null) return // 无 SQL 上下文，忽略
@@ -52,7 +63,7 @@ class JdbcTemplateLogParser(
             return
         }
 
-        // 分支 3：有 pendingSql 后遇到非参数非 SQL 行 → 闭合当前条目
+        // 分支 4：有 pendingSql 后遇到非参数非 SQL 行 → 闭合当前条目
         if (pendingSql != null && pendingParams.isNotEmpty()) {
             closePending()
         }
@@ -84,6 +95,75 @@ class JdbcTemplateLogParser(
     }
 
     // ---------- 私有方法 ----------
+
+    /**
+     * 尝试从行中提取 NamedParameterJdbcTemplate 格式的完整条目（单行）。
+     * 格式：`sql = <SQL> , parameters = {param1=val1, param2=val2}`
+     * 命名参数 `:paramName` 直接替换为 Map 中对应值。
+     */
+    private fun extractNamedParamEntry(line: String): LogSqlEntry? {
+        val match = NAMED_PARAM_PATTERN.find(line) ?: return null
+        val sql = match.groupValues[1].trim().take(maxParseLength)
+        val paramsText = match.groupValues[2].trim()
+        val paramsMap = parseNamedParamsMap(paramsText)
+        val restoredSql = replaceNamedParams(sql, paramsMap)
+        // 收集 params 列表（按 :paramN 出现顺序）
+        val params = mutableListOf<LogSqlParam>()
+        NAMED_PARAM_REF.findAll(sql).forEach { refMatch ->
+            val paramName = refMatch.groupValues[1]
+            val value = paramsMap[paramName]
+            params += LogSqlParam(value, null)
+        }
+        return LogSqlEntry(
+            rawSql = sql,
+            restoredSql = restoredSql,
+            params = params,
+            source = SqlSource.JDBC,
+        )
+    }
+
+    /**
+     * 解析 NamedParameter 格式的参数 Map 文本。
+     * 格式：`param1=0, param2=abc`
+     * 值可能含 `=` 或 `,`（如 JSON 字符串），按 `, paramName=` 边界切分。
+     */
+    private fun parseNamedParamsMap(paramsText: String): Map<String, String> {
+        if (paramsText.isEmpty()) return emptyMap()
+        val params = mutableMapOf<String, String>()
+        // 按 `, key=` 边界切分（lookahead 保留 key）
+        val entries = paramsText.split(Regex("""\s*,\s*(?=\w+\s*=)"""))
+        for (entry in entries) {
+            val eqIdx = entry.indexOf('=')
+            if (eqIdx <= 0) continue
+            val key = entry.substring(0, eqIdx).trim()
+            val value = entry.substring(eqIdx + 1).trim()
+            params[key] = value
+        }
+        return params
+    }
+
+    /**
+     * 替换 SQL 中的命名参数为渲染后的字面量。
+     * 无类型标注 → 启发式：数值/true/false 原样，其余引号包裹。
+     */
+    private fun replaceNamedParams(sql: String, params: Map<String, String>): String {
+        var result = sql
+        for ((name, value) in params) {
+            val rendered = renderUntyped(value)
+            result = result.replace(":$name", rendered)
+        }
+        return result
+    }
+
+    /**
+     * 无类型标注的字面量渲染（启发式）。
+     * 数值（含小数/科学计数）/ true/false → 原样；null → NULL；其余 → 引号包裹。
+     */
+    private fun renderUntyped(value: String?): String {
+        if (value == null || value == "null") return "NULL"
+        if (value.matches(NUMERIC_REGEX) || value == "true" || value == "false") return value
+        return "'" + value.replace("'", "''") + "'"
+    }
 
     /**
      * 尝试从行中提取 SQL 文本（有 `[SQL]` 的语句行）。
@@ -174,5 +254,25 @@ class JdbcTemplateLogParser(
             """Setting\s+SQL\s+statement\s+parameter\s+value:\s+column\s+index\s+(\d+),\s+parameter\s+value\s+\[(.*)],\s+value\s+class\s+\[(.*?)],\s+SQL\s+type\s+(.*)""",
             RegexOption.IGNORE_CASE,
         )
+
+        /**
+         * NamedParameterJdbcTemplate 单行格式正则。
+         * 组 1 = SQL 文本，组 2 = 参数 Map 文本。
+         *
+         * 匹配形态：`sql = SELECT ... , parameters = {param1=0, param2=abc}`
+         * SQL 使用非贪婪匹配到 ` , parameters =` 前的最后一个字符。
+         */
+        private val NAMED_PARAM_PATTERN = Regex(
+            """sql\s*=\s*(.*?)\s*,\s*parameters\s*=\s*\{([^}]*)\}""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /**
+         * SQL 中命名参数引用模式：`:paramName`（用于收集 params 列表）。
+         */
+        private val NAMED_PARAM_REF = Regex(""":(\w+)""")
+
+        /** 数值字面量（含小数与科学计数）。 */
+        private val NUMERIC_REGEX = Regex("""-?\d+(\.\d+)?([eE][+-]?\d+)?""")
     }
 }

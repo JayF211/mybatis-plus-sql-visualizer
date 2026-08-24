@@ -319,4 +319,86 @@ class JdbcTemplateLogParserTest {
         assertEquals("SELECT id FROM users", entries[0].rawSql)
         assertEquals(SqlSource.JDBC, entries[0].source)
     }
+
+    // ========== NamedParameterJdbcTemplate 单行格式 ==========
+
+    @Test
+    fun `NamedParameter 基本格式（用户真实日志）`() {
+        val entries = feedAll(
+            parser(),
+            """sql = SELECT "owner", "modifiedTime" FROM ipm_RunPlanProject WHERE ( ("deleted" = :param1) AND ("runPlanId" = :param2) )  , parameters = {param1=0, param2=b9bd4c306fee44bebc3dd6fe1b716357}""",
+        )
+        assertEquals(1, entries.size)
+        assertEquals(SqlSource.JDBC, entries[0].source)
+        assertTrue(entries[0].rawSql.contains("ipm_RunPlanProject"))
+        assertTrue(entries[0].rawSql.contains(":param1"))
+        // 还原：param1=0（数值裸渲染），param2=UUID（字符串引号）
+        assertTrue(entries[0].restoredSql.contains("\"deleted\" = 0"))
+        assertTrue(entries[0].restoredSql.contains("\"runPlanId\" = 'b9bd4c306fee44bebc3dd6fe1b716357'"))
+    }
+
+    @Test
+    fun `NamedParameter 带日志前缀`() {
+        val entries = feedAll(
+            parser(),
+            "2026-08-24 15:46:42.444 Line:243 - sql = SELECT * FROM users WHERE id = :id AND name = :name , parameters = {id=42, name=Alice}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql.contains("id = 42"))
+        assertTrue(entries[0].restoredSql.contains("name = 'Alice'"))
+    }
+
+    @Test
+    fun `NamedParameter null 值`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE a = :p1 , parameters = {p1=null}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql.contains("a = NULL"))
+    }
+
+    @Test
+    fun `NamedParameter 值含等号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE a = :p1 , parameters = {p1=a=b=c}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql.contains("a = 'a=b=c'"))
+    }
+
+    @Test
+    fun `NamedParameter 值含逗号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE a = :p1 AND b = :p2 , parameters = {p1=a,b,c, p2=ok}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql.contains("a = 'a,b,c'"))
+        assertTrue(entries[0].restoredSql.contains("b = 'ok'"))
+    }
+
+    @Test
+    fun `NamedParameter 空参数`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT 1 , parameters = {}",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 1", entries[0].rawSql)
+        assertTrue(entries[0].params.isEmpty())
+    }
+
+    @Test
+    fun `NamedParameter 多条连续`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t1 WHERE id = :id , parameters = {id=1}",
+            "sql = SELECT * FROM t2 WHERE name = :name , parameters = {name=test}",
+        )
+        assertEquals(2, entries.size)
+        assertTrue(entries[0].rawSql.contains("t1"))
+        assertTrue(entries[1].rawSql.contains("t2"))
+    }
 }
