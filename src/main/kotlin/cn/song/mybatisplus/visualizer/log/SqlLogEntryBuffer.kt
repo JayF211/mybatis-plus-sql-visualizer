@@ -11,8 +11,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 与平台壳 [SqlLogManager] 分离：本类可纯 JUnit 测试（无 Application 依赖）。
  */
 class SqlLogEntryBuffer(
-    private val maxEntries: Int = DEFAULT_MAX_ENTRIES,
+    maxEntries: Int = DEFAULT_MAX_ENTRIES,
 ) {
+    /** 最大条目数（可变——运行时动态调整上限，超出自动淘汰最早）。 */
+    @Volatile
+    var maxEntries: Int = maxEntries
 
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val entries = ArrayDeque<LogSqlEntry>()

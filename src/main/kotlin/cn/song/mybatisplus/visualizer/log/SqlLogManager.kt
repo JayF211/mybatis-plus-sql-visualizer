@@ -29,7 +29,9 @@ import java.util.concurrent.CopyOnWriteArrayList
 @Service(Service.Level.PROJECT)
 class SqlLogManager(private val project: Project) : Disposable {
 
-    private val buffer = SqlLogEntryBuffer()
+    private val buffer = SqlLogEntryBuffer(
+        PluginSettings.getInstance().state.logMaxCount,
+    )
     private var bridge: SqlLogConsoleBridge = SqlLogConsoleBridge(
         buffer,
         ::parserConfig,
@@ -241,6 +243,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.dedupeWindowMs = state.logDedupeWindowMs
         buffer.filterKeywords = state.logFilterKeywords
             .split(';').map { it.trim() }.filter { it.isNotEmpty() }
+        buffer.maxEntries = state.logMaxCount
     }
 
     /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */

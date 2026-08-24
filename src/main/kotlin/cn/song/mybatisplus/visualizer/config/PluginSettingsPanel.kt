@@ -193,6 +193,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val logFilterKeywordsField = JBTextField(12)
     private val logDedupeField = JBTextField(12)
     private val logMaxParseField = JBTextField(12)
+    private val logMaxCountField = JBTextField(12)
     private val logHibernateEnabledCheck = JBCheckBox()
     private val logHibernateSqlPrefixField = JBTextField(12)
     private val logHibernateParamPrefixField = JBTextField(12)
@@ -426,6 +427,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxCount"), logMaxCountField.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.maxCount.tip")
             })
             // O-1：日志耗时前缀 + 慢查询阈值
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
@@ -818,6 +822,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logFilterKeywordsField.text.trim() != s.logFilterKeywords
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
             || logMaxParseField.text.trim().toIntOrNull() != s.logMaxParseLength
+            || logMaxCountField.text.trim().toIntOrNull() != s.logMaxCount
             || logFilterBarCheck.isSelected != s.logFilterBarEnabled
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
@@ -874,6 +879,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logFilterKeywords = logFilterKeywordsField.text.trim()
         s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
         s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
+        s.logMaxCount = logMaxCountField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_COUNT
         s.logFilterBarEnabled = logFilterBarCheck.isSelected
         s.logTimePrefix = logTimePrefixField.text.trim()
         s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
@@ -942,6 +948,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logFilterKeywordsField.text = s.logFilterKeywords
         logDedupeField.text = s.logDedupeWindowMs.toString()
         logMaxParseField.text = s.logMaxParseLength.toString()
+        logMaxCountField.text = s.logMaxCount.toString()
         logFilterBarCheck.isSelected = s.logFilterBarEnabled
         logTimePrefixField.text = s.logTimePrefix
         slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()

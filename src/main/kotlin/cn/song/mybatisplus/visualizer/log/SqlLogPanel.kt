@@ -513,23 +513,14 @@ class SqlLogPanel(
                 val entry = value as? LogSqlEntry
                 text = null
                 if (entry != null) {
-                    // T-M31.13/14：SQL 词法着色（插件自身 SqlHighlightColors 配色，随 IDE 主题）+ 可选时间戳前缀
-                    val timestamp = timestampHtml(entry.timestamp)
-                    val sql = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-                    // O-1：执行耗时叠加（着色：绿/黄/红）
-                    val durationStr = durationHtml(entry.executionTimeMs)
-                    // P-06：检测是否为折叠态模板（高频折叠态：count > 1 && !expanded）
-                    val foldedGroup = findFoldedGroup(entry)
-                    if (foldedGroup != null) {
-                        val badge = MpSqlVisualizerBundle.message("log.fold.badge", foldedGroup.count)
-                        val tooltip = MpSqlVisualizerBundle.message("log.fold.tooltip.folded", foldedGroup.count)
-                        this.text = "<html>" + timestamp + durationStr + "<br>" + sql +
-                            "&nbsp;<span style='color:#888888;background:#E8E8E8;'>$badge</span></html>"
-                        toolTipText = tooltip + "\n" + entry.restoredSql
-                    } else {
-                        this.text = "<html>" + timestamp + durationStr + "<br>" + sql + "</html>"
-                        toolTipText = entry.restoredSql
-                    }
+                    // M46：纯文本渲染（移除 HTML 标签，消除 Swing HTML 引擎开销 + EDT 上的 SQL 词法分析）
+                    val timestamp = formatTimestamp(entry.timestamp)
+                    val duration = formatDuration(entry.executionTimeMs)
+                    val foldedBadge = findFoldedGroup(entry)?.let { " ⨉${it.count} " } ?: ""
+                    this.text = "$timestamp$duration${entry.summary}$foldedBadge"
+                    toolTipText = entry.restoredSql
+                    // 耗时着色（仅前景色，不走 HTML）
+                    foreground = durationColor(entry.executionTimeMs, isSelected)
                 }
                 // 行底分隔线 + 四周内边距（条目视觉分隔清晰，解决"区分不清"）
                 border = BorderFactory.createCompoundBorder(
@@ -639,13 +630,18 @@ class SqlLogPanel(
 
     /** 重建列表模型（从 [groupedEntries] 展开到 [listModel]）。 */
     private fun rebuildListModel() {
-        listModel.clear()
+        val elements = ArrayList<LogSqlEntry>(groupedEntries.size * 2)
         groupedEntries.forEach { ge ->
             if (ge.expanded) {
-                ge.entries.forEach { listModel.addElement(it) }
+                elements.addAll(ge.entries)
             } else {
-                listModel.addElement(ge.template)
+                elements.add(ge.template)
             }
+        }
+        listModel.clear()
+        // 一次性替换全部内容：fireIntervalAdded 仅触发一次布局计算（M46：O(N²) → O(N)）
+        if (elements.isNotEmpty()) {
+            listModel.addAll(elements)
         }
     }
 
@@ -659,6 +655,36 @@ class SqlLogPanel(
     }
 
     // ---------- 刷新与动作 ----------
+
+    /** M46：纯文本时间戳前缀（替代 timestampHtml，不再生成 HTML）。 */
+    private fun formatTimestamp(timestamp: Long): String {
+        val state = PluginSettings.getInstance().state
+        if (!state.logTimestampEnabled) return ""
+        val formatted = try {
+            SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
+        } catch (_: IllegalArgumentException) {
+            SimpleDateFormat(DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp))
+        }
+        return "[$formatted] "
+    }
+
+    /** M46：纯文本耗时文本（替代 durationHtml，不再生成 HTML）。 */
+    private fun formatDuration(ms: Long?): String {
+        if (ms == null) return ""
+        return " ${ms}ms "
+    }
+
+    /** M46：耗时前景色（绿/黄/红，替代 HTML span 着色）。 */
+    private fun durationColor(ms: Long?, isSelected: Boolean): java.awt.Color {
+        if (isSelected) return list.selectionForeground
+        if (ms == null) return list.foreground
+        val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
+        return when {
+            ms >= threshold -> JBColor.RED
+            ms >= threshold / 2 -> JBColor.ORANGE
+            else -> list.foreground
+        }
+    }
 
     /** 时间戳 HTML 前缀（设置开关 + 格式；灰字跟随主题）。 */
     private fun timestampHtml(timestamp: Long): String {

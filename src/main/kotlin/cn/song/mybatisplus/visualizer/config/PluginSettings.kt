@@ -182,6 +182,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 日志行解析最大长度（超长截断，防控制台大输出卡顿；默认 20000 对齐参考插件）。 */
         var logMaxParseLength: Int = DEFAULT_LOG_MAX_PARSE_LENGTH,
 
+        /** SQL 日志列表最大条数（默认 200）：超出自动淘汰最早条目，防止日志过多 EDT 卡顿。 */
+        var logMaxCount: Int = DEFAULT_LOG_MAX_COUNT,
+
         // ---------- P-06 日志智能分组 / 高频折叠 ----------
 
         /**
@@ -333,6 +336,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
+        const val DEFAULT_LOG_MAX_COUNT = 200
         const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
 
         // ---------- O-1 日志窗口差异化默认值 ----------
