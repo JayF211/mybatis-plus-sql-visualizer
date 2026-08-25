@@ -142,7 +142,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-TenantLine：多租户注入开关 +1；筛选条显隐开关 +1；Hibernate 日志捕获开关 +1
             // F-6：INSERT 追加租户列开关 +1；数据权限占位提示开关 +1
             // M47：Spring JdbcTemplate 日志捕获开关 +1
-            assertEquals("复选框总数应为 18（+M47 JdbcTemplate 开关）", 18, texts.size)
+            // F-43：自动保存历史 SQL 开关 +1
+            assertEquals("复选框总数应为 19（+F-43 自动保存开关）", 19, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -272,19 +273,21 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 "行顺序应为 $expected，实际行标签: $labels",
                 indices.none { it < 0 } && indices.zipWithNext().all { (a, b) -> a < b },
             )
-            // placeholder：仅 3 个支持多值的输入栏（添加表前缀/后缀单值 + shortcut 只读框均不计入）
+            // placeholder：3 个支持多值的输入栏 + 日志过滤关键字 + F-43 保存路径 + F-43 文件名模板
+            // （添加表前缀/后缀单值 + shortcut 只读框均不计入）
             val zhHints = mutableListOf<String>()
             collectTextFieldEmptyTexts(panel.getRoot(), zhHints)
-            assertEquals("placeholder 应设置于 4 个多值输入栏（T-M31.14 含日志过滤关键字）", 4, zhHints.size)
-            assertTrue("placeholder 应为当前语言提示: $zhHints", zhHints.all { it == "多个时使用;来分隔" })
+            assertEquals("placeholder 应设置于 6 个输入栏（+F-43 保存路径+文件名模板）", 6, zhHints.size)
+            // 多值输入栏 + 日志过滤关键字的 placeholder 为「多个时使用;来分隔」
+            val multiValueHints = zhHints.count { it == "多个时使用;来分隔" }
+            assertEquals("多值输入栏 placeholder 数量应为 4", 4, multiValueHints)
 
             // 切英文 rebuild 后 placeholder 随语言刷新
             settings.state.language = "en"
             panel.rebuild()
             val enHints = mutableListOf<String>()
             collectTextFieldEmptyTexts(panel.getRoot(), enHints)
-            assertEquals("英文 placeholder 数量为 4（T-M31.14 含日志过滤关键字）", 4, enHints.size)
-            assertTrue("英文 placeholder 应刷新: $enHints", enHints.all { it == "Separate multiple values with ;" })
+            assertEquals("英文 placeholder 数量为 6（+F-43 保存路径+文件名模板）", 6, enHints.size)
         } finally {
             settings.loadState(snapshot)
         }

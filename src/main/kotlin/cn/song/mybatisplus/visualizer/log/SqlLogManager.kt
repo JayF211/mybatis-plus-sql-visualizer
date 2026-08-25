@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.wm.ToolWindowManager
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -42,6 +43,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         onConsoleRemoved = { this@SqlLogManager.onConsoleRemoved() }
     }
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
+
+    /** 自动保存历史 SQL（F-43）：buffer 淘汰回调的写入目标。 */
+    private val autoSaver = SqlLogAutoSaver()
 
     /** 缓冲变更 → 面板刷新（EDT 调度）；仅面板订阅时登记（命名引用——可被 removeListener 精确移除）。 */
     private val uiNotifyListener: () -> Unit = { notifyUi() }
@@ -244,6 +248,13 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.filterKeywords = state.logFilterKeywords
             .split(';').map { it.trim() }.filter { it.isNotEmpty() }
         buffer.maxEntries = state.logMaxCount
+        // F-43：自动保存历史 SQL
+        if (state.logAutoSaveEnabled) {
+            autoSaver.configure(state.logAutoSavePath, state.logAutoSaveFileNamePattern, project.basePath)
+            buffer.onEvicted = { entry -> autoSaver.write(entry) }
+        } else {
+            buffer.onEvicted = null
+        }
     }
 
     /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */
@@ -276,6 +287,12 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** T-xx：测试访问器——验证窗口未打开时首条捕获也能触发自动打开决策（见 [maybeAutoOpenWindow]）。 */
     internal fun autoOpenFiredForTest(): Boolean = autoOpenFired
 
+    /** F-43 测试访问器：当前自动保存文件。 */
+    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()
+
+    /** F-43 测试访问器：解析文件名模板。 */
+    internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
+
     private fun notifyUi() {
         ApplicationManager.getApplication().invokeLater {
             uiListeners.forEach { it() }
@@ -306,6 +323,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.removeListener(uiNotifyListener)
         buffer.removeListener(autoOpenListener)
         uiListeners.clear()
+        autoSaver.close()
     }
 
     companion object {

@@ -185,6 +185,24 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** SQL 日志列表最大条数（默认 200）：超出自动淘汰最早条目，防止日志过多 EDT 卡顿。 */
         var logMaxCount: Int = DEFAULT_LOG_MAX_COUNT,
 
+        /**
+         * 自动保存历史 SQL（F-43）：开启后 SQL 超出上限被淘汰时写入保存文件（而非直接丢弃）。
+         * 默认关——保持现有「超出即丢」行为。
+         */
+        var logAutoSaveEnabled: Boolean = false,
+
+        /**
+         * 自动保存历史 SQL 的保存目录（F-43）：用户自定义保存位置。
+         * 空字符串表示使用默认路径（.idea/mybatis-plus-sql-visualizer/sql-history/）。
+         */
+        var logAutoSavePath: String = "",
+
+        /**
+         * 自动保存历史 SQL 的文件名模板（F-43）：支持 $yyyy$ $MM$ $dd$ $HH$ $mm$ $ss$ 占位符。
+         * 默认 "sql-history-$yyyy-MM-dd$.sql"。
+         */
+        var logAutoSaveFileNamePattern: String = DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN,
+
         // ---------- P-06 日志智能分组 / 高频折叠 ----------
 
         /**
@@ -343,6 +361,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOG_MAX_COUNT = 200
         const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
+
+        /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
+        const val DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-\$yyyy-MM-dd\$.sql"
 
         // ---------- O-1 日志窗口差异化默认值 ----------
         const val DEFAULT_LOG_TIME_PREFIX = "Time:"

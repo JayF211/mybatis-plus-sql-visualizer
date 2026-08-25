@@ -36,6 +36,9 @@ class SqlLogEntryBuffer(
     @Volatile
     var filterKeywords: List<String> = emptyList()
 
+    /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
+    var onEvicted: ((LogSqlEntry) -> Unit)? = null
+
     /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
@@ -43,7 +46,10 @@ class SqlLogEntryBuffer(
         if (dedupeEnabled && isDuplicate(entry)) return false
         synchronized(entries) {
             entries.addLast(entry)
-            while (entries.size > maxEntries) entries.removeFirst()
+            while (entries.size > maxEntries) {
+                val evicted = entries.removeFirst()
+                onEvicted?.invoke(evicted)
+            }
         }
         notifyChanged()
         return true
