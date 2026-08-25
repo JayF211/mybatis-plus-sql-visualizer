@@ -16,6 +16,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
+import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import cn.song.mybatisplus.visualizer.ui.diff.DiffHighlighter
 import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
@@ -169,6 +170,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     // F-1：JOIN 关系图（仅 SELECT 含 JOIN 时显示标签页）
     private val diagramPanel = DiagramPanel(project)
+    // F-45：maintainPage 列信息（仅 <pages> 预览非 null 时显示标签页）
+    private var columnInfoPanel: JComponent? = null
     /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
     private var contentPane: JBPanel<JBPanel<*>>? = null
     private var contentTabPane: JTabbedPane? = null
@@ -363,6 +366,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         updateMeta(result)
         // F-1：更新 JOIN 图标签页（仅 SELECT 含 JOIN 时显示）
         updateDiagramTab(result)
+        // F-45：更新列信息标签页（仅 <pages> 预览时显示）
+        updateColumnInfoTab(result)
         // O-4：缓存当前 SQL 供下次 diff
         previousSql = editor?.document?.text
     }
@@ -423,6 +428,66 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         contentTabPane = null
         revalidate()
         repaint()
+    }
+
+    /**
+     * F-45：根据当前预览结果更新列信息标签页。
+     *
+     * 仅当 result.pagesColumns 非 null 时显示"列信息"标签页；否则移除标签页（如有）。
+     */
+    private fun updateColumnInfoTab(result: PreviewResult) {
+        if (result.pagesColumns != null) {
+            ensureTabbedContent()
+            val tabPane = contentTabPane ?: return
+            // 已添加则不重复添加
+            if (tabPane.tabCount < 2 || tabPane.getTitleAt(tabPane.tabCount - 1) != COLUMN_INFO_TAB_TITLE) {
+                val panel = buildColumnInfoPanel(result.pagesColumns)
+                tabPane.addTab(COLUMN_INFO_TAB_TITLE, panel)
+            }
+        } else {
+            removeColumnInfoTab()
+        }
+    }
+
+    /** 构建列信息面板（列标识/标题/类型/可见性 表格）。 */
+    private fun buildColumnInfoPanel(columns: List<PagesColumn>): JComponent {
+        val header = arrayOf(
+            MpSqlVisualizerBundle.message("pages.columns.id"),
+            MpSqlVisualizerBundle.message("pages.columns.title"),
+            MpSqlVisualizerBundle.message("pages.columns.dataType"),
+            MpSqlVisualizerBundle.message("pages.columns.visible"),
+        )
+        val data = columns.map {
+            arrayOf(it.id, it.title, it.dataType, if (it.visible) "✅" else "❌")
+        }.toTypedArray()
+        val table = com.intellij.ui.table.JBTable(object : javax.swing.table.DefaultTableModel(data, header) {
+            override fun isCellEditable(row: Int, column: Int): Boolean = false
+        }).apply {
+            autoResizeMode = com.intellij.ui.table.JBTable.AUTO_RESIZE_ALL_COLUMNS
+            tableHeader.reorderingAllowed = false
+        }
+        return JBScrollPane(table)
+    }
+
+    /** 移除列信息标签页。 */
+    private fun removeColumnInfoTab() {
+        val tabPane = contentTabPane ?: return
+        // 从末尾开始找列信息标签页（可能在 JOIN 图之后）
+        for (i in tabPane.tabCount - 1 downTo 0) {
+            if (tabPane.getTitleAt(i) == COLUMN_INFO_TAB_TITLE) {
+                tabPane.removeTabAt(i)
+                break
+            }
+        }
+        // 只剩 SQL 标签页时恢复纯 SQL 视图
+        if (tabPane.tabCount == 1) {
+            val sqlContent = tabPane.getComponentAt(0)
+            remove(tabPane)
+            add(sqlContent, BorderLayout.CENTER)
+            contentTabPane = null
+            revalidate()
+            repaint()
+        }
     }
 
     /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。 */
@@ -1779,12 +1844,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** P-05.1：当前 paramValues 序列化为 JSON（测试调用用）。 */
     internal fun serializeParamsToJsonForTest(): String = serializeParamsToJson()
 
-    companion object {
-        /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
-        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+     companion object {
+         /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
+         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
-        private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
-        /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
-        private val WHITESPACE_REGEX = Regex("\\s+")
-    }
+         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
+         /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
+         private val WHITESPACE_REGEX = Regex("\\s+")
+
+         /** F-45：列信息标签页标题（避免硬编码，removeColumnInfoTab 按标题匹配）。 */
+         private const val COLUMN_INFO_TAB_TITLE = "列信息"
+     }
 }
