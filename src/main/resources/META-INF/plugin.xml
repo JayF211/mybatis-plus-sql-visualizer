@@ -173,14 +173,14 @@
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）
              T-M40：三处图标统一——sqlLog 蓝底白字版 + 右下角放大镜前景层（玻璃盘浅蓝实色垫底、代码顶层、空心环），无底版实测不理想已回退（sqlLog_bg.svg 为同内容备份） -->
-        <!-- F-44：SQL 日志合并到主侧边栏（SqlLogPanel 嵌入为 tab），不再独立注册工具窗口
+        <!-- F-44：主侧边栏（4 tabs：SQL 日志/日志转SQL/SQL→Java/历史） -->
         <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
                     icon="/icons/sqlLog.svg"
-                    factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/> -->
-        <!-- F-7：SQL 历史记录（自动记录每次预览，支持收藏/标签/搜索） -->
+                    factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
+        <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册
         <toolWindow id="cn.song.mybatisplus.visualizer.history" anchor="right"
                     icon="/icons/sqlGutter.svg"
-                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/>
+                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/> -->
     </extensions>
 
     <!-- F-4：Kotlin plugin mode 声明（Marketplace 要求：依赖 Kotlin 插件需声明兼容模式） -->
