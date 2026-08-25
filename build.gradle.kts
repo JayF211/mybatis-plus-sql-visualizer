@@ -171,6 +171,7 @@ tasks.withType<Test>().configureEach {
 // buildPlugin 最终产物由 composedJar 生成，只配 jar 会导致 zip 内 jar 丢失该属性），
 // 强制每次执行（刷新时间戳）。
 tasks.withType<Jar>().configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     doFirst {
         manifest.attributes["MPV-Build"] = System.currentTimeMillis().toString()
     }
