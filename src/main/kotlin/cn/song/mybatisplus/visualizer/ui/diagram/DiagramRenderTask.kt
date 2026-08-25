@@ -77,7 +77,19 @@ class DiagramRenderTask(
             if (baos.size() == 0) {
                 throw RuntimeException("PlantUML render produced no output")
             }
-            return baos.toByteArray()
+            val bytes = baos.toByteArray()
+            // F-42 兜底：PlantUML 8059 的 SVG 输出依赖 Graphviz 时会渲染出
+            // "Dot Executable: null / Cannot find Graphviz" 错误图（用户环境实证）——
+            // 检测到错误图时抛异常，让上层显示错误信息而非错误图
+            if (format == FileFormat.SVG) {
+                val header = String(bytes, 0, minOf(200, bytes.size), Charsets.UTF_8)
+                if (header.contains("Dot Executable") || header.contains("dot executable") ||
+                    header.contains("Cannot find Graphviz") || header.contains("testdot")
+                ) {
+                    throw RuntimeException("PlantUML SVG render requires Graphviz (not available)")
+                }
+            }
+            return bytes
         }
 
         /**

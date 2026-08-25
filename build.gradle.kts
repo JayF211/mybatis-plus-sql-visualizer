@@ -19,8 +19,12 @@ dependencies {
     // T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例——方法签名/注解元数据可解析；
     // 仅测试依赖，插件运行时零依赖不变；MPJ 1.5.x 不在 Central，暂不加）
     testImplementation(libs.mp.core)
-    // F-1：JOIN 关系可视化图（PlantUML 渲染为 PNG/SVG 静态图，零环境依赖）
-    implementation("net.sourceforge.plantuml:plantuml:8059")
+    // F-1：JOIN 关系可视化图（PlantUML 渲染为 PNG/SVG 静态图）
+    // F-42 升级：8059（2017 编译）的 ER 图布局硬依赖 Graphviz dot + PNG 写入依赖
+    // com.sun.imageio.plugins.png（无 --add-opens 必抛 IllegalAccessError）；
+    // 1.2024.8 内置 Smetana 引擎（无需 Graphviz）+ 自带 PNG writer（无需 --add-opens），
+    // 用户环境无 Graphviz 实证渲染成功（370x259 正常图）。总依赖经 POM 传递（约 21MB jar）。
+    implementation("net.sourceforge.plantuml:plantuml:1.2024.8")
     // F-42：主 IDE 无 --add-opens，PNG 渲染必抛 IllegalAccessError（javap 实证 PngIO 经
     // ImageIO 加载 com.sun.imageio.plugins.png）——SVG 降级后须栅格化显示。Batik（SVG→
     // BufferedImage，纯 Java 全平台一致；PNGTranscoder 自带 PNG 编码器不经 imageio，
