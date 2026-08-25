@@ -212,8 +212,8 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
-        // F-44：仅开启自动保存时才显示历史 tab
-        if (PluginSettings.getInstance().state.logAutoSaveEnabled) {
+        // F-44：开启自动保存、或 .idea 中已有历史文件时显示历史 tab
+        if (PluginSettings.getInstance().state.logAutoSaveEnabled || hasHistoryFiles()) {
             Disposer.register(this, historyPanel)
             historyTabIndex = tabs.tabCount
             tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
@@ -342,17 +342,19 @@ class SqlLogPanel(
     }
 
     /**
-     * F-44：根据 logAutoSaveEnabled 设置同步历史 tab 的显隐。
-     * 开启时添加 tab，关闭时移除 tab。
+     * F-44：根据 logAutoSaveEnabled 设置 + 历史数据存在与否同步历史 tab 的显隐。
+     * 开启自动保存时显示；关闭后若 .idea 中仍有历史文件，也保留 tab（只读查看已有数据）。
+     * 仅当无自动保存且无历史数据时才移除 tab。
      */
     private fun updateHistoryTabVisibility() {
         val enabled = runCatching { PluginSettings.getInstance().state.logAutoSaveEnabled }.getOrDefault(false)
-        if (enabled && historyTabIndex < 0) {
+        val hasHistoryData = enabled || hasHistoryFiles()
+        if (hasHistoryData && historyTabIndex < 0) {
             // 添加历史 tab
             Disposer.register(this, historyPanel)
             historyTabIndex = tabs.tabCount
             tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
-        } else if (!enabled && historyTabIndex >= 0) {
+        } else if (!hasHistoryData && historyTabIndex >= 0) {
             // 移除历史 tab（避免选中正在移除的 tab）
             if (tabs.selectedIndex == historyTabIndex) {
                 tabs.selectedIndex = 0
@@ -360,6 +362,13 @@ class SqlLogPanel(
             tabs.removeTabAt(historyTabIndex)
             historyTabIndex = -1
         }
+    }
+
+    /** F-44：检查 .idea 目录中是否存在历史 SQL 文件。 */
+    private fun hasHistoryFiles(): Boolean {
+        val basePath = project.basePath ?: return false
+        val dir = java.io.File("$basePath${java.io.File.separator}.idea${java.io.File.separator}mybatis-plus-sql-visualizer${java.io.File.separator}sql-history")
+        return dir.isDirectory && dir.listFiles { f -> f.extension == "sql" }?.isNotEmpty() == true
     }
 
     /** 工具栏引用（capturing 变化时刷新按钮状态）。 */
