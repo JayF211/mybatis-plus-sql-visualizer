@@ -112,11 +112,21 @@ class SqlLogAutoSaver {
         }
     }
 
-    /** 写入单条条目到文件。 */
+    /**
+     * 写入单条条目到文件。
+     * 格式（F-44）：--- source: xxx | time: xxx | timestamp ---\nSQL\n
+     * 旧版格式（F-43）：-- timestamp\nSQL\n（向后兼容，Reader 同时支持）
+     */
     private fun writeEntry(w: BufferedWriter, entry: LogSqlEntry) {
         runCatching {
             synchronized(w) {
-                w.write("-- ${formatTimestamp(entry.timestamp)}\n")
+                // 头部：源码位置 | 耗时 | 时间戳
+                val source = entry.sourceFile?.let { file ->
+                    if (entry.sourceLine > 0) "$file:${entry.sourceLine}" else file
+                } ?: "unknown"
+                val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
+                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).format(Date(entry.timestamp))
+                w.write("--- source: $source | time: $duration | $timestamp ---\n")
                 w.write(entry.restoredSql)
                 w.write("\n\n")
                 w.flush()
@@ -161,9 +171,6 @@ class SqlLogAutoSaver {
         writer = null
         currentFile = null
     }
-
-    private fun formatTimestamp(timestamp: Long): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(timestamp))
 
     companion object {
         private val LOG = Logger.getInstance(SqlLogAutoSaver::class.java)

@@ -37,8 +37,10 @@ class SqlLogAutoSaverTest {
         assertNotNull("File should be created", file)
         // 读取文件内容前不 close（close 会置 null）
         val content = file!!.readText()
-        // 时区无关：仅验证格式（本地时区下日期可能不同）
-        assertTrue("Should contain timestamp header: $content", content.matches(Regex("(?s)-- \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.*")))
+        // F-44：新格式 --- source: xxx | time: xxx | timestamp ---
+        assertTrue("Should contain source header: $content", content.contains("source: unknown"))
+        assertTrue("Should contain duration: $content", content.contains("time: —"))
+        assertTrue("Should contain timestamp: $content", content.matches(Regex("(?s).*\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}.*")))
         assertTrue("Should contain SQL: $content", content.contains("SELECT 1"))
         saver.close()
     }
@@ -54,7 +56,8 @@ class SqlLogAutoSaverTest {
         val file = saver.currentFile()
         assertNotNull(file)
         val content = file!!.readText()
-        val count = content.split("-- ").size - 1
+        // F-44：新格式以 "--- source:" 开头
+        val count = content.split("--- source:").size - 1
         assertEquals(3, count)
         saver.close()
     }
