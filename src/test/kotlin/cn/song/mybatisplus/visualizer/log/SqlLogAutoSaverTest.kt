@@ -37,7 +37,8 @@ class SqlLogAutoSaverTest {
         assertNotNull("File should be created", file)
         // 读取文件内容前不 close（close 会置 null）
         val content = file!!.readText()
-        assertTrue("Should contain timestamp header: $content", content.contains("-- 2024-08-25"))
+        // 时区无关：仅验证格式（本地时区下日期可能不同）
+        assertTrue("Should contain timestamp header: $content", content.matches(Regex("(?s)-- \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.*")))
         assertTrue("Should contain SQL: $content", content.contains("SELECT 1"))
         saver.close()
     }
@@ -68,6 +69,16 @@ class SqlLogAutoSaverTest {
             resolved.matches(Regex("sql-history-\\d{4}-\\d{2}-\\d{2}\\.sql")))
         // 验证各占位符都被替换（不应再包含 $） {
         assertFalse("All placeholders should be replaced: $resolved", resolved.contains("$"))
+    }
+
+    @Test
+    fun `文件名模板解析_冒号替换为横线`() {
+        val saver = SqlLogAutoSaver()
+        saver.configure("", "log-\$HH:mm:ss\$.sql", "/tmp")
+        val resolved = saver.resolveFileName()
+        assertFalse("':' should be replaced with '-': $resolved", resolved.contains(":"))
+        assertTrue("Expected pattern like log-HH-mm-ss.sql, got: $resolved",
+            resolved.matches(Regex("log-\\d{2}-\\d{2}-\\d{2}\\.sql")))
     }
 
     @Test
@@ -103,8 +114,8 @@ class SqlLogAutoSaverTest {
     @Test
     fun `无效路径不抛异常`() {
         val saver = SqlLogAutoSaver()
-        // 使用包含非法字符的路径（NUL 是 Windows 保留设备名，不能作为目录）
-        saver.configure("C:\\NUL\\invalid", "test.sql", null)
+        // 使用包含空字符的路径（Windows/macOS 均不允许路径含 \0）
+        saver.configure("invalid${Char(0)}path", "test.sql", null)
         // write 不应抛出异常
         saver.write(entry("SELECT 1"))
         // currentFile 应该为 null（因为文件无法创建）

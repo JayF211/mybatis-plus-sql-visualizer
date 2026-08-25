@@ -1068,7 +1068,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         return pattern.replace(Regex("""\$([^$]+)\$""")) { mr ->
             val formatStr = mr.groupValues[1]
             try {
-                val formatted = java.text.SimpleDateFormat(formatStr).format(java.util.Date(now))
+                val formatted = java.text.SimpleDateFormat(formatStr, java.util.Locale.ENGLISH).format(java.util.Date(now)).replace(':', '-')
                 if (formatted == formatStr) mr.value else formatted
             } catch (_: Exception) {
                 mr.value

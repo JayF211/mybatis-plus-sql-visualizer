@@ -7,6 +7,7 @@ import java.io.File
 import java.nio.charset.Charset
 import java.nio.file.Files
 import java.text.SimpleDateFormat
+import java.util.Locale
 import java.util.Date
 
 /**
@@ -128,20 +129,21 @@ class SqlLogAutoSaver {
     /**
      * 解析文件名模板（替换 $日期格式$ 占位符为 SimpleDateFormat 格式化结果）。
      * 若占位符内容不含日期模式字符（如 $unknown$），则原样保留。
+     * Windows 文件名不允许 :，自动替换为 -（macOS 也兼容）。
      */
     fun resolveFileName(): String {
         val now = System.currentTimeMillis()
         return fileNamePattern.replace(PLACEHOLDER_REGEX) { mr ->
             val formatStr = mr.groupValues[1]
             try {
-                val formatted = SimpleDateFormat(formatStr).format(Date(now))
+                val formatted = SimpleDateFormat(formatStr, Locale.ENGLISH).format(Date(now))
                 // 若格式化结果与输入一致（说明无日期字符），原样保留
                 if (formatted == formatStr) mr.value else formatted
             } catch (_: Exception) {
                 // 非法日期格式原样保留
                 mr.value
             }
-        }
+        }.replace(':', '-')
     }
 
     /** 当前打开的保存文件（测试访问 + 状态展示用）。 */
@@ -161,7 +163,7 @@ class SqlLogAutoSaver {
     }
 
     private fun formatTimestamp(timestamp: Long): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(timestamp))
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(timestamp))
 
     companion object {
         private val LOG = Logger.getInstance(SqlLogAutoSaver::class.java)
