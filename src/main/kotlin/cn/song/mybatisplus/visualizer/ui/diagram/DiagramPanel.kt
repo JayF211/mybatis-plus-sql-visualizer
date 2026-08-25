@@ -16,15 +16,18 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import net.sourceforge.plantuml.FileFormat
+import org.apache.batik.transcoder.TranscoderInput
+import org.apache.batik.transcoder.TranscoderOutput
+import org.apache.batik.transcoder.image.PNGTranscoder
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.charset.Charset
-import java.nio.file.Files
 import javax.imageio.ImageIO
 import javax.swing.ImageIcon
 import javax.swing.JButton
@@ -194,7 +197,6 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     /**
      * 后台异步渲染 PlantUML 图。
      * 使用 [DiagramRenderTask.renderWithFallback]：PNG 优先，JDK 模块受限时自动降级 SVG。
-     * 10 秒超时：渲染超时时自动显示错误。
      */
     private fun renderAsync(plantUmlText: String) {
         val task = DiagramRenderTask(project, plantUmlText) { bytes, error ->
@@ -244,14 +246,20 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         val bytes = currentBytes ?: run {
             return
         }
-        // 检测 SVG 字节（PNG 降级产物）→ JavaFX WebView 渲染
-        if (isSvgBytes(bytes)) {
-            showSvgWithWebView(bytes)
-            return
-        }
-        val image = ImageIO.read(bytes.inputStream()) ?: run {
-            showError(currentSource ?: "", "Failed to decode image bytes")
-            return
+        // 检测 SVG 字节（PNG 降级产物）→ Batik 栅格化为 BufferedImage，走同一显示路径
+        // （F-42：不能用 JavaFX WebView——IDEA 运行时无 javafx.embed.swing.JFXPanel，日志实证）
+        val image = if (isSvgBytes(bytes)) {
+            try {
+                SvgRasterizer.rasterize(bytes)
+            } catch (e: Exception) {
+                showError(currentSource ?: "", "Failed to rasterize SVG: ${e.message}")
+                return
+            }
+        } else {
+            ImageIO.read(bytes.inputStream()) ?: run {
+                showError(currentSource ?: "", "Failed to decode image bytes")
+                return
+            }
         }
         val scaled = if (zoom == 1.0) image else scaleImage(image, zoom)
         swapContent(scrollPane)
@@ -265,65 +273,6 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     private fun isSvgBytes(bytes: ByteArray): Boolean {
         val header = String(bytes, 0, minOf(100, bytes.size), Charsets.UTF_8).trimStart()
         return header.startsWith("<?xml") || header.startsWith("<svg")
-    }
-
-    /** 使用 JavaFX WebView 渲染 SVG（通过反射访问，避免编译时依赖 JavaFX）。 */
-    private fun showSvgWithWebView(bytes: ByteArray) {
-        val svgContent = String(bytes, Charsets.UTF_8)
-        
-        // 将 SVG 写入临时文件（WebView 通过 URL 加载更稳定）
-        val tempFile = Files.createTempFile("mpvs-diagram-", ".svg").toFile()
-        tempFile.writeText(svgContent, Charsets.UTF_8)
-        tempFile.deleteOnExit()
-        
-
-        try {
-            // 反射创建 JFXPanel + WebView + Scene（JavaFX 在 IntelliJ IDEA 运行时可用）
-            
-            val jfxPanelClass = Class.forName("javafx.embed.swing.JFXPanel")
-            val jfxPanel = jfxPanelClass.getDeclaredConstructor().newInstance() as JComponent
-            
-
-            val platformClass = Class.forName("javafx.application.Platform")
-            val runLater = platformClass.getMethod("runLater", Runnable::class.java)
-            
-
-            val webViewClass = Class.forName("javafx.scene.web.WebView")
-            val webView = webViewClass.getDeclaredConstructor().newInstance()
-            
-            val engine = webViewClass.getMethod("getEngine").invoke(webView)
-            engine.javaClass.getMethod("load", String::class.java).invoke(engine, tempFile.toURI().toString())
-            
-
-            val sceneClass = Class.forName("javafx.scene.Scene")
-            val scene = sceneClass.getConstructor(Class.forName("javafx.scene.Parent")).newInstance(webView)
-            jfxPanelClass.getMethod("setScene", sceneClass).invoke(jfxPanel, scene)
-            
-
-            swapContent(JBScrollPane(jfxPanel))
-            revalidate()
-            repaint()
-            
-        } catch (e: Exception) {
-            
-            e.printStackTrace()
-            // 反射失败（JavaFX 不可用）→ 降级显示 SVG 源码
-            showSvgTextFallback(bytes)
-        }
-    }
-
-    /** 降级显示 SVG 源码（JavaFX 不可用时）。 */
-    private fun showSvgTextFallback(bytes: ByteArray) {
-        val source = String(bytes, Charsets.UTF_8)
-        val display = buildString {
-            append(MpSqlVisualizerBundle.message("diagram.render.svgFallback"))
-            append("\n\n--- SVG Source ---\n")
-            append(source)
-        }
-        errorTextArea.text = display
-        swapContent(errorScroll)
-        revalidate()
-        repaint()
     }
 
     /** 缩放图像（双线性插值，平滑）。 */
@@ -408,7 +357,14 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         try {
             // 渲染目标格式的字节
             val bytes = if (format == FileFormat.PNG && currentBytes != null) {
-                currentBytes!!
+                val cached = currentBytes!!
+                if (isSvgBytes(cached)) {
+                    // F-42：主 IDE 常态下 PNG 渲染失败、缓存为 SVG 字节——直接写出是
+                    // "SVG 内容 + .png 后缀"的损坏文件，须经 Batik 重编码为真实 PNG
+                    encodeSvgToPng(cached)
+                } else {
+                    cached
+                }
             } else {
                 DiagramRenderTask.render(source, format)
             }
@@ -420,6 +376,17 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
                 MpSqlVisualizerBundle.message("diagram.export.title"),
             )
         }
+    }
+
+    /** 将 SVG 字节经 Batik PNGTranscoder 编码为 PNG 字节（自带 PNG 编码器，不经 imageio，无 JDK 模块限制）。 */
+    private fun encodeSvgToPng(svgBytes: ByteArray): ByteArray {
+        val transcoder = PNGTranscoder()
+        val baos = ByteArrayOutputStream()
+        transcoder.transcode(TranscoderInput(ByteArrayInputStream(svgBytes)), TranscoderOutput(baos))
+        if (baos.size() == 0) {
+            throw RuntimeException("PNG encode produced no output")
+        }
+        return baos.toByteArray()
     }
 
     /** 经文件选择器保存字节到用户指定路径。 */

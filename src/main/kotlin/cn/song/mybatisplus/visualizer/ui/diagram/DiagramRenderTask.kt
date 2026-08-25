@@ -31,14 +31,14 @@ class DiagramRenderTask(
 
     override fun run(indicator: ProgressIndicator) {
         indicator.text = "Generating PlantUML diagram..."
-        indicator.fraction = 0.0
+        // 注意：不调用 indicator.fraction —— 后台任务用 indeterminate 进度条
+        // （BackgroundableProcessIndicator），setFraction 会打 WARN（主 IDE 日志实证），且无进度语义
         try {
             val bytes = if (format == FileFormat.PNG) {
                 renderWithFallback(plantUmlText)
             } else {
                 render(plantUmlText, format)
             }
-            indicator.fraction = 1.0
             ApplicationManager.getApplication().invokeLater {
                 onDone(bytes, null)
             }

@@ -21,6 +21,15 @@ dependencies {
     testImplementation(libs.mp.core)
     // F-1：JOIN 关系可视化图（PlantUML 渲染为 PNG/SVG 静态图，零环境依赖）
     implementation("net.sourceforge.plantuml:plantuml:8059")
+    // F-42：主 IDE 无 --add-opens，PNG 渲染必抛 IllegalAccessError（javap 实证 PngIO 经
+    // ImageIO 加载 com.sun.imageio.plugins.png）——SVG 降级后须栅格化显示。Batik（SVG→
+    // BufferedImage，纯 Java 全平台一致；PNGTranscoder 自带 PNG 编码器不经 imageio，
+    // 导出 PNG 亦不受 JDK 模块限制）。体积约 6-8MB，随插件打 lib/（与 plantuml 同策略）。
+    implementation("org.apache.xmlgraphics:batik-transcoder:1.17")
+    // F-42：batik-codec 是 batik-transcoder 的 POM optional 依赖（Gradle 不自动拉），但
+    // PNGTranscoder 写 PNG 所需的两个 WriteAdapter 类（InternalCodecWriteAdapter — 自带
+    // PNG 编码器不经 imageio；ImageIOWriteAdapter）都在此 jar 中，缺它则"no WriteAdapter"。
+    implementation("org.apache.xmlgraphics:batik-codec:1.17")
     // F-2：SQL 性能分析（JSqlParser 5.3 — 零依赖 SQL 解析器，静态分析用）
     implementation("com.github.jsqlparser:jsqlparser:5.3")
 
@@ -54,6 +63,14 @@ repositories {
     intellijPlatform {
         defaultRepositories()
     }
+}
+
+// F-42：batik-* 各模块（transcoder/codec/dom/...）都传递拉入 xml-apis:1.4.01，其
+// javax.xml.XMLConstants 停在 FEATURE_SECURE_PROCESSING（无 JDK7+ 的 ACCESS_EXTERNAL_DTD），
+// 遮蔽 JDK 同名类导致 XmlMapperParser 编译失败。JDK 9+ java.xml 模块已完整覆盖该 jar，
+// 全局排除安全；xml-apis-ext（org.w3c.dom.svg/smil 等 JDK 没有的 DOM 接口）仍保留。
+configurations.all {
+    exclude(group = "xml-apis", module = "xml-apis")
 }
 
 // 纯 Kotlin 插件：无需 @NotNull 字节码插桩（Kotlin 编译器已处理空安全）。
@@ -414,6 +431,8 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverterTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.WrapperFormatTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
+                    // F-42：SvgRasterizer（Batik SVG 栅格化）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.SvgRasterizerTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.model.BatchModelTest")
