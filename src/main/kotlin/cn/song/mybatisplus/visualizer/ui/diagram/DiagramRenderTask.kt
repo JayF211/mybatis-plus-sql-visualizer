@@ -39,10 +39,9 @@ class DiagramRenderTask(
             } else {
                 render(plantUmlText, format)
             }
-            ApplicationManager.getApplication().invokeLater {
-                onDone(bytes, null)
-            }
+            ApplicationManager.getApplication().invokeLater { onDone(bytes, null) }
         } catch (e: Throwable) {
+            // 捕获 Throwable（含 Error 子类如 IllegalAccessError），确保 onDone 总被调用
             val msg = e.message ?: e.javaClass.simpleName
             ApplicationManager.getApplication().invokeLater { onDone(null, msg) }
         }
@@ -61,13 +60,11 @@ class DiagramRenderTask(
          */
         @JvmStatic
         fun render(text: String, format: FileFormat = FileFormat.PNG): ByteArray {
-            
             val reader = SourceStringReader(text)
             val option = FileFormatOption(format)
             val baos = ByteArrayOutputStream(64 * 1024)
             // generateImage 返回描述字符串（含错误信息），输出写入 baos
             reader.generateImage(baos, option)
-            
             if (baos.size() == 0) {
                 throw RuntimeException("PlantUML render produced no output")
             }
@@ -83,10 +80,8 @@ class DiagramRenderTask(
         @JvmStatic
         fun renderWithFallback(text: String): ByteArray {
             return try {
-                
                 render(text, FileFormat.PNG)
             } catch (e: java.lang.IllegalAccessError) {
-                
                 // F-1：PNG 模块访问受限 → 降级 SVG
                 render(text, FileFormat.SVG)
             }

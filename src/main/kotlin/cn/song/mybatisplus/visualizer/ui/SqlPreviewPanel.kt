@@ -273,8 +273,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
         // P-05：导入按钮（默认点击 = 从剪贴板导入）
         add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
-        // O-4：复制可执行 SQL（替换占位符为字面值，含类型处理）
-        add(smallButton(MpSqlVisualizerBundle.message("panel.copyExecutableSql")) { copyExecutableSql() })
         // O-4：差异高亮开关（本次 vs 上次预览）
         add(smallButton(MpSqlVisualizerBundle.message("panel.diff")) { toggleDiffHighlight() })
         // O-4：SQL Diff 并排对比
