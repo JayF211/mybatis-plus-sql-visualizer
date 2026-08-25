@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.wm.ToolWindowManager
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -16,11 +17,12 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 经 [SqlLogConsoleBridge] 反射挂载运行控制台（execution API 不在编译 classpath，见桥 KDoc），
  * 并把缓冲变更 [notifyUi] 调度到 EDT 供面板刷新。
  *
- * T-M31.14：配置装配——parser 前缀/混合/最大长度、去重窗口、过滤关键字均来自 [PluginSettings]；
- * 发现 SQL 自动打开日志窗口（[TOOL_WINDOW_ID]）。
+ * T-M31.14：配置装配——parser 前缀/混合/最大长度、去重窗口、过滤关键字均来自 [PluginSettings]。
+ *
+ * F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）；实时捕获仍运行，
+ * 驱动 F-43 自动保存 + 主侧边栏 Tab 0 实时展示。
  *
  * T-xx（设置生效性审计）：
- *  - 自动打开监听与面板解耦——窗口从未打开（启动自动监听旗舰场景）时同样触发 [maybeAutoOpenWindow]；
  *  - capturing 仅在桥挂载成功后置位——attach 失败不进入「已捕捉但无监听」的假状态（可重试）；
  *  - 启动自动监听（logAutoCaptureOnStart）由 [LogStartupCapture]（postStartupActivity）在项目打开时触发，
  *    但 [startCapture] 带主控制台守卫——项目未运行（无主控制台）时不进入捕捉态，项目关闭后 [dispose] 自动停止；
@@ -43,11 +45,11 @@ class SqlLogManager(private val project: Project) : Disposable {
     }
     private val uiListeners = CopyOnWriteArrayList<() -> Unit>()
 
+    /** 自动保存历史 SQL（F-43）：buffer 淘汰回调的写入目标。 */
+    private val autoSaver = SqlLogAutoSaver()
+
     /** 缓冲变更 → 面板刷新（EDT 调度）；仅面板订阅时登记（命名引用——可被 removeListener 精确移除）。 */
     private val uiNotifyListener: () -> Unit = { notifyUi() }
-
-    /** 缓冲变更 → 自动打开窗口检查（T-xx：与面板创建解耦——窗口从未打开时监听已接线）。 */
-    private val autoOpenListener: () -> Unit = { maybeAutoOpenWindow() }
 
     /** 条目缓冲（面板与测试访问）。 */
     val entries: SqlLogEntryBuffer get() = buffer
@@ -69,10 +71,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         private set
 
     init {
-        // T-xx：自动打开决策监听随 manager 生命周期常驻——面板懒加载（工具窗口首次打开才创建
-        // SqlLogPanel → addUiListener），若监听只在 addUiListener 时接线，窗口从未打开的场景
-        // （启动自动监听 + logAutoOpenOnCapture）自动打开永不触发（该设置形同虚设）
-        buffer.addListener(autoOpenListener)
+        // F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
@@ -244,6 +243,13 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.filterKeywords = state.logFilterKeywords
             .split(';').map { it.trim() }.filter { it.isNotEmpty() }
         buffer.maxEntries = state.logMaxCount
+        // F-43：自动保存历史 SQL
+        if (state.logAutoSaveEnabled) {
+            autoSaver.configure(state.logAutoSavePath, state.logAutoSaveFileNamePattern, project.basePath)
+            buffer.onEvicted = { entry -> autoSaver.write(entry) }
+        } else {
+            buffer.onEvicted = null
+        }
     }
 
     /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */
@@ -260,21 +266,11 @@ class SqlLogManager(private val project: Project) : Disposable {
     }
 
     /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次；与面板是否已创建无关）。 */
-    private fun maybeAutoOpenWindow() {
-        if (autoOpenFired) return
-        if (!PluginSettings.getInstance().state.logAutoOpenOnCapture) return
-        if (buffer.snapshot().isEmpty()) return
-        autoOpenFired = true
-        ApplicationManager.getApplication().invokeLater {
-            // runCatching 兜底：项目已关闭/工具窗口不可用等边缘场景不得抛出（显示失败静默即可）
-            runCatching {
-                ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.show()
-            }
-        }
-    }
+    /** F-43 测试访问器：当前自动保存文件。 */
+    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()
 
-    /** T-xx：测试访问器——验证窗口未打开时首条捕获也能触发自动打开决策（见 [maybeAutoOpenWindow]）。 */
-    internal fun autoOpenFiredForTest(): Boolean = autoOpenFired
+    /** F-43 测试访问器：解析文件名模板。 */
+    internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
 
     private fun notifyUi() {
         ApplicationManager.getApplication().invokeLater {
@@ -304,18 +300,16 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.paused = true
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
-        buffer.removeListener(autoOpenListener)
         uiListeners.clear()
+        autoSaver.close()
     }
 
     companion object {
         private val LOG = Logger.getInstance(SqlLogManager::class.java)
 
-        /** plugin.xml `<toolWindow id>`（自动打开用）。 */
+        /** 原 toolWindow id（F-44 后不再注册，保留常量供其他引用）。 */
         const val TOOL_WINDOW_ID = "cn.song.mybatisplus.visualizer.log"
     }
-
-    private var autoOpenFired = false
 }
 
 /** 解析器配置（桥创建 parser 用；纯数据）。 */

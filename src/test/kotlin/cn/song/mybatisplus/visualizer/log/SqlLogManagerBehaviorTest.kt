@@ -88,40 +88,7 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         assertFalse("停止后恢复未捕捉态", manager.capturing)
     }
 
-    fun testAutoOpenDecisionFiresWithoutUiListener() {
-        val settings = PluginSettings.getInstance()
-        val old = settings.state.logAutoOpenOnCapture
-        try {
-            settings.state.logAutoOpenOnCapture = true
-            // 不调用 addUiListener——模拟工具窗口从未打开（启动自动监听旗舰场景）
-            val manager = SqlLogManager(project)
-            assertFalse(manager.autoOpenFiredForTest())
-            manager.entries.addEntry(
-                LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = 0L),
-            )
-            assertTrue(
-                "窗口未打开（无 UI 订阅）时首条捕获也应触发自动打开决策（修复前监听仅在面板创建时接线）",
-                manager.autoOpenFiredForTest(),
-            )
-        } finally {
-            settings.state.logAutoOpenOnCapture = old
-        }
-    }
-
-    fun testAutoOpenDisabledStaysSilent() {
-        val settings = PluginSettings.getInstance()
-        val old = settings.state.logAutoOpenOnCapture
-        try {
-            settings.state.logAutoOpenOnCapture = false
-            val manager = SqlLogManager(project)
-            manager.entries.addEntry(
-                LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = 0L),
-            )
-            assertFalse("开关关闭时自动打开决策不触发", manager.autoOpenFiredForTest())
-        } finally {
-            settings.state.logAutoOpenOnCapture = old
-        }
-    }
+    // F-44：自动打开独立窗口功能已移除（SQL 日志合并到主侧边栏 tab），相关测试删除。
 
     /**
      * 项目生命周期语义：startCapture 进入捕捉态后，dispose（项目关闭）应自动停止并重置 capturing。

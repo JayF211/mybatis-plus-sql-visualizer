@@ -77,6 +77,54 @@ class SqlLogEntryBufferTest {
         assertEquals(2, notified)
     }
 
+    // ---------- F-43：onEvicted 回调 ----------
+
+    @Test
+    fun `onEvicted 回调在淘汰时触发`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 2)
+        val evicted = mutableListOf<String>()
+        buf.onEvicted = { e -> evicted.add(e.restoredSql) }
+        buf.addEntry(entry("SELECT 1"))
+        buf.addEntry(entry("SELECT 2"))
+        buf.addEntry(entry("SELECT 3")) // 淘汰 SELECT 1
+        assertEquals(listOf("SELECT 1"), evicted)
+    }
+
+    @Test
+    fun `onEvicted=null 时无异常`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 1)
+        buf.onEvicted = null
+        buf.addEntry(entry("SELECT 1"))
+        buf.addEntry(entry("SELECT 2")) // 淘汰 SELECT 1，无回调
+        assertEquals(1, buf.snapshot().size)
+        assertEquals("SELECT 2", buf.snapshot()[0].restoredSql)
+    }
+
+    @Test
+    fun `多条目连续淘汰触发多次回调`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 1)
+        val evicted = mutableListOf<String>()
+        buf.onEvicted = { e -> evicted.add(e.restoredSql) }
+        buf.addEntry(entry("SELECT 1"))
+        buf.addEntry(entry("SELECT 2"))
+        buf.addEntry(entry("SELECT 3"))
+        buf.addEntry(entry("SELECT 4"))
+        assertEquals(listOf("SELECT 1", "SELECT 2", "SELECT 3"), evicted)
+    }
+
+    @Test
+    fun `onEvicted 回调顺序为最早到最新`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 2)
+        val evicted = mutableListOf<String>()
+        buf.onEvicted = { e -> evicted.add(e.restoredSql) }
+        buf.addEntry(entry("A"))
+        buf.addEntry(entry("B"))
+        buf.addEntry(entry("C")) // 淘汰 A
+        buf.addEntry(entry("D")) // 淘汰 B
+        buf.addEntry(entry("E")) // 淘汰 C
+        assertEquals(listOf("A", "B", "C"), evicted)
+    }
+
     // ---------- 去重（对齐 MybatisCodeHelper-Pro「移除重复的sql」） ----------
 
     companion object {

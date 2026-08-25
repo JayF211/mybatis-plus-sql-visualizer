@@ -49,6 +49,16 @@ data class LogSqlEntry(
      * 由 [ExecutionTimeParser] 从日志文本解析后填入（O-1 Phase B）。
      */
     val executionTimeMs: Long? = null,
+    // ---------- F-44：源码位置 ----------
+    /**
+     * 产生该 SQL 的源文件路径（相对项目根目录，如 "src/main/java/com/example/mapper/UserMapper.java"）。
+     * null 表示未知（旧版 F-43 保存的条目无此信息）。
+     */
+    val sourceFile: String? = null,
+    /**
+     * 产生该 SQL 的源码行号（0 表示未知）。
+     */
+    val sourceLine: Int = 0,
 ) {
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160

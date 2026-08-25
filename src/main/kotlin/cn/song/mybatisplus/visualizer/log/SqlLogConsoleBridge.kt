@@ -6,6 +6,7 @@ import com.intellij.ui.content.ContentManagerEvent
 import com.intellij.ui.content.ContentManagerListener
 import java.awt.Component
 import java.awt.Container
+import java.io.File
 import java.lang.reflect.Proxy
 import java.util.IdentityHashMap
 import javax.swing.Timer
@@ -315,7 +316,12 @@ open class SqlLogConsoleBridge(
                         syncBufferConfig()
                         val taken = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
                         if (taken.isNotEmpty()) LOG.debug("FilterProxy: 捕获到 ${taken.size} 条 SQL: ${taken.first().restoredSql.take(80)}")
-                        taken.forEach { buffer.addEntry(it) }
+                        // F-44：附加源码位置（从调用栈提取）
+                        val (sourceFile, sourceLine) = extractSourceLocation()
+                        taken.forEach { entry ->
+                            val withSource = entry.copy(sourceFile = sourceFile, sourceLine = sourceLine)
+                            buffer.addEntry(withSource)
+                        }
                     },
                 )
                 console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
@@ -382,6 +388,41 @@ open class SqlLogConsoleBridge(
             LOG.debug("detachContentListener: removeContentManagerListener failed", t)
         }
         contentListenerRegistered = false
+    }
+
+    /**
+     * F-44：从当前线程调用栈中提取产生 SQL 的源码位置。
+     * 原理：SQL 日志由应用代码打印 → 调用栈中第一个非 JDK/非本插件/非 IntelliJ 平台的帧即为产生者。
+     * 返回：相对路径（如 "src/main/java/com/example/mapper/UserMapper.java"）+ 行号。
+     */
+    private fun extractSourceLocation(): Pair<String?, Int> {
+        val stackTrace = Thread.currentThread().stackTrace
+        // 跳过前几个帧（Thread.getStackTrace、本方法、Lambda、LogFilterProxyHandler）
+        for (i in minOf(6, stackTrace.size) until stackTrace.size) {
+            val frame = stackTrace[i]
+            val className = frame.className
+            // 跳过 JDK、IntelliJ 平台、本插件类
+            if (className.startsWith("java.") || className.startsWith("javax.") ||
+                className.startsWith("jdk.") || className.startsWith("sun.") ||
+                className.startsWith("com.intellij.") || className.startsWith("org.jetbrains.") ||
+                className.startsWith("cn.song.mybatisplus.visualizer.") ||
+                className.startsWith("com.sun.proxy.") || className.startsWith("\$Proxy")) {
+                continue
+            }
+            // 找到第一个应用代码帧
+            val relativePath = classNameToRelativePath(className, frame.fileName)
+            return relativePath to frame.lineNumber
+        }
+        return null to 0
+    }
+
+    /**
+     * 将类名 + 文件名转换为相对项目根目录的路径。
+     * 例如：com.example.mapper.UserMapper + UserMapper.java → com/example/mapper/UserMapper.java
+     */
+    private fun classNameToRelativePath(className: String, fileName: String): String? {
+        val packagePath = className.substringBeforeLast('.', "").replace('.', File.separatorChar)
+        return if (packagePath.isNotEmpty()) "$packagePath${File.separatorChar}$fileName" else fileName
     }
 
     companion object {

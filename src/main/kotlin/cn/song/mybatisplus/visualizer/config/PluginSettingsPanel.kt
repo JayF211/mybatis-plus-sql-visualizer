@@ -37,6 +37,7 @@ import javax.swing.JDialog
 import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
+import javax.swing.event.DocumentListener
 
 /**
  * 设置表单面板（T-M5-02，F-16 配置项 UI）。
@@ -198,6 +199,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     private val logHibernateSqlPrefixField = JBTextField(12)
     private val logHibernateParamPrefixField = JBTextField(12)
     private val logJdbcEnabledCheck = JBCheckBox()
+
+    // ---------- F-43 自动保存历史 SQL ----------
+    private val logAutoSaveCheck = JBCheckBox()
+    private val logAutoSavePathField = JBTextField(20)
+    private val logAutoSaveBrowseButton = JButton("...")
+    private val logAutoSavePatternField = JBTextField(20)
+    private val logAutoSavePatternPreview = JBLabel(" ")
 
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private val logTimePrefixField = JBTextField(12)
@@ -454,6 +462,54 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, "", logJdbcEnabledCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.jdbc")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
+            })
+            // F-43：自动保存历史 SQL
+            addRow(p, g, "", logAutoSaveCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.autoSave")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
+                addActionListener {
+                    val enabled = isSelected
+                    logAutoSavePathField.isEnabled = enabled
+                    logAutoSaveBrowseButton.isEnabled = enabled
+                    logAutoSavePatternField.isEnabled = enabled
+                    updateAutoSavePreview()
+                }
+            })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
+                JPanel(BorderLayout(4, 0)).apply {
+                    isOpaque = false
+                    add(logAutoSavePathField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.path.tip")
+                        emptyText.text = MpSqlVisualizerBundle.message("settings.log.autoSave.path.empty")
+                    }, BorderLayout.CENTER)
+                    add(logAutoSaveBrowseButton.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip")
+                        addActionListener { browseAutoSavePath() }
+                    }, BorderLayout.EAST)
+                }
+            )
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.pattern"),
+                JPanel(BorderLayout(4, 0)).apply {
+                    isOpaque = false
+                    add(logAutoSavePatternField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
+                        emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
+                        document.addDocumentListener(object : javax.swing.event.DocumentListener {
+                            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                        })
+                    }, BorderLayout.CENTER)
+                    add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
+                        addActionListener {
+                            logAutoSavePatternField.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
+                        }
+                    }, BorderLayout.EAST)
+                }
+            )
+            addRow(p, g, "", logAutoSavePatternPreview.apply {
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
             })
         }
 
@@ -836,6 +892,9 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
             || logJdbcEnabledCheck.isSelected != s.logJdbcEnabled
+            || logAutoSaveCheck.isSelected != s.logAutoSaveEnabled
+            || logAutoSavePathField.text.trim() != s.logAutoSavePath
+            || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
     }
 
     /**
@@ -895,6 +954,10 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
         s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
         s.logJdbcEnabled = logJdbcEnabledCheck.isSelected
+        s.logAutoSaveEnabled = logAutoSaveCheck.isSelected
+        s.logAutoSavePath = logAutoSavePathField.text.trim()
+        s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
+            .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
             applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
         }
@@ -964,6 +1027,53 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
         logHibernateParamPrefixField.text = s.logHibernateParamPrefix
         logJdbcEnabledCheck.isSelected = s.logJdbcEnabled
+        logAutoSaveCheck.isSelected = s.logAutoSaveEnabled
+        logAutoSavePathField.text = s.logAutoSavePath
+        logAutoSavePatternField.text = s.logAutoSaveFileNamePattern
+        val autoSaveEnabled = s.logAutoSaveEnabled
+        logAutoSavePathField.isEnabled = autoSaveEnabled
+        logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
+        logAutoSavePatternField.isEnabled = autoSaveEnabled
+        updateAutoSavePreview()
+    }
+
+    // ------------------------------------------------------------------
+    // F-43：自动保存历史 SQL 辅助方法
+    // ------------------------------------------------------------------
+
+    private fun browseAutoSavePath() {
+        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(
+            false, true, false, false, false, false
+        ).withTitle(MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip"))
+        val baseDir = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .findFileByIoFile(java.io.File(System.getProperty("user.home")))
+        val dir = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, null, baseDir)
+        if (dir != null) {
+            logAutoSavePathField.text = dir.path
+        }
+    }
+
+    private fun updateAutoSavePreview() {
+        val pattern = logAutoSavePatternField.text.trim()
+            .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+        val resolved = resolvePatternPreview(pattern)
+        logAutoSavePatternPreview.text = MpSqlVisualizerBundle.message(
+            "settings.log.autoSave.pattern.preview", resolved
+        )
+    }
+
+    /** 解析模板用于预览（复用 SqlLogAutoSaver 的占位符规则）。 */
+    private fun resolvePatternPreview(pattern: String): String {
+        val now = System.currentTimeMillis()
+        return pattern.replace(Regex("""\$([^$]+)\$""")) { mr ->
+            val formatStr = mr.groupValues[1]
+            try {
+                val formatted = java.text.SimpleDateFormat(formatStr, java.util.Locale.ENGLISH).format(java.util.Date(now)).replace(':', '-')
+                if (formatted == formatStr) mr.value else formatted
+            } catch (_: Exception) {
+                mr.value
+            }
+        }
     }
 
     // ------------------------------------------------------------------

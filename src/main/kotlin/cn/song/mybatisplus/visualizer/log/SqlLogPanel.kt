@@ -98,6 +98,8 @@ class SqlLogPanel(
     private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
     private val sqlToJavaPanel = SqlToJavaPanel(project)
+    /** F-44：历史 SQL tab（读取 .idea 目录中的自动保存文件，支持源码定位）。 */
+    private val historyPanel = HistorySqlLogPanel(project)
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener { manager.entries.dedupeEnabled = isSelected }
@@ -198,6 +200,7 @@ class SqlLogPanel(
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
         Disposer.register(this, logToSqlPanel)
         Disposer.register(this, sqlToJavaPanel)
+        Disposer.register(this, historyPanel)
 
         // 标签 1：SQL 日志（工具栏 + 过滤条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
@@ -208,12 +211,17 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
+        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
         add(tabs, BorderLayout.CENTER)
 
         // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
         tabs.addChangeListener {
             if (tabs.selectedComponent == sqlToJavaPanel) {
                 sqlToJavaPanel.refreshFormatFromSettings()
+            }
+            // F-44：切换到历史 tab 时刷新数据
+            if (tabs.selectedComponent == historyPanel) {
+                historyPanel.refresh()
             }
             // 筛选条显隐跟随设置（设置页修改后切回即同步）
             refreshFilterBarVisibility()
