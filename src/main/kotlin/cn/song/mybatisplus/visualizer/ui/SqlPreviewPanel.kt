@@ -401,6 +401,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
             addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel)
         }
+        // F-42 修复：渲染完成时组件可能处于 hidden（标签页未被选中），swapContent/revalidate
+        // 对 hidden 组件无效——切到"JOIN 图"标签页时强制刷新，使图像真正显示
+        pane.addChangeListener {
+            if (pane.selectedIndex == 1) {
+                diagramPanel.refreshAfterVisible()
+            }
+        }
         add(pane, BorderLayout.CENTER)
         contentTabPane = pane
         revalidate()

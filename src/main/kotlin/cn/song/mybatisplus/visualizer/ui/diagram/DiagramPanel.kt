@@ -208,7 +208,7 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
                 currentSource = plantUmlText
                 try {
                     applyZoom()
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     e.printStackTrace()
                 }
             } else {
@@ -237,6 +237,19 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         showPlaceholder()
     }
 
+    /**
+     * F-42：标签页切换到"JOIN 图"时调用。
+     *
+     * 渲染完成时组件可能处于 hidden（标签页未被选中），此时 swapContent/revalidate/repaint
+     * 均不生效。切换到标签页后组件可见，重新执行 applyZoom 使图像真正显示。
+     */
+    fun refreshAfterVisible() {
+        // 标签页切换后组件可见，重新执行 applyZoom 使图像真正显示
+        if (currentBytes != null && isShowing) {
+            applyZoom()
+        }
+    }
+
     // ------------------------------------------------------------------
     // 渲染结果显示
     // ------------------------------------------------------------------
@@ -262,9 +275,20 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }
         }
         val scaled = if (zoom == 1.0) image else scaleImage(image, zoom)
+        // 关键修复（F-42）：在修改组件前强制验证布局，确保在 JTabedByPane 中也能正确显示
+        // 即使组件当前不可见（在未被选中的标签页中），swapContent 也会生效
+        // 当组件变可见时，invalidate/validate 确保布局正确更新
+        invalidate()
+        getTreeLock().let { /* ensure layout is flushed */ }
         swapContent(scrollPane)
         imageLabel.icon = ImageIcon(scaled)
         imageLabel.text = null
+        // 强制从根容器开始验证，确保嵌套在 JTabedByPane 中的组件也能更新
+        var p: java.awt.Container? = this
+        while (p != null) {
+            p.invalidate()
+            p = p.parent
+        }
         revalidate()
         repaint()
     }

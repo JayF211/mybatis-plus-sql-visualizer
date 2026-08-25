@@ -39,11 +39,20 @@ class DiagramRenderTask(
             } else {
                 render(plantUmlText, format)
             }
-            ApplicationManager.getApplication().invokeLater { onDone(bytes, null) }
+            // F-42 关键修复：必须用 ModalityState.any() —— SQL 预览弹窗（SqlPreviewDialog）是
+            // 模态弹窗（DialogWrapper(project, true)），默认 invokeLater 在模态状态下会延迟
+            // 到弹窗关闭才执行回调，导致 UI 永远卡在"渲染中"（日志实证回调延迟 40 秒）
+            ApplicationManager.getApplication().invokeLater(
+                { onDone(bytes, null) },
+                com.intellij.openapi.application.ModalityState.any(),
+            )
         } catch (e: Throwable) {
             // 捕获 Throwable（含 Error 子类如 IllegalAccessError），确保 onDone 总被调用
             val msg = e.message ?: e.javaClass.simpleName
-            ApplicationManager.getApplication().invokeLater { onDone(null, msg) }
+            ApplicationManager.getApplication().invokeLater(
+                { onDone(null, msg) },
+                com.intellij.openapi.application.ModalityState.any(),
+            )
         }
     }
 

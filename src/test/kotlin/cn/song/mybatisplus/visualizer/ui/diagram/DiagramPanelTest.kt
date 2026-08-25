@@ -16,11 +16,10 @@ import javax.imageio.ImageIO
  */
 class DiagramPanelTest {
 
-    /** 最小可渲染的 PlantUML 源（单 entity，无 JOIN）。不含 !theme plain（PlantUML 8059 不支持）。 */
+    /** 最小可渲染的 PlantUML 源（单 entity，无 JOIN）。不含 !theme plain / linetype ortho（8059 不支持 / 依赖 Graphviz）。 */
     private val minimalPlantUml = """
         @startuml
         hide circle
-        skinparam linetype ortho
         entity "user" as u {
           * id : Long
           name : String
@@ -32,7 +31,6 @@ class DiagramPanelTest {
     private val joinPlantUml = """
         @startuml
         hide circle
-        skinparam linetype ortho
         entity "user (u)" as u #lightgreen {
           * id : Long
           name : String

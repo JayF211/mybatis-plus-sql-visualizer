@@ -21,11 +21,10 @@ import java.io.ByteArrayOutputStream
  */
 class SvgRasterizerTest {
 
-    /** 与 JoinDiagramGenerator 输出风格一致（不含 !theme plain，8059 不支持）。 */
+    /** 与 JoinDiagramGenerator 输出风格一致（不含 !theme plain / linetype ortho）。 */
     private val plantUmlSource = """
         @startuml
         hide circle
-        skinparam linetype ortho
         entity "user (u)" as u #lightgreen {
           * id : Long
           name : String

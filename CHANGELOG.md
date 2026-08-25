@@ -6,13 +6,18 @@
 
 ### Fixed
 
-- **JOIN 关系图渲染失败修复（F-42）**：主 IDE 无 `--add-opens java.desktop/com.sun.imageio.plugins.png` 时 PlantUML PNG 渲染必抛 `IllegalAccessError`（jar 反编译实证 PngIO 经 ImageIO 加载 `com.sun.imageio.plugins.png.PNGMetadata`），原"反射 JavaFX WebView 渲染 SVG"方案在 IDEA 运行时无 `javafx.embed.swing.JFXPanel`（`ClassNotFoundException`，idea.log 实证）——改为 Apache Batik（batik-transcoder/codec 1.17）将 SVG 栅格化为 `BufferedImage`，复用现有 ImageIcon + 缩放路径，纯 Java 全平台一致；导出 PNG 用 Batik `PNGTranscoder`（自带 PNG 编码器不经 imageio）规避模块限制，同步修复"导出 PNG 写出 SVG 内容 + .png 后缀损坏文件"问题
+- **JOIN 关系图渲染失败修复（F-42，三层根因）**：
+  1. **模态弹窗阻塞回调**：SQL 预览弹窗（`SqlPreviewDialog`）是模态弹窗，默认 `invokeLater` 在模态状态下延迟到弹窗关闭才执行回调（日志实证延迟 40 秒），UI 永远卡在"渲染中"——改为 `invokeLater(runnable, ModalityState.any())`
+  2. **Graphviz 依赖导致错误图**：`skinparam linetype ortho` 正交线型强制依赖 Graphviz dot 引擎，无 Graphviz 环境渲染出 `Dot Executable: null` 错误图（用户环境实证）——移除该指令，默认线型走 Smetana 纯 Java 引擎，任何环境可渲染（验证 274x243 正常图）
+  3. **PNG 模块访问受限**：主 IDE 无 `--add-opens java.desktop/com.sun.imageio.plugins.png` 时 PlantUML PNG 渲染必抛 `IllegalAccessError`（jar 反编译实证 PngIO 经 ImageIO 加载 `com.sun.imageio.plugins.png.PNGMetadata`），原"反射 JavaFX WebView 渲染 SVG"方案在 IDEA 运行时无 `javafx.embed.swing.JFXPanel`（`ClassNotFoundException`，idea.log 实证）——改为 Apache Batik（batik-transcoder/codec 1.17）将 SVG 栅格化为 `BufferedImage`，复用现有 ImageIcon + 缩放路径，纯 Java 全平台一致；导出 PNG 用 Batik `PNGTranscoder`（自带 PNG 编码器不经 imageio）规避模块限制，同步修复"导出 PNG 写出 SVG 内容 + .png 后缀损坏文件"问题
+- **标签页切换强制刷新**：渲染完成时组件可能处于 hidden（"JOIN 图"标签页未被选中），swapContent/revalidate 对 hidden 组件无效——`JTabbedPane` 注册 `ChangeListener`，切到"JOIN 图"标签页时调用 `DiagramPanel.refreshAfterVisible()` 重新渲染
 - **移除 `indicator.fraction` 调用**：`DiagramRenderTask` 使用 indeterminate 进度条，`setFraction` 会打 WARN（主 IDE 日志实证）——移除，保留进度文字提示
 - **清理废弃 i18n 键**：移除不再引用的 `diagram.render.moduleError` / `diagram.render.svgFallback`（中/英文 bundle）
 
 ### Test
 
 - **SvgRasterizerTest**：4 个用例覆盖 PlantUML SVG 栅格化尺寸（与 PNG 10% DPI 容差）、内联最小 SVG、无效输入抛异常、`PNGTranscoder` 输出真实 PNG 字节（文件头 89 50 4E 47）
+- **DiagramPanelTest / SvgRasterizerTest fixture 同步**：移除 `skinparam linetype ortho`（与生成器输出一致，避免无 Graphviz 环境渲染错误图）
 
 ## [2026.8.21] - 2026-08-21
 

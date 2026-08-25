@@ -35,8 +35,10 @@ object JoinDiagramGenerator {
         val sb = StringBuilder()
         sb.append("@startuml\n")
         // 注：不能加 !theme plain —— PlantUML 8059 不支持该指令，会渲染出 105x59 错误图
-        sb.append("hide circle\n")
-        sb.append("skinparam linetype ortho\n\n")
+        // 注：不能加 skinparam linetype ortho —— 正交线型强制依赖 Graphviz dot 引擎，
+        //     无 Graphviz 环境渲染出 "Dot Executable: null" 错误图（用户环境实证）；
+        //     默认线型走 Smetana 纯 Java 引擎，任何环境可渲染
+        sb.append("hide circle\n\n")
 
         // 主表（绿色）
         appendEntity(sb, mainAlias, stmt.table.tableName, stmt.table, isMain = true)
