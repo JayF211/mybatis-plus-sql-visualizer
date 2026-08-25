@@ -276,9 +276,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // O-4：复制可执行 SQL（替换占位符为字面值，含类型处理）
         add(smallButton(MpSqlVisualizerBundle.message("panel.copyExecutableSql")) { copyExecutableSql() })
         // O-4：差异高亮开关（本次 vs 上次预览）
-        add(smallButton("Diff") { toggleDiffHighlight() })
+        add(smallButton(MpSqlVisualizerBundle.message("panel.diff")) { toggleDiffHighlight() })
         // O-4：SQL Diff 并排对比
-        add(smallButton("Compare") { showSqlDiff() })
+        add(smallButton(MpSqlVisualizerBundle.message("panel.compare")) { showSqlDiff() })
         // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
         add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
@@ -643,8 +643,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             project = proj,
             leftSql = oldSql,
             rightSql = currentSql,
-            leftTitle = "Previous",
-            rightTitle = "Current",
+            leftTitle = MpSqlVisualizerBundle.message("panel.diff.previous"),
+            rightTitle = MpSqlVisualizerBundle.message("panel.diff.current"),
         ).show()
     }
 
@@ -1627,9 +1627,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        // T-SqlPerf：性能建议文案拼接
+        // T-SqlPerf：性能建议文案单独一行（HTML 换行，避免与右侧工具栏重叠）
         val perfLine = buildPerfLine(result)
-        metaLabel.text = meta + warningLine + perfLine
+        val displayText = if (perfLine.isNotEmpty()) {
+            // HTML 渲染：meta+warning 第一行，perf 第二行
+            "<html>$meta$warningLine<br>$perfLine</html>"
+        } else {
+            meta + warningLine
+        }
+        metaLabel.text = displayText
+        metaLabel.toolTipText = meta + warningLine + perfLine
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -1649,9 +1656,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (warnings.isEmpty()) return ""
         val sb = StringBuilder()
         warnings.forEach { warning ->
-            val prefix = if (warning.severity == PerfSeverity.ERROR || warning.severity == PerfSeverity.WARN) "⚠ " else "ℹ "
+            val isError = warning.severity == PerfSeverity.ERROR || warning.severity == PerfSeverity.WARN
+            val prefix = if (isError) "⚠ " else "ℹ "
             val localized = localizeWarning(warning)
-            sb.append("   ").append(prefix).append(localized)
+            // HTML 颜色区分：ERROR/WARN 红色，INFO 蓝色
+            val color = if (isError) "#E05555" else "#3B82F6"
+            sb.append("   <font color=\"").append(color).append("\">").append(prefix).append(localized).append("</font>")
             if (warning != warnings.last()) sb.append("；")
         }
         return sb.toString()

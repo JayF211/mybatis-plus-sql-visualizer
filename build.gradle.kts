@@ -185,6 +185,12 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
+        // F-1：PlantUML PNG 渲染需要访问 JDK 内部 com.sun.imageio.plugins.png 模块
+        // （JDK 17+ 模块系统默认不开放；--add-opens 使 unnamed module 可反射访问）
+        jvmArgs(
+            "--add-opens", "java.desktop/com.sun.imageio.plugins.png=ALL-UNNAMED",
+            "--add-opens", "java.desktop/java.awt.image=ALL-UNNAMED",
+        )
         // 本地清单测试：-Dmpvs.update.manifest.url=... 转发到沙盒 IDE 的 systemProperty（不影响 Gitee 用户）
         val manifestUrl = System.getProperty("mpvs.update.manifest.url")
         if (!manifestUrl.isNullOrBlank()) {

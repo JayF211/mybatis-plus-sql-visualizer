@@ -34,7 +34,7 @@ object JoinDiagramGenerator {
         val mainAlias = sanitizeAlias(stmt.tableAlias ?: "t")
         val sb = StringBuilder()
         sb.append("@startuml\n")
-        sb.append("!theme plain\n")
+        // 注：不能加 !theme plain —— PlantUML 8059 不支持该指令，会渲染出 105x59 错误图
         sb.append("hide circle\n")
         sb.append("skinparam linetype ortho\n\n")
 

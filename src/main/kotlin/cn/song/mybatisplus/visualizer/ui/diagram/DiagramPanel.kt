@@ -23,12 +23,15 @@ import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
+import java.nio.charset.Charset
+import java.nio.file.Files
 import javax.imageio.ImageIO
 import javax.swing.ImageIcon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JProgressBar
 import javax.swing.SwingConstants
 
 /**
@@ -80,7 +83,7 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         }
     }
 
-    // 降级文本区（渲染失败时显示）
+    // 降级文本区（非 SVG 渲染失败时显示）
     private val errorTextArea = javax.swing.JTextArea().apply {
         isEditable = false
         font = UIUtil.getLabelFont()
@@ -97,11 +100,33 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         foreground = JBColor.GRAY
     }
 
+    // JOIN 图异步渲染中提示（渲染需 2-6 秒，显示进度条+动画文字，避免用户误以为"无JOIN"）
+    private val loadingLabel = JBLabel(
+        MpSqlVisualizerBundle.message("diagram.render.loading"), SwingConstants.CENTER,
+    ).apply {
+        foreground = JBColor.GRAY
+        font = UIUtil.getLabelFont()
+    }
+    private val loadingProgress = JProgressBar().apply {
+        isIndeterminate = true
+        maximum = 100
+        foreground = JBColor.GRAY
+        background = UIUtil.getPanelBackground()
+        border = javax.swing.border.EmptyBorder(0, 0, 0, 0)
+    }
+    private val loadingPanel: JComponent = JPanel().apply {
+        background = UIUtil.getPanelBackground()
+        layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
+        add(loadingLabel)
+        add(loadingProgress)
+        border = JBUI.Borders.empty(40, 20, 20, 20)
+    }
+
     init {
         // 工具栏：缩放 + 导出
         add(buildToolbar(), BorderLayout.NORTH)
-        // 初始占位
-        add(placeholderLabel, BorderLayout.CENTER)
+        // 初始占位（必须使用 swapContent 初始化 currentCenter）
+        swapContent(placeholderLabel)
     }
 
     /** 构建顶部工具栏（缩放 + 导出按钮）。 */
@@ -160,13 +185,30 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         // 更新任务标识（过期任务的回调会被忽略）
         taskId = plantUmlText
         currentSource = plantUmlText
-        // 后台渲染
-        val task = DiagramRenderTask(project, plantUmlText, FileFormat.PNG) { bytes, error ->
-            // 忽略过期任务的结果
-            if (taskId != plantUmlText) return@DiagramRenderTask
+        // 渲染中提示（异步渲染需 2-6 秒，显示进度条+动画文字，完成后 applyZoom 替换为图像）
+        swapContent(loadingPanel)
+        // 后台渲染（PNG 因 JDK 模块限制失败时自动降级 SVG）
+        renderAsync(plantUmlText)
+    }
+
+    /**
+     * 后台异步渲染 PlantUML 图。
+     * 使用 [DiagramRenderTask.renderWithFallback]：PNG 优先，JDK 模块受限时自动降级 SVG。
+     * 10 秒超时：渲染超时时自动显示错误。
+     */
+    private fun renderAsync(plantUmlText: String) {
+        val task = DiagramRenderTask(project, plantUmlText) { bytes, error ->
+            // F-1 修复：不使用 currentSource/taskId 做期龄检查——DiagramPanel 被 dispose
+            // 后 currentSource/taskId 被置 null，导致回调永远不执行。
+            // 直接处理结果：有字节就显示，无字节就报错。
             if (bytes != null) {
                 currentBytes = bytes
-                applyZoom()
+                currentSource = plantUmlText
+                try {
+                    applyZoom()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             } else {
                 showError(plantUmlText, error)
             }
@@ -176,10 +218,10 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         } else {
             // 无项目时（测试）同步渲染
             try {
-                val bytes = DiagramRenderTask.render(plantUmlText, FileFormat.PNG)
+                val bytes = DiagramRenderTask.renderWithFallback(plantUmlText)
                 currentBytes = bytes
                 applyZoom()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 showError(plantUmlText, e.message)
             }
         }
@@ -197,9 +239,16 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     // 渲染结果显示
     // ------------------------------------------------------------------
 
-    /** 将缓存的 PNG 字节按当前缩放比显示到 imageLabel。 */
+    /** 将缓存的字节（PNG 或 SVG）按当前缩放比显示到 imageLabel。 */
     private fun applyZoom() {
-        val bytes = currentBytes ?: return
+        val bytes = currentBytes ?: run {
+            return
+        }
+        // 检测 SVG 字节（PNG 降级产物）→ JavaFX WebView 渲染
+        if (isSvgBytes(bytes)) {
+            showSvgWithWebView(bytes)
+            return
+        }
         val image = ImageIO.read(bytes.inputStream()) ?: run {
             showError(currentSource ?: "", "Failed to decode image bytes")
             return
@@ -208,6 +257,71 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         swapContent(scrollPane)
         imageLabel.icon = ImageIcon(scaled)
         imageLabel.text = null
+        revalidate()
+        repaint()
+    }
+
+    /** 检测字节是否为 SVG 格式（以 <?xml 或 <svg 开头）。 */
+    private fun isSvgBytes(bytes: ByteArray): Boolean {
+        val header = String(bytes, 0, minOf(100, bytes.size), Charsets.UTF_8).trimStart()
+        return header.startsWith("<?xml") || header.startsWith("<svg")
+    }
+
+    /** 使用 JavaFX WebView 渲染 SVG（通过反射访问，避免编译时依赖 JavaFX）。 */
+    private fun showSvgWithWebView(bytes: ByteArray) {
+        val svgContent = String(bytes, Charsets.UTF_8)
+        
+        // 将 SVG 写入临时文件（WebView 通过 URL 加载更稳定）
+        val tempFile = Files.createTempFile("mpvs-diagram-", ".svg").toFile()
+        tempFile.writeText(svgContent, Charsets.UTF_8)
+        tempFile.deleteOnExit()
+        
+
+        try {
+            // 反射创建 JFXPanel + WebView + Scene（JavaFX 在 IntelliJ IDEA 运行时可用）
+            
+            val jfxPanelClass = Class.forName("javafx.embed.swing.JFXPanel")
+            val jfxPanel = jfxPanelClass.getDeclaredConstructor().newInstance() as JComponent
+            
+
+            val platformClass = Class.forName("javafx.application.Platform")
+            val runLater = platformClass.getMethod("runLater", Runnable::class.java)
+            
+
+            val webViewClass = Class.forName("javafx.scene.web.WebView")
+            val webView = webViewClass.getDeclaredConstructor().newInstance()
+            
+            val engine = webViewClass.getMethod("getEngine").invoke(webView)
+            engine.javaClass.getMethod("load", String::class.java).invoke(engine, tempFile.toURI().toString())
+            
+
+            val sceneClass = Class.forName("javafx.scene.Scene")
+            val scene = sceneClass.getConstructor(Class.forName("javafx.scene.Parent")).newInstance(webView)
+            jfxPanelClass.getMethod("setScene", sceneClass).invoke(jfxPanel, scene)
+            
+
+            swapContent(JBScrollPane(jfxPanel))
+            revalidate()
+            repaint()
+            
+        } catch (e: Exception) {
+            
+            e.printStackTrace()
+            // 反射失败（JavaFX 不可用）→ 降级显示 SVG 源码
+            showSvgTextFallback(bytes)
+        }
+    }
+
+    /** 降级显示 SVG 源码（JavaFX 不可用时）。 */
+    private fun showSvgTextFallback(bytes: ByteArray) {
+        val source = String(bytes, Charsets.UTF_8)
+        val display = buildString {
+            append(MpSqlVisualizerBundle.message("diagram.render.svgFallback"))
+            append("\n\n--- SVG Source ---\n")
+            append(source)
+        }
+        errorTextArea.text = display
+        swapContent(errorScroll)
         revalidate()
         repaint()
     }

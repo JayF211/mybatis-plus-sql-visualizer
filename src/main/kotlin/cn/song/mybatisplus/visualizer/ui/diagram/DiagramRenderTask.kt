@@ -33,11 +33,16 @@ class DiagramRenderTask(
         indicator.text = "Generating PlantUML diagram..."
         indicator.fraction = 0.0
         try {
-            val bytes = render(plantUmlText, format)
+            val bytes = if (format == FileFormat.PNG) {
+                renderWithFallback(plantUmlText)
+            } else {
+                render(plantUmlText, format)
+            }
             indicator.fraction = 1.0
-            // 切回 EDT 交付结果
-            ApplicationManager.getApplication().invokeLater { onDone(bytes, null) }
-        } catch (e: Exception) {
+            ApplicationManager.getApplication().invokeLater {
+                onDone(bytes, null)
+            }
+        } catch (e: Throwable) {
             val msg = e.message ?: e.javaClass.simpleName
             ApplicationManager.getApplication().invokeLater { onDone(null, msg) }
         }
@@ -56,15 +61,35 @@ class DiagramRenderTask(
          */
         @JvmStatic
         fun render(text: String, format: FileFormat = FileFormat.PNG): ByteArray {
+            
             val reader = SourceStringReader(text)
             val option = FileFormatOption(format)
             val baos = ByteArrayOutputStream(64 * 1024)
             // generateImage 返回描述字符串（含错误信息），输出写入 baos
             reader.generateImage(baos, option)
+            
             if (baos.size() == 0) {
                 throw RuntimeException("PlantUML render produced no output")
             }
             return baos.toByteArray()
+        }
+
+        /**
+         * 安全渲染：PNG 优先，JDK 模块受限时自动降级 SVG。
+         *
+         * @param text PlantUML 源文本
+         * @return 渲染字节；PNG 成功返回 PNG 字节，降级时返回 SVG 字节
+         */
+        @JvmStatic
+        fun renderWithFallback(text: String): ByteArray {
+            return try {
+                
+                render(text, FileFormat.PNG)
+            } catch (e: java.lang.IllegalAccessError) {
+                
+                // F-1：PNG 模块访问受限 → 降级 SVG
+                render(text, FileFormat.SVG)
+            }
         }
     }
 }

@@ -101,10 +101,9 @@
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
-        <!-- F-4：Kotlin Wrapper 链 gutter 图标（复用 SqlGutterLineMarkerProvider，Kotlin 语言注册） -->
-        <codeInsight.lineMarkerProvider language="Kotlin"
-                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
-
+        <!-- F-4：Kotlin Wrapper 链 gutter 图标（复用 SqlGutterLineMarkerProvider，Kotlin 语言注册）——
+             注册移至 kotlin-optional.xml（org.jetbrains.kotlin 可选依赖存在时加载），避免主描述文件
+             引用可选插件语言 ID 导致校验报错「无法解析 ID 为 'Kotlin' 的语言」 -->
         <!-- T-M25-03 注解预览：MyBatis SQL 注解（@Select/@Insert/@Update/@Delete 及 Provider 族）行显示预览图标（O(1) 语法判定） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProvider"/>

@@ -40,7 +40,7 @@ class SqlDiffDialog(
     private val rightArea = ReadOnlyDiffArea()
 
     init {
-        title = "SQL Diff"
+        title = MpSqlVisualizerBundle.message("panel.diff.dialogTitle")
         init()
     }
 
