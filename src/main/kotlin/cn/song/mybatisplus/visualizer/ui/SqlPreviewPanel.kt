@@ -16,21 +16,18 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
-import cn.song.mybatisplus.visualizer.xml.PagesColumn
-import cn.song.mybatisplus.visualizer.ui.diff.DiffHighlighter
-import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
+import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataProvider
@@ -95,8 +92,8 @@ import javax.swing.event.DocumentListener
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
  *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 单行多行切换 / 刷新）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
- *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ `LexerEditorHighlighter` 语法高亮；
- *    文档由 `SqlPreviewLanguage` 的 PSI 文件支撑，挂 [SqlCompletionContributor] 提供补全（Ctrl+Space）
+ *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
+ *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
  *  - 补全上下文（表名/列名）双载体传递（[SqlCompletionContext]）：**Editor userData 优先**（M16.2，
  *    嵌入式编辑器编辑后 PSI 可能被 commit 重建丢失 userData）+ **PSI userData 兜底**
  *
@@ -166,11 +163,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var current: PreviewResult? = null
     private var compactMode = false
 
-    // O-4：差异高亮状态（会话级缓存上一次 SQL + diff 开关）
-    /** O-4：上一次渲染的 SQL（会话缓存，用于 diff 对比）。 */
+    // O-4：上一次预览的 SQL（会话缓存，供 Compare 并排对比用）
     private var previousSql: String? = null
-    /** O-4：差异高亮开关（默认开启）。 */
-    private var diffHighlightEnabled = true
 
     // F-1：JOIN 关系图（仅 SELECT 含 JOIN 时显示标签页）
     private val diagramPanel = DiagramPanel(project)
@@ -281,8 +275,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // P-05：导入按钮（默认点击 = 从剪贴板导入）
         add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
         // O-4：差异高亮开关（本次 vs 上次预览）
-        add(smallButton(MpSqlVisualizerBundle.message("panel.diff")) { toggleDiffHighlight() })
-        // O-4：SQL Diff 并排对比
+        // O-4：SQL 并排对比（IDEA 原生 Diff，SQL 语法高亮）
         add(smallButton(MpSqlVisualizerBundle.message("panel.compare")) { showSqlDiff() })
         // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
         add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
@@ -363,16 +356,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         rebuildLeftPanel(result)
         refreshCompletionContext()
         renderSql()
-        // O-4：差异高亮（本次 vs 上次预览）
-        if (diffHighlightEnabled) {
-            applyDiffHighlight(result.previousSql)
-        }
         updateMeta(result)
         // F-1：更新 JOIN 图标签页（仅 SELECT 含 JOIN 时显示）
         updateDiagramTab(result)
         // F-45：更新列信息标签页（仅 <pages> 预览时显示）
         updateColumnInfoTab(result)
-        // O-4：缓存当前 SQL 供下次 diff
+        // O-4：缓存当前 SQL 供下次 Compare
         previousSql = editor?.document?.text
     }
 
@@ -388,9 +377,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (hasJoins) {
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
-            // 生成 PlantUML 文本并展示
-            val plantUml = JoinDiagramGenerator.generatePlantUml(statement as SelectStatement)
-            diagramPanel.showDiagram(plantUml)
+            // 构建结构化模型并展示
+            val model = JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement)
+            diagramPanel.showDiagram(model)
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
             removeDiagramTab()
@@ -399,7 +388,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
-    private fun ensureTabbedContent() {
+    private fun ensureTabbedContent(addDiagramTab: Boolean = true) {
         val tabPane = contentTabPane
         if (tabPane != null) return // 已切换
         // 从当前布局中取出 split（SQL 视图）
@@ -408,13 +397,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 构建标签页
         val pane = JTabbedPane().apply {
             addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
-            addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel)
+            if (addDiagramTab) {
+                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel)
+            }
         }
         // F-42 修复：渲染完成时组件可能处于 hidden（标签页未被选中），swapContent/revalidate
         // 对 hidden 组件无效——切到"JOIN 图"标签页时强制刷新，使图像真正显示
-        pane.addChangeListener {
-            if (pane.selectedIndex == 1) {
-                diagramPanel.refreshAfterVisible()
+        if (addDiagramTab) {
+            pane.addChangeListener {
+                if (pane.selectedIndex == 1) {
+                    diagramPanel.refreshAfterVisible()
+                }
             }
         }
         add(pane, BorderLayout.CENTER)
@@ -440,7 +433,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * F-45：根据当前预览结果更新列信息标签页。
-     *
      * 仅当 result.pagesColumns 非 null 时显示"列信息"标签页；否则移除标签页（如有）。
      */
     private fun updateColumnInfoTab(result: PreviewResult) {
@@ -682,44 +674,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     // ------------------------------------------------------------------
-    // O-4：差异高亮（本次 vs 上次预览）
+    // O-4：SQL 并排对比（IDEA 原生 Diff，SQL 语法高亮）
     // ------------------------------------------------------------------
 
     /**
-     * O-4：对当前编辑器应用差异高亮（本次 SQL vs [oldSql]）。
-     * 首次预览（oldSql=null）不显示差异。
-     *
-     * @param oldSql 上一次预览的 SQL（null = 首次预览）
-     */
-    private fun applyDiffHighlight(oldSql: String?) {
-        val ed = editor ?: return
-        if (oldSql.isNullOrEmpty()) return
-        val newSql = ed.document.text
-        // 后台计算 diff（< 100ms for < 1000 lines），EDT 渲染高亮
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val diff = SqlDiffer.computeDiff(oldSql, newSql)
-            ApplicationManager.getApplication().invokeLater {
-                if (!ed.isDisposed) {
-                    DiffHighlighter.highlight(ed, diff, newSql)
-                }
-            }
-        }
-    }
-
-    /** O-4：切换差异高亮开关。 */
-    fun toggleDiffHighlight() {
-        diffHighlightEnabled = !diffHighlightEnabled
-        val ed = editor ?: return
-        if (!diffHighlightEnabled) {
-            DiffHighlighter.clear(ed.markupModel)
-        } else {
-            applyDiffHighlight(previousSql)
-        }
-    }
-
-    /**
-     * O-4：显示 SQL 并排 Diff 弹窗（当前 SQL vs 上次预览 SQL）。
+     * O-4：使用 IDEA 原生 Diff 对比当前 SQL 与上次预览 SQL。
      * 无上次预览时 toast 提示。
+     *
+     * 接入方式：DiffContentFactory.createEditable() 创建可编辑内容 + SimpleDiffRequest 包装 → DiffManager.showDiff。
+     * 原生 diff 支持 SQL 语法高亮、行级对比、同步滚动、可编辑、F7 跳转差异等 IDEA 标准能力。
      */
     fun showSqlDiff() {
         val proj = project ?: return
@@ -728,13 +691,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             showDiffToast(MpSqlVisualizerBundle.message("preview.diff.noPrevious"))
             return
         }
-        SqlDiffDialog(
-            project = proj,
-            leftSql = oldSql,
-            rightSql = currentSql,
-            leftTitle = MpSqlVisualizerBundle.message("panel.diff.previous"),
-            rightTitle = MpSqlVisualizerBundle.message("panel.diff.current"),
-        ).show()
+        // IDEA 原生 Diff（createEditable → 两侧均可编辑，SQL 文件类型 → 语法高亮）
+        val diffContentFactory = com.intellij.diff.DiffContentFactory.getInstance()
+        val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
+        val leftContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.createEditable(proj, oldSql, sqlFileType)
+        val rightContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.createEditable(proj, currentSql, sqlFileType)
+        val request = com.intellij.diff.requests.SimpleDiffRequest(
+            MpSqlVisualizerBundle.message("panel.diff.dialogTitle"),
+            leftContent,
+            rightContent,
+            MpSqlVisualizerBundle.message("panel.diff.previous"),
+            MpSqlVisualizerBundle.message("panel.diff.current"),
+        )
+        com.intellij.diff.DiffManager.getInstance().showDiff(proj, request)
     }
 
     /** O-4：显示 diff 相关 toast 通知。 */
@@ -774,8 +743,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         batchSelectAllButton = null
         batchSelectNoneButton = null
         paramPanel.removeAll()
-        // O-4：清除差异高亮 + 重置会话缓存
-        editor?.let { DiffHighlighter.clear(it.markupModel) }
+        // O-4：重置会话缓存
         previousSql = null
         releaseEditor()
         editorHolder.removeAll()
@@ -835,7 +803,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return sb.toString()
     }
 
-    /** 首次创建：SqlPreviewLanguage PSI 文件 → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
+    /** 首次创建：原生 SQL FileType PSI → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
     private fun createEditor(sql: String) {
         val proj = project
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
@@ -874,10 +842,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
         created.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         (created as EditorEx).apply {
-            highlighter = LexerEditorHighlighter(
-                SqlSyntaxHighlighter(),
-                EditorColorsManager.getInstance().globalScheme,
-            )
+            // 原生 SQL 高亮器（手动设置，因内存 PSI 文件不自动关联）
+            val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+                .getStdFileType("SQL")
+            if (sqlFileType != null) {
+                val sqlHighlighter = com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
+                    .getSyntaxHighlighter(sqlFileType, project, null)
+                if (sqlHighlighter != null) {
+                    highlighter = LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().globalScheme)
+                }
+            }
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
@@ -917,8 +891,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     internal fun createPreviewFileForTest(proj: Project, sql: String): PsiFile {
         return ReadAction.compute<PsiFile, Throwable> {
+            val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+                .getStdFileType("SQL")
             PsiFileFactory.getInstance(proj)
-                .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
+                .createFileFromText("preview.sql", fileType, sql)
         }
     }
 
@@ -1827,6 +1803,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun compactForTest(): Boolean = compactMode
 
     // ------------------------------------------------------------------
+    // F-46：来源位置（来源列默认值）
+    // ------------------------------------------------------------------
+
+    /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
+    fun setSourceLocation(loc: String?) { sourceLocation = loc }
+
+    /** 当前代码位置（文件名:行号），null 表示未知。 */
+    fun currentSourceLocation(): String? = sourceLocation
+
+    // ------------------------------------------------------------------
     // O-4：预览弹窗 UX 增强（外部组件访问面板状态）
     // ------------------------------------------------------------------
 
@@ -1887,15 +1873,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** P-05.1：当前 paramValues 序列化为 JSON（测试调用用）。 */
     internal fun serializeParamsToJsonForTest(): String = serializeParamsToJson()
 
-     companion object {
-         /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
-         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+    companion object {
+        /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+        /** F-45：列信息标签页标题。 */
+        private const val COLUMN_INFO_TAB_TITLE = "列信息"
 
-         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
-         /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
-         private val WHITESPACE_REGEX = Regex("\\s+")
-
-         /** F-45：列信息标签页标题（避免硬编码，removeColumnInfoTab 按标题匹配）。 */
-         private const val COLUMN_INFO_TAB_TITLE = "列信息"
-     }
+        private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
+        /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
+        private val WHITESPACE_REGEX = Regex("\\s+")
+    }
 }
