@@ -24,6 +24,7 @@ import com.intellij.testFramework.EditorTestUtil
 import com.intellij.util.ui.UIUtil
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupManager
+import com.intellij.lang.Language
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
@@ -957,7 +958,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testPanelEditorCompletionOffersKeywordsAndColumns() {
-        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
+        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())
         val editor = panel.editorForTest()!!
@@ -1007,7 +1008,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testTypingTriggersAutoPopup() {
-        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
+        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
         val panel = SqlPreviewPanel(project)
         // SQL 末尾空白处输入（新词起始，前缀 S 命中 SELECT）
         panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl"))
@@ -1036,7 +1037,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testTypingTriggersAutoPopupXmlScene() {
-        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
+        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
         // XML 预览场景：tableName/columns 为空（XmlPreviewService 不关联实体）——
         // 关键字补全应仍弹出（预览补全不依赖实体上下文）
         val panel = SqlPreviewPanel(project)
@@ -1065,7 +1066,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testTypingTriggersAutoPopupXmlSceneWithEntity() {
-        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
+        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
         // T-M27.3：XML 预览注入实体上下文后——输入应弹**列名**（不止关键字）
         val panel = SqlPreviewPanel(project)
         panel.showResult(
@@ -1120,7 +1121,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testTableNameCompletionInWhereClauseWithCandidates() {
-        if (SqlInputEditor.resolveSqlFileType() == null) return // 测试环境无 Database 插件
+        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
         // T-M27.4：表名全位置提示——WHERE 后输入表名前缀也提示（主表 + 联表候选），
         // 不再限定 FROM/JOIN 后（输入 me → merchant_entity 命中）
         val panel = SqlPreviewPanel(project)

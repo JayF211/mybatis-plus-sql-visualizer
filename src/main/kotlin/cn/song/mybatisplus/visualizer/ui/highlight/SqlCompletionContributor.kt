@@ -92,7 +92,10 @@ class SqlCompletionContributor : CompletionContributor() {
 
                     // 当前实体表/列/别名（M16：位置感知 + 注释展示/检索）
                     // M16.2：双载体读取（Editor userData 优先、PSI 兜底）；ctx 为 null 时跳过实体补全
+                    // M34 修复：level 3 兜底再补一次 editor.document 直接查（PSI viewProvider document
+                    // 与注册 document 可能因 commit 重建不同实例）
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
+                        ?: documentContexts[parameters.editor.document]
                     LOG.info("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；

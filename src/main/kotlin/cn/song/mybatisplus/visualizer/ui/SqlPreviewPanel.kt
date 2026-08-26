@@ -850,8 +850,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val prev = ed.document.getText(TextRange.create(insertEnd - 1, insertEnd)).firstOrNull() ?: return
                 if (!prev.isLetterOrDigit() && prev != '_') { return }
                 autoPopupScheduled = true
-                com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
-                    .info("[SqlPreviewPanel] bindAutoPopup: char='$prev', scheduling invokeLater")
                 ApplicationManager.getApplication().invokeLater {
                     autoPopupScheduled = false
                     val ed2 = editor ?: return@invokeLater
@@ -863,15 +861,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                         // 先提交文档（PSI 同步）——补全前缀按编辑器文档计算，未 commit 时用旧 PSI
                         // 文本算前缀导致误过滤（如 "FROM Stbl" 按旧文本 "FROM tbl" 前缀算成 "t"）
                         com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(ed2.document)
-                        com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
-                            .info("[SqlPreviewPanel] bindAutoPopup: invoking CodeCompletionHandlerBase")
                         CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true)
                             .invokeCompletion(proj, ed2, 1, false)
-                        com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
-                            .info("[SqlPreviewPanel] bindAutoPopup: invokeCompletion returned")
                     } catch (t: Throwable) {
-                        com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
-                            .warn("[SqlPreviewPanel] bindAutoPopup: invokeCompletion FAILED", t)
+                        // 补全异常不影响输入（弹窗失败下次输入重试）
                     }
                 }
             }
