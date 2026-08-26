@@ -135,7 +135,11 @@ object ArgResolver {
         // 优先从实体字段映射取列名
         val mapped = table?.columnByField(propertyName)?.columnName
         val columnName = mapped ?: NamingStrategy.toSnakeCase(propertyName)
-        return ColumnRef(columnName = columnName)
+
+        // 提取方法引用接收者实体类名（用于 selectAs 图表列归属推断）
+        val entityClass = (methodRef.qualifiedName?.substringBefore("::") ?: methodRef.firstChild?.text)
+
+        return ColumnRef(columnName = columnName, entityClass = entityClass)
     }
 
     /**

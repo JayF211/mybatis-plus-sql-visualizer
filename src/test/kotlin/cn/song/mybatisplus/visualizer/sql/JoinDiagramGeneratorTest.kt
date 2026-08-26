@@ -270,4 +270,39 @@ class JoinDiagramGeneratorTest {
         assertTrue(label.contains("u.dept_id = o.dept_id"))
         assertTrue(label.contains(" AND "))
     }
+
+    @Test
+    fun `join table shows columns from ON conditions and selectAs`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            selectColumns = listOf(
+                ColumnRef(tableAlias = "o", columnName = "station_name"),
+            ),
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "dept_id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "dept_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val joinEntity = model.entities[1]
+        assertEquals("order", joinEntity.tableName)
+        val colNames = joinEntity.columns.map { it.name }
+        // From selectAs
+        assertTrue("Should contain station_name from selectAs", colNames.contains("station_name"))
+        // From ON conditions
+        assertTrue("Should contain user_id from ON", colNames.contains("user_id"))
+        assertTrue("Should contain dept_id from ON", colNames.contains("dept_id"))
+    }
+
 }

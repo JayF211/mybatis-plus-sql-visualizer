@@ -62,11 +62,14 @@ object JoinDiagramGenerator {
             val uniqueAlias = uniquify(joinAlias, usedAliases)
             usedAliases.add(uniqueAlias)
 
+            // Extract JOIN table columns from ON conditions
+            val joinColumns = extractJoinColumns(join, uniqueAlias, stmt)
+
             entities.add(
                 EntityNode(
                     alias = uniqueAlias,
                     tableName = join.tableName,
-                    columns = emptyList(), // JOIN 表无列信息
+                    columns = joinColumns,
                     isMain = false,
                 ),
             )
@@ -151,5 +154,52 @@ object JoinDiagramGenerator {
             ) { conditionToLabel(it) }
         is Condition.Raw ->
             condition.sqlText
+    }
+
+    /**
+     * 提取 JOIN 表的列信息，来源：
+     * 1. selectColumns 中引用该 JOIN 表的列（含 selectAs 映射的列）
+     * 2. ON 条件中引用该 JOIN 表的列
+     * 3. FillClause 中该 JOIN 表的 selectColumns
+     */
+    private fun extractJoinColumns(join: JoinClause, joinAlias: String, stmt: SelectStatement): List<ColumnEntry> {
+        val columns = mutableListOf<ColumnEntry>()
+        val seen = mutableSetOf<String>()
+
+        // 1. From selectColumns (includes selectAs results)
+        for (col in stmt.selectColumns) {
+            if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
+                seen.add(col.columnName)
+                columns.add(ColumnEntry(name = col.columnName, type = null, isPk = false))
+            }
+        }
+
+        // 2. From ON conditions
+        for (cond in join.onConditions) {
+            if (cond is Condition.ColumnComparison) {
+                if (cond.right.tableAlias == joinAlias && !seen.contains(cond.right.columnName)) {
+                    seen.add(cond.right.columnName)
+                    columns.add(ColumnEntry(name = cond.right.columnName, type = null, isPk = false))
+                }
+                if (cond.left.tableAlias == joinAlias && !seen.contains(cond.left.columnName)) {
+                    seen.add(cond.left.columnName)
+                    columns.add(ColumnEntry(name = cond.left.columnName, type = null, isPk = false))
+                }
+            }
+        }
+
+        // 3. From FillClause selectColumns
+        stmt.fillClauses?.forEach { fill ->
+            if (fill.childAlias == joinAlias) {
+                for (col in fill.selectColumns) {
+                    if (!seen.contains(col.columnName)) {
+                        seen.add(col.columnName)
+                        columns.add(ColumnEntry(name = col.columnName, type = null, isPk = false))
+                    }
+                }
+            }
+        }
+
+        return columns
     }
 }
