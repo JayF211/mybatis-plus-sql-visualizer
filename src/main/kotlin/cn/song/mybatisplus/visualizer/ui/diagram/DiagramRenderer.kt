@@ -105,7 +105,7 @@ object DiagramRenderer {
         val layouts = measureEntities(model.entities, font, bold, frc)
         val positions = computeLayout(layouts, model, font, frc)
         val pad = MARGIN + 16
-        val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
+        val totalW = contentWidth(model, layouts, positions, font, frc) + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
         return Size(totalW, totalH)
     }
@@ -119,7 +119,7 @@ object DiagramRenderer {
         val layouts = measureEntities(model.entities, font, bold, frc)
         val positions = computeLayout(layouts, model, font, frc)
         val pad = MARGIN + 16
-        val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
+        val totalW = contentWidth(model, layouts, positions, font, frc) + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
 
         val img = BufferedImage(totalW, totalH, BufferedImage.TYPE_INT_ARGB)
@@ -147,7 +147,7 @@ object DiagramRenderer {
         val layouts = measureEntities(model.entities, font, bold, frc)
         val positions = computeLayout(layouts, model, font, frc)
         val pad = MARGIN + 16
-        val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
+        val totalW = contentWidth(model, layouts, positions, font, frc) + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
 
         val sb = StringBuilder()
@@ -237,6 +237,20 @@ object DiagramRenderer {
     private fun labelWidth(label: String, font: Font, frc: FontRenderContext): Int {
         val text = if (label.length > MAX_LABEL_CHARS) label.take(MAX_LABEL_CHARS - 1) + "\u2026" else label
         return (font.getStringBounds(text, frc).width.toInt() + 20).coerceIn(MIN_LABEL_WIDTH, MAX_LABEL_WIDTH)
+    }
+
+    private fun contentWidth(
+        model: DiagramModel, layouts: List<Layout>, positions: List<Pos>,
+        font: Font, frc: FontRenderContext,
+    ): Int {
+        val nodeRight = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width }
+        val labelRight = model.relationships.mapNotNull { relationship ->
+            val target = model.entities.indexOfFirst { it.alias == relationship.toAlias }
+            if (target < 0) return@mapNotNull null
+            val path = computeOrthoPath(positions[0], layouts[0], positions[target], layouts[target]).points
+            if (relationship.label.isBlank()) null else path[1].x + LABEL_LINE_GAP + labelWidth(relationship.label, font, frc)
+        }.maxOrNull() ?: 0
+        return max(nodeRight, labelRight)
     }
 
     /** Prepare line data for the model. */
@@ -333,7 +347,7 @@ object DiagramRenderer {
     ) {
         val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
 
-        // 关系图采用右侧独立标签列：标签不再绘制在连线或主表内部
+        // 每条关系使用独立的标签行，避免标签互相覆盖或进入节点区域
         for ((idx, line) in lines.withIndex()) {
             val fi = byIdx[line.fromAlias] ?: continue
             val ti = byIdx[line.toAlias] ?: continue
@@ -343,7 +357,7 @@ object DiagramRenderer {
             val bw = labelWidth(line.label, font, frc)
             val bh = (font.getStringBounds(text, frc).height + 12).toInt()
             val labelX = pts[1].x + LABEL_LINE_GAP
-            val labelY = pts[1].y - bh / 2
+            val labelY = pts[1].y - bh / 2 + idx * (bh + LABEL_LINE_GAP)
             onLabel(g2, text, labelX, labelY, bw, bh, font)
         }
 
