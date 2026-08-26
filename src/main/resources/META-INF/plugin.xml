@@ -91,13 +91,6 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
-        <!-- O-5：项目级设置（projectConfigurable，按项目覆盖全局设置） -->
-        <projectConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
-                             id="cn.song.mybatisplus.visualizer.projectSettings"
-                             bundle="messages.MpSqlVisualizerBundle"
-                             key="configurable.settings.displayName"
-                             instance="cn.song.mybatisplus.visualizer.config.ProjectPluginSettingsConfigurable"/>
-
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>

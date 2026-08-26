@@ -447,6 +447,11 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
             })
+            // M47：Spring JdbcTemplate 日志捕获开关
+            addRow(p, g, "", logJdbcEnabledCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.log.jdbc")
+                toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
+            })
             // Hibernate/JPA 日志捕获配置
             addRow(p, g, "", logHibernateEnabledCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
@@ -457,11 +462,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
-            })
-            // M47：Spring JdbcTemplate 日志捕获开关
-            addRow(p, g, "", logJdbcEnabledCheck.apply {
-                text = MpSqlVisualizerBundle.message("settings.log.jdbc")
-                toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
             })
             // F-43：自动保存历史 SQL
             addRow(p, g, "", logAutoSaveCheck.apply {
