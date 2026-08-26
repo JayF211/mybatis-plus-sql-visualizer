@@ -44,7 +44,7 @@ object DiagramRenderer {
     private const val MAX_TEXT_LEN = 60
     private const val TYPE_GAP = 20
     private const val KEY_ICON_W = 16
-    private const val SEPARATOR_PAD = 8
+    private const val SEPARATOR_PAD = 12
 
     // ---- Colors (light / dark) ----
     private val SHADOW = JBColor(Color(0x00, 0x00, 0x00, 28), Color(0x00, 0x00, 0x00, 50))
@@ -252,8 +252,8 @@ object DiagramRenderer {
         for (i in lines.indices) {
             val l = lines[i]
             val gap = gaps[i]
-            val gx1 = (gap.x + s(8)).toInt()
-            val gx2 = (gap.x + gap.width - s(8)).toInt()
+            val gx1 = (gap.x + s(16)).toInt()
+            val gx2 = (gap.x + gap.width - s(16)).toInt()
 
             if (gap.width > s(30)) {
                 g2.drawLine(l.x1, l.y1, gx1, l.y1)

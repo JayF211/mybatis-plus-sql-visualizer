@@ -161,30 +161,39 @@ object JoinDiagramGenerator {
      * 1. selectColumns 中引用该 JOIN 表的列（含 selectAs 映射的列）
      * 2. ON 条件中引用该 JOIN 表的列
      * 3. FillClause 中该 JOIN 表的 selectColumns
+     *
+     * 类型解析优先级：ColumnRef.type (selectAs) > tableInfo 字段推断 > null
      */
     private fun extractJoinColumns(join: JoinClause, joinAlias: String, stmt: SelectStatement): List<ColumnEntry> {
         val columns = mutableListOf<ColumnEntry>()
         val seen = mutableSetOf<String>()
+
+        // Helper: resolve Java type from tableInfo by column name
+        fun typeFromTable(colName: String): String? {
+            val fieldType = join.tableInfo?.columns?.firstOrNull { it.columnName == colName }?.fieldType
+            return fieldType?.substringAfterLast('.')?.takeIf { it.isNotEmpty() }
+        }
 
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (col in stmt.selectColumns) {
             if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
                 seen.add(col.columnName)
                 val javaType = col.type?.substringAfterLast('.')?.takeIf { it.isNotEmpty() }
+                    ?: typeFromTable(col.columnName)
                 columns.add(ColumnEntry(name = col.columnName, type = javaType, isPk = false))
             }
         }
 
-        // 2. From ON conditions
+        // 2. From ON conditions (resolve type from tableInfo)
         for (cond in join.onConditions) {
             if (cond is Condition.ColumnComparison) {
                 if (cond.right.tableAlias == joinAlias && !seen.contains(cond.right.columnName)) {
                     seen.add(cond.right.columnName)
-                    columns.add(ColumnEntry(name = cond.right.columnName, type = null, isPk = false))
+                    columns.add(ColumnEntry(name = cond.right.columnName, type = typeFromTable(cond.right.columnName), isPk = false))
                 }
                 if (cond.left.tableAlias == joinAlias && !seen.contains(cond.left.columnName)) {
                     seen.add(cond.left.columnName)
-                    columns.add(ColumnEntry(name = cond.left.columnName, type = null, isPk = false))
+                    columns.add(ColumnEntry(name = cond.left.columnName, type = typeFromTable(cond.left.columnName), isPk = false))
                 }
             }
         }
@@ -195,7 +204,7 @@ object JoinDiagramGenerator {
                 for (col in fill.selectColumns) {
                     if (!seen.contains(col.columnName)) {
                         seen.add(col.columnName)
-                        columns.add(ColumnEntry(name = col.columnName, type = null, isPk = false))
+                        columns.add(ColumnEntry(name = col.columnName, type = typeFromTable(col.columnName), isPk = false))
                     }
                 }
             }

@@ -555,7 +555,7 @@ object MpjLambdaConverter : WrapperConverter {
 
         // T-M20-05：仅 EntityRefArg（psi 解析实体）携带逻辑删除列；类名兜底/字符串 join/selectCollection
         // 子查询形态 tableInfo 为 null → 不填充（SqlPreviewService 不注入副表 deleted）
-        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = logicDelete)
+        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = logicDelete, tableInfo = tableInfo)
     }
 
     /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */

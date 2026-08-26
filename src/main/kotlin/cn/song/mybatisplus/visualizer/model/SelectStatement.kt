@@ -26,9 +26,10 @@ sealed class SqlStatement {
  *                    非空时整段原样渲染（含别名与 ON），忽略 tableName/alias/onConditions
  * @param customKeyword 自定义 join 关键字（`join("FULL JOIN", ...)`，M15-P0）；null 时按 type 映射
  * @param logicDeleteColumn 关联表逻辑删除列（@TableLogic 标注字段的列名，T-M20-05）；null 表示无逻辑删除
- *                          （类名兜底 / 字符串 join / selectCollection 子查询形态无 TableInfo）。
- *                          SqlPreviewService 据此按 MPJ 官方语义注入副表 deleted 条件（默认 ON，
+ *                          （类名兜底 / 字符串 join / selectCollection 子查询形态无 TableInfo）。 *                          SqlPreviewService 据此按 MPJ 官方语义注入副表 deleted 条件（默认 ON，
  *                          `logicDelToWhere()` 移 WHERE 末尾；`disableSubLogicDel()` 关闭）
+ * @param tableInfo          关联表实体元数据（PSI 解析的 EntityRefArg）；null 表示无实体信息
+ *                          （类名兜底 / 字符串 join）。图表渲染据此查找字段 Java 类型。
  */
 data class JoinClause(
     val type: JoinType,
@@ -38,6 +39,7 @@ data class JoinClause(
     val rawSql: String? = null,
     val customKeyword: String? = null,
     val logicDeleteColumn: String? = null,
+    val tableInfo: TableInfo? = null,
 )
 
 /**
