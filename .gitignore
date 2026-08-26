@@ -60,3 +60,4 @@ reasonix.toml
 
 ### ZCode ###
 .zcode/
+out/

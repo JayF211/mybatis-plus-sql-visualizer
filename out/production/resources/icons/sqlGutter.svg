@@ -1,9 +1,0 @@
-<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <!-- T-M40：SQL 预览图标（放大 1.25 + 加粗；放大镜内移镜心 (11.4,11.0)——不再贴画布右下角边缘） -->
-    <circle cx="11.4" cy="11.0" r="3.38" fill="#F4EEFF"/>
-    <path d="M5.12 5.25 L2.62 8.00 L5.12 10.75" stroke="#4FB477" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="7.00" y1="11.00" x2="9.00" y2="5.00" stroke="#4FB477" stroke-width="1.8" stroke-linecap="round"/>
-    <path d="M10.88 5.25 L13.38 8.00 L10.88 10.75" stroke="#4FB477" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="11.4" cy="11.0" r="3.38" fill="none" stroke="#B48EFF" stroke-width="1.6"/>
-    <line x1="13.79" y1="13.39" x2="14.70" y2="14.30" stroke="#B48EFF" stroke-width="1.6" stroke-linecap="round"/>
-</svg>
