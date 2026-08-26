@@ -8,19 +8,10 @@ import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * F-1：JOIN 关系图 PlantUML 文本生成器单元测试（纯逻辑，无渲染）。
- *
- * 覆盖：
- *  - 单表无 JOIN → 空输出
- *  - 2 表 LEFT JOIN
- *  - 3 表混合 JOIN（LEFT + INNER）
- *  - 子查询 JOIN（rawSql 非空）
- *  - 列数 > 50 只显示 PK + FK
- */
 class JoinDiagramGeneratorTest {
 
     private val userTable = TableInfo(
@@ -63,38 +54,29 @@ class JoinDiagramGeneratorTest {
         ),
     )
 
-    // ------------------------------------------------------------------
-    // 单表无 JOIN → 空输出
-    // ------------------------------------------------------------------
-
     @Test
-    fun `single table no join returns empty`() {
+    fun `single table no join returns empty model`() {
         val stmt = SelectStatement(table = userTable)
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertEquals("", result)
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertTrue("model should be empty", model.isEmpty)
+        assertEquals(0, model.entities.size)
+        assertEquals(0, model.relationships.size)
     }
 
     @Test
-    fun `empty joins list returns empty`() {
+    fun `empty joins list returns empty model`() {
         val stmt = SelectStatement(table = userTable, joins = emptyList())
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertEquals("", result)
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertTrue("model should be empty", model.isEmpty)
     }
-
-    // ------------------------------------------------------------------
-    // 2 表 LEFT JOIN
-    // ------------------------------------------------------------------
 
     @Test
     fun `two table left join`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "u",
+            table = userTable, tableAlias = "u",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.LEFT,
-                    tableName = "order",
-                    alias = "o",
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "u", columnName = "id"),
@@ -104,30 +86,32 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain @startuml", result.contains("@startuml"))
-        assertTrue("should contain @enduml", result.contains("@enduml"))
-        assertTrue("should contain main table", result.contains("user"))
-        assertTrue("should contain join table", result.contains("order"))
-        assertTrue("should contain LEFT JOIN relation", result.contains("||--o{"))
-        assertTrue("should contain ON condition", result.contains("u.id = o.user_id"))
-        assertTrue("should mark PK", result.contains("* id"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertFalse("model should not be empty", model.isEmpty)
+        assertEquals(2, model.entities.size)
+        assertTrue(model.entities[0].isMain)
+        assertEquals("user", model.entities[0].tableName)
+        assertEquals("u", model.entities[0].alias)
+        assertFalse(model.entities[1].isMain)
+        assertEquals("order", model.entities[1].tableName)
+        assertEquals("o", model.entities[1].alias)
+        assertEquals(1, model.relationships.size)
+        assertEquals("u", model.relationships[0].fromAlias)
+        assertEquals("o", model.relationships[0].toAlias)
+        assertEquals(JoinType.LEFT, model.relationships[0].joinType)
+        assertTrue(model.relationships[0].label.contains("u.id = o.user_id"))
+        assertTrue(model.entities[0].columns.isNotEmpty())
+        assertTrue(model.entities[0].columns[0].isPk)
+        assertEquals("id", model.entities[0].columns[0].name)
     }
-
-    // ------------------------------------------------------------------
-    // 3 表混合 JOIN（LEFT + INNER）
-    // ------------------------------------------------------------------
 
     @Test
     fun `three table mixed join`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "u",
+            table = userTable, tableAlias = "u",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.LEFT,
-                    tableName = "order",
-                    alias = "o",
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "u", columnName = "id"),
@@ -136,9 +120,7 @@ class JoinDiagramGeneratorTest {
                     ),
                 ),
                 JoinClause(
-                    type = JoinType.INNER,
-                    tableName = "dept",
-                    alias = "d",
+                    type = JoinType.INNER, tableName = "dept", alias = "d",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "u", columnName = "dept_id"),
@@ -148,29 +130,22 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain order table", result.contains("order"))
-        assertTrue("should contain dept table", result.contains("dept"))
-        assertTrue("should contain LEFT relation", result.contains("||--o{"))
-        assertTrue("should contain INNER relation", result.contains("||--||"))
-        assertTrue("should contain first ON condition", result.contains("u.id = o.user_id"))
-        assertTrue("should contain second ON condition", result.contains("u.dept_id = d.id"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(3, model.entities.size)
+        assertEquals(2, model.relationships.size)
+        assertEquals(JoinType.LEFT, model.relationships[0].joinType)
+        assertTrue(model.relationships[0].label.contains("u.id = o.user_id"))
+        assertEquals(JoinType.INNER, model.relationships[1].joinType)
+        assertTrue(model.relationships[1].label.contains("u.dept_id = d.id"))
     }
 
-    // ------------------------------------------------------------------
-    // RIGHT JOIN + FULL JOIN 关系线验证
-    // ------------------------------------------------------------------
-
     @Test
-    fun `right join relation line`() {
+    fun `right join relation type`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "u",
+            table = userTable, tableAlias = "u",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.RIGHT,
-                    tableName = "address",
-                    alias = "a",
+                    type = JoinType.RIGHT, tableName = "address", alias = "a",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "u", columnName = "id"),
@@ -180,20 +155,17 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain RIGHT relation", result.contains("}o--||"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(JoinType.RIGHT, model.relationships[0].joinType)
     }
 
     @Test
-    fun `full join relation line`() {
+    fun `full join relation type`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "u",
+            table = userTable, tableAlias = "u",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.FULL,
-                    tableName = "address",
-                    alias = "a",
+                    type = JoinType.FULL, tableName = "address", alias = "a",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "u", columnName = "id"),
@@ -203,57 +175,37 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain FULL relation", result.contains("}o--o{"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(JoinType.FULL, model.relationships[0].joinType)
     }
-
-    // ------------------------------------------------------------------
-    // 子查询 JOIN（rawSql 非空）
-    // ------------------------------------------------------------------
 
     @Test
     fun `rawSql join still renders`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "u",
+            table = userTable, tableAlias = "u",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.LEFT,
-                    tableName = "order",
-                    alias = "o",
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
                     onConditions = emptyList(),
                     rawSql = "LEFT JOIN (SELECT * FROM order WHERE amount > 100) o ON u.id = o.user_id",
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain @startuml", result.contains("@startuml"))
-        assertTrue("should contain join table", result.contains("order"))
-        assertTrue("should contain rawSql indicator", result.contains("rawSql"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertFalse(model.isEmpty)
+        assertEquals(2, model.entities.size)
+        assertTrue(model.relationships[0].label.contains("rawSql"))
     }
-
-    // ------------------------------------------------------------------
-    // 列数 > 50 只显示 PK
-    // ------------------------------------------------------------------
 
     @Test
     fun `table with over 50 columns shows only PK`() {
-        val manyColumns = (1..60).map { i ->
-            ColumnInfo("field$i", "col_$i", isId = i == 1)
-        }
-        val bigTable = TableInfo(
-            entityClassName = "BigEntity",
-            tableName = "big_table",
-            columns = manyColumns,
-        )
+        val manyColumns = (1..60).map { i -> ColumnInfo("field$i", "col_$i", isId = i == 1) }
+        val bigTable = TableInfo(entityClassName = "BigEntity", tableName = "big_table", columns = manyColumns)
         val stmt = SelectStatement(
-            table = bigTable,
-            tableAlias = "t",
+            table = bigTable, tableAlias = "t",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.INNER,
-                    tableName = "order",
-                    alias = "o",
+                    type = JoinType.INNER, tableName = "order", alias = "o",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "t", columnName = "col_1"),
@@ -263,27 +215,19 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain PK column col_1", result.contains("* col_1"))
-        // 非 PK 列不应出现
-        assertTrue("should not contain non-PK column col_2", !result.contains("col_2"))
-        assertTrue("should not contain non-PK column col_3", !result.contains("col_3"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(1, model.entities[0].columns.size)
+        assertTrue(model.entities[0].columns[0].isPk)
+        assertEquals("col_1", model.entities[0].columns[0].name)
     }
-
-    // ------------------------------------------------------------------
-    // 无别名时使用默认别名
-    // ------------------------------------------------------------------
 
     @Test
     fun `join without alias uses default alias`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "t",
+            table = userTable, tableAlias = "t",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.LEFT,
-                    tableName = "order",
-                    alias = "",
+                    type = JoinType.LEFT, tableName = "order", alias = "",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "t", columnName = "id"),
@@ -293,25 +237,20 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain @startuml", result.contains("@startuml"))
-        assertTrue("should contain table name order", result.contains("order"))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertFalse(model.isEmpty)
+        assertEquals(2, model.entities.size)
+        assertEquals("t1", model.entities[1].alias)
+        assertEquals("order", model.entities[1].tableName)
     }
-
-    // ------------------------------------------------------------------
-    // 多条件 ON（AND 连接）
-    // ------------------------------------------------------------------
 
     @Test
     fun `multiple on conditions joined with AND`() {
         val stmt = SelectStatement(
-            table = userTable,
-            tableAlias = "u",
+            table = userTable, tableAlias = "u",
             joins = listOf(
                 JoinClause(
-                    type = JoinType.LEFT,
-                    tableName = "order",
-                    alias = "o",
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
                     onConditions = listOf(
                         Condition.ColumnComparison(
                             left = ColumnRef(tableAlias = "u", columnName = "id"),
@@ -325,9 +264,10 @@ class JoinDiagramGeneratorTest {
                 ),
             ),
         )
-        val result = JoinDiagramGenerator.generatePlantUml(stmt)
-        assertTrue("should contain first condition", result.contains("u.id = o.user_id"))
-        assertTrue("should contain second condition", result.contains("u.dept_id = o.dept_id"))
-        assertTrue("should join with AND", result.contains(" AND "))
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val label = model.relationships[0].label
+        assertTrue(label.contains("u.id = o.user_id"))
+        assertTrue(label.contains("u.dept_id = o.dept_id"))
+        assertTrue(label.contains(" AND "))
     }
 }

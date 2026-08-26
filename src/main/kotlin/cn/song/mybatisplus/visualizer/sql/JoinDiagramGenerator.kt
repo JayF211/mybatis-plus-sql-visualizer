@@ -4,18 +4,22 @@ import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.ui.diagram.ColumnEntry
+import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
+import cn.song.mybatisplus.visualizer.ui.diagram.EntityNode
+import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine
 
 /**
- * F-1：JOIN 关系图 PlantUML 文本生成器。
+ * F-1/F-xx：JOIN 关系图结构化模型生成器。
  *
- * 将 [SelectStatement] 中的 JOIN 关系映射为 PlantUML entity 图：
+ * 将 [SelectStatement] 中的 JOIN 关系映射为 [DiagramModel]：
  *  - 主表 → 绿色实体（含列信息，PK 标 *）
  *  - JOIN 表 → 蓝色实体
- *  - JOIN 类型 → 关系线样式（LEFT: `||--o{` / INNER: `||--||` / RIGHT: `}o--||` / FULL: `}o--o{`）
+ *  - JOIN 类型 → 关系线样式（LEFT/INNER/RIGHT/FULL）
  *  - ON 条件 → 关系线标签
  *  - 列数 > 50 时仅显示主键列（避免图过大）
  *
- * 无 JOIN 时返回空字符串（调用方据此决定是否展示标签页）。
+ * 无 JOIN 时返回空模型（调用方据此决定是否展示标签页）。
  */
 object JoinDiagramGenerator {
 
@@ -23,72 +27,61 @@ object JoinDiagramGenerator {
     private const val MAX_COLUMNS = 50
 
     /**
-     * 生成 PlantUML entity 图文本。
+     * 构建 JOIN 关系图的结构化模型。
      *
      * @param stmt SELECT 语句模型
-     * @return PlantUML 源文本；无 JOIN 时返回空字符串
+     * @return [DiagramModel]；无 JOIN 时返回空模型
      */
-    fun generatePlantUml(stmt: SelectStatement): String {
-        if (stmt.joins.isEmpty()) return ""
+    fun buildDiagramModel(stmt: SelectStatement): DiagramModel {
+        if (stmt.joins.isEmpty()) return DiagramModel(emptyList(), emptyList())
 
         val mainAlias = sanitizeAlias(stmt.tableAlias ?: "t")
-        val sb = StringBuilder()
-        sb.append("@startuml\n")
-        // 注：不能加 !theme plain —— PlantUML 8059 不支持该指令，会渲染出 105x59 错误图
-        // 注：不能加 skinparam linetype ortho —— 正交线型强制依赖 Graphviz dot 引擎，
-        //     无 Graphviz 环境渲染出 "Dot Executable: null" 错误图（用户环境实证）；
-        //     默认线型走 Smetana 纯 Java 引擎，任何环境可渲染
-        sb.append("hide circle\n\n")
+        val entities = mutableListOf<EntityNode>()
+        val relationships = mutableListOf<RelationshipLine>()
 
-        // 主表（绿色）
-        appendEntity(sb, mainAlias, stmt.table.tableName, stmt.table, isMain = true)
+        // 主表
+        entities.add(
+            EntityNode(
+                alias = mainAlias,
+                tableName = stmt.table.tableName,
+                columns = pickColumns(stmt.table).map { col ->
+                    ColumnEntry(
+                        name = col.columnName,
+                        type = col.fieldType,
+                        isPk = col.isId,
+                    )
+                },
+                isMain = true,
+            ),
+        )
 
         // JOIN 表 + 关系线
         val usedAliases = mutableSetOf(mainAlias)
         stmt.joins.forEachIndexed { index, join ->
             val joinAlias = resolveJoinAlias(join.alias, index)
-            // 防别名冲突：已存在则追加序号
             val uniqueAlias = uniquify(joinAlias, usedAliases)
             usedAliases.add(uniqueAlias)
 
-            appendEntity(sb, uniqueAlias, join.tableName, null, isMain = false)
+            entities.add(
+                EntityNode(
+                    alias = uniqueAlias,
+                    tableName = join.tableName,
+                    columns = emptyList(), // JOIN 表无列信息
+                    isMain = false,
+                ),
+            )
 
-            val rel = relationshipFor(join.type)
-            val label = buildOnLabel(join)
-            sb.append("$mainAlias $rel $uniqueAlias : \"$label\"\n\n")
+            relationships.add(
+                RelationshipLine(
+                    fromAlias = mainAlias,
+                    toAlias = uniqueAlias,
+                    joinType = join.type,
+                    label = buildOnLabel(join),
+                ),
+            )
         }
 
-        sb.append("@enduml\n")
-        return sb.toString()
-    }
-
-    /**
-     * 追加一个 entity 块（含列信息）。
-     *
-     * @param alias     实体别名（已 sanitize，用于 as 子句）
-     * @param tableName 表名（用于显示名）
-     * @param tableInfo 表信息（含列）；JOIN 表无列信息时传 null
-     * @param isMain    是否主表（控制颜色）
-     */
-    private fun appendEntity(
-        sb: StringBuilder,
-        alias: String,
-        tableName: String,
-        tableInfo: cn.song.mybatisplus.visualizer.model.TableInfo?,
-        isMain: Boolean,
-    ) {
-        val displayName = if (alias != tableName) "$tableName ($alias)" else tableName
-        val color = if (isMain) "#lightgreen" else "#lightblue"
-        sb.append("entity \"$displayName\" as $alias $color {\n")
-        if (tableInfo != null) {
-            val columns = pickColumns(tableInfo)
-            for (col in columns) {
-                val marker = if (col.isId) "* " else "  "
-                val typeStr = col.fieldType ?: ""
-                sb.append("  $marker${col.columnName} : $typeStr\n")
-            }
-        }
-        sb.append("}\n\n")
+        return DiagramModel(entities, relationships)
     }
 
     /**
@@ -102,14 +95,14 @@ object JoinDiagramGenerator {
         }
 
     /**
-     * 解析 JOIN 别名为有效的 PlantUML 标识符。
+     * 解析 JOIN 别名为有效的标识符。
      * 空字符串时生成默认别名 `t{index+1}`。
      */
     private fun resolveJoinAlias(alias: String, index: Int): String =
         if (alias.isBlank()) "t${index + 1}" else sanitizeAlias(alias)
 
     /**
-     * 将别名 sanitize 为合法 PlantUML 标识符（仅保留字母/数字/下划线，数字开头则加前缀）。
+     * 将别名 sanitize 为合法标识符（仅保留字母/数字/下划线，数字开头则加前缀）。
      */
     private fun sanitizeAlias(raw: String): String {
         val cleaned = raw.replace(Regex("[^a-zA-Z0-9_]"), "_")
@@ -127,16 +120,6 @@ object JoinDiagramGenerator {
     }
 
     /**
-     * JOIN 类型 → PlantUML 关系线样式。
-     */
-    private fun relationshipFor(type: JoinType): String = when (type) {
-        JoinType.LEFT -> "||--o{"
-        JoinType.INNER -> "||--||"
-        JoinType.RIGHT -> "}o--||"
-        JoinType.FULL -> "}o--o{"
-    }
-
-    /**
      * 构建关系线标签（ON 条件）。
      * rawSql 非空时显示 "(rawSql)" 提示；否则拼接 ON 条件（AND 连接）。
      */
@@ -148,7 +131,6 @@ object JoinDiagramGenerator {
 
     /**
      * 将条件转换为可读的标签文本。
-     * [Condition.ColumnComparison] → `left = right`；其余类型取简化表示。
      */
     private fun conditionToLabel(condition: Condition): String = when (condition) {
         is Condition.ColumnComparison ->

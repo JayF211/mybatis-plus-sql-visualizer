@@ -19,21 +19,8 @@ dependencies {
     // T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例——方法签名/注解元数据可解析；
     // 仅测试依赖，插件运行时零依赖不变；MPJ 1.5.x 不在 Central，暂不加）
     testImplementation(libs.mp.core)
-    // F-1：JOIN 关系可视化图（PlantUML 渲染为 PNG/SVG 静态图）
-    // F-42 升级：8059（2017 编译）的 ER 图布局硬依赖 Graphviz dot + PNG 写入依赖
-    // com.sun.imageio.plugins.png（无 --add-opens 必抛 IllegalAccessError）；
-    // 1.2024.8 内置 Smetana 引擎（无需 Graphviz）+ 自带 PNG writer（无需 --add-opens），
-    // 用户环境无 Graphviz 实证渲染成功（370x259 正常图）。总依赖经 POM 传递（约 21MB jar）。
-    implementation("net.sourceforge.plantuml:plantuml:1.2024.8")
-    // F-42：主 IDE 无 --add-opens，PNG 渲染必抛 IllegalAccessError（javap 实证 PngIO 经
-    // ImageIO 加载 com.sun.imageio.plugins.png）——SVG 降级后须栅格化显示。Batik（SVG→
-    // BufferedImage，纯 Java 全平台一致；PNGTranscoder 自带 PNG 编码器不经 imageio，
-    // 导出 PNG 亦不受 JDK 模块限制）。体积约 6-8MB，随插件打 lib/（与 plantuml 同策略）。
-    implementation("org.apache.xmlgraphics:batik-transcoder:1.17")
-    // F-42：batik-codec 是 batik-transcoder 的 POM optional 依赖（Gradle 不自动拉），但
-    // PNGTranscoder 写 PNG 所需的两个 WriteAdapter 类（InternalCodecWriteAdapter — 自带
-    // PNG 编码器不经 imageio；ImageIOWriteAdapter）都在此 jar 中，缺它则"no WriteAdapter"。
-    implementation("org.apache.xmlgraphics:batik-codec:1.17")
+    // F-1/F-xx：JOIN 关系可视化图（自绘 Swing Graphics2D 渲染，零外部依赖）
+    // F-xx 替代方案：移除 PlantUML 1.2024.8 (21.9MB) + Batik (~8MB)，改用自绘引擎
     // F-2：SQL 性能分析（JSqlParser 5.3 — 零依赖 SQL 解析器，静态分析用）
     implementation("com.github.jsqlparser:jsqlparser:5.3")
 
@@ -69,13 +56,7 @@ repositories {
     }
 }
 
-// F-42：batik-* 各模块（transcoder/codec/dom/...）都传递拉入 xml-apis:1.4.01，其
-// javax.xml.XMLConstants 停在 FEATURE_SECURE_PROCESSING（无 JDK7+ 的 ACCESS_EXTERNAL_DTD），
-// 遮蔽 JDK 同名类导致 XmlMapperParser 编译失败。JDK 9+ java.xml 模块已完整覆盖该 jar，
-// 全局排除安全；xml-apis-ext（org.w3c.dom.svg/smil 等 JDK 没有的 DOM 接口）仍保留。
-configurations.all {
-    exclude(group = "xml-apis", module = "xml-apis")
-}
+// F-xx：已移除 Batik/PlantUML 依赖，无需 xml-apis 排除规则。
 
 // 纯 Kotlin 插件：无需 @NotNull 字节码插桩（Kotlin 编译器已处理空安全）。
 // 禁用后可绕开 JDK 环境下 instrumentCode 的 jrt 模块解析问题（Windows 中文环境实测报
@@ -149,12 +130,6 @@ tasks.withType<JavaCompile>().configureEach {
 // 使 ExecuteSqlSupport.isAvailable() 恒为 true（无法单测 Community 降级路径）；排除后测试环境
 // 稳定模拟「无 database 插件」（按钮降级/提示分支可测）。排除 jar 名含 database/sql 的模块 jar。
 tasks.withType<Test>().configureEach {
-    // F-1：PlantUML PNG 渲染需要访问 JDK 内部 com.sun.imageio.plugins.png 模块
-    // （测试沙盒默认不开放；IDE 运行时平台已开放此模块）
-    jvmArgs(
-        "--add-opens", "java.desktop/com.sun.imageio.plugins.png=ALL-UNNAMED",
-        "--add-opens", "java.desktop/java.awt.image=ALL-UNNAMED",
-    )
     classpath = classpath.filter {
         !it.name.contains("vue", ignoreCase = true) &&
             !(it.name.contains("database", ignoreCase = true) && it.name.startsWith("intellij.")) &&
@@ -207,12 +182,6 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
-        // F-1：PlantUML PNG 渲染需要访问 JDK 内部 com.sun.imageio.plugins.png 模块
-        // （JDK 17+ 模块系统默认不开放；--add-opens 使 unnamed module 可反射访问）
-        jvmArgs(
-            "--add-opens", "java.desktop/com.sun.imageio.plugins.png=ALL-UNNAMED",
-            "--add-opens", "java.desktop/java.awt.image=ALL-UNNAMED",
-        )
         // 本地清单测试：-Dmpvs.update.manifest.url=... 转发到沙盒 IDE 的 systemProperty（不影响 Gitee 用户）
         val manifestUrl = System.getProperty("mpvs.update.manifest.url")
         if (!manifestUrl.isNullOrBlank()) {

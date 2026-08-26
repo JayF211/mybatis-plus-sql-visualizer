@@ -307,7 +307,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             panel.add(JBLabel(label), gbc)
             gbc.gridx = 1
             gbc.weightx = 1.0
-            gbc.fill = GridBagConstraints.HORIZONTAL
+            gbc.fill = GridBagConstraints.NONE
             panel.add(component, gbc)
             gbc.fill = GridBagConstraints.NONE
             gbc.gridy++

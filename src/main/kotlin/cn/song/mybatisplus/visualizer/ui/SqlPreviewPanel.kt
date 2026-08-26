@@ -379,9 +379,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (hasJoins) {
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
-            // 生成 PlantUML 文本并展示
-            val plantUml = JoinDiagramGenerator.generatePlantUml(statement as SelectStatement)
-            diagramPanel.showDiagram(plantUml)
+            // 构建结构化模型并展示
+            val model = JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement)
+            diagramPanel.showDiagram(model)
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
             removeDiagramTab()
