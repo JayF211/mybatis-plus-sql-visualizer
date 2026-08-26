@@ -166,11 +166,12 @@ object JoinDiagramGenerator {
         val columns = mutableListOf<ColumnEntry>()
         val seen = mutableSetOf<String>()
 
-        // 1. From selectColumns (includes selectAs results)
+        // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (col in stmt.selectColumns) {
             if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
                 seen.add(col.columnName)
-                columns.add(ColumnEntry(name = col.columnName, type = null, isPk = false))
+                val javaType = col.type?.substringAfterLast('.')?.takeIf { it.isNotEmpty() }
+                columns.add(ColumnEntry(name = col.columnName, type = javaType, isPk = false))
             }
         }
 

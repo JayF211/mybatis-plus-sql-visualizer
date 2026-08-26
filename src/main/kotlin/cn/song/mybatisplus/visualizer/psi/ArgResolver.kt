@@ -56,12 +56,14 @@ object ArgResolver {
         asAlias: Boolean = false,
         resolveVariables: Boolean = true,
     ): WrapperArg {
-        // selectAs(Entity::getX, VO::getY)：第二参方法引用 → 目标 VO 属性名（别名）
+        // selectAs(Entity::getX, VO::getY)：第二参方法引用 → 目标 VO 属性名（别名）+ 返回类型
         if (asAlias && expression is PsiMethodReferenceExpression) {
             val name = expression.referenceName ?: return WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
             val property = getterToProperty(name)
+            // Extract return type for diagram column type display
+            val returnType = (expression.functionalInterfaceType as? PsiClassType)?.parameters?.firstOrNull()?.canonicalText
             return if (property != null) {
-                WrapperArg.AliasArg(property)
+                WrapperArg.AliasArg(property, returnType)
             } else {
                 WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
             }

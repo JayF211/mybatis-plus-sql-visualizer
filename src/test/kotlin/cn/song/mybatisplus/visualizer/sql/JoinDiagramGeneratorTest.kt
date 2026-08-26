@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -276,7 +277,7 @@ class JoinDiagramGeneratorTest {
         val stmt = SelectStatement(
             table = userTable, tableAlias = "u",
             selectColumns = listOf(
-                ColumnRef(tableAlias = "o", columnName = "station_name"),
+                ColumnRef(tableAlias = "o", columnName = "station_name", type = "java.lang.String"),
             ),
             joins = listOf(
                 JoinClause(
@@ -298,9 +299,12 @@ class JoinDiagramGeneratorTest {
         val joinEntity = model.entities[1]
         assertEquals("order", joinEntity.tableName)
         val colNames = joinEntity.columns.map { it.name }
-        // From selectAs
+        // From selectAs (with type)
         assertTrue("Should contain station_name from selectAs", colNames.contains("station_name"))
-        // From ON conditions
+        val stationCol = joinEntity.columns.find { it.name == "station_name" }
+        assertNotNull("station_name should exist", stationCol)
+        assertEquals("String", stationCol!!.type)
+        // From ON conditions (no type)
         assertTrue("Should contain user_id from ON", colNames.contains("user_id"))
         assertTrue("Should contain dept_id from ON", colNames.contains("dept_id"))
     }

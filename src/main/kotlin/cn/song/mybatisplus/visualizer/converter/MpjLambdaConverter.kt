@@ -352,9 +352,10 @@ object MpjLambdaConverter : WrapperConverter {
             else -> null
         } ?: return null
 
-        // 别名：第二参可为 VO::getY 方法引用（AliasArg 保留属性名）、lambda 列或字符串字面量
+        // 别名：第二参可为 VO::getY 方法引用（AliasArg 保留属性名 + 返回类型）、lambda 列或字符串字面量
+        var colType: String? = null
         val alias = when (val arg = call.args.getOrNull(1)) {
-            is WrapperArg.AliasArg -> arg.propertyName
+            is WrapperArg.AliasArg -> { colType = arg.returnType; arg.propertyName }
             is WrapperArg.ColumnArg -> arg.column.columnName
             is WrapperArg.ValueArg -> (arg.value as? SqlValue.Literal)?.unquoted
             else -> null
@@ -368,7 +369,7 @@ object MpjLambdaConverter : WrapperConverter {
         } else {
             mainAlias
         }
-        return ColumnRef(tableAlias = tableAlias, columnName = column.columnName, alias = alias)
+        return ColumnRef(tableAlias = tableAlias, columnName = column.columnName, alias = alias, type = colType)
     }
 
     /**
