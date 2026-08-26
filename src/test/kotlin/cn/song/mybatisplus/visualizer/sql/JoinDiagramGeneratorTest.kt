@@ -332,6 +332,7 @@ class JoinDiagramGeneratorTest {
         // 实体类名含大写，fallback 为默认别名 t1
         assertEquals("t1", model.entities[1].alias)
         assertEquals("order", model.entities[1].tableName)
+        assertTrue(model.relationships[0].label.contains("t.id = t1.user_id"))
     }
 
     @Test

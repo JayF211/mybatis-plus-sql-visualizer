@@ -57,10 +57,13 @@ object JoinDiagramGenerator {
 
         // JOIN 表 + 关系线
         val usedAliases = mutableSetOf(mainAlias)
+        val aliasMap = mutableMapOf<String, String>()
+        stmt.tableAlias?.takeIf { it.isNotBlank() }?.let { aliasMap[it] = mainAlias }
         stmt.joins.forEachIndexed { index, join ->
             val joinAlias = resolveJoinAlias(join, index)
             val uniqueAlias = uniquify(joinAlias, usedAliases)
             usedAliases.add(uniqueAlias)
+            if (join.alias.isNotBlank()) aliasMap[join.alias] = uniqueAlias
 
             val joinColumns = extractJoinColumns(join, uniqueAlias, stmt)
             val displayTableName = resolveDisplayTableName(join)
@@ -80,7 +83,7 @@ object JoinDiagramGenerator {
                     fromAlias = mainAlias,
                     toAlias = uniqueAlias,
                     joinType = join.type,
-                    label = buildOnLabel(join),
+                    label = buildOnLabel(join, aliasMap),
                 ),
             )
         }
@@ -175,35 +178,35 @@ object JoinDiagramGenerator {
      * 构建关系线标签（ON 条件）。
      * rawSql 非空时显示 "(rawSql)" 提示；否则拼接 ON 条件（AND 连接）。
      */
-    private fun buildOnLabel(join: JoinClause): String {
+    private fun buildOnLabel(join: JoinClause, aliasMap: Map<String, String> = emptyMap()): String {
         if (!join.rawSql.isNullOrBlank()) return "(rawSql)"
         if (join.onConditions.isEmpty()) return ""
-        return join.onConditions.map { conditionToLabel(it) }.joinToString(" AND ")
+        return join.onConditions.map { conditionToLabel(it, aliasMap) }.joinToString(" AND ")
     }
 
-    /**
-     * 将条件转换为可读的标签文本。
-     */
-    private fun conditionToLabel(condition: Condition): String = when (condition) {
+    /** 将条件转换为可读标签，并将解析期实体别名归一到图中显示别名。 */
+    private fun conditionToLabel(condition: Condition, aliasMap: Map<String, String>): String = when (condition) {
         is Condition.ColumnComparison ->
-            "${condition.left.qualifiedName} = ${condition.right.qualifiedName}"
+            "${qualifiedName(condition.left, aliasMap)} = ${qualifiedName(condition.right, aliasMap)}"
         is Condition.Simple ->
-            "${condition.column.qualifiedName} ${condition.op} ?"
+            "${qualifiedName(condition.column, aliasMap)} ${condition.op} ?"
         is Condition.Unary ->
-            "${condition.column.qualifiedName} ${condition.op}"
+            "${qualifiedName(condition.column, aliasMap)} ${condition.op}"
         is Condition.In ->
-            "${condition.column.qualifiedName} IN (...)"
+            "${qualifiedName(condition.column, aliasMap)} IN (...)"
         is Condition.Between ->
-            "${condition.column.qualifiedName} BETWEEN ? AND ?"
+            "${qualifiedName(condition.column, aliasMap)} BETWEEN ? AND ?"
         is Condition.Like ->
-            "${condition.column.qualifiedName} LIKE ?"
+            "${qualifiedName(condition.column, aliasMap)} LIKE ?"
         is Condition.Group ->
             condition.children.joinToString(
                 if (condition.connector == cn.song.mybatisplus.visualizer.model.Connector.OR) " OR " else " AND ",
-            ) { conditionToLabel(it) }
-        is Condition.Raw ->
-            condition.sqlText
+            ) { conditionToLabel(it, aliasMap) }
+        is Condition.Raw -> condition.sqlText
     }
+
+    private fun qualifiedName(ref: cn.song.mybatisplus.visualizer.model.ColumnRef, aliasMap: Map<String, String>): String =
+        ref.tableAlias?.let { "${aliasMap[it] ?: it}.${ref.columnName}" } ?: ref.columnName
 
     /**
      * 提取 JOIN 表的列信息，来源：
