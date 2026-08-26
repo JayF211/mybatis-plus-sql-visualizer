@@ -71,14 +71,19 @@ object DiagramRenderer {
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
 
-        // Compute dynamic gap based on ON condition text widths
+        // Compute dynamic gap: account for ON condition text + both cardinality labels
+        val frc2 = FontRenderContext(null, true, true)
         var minGap = COLUMN_GAP
         for (r in model.relationships) {
+            var needed = COLUMN_GAP
             if (r.label.isNotEmpty()) {
                 val text = if (r.label.length > 120) r.label.take(119) + "…" else r.label
-                val tw = font.getStringBounds(text, frc).width.toInt() + 40
-                if (tw > minGap) minGap = (tw + 30).coerceAtMost(500)
+                val tw = font.getStringBounds(text, frc2).width.toInt() + 40
+                if (tw > needed) needed = tw
             }
+            // Add space for both cardinality labels (each ~30px) + margins (30px each side)
+            needed = (needed + 120).coerceAtMost(520)
+            if (needed > minGap) minGap = needed
         }
 
         val layouts = measureEntities(model.entities, font, bold)
@@ -123,11 +128,14 @@ object DiagramRenderer {
 
         var minGap = COLUMN_GAP
         for (r in model.relationships) {
+            var needed = COLUMN_GAP
             if (r.label.isNotEmpty()) {
                 val text = if (r.label.length > 120) r.label.take(119) + "…" else r.label
                 val tw = font.getStringBounds(text, frc).width.toInt() + 40
-                if (tw > minGap) minGap = (tw + 30).coerceAtMost(500)
+                if (tw > needed) needed = tw
             }
+            needed = (needed + 120).coerceAtMost(520)
+            if (needed > minGap) minGap = needed
         }
 
         val layouts = measureEntities(model.entities, font, bold)
@@ -232,28 +240,18 @@ object DiagramRenderer {
 
     private fun drawLines(g2: Graphics2D, lines: List<Line>, gaps: List<java.awt.geom.Rectangle2D.Double>) {
         g2.color = LINE_COLOR
-        g2.stroke = BasicStroke(1.8f)
+        g2.stroke = BasicStroke(2.0f)
         for (i in lines.indices) {
             val l = lines[i]
             val gap = gaps[i]
-            val gx1 = gap.x.toInt()
-            val gx2 = (gap.x + gap.width).toInt()
-            val gy1 = gap.y.toInt() - 4
-            val gy2 = (gap.y + gap.height).toInt() + 4
+            val gx1 = (gap.x + 6).toInt()
+            val gx2 = (gap.x + gap.width - 6).toInt()
 
-            // Skip line segments that pass through the gap
-            if (gap.width > 20) {
-                // Draw from start to gap start
-                if (l.x1 < gx1 - 2) {
-                    g2.drawLine(l.x1, l.y1, minOf(gx1, l.x2), l.y1)
-                }
-                // Draw from gap end to end (with arrow)
-                if (l.x2 > gx2 + 2) {
-                    val startX = maxOf(gx2, l.x1)
-                    if (startX < l.x2) {
-                        g2.drawLine(startX, l.y2, l.x2, l.y2)
-                    }
-                }
+            if (gap.width > 30) {
+                // Draw from card edge to gap start
+                g2.drawLine(l.x1, l.y1, gx1, l.y1)
+                // Draw from gap end to card edge
+                g2.drawLine(gx2, l.y2, l.x2, l.y2)
             } else {
                 g2.drawLine(l.x1, l.y1, l.x2, l.y2)
             }
@@ -360,41 +358,39 @@ object DiagramRenderer {
         val gaps = mutableListOf<java.awt.geom.Rectangle2D.Double>()
 
         for (l in lines) {
-            var minX = minOf(l.x1, l.x2).toDouble()
-            var maxX = maxOf(l.x1, l.x2).toDouble()
-            var minY = (l.y1 - 14).toDouble()
-            var maxY = (l.y1 + 14).toDouble()
+            // Gap covers only the label area (ON badge + cardinality labels)
+            var minX = Double.MAX_VALUE
+            var maxX = Double.MIN_VALUE
+            var minY = Double.MAX_VALUE
+            var maxY = Double.MIN_VALUE
 
-                                    // ON condition label: dynamic sizing - ensure gap is wide enough
+            // ON condition label: centered
             if (l.label.isNotEmpty()) {
                 val rawText = if (l.label.length > 120) l.label.take(119) + "…" else l.label
-                val maxBadgeW = 400  // max reasonable width
-                val minGapNeeded = maxBadgeW + 32  // badge + margins
-                val actualGap = (l.x2 - l.x1)
+                val maxBadgeW = 400
                 val fullW = font.getStringBounds(rawText, frc).width
                 val bw = (fullW + 20).toInt().coerceIn(60, maxBadgeW)
                 val bh = (font.getStringBounds(rawText, frc).height.toInt() + 12)
                 val bx = ((l.x1 + l.x2 - bw) / 2).toInt()
                 val by = ((l.y1 + l.y2 - bh) / 2).toInt()
                 onLabel(g2, rawText, bx, by, bw, bh, font)
-                minX = minOf(minX, l.x1.toDouble())
-                maxX = maxOf(maxX, l.x2.toDouble())
+                minX = minOf(minX, bx.toDouble())
+                maxX = maxOf(maxX, (bx + bw).toDouble())
                 minY = minOf(minY, by.toDouble())
                 maxY = maxOf(maxY, (by + bh).toDouble())
             }
 
-            // Cardinality labels: 22px from card edges
+            // Cardinality labels: 30px from card edges, vertically offset
             val fromText = cardText(l.jt, false)
             val toText = cardText(l.jt, true)
             val fromW = font.getStringBounds(fromText, frc).width.toInt() + 16
             val toW = font.getStringBounds(toText, frc).width.toInt() + 16
             val cbh = 20
 
-            // Position cardinality labels vertically offset from line to avoid overlapping ON condition label
-            val fromX = l.x1 + 16
-            val toX = l.x2 - 16 - toW
-            val fromY = l.y1 - cbh - 2  // above the line
-            val toY = l.y2 + 2          // below the line
+            val fromX = l.x1 + 30
+            val toX = l.x2 - 30 - toW
+            val fromY = l.y1 - cbh - 2
+            val toY = l.y2 + 2
             badge(g2, fromText, fromX, fromY, fromW, cbh, font)
             badge(g2, toText, toX, toY, toW, cbh, font)
 
@@ -519,16 +515,16 @@ object DiagramRenderer {
         for (l in lines) {
             val ft = cardText(l.jt, false)
             val fw = ft.length * 6 + 10
-            sb.append("""  <rect x="${l.x1 + 12}" y="${l.y1 - 9}" width="$fw" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""")
+            sb.append("""  <rect x="${l.x1 + 30}" y="${l.y1 - 9}" width="$fw" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""")
             sb.append("\n")
-            sb.append("""  <text x="${l.x1 + 17}" y="${l.y1 + 4}" font-size="10" fill="$lc">$ft</text>""")
+            sb.append("""  <text x="${l.x1 + 35}" y="${l.y1 + 4}" font-size="10" fill="$lc">$ft</text>""")
             sb.append("\n")
 
             val tt = cardText(l.jt, true)
             val tw2 = tt.length * 6 + 10
-            sb.append("""  <rect x="${l.x2 - 12 - tw2}" y="${l.y2 - 9}" width="$tw2" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""")
+            sb.append("""  <rect x="${l.x2 - 30 - tw2}" y="${l.y2 - 9}" width="$tw2" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""")
             sb.append("\n")
-            sb.append("""  <text x="${l.x2 - 7 - tw2}" y="${l.y2 + 4}" font-size="10" fill="$lc">$tt</text>""")
+            sb.append("""  <text x="${l.x2 - 25 - tw2}" y="${l.y2 + 4}" font-size="10" fill="$lc">$tt</text>""")
             sb.append("\n")
 
             if (l.label.isNotEmpty()) {

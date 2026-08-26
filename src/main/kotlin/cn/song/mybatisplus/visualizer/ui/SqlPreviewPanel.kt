@@ -16,8 +16,6 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
-import cn.song.mybatisplus.visualizer.ui.diff.DiffHighlighter
-import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
@@ -161,11 +159,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var current: PreviewResult? = null
     private var compactMode = false
 
-    // O-4：差异高亮状态（会话级缓存上一次 SQL + diff 开关）
-    /** O-4：上一次渲染的 SQL（会话缓存，用于 diff 对比）。 */
+    // O-4：上一次预览的 SQL（会话缓存，供 Compare 并排对比用）
     private var previousSql: String? = null
-    /** O-4：差异高亮开关（默认开启）。 */
-    private var diffHighlightEnabled = true
 
     // F-1：JOIN 关系图（仅 SELECT 含 JOIN 时显示标签页）
     private val diagramPanel = DiagramPanel(project)
@@ -274,8 +269,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // P-05：导入按钮（默认点击 = 从剪贴板导入）
         add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
         // O-4：差异高亮开关（本次 vs 上次预览）
-        add(smallButton(MpSqlVisualizerBundle.message("panel.diff")) { toggleDiffHighlight() })
-        // O-4：SQL Diff 并排对比
+        // O-4：SQL 并排对比（IDEA 原生 Diff，SQL 语法高亮）
         add(smallButton(MpSqlVisualizerBundle.message("panel.compare")) { showSqlDiff() })
         // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
         add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
@@ -356,14 +350,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         rebuildLeftPanel(result)
         refreshCompletionContext()
         renderSql()
-        // O-4：差异高亮（本次 vs 上次预览）
-        if (diffHighlightEnabled) {
-            applyDiffHighlight(result.previousSql)
-        }
         updateMeta(result)
         // F-1：更新 JOIN 图标签页（仅 SELECT 含 JOIN 时显示）
         updateDiagramTab(result)
-        // O-4：缓存当前 SQL 供下次 diff
+        // O-4：缓存当前 SQL 供下次 Compare
         previousSql = editor?.document?.text
     }
 
@@ -598,44 +588,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     // ------------------------------------------------------------------
-    // O-4：差异高亮（本次 vs 上次预览）
+    // O-4：SQL 并排对比（IDEA 原生 Diff，SQL 语法高亮）
     // ------------------------------------------------------------------
 
     /**
-     * O-4：对当前编辑器应用差异高亮（本次 SQL vs [oldSql]）。
-     * 首次预览（oldSql=null）不显示差异。
-     *
-     * @param oldSql 上一次预览的 SQL（null = 首次预览）
-     */
-    private fun applyDiffHighlight(oldSql: String?) {
-        val ed = editor ?: return
-        if (oldSql.isNullOrEmpty()) return
-        val newSql = ed.document.text
-        // 后台计算 diff（< 100ms for < 1000 lines），EDT 渲染高亮
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val diff = SqlDiffer.computeDiff(oldSql, newSql)
-            ApplicationManager.getApplication().invokeLater {
-                if (!ed.isDisposed) {
-                    DiffHighlighter.highlight(ed, diff, newSql)
-                }
-            }
-        }
-    }
-
-    /** O-4：切换差异高亮开关。 */
-    fun toggleDiffHighlight() {
-        diffHighlightEnabled = !diffHighlightEnabled
-        val ed = editor ?: return
-        if (!diffHighlightEnabled) {
-            DiffHighlighter.clear(ed.markupModel)
-        } else {
-            applyDiffHighlight(previousSql)
-        }
-    }
-
-    /**
-     * O-4：显示 SQL 并排 Diff 弹窗（当前 SQL vs 上次预览 SQL）。
+     * O-4：使用 IDEA 原生 Diff 对比当前 SQL 与上次预览 SQL。
      * 无上次预览时 toast 提示。
+     *
+     * 接入方式：DiffContentFactory 创建两个字符串内容 + SimpleDiffRequest 包装 → DiffManager.showDiff。
+     * 原生 diff 支持行级高亮、同步滚动、折叠相同行、Ctrl+D 快捷键等 IDEA 标准能力。
      */
     fun showSqlDiff() {
         val proj = project ?: return
@@ -644,13 +605,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             showDiffToast(MpSqlVisualizerBundle.message("preview.diff.noPrevious"))
             return
         }
-        SqlDiffDialog(
-            project = proj,
-            leftSql = oldSql,
-            rightSql = currentSql,
-            leftTitle = MpSqlVisualizerBundle.message("panel.diff.previous"),
-            rightTitle = MpSqlVisualizerBundle.message("panel.diff.current"),
-        ).show()
+        // IDEA 原生 Diff（SQL 文件类型 → 语法高亮 + 行级对比 + 同步滚动）
+        val diffContentFactory = com.intellij.diff.DiffContentFactory.getInstance()
+        val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
+        val leftContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.create(proj, oldSql, sqlFileType)
+        val rightContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.create(proj, currentSql, sqlFileType)
+        val request = com.intellij.diff.requests.SimpleDiffRequest(
+            MpSqlVisualizerBundle.message("panel.diff.dialogTitle"),
+            leftContent,
+            rightContent,
+            MpSqlVisualizerBundle.message("panel.diff.previous"),
+            MpSqlVisualizerBundle.message("panel.diff.current"),
+        )
+        com.intellij.diff.DiffManager.getInstance().showDiff(proj, request)
     }
 
     /** O-4：显示 diff 相关 toast 通知。 */
@@ -690,8 +657,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         batchSelectAllButton = null
         batchSelectNoneButton = null
         paramPanel.removeAll()
-        // O-4：清除差异高亮 + 重置会话缓存
-        editor?.let { DiffHighlighter.clear(it.markupModel) }
+        // O-4：重置会话缓存
         previousSql = null
         releaseEditor()
         editorHolder.removeAll()
