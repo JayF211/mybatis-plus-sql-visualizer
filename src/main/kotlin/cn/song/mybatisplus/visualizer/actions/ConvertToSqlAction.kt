@@ -50,14 +50,17 @@ class ConvertToSqlAction : AnAction() {
         val file = e.getData(CommonDataKeys.PSI_FILE) ?: return
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
 
+        // F-46：当前代码位置（文件名:行号），来源列默认值（XML/Java 共用）
+        val sourceLocation = "${file.name}:${editor.document.getLineNumber(editor.caretModel.offset) + 1}"
+
         // T-M24-04：XML mapper 文件 → 预览光标所在语句（不在语句内 → 首个语句）
         // T-M29.6：选择区优先——选中段落内多条语句时弹选择栏（与 Java 选择区候选交互一致）
         if (file is XmlFile) {
             val selectionModel = editor.selectionModel
             if (selectionModel.hasSelection()) {
-                previewXmlSelection(project, file, editor, selectionModel.selectionStart, selectionModel.selectionEnd)
+                previewXmlSelection(project, file, editor, selectionModel.selectionStart, selectionModel.selectionEnd, sourceLocation)
             } else {
-                previewXmlStatement(project, file, editor)
+                previewXmlStatement(project, file, editor, sourceLocation)
             }
             return
         }
@@ -90,12 +93,12 @@ class ConvertToSqlAction : AnAction() {
                 ApplicationManager.getApplication().invokeLater {
                     when (chainHeads.size) {
                         // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选（0/1/多分发）
-                        0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd)
-                        1 -> preview(service, chainHeads[0], project)
+                        0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd, sourceLocation)
+                        1 -> preview(service, chainHeads[0], project, sourceLocation)
                         else -> SqlSelectionDialog(project, chainHeads, displayTexts) { head ->
                             // T-M23.8：选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
                             locateEditorTo(editor, head)
-                            preview(service, head, project)
+                            preview(service, head, project, sourceLocation)
                         }.show()
                     }
                 }
@@ -113,7 +116,7 @@ class ConvertToSqlAction : AnAction() {
             SqlPreviewService.previewAsync(project, {
                 AnnotationSqlPreviewService.preview(annotation, project)
             }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceLocation)
             }
             return
         }
@@ -124,10 +127,10 @@ class ConvertToSqlAction : AnAction() {
         }) { result ->
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
-                SqlPreviewService.showResult(project, result)
-            } else if (!tryJpaFallback(service, project, element)) {
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            } else if (!tryJpaFallback(service, project, element, sourceLocation)) {
                 // JPA 均未命中（tryJpaFallback 返回 false）→ 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
-                showAnnotationCandidates(project, file, editor)
+                showAnnotationCandidates(project, file, editor, sourceLocation)
             }
             // tryJpaFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
         }
@@ -137,26 +140,26 @@ class ConvertToSqlAction : AnAction() {
      * JPA 三态回落（波次一）：派生查询 / @Query / CriteriaQuery —— 命中任一即触发预览并返回 true。
      * 调用方在返回 true 后立即 return，不再走 MyBatis 注解候选回落。
      */
-    private fun tryJpaFallback(service: SqlPreviewService, project: Project, element: PsiElement): Boolean {
+    private fun tryJpaFallback(service: SqlPreviewService, project: Project, element: PsiElement, sourceLocation: String?): Boolean {
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java, false)
         // 1. JPA 回落：@Query（优先检查——@Query 方法即使方法名匹配派生查询模式，也走 JPQL 路径）
         if (method != null && JpqlQueryLocator.hasQueryAnnotation(method)) {
             SqlPreviewService.previewAsync(project, { service.previewJpql(method) }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceLocation)
             }
             return true
         }
         // 2. JPA 回落：派生查询（无 @Query 的方法名推导）
         if (method != null && DerivedMethodLocator.isDerivedQuery(method)) {
             SqlPreviewService.previewAsync(project, { service.previewDerivedQuery(method) }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceLocation)
             }
             return true
         }
         // 3. JPA 回落：CriteriaQuery
         if (CriteriaQueryLocator.locate(element) != null) {
             SqlPreviewService.previewAsync(project, { service.previewCriteriaQuery(element) }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceLocation)
             }
             return true
         }
@@ -169,7 +172,7 @@ class ConvertToSqlAction : AnAction() {
      * T-M29.6：选中确定后编辑器定位（对齐选择区候选交互）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor) {
+    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor, sourceLocation: String?) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<PsiAnnotation>, List<String>>, Throwable> {
@@ -188,11 +191,11 @@ class ConvertToSqlAction : AnAction() {
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
                 when (annotations.size) {
-                    0 -> SqlPreviewService.showResult(project, null)
-                    1 -> previewAnnotation(project, annotations[0])
+                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    1 -> previewAnnotation(project, annotations[0], sourceLocation)
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
                         locateEditorTo(editor, selected)
-                        previewAnnotation(project, selected)
+                        previewAnnotation(project, selected, sourceLocation)
                     }.show()
                 }
             }
@@ -211,6 +214,7 @@ class ConvertToSqlAction : AnAction() {
         editor: Editor,
         selStart: Int,
         selEnd: Int,
+        sourceLocation: String? = null,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
@@ -230,11 +234,11 @@ class ConvertToSqlAction : AnAction() {
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
                 when (annotations.size) {
-                    0 -> SqlPreviewService.showResult(project, null)
-                    1 -> previewAnnotation(project, annotations[0])
+                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    1 -> previewAnnotation(project, annotations[0], sourceLocation)
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
                         locateEditorTo(editor, selected)
-                        previewAnnotation(project, selected)
+                        previewAnnotation(project, selected, sourceLocation)
                     }.show()
                 }
             }
@@ -242,11 +246,11 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /** 预览单个 SQL 注解（后台转换，EDT 渲染）。 */
-    private fun previewAnnotation(project: Project, annotation: PsiAnnotation) {
+    private fun previewAnnotation(project: Project, annotation: PsiAnnotation, sourceLocation: String?) {
         SqlPreviewService.previewAsync(project, {
             AnnotationSqlPreviewService.preview(annotation, project)
         }) { result ->
-            SqlPreviewService.showResult(project, result)
+            SqlPreviewService.showResult(project, result, sourceLocation)
         }
     }
 
@@ -256,7 +260,7 @@ class ConvertToSqlAction : AnAction() {
      * 摘要/行文本后台 ReadAction 预计算（EDT 慢操作守卫，仿 T-M23.8）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    private fun previewXmlSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int) {
+    private fun previewXmlSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int, sourceLocation: String?) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
@@ -277,12 +281,12 @@ class ConvertToSqlAction : AnAction() {
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
                 when (tags.size) {
-                    0 -> SqlPreviewService.showResult(project, null)
-                    1 -> previewXml(project, file, tags[0])
+                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    1 -> previewXml(project, file, tags[0], sourceLocation)
                     else -> SqlSelectionDialog(project, tags, displayTexts) { selected ->
                         // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
                         locateEditorTo(editor, selected)
-                        previewXml(project, file, selected)
+                        previewXml(project, file, selected, sourceLocation)
                     }.show()
                 }
             }
@@ -294,7 +298,7 @@ class ConvertToSqlAction : AnAction() {
      * 收集全部语句（0/1/多分发，多候选走 [SqlSelectionDialog]，仿 Java 选择区候选交互）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor) {
+    private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor, sourceLocation: String?) {
         val element = file.findElementAt(editor.caretModel.offset)
         val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
         var statement = tag
@@ -302,15 +306,15 @@ class ConvertToSqlAction : AnAction() {
             statement = statement.parentTag
         }
         if (statement != null) {
-            previewXml(project, file, statement)
+            previewXml(project, file, statement, sourceLocation)
             return
         }
         // 光标不在语句内 → 全部语句候选（T-M25-01）
         val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
             .filter { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
         when (statements.size) {
-            0 -> SqlPreviewService.showResult(project, null)
-            1 -> previewXml(project, file, statements[0])
+            0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+            1 -> previewXml(project, file, statements[0], sourceLocation)
             else -> {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     // EDT 慢操作守卫：摘要/行文本后台 ReadAction 预计算（仿 T-M23.8 Java 候选）
@@ -331,13 +335,13 @@ class ConvertToSqlAction : AnAction() {
                     }
                     ApplicationManager.getApplication().invokeLater {
                         if (displayTexts.size != statements.size) {
-                            SqlPreviewService.showResult(project, null)
+                            SqlPreviewService.showResult(project, null, sourceLocation)
                             return@invokeLater
                         }
                         SqlSelectionDialog(project, statements, displayTexts) { selected ->
                             // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
                             locateEditorTo(editor, selected)
-                            previewXml(project, file, selected)
+                            previewXml(project, file, selected, sourceLocation)
                         }.show()
                     }
                 }
@@ -346,7 +350,7 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
-    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag) {
+    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
         SqlPreviewService.previewAsync(project, {
             // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
             // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
@@ -356,14 +360,14 @@ class ConvertToSqlAction : AnAction() {
             }
             XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
         }) { result ->
-            SqlPreviewService.showResult(project, result)
+            SqlPreviewService.showResult(project, result, sourceLocation)
         }
     }
 
     /** 预览单个链首调用（后台转换，EDT 渲染）。 */
-    private fun preview(service: SqlPreviewService, anchor: PsiElement, project: Project) {
+    private fun preview(service: SqlPreviewService, anchor: PsiElement, project: Project, sourceLocation: String?) {
         SqlPreviewService.previewAsync(project, { service.preview(anchor) }) { result ->
-            SqlPreviewService.showResult(project, result)
+            SqlPreviewService.showResult(project, result, sourceLocation)
         }
     }
 

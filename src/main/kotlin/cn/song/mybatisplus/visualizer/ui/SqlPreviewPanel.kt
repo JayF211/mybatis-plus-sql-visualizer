@@ -19,9 +19,8 @@ import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
@@ -47,9 +46,7 @@ import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
-import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
@@ -92,8 +89,8 @@ import javax.swing.event.DocumentListener
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
  *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 单行多行切换 / 刷新）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
- *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ `LexerEditorHighlighter` 语法高亮；
- *    文档由 `SqlPreviewLanguage` 的 PSI 文件支撑，挂 [SqlCompletionContributor] 提供补全（Ctrl+Space）
+ *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
+ *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
  *  - 补全上下文（表名/列名）双载体传递（[SqlCompletionContext]）：**Editor userData 优先**（M16.2，
  *    嵌入式编辑器编辑后 PSI 可能被 commit 重建丢失 userData）+ **PSI userData 兜底**
  *
@@ -154,6 +151,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M27.4：渲染 setText 期间抑制自建 autopopup（格式化替换整文档不触发补全）。 */
     private var suppressAutoPopup = false
     private var psiFile: PsiFile? = null
+    /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
+    private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
 
     private var current: PreviewResult? = null
@@ -595,8 +594,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * O-4：使用 IDEA 原生 Diff 对比当前 SQL 与上次预览 SQL。
      * 无上次预览时 toast 提示。
      *
-     * 接入方式：DiffContentFactory 创建两个字符串内容 + SimpleDiffRequest 包装 → DiffManager.showDiff。
-     * 原生 diff 支持行级高亮、同步滚动、折叠相同行、Ctrl+D 快捷键等 IDEA 标准能力。
+     * 接入方式：DiffContentFactory.createEditable() 创建可编辑内容 + SimpleDiffRequest 包装 → DiffManager.showDiff。
+     * 原生 diff 支持 SQL 语法高亮、行级对比、同步滚动、可编辑、F7 跳转差异等 IDEA 标准能力。
      */
     fun showSqlDiff() {
         val proj = project ?: return
@@ -605,11 +604,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             showDiffToast(MpSqlVisualizerBundle.message("preview.diff.noPrevious"))
             return
         }
-        // IDEA 原生 Diff（SQL 文件类型 → 语法高亮 + 行级对比 + 同步滚动）
+        // IDEA 原生 Diff（createEditable → 两侧均可编辑，SQL 文件类型 → 语法高亮）
         val diffContentFactory = com.intellij.diff.DiffContentFactory.getInstance()
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
-        val leftContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.create(proj, oldSql, sqlFileType)
-        val rightContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.create(proj, currentSql, sqlFileType)
+        val leftContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.createEditable(proj, oldSql, sqlFileType)
+        val rightContent: com.intellij.diff.contents.DocumentContent = diffContentFactory.createEditable(proj, currentSql, sqlFileType)
         val request = com.intellij.diff.requests.SimpleDiffRequest(
             MpSqlVisualizerBundle.message("panel.diff.dialogTitle"),
             leftContent,
@@ -717,7 +716,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return sb.toString()
     }
 
-    /** 首次创建：SqlPreviewLanguage PSI 文件 → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
+    /** 首次创建：原生 SQL FileType PSI → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
     private fun createEditor(sql: String) {
         val proj = project
         val created = if (proj != null) {
@@ -734,11 +733,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val ctx = buildCompletionContext()
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
+        // 补全守卫标记（language="SQL" 仅插件编辑器触发）
+        created.putUserData(SqlCompletionContributor.IS_PREVIEW_EDITOR, true)
         (created as EditorEx).apply {
-            highlighter = LexerEditorHighlighter(
-                SqlSyntaxHighlighter(),
-                EditorColorsManager.getInstance().globalScheme,
-            )
+            // 原生 SQL 高亮器（手动设置，因内存 PSI 文件不自动关联）
+            val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+                .getStdFileType("SQL")
+            if (sqlFileType != null) {
+                val sqlHighlighter = com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
+                    .getSyntaxHighlighter(sqlFileType, project, null)
+                if (sqlHighlighter != null) {
+                    highlighter = LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().globalScheme)
+                }
+            }
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
@@ -778,8 +785,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     internal fun createPreviewFileForTest(proj: Project, sql: String): PsiFile {
         return ReadAction.compute<PsiFile, Throwable> {
+            val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+                .getStdFileType("SQL")
             PsiFileFactory.getInstance(proj)
-                .createFileFromText("preview.mpsql", SqlPreviewLanguage, sql)
+                .createFileFromText("preview.sql", fileType, sql)
         }
     }
 
@@ -1683,6 +1692,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun psiFileForTest(): PsiFile? = psiFile
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
+
+    // ------------------------------------------------------------------
+    // F-46：来源位置（来源列默认值）
+    // ------------------------------------------------------------------
+
+    /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
+    fun setSourceLocation(loc: String?) { sourceLocation = loc }
+
+    /** 当前代码位置（文件名:行号），null 表示未知。 */
+    fun currentSourceLocation(): String? = sourceLocation
 
     // ------------------------------------------------------------------
     // O-4：预览弹窗 UX 增强（外部组件访问面板状态）

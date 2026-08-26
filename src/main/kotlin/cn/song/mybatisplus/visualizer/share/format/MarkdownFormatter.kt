@@ -99,15 +99,38 @@ object MarkdownFormatter {
         } else {
             "-"
         }
-        val meta = buildMeta(tableName, dialect, source).joinToString(" ")
+        val sourceText = source ?: "-"
+        val tableText = tableName ?: "-"
+        val dialectText = dialect ?: "-"
+        val timeText = LocalDateTime.now().format(TIMESTAMP_FMT)
 
-        sb.append("| SQL | 参数 | 来源 |\n")
-        sb.append("| --- | --- | --- |\n")
-        sb.append("| `").append(sql.trim().replace("`", "\\`")).append("` | ")
-        sb.append(params.replace("`", "\\`")).append(" | ")
-        sb.append(meta.replace("|", "\\|")).append(" |")
+        sb.append("| 来源 | SQL | 参数 | 表 | 方言 | 时间 |\n")
+        sb.append("| --- | --- | --- | --- | --- | --- |\n")
+        sb.append("| ").append(escapeForMdTable(sourceText)).append(" | ")
+        sb.append(escapeForMdTable(sql.trim())).append(" | ")
+        sb.append(escapeForMdTable(params)).append(" | ")
+        sb.append(escapeForMdTable(tableText)).append(" | ")
+        sb.append(escapeForMdTable(dialectText)).append(" | ")
+        sb.append(escapeForMdTable(timeText)).append(" |")
 
         return sb.toString()
+    }
+
+    /**
+     * 转义 Markdown 表格单元格内容：
+     * - 换行符 → [br]（保持可读性同时不破坏表格结构）
+     * - ` → \`（避免提前关闭 code span）
+     * - | → \|（避免被误认为列分隔符）
+     * - \ → \\（优先处理，避免重复转义）
+     */
+    private fun escapeForMdTable(text: String): String {
+        return text
+            .replace("\\", "\\\\")
+            .replace("`", "\\`")
+            .replace("|", "\\|")
+            .replace("\r\n", "<br>")
+            .replace("\n", "<br>")
+            .replace("\r", "<br>")
     }
 
     /** 构建元信息片段列表（过滤 null/空）。 */
