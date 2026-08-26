@@ -16,7 +16,6 @@ import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.MessageDialogBuilder
-import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.TitledSeparator
@@ -25,7 +24,6 @@ import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import java.awt.Component
-import java.awt.Container
 import java.awt.Dialog
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -243,33 +241,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
     private val updateSection = UpdateSection(settings)
 
-    /** 搜索框（Phase 3：实时过滤配置项）。使用 SearchTextField 避免 placeholder 被 collectTextFieldEmptyTexts 计入。 */
-    private val searchField = SearchTextField().apply {
-        text = ""
-        toolTipText = MpSqlVisualizerBundle.message("settings.search.placeholder")
-        // SearchTextField 通过 JTextField.placeholderText 客户端属性显示提示（非 emptyText），
-        // collectTextFieldEmptyTexts 只收集 JBTextField.emptyText，故此提示不计入 placeholder 数量
-        textEditor.putClientProperty("JTextField.placeholderText", MpSqlVisualizerBundle.message("settings.search.placeholder"))
-    }
-
-    /** 可折叠面板引用列表（用于搜索过滤）。 */
-    private val collapsiblePanelRefs = mutableListOf<CollapsiblePanelRef>()
-
-    /** 可折叠面板元数据（用于搜索过滤）。 */
-    private data class CollapsiblePanelRef(
-        val groupId: String,
-        val wrapper: JPanel,
-        val contentPanel: JPanel,
-        val toggle: JButton,
-        val defaultExpanded: Boolean,
-        val rows: MutableList<RowRef>,
-    )
-
-    /** 行元数据（用于搜索过滤）。 */
-    private data class RowRef(
-        val label: JBLabel,
-        val component: JComponent,
-    )
+    // 搜索框已移至主设置页面（PluginSettingsFolderConfigurable）
 
     private val rootPanel: JPanel = JPanel(GridBagLayout()).apply {
         border = JBUI.Borders.empty(8, 10, 8, 10)
@@ -283,12 +255,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
         buildSections(rootPanel)
         reset()
         refreshCacheInfo()
-        // Phase 3：搜索框实时过滤
-        searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = filterRows(searchField.text)
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = filterRows(searchField.text)
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = filterRows(searchField.text)
-        })
         // M19（用户实测：设置切语言确定后重开仍原样——平台 Settings 框架 OK 仅对「当前选中页」且
         // isModified()==true 的 configurable 调用 apply()，改完语言切到其他页再确定即被静默跳过；
         // M16.3 roaming 修复只覆盖磁盘持久化链路）：
@@ -331,47 +297,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gbc.gridy++
         }
 
-        /** 可折叠面板：标题行（toggle 按钮 + 标题）+ 内容面板（可显隐）。 */
-        fun collapsiblePanel(
+        /** 分隔线 + 内容面板（无边框、无折叠）。 */
+        fun sectionGroup(
             titleKey: String,
-            groupId: String,
-            defaultExpanded: Boolean = true,
             content: (JPanel, GridBagConstraints) -> Unit,
         ) {
-            val expanded = groupId !in settings.state.collapsedGroups
-            val contentPanel = JPanel(GridBagLayout()).apply { isVisible = expanded }
+            val contentPanel = JPanel(GridBagLayout())
             val inner = GridBagConstraints().apply {
                 gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
             }
             content(contentPanel, inner)
-
-            // 注册到可折叠面板列表（用于搜索过滤）
-            val rowRefs = mutableListOf<RowRef>()
-            val ref = CollapsiblePanelRef(groupId, JPanel(BorderLayout(0, 4)), contentPanel,
-                JButton(if (expanded) "▼" else "▶"), defaultExpanded, rowRefs)
-            collapsiblePanelRefs.add(ref)
-
-            // 递归扫描内容面板中的 (JBLabel, JComponent) 对，注册为行引用
-            fun scanRows(container: Container) {
-                val comps = container.components
-                var i = 0
-                while (i < comps.size - 1) {
-                    val left = comps[i]
-                    val right = comps[i + 1]
-                    if (left is JBLabel && right is JComponent) {
-                        rowRefs.add(RowRef(left, right))
-                        i += 2
-                    } else {
-                        if (left is Container) scanRows(left)
-                        i++
-                    }
-                }
-                if (comps.isNotEmpty()) {
-                    val last = comps.last()
-                    if (last is Container) scanRows(last)
-                }
-            }
-            scanRows(contentPanel)
 
             // 计算内容区标签最大宽度，统一列宽
             val layout = contentPanel.layout as GridBagLayout
@@ -385,55 +320,22 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 layout.columnWidths = intArrayOf(maxLabelWidth + 8, 0)
             }
 
-            val toggle = ref.toggle.apply {
-                isContentAreaFilled = false
-                isBorderPainted = false
-                isFocusPainted = false
-                toolTipText = MpSqlVisualizerBundle.message(titleKey)
-                addActionListener {
-                    val show = !contentPanel.isVisible
-                    contentPanel.isVisible = show
-                    text = if (show) "▼" else "▶"
-                    settings.state.collapsedGroups = if (show)
-                        settings.state.collapsedGroups.apply { remove(groupId) }
-                    else settings.state.collapsedGroups.apply { add(groupId) }
-                    panel.revalidate(); panel.repaint()
-                }
-            }
-            val titlePanel = JPanel(BorderLayout(6, 0)).apply {
-                isOpaque = false
-                add(toggle, BorderLayout.WEST)
-                add(TitledSeparator(MpSqlVisualizerBundle.message(titleKey)), BorderLayout.CENTER)
-            }
-            val wrapper = ref.wrapper.apply {
-                isOpaque = false
-                border = JBUI.Borders.customLine(java.awt.Color(0xC0C0C0.toInt()), 1, 1, 1, 1)
-                add(titlePanel, BorderLayout.NORTH)
-                add(contentPanel, BorderLayout.CENTER)
-            }
+            // 分隔线（仅横线，无边框）
             gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
             gbc.fill = GridBagConstraints.HORIZONTAL
-            panel.add(wrapper, gbc)
+            panel.add(TitledSeparator(MpSqlVisualizerBundle.message(titleKey)), gbc)
             gbc.gridy++
-        }
 
-        // 搜索框（Phase 3：实时过滤）—— 仅在全部模式下显示
-        if (sections == SECTION_ALL) {
-            collapsiblePanelRefs.clear()
+            // 内容面板
             gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
             gbc.fill = GridBagConstraints.HORIZONTAL
-            val searchPanel = JPanel(BorderLayout(6, 0)).apply {
-                isOpaque = false
-                border = JBUI.Borders.empty(2, 6, 6, 6)
-                add(searchField, BorderLayout.CENTER)
-            }
-            panel.add(searchPanel, gbc)
+            panel.add(contentPanel, gbc)
             gbc.gridy++
         }
 
         // 组 1：SQL 预览（默认展开）
         if (SECTION_PREVIEW in sections) {
-            collapsiblePanel("settings.section.preview", "preview", defaultExpanded = true) { p, g ->
+            sectionGroup("settings.section.preview") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
                 addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
                 addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
@@ -464,7 +366,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
         // 组 2：表名映射（默认折叠）
         if (SECTION_TABLE_MAPPING in sections) {
-            collapsiblePanel("settings.section.tableMapping", "tableMapping", defaultExpanded = false) { p, g ->
+            sectionGroup("settings.section.tableMapping") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
                 })
@@ -494,7 +396,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
         // 组 3：代码生成（默认折叠）
         if (SECTION_CODE_GEN in sections) {
-            collapsiblePanel("settings.section.codeGen", "codeGen", defaultExpanded = false) { p, g ->
+            sectionGroup("settings.section.codeGen") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
                     model = DefaultComboBoxModel(reverseFormatOptions())
                     toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
@@ -510,7 +412,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
         // 组 4：SQL 日志（默认折叠，内分 3 Tab）
         if (SECTION_SQL_LOG in sections) {
-            collapsiblePanel("settings.section.sqlLog", "sqlLog", defaultExpanded = false) { p, _ ->
+            sectionGroup("settings.section.sqlLog") { p, _ ->
                 val tabPane = JTabbedPane()
                 val tabGbc = GridBagConstraints().apply {
                     gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
@@ -662,7 +564,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
         // 组 5：界面与操作（默认展开）
         if (SECTION_UI in sections) {
-            collapsiblePanel("settings.section.ui", "ui", defaultExpanded = true) { p, g ->
+            sectionGroup("settings.section.ui") { p, g ->
                 addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
                     model = DefaultComboBoxModel(languageOptions())
@@ -676,7 +578,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
         // 组 6：更新与诊断（默认折叠）
         if (SECTION_UPDATE_DIAGNOSTICS in sections) {
-            collapsiblePanel("settings.section.updateDiagnostics", "updateDiagnostics", defaultExpanded = false) { p, g ->
+            sectionGroup("settings.section.updateDiagnostics") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.cache.label"),
                     JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                         isOpaque = false
@@ -733,47 +635,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * - 非空搜索框：隐藏不匹配的行，展开包含匹配行的折叠面板。
      * 匹配范围：行标签文本 + 组件 tooltip。
      */
-    private fun filterRows(query: String) {
-        val q = query.trim().lowercase()
-        if (q.isEmpty()) {
-            // 恢复全部可见 + 恢复折叠状态
-            for (ref in collapsiblePanelRefs) {
-                for (row in ref.rows) {
-                    row.label.isVisible = true
-                    row.component.isVisible = true
-                }
-                ref.contentPanel.isVisible = ref.groupId !in settings.state.collapsedGroups
-                ref.toggle.text = if (ref.contentPanel.isVisible) "▼" else "▶"
-                ref.wrapper.isVisible = true
-            }
-            rootPanel.revalidate(); rootPanel.repaint()
-            return
-        }
-
-        // 过滤模式
-        for (ref in collapsiblePanelRefs) {
-            var panelHasMatch = false
-            for (row in ref.rows) {
-                val labelText = row.label.text.lowercase()
-                val compBtnText = (row.component as? javax.swing.AbstractButton)?.text?.lowercase() ?: ""
-                val tooltip = row.label.toolTipText?.lowercase() ?: ""
-                val compTooltip = row.component.toolTipText?.lowercase() ?: ""
-                val matches = labelText.contains(q) || compBtnText.contains(q) || tooltip.contains(q) || compTooltip.contains(q)
-                row.label.isVisible = matches
-                row.component.isVisible = matches
-                if (matches) panelHasMatch = true
-            }
-            ref.wrapper.isVisible = panelHasMatch
-            // 匹配的面板自动展开（同步更新 collapsedGroups）
-            if (panelHasMatch && !ref.contentPanel.isVisible) {
-                ref.contentPanel.isVisible = true
-                ref.toggle.text = "▼"
-                settings.state.collapsedGroups = settings.state.collapsedGroups.apply { remove(ref.groupId) }
-            }
-        }
-        rootPanel.revalidate(); rootPanel.repaint()
-    }
-
     /**
      * 快捷键内嵌编辑行（M14.1）：只读显示当前快捷键 + 「修改」按钮弹出录制对话框，
      * 捕获按键组合后回填（保存时由 [PluginSettingsPanel.apply] 写入 Keymap）。
