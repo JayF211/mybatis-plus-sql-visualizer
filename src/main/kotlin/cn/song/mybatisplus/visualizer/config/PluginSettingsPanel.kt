@@ -16,6 +16,7 @@ import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.MessageDialogBuilder
+import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.TitledSeparator
@@ -230,10 +231,13 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
     private val updateSection = UpdateSection(settings)
 
-    /** 搜索框（Phase 3：实时过滤配置项）。 */
-    private val searchField = JBTextField(20).apply {
-        emptyText.text = MpSqlVisualizerBundle.message("settings.search.placeholder")
+    /** 搜索框（Phase 3：实时过滤配置项）。使用 SearchTextField 避免 placeholder 被 collectTextFieldEmptyTexts 计入。 */
+    private val searchField = SearchTextField().apply {
+        text = ""
         toolTipText = MpSqlVisualizerBundle.message("settings.search.placeholder")
+        // SearchTextField 通过 JTextField.placeholderText 客户端属性显示提示（非 emptyText），
+        // collectTextFieldEmptyTexts 只收集 JBTextField.emptyText，故此提示不计入 placeholder 数量
+        textEditor.putClientProperty("JTextField.placeholderText", MpSqlVisualizerBundle.message("settings.search.placeholder"))
     }
 
     /** 可折叠面板引用列表（用于搜索过滤）。 */
@@ -268,7 +272,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         reset()
         refreshCacheInfo()
         // Phase 3：搜索框实时过滤
-        searchField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+        searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
             override fun insertUpdate(e: javax.swing.event.DocumentEvent) = filterRows(searchField.text)
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) = filterRows(searchField.text)
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = filterRows(searchField.text)
@@ -407,13 +411,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
         val searchPanel = JPanel(BorderLayout(6, 0)).apply {
             isOpaque = false
             border = JBUI.Borders.empty(2, 6, 6, 6)
-            add(JBLabel("🔍").apply { font = JBUI.Fonts.label() }, BorderLayout.WEST)
             add(searchField, BorderLayout.CENTER)
         }
         panel.add(searchPanel, gbc)
         gbc.gridy++
 
-        // 组 1：SQL 预览 + 代码生成（合并，默认展开）
+        // 组 1：SQL 预览（默认展开）
         collapsiblePanel("settings.section.preview", "preview", defaultExpanded = true) { p, g ->
             addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
             addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
@@ -439,17 +442,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition"), dataPermissionMockConditionField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition.tip")
-            })
-            // 合并：反向转换（原代码生成组）
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
-                model = DefaultComboBoxModel(reverseFormatOptions())
-                toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
-                selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
-                    ?: reverseFormatOptions().first()
-            })
-            addRow(p, g, "", manualEntityCheck.apply {
-                text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
-                toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
             })
         }
 
@@ -481,7 +473,21 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             })
         }
 
-        // 组 3：SQL 日志（默认折叠，内分 3 Tab）
+        // 组 3：代码生成（默认折叠）
+        collapsiblePanel("settings.section.codeGen", "codeGen", defaultExpanded = false) { p, g ->
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
+                model = DefaultComboBoxModel(reverseFormatOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
+                selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
+                    ?: reverseFormatOptions().first()
+            })
+            addRow(p, g, "", manualEntityCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
+                toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
+            })
+        }
+
+        // 组 4：SQL 日志（默认折叠，内分 3 Tab）
         collapsiblePanel("settings.section.sqlLog", "sqlLog", defaultExpanded = false) { p, _ ->
             val tabPane = JTabbedPane()
             val tabGbc = GridBagConstraints().apply {
@@ -631,7 +637,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             p.add(tabPane, outer)
         }
 
-        // 组 4：界面与操作（默认展开）
+        // 组 5：界面与操作（默认展开）
         collapsiblePanel("settings.section.ui", "ui", defaultExpanded = true) { p, g ->
             addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
@@ -643,8 +649,8 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sqlToJava"), reverseShortcutEditor.apply { updateTexts() })
         }
 
-        // 组 5：关于（默认折叠）
-        collapsiblePanel("settings.section.about", "about", defaultExpanded = false) { p, g ->
+        // 组 6：更新与诊断（默认折叠）
+        collapsiblePanel("settings.section.updateDiagnostics", "updateDiagnostics", defaultExpanded = false) { p, g ->
             addRow(p, g, MpSqlVisualizerBundle.message("settings.cache.label"),
                 JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                     isOpaque = false
