@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ShowSettingsUtil
@@ -11,26 +12,34 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Cursor
+import java.awt.Dimension
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Insets
 import java.awt.event.MouseEvent
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
+import javax.swing.Icon
 import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
+import javax.swing.SwingConstants
+import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
 /**
  * 设置页主页面（左侧树导航的父节点）。
  *
- * 显示搜索栏 + 子设置页面列表（点击跳转），参考 IDEA 原生设置风格。
- * 搜索支持：
- *  - 搜索子页面名称 → 点击跳转到对应子页面
- *  - 搜索子页面内容 → 显示匹配的设置项预览，点击定位到具体设置项
+ * 参考 IDEA 原生设置风格：
+ *  - 顶部搜索栏
+ *  - 子页面列表（图标 + 名称 + 描述）
+ *  - 搜索时显示匹配的设置项（名称 + 所属页面 + 当前值预览）
  */
 class PluginSettingsFolderConfigurable : Configurable {
 
@@ -45,18 +54,16 @@ class PluginSettingsFolderConfigurable : Configurable {
 
         list.cellRenderer = SearchItemRenderer()
         list.selectionMode = ListSelectionModel.SINGLE_SELECTION
+        list.fixedCellHeight = 56  // 固定行高，匹配 IDEA 风格
 
-        // 点击跳转（双击或单击）
+        // 点击跳转
         object : DoubleClickListener() {
             override fun onDoubleClick(e: MouseEvent): Boolean {
-                val selected = list.selectedValue ?: return false
-                navigateTo(selected)
+                list.selectedValue?.let { navigateTo(it) }
                 return true
             }
-
             override fun onSingleClick(e: MouseEvent): Boolean {
-                val selected = list.selectedValue ?: return false
-                navigateTo(selected)
+                list.selectedValue?.let { navigateTo(it) }
                 return true
             }
         }.installOn(list)
@@ -70,7 +77,7 @@ class PluginSettingsFolderConfigurable : Configurable {
 
         // 搜索面板
         val searchPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(8, 12, 4, 12)
+            border = JBUI.Borders.empty(10, 16, 6, 16)
             add(searchField, BorderLayout.CENTER)
         }
 
@@ -93,9 +100,8 @@ class PluginSettingsFolderConfigurable : Configurable {
         listModel.removeAllElements()
 
         if (q.isEmpty()) {
-            // 空搜索：只显示子页面
             for (page in SUB_PAGES) {
-                listModel.addItem(SearchItem.PageItem(page.labelKey, page.configurableClass))
+                listModel.addElement(SearchItem.PageItem(page.labelKey, page.descKey, page.icon, page.configurableClass))
             }
             return
         }
@@ -103,9 +109,10 @@ class PluginSettingsFolderConfigurable : Configurable {
         // 1) 匹配的子页面
         val matchedPages = SUB_PAGES.filter {
             MpSqlVisualizerBundle.message(it.labelKey).lowercase().contains(q)
+                || MpSqlVisualizerBundle.message(it.descKey).lowercase().contains(q)
         }
         for (page in matchedPages) {
-            listModel.addItem(SearchItem.PageItem(page.labelKey, page.configurableClass))
+            listModel.addElement(SearchItem.PageItem(page.labelKey, page.descKey, page.icon, page.configurableClass))
         }
 
         // 2) 匹配的设置项内容
@@ -113,8 +120,9 @@ class PluginSettingsFolderConfigurable : Configurable {
             val label = field.searchLabel.lowercase()
             val tooltip = field.searchTooltip.lowercase()
             if (label.contains(q) || tooltip.contains(q)) {
-                listModel.addItem(SearchItem.FieldItem(
+                listModel.addElement(SearchItem.FieldItem(
                     fieldLabel = field.searchLabel,
+                    fieldTooltip = field.searchTooltip,
                     pageLabelKey = field.pageLabelKey,
                     configurableClass = field.configurableClass,
                 ))
@@ -122,24 +130,14 @@ class PluginSettingsFolderConfigurable : Configurable {
         }
     }
 
-    /**
-     * 导航到搜索结果项。
-     * 子页面 → 在同一对话框内切换到对应页面
-     * 设置项 → 切换到对应页面并高亮
-     */
     private fun navigateTo(item: SearchItem) {
-        when (item) {
-            is SearchItem.PageItem -> navigateToPage(item.configurableClass)
-            is SearchItem.FieldItem -> navigateToPage(item.configurableClass)
-        }
+        navigateToPage(item.configurableClass)
     }
 
     /**
      * 在同一对话框内导航到指定子页面。
-     * 使用 showSettingsDialog 复用已打开的对话框（IDEA 平台原生行为）。
      */
     private fun navigateToPage(configurableClass: Class<out Configurable>) {
-        // 从当前组件获取项目（确保与当前对话框的项目一致）
         val project = com.intellij.openapi.actionSystem.DataManager.getInstance()
             .getDataContext(searchField)
             .getData(CommonDataKeys.PROJECT)
@@ -155,21 +153,28 @@ class PluginSettingsFolderConfigurable : Configurable {
 
     /** 搜索结果项 */
     private sealed class SearchItem {
+        abstract val configurableClass: Class<out Configurable>
+
         data class PageItem(
             val labelKey: String,
-            val configurableClass: Class<out Configurable>,
+            val descKey: String,
+            val icon: Icon,
+            override val configurableClass: Class<out Configurable>,
         ) : SearchItem()
 
         data class FieldItem(
             val fieldLabel: String,
+            val fieldTooltip: String,
             val pageLabelKey: String,
-            val configurableClass: Class<out Configurable>,
+            override val configurableClass: Class<out Configurable>,
         ) : SearchItem()
     }
 
     /** 子页面描述 */
     private data class SubPageDesc(
         val labelKey: String,
+        val descKey: String,
+        val icon: Icon,
         val configurableClass: Class<out Configurable>,
     )
 
@@ -181,7 +186,11 @@ class PluginSettingsFolderConfigurable : Configurable {
         val configurableClass: Class<out Configurable>,
     )
 
-    /** 列表渲染器 */
+    /**
+     * 列表渲染器 — 参考 IDEA 原生设置风格。
+     * 子页面：图标 + 名称（粗体）+ 描述（灰色小字）
+     * 设置项：图标 + 名称 + 所属页面路径
+     */
     private inner class SearchItemRenderer : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
             list: JList<*>?,
@@ -190,114 +199,203 @@ class PluginSettingsFolderConfigurable : Configurable {
             isSelected: Boolean,
             cellHasFocus: Boolean,
         ): Component {
-            val item = value as? SearchItem ?: return super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+            val item = value as? SearchItem
+                ?: return super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
 
-            val (text, icon) = when (item) {
-                is SearchItem.PageItem -> {
-                    val name = MpSqlVisualizerBundle.message(item.labelKey)
-                    "📁 $name" to null
-                }
-                is SearchItem.FieldItem -> {
-                    val pageName = MpSqlVisualizerBundle.message(item.pageLabelKey)
-                    "🔍 ${item.fieldLabel}  →  $pageName" to null
-                }
+            val bg = if (isSelected) list?.selectionBackground else list?.background
+            val fg = if (isSelected) list?.selectionForeground else list?.foreground
+
+            return when (item) {
+                is SearchItem.PageItem -> renderPageItem(item, bg, fg, isSelected)
+                is SearchItem.FieldItem -> renderFieldItem(item, bg, fg, isSelected)
             }
+        }
 
-            val label = JBLabel(text).apply {
-                border = JBUI.Borders.empty(6, 12)
-                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                if (isSelected) {
-                    background = list?.selectionBackground
-                    foreground = list?.selectionForeground
-                } else {
-                    background = list?.background
-                    foreground = list?.foreground
-                }
+        private fun renderPageItem(
+            item: SearchItem.PageItem,
+            bg: java.awt.Color?,
+            fg: java.awt.Color?,
+            isSelected: Boolean,
+        ): Component {
+            val panel = JPanel(GridBagLayout()).apply {
+                background = bg
                 isOpaque = true
+                border = EmptyBorder(JBUI.insets(8, 16))
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             }
-            return label
+
+            // 图标
+            val iconLabel = JBLabel(item.icon).apply {
+                border = EmptyBorder(JBUI.insetsRight(12))
+            }
+
+            // 名称 + 描述
+            val name = MpSqlVisualizerBundle.message(item.labelKey)
+            val desc = MpSqlVisualizerBundle.message(item.descKey)
+
+            val textPanel = JPanel(GridBagLayout()).apply {
+                isOpaque = false
+            }
+
+            val nameLabel = JBLabel(name).apply {
+                font = JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD)
+                foreground = fg
+            }
+
+            val descLabel = JBLabel(desc).apply {
+                font = JBUI.Fonts.smallFont()
+                foreground = if (isSelected) fg else UIUtil.getContextHelpForeground()
+            }
+
+            textPanel.add(nameLabel, GridBagConstraints().apply {
+                gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+            })
+            textPanel.add(descLabel, GridBagConstraints().apply {
+                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets = Insets(2, 0, 0, 0)
+            })
+
+            panel.add(iconLabel, GridBagConstraints().apply {
+                gridx = 0; gridy = 0; anchor = GridBagConstraints.NORTHWEST
+            })
+            panel.add(textPanel, GridBagConstraints().apply {
+                gridx = 1; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+            })
+
+            return panel
+        }
+
+        private fun renderFieldItem(
+            item: SearchItem.FieldItem,
+            bg: java.awt.Color?,
+            fg: java.awt.Color?,
+            isSelected: Boolean,
+        ): Component {
+            val panel = JPanel(GridBagLayout()).apply {
+                background = bg
+                isOpaque = true
+                border = EmptyBorder(JBUI.insets(8, 16))
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            }
+
+            // 图标
+            val iconLabel = JBLabel(AllIcons.Actions.Search).apply {
+                border = EmptyBorder(JBUI.insetsRight(12))
+            }
+
+            // 字段名 + 所属页面
+            val pageName = MpSqlVisualizerBundle.message(item.pageLabelKey)
+
+            val textPanel = JPanel(GridBagLayout()).apply {
+                isOpaque = false
+            }
+
+            val fieldLabel = JBLabel(item.fieldLabel).apply {
+                font = JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD)
+                foreground = fg
+            }
+
+            val pathLabel = JBLabel(pageName).apply {
+                font = JBUI.Fonts.smallFont()
+                foreground = if (isSelected) fg else UIUtil.getContextHelpForeground()
+            }
+
+            textPanel.add(fieldLabel, GridBagConstraints().apply {
+                gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+            })
+            textPanel.add(pathLabel, GridBagConstraints().apply {
+                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets = Insets(2, 0, 0, 0)
+            })
+
+            panel.add(iconLabel, GridBagConstraints().apply {
+                gridx = 0; gridy = 0; anchor = GridBagConstraints.NORTHWEST
+            })
+            panel.add(textPanel, GridBagConstraints().apply {
+                gridx = 1; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+            })
+
+            return panel
         }
     }
 
     companion object {
         private val SUB_PAGES = listOf(
-            SubPageDesc("settings.section.preview", SqlPreviewConfigurable::class.java),
-            SubPageDesc("settings.section.tableMapping", TableMappingConfigurable::class.java),
-            SubPageDesc("settings.section.sqlLog", SqlLogConfigurable::class.java),
-            SubPageDesc("settings.section.ui", UiActionsConfigurable::class.java),
-            SubPageDesc("settings.section.about", AboutConfigurable::class.java),
+            SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.ConfigFile, SqlPreviewConfigurable::class.java),
+            SubPageDesc("settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables, TableMappingConfigurable::class.java),
+            SubPageDesc("settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console, SqlLogConfigurable::class.java),
+            SubPageDesc("settings.section.ui", "settings.section.ui.desc", AllIcons.Nodes.Plugin, UiActionsConfigurable::class.java),
+            SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.About, AboutConfigurable::class.java),
         )
 
-        /** 所有可搜索的设置项字段（label + tooltip + 所属页面） */
+        /** 所有可搜索的设置项字段 */
         private val ALL_SEARCHABLE_FIELDS = buildSearchableFields()
 
         private fun buildSearchableFields(): List<SearchableField> {
             val fields = mutableListOf<SearchableField>()
-            val bundle = MpSqlVisualizerBundle
+            val b = MpSqlVisualizerBundle
 
             // SQL 预览
-            val previewClass = SqlPreviewConfigurable::class.java
-            fields.add(SearchableField(bundle.message("settings.dialect"), "", "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.replaceParams"), bundle.message("settings.replaceParams"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.formatSql"), bundle.message("settings.formatSql"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.injectLogicDelete"), bundle.message("settings.injectLogicDelete"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.logicDeleteValue"), bundle.message("settings.logicDeleteValue.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.injectTenantLine"), bundle.message("settings.injectTenantLine"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.tenantColumnName"), bundle.message("settings.tenantColumnName.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.tenantColumnDefault"), bundle.message("settings.tenantColumnDefault.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.injectTenantOnInsert"), bundle.message("settings.injectTenantOnInsert.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.dataPermissionHint"), bundle.message("settings.dataPermissionHint.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.dataPermissionMockCondition"), bundle.message("settings.dataPermissionMockCondition.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.reverseWrapperFormat"), bundle.message("settings.reverseWrapperFormat.tip"), "settings.section.preview", previewClass))
-            fields.add(SearchableField(bundle.message("settings.reverseManualEntitySelection"), bundle.message("settings.reverseManualEntitySelection.tip"), "settings.section.preview", previewClass))
+            val p = SqlPreviewConfigurable::class.java
+            fields.add(SearchableField(b.message("settings.dialect"), "", "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.replaceParams"), b.message("settings.replaceParams"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.formatSql"), b.message("settings.formatSql"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.injectLogicDelete"), b.message("settings.injectLogicDelete"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.logicDeleteValue"), b.message("settings.logicDeleteValue.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.injectTenantLine"), b.message("settings.injectTenantLine"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.tenantColumnName"), b.message("settings.tenantColumnName.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.tenantColumnDefault"), b.message("settings.tenantColumnDefault.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.injectTenantOnInsert"), b.message("settings.injectTenantOnInsert.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.dataPermissionHint"), b.message("settings.dataPermissionHint.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.dataPermissionMockCondition"), b.message("settings.dataPermissionMockCondition.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.reverseWrapperFormat"), b.message("settings.reverseWrapperFormat.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.reverseManualEntitySelection"), b.message("settings.reverseManualEntitySelection.tip"), "settings.section.preview", p))
 
             // 表名映射
-            val tableClass = TableMappingConfigurable::class.java
-            fields.add(SearchableField(bundle.message("settings.tablePrefix"), bundle.message("settings.tablePrefix.tip"), "settings.section.tableMapping", tableClass))
-            fields.add(SearchableField(bundle.message("settings.tableSuffix"), bundle.message("settings.tableSuffix.tip"), "settings.section.tableMapping", tableClass))
-            fields.add(SearchableField(bundle.message("settings.removeTablePrefix"), bundle.message("settings.removeTablePrefix.tip"), "settings.section.tableMapping", tableClass))
-            fields.add(SearchableField(bundle.message("settings.removeTableSuffix"), bundle.message("settings.removeTableSuffix.tip"), "settings.section.tableMapping", tableClass))
-            fields.add(SearchableField(bundle.message("settings.ignoredFields"), bundle.message("settings.ignoredFields.tip"), "settings.section.tableMapping", tableClass))
-            fields.add(SearchableField(bundle.message("settings.tableNameInference"), bundle.message("settings.tableNameInference.tip"), "settings.section.tableMapping", tableClass))
+            val t = TableMappingConfigurable::class.java
+            fields.add(SearchableField(b.message("settings.tablePrefix"), b.message("settings.tablePrefix.tip"), "settings.section.tableMapping", t))
+            fields.add(SearchableField(b.message("settings.tableSuffix"), b.message("settings.tableSuffix.tip"), "settings.section.tableMapping", t))
+            fields.add(SearchableField(b.message("settings.removeTablePrefix"), b.message("settings.removeTablePrefix.tip"), "settings.section.tableMapping", t))
+            fields.add(SearchableField(b.message("settings.removeTableSuffix"), b.message("settings.removeTableSuffix.tip"), "settings.section.tableMapping", t))
+            fields.add(SearchableField(b.message("settings.ignoredFields"), b.message("settings.ignoredFields.tip"), "settings.section.tableMapping", t))
+            fields.add(SearchableField(b.message("settings.tableNameInference"), b.message("settings.tableNameInference.tip"), "settings.section.tableMapping", t))
 
             // SQL 日志
-            val logClass = SqlLogConfigurable::class.java
-            fields.add(SearchableField(bundle.message("settings.log.filterBar"), bundle.message("settings.log.filterBar.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.sqlPrefix"), bundle.message("settings.log.sqlPrefix.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.paramPrefix"), bundle.message("settings.log.paramPrefix.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.mixedPrefix"), bundle.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.autoCapture"), "", "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.autoOpen"), "", "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.stopOnToolWindowClose"), "", "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.timestamp"), "", "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.timestampFormat"), bundle.message("settings.log.timestampFormat.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.formatSql"), "", "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.filterKeywords"), bundle.message("settings.log.filterKeywords.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.dedupeWindow"), bundle.message("settings.log.dedupeWindow.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.maxParseLength"), bundle.message("settings.log.maxParseLength.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.maxCount"), bundle.message("settings.log.maxCount.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.timePrefix"), bundle.message("settings.log.timePrefix.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.slowQueryThreshold"), bundle.message("settings.log.slowQueryThreshold.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.hibernate.enabled"), bundle.message("settings.log.hibernate.enabled.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.hibernate.sqlPrefix"), bundle.message("settings.log.hibernate.sqlPrefix.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.hibernate.paramPrefix"), bundle.message("settings.log.hibernate.paramPrefix.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.jdbc"), bundle.message("settings.log.jdbc.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.autoSave"), bundle.message("settings.log.autoSave.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.autoSave.path"), bundle.message("settings.log.autoSave.path.tip"), "settings.section.sqlLog", logClass))
-            fields.add(SearchableField(bundle.message("settings.log.autoSave.pattern"), bundle.message("settings.log.autoSave.pattern.tip"), "settings.section.sqlLog", logClass))
+            val l = SqlLogConfigurable::class.java
+            fields.add(SearchableField(b.message("settings.log.filterBar"), b.message("settings.log.filterBar.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.sqlPrefix"), b.message("settings.log.sqlPrefix.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.paramPrefix"), b.message("settings.log.paramPrefix.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.mixedPrefix"), b.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoCapture"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoOpen"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.stopOnToolWindowClose"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.timestamp"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.timestampFormat"), b.message("settings.log.timestampFormat.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.formatSql"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.filterKeywords"), b.message("settings.log.filterKeywords.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.dedupeWindow"), b.message("settings.log.dedupeWindow.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.maxParseLength"), b.message("settings.log.maxParseLength.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.maxCount"), b.message("settings.log.maxCount.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.timePrefix"), b.message("settings.log.timePrefix.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.slowQueryThreshold"), b.message("settings.log.slowQueryThreshold.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.hibernate.enabled"), b.message("settings.log.hibernate.enabled.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.hibernate.sqlPrefix"), b.message("settings.log.hibernate.sqlPrefix.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.hibernate.paramPrefix"), b.message("settings.log.hibernate.paramPrefix.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.jdbc"), b.message("settings.log.jdbc.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoSave"), b.message("settings.log.autoSave.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoSave.path"), b.message("settings.log.autoSave.path.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoSave.pattern"), b.message("settings.log.autoSave.pattern.tip"), "settings.section.sqlLog", l))
 
             // 界面与操作
-            val uiClass = UiActionsConfigurable::class.java
-            fields.add(SearchableField(bundle.message("settings.showGutterIcon"), "", "settings.section.ui", uiClass))
-            fields.add(SearchableField(bundle.message("settings.language"), "", "settings.section.ui", uiClass))
-            fields.add(SearchableField(bundle.message("settings.shortcut"), bundle.message("settings.shortcut.tip"), "settings.section.ui", uiClass))
-            fields.add(SearchableField(bundle.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", uiClass))
+            val u = UiActionsConfigurable::class.java
+            fields.add(SearchableField(b.message("settings.showGutterIcon"), "", "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", u))
 
             // 关于
-            val aboutClass = AboutConfigurable::class.java
-            fields.add(SearchableField(bundle.message("settings.cache.label"), bundle.message("settings.cache.tip"), "settings.section.about", aboutClass))
-            fields.add(SearchableField(bundle.message("settings.update.versionInfo"), "", "settings.section.about", aboutClass))
-            fields.add(SearchableField(bundle.message("settings.buildNumber"), bundle.message("settings.buildNumber.tip"), "settings.section.about", aboutClass))
+            val a = AboutConfigurable::class.java
+            fields.add(SearchableField(b.message("settings.cache.label"), b.message("settings.cache.tip"), "settings.section.about", a))
+            fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
+            fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 
             return fields
         }
