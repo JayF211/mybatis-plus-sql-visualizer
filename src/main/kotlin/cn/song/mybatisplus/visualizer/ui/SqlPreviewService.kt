@@ -30,6 +30,8 @@ import cn.song.mybatisplus.visualizer.model.SetClause
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import cn.song.mybatisplus.visualizer.model.AssociationInfo
+import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
 import cn.song.mybatisplus.visualizer.model.WrapperType
@@ -37,6 +39,8 @@ import cn.song.mybatisplus.visualizer.psi.BatchOperationConverter
 import cn.song.mybatisplus.visualizer.psi.WrapperCache
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver
+import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.sql.Dialect
@@ -1112,19 +1116,35 @@ class SqlPreviewService(private val project: Project) {
      */
     private fun resolveHqlTable(entityClass: PsiClass?, entityClassName: String?, hql: String): TableInfo? {
         val resolver = JpaEntityResolver()
-        // 路径 1：有 PsiClass 直接解析
-        if (entityClass != null) {
-            return resolver.resolve(entityClass)
-        }
-        // 路径 2：按类名查找 @Entity 类
         val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return null
-        val className = entityClassName ?: extractEntityNameFromHql(hql) ?: return null
-        val scope = com.intellij.psi.search.GlobalSearchScope.allScope(project)
-        // 优先精确匹配全限定名
-        val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project).findClass(className, scope)
-            ?: findClassByShortName(project, className, scope)
-            ?: return null
-        return resolver.resolve(psiClass)
+        val className = entityClassName ?: extractEntityNameFromHql(hql)
+
+        // 路径 1：有 PsiClass 直接解析（JPA 注解）
+        if (entityClass != null) {
+            val table = resolver.resolve(entityClass)
+            if (table != null) return table
+        }
+
+        // 路径 2：按类名查找 @Entity 类（JPA 注解）
+        if (className != null) {
+            val scope = com.intellij.psi.search.GlobalSearchScope.allScope(project)
+            val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project).findClass(className, scope)
+                ?: findClassByShortName(project, className, scope)
+            if (psiClass != null) {
+                val table = resolver.resolve(psiClass)
+                if (table != null) return table
+            }
+        }
+
+        // 路径 3：Hibernate XML 映射文件（.hbm.xml）
+        if (className != null) {
+            val hbmMapping = HbmXmlEntityResolver.resolve(className, project)
+            if (hbmMapping != null) {
+                return convertHbmMappingToTableInfo(hbmMapping)
+            }
+        }
+
+        return null
     }
 
     /**
@@ -1134,6 +1154,35 @@ class SqlPreviewService(private val project: Project) {
     private fun extractEntityNameFromHql(hql: String): String? {
         val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
         return fromPattern.find(hql)?.groupValues?.get(1)
+    }
+
+    /**
+     * 将 HBM XML 映射转换为 TableInfo（供 HqlConverter 使用）。
+     */
+    private fun convertHbmMappingToTableInfo(mapping: HbmXmlMapping.ClassMapping): TableInfo {
+        val columns = mapping.properties.map { prop ->
+            ColumnInfo(
+                fieldName = prop.fieldName,
+                columnName = prop.columnName,
+                isId = prop.isId,
+            )
+        }
+        val associations = mapping.associations.map { assoc ->
+            // 从全限定名提取简单类名作为目标表名（实际应用中应解析目标类的映射）
+            val targetSimpleName = assoc.targetClassName.substringAfterLast('.')
+            AssociationInfo(
+                fieldName = assoc.fieldName,
+                joinColumn = assoc.joinColumn,
+                targetTable = targetSimpleName,
+                targetAlias = targetSimpleName.replaceFirstChar { it.lowercaseChar() },
+            )
+        }
+        return TableInfo(
+            entityClassName = mapping.entityClassName,
+            tableName = mapping.tableName,
+            columns = columns,
+            associations = associations,
+        )
     }
 
     /**
