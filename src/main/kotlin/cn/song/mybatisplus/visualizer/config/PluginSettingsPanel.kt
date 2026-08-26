@@ -393,7 +393,6 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             }
             val wrapper = ref.wrapper.apply {
                 isOpaque = false
-                border = JBUI.Borders.customLine(java.awt.Color(0xC0C0C0.toInt()), 1, 1, 1, 1)
                 add(titlePanel, BorderLayout.NORTH)
                 add(contentPanel, BorderLayout.CENTER)
             }
