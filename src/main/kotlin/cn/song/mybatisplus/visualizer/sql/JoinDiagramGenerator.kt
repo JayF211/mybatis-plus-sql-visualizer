@@ -47,7 +47,7 @@ object JoinDiagramGenerator {
                 columns = pickColumns(stmt.table).map { col ->
                     ColumnEntry(
                         name = col.columnName,
-                        type = col.fieldType,
+                        type = javaTypeToSqlType(col.fieldType),
                         isPk = col.isId,
                     )
                 },
@@ -58,19 +58,20 @@ object JoinDiagramGenerator {
         // JOIN 表 + 关系线
         val usedAliases = mutableSetOf(mainAlias)
         stmt.joins.forEachIndexed { index, join ->
-            val joinAlias = resolveJoinAlias(join.alias, index)
+            val joinAlias = resolveJoinAlias(join, index)
             val uniqueAlias = uniquify(joinAlias, usedAliases)
             usedAliases.add(uniqueAlias)
 
-            // Extract JOIN table columns from ON conditions
             val joinColumns = extractJoinColumns(join, uniqueAlias, stmt)
+            val displayTableName = resolveDisplayTableName(join)
 
             entities.add(
                 EntityNode(
                     alias = uniqueAlias,
-                    tableName = join.tableName,
+                    tableName = displayTableName,
                     columns = joinColumns,
                     isMain = false,
+                    joinType = join.type,
                 ),
             )
 
@@ -98,11 +99,59 @@ object JoinDiagramGenerator {
         }
 
     /**
-     * 解析 JOIN 别名为有效的标识符。
-     * 空字符串时生成默认别名 `t{index+1}`。
+     * 解析 JOIN 别名为有效的 SQL 标识符。
+     *
+     * 优先使用 SQL 别名（纯小写+下划线格式）；
+     * 实体类名（含大写驼峰）fallback 为默认别名 `t{index+1}`。
      */
-    private fun resolveJoinAlias(alias: String, index: Int): String =
-        if (alias.isBlank()) "t${index + 1}" else sanitizeAlias(alias)
+    private fun resolveJoinAlias(join: JoinClause, index: Int): String {
+        val raw = join.alias
+        if (raw.isBlank()) return "t${index + 1}"
+        if (looksLikeSqlAlias(raw)) return sanitizeAlias(raw)
+        return "t${index + 1}"
+    }
+
+    /** 判断别名是否像 SQL 别名（纯小写+下划线+数字，非驼峰）。 */
+    private fun looksLikeSqlAlias(raw: String): Boolean =
+        raw.isNotBlank() && raw.all { it.isLowerCase() || it.isDigit() || it == '_' }
+
+    /**
+     * 解析 JOIN 表的显示名称。
+     * 子查询（tableName 含 SELECT 或以 '(' 开头）显示为 "Subquery"。
+     */
+    private fun resolveDisplayTableName(join: JoinClause): String {
+        val name = join.tableName
+        if (name.isBlank()) return "Subquery"
+        if (name.startsWith("(", ignoreCase = true)) return "Subquery"
+        if (name.contains("SELECT", ignoreCase = true)) return "Subquery"
+        return name
+    }
+
+    /**
+     * Java 字段类型 → SQL 列类型映射。
+     * 用于图中列类型显示（用户期望看到 SQL 类型而非 Java 类型）。
+     */
+    private fun javaTypeToSqlType(javaType: String?): String? {
+        if (javaType == null) return null
+        val simple = javaType.substringAfterLast('.')
+        return when (simple) {
+            "Integer", "int" -> "INT"
+            "Long", "long" -> "BIGINT"
+            "Short", "short" -> "SMALLINT"
+            "Byte", "byte" -> "TINYINT"
+            "Boolean", "boolean" -> "BOOLEAN"
+            "Float", "float" -> "FLOAT"
+            "Double", "double" -> "DOUBLE"
+            "BigDecimal" -> "DECIMAL"
+            "String" -> "VARCHAR"
+            "LocalDate" -> "DATE"
+            "LocalDateTime", "Date", "Timestamp" -> "DATETIME"
+            "LocalTime", "Time" -> "TIME"
+            "byte[]" -> "BLOB"
+            "UUID" -> "CHAR(36)"
+            else -> simple
+        }
+    }
 
     /**
      * 将别名 sanitize 为合法标识符（仅保留字母/数字/下划线，数字开头则加前缀）。
@@ -168,19 +217,18 @@ object JoinDiagramGenerator {
         val columns = mutableListOf<ColumnEntry>()
         val seen = mutableSetOf<String>()
 
-        // Helper: resolve Java type from tableInfo by column name
-        fun typeFromTable(colName: String): String? {
+        // Helper: resolve SQL type from tableInfo by column name
+        fun sqlTypeFromTable(colName: String): String? {
             val fieldType = join.tableInfo?.columns?.firstOrNull { it.columnName == colName }?.fieldType
-            return fieldType?.substringAfterLast('.')?.takeIf { it.isNotEmpty() }
+            return javaTypeToSqlType(fieldType)
         }
 
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (col in stmt.selectColumns) {
             if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
                 seen.add(col.columnName)
-                val javaType = col.type?.substringAfterLast('.')?.takeIf { it.isNotEmpty() }
-                    ?: typeFromTable(col.columnName)
-                columns.add(ColumnEntry(name = col.columnName, type = javaType, isPk = false))
+                val sqlType = javaTypeToSqlType(col.type) ?: sqlTypeFromTable(col.columnName)
+                columns.add(ColumnEntry(name = col.columnName, type = sqlType, isPk = false))
             }
         }
 
@@ -189,11 +237,11 @@ object JoinDiagramGenerator {
             if (cond is Condition.ColumnComparison) {
                 if (cond.right.tableAlias == joinAlias && !seen.contains(cond.right.columnName)) {
                     seen.add(cond.right.columnName)
-                    columns.add(ColumnEntry(name = cond.right.columnName, type = typeFromTable(cond.right.columnName), isPk = false))
+                    columns.add(ColumnEntry(name = cond.right.columnName, type = sqlTypeFromTable(cond.right.columnName), isPk = false))
                 }
                 if (cond.left.tableAlias == joinAlias && !seen.contains(cond.left.columnName)) {
                     seen.add(cond.left.columnName)
-                    columns.add(ColumnEntry(name = cond.left.columnName, type = typeFromTable(cond.left.columnName), isPk = false))
+                    columns.add(ColumnEntry(name = cond.left.columnName, type = sqlTypeFromTable(cond.left.columnName), isPk = false))
                 }
             }
         }
@@ -204,7 +252,7 @@ object JoinDiagramGenerator {
                 for (col in fill.selectColumns) {
                     if (!seen.contains(col.columnName)) {
                         seen.add(col.columnName)
-                        columns.add(ColumnEntry(name = col.columnName, type = typeFromTable(col.columnName), isPk = false))
+                        columns.add(ColumnEntry(name = col.columnName, type = sqlTypeFromTable(col.columnName), isPk = false))
                     }
                 }
             }

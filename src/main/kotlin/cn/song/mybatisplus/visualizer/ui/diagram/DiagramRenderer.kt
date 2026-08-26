@@ -8,6 +8,7 @@ import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Font
 import java.awt.Graphics2D
+import java.awt.Point
 import java.awt.RenderingHints
 import java.awt.font.FontRenderContext
 import java.awt.geom.Path2D
@@ -17,11 +18,11 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * F-xx：JOIN 关系图 Swing 自绘引擎（IDEA 原生 ER 图风格 v3）。
+ * F-1.1：JOIN 关系图 Swing 自绘引擎（IDEA 类图/ER 图风格）。
  *
- * 直接 Graphics2D 渲染（无 2x DPI 超采样），HiDPI 由 Graphics2D.transform 自动处理。
- * 卡片样式：白底 + 细边框 + 投影，列间分隔线，行交替底色。
- * 关系线：深灰 1.5px 粗线 + 实心三角箭头。
+ * 布局：主表居中上方，JOIN 表水平排列在下方（梳状拓扑）。
+ * 连线：正交路由（T 型/梳状），标签紧贴水平段。
+ * 卡片：白底 + 细边框 + 投影，列间分隔线，行交替底色，JOIN 类型标注。
  */
 object DiagramRenderer {
 
@@ -29,7 +30,7 @@ object DiagramRenderer {
     const val HEADER_HEIGHT = 30
     const val ROW_HEIGHT = 22
     const val COLUMN_GAP = 100
-    const val ROW_GAP = 56
+    const val ROW_GAP = 80
     const val MARGIN = 56
     const val CARD_ARC = 6
     const val ARROW_LEN = 9
@@ -39,6 +40,7 @@ object DiagramRenderer {
     const val MAX_TEXT_LEN = 60
     const val TYPE_GAP = 24
     const val KEY_ICON_W = 16
+    const val JOIN_BADGE_PADDING = 6
 
     val SHADOW = JBColor(Color(0x00, 0x00, 0x00, 25), Color(0x00, 0x00, 0x00, 45))
     val CARD_BG = JBColor(Color(0xFF, 0xFF, 0xFF), Color(0x2D, 0x2F, 0x33))
@@ -54,6 +56,8 @@ object DiagramRenderer {
     val LINE_COLOR = JBColor(Color(0x55, 0x55, 0x55), Color(0x77, 0x77, 0x77))
     val LABEL_BG = JBColor(Color(0xFF, 0xFF, 0xFF), Color(0x33, 0x36, 0x3B))
     val LABEL_BORDER = JBColor(Color(0xC0, 0xC0, 0xC0), Color(0x50, 0x53, 0x5A))
+    val JOIN_BADGE_BG = JBColor(Color(0xE8, 0xEA, 0xED), Color(0x3A, 0x3D, 0x42))
+    val JOIN_BADGE_TEXT = JBColor(Color(0x55, 0x55, 0x55), Color(0x99, 0x99, 0x99))
 
     // ------------------------------------------------------------------
     // Layout data classes
@@ -61,18 +65,27 @@ object DiagramRenderer {
 
     data class Layout(
         val width: Int, val height: Int,
-        val header: String,
+        val header: String, val joinBadge: String?,
         val names: List<String>, val types: List<String>, val pks: List<Boolean>,
     )
 
     data class Pos(val x: Int, val y: Int)
 
+    /** 正交路由段：一系列折线点。 */
+    data class OrthoPath(val points: List<Point>)
+
     data class Line(
-        val x1: Int, val y1: Int, val x2: Int, val y2: Int,
+        val fromAlias: String, val toAlias: String,
         val jt: JoinType, val label: String,
     )
 
     data class Size(val width: Int, val height: Int)
+
+    /** ON 条件标签的布局信息（用于重叠检测与交错排列）。 */
+    private data class LabelInfo(
+        val lineIndex: Int, val bx: Int, val by: Int, val bw: Int, val bh: Int,
+        val text: String, val splitY: Int,
+    )
 
     // ------------------------------------------------------------------
     // Public API
@@ -84,19 +97,8 @@ object DiagramRenderer {
         val font = UIUtil.getLabelFont()
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
-        var minGap = COLUMN_GAP
-        for (r in model.relationships) {
-            var needed = COLUMN_GAP
-            if (r.label.isNotEmpty()) {
-                val text = if (r.label.length > 120) r.label.take(119) + "\u2026" else r.label
-                val tw = font.getStringBounds(text, frc).width.toInt() + 40
-                if (tw > needed) needed = tw
-            }
-            needed = (needed + 120).coerceAtMost(520)
-            if (needed > minGap) minGap = needed
-        }
         val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, minGap)
+        val positions = computeLayout(layouts, model, font, frc)
         val pad = MARGIN + 16
         val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
@@ -109,37 +111,22 @@ object DiagramRenderer {
         val font = UIUtil.getLabelFont()
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
-        var minGap = COLUMN_GAP
-        for (r in model.relationships) {
-            var needed = COLUMN_GAP
-            if (r.label.isNotEmpty()) {
-                val text = if (r.label.length > 120) r.label.take(119) + "\u2026" else r.label
-                val tw = font.getStringBounds(text, frc).width.toInt() + 40
-                if (tw > needed) needed = tw
-            }
-            needed = (needed + 120).coerceAtMost(520)
-            if (needed > minGap) minGap = needed
-        }
         val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, minGap)
+        val positions = computeLayout(layouts, model, font, frc)
         val pad = MARGIN + 16
         val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
 
         val img = BufferedImage(totalW, totalH, BufferedImage.TYPE_INT_ARGB)
         val g2 = img.createGraphics()
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB)
-        g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-        g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
-        g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
-
+        setupHints(g2)
         g2.color = UIUtil.getPanelBackground()
         g2.fillRect(0, 0, totalW, totalH)
 
         val lines = prepareLinesFor(model)
         drawCards(g2, model, font, bold)
-        drawLabels(g2, model, lines, font, frc)
+        drawOrthoLines(g2, lines, model, layouts, positions)
+        drawLabelsOnPath(g2, lines, model, layouts, positions, font, frc)
 
         g2.dispose()
         return img
@@ -152,19 +139,8 @@ object DiagramRenderer {
         val font = UIUtil.getLabelFont()
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
-        var minGap = COLUMN_GAP
-        for (r in model.relationships) {
-            var needed = COLUMN_GAP
-            if (r.label.isNotEmpty()) {
-                val text = if (r.label.length > 120) r.label.take(119) + "\u2026" else r.label
-                val tw = font.getStringBounds(text, frc).width.toInt() + 40
-                if (tw > needed) needed = tw
-            }
-            needed = (needed + 120).coerceAtMost(520)
-            if (needed > minGap) minGap = needed
-        }
         val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, minGap)
+        val positions = computeLayout(layouts, model, font, frc)
         val pad = MARGIN + 16
         val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
@@ -173,9 +149,9 @@ object DiagramRenderer {
         sb.append("""<svg xmlns="http://www.w3.org/2000/svg" width="$totalW" height="$totalH">""").append("\n")
 
         val lines = prepareLinesFor(model)
-        appendLinesSvg(sb, lines)
-        appendCardsSvg(sb, model)
-        appendLabelsSvg(sb, lines)
+        appendOrthoLinesSvg(sb, lines, model, layouts, positions)
+        appendCardsSvg(sb, model, font, bold, frc)
+        appendLabelsOnPathSvg(sb, lines, model, layouts, positions, font, frc)
 
         sb.append("</svg>\n")
         return sb.toString()
@@ -185,10 +161,21 @@ object DiagramRenderer {
     // Internal rendering (used by both render() and DiagramPanel canvas)
     // ------------------------------------------------------------------
 
+    private fun setupHints(g2: Graphics2D) {
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB)
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+        g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+        g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
+    }
+
     private fun measureEntities(ents: List<EntityNode>, font: Font, bold: Font, frc: FontRenderContext): List<Layout> {
         return ents.map { e ->
-            val hdr = truncate(e.displayName)
-            val hdrW = bold.getStringBounds(hdr, frc).width.toInt() + 2 * ENTITY_PADDING
+            val badgeText = if (!e.isMain && e.joinType != null) " ${e.joinType.name} " else null
+            val hdrBase = e.displayName
+            val hdr = if (badgeText != null) truncate(hdrBase) else truncate(hdrBase)
+            val badgeW = if (badgeText != null) bold.getStringBounds(badgeText, frc).width.toInt() + 2 * JOIN_BADGE_PADDING else 0
+            val hdrW = bold.getStringBounds(hdr, frc).width.toInt() + 2 * ENTITY_PADDING + badgeW
             val names = e.columns.map { truncate(it.name) }
             val types = e.columns.map { truncate(it.type ?: "") }
             val pks = e.columns.map { it.isPk }
@@ -197,116 +184,318 @@ object DiagramRenderer {
             val contentW = max(hdrW, ENTITY_PADDING + KEY_ICON_W + maxNameW + TYPE_GAP + maxTypeW + ENTITY_PADDING)
             val cardW = contentW.coerceIn(MIN_CARD_WIDTH, MAX_CARD_WIDTH)
             val cardH = HEADER_HEIGHT + e.columns.size * ROW_HEIGHT + ENTITY_PADDING
-            Layout(cardW, cardH, hdr, names, types, pks)
+            Layout(cardW, cardH, hdr, badgeText, names, types, pks)
         }
     }
 
-    private fun computeLayout(layouts: List<Layout>, minGap: Int): List<Pos> {
+    /**
+     * 居中对称布局：主表居中上方，JOIN 表水平排列在下方。
+     * 动态间距：根据 ON 标签实际渲染宽度调整相邻卡片间距，彻底避免标签重叠。
+     *
+     * ```
+     *         ┌──────────┐
+     *         │  主表    │
+     *         └────┬─────┘
+     *       ┌──────┼──────┐
+     *       │      │      │
+     *   ┌───┴──┐ ┌─┴───┐ ┌┴─────┐
+     *   │ t1   │ │ t2  │ │ t3   │
+     *   └──────┘ └─────┘ └──────┘
+     * ```
+     */
+    private fun computeLayout(layouts: List<Layout>, model: DiagramModel, font: Font, frc: FontRenderContext): List<Pos> {
         if (layouts.isEmpty()) return emptyList()
-        val gap = maxOf(minGap, COLUMN_GAP)
-        val ps = mutableListOf(Pos(MARGIN, MARGIN))
-        val jx = MARGIN + layouts[0].width + gap
-        var jy = MARGIN
-        for (i in 1 until layouts.size) {
-            ps.add(Pos(jx, jy))
-            jy += layouts[i].height + ROW_GAP
+        if (layouts.size == 1) return listOf(Pos(MARGIN, MARGIN))
+
+        val main = layouts[0]
+        val joinLayouts = layouts.drop(1)
+
+        // 计算每个 JOIN 表对应 ON 标签的渲染宽度
+        val childAliasToIdx = model.entities.withIndex().drop(1).associate { (i, e) -> e.alias to i }
+        val labelWidths = IntArray(joinLayouts.size) // 每个子表的 ON 标签半宽
+        for (rel in model.relationships) {
+            val childIdx = childAliasToIdx[rel.toAlias] ?: continue
+            if (rel.label.isNotEmpty()) {
+                val text = if (rel.label.length > 120) rel.label.take(119) + "\u2026" else rel.label
+                val fullW = font.getStringBounds(text, frc).width.toInt() + 20
+                val hw = fullW / 2 + 16 // 半宽 + 安全边距
+                if (hw > labelWidths[childIdx]) labelWidths[childIdx] = hw
+            }
         }
-        return ps
+
+        // 相邻子表间距 = max(COLUMN_GAP, 左子标签半宽 + 右子标签半宽)
+        val gaps = mutableListOf<Int>()
+        for (i in 0 until joinLayouts.size - 1) {
+            val needed = labelWidths[i] + labelWidths[i + 1]
+            gaps.add(maxOf(COLUMN_GAP, needed))
+        }
+
+        val totalJoinWidth = joinLayouts.sumOf { it.width } + gaps.sum()
+        val mainX = MARGIN + (totalJoinWidth - main.width) / 2
+        val mainY = MARGIN
+
+        val positions = mutableListOf(Pos(mainX, mainY))
+        var childX = MARGIN
+        val childY = MARGIN + main.height + ROW_GAP
+
+        for ((i, child) in joinLayouts.withIndex()) {
+            positions.add(Pos(childX, childY))
+            childX += child.width + if (i < gaps.size) gaps[i] else COLUMN_GAP
+        }
+        return positions
     }
 
-    /** Prepare line data for the model (uses internal layout). */
+    /** Prepare line data for the model. */
     fun prepareLinesFor(model: DiagramModel): List<Line> {
-        val font = UIUtil.getLabelFont()
-        val bold = font.deriveFont(Font.BOLD)
-        val frc = FontRenderContext(null, true, true)
-        var minGap = COLUMN_GAP
-        for (r in model.relationships) {
-            var needed = COLUMN_GAP
-            if (r.label.isNotEmpty()) {
-                val text = if (r.label.length > 120) r.label.take(119) + "\u2026" else r.label
-                val tw = font.getStringBounds(text, frc).width.toInt() + 40
-                if (tw > needed) needed = tw
-            }
-            needed = (needed + 120).coerceAtMost(520)
-            if (needed > minGap) minGap = needed
-        }
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, minGap)
-        val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
-        return model.relationships.mapNotNull { r ->
-            val fi = byIdx[r.fromAlias] ?: return@mapNotNull null
-            val ti = byIdx[r.toAlias] ?: return@mapNotNull null
+        return model.relationships.map { r ->
             Line(
-                x1 = positions[fi].x + layouts[fi].width,
-                y1 = positions[fi].y + layouts[fi].height / 2,
-                x2 = positions[ti].x,
-                y2 = positions[ti].y + layouts[ti].height / 2,
+                fromAlias = r.fromAlias,
+                toAlias = r.toAlias,
                 jt = r.joinType,
                 label = r.label,
             )
         }
     }
 
+    /** Compute orthogonal path between main table and a child table. */
+    private fun computeOrthoPath(
+        mainPos: Pos, mainLayout: Layout,
+        childPos: Pos, childLayout: Layout,
+    ): OrthoPath {
+        val mainCenterX = mainPos.x + mainLayout.width / 2
+        val mainBottom = mainPos.y + mainLayout.height
+        val childCenterX = childPos.x + childLayout.width / 2
+        val childTop = childPos.y
+        val splitY = mainBottom + (childTop - mainBottom) / 2
+
+        return OrthoPath(
+            listOf(
+                Point(mainCenterX, mainBottom),
+                Point(mainCenterX, splitY),
+                Point(childCenterX, splitY),
+                Point(childCenterX, childTop),
+            )
+        )
+    }
+
     /** Draw all entity cards. */
     fun drawCards(g2: Graphics2D, model: DiagramModel, font: Font, bold: Font) {
         val frc = g2.fontRenderContext
-        val minGap = computeMinGap(model, font, frc)
         val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, minGap)
+        val positions = computeLayout(layouts, model, font, frc)
         for ((i, e) in model.entities.withIndex()) {
             drawCard(g2, e, positions[i], layouts[i], font, bold)
         }
     }
 
-    /** Draw labels (lines + badges + ON condition). */
-    fun drawLabels(g2: Graphics2D, model: DiagramModel, lines: List<Line>, font: Font, frc: FontRenderContext) {
-        val gaps = mutableListOf<java.awt.geom.Rectangle2D.Double>()
+    /** Draw orthogonal lines with arrows. */
+    private fun drawOrthoLines(
+        g2: Graphics2D, lines: List<Line>,
+        model: DiagramModel, layouts: List<Layout>, positions: List<Pos>,
+    ) {
+        val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
+        g2.color = LINE_COLOR
+        g2.stroke = BasicStroke(1.5f)
 
-        for (l in lines) {
-            var minX = Double.MAX_VALUE
-            var maxX = Double.MIN_VALUE
-            var minY = Double.MAX_VALUE
-            var maxY = Double.MIN_VALUE
+        for (line in lines) {
+            val fi = byIdx[line.fromAlias] ?: continue
+            val ti = byIdx[line.toAlias] ?: continue
+            val path = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti])
+            val pts = path.points
 
-            // ON condition label: centered
-            if (l.label.isNotEmpty()) {
-                val rawText = if (l.label.length > 120) l.label.take(119) + "\u2026" else l.label
+            // Draw polyline segments
+            for (i in 0 until pts.size - 1) {
+                g2.drawLine(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y)
+            }
+
+            // Arrow at the end (pointing to child)
+            if (pts.size >= 2) {
+                val tip = pts.last()
+                val from = pts[pts.size - 2]
+                drawArrow(g2, tip.x, tip.y, from.x, from.y)
+            }
+        }
+    }
+
+    /** Draw labels (ON condition + cardinality) positioned along orthogonal paths. */
+    fun drawLabels(
+        g2: Graphics2D, model: DiagramModel, lines: List<Line>,
+        font: Font, frc: FontRenderContext,
+    ) {
+        val layouts = measureEntities(model.entities, font, bold = font.deriveFont(Font.BOLD), frc)
+        val positions = computeLayout(layouts, model, font, frc)
+        drawLabelsOnPath(g2, lines, model, layouts, positions, font, frc)
+    }
+
+    private fun drawLabelsOnPath(
+        g2: Graphics2D, lines: List<Line>,
+        model: DiagramModel, layouts: List<Layout>, positions: List<Pos>,
+        font: Font, frc: FontRenderContext,
+    ) {
+        val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
+
+        // First pass: compute all label bounding boxes and detect overlaps
+        val onLabels = mutableListOf<LabelInfo>()
+
+        for ((idx, line) in lines.withIndex()) {
+            val fi = byIdx[line.fromAlias] ?: continue
+            val ti = byIdx[line.toAlias] ?: continue
+            val path = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti])
+            val pts = path.points
+
+            if (line.label.isNotEmpty() && pts.size >= 3) {
+                val hSegStart = pts[1]
+                val hSegEnd = pts[2]
+                val labelCenterX = (hSegStart.x + hSegEnd.x) / 2
+                val labelY = hSegStart.y
+                val rawText = if (line.label.length > 120) line.label.take(119) + "\u2026" else line.label
                 val fullW = font.getStringBounds(rawText, frc).width
                 val bw = (fullW + 20).toInt().coerceIn(60, 400)
                 val bh = (font.getStringBounds(rawText, frc).height + 12).toInt()
-                val bx = ((l.x1 + l.x2) / 2 - bw / 2)
-                val by = ((l.y1 + l.y2) / 2 - bh / 2)
-                onLabel(g2, rawText, bx, by, bw, bh, font)
-                minX = minOf(minX, bx.toDouble())
-                maxX = maxOf(maxX, (bx + bw).toDouble())
-                minY = minOf(minY, by.toDouble())
-                maxY = maxOf(maxY, (by + bh).toDouble())
+                val bx = labelCenterX - bw / 2
+                val by = labelY - bh / 2
+                onLabels.add(LabelInfo(idx, bx, by, bw, bh, rawText, labelY))
             }
-
-            // Cardinality labels
-            val fromText = cardText(l.jt, false)
-            val toText = cardText(l.jt, true)
-            val fromW = font.getStringBounds(fromText, frc).width.toInt() + 16
-            val toW = font.getStringBounds(toText, frc).width.toInt() + 16
-            val cbh = 20
-
-            val fromX = l.x1 + 30
-            val toX = l.x2 - 30 - toW
-            val fromY = l.y1 - cbh - 3
-            val toY = l.y2 + 3
-            badge(g2, fromText, fromX, fromY, fromW, cbh, font)
-            badge(g2, toText, toX, toY, toW, cbh, font)
-
-            minX = minOf(minX, fromX.toDouble(), toX.toDouble())
-            maxX = maxOf(maxX, (fromX + fromW).toDouble(), (toX + toW).toDouble())
-            minY = minOf(minY, fromY.toDouble(), toY.toDouble())
-            maxY = maxOf(maxY, (fromY + cbh).toDouble(), (toY + cbh).toDouble())
-
-            gaps.add(java.awt.geom.Rectangle2D.Double(minX, minY, maxX - minX, maxY - minY))
         }
 
-        // Draw lines UNDER labels
-        drawLines(g2, lines, gaps)
+        // Resolve vertical overlaps: alternate above/below the horizontal line
+        val resolved = resolveOverlappingLabels(onLabels, font, frc)
+
+        // Draw resolved ON labels
+        for ((idx, info) in resolved.withIndex()) {
+            val orig = onLabels[idx]
+            onLabel(g2, orig.text, info.first, info.second, orig.bw, orig.bh, font)
+        }
+
+        // Second pass: cardinality labels
+        for (line in lines) {
+            val fi = byIdx[line.fromAlias] ?: continue
+            val ti = byIdx[line.toAlias] ?: continue
+            val fromText = cardText(line.jt, false)
+            val toText = cardText(line.jt, true)
+            val cbh = 20
+            val fromW = font.getStringBounds(fromText, frc).width.toInt() + 16
+            val toW = font.getStringBounds(toText, frc).width.toInt() + 16
+
+            val mainBottom = positions[fi].y + layouts[fi].height
+            badge(g2, fromText, positions[fi].x + layouts[fi].width / 2 - fromW / 2, mainBottom + 4, fromW, cbh, font)
+            badge(g2, toText, positions[ti].x + layouts[ti].width / 2 - toW / 2, positions[ti].y - cbh - 4, toW, cbh, font)
+        }
+    }
+
+    /**
+     * 检测 ON 标签水平重叠，重叠的标签交替偏移到水平线上方/下方。
+     * @return 调整后的 (x, y) 列表，与输入 onLabels 一一对应
+     */
+    private fun resolveOverlappingLabels(
+        labels: List<LabelInfo>, font: Font, frc: FontRenderContext,
+    ): List<Pair<Int, Int>> {
+        if (labels.isEmpty()) return emptyList()
+        val result = mutableListOf<Pair<Int, Int>>()
+        // 已放置标签的水平区间 + 实际 Y（调整后）
+        val placed = mutableListOf<Pair<IntRange, Int>>()
+
+        for (info in labels) {
+            val origX = info.bx
+            val origY = info.by
+            val xRange = origX..(origX + info.bw)
+
+            // 检查与已放置标签的水平重叠
+            var finalY = origY
+            var overlaps = false
+            for ((placedRange, placedY) in placed) {
+                if (xRange.first <= placedRange.last && xRange.last >= placedRange.first) {
+                    if (kotlin.math.abs(origY - placedY) < info.bh + 2) {
+                        overlaps = true
+                        break
+                    }
+                }
+            }
+
+            if (overlaps) {
+                // 交替偏移：在水平线上方或下方
+                val offset = if (result.size % 2 == 0) -(info.bh + 6) else (info.bh + 6)
+                finalY = info.splitY - info.bh / 2 + offset
+            }
+
+            result.add(origX to finalY)
+            placed.add(xRange to finalY)
+        }
+        return result
+    }
+
+    /** Draw labels for SVG (same logic as drawLabelsOnPath but appends to StringBuilder). */
+    private fun appendLabelsOnPathSvg(
+        sb: StringBuilder, lines: List<Line>,
+        model: DiagramModel, layouts: List<Layout>, positions: List<Pos>,
+        font: Font, frc: FontRenderContext,
+    ) {
+        val lc = hexOf(LINE_COLOR)
+        val bg = hexOf(LABEL_BG)
+        val bd = hexOf(LABEL_BORDER)
+        val tx = hexOf(TEXT)
+
+        val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
+
+        // First pass: compute ON label positions with overlap resolution
+        val onLabels = mutableListOf<LabelInfo>()
+
+        for ((idx, line) in lines.withIndex()) {
+            val fi = byIdx[line.fromAlias] ?: continue
+            val ti = byIdx[line.toAlias] ?: continue
+            val path = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti])
+            val pts = path.points
+
+            if (line.label.isNotEmpty() && pts.size >= 3) {
+                val hSegStart = pts[1]
+                val hSegEnd = pts[2]
+                val labelCenterX = (hSegStart.x + hSegEnd.x) / 2
+                val labelY = hSegStart.y
+                val text = truncate(line.label)
+                val estW = text.length * 6 + 12
+                val bh = 18
+                val bx = labelCenterX - estW / 2
+                val by = labelY - bh / 2
+                onLabels.add(LabelInfo(idx, bx, by, estW, bh, text, labelY))
+            }
+        }
+
+        // Resolve overlaps using the same algorithm
+        val resolved = resolveOverlappingLabels(onLabels, font, frc)
+
+        // Second pass: draw everything
+        var onLabelIdx = 0
+        for (line in lines) {
+            val fi = byIdx[line.fromAlias] ?: continue
+            val ti = byIdx[line.toAlias] ?: continue
+
+            // Cardinality badges
+            val ft = cardText(line.jt, false)
+            val fw = ft.length * 6 + 16
+            val mainBottom = positions[fi].y + layouts[fi].height
+            val fromBadgeX = positions[fi].x + layouts[fi].width / 2 - fw / 2
+            sb.append("""  <rect x="$fromBadgeX" y="${mainBottom + 4}" width="$fw" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""").append("\n")
+            sb.append("""  <text x="${fromBadgeX + 8}" y="${mainBottom + 17}" font-size="10" fill="$lc">$ft</text>""").append("\n")
+
+            val tt = cardText(line.jt, true)
+            val tw2 = tt.length * 6 + 16
+            val toBadgeX = positions[ti].x + layouts[ti].width / 2 - tw2 / 2
+            sb.append("""  <rect x="$toBadgeX" y="${positions[ti].y - 22}" width="$tw2" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""").append("\n")
+            sb.append("""  <text x="${toBadgeX + 8}" y="${positions[ti].y - 9}" font-size="10" fill="$lc">$tt</text>""").append("\n")
+
+            // ON label (with overlap resolution)
+            val path = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti])
+            val pts = path.points
+            if (line.label.isNotEmpty() && pts.size >= 3 && onLabelIdx < resolved.size) {
+                val info = onLabels[onLabelIdx]
+                val (adjustedX, adjustedY) = resolved[onLabelIdx]
+                onLabelIdx++
+                sb.append("""  <rect x="$adjustedX" y="$adjustedY" width="${info.bw}" height="${info.bh}" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""").append("\n")
+                val textX = adjustedX + info.bw / 2
+                val textY = adjustedY + info.bh / 2 + 4
+                sb.append("""  <text x="$textX" y="$textY" font-size="10" text-anchor="middle" fill="$tx">${escapeXml(info.text)}</text>""").append("\n")
+            }
+        }
     }
 
     private fun computeMinGap(model: DiagramModel, font: Font, frc: FontRenderContext): Int {
@@ -322,25 +511,6 @@ object DiagramRenderer {
             if (needed > minGap) minGap = needed
         }
         return minGap
-    }
-
-    private fun drawLines(g2: Graphics2D, lines: List<Line>, gaps: List<java.awt.geom.Rectangle2D.Double>) {
-        g2.color = LINE_COLOR
-        g2.stroke = BasicStroke(1.5f)
-        for (i in lines.indices) {
-            val l = lines[i]
-            val gap = gaps[i]
-            val gx1 = (gap.x + 16).toInt()
-            val gx2 = (gap.x + gap.width - 16).toInt()
-
-            if (gap.width > 30) {
-                g2.drawLine(l.x1, l.y1, gx1, l.y1)
-                g2.drawLine(gx2, l.y2, l.x2, l.y2)
-            } else {
-                g2.drawLine(l.x1, l.y1, l.x2, l.y2)
-            }
-            drawArrow(g2, l.x2, l.y2, l.x1, l.y1)
-        }
     }
 
     private fun drawArrow(g2: Graphics2D, tipX: Int, tipY: Int, fromX: Int, fromY: Int) {
@@ -417,6 +587,19 @@ object DiagramRenderer {
         g2.color = TEXT
         g2.drawString(lo.header, ix + ENTITY_PADDING, iy + HEADER_HEIGHT - 9)
 
+        // JOIN type badge (right side of header)
+        if (lo.joinBadge != null) {
+            val badgeW = bold.getStringBounds(lo.joinBadge, g2.fontRenderContext).width.toInt() + 2 * JOIN_BADGE_PADDING
+            val badgeX = ix + iw - ENTITY_PADDING - badgeW
+            val badgeY = iy + (HEADER_HEIGHT - 16) / 2
+            g2.color = JOIN_BADGE_BG
+            g2.fillRoundRect(badgeX, badgeY, badgeW, 16, 4, 4)
+            g2.color = JOIN_BADGE_TEXT
+            g2.font = font
+            val ascent = font.getLineMetrics(lo.joinBadge, g2.fontRenderContext).ascent.toInt()
+            g2.drawString(lo.joinBadge, badgeX + JOIN_BADGE_PADDING, badgeY + 2 + ascent)
+        }
+
         // Columns
         g2.font = font
         var cy = colAreaY + ENTITY_PADDING + ROW_HEIGHT - 5
@@ -478,33 +661,45 @@ object DiagramRenderer {
     // SVG output helpers
     // ------------------------------------------------------------------
 
-    private fun appendLinesSvg(sb: StringBuilder, lines: List<Line>) {
+    private fun appendOrthoLinesSvg(
+        sb: StringBuilder, lines: List<Line>,
+        model: DiagramModel, layouts: List<Layout>, positions: List<Pos>,
+    ) {
         val lc = hexOf(LINE_COLOR)
-        for (l in lines) {
-            sb.append("""  <line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="$lc" stroke-width="1.5"/>""").append("\n")
-            val dx = (l.x2 - l.x1).toDouble()
-            val dy = (l.y2 - l.y1).toDouble()
-            val len = sqrt(dx * dx + dy * dy)
-            if (len >= 1) {
-                val ux = dx / len; val uy = dy / len
-                val vx = -uy; val vy = ux
-                val p1x = l.x2 - ux * ARROW_LEN + vx * ARROW_HW
-                val p1y = l.y2 - uy * ARROW_LEN + vy * ARROW_HW
-                val p2x = l.x2 - ux * ARROW_LEN - vx * ARROW_HW
-                val p2y = l.y2 - uy * ARROW_LEN - vy * ARROW_HW
-                sb.append("""  <polygon points="${l.x2},${l.y2} $p1x,$p1y $p2x,$p2y" fill="$lc"/>""").append("\n")
+        val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
+
+        for (line in lines) {
+            val fi = byIdx[line.fromAlias] ?: continue
+            val ti = byIdx[line.toAlias] ?: continue
+            val path = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti])
+            val pts = path.points
+
+            // Polyline segments
+            for (i in 0 until pts.size - 1) {
+                sb.append("""  <line x1="${pts[i].x}" y1="${pts[i].y}" x2="${pts[i + 1].x}" y2="${pts[i + 1].y}" stroke="$lc" stroke-width="1.5"/>""").append("\n")
+            }
+
+            // Arrow at end
+            if (pts.size >= 2) {
+                val tip = pts.last()
+                val from = pts[pts.size - 2]
+                val dx = (tip.x - from.x).toDouble()
+                val dy = (tip.y - from.y).toDouble()
+                val len = sqrt(dx * dx + dy * dy)
+                if (len >= 1) {
+                    val ux = dx / len; val uy = dy / len
+                    val vx = -uy; val vy = ux
+                    val p1x = tip.x - ux * ARROW_LEN + vx * ARROW_HW
+                    val p1y = tip.y - uy * ARROW_LEN + vy * ARROW_HW
+                    val p2x = tip.x - ux * ARROW_LEN - vx * ARROW_HW
+                    val p2y = tip.y - uy * ARROW_LEN - vy * ARROW_HW
+                    sb.append("""  <polygon points="${tip.x},${tip.y} $p1x,$p1y $p2x,$p2y" fill="$lc"/>""").append("\n")
+                }
             }
         }
     }
 
-    private fun appendCardsSvg(sb: StringBuilder, model: DiagramModel) {
-        val font = UIUtil.getLabelFont()
-        val bold = font.deriveFont(Font.BOLD)
-        val frc = FontRenderContext(null, true, true)
-        val minGap = computeMinGap(model, font, frc)
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, minGap)
-
+    private fun appendCardsSvg(sb: StringBuilder, model: DiagramModel, font: Font, bold: Font, frc: FontRenderContext) {
         val bg = hexOf(CARD_BG)
         val bd = hexOf(CARD_BORDER)
         val tx = hexOf(TEXT)
@@ -512,6 +707,11 @@ object DiagramRenderer {
         val pk = hexOf(PK_COLOR)
         val hl = hexOf(HEADER_LINE)
         val sep = hexOf(SEPARATOR)
+        val jbbg = hexOf(JOIN_BADGE_BG)
+        val jbt = hexOf(JOIN_BADGE_TEXT)
+
+        val layouts = measureEntities(model.entities, font, bold, frc)
+        val positions = computeLayout(layouts, model, font, frc)
 
         for ((i, e) in model.entities.withIndex()) {
             val pos = positions[i]
@@ -533,6 +733,15 @@ object DiagramRenderer {
 
             sb.append("""  <text x="${ix + ENTITY_PADDING}" y="${iy + HEADER_HEIGHT - 9}" font-weight="bold" font-size="12" fill="$tx">${escapeXml(lo.header)}</text>""").append("\n")
 
+            // JOIN type badge
+            if (lo.joinBadge != null) {
+                val badgeW = lo.joinBadge.length * 7 + 2 * JOIN_BADGE_PADDING
+                val badgeX = ix + iw - ENTITY_PADDING - badgeW
+                val badgeY = iy + (HEADER_HEIGHT - 16) / 2
+                sb.append("""  <rect x="$badgeX" y="$badgeY" width="$badgeW" height="16" rx="4" fill="$jbbg"/>""").append("\n")
+                sb.append("""  <text x="${badgeX + JOIN_BADGE_PADDING}" y="${badgeY + 12}" font-size="10" fill="$jbt">${escapeXml(lo.joinBadge)}</text>""").append("\n")
+            }
+
             var cy = colAreaY + ENTITY_PADDING + ROW_HEIGHT - 5
             for (j in lo.names.indices) {
                 val name = lo.names[j]
@@ -548,34 +757,6 @@ object DiagramRenderer {
                     sb.append("""  <text x="${ix + iw - ENTITY_PADDING - estW}" y="$cy" font-size="11" fill="$ty">${escapeXml(type)}</text>""").append("\n")
                 }
                 cy += ROW_HEIGHT
-            }
-        }
-    }
-
-    private fun appendLabelsSvg(sb: StringBuilder, lines: List<Line>) {
-        val lc = hexOf(LINE_COLOR)
-        val bg = hexOf(LABEL_BG)
-        val bd = hexOf(LABEL_BORDER)
-        val tx = hexOf(TEXT)
-
-        for (l in lines) {
-            val ft = cardText(l.jt, false)
-            val fw = ft.length * 6 + 10
-            sb.append("""  <rect x="${l.x1 + 30}" y="${l.y1 - 9}" width="$fw" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""").append("\n")
-            sb.append("""  <text x="${l.x1 + 35}" y="${l.y1 + 4}" font-size="10" fill="$lc">$ft</text>""").append("\n")
-
-            val tt = cardText(l.jt, true)
-            val tw2 = tt.length * 6 + 10
-            sb.append("""  <rect x="${l.x2 - 30 - tw2}" y="${l.y2 - 9}" width="$tw2" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""").append("\n")
-            sb.append("""  <text x="${l.x2 - 25 - tw2}" y="${l.y2 + 4}" font-size="10" fill="$lc">$tt</text>""").append("\n")
-
-            if (l.label.isNotEmpty()) {
-                val text = truncate(l.label)
-                val estW = text.length * 6 + 12
-                val mx = (l.x1 + l.x2) / 2
-                val my = (l.y1 + l.y2) / 2
-                sb.append("""  <rect x="${mx - estW / 2}" y="${my - 10}" width="$estW" height="18" rx="5" fill="$bg" stroke="$bd" stroke-width="1.0"/>""").append("\n")
-                sb.append("""  <text x="$mx" y="${my + 4}" font-size="10" text-anchor="middle" fill="$tx">${escapeXml(text)}</text>""").append("\n")
             }
         }
     }
