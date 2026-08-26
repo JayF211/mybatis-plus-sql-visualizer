@@ -150,7 +150,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
-| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 22 个 + 已解决踩坑 31 个 + 用户环境 1 个） |
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 36 个 + 已解决踩坑 35 个 + 用户环境 1 个） |
 | [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
 | [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
 | [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
@@ -191,6 +191,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 2026-08-15 | 新增索引条目：20260815-1630-XML与注解SQL代码补全-M27-开发计划.md（M27 任务源 T-M27-xx，方案 B 自研补全 + 联表支持；方案 C 立项 P-立项-06） |
 | 2026-08-14 | 新增索引条目：20260814-1130-多SQL选择弹窗代码行预览与定位-开发计划.md（T-M23.8，已交付 499 测试全绿） |
 | 2026-08-22 | 记忆精简（107→12）：新增「归档记忆」分区（docs/memory-archive/，54 个文件）；全局通用记忆 41 个备份到 `~/.zcode/cli/memories/global/`；全局经验精炼入 `~/.zcode/AGENTS.md` |
+| 2026-08-26 | 记忆第二次精简（31→14）：新增 16 个归档（M30-M33/M41/F-42/F-43/F-44/IDE 冻结/M28/M47/F-45/PlantUML/plugin-xml/设置页布局/设置页配置/tooltip + 3 个踩坑）；archive 增至 70 个文件 |
 | 2026-08-14 | 新增索引条目：20260814-1115-任意位置触发与多SQL选择-开发计划.md（T-M23.7，已交付 497 测试全绿） |
 | 2026-08-14 | 新增索引条目：20260814-1100-弹窗提示一键关闭SQL面板-开发计划.md（T-M23.6，已交付 492 测试全绿） |
 | 2026-08-14 | 更新索引条目：20260814-1015-SQL关键字标识符引用-开发计划.md（T-M23.5 增量交付，490 测试全绿；查询路径引用补齐） |

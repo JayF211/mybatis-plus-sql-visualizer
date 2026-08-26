@@ -3,10 +3,10 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（41 个通用文件）
-> **项目记忆**：保留 12 个核心文件 + MEMORY.md 索引
+> **项目记忆**：保留 13 个核心文件 + MEMORY.md 索引
 
 ---
 
@@ -36,6 +36,20 @@
 | [project-test-speedup.md](bug-fixes/project-test-speedup.md) | 测试提速实测（clean test 带缓存 1m03s 最优） |
 | [project-update-channel-beta-refactor.md](bug-fixes/project-update-channel-beta-refactor.md) | 更新机制改为 Gitee 抢先体验通道 |
 | [project-architecture-docs.md](bug-fixes/project-architecture-docs.md) | docs/架构设计/ 三篇系列文档指针 |
+| [m30-m33-features.md](bug-fixes/m30-m33-features.md) | M30-M33 全量开发完成（2026-08-23）：11 功能模块 |
+| [m41-toolbar-i18n-cleanup.md](bug-fixes/m41-toolbar-i18n-cleanup.md) | M41 工具栏国际化修复 + 布局分离（2026-08-23） |
+| [project-f42-join-diagram-batik.md](bug-fixes/project-f42-join-diagram-batik.md) | F-42 JOIN 图渲染修复完成（2026-08-25）：PlantUML→自绘 Swing |
+| [project-f43-auto-save-sql.md](bug-fixes/project-f43-auto-save-sql.md) | F-43 自动保存历史 SQL（2026-08-25） |
+| [project-f44-sql-log-merge-sidebar.md](bug-fixes/project-f44-sql-log-merge-sidebar.md) | F-44 SQL 日志合并主侧边栏 + 源码定位（2026-08-25） |
+| [project-ide-freeze-20260824.md](bug-fixes/project-ide-freeze-20260824.md) | IDEA 2026.2 卡顿根因：SqlLogPanel O(N²) 事件风暴（M46 已修复） |
+| [project-m28-update-channel.md](bug-fixes/project-m28-update-channel.md) | M28 内部更新机制 Gitee 抢先体验通道改造（2026-08-22） |
+| [project-m47-jdbc-template-log.md](bug-fixes/project-m47-jdbc-template-log.md) | M47 Spring JdbcTemplate SQL 日志支持（2026-08-24） |
+| [project-pages-xml-preview.md](bug-fixes/project-pages-xml-preview.md) | F-45 低代码框架 XML HQL 预览（2026-08-26） |
+| [project-plantuml-render-error.md](bug-fixes/project-plantuml-render-error.md) | PlantUML JOIN 图渲染修复链（2026-08-23~25） |
+| [project-plugin-xml-kotlin-optional.md](bug-fixes/project-plugin-xml-kotlin-optional.md) | plugin.xml Kotlin 语言 ID 注册修复（2026-08-25） |
+| [project-settings-layout-optimization.md](bug-fixes/project-settings-layout-optimization.md) | 设置页布局优化 Phase 1-3（2026-08-26） |
+| [project-settings-no-nested-configurable.md](bug-fixes/project-settings-no-nested-configurable.md) | 设置页不再注册 projectConfigurable（2026-08-26） |
+| [toolwindow-button-tooltip-mechanism.md](bug-fixes/toolwindow-button-tooltip-mechanism.md) | F-41 右侧面板按钮 tooltip 机制修复（2026-08-25） |
 
 ## 已解决踩坑（32 个）
 
@@ -72,6 +86,9 @@
 | [pitfall-test-coverage-gaps-jpa.md](pitfalls/pitfall-test-coverage-gaps-jpa.md) | JPA 测试覆盖缺口 |
 | [pitfall-tm51-api-cleanup.md](pitfalls/pitfall-tm51-api-cleanup.md) | Marketplace Internal API 清理 |
 | [pitfall-tm52-deprecated-api-replacements.md](pitfalls/pitfall-tm52-deprecated-api-replacements.md) | 废弃 API 替代方案全量实施 |
+| [pitfall-cross-platform-filename.md](pitfalls/pitfall-cross-platform-filename.md) | 跨平台文件名生成陷阱（SimpleDateFormat Locale.ENGLISH + Windows 禁冒号） |
+| [pitfall-sidebar-merge-confusion.md](pitfalls/pitfall-sidebar-merge-confusion.md) | F-44 侧边栏去除对象搞反（保留主侧边栏 log，去除独立 history） |
+| [sandbox-deployment-pitfalls.md](pitfalls/sandbox-deployment-pitfalls.md) | 沙盒 IDE 构建部署陷阱（prepareSandbox 文件锁 + 陈旧 jar） |
 | [pitfall-f42-join-diagram-render.md](pitfalls/pitfall-f42-join-diagram-render.md) | JOIN 图"渲染中/错误图"终极修复（F-42）——PlantUML 8059 硬依赖 Graphviz + 模态弹窗阻塞 invokeLater + hidden 标签页，三层根因（17bb741） |
 
 ## 用户环境（1 个）
@@ -98,7 +115,7 @@
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 13（含 MEMORY.md） |
+| 项目 memory（保留） | 14（含 MEMORY.md） |
 | 全局记忆 global/ | 41 |
-| 归档 archive/ | 54 |
-| **合计** | **108** |
+| 归档 archive/ | 70（bug-fixes 36 + pitfalls 35 + user-context 1 + README） |
+| **合计** | **125** |
