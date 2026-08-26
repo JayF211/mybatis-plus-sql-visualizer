@@ -45,6 +45,7 @@ object DiagramRenderer {
     const val MIN_LABEL_WIDTH = 60
     const val MAX_LABEL_WIDTH = 300
     const val LABEL_LINE_GAP = 12
+    const val LABEL_COLUMN_GAP = 24
 
     val SHADOW = JBColor(Color(0x00, 0x00, 0x00, 25), Color(0x00, 0x00, 0x00, 45))
     val CARD_BG = JBColor(Color(0xFF, 0xFF, 0xFF), Color(0x2D, 0x2F, 0x33))
@@ -218,7 +219,7 @@ object DiagramRenderer {
             .filter { it.label.isNotBlank() }
             .map { labelWidth(it.label, font, frc) }
             .maxOrNull() ?: 0
-        val gap = maxOf(COLUMN_GAP, maxLabelWidth + 48)
+        val gap = maxOf(COLUMN_GAP, maxLabelWidth + LABEL_COLUMN_GAP + 48)
         val childX = MARGIN + main.width + gap
         val childY = MARGIN
         val childrenHeight = joinLayouts.sumOf { it.height } + (joinLayouts.size - 1) * ROW_GAP
@@ -255,13 +256,15 @@ object DiagramRenderer {
         mainPos: Pos, mainLayout: Layout,
         childPos: Pos, childLayout: Layout,
     ): OrthoPath {
-        val splitX = mainPos.x + mainLayout.width + COLUMN_GAP / 2
+        val splitX = mainPos.x + mainLayout.width + 24
+        val mainCenterY = mainPos.y + mainLayout.height / 2
+        val childCenterY = childPos.y + childLayout.height / 2
         return OrthoPath(
             listOf(
-                Point(mainPos.x + mainLayout.width, mainPos.y + mainLayout.height / 2),
-                Point(splitX, mainPos.y + mainLayout.height / 2),
-                Point(splitX, childPos.y + childLayout.height / 2),
-                Point(childPos.x, childPos.y + childLayout.height / 2),
+                Point(mainPos.x + mainLayout.width, mainCenterY),
+                Point(splitX, mainCenterY),
+                Point(splitX, childCenterY),
+                Point(childPos.x, childCenterY),
             )
         )
     }
@@ -330,7 +333,7 @@ object DiagramRenderer {
     ) {
         val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
 
-        // 每条关系使用独立的水平 lane，标签严格绑定在该 lane 的中点
+        // 关系图采用右侧独立标签列：标签不再绘制在连线或主表内部
         for ((idx, line) in lines.withIndex()) {
             val fi = byIdx[line.fromAlias] ?: continue
             val ti = byIdx[line.toAlias] ?: continue
@@ -339,9 +342,9 @@ object DiagramRenderer {
             val text = if (line.label.length > MAX_LABEL_CHARS) line.label.take(MAX_LABEL_CHARS - 1) + "\u2026" else line.label
             val bw = labelWidth(line.label, font, frc)
             val bh = (font.getStringBounds(text, frc).height + 12).toInt()
-            val centerX = (pts[1].x + pts[2].x) / 2
-            val by = pts[1].y - bh / 2
-            onLabel(g2, text, centerX - bw / 2, by, bw, bh, font)
+            val labelX = pts[1].x + LABEL_LINE_GAP
+            val labelY = pts[1].y - bh / 2
+            onLabel(g2, text, labelX, labelY, bw, bh, font)
         }
 
         // Second pass: cardinality labels
