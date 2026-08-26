@@ -46,7 +46,9 @@ import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
@@ -733,8 +735,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val ctx = buildCompletionContext()
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
-        // 补全守卫标记（language="SQL" 仅插件编辑器触发）
-        created.putUserData(SqlCompletionContributor.IS_PREVIEW_EDITOR, true)
         (created as EditorEx).apply {
             // 原生 SQL 高亮器（手动设置，因内存 PSI 文件不自动关联）
             val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()

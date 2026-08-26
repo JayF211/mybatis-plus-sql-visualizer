@@ -8,14 +8,19 @@ import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupElementBuilder
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.editor.Document
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.PsiElement
 import com.intellij.util.ProcessingContext
+import java.util.WeakHashMap
+
+private val LOG = Logger.getInstance(SqlCompletionContributor::class.java)
 
 /**
  * SQL 预览代码补全（M9-03，方案 A：Community 兼容自定义补全）。
  *
- * 为 [SqlPreviewLanguage] 的编辑器（可编辑 SQL）提供 Ctrl+Space 补全：
+ * 为原生 SQL 编辑器（插件预览面板，language="SQL" + IS_PREVIEW_EDITOR 守卫）提供 Ctrl+Space 补全：
  *  - SQL 关键字（[SqlLexer.KEYWORDS]）
  *  - 当前预览实体的表名 / 列名 / 表别名（来自 [SqlCompletionContext]，经 Editor/PSI 双载体 userData 传递）
  *  - M16：列名/表名补全项**展示注释**（withTailText 灰色尾缀）且**支持注释关键词检索**
@@ -38,6 +43,21 @@ import com.intellij.util.ProcessingContext
  */
 class SqlCompletionContributor : CompletionContributor() {
 
+    companion object {
+        /**
+         * Document → SqlCompletionContext 映射（WeakHashMap，文档释放时自动清除）。
+         *
+         * 解决原生 SQL PSI 文件 commitDocument 重建后 PSI userData 丢失的问题：
+         * 预览编辑器创建时存入，补全时按 Document 查找。
+         */
+        private val documentContexts = WeakHashMap<Document, SqlCompletionContext>()
+
+        fun registerContext(document: Document, ctx: SqlCompletionContext) {
+            documentContexts[document] = ctx
+            LOG.info("[SqlCompletion] registerContext: doc=${document.hashCode()}, table=${ctx.tableName}, mapSize=${documentContexts.size}")
+        }
+    }
+
     init {
         extend(
             CompletionType.BASIC,
@@ -51,6 +71,20 @@ class SqlCompletionContributor : CompletionContributor() {
                     val prefix = result.prefixMatcher
                     val provider = SqlCompletionProvider.instance
 
+                    // ★ 调试：每次补全触发时打印关键信息
+                    val editor = parameters.editor
+                    val position = parameters.position
+                    val containingFile = position.containingFile
+                    LOG.info("[SqlCompletion] addCompletions triggered")
+                    LOG.info("[SqlCompletion]   editor=${editor.javaClass.simpleName}, doc=${editor.document.hashCode()}")
+                    LOG.info("[SqlCompletion]   position=${position.javaClass.simpleName}, text='${position.text?.take(30)}'")
+                    LOG.info("[SqlCompletion]   containingFile=${containingFile?.name}, lang=${containingFile?.language?.id}")
+                    LOG.info("[SqlCompletion]   editorUserData=${editor.getUserData(SqlCompletionContext.KEY)?.tableName}")
+                    LOG.info("[SqlCompletion]   psiUserData=${containingFile?.getUserData(SqlCompletionContext.KEY)?.tableName}")
+                    LOG.info("[SqlCompletion]   documentContexts.size=${documentContexts.size}")
+                    val docFromViewProvider = containingFile?.viewProvider?.document
+                    LOG.info("[SqlCompletion]   docFromViewProvider=${docFromViewProvider?.hashCode()}, inMap=${documentContexts.containsKey(docFromViewProvider)}")
+
                     // 关键字（M16.2：不依赖上下文——ctx 缺失/丢失时关键字补全仍生效，恢复 M9 语义）
                     provider.keywords().forEach { word ->
                         if (prefix.prefixMatches(word)) result.addElement(LookupElementBuilder.create(word))
@@ -58,7 +92,9 @@ class SqlCompletionContributor : CompletionContributor() {
 
                     // 当前实体表/列/别名（M16：位置感知 + 注释展示/检索）
                     // M16.2：双载体读取（Editor userData 优先、PSI 兜底）；ctx 为 null 时跳过实体补全
-                    val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position) ?: return
+                    val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
+                    LOG.info("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
+                    if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
                     // 异常/无文件回退 UNKNOWN）
                     val clause = runCatching {
@@ -116,13 +152,30 @@ class SqlCompletionContributor : CompletionContributor() {
     private val AGGREGATE_FUNCTIONS = listOf("COUNT", "SUM", "MAX", "MIN", "AVG")
 
     /**
-     * 上下文读取（M16.2 双载体）：**Editor userData 优先**（嵌入式编辑器在用户编辑后不重建，
-     * 而 PSI 文件可能被 PsiDocumentManager commit 重建导致 userData 丢失——M16 补全失效根因）、
-     * **PSI 文件 userData 兜底**。抽为 internal 纯函数供测试。
+     * 上下文读取（三级回退）：
+     *  1. Editor userData（编辑器实例未变时最快）
+     *  2. PSI 文件 userData（编辑器重建但 PSI 未变时）
+     *  3. Document → Context 映射（PSI 文件 commitDocument 重建后最终兜底）
      *
-     * @param editorContext Editor 上绑定的上下文（由 [SqlPreviewPanel.createEditor] 写入）
-     * @param position      补全位置 PSI 元素（兜底载体所在文件）
+     * 抽为 internal 纯函数供测试。
      */
-    internal fun resolveContext(editorContext: SqlCompletionContext?, position: PsiElement): SqlCompletionContext? =
-        editorContext ?: position.containingFile?.getUserData(SqlCompletionContext.KEY)
+    internal fun resolveContext(editorContext: SqlCompletionContext?, position: PsiElement): SqlCompletionContext? {
+        editorContext?.let {
+            LOG.info("[SqlCompletion] resolveContext: hit level 1 (editor userData), table=${it.tableName}")
+            return it
+        }
+        position.containingFile?.getUserData(SqlCompletionContext.KEY)?.let {
+            LOG.info("[SqlCompletion] resolveContext: hit level 2 (PSI userData), table=${it.tableName}")
+            return it
+        }
+        // 最终兜底：通过 Document 映射查找
+        val doc = position.containingFile?.viewProvider?.document
+        if (doc == null) {
+            LOG.info("[SqlCompletion] resolveContext: miss (doc is null)")
+            return null
+        }
+        val ctx = documentContexts[doc]
+        LOG.info("[SqlCompletion] resolveContext: hit level 3 (document map)=${ctx != null}, table=${ctx?.tableName}")
+        return ctx
+    }
 }

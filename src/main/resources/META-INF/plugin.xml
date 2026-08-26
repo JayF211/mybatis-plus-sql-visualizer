@@ -125,13 +125,9 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider"/>
 
-        <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
-        <lang.parserDefinition language="MP_SQL_Preview"
-                               implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlParserDefinition"/>
-        <completion.contributor language="MP_SQL_Preview"
-                               implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
-        <fileType name="MP_SQL_Preview" extensions="mpsql" language="MP_SQL_Preview"
-                  implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewFileType"/>
+        <!-- M9→原生SQL：补全注册为所有语言 + 内部按文件名/虚拟文件守卫（预览编辑器无虚拟文件） -->
+        <completion.contributor
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
 
         <!-- M27 XML/注解 SQL 代码补全（T-M27-03/05，方案 B 自研，Community 兼容）：mapper 语句
              文本与 @Select 等注解字符串内——SQL 关键字/表名/列名/`别名.` 前缀列/#{} 参数名/

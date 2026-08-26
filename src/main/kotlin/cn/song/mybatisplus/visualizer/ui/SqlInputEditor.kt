@@ -80,8 +80,6 @@ class SqlInputEditor(
         val ctx = SqlCompletionContext(null, emptyList(), null, emptyMap(), null, emptyList())
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
-        // 补全守卫标记（language="SQL" 仅插件编辑器触发）
-        created.putUserData(SqlCompletionContributor.IS_PREVIEW_EDITOR, true)
         // DataProvider 包装补 EDITOR（M27.1，实证，见类注释）
         editorHolder.add(
             object : JBPanel<JBPanel<*>>(BorderLayout()), DataProvider {

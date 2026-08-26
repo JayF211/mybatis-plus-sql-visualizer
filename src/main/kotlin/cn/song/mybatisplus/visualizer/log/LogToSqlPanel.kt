@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -314,15 +313,21 @@ class LogToSqlPanel(
         return editor
     }
 
-    /** SQL 结果编辑器：可编辑（微调参数后复制）+ SQL 词法高亮。 */
+    /** SQL 结果编辑器：可编辑（微调参数后复制）+ 原生 SQL 语法高亮。 */
     private fun createResultEditor(): Editor {
         val editor = EditorFactory.getInstance()
             .createEditor(EditorFactory.getInstance().createDocument(""), project)
         (editor as EditorEx).apply {
-            highlighter = LexerEditorHighlighter(
-                SqlSyntaxHighlighter(),
-                EditorColorsManager.getInstance().globalScheme,
-            )
+            // 原生 SQL 高亮器
+            val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+                .getStdFileType("SQL")
+            if (sqlFileType != null) {
+                val sqlHighlighter = com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
+                    .getSyntaxHighlighter(sqlFileType, project, null)
+                if (sqlHighlighter != null) {
+                    highlighter = LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().globalScheme)
+                }
+            }
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false

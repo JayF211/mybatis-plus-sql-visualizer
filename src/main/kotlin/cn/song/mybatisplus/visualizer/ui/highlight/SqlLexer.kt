@@ -12,8 +12,7 @@ import com.intellij.psi.tree.IElementType
  *  - 表名启发式：`FROM` / `JOIN` / `INTO` / `UPDATE` 后的标识符（及紧随的表别名）
  *    标记为 [SqlTokenTypes.TABLE]，对齐参考样式中"表名/别名"与"列名"分色。
  *
- * 与 [SqlSyntaxHighlighter] 配合，经 [com.intellij.openapi.editor.highlighter.LexerEditorHighlighter]
- * 挂到只读编辑器视图上。
+ * 原生 SQL 高亮由平台 SqlSyntaxHighlighterFactory 提供；SqlLexer 仅供 [SqlFormatter] 格式化与 HTML 渲染使用。
  */
 class SqlLexer : LexerBase() {
 

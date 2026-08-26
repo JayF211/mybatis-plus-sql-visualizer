@@ -16,8 +16,8 @@ import org.junit.Assert.assertTrue
 
 /**
  * SQL 补全基础设施测试（M9-03/04）：
- *  - 预览语言 PSI 文件可创建（ParserDefinition 生效）
- *  - CompletionContributor 已注册到语言
+ *  - 原生 SQL FileType PSI 文件可创建
+ *  - CompletionContributor 已注册到 SQL 语言
  *  - SqlCompletionProvider 提供关键字
  *  - M16.2：detectClause 边界防御（offset clamp/空文本）与上下文双载体读取（Editor userData 优先）
  *  - T-M27-01：detectClause 迁入 sql.SqlTextAnalysis 纯函数模块——下述 detectClause 用例改走公共 API
@@ -25,16 +25,28 @@ import org.junit.Assert.assertTrue
  */
 class SqlCompletionContributorTest : BasePlatformTestCase() {
 
-    fun testPsiFileCreatedForPreviewLanguage() {
+    private val sqlFileType: com.intellij.openapi.fileTypes.FileType
+        get() = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+            .getStdFileType("SQL") ?: com.intellij.openapi.fileTypes.PlainTextFileType.INSTANCE
+
+    private val sqlLanguage: com.intellij.lang.Language
+        get() = sqlFileType.let { ft ->
+            when (ft) {
+                is com.intellij.openapi.fileTypes.LanguageFileType -> ft.language
+                else -> com.intellij.lang.Language.findLanguageByID("SQL") ?: com.intellij.lang.Language.ANY
+            }
+        }
+
+    fun testPsiFileCreatedForNativeSql() {
         val file = PsiFileFactory.getInstance(project)
-            .createFileFromText("preview.mpsql", SqlPreviewLanguage, "SELECT 1 FROM t")
-        assertNotNull("预览语言应能生成 PSI 文件", file)
-        assertEquals(SqlPreviewLanguage, file.language)
+            .createFileFromText("preview.sql", sqlFileType, "SELECT 1 FROM t")
+        assertNotNull("原生 SQL FileType 应能生成 PSI 文件", file)
+        assertEquals(sqlLanguage, file.language)
     }
 
     fun testCompletionContributorRegistered() {
-        val contributors = CompletionContributor.forLanguage(SqlPreviewLanguage)
-        assertTrue("应注册 SqlCompletionContributor", contributors.any { it is SqlCompletionContributor })
+        val contributors = CompletionContributor.forLanguage(sqlLanguage)
+        assertTrue("应注册 SqlCompletionContributor 到 SQL 语言", contributors.any { it is SqlCompletionContributor })
     }
 
     fun testProviderKeywords() {
@@ -107,7 +119,7 @@ class SqlCompletionContributorTest : BasePlatformTestCase() {
         // 回归点 B）、PSI 文件 userData 兜底
         val contributor = SqlCompletionContributor()
         val file = PsiFileFactory.getInstance(project)
-            .createFileFromText("preview.mpsql", SqlPreviewLanguage, "SELECT 1")
+            .createFileFromText("preview.sql", sqlFileType, "SELECT 1")
         val position = PsiTreeUtil.getDeepestFirst(file)
 
         // ① Editor 无上下文 → 回退 PSI userData
