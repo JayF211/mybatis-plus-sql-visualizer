@@ -809,22 +809,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
         val created = if (proj != null) {
-            // M34 回归修复：PsiFileFactory.createFileFromText 创建的 in-memory PSI 文件不在
-            // PsiDocumentManager 注册——CodeCompletionHandlerBase.invokeCompletion 内部调用
-            // PsiDocumentManager.getPsiFile(document) 返回 null → "no PSI file" 断言失败。
-            // 改用真实临时文件（系统 temp + .sql 后缀，java.io 写入免 write action）：
-            // LocalFileSystem 可见 → PsiManager.findFile 建立 VFS 文件 → PsiDocumentManager
-            // 追踪 document↔psi，补全框架初始化不再 NPE。生命周期见 releaseEditor。
-            val vFile = previewTempFile ?: run {
-                val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
-                io.writeText(sql)  // 纯 java.io，无需 EDT/write action
-                io.deleteOnExit()
-                com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
-                    ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+            // M34 回归修复：PSI 创建/解析整体包 ReadAction——PsiManager.findFile 触发
+            // SqlLanguageSubstitutor（SQL 方言映射）→ ProjectFileIndex 查询，2024.3 平台在
+            // EDT 上视为 slow operation 硬抛（SEVERE 递归堆栈）；ReadAction 内部允许慢操作。
+            // PSI 需被 PsiDocumentManager 追踪（createFileFromText 的 in-memory 文件不追踪，
+            // 补全框架 PsiDocumentManager.getPsiFile(document) 返回 null → "no PSI file"）。
+            val (vFile, psi) = com.intellij.openapi.application.ReadAction.compute<Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>, Throwable> {
+                val vf = previewTempFile ?: run {
+                    val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
+                    io.writeText(sql)  // 纯 java.io，无需 EDT/write action
+                    io.deleteOnExit()
+                    com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
+                        ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+                }
+                previewTempFile = vf
+                vf to (com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                    ?: throw IllegalStateException("临时 SQL 文件无 PSI"))
             }
-            previewTempFile = vFile
-            val psi = com.intellij.psi.PsiManager.getInstance(proj).findFile(vFile)
-                ?: throw IllegalStateException("临时 SQL 文件无 PSI")
             psiFile = psi
             val doc = com.intellij.psi.PsiDocumentManager.getInstance(proj)
                 .getDocument(psi) ?: throw IllegalStateException("临时 SQL 文件无关联文档")
