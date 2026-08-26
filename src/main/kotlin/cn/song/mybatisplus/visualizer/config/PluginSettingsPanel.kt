@@ -388,14 +388,15 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
                     panel.revalidate(); panel.repaint()
                 }
             }
-            val border = javax.swing.BorderFactory.createTitledBorder(
-                javax.swing.BorderFactory.createLineBorder(java.awt.Color(0xC0C0C0.toInt())),
-                MpSqlVisualizerBundle.message(titleKey)
-            )
+            val titlePanel = JPanel(BorderLayout(6, 0)).apply {
+                isOpaque = false
+                add(toggle, BorderLayout.WEST)
+                add(TitledSeparator(MpSqlVisualizerBundle.message(titleKey)), BorderLayout.CENTER)
+            }
             val wrapper = ref.wrapper.apply {
                 isOpaque = false
-                this.border = border
-                add(toggle, BorderLayout.WEST)
+                border = JBUI.Borders.customLine(java.awt.Color(0xC0C0C0.toInt()), 1, 1, 1, 1)
+                add(titlePanel, BorderLayout.NORTH)
                 add(contentPanel, BorderLayout.CENTER)
             }
             gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
