@@ -5,11 +5,13 @@ import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.PagesXmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
+import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -55,7 +57,18 @@ class ConvertToSqlAction : AnAction() {
 
         // T-M24-04：XML mapper 文件 → 预览光标所在语句（不在语句内 → 首个语句）
         // T-M29.6：选择区优先——选中段落内多条语句时弹选择栏（与 Java 选择区候选交互一致）
+        // F-45：<pages> XML 文件 → maintainPage 预览
         if (file is XmlFile) {
+            val rootTag = file.rootTag
+            if (rootTag?.name == "pages") {
+                val selectionModel = editor.selectionModel
+                if (selectionModel.hasSelection()) {
+                    previewPagesSelection(project, file, editor, selectionModel.selectionStart, selectionModel.selectionEnd)
+                } else {
+                    previewPagesStatement(project, file, editor)
+                }
+                return
+            }
             val selectionModel = editor.selectionModel
             if (selectionModel.hasSelection()) {
                 previewXmlSelection(project, file, editor, selectionModel.selectionStart, selectionModel.selectionEnd, sourceLocation)
@@ -361,6 +374,106 @@ class ConvertToSqlAction : AnAction() {
             XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
         }) { result ->
             SqlPreviewService.showResult(project, result, sourceLocation)
+        }
+    }
+
+    /**
+     * F-45：maintainPage 语句预览——光标所在 maintainPage 优先；不在语句内时
+     * 收集全部 maintainPage（0/1/多分发，多候选走 [SqlSelectionDialog]，仿 mapper 语句候选交互）。
+     */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun previewPagesStatement(project: Project, file: XmlFile, editor: Editor) {
+        val element = file.findElementAt(editor.caretModel.offset)
+        val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
+        var statement = tag
+        while (statement != null && statement.name != "maintainPage") {
+            statement = statement.parentTag
+        }
+        if (statement != null) {
+            previewPages(project, file, statement)
+            return
+        }
+        // 光标不在 maintainPage 内 → 全部候选
+        val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
+            .filter { it.name == "maintainPage" }
+        when (statements.size) {
+            0 -> SqlPreviewService.showResult(project, null)
+            1 -> previewPages(project, file, statements[0])
+            else -> {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    val displayTexts = try {
+                        ReadAction.compute<List<String>, Throwable> {
+                            statements.map { tag ->
+                                val line = tag.containingFile.viewProvider.document
+                                    ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+                                val text = tag.text?.trim().orEmpty()
+                                SqlSelectionDialog.displayText(
+                                    "${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
+                                    text,
+                                )
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        emptyList()
+                    }
+                    ApplicationManager.getApplication().invokeLater {
+                        if (displayTexts.size != statements.size) {
+                            SqlPreviewService.showResult(project, null)
+                            return@invokeLater
+                        }
+                        SqlSelectionDialog(project, statements, displayTexts) { selected ->
+                            locateEditorTo(editor, selected)
+                            previewPages(project, file, selected)
+                        }.show()
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * F-45：选择区内 maintainPage 候选——扫描选择区内 maintainPage（startOffset 在选区范围），
+     * 0/1/多分发（多条弹 [SqlSelectionDialog]，仿 mapper 选择区候选交互）。
+     */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun previewPagesSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val payload = try {
+                ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
+                    val tags = PagesXmlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
+                    tags to tags.map { tag ->
+                        val line = tag.containingFile.viewProvider.document
+                            ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+                        val text = tag.text?.trim().orEmpty()
+                        SqlSelectionDialog.displayText(
+                            "${tag.getAttributeValue("id").orEmpty()}（第 $line 行）",
+                            text,
+                        )
+                    }
+                }
+            } catch (t: Throwable) {
+                emptyList<XmlTag>() to emptyList<String>()
+            }
+            val (tags, displayTexts) = payload
+            ApplicationManager.getApplication().invokeLater {
+                when (tags.size) {
+                    0 -> SqlPreviewService.showResult(project, null)
+                    1 -> previewPages(project, file, tags[0])
+                    else -> SqlSelectionDialog(project, tags, displayTexts) { selected ->
+                        locateEditorTo(editor, selected)
+                        previewPages(project, file, selected)
+                    }.show()
+                }
+            }
+        }
+    }
+
+    /** 预览单个 maintainPage（后台转换，EDT 渲染）。 */
+    private fun previewPages(project: Project, file: XmlFile, tag: XmlTag) {
+        SqlPreviewService.previewAsync(project, {
+            PagesXmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project)
+        }) { result ->
+            SqlPreviewService.showResult(project, result)
         }
     }
 

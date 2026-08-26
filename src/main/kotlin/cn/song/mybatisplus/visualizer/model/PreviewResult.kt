@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.model
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
+import cn.song.mybatisplus.visualizer.xml.PagesColumn
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 
 /**
@@ -27,6 +28,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
  *                         面板勾选重建；非 XML 预览为 null（与 previewModel/batchModel 互斥）
  * @param fillClauses      fill 附加查询子句列表（MPJ 1.5.1+，T-MpjFill）：按调用顺序；
  *                         null 表示无 fill 调用。面板在主 SQL 之后追加渲染 fill 附加 SELECT 段。
+ * @param pagesColumns     maintainPage 列元数据（F-45）：<pages> 预览非 null，面板「列信息」tab 展示源。
  */
 data class PreviewResult(
     val sql: String,
@@ -54,4 +56,6 @@ data class PreviewResult(
     val fillClauses: List<FillClause>? = null,
     /** O-4：会话级缓存的上一次预览 SQL（null = 首次预览，不显示差异）。 */
     val previousSql: String? = null,
+    /** F-45：maintainPage 列元数据（仅 pages XML 预览非 null；面板「列信息」tab 展示源）。 */
+    val pagesColumns: List<PagesColumn>? = null,
 )

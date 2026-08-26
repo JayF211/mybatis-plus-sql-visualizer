@@ -136,6 +136,9 @@
         <!-- T-M24-04 XML 预览：mapper 语句（select/insert/update/delete）行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider"/>
+        <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
