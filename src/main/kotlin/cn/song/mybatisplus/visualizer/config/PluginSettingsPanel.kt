@@ -61,7 +61,7 @@ import javax.swing.JTabbedPane
  * M16.2 增强：
  *  - 「表前缀」「表后缀」文本输入行（可添加/清除）——统一修饰预览 SQL 中的表名（全局语义）。
  */
-class PluginSettingsPanel(
+class PluginSettingsPanel @JvmOverloads constructor(
     private val settings: PluginSettings,
     private val sections: Set<String> = SECTION_ALL,
 ) {
