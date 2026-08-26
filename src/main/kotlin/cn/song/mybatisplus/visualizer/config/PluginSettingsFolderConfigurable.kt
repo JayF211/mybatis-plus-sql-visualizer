@@ -3,8 +3,10 @@ package cn.song.mybatisplus.visualizer.config
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.options.ex.Settings
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.ui.DoubleClickListener
 import com.intellij.ui.SearchTextField
@@ -15,8 +17,8 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Container
 import java.awt.Cursor
-import java.awt.Dimension
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
@@ -28,7 +30,6 @@ import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
-import javax.swing.SwingConstants
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -127,20 +128,113 @@ class PluginSettingsFolderConfigurable : Configurable {
     }
 
     private fun navigateTo(item: SearchItem) {
-        navigateToPage(item.configurableClass)
+        val focusHint = when (item) {
+            is SearchItem.PageItem -> null
+            is SearchItem.FieldItem -> item.fieldLabel
+        }
+        navigateToPage(item.configurableClass, focusHint)
     }
 
     /**
-     * 在同一对话框内导航到指定子页面。
+     * 在同一对话框内导航到指定子页面，并聚焦目标控件。
+     *
+     * 优先通过 Settings.KEY 在当前已打开的设置对话框内切换树选择（不新开窗口）；
+     * 仅当取不到 Settings 时才回退 showSettingsDialog。
      */
-    private fun navigateToPage(configurableClass: Class<out Configurable>) {
+    private fun navigateToPage(configurableClass: Class<out Configurable>, focusHint: String? = null) {
         val project = com.intellij.ide.DataManager.getInstance()
             .getDataContext(searchField)
             .getData(CommonDataKeys.PROJECT)
             ?: ProjectManager.getInstance().openProjects.firstOrNull()
             ?: return
 
+        // 在当前已打开的设置对话框内切换（Settings.KEY 取自该对话框）
+        val settings = Settings.KEY.getData(DataContext { dataId ->
+            if (dataId == CommonDataKeys.PROJECT.name) project else null
+        })
+
+        if (settings != null) {
+            val target = settings.find(configurableClass)
+            if (target != null) {
+                settings.select(target)
+                if (focusHint != null) {
+                    focusTarget(target, focusHint)
+                }
+                return
+            }
+        }
+
+        // 回退：打开设置对话框（若尚未打开）
         ShowSettingsUtil.getInstance().showSettingsDialog(project, configurableClass)
+    }
+
+    /**
+     * 聚焦目标设置控件：页面切换后在真实面板中查找并高亮目标字段。
+     * 页面切换为异步，延迟到 EDT 调度。
+     */
+    private fun focusTarget(target: Configurable, focusHint: String) {
+        javax.swing.SwingUtilities.invokeLater {
+            runCatching {
+                // 页面已显示，createComponent() 返回真实面板
+                val root = target.createComponent() ?: return@invokeLater
+                if (focusAndFlash(root, focusHint)) {
+                    root.revalidate(); root.repaint()
+                }
+            }.onFailure { /* 忽略聚焦失败，不影响导航 */ }
+        }
+    }
+
+    /**
+     * 递归查找匹配 hint 的控件：聚焦并短暂高亮（闪烁背景色）。
+     * @return 是否找到目标控件
+     */
+    private fun focusAndFlash(container: Container, hint: String): Boolean {
+        for (comp in container.components) {
+            val matched = when {
+                comp is javax.swing.text.JTextComponent ->
+                    comp.toolTipText?.contains(hint, ignoreCase = true) == true
+                comp is JBLabel -> comp.text.contains(hint, ignoreCase = true)
+                comp is javax.swing.AbstractButton -> comp.text.contains(hint, ignoreCase = true)
+                else -> false
+            }
+            if (matched) {
+                flashHighlight(comp)
+                return true
+            }
+            if (comp is Container && focusAndFlash(comp, hint)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /** 短暂高亮目标控件（背景闪烁 3 次）。 */
+    private fun flashHighlight(comp: Component) {
+        comp.requestFocusInWindow()
+        val originalBg = comp.background
+        val originalOpaque = (comp as? javax.swing.JComponent)?.isOpaque ?: false
+        if (comp is javax.swing.JComponent) {
+            comp.isOpaque = true
+        }
+        var count = 0
+        val timer = javax.swing.Timer(250) {
+            count++
+            if (count % 2 == 1) {
+                comp.background = java.awt.Color(0xFFE599)
+            } else {
+                comp.background = originalBg
+            }
+            comp.repaint()
+            if (count >= 6) {
+                comp.background = originalBg
+                if (comp is javax.swing.JComponent) {
+                    comp.isOpaque = originalOpaque
+                }
+                (it.source as? javax.swing.Timer)?.stop()
+            }
+        }
+        timer.isRepeats = true
+        timer.start()
     }
 
     override fun isModified(): Boolean = false
