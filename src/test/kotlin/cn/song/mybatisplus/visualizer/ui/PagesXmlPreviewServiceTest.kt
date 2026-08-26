@@ -169,6 +169,28 @@ class PagesXmlPreviewServiceTest {
     }
 
     @Test
+    fun `HQL内容_直接展示无参数`() {
+        val xml = """
+            <pages>
+                <maintainPage id="hqlPage" title="HQL" autoQuery="true"
+                              entityClass="com.example.model.User">
+                    <datasource><![CDATA[
+                    select u.name, u.email from User u
+                  where u.age > 18
+                  order by u.createdDate desc
+                    ]]></datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+        val result = PagesXmlPreviewService.preview(xml, "hqlPage")
+        assertTrue(result.sql.contains("User"))
+        assertTrue(result.sql.contains("order by"))
+        // HQL 无占位符 → 参数列表为空
+        assertEquals(emptyList<String>(), result.unresolvedParams)
+        assertNull(result.paramTable)
+    }
+
+    @Test
     fun `wrapperType为null`() {
         val result = PagesXmlPreviewService.preview(sampleXml, "maintainLangLibPage")
         assertNull(result.wrapperType)

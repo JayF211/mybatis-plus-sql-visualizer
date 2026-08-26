@@ -166,4 +166,25 @@ class PagesXmlParserTest {
         assertTrue(sql.contains("id < 10"))
         assertTrue(sql.contains("%test%"))
     }
+
+    @Test
+    fun `HQL语句_实体类与字段正确提取`() {
+        val xml = """
+            <pages>
+                <maintainPage id="userQuery" title="User Query" autoQuery="true"
+                              entityClass="com.example.model.User">
+                    <datasource><![CDATA[
+                    select u.name, u.email from User u
+                  where u.age > 18
+                  order by u.createdDate desc
+                    ]]></datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        val stmt = model.statements[0]
+        assertEquals("com.example.model.User", stmt.entityClass)
+        assertTrue(stmt.sql.contains("from User u"))
+        assertTrue(stmt.sql.contains("order by u.createdDate desc"))
+    }
 }
