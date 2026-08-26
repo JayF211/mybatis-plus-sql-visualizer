@@ -387,9 +387,7 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             val titlePanel = JPanel(BorderLayout(6, 0)).apply {
                 isOpaque = false
                 add(toggle, BorderLayout.WEST)
-                add(JBLabel(MpSqlVisualizerBundle.message(titleKey)).apply {
-                    font = JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD)
-                }, BorderLayout.CENTER)
+                add(TitledSeparator(MpSqlVisualizerBundle.message(titleKey)), BorderLayout.CENTER)
             }
             val wrapper = ref.wrapper.apply {
                 isOpaque = false
