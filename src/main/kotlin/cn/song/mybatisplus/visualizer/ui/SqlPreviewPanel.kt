@@ -3,6 +3,10 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
+import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
+import cn.song.mybatisplus.visualizer.execute.DataSourceSettings
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.FillClause
@@ -160,6 +164,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
 
+    // M36：SQL 执行结果面板（编辑器下方，展示执行状态/摘要）
+    private val resultPanel = SqlResultPanel()
+
     private var current: PreviewResult? = null
     private var compactMode = false
 
@@ -213,7 +220,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             dividerSize = 3
             background = UIUtil.getPanelBackground()
         }
-        add(split, BorderLayout.CENTER)
+
+        // M36：垂直分割——上方 SQL 编辑区 | 下方结果面板（默认折叠，执行后展开）
+        val verticalSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, split, resultPanel).apply {
+            resizeWeight = 0.7
+            isContinuousLayout = true
+            isOneTouchExpandable = false
+            dividerSize = 3
+            background = UIUtil.getPanelBackground()
+            // 结果面板默认最小高度（折叠态）
+            minimumSize = Dimension(0, 0)
+        }
+        add(verticalSplit, BorderLayout.CENTER)
 
         // T-M26.6：注册格式化快捷键——组件级 custom shortcut 命中即消费按键，
         // 不与 IDE 全局 Reformat Code 双触发（预览语言无 formatter，全局动作本不可用）
@@ -283,16 +301,78 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * 执行 SQL（M17，M17.4 由弹窗底部按钮区调用）：取当前编辑器 SQL（含参数回填与手动编辑）
-     * 交给 [cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport]——选择数据源 → 自动创建
-     * 临时文件（Database 控制台绑定）→ 打开可执行。无项目/无内容时不动作；
+     * 执行 SQL（M36 直接执行）：
+     *  1. SQL 类型分类 → 非查询语句二次确认
+     *  2. 获取数据源（默认 → 选择弹窗）
+     *  3. 创建临时文件 + 原生控制台执行（结果内联展示，IDEA 原生样式）
+     *  4. 结果摘要展示在下方结果面板
+     *
      * Community（无 database 插件）由支持层提示降级。
      * T-M23.6：成功提示「关闭 SQL 面板」按钮 → 回调 [onClosePanelRequested]（预览弹窗关闭）。
      */
     internal fun executeSql() {
         val proj = project ?: return
         val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
-        ExecuteSqlSupport.execute(proj, sql, onClosePanel = { onClosePanelRequested?.invoke() })
+
+        // 1. SQL 类型分类 → 非查询语句二次确认
+        val isQuery = SqlTypeClassifier.isQuery(sql)
+        if (!isQuery) {
+            val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+            val confirm = Messages.showYesNoDialog(
+                proj,
+                MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                Messages.getWarningIcon(),
+            )
+            if (confirm != Messages.YES) return
+        }
+
+        // 2. 获取数据源（默认 → 选择弹窗）
+        val defaultDs = DataSourceSettings.getDefaultDataSource(proj)
+        if (defaultDs != null) {
+            executeWithDataSource(proj, sql, defaultDs, isQuery)
+        } else {
+            resultPanel.showLoading()
+            DataSourceSelector.select(proj) { ds ->
+                if (ds != null) {
+                    executeWithDataSource(proj, sql, ds, isQuery)
+                } else {
+                    resultPanel.showEmpty()
+                }
+            }
+        }
+    }
+
+    /**
+     * 使用指定数据源执行 SQL（M36）。
+     */
+    private fun executeWithDataSource(proj: Project, sql: String, dataSource: Any, isQuery: Boolean) {
+        val dsName = DataSourceSettings.getName(dataSource)
+        resultPanel.showLoading(dsName)
+
+        // 后台执行（避免阻塞 EDT）
+        com.intellij.openapi.progress.ProgressManager.getInstance().run(
+            object : com.intellij.openapi.progress.Task.Backgroundable(proj, "Executing SQL", false) {
+                override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                    val startTime = System.currentTimeMillis()
+                    runCatching {
+                        SqlExecutor.execute(proj, sql, dataSource, isQuery)
+                        val elapsed = System.currentTimeMillis() - startTime
+                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                            if (isQuery) {
+                                resultPanel.showQueryResult(-1, elapsed, dsName)
+                            } else {
+                                resultPanel.showUpdateResult(-1, elapsed, dsName)
+                            }
+                        }
+                    }.onFailure { error ->
+                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                            resultPanel.showError(error.message ?: error.toString())
+                        }
+                    }
+                }
+            },
+        )
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
@@ -751,6 +831,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // F-1：清除图集 + 恢复纯 SQL 视图
         removeDiagramTab()
         diagramPanel.clear()
+        // M36：清空结果面板
+        resultPanel.clear()
         revalidate()
         repaint()
     }
