@@ -303,10 +303,132 @@ class JoinDiagramGeneratorTest {
         assertTrue("Should contain station_name from selectAs", colNames.contains("station_name"))
         val stationCol = joinEntity.columns.find { it.name == "station_name" }
         assertNotNull("station_name should exist", stationCol)
-        assertEquals("String", stationCol!!.type)
+        assertEquals("VARCHAR", stationCol!!.type)
         // From ON conditions (no type)
         assertTrue("Should contain user_id from ON", colNames.contains("user_id"))
         assertTrue("Should contain dept_id from ON", colNames.contains("dept_id"))
+    }
+
+    // ---- F-1.1 新增测试 ----
+
+    @Test
+    fun `entity class name alias falls back to default alias`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "orderEntity",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t", columnName = "id"),
+                            right = ColumnRef(tableAlias = "orderEntity", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(2, model.entities.size)
+        // 实体类名含大写，fallback 为默认别名 t1
+        assertEquals("t1", model.entities[1].alias)
+        assertEquals("order", model.entities[1].tableName)
+    }
+
+    @Test
+    fun `sql alias with lowercase preserved`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "tt",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t", columnName = "id"),
+                            right = ColumnRef(tableAlias = "tt", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals("tt", model.entities[1].alias)
+    }
+
+    @Test
+    fun `subquery join shows Subquery as table name`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT,
+                    tableName = "(SELECT tt.id, tt.station_id, tt.station_name FROM station_info tt)",
+                    alias = "tt",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t", columnName = "id"),
+                            right = ColumnRef(tableAlias = "tt", columnName = "station_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals("Subquery", model.entities[1].tableName)
+    }
+
+    @Test
+    fun `java types converted to sql types in columns`() {
+        val tableWithTypes = TableInfo(
+            entityClassName = "UserEntity",
+            tableName = "user",
+            columns = listOf(
+                ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
+                ColumnInfo("name", "name", fieldType = "java.lang.String"),
+                ColumnInfo("age", "age", fieldType = "java.lang.Integer"),
+                ColumnInfo("created", "created_at", fieldType = "java.time.LocalDateTime"),
+            ),
+        )
+        val stmt = SelectStatement(
+            table = tableWithTypes, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val cols = model.entities[0].columns
+        assertEquals("BIGINT", cols[0].type)
+        assertEquals("VARCHAR", cols[1].type)
+        assertEquals("INT", cols[2].type)
+        assertEquals("DATETIME", cols[3].type)
+    }
+
+    @Test
+    fun `join entity has joinType set`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(JoinType.LEFT, model.entities[1].joinType)
+        assertEquals(null, model.entities[0].joinType)
     }
 
 }

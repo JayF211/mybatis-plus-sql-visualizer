@@ -26,12 +26,14 @@ data class DiagramModel(
  * @param tableName 表名（用于显示）
  * @param columns   列列表（已裁剪：总数 >50 时仅保留 PK）
  * @param isMain    是否主表（控制颜色：true = 绿色，false = 蓝色）
+ * @param joinType  JOIN 类型（仅 JOIN 表有效，用于卡片标题标注）
  */
 data class EntityNode(
     val alias: String,
     val tableName: String,
     val columns: List<ColumnEntry>,
     val isMain: Boolean,
+    val joinType: JoinType? = null,
 ) {
     /** 显示名：别名与表名不同时显示 "tableName (alias)"。 */
     val displayName: String
