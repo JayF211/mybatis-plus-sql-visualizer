@@ -8,6 +8,8 @@ package cn.song.mybatisplus.visualizer.model
  * @param alias      SQL 别名（selectAs 时设置，如 AS device_id）
  * @param function   聚合函数（selectMax/selectCount 等，如 MAX / COUNT；null 表示普通列）
  * @param rawExpr    selectFunc 的完整表达式（如 `COUNT(CASE WHEN t.status = 1 THEN 1 END)`；非空时优先渲染）
+     * @param entityClass 列来源实体类名（selectAs 第一参方法引用的接收者类名；用于图表列归属推断）
+     * @param type        Java 类型全限定名（selectAs 第二参方法引用的返回类型；用于图表列类型显示）
  */
 data class ColumnRef(
     val tableAlias: String? = null,
@@ -15,6 +17,8 @@ data class ColumnRef(
     val alias: String? = null,
     val function: String? = null,
     val rawExpr: String? = null,
+    val entityClass: String? = null,
+    val type: String? = null,
 ) {
     /** 渲染为带表限定的列表达式，如 `cssm.sort` 或 `sort`。 */
     val qualifiedName: String

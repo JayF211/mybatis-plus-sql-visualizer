@@ -65,7 +65,7 @@ sealed class WrapperArg {
     data class NestedArg(val chain: WrapperChain) : WrapperArg()
 
     /** MPJ selectAs 目标 VO 字段引用（`selectAs(Entity::getX, VO::getY)` 第二参）：别名 = VO 属性名（保留驼峰）。 */
-    data class AliasArg(val propertyName: String) : WrapperArg()
+    data class AliasArg(val propertyName: String, val returnType: String? = null) : WrapperArg()
 
     /** MPJ selectFunc 聚合函数实参（`selectFunc("COUNT(%s)", func -> func.accept(列).values(值), "alias")`）。 */
     data class FuncArg(

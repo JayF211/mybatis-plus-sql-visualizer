@@ -1,8 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupManager
@@ -13,9 +12,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
-import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDocumentManager
@@ -29,7 +26,7 @@ import javax.swing.JComponent
  * SQL 可编辑输入编辑器（T-M36.4 工具窗口「SQL → Java」tab 输入区）。
  *
  * 接线全部复用 SqlPreviewPanel 的实证先例：
- *  - `SqlPreviewLanguage` PSI 文件支撑 → 挂 [SqlCompletionContributor] 提供补全；
+ *  - 原生 SQL FileType PSI 文件支撑 → 挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全；
  *  - DataProvider 包装补 EDITOR（M27.1：2025.3 平台编辑器改 UiCompatibleDataProvider 后
  *    传统 DataManager 沿父链只认 DataProvider，不包装则 Ctrl+Space/自动补全拿不到编辑器）；
  *  - **自建 autopopup**（M27.2）：平台 autopopup 对非项目文件编辑器不生效（空弹窗、
@@ -59,34 +56,31 @@ class SqlInputEditor(
 
     val text: String get() = editor.document.text
 
-    /** 创建编辑器：PSI 文件 → 文档 → 可编辑编辑器 + 高亮 + 补全上下文双载体 + autopopup。 */
+    /** 创建编辑器：原生 SQL FileType PSI → 文档 → 可编辑编辑器 + 高亮 + 补全上下文双载体 + autopopup。 */
     private fun createEditor(sql: String): Editor {
-        val created = if (project.isDisposed) {
+        val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+            .getStdFileType("SQL")
+        val created = if (project.isDisposed || sqlFileType == null) {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
         } else {
             val psi = PsiFileFactory.getInstance(project)
-                .createFileFromText("input.mpsql", SqlPreviewLanguage, sql)
+                .createFileFromText("input.sql", sqlFileType, sql)
             psiFile = psi
             val doc = PsiDocumentManager.getInstance(project).getDocument(psi)
                 ?: EditorFactory.getInstance().createDocument(sql)
-            EditorFactory.getInstance().createEditor(doc, project)
+            EditorFactory.getInstance().createEditor(doc, project, sqlFileType, false)
         }
         (created as EditorEx).apply {
-            highlighter = LexerEditorHighlighter(
-                SqlSyntaxHighlighter(),
-                EditorColorsManager.getInstance().globalScheme,
-            )
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
         }
-        // 补全上下文双载体（M16.2）：Editor userData 为主载体（用户输入后 PSI 可能被
-        // commit 重建而丢失 userData，Editor 对象编辑期间稳定）、PSI 文件 userData 兜底
+        // 补全上下文双载体（M16.2）：Editor userData 为主载体 + PSI 文件 userData 兜底
         val ctx = SqlCompletionContext(null, emptyList(), null, emptyMap(), null, emptyList())
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
-        // DataProvider 包装补 EDITOR（M27.1 实证，见类注释）
+        // DataProvider 包装补 EDITOR（M27.1，实证，见类注释）
         editorHolder.add(
             object : JBPanel<JBPanel<*>>(BorderLayout()), DataProvider {
                 override fun getData(dataId: String): Any? =

@@ -56,6 +56,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
 
         gbc.gridy++
         gbc.insets = Insets(4, 24, 4, 6)  // 缩进
+        gbc.fill = GridBagConstraints.NONE  // 不拉伸，保持自然宽度
 
         // 方言下拉（示例项，后续可扩展更多）
         val dialectPanel = JPanel(BorderLayout(8, 0)).apply {

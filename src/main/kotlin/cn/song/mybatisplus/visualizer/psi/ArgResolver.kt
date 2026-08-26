@@ -56,12 +56,14 @@ object ArgResolver {
         asAlias: Boolean = false,
         resolveVariables: Boolean = true,
     ): WrapperArg {
-        // selectAs(Entity::getX, VO::getY)：第二参方法引用 → 目标 VO 属性名（别名）
+        // selectAs(Entity::getX, VO::getY)：第二参方法引用 → 目标 VO 属性名（别名）+ 返回类型
         if (asAlias && expression is PsiMethodReferenceExpression) {
             val name = expression.referenceName ?: return WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
             val property = getterToProperty(name)
+            // Extract return type for diagram column type display
+            val returnType = (expression.functionalInterfaceType as? PsiClassType)?.parameters?.firstOrNull()?.canonicalText
             return if (property != null) {
-                WrapperArg.AliasArg(property)
+                WrapperArg.AliasArg(property, returnType)
             } else {
                 WrapperArg.ValueArg(SqlValue.Placeholder(expression.text))
             }
@@ -135,7 +137,11 @@ object ArgResolver {
         // 优先从实体字段映射取列名
         val mapped = table?.columnByField(propertyName)?.columnName
         val columnName = mapped ?: NamingStrategy.toSnakeCase(propertyName)
-        return ColumnRef(columnName = columnName)
+
+        // 提取方法引用接收者实体类名（用于 selectAs 图表列归属推断）
+        val entityClass = (methodRef.qualifiedName?.substringBefore("::") ?: methodRef.firstChild?.text)
+
+        return ColumnRef(columnName = columnName, entityClass = entityClass)
     }
 
     /**

@@ -98,8 +98,10 @@ class SqlLogPanel(
     private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
     private val sqlToJavaPanel = SqlToJavaPanel(project)
-    /** F-44：历史 SQL tab（读取 .idea 目录中的自动保存文件，支持源码定位）。 */
-    private val historyPanel = HistorySqlLogPanel(project)
+    /** F-44：历史 SQL tab（读取 .idea 目录中的自动保存文件，支持源码定位）。仅 logAutoSaveEnabled 时创建。 */
+    private val historyPanel: HistorySqlLogPanel by lazy { HistorySqlLogPanel(project) }
+    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加）。 */
+    private var historyTabIndex = -1
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener { manager.entries.dedupeEnabled = isSelected }
@@ -200,7 +202,6 @@ class SqlLogPanel(
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
         Disposer.register(this, logToSqlPanel)
         Disposer.register(this, sqlToJavaPanel)
-        Disposer.register(this, historyPanel)
 
         // 标签 1：SQL 日志（工具栏 + 过滤条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
@@ -211,7 +212,12 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+        // F-44：开启自动保存、或 .idea 中已有历史文件时显示历史 tab
+        if (PluginSettings.getInstance().state.logAutoSaveEnabled || hasHistoryFiles()) {
+            Disposer.register(this, historyPanel)
+            historyTabIndex = tabs.tabCount
+            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+        }
         add(tabs, BorderLayout.CENTER)
 
         // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
@@ -220,16 +226,19 @@ class SqlLogPanel(
                 sqlToJavaPanel.refreshFormatFromSettings()
             }
             // F-44：切换到历史 tab 时刷新数据
-            if (tabs.selectedComponent == historyPanel) {
+            if (historyTabIndex >= 0 && tabs.selectedIndex == historyTabIndex) {
                 historyPanel.refresh()
             }
             // 筛选条显隐跟随设置（设置页修改后切回即同步）
             refreshFilterBarVisibility()
         }
 
-        // 设置变更即时刷新筛选条显隐（无需切 tab）
+        // 设置变更即时刷新筛选条显隐 + F-44 历史 tab 显隐（无需切 tab）
         val settingsListener = SettingsChangeListener {
-            ApplicationManager.getApplication().invokeLater { refreshFilterBarVisibility() }
+            ApplicationManager.getApplication().invokeLater {
+                refreshFilterBarVisibility()
+                updateHistoryTabVisibility()
+            }
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
 
@@ -330,6 +339,36 @@ class SqlLogPanel(
         val enabled = runCatching { PluginSettings.getInstance().state.logFilterBarEnabled }.getOrDefault(false)
         filterSeparator?.isVisible = enabled
         filterBarPanel?.isVisible = enabled
+    }
+
+    /**
+     * F-44：根据 logAutoSaveEnabled 设置 + 历史数据存在与否同步历史 tab 的显隐。
+     * 开启自动保存时显示；关闭后若 .idea 中仍有历史文件，也保留 tab（只读查看已有数据）。
+     * 仅当无自动保存且无历史数据时才移除 tab。
+     */
+    private fun updateHistoryTabVisibility() {
+        val enabled = runCatching { PluginSettings.getInstance().state.logAutoSaveEnabled }.getOrDefault(false)
+        val hasHistoryData = enabled || hasHistoryFiles()
+        if (hasHistoryData && historyTabIndex < 0) {
+            // 添加历史 tab
+            Disposer.register(this, historyPanel)
+            historyTabIndex = tabs.tabCount
+            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+        } else if (!hasHistoryData && historyTabIndex >= 0) {
+            // 移除历史 tab（避免选中正在移除的 tab）
+            if (tabs.selectedIndex == historyTabIndex) {
+                tabs.selectedIndex = 0
+            }
+            tabs.removeTabAt(historyTabIndex)
+            historyTabIndex = -1
+        }
+    }
+
+    /** F-44：检查 .idea 目录中是否存在历史 SQL 文件。 */
+    private fun hasHistoryFiles(): Boolean {
+        val basePath = project.basePath ?: return false
+        val dir = java.io.File("$basePath${java.io.File.separator}.idea${java.io.File.separator}mybatis-plus-sql-visualizer${java.io.File.separator}sql-history")
+        return dir.isDirectory && dir.listFiles { f -> f.extension == "sql" }?.isNotEmpty() == true
     }
 
     /** 工具栏引用（capturing 变化时刷新按钮状态）。 */

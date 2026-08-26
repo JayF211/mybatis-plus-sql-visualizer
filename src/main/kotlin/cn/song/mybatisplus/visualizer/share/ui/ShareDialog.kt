@@ -49,7 +49,21 @@ class ShareDialog(
 
     init {
         title = MpSqlVisualizerBundle.message("share.dialog.title")
+        // F-46：预填充当前代码位置（文件名:行号），用户可编辑覆盖
+        val loc = panel.currentSourceLocation() ?: computeCurrentLocation()
+        if (!loc.isNullOrEmpty()) {
+            sourceField.text = loc
+        }
         init()
+    }
+
+    /** 从当前编辑器实时计算代码位置（文件名:行号），兜底 panel 未设置 sourceLocation 的场景。 */
+    private fun computeCurrentLocation(): String? {
+        val proj = project ?: return null
+        val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(proj).selectedTextEditor ?: return null
+        val virtualFile = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(editor.document) ?: return null
+        val line = editor.document.getLineNumber(editor.caretModel.offset) + 1
+        return "${virtualFile.name}:$line"
     }
 
     override fun createCenterPanel(): JComponent {

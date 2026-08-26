@@ -1204,8 +1204,9 @@ class SqlPreviewService(private val project: Project) {
          * 供 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 与 gutter 图标点击共用（M11 起收敛为弹窗）。
          *
          * @param result null 表示未找到可转换的 Wrapper → 弹友好提示（不抛异常）
+         * @param sourceLocation 当前代码位置（文件名:行号），来源列默认值；null 表示未知
          */
-        fun showResult(project: Project, result: PreviewResult?) {
+        fun showResult(project: Project, result: PreviewResult?, sourceLocation: String? = null) {
             if (result == null) {
                 Messages.showInfoMessage(
                     project,
@@ -1214,7 +1215,7 @@ class SqlPreviewService(private val project: Project) {
                 )
                 return
             }
-            SqlPreviewDialog(project, result).show()
+            SqlPreviewDialog(project, result, sourceLocation).show()
         }
 
         /**

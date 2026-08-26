@@ -79,13 +79,17 @@ object MpjLambdaConverter : WrapperConverter {
         val base = QueryWrapperParser(table, mainAlias)
             .parse(WrapperChain(chain.wrapperType, chain.entityClass, restCalls))
 
+        // Build alias → table and class → alias mappings (needed for selectAs column attribution)
+        val aliasToTable = buildAliasToTable(joinCalls)
+        val classToAlias = aliasToTable.entries.associate { (alias, ti) -> ti.entityClassName to alias }
+
         // selectAll(Class[, prefix][, exclude...])：主表全列（带主表别名前缀）+ 聚合列（selectSum 等，委托 base）
         // + selectAs/selectAsClass/selectSub 列追加；exclude 排除字段（官方 API）、prefix 列前缀（官方 API）
         val selectAsColumns = selectAsCalls.flatMap { call ->
             when (call.methodName) {
                 SELECT_AS_CLASS -> parseSelectAsClass(call, mainAlias)
                 SELECT_SUB -> parseSelectSub(call)
-                else -> listOfNotNull(parseSelectAs(call, mainAlias))
+                else -> listOfNotNull(parseSelectAs(call, mainAlias, classToAlias))
             }
         }
         val selectColumns = if (selectAllCalls.isNotEmpty()) {
@@ -125,8 +129,7 @@ object MpjLambdaConverter : WrapperConverter {
         val around = chain.calls.firstOrNull { it.methodName == AROUND_METHOD }?.let { parseAround(it) }
 
         // T-MpjFill：fill 调用解析（MPJ 1.5.1+）→ FillClause 列表（按调用顺序）；解析失败返回 null 不崩溃
-        // 构建关联表别名 → TableInfo 映射（来自 join 调用的 EntityRefArg）
-        val aliasToTable = buildAliasToTable(joinCalls)
+        // aliasToTable already built above for selectAs attribution
         val fillClauses = fillCalls.mapNotNull { parseFill(it, aliasToTable) }.ifEmpty { null }
 
         return base.copy(
@@ -342,28 +345,31 @@ object MpjLambdaConverter : WrapperConverter {
      *  - `selectAs(Entity::getX, "alias")`：第二参字符串 → 别名原样
      *  - `selectAs("alias.col", VO::getY)`：第一参字符串列（已含表别名限定）→ 不补主表前缀
      */
-    private fun parseSelectAs(call: WrapperCall, mainAlias: String): ColumnRef? {
+    private fun parseSelectAs(call: WrapperCall, mainAlias: String, classToAlias: Map<String, String> = emptyMap()): ColumnRef? {
         val column = when (val arg = call.args.getOrNull(0)) {
             is WrapperArg.ColumnArg -> arg.column
             is WrapperArg.ValueArg -> (arg.value as? SqlValue.Literal)?.let { ColumnRef(columnName = it.unquoted) }
             else -> null
         } ?: return null
 
-        // 别名：第二参可为 VO::getY 方法引用（AliasArg 保留属性名）、lambda 列或字符串字面量
+        // 别名：第二参可为 VO::getY 方法引用（AliasArg 保留属性名 + 返回类型）、lambda 列或字符串字面量
+        var colType: String? = null
         val alias = when (val arg = call.args.getOrNull(1)) {
-            is WrapperArg.AliasArg -> arg.propertyName
+            is WrapperArg.AliasArg -> { colType = arg.returnType; arg.propertyName }
             is WrapperArg.ColumnArg -> arg.column.columnName
             is WrapperArg.ValueArg -> (arg.value as? SqlValue.Literal)?.unquoted
             else -> null
         } ?: return null
 
-        // 第一参为已带表别名限定的字符串列（含 '.'）时原样渲染，否则补主表别名
+        // 第一参为已带表别名限定的字符串列（含 '.'）时原样渲染，否则根据 entityClass 推断
         val tableAlias = if (call.args.getOrNull(0) is WrapperArg.ValueArg && column.columnName.contains('.')) {
             null
+        } else if (column.entityClass != null && classToAlias.containsKey(column.entityClass)) {
+            classToAlias[column.entityClass]!!
         } else {
             mainAlias
         }
-        return ColumnRef(tableAlias = tableAlias, columnName = column.columnName, alias = alias)
+        return ColumnRef(tableAlias = tableAlias, columnName = column.columnName, alias = alias, type = colType)
     }
 
     /**
@@ -549,7 +555,7 @@ object MpjLambdaConverter : WrapperConverter {
 
         // T-M20-05：仅 EntityRefArg（psi 解析实体）携带逻辑删除列；类名兜底/字符串 join/selectCollection
         // 子查询形态 tableInfo 为 null → 不填充（SqlPreviewService 不注入副表 deleted）
-        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = logicDelete)
+        return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = logicDelete, tableInfo = tableInfo)
     }
 
     /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */

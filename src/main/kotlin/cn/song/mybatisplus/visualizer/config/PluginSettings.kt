@@ -309,6 +309,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 收藏条目无数量上限。
          */
         var historyMaxSize: Int = DEFAULT_HISTORY_MAX_SIZE,
+
+        // ---------- 设置页布局（Phase 1：折叠面板状态持久化） ----------
+
+        /** 当前折叠的设置分组 ID 集合（持久化）。展开的组不在集合中。 */
+        var collapsedGroups: MutableSet<String> = mutableSetOf(),
     )
 
     private var state = State()

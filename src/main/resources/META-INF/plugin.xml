@@ -91,13 +91,6 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
 
-        <!-- O-5：项目级设置（projectConfigurable，按项目覆盖全局设置） -->
-        <projectConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
-                             id="cn.song.mybatisplus.visualizer.projectSettings"
-                             bundle="messages.MpSqlVisualizerBundle"
-                             key="configurable.settings.displayName"
-                             instance="cn.song.mybatisplus.visualizer.config.ProjectPluginSettingsConfigurable"/>
-
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
@@ -135,13 +128,9 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider"/>
 
-        <!-- M9 可编辑 SQL 的补全基础设施：预览语言 PSI + 补全器 + 文件类型 -->
-        <lang.parserDefinition language="MP_SQL_Preview"
-                               implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlParserDefinition"/>
-        <completion.contributor language="MP_SQL_Preview"
-                               implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
-        <fileType name="MP_SQL_Preview" extensions="mpsql" language="MP_SQL_Preview"
-                  implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewFileType"/>
+        <!-- M9→原生SQL：补全注册为所有语言 + 内部按文件名/虚拟文件守卫（预览编辑器无虚拟文件） -->
+        <completion.contributor
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
 
         <!-- M27 XML/注解 SQL 代码补全（T-M27-03/05，方案 B 自研，Community 兼容）：mapper 语句
              文本与 @Select 等注解字符串内——SQL 关键字/表名/列名/`别名.` 前缀列/#{} 参数名/
@@ -176,14 +165,14 @@
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）
              T-M40：三处图标统一——sqlLog 蓝底白字版 + 右下角放大镜前景层（玻璃盘浅蓝实色垫底、代码顶层、空心环），无底版实测不理想已回退（sqlLog_bg.svg 为同内容备份） -->
-        <!-- F-44：SQL 日志合并到主侧边栏（SqlLogPanel 嵌入为 tab），不再独立注册工具窗口
+        <!-- F-44：主侧边栏（4 tabs：SQL 日志/日志转SQL/SQL→Java/历史） -->
         <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
                     icon="/icons/sqlLog.svg"
-                    factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/> -->
-        <!-- F-7：SQL 历史记录（自动记录每次预览，支持收藏/标签/搜索） -->
+                    factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
+        <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册
         <toolWindow id="cn.song.mybatisplus.visualizer.history" anchor="right"
                     icon="/icons/sqlGutter.svg"
-                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/>
+                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/> -->
     </extensions>
 
     <!-- F-4：Kotlin plugin mode 声明（Marketplace 要求：依赖 Kotlin 插件需声明兼容模式） -->
