@@ -56,13 +56,9 @@ class PluginSettingsFolderConfigurable : Configurable {
         list.selectionMode = ListSelectionModel.SINGLE_SELECTION
         list.fixedCellHeight = 56  // 固定行高，匹配 IDEA 风格
 
-        // 点击跳转
+        // 点击跳转（双击导航到子页面）
         object : DoubleClickListener() {
             override fun onDoubleClick(e: MouseEvent): Boolean {
-                list.selectedValue?.let { navigateTo(it) }
-                return true
-            }
-            override fun onSingleClick(e: MouseEvent): Boolean {
                 list.selectedValue?.let { navigateTo(it) }
                 return true
             }
@@ -138,7 +134,7 @@ class PluginSettingsFolderConfigurable : Configurable {
      * 在同一对话框内导航到指定子页面。
      */
     private fun navigateToPage(configurableClass: Class<out Configurable>) {
-        val project = com.intellij.openapi.actionSystem.DataManager.getInstance()
+        val project = com.intellij.ide.DataManager.getInstance()
             .getDataContext(searchField)
             .getData(CommonDataKeys.PROJECT)
             ?: ProjectManager.getInstance().openProjects.firstOrNull()
@@ -319,11 +315,11 @@ class PluginSettingsFolderConfigurable : Configurable {
 
     companion object {
         private val SUB_PAGES = listOf(
-            SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.ConfigFile, SqlPreviewConfigurable::class.java),
+            SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.Class, SqlPreviewConfigurable::class.java),
             SubPageDesc("settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables, TableMappingConfigurable::class.java),
             SubPageDesc("settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console, SqlLogConfigurable::class.java),
             SubPageDesc("settings.section.ui", "settings.section.ui.desc", AllIcons.Nodes.Plugin, UiActionsConfigurable::class.java),
-            SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.About, AboutConfigurable::class.java),
+            SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite, AboutConfigurable::class.java),
         )
 
         /** 所有可搜索的设置项字段 */
