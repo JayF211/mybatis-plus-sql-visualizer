@@ -32,6 +32,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
 | [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
+| [记忆精简规范.md](./记忆精简规范.md)                                          | 本地记忆文件管理：分类标准（保留/归档/全局）、归档目录结构、操作流程、数量基线 |
 | [MEMORY.md](./MEMORY.md)                                                      | 本文件：docs 目录检索索引 |
 
 ## 架构设计（docs/架构设计/，2026-08-16 新建）
@@ -171,11 +172,13 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
 | 已修复 Bug / 已解决踩坑（归档） | `docs/memory-archive/README.md` |
 | 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（41 个文件，手动查阅） |
+| 记忆精简规范 | `docs/记忆精简规范.md`（分类标准、归档流程、数量基线） |
 
 ## 变更记录
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-26 | 新增「记忆精简规范.md」：本地记忆文件管理标准（分类/归档/全局/流程/基线） |
 | 2026-08-26 | 记忆第二次精简（31→14）：新增 16 个归档（M30-M33/M41/F-42/F-43/F-44/IDE 冻结/M28/M47/F-45/PlantUML/plugin-xml/设置页布局/设置页配置/tooltip + 3 个踩坑）；archive 增至 70 个文件 |
 | 2026-08-22 | 记忆精简（107→12）：新增「归档记忆」分区（docs/memory-archive/，54 个文件）；全局通用记忆 41 个备份到 `~/.zcode/cli/memories/global/`；全局经验精炼入 `~/.zcode/AGENTS.md` |
 | 2026-08-20 | 新增索引条目：20260820-2030-更新机制Windows路径解析缺陷修复-开发计划.md（插件自更新静默失败修复，✅ 已修复） |
