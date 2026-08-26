@@ -239,19 +239,19 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             g2.fillRect(0, 0, width, height)
 
             val pref = DiagramRenderer.measurePreferredSize(m)
-            val scaleX = width.toDouble() / pref.width
-            val scaleY = height.toDouble() / pref.height
-            val baseScale = minOf(scaleX, scaleY)
-            val offsetX = ((width - pref.width * baseScale) / 2).coerceAtLeast(0.0)
-            val offsetY = ((height - pref.height * baseScale) / 2).coerceAtLeast(0.0)
+            val scale = zoom.coerceIn(0.2, 5.0)
+            val offsetX = ((width - pref.width * scale) / 2).coerceAtLeast(0.0)
+            val offsetY = ((height - pref.height * scale) / 2).coerceAtLeast(0.0)
             g2.translate(offsetX, offsetY)
-            g2.scale(baseScale, baseScale)
+            g2.scale(scale, scale)
 
             val font = UIUtil.getLabelFont()
             val bold = font.deriveFont(Font.BOLD)
             val frc = g2.fontRenderContext
 
             val lines = DiagramRenderer.prepareLinesFor(m)
+            // Canvas 与 PNG/SVG 使用相同的绘制顺序和关系线
+            DiagramRenderer.drawOrthoLinesForCanvas(g2, m, lines, font, bold)
             DiagramRenderer.drawCards(g2, m, font, bold)
             DiagramRenderer.drawLabels(g2, m, lines, font, frc)
 

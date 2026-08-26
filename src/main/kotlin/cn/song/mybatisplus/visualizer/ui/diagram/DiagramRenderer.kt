@@ -128,8 +128,8 @@ object DiagramRenderer {
         g2.fillRect(0, 0, totalW, totalH)
 
         val lines = prepareLinesFor(model)
-        drawCards(g2, model, font, bold)
         drawOrthoLines(g2, lines, model, layouts, positions)
+        drawCards(g2, model, font, bold)
         drawLabelsOnPath(g2, lines, model, layouts, positions, font, frc)
 
         g2.dispose()
@@ -213,40 +213,29 @@ object DiagramRenderer {
 
         val main = layouts[0]
         val joinLayouts = layouts.drop(1)
+        val maxLabelWidth = model.relationships
+            .asSequence()
+            .filter { it.label.isNotBlank() }
+            .map { labelWidth(it.label, font, frc) }
+            .maxOrNull() ?: 0
+        val gap = maxOf(COLUMN_GAP, maxLabelWidth + 48)
+        val childX = MARGIN + main.width + gap
+        val childY = MARGIN
+        val childrenHeight = joinLayouts.sumOf { it.height } + (joinLayouts.size - 1) * ROW_GAP
+        val mainY = childY + (childrenHeight - main.height) / 2
 
-        // 计算每个 JOIN 表对应 ON 标签的渲染宽度（joinLayouts 中的 0-based 索引）
-        val childAliasToJoinIdx = model.entities.withIndex().drop(1).associate { (i, e) -> e.alias to (i - 1) }
-        val labelWidths = IntArray(joinLayouts.size) // 每个子表的 ON 标签半宽
-        for (rel in model.relationships) {
-            val joinIdx = childAliasToJoinIdx[rel.toAlias] ?: continue
-            if (rel.label.isNotEmpty()) {
-                val text = if (rel.label.length > MAX_LABEL_CHARS) rel.label.take(MAX_LABEL_CHARS - 1) + "\u2026" else rel.label
-                val fullW = font.getStringBounds(text, frc).width.toInt() + 20
-                val hw = fullW / 2 + 16
-                if (hw > labelWidths[joinIdx]) labelWidths[joinIdx] = hw
-            }
-        }
-
-        // 相邻子表间距 = max(COLUMN_GAP, 左子标签半宽 + 右子标签半宽)
-        val gaps = mutableListOf<Int>()
-        for (i in 0 until joinLayouts.size - 1) {
-            val needed = labelWidths[i] + labelWidths[i + 1]
-            gaps.add(maxOf(COLUMN_GAP, needed))
-        }
-
-        val totalJoinWidth = joinLayouts.sumOf { it.width } + gaps.sum()
-        val mainX = MARGIN + (totalJoinWidth - main.width) / 2
-        val mainY = MARGIN
-
-        val positions = mutableListOf(Pos(mainX, mainY))
-        var childX = MARGIN
-        val childY = MARGIN + main.height + ROW_GAP
-
-        for ((i, child) in joinLayouts.withIndex()) {
-            positions.add(Pos(childX, childY))
-            childX += child.width + if (i < gaps.size) gaps[i] else COLUMN_GAP
+        val positions = mutableListOf(Pos(MARGIN, mainY))
+        var y = childY
+        for (layout in joinLayouts) {
+            positions.add(Pos(childX, y))
+            y += layout.height + ROW_GAP
         }
         return positions
+    }
+
+    private fun labelWidth(label: String, font: Font, frc: FontRenderContext): Int {
+        val text = if (label.length > MAX_LABEL_CHARS) label.take(MAX_LABEL_CHARS - 1) + "\u2026" else label
+        return (font.getStringBounds(text, frc).width.toInt() + 20).coerceIn(MIN_LABEL_WIDTH, MAX_LABEL_WIDTH)
     }
 
     /** Prepare line data for the model. */
@@ -266,18 +255,13 @@ object DiagramRenderer {
         mainPos: Pos, mainLayout: Layout,
         childPos: Pos, childLayout: Layout,
     ): OrthoPath {
-        val mainCenterX = mainPos.x + mainLayout.width / 2
-        val mainBottom = mainPos.y + mainLayout.height
-        val childCenterX = childPos.x + childLayout.width / 2
-        val childTop = childPos.y
-        val splitY = mainBottom + (childTop - mainBottom) / 2
-
+        val splitX = mainPos.x + mainLayout.width + COLUMN_GAP / 2
         return OrthoPath(
             listOf(
-                Point(mainCenterX, mainBottom),
-                Point(mainCenterX, splitY),
-                Point(childCenterX, splitY),
-                Point(childCenterX, childTop),
+                Point(mainPos.x + mainLayout.width, mainPos.y + mainLayout.height / 2),
+                Point(splitX, mainPos.y + mainLayout.height / 2),
+                Point(splitX, childPos.y + childLayout.height / 2),
+                Point(childPos.x, childPos.y + childLayout.height / 2),
             )
         )
     }
@@ -321,6 +305,14 @@ object DiagramRenderer {
         }
     }
 
+    /** Canvas 专用关系线入口，复用与导出相同的布局算法。 */
+    fun drawOrthoLinesForCanvas(g2: Graphics2D, model: DiagramModel, lines: List<Line>, font: Font, bold: Font) {
+        val frc = g2.fontRenderContext
+        val layouts = measureEntities(model.entities, font, bold, frc)
+        val positions = computeLayout(layouts, model, font, frc)
+        drawOrthoLines(g2, lines, model, layouts, positions)
+    }
+
     /** Draw labels (ON condition + cardinality) positioned along orthogonal paths. */
     fun drawLabels(
         g2: Graphics2D, model: DiagramModel, lines: List<Line>,
@@ -338,38 +330,18 @@ object DiagramRenderer {
     ) {
         val byIdx = model.entities.withIndex().associate { (i, e) -> e.alias to i }
 
-        // First pass: compute all label bounding boxes and detect overlaps
-        val onLabels = mutableListOf<LabelInfo>()
-
+        // 每条关系使用独立的水平 lane，标签严格绑定在该 lane 的中点
         for ((idx, line) in lines.withIndex()) {
             val fi = byIdx[line.fromAlias] ?: continue
             val ti = byIdx[line.toAlias] ?: continue
-            val path = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti])
-            val pts = path.points
-
-            if (line.label.isNotEmpty() && pts.size >= 3) {
-                val hSegStart = pts[1]
-                val hSegEnd = pts[2]
-                val labelCenterX = (hSegStart.x + hSegEnd.x) / 2
-                val labelY = hSegStart.y
-                val rawText = if (line.label.length > MAX_LABEL_CHARS) line.label.take(MAX_LABEL_CHARS - 1) + "\u2026" else line.label
-                val fullW = font.getStringBounds(rawText, frc).width
-                val bw = (fullW + 20).toInt().coerceIn(MIN_LABEL_WIDTH, MAX_LABEL_WIDTH)
-                val bh = (font.getStringBounds(rawText, frc).height + 12).toInt()
-                val bx = labelCenterX - bw / 2
-                // 每条关系独占一行标签；按关系序号向上错层，避免标签与标签/基数徽标重叠
-                val by = labelY - bh - LABEL_LINE_GAP - idx * (bh + LABEL_LINE_GAP)
-                onLabels.add(LabelInfo(idx, bx, by, bw, bh, rawText, labelY))
-            }
-        }
-
-        // Resolve vertical overlaps: alternate above/below the horizontal line
-        val resolved = resolveOverlappingLabels(onLabels, font, frc)
-
-        // Draw resolved ON labels
-        for ((idx, info) in resolved.withIndex()) {
-            val orig = onLabels[idx]
-            onLabel(g2, orig.text, info.first, info.second, orig.bw, orig.bh, font)
+            if (line.label.isBlank()) continue
+            val pts = computeOrthoPath(positions[fi], layouts[fi], positions[ti], layouts[ti]).points
+            val text = if (line.label.length > MAX_LABEL_CHARS) line.label.take(MAX_LABEL_CHARS - 1) + "\u2026" else line.label
+            val bw = labelWidth(line.label, font, frc)
+            val bh = (font.getStringBounds(text, frc).height + 12).toInt()
+            val centerX = (pts[1].x + pts[2].x) / 2
+            val by = pts[1].y - bh / 2
+            onLabel(g2, text, centerX - bw / 2, by, bw, bh, font)
         }
 
         // Second pass: cardinality labels
