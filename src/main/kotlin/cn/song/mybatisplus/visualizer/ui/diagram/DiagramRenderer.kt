@@ -41,6 +41,10 @@ object DiagramRenderer {
     const val TYPE_GAP = 24
     const val KEY_ICON_W = 16
     const val JOIN_BADGE_PADDING = 6
+    const val MAX_LABEL_CHARS = 48
+    const val MIN_LABEL_WIDTH = 60
+    const val MAX_LABEL_WIDTH = 300
+    const val LABEL_LINE_GAP = 12
 
     val SHADOW = JBColor(Color(0x00, 0x00, 0x00, 25), Color(0x00, 0x00, 0x00, 45))
     val CARD_BG = JBColor(Color(0xFF, 0xFF, 0xFF), Color(0x2D, 0x2F, 0x33))
@@ -210,16 +214,16 @@ object DiagramRenderer {
         val main = layouts[0]
         val joinLayouts = layouts.drop(1)
 
-        // 计算每个 JOIN 表对应 ON 标签的渲染宽度
-        val childAliasToIdx = model.entities.withIndex().drop(1).associate { (i, e) -> e.alias to i }
+        // 计算每个 JOIN 表对应 ON 标签的渲染宽度（joinLayouts 中的 0-based 索引）
+        val childAliasToJoinIdx = model.entities.withIndex().drop(1).associate { (i, e) -> e.alias to (i - 1) }
         val labelWidths = IntArray(joinLayouts.size) // 每个子表的 ON 标签半宽
         for (rel in model.relationships) {
-            val childIdx = childAliasToIdx[rel.toAlias] ?: continue
+            val joinIdx = childAliasToJoinIdx[rel.toAlias] ?: continue
             if (rel.label.isNotEmpty()) {
-                val text = if (rel.label.length > 120) rel.label.take(119) + "\u2026" else rel.label
+                val text = if (rel.label.length > MAX_LABEL_CHARS) rel.label.take(MAX_LABEL_CHARS - 1) + "\u2026" else rel.label
                 val fullW = font.getStringBounds(text, frc).width.toInt() + 20
-                val hw = fullW / 2 + 16 // 半宽 + 安全边距
-                if (hw > labelWidths[childIdx]) labelWidths[childIdx] = hw
+                val hw = fullW / 2 + 16
+                if (hw > labelWidths[joinIdx]) labelWidths[joinIdx] = hw
             }
         }
 
@@ -348,12 +352,13 @@ object DiagramRenderer {
                 val hSegEnd = pts[2]
                 val labelCenterX = (hSegStart.x + hSegEnd.x) / 2
                 val labelY = hSegStart.y
-                val rawText = if (line.label.length > 120) line.label.take(119) + "\u2026" else line.label
+                val rawText = if (line.label.length > MAX_LABEL_CHARS) line.label.take(MAX_LABEL_CHARS - 1) + "\u2026" else line.label
                 val fullW = font.getStringBounds(rawText, frc).width
-                val bw = (fullW + 20).toInt().coerceIn(60, 400)
+                val bw = (fullW + 20).toInt().coerceIn(MIN_LABEL_WIDTH, MAX_LABEL_WIDTH)
                 val bh = (font.getStringBounds(rawText, frc).height + 12).toInt()
                 val bx = labelCenterX - bw / 2
-                val by = labelY - bh / 2
+                // 每条关系独占一行标签；按关系序号向上错层，避免标签与标签/基数徽标重叠
+                val by = labelY - bh - LABEL_LINE_GAP - idx * (bh + LABEL_LINE_GAP)
                 onLabels.add(LabelInfo(idx, bx, by, bw, bh, rawText, labelY))
             }
         }
@@ -455,7 +460,7 @@ object DiagramRenderer {
                 val estW = text.length * 6 + 12
                 val bh = 18
                 val bx = labelCenterX - estW / 2
-                val by = labelY - bh / 2
+                val by = labelY - bh - LABEL_LINE_GAP - onLabels.size * (bh + LABEL_LINE_GAP)
                 onLabels.add(LabelInfo(idx, bx, by, estW, bh, text, labelY))
             }
         }
