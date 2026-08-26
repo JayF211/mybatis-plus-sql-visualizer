@@ -602,4 +602,96 @@ object DiagramRenderer {
     private fun hexOf(c: Color): String =
         if (c.alpha < 255) "#%02x%02x%02x%02x".format(c.alpha, c.red, c.green, c.blue)
         else "#%02x%02x%02x".format(c.red, c.green, c.blue)
+
+    // ------------------------------------------------------------------
+    // HiDPI-aware rendering for DiagramPanel
+    // ------------------------------------------------------------------
+
+    /** Preferred display size for the diagram. */
+    data class Size(val width: Int, val height: Int)
+
+    /** Measure preferred display size (at 1x zoom). */
+    fun measurePreferredSize(model: DiagramModel): Size {
+        if (model.entities.isEmpty()) return Size(200, 100)
+        val font = UIUtil.getLabelFont()
+        val bold = font.deriveFont(Font.BOLD)
+        val frc = FontRenderContext(null, true, true)
+        var minGap = COLUMN_GAP
+        for (r in model.relationships) {
+            var needed = COLUMN_GAP
+            if (r.label.isNotEmpty()) {
+                val text = if (r.label.length > 120) r.label.take(119) + "…" else r.label
+                val tw = font.getStringBounds(text, frc).width.toInt() + 40
+                if (tw > needed) needed = tw
+            }
+            needed = (needed + 120).coerceAtMost(520)
+            if (needed > minGap) minGap = needed
+        }
+        val layouts = measureEntities(model.entities, font, bold, frc)
+        val positions = computeLayout(layouts, minGap)
+        val pad = MARGIN + 16
+        val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
+        val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
+        return Size(totalW, totalH)
+    }
+
+    /**
+     * Render diagram directly to a device-resolution BufferedImage.
+     */
+    fun renderToDevice(model: DiagramModel, deviceW: Int, deviceH: Int, zoom: Double = 1.0): BufferedImage {
+        if (model.entities.isEmpty()) return BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
+
+        val font = UIUtil.getLabelFont()
+        val bold = font.deriveFont(Font.BOLD)
+        val frc = FontRenderContext(null, true, true)
+
+        var minGap = COLUMN_GAP
+        for (r in model.relationships) {
+            var needed = COLUMN_GAP
+            if (r.label.isNotEmpty()) {
+                val text = if (r.label.length > 120) r.label.take(119) + "…" else r.label
+                val tw = font.getStringBounds(text, frc).width.toInt() + 40
+                if (tw > needed) needed = tw
+            }
+            needed = (needed + 120).coerceAtMost(520)
+            if (needed > minGap) minGap = needed
+        }
+
+        val layouts = measureEntities(model.entities, font, bold, frc)
+        val positions = computeLayout(layouts, minGap)
+        val pad = MARGIN + 16
+        val totalW = positions.zip(layouts).maxOf { (p, l) -> p.x + l.width } + pad
+        val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
+
+        val img = BufferedImage(deviceW, deviceH, BufferedImage.TYPE_INT_ARGB)
+        val g2 = img.createGraphics()
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB)
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+        g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+        g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
+
+        val scaleX = deviceW.toDouble() / totalW
+        val scaleY = deviceH.toDouble() / totalH
+        val baseScale = minOf(scaleX, scaleY).coerceAtLeast(0.1) * zoom
+        val offsetX = ((deviceW - totalW * baseScale) / 2).coerceAtLeast(0.0)
+        val offsetY = ((deviceH - totalH * baseScale) / 2).coerceAtLeast(0.0)
+        g2.translate(offsetX, offsetY)
+        g2.scale(baseScale, baseScale)
+
+        g2.color = UIUtil.getPanelBackground()
+        g2.fillRect(0, 0, totalW, totalH)
+
+        val lines = prepareLines(model, positions, layouts)
+
+        for ((i, e) in model.entities.withIndex()) {
+            drawCard(g2, e, positions[i], layouts[i], font, bold)
+        }
+
+        drawLabels(g2, lines, font, frc)
+
+        g2.dispose()
+        return img
+    }
+
 }

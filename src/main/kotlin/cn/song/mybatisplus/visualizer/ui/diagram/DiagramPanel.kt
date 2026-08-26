@@ -17,16 +17,16 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.FlowLayout
+import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
+import java.awt.event.MouseWheelListener
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
-import javax.swing.ImageIcon
 import javax.swing.JButton
 import javax.swing.JComponent
-import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JProgressBar
 import javax.swing.SwingConstants
@@ -34,50 +34,12 @@ import javax.swing.SwingConstants
 /**
  * F-1/F-xx：JOIN 关系图渲染面板。
  *
- * 职责：
- *  - 接收 [DiagramModel]，经 [DiagramRenderer] 渲染为 BufferedImage
- *  - 渲染成功后以缩放图显示（支持滚轮/按钮缩放）
- *  - 渲染失败时降级显示错误信息
- *  - 导出 PNG / SVG 到文件
- *
- * 缓存：同一模型不重复渲染（以模型 identity 为键缓存图像）。
- * 生命周期：注册到父组件 Disposer 树，释放时清空缓存。
+ * 直接 Graphics2D 渲染（无中间位图），HiDPI 自适应，任意缩放清晰。
  */
 class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>(BorderLayout()), Disposable {
 
     private var zoom = 1.0
-    private var currentImage: BufferedImage? = null
     private var currentModel: DiagramModel? = null
-
-    private val imageLabel = JLabel().apply {
-        isOpaque = true
-        background = UIUtil.getPanelBackground()
-        horizontalAlignment = SwingConstants.CENTER
-        verticalAlignment = SwingConstants.CENTER
-    }
-    private val scrollPane = JBScrollPane(imageLabel).apply {
-        border = JBUI.Borders.empty()
-        addMouseWheelListener { e ->
-            if (e.isControlDown) {
-                if (e.wheelRotation < 0) zoomIn() else zoomOut()
-                e.consume()
-            }
-        }
-    }
-
-    private val errorTextArea = javax.swing.JTextArea().apply {
-        isEditable = false
-        font = UIUtil.getLabelFont()
-        background = UIUtil.getPanelBackground()
-        border = JBUI.Borders.empty(8)
-        lineWrap = true
-        wrapStyleWord = true
-    }
-    private val errorScroll = JBScrollPane(errorTextArea)
-
-    private val placeholderLabel = JBLabel(
-        MpSqlVisualizerBundle.message("diagram.placeholder.noJoin"), SwingConstants.CENTER,
-    ).apply { foreground = JBColor.GRAY }
 
     private val loadingLabel = JBLabel(
         MpSqlVisualizerBundle.message("diagram.render.loading"), SwingConstants.CENTER,
@@ -100,6 +62,35 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         border = JBUI.Borders.empty(40, 20, 20, 20)
     }
 
+    private val placeholderLabel = JBLabel(
+        MpSqlVisualizerBundle.message("diagram.placeholder.noJoin"), SwingConstants.CENTER,
+    ).apply { foreground = JBColor.GRAY }
+
+    private val errorTextArea = javax.swing.JTextArea().apply {
+        isEditable = false
+        font = UIUtil.getLabelFont()
+        background = UIUtil.getPanelBackground()
+        border = JBUI.Borders.empty(8)
+        lineWrap = true
+        wrapStyleWord = true
+    }
+    private val errorScroll = JBScrollPane(errorTextArea)
+
+    // Diagrams are rendered directly to this component
+    private val diagramComponent = DiagramComponent()
+
+    private val scrollPane = JBScrollPane(diagramComponent).apply {
+        border = JBUI.Borders.empty()
+        addMouseWheelListener { e ->
+            if (e.isControlDown()) {
+                if (e.wheelRotation < 0) zoomIn() else zoomOut()
+                e.consume()
+            }
+        }
+    }
+
+    private var currentCenter: JComponent? = null
+
     init {
         add(buildToolbar(), BorderLayout.NORTH)
         swapContent(placeholderLabel)
@@ -120,62 +111,22 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     fun showDiagram(model: DiagramModel) {
         if (model.isEmpty) { showPlaceholder(); return }
-        if (model == currentModel && currentImage != null) { applyZoom(); return }
+        if (model == currentModel) { return }
         currentModel = model
-        swapContent(loadingPanel)
-        try {
-            currentImage = DiagramRenderer.render(model)
-            currentModel = model
-            applyZoom()
-        } catch (e: Throwable) {
-            showError(model, e.message ?: e.javaClass.simpleName)
-        }
+        swapContent(scrollPane)
+        diagramComponent.setModel(model)
+        revalidate()
+        repaint()
     }
 
     fun clear() {
         currentModel = null
-        currentImage = null
+        diagramComponent.setModel(null)
         showPlaceholder()
     }
 
     fun refreshAfterVisible() {
-        if (currentImage != null && isShowing) applyZoom()
-    }
-
-    private fun applyZoom() {
-        val image = currentImage ?: return
-        val scaled = if (zoom == 1.0) image else scaleImage(image, zoom)
-        invalidate()
-        swapContent(scrollPane)
-        imageLabel.icon = ImageIcon(scaled)
-        imageLabel.text = null
-        var p: java.awt.Container? = this
-        while (p != null) { p.invalidate(); p = p.parent }
-        revalidate()
-        repaint()
-    }
-
-    private fun scaleImage(src: BufferedImage, factor: Double): BufferedImage {
-        val w = (src.width * factor).toInt().coerceAtLeast(1)
-        val h = (src.height * factor).toInt().coerceAtLeast(1)
-        val dst = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
-        val g = dst.createGraphics()
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.drawImage(src, 0, 0, w, h, null)
-        g.dispose()
-        return dst
-    }
-
-    private fun showError(model: DiagramModel, error: String?) {
-        errorTextArea.text = buildString {
-            append(MpSqlVisualizerBundle.message("diagram.render.failed", error ?: "unknown"))
-            append("\n\nEntities: ${model.entities.size}, Relationships: ${model.relationships.size}")
-        }
-        swapContent(errorScroll)
-        revalidate()
-        repaint()
+        if (currentModel != null && isShowing) repaint()
     }
 
     private fun showPlaceholder() {
@@ -184,7 +135,6 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         repaint()
     }
 
-    private var currentCenter: JComponent? = null
     private fun swapContent(component: JComponent) {
         if (currentCenter === component) return
         currentCenter?.let { remove(it) }
@@ -192,15 +142,16 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         currentCenter = component
     }
 
-    fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); applyZoom() }
-    fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); applyZoom() }
-    fun zoomReset() { zoom = 1.0; applyZoom() }
+    fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); repaint() }
+    fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); repaint() }
+    fun zoomReset() { zoom = 1.0; repaint() }
     fun zoomForTest(): Double = zoom
 
     private fun exportPng() {
-        val image = currentImage ?: return
+        val model = currentModel ?: return
         val proj = project ?: return
         try {
+            val image = DiagramRenderer.render(model)
             val baos = ByteArrayOutputStream()
             ImageIO.write(image, "png", baos)
             if (baos.size() == 0) throw RuntimeException("PNG encode produced no output")
@@ -246,7 +197,58 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     override fun dispose() {
         currentModel = null
-        currentImage = null
         Disposer.dispose(this)
+    }
+
+    /**
+     * 自定义组件：直接 Graphics2D 渲染 ER 图，HiDPI 自适应。
+     */
+    private inner class DiagramComponent : JComponent() {
+        private var model: DiagramModel? = null
+        private var cachedImage: BufferedImage? = null
+        private var cachedZoom = 0.0
+        private var cachedW = 0
+        private var cachedH = 0
+
+        fun setModel(m: DiagramModel?) {
+            model = m
+            cachedImage = null
+            if (m != null && !m.isEmpty) {
+                val pref = DiagramRenderer.measurePreferredSize(m)
+                preferredSize = java.awt.Dimension(pref.width, pref.height)
+            } else {
+                preferredSize = java.awt.Dimension(200, 100)
+            }
+        }
+
+        override fun paintComponent(g: Graphics) {
+            super.paintComponent(g)
+            val m = model ?: return
+            if (m.isEmpty) return
+
+            val g2 = g.create() as Graphics2D
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB)
+            g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+            g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
+
+            val scaleX = g2.transform.scaleX
+            val scaleY = g2.transform.scaleY
+            val effZoom = zoom * scaleX
+
+            // Render to cached image at device resolution if zoom or size changed
+            val w = (width * scaleX).toInt().coerceAtLeast(1)
+            val h = (height * scaleY).toInt().coerceAtLeast(1)
+            if (cachedImage == null || cachedZoom != zoom || cachedW != w || cachedH != h) {
+                cachedImage = DiagramRenderer.renderToDevice(m, w, h, zoom)
+                cachedZoom = zoom
+                cachedW = w
+                cachedH = h
+            }
+
+            g2.drawImage(cachedImage, 0, 0, width, height, null)
+            g2.dispose()
+        }
     }
 }
