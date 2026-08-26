@@ -153,6 +153,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M27.4：渲染 setText 期间抑制自建 autopopup（格式化替换整文档不触发补全）。 */
     private var suppressAutoPopup = false
     private var psiFile: PsiFile? = null
+    /** M34 回归修复：预览 PSI 的临时 VirtualFile（PsiDocumentManager 追踪需真实 VFS 文件），releaseEditor 时删除。 */
+    private var previewTempFile: com.intellij.openapi.vfs.VirtualFile? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
@@ -416,11 +418,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         repaint()
     }
 
-    /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。 */
+    /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。
+     *  M34 回归修复：原生 SQL 高亮迁移后 Editor/PSI 对象在预览切换间复用（文档不变），
+     *  三级回退的 Document→Context 映射需随上下文刷新同步更新，否则落入旧预览的过期表/列。 */
     private fun refreshCompletionContext() {
         val ctx = buildCompletionContext()
         editor?.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
+        editor?.document?.let { SqlCompletionContributor.registerContext(it, ctx) }
     }
 
     /** 由当前预览结果构造补全上下文（表名/列名/注释；M16.2 抽为复用函数，Editor 与 PSI 同源）。 */
@@ -721,12 +726,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 首次创建：原生 SQL FileType PSI → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
     private fun createEditor(sql: String) {
         val proj = project
+        val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
+            .getStdFileType("SQL")
         val created = if (proj != null) {
-            val psi = createPreviewFileForTest(proj, sql)
+            // M34 回归修复：PsiFileFactory.createFileFromText 创建的 in-memory PSI 文件不在
+            // PsiDocumentManager 注册——CodeCompletionHandlerBase.invokeCompletion 内部调用
+            // PsiDocumentManager.getPsiFile(document) 返回 null → "no PSI file" 断言失败。
+            // 改用真实临时文件（系统 temp + .sql 后缀，java.io 写入免 write action）：
+            // LocalFileSystem 可见 → PsiManager.findFile 建立 VFS 文件 → PsiDocumentManager
+            // 追踪 document↔psi，补全框架初始化不再 NPE。生命周期见 releaseEditor。
+            val vFile = previewTempFile ?: run {
+                val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
+                io.writeText(sql)  // 纯 java.io，无需 EDT/write action
+                io.deleteOnExit()
+                com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
+                    ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+            }
+            previewTempFile = vFile
+            val psi = com.intellij.psi.PsiManager.getInstance(proj).findFile(vFile)
+                ?: throw IllegalStateException("临时 SQL 文件无 PSI")
             psiFile = psi
-            val doc = PsiDocumentManager.getInstance(proj).getDocument(psi)
-                ?: EditorFactory.getInstance().createDocument(sql)
-            EditorFactory.getInstance().createEditor(doc, proj)
+            val doc = com.intellij.psi.PsiDocumentManager.getInstance(proj)
+                .getDocument(psi) ?: throw IllegalStateException("临时 SQL 文件无关联文档")
+            EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
         }
@@ -735,6 +757,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val ctx = buildCompletionContext()
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
+        // M34 回归修复：三级回退的 Document→Context 映射须在此登记（首次创建时 editor 尚不存在，
+        // refreshCompletionContext 的 editor?.document 为 null，只能在此写入）——否则 commitDocument
+        // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
+        created.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         (created as EditorEx).apply {
             // 原生 SQL 高亮器（手动设置，因内存 PSI 文件不自动关联）
             val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
@@ -824,6 +850,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val prev = ed.document.getText(TextRange.create(insertEnd - 1, insertEnd)).firstOrNull() ?: return
                 if (!prev.isLetterOrDigit() && prev != '_') { return }
                 autoPopupScheduled = true
+                com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
+                    .info("[SqlPreviewPanel] bindAutoPopup: char='$prev', scheduling invokeLater")
                 ApplicationManager.getApplication().invokeLater {
                     autoPopupScheduled = false
                     val ed2 = editor ?: return@invokeLater
@@ -835,10 +863,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                         // 先提交文档（PSI 同步）——补全前缀按编辑器文档计算，未 commit 时用旧 PSI
                         // 文本算前缀导致误过滤（如 "FROM Stbl" 按旧文本 "FROM tbl" 前缀算成 "t"）
                         com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(ed2.document)
+                        com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
+                            .info("[SqlPreviewPanel] bindAutoPopup: invoking CodeCompletionHandlerBase")
                         CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true)
                             .invokeCompletion(proj, ed2, 1, false)
+                        com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
+                            .info("[SqlPreviewPanel] bindAutoPopup: invokeCompletion returned")
                     } catch (t: Throwable) {
-                        // 补全异常不影响输入（弹窗失败下次输入重试）
+                        com.intellij.openapi.diagnostic.Logger.getInstance("SqlPreviewPanel.AutoPopup")
+                            .warn("[SqlPreviewPanel] bindAutoPopup: invokeCompletion FAILED", t)
                     }
                 }
             }
@@ -861,6 +894,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             editor = null
         }
         psiFile = null
+        // M34 回归修复：临时 SQL 文件删除（java.io 删除免 write action；deleteOnExit 兜底）
+        previewTempFile?.let { vFile -> java.io.File(vFile.path).delete() }
+        previewTempFile = null
     }
 
     // ------------------------------------------------------------------
