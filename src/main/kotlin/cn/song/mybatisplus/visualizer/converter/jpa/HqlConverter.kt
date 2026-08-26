@@ -15,7 +15,8 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
  *  4. NEW DTO(...) 表达式 → 提取构造参数
  *  5. JOIN FETCH → LEFT JOIN（保留别名，推断 ON 条件）
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
- *  7. 属性名 → 列名映射（仅当有有效 TableInfo 时）
+ *  7. 关联字段路径映射：`alias.field.id` → 外键列名（仅当有有效 TableInfo 时）
+ *  8. 属性名 → 列名映射（仅当有有效 TableInfo 时）
  *
  * 关键：返回的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
  * 转换器不解析条件树（conditions 为空），因此必须使用转换后的 SQL 字符串。
@@ -71,14 +72,16 @@ object HqlConverter {
         // 7. 实体名 → 表名映射
         if (!table.entityClassName.isBlank()) {
             sql = mapEntityToTable(sql, table)
-            // 8. 属性名 → 列名映射
+            // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
+            sql = mapAssociationPath(sql, table)
+            // 9. 属性名 → 列名映射
             sql = mapPropertyToColumn(sql, table)
         } else {
             // Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table
             sql = mapFallbackEntityToTable(sql, table.tableName)
         }
 
-        // 9. 检测 DELETE HQL → DeleteStatement
+        // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trimStart().uppercase().startsWith("DELETE")) {
             return Result(
                 sql = sql,
@@ -235,6 +238,55 @@ object HqlConverter {
         if (table.entityClassName.isBlank()) return hql
         val entityPattern = Regex("\\b${Regex.escape(table.entityClassName)}\\b")
         return entityPattern.replace(hql, table.tableName)
+    }
+
+    // ------------------------------------------------------------------
+    // 关联字段路径映射
+    // ------------------------------------------------------------------
+
+    /**
+     * 处理关联字段路径：`alias.field.id` → `alias.joinColumn`。
+     *
+     * HQL 中关联字段路径的语义：
+     * - `rti.ruleTable.id` → 关联字段 `ruleTable` 的主键，等价于外键列 `RULE_TABLE_ID`
+     * - `rti.ruleTable.name` → 关联实体的 `name` 属性（需要 JOIN，暂用注释提示）
+     *
+     * 解析策略：
+     * 1. 匹配 `alias.field.id` 三段式路径（两段式关联）
+     * 2. 查找 `field` 对应的 `AssociationInfo`
+     * 3. 将 `alias.field.id` 替换为 `alias.joinColumn`
+     * 4. 对于 `alias.field.property`（非 id），添加注释提示需要 JOIN
+     */
+    private fun mapAssociationPath(hql: String, table: TableInfo): String {
+        if (table.associations.isEmpty()) return hql
+
+        var result = hql
+        // 匹配三段式路径：alias.fieldName.propertyName
+        val threeLevelPattern = Regex(
+            "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b"
+        )
+
+        result = threeLevelPattern.replace(result) { match ->
+            val alias = match.groupValues[1]
+            val fieldName = match.groupValues[2]
+            val propertyName = match.groupValues[3]
+
+            val association = table.associationByField(fieldName)
+            if (association != null) {
+                if (propertyName.equals("id", ignoreCase = true)) {
+                    // alias.field.id → alias.joinColumn（外键列）
+                    "$alias.${association.joinColumn}"
+                } else {
+                    // alias.field.property → 需要 JOIN，添加注释提示
+                    "$alias.$fieldName.$propertyName /* 关联字段，需 JOIN ${association.targetTable} */"
+                }
+            } else {
+                // 非关联字段，保持原样
+                match.value
+            }
+        }
+
+        return result
     }
 
     // ------------------------------------------------------------------
