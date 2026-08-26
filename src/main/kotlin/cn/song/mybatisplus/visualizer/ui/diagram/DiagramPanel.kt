@@ -17,10 +17,10 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.FlowLayout
+import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
-import java.awt.event.MouseWheelListener
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -34,7 +34,8 @@ import javax.swing.SwingConstants
 /**
  * F-1/F-xx：JOIN 关系图渲染面板。
  *
- * 直接 Graphics2D 渲染（无中间位图），HiDPI 自适应，任意缩放清晰。
+ * 渲染方案：paintComponent 内直接 Graphics2D 变换绘制，无中间位图。
+ * 组件尺寸 = 图表自然尺寸 × zoom，scroll pane 处理溢出。
  */
 class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>(BorderLayout()), Disposable {
 
@@ -76,11 +77,11 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     }
     private val errorScroll = JBScrollPane(errorTextArea)
 
-    // Diagrams are rendered directly to this component
-    private val diagramComponent = DiagramComponent()
+    private val diagramCanvas = DiagramCanvas()
 
-    private val scrollPane = JBScrollPane(diagramComponent).apply {
+    private val scrollPane = JBScrollPane(diagramCanvas).apply {
         border = JBUI.Borders.empty()
+        viewport.background = UIUtil.getPanelBackground()
         addMouseWheelListener { e ->
             if (e.isControlDown()) {
                 if (e.wheelRotation < 0) zoomIn() else zoomOut()
@@ -111,22 +112,24 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     fun showDiagram(model: DiagramModel) {
         if (model.isEmpty) { showPlaceholder(); return }
-        if (model == currentModel) { return }
         currentModel = model
         swapContent(scrollPane)
-        diagramComponent.setModel(model)
+        diagramCanvas.setModel(model, zoom)
         revalidate()
         repaint()
     }
 
     fun clear() {
         currentModel = null
-        diagramComponent.setModel(null)
+        diagramCanvas.setModel(null, zoom)
         showPlaceholder()
     }
 
     fun refreshAfterVisible() {
-        if (currentModel != null && isShowing) repaint()
+        if (currentModel != null && isShowing) {
+            diagramCanvas.revalidate()
+            repaint()
+        }
     }
 
     private fun showPlaceholder() {
@@ -142,9 +145,9 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         currentCenter = component
     }
 
-    fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); repaint() }
-    fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); repaint() }
-    fun zoomReset() { zoom = 1.0; repaint() }
+    fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
+    fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
+    fun zoomReset() { zoom = 1.0; diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
     fun zoomForTest(): Double = zoom
 
     private fun exportPng() {
@@ -201,21 +204,19 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     }
 
     /**
-     * 自定义组件：直接 Graphics2D 渲染 ER 图，HiDPI 自适应。
+     * 直接 Graphics2D 渲染画布。
+     * preferredSize = 图表自然尺寸 × zoom → scroll pane 自动处理溢出。
      */
-    private inner class DiagramComponent : JComponent() {
+    private inner class DiagramCanvas : JComponent() {
         private var model: DiagramModel? = null
-        private var cachedImage: BufferedImage? = null
-        private var cachedZoom = 0.0
-        private var cachedW = 0
-        private var cachedH = 0
 
-        fun setModel(m: DiagramModel?) {
+        fun setModel(m: DiagramModel?, z: Double) {
             model = m
-            cachedImage = null
             if (m != null && !m.isEmpty) {
                 val pref = DiagramRenderer.measurePreferredSize(m)
-                preferredSize = java.awt.Dimension(pref.width, pref.height)
+                val w = (pref.width * z).toInt().coerceAtLeast(100)
+                val h = (pref.height * z).toInt().coerceAtLeast(60)
+                preferredSize = java.awt.Dimension(w, h)
             } else {
                 preferredSize = java.awt.Dimension(200, 100)
             }
@@ -233,21 +234,27 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
             g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
 
-            val scaleX = g2.transform.scaleX
-            val scaleY = g2.transform.scaleY
-            val effZoom = zoom * scaleX
+            // 背景
+            g2.color = UIUtil.getPanelBackground()
+            g2.fillRect(0, 0, width, height)
 
-            // Render to cached image at device resolution if zoom or size changed
-            val w = (width * scaleX).toInt().coerceAtLeast(1)
-            val h = (height * scaleY).toInt().coerceAtLeast(1)
-            if (cachedImage == null || cachedZoom != zoom || cachedW != w || cachedH != h) {
-                cachedImage = DiagramRenderer.renderToDevice(m, w, h, zoom)
-                cachedZoom = zoom
-                cachedW = w
-                cachedH = h
-            }
+            val pref = DiagramRenderer.measurePreferredSize(m)
+            val scaleX = width.toDouble() / pref.width
+            val scaleY = height.toDouble() / pref.height
+            val baseScale = minOf(scaleX, scaleY)
+            val offsetX = ((width - pref.width * baseScale) / 2).coerceAtLeast(0.0)
+            val offsetY = ((height - pref.height * baseScale) / 2).coerceAtLeast(0.0)
+            g2.translate(offsetX, offsetY)
+            g2.scale(baseScale, baseScale)
 
-            g2.drawImage(cachedImage, 0, 0, width, height, null)
+            val font = UIUtil.getLabelFont()
+            val bold = font.deriveFont(Font.BOLD)
+            val frc = g2.fontRenderContext
+
+            val lines = DiagramRenderer.prepareLinesFor(m)
+            DiagramRenderer.drawCards(g2, m, font, bold)
+            DiagramRenderer.drawLabels(g2, m, lines, font, frc)
+
             g2.dispose()
         }
     }
