@@ -120,7 +120,18 @@ class SqlCompletionContributor : CompletionContributor() {
                     }
                     // 列名：WHERE/ON/HAVING/GROUP BY/ORDER BY 后、SELECT 列位或子句无法判定
                     if (clause != SqlClause.TABLE) {
-                        provider.columnsWithComments(ctx).forEach { (col, comment) ->
+                        val colComments = provider.columnsWithComments(ctx)
+                        // M35 方案 B：数据源 schema 注释优先（DB COMMENT 比实体注释权威）；
+                        // 按实体表名查数据源列注释，命中则覆盖同名列的实体注释。
+                        val project = parameters.editor.project
+                        val schemaComments = if (project != null && ctx.tableName != null)
+                            DatabaseSchemaResolver.columnComments(project, ctx.tableName)
+                        else emptyMap()
+                        val merged = if (schemaComments.isEmpty()) colComments
+                        else colComments.map { (col, comment) ->
+                            col to (schemaComments[col] ?: comment)
+                        }
+                        merged.forEach { (col, comment) ->
                             if (prefix.prefixMatches(col)) {
                                 result.addElement(withComment(LookupElementBuilder.create(col), comment))
                             }
