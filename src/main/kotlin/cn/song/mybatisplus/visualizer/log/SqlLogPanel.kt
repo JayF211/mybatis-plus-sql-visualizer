@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
-import cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable
+import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
@@ -414,7 +414,7 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, PluginSettingsConfigurable::class.java)
+            ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
         }
     }
 

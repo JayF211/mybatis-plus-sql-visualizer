@@ -81,15 +81,47 @@
              IDE 自动发现，无需 XML 注册；获取方式不变 project.getService(SqlPreviewService::class.java)） -->
 
         <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer
-             （官方规范：必须用 applicationConfigurable 注册；com.intellij.configurable 为 abstract EP 不可直接注册；
-              M16.1 修正：覆写 getDisplayName() 的 Configurable 必须声明 displayName 或 key 属性
-              （Plugin DevKit 验证规则，缺失报错），故声明 bundle+key——key 由 IDE 默认 locale 解析；
-              getDisplayName() 覆写保留作动态兜底（插件语言 zh/en 手动切换时以代码为准） -->
+             （左侧树导航：父节点为文件夹，5 个子节点各自显示独立页面） -->
         <applicationConfigurable parentId="tools"
                                  id="cn.song.mybatisplus.visualizer.settings"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="configurable.settings.displayName"
-                                 instance="cn.song.mybatisplus.visualizer.config.PluginSettingsConfigurable"/>
+                                 instance="cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable"/>
+
+        <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.preview"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.preview"
+                                 instance="cn.song.mybatisplus.visualizer.config.SqlPreviewConfigurable"/>
+
+        <!-- 表名映射（前缀/后缀/移除/忽略字段/推断策略） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.tableMapping"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.tableMapping"
+                                 instance="cn.song.mybatisplus.visualizer.config.TableMappingConfigurable"/>
+
+        <!-- SQL 日志（前缀/自动捕获/时间戳/格式化/过滤/去重/最大条数/耗时/慢查询/Hibernate/Jdbc/自动保存） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.sqlLog"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.sqlLog"
+                                 instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
+
+        <!-- 界面与操作（gutter图标/语言/快捷键） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.ui"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.ui"
+                                 instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
+
+        <!-- 关于（缓存/更新/构建号/导入导出） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.about"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.about"
+                                 instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
@@ -125,8 +157,11 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider"/>
 
-        <!-- M9→原生SQL：补全注册为所有语言 + 内部按文件名/虚拟文件守卫（预览编辑器无虚拟文件） -->
-        <completion.contributor
+        <!-- M9→原生SQL：补全注册到 SQL 语言。实测全语言注册（无 language）在补全调度时不被
+     CompletionContributor.forLanguage 返回（M34 补全失效根因之一），必须显式 language；
+     SQL 文件（IDEA DatabaseTools：com.intellij.sql.SqlLanguage，id="SQL"）由
+     editor.getFileType().language 匹配。 -->
+        <completion.contributor language="SQL"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor"/>
 
         <!-- M27 XML/注解 SQL 代码补全（T-M27-03/05，方案 B 自研，Community 兼容）：mapper 语句

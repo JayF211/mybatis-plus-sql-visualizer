@@ -61,7 +61,19 @@ import javax.swing.JTabbedPane
  * M16.2 增强：
  *  - 「表前缀」「表后缀」文本输入行（可添加/清除）——统一修饰预览 SQL 中的表名（全局语义）。
  */
-class PluginSettingsPanel(private val settings: PluginSettings) {
+class PluginSettingsPanel(
+    private val settings: PluginSettings,
+    private val sections: Set<String> = SECTION_ALL,
+) {
+    companion object {
+        const val SECTION_PREVIEW = "preview"
+        const val SECTION_TABLE_MAPPING = "tableMapping"
+        const val SECTION_CODE_GEN = "codeGen"
+        const val SECTION_SQL_LOG = "sqlLog"
+        const val SECTION_UI = "ui"
+        const val SECTION_UPDATE_DIAGNOSTICS = "updateDiagnostics"
+        val SECTION_ALL = setOf(SECTION_PREVIEW, SECTION_TABLE_MAPPING, SECTION_CODE_GEN, SECTION_SQL_LOG, SECTION_UI, SECTION_UPDATE_DIAGNOSTICS)
+    }
 
     /**
      * 语言选项（值 + 当前语言下的显示文案；rebuild 时按新语言重建）。
@@ -405,294 +417,308 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             gbc.gridy++
         }
 
-        // 搜索框（Phase 3：实时过滤）
-        collapsiblePanelRefs.clear()
-        gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
-        gbc.fill = GridBagConstraints.HORIZONTAL
-        val searchPanel = JPanel(BorderLayout(6, 0)).apply {
-            isOpaque = false
-            border = JBUI.Borders.empty(2, 6, 6, 6)
-            add(searchField, BorderLayout.CENTER)
+        // 搜索框（Phase 3：实时过滤）—— 仅在全部模式下显示
+        if (sections == SECTION_ALL) {
+            collapsiblePanelRefs.clear()
+            gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            val searchPanel = JPanel(BorderLayout(6, 0)).apply {
+                isOpaque = false
+                border = JBUI.Borders.empty(2, 6, 6, 6)
+                add(searchField, BorderLayout.CENTER)
+            }
+            panel.add(searchPanel, gbc)
+            gbc.gridy++
         }
-        panel.add(searchPanel, gbc)
-        gbc.gridy++
 
         // 组 1：SQL 预览（默认展开）
-        collapsiblePanel("settings.section.preview", "preview", defaultExpanded = true) { p, g ->
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
-            addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
-            addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
-            addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
-            })
-            addRow(p, g, "", injectTenantLineCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectTenantLine") })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnName"), tenantColumnNameField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnName.tip")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnDefault"), tenantColumnDefaultField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnDefault.tip")
-            })
-            addRow(p, g, "", injectTenantOnInsertCheck.apply {
-                text = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert")
-                toolTipText = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert.tip")
-            })
-            addRow(p, g, "", dataPermissionHintCheck.apply {
-                text = MpSqlVisualizerBundle.message("settings.dataPermissionHint")
-                toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionHint.tip")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition"), dataPermissionMockConditionField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition.tip")
-            })
+        if (SECTION_PREVIEW in sections) {
+            collapsiblePanel("settings.section.preview", "preview", defaultExpanded = true) { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
+                addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
+                addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
+                addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
+                })
+                addRow(p, g, "", injectTenantLineCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectTenantLine") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnName"), tenantColumnNameField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnName.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnDefault"), tenantColumnDefaultField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnDefault.tip")
+                })
+                addRow(p, g, "", injectTenantOnInsertCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert.tip")
+                })
+                addRow(p, g, "", dataPermissionHintCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.dataPermissionHint")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionHint.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition"), dataPermissionMockConditionField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition.tip")
+                })
+            }
         }
 
         // 组 2：表名映射（默认折叠）
-        collapsiblePanel("settings.section.tableMapping", "tableMapping", defaultExpanded = false) { p, g ->
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.tableSuffix.tip")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTablePrefix"), removeTablePrefixField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.removeTablePrefix.tip")
-                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTableSuffix"), removeTableSuffixField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.removeTableSuffix.tip")
-                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.ignoredFields"), ignoredFieldsField.apply {
-                toolTipText = MpSqlVisualizerBundle.message("settings.ignoredFields.tip")
-                emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.tableNameInference"), inferenceCombo.apply {
-                model = DefaultComboBoxModel(inferenceOptions())
-                toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
-                selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
-                    ?: inferenceOptions().first()
-            })
+        if (SECTION_TABLE_MAPPING in sections) {
+            collapsiblePanel("settings.section.tableMapping", "tableMapping", defaultExpanded = false) { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.tableSuffix.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTablePrefix"), removeTablePrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.removeTablePrefix.tip")
+                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTableSuffix"), removeTableSuffixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.removeTableSuffix.tip")
+                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.ignoredFields"), ignoredFieldsField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.ignoredFields.tip")
+                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.tableNameInference"), inferenceCombo.apply {
+                    model = DefaultComboBoxModel(inferenceOptions())
+                    toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
+                    selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
+                        ?: inferenceOptions().first()
+                })
+            }
         }
 
         // 组 3：代码生成（默认折叠）
-        collapsiblePanel("settings.section.codeGen", "codeGen", defaultExpanded = false) { p, g ->
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
-                model = DefaultComboBoxModel(reverseFormatOptions())
-                toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
-                selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
-                    ?: reverseFormatOptions().first()
-            })
-            addRow(p, g, "", manualEntityCheck.apply {
-                text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
-                toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
-            })
+        if (SECTION_CODE_GEN in sections) {
+            collapsiblePanel("settings.section.codeGen", "codeGen", defaultExpanded = false) { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
+                    model = DefaultComboBoxModel(reverseFormatOptions())
+                    toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
+                    selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
+                        ?: reverseFormatOptions().first()
+                })
+                addRow(p, g, "", manualEntityCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
+                })
+            }
         }
 
         // 组 4：SQL 日志（默认折叠，内分 3 Tab）
-        collapsiblePanel("settings.section.sqlLog", "sqlLog", defaultExpanded = false) { p, _ ->
-            val tabPane = JTabbedPane()
-            val tabGbc = GridBagConstraints().apply {
-                gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
-            }
-            fun tabRow(p: JPanel, g: GridBagConstraints, label: String, comp: JComponent) {
-                g.gridx = 0; g.weightx = 0.0; p.add(JBLabel(label), g)
-                g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.NONE; p.add(comp, g)
-                g.fill = GridBagConstraints.NONE; g.gridy++
-            }
-
-            // Tab 1 — MyBatis 核心
-            tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.mybatis"), JPanel(GridBagLayout()).apply {
-                tabRow(this, tabGbc, "", logFilterBarCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.filterBar")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.filterBar.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.paramPrefix"), logParamPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.paramPrefix.tip")
-                })
-                tabRow(this, tabGbc, "", logMixedPrefixCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.mixedPrefix")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
-                })
-                tabRow(this, tabGbc, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
-                tabRow(this, tabGbc, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
-                tabRow(this, tabGbc, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
-                tabRow(this, tabGbc, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
-                })
-                tabRow(this, tabGbc, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
-                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.dedupeWindow"), logDedupeField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.dedupeWindow.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.maxCount"), logMaxCountField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.maxCount.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timePrefix.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
-                })
-            })
-
-            // Tab 2 — ORM 框架
-            tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.orm"), JPanel(GridBagLayout()).apply {
-                tabRow(this, tabGbc, "", logHibernateEnabledCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix"), logHibernateSqlPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix.tip")
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
-                })
-                tabRow(this, tabGbc, "", logJdbcEnabledCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.jdbc")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
-                })
-            })
-
-            // Tab 3 — 自动保存
-            tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.autoSave"), JPanel(GridBagLayout()).apply {
-                tabRow(this, tabGbc, "", logAutoSaveCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.autoSave")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
-                    addActionListener {
-                        val enabled = isSelected
-                        logAutoSavePathField.isEnabled = enabled
-                        logAutoSaveBrowseButton.isEnabled = enabled
-                        logAutoSavePatternField.isEnabled = enabled
-                        updateAutoSavePreview()
-                    }
-                })
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
-                    JPanel(BorderLayout(4, 0)).apply {
-                        isOpaque = false
-                        add(logAutoSavePathField.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.path.tip")
-                            emptyText.text = MpSqlVisualizerBundle.message("settings.log.autoSave.path.empty")
-                        }, BorderLayout.CENTER)
-                        add(logAutoSaveBrowseButton.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip")
-                            addActionListener { browseAutoSavePath() }
-                        }, BorderLayout.EAST)
-                    }
-                )
-                tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.autoSave.pattern"),
-                    JPanel(BorderLayout(4, 0)).apply {
-                        isOpaque = false
-                        add(logAutoSavePatternField.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
-                            emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
-                            document.addDocumentListener(object : javax.swing.event.DocumentListener {
-                                override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                            })
-                        }, BorderLayout.CENTER)
-                        add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
-                            addActionListener { logAutoSavePatternField.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
-                        }, BorderLayout.EAST)
-                    }
-                )
-                tabRow(this, tabGbc, "", logAutoSavePatternPreview.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
-                })
-            })
-
-            // 统一 tab 内标签列宽
-            var maxTabLabel = 0
-            for (i in 0 until tabPane.tabCount) {
-                val tabComp = tabPane.getComponentAt(i)
-                if (tabComp is JPanel) {
-                    for (c in tabComp.components) {
-                        if (c is JBLabel) maxTabLabel = maxOf(maxTabLabel, c.preferredSize.width)
-                    }
+        if (SECTION_SQL_LOG in sections) {
+            collapsiblePanel("settings.section.sqlLog", "sqlLog", defaultExpanded = false) { p, _ ->
+                val tabPane = JTabbedPane()
+                val tabGbc = GridBagConstraints().apply {
+                    gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
                 }
-            }
-            if (maxTabLabel > 0) {
+                fun tabRow(p: JPanel, g: GridBagConstraints, label: String, comp: JComponent) {
+                    g.gridx = 0; g.weightx = 0.0; p.add(JBLabel(label), g)
+                    g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.NONE; p.add(comp, g)
+                    g.fill = GridBagConstraints.NONE; g.gridy++
+                }
+
+                // Tab 1 — MyBatis 核心
+                tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.mybatis"), JPanel(GridBagLayout()).apply {
+                    tabRow(this, tabGbc, "", logFilterBarCheck.apply {
+                        text = MpSqlVisualizerBundle.message("settings.log.filterBar")
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.filterBar.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.paramPrefix"), logParamPrefixField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.paramPrefix.tip")
+                    })
+                    tabRow(this, tabGbc, "", logMixedPrefixCheck.apply {
+                        text = MpSqlVisualizerBundle.message("settings.log.mixedPrefix")
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
+                    })
+                    tabRow(this, tabGbc, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
+                    tabRow(this, tabGbc, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
+                    tabRow(this, tabGbc, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
+                    tabRow(this, tabGbc, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
+                    })
+                    tabRow(this, tabGbc, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
+                        emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.dedupeWindow"), logDedupeField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.dedupeWindow.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.maxCount"), logMaxCountField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.maxCount.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.timePrefix.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
+                    })
+                })
+
+                // Tab 2 — ORM 框架
+                tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.orm"), JPanel(GridBagLayout()).apply {
+                    tabRow(this, tabGbc, "", logHibernateEnabledCheck.apply {
+                        text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix"), logHibernateSqlPrefixField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix.tip")
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
+                    })
+                    tabRow(this, tabGbc, "", logJdbcEnabledCheck.apply {
+                        text = MpSqlVisualizerBundle.message("settings.log.jdbc")
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
+                    })
+                })
+
+                // Tab 3 — 自动保存
+                tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.autoSave"), JPanel(GridBagLayout()).apply {
+                    tabRow(this, tabGbc, "", logAutoSaveCheck.apply {
+                        text = MpSqlVisualizerBundle.message("settings.log.autoSave")
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
+                        addActionListener {
+                            val enabled = isSelected
+                            logAutoSavePathField.isEnabled = enabled
+                            logAutoSaveBrowseButton.isEnabled = enabled
+                            logAutoSavePatternField.isEnabled = enabled
+                            updateAutoSavePreview()
+                        }
+                    })
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
+                        JPanel(BorderLayout(4, 0)).apply {
+                            isOpaque = false
+                            add(logAutoSavePathField.apply {
+                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.path.tip")
+                                emptyText.text = MpSqlVisualizerBundle.message("settings.log.autoSave.path.empty")
+                            }, BorderLayout.CENTER)
+                            add(logAutoSaveBrowseButton.apply {
+                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip")
+                                addActionListener { browseAutoSavePath() }
+                            }, BorderLayout.EAST)
+                        }
+                    )
+                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.autoSave.pattern"),
+                        JPanel(BorderLayout(4, 0)).apply {
+                            isOpaque = false
+                            add(logAutoSavePatternField.apply {
+                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
+                                emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
+                                document.addDocumentListener(object : javax.swing.event.DocumentListener {
+                                    override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                    override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                    override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                })
+                            }, BorderLayout.CENTER)
+                            add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
+                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
+                                addActionListener { logAutoSavePatternField.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+                            }, BorderLayout.EAST)
+                        }
+                    )
+                    tabRow(this, tabGbc, "", logAutoSavePatternPreview.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
+                    })
+                })
+
+                // 统一 tab 内标签列宽
+                var maxTabLabel = 0
                 for (i in 0 until tabPane.tabCount) {
                     val tabComp = tabPane.getComponentAt(i)
-                    if (tabComp is JPanel && tabComp.layout is GridBagLayout) {
-                        (tabComp.layout as GridBagLayout).columnWidths = intArrayOf(maxTabLabel + 8, 0)
+                    if (tabComp is JPanel) {
+                        for (c in tabComp.components) {
+                            if (c is JBLabel) maxTabLabel = maxOf(maxTabLabel, c.preferredSize.width)
+                        }
                     }
                 }
-            }
+                if (maxTabLabel > 0) {
+                    for (i in 0 until tabPane.tabCount) {
+                        val tabComp = tabPane.getComponentAt(i)
+                        if (tabComp is JPanel && tabComp.layout is GridBagLayout) {
+                            (tabComp.layout as GridBagLayout).columnWidths = intArrayOf(maxTabLabel + 8, 0)
+                        }
+                    }
+                }
 
-            val outer = GridBagConstraints().apply {
-                gridx = 0; gridy = 0; weightx = 1.0; weighty = 1.0
-                fill = GridBagConstraints.BOTH
+                val outer = GridBagConstraints().apply {
+                    gridx = 0; gridy = 0; weightx = 1.0; weighty = 1.0
+                    fill = GridBagConstraints.BOTH
+                }
+                p.add(tabPane, outer)
             }
-            p.add(tabPane, outer)
         }
 
         // 组 5：界面与操作（默认展开）
-        collapsiblePanel("settings.section.ui", "ui", defaultExpanded = true) { p, g ->
-            addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
-                model = DefaultComboBoxModel(languageOptions())
-                selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
-                    ?: languageOptions().first()
-            })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sqlToJava"), reverseShortcutEditor.apply { updateTexts() })
+        if (SECTION_UI in sections) {
+            collapsiblePanel("settings.section.ui", "ui", defaultExpanded = true) { p, g ->
+                addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
+                    model = DefaultComboBoxModel(languageOptions())
+                    selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
+                        ?: languageOptions().first()
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sqlToJava"), reverseShortcutEditor.apply { updateTexts() })
+            }
         }
 
         // 组 6：更新与诊断（默认折叠）
-        collapsiblePanel("settings.section.updateDiagnostics", "updateDiagnostics", defaultExpanded = false) { p, g ->
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.cache.label"),
-                JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-                    isOpaque = false
-                    add(cacheInfoLabel)
-                    add(clearCacheButton.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.cache.tip")
+        if (SECTION_UPDATE_DIAGNOSTICS in sections) {
+            collapsiblePanel("settings.section.updateDiagnostics", "updateDiagnostics", defaultExpanded = false) { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.cache.label"),
+                    JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                        isOpaque = false
+                        add(cacheInfoLabel)
+                        add(clearCacheButton.apply {
+                            toolTipText = MpSqlVisualizerBundle.message("settings.cache.tip")
+                            addActionListener {
+                                ProjectManager.getInstance().openProjects.forEach { PluginCacheManager.clearAll(it) }
+                                cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.cleared")
+                            }
+                        })
+                    })
+                g.anchor = GridBagConstraints.NORTHWEST
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.update.versionInfo"), updateSection.apply { updateTexts() })
+                g.anchor = GridBagConstraints.WEST
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
+                    add(JBLabel().apply {
+                        text = PluginBuildInfo.displayText()
+                        toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
+                    }, BorderLayout.CENTER)
+                    add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
+                        isEnabled = PluginBuildInfo.mpvBuild() != null
                         addActionListener {
-                            ProjectManager.getInstance().openProjects.forEach { PluginCacheManager.clearAll(it) }
-                            cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.cleared")
+                            CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()))
+                            val original = text
+                            text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
+                            javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
                         }
+                    }, BorderLayout.EAST)
+                })
+                addRow(p, g, "", JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                    isOpaque = false
+                    add(JButton(MpSqlVisualizerBundle.message("settings.import")).apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.import.tip")
+                        addActionListener { importSettings() }
+                    })
+                    add(JButton(MpSqlVisualizerBundle.message("settings.export")).apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.export.tip")
+                        addActionListener { exportSettings() }
                     })
                 })
-            g.anchor = GridBagConstraints.NORTHWEST
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.update.versionInfo"), updateSection.apply { updateTexts() })
-            g.anchor = GridBagConstraints.WEST
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
-                add(JBLabel().apply {
-                    text = PluginBuildInfo.displayText()
-                    toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
-                }, BorderLayout.CENTER)
-                add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
-                    isEnabled = PluginBuildInfo.mpvBuild() != null
-                    addActionListener {
-                        CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()))
-                        val original = text
-                        text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
-                        javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
-                    }
-                }, BorderLayout.EAST)
-            })
-            addRow(p, g, "", JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-                isOpaque = false
-                add(JButton(MpSqlVisualizerBundle.message("settings.import")).apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.import.tip")
-                    addActionListener { importSettings() }
-                })
-                add(JButton(MpSqlVisualizerBundle.message("settings.export")).apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.export.tip")
-                    addActionListener { exportSettings() }
-                })
-            })
+            }
         }
 
         // 底部 weighty 占位（内容顶置）
@@ -995,10 +1021,18 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
     fun isModified(): Boolean {
         val s = settings.state
         return languagePending
-            || dialectCombo.selectedItem != s.dialect
+            || (SECTION_PREVIEW in sections && isModifiedPreview(s))
+            || (SECTION_TABLE_MAPPING in sections && isModifiedTableMapping(s))
+            || (SECTION_CODE_GEN in sections && isModifiedCodeGen(s))
+            || (SECTION_SQL_LOG in sections && isModifiedSqlLog(s))
+            || (SECTION_UI in sections && isModifiedUi(s))
+            || (SECTION_UPDATE_DIAGNOSTICS in sections && updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate)
+    }
+
+    private fun isModifiedPreview(s: PluginSettings.State): Boolean =
+        dialectCombo.selectedItem != s.dialect
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
-            || gutterIconCheck.isSelected != s.showGutterIcon
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
             || injectTenantLineCheck.isSelected != s.injectTenantLine
@@ -1007,21 +1041,21 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || injectTenantOnInsertCheck.isSelected != s.injectTenantOnInsert
             || dataPermissionHintCheck.isSelected != s.dataPermissionHint
             || dataPermissionMockConditionField.text.trim() != s.dataPermissionMockCondition
-            || tablePrefixField.text.trim() != s.tablePrefix
+
+    private fun isModifiedTableMapping(s: PluginSettings.State): Boolean =
+        tablePrefixField.text.trim() != s.tablePrefix
             || tableSuffixField.text.trim() != s.tableSuffix
             || (inferenceCombo.selectedItem as? InferenceOption)?.value != s.tableNameInference
-            // T-xx（设置生效性审计）：反向转换形态下拉此前**漏挂 isModified**——仅改此项时 Apply 按钮不启用，
-            // 改动被平台静默丢弃（有读取点但保存链路断裂，形同假开关）；补上与其余下拉一致的变化检测
-            || (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
-            || manualEntityCheck.isSelected != s.reverseManualEntitySelection
             || ignoredFieldsField.text.trim() != s.ignoredFields
             || removeTablePrefixField.text.trim() != s.removeTablePrefix
             || removeTableSuffixField.text.trim() != s.removeTableSuffix
-            || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
-            || updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate
-            || shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)
-            || reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
-            || logSqlPrefixField.text.trim() != s.logSqlPrefix
+
+    private fun isModifiedCodeGen(s: PluginSettings.State): Boolean =
+        (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
+            || manualEntityCheck.isSelected != s.reverseManualEntitySelection
+
+    private fun isModifiedSqlLog(s: PluginSettings.State): Boolean =
+        logSqlPrefixField.text.trim() != s.logSqlPrefix
             || logParamPrefixField.text.trim() != s.logParamPrefix
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
             || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
@@ -1044,7 +1078,12 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
             || logAutoSaveCheck.isSelected != s.logAutoSaveEnabled
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
-    }
+
+    private fun isModifiedUi(s: PluginSettings.State): Boolean =
+        gutterIconCheck.isSelected != s.showGutterIcon
+            || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
+            || shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)
+            || reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
 
     /**
      * 将表单值写回配置（Settings 点击 OK/Apply 时调用）；快捷键变化时写入 Keymap。
@@ -1053,65 +1092,73 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      */
     fun apply(): Boolean {
         val s = settings.state
-        // T-TenantLine 诊断：输出 apply 调用时的表单值，确认 UI → state 写入链路
-        LOG.info("PluginSettingsPanel.apply: injectTenantLineCheck=${injectTenantLineCheck.isSelected}, " +
-                 "tenantColumnNameField=${tenantColumnNameField.text.trim()}, " +
-                 "state.before=${s.injectTenantLine}")
         // M19.1：语言变更判定包含「待应用」标记——写穿后（combo 与 state 已一致）仍报告一次变更，
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
         val languageChanged = languagePending || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
-        s.dialect = dialectCombo.selectedItem as? String ?: PluginSettings.DEFAULT_DIALECT
-        s.replaceParams = replaceParamsCheck.isSelected
-        s.formatSql = formatCheck.isSelected
-        s.showGutterIcon = gutterIconCheck.isSelected
-        s.injectLogicDelete = injectLogicDeleteCheck.isSelected
-        s.logicDeleteValue = logicDeleteValueField.text.trim()
-        s.injectTenantLine = injectTenantLineCheck.isSelected
-        s.tenantColumnName = tenantColumnNameField.text.trim()
-        s.tenantColumnDefault = tenantColumnDefaultField.text.trim()
-        s.injectTenantOnInsert = injectTenantOnInsertCheck.isSelected
-        s.dataPermissionHint = dataPermissionHintCheck.isSelected
-        s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
-        s.tablePrefix = tablePrefixField.text.trim()
-        s.tableSuffix = tableSuffixField.text.trim()
-        s.tableNameInference = (inferenceCombo.selectedItem as? InferenceOption)?.value ?: PluginSettings.INFERENCE_SNAKE
-        s.ignoredFields = ignoredFieldsField.text.trim()
-        s.removeTablePrefix = removeTablePrefixField.text.trim()
-        s.removeTableSuffix = removeTableSuffixField.text.trim()
-        s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
-        s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
-        s.reverseManualEntitySelection = manualEntityCheck.isSelected
-        s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
-        s.logSqlPrefix = logSqlPrefixField.text.trim()
-        s.logParamPrefix = logParamPrefixField.text.trim()
-        s.logMixedPrefix = logMixedPrefixCheck.isSelected
-        s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
-        s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
-        s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
-        s.logTimestampEnabled = logTimestampCheck.isSelected
-        s.logTimestampFormat = logTimestampFormatField.text.trim()
-        s.logFormatSql = logFormatSqlCheck.isSelected
-        s.logFilterKeywords = logFilterKeywordsField.text.trim()
-        s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
-        s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
-        s.logMaxCount = logMaxCountField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_COUNT
-        s.logFilterBarEnabled = logFilterBarCheck.isSelected
-        s.logTimePrefix = logTimePrefixField.text.trim()
-        s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
-            ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
-        s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
-        s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
-        s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
-        s.logJdbcEnabled = logJdbcEnabledCheck.isSelected
-        s.logAutoSaveEnabled = logAutoSaveCheck.isSelected
-        s.logAutoSavePath = logAutoSavePathField.text.trim()
-        s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
-            .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
-        if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
-            applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
+        if (SECTION_PREVIEW in sections) {
+            s.dialect = dialectCombo.selectedItem as? String ?: PluginSettings.DEFAULT_DIALECT
+            s.replaceParams = replaceParamsCheck.isSelected
+            s.formatSql = formatCheck.isSelected
+            s.injectLogicDelete = injectLogicDeleteCheck.isSelected
+            s.logicDeleteValue = logicDeleteValueField.text.trim()
+            s.injectTenantLine = injectTenantLineCheck.isSelected
+            s.tenantColumnName = tenantColumnNameField.text.trim()
+            s.tenantColumnDefault = tenantColumnDefaultField.text.trim()
+            s.injectTenantOnInsert = injectTenantOnInsertCheck.isSelected
+            s.dataPermissionHint = dataPermissionHintCheck.isSelected
+            s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
         }
-        if (reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)) {
-            applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID)
+        if (SECTION_TABLE_MAPPING in sections) {
+            s.tablePrefix = tablePrefixField.text.trim()
+            s.tableSuffix = tableSuffixField.text.trim()
+            s.tableNameInference = (inferenceCombo.selectedItem as? InferenceOption)?.value ?: PluginSettings.INFERENCE_SNAKE
+            s.ignoredFields = ignoredFieldsField.text.trim()
+            s.removeTablePrefix = removeTablePrefixField.text.trim()
+            s.removeTableSuffix = removeTableSuffixField.text.trim()
+        }
+        if (SECTION_CODE_GEN in sections) {
+            s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
+            s.reverseManualEntitySelection = manualEntityCheck.isSelected
+        }
+        if (SECTION_SQL_LOG in sections) {
+            s.logSqlPrefix = logSqlPrefixField.text.trim()
+            s.logParamPrefix = logParamPrefixField.text.trim()
+            s.logMixedPrefix = logMixedPrefixCheck.isSelected
+            s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
+            s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
+            s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
+            s.logTimestampEnabled = logTimestampCheck.isSelected
+            s.logTimestampFormat = logTimestampFormatField.text.trim()
+            s.logFormatSql = logFormatSqlCheck.isSelected
+            s.logFilterKeywords = logFilterKeywordsField.text.trim()
+            s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
+            s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
+            s.logMaxCount = logMaxCountField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_COUNT
+            s.logFilterBarEnabled = logFilterBarCheck.isSelected
+            s.logTimePrefix = logTimePrefixField.text.trim()
+            s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
+                ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
+            s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
+            s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
+            s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
+            s.logJdbcEnabled = logJdbcEnabledCheck.isSelected
+            s.logAutoSaveEnabled = logAutoSaveCheck.isSelected
+            s.logAutoSavePath = logAutoSavePathField.text.trim()
+            s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
+                .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+        }
+        if (SECTION_UI in sections) {
+            s.showGutterIcon = gutterIconCheck.isSelected
+            s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
+            if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
+                applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
+            }
+            if (reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)) {
+                applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID)
+            }
+        }
+        if (SECTION_UPDATE_DIAGNOSTICS in sections) {
+            s.autoCheckUpdate = updateSection.autoCheckCheck.isSelected
         }
         languagePending = false
         // 强制触发持久化：原地修改 state 属性后，框架可能不检测引用变化导致 XML 未写入（实证：
@@ -1130,60 +1177,72 @@ class PluginSettingsPanel(private val settings: PluginSettings) {
      */
     fun reset() {
         val s = settings.state
-        dialectCombo.selectedItem = s.dialect
-        replaceParamsCheck.isSelected = s.replaceParams
-        formatCheck.isSelected = s.formatSql
-        gutterIconCheck.isSelected = s.showGutterIcon
-        injectLogicDeleteCheck.isSelected = s.injectLogicDelete
-        logicDeleteValueField.text = s.logicDeleteValue
-        injectTenantLineCheck.isSelected = s.injectTenantLine
-        tenantColumnNameField.text = s.tenantColumnName
-        tenantColumnDefaultField.text = s.tenantColumnDefault
-        injectTenantOnInsertCheck.isSelected = s.injectTenantOnInsert
-        dataPermissionHintCheck.isSelected = s.dataPermissionHint
-        dataPermissionMockConditionField.text = s.dataPermissionMockCondition
-        tablePrefixField.text = s.tablePrefix
-        tableSuffixField.text = s.tableSuffix
-        inferenceCombo.selectedItem = inferenceOptions().firstOrNull { it.value == s.tableNameInference }
-            ?: inferenceOptions().first()
-        ignoredFieldsField.text = s.ignoredFields
-        removeTablePrefixField.text = s.removeTablePrefix
-        removeTableSuffixField.text = s.removeTableSuffix
-        languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
-        reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
-            ?: reverseFormatOptions().first()
-        manualEntityCheck.isSelected = s.reverseManualEntitySelection
-        updateSection.resetState()
-        shortcutEditor.shortcut = currentShortcut(ConvertToSqlAction.ACTION_ID)
-        reverseShortcutEditor.shortcut = currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
-        logSqlPrefixField.text = s.logSqlPrefix
-        logParamPrefixField.text = s.logParamPrefix
-        logMixedPrefixCheck.isSelected = s.logMixedPrefix
-        logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
-        logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
-        logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
-        logTimestampCheck.isSelected = s.logTimestampEnabled
-        logTimestampFormatField.text = s.logTimestampFormat
-        logFormatSqlCheck.isSelected = s.logFormatSql
-        logFilterKeywordsField.text = s.logFilterKeywords
-        logDedupeField.text = s.logDedupeWindowMs.toString()
-        logMaxParseField.text = s.logMaxParseLength.toString()
-        logMaxCountField.text = s.logMaxCount.toString()
-        logFilterBarCheck.isSelected = s.logFilterBarEnabled
-        logTimePrefixField.text = s.logTimePrefix
-        slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
-        logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
-        logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
-        logHibernateParamPrefixField.text = s.logHibernateParamPrefix
-        logJdbcEnabledCheck.isSelected = s.logJdbcEnabled
-        logAutoSaveCheck.isSelected = s.logAutoSaveEnabled
-        logAutoSavePathField.text = s.logAutoSavePath
-        logAutoSavePatternField.text = s.logAutoSaveFileNamePattern
-        val autoSaveEnabled = s.logAutoSaveEnabled
-        logAutoSavePathField.isEnabled = autoSaveEnabled
-        logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
-        logAutoSavePatternField.isEnabled = autoSaveEnabled
-        updateAutoSavePreview()
+        if (SECTION_PREVIEW in sections) {
+            dialectCombo.selectedItem = s.dialect
+            replaceParamsCheck.isSelected = s.replaceParams
+            formatCheck.isSelected = s.formatSql
+            injectLogicDeleteCheck.isSelected = s.injectLogicDelete
+            logicDeleteValueField.text = s.logicDeleteValue
+            injectTenantLineCheck.isSelected = s.injectTenantLine
+            tenantColumnNameField.text = s.tenantColumnName
+            tenantColumnDefaultField.text = s.tenantColumnDefault
+            injectTenantOnInsertCheck.isSelected = s.injectTenantOnInsert
+            dataPermissionHintCheck.isSelected = s.dataPermissionHint
+            dataPermissionMockConditionField.text = s.dataPermissionMockCondition
+        }
+        if (SECTION_TABLE_MAPPING in sections) {
+            tablePrefixField.text = s.tablePrefix
+            tableSuffixField.text = s.tableSuffix
+            inferenceCombo.selectedItem = inferenceOptions().firstOrNull { it.value == s.tableNameInference }
+                ?: inferenceOptions().first()
+            ignoredFieldsField.text = s.ignoredFields
+            removeTablePrefixField.text = s.removeTablePrefix
+            removeTableSuffixField.text = s.removeTableSuffix
+        }
+        if (SECTION_CODE_GEN in sections) {
+            reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
+                ?: reverseFormatOptions().first()
+            manualEntityCheck.isSelected = s.reverseManualEntitySelection
+        }
+        if (SECTION_UI in sections) {
+            gutterIconCheck.isSelected = s.showGutterIcon
+            languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
+            shortcutEditor.shortcut = currentShortcut(ConvertToSqlAction.ACTION_ID)
+            reverseShortcutEditor.shortcut = currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
+        }
+        if (SECTION_UPDATE_DIAGNOSTICS in sections) {
+            updateSection.resetState()
+        }
+        if (SECTION_SQL_LOG in sections) {
+            logSqlPrefixField.text = s.logSqlPrefix
+            logParamPrefixField.text = s.logParamPrefix
+            logMixedPrefixCheck.isSelected = s.logMixedPrefix
+            logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
+            logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
+            logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
+            logTimestampCheck.isSelected = s.logTimestampEnabled
+            logTimestampFormatField.text = s.logTimestampFormat
+            logFormatSqlCheck.isSelected = s.logFormatSql
+            logFilterKeywordsField.text = s.logFilterKeywords
+            logDedupeField.text = s.logDedupeWindowMs.toString()
+            logMaxParseField.text = s.logMaxParseLength.toString()
+            logMaxCountField.text = s.logMaxCount.toString()
+            logFilterBarCheck.isSelected = s.logFilterBarEnabled
+            logTimePrefixField.text = s.logTimePrefix
+            slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
+            logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
+            logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
+            logHibernateParamPrefixField.text = s.logHibernateParamPrefix
+            logJdbcEnabledCheck.isSelected = s.logJdbcEnabled
+            logAutoSaveCheck.isSelected = s.logAutoSaveEnabled
+            logAutoSavePathField.text = s.logAutoSavePath
+            logAutoSavePatternField.text = s.logAutoSaveFileNamePattern
+            val autoSaveEnabled = s.logAutoSaveEnabled
+            logAutoSavePathField.isEnabled = autoSaveEnabled
+            logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
+            logAutoSavePatternField.isEnabled = autoSaveEnabled
+            updateAutoSavePreview()
+        }
     }
 
     // ------------------------------------------------------------------
