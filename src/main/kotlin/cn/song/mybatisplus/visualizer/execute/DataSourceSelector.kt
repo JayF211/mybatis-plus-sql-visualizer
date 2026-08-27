@@ -176,55 +176,72 @@ object DataSourceSelector {
             LOG.info("[M36] executeQueries invoked OK")
 
             // 5. 内嵌完整控制台（执行后）：getView→getContent→getComponent。
-            //    此时结果 Tab 已创建（含数据表名），Content 已构建非 0 尺寸
+            //    注意时序：executeQueries 是异步的——结果 Tab 在后台创建，需轮询等待出现；
+            //    ensureContentInitialized 在 BaseLogView（logView）上，不在 RunnerLayoutUi 上
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
-            var component: javax.swing.JComponent? = null
-            var ui: Any? = null
+
+            // 5.1 logView 级内容初始化（独立 try-catch，失败不拖垮组件获取）
             if (logView != null) {
                 runCatching {
-                    ui = logView.javaClass.getMethod("getUi").invoke(logView)
-                    val currentUi = ui
-                    if (currentUi != null) {
-                        currentUi.javaClass.getMethod("ensureContentInitialized").invoke(currentUi)
-                    }
-                    val content = logView.javaClass.getMethod("getContent").invoke(logView)
-                    component = content?.javaClass?.getMethod("getComponent")?.invoke(content)
-                        as? javax.swing.JComponent
+                    logView.javaClass.getMethod("ensureContentInitialized").invoke(logView)
                 }.onFailure { e ->
-                    LOG.warn("[M36] logView component FAILED: ${e.message}")
+                    LOG.warn("[M36] ensureContentInitialized FAILED: ${e.message}")
                 }
             }
-            // 兜底：getView 不可用时退回 RunnerLayoutUi 结果区
+
+            // 5.2 取 ui（getUi 失败不阻断）
+            var ui: Any? = logView?.let {
+                runCatching { it.javaClass.getMethod("getUi").invoke(it) }.getOrNull()
+            } ?: runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
+
+            // 5.3 轮询等结果 Tab 出现（executeQueries 异步建 Tab；最多 3s，200ms 一拍）
+            var resultContent: com.intellij.ui.content.Content? = null
+            var contentsSnapshot: List<String> = emptyList()
+            repeat(15) {
+                val contents = ui?.let {
+                    runCatching {
+                        it.javaClass.getMethod("getContents").invoke(it) as? Array<com.intellij.ui.content.Content>
+                    }.getOrNull()
+                } ?: emptyArray()
+                contentsSnapshot = contents.map { it.displayName }
+                resultContent = contents.firstOrNull {
+                    !it.displayName.equals("Output", ignoreCase = true) &&
+                        !it.displayName.equals("输出", ignoreCase = true)
+                }
+                if (resultContent != null) return@repeat
+                Thread.sleep(200)
+            }
+            LOG.info("[M36] contents=$contentsSnapshot, select=${resultContent?.displayName}")
+
+            // 5.4 拿完整控制台组件（logView.getContent；兜底 RunnerLayoutUi 结果区）
+            var component: javax.swing.JComponent? = logView?.let {
+                runCatching {
+                    val content = it.javaClass.getMethod("getContent").invoke(it)
+                    content?.javaClass?.getMethod("getComponent")?.invoke(content) as? javax.swing.JComponent
+                }.getOrNull()
+            }
             if (component == null) {
-                ui = runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
                 component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
             }
             LOG.info("[M36] logView=$logView, component=$component")
             if (component == null) return
-            // 内嵌（同步，已在 EDT）；随后选结果 Tab
+
+            // 5.5 内嵌（同步，已在 EDT）
             onConsole?.invoke(component)
 
-            // 6. 默认激活查询结果 Tab（执行后非 Output 内容已存在）
-            if (ui != null) {
+            // 6. 默认激活查询结果 Tab（5.3 轮询到后已就绪）
+            val selected = resultContent
+            if (ui != null && selected != null) {
                 runCatching {
-                    val uiClass = ui.javaClass
-                    val contents = uiClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
-                    val resultContent = contents?.firstOrNull {
-                        !it.displayName.equals("Output", ignoreCase = true) &&
-                            !it.displayName.equals("输出", ignoreCase = true)
-                    }
-                    LOG.info("[M36] contents=${contents?.map { it.displayName }}, select=${resultContent?.displayName}")
-                    if (resultContent != null) {
-                        val select = uiClass.getMethod(
-                            "selectAndFocus",
-                            com.intellij.ui.content.Content::class.java,
-                            Boolean::class.javaPrimitiveType,
-                            Boolean::class.javaPrimitiveType,
-                        )
-                        select.invoke(ui, resultContent, false, true)
-                    }
+                    val select = ui.javaClass.getMethod(
+                        "selectAndFocus",
+                        com.intellij.ui.content.Content::class.java,
+                        Boolean::class.javaPrimitiveType,
+                        Boolean::class.javaPrimitiveType,
+                    )
+                    select.invoke(ui, selected, false, true)
                 }.onFailure { e ->
                     LOG.warn("[M36] select result tab FAILED: ${e.message}")
                 }
