@@ -247,8 +247,8 @@ class SqlLogPanel(
         CaptureAction(),
         ClearAction(),
         SettingsAction(),
+        ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
         HelpAction(),
-        ShowSearchAction(), // 搜索在帮助右侧（用户指定排序）
     )
 
     init {
