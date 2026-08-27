@@ -139,25 +139,41 @@ object DataSourceSelector {
 
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
-            // 2. 完整原生控制台 UI（RunnerLayoutUi 根组件，含工具栏/编辑器/结果 tabs）→ 回调内嵌
-            val ui = runCatching {
-                consoleClass.getMethod("getUi").invoke(console)
+            // 2. 完整原生控制台组件（M36.2 重构）：
+            //    getView()（DatabaseSessionLogView）→ getContent()（Content）→ getComponent()
+            //    = Database 工具窗口内嵌的完整控制台拼合体（原生编辑器 + 工具栏 + 结果 tabs）。
+            //    此前 getUi().getComponent() 只是 RunnerLayoutUi 结果区（缺编辑器和工具栏）。
+            val logView = runCatching {
+                consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
-            val component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui)
-                as? javax.swing.JComponent
-                // 兜底：getUi 不可用时退回 consoleView 简易组件
-                ?: runCatching {
-                    val consoleView = consoleClass.getMethod("getConsoleView").invoke(console)
-                    consoleView?.javaClass?.getMethod("getComponent")?.invoke(consoleView)
+            var component: javax.swing.JComponent? = null
+            var ui: Any? = null
+            if (logView != null) {
+                runCatching {
+                    val content = logView.javaClass.getMethod("getContent").invoke(logView)
+                    component = content?.javaClass?.getMethod("getComponent")?.invoke(content)
                         as? javax.swing.JComponent
-                }.getOrNull()
-            LOG.info("[M36] ui=$ui, component=$component")
+                    ui = logView.javaClass.getMethod("getUi").invoke(logView)
+                }.onFailure { e ->
+                    LOG.warn("[M36] logView component FAILED: ${e.message}")
+                }
+            }
+            // 兜底：getView 不可用时退回 RunnerLayoutUi 结果区
+            if (component == null) {
+                ui = runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
+                component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
+            }
+            LOG.info("[M36] logView=$logView, ui=$ui, component=$component")
             if (component == null) return
             onConsole?.invoke(component)
 
             // 2.5 默认激活查询结果 Tab（原生默认 Output Tab 只有 "Console output" 占位）：
-            // getContents() 找第一个非 Output 内容 → selectAndFocus(content, focus, activate)
+            // getContents() 找第一个非 Output 内容 → selectAndFocus(content, focus, activate)。
+            // 时序：内嵌组件挂载后调用（getContent 延迟构建）
             if (ui != null) {
+                runCatching {
+                    ui.javaClass.getMethod("ensureContentInitialized").invoke(ui)
+                }
                 runCatching {
                     val uiClass = ui.javaClass
                     val contents = uiClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
@@ -263,7 +279,7 @@ object DataSourceSelector {
         method.invoke(runner) as? Boolean
     }.getOrNull() ?: false
 
-    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。 */
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 弹错误引导。 */
     private fun runRunner(runner: Any) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -272,7 +288,15 @@ object DataSourceSelector {
             method.invoke(runner)
             LOG.info("[M36] runRunner invoked OK")
         }.onFailure { e ->
-            LOG.warn("[M36] runRunner FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            LOG.warn("[M36] runRunner FAILED: ${cause.javaClass.simpleName}: ${cause.message}", cause)
+            // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
+            val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
+            com.intellij.openapi.ui.Messages.showErrorDialog(
+                project,
+                MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString()),
+                MpSqlVisualizerBundle.message("execute.title"),
+            )
         }
     }
 
