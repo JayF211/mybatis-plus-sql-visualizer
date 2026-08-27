@@ -175,12 +175,13 @@ object DataSourceSelector {
             execute.invoke(console, editor, scriptModel, execOption)
             LOG.info("[M36] executeQueries invoked OK")
 
-            // 5. 立即内嵌完整控制台组件（M36.2e 策略：不阻塞等待结果 Tab）：
-            //    buildConsoleUi 反编译证实完整控制台 = JBLoadingPanel(console 编辑器
-            //    + RunnerLayoutUi)。ensureContentInitialized()（BaseLogView 上）触发
-            //    buildConsoleUi 后 getContent().getComponent() 即完整组件——
-            //    立即内嵌，编辑器+工具栏立刻可见；结果 Tab 由执行异步创建，
-            //    出现时自然出现在内嵌 ui 的 tabs 里（同一实例，无需等待）。
+            // 5. 自拼完整控制台组件（M36.2f 最终方案）：
+            //    反编译实锤：原生 Database 工具窗口布局 = consoleView 编辑器（上）
+            //    + view.getContent().getComponent()（RunnerLayoutUi 结果区，下）——
+            //    编辑器不在 getContent 组件里（由工具窗口 FileEditor 单独放上方），
+            //    此前内嵌 RunnerLayoutUi 天生缺编辑器（截图只有 tabs）。
+            //    此处仿原生拼合：垂直 SplitPane（编辑器 40% / 结果区 60%），
+            //    结果 Tab 异步出现（Timer 重试激活已有）。
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
@@ -194,25 +195,39 @@ object DataSourceSelector {
                 }
             }
 
-            // 5.2 取 ui
+            // 5.2 取 ui 与结果区组件
             val ui: Any? = logView?.let {
                 runCatching { it.javaClass.getMethod("getUi").invoke(it) }.getOrNull()
             } ?: runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
+            val resultComponent: javax.swing.JComponent? =
+                ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
 
-            // 5.3 拿完整组件（logView.getContent；兜底 RunnerLayoutUi）
-            var component: javax.swing.JComponent? = logView?.let {
+            // 5.3 SQL 编辑器组件（consoleView——原生编辑器，含原生高亮/补全）
+            val consoleView = runCatching {
+                consoleClass.getMethod("getConsoleView").invoke(console)
+            }.getOrNull()
+            val editorComponent: javax.swing.JComponent? = consoleView?.let {
                 runCatching {
-                    val content = it.javaClass.getMethod("getContent").invoke(it)
-                    content?.javaClass?.getMethod("getComponent")?.invoke(content) as? javax.swing.JComponent
+                    it.javaClass.getMethod("getComponent").invoke(it) as? javax.swing.JComponent
                 }.getOrNull()
             }
-            if (component == null) {
-                component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
-            }
-            LOG.info("[M36] logView=$logView, component=$component")
-            if (component == null) return
+            LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponent")
 
-            // 5.4 内嵌（同步，已在 EDT）
+            // 5.4 拼合：编辑器（上）/ 结果区（下）——任一缺失单独内嵌另一块
+            val component: javax.swing.JComponent = when {
+                editorComponent != null && resultComponent != null ->
+                    javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT, editorComponent, resultComponent).apply {
+                        resizeWeight = 0.4
+                        isContinuousLayout = true
+                        dividerSize = 4
+                        border = com.intellij.util.ui.JBUI.Borders.empty()
+                    }
+                editorComponent != null -> editorComponent
+                resultComponent != null -> resultComponent
+                else -> return
+            }
+
+            // 5.5 内嵌（同步，已在 EDT）
             onConsole?.invoke(component)
 
             // 6. 激活查询结果 Tab：EDT 延迟重试（结果 Tab 异步创建；10 次 × 400ms）。
