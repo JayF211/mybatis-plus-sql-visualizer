@@ -135,6 +135,7 @@ object DataSourceSelector {
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
             // 2. 原生控制台 UI 组件（编辑器 + 结果区）→ 回调内嵌
+            //    内嵌必须先于取 editor：组件挂到容器后编辑器才完成初始化（否则 EditorImpl[null]）
             val consoleView = consoleClass.getMethod("getConsoleView").invoke(console)
             val component = consoleView?.javaClass?.getMethod("getComponent")?.invoke(consoleView)
                 as? javax.swing.JComponent
@@ -158,9 +159,11 @@ object DataSourceSelector {
             // 4. scriptModel + execOption
             val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
             val execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings\$ExecOption")
-            val execOption = execOptionClass.enumConstants?.firstOrNull()
+            // ExecOption 是普通类（非 enum）：new 默认实例 = 原生默认执行选项
+            //（enumConstants 取值在此为 null，此前导致 executeQueries 被静默跳过）
+            val execOption = execOptionClass.getDeclaredConstructor().newInstance()
             LOG.info("[M36] scriptModel=$scriptModel, execOption=$execOption")
-            if (scriptModel == null || execOption == null) return
+            if (scriptModel == null) return
 
             // 5. 执行（结果网格随控制台编辑器内联展示）
             val execute = consoleClass.getMethod(
