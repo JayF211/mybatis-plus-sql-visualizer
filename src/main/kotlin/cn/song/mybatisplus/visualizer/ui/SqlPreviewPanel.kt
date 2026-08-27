@@ -164,6 +164,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // M36：SQL 执行结果面板（编辑器下方，展示执行状态/摘要）
     private val resultPanel = SqlResultPanel()
 
+    // M36：下半区容器——状态行（resultPanel NORTH）+ 可内嵌的原生 Database 控制台组件（CENTER）
+    private val consoleHolder = JBPanel<JBPanel<*>>(BorderLayout())
+
+    /** M36：垂直分割（上半 SQL 编辑区 | 下半 consoleHolder），内嵌控制台后展开定位用。 */
+    private var verticalSplit: JSplitPane? = null
+
+    /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
+    private var embeddedConsole: JComponent? = null
+
     private var current: PreviewResult? = null
     private var compactMode = false
 
@@ -218,8 +227,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             background = UIUtil.getPanelBackground()
         }
 
-        // M36：垂直分割——上方 SQL 编辑区 | 下方结果面板（默认折叠，执行后展开）
-        val verticalSplit = object : JSplitPane(JSplitPane.VERTICAL_SPLIT, split, resultPanel) {
+        // M36：垂直分割——上方 SQL 编辑区 | 下方 consoleHolder（状态行 + 内嵌控制台）
+        // 默认只显示状态行（控制台区域空），执行后内嵌控制台并展开
+        consoleHolder.add(resultPanel, BorderLayout.NORTH)
+        val verticalSplit = object : JSplitPane(JSplitPane.VERTICAL_SPLIT, split, consoleHolder) {
             override fun paint(g: java.awt.Graphics) {
                 // 覆盖 paint 去除默认边框绘制
                 super.paint(g)
@@ -237,9 +248,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             dividerSize = 3
             border = JBUI.Borders.empty() // 去除默认边框
             background = UIUtil.getPanelBackground()
-            // 结果面板默认最小高度（折叠态）
             minimumSize = Dimension(0, 0)
         }
+        this.verticalSplit = verticalSplit
         add(verticalSplit, BorderLayout.CENTER)
 
         // T-M26.6：注册格式化快捷键——组件级 custom shortcut 命中即消费按键，
@@ -335,7 +346,39 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
 
         // 2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
-        SqlExecutor.execute(proj, sql, null, isQuery)
+        //    控制台 UI 组件就绪后内嵌到面板下方（原生编辑器+结果区，全原生能力）
+        resultPanel.showLoading()
+        SqlExecutor.execute(proj, sql, null, isQuery, onConsole = { consoleComponent ->
+            ApplicationManager.getApplication().invokeLater { embedConsole(consoleComponent) }
+        })
+    }
+
+    /**
+     * M36：将原生 Database 控制台 UI 组件内嵌到面板下方并展开分割。
+     * 重复执行时替换旧控制台（旧组件随 JdbcConsole 生命周期由 IDE 管理，
+     * 这里仅从容器摘除引用避免悬挂 UI）。
+     */
+    private fun embedConsole(consoleComponent: JComponent) {
+        embeddedConsole?.let { old -> consoleHolder.remove(old) }
+        embeddedConsole = consoleComponent
+        consoleHolder.add(consoleComponent, BorderLayout.CENTER)
+        resultPanel.showEmpty()
+        // 展开下半区：分割线定位到 55%（上 55% SQL 区 / 下 45% 控制台）
+        verticalSplit?.let { split ->
+            if (split.dividerLocation <= 0 || split.height <= 0) {
+                split.resizeWeight = 0.55
+            } else {
+                split.setDividerLocation(0.55)
+            }
+        }
+        revalidate()
+        repaint()
+    }
+
+    /** M36：摘除已内嵌的控制台组件（清空预览时调用；JdbcConsole 生命周期由 IDE 管理）。 */
+    private fun detachConsole() {
+        embeddedConsole?.let { consoleHolder.remove(it) }
+        embeddedConsole = null
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
@@ -794,8 +837,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // F-1：清除图集 + 恢复纯 SQL 视图
         removeDiagramTab()
         diagramPanel.clear()
-        // M36：清空结果面板
+        // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
+        detachConsole()
         revalidate()
         repaint()
     }

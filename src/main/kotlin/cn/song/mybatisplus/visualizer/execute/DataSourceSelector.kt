@@ -41,11 +41,19 @@ object DataSourceSelector {
     /**
      * 选择数据源并执行 SQL。
      *
-     * @param project  当前项目
-     * @param sql      SQL 文本
-     * @param callback 完成回调（true=已触发执行；false=不可用/无数据源/取消）
+     * @param project   当前项目
+     * @param sql       SQL 文本
+     * @param onConsole 控制台就绪回调：参数为 JdbcConsole 的原生 UI 组件（编辑器+结果区，
+     *                  [com.intellij.execution.console.LanguageConsoleView.getComponent]）。
+     *                  调用方可将其内嵌到任意容器（M36：SQL 预览面板下方）；null = 不需要内嵌
+     * @param callback  完成回调（true=已触发执行；false=不可用/无数据源/取消）
      */
-    fun selectAndExecute(project: Project, sql: String, callback: ((Boolean) -> Unit)? = null) {
+    fun selectAndExecute(
+        project: Project,
+        sql: String,
+        onConsole: ((javax.swing.JComponent) -> Unit)? = null,
+        callback: ((Boolean) -> Unit)? = null,
+    ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort")
@@ -65,7 +73,7 @@ object DataSourceSelector {
         // consumer：runner.run 建好 session 后回调 → 续接执行链（attachConsole + executeQueries）
         val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
             LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console & executing")
-            executeInConsole(project, session, vf)
+            executeInConsole(project, session, vf, onConsole)
         }
 
         val runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer)
@@ -93,10 +101,20 @@ object DataSourceSelector {
     }
 
     /**
-     * 执行链续接（consumer 回调内调用）：session → attachConsole → 打开编辑器 → executeQueries。
-     * 全程反射，任一步失败仅记日志（session 已建，用户仍可在打开的编辑器手动 Ctrl+Enter）。
+     * 执行链续接（consumer 回调内调用）：session → attachConsole → 内嵌控制台 → executeQueries。
+     *
+     * 不打开主编辑器——通过 `JdbcConsole.getConsoleView()` 拿原生控制台 UI 组件
+     * （[com.intellij.execution.console.LanguageConsoleView]，含编辑器与结果区），
+     * 经 [onConsole] 回调给调用方内嵌；执行用编辑器从控制台视图自身取
+     * （`LanguageConsoleView.getEditor()`，兜底 `EditorFactory.getEditors(document)`），
+     * 结果网格随控制台编辑器内联渲染（原生 in-editor results）。
      */
-    private fun executeInConsole(project: Project, session: Any, vf: com.intellij.openapi.vfs.VirtualFile) {
+    private fun executeInConsole(
+        project: Project,
+        session: Any,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        onConsole: ((javax.swing.JComponent) -> Unit)?,
+    ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val providerClass = Class.forName(CONSOLE_PROVIDER_CLASS)
@@ -116,24 +134,35 @@ object DataSourceSelector {
 
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
-            // 2. 打开编辑器（executeQueries 需要 editor）
-            val editorManager = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
-            val editor = editorManager.openTextEditor(
-                com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf),
-                true,
-            )
-            LOG.info("[M36] openTextEditor -> $editor")
+            // 2. 原生控制台 UI 组件（编辑器 + 结果区）→ 回调内嵌
+            val consoleView = consoleClass.getMethod("getConsoleView").invoke(console)
+            val component = consoleView?.javaClass?.getMethod("getComponent")?.invoke(consoleView)
+                as? javax.swing.JComponent
+            LOG.info("[M36] consoleView=$consoleView, component=$component")
+            if (component == null) return
+            onConsole?.invoke(component)
+
+            // 3. 执行用编辑器：控制台视图自身（内嵌后即面板内的编辑器实例）
+            val document = consoleClass.getMethod("getDocument").invoke(console)
+                as? com.intellij.openapi.editor.Document
+            val editor = runCatching {
+                consoleView.javaClass.getMethod("getEditor").invoke(consoleView)
+                    as? com.intellij.openapi.editor.Editor
+            }.getOrNull()
+                ?: document?.let {
+                    com.intellij.openapi.editor.EditorFactory.getInstance().getEditors(it).firstOrNull()
+                }
+            LOG.info("[M36] editor=$editor")
             if (editor == null) return
 
-            // 3. scriptModel + execOption
+            // 4. scriptModel + execOption
             val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
             val execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings\$ExecOption")
-            // EXEC_CHARACTER／首枚举：单语句/多语句均走默认全量执行选项
             val execOption = execOptionClass.enumConstants?.firstOrNull()
             LOG.info("[M36] scriptModel=$scriptModel, execOption=$execOption")
             if (scriptModel == null || execOption == null) return
 
-            // 4. 执行（结果在控制台下方原生展示）
+            // 5. 执行（结果网格随控制台编辑器内联展示）
             val execute = consoleClass.getMethod(
                 "executeQueries",
                 com.intellij.openapi.editor.Editor::class.java,

@@ -5,11 +5,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 
 /**
- * SQL 执行引擎（M36，反射隔离）：弹出原生数据源选择 → 自动执行 SQL。
+ * SQL 执行引擎（M36，反射隔离）：弹出原生数据源选择 → Database 控制台内嵌执行。
  *
  * 通过 [DataSourceSelector.selectAndExecute] 触发 Database 插件原生数据源弹窗，
- * 选中后 [com.intellij.database.console.DatabaseRunners] 打开 Database 编辑器执行，
- * 结果在编辑器下方原生展示。
+ * 选中后自动执行；[onConsole] 回调带回 JdbcConsole 的原生 UI 组件
+ * （编辑器+结果区），由调用方（SQL 预览面板）内嵌展示。
  *
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
@@ -22,10 +22,16 @@ object SqlExecutor {
      * @param sql        SQL 文本
      * @param dataSource 保留参数（不使用，数据源由原生弹窗选择）
      * @param isQuery    保留参数（SQL 类型分类已在面板层完成）
+     * @param onConsole  控制台 UI 组件就绪回调（供内嵌展示；null = 不内嵌）
      */
-    fun execute(project: Project, sql: String, dataSource: Any?, isQuery: Boolean) {
-        // 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
-        DataSourceSelector.selectAndExecute(project, sql) { success ->
+    fun execute(
+        project: Project,
+        sql: String,
+        dataSource: Any?,
+        isQuery: Boolean,
+        onConsole: ((javax.swing.JComponent) -> Unit)? = null,
+    ) {
+        DataSourceSelector.selectAndExecute(project, sql, onConsole = onConsole) { success ->
             if (!success) {
                 // Community 或失败时提示
                 if (!ExecuteSqlSupport.isAvailable()) {
