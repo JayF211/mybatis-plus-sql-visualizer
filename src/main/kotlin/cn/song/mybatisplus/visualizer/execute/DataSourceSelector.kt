@@ -44,31 +44,39 @@ object DataSourceSelector {
      * @param callback 完成回调（true=已触发执行；false=不可用/无数据源/取消）
      */
     fun selectAndExecute(project: Project, sql: String, callback: ((Boolean) -> Unit)? = null) {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (!ExecuteSqlSupport.isAvailable()) {
+            LOG.warn("[M36] database plugin NOT available, abort")
             callback?.invoke(false)
             return
         }
 
         val psiFile = createTempPsiFile(project, sql)
         if (psiFile == null) {
+            LOG.warn("[M36] createTempPsiFile failed, abort")
             callback?.invoke(false)
             return
         }
 
         val runners = getAttachDataSourceRunners(psiFile, sql)
+        LOG.info("[M36] runners=${runners.size}, types=${runners.map { it.javaClass.name }}")
         when {
             runners.isEmpty() -> {
                 // 无已配置数据源：打开 Database 工具窗口引导用户配置
+                LOG.warn("[M36] runners empty -> open Database tool window")
                 openDatabaseToolWindow(project)
                 callback?.invoke(false)
             }
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
                 // 单数据源且原生标记免选：直接执行
+                LOG.info("[M36] single runner, run directly")
                 runRunner(runners.first())
                 callback?.invoke(true)
             }
             else -> {
+                LOG.info("[M36] show popup with ${runners.size} runners")
                 showRunnerPopup(project, runners) { runner ->
+                    LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                     callback?.invoke(runner != null)
                     if (runner != null) runRunner(runner)
                 }
@@ -80,6 +88,7 @@ object DataSourceSelector {
      * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
      */
     private fun getAttachDataSourceRunners(psiFile: PsiFile, sql: String): List<Any> {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return runCatching {
             val clazz = Class.forName(RUNNERS_CLASS)
             val method = clazz.getMethod(
@@ -92,6 +101,8 @@ object DataSourceSelector {
             @Suppress("UNCHECKED_CAST")
             val result = method.invoke(null, psiFile, sql, com.intellij.util.Consumer<Any> { })
             (result as? List<*>)?.filterNotNull() ?: emptyList()
+        }.onFailure { e ->
+            LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
         }.getOrDefault(emptyList())
     }
 
