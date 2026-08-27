@@ -46,12 +46,16 @@ object DataSourceSelector {
      * @param onConsole 控制台就绪回调：参数为 JdbcConsole 的原生 UI 组件（编辑器+结果区，
      *                  [com.intellij.execution.console.LanguageConsoleView.getComponent]）。
      *                  调用方可将其内嵌到任意容器（M36：SQL 预览面板下方）；null = 不需要内嵌
+     * @param onEditor  控制台编辑器就绪回调（M36.2：调用方注入插件补全上下文
+     *                  [cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext]，
+     *                  与 Database 原生补全叠加生效）；null = 不需要
      * @param callback  完成回调（true=已触发执行；false=不可用/无数据源/取消）
      */
     fun selectAndExecute(
         project: Project,
         sql: String,
         onConsole: ((javax.swing.JComponent) -> Unit)? = null,
+        onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
@@ -73,7 +77,7 @@ object DataSourceSelector {
         // consumer：runner.run 建好 session 后回调 → 续接执行链（attachConsole + executeQueries）
         val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
             LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console & executing")
-            executeInConsole(project, session, vf, onConsole)
+            executeInConsole(project, session, vf, onConsole, onEditor)
         }
 
         val runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer)
@@ -114,6 +118,7 @@ object DataSourceSelector {
         session: Any,
         vf: com.intellij.openapi.vfs.VirtualFile,
         onConsole: ((javax.swing.JComponent) -> Unit)?,
+        onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -150,6 +155,31 @@ object DataSourceSelector {
             if (component == null) return
             onConsole?.invoke(component)
 
+            // 2.5 默认激活查询结果 Tab（原生默认 Output Tab 只有 "Console output" 占位）：
+            // getContents() 找第一个非 Output 内容 → selectAndFocus(content, focus, activate)
+            if (ui != null) {
+                runCatching {
+                    val uiClass = ui.javaClass
+                    val contents = uiClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
+                    val resultContent = contents?.firstOrNull {
+                        !it.displayName.equals("Output", ignoreCase = true) &&
+                            !it.displayName.equals("输出", ignoreCase = true)
+                    }
+                    LOG.info("[M36] contents=${contents?.map { it.displayName }}, select=${resultContent?.displayName}")
+                    if (resultContent != null) {
+                        val select = uiClass.getMethod(
+                            "selectAndFocus",
+                            com.intellij.ui.content.Content::class.java,
+                            Boolean::class.javaPrimitiveType,
+                            Boolean::class.javaPrimitiveType,
+                        )
+                        select.invoke(ui, resultContent, false, true)
+                    }
+                }.onFailure { e ->
+                    LOG.warn("[M36] select result tab FAILED: ${e.message}")
+                }
+            }
+
             // 3. 执行用编辑器：按 console 文档反查（内嵌+布局后编辑器已初始化）
             val document = consoleClass.getMethod("getDocument").invoke(console)
                 as? com.intellij.openapi.editor.Document
@@ -165,6 +195,8 @@ object DataSourceSelector {
             }
             LOG.info("[M36] editor=$editor")
             if (editor == null) return
+            // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
+            onEditor?.invoke(editor)
 
             // 4. scriptModel + execOption
             val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)

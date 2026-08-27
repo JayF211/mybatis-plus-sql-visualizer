@@ -23,6 +23,7 @@ object SqlExecutor {
      * @param dataSource 保留参数（不使用，数据源由原生弹窗选择）
      * @param isQuery    保留参数（SQL 类型分类已在面板层完成）
      * @param onConsole  控制台 UI 组件就绪回调（供内嵌展示；null = 不内嵌）
+     * @param onEditor   控制台编辑器就绪回调（M36.2：注入插件补全上下文；null = 不需要）
      */
     fun execute(
         project: Project,
@@ -30,8 +31,9 @@ object SqlExecutor {
         dataSource: Any?,
         isQuery: Boolean,
         onConsole: ((javax.swing.JComponent) -> Unit)? = null,
+        onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
     ) {
-        DataSourceSelector.selectAndExecute(project, sql, onConsole = onConsole) { success ->
+        DataSourceSelector.selectAndExecute(project, sql, onConsole = onConsole, onEditor = onEditor) { success ->
             if (!success) {
                 // Community 或失败时提示
                 if (!ExecuteSqlSupport.isAvailable()) {

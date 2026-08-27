@@ -348,11 +348,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
         //    控制台 UI 组件就绪后内嵌到面板下方（原生编辑器+结果区，全原生能力）。
         //    同步内嵌（回调线程已在 EDT：attachConsole 内部 invokeLater 派发）——
-        //    Selector 在 onConsole 返回后才取 editor，组件必须已挂载完成
+        //    Selector 在 onConsole 返回后才取 editor，组件必须已挂载完成。
+        //    M36.2：控制台编辑器注入插件补全上下文（表/列注释），与 Database 原生补全叠加
         resultPanel.showLoading()
-        SqlExecutor.execute(proj, sql, null, isQuery, onConsole = { consoleComponent ->
-            embedConsole(consoleComponent)
-        })
+        SqlExecutor.execute(
+            proj, sql, null, isQuery,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent) },
+            onEditor = { consoleEditor ->
+                val ctx = buildCompletionContext()
+                consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
+                consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
+            },
+        )
     }
 
     /**
