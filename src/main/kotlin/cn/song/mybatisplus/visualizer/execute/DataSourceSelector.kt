@@ -101,13 +101,13 @@ object DataSourceSelector {
     }
 
     /**
-     * 执行链续接（consumer 回调内调用）：session → attachConsole → 内嵌控制台 → executeQueries。
+     * 执行链续接（consumer 回调内调用）：session → attachConsole → 内嵌控制台 UI → executeQueries。
      *
-     * 不打开主编辑器——通过 `JdbcConsole.getConsoleView()` 拿原生控制台 UI 组件
-     * （[com.intellij.execution.console.LanguageConsoleView]，含编辑器与结果区），
-     * 经 [onConsole] 回调给调用方内嵌；执行用编辑器从控制台视图自身取
-     * （`LanguageConsoleView.getEditor()`，兜底 `EditorFactory.getEditors(document)`），
-     * 结果网格随控制台编辑器内联渲染（原生 in-editor results）。
+     * 不打开主编辑器——通过 `JdbcConsole.getUi()` 拿 [com.intellij.execution.ui.RunnerLayoutUi]
+     * 的根组件：Database 控制台的**完整原生 UI**（编辑器、工具栏、session 选择器、结果 tabs），
+     * 经 [onConsole] 回调给调用方内嵌；执行用编辑器从 console 文档反查
+     * （`EditorFactory.getEditors(document)`，组件挂载后按 document 匹配拿到已初始化实例），
+     * 结果网格随编辑器内联渲染（原生 in-editor results）。
      */
     private fun executeInConsole(
         project: Project,
@@ -134,25 +134,35 @@ object DataSourceSelector {
 
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
-            // 2. 原生控制台 UI 组件（编辑器 + 结果区）→ 回调内嵌
-            //    内嵌必须先于取 editor：组件挂到容器后编辑器才完成初始化（否则 EditorImpl[null]）
-            val consoleView = consoleClass.getMethod("getConsoleView").invoke(console)
-            val component = consoleView?.javaClass?.getMethod("getComponent")?.invoke(consoleView)
+            // 2. 完整原生控制台 UI（RunnerLayoutUi 根组件，含工具栏/编辑器/结果 tabs）→ 回调内嵌
+            val ui = runCatching {
+                consoleClass.getMethod("getUi").invoke(console)
+            }.getOrNull()
+            val component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui)
                 as? javax.swing.JComponent
-            LOG.info("[M36] consoleView=$consoleView, component=$component")
+                // 兜底：getUi 不可用时退回 consoleView 简易组件
+                ?: runCatching {
+                    val consoleView = consoleClass.getMethod("getConsoleView").invoke(console)
+                    consoleView?.javaClass?.getMethod("getComponent")?.invoke(consoleView)
+                        as? javax.swing.JComponent
+                }.getOrNull()
+            LOG.info("[M36] ui=$ui, component=$component")
             if (component == null) return
             onConsole?.invoke(component)
 
-            // 3. 执行用编辑器：控制台视图自身（内嵌后即面板内的编辑器实例）
+            // 3. 执行用编辑器：按 console 文档反查（内嵌+布局后编辑器已初始化）
             val document = consoleClass.getMethod("getDocument").invoke(console)
                 as? com.intellij.openapi.editor.Document
-            val editor = runCatching {
-                consoleView.javaClass.getMethod("getEditor").invoke(consoleView)
-                    as? com.intellij.openapi.editor.Editor
-            }.getOrNull()
-                ?: document?.let {
-                    com.intellij.openapi.editor.EditorFactory.getInstance().getEditors(it).firstOrNull()
+            var editor: com.intellij.openapi.editor.Editor? = null
+            // 最多等 20 帧（约 400ms）让 Swing 完成挂载与编辑器初始化
+            repeat(20) {
+                if (editor != null) return@repeat
+                document?.let {
+                    editor = com.intellij.openapi.editor.EditorFactory.getInstance()
+                        .getEditors(it).firstOrNull()
                 }
+                if (editor == null) Thread.sleep(20)
+            }
             LOG.info("[M36] editor=$editor")
             if (editor == null) return
 
