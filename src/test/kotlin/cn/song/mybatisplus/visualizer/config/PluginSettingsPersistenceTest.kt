@@ -139,11 +139,12 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
-            // T-TenantLine：多租户注入开关 +1；筛选条显隐开关 +1；Hibernate 日志捕获开关 +1
+            // T-TenantLine：多租户注入开关 +1；Hibernate 日志捕获开关 +1
             // F-6：INSERT 追加租户列开关 +1；数据权限占位提示开关 +1
             // M47：Spring JdbcTemplate 日志捕获开关 +1
             // F-43：自动保存历史 SQL 开关 +1
-            assertEquals("复选框总数应为 19（+F-43 自动保存开关）", 19, texts.size)
+            // 2026-08-27 筛选精简：移除「显示类型筛选条」开关 -1（SQL 类型多选改面板工具栏直出）
+            assertEquals("复选框总数应为 18（-显示类型筛选条开关）", 18, texts.size)
         } finally {
             settings.state.language = old
         }

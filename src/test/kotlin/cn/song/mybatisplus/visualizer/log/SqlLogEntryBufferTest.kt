@@ -196,4 +196,65 @@ class SqlLogEntryBufferTest {
         assertTrue(buffer.addEntry(entryAt("SELECT 1", 100L)))
         assertEquals(2, buffer.snapshot().size)
     }
+
+    // ---------- 去重丢弃计数（列表 ⨉N 徽章数据源） ----------
+
+    @Test
+    fun `去重丢弃计数随丢弃递增`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃 1 次
+        buffer.addEntry(entryAt("SELECT 1", 200L)) // 丢弃 2 次
+        assertEquals(2, buffer.dedupeCount("SELECT 1"))
+        assertEquals(2, buffer.dedupeCountsSnapshot()["SELECT 1"])
+    }
+
+    @Test
+    fun `去重计数键为还原SQL原文_不同SQL互不干扰`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 2", 0L))
+        buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃
+        assertEquals(1, buffer.dedupeCount("SELECT 1"))
+        assertEquals(0, buffer.dedupeCount("SELECT 2"))
+        assertEquals(0, buffer.dedupeCount("SELECT 3")) // 无记录返回 0
+    }
+
+    @Test
+    fun `clear 归零去重计数`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃 1 次
+        assertEquals(1, buffer.dedupeCount("SELECT 1"))
+        buffer.clear()
+        assertEquals(0, buffer.dedupeCount("SELECT 1"))
+    }
+
+    @Test
+    fun `resetDedupeCounts 归零而不清列表`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃 1 次
+        buffer.resetDedupeCounts()
+        assertEquals(0, buffer.dedupeCount("SELECT 1"))
+        assertEquals(1, buffer.snapshot().size) // 列表条目保留
+    }
+
+    @Test
+    fun `去重关闭期间不累计计数`() {
+        buffer.dedupeEnabled = false
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 1", 100L)) // 去重关闭，正常入列
+        assertEquals(0, buffer.dedupeCount("SELECT 1"))
+    }
+
+    @Test
+    fun `去重丢弃不触发监听器`() {
+        buffer.dedupeEnabled = true
+        var notified = 0
+        buffer.addListener { notified++ }
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃
+        assertEquals(1, notified)
+    }
 }

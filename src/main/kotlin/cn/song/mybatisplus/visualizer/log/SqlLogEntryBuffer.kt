@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -28,6 +29,13 @@ class SqlLogEntryBuffer(
     @Volatile
     var dedupeEnabled: Boolean = true
 
+    /**
+     * 去重丢弃计数（键 = restoredSql 原文，与 [isDuplicate] 匹配同源）：去重开启期间每丢弃
+     * 一条相同 SQL 计数 +1，供列表「⨉N」徽章展示该 SQL 被去掉过几次。
+     * 仅在 [dedupeEnabled] 为 true 时累计；[clear] 与 [resetDedupeCounts] 归零。
+     */
+    private val dedupeCounts = ConcurrentHashMap<String, Int>()
+
     /** 去重窗口（毫秒）：相同还原 SQL 在该窗口内重复出现时丢弃后到者。 */
     @Volatile
     var dedupeWindowMs: Long = DEFAULT_DEDUPE_WINDOW_MS
@@ -39,11 +47,14 @@ class SqlLogEntryBuffer(
     /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
     var onEvicted: ((LogSqlEntry) -> Unit)? = null
 
-    /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃；超过上限裁掉最旧）。 */
+    /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃并计数；超过上限裁掉最旧）。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
         if (isFiltered(entry.restoredSql)) return false
-        if (dedupeEnabled && isDuplicate(entry)) return false
+        if (dedupeEnabled && isDuplicate(entry)) {
+            dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+            return false
+        }
         synchronized(entries) {
             entries.addLast(entry)
             while (entries.size > maxEntries) {
@@ -66,11 +77,23 @@ class SqlLogEntryBuffer(
     /** 最早在前的快照（正序）。 */
     fun snapshot(): List<LogSqlEntry> = synchronized(entries) { entries.toList() }
 
-    /** 清空全部。 */
+    /** 清空全部（去重计数一并归零——徽章与列表内容同生命周期）。 */
     fun clear() {
         synchronized(entries) { entries.clear() }
+        resetDedupeCounts()
         notifyChanged()
     }
+
+    /** 去重丢弃计数归零（清空列表、面板重新开启去重时调用）。 */
+    fun resetDedupeCounts() {
+        dedupeCounts.clear()
+    }
+
+    /** 指定 SQL 的去重丢弃次数（无丢弃记录返回 0）。 */
+    fun dedupeCount(sql: String): Int = dedupeCounts[sql] ?: 0
+
+    /** 去重丢弃计数快照（键 = restoredSql，值 = 丢弃次数；供面板渲染徽章）。 */
+    fun dedupeCountsSnapshot(): Map<String, Int> = dedupeCounts.toMap()
 
     /** 删除单条（面板右键菜单）。 */
     fun removeEntry(entry: LogSqlEntry) {

@@ -8,12 +8,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
 /**
- * SqlLogPanel 过滤/折叠/排序集成测试（P-06，13 用例覆盖管线逻辑）。
+ * SqlLogPanel 过滤/搜索/排序集成测试（2026-08-27 筛选项精简改造，覆盖管线逻辑）。
  *
- * 测试策略：通过 manager.entries.addEntry 注入条目 → 调用管线方法 → 断言结果。
- * 由于 SqlLogPanel 构造函数需完整 ActionToolbar/EDT 上下文（headless 沙盒中 DisposalException），
- * 管线逻辑经面板内部方法暴露后直接测试（面板本身委托 LogStatementClassifier / LogFrequencyGrouper /
- * LogDurationParser 三大纯逻辑类 + PluginSettings 阈值——均经独立单测覆盖）。
+ * 测试策略：核心管线抽为顶层纯函数（filterByType / filterBySearch），直接注入条目断言；
+ * 排序委托 LogDurationParser（已有独立单测）。原高频折叠测试随折叠功能移除而删除。
  */
 class SqlLogPanelFilterTest : BasePlatformTestCase() {
 
@@ -22,7 +20,7 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         manager = SqlLogManager(project)
-        // 测试管线逻辑需要重复 SQL（高频折叠场景），关闭去重避免相同 SQL 被丢弃
+        // 管线测试需要重复 SQL 场景，关闭去重避免相同 SQL 被丢弃
         manager.entries.dedupeEnabled = false
     }
 
@@ -43,154 +41,105 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
         return LogSqlEntry(rawSql = actualSql, restoredSql = actualSql, params = emptyList(), timestamp = ts)
     }
 
-    /** 添加条目并等待 EDT 刷新。 */
-    private fun addEntriesAndRefresh(vararg entries: LogSqlEntry) {
-        entries.forEach { manager.entries.addEntry(it) }
-        // 等待 EDT 调度完成（pane 的 UI 监听器经 invokeLater 刷新）
-        ApplicationManager.getApplication().invokeAndWait { /* 空 EDT 任务 */ }
-    }
-
-    /** 等待 EDT 调度完成（供测试方法直接调用）。 */
-    private fun waitForEdt() {
-        ApplicationManager.getApplication().invokeAndWait { /* 空 EDT 任务 */ }
-    }
-
-    // ---------- 类型过滤（委托 LogStatementClassifier） ----------
+    // ---------- 类型过滤（filterByType 纯函数） ----------
 
     fun testFilterSelectOnly() {
-        addEntriesAndRefresh(
+        val entries = listOf(
             entryOfType(StatementType.SELECT, "SELECT 1"),
             entryOfType(StatementType.INSERT, "INSERT 1"),
             entryOfType(StatementType.UPDATE, "UPDATE 1"),
         )
-        val snapshot = manager.entries.snapshot()
-        val filtered = snapshot.filter { LogStatementClassifier.classify(it) == StatementType.SELECT }
-        assertEquals(1, filtered.size)
-        assertEquals("SELECT 1", filtered[0].restoredSql)
-    }
-
-    fun testFilterInsertOnly() {
-        addEntriesAndRefresh(
-            entryOfType(StatementType.SELECT, "SELECT 1"),
-            entryOfType(StatementType.INSERT, "INSERT 1"),
-            entryOfType(StatementType.DELETE, "DELETE 1"),
-        )
-        val snapshot = manager.entries.snapshot()
-        val filtered = snapshot.filter { LogStatementClassifier.classify(it) == StatementType.INSERT }
-        assertEquals(1, filtered.size)
-        assertEquals("INSERT 1", filtered[0].restoredSql)
+        val filtered = filterByType(entries, setOf(StatementType.SELECT))
+        assertEquals(listOf("SELECT 1"), filtered.map { it.restoredSql })
     }
 
     fun testFilterMultiType() {
-        addEntriesAndRefresh(
+        val entries = listOf(
             entryOfType(StatementType.SELECT, "SELECT 1"),
             entryOfType(StatementType.INSERT, "INSERT 1"),
             entryOfType(StatementType.UPDATE, "UPDATE 1"),
             entryOfType(StatementType.DELETE, "DELETE 1"),
         )
-        val snapshot = manager.entries.snapshot()
-        val activeFilter = setOf(StatementType.SELECT, StatementType.UPDATE)
-        val filtered = snapshot.filter { LogStatementClassifier.classify(it) in activeFilter }
-        assertEquals(2, filtered.size)
-        assertTrue(filtered.any { it.restoredSql == "SELECT 1" })
-        assertTrue(filtered.any { it.restoredSql == "UPDATE 1" })
-        assertFalse(filtered.any { it.restoredSql == "INSERT 1" })
+        val filtered = filterByType(entries, setOf(StatementType.SELECT, StatementType.UPDATE))
+        assertEquals(listOf("SELECT 1", "UPDATE 1"), filtered.map { it.restoredSql })
     }
 
-    fun testFilterAllButtonSelectsAll() {
-        addEntriesAndRefresh(
+    fun testFilterAllPassesOtherThrough() {
+        // 全选（= FILTERABLE_TYPES 全集）时 OTHER 透传——修正原筛选条 OTHER 被隐性过滤的缺陷
+        val entries = listOf(
             entryOfType(StatementType.SELECT, "SELECT 1"),
-            entryOfType(StatementType.INSERT, "INSERT 1"),
+            entryOfType(StatementType.OTHER, "TRUNCATE TABLE t"),
         )
-        val snapshot = manager.entries.snapshot()
-        val activeFilter = setOf(StatementType.SELECT, StatementType.INSERT, StatementType.UPDATE, StatementType.DELETE)
-        val filtered = snapshot.filter { LogStatementClassifier.classify(it) in activeFilter }
+        val filtered = filterByType(entries, FILTERABLE_TYPES.toSet())
         assertEquals(2, filtered.size)
     }
 
-    fun testCountUpdatesAfterAddingEntries() {
-        addEntriesAndRefresh(
+    fun testFilterPartialHidesOther() {
+        // 非全选时 OTHER 不透传（不在可筛选集合中）
+        val entries = listOf(
             entryOfType(StatementType.SELECT, "SELECT 1"),
-            entryOfType(StatementType.SELECT, "SELECT 2"),
+            entryOfType(StatementType.OTHER, "TRUNCATE TABLE t"),
+        )
+        val filtered = filterByType(entries, setOf(StatementType.SELECT))
+        assertEquals(listOf("SELECT 1"), filtered.map { it.restoredSql })
+    }
+
+    fun testFilterEmptySelectionShowsNothing() {
+        val entries = listOf(
+            entryOfType(StatementType.SELECT, "SELECT 1"),
             entryOfType(StatementType.INSERT, "INSERT 1"),
         )
-        val snapshot = manager.entries.snapshot()
-        val counts = snapshot.groupingBy { LogStatementClassifier.classify(it) }.eachCount()
-        assertEquals(2, counts[StatementType.SELECT])
-        assertEquals(1, counts[StatementType.INSERT])
+        assertTrue(filterByType(entries, emptySet()).isEmpty())
     }
 
-    // ---------- 高频折叠（委托 LogFrequencyGrouper） ----------
+    // ---------- 搜索过滤（filterBySearch 纯函数） ----------
 
-    fun testFrequencyFoldMergesHighFrequencyTemplates() {
-        addEntriesAndRefresh(
-            entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", ts = 1L),
-            entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", ts = 2L),
-            entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", ts = 3L),
-            entryOfType(StatementType.INSERT, "INSERT INTO t VALUES (1)", ts = 4L),
+    fun testSearchEmptyQueryPassesAll() {
+        val entries = listOf(
+            entryOfType(StatementType.SELECT, "SELECT * FROM user"),
+            entryOfType(StatementType.SELECT, "SELECT * FROM orders"),
         )
-        val snapshot = manager.entries.snapshot()
-        val grouped = LogFrequencyGrouper.group(snapshot, threshold = 3)
-        // 高频 SELECT 合并 1 条（count=3）+ INSERT 1 条（count=1）= 2 个 GroupedEntry
-        assertEquals(2, grouped.size)
-        val selectGroup = grouped.first { it.template.restoredSql.contains("SELECT") }
-        assertEquals(3, selectGroup.count)
-        assertFalse(selectGroup.expanded)
+        assertEquals(2, filterBySearch(entries, "").size)
+        assertEquals(2, filterBySearch(entries, "   ").size) // 纯空白同空
     }
 
-    fun testFrequencyFoldDisabledShowsAll() {
-        addEntriesAndRefresh(
-            entryOfType(StatementType.SELECT, "SELECT 1", ts = 1L),
-            entryOfType(StatementType.SELECT, "SELECT 2", ts = 2L),
-            entryOfType(StatementType.SELECT, "SELECT 3", ts = 3L),
-        )
-        val snapshot = manager.entries.snapshot()
-        // 不启用高频折叠时，每条独立显示
-        assertEquals(3, snapshot.size)
+    fun testSearchCaseInsensitive() {
+        val entries = listOf(entryOfType(StatementType.SELECT, "SELECT * FROM user"))
+        assertEquals(1, filterBySearch(entries, "USER").size)
+        assertEquals(1, filterBySearch(entries, "select").size)
     }
 
-    fun testFrequencyFoldExpandCollapse() {
-        addEntriesAndRefresh(
-            entryOfType(StatementType.SELECT, "SELECT * FROM t", ts = 1L),
-            entryOfType(StatementType.SELECT, "SELECT * FROM t", ts = 2L),
-            entryOfType(StatementType.SELECT, "SELECT * FROM t", ts = 3L),
+    fun testSearchMatchesParameterValue() {
+        // 摘要（restoredSql 首行截断）含参数还原值——按订单号等参数值检索是常见场景
+        val entry = LogSqlEntry(
+            rawSql = "SELECT * FROM orders WHERE id = ?",
+            restoredSql = "SELECT * FROM orders WHERE id = 'NO-20260827-001'",
+            params = emptyList(),
+            timestamp = 0L,
         )
-        val snapshot = manager.entries.snapshot()
-        val grouped = LogFrequencyGrouper.group(snapshot, threshold = 3)
-        assertEquals(1, grouped.size)
-        assertEquals(3, grouped[0].count)
-        assertFalse("默认折叠", grouped[0].expanded)
-        // 模拟展开
-        grouped[0].expanded = true
-        assertTrue("展开后", grouped[0].expanded)
-        // 模拟折叠
-        grouped[0].expanded = false
-        assertFalse("折叠后", grouped[0].expanded)
+        assertEquals(1, filterBySearch(listOf(entry), "NO-20260827-001").size)
+        assertEquals(0, filterBySearch(listOf(entry), "NO-99999").size)
+    }
+
+    fun testSearchCombinedWithTypeFilter() {
+        // 过滤 + 搜索叠加：先类型后搜索（与面板 refreshList 顺序一致）
+        val entries = listOf(
+            entryOfType(StatementType.SELECT, "SELECT * FROM user"),
+            entryOfType(StatementType.INSERT, "INSERT INTO user VALUES (1)"),
+        )
+        val filtered = filterByType(entries, setOf(StatementType.SELECT))
+        val searched = filterBySearch(filtered, "user")
+        assertEquals(listOf("SELECT * FROM user"), searched.map { it.restoredSql })
     }
 
     // ---------- 耗时排序（委托 LogDurationParser） ----------
 
     fun testDurationSortHiddenWithoutDurationInfo() {
-        addEntriesAndRefresh(
+        val snapshot = listOf(
             entryOfType(StatementType.SELECT, "SELECT 1"),
             entryOfType(StatementType.SELECT, "SELECT 2"),
         )
-        val snapshot = manager.entries.snapshot()
-        val hasDuration = snapshot.any { LogDurationParser.hasDurationInfo(it) }
-        assertFalse("无耗时信息", hasDuration)
-    }
-
-    fun testDurationSortVisibleWithDurationInfo() {
-        val entry = LogSqlEntry(
-            rawSql = "1723456789012|123|statement|SELECT * FROM t",
-            restoredSql = "SELECT * FROM t",
-            params = emptyList(),
-            timestamp = 0L,
-        )
-        addEntriesAndRefresh(entry)
-        val snapshot = manager.entries.snapshot()
-        val hasDuration = snapshot.any { LogDurationParser.hasDurationInfo(it) }
-        assertTrue("含耗时信息", hasDuration)
+        assertFalse(snapshot.any { LogDurationParser.hasDurationInfo(it) })
     }
 
     fun testDurationSortOrderDesc() {
@@ -212,65 +161,46 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
             params = emptyList(),
             timestamp = 0L,
         )
-        addEntriesAndRefresh(e1, e2, e3)
-        val snapshot = manager.entries.snapshot()
+        val snapshot = listOf(e1, e2, e3)
         val sorted = snapshot.sortedByDescending { LogDurationParser.parse(it) ?: -1L }
         assertEquals("SELECT * FROM b", sorted[0].restoredSql) // 500ms
         assertEquals("SELECT * FROM c", sorted[1].restoredSql) // 300ms
         assertEquals("SELECT * FROM a", sorted[2].restoredSql) // 100ms
     }
 
-    // ---------- 过滤 + 折叠叠加 ----------
+    // ---------- 缓冲层去重计数联动（面板徽章数据源） ----------
 
-    fun testFilterPlusFoldOverlay() {
-        addEntriesAndRefresh(
-            entryOfType(StatementType.SELECT, "SELECT * FROM a", ts = 1L),
-            entryOfType(StatementType.SELECT, "SELECT * FROM a", ts = 2L),
-            entryOfType(StatementType.SELECT, "SELECT * FROM a", ts = 3L),
-            entryOfType(StatementType.INSERT, "INSERT INTO b", ts = 4L),
-            entryOfType(StatementType.INSERT, "INSERT INTO b", ts = 5L),
-        )
-        val snapshot = manager.entries.snapshot()
-        // 先过滤：取消 INSERT
-        val filtered = snapshot.filter { LogStatementClassifier.classify(it) != StatementType.INSERT }
-        // 再折叠
-        val grouped = LogFrequencyGrouper.group(filtered, threshold = 3)
-        // 过滤后只剩 SELECT（3 条同模板），折叠后合并 1 条
-        assertEquals("过滤+折叠叠加后仅 1 条 SELECT 折叠组", 1, grouped.size)
-        assertTrue("剩余条目是 SELECT", grouped[0].template.restoredSql.startsWith("SELECT"))
-    }
-
-    // ---------- PluginSettings 阈值联动 ----------
-
-    fun testPluginSettingsThresholdDefault() {
-        val threshold = PluginSettings.getInstance().state.logFrequencyThreshold
-        assertTrue("默认阈值 >= 2", threshold >= 2)
-    }
-
-    fun testPluginSettingsFoldDefaultDisabled() {
-        val foldEnabled = PluginSettings.getInstance().state.logFrequencyFoldEnabled
-        assertFalse("高频折叠默认关闭", foldEnabled)
-    }
-
-    fun testPluginSettingsSortDefaultDisabled() {
-        val sortEnabled = PluginSettings.getInstance().state.logDurationSortEnabled
-        assertFalse("耗时排序默认关闭", sortEnabled)
-    }
-
-    // ---------- 清空后状态保留（面板行为模拟） ----------
-
-    fun testClearPreservesDataIntegrity() {
-        addEntriesAndRefresh(
-            entryOfType(StatementType.SELECT, "SELECT 1"),
-            entryOfType(StatementType.INSERT, "INSERT 1"),
-        )
-        assertEquals(2, manager.entries.snapshot().size)
-        // 清空
-        manager.entries.clear()
+    fun testDedupeBadgeDataFromBuffer() {
+        manager.entries.dedupeEnabled = true
+        manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", ts = 0L))
+        manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", ts = 100L)) // 丢弃
+        manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", ts = 200L)) // 再丢弃
+        // 等待 EDT 刷新（面板 UI 监听器经 invokeLater）
         waitForEdt()
-        assertEquals("清空后无条目", 0, manager.entries.snapshot().size)
-        // 重新添加后管线仍可用
-        addEntriesAndRefresh(entryOfType(StatementType.SELECT, "SELECT new"))
-        assertEquals(1, manager.entries.snapshot().size)
+        val counts = manager.entries.dedupeCountsSnapshot()
+        assertEquals(2, counts["SELECT * FROM t WHERE id = 1"])
+    }
+
+    fun testClearResetsBadgeCounts() {
+        manager.entries.dedupeEnabled = true
+        manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT dup", ts = 0L))
+        manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT dup", ts = 100L)) // 丢弃
+        assertEquals(1, manager.entries.dedupeCount("SELECT dup"))
+        manager.entries.clear()
+        assertEquals(0, manager.entries.dedupeCount("SELECT dup"))
+    }
+
+    // ---------- PluginSettings 默认值（改造后残留状态检查） ----------
+
+    fun testPluginSettingsDefaultsAfterCleanup() {
+        // 去重开关在 buffer 层（SqlLogEntryBuffer.dedupeEnabled 默认 true，T-M31.13），
+        // 不再断言 PluginSettings（筛选条相关字段已随精简改造移除）
+        val state = PluginSettings.getInstance().state
+        assertFalse("历史自动保存默认关闭", state.logAutoSaveEnabled)
+    }
+
+    /** 等待 EDT 调度完成。 */
+    private fun waitForEdt() {
+        ApplicationManager.getApplication().invokeAndWait { java.lang.Runnable { } }
     }
 }

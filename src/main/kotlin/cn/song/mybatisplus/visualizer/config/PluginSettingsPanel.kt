@@ -194,7 +194,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val clearCacheButton = JButton(MpSqlVisualizerBundle.message("settings.cache.clear"))
 
     // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
-    private val logFilterBarCheck = JBCheckBox()
     private val logSqlPrefixField = JBTextField(12)
     private val logParamPrefixField = JBTextField(12)
     private val logMixedPrefixCheck = JBCheckBox()
@@ -412,10 +411,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
         // 组 4：SQL 日志（分割线分隔 3 个子分组）
         if (SECTION_SQL_LOG in sections) {
             sectionGroup("settings.log.tab.mybatis") { p, g ->
-                addRow(p, g, "", logFilterBarCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.filterBar")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.filterBar.tip")
-                })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
                 })
@@ -888,7 +883,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
             || logMaxParseField.text.trim().toIntOrNull() != s.logMaxParseLength
             || logMaxCountField.text.trim().toIntOrNull() != s.logMaxCount
-            || logFilterBarCheck.isSelected != s.logFilterBarEnabled
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
@@ -954,7 +948,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
             s.logMaxParseLength = logMaxParseField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_PARSE_LENGTH
             s.logMaxCount = logMaxCountField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_MAX_COUNT
-            s.logFilterBarEnabled = logFilterBarCheck.isSelected
             s.logTimePrefix = logTimePrefixField.text.trim()
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
@@ -1047,7 +1040,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logDedupeField.text = s.logDedupeWindowMs.toString()
             logMaxParseField.text = s.logMaxParseLength.toString()
             logMaxCountField.text = s.logMaxCount.toString()
-            logFilterBarCheck.isSelected = s.logFilterBarEnabled
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled

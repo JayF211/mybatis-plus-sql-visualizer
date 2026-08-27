@@ -203,33 +203,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var logAutoSaveFileNamePattern: String = DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN,
 
-        // ---------- P-06 日志智能分组 / 高频折叠 ----------
-
-        /**
-         * 筛选条显隐开关（P-06）：开启后 SQL 日志面板顶部显示类型筛选条
-         * （全部/SELECT/INSERT/UPDATE/DELETE + 高频折叠 + 耗时排序）。
-         * 默认关（低频项，需要时手动开启）。
-         */
-        var logFilterBarEnabled: Boolean = false,
-
-        /**
-         * 日志高频折叠阈值（P-06）：同一 SQL 模板出现次数 >= 该值时启用折叠。
-         * 默认 3。
-         */
-        var logFrequencyThreshold: Int = DEFAULT_LOG_FREQUENCY_THRESHOLD,
-
-        /**
-         * 日志高频折叠开关（P-06）：启用后高频 SQL 模板折叠显示。
-         * 默认关（用户手动启用）。
-         */
-        var logFrequencyFoldEnabled: Boolean = false,
-
-        /**
-         * 日志耗时排序开关（P-06）：启用后按耗时降序排序。
-         * 默认关。
-         */
-        var logDurationSortEnabled: Boolean = false,
-
         // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
 
         /**
@@ -365,7 +338,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOG_MAX_COUNT = 200
-        const val DEFAULT_LOG_FREQUENCY_THRESHOLD = 3
 
         /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
         const val DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-\$yyyy-MM-dd\$.sql"

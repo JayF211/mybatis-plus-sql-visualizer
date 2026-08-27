@@ -312,8 +312,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
-     *  2. 创建临时 .sql 文件 → 打开原生编辑器 → IDEA 原生数据源选择弹窗自动出现
-     *  3. 用户选择数据源后 Ctrl+Enter 执行（结果内联展示，IDEA 原生样式）
+     *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
+     *  3. 结果在打开的 Database 编辑器下方原生展示
      *
      * Community（无 database 插件）由 [SqlExecutor] 提示降级。
      */
@@ -334,11 +334,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (confirm != Messages.YES) return
         }
 
-        // 2. 创建临时文件 → 打开编辑器 → 原生数据源弹窗自动出现
+        // 2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
         SqlExecutor.execute(proj, sql, null, isQuery)
-
-        // 3. 更新结果面板状态
-        resultPanel.showTempFileOpened()
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
