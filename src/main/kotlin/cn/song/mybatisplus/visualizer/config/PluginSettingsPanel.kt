@@ -39,7 +39,6 @@ import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
 import javax.swing.event.DocumentListener
-import javax.swing.JTabbedPane
 
 /**
  * 设置表单面板（T-M5-02，F-16 配置项 UI）。

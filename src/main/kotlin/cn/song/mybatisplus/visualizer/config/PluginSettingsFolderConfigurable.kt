@@ -434,10 +434,10 @@ class PluginSettingsFolderConfigurable : Configurable {
 
     companion object {
         private val SUB_PAGES = listOf(
+            SubPageDesc("settings.section.ui", "settings.section.ui.desc", AllIcons.Nodes.Plugin, UiActionsConfigurable::class.java),
             SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.Class, SqlPreviewConfigurable::class.java),
             SubPageDesc("settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables, TableMappingConfigurable::class.java),
             SubPageDesc("settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console, SqlLogConfigurable::class.java),
-            SubPageDesc("settings.section.ui", "settings.section.ui.desc", AllIcons.Nodes.Plugin, UiActionsConfigurable::class.java),
             SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite, AboutConfigurable::class.java),
         )
 

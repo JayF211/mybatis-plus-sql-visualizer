@@ -2,10 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
-import cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
-import cn.song.mybatisplus.visualizer.execute.DataSourceSettings
-import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -313,14 +310,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * 执行 SQL（M36 直接执行）：
+     * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
-     *  2. 获取数据源（默认 → 选择弹窗）
-     *  3. 创建临时文件 + 原生控制台执行（结果内联展示，IDEA 原生样式）
-     *  4. 结果摘要展示在下方结果面板
+     *  2. 创建临时 .sql 文件 → 打开原生编辑器 → IDEA 原生数据源选择弹窗自动出现
+     *  3. 用户选择数据源后 Ctrl+Enter 执行（结果内联展示，IDEA 原生样式）
      *
-     * Community（无 database 插件）由支持层提示降级。
-     * T-M23.6：成功提示「关闭 SQL 面板」按钮 → 回调 [onClosePanelRequested]（预览弹窗关闭）。
+     * Community（无 database 插件）由 [SqlExecutor] 提示降级。
      */
     internal fun executeSql() {
         val proj = project ?: return
@@ -339,36 +334,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (confirm != Messages.YES) return
         }
 
-        // 2. 获取数据源（默认 → 选择弹窗）
-        val defaultDs = DataSourceSettings.getDefaultDataSource(proj)
-        if (defaultDs != null) {
-            executeWithDataSource(proj, sql, defaultDs, isQuery)
-        } else {
-            resultPanel.showLoading()
-            DataSourceSelector.select(proj) { ds ->
-                if (ds != null) {
-                    executeWithDataSource(proj, sql, ds, isQuery)
-                } else {
-                    resultPanel.showEmpty()
-                }
-            }
-        }
-    }
+        // 2. 创建临时文件 → 打开编辑器 → 原生数据源弹窗自动出现
+        SqlExecutor.execute(proj, sql, null, isQuery)
 
-    /**
-     * 使用指定数据源执行 SQL（M36）。
-     * 创建临时文件 → 打开原生编辑器 → 提示用户 Ctrl+Enter 执行（Database 插件自动关联控制台）。
-     */
-    private fun executeWithDataSource(proj: Project, sql: String, dataSource: Any, isQuery: Boolean) {
-        val dsName = DataSourceSettings.getName(dataSource)
-        val startTime = System.currentTimeMillis()
-
-        // 在 EDT 上创建文件并打开编辑器（文件操作必须在 EDT）
-        SqlExecutor.execute(proj, sql, dataSource, isQuery)
-
-        // 更新结果面板状态（提示用户在打开的编辑器中 Ctrl+Enter 执行）
-        val elapsed = System.currentTimeMillis() - startTime
-        resultPanel.showTempFileOpened(dsName)
+        // 3. 更新结果面板状态
+        resultPanel.showTempFileOpened()
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
@@ -1959,7 +1929,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private const val COLUMN_INFO_TAB_TITLE = "列信息"
 
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
-        /** T-M24-04：XML 单行视图的空白归一化（多行文本节点 / 段间空格）。 */
+        /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")
     }
 }

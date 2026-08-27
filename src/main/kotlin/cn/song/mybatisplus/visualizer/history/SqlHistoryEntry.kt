@@ -10,7 +10,7 @@ import java.util.UUID
  *
  * @param id         唯一标识（空白时由 [SqlHistoryManager.add] 自动分配 UUID）
  * @param sql        完整 SQL（多行格式化）
- * @param compactSql 单行 SQL（摘要展示用）
+ * @param compactSql 压缩 SQL（摘要展示用）
  * @param timestamp  预览时间戳（毫秒）
  * @param sourceFile 来源文件名（如 UserMapper.java）
  * @param sourceLine 来源文件行号（0 表示未知）

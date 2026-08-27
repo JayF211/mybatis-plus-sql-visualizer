@@ -7,7 +7,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
  *
  * @param statement      语句模型（含动态条件 toggle 元数据）
  * @param dialect        方言（重生成分页子句用）
- * @param formatSql      多行/单行设置（false=单行），面板据此对齐初始 compactMode
+ * @param formatSql      多行/压缩设置（false=压缩），面板据此对齐初始 compactMode
  * @param conditionViews 动态条件行（扁平化，含嵌套组内），供左栏复选框渲染
  */
 data class SqlPreviewModel(

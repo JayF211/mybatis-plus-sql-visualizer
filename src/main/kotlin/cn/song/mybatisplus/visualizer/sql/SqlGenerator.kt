@@ -35,7 +35,7 @@ data class GeneratedSql(
  * 输出约定（与 docs/项目介绍.md 联表示例风格对齐）：
  *  - 关键字大写
  *  - 默认多行模式：每个子句独占一行，WHERE 后续条件以 4 空格缩进 + `AND` 开头
- *  - 单行模式（compact）：子句间以空格连接，WHERE 条件内联（F-03 格式化视图切换）
+ *  - 压缩模式（compact）：子句间以空格连接，WHERE 条件内联（F-03 格式化视图切换）
  *  - 参数：psi 层已求值的字面量直接渲染；运行时值渲染为 `?` 并收集来源（F-02）
  *
  * 本类为纯函数，不依赖 PSI / IDE，可独立单测。
@@ -60,7 +60,7 @@ object SqlGenerator {
      * 生成 SQL（按语句类型分发）。
      *
      * @param statement          语句模型（SELECT / UPDATE / DELETE）
-     * @param compact            true=单行模式，false=多行缩进模式
+     * @param compact            true=压缩模式，false=多行缩进模式
      * @param dialect            数据库方言（影响分页子句，默认 MySQL）
      * @param enabledConditionIds 动态条件启用集合（M12）；null（默认）→ 按 toggle.defaultEnabled
      * @return SQL 文本
@@ -76,7 +76,7 @@ object SqlGenerator {
      * 生成 SQL 并收集未解析参数来源与回填提示（F-02 参数替换与对照表，M13 hints）。
      *
      * @param statement          语句模型
-     * @param compact            true=单行模式，false=多行缩进模式
+     * @param compact            true=压缩模式，false=多行缩进模式
      * @param dialect            数据库方言（影响分页子句）
      * @param enabledConditionIds 动态条件启用集合（M12）：仅渲染 id 在该集合内的动态条件；
      *                             null（默认）→ 按各条件 toggle.defaultEnabled 渲染（与 M11 基线一致）
@@ -363,7 +363,7 @@ object SqlGenerator {
     /**
      * 渲染一组条件。
      *
-     * @param indent   true=顶层多条件换行缩进（如 `    AND xxx`），false=单行连接
+     * @param indent   true=顶层多条件换行缩进（如 `    AND xxx`），false=压缩连接
      * @param paramSink 参数收集器（可为 null）
      * @param dialect  方言（T-M23.4 关键字标识符引用；默认 MySQL）
      */

@@ -9,7 +9,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
  * 预览结果（M3-01 整合层产物）：一次 Wrapper 转换的完整展示数据。
  *
  * @param sql              多行格式化 SQL（主展示）
- * @param compactSql       单行 SQL（F-03 视图切换备用）
+ * @param compactSql       压缩 SQL（F-03 视图切换备用）
  * @param unresolvedParams 未解析参数来源（F-02 对照表，顺序对应 SQL 中 `?`）
  * @param paramTable       参数对照表文本（`-- 参数对照: [...]`，无参数为 null）
  * @param wrapperType      Wrapper 类型（UI 可展示类型标签）

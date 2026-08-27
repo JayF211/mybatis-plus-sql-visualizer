@@ -1014,7 +1014,7 @@ class SqlPreviewService(private val project: Project) {
                   { projectSettings?.effectiveDialect() })
 
     /**
-     * 是否格式化输出（true=多行缩进，false=单行；O-5：项目级优先）。
+     * 是否格式化输出（true=多行缩进，false=压缩；O-5：项目级优先）。
      */
     fun formatSql(): Boolean =
         effective({ settings?.state?.formatSql ?: true },
