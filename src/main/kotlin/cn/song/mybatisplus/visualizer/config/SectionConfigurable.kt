@@ -20,7 +20,9 @@ abstract class SectionConfigurable(
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message(displayNameKey)
 
     override fun createComponent(): JComponent {
-        panel = PluginSettingsPanel(PluginSettings.getInstance(), sections)
+        if (!::panel.isInitialized) {
+            panel = PluginSettingsPanel(PluginSettings.getInstance(), sections)
+        }
         return panel.getRoot()
     }
 

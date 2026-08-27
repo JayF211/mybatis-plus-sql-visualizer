@@ -72,7 +72,7 @@ import com.intellij.psi.util.PsiTreeUtil
  * 集成链路：WrapperLocator 定位 → ConverterRegistry 分发（SPI）→ SqlGenerator 生成 →
  * ParameterReplacer 参数对照 → WrapperCache 缓存（F-20）。
  *
- * M5 起读取 [PluginSettings] 配置：方言（分页子句）、格式化开关（多行/单行）。
+ * M5 起读取 [PluginSettings] 配置：方言（分页子句）、格式化开关（多行/压缩）。
  * 轻服务（M16）：`@Service(Service.Level.PROJECT)` 注解声明，无需 plugin.xml `<projectService>` 注册
  * （IDE 自动发现；构造函数仅依赖 Project，满足轻服务条件），获取方式不变（project.getService）。
  */

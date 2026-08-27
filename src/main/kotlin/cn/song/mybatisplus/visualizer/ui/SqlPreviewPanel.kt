@@ -94,7 +94,7 @@ import javax.swing.event.DocumentListener
  * SQL 预览面板（M9-01/02/03 可编辑版，F-07/F-08）。
  *
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
- *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 单行多行切换 / 刷新）
+ *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 压缩多行切换 / 刷新）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
  *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
@@ -222,11 +222,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
 
         // M36：垂直分割——上方 SQL 编辑区 | 下方结果面板（默认折叠，执行后展开）
-        val verticalSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, split, resultPanel).apply {
+        val verticalSplit = object : JSplitPane(JSplitPane.VERTICAL_SPLIT, split, resultPanel) {
+            override fun paint(g: java.awt.Graphics) {
+                // 覆盖 paint 去除默认边框绘制
+                super.paint(g)
+                // 覆盖分隔条区域为面板底色（消除白色边框感）
+                val loc = getDividerLocation()
+                if (loc > 0) {
+                    g.color = UIUtil.getPanelBackground()
+                    g.fillRect(0, loc, width, getDividerSize())
+                }
+            }
+        }.apply {
             resizeWeight = 0.7
             isContinuousLayout = true
             isOneTouchExpandable = false
             dividerSize = 3
+            border = JBUI.Borders.empty() // 去除默认边框
             background = UIUtil.getPanelBackground()
             // 结果面板默认最小高度（折叠态）
             minimumSize = Dimension(0, 0)
@@ -275,7 +287,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** 顶部工具栏：复制错误（有警示时可见）/ 单行多行切换 / 格式化 / 导入（P-05）/ 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
+    /** 顶部工具栏：复制错误（有警示时可见）/ 压缩多行切换 / 格式化 / 导入（P-05）/ 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.X_AXIS)
         errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
@@ -345,34 +357,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * 使用指定数据源执行 SQL（M36）。
+     * 创建临时文件 → 打开原生编辑器 → 提示用户 Ctrl+Enter 执行（Database 插件自动关联控制台）。
      */
     private fun executeWithDataSource(proj: Project, sql: String, dataSource: Any, isQuery: Boolean) {
         val dsName = DataSourceSettings.getName(dataSource)
-        resultPanel.showLoading(dsName)
+        val startTime = System.currentTimeMillis()
 
-        // 后台执行（避免阻塞 EDT）
-        com.intellij.openapi.progress.ProgressManager.getInstance().run(
-            object : com.intellij.openapi.progress.Task.Backgroundable(proj, "Executing SQL", false) {
-                override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
-                    val startTime = System.currentTimeMillis()
-                    runCatching {
-                        SqlExecutor.execute(proj, sql, dataSource, isQuery)
-                        val elapsed = System.currentTimeMillis() - startTime
-                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                            if (isQuery) {
-                                resultPanel.showQueryResult(-1, elapsed, dsName)
-                            } else {
-                                resultPanel.showUpdateResult(-1, elapsed, dsName)
-                            }
-                        }
-                    }.onFailure { error ->
-                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                            resultPanel.showError(error.message ?: error.toString())
-                        }
-                    }
-                }
-            },
-        )
+        // 在 EDT 上创建文件并打开编辑器（文件操作必须在 EDT）
+        SqlExecutor.execute(proj, sql, dataSource, isQuery)
+
+        // 更新结果面板状态（提示用户在打开的编辑器中 Ctrl+Enter 执行）
+        val elapsed = System.currentTimeMillis() - startTime
+        resultPanel.showTempFileOpened(dsName)
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
@@ -380,7 +376,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         addActionListener { action() }
     }
 
-    /** 单行/多行切换按钮文案：显示"将要切换到的模式"。 */
+    /** 压缩/多行切换按钮文案：显示"将要切换到的模式"。 */
     private fun modeButtonText(): String = MpSqlVisualizerBundle.message(
         if (compactMode) "panel.mode.multiline" else "panel.mode.singleline",
     )
@@ -430,7 +426,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // P-05：历史召回（在 initialParamValues 之后，用户输入之前）
         recallFromHistory()
-        // 模型级重生成路径：初始单行/多行与格式化设置对齐（旧文本路径保持默认多行）
+        // 模型级重生成路径：初始压缩/多行与格式化设置对齐（旧文本路径保持默认多行）
         result.previewModel?.let { compactMode = !it.formatSql }
         modeButton.text = modeButtonText()
         rebuildLeftPanel(result)
@@ -599,7 +595,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         candidateTables = current?.candidateTables.orEmpty(),
     )
 
-    /** 按当前单行/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
+    /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
         val result = current ?: return
         val model = result.previewModel
@@ -660,7 +656,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * 刷新视图（M19.3）：模式**复位为与设置「SQL 格式化输出」对齐**（默认多行）后重渲染编辑器——
-     * 用户实测：点刷新后 SQL 仍停留在单行模式（此前手动切换/设置快照的单行被保留）；
+     * 用户实测：点刷新后 SQL 仍停留在压缩模式（此前手动切换/设置快照的压缩被保留）；
      * 刷新 = 回到默认状态（参数与回填保留，仅模式复位）。
      */
     fun refreshView() {
@@ -669,7 +665,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderSql()
     }
 
-    /** 设置「SQL 格式化输出」（false=单行）；环境异常兜底 true（多行）。 */
+    /** 设置「SQL 格式化输出」（false=压缩）；环境异常兜底 true（多行）。 */
     private fun formatSqlSetting(): Boolean = runCatching {
         PluginSettings.getInstance().state.formatSql
     }.getOrDefault(true)
@@ -708,7 +704,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         )
     }
 
-    /** 单行 / 多行切换。 */
+    /** 压缩 / 多行切换。 */
     fun toggleCompact(): Boolean {
         compactMode = !compactMode
         renderSql()
@@ -845,9 +841,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun showSql(sql: String) {
         // T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）——在主 SQL 之后渲染 fill 附加 SELECT
         val withFill = appendFillSection(sql)
-        // T-M27.4：渲染自动格式化（设置开启且非单行模式）——XML 动态标签展开残留的空行/缩进
+        // T-M27.4：渲染自动格式化（设置开启且非压缩模式）——XML 动态标签展开残留的空行/缩进
         // 由格式化器归一（关键字大写、主子句顶格、列清单换行缩进、AND 缩进、子查询缩进）；
-        // 单行模式保持紧凑（格式化会引入换行）
+        // 压缩模式保持紧凑（格式化会引入换行）
         val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(withFill) else withFill
         val existing = editor
         if (existing != null) {

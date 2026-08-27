@@ -24,12 +24,27 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     private val statusLabel = JBLabel()
     private val infoLabel = JBLabel().apply {
         foreground = JBColor.GRAY
-        border = JBUI.Borders.empty(2, 8)
+        border = JBUI.Borders.empty(1, 4)
     }
 
     init {
-        border = JBUI.Borders.empty(4, 8)
+        // 无边框 + 透明背景，与预览面板融为一体
+        border = JBUI.Borders.empty()
+        isOpaque = false
         add(infoLabel, BorderLayout.CENTER)
+    }
+
+    /**
+     * 显示临时文件已打开状态（提示用户 Ctrl+Enter 执行）。
+     */
+    fun showTempFileOpened(dataSourceName: String = "") {
+        val dsInfo = if (dataSourceName.isNotEmpty()) {
+            " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
+        } else ""
+        infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.fileOpened")}$dsInfo</html>"
+        infoLabel.foreground = JBColor.GRAY
+        revalidate()
+        repaint()
     }
 
     /**

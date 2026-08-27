@@ -43,7 +43,7 @@
             <li>参数替换：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；动态条件复选框</li>
             <li>控制台 SQL 日志捕获还原 + 「日志转 SQL」批量还原</li>
             <li>SQL 反向转 MP Java 代码：增删改查 / 多表 JOIN，QueryWrapper / Lambda / Wrappers / MPJ 四种形态，生成代码可直接编译</li>
-            <li>SQL 自动格式化（多行 / 单行）、9 种数据库方言分页差异渲染、执行 SQL（Ultimate）</li>
+            <li>SQL 自动格式化（多行 / 压缩）、9 种数据库方言分页差异渲染、执行 SQL（Ultimate）</li>
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
@@ -88,39 +88,29 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable"/>
 
+        <!-- 界面与操作（gutter图标/语言/快捷键） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.ui"
+                                 instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
+
         <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.preview"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.preview"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlPreviewConfigurable"/>
 
         <!-- 表名映射（前缀/后缀/移除/忽略字段/推断策略） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.tableMapping"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.tableMapping"
                                  instance="cn.song.mybatisplus.visualizer.config.TableMappingConfigurable"/>
 
         <!-- SQL 日志（前缀/自动捕获/时间戳/格式化/过滤/去重/最大条数/耗时/慢查询/Hibernate/Jdbc/自动保存） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.sqlLog"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.sqlLog"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
-
-        <!-- 界面与操作（gutter图标/语言/快捷键） -->
-        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
-                                 id="cn.song.mybatisplus.visualizer.settings.ui"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.ui"
-                                 instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
 
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->

@@ -20,7 +20,6 @@ import java.awt.Container
 import java.awt.Cursor
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
-import java.awt.Insets
 import java.awt.event.MouseEvent
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
@@ -185,53 +184,62 @@ class PluginSettingsFolderConfigurable : Configurable {
     }
 
     /**
-     * 聚焦目标设置控件：页面切换后在真实面板中查找并高亮目标字段。
-     * 页面切换为异步，延迟到 EDT 调度。
+     * 聚焦目标设置控件：页面切换后在真实面板中查找目标字段，滚动到可见区域并闪烁高亮。
+     * 页面切换为异步，延迟到 EDT 调度以确保布局完成。
      */
     private fun focusTarget(target: Configurable, focusHint: String) {
         javax.swing.SwingUtilities.invokeLater {
-            runCatching {
-                // 页面已显示，createComponent() 返回真实面板
-                val root = target.createComponent() ?: return@invokeLater
-                if (focusAndFlash(root, focusHint)) {
-                    root.revalidate(); root.repaint()
-                }
-            }.onFailure { /* 忽略聚焦失败，不影响导航 */ }
+            javax.swing.SwingUtilities.invokeLater {
+                runCatching {
+                    // 页面已显示，createComponent() 返回真实面板（SectionConfigurable 已缓存）
+                    val root = target.createComponent() ?: return@invokeLater
+                    val matched = findComponent(root, focusHint)
+                    if (matched != null) {
+                        // 滚动到可见区域，让用户感知目标位置
+                        (matched as? javax.swing.JComponent)?.scrollRectToVisible(matched.bounds)
+                        flashHighlight(matched)
+                        root.revalidate(); root.repaint()
+                    }
+                }.onFailure { /* 忽略聚焦失败，不影响导航 */ }
+            }
         }
     }
 
     /**
-     * 递归查找匹配 hint 的控件：聚焦并短暂高亮（闪烁背景色）。
-     * @return 是否找到目标控件
+     * 递归查找匹配 hint 的控件。
+     * 优先匹配输入框/复选框（用户可直接操作），其次匹配标签。
+     * @return 匹配的控件，未找到返回 null
      */
-    private fun focusAndFlash(container: Container, hint: String): Boolean {
+    private fun findComponent(container: Container, hint: String): Component? {
         for (comp in container.components) {
             val matched = when {
                 comp is javax.swing.text.JTextComponent ->
                     comp.toolTipText?.contains(hint, ignoreCase = true) == true
-                comp is JBLabel -> comp.text.contains(hint, ignoreCase = true)
-                comp is javax.swing.AbstractButton -> comp.text.contains(hint, ignoreCase = true)
+                comp is javax.swing.AbstractButton ->
+                    comp.text.contains(hint, ignoreCase = true)
+                comp is JBLabel ->
+                    comp.text.contains(hint, ignoreCase = true)
                 else -> false
             }
-            if (matched) {
-                flashHighlight(comp)
-                return true
-            }
-            if (comp is Container && focusAndFlash(comp, hint)) {
-                return true
+            if (matched) return comp
+            if (comp is Container) {
+                findComponent(comp, hint)?.let { return it }
             }
         }
-        return false
+        return null
     }
 
-    /** 短暂高亮目标控件（背景闪烁 3 次）。 */
+    /**
+     * 短暂高亮目标控件：黄底闪烁 + 橙色边框，持续约 1.5 秒。
+     */
     private fun flashHighlight(comp: Component) {
         comp.requestFocusInWindow()
+        if (comp !is JComponent) return
         val originalBg = comp.background
-        val originalOpaque = (comp as? javax.swing.JComponent)?.isOpaque ?: false
-        if (comp is javax.swing.JComponent) {
-            comp.isOpaque = true
-        }
+        val originalOpaque = comp.isOpaque
+        val originalBorder = comp.border
+        comp.isOpaque = true
+        comp.border = javax.swing.BorderFactory.createLineBorder(java.awt.Color(0xFF9C00), 2)
         var count = 0
         val timer = javax.swing.Timer(250) {
             count++
@@ -243,9 +251,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             comp.repaint()
             if (count >= 6) {
                 comp.background = originalBg
-                if (comp is javax.swing.JComponent) {
-                    comp.isOpaque = originalOpaque
-                }
+                comp.isOpaque = originalOpaque
+                comp.border = originalBorder
                 (it.source as? javax.swing.Timer)?.stop()
             }
         }
@@ -297,7 +304,7 @@ class PluginSettingsFolderConfigurable : Configurable {
      * 子页面：图标 + 名称（粗体）+ 描述（灰色小字）
      * 设置项：图标 + 名称 + 所属页面路径
      */
-    private inner class SearchItemRenderer : DefaultListCellRenderer() {
+    private class SearchItemRenderer : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
             list: JList<*>?,
             value: Any?,
@@ -357,7 +364,8 @@ class PluginSettingsFolderConfigurable : Configurable {
                 gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
             })
             textPanel.add(descLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets = Insets(2, 0, 0, 0)
+                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets =
+                JBUI.insetsTop(2)
             })
 
             panel.add(iconLabel, GridBagConstraints().apply {
@@ -409,7 +417,8 @@ class PluginSettingsFolderConfigurable : Configurable {
                 gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
             })
             textPanel.add(pathLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets = Insets(2, 0, 0, 0)
+                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets =
+                JBUI.insetsTop(2)
             })
 
             panel.add(iconLabel, GridBagConstraints().apply {

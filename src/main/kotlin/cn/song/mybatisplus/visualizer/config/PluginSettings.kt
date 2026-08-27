@@ -37,7 +37,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 是否替换参数（F-16 配置项；true 时 psi 层变量追踪内联，false 保留 `?`）。 */
         var replaceParams: Boolean = true,
 
-        /** 是否格式化输出（true=多行缩进，false=单行）。 */
+        /** 是否格式化输出（true=多行缩进，false=压缩）。 */
         var formatSql: Boolean = true,
 
         /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */

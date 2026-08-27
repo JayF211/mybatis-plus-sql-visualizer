@@ -37,7 +37,7 @@ import javax.swing.JPanel
  *
  * 布局（Splitter 上下分栏 + IDEA 原生 ActionToolbar，对齐「SQL → Java」tab）：
  *  - 上：日志输入区（普通编辑器——日志文本含前缀/时间戳，不设 SQL 词法高亮）；工具栏：转换 / 清空；
- *  - 下：SQL 结果区（可编辑 + SQL 词法高亮）；工具栏：复制 / 单行↔多行 / 清空；
+ *  - 下：SQL 结果区（可编辑 + SQL 词法高亮）；工具栏：复制 / 压缩↔多行 / 清空；
  *  - 底部：状态行（错误红字 / 提示灰字）。
  *
  * 转换是 EDT 纯函数（文本解析无 PSI/实体查找），同步执行无需异步；
@@ -65,7 +65,7 @@ class LogToSqlPanel(
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
 
-    /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样单行。 */
+    /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样压缩。 */
     private var formatToggled = true
 
     init {
@@ -178,7 +178,7 @@ class LogToSqlPanel(
         }
     }
 
-    /** 单行/多行切换：立即用当前输入重转（空输入不动作）。 */
+    /** 压缩/多行切换：立即用当前输入重转（空输入不动作）。 */
     private inner class ToggleFormatAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.ReformatCode
@@ -208,7 +208,7 @@ class LogToSqlPanel(
     // ------------------------------------------------------------------
 
     /**
-     * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/单行切换）→ 写结果区。
+     * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/压缩切换）→ 写结果区。
      *
      * 三解析器并列：MyBatis + Hibernate + JdbcTemplate 同时喂行，各自识别匹配的格式，结果合并输出。
      * 一段混合日志（同时含多种格式）也能正确转换。

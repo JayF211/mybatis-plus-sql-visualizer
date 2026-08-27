@@ -410,155 +410,115 @@ class PluginSettingsPanel @JvmOverloads constructor(
             }
         }
 
-        // 组 4：SQL 日志（默认折叠，内分 3 Tab）
+        // 组 4：SQL 日志（分割线分隔 3 个子分组）
         if (SECTION_SQL_LOG in sections) {
-            sectionGroup("settings.section.sqlLog") { p, _ ->
-                val tabPane = JTabbedPane()
-                val tabGbc = GridBagConstraints().apply {
-                    gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
-                }
-                fun tabRow(p: JPanel, g: GridBagConstraints, label: String, comp: JComponent) {
-                    g.gridx = 0; g.weightx = 0.0; p.add(JBLabel(label), g)
-                    g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.NONE; p.add(comp, g)
-                    g.fill = GridBagConstraints.NONE; g.gridy++
-                }
-
-                // Tab 1 — MyBatis 核心
-                tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.mybatis"), JPanel(GridBagLayout()).apply {
-                    tabRow(this, tabGbc, "", logFilterBarCheck.apply {
-                        text = MpSqlVisualizerBundle.message("settings.log.filterBar")
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.filterBar.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.paramPrefix"), logParamPrefixField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.paramPrefix.tip")
-                    })
-                    tabRow(this, tabGbc, "", logMixedPrefixCheck.apply {
-                        text = MpSqlVisualizerBundle.message("settings.log.mixedPrefix")
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
-                    })
-                    tabRow(this, tabGbc, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
-                    tabRow(this, tabGbc, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
-                    tabRow(this, tabGbc, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
-                    tabRow(this, tabGbc, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
-                    })
-                    tabRow(this, tabGbc, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
-                        emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.dedupeWindow"), logDedupeField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.dedupeWindow.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.maxCount"), logMaxCountField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.maxCount.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.timePrefix.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
-                    })
+            sectionGroup("settings.log.tab.mybatis") { p, g ->
+                addRow(p, g, "", logFilterBarCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.filterBar")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.filterBar.tip")
                 })
-
-                // Tab 2 — ORM 框架
-                tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.orm"), JPanel(GridBagLayout()).apply {
-                    tabRow(this, tabGbc, "", logHibernateEnabledCheck.apply {
-                        text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix"), logHibernateSqlPrefixField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix.tip")
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
-                    })
-                    tabRow(this, tabGbc, "", logJdbcEnabledCheck.apply {
-                        text = MpSqlVisualizerBundle.message("settings.log.jdbc")
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
-                    })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
                 })
-
-                // Tab 3 — 自动保存
-                tabPane.addTab(MpSqlVisualizerBundle.message("settings.log.tab.autoSave"), JPanel(GridBagLayout()).apply {
-                    tabRow(this, tabGbc, "", logAutoSaveCheck.apply {
-                        text = MpSqlVisualizerBundle.message("settings.log.autoSave")
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
-                        addActionListener {
-                            val enabled = isSelected
-                            logAutoSavePathField.isEnabled = enabled
-                            logAutoSaveBrowseButton.isEnabled = enabled
-                            logAutoSavePatternField.isEnabled = enabled
-                            updateAutoSavePreview()
-                        }
-                    })
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
-                        JPanel(BorderLayout(4, 0)).apply {
-                            isOpaque = false
-                            add(logAutoSavePathField.apply {
-                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.path.tip")
-                                emptyText.text = MpSqlVisualizerBundle.message("settings.log.autoSave.path.empty")
-                            }, BorderLayout.CENTER)
-                            add(logAutoSaveBrowseButton.apply {
-                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip")
-                                addActionListener { browseAutoSavePath() }
-                            }, BorderLayout.EAST)
-                        }
-                    )
-                    tabRow(this, tabGbc, MpSqlVisualizerBundle.message("settings.log.autoSave.pattern"),
-                        JPanel(BorderLayout(4, 0)).apply {
-                            isOpaque = false
-                            add(logAutoSavePatternField.apply {
-                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
-                                emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
-                                document.addDocumentListener(object : javax.swing.event.DocumentListener {
-                                    override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                    override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                    override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                })
-                            }, BorderLayout.CENTER)
-                            add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
-                                toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
-                                addActionListener { logAutoSavePatternField.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
-                            }, BorderLayout.EAST)
-                        }
-                    )
-                    tabRow(this, tabGbc, "", logAutoSavePatternPreview.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
-                    })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.paramPrefix"), logParamPrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.paramPrefix.tip")
                 })
+                addRow(p, g, "", logMixedPrefixCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.mixedPrefix")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
+                })
+                addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
+                addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
+                addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
+                addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
+                })
+                addRow(p, g, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
+                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.dedupeWindow"), logDedupeField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.dedupeWindow.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxCount"), logMaxCountField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.maxCount.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timePrefix.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
+                })
+            }
 
-                // 统一 tab 内标签列宽
-                var maxTabLabel = 0
-                for (i in 0 until tabPane.tabCount) {
-                    val tabComp = tabPane.getComponentAt(i)
-                    if (tabComp is JPanel) {
-                        for (c in tabComp.components) {
-                            if (c is JBLabel) maxTabLabel = maxOf(maxTabLabel, c.preferredSize.width)
-                        }
+            sectionGroup("settings.log.tab.orm") { p, g ->
+                addRow(p, g, "", logHibernateEnabledCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix"), logHibernateSqlPrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
+                })
+                addRow(p, g, "", logJdbcEnabledCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.jdbc")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
+                })
+            }
+
+            sectionGroup("settings.log.tab.autoSave") { p, g ->
+                addRow(p, g, "", logAutoSaveCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.autoSave")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
+                    addActionListener {
+                        val enabled = isSelected
+                        logAutoSavePathField.isEnabled = enabled
+                        logAutoSaveBrowseButton.isEnabled = enabled
+                        logAutoSavePatternField.isEnabled = enabled
+                        updateAutoSavePreview()
                     }
-                }
-                if (maxTabLabel > 0) {
-                    for (i in 0 until tabPane.tabCount) {
-                        val tabComp = tabPane.getComponentAt(i)
-                        if (tabComp is JPanel && tabComp.layout is GridBagLayout) {
-                            (tabComp.layout as GridBagLayout).columnWidths = intArrayOf(maxTabLabel + 8, 0)
-                        }
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
+                    JPanel(BorderLayout(4, 0)).apply {
+                        isOpaque = false
+                        add(logAutoSavePathField.apply {
+                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.path.tip")
+                            emptyText.text = MpSqlVisualizerBundle.message("settings.log.autoSave.path.empty")
+                        }, BorderLayout.CENTER)
+                        add(logAutoSaveBrowseButton.apply {
+                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip")
+                            addActionListener { browseAutoSavePath() }
+                        }, BorderLayout.EAST)
                     }
-                }
-
-                val outer = GridBagConstraints().apply {
-                    gridx = 0; gridy = 0; weightx = 1.0; weighty = 1.0
-                    fill = GridBagConstraints.BOTH
-                }
-                p.add(tabPane, outer)
+                )
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.pattern"),
+                    JPanel(BorderLayout(4, 0)).apply {
+                        isOpaque = false
+                        add(logAutoSavePatternField.apply {
+                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
+                            emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
+                            document.addDocumentListener(object : javax.swing.event.DocumentListener {
+                                override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                                override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
+                            })
+                        }, BorderLayout.CENTER)
+                        add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
+                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
+                            addActionListener { logAutoSavePatternField.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+                        }, BorderLayout.EAST)
+                    }
+                )
+                addRow(p, g, "", logAutoSavePatternPreview.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
+                })
             }
         }
 
