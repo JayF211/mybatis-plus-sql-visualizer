@@ -33,9 +33,12 @@ import com.intellij.ui.components.JBTabbedPane
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.Container
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GridBagLayout
+import java.awt.Insets
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.KeyAdapter
@@ -180,7 +183,10 @@ class SqlLogPanel(
 
     // ---------- UI 组件（工具栏行：捕捉/清空/设置/帮助 + 去重勾选 + SQL类型 + 耗时排序） ----------
 
-    /** SQL类型多选按钮（点击弹可勾选弹窗；文案动态反映当前选中组合）。 */
+    /** SQL类型标签（独立于按钮——`SQL类型：[状态]`，状态文字只放按钮）。 */
+    private val typeFilterLabel = JLabel(MpSqlVisualizerBundle.message("log.filter.type.label"))
+
+    /** SQL类型多选按钮（点击弹可勾选弹窗；文案只显示选中状态：全部 / 无 / 「查询, 更新」组合）。 */
     private val typeFilterButton = JButton().apply {
         isFocusable = false
         icon = AllIcons.General.ArrowDown
@@ -219,6 +225,17 @@ class SqlLogPanel(
     /** SQL类型多选按钮（测试断言文案）。 */
     internal val typeFilterButtonForTest: JButton get() = typeFilterButton
 
+    /** SQL类型标签（测试断言存在性与文案）。 */
+    internal val typeFilterLabelForTest: JLabel get() = typeFilterLabel
+
+    /** 应用类型过滤组合（测试驱动：设置选中集 + 刷新按钮文案与列表）。 */
+    internal fun applyTypeFilterForTest(types: Set<StatementType>) {
+        activeFilter.clear()
+        activeFilter.addAll(types)
+        updateTypeFilterButton()
+        refreshList()
+    }
+
     /** 搜索条（测试断言显隐/文本）。 */
     internal val searchFieldForTest: SearchTextField get() = searchField
 
@@ -231,7 +248,7 @@ class SqlLogPanel(
         ClearAction(),
         SettingsAction(),
         HelpAction(),
-        ShowSearchAction(),
+        ShowSearchAction(), // 搜索在帮助右侧（用户指定排序）
     )
 
     init {
@@ -309,19 +326,38 @@ class SqlLogPanel(
         _toolbarRef = toolbar // 保存引用供 capturing 监听刷新
 
         updateTypeFilterButton()
-        val bar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4))
-        bar.add(toolbar.component)
-        bar.add(dedupeCheckBox) // 去重勾选开关（T-M31.5）
-        bar.add(typeFilterButton)
-        bar.add(sortButton)
+        // 左右分区：左侧 动作图标 + SQL类型单元 + 耗时排序 + 慢查询计数；
+        // 右侧「移除重复的sql」勾选（用户要求移到右侧，与 SQL类型 垂直居中平行、样式统一）
+        val row = JPanel(BorderLayout())
+
+        // 左侧流式区：WrapLayout——窄侧边栏放不下时折行且高度随之增长（原生 FlowLayout
+        // preferredLayoutSize 只按单行算，折行后第二行会被裁掉——「SQL类型筛选项消失」根因）
+        val left = JPanel(WrapLayout())
+        left.add(toolbar.component)
+        // 标签 + 按钮打包成一体：折行时「SQL类型：」与状态按钮同进退，不拆散两行
+        val typeFilterUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(typeFilterLabel)
+            add(typeFilterButton)
+        }
+        left.add(typeFilterUnit)
+        left.add(sortButton)
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
             foreground = Color(0xD32F2F) // 红色
             font = font.deriveFont(Font.BOLD)
             isVisible = false // 默认隐藏，有慢查询时显示
         }
-        bar.add(slowQueryLabel)
-        return bar
+        left.add(slowQueryLabel)
+        row.add(left, BorderLayout.CENTER)
+
+        // 右侧：去重勾选（Flow 面板带边距，BorderLayout 垂直居中 → 与左侧图标/标签同轴平行）
+        val right = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 4)).apply {
+            isOpaque = false
+            add(dedupeCheckBox)
+        }
+        row.add(right, BorderLayout.EAST)
+        return row
     }
 
     /** 搜索条（默认隐藏；Ctrl+F/⌘F 经 ShowSearchAction 唤起）。 */
@@ -353,6 +389,13 @@ class SqlLogPanel(
             registerCustomShortcutSet(CommonShortcuts.getFind(), list)
         }
 
+        override fun update(e: AnActionEvent) {
+            // 图标必须在 update 里写（工具栏 ActionButton 按 presentation 渲染；
+            // 不设则渲染为占位圆圈——用户实测缺陷）
+            e.presentation.icon = AllIcons.Actions.Search
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.search")
+        }
+
         override fun actionPerformed(e: AnActionEvent) {
             showSearch()
         }
@@ -382,21 +425,22 @@ class SqlLogPanel(
 
     // ---------- SQL类型多选弹窗 ----------
 
-    /** 更新 SQL类型按钮文案（全选/无/部分组合）。 */
+    /** 更新 SQL类型按钮文案：标签独立展示，按钮只显示状态（全部 / 无 / 类型组合）。 */
     private fun updateTypeFilterButton() {
         typeFilterButton.text = when {
-            activeFilter.containsAll(FILTERABLE_TYPES) -> MpSqlVisualizerBundle.message("log.filter.type.all")
+            activeFilter.containsAll(FILTERABLE_TYPES) -> MpSqlVisualizerBundle.message("log.filter.all")
             activeFilter.isEmpty() -> MpSqlVisualizerBundle.message("log.filter.type.none")
-            else -> MpSqlVisualizerBundle.message(
-                "log.filter.type.selected",
-                FILTERABLE_TYPES.filter { it in activeFilter }.joinToString(", ") { labelForType(it) },
-            )
+            else -> FILTERABLE_TYPES.filter { it in activeFilter }.joinToString(", ") { labelForType(it) }
         }
     }
 
+    /** 当前打开的类型弹窗内勾选框（全选/全不选即时同步用；弹窗每次打开重建）。 */
+    private var typePopupCheckBoxes: List<Pair<StatementType, JCheckBox>> = emptyList()
+
     /**
      * 弹出类型多选弹窗：勾选即时生效且弹窗不关闭（JCheckBox 非 menu item，
-     * 点击不触发 popup 收起，支持连续勾选组合）；底部全选/全不选一键设置。
+     * 点击不触发 popup 收起，支持连续勾选组合）；底部全选/全不选一键设置——
+     * 同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
      */
     private fun showTypeFilterPopup() {
         val popup = JPopupMenu()
@@ -404,6 +448,7 @@ class SqlLogPanel(
         content.layout = BoxLayout(content, BoxLayout.Y_AXIS)
         content.isOpaque = false
         content.border = EmptyBorder(8, 12, 8, 12)
+        val checkBoxes = mutableListOf<Pair<StatementType, JCheckBox>>()
         FILTERABLE_TYPES.forEach { type ->
             val cb = JCheckBox(labelForType(type), type in activeFilter).apply {
                 isOpaque = false
@@ -415,8 +460,10 @@ class SqlLogPanel(
                     refreshList()
                 }
             }
+            checkBoxes += type to cb
             content.add(cb)
         }
+        typePopupCheckBoxes = checkBoxes
         content.add(Box.createVerticalStrut(6))
         content.add(JSeparator().apply { alignmentX = Component.LEFT_ALIGNMENT })
         content.add(Box.createVerticalStrut(6))
@@ -425,11 +472,11 @@ class SqlLogPanel(
             alignmentX = Component.LEFT_ALIGNMENT
             add(JButton(MpSqlVisualizerBundle.message("log.filter.selectAll")).apply {
                 isFocusable = false
-                addActionListener { setAllTypesSelected(true) }
+                addActionListener { applyAllTypes(true) }
             })
             add(JButton(MpSqlVisualizerBundle.message("log.filter.selectNone")).apply {
                 isFocusable = false
-                addActionListener { setAllTypesSelected(false) }
+                addActionListener { applyAllTypes(false) }
             })
         }
         content.add(row)
@@ -437,10 +484,11 @@ class SqlLogPanel(
         popup.show(typeFilterButton, 0, typeFilterButton.height + 2)
     }
 
-    /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）。 */
-    private fun setAllTypesSelected(selected: Boolean) {
+    /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）：同步弹窗内勾选框 + 按钮文案 + 列表。 */
+    private fun applyAllTypes(selected: Boolean) {
         activeFilter.clear()
         if (selected) activeFilter.addAll(FILTERABLE_TYPES)
+        typePopupCheckBoxes.forEach { (type, cb) -> cb.isSelected = type in activeFilter }
         updateTypeFilterButton()
         refreshList()
     }
@@ -885,6 +933,64 @@ class SqlLogPanel(
     override fun dispose() {
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
+    }
+
+    // ---------- WrapLayout（工具栏行自动换行） ----------
+
+    /**
+     * WrapLayout：FlowLayout 的换行变体——空间不足时组件自动折到下一行，且 preferred/minimum
+     * 尺寸按多行计算（原生 FlowLayout.preferredLayoutSize 只按单行算，折行后第二行会被裁掉，
+     * 表现为「控件消失」——2026-08-27 用户实测 SQL类型按钮选中两个类型后触发的缺陷）。
+     */
+    private class WrapLayout : FlowLayout(LEFT, 4, 2) {
+
+        override fun preferredLayoutSize(target: Container): Dimension {
+            return computeSize(target, preferred = true)
+        }
+
+        override fun minimumLayoutSize(target: Container): Dimension {
+            return computeSize(target, preferred = false)
+        }
+
+        private fun computeSize(target: Container, preferred: Boolean): Dimension {
+            synchronized(target.treeLock) {
+                val insets = target.getInsets()
+                val availWidth = (target.parent?.width ?: Int.MAX_VALUE) - insets.left - insets.right
+                var x = 0; var y = insets.top + vgap; var rowHeight = 0; var maxRowWidth = 0
+                for (i in 0 until target.componentCount) {
+                    val m = target.getComponent(i)
+                    if (!m.isVisible) continue
+                    val d = if (preferred) m.preferredSize else m.minimumSize
+                    if (x + d.width > availWidth && x > 0) {
+                        maxRowWidth = maxOf(maxRowWidth, x - hgap)
+                        x = 0; y += rowHeight + vgap; rowHeight = 0
+                    }
+                    x += d.width + hgap; rowHeight = maxOf(rowHeight, d.height)
+                }
+                maxRowWidth = maxOf(maxRowWidth, x - hgap)
+                return Dimension(maxRowWidth + insets.left + insets.right, y + rowHeight + insets.bottom)
+            }
+        }
+
+        override fun layoutContainer(target: Container) {
+            synchronized(target.treeLock) {
+                val insets: Insets = target.getInsets()
+                val availWidth: Int = target.width - insets.left - insets.right
+                var x: Int = insets.left; var y: Int = insets.top; var rowHeight = 0
+                for (i in 0 until target.componentCount) {
+                    val m = target.getComponent(i)
+                    if (!m.isVisible) continue
+                    val d: Dimension = m.preferredSize
+                    val rightEdge: Int = x + d.width
+                    val maxRight: Int = insets.left + availWidth
+                    if (rightEdge > maxRight && x > insets.left) {
+                        x = insets.left; y += rowHeight + vgap; rowHeight = 0
+                    }
+                    m.setBounds(x, y, d.width, d.height)
+                    x += d.width + hgap; rowHeight = maxOf(rowHeight, d.height)
+                }
+            }
+        }
     }
 
     companion object {

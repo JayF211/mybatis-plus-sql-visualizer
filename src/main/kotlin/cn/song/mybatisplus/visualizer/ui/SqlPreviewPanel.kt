@@ -1904,8 +1904,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
     internal fun clearButtonForTest(): JButton? = clearButton
     internal fun batchClearButtonForTest(): JButton? = batchClearButton
-    /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。 */
-    internal fun splitPaneForTest(): JSplitPane? = components.filterIsInstance<JSplitPane>().firstOrNull()
+    /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。M36 垂直结果分栏加入后，须按方向取水平分栏（垂直分栏的左组件即水平分栏）。 */
+    internal fun splitPaneForTest(): JSplitPane? {
+        fun find(c: java.awt.Container): JSplitPane? {
+            for (child in c.components) {
+                if (child is JSplitPane && child.orientation == JSplitPane.HORIZONTAL_SPLIT) return child
+                if (child is java.awt.Container) find(child)?.let { return it }
+            }
+            return null
+        }
+        return find(this)
+    }
     /** T-M26.6：格式化快捷键 action（注册断言 + 触发格式化测试用）。 */
     internal fun reformatActionForTest(): AnAction = reformatAction
     /** P-05：参数导入入口（测试调用用，绕过剪贴板）。 */

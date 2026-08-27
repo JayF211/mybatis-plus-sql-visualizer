@@ -75,11 +75,17 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.section.preview",
             "settings.section.tableMapping",
             "settings.section.codeGen",
-            "settings.section.sqlLog", // T-M31.14 新增
+            // SQL 日志组拆 3 子组（MyBatis 核心 / ORM 框架 / 自动保存）
+            "settings.log.tab.mybatis",
+            "settings.log.tab.orm",
+            "settings.log.tab.autoSave",
             "settings.section.ui",
             "settings.section.updateDiagnostics",
         ).map { MpSqlVisualizerBundle.message(it) }
-        assertEquals("6 个分组标题按高频→低频顺序", expected, separators)
+        assertEquals(
+            "8 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/ORM 框架/自动保存 3 子组）",
+            expected, separators,
+        )
     }
 
     /** 递归收集组件树中全部 TitledSeparator 标题（按布局顺序）。 */
