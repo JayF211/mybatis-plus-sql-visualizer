@@ -137,39 +137,31 @@ object DataSourceSelector {
     }
 
     /**
-     * 弹窗展示 Runner 列表（图标 + 数据源名称，SimpleListCellRenderer 原生渲染）。
-     * 取消选择回调 null。
+     * 弹窗展示 Runner 列表（图标 + 数据源名称，原生 BaseListPopupStep 单击即选）。
+     * 取消/关闭弹窗回调 null。
      */
     private fun showRunnerPopup(project: Project, runners: List<Any>, callback: (Any?) -> Unit) {
-        data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
-
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
-        val list = JBList(items).apply {
-            cellRenderer = object : javax.swing.DefaultListCellRenderer() {
-                override fun getListCellRendererComponent(
-                    list: javax.swing.JList<*>,
-                    value: Any?,
-                    index: Int,
-                    isSelected: Boolean,
-                    cellHasFocus: Boolean,
-                ): java.awt.Component {
-                    val comp = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                    val item = value as? RunnerItem
-                    if (comp is javax.swing.JLabel) {
-                        item?.icon?.let { comp.icon = it }
-                        comp.text = item?.name ?: value?.toString() ?: ""
-                    }
-                    return comp
-                }
+        val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem>(
+            MpSqlVisualizerBundle.message("execute.datasource.select"),
+            items,
+        ) {
+            override fun getTextFor(value: RunnerItem): String = value.name
+            override fun getIconFor(value: RunnerItem): Icon? = value.icon
+            override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                LOG.info("[M36] popup onChosen: ${selectedValue?.name}")
+                callback(selectedValue?.runner)
+                return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
             }
         }
-        PopupChooserBuilder(list)
-            .setTitle(MpSqlVisualizerBundle.message("execute.datasource.select"))
-            .setItemChoosenCallback { callback(list.selectedValue?.runner) }
-            .setNamerForFiltering { it.name }
-            .createPopup()
+        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+            .createListPopup(step)
             .showInFocusCenter()
     }
+
+    /** 弹窗列表项（Runner 包装）。 */
+    private data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
 
     /**
      * 创建临时 .sql 文件 + PsiFile（仅作 Runner 上下文，不打开编辑器）。
