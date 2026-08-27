@@ -139,10 +139,44 @@ object DataSourceSelector {
 
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
-            // 2. 完整原生控制台组件（M36.2 重构）：
-            //    getView()（DatabaseSessionLogView）→ getContent()（Content）→ getComponent()
-            //    = Database 工具窗口内嵌的完整控制台拼合体（原生编辑器 + 工具栏 + 结果 tabs）。
-            //    此前 getUi().getComponent() 只是 RunnerLayoutUi 结果区（缺编辑器和工具栏）。
+            // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）
+            val document = consoleClass.getMethod("getDocument").invoke(console)
+                as? com.intellij.openapi.editor.Document
+            var editor: com.intellij.openapi.editor.Editor? = null
+            repeat(20) {
+                if (editor != null) return@repeat
+                document?.let {
+                    editor = com.intellij.openapi.editor.EditorFactory.getInstance()
+                        .getEditors(it).firstOrNull()
+                }
+                if (editor == null) Thread.sleep(20)
+            }
+            LOG.info("[M36] editor=$editor")
+            if (editor == null) return
+            // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
+            onEditor?.invoke(editor)
+
+            // 3. scriptModel + execOption
+            val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
+            val execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings\$ExecOption")
+            val execOption = execOptionClass.getDeclaredConstructor().newInstance()
+            if (scriptModel == null) return
+
+            // 4. 先执行（M36.2c 时序重构）：
+            //    结果 Tab 由执行动态创建（执行前 contents=[Output]）——先内嵌拿到的组件
+            //    既缺结果 Tab 又是 0 尺寸未布局；先执行则原生密码框（密码过期/错误）也在
+            //    本步正常弹出（挂主窗口，用户输入后执行继续）
+            val execute = consoleClass.getMethod(
+                "executeQueries",
+                com.intellij.openapi.editor.Editor::class.java,
+                Class.forName("com.intellij.database.script.ScriptModel"),
+                execOptionClass,
+            )
+            execute.invoke(console, editor, scriptModel, execOption)
+            LOG.info("[M36] executeQueries invoked OK")
+
+            // 5. 内嵌完整控制台（执行后）：getView→getContent→getComponent。
+            //    此时结果 Tab 已创建（含数据表名），Content 已构建非 0 尺寸
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
@@ -150,10 +184,14 @@ object DataSourceSelector {
             var ui: Any? = null
             if (logView != null) {
                 runCatching {
+                    ui = logView.javaClass.getMethod("getUi").invoke(logView)
+                    val currentUi = ui
+                    if (currentUi != null) {
+                        currentUi.javaClass.getMethod("ensureContentInitialized").invoke(currentUi)
+                    }
                     val content = logView.javaClass.getMethod("getContent").invoke(logView)
                     component = content?.javaClass?.getMethod("getComponent")?.invoke(content)
                         as? javax.swing.JComponent
-                    ui = logView.javaClass.getMethod("getUi").invoke(logView)
                 }.onFailure { e ->
                     LOG.warn("[M36] logView component FAILED: ${e.message}")
                 }
@@ -163,17 +201,13 @@ object DataSourceSelector {
                 ui = runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
                 component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
             }
-            LOG.info("[M36] logView=$logView, ui=$ui, component=$component")
+            LOG.info("[M36] logView=$logView, component=$component")
             if (component == null) return
+            // 内嵌（同步，已在 EDT）；随后选结果 Tab
             onConsole?.invoke(component)
 
-            // 2.5 默认激活查询结果 Tab（原生默认 Output Tab 只有 "Console output" 占位）：
-            // getContents() 找第一个非 Output 内容 → selectAndFocus(content, focus, activate)。
-            // 时序：内嵌组件挂载后调用（getContent 延迟构建）
+            // 6. 默认激活查询结果 Tab（执行后非 Output 内容已存在）
             if (ui != null) {
-                runCatching {
-                    ui.javaClass.getMethod("ensureContentInitialized").invoke(ui)
-                }
                 runCatching {
                     val uiClass = ui.javaClass
                     val contents = uiClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
@@ -195,43 +229,6 @@ object DataSourceSelector {
                     LOG.warn("[M36] select result tab FAILED: ${e.message}")
                 }
             }
-
-            // 3. 执行用编辑器：按 console 文档反查（内嵌+布局后编辑器已初始化）
-            val document = consoleClass.getMethod("getDocument").invoke(console)
-                as? com.intellij.openapi.editor.Document
-            var editor: com.intellij.openapi.editor.Editor? = null
-            // 最多等 20 帧（约 400ms）让 Swing 完成挂载与编辑器初始化
-            repeat(20) {
-                if (editor != null) return@repeat
-                document?.let {
-                    editor = com.intellij.openapi.editor.EditorFactory.getInstance()
-                        .getEditors(it).firstOrNull()
-                }
-                if (editor == null) Thread.sleep(20)
-            }
-            LOG.info("[M36] editor=$editor")
-            if (editor == null) return
-            // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
-            onEditor?.invoke(editor)
-
-            // 4. scriptModel + execOption
-            val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
-            val execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings\$ExecOption")
-            // ExecOption 是普通类（非 enum）：new 默认实例 = 原生默认执行选项
-            //（enumConstants 取值在此为 null，此前导致 executeQueries 被静默跳过）
-            val execOption = execOptionClass.getDeclaredConstructor().newInstance()
-            LOG.info("[M36] scriptModel=$scriptModel, execOption=$execOption")
-            if (scriptModel == null) return
-
-            // 5. 执行（结果网格随控制台编辑器内联展示）
-            val execute = consoleClass.getMethod(
-                "executeQueries",
-                com.intellij.openapi.editor.Editor::class.java,
-                Class.forName("com.intellij.database.script.ScriptModel"),
-                execOptionClass,
-            )
-            execute.invoke(console, editor, scriptModel, execOption)
-            LOG.info("[M36] executeQueries invoked OK")
         }.onFailure { e ->
             LOG.warn("[M36] executeInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         }
