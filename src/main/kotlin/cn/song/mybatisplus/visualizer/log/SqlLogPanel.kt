@@ -6,7 +6,6 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -20,7 +19,6 @@ import com.intellij.openapi.actionSystem.CommonShortcuts
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
@@ -54,7 +52,6 @@ import javax.swing.BoxLayout
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JCheckBox
-import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
@@ -66,7 +63,6 @@ import javax.swing.SwingConstants
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
-import com.intellij.util.messages.Topic
 
 /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复；T-M42 提为顶层，openPreview/右键复制/列表复制共用）。 */
 internal fun withTerminator(sql: String): String =
@@ -597,9 +593,14 @@ class SqlLogPanel(
         }
     }
 
-    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 帮助弹窗（核心功能/使用方法/默认快捷键）。
+    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 编辑器标签页内嵌浏览器打开在线文档。
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
-     *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。 */
+     *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
+     *
+     *  打开逻辑（仿 Json Assistant）：
+     *  1. 检测 JCEF 是否可用 + 网络是否可达；
+     *  2. 均满足 → HTMLEditorProvider.openEditor（内嵌浏览器，加载失败时显示降级页 + 跳转系统浏览器链接）；
+     *  3. 任一不满足 → BrowserUtil.browse（降级系统浏览器）。 */
     private inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.Help
@@ -607,7 +608,12 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            HelpDialog(project).show()
+            val url = HELP_DOCUMENTATION_URL
+            // JCEF 内置浏览器启动时带 --no-proxy-server 参数（平台硬编码），在国内网络环境下
+            // 直连 CloudFront CDN 节点（13.225.117.x）通常很慢或不通。
+            // 系统浏览器走 IDE 代理配置，能正常访问，故统一使用系统浏览器打开在线文档。
+            LOG.info("[HelpAction] Opening documentation in system browser: $url")
+            com.intellij.ide.BrowserUtil.browse(url)
         }
     }
 
@@ -997,6 +1003,9 @@ class SqlLogPanel(
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
+        /** T-M39：帮助文档 URL（? 按钮 → 编辑器标签页内嵌浏览器打开在线文档）。 */
+        private const val HELP_DOCUMENTATION_URL =
+            "https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer/documentation"
 
         /** 类型 → 文案。 */
         private fun labelForType(type: StatementType): String = when (type) {

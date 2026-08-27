@@ -7,68 +7,23 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
 /**
- * 帮助弹窗与工具栏帮助入口测试（T-M39）。
+ * 帮助入口测试（T-M39）。
  *
- * 内容断言走 JEditorPane.getText() 返回的原始 HTML 源（非 ASCII 字符被解析器实体化，
- * 故只断言语言无关的 ASCII 字面与结构计数）；工具栏断言走 toolbarGroup
- * （面板测试风格——headless 不布局，update 手动触发，图标/文案从 event.presentation 读取）。
+ * 帮助按钮已改为 HTMLEditorProvider.openEditor 在编辑器标签页打开内嵌浏览器；
+ * 测试聚焦：(1) 工具栏组含帮助入口；(2) 保留 bundle key 存在；(3) 废弃 key 已移除。
  */
 class HelpDialogTest : BasePlatformTestCase() {
-
-    fun testDialogRendersHelpContent() {
-        val dialog = HelpDialog(project)
-        val text = dialog.contentForTest().text
-        assertTrue("帮助 HTML 渲染文本不应为空", text.isNotBlank())
-        // 关键片段：核心功能 / 默认快捷键 / 反馈入口（语言无关字面）
-        assertTrue(text, text.contains("Wrapper"))
-        assertTrue(text, text.contains("Preparing"))
-        assertTrue(text, text.contains("Alt+Shift+Q"))
-        assertTrue(text, text.contains("Alt+Shift+J"))
-        assertTrue(text, text.contains("gitee.com"))
-        assertTrue(text, text.contains("Keymap"))
-    }
-
-    fun testDialogSectionsAllPresent() {
-        val dialog = HelpDialog(project)
-        val html = dialog.contentForTest().text
-        // getText() 返回原始 HTML 源（非 ASCII 被解析器实体化，如 → 变 &#8594;）——
-        // 断言结构与语言无关的 ASCII 片段；四节各应有 h3 标题 + ul 列表
-        assertEquals("四节内容各应有 h3 标题", 4, Regex("<h3>").findAll(html).count())
-        assertEquals("四节内容各应有 ul 列表", 4, Regex("<ul>").findAll(html).count())
-        assertTrue("核心功能节：日志还原片段", html.contains("Preparing/Parameters"))
-        assertTrue("使用方法节：右键/快捷键片段", html.contains("Convert to SQL"))
-        assertTrue("快捷键节：macOS 绑定片段", html.contains("Cmd+Shift+J"))
-        assertTrue("快捷键节：Keymap 修改提示（p 元素）", html.contains("<p>") && html.contains("Keymap"))
-        assertTrue("其他节：Gitee Issues 反馈入口", html.contains("Gitee Issues"))
-    }
-
-    fun testDialogRendersThemeAware() {
-        // 用户反馈「样式割裂」后的主题化契约：背景透出面板色（无白底）、
-        // 前景取 LAF 文字色、HTML 排版 CSS 已注入文档 StyleSheet
-        val dialog = HelpDialog(project)
-        val pane = dialog.contentForTest()
-        assertFalse("背景应透明（透出面板色，无 JDK 默认白底）", pane.isOpaque)
-        assertEquals("前景应取 LAF 文字色（主题适配）", com.intellij.util.ui.UIUtil.getLabelForeground(), pane.foreground)
-        // <style> 块内容被解析器从文档 content 剥离进 StyleSheet（getText() 不含标签），从 StyleSheet 断言
-        val htmlDoc = pane.document as? javax.swing.text.html.HTMLDocument
-        val bodyRule = htmlDoc?.styleSheet?.getRule("body")
-        assertNotNull("body CSS 规则应已注入（行高排版生效）", bodyRule)
-        assertNotNull(
-            "line-height 应解析进 body 规则",
-            bodyRule?.getAttribute(javax.swing.text.html.CSS.Attribute.LINE_HEIGHT),
-        )
-    }
 
     fun testToolbarGroupContainsHelpAction() {
         // 直接构造（对齐 SqlLogManagerBehaviorTest——测试环境 project.getService 不可用）
         val panel = SqlLogPanel(project, SqlLogManager(project))
         try {
             val children = panel.toolbarGroup.getChildren(null).toList()
-            assertEquals("工具栏组应有 5 项（捕捉/清空/设置/帮助/搜索）", 5, children.size)
+            assertEquals("工具栏组应有 5 项（捕捉/清空/设置/搜索/帮助）", 5, children.size)
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {
@@ -86,18 +41,35 @@ class HelpDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testBundleKeysPresent() {
+    fun testRetainedBundleKeysPresent() {
+        // 保留 key：仍被 HelpAction 引用
         assertTrue(MpSqlVisualizerBundle.message("log.panel.help").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("help.dialog.title").isNotBlank())
-        assertTrue(MpSqlVisualizerBundle.message("help.dialog.close").isNotBlank())
-        assertTrue(MpSqlVisualizerBundle.message("help.content.features").isNotBlank())
-        assertTrue(MpSqlVisualizerBundle.message("help.content.usage").isNotBlank())
-        assertTrue(MpSqlVisualizerBundle.message("help.content.shortcuts").isNotBlank())
-        assertTrue(MpSqlVisualizerBundle.message("help.content.other").isNotBlank())
-        // 内容键应解析为真实 HTML（缺失时 message 兜底返回 key 本身）
-        assertTrue(MpSqlVisualizerBundle.message("help.content.features").contains("<h3>"))
-        assertTrue(MpSqlVisualizerBundle.message("help.content.other").contains("gitee.com"))
-        // 用户要求 tab 名「日志转 SQL」→「日志 → SQL」（测试环境 bundle 兜底中文）
-        assertEquals("日志 → SQL", MpSqlVisualizerBundle.message("log.tab.logToSql"))
+    }
+
+    fun testRemovedBundleKeysAbsent() {
+        // 废弃 key：help.dialog.close 已移除
+        assertFalse(
+            "help.dialog.close 应已移除",
+            MpSqlVisualizerBundle.message("help.dialog.close").isNotBlank() &&
+                MpSqlVisualizerBundle.message("help.dialog.close") != "help.dialog.close",
+        )
+        // 内容 key 已迁移到在线文档
+        assertFalse(
+            "help.content.features 应已移除",
+            MpSqlVisualizerBundle.message("help.content.features").contains("<h3>"),
+        )
+        assertFalse(
+            "help.content.usage 应已移除",
+            MpSqlVisualizerBundle.message("help.content.usage").contains("<h3>"),
+        )
+        assertFalse(
+            "help.content.shortcuts 应已移除",
+            MpSqlVisualizerBundle.message("help.content.shortcuts").contains("<h3>"),
+        )
+        assertFalse(
+            "help.content.other 应已移除",
+            MpSqlVisualizerBundle.message("help.content.other").contains("<h3>"),
+        )
     }
 }
