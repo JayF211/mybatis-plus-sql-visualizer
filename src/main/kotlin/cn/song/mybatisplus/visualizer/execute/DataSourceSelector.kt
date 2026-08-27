@@ -2,25 +2,29 @@ package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.popup.PopupChooserBuilder
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
-import com.intellij.ui.components.JBList
 import javax.swing.Icon
 
 /**
- * 原生数据源选择器（M36，反射隔离）：用 Database 插件原生 Runner 选择数据源并直接执行。
+ * 原生数据源选择器（M36，反射隔离）：选数据源 → Database 控制台直接执行。
  *
- * 通过 [com.intellij.database.console.DatabaseRunners.getAttachDataSourceRunners] 获取
- * 数据源 Runner 列表——与 IDEA 原生 Ctrl+Enter 未绑定文件时弹出的数据源列表**同源**
- * （每个 Runner 封装数据源名称/图标/"在该数据源上打开控制台执行 SQL"的完整逻辑）。
- * 选中后 [Runner.run] 直接执行，结果在打开的控制台下方原生展示——无需手动 Ctrl+Enter。
+ * 流程（选中后自动执行，等价原生 Ctrl+Enter 全链路）：
+ *  1. 创建临时 .sql 文件（含 SQL）+ PsiFile —— 同时作为 [VF] 控制台挂载文件
+ *  2. 反射 `DatabaseRunners.getAttachDataSourceRunners(psiFile, sql, consumer)` 获取
+ *     原生 Runner 列表（与原生 Ctrl+Enter 数据源列表同源；consumer 在 runner.run 后收到
+ *     [com.intellij.database.console.session.DatabaseSession]）
+ *  3. 选中 runner → `run()` 内部建 session 并回调 consumer
+ *  4. consumer 内续接执行链：`JdbcConsoleProvider.attachConsole(project, session, vf)`
+ *     将控制台挂到临时文件 → 打开编辑器 → `console.executeQueries(editor, scriptModel, option)`
+ *     直接执行（结果在控制台下方原生展示，无需手动 Ctrl+Enter）
  *
- * **反射关键**：`DatabaseRunners$MyRunner` 是**包私有类**，跨包反射 invoke 会抛
- * `IllegalAccessException`——所有方法调用前必须 `isAccessible = true`
- * （此前 "Unknown" 数据源名 / 选中无响应均由此引起）。
+ * **关键教训**（多轮迭代定位）：
+ *  - `MyRunner` 是包私有类 → 反射须 `isAccessible = true`
+ *  - `runInDataSource`/`MyRunner.run()` 只**建 session 不执行**——SQL 执行必须由
+ *    consumer 回调续接 `attachConsole + executeQueries`（此前传空 Consumer 导致"选中无反应"）
  *
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
@@ -29,15 +33,13 @@ object DataSourceSelector {
     /** DatabaseRunners 类名（反射入口）。 */
     private const val RUNNERS_CLASS = "com.intellij.database.console.DatabaseRunners"
 
+    /** 执行链反射目标类名。 */
+    private const val CONSOLE_PROVIDER_CLASS = "com.intellij.database.console.JdbcConsoleProvider"
+    private const val CONSOLE_CLASS = "com.intellij.database.console.JdbcConsole"
+    private const val SESSION_CLASS = "com.intellij.database.console.session.DatabaseSession"
+
     /**
      * 选择数据源并执行 SQL。
-     *
-     * 流程：
-     *  1. 创建临时 .sql 文件 + PsiFile（仅作 Runner 上下文，不打开编辑器）
-     *  2. 反射调用 getAttachDataSourceRunners 获取原生 Runner 列表
-     *  3. 无 Runner → 打开 Database 工具窗口引导配置数据源
-     *  4. 单 Runner 且 shouldBeChosenIfAlone → 直接执行（原生免选行为）
-     *  5. 多 Runner → 弹窗展示（图标+名称，原生列表样式），选中即执行
      *
      * @param project  当前项目
      * @param sql      SQL 文本
@@ -51,24 +53,30 @@ object DataSourceSelector {
             return
         }
 
-        val psiFile = createTempPsiFile(project, sql)
-        if (psiFile == null) {
+        // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
+        val temp = createTempPsiFile(project, sql)
+        if (temp == null) {
             LOG.warn("[M36] createTempPsiFile failed, abort")
             callback?.invoke(false)
             return
         }
+        val (vf, psiFile) = temp
 
-        val runners = getAttachDataSourceRunners(psiFile, sql)
-        LOG.info("[M36] runners=${runners.size}, types=${runners.map { it.javaClass.name }}")
+        // consumer：runner.run 建好 session 后回调 → 续接执行链（attachConsole + executeQueries）
+        val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
+            LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console & executing")
+            executeInConsole(project, session, vf)
+        }
+
+        val runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer)
+        LOG.info("[M36] runners=${runners.size}")
         when {
             runners.isEmpty() -> {
-                // 无已配置数据源：打开 Database 工具窗口引导用户配置
                 LOG.warn("[M36] runners empty -> open Database tool window")
                 openDatabaseToolWindow(project)
                 callback?.invoke(false)
             }
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
-                // 单数据源且原生标记免选：直接执行
                 LOG.info("[M36] single runner, run directly")
                 runRunner(runners.first())
                 callback?.invoke(true)
@@ -85,9 +93,65 @@ object DataSourceSelector {
     }
 
     /**
-     * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
+     * 执行链续接（consumer 回调内调用）：session → attachConsole → 打开编辑器 → executeQueries。
+     * 全程反射，任一步失败仅记日志（session 已建，用户仍可在打开的编辑器手动 Ctrl+Enter）。
      */
-    private fun getAttachDataSourceRunners(psiFile: PsiFile, sql: String): List<Any> {
+    private fun executeInConsole(project: Project, session: Any, vf: com.intellij.openapi.vfs.VirtualFile) {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        runCatching {
+            val providerClass = Class.forName(CONSOLE_PROVIDER_CLASS)
+            val sessionClass = Class.forName(SESSION_CLASS)
+
+            // 1. attachConsole：将 JdbcConsole 挂到临时文件（同一 session）
+            val attach = providerClass.getMethod(
+                "attachConsole",
+                Project::class.java,
+                sessionClass,
+                com.intellij.openapi.vfs.VirtualFile::class.java,
+            )
+            attach.isAccessible = true
+            val console = attach.invoke(null, project, session, vf)
+            LOG.info("[M36] attachConsole -> $console")
+            if (console == null) return
+
+            val consoleClass = Class.forName(CONSOLE_CLASS)
+
+            // 2. 打开编辑器（executeQueries 需要 editor）
+            val editorManager = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+            val editor = editorManager.openTextEditor(
+                com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf),
+                true,
+            )
+            LOG.info("[M36] openTextEditor -> $editor")
+            if (editor == null) return
+
+            // 3. scriptModel + execOption
+            val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
+            val execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings\$ExecOption")
+            // EXEC_CHARACTER／首枚举：单语句/多语句均走默认全量执行选项
+            val execOption = execOptionClass.enumConstants?.firstOrNull()
+            LOG.info("[M36] scriptModel=$scriptModel, execOption=$execOption")
+            if (scriptModel == null || execOption == null) return
+
+            // 4. 执行（结果在控制台下方原生展示）
+            val execute = consoleClass.getMethod(
+                "executeQueries",
+                com.intellij.openapi.editor.Editor::class.java,
+                Class.forName("com.intellij.database.script.ScriptModel"),
+                execOptionClass,
+            )
+            execute.invoke(console, editor, scriptModel, execOption)
+            LOG.info("[M36] executeQueries invoked OK")
+        }.onFailure { e ->
+            LOG.warn("[M36] executeInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
+     * [sessionConsumer] 在选中 runner 执行后收到 DatabaseSession。
+     */
+    private fun getAttachDataSourceRunners(psiFile: PsiFile, sql: String, sessionConsumer: com.intellij.util.Consumer<Any>): List<Any> {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return runCatching {
             val clazz = Class.forName(RUNNERS_CLASS)
@@ -97,9 +161,7 @@ object DataSourceSelector {
                 String::class.java,
                 com.intellij.util.Consumer::class.java,
             )
-            // Consumer<DatabaseSession>：Runner 执行后数据源附加完成时回调（此处无需处理）
-            @Suppress("UNCHECKED_CAST")
-            val result = method.invoke(null, psiFile, sql, com.intellij.util.Consumer<Any> { })
+            val result = method.invoke(null, psiFile, sql, sessionConsumer)
             (result as? List<*>)?.filterNotNull() ?: emptyList()
         }.onFailure { e ->
             LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
@@ -127,21 +189,23 @@ object DataSourceSelector {
         method.invoke(runner) as? Boolean
     }.getOrNull() ?: false
 
-    /** 反射调用 Runner.run：打开该数据源的控制台并执行 SQL（结果原生展示）。 */
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。 */
     private fun runRunner(runner: Any) {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val method = runner.javaClass.getMethod("run")
             method.isAccessible = true
             method.invoke(runner)
+            LOG.info("[M36] runRunner invoked OK")
+        }.onFailure { e ->
+            LOG.warn("[M36] runRunner FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         }
     }
 
     /**
      * 弹窗展示 Runner 列表（图标 + 数据源名称，原生 BaseListPopupStep 单击即选）。
-     * 取消/关闭弹窗回调 null。
      */
     private fun showRunnerPopup(project: Project, runners: List<Any>, callback: (Any?) -> Unit) {
-        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
         val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem>(
             MpSqlVisualizerBundle.message("execute.datasource.select"),
@@ -150,7 +214,8 @@ object DataSourceSelector {
             override fun getTextFor(value: RunnerItem): String = value.name
             override fun getIconFor(value: RunnerItem): Icon? = value.icon
             override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
-                LOG.info("[M36] popup onChosen: ${selectedValue?.name}")
+                com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                    .info("[M36] popup onChosen: ${selectedValue?.name}")
                 callback(selectedValue?.runner)
                 return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
             }
@@ -164,15 +229,18 @@ object DataSourceSelector {
     private data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
 
     /**
-     * 创建临时 .sql 文件 + PsiFile（仅作 Runner 上下文，不打开编辑器）。
+     * 创建临时 .sql 文件（含 SQL），返回 (VirtualFile, PsiFile)。
+     * VF 作为控制台挂载点（attachConsole），PsiFile 作为 Runner 上下文。
      */
-    private fun createTempPsiFile(project: Project, sql: String): PsiFile? {
+    private fun createTempPsiFile(project: Project, sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         return runCatching {
-            val ioFile = FileUtil.createTempFile("mpsql-select-", ".sql", true)
+            val ioFile = FileUtil.createTempFile("mpsql-exec-", ".sql", true)
             FileUtil.writeToFile(ioFile, sql)
             ioFile.deleteOnExit()
-            val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile) ?: return null
-            PsiManager.getInstance(project).findFile(vf)
+            val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+                ?: return null
+            val psi = PsiManager.getInstance(project).findFile(vf) ?: return null
+            vf to psi
         }.getOrNull()
     }
 
