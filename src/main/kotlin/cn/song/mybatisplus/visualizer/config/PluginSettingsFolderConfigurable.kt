@@ -2,8 +2,7 @@ package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
-import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.actionSystem.DataContext
+import com.intellij.ide.DataManager
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.options.ex.Settings
@@ -138,34 +137,51 @@ class PluginSettingsFolderConfigurable : Configurable {
     /**
      * 在同一对话框内导航到指定子页面，并聚焦目标控件。
      *
-     * 优先通过 Settings.KEY 在当前已打开的设置对话框内切换树选择（不新开窗口）；
-     * 仅当取不到 Settings 时才回退 showSettingsDialog。
+     * 从宿主 SettingsEditor 取得当前 Settings（同一设置对话框），用 settings.select 切换树选择；
+     * 切换完成后聚焦目标控件并闪烁高亮，让用户感知目标位置。取不到 Settings 时才回退打开设置对话框。
      */
     private fun navigateToPage(configurableClass: Class<out Configurable>, focusHint: String? = null) {
-        val project = com.intellij.ide.DataManager.getInstance()
-            .getDataContext(searchField)
-            .getData(CommonDataKeys.PROJECT)
-            ?: ProjectManager.getInstance().openProjects.firstOrNull()
-            ?: return
-
-        // 在当前已打开的设置对话框内切换（Settings.KEY 取自该对话框）
-        val settings = Settings.KEY.getData(DataContext { dataId ->
-            if (dataId == CommonDataKeys.PROJECT.name) project else null
-        })
-
-        if (settings != null) {
-            val target = settings.find(configurableClass)
-            if (target != null) {
-                settings.select(target)
-                if (focusHint != null) {
-                    focusTarget(target, focusHint)
-                }
-                return
-            }
+        val settings = currentSettings() ?: run {
+            // 未在已打开的设置对话框内，回退为打开设置对话框
+            val project = ProjectManager.getInstance().openProjects.firstOrNull() ?: return
+            ShowSettingsUtil.getInstance().showSettingsDialog(project, configurableClass)
+            return
         }
 
-        // 回退：打开设置对话框（若尚未打开）
-        ShowSettingsUtil.getInstance().showSettingsDialog(project, configurableClass)
+        val target = settings.find(configurableClass) ?: return
+        val callback = settings.select(target)
+        if (focusHint != null) {
+            // 切换完成后异步聚焦目标控件，确保页面已显示、控件已创建
+            callback.doWhenDone { focusTarget(target, focusHint) }
+        }
+    }
+
+    /**
+     * 获取当前已打开设置对话框的 [Settings] 实例。
+     *
+     * 主设置面板由 SettingsEditor 承载，SettingsEditor 实现 UiDataProvider 并对外提供 Settings.KEY。
+     * 优先通过 DataManager 从 searchField 的真实组件 DataContext 取（会沿组件树收集 UiDataProvider 数据）；
+     * 失败则沿组件树反射读取 SettingsEditor.settings 字段兜底。
+     * SettingsEditor 为 @ApiStatus.Internal，用 Class.forName 反射避免编译期依赖内部 API。
+     */
+    private fun currentSettings(): Settings? {
+        runCatching { Settings.KEY.getData(DataManager.getInstance().getDataContext(searchField)) }
+            .getOrNull()
+            ?.let { return it }
+        // 兜底：沿组件树反射读取 SettingsEditor.settings 字段（反射类名，避免直接引用 internal 类型）
+        val editorClass = runCatching { Class.forName("com.intellij.openapi.options.newEditor.SettingsEditor") }.getOrNull() ?: return null
+        var comp: Component? = searchField
+        while (comp != null) {
+            if (editorClass.isInstance(comp)) {
+                return runCatching {
+                    val field = editorClass.getDeclaredField("settings")
+                    field.isAccessible = true
+                    field.get(comp) as? Settings
+                }.getOrNull()
+            }
+            comp = comp.parent
+        }
+        return null
     }
 
     /**
