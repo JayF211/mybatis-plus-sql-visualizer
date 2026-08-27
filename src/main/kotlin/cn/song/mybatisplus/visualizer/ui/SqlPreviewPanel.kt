@@ -165,7 +165,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val resultPanel = SqlResultPanel()
 
     // M36：下半区容器——状态行（resultPanel NORTH）+ 可内嵌的原生 Database 控制台组件（CENTER）
-    private val consoleHolder = JBPanel<JBPanel<*>>(BorderLayout())
+    private val consoleHolder = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        border = JBUI.Borders.empty()   // 去白边
+        isOpaque = false                // 透明底色
+    }
 
     /** M36：垂直分割（上半 SQL 编辑区 | 下半 consoleHolder），内嵌控制台后展开定位用。 */
     private var verticalSplit: JSplitPane? = null
@@ -370,8 +373,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun embedConsole(consoleComponent: JComponent) {
         embeddedConsole?.let { old -> consoleHolder.remove(old) }
         embeddedConsole = consoleComponent
-        // 去边框防白边（内嵌组件可能自带 border）
+        // 去边框防白边（内嵌组件/容器可能自带 border）
         consoleComponent.border = JBUI.Borders.empty()
+        consoleComponent.isOpaque = false
         consoleHolder.add(consoleComponent, BorderLayout.CENTER)
         resultPanel.showEmpty()
         // 展开下半区：分割线定位到 55%（上 55% SQL 区 / 下 45% 控制台）

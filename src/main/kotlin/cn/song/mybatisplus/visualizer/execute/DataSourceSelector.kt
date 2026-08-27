@@ -175,18 +175,16 @@ object DataSourceSelector {
             execute.invoke(console, editor, scriptModel, execOption)
             LOG.info("[M36] executeQueries invoked OK")
 
-            // 5. 自拼完整控制台组件（M36.2f 最终方案）：
-            //    反编译实锤：原生 Database 工具窗口布局 = consoleView 编辑器（上）
-            //    + view.getContent().getComponent()（RunnerLayoutUi 结果区，下）——
-            //    编辑器不在 getContent 组件里（由工具窗口 FileEditor 单独放上方），
-            //    此前内嵌 RunnerLayoutUi 天生缺编辑器（截图只有 tabs）。
-            //    此处仿原生拼合：垂直 SplitPane（编辑器 40% / 结果区 60%），
-            //    结果 Tab 异步出现（Timer 重试激活已有）。
+            // 5. 内嵌完整控制台组件（M36.2h 最终方案）：
+            //    只嵌 logView.getContent().getComponent() 一块 = Database 工具窗口的
+            //    完整原生控制台（编辑器区域 + 工具栏 addLeftToolbarConsoleActions +
+            //    结果/Output tabs）——不再拼合 editor.component（此前 SplitPane 多余）。
+            //    时序：先执行（结果 Tab 创建 + 原生密码框/驱动框正常弹出）→ 再内嵌。
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
 
-            // 5.1 触发内容构建（独立 try-catch）
+            // 5.1 触发内容构建（独立 try-catch，失败不拖垮组件获取）
             if (logView != null) {
                 runCatching {
                     logView.javaClass.getMethod("ensureContentInitialized").invoke(logView)
@@ -195,50 +193,26 @@ object DataSourceSelector {
                 }
             }
 
-            // 5.2 取 ui 与结果区组件
+            // 5.2 取 ui（结果 Tab 选择用）
             val ui: Any? = logView?.let {
                 runCatching { it.javaClass.getMethod("getUi").invoke(it) }.getOrNull()
             } ?: runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
-            val resultComponent: javax.swing.JComponent? =
-                ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
 
-            // 5.3 SQL 编辑器组件（M36.2g 修正）：
-            //    consoleView.getComponent() 是 LanguageConsoleView 拼合体（编辑器 + history
-            //    viewer + "Console output" 占位）——这就是多出一块 Console output 的根因。
-            //    真编辑器组件 = 5 步已取到的 editor（EditorImpl）的 editor.component。
-            val editorComponent: javax.swing.JComponent? = editor?.component
-            LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponent")
-
-            // 5.4 拼合：编辑器（上）/ 结果区（下）——任一缺失单独内嵌另一块。
-            //     无边框（去白边）+ 分隔条融入面板底色
-            val component: javax.swing.JComponent = when {
-                editorComponent != null && resultComponent != null ->
-                    object : javax.swing.JSplitPane(
-                        javax.swing.JSplitPane.VERTICAL_SPLIT, editorComponent, resultComponent,
-                    ) {
-                        override fun paint(g: java.awt.Graphics) {
-                            super.paint(g)
-                            g.color = com.intellij.util.ui.UIUtil.getPanelBackground()
-                            g.fillRect(0, getDividerLocation(), width, getDividerSize())
-                        }
-                    }.apply {
-                        resizeWeight = 0.4
-                        isContinuousLayout = true
-                        isOneTouchExpandable = false
-                        dividerSize = 3
-                        border = com.intellij.util.ui.JBUI.Borders.empty()
-                        background = com.intellij.util.ui.UIUtil.getPanelBackground()
-                    }
-                editorComponent != null -> editorComponent
-                resultComponent != null -> resultComponent
-                else -> return
+            // 5.3 拿完整控制台组件（logView.getContent；兜底 RunnerLayoutUi）
+            var component: javax.swing.JComponent? = logView?.let {
+                runCatching {
+                    val content = it.javaClass.getMethod("getContent").invoke(it)
+                    content?.javaClass?.getMethod("getComponent")?.invoke(content) as? javax.swing.JComponent
+                }.getOrNull()
             }
-
-            // 5.5 内嵌（同步，已在 EDT）
+            if (component == null) {
+                component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
+            }
+            LOG.info("[M36] logView=$logView, component=$component")
+            if (component == null) return
             onConsole?.invoke(component)
 
-            // 6. 激活查询结果 Tab：EDT 延迟重试（结果 Tab 异步创建；10 次 × 400ms）。
-            //    非阻塞——用 javax.swing.Timer 调度，不卡 EDT；密码框/慢查询不受影响
+            // 6. 默认激活查询结果 Tab：EDT Timer 非阻塞重试（结果 Tab 异步创建；10×400ms）
             if (ui != null) {
                 val selectRetry = object : java.awt.event.ActionListener {
                     var attempts = 0
@@ -271,9 +245,7 @@ object DataSourceSelector {
                             LOG.info("[M36] result tab not appeared after $attempts attempts (may need credentials or query failed)")
                         }
                     }
-                    init {
-                        timer.addActionListener(this)
-                    }
+                    init { timer.addActionListener(this) }
                 }
                 selectRetry.timer.start()
             }
