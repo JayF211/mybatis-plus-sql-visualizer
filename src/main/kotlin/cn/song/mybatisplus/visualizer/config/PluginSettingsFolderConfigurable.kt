@@ -7,6 +7,7 @@ import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.options.ex.Settings
 import com.intellij.openapi.project.ProjectManager
+import com.intellij.ui.JBColor
 import com.intellij.ui.DoubleClickListener
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBLabel
@@ -239,12 +240,12 @@ class PluginSettingsFolderConfigurable : Configurable {
         val originalOpaque = comp.isOpaque
         val originalBorder = comp.border
         comp.isOpaque = true
-        comp.border = javax.swing.BorderFactory.createLineBorder(java.awt.Color(0xFF9C00), 2)
+        comp.border = javax.swing.BorderFactory.createLineBorder(JBColor(0xE6C068, 0x6B5B2E), 2)
         var count = 0
         val timer = javax.swing.Timer(250) {
             count++
             if (count % 2 == 1) {
-                comp.background = java.awt.Color(0xFFE599)
+                comp.background = JBColor(0xFFFAE6, 0x3A3320)
             } else {
                 comp.background = originalBg
             }
