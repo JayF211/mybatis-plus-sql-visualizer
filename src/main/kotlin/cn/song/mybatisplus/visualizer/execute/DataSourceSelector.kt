@@ -175,14 +175,17 @@ object DataSourceSelector {
             execute.invoke(console, editor, scriptModel, execOption)
             LOG.info("[M36] executeQueries invoked OK")
 
-            // 5. 内嵌完整控制台（执行后）：getView→getContent→getComponent。
-            //    注意时序：executeQueries 是异步的——结果 Tab 在后台创建，需轮询等待出现；
-            //    ensureContentInitialized 在 BaseLogView（logView）上，不在 RunnerLayoutUi 上
+            // 5. 立即内嵌完整控制台组件（M36.2e 策略：不阻塞等待结果 Tab）：
+            //    buildConsoleUi 反编译证实完整控制台 = JBLoadingPanel(console 编辑器
+            //    + RunnerLayoutUi)。ensureContentInitialized()（BaseLogView 上）触发
+            //    buildConsoleUi 后 getContent().getComponent() 即完整组件——
+            //    立即内嵌，编辑器+工具栏立刻可见；结果 Tab 由执行异步创建，
+            //    出现时自然出现在内嵌 ui 的 tabs 里（同一实例，无需等待）。
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
 
-            // 5.1 logView 级内容初始化（独立 try-catch，失败不拖垮组件获取）
+            // 5.1 触发内容构建（独立 try-catch）
             if (logView != null) {
                 runCatching {
                     logView.javaClass.getMethod("ensureContentInitialized").invoke(logView)
@@ -191,31 +194,12 @@ object DataSourceSelector {
                 }
             }
 
-            // 5.2 取 ui（getUi 失败不阻断）
-            var ui: Any? = logView?.let {
+            // 5.2 取 ui
+            val ui: Any? = logView?.let {
                 runCatching { it.javaClass.getMethod("getUi").invoke(it) }.getOrNull()
             } ?: runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
 
-            // 5.3 轮询等结果 Tab 出现（executeQueries 异步建 Tab；最多 3s，200ms 一拍）
-            var resultContent: com.intellij.ui.content.Content? = null
-            var contentsSnapshot: List<String> = emptyList()
-            repeat(15) {
-                val contents = ui?.let {
-                    runCatching {
-                        it.javaClass.getMethod("getContents").invoke(it) as? Array<com.intellij.ui.content.Content>
-                    }.getOrNull()
-                } ?: emptyArray()
-                contentsSnapshot = contents.map { it.displayName }
-                resultContent = contents.firstOrNull {
-                    !it.displayName.equals("Output", ignoreCase = true) &&
-                        !it.displayName.equals("输出", ignoreCase = true)
-                }
-                if (resultContent != null) return@repeat
-                Thread.sleep(200)
-            }
-            LOG.info("[M36] contents=$contentsSnapshot, select=${resultContent?.displayName}")
-
-            // 5.4 拿完整控制台组件（logView.getContent；兜底 RunnerLayoutUi 结果区）
+            // 5.3 拿完整组件（logView.getContent；兜底 RunnerLayoutUi）
             var component: javax.swing.JComponent? = logView?.let {
                 runCatching {
                     val content = it.javaClass.getMethod("getContent").invoke(it)
@@ -228,23 +212,48 @@ object DataSourceSelector {
             LOG.info("[M36] logView=$logView, component=$component")
             if (component == null) return
 
-            // 5.5 内嵌（同步，已在 EDT）
+            // 5.4 内嵌（同步，已在 EDT）
             onConsole?.invoke(component)
 
-            // 6. 默认激活查询结果 Tab（5.3 轮询到后已就绪）
-            val selected = resultContent
-            if (ui != null && selected != null) {
-                runCatching {
-                    val select = ui.javaClass.getMethod(
-                        "selectAndFocus",
-                        com.intellij.ui.content.Content::class.java,
-                        Boolean::class.javaPrimitiveType,
-                        Boolean::class.javaPrimitiveType,
-                    )
-                    select.invoke(ui, selected, false, true)
-                }.onFailure { e ->
-                    LOG.warn("[M36] select result tab FAILED: ${e.message}")
+            // 6. 激活查询结果 Tab：EDT 延迟重试（结果 Tab 异步创建；10 次 × 400ms）。
+            //    非阻塞——用 javax.swing.Timer 调度，不卡 EDT；密码框/慢查询不受影响
+            if (ui != null) {
+                val selectRetry = object : java.awt.event.ActionListener {
+                    var attempts = 0
+                    val timer = javax.swing.Timer(400, null)
+                    override fun actionPerformed(e: java.awt.event.ActionEvent) {
+                        attempts++
+                        val contents = runCatching {
+                            ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
+                        }.getOrNull() ?: emptyArray()
+                        val result = contents.firstOrNull {
+                            !it.displayName.equals("Output", ignoreCase = true) &&
+                                !it.displayName.equals("输出", ignoreCase = true)
+                        }
+                        LOG.info("[M36] retry#$attempts contents=${contents.map { it.displayName }}, select=${result?.displayName}")
+                        if (result != null) {
+                            timer.stop()
+                            runCatching {
+                                val select = ui.javaClass.getMethod(
+                                    "selectAndFocus",
+                                    com.intellij.ui.content.Content::class.java,
+                                    Boolean::class.javaPrimitiveType,
+                                    Boolean::class.javaPrimitiveType,
+                                )
+                                select.invoke(ui, result, false, true)
+                            }.onFailure { ex ->
+                                LOG.warn("[M36] select result tab FAILED: ${ex.message}")
+                            }
+                        } else if (attempts >= 10) {
+                            timer.stop()
+                            LOG.info("[M36] result tab not appeared after $attempts attempts (may need credentials or query failed)")
+                        }
+                    }
+                    init {
+                        timer.addActionListener(this)
+                    }
                 }
+                selectRetry.timer.start()
             }
         }.onFailure { e ->
             LOG.warn("[M36] executeInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
