@@ -1,34 +1,184 @@
 package cn.song.mybatisplus.visualizer.execute
 
-import cn.song.mybatisplus.visualizer.database.DatabaseConsoleLauncher
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.popup.PopupChooserBuilder
+import com.intellij.openapi.util.io.FileUtil
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.psi.PsiFile
+import com.intellij.psi.PsiManager
+import com.intellij.ui.components.JBList
+import javax.swing.Icon
 
 /**
- * 原生数据源选择器（M36，反射隔离）：打开临时文件触发 IDEA 原生数据源弹窗。
+ * 原生数据源选择器（M36，反射隔离）：用 Database 插件原生 Runner 选择数据源并直接执行。
  *
- * 不创建自定义弹窗——直接创建临时 .sql 文件并打开编辑器，
- * IDEA Database 插件自动弹出原生数据源选择弹窗（带图标、搜索框、记住选择），
- * 用户选择后 Ctrl+Enter 执行，结果在编辑器下方原生展示。
+ * 通过 [com.intellij.database.console.DatabaseRunners.getAttachDataSourceRunners] 获取
+ * 数据源 Runner 列表——与 IDEA 原生 Ctrl+Enter 未绑定文件时弹出的数据源列表**同源**
+ * （每个 Runner 封装数据源名称/图标/"在该数据源上打开控制台执行 SQL"的完整逻辑）。
+ * 选中后 [Runner.run] 直接执行，结果在打开的控制台下方原生展示——无需手动 Ctrl+Enter。
+ *
+ * **反射关键**：`DatabaseRunners$MyRunner` 是**包私有类**，跨包反射 invoke 会抛
+ * `IllegalAccessException`——所有方法调用前必须 `isAccessible = true`
+ * （此前 "Unknown" 数据源名 / 选中无响应均由此引起）。
  *
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
 object DataSourceSelector {
 
+    /** DatabaseRunners 类名（反射入口）。 */
+    private const val RUNNERS_CLASS = "com.intellij.database.console.DatabaseRunners"
+
     /**
      * 选择数据源并执行 SQL。
-     * 创建临时文件 → 打开编辑器 → 原生数据源弹窗自动出现。
+     *
+     * 流程：
+     *  1. 创建临时 .sql 文件 + PsiFile（仅作 Runner 上下文，不打开编辑器）
+     *  2. 反射调用 getAttachDataSourceRunners 获取原生 Runner 列表
+     *  3. 无 Runner → 打开 Database 工具窗口引导配置数据源
+     *  4. 单 Runner 且 shouldBeChosenIfAlone → 直接执行（原生免选行为）
+     *  5. 多 Runner → 弹窗展示（图标+名称，原生列表样式），选中即执行
      *
      * @param project  当前项目
      * @param sql      SQL 文本
-     * @param callback 完成回调（暂不使用，执行由 Database 插件内部处理）
+     * @param callback 完成回调（true=已触发执行；false=不可用/无数据源/取消）
      */
     fun selectAndExecute(project: Project, sql: String, callback: ((Boolean) -> Unit)? = null) {
         if (!ExecuteSqlSupport.isAvailable()) {
             callback?.invoke(false)
             return
         }
-        // 委托 DatabaseConsoleLauncher（反射隔离）创建临时文件并打开编辑器 → 原生弹窗自动出现
-        DatabaseConsoleLauncher.execute(project, sql)
-        callback?.invoke(true)
+
+        val psiFile = createTempPsiFile(project, sql)
+        if (psiFile == null) {
+            callback?.invoke(false)
+            return
+        }
+
+        val runners = getAttachDataSourceRunners(psiFile, sql)
+        when {
+            runners.isEmpty() -> {
+                // 无已配置数据源：打开 Database 工具窗口引导用户配置
+                openDatabaseToolWindow(project)
+                callback?.invoke(false)
+            }
+            runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
+                // 单数据源且原生标记免选：直接执行
+                runRunner(runners.first())
+                callback?.invoke(true)
+            }
+            else -> {
+                showRunnerPopup(project, runners) { runner ->
+                    callback?.invoke(runner != null)
+                    if (runner != null) runRunner(runner)
+                }
+            }
+        }
+    }
+
+    /**
+     * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
+     */
+    private fun getAttachDataSourceRunners(psiFile: PsiFile, sql: String): List<Any> {
+        return runCatching {
+            val clazz = Class.forName(RUNNERS_CLASS)
+            val method = clazz.getMethod(
+                "getAttachDataSourceRunners",
+                PsiFile::class.java,
+                String::class.java,
+                com.intellij.util.Consumer::class.java,
+            )
+            // Consumer<DatabaseSession>：Runner 执行后数据源附加完成时回调（此处无需处理）
+            @Suppress("UNCHECKED_CAST")
+            val result = method.invoke(null, psiFile, sql, com.intellij.util.Consumer<Any> { })
+            (result as? List<*>)?.filterNotNull() ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+
+    /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
+    private fun getRunnerName(runner: Any): String = runCatching {
+        val method = runner.javaClass.getMethod("getDisplayName")
+        method.isAccessible = true
+        method.invoke(runner) as? String
+    }.getOrNull() ?: "Unknown"
+
+    /** 反射获取 Runner 图标（数据源 DB 类型图标）。 */
+    private fun getRunnerIcon(runner: Any): Icon? = runCatching {
+        val method = runner.javaClass.getMethod("getIcon")
+        method.isAccessible = true
+        method.invoke(runner) as? Icon
+    }.getOrNull()
+
+    /** 反射调用 Runner.shouldBeChosenIfAlone（单数据源时原生是否免选直接执行）。 */
+    private fun shouldBeChosenIfAlone(runner: Any): Boolean = runCatching {
+        val method = runner.javaClass.getMethod("shouldBeChosenIfAlone")
+        method.isAccessible = true
+        method.invoke(runner) as? Boolean
+    }.getOrNull() ?: false
+
+    /** 反射调用 Runner.run：打开该数据源的控制台并执行 SQL（结果原生展示）。 */
+    private fun runRunner(runner: Any) {
+        runCatching {
+            val method = runner.javaClass.getMethod("run")
+            method.isAccessible = true
+            method.invoke(runner)
+        }
+    }
+
+    /**
+     * 弹窗展示 Runner 列表（图标 + 数据源名称，SimpleListCellRenderer 原生渲染）。
+     * 取消选择回调 null。
+     */
+    private fun showRunnerPopup(project: Project, runners: List<Any>, callback: (Any?) -> Unit) {
+        data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
+
+        val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
+        val list = JBList(items).apply {
+            cellRenderer = object : javax.swing.DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: javax.swing.JList<*>,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): java.awt.Component {
+                    val comp = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    val item = value as? RunnerItem
+                    if (comp is javax.swing.JLabel) {
+                        item?.icon?.let { comp.icon = it }
+                        comp.text = item?.name ?: value?.toString() ?: ""
+                    }
+                    return comp
+                }
+            }
+        }
+        PopupChooserBuilder(list)
+            .setTitle(MpSqlVisualizerBundle.message("execute.datasource.select"))
+            .setItemChoosenCallback { callback(list.selectedValue?.runner) }
+            .setNamerForFiltering { it.name }
+            .createPopup()
+            .showInFocusCenter()
+    }
+
+    /**
+     * 创建临时 .sql 文件 + PsiFile（仅作 Runner 上下文，不打开编辑器）。
+     */
+    private fun createTempPsiFile(project: Project, sql: String): PsiFile? {
+        return runCatching {
+            val ioFile = FileUtil.createTempFile("mpsql-select-", ".sql", true)
+            FileUtil.writeToFile(ioFile, sql)
+            ioFile.deleteOnExit()
+            val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile) ?: return null
+            PsiManager.getInstance(project).findFile(vf)
+        }.getOrNull()
+    }
+
+    /** 打开 Database 工具窗口（无配置数据源时引导用户）。 */
+    private fun openDatabaseToolWindow(project: Project) {
+        runCatching {
+            com.intellij.openapi.wm.ToolWindowManager.getInstance(project)
+                .getToolWindow("Database")
+                ?.show()
+        }
     }
 }
