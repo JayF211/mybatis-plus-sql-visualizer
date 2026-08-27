@@ -370,6 +370,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun embedConsole(consoleComponent: JComponent) {
         embeddedConsole?.let { old -> consoleHolder.remove(old) }
         embeddedConsole = consoleComponent
+        // 去边框防白边（内嵌组件可能自带 border）
+        consoleComponent.border = JBUI.Borders.empty()
         consoleHolder.add(consoleComponent, BorderLayout.CENTER)
         resultPanel.showEmpty()
         // 展开下半区：分割线定位到 55%（上 55% SQL 区 / 下 45% 控制台）

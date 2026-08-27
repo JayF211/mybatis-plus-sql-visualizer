@@ -202,25 +202,32 @@ object DataSourceSelector {
             val resultComponent: javax.swing.JComponent? =
                 ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
 
-            // 5.3 SQL 编辑器组件（consoleView——原生编辑器，含原生高亮/补全）
-            val consoleView = runCatching {
-                consoleClass.getMethod("getConsoleView").invoke(console)
-            }.getOrNull()
-            val editorComponent: javax.swing.JComponent? = consoleView?.let {
-                runCatching {
-                    it.javaClass.getMethod("getComponent").invoke(it) as? javax.swing.JComponent
-                }.getOrNull()
-            }
+            // 5.3 SQL 编辑器组件（M36.2g 修正）：
+            //    consoleView.getComponent() 是 LanguageConsoleView 拼合体（编辑器 + history
+            //    viewer + "Console output" 占位）——这就是多出一块 Console output 的根因。
+            //    真编辑器组件 = 5 步已取到的 editor（EditorImpl）的 editor.component。
+            val editorComponent: javax.swing.JComponent? = editor?.component
             LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponent")
 
-            // 5.4 拼合：编辑器（上）/ 结果区（下）——任一缺失单独内嵌另一块
+            // 5.4 拼合：编辑器（上）/ 结果区（下）——任一缺失单独内嵌另一块。
+            //     无边框（去白边）+ 分隔条融入面板底色
             val component: javax.swing.JComponent = when {
                 editorComponent != null && resultComponent != null ->
-                    javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT, editorComponent, resultComponent).apply {
+                    object : javax.swing.JSplitPane(
+                        javax.swing.JSplitPane.VERTICAL_SPLIT, editorComponent, resultComponent,
+                    ) {
+                        override fun paint(g: java.awt.Graphics) {
+                            super.paint(g)
+                            g.color = com.intellij.util.ui.UIUtil.getPanelBackground()
+                            g.fillRect(0, getDividerLocation(), width, getDividerSize())
+                        }
+                    }.apply {
                         resizeWeight = 0.4
                         isContinuousLayout = true
-                        dividerSize = 4
+                        isOneTouchExpandable = false
+                        dividerSize = 3
                         border = com.intellij.util.ui.JBUI.Borders.empty()
+                        background = com.intellij.util.ui.UIUtil.getPanelBackground()
                     }
                 editorComponent != null -> editorComponent
                 resultComponent != null -> resultComponent
