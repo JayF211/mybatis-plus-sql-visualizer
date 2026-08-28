@@ -45,7 +45,7 @@ class JavaCodeGeneratorTest {
         val code = JavaCodeGenerator.generate(result)
         assertEquals(
             """
-            // SQL → MyBatis-Plus QueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）
+            // SQL → MyBatis-Plus QueryWrapper 反向生成（SQL Visualizer）
             // 实体类名 User 由表名 user 推断，请按实际类名调整
             new QueryWrapper<User>()
                 .select("id", "name")
@@ -70,7 +70,7 @@ class JavaCodeGeneratorTest {
         val code = JavaCodeGenerator.generate(SqlReverseResult(tableName = "user", selectColumns = null))
         assertEquals(
             """
-            // SQL → MyBatis-Plus QueryWrapper 反向生成（MyBatis-Plus SQL Visualizer）
+            // SQL → MyBatis-Plus QueryWrapper 反向生成（SQL Visualizer）
             // 实体类名 User 由表名 user 推断，请按实际类名调整
             new QueryWrapper<User>();
             """.trimIndent(),

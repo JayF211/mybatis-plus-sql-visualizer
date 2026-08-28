@@ -1,6 +1,6 @@
-# MyBatis-Plus SQL Visualizer
+# SQL Visualizer
 
-IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
+本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
 
 ## 功能截图
 
@@ -134,7 +134,7 @@ ORDER BY t1.create_time DESC
 
 ### 配置
 
-`Settings → Tools → MyBatis-Plus SQL Visualizer`，设置按分区组织：
+`Settings → Tools → SQL Visualizer`，设置按分区组织：
 
 **SQL 预览**
 

@@ -17,7 +17,7 @@ import javax.swing.JComboBox
 /**
  * 项目级设置页（O-5 Phase B）。
  *
- * 接入 IDE Settings → 当前项目的 MyBatis-Plus SQL Visualizer（project-level）。
+ * 接入 IDE Settings → 当前项目的 SQL Visualizer（project-level）。
  * 展示「使用项目设置」开关 + 可覆盖项（方言/参数替换/逻辑删除/表名映射等）。
  *
  * 仅当「使用项目设置」开启时可编辑其它项；关闭时回退全局 [PluginSettings]。

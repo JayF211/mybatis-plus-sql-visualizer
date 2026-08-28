@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **插件显示名更名 SQL Visualizer（原 MyBatis-Plus SQL Visualizer）**：`plugin.xml` `<name>` 与全部用户可见文案（设置页/弹窗标题/gutter tooltip/通知/工具窗口标题，中英双语）同步更名；插件 ID（`<id>`）、构建产物 zip 顶层短名、仓库与 Marketplace 页地址均不变——已安装用户正常升级，配置与历史记录全保留。仍全面支持 MyBatis-Plus / MPJ / JPA / Hibernate
+
+### Fixed
+
+- **方言输出真实验证（P-立项-05）——消除 4 类真实兼容性缺陷（H2 引擎实证 + 达梦/金仓官方文档逐词核对）**：
+  - **H2 方言 UPSERT 整体不可用（最高优先级）**：原输出 `ON CONFLICT (k) DO UPDATE SET col = EXCLUDED.col` 在 H2 任何模式均为语法错误（H2 2.3.232 引擎实证：`ON CONFLICT` 仅 PG 兼容模式支持且仅 `DO NOTHING`、无冲突目标）——改为 H2 原生整语句形态 `MERGE INTO t (cols) KEY (主键) VALUES (...)`（SPI 新增 `renderUpsertStatement`，UPSERT 整语句形态优先于 INSERT+后缀），引擎实测冲突/插入双路径全通过
+  - **H2 保留字漏包 20+ 词**：原用 PG 集合近似，`key`/`value`/`values`/`day`/`year`/`interval`/`row`/`if`/`minus`/`qualify`/`rownum`/`top`/`unknown`/`uescape` 等在 H2 裸用作列名直接语法错误——新增 `H2_RESERVED`（官方关键字表全量 100 词 + 引擎实测核对）
+  - **DM（达梦）保留字双向错误**：原用 Oracle 集合近似——DM 额外保留 `top`/`section`/`domain`/`identity`/`int` 等（漏包）；Oracle 保留的 `number`/`size`/`level` 等 DM 仅关键字（错包后 CASE_SENSITIVE=Y 下双引号大小写敏感易失配）——新增 `DM_RESERVED`（官方附录 1 全量 254 词）
+  - **KingBase（人大金仓）保留字漏包**：原用 PG 集合近似，金仓额外保留 `auto_increment`/`binary`/`ilike`/`minus`/`rowid`/`rownum`/`synonym`/`top` 等——新增 `KINGBASE_RESERVED`（官方 V9 手册全量 117 词）；UPSERT `ON CONFLICT` 形态经金仓官方 INSERT 文法确认（官方示例即 EXCLUDED 用法）
+  - **MariaDB 保留字差量 + PG 集合补齐**：MariaDB 新增官方差量 23 词（`except`/`intersect`/`binary`/`offset`/`returning` 等）；PG 补齐「reserved (can be function or type name)」类别 7 词（`authorization`/`binary`/`concurrently`/`freeze`/`isnull`/`notnull`/`similar`）
+  - **各方言验证来源标注**：`Dialect.kt` 假设性标注全部移除，9 方言逐一标注验证证据（引擎实测/官方文档/Docker 待执行）；验证报告 + 执行指南见 docs/开发计划/20260828-2000-P-立项-05
+
+### Test
+
+- **方言真实验证套件（P-立项-05，29 用例全绿）**：H2 六种兼容模式（REGULAR/MySQL/MariaDB/PostgreSQL/Oracle/MSSQLServer）配对验证 + SQLite 3.50.3 原生引擎验证——插件渲染 SQL（SqlGenerator/BatchModel 产物，非手写）在引擎上真实执行（TC-01~08：分页/引用/UPSERT/IN/聚合/UPDATE/DELETE）；9 方言 1538 个保留字逐词「渲染 → 执行」全量扫描 + 反向覆盖探测（引擎拒绝裸用的词必须已在集合内）；DM/KingBase 官方文档黄金断言（黄金清单独立于实现集合，防同步改坏）
+- **Docker 真实环境测试就绪（Tier 2）**：Testcontainers 五容器（mysql:8.0/postgres:16/mariadb:11/mssql:2022/oracle-free:23）+ docker-compose 编排 + 外部实例接入入口（`-Dmpvs.dialect.*`，DM/KingBase 真机标准流程）；无 Docker 时自动跳过
+- **测试基础设施**：新增测试依赖 H2/sqlite-jdbc/Testcontainers+JDBC 驱动（仅测试 classpath，插件运行时零依赖不变）；jackson 三件套约束对齐 2.17.1（testcontainers 传递的 2.10.3 缺失 `JsonProperty.namespace()`，遮蔽 IDEA 平台所用版本导致 XML 补全测试 NoSuchMethodError）；settings.gradle.kts 增加阿里云镜像源兜底（本机代理失效场景，与 Central 同源）
+
 ### Fixed
 
 - **JOIN 关系图渲染失败修复（F-42，最终根因 PlantUML 版本）**：

@@ -19,6 +19,35 @@ dependencies {
     // T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例——方法签名/注解元数据可解析；
     // 仅测试依赖，插件运行时零依赖不变；MPJ 1.5.x 不在 Central，暂不加）
     testImplementation(libs.mp.core)
+    // P-立项-05：方言真实验证——H2 嵌入式（兼容模式模拟 MySQL/MariaDB/PG/Oracle/MSSQLServer 语法）
+    // 与 sqlite-jdbc 内嵌原生 SQLite 引擎。仅测试 classpath，插件运行时零依赖不变。
+    testImplementation(libs.h2)
+    testImplementation(libs.sqlite.jdbc)
+    // P-立项-05 Phase 2：Docker 真实环境验证（Testcontainers + 各库 JDBC 驱动，仅测试 classpath）。
+    // 本机无 Docker 时 DialectDockerVerificationTest 自动 Assume 跳过；依赖照常解析不影响 CI。
+    testImplementation(libs.testcontainers)
+    testImplementation(libs.testcontainers.mysql)
+    testImplementation(libs.testcontainers.postgresql)
+    testImplementation(libs.testcontainers.mariadb)
+    testImplementation(libs.testcontainers.mssqlserver)
+    testImplementation(libs.testcontainers.oracle.xe)
+    testImplementation(libs.mysql.connector)
+    testImplementation(libs.postgresql)
+    testImplementation(libs.mssql.jdbc)
+    testImplementation(libs.mariadb.java.client)
+    testImplementation(libs.ojdbc11)
+
+    // P-立项-05：jackson 版本约束——testcontainers 传递的 jackson-annotations 2.10.3 缺失
+    // JsonProperty.namespace()（2.11+ 才有），在测试 classpath 上遮蔽 IDEA 平台所用的新版
+    // jackson，导致平台 XML PSI 代码 NoSuchMethodError。三件套统一对齐 2.17.1
+    // （testcontainers 1.19.3 兼容；jackson-annotations 向后兼容）。
+    constraints {
+        testImplementation("com.fasterxml.jackson.core:jackson-annotations:2.17.1") {
+            because("IDEA 平台调用 JsonProperty.namespace()，testcontainers 传递的 2.10.3 缺失该方法")
+        }
+        testImplementation("com.fasterxml.jackson.core:jackson-core:2.17.1")
+        testImplementation("com.fasterxml.jackson.core:jackson-databind:2.17.1")
+    }
     // F-1/F-xx：JOIN 关系可视化图（自绘 Swing Graphics2D 渲染，零外部依赖）
     // F-xx 替代方案：移除 PlantUML 1.2024.8 (21.9MB) + Batik (~8MB)，改用自绘引擎
     // F-2：SQL 性能分析（JSqlParser 5.3 — 零依赖 SQL 解析器，静态分析用）
@@ -376,6 +405,9 @@ intellijPlatformTesting {
                 classpath = classpath + sourceSets["test"].output
                 filter {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest")
+                    // P-立项-05：方言真实验证套件（H2 兼容模式/SQLite 引擎/文档黄金断言；Docker 测试
+                    // 无 Docker 时 Assume 跳过）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.verify.*")
                     // T-M36.4 SQL→Java 面板 fixture 测试
                     includeTestsMatching("cn.song.mybatisplus.visualizer.log.SqlToJavaPanelTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperLocatorTest")

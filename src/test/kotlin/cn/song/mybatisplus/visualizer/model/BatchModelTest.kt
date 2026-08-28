@@ -300,14 +300,20 @@ class BatchModelTest {
             dupKeySql,
             BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = MariaDbDialect).renderSql(active),
         )
-        // PostgreSQL / H2 / SQLite / KingBase：ON CONFLICT + EXCLUDED
+        // PostgreSQL / SQLite / KingBase：ON CONFLICT + EXCLUDED（P-立项-05：H2 移出——
+        // ON CONFLICT 在 H2 任何模式均语法错误，改为下方 MERGE 整语句形态）
         val conflictSql = "INSERT INTO t (id, name)\nVALUES (?, ?)\nON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
-        for (dialect in listOf(PostgreSQLDialect, H2Dialect, SqliteDialect, KingBaseDialect)) {
+        for (dialect in listOf(PostgreSQLDialect, SqliteDialect, KingBaseDialect)) {
             assertEquals(
                 conflictSql,
                 BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = dialect).renderSql(active),
             )
         }
+        // H2（P-立项-05）：原生 upsert 为整语句 MERGE INTO..KEY..VALUES（引擎实证 ON CONFLICT 不可用）
+        assertEquals(
+            "MERGE INTO t (id, name) KEY (id) VALUES (?, ?)",
+            BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = H2Dialect).renderSql(active),
+        )
         // Oracle / SQL Server / DM：无原生 upsert → 降级纯 INSERT（SQL 在本方言可执行）
         val plainSql = "INSERT INTO t (id, name)\nVALUES (?, ?)"
         for (dialect in listOf(OracleDialect, SqlServerDialect, DmDialect)) {

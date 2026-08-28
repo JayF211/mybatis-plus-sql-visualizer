@@ -118,16 +118,12 @@ class DialectTest {
             "ON DUPLICATE KEY UPDATE `table` = VALUES(`table`)",
             MariaDbDialect.renderUpsert("id", listOf("table")),
         )
-        // PostgreSQL / H2 / SQLite / KingBase：ON CONFLICT (冲突键) + EXCLUDED（`table` 命中 PG 保留字 → 双引号）
+        // PostgreSQL / SQLite / KingBase：ON CONFLICT (冲突键) + EXCLUDED（`table` 命中 PG 保留字 → 双引号）
         assertEquals(
             "ON CONFLICT (\"table\") DO UPDATE SET id = EXCLUDED.id",
             PostgreSQLDialect.renderUpsert("table", listOf("id")),
         )
-        // H2/SQLite/KingBase 与 PG 同形态（近似集合），抽查引用符号（id 非保留字 → 不包）
-        assertEquals(
-            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
-            H2Dialect.renderUpsert("id", listOf("name")),
-        )
+        // SQLite/KingBase 与 PG 同形态（各自官方集合），抽查引用符号（id 非保留字 → 不包）
         assertEquals(
             "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
             SqliteDialect.renderUpsert("id", listOf("name")),
@@ -140,6 +136,17 @@ class DialectTest {
         assertNull(OracleDialect.renderUpsert("id", listOf("name")))
         assertNull(SqlServerDialect.renderUpsert("id", listOf("name")))
         assertNull(DmDialect.renderUpsert("id", listOf("name")))
+        // H2（P-立项-05）：ON CONFLICT 在 H2 任何模式均语法错误（引擎实证）→ 后缀 null；
+        // 原生 upsert 走整语句 MERGE INTO..KEY..VALUES（H2 2.3.232 实测可用）
+        assertNull(H2Dialect.renderUpsert("id", listOf("name")))
+        assertEquals(
+            "MERGE INTO t (id, name) KEY (id) VALUES (?, ?)",
+            H2Dialect.renderUpsertStatement("t", listOf("id", "name"), "id"),
+        )
+        assertEquals(
+            "MERGE INTO t (\"table\", name) KEY (\"table\") VALUES (?, ?)",
+            H2Dialect.renderUpsertStatement("t", listOf("table", "name"), "table"),
+        )
     }
 
     /**
