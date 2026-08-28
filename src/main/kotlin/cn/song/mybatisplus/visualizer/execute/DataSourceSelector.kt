@@ -71,6 +71,14 @@ object DataSourceSelector {
     private var sharedFullComponent: javax.swing.JComponent? = null
     private var sharedDataSourceName: String? = null
 
+    /** M36.5.6：结果区换入回调（准备阶段挂 ContentManager 监听，任一路径出结果即换入；复用时由新面板接管）。 */
+    private var pendingOnConsole: ((javax.swing.JComponent) -> Unit)? = null
+
+    // M36.5.7：共享缓存的分件存储——复用/换入时按**实时结果区组件**重建完整 SplitPane。
+    // （组合组件引用在面板分离/重挂后会过期：M36.5.5 复用面板空显示、M36.5.6 第二次预览
+    // 结果栏消失、contentAdded 换入未写回共享缓存导致复用嵌了旧编辑器块，均是此类过期引用。）
+    private var sharedTopBlock: javax.swing.JComponent? = null
+
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
     @JvmStatic
     fun isPrepared(): Boolean = preparedConsole != null
@@ -260,7 +268,7 @@ object DataSourceSelector {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val console = sharedConsole ?: return false
         val editor = sharedEditor ?: return false
-        val full = sharedFullComponent ?: return false
+        val top = sharedTopBlock ?: return false
         val dsName = sharedDataSourceName ?: return false
         val scriptModel = sharedScriptModel ?: return false
         val execOption = sharedExecOption ?: return false
@@ -278,17 +286,30 @@ object DataSourceSelector {
                 editor.document.setText(sql)
             }
         }
+        // M36.5.7：完整 UI 按**实时结果区组件**重建（组合引用在面板分离/重挂后会过期——
+        // M36.5.5 复用面板空显示根因）；顶部块（原生头部+编辑器）自旧面板"偷"入新面板。
+        val liveResult = runCatching {
+            sharedUi?.javaClass?.getMethod("getComponent")?.invoke(sharedUi) as? javax.swing.JComponent
+        }.getOrNull()
+        val full = liveResult?.let { buildConsoleSplitPane(top, it) }
+            ?: sharedFullComponent
+            ?: return false
+        sharedFullComponent = full
         preparedConsole = console
         preparedEditor = editor
         preparedScriptModel = scriptModel
         preparedExecOption = execOption
         preparedUi = sharedUi
-        preparedTopBlock = null
-        preparedResultComponent = null
+        preparedTopBlock = top
+        preparedResultComponent = liveResult
         preparedFullComponent = full
         onEditor?.invoke(editor)
         onConsole?.invoke(full)
-        LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare)")
+        // M36.5.6：接管结果换入回调——后续任意路径执行产生新结果内容时换入本面板；
+        // 已嵌完整组件场景由面板同实例防抖幂等吸收。
+        pendingOnConsole = onConsole
+        logDataContextCheck(full, LOG)
+        LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
         if (executeAfterPrepare) {
             executeOnConsole(project, console, editor, scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError)
         }
@@ -303,8 +324,83 @@ object DataSourceSelector {
         sharedScriptModel = null
         sharedExecOption = null
         sharedUi = null
+        sharedTopBlock = null
         sharedFullComponent = null
         sharedDataSourceName = null
+    }
+
+    /**
+     * M36.5.6：结果区换入监听——RunnerLayoutUi 的 ContentManager 上任意结果内容新增
+     * （contentAdded，排除 Output 自身）即把宿主面板从「编辑器块」换入「完整 SplitPane」。
+     * 覆盖原生 ▶ / 控制台 Ctrl+Enter 等插件外执行路径（此前仅插件 executePrepared 有
+     * onResultsReady 换入）。topBlock/resultComponent 闭包自捕获（复用路径会清 prepared*
+     * 字段，监听器不可依赖它们）；换入组件懒构建并缓存（顶部块已被内嵌"偷走"，预建实例缺
+     * 子组件——M36.5.2 教训）。同实例重复换入由面板 embedConsole 防抖兜底。
+     * 待机回调 [pendingOnConsole] 由创建面板设置、复用面板接管（面板可能已关闭重建）。
+     */
+    private fun attachResultsHook(
+        ui: Any?,
+        topBlock: javax.swing.JComponent,
+        resultComponent: javax.swing.JComponent?,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ) {
+        if (ui == null || resultComponent == null) return
+        runCatching {
+            val cm = ui.javaClass.getMethod("getContentManager").invoke(ui)
+                as com.intellij.ui.content.ContentManager
+            var fullCache: javax.swing.JComponent? = null
+            cm.addContentManagerListener(object : com.intellij.ui.content.ContentManagerListener {
+                override fun contentAdded(event: com.intellij.ui.content.ContentManagerEvent) {
+                    val name = event.content?.displayName ?: return
+                    LOG.info("[M36] contentAdded: $name")
+                    if (name.equals("Output", ignoreCase = true) || name.equals("输出", ignoreCase = true)) return
+                    val callback = pendingOnConsole ?: return
+                    pendingOnConsole = null
+                    // 换入时重新取结果区组件——RunnerLayoutUi 可能在面板分离/重挂后重建组件，
+                    // prepare 时捕获的引用可能已非当前展示实例（M36.5.5 复用面板空显示的疑因）
+                    val liveResult = runCatching {
+                        ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
+                    }.getOrNull() ?: resultComponent
+                    val full = fullCache
+                        ?: buildConsoleSplitPane(topBlock, liveResult).also {
+                            fullCache = it
+                            preparedFullComponent = it
+                        }
+                    // M36.5.7：写回共享缓存——否则下次复用嵌的是换入前的旧编辑器块
+                    //（M36.5.6 第二次预览结果栏消失根因）
+                    sharedTopBlock = topBlock
+                    sharedFullComponent = full
+                    ApplicationManager.getApplication().invokeLater { callback.invoke(full) }
+                }
+            })
+            LOG.info("[M36] results hook attached (contentAdded -> embed results)")
+        }.onFailure { e ->
+            LOG.warn("[M36] results hook attach FAILED: ${e.message}")
+        }
+    }
+
+    /**
+     * M36.5.6：嵌入后自检数据上下文——原生 ▶ 执行按钮启用链（QueryActionBase：EDITOR +
+     * JdbcConsole.findConsole 的 CLIENT_KEY 分支）经 DataManager 在嵌入块上解析验证，
+     * 日志直接给出两键可达性（此前 ▶ 禁用只能靠截图灰态间接判断）。
+     */
+    private fun logDataContextCheck(editorBlock: javax.swing.JComponent, LOG: com.intellij.openapi.diagnostic.Logger) {
+        ApplicationManager.getApplication().invokeLater {
+            runCatching {
+                val ctx = com.intellij.ide.DataManager.getInstance()
+                    .getDataContext(editorBlock)
+                val editorOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR.name) != null
+                val clientKeyName = runCatching {
+                    (Class.forName("com.intellij.database.console.client.SessionClientHolder")
+                        .getField("CLIENT_KEY").get(null)
+                            as com.intellij.openapi.actionSystem.DataKey<*>).name
+                }.getOrNull()
+                val consoleOk = clientKeyName != null && ctx.getData(clientKeyName) != null
+                LOG.info("[M36] dataContext check: EDITOR=$editorOk, CLIENT_KEY(console)=$consoleOk (key=$clientKeyName)")
+            }.onFailure { e ->
+                LOG.warn("[M36] dataContext check FAILED: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -423,6 +519,17 @@ object DataSourceSelector {
             }.getOrNull()
             val consoleForData = console
             val editorForData = editor
+            // M36.5.7：补 PSI_FILE/VIRTUAL_FILE——▶ 启用链 isApplicable →
+            // JdbcConsoleProvider.isSqlAtPlace(psiFile, editor) 需要 PSI_FILE
+            // （javap 实证）；嵌入面板无 FileEditor/平台 Provider 链，须直供。
+            // PSI 预解析包 ReadAction（DataProvider.getData 可能在 BGT 动作更新线程调用）。
+            val vfForData = vf
+            val psiForData = runCatching {
+                @Suppress("DEPRECATION")
+                ReadAction.compute<PsiFile, Throwable> {
+                    PsiManager.getInstance(project).findFile(vf)
+                }
+            }.getOrNull()
             val editorComponent: javax.swing.JComponent =
                 object : com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<*>>(
                     java.awt.BorderLayout(),
@@ -430,6 +537,8 @@ object DataSourceSelector {
                     override fun getData(dataId: String): Any? = when {
                         com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR.`is`(dataId) -> editorForData
                         dataId == clientKeyName -> consoleForData
+                        com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE.`is`(dataId) -> vfForData
+                        com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.`is`(dataId) -> psiForData
                         else -> null
                     }
                 }.apply {
@@ -487,15 +596,22 @@ object DataSourceSelector {
                 buildConsoleSplitPane(topBlock, result)
             }
 
-            // 4.6 内嵌（M36.5.4：**一次嵌齐完整 SplitPane**）——原生 ▶ / 控制台 Ctrl+Enter /
-            // 插件「执行 SQL」三条执行路径的结果都落在 RunnerLayoutUi 结果区；此前"默认展示只嵌
-            // 编辑器块、执行后换入"策略导致原生路径执行后结果无处显示（沙盒实测）。塌缩风险由
-            // 4.3 首选高度兜底 + embedConsole 分隔保险防护（M36.4 同形态已验证）。
-            val component: javax.swing.JComponent = fullComponent ?: topBlock
+            // 4.6 内嵌（M36.5.6：准备阶段**只嵌编辑器块**——"Console output" 空占位不再预嵌；
+            // 结果区由 ContentManager 监听换入：任何执行路径（原生 ▶ / 控制台 Ctrl+Enter /
+            // 插件按钮）产生结果内容（contentAdded）即换入完整 SplitPane——三路径全覆盖、
+            // 以真实结果出现为准。准备+执行全链仍直接嵌完整 SplitPane（执行后立即有结果可看）。
+            // 塌缩防护不变：4.3 首选高度兜底 + embedConsole 分隔保险。
+            val component: javax.swing.JComponent = if (executeAfterPrepare) (fullComponent ?: topBlock) else topBlock
             preparedTopBlock = topBlock
             preparedResultComponent = resultComponent
-            preparedFullComponent = fullComponent
-            LOG.info("[M36] embed component=$component (full=${fullComponent != null})")
+            preparedFullComponent = if (executeAfterPrepare) fullComponent else null
+            LOG.info("[M36] embed component=$component (executeAfterPrepare=$executeAfterPrepare)")
+
+            if (!executeAfterPrepare) {
+                pendingOnConsole = onConsole
+                attachResultsHook(ui, topBlock, resultComponent, LOG)
+                logDataContextCheck(editorComponent, LOG)
+            }
 
             // M36.5.5：填充共享控制台缓存 + 统一记忆数据源（下次预览 last-used 命中即复用，
             // 不再新建 session/连接——挂死根因见 sharedConsole 字段注释）
@@ -504,6 +620,7 @@ object DataSourceSelector {
             sharedScriptModel = scriptModel
             sharedExecOption = execOption
             sharedUi = ui
+            sharedTopBlock = topBlock
             sharedFullComponent = component
             sharedDataSourceName = dataSourceName
             if (dataSourceName != null) rememberRunnerName(project, dataSourceName)
