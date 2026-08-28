@@ -563,7 +563,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         }
                     }, BorderLayout.EAST)
                 })
-                addRow(p, g, "", JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.pluginSettings"), JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
                     isOpaque = false
                     add(JButton(MpSqlVisualizerBundle.message("settings.import")).apply {
                         toolTipText = MpSqlVisualizerBundle.message("settings.import.tip")

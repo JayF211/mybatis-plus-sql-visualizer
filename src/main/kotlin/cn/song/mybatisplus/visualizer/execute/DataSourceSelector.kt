@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -196,10 +197,14 @@ object DataSourceSelector {
             }
 
             // 后台线程执行，带超时检测
+            // M36.5：executeQueries 内部 Document.createRangeMarker 要求 read action，
+            // 线程池线程无 read action 上下文会抛 RuntimeExceptionWithAttachments
             val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
             val future = executor.submit {
                 try {
-                    execute.invoke(console, editor, scriptModel, execOption)
+                    ReadAction.compute<Unit, Throwable> {
+                        execute.invoke(console, editor, scriptModel, execOption)
+                    }
                     LOG.info("[M36] executeQueries invoked OK")
                 } catch (e: Exception) {
                     LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
