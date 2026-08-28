@@ -121,6 +121,72 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
         )
     }
 
+    // ======================== M36.5 自动可见性 ========================
+
+    /**
+     * 测试：SqlResultPanel 初始/空状态隐藏（不占高度，消除底部空白占位），
+     * 有内容（错误/loading）时显示。
+     */
+    @Test
+    fun testResultPanelAutoVisibility() {
+        val panel = SqlResultPanel()
+        // 初始隐藏
+        assertTrue("Panel should start hidden (no blank placeholder)", !panel.isVisible)
+
+        // 有内容 → 显示
+        panel.showError("boom")
+        assertTrue("Panel should be visible with error content", panel.isVisible)
+
+        panel.showLoading()
+        assertTrue("Panel should be visible while loading", panel.isVisible)
+
+        // 清空 → 隐藏
+        panel.showEmpty()
+        assertTrue("Panel should hide when empty (no blank placeholder)", !panel.isVisible)
+    }
+
+    // ======================== M36.5 控制台准备/执行拆分 ========================
+
+    /**
+     * 测试：executePrepared 在控制台未就绪时返回 false（不抛异常）——
+     * 调用方据此回退 prepare+execute 全链。
+     */
+    @Test
+    fun testExecutePreparedNotReadyReturnsFalse() {
+        DataSourceSelector.clearPrepared()
+        val executed = DataSourceSelector.executePrepared(project)
+        assertTrue("executePrepared should return false when console not prepared", !executed)
+    }
+
+    /**
+     * 测试：SqlExecutor.prepareConsole 在插件不可用环境（单元测试沙盒）静默回退——
+     * callback(false) 且不抛异常、不弹提示（社区版回退语义）。
+     */
+    @Test
+    fun testPrepareConsoleSilentFallbackWhenPluginUnavailable() {
+        var callbackResult: Boolean? = null
+        var errorInvoked = false
+
+        SqlExecutor.prepareConsole(
+            project = project,
+            sql = "SELECT 1",
+            onError = { errorInvoked = true },
+            callback = { success -> callbackResult = success },
+        )
+
+        assertEquals("callback should be invoked with false in test sandbox", false, callbackResult)
+        assertTrue("onError should NOT be invoked (silent fallback)", !errorInvoked)
+    }
+
+    /**
+     * 测试：clearPrepared 重置就绪状态。
+     */
+    @Test
+    fun testClearPrepared() {
+        DataSourceSelector.clearPrepared()
+        assertTrue("isPrepared should be false after clearPrepared", !DataSourceSelector.isPrepared())
+    }
+
     /**
      * 测试：SqlResultPanel.clear 清空状态。
      */

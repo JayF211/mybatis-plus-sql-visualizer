@@ -885,6 +885,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         detachConsole()
         // M36.4：重置原生编辑器文档引用
         nativeEditorDoc = null
+        // M36.5：释放已准备控制台引用（下次预览重新准备）
+        SqlExecutor.clearPrepared()
         revalidate()
         repaint()
     }
