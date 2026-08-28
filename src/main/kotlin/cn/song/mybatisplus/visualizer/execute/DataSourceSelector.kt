@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -49,6 +50,9 @@ object DataSourceSelector {
      * @param onEditor  控制台编辑器就绪回调（M36.2：调用方注入插件补全上下文
      *                  [cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext]，
      *                  与 Database 原生补全叠加生效）；null = 不需要
+     * @param onEditorComponent 原生编辑器组件就绪回调（M36.3：参数为 editor.component，
+     *                  调用方可将其内嵌到右侧 SQL 显示栏，替代自研编辑器）；null = 不需要
+     * @param onError   错误回调（执行链任何环节失败时调用，参数为错误信息；null = 不通知）
      * @param callback  完成回调（true=已触发执行；false=不可用/无数据源/取消）
      */
     fun selectAndExecute(
@@ -56,11 +60,14 @@ object DataSourceSelector {
         sql: String,
         onConsole: ((javax.swing.JComponent) -> Unit)? = null,
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
+        onEditorComponent: ((javax.swing.JComponent) -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort")
+            onError?.invoke(MpSqlVisualizerBundle.message("execute.noDatabase"))
             callback?.invoke(false)
             return
         }
@@ -69,6 +76,7 @@ object DataSourceSelector {
         val temp = createTempPsiFile(project, sql)
         if (temp == null) {
             LOG.warn("[M36] createTempPsiFile failed, abort")
+            onError?.invoke("Failed to create temporary SQL file")
             callback?.invoke(false)
             return
         }
@@ -77,7 +85,7 @@ object DataSourceSelector {
         // consumer：runner.run 建好 session 后回调 → 续接执行链（attachConsole + executeQueries）
         val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
             LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console & executing")
-            executeInConsole(project, session, vf, onConsole, onEditor)
+            executeInConsole(project, session, vf, onConsole, onEditor, onEditorComponent, onError)
         }
 
         val runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer)
@@ -86,6 +94,8 @@ object DataSourceSelector {
             runners.isEmpty() -> {
                 LOG.warn("[M36] runners empty -> open Database tool window")
                 openDatabaseToolWindow(project)
+                // M36.3：无数据源时通知 UI 从「执行中」恢复
+                onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
                 callback?.invoke(false)
             }
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
@@ -119,6 +129,8 @@ object DataSourceSelector {
         vf: com.intellij.openapi.vfs.VirtualFile,
         onConsole: ((javax.swing.JComponent) -> Unit)?,
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
+        onEditorComponent: ((javax.swing.JComponent) -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -162,23 +174,56 @@ object DataSourceSelector {
             val execOption = execOptionClass.getDeclaredConstructor().newInstance()
             if (scriptModel == null) return
 
-            // 4. 先执行（M36.2c 时序重构）：
+            // 4. 后台执行 executeQueries（M36.3）：避免 EDT 阻塞导致密码弹窗被遮挡。
             //    结果 Tab 由执行动态创建（执行前 contents=[Output]）——先内嵌拿到的组件
             //    既缺结果 Tab 又是 0 尺寸未布局；先执行则原生密码框（密码过期/错误）也在
-            //    本步正常弹出（挂主窗口，用户输入后执行继续）
+            //    本步正常弹出（挂主窗口，用户输入后执行继续）。
+            //    M36.3：密码过期/驱动未下载时 executeQueries 会阻塞等待原生弹窗，
+            //    后台线程执行避免 EDT 卡死（loading 动画可正常刷新）。
             val execute = consoleClass.getMethod(
                 "executeQueries",
                 com.intellij.openapi.editor.Editor::class.java,
                 Class.forName("com.intellij.database.script.ScriptModel"),
                 execOptionClass,
             )
-            execute.invoke(console, editor, scriptModel, execOption)
-            LOG.info("[M36] executeQueries invoked OK")
+            // 连接前置测试（M36.3）：检查 session 连接状态，失败则提前提示
+            val connected = runCatching {
+                session.javaClass.getMethod("isConnected").invoke(session) as? Boolean
+            }.getOrNull() ?: false
+            LOG.info("[M36] session isConnected=$connected")
+            if (!connected) {
+                LOG.warn("[M36] session NOT connected - connection may need credentials or driver")
+            }
 
-            // 5. 内嵌完整控制台组件（M36.2h 最终方案）：
-            //    只嵌 logView.getContent().getComponent() 一块 = Database 工具窗口的
-            //    完整原生控制台（编辑器区域 + 工具栏 addLeftToolbarConsoleActions +
-            //    结果/Output tabs）——不再拼合 editor.component（此前 SplitPane 多余）。
+            // 后台线程执行，带超时检测
+            val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+            val future = executor.submit {
+                try {
+                    execute.invoke(console, editor, scriptModel, execOption)
+                    LOG.info("[M36] executeQueries invoked OK")
+                } catch (e: Exception) {
+                    LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
+                    throw e
+                }
+            }
+            executor.shutdown()
+
+            // 等待执行完成，带超时（5秒）
+            // 超时意味着可能弹出了密码/驱动弹窗（被面板遮挡），不取消 future，
+            // 让它在后台继续等待用户处理弹窗
+            try {
+                future.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: java.util.concurrent.TimeoutException) {
+                LOG.warn("[M36] executeQueries TIMEOUT (5s) - may need credentials or driver download")
+            } catch (e: Exception) {
+                LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
+            }
+
+            // 5. 内嵌完整原生控制台（M36.2h 方案）：
+            //    logView.getContent().getComponent() = Database 工具窗口完整原生 UI
+            //    （编辑器区域 + 工具栏 + 结果/Output tabs）。
+            //    M36.3 教训：编辑器组件（editor.component）从未显示的控制台提取时
+            //    为 0x0 尺寸且 hidden，无法单独内嵌右侧。完整控制台是唯一可靠方案。
             //    时序：先执行（结果 Tab 创建 + 原生密码框/驱动框正常弹出）→ 再内嵌。
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
@@ -243,6 +288,10 @@ object DataSourceSelector {
                         } else if (attempts >= 10) {
                             timer.stop()
                             LOG.info("[M36] result tab not appeared after $attempts attempts (may need credentials or query failed)")
+                            // M36.3：超时后提示用户检查是否有被遮挡的密码/驱动弹窗
+                            ApplicationManager.getApplication().invokeLater {
+                                showCredentialHint(project)
+                            }
                         }
                     }
                     init { timer.addActionListener(this) }
@@ -251,6 +300,22 @@ object DataSourceSelector {
             }
         }.onFailure { e ->
             LOG.warn("[M36] executeInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+            // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            onError?.invoke(cause.message ?: cause.toString())
+        }
+    }
+
+    /**
+     * M36.3：显示连接提示（密码过期/驱动未下载时，原生弹窗可能被面板遮挡）。
+     */
+    private fun showCredentialHint(project: Project) {
+        runCatching {
+            com.intellij.openapi.ui.Messages.showWarningDialog(
+                project,
+                MpSqlVisualizerBundle.message("execute.credential.hint"),
+                MpSqlVisualizerBundle.message("execute.title"),
+            )
         }
     }
 

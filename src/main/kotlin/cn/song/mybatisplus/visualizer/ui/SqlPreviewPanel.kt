@@ -362,13 +362,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
                 consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
             },
+            // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
+            onError = { errorMsg ->
+                resultPanel.showError(errorMsg)
+            },
         )
     }
 
     /**
-     * M36：将原生 Database 控制台 UI 组件内嵌到面板下方并展开分割。
-     * 重复执行时替换旧控制台（旧组件随 JdbcConsole 生命周期由 IDE 管理，
-     * 这里仅从容器摘除引用避免悬挂 UI）。
+     * M36：将完整原生 Database 控制台 UI 组件内嵌到面板下方并展开分割。
+     * 完整控制台 = 编辑器区域 + 工具栏 + 结果/Output tabs（M36.2h 方案）。
+     * M36.3 说明：原生编辑器组件（editor.component）从未显示的控制台提取时
+     * 为 0x0 尺寸且 hidden，无法单独内嵌右侧。完整控制台是唯一可靠方案。
+     * 重复执行时替换旧控制台（旧组件随 JdbcConsole 生命周期由 IDE 管理）。
      */
     private fun embedConsole(consoleComponent: JComponent) {
         embeddedConsole?.let { old -> consoleHolder.remove(old) }
@@ -697,19 +703,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 格式化当前编辑器 SQL（关键字大写 / 子句换行 / 条件缩进，[SqlFormatter]）。 */
     fun formatSql() {
-        val editor = editor ?: return
-        val formatted = SqlFormatter.format(editor.document.text)
-        if (formatted != editor.document.text) {
-            WriteCommandAction.runWriteCommandAction(project) { editor.document.setText(formatted) }
+        val doc = editor?.document ?: return
+        val formatted = SqlFormatter.format(doc.text)
+        if (formatted != doc.text) {
+            WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
         }
     }
 
     /** 关键字换行格式化：子句顶格换行、同行内容压一行（[SqlFormatter.formatClauseLine]）。 */
     private fun formatClauseLine() {
-        val editor = editor ?: return
-        val formatted = SqlFormatter.formatClauseLine(editor.document.text)
-        if (formatted != editor.document.text) {
-            WriteCommandAction.runWriteCommandAction(project) { editor.document.setText(formatted) }
+        val doc = editor?.document ?: return
+        val formatted = SqlFormatter.formatClauseLine(doc.text)
+        if (formatted != doc.text) {
+            WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
         }
     }
 
@@ -738,6 +744,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。 */
     fun copySql(): Boolean {
+        // M36.3：优先取原生编辑器文档，兜底自研编辑器
         val raw = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return false
         // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
         val text = SqlCommentStripper.strip(raw)
