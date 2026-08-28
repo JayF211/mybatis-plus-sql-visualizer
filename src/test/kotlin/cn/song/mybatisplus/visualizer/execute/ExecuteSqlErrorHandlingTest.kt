@@ -159,6 +159,61 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
     }
 
     /**
+     * 测试（M36.5.2）：executePrepared 未就绪时不触发 onResultsReady（不抛异常）——
+     * 结果区换入回调仅在真实执行触发成功后发生。
+     */
+    @Test
+    fun testExecutePreparedNotReadyDoesNotFireResultsReady() {
+        DataSourceSelector.clearPrepared()
+        var resultsReadyFired = false
+        val executed = DataSourceSelector.executePrepared(
+            project,
+            onResultsReady = { resultsReadyFired = true },
+        )
+        assertTrue("executePrepared should return false when console not prepared", !executed)
+        assertTrue("onResultsReady should not fire when console not prepared", !resultsReadyFired)
+    }
+
+    /**
+     * 测试（M36.5.2）：SqlExecutor.executePrepared 同样在未就绪时返回 false（沙盒无 Database 插件）。
+     */
+    @Test
+    fun testSqlExecutorExecutePreparedNotReadyReturnsFalse() {
+        SqlExecutor.clearPrepared()
+        assertTrue(
+            "SqlExecutor.executePrepared should return false when console not prepared",
+            !SqlExecutor.executePrepared(project),
+        )
+    }
+
+    // ======================== M36.5.2 控制台内嵌防抖 ========================
+
+    /**
+     * 测试（M36.5.2）：embedConsole 替换旧控制台；同一组件重复回调不重复内嵌（防闪烁）——
+     * 缓存完整 UI 在重复执行时回调同一实例，面板须幂等。
+     */
+    @Test
+    fun testEmbedConsoleReplacesAndDebounces() {
+        val panel = cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel(project)
+        val first = javax.swing.JPanel()
+        val second = javax.swing.JPanel()
+
+        panel.embedConsoleForTest(first)
+        assertTrue("first embed should attach to holder", first.parent != null)
+
+        panel.embedConsoleForTest(second)
+        assertTrue("second embed should replace as current", panel.embeddedConsoleForTest() === second)
+        assertTrue("second embed should be attached", second.parent != null)
+        assertTrue("first embed should be detached after replace", first.parent == null)
+
+        // 同实例重复回调（重复执行触发 onResultsReady）→ 幂等，不替换不摘挂
+        val parentBefore = second.parent
+        panel.embedConsoleForTest(second)
+        assertTrue("same instance re-embed should keep current", panel.embeddedConsoleForTest() === second)
+        assertTrue("same instance re-embed should keep parent", second.parent === parentBefore)
+    }
+
+    /**
      * 测试：SqlExecutor.prepareConsole 在插件不可用环境（单元测试沙盒）静默回退——
      * callback(false) 且不抛异常、不弹提示（社区版回退语义）。
      */
