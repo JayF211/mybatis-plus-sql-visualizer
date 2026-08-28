@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **插件显示名更名 SQL Visualizer（原 MyBatis-Plus SQL Visualizer）**：`plugin.xml` `<name>` 与全部用户可见文案（设置页/弹窗标题/gutter tooltip/通知/工具窗口标题，中英双语）同步更名；插件 ID（`<id>`）、构建产物 zip 顶层短名、仓库与 Marketplace 页地址均不变——已安装用户正常升级，配置与历史记录全保留。仍全面支持 MyBatis-Plus / MPJ / JPA / Hibernate
+
 ### Fixed
 
 - **JOIN 关系图渲染失败修复（F-42，最终根因 PlantUML 版本）**：

@@ -13,7 +13,7 @@
     <resource-bundle>messages.MpSqlVisualizerBundle</resource-bundle>
 
     <!-- 插件显示名称（M13.1 统一为完整名） -->
-    <name>MyBatis-Plus SQL Visualizer</name>
+    <name>SQL Visualizer</name>
     <!-- 插件图标：不声明 <icon>，走 IDEA 约定路径（jar 根 pluginIcon.svg / pluginIcon_dark.svg，亮暗主题自动切换，M14） -->
 
     <!-- 插件厂商（发布前请替换为真实信息） -->
@@ -21,7 +21,7 @@
 
     <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
-        MyBatis-Plus SQL Visualizer is a debugging tool for MyBatis-Plus, MyBatis-Plus-Join, Hibernate and JPA inside IntelliJ IDEA: preview Wrapper chains, XML mappers, annotation SQL, Spring Data JPA derived queries, CriteriaBuilder queries and JPQL/@Query as readable SQL with resolved parameters, restore SQL from console logs, and convert SQL back to MP Java code.
+        SQL Visualizer is a debugging tool for MyBatis-Plus, MyBatis-Plus-Join, Hibernate and JPA inside IntelliJ IDEA: preview Wrapper chains, XML mappers, annotation SQL, Spring Data JPA derived queries, CriteriaBuilder queries and JPQL/@Query as readable SQL with resolved parameters, restore SQL from console logs, and convert SQL back to MP Java code.
         <br/>
         <h2>Core capabilities</h2>
         <ul>
@@ -80,7 +80,7 @@
         <!-- SQL 预览服务（project-level，M16 起为轻服务：@Service(Service.Level.PROJECT) 注解声明，
              IDE 自动发现，无需 XML 注册；获取方式不变 project.getService(SqlPreviewService::class.java)） -->
 
-        <!-- 设置页：Settings → Tools → MyBatis-Plus SQL Visualizer
+        <!-- 设置页：Settings → Tools → SQL Visualizer
              （左侧树导航：父节点为文件夹，5 个子节点各自显示独立页面） -->
         <applicationConfigurable parentId="tools"
                                  id="cn.song.mybatisplus.visualizer.settings"
