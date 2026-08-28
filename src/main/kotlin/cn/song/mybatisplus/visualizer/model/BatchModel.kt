@@ -15,8 +15,11 @@ enum class BatchKind {
     UPDATE,
 
     /**
-     * UPSERT：`INSERT ...` + 方言冲突子句（T-M43：PG 系 `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`、
-     * MySQL 系 `ON DUPLICATE KEY UPDATE 列 = VALUES(列)`；Oracle/SQL Server/DM 无原生简洁形态 → 降级纯 INSERT）。
+     * UPSERT：方言原生形态（T-M43 + P-立项-05 验证修正）——MySQL 系
+     * `INSERT ... ON DUPLICATE KEY UPDATE 列 = VALUES(列)`、PG/KingBase/SQLite 系
+     * `ON CONFLICT (主键) DO UPDATE SET 非主键列 = EXCLUDED.列`、H2 整语句
+     * `MERGE INTO t (cols) KEY (主键) VALUES (...)`；Oracle/SQL Server/DM 无原生简洁形态
+     * → 降级纯 INSERT。
      * T-M23.2：主键在 [BatchModel.toggleColumns] 内**可勾选**（默认勾选渲染完整 upsert；
      * 取消勾选 → 渲染纯 INSERT 新记录路径），冲突键见 [BatchModel.conflictColumn]。
      */
@@ -121,12 +124,15 @@ data class BatchModel(
                 // 主键未勾选（新记录插入路径）→ 纯 INSERT，无冲突子句
                 base
             } else {
-                // T-M43：冲突子句按方言渲染——方言无原生 upsert（Oracle/SQL Server/DM）→ null 降级纯 INSERT
-                val suffix = dialect.renderUpsert(
-                    conflict,
-                    toggles.filter { it.columnName != conflict }.map { it.columnName },
-                )
-                if (suffix == null) base else "$base\n$suffix"
+                // P-立项-05：整语句形态优先（H2 原生 upsert 为 MERGE INTO..KEY..VALUES，
+                // 无法以「INSERT+后缀」表达）；null → 后缀形态；后缀亦 null（Oracle/SQL Server/DM
+                // 无原生简洁 upsert）→ 降级纯 INSERT
+                dialect.renderUpsertStatement(tableName, toggles.map { it.columnName }, conflict)
+                    ?: dialect.renderUpsert(
+                        conflict,
+                        toggles.filter { it.columnName != conflict }.map { it.columnName },
+                    )?.let { suffix -> "$base\n$suffix" }
+                    ?: base
             }
         }
     }

@@ -10,12 +10,24 @@ package cn.song.mybatisplus.visualizer.sql
  * 集合构成（尽量完整，来源为各数据库官方关键字文档）：
  *  - [MYSQL_RESERVED]：MySQL 8.0 官方保留字全量（dev.mysql.com/doc/refman/8.0/en/keywords.html）
  *  - [SQLITE_RESERVED]：SQLite 官方关键字全量（sqlite.org/lang_keywords.html）
- *  - [PG_RESERVED]：PostgreSQL 官方保留字全量（postgresql.org/docs/current/sql-keywords-appendix.html）
+ *  - [PG_RESERVED]：PostgreSQL 官方保留字全量（postgresql.org/docs/current/sql-keywords-appendix.html；
+ *    P-立项-05 补齐「reserved (can be function or type name)」类别 7 词——AUTHORIZATION/BINARY/
+ *    CONCURRENTLY/FREEZE/ISNULL/NOTNULL/SIMILAR 同样不能裸用作列名，原集合缺漏已由金仓官方
+ *    保留字表交叉验证（help.kingbase.com.cn V9 保留字章节同标「保留」））
  *  - [ORACLE_RESERVED]：Oracle 官方保留字全量
  *  - [SQLSERVER_RESERVED]：SQL Server 官方保留字全量（learn.microsoft.com 保留字文档）
+ *  - [H2_RESERVED]：H2 2.x 官方关键字全量（h2database.com/html/keywords.html——Regular 模式
+ *    always-keyword + context-sensitive + mode-sensitive 全量；P-立项-05 引擎实测核对）
+ *  - [DM_RESERVED]：DM8 官方附录 1「带 * 系统保留字」全量（eco.dameng.com
+ *    /document/dm/zh-cn/pm/sql-appendix.html；P-立项-05 逐词核对）
+ *  - [KINGBASE_RESERVED]：KingbaseES V9 官方保留字全量（bbs.kingbase.com.cn V9 手册
+ *    《SQL保留字和关键字》章节 22，分类为「保留」的词；P-立项-05 逐词核对）
+ *  - [MARIA_RESERVED]：MariaDB 官方保留字全量（mariadb.com/kb/en/reserved-words/，
+ *    = MySQL 8.0 保留字 + MariaDB 增量；P-立项-05 逐词核对）
  *
- * 近似归组（文档化）：MariaDB → MySQL；H2 → PostgreSQL（关键字表高度重叠）；
- * DM（达梦）→ Oracle；KingBase → PostgreSQL。
+ * 近似归组已消除（P-立项-05）：H2 / DM / KingBase / MariaDB 均改为**本方言官方保留字集合**，
+ * 不再近似复用其他方言的集合（原近似在 H2（key/value/values/day/year 等漏包）与
+ * DM（top/section/domain 等漏包 + number/size 错包）上经真实引擎/官方文档证伪）。
  *
  * 范围边界：
  *  - 各方言**非保留字**（MySQL 的 `name`/`status`/`type`、PG 的 `value` 等——不包裹不报错）
@@ -91,17 +103,18 @@ val SQLITE_RESERVED: Set<String> = setOf(
     "virtual", "when", "where", "window", "with", "without",
 )
 
-/** PostgreSQL 官方保留字全量。 */
+/** PostgreSQL 官方保留字全量。P-立项-05：补齐「reserved (can be function or type name)」7 词。 */
 val PG_RESERVED: Set<String> = setOf(
     "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric",
-    "both", "case", "cast", "check", "collate", "column", "constraint", "create",
-    "current_catalog", "current_date", "current_role", "current_time",
-    "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct",
-    "do", "else", "end", "except", "false", "fetch", "for", "foreign", "from",
-    "grant", "group", "having", "in", "initially", "intersect", "into", "lateral",
-    "leading", "limit", "localtime", "localtimestamp", "not", "null", "offset",
-    "on", "only", "or", "order", "placing", "primary", "references", "returning",
-    "select", "session_user", "some", "symmetric", "table", "then", "to",
+    "authorization", "binary", "both", "case", "cast", "check", "collate", "column",
+    "concurrently", "constraint", "create", "current_catalog", "current_date",
+    "current_role", "current_time", "current_timestamp", "current_user", "default",
+    "deferrable", "desc", "distinct", "do", "else", "end", "except", "false",
+    "fetch", "for", "foreign", "freeze", "from", "grant", "group", "having", "in",
+    "initially", "intersect", "into", "isnull", "lateral", "leading", "limit",
+    "localtime", "localtimestamp", "not", "notnull", "null", "offset", "on", "only",
+    "or", "order", "placing", "primary", "references", "returning", "select",
+    "session_user", "similar", "some", "symmetric", "table", "then", "to",
     "trailing", "true", "union", "unique", "user", "using", "variadic", "when",
     "where", "window", "with",
 )
@@ -151,4 +164,158 @@ val SQLSERVER_RESERVED: Set<String> = setOf(
     "tran", "transaction", "trigger", "truncate", "try_convert", "tsequal",
     "union", "unique", "unpivot", "update", "updatetext", "use", "user", "values",
     "varying", "view", "waitfor", "when", "where", "while", "with", "writetext",
+)
+
+/**
+ * H2 2.x 官方关键字全量（P-立项-05：h2database.com/html/keywords.html 逐词核对 +
+ * H2 2.3.232 引擎实测）。
+ *
+ * 构成：官方表中 Regular 模式为关键字（+）的词 + context-sensitive（CS）+ mode-sensitive
+ * 中 Regular 模式为关键字的词（LIMIT/MINUS/TOP）。引擎实测证伪原「≈PG 集合」近似：
+ * H2 保留而 PG 集合没有的 `key`/`value`/`values`/`day`/`year`/`interval`/`row`/`if`/
+ * `minus`/`qualify`/`rownum`/`top`/`unknown`/`uescape` 等裸用作列名直接语法错误（漏包）。
+ */
+val H2_RESERVED: Set<String> = setOf(
+    "all", "and", "any", "array", "as", "asymmetric", "authorization", "between",
+    "both", "case", "cast", "check", "constraint", "cross", "current_catalog",
+    "current_date", "current_path", "current_role", "current_schema", "current_time",
+    "current_timestamp", "current_user", "day", "default", "distinct", "else", "end",
+    "except", "exists", "false", "fetch", "for", "foreign", "from", "full", "grant",
+    "group", "groups", "having", "hour", "if", "ilike", "in", "inner", "intersect",
+    "interval", "is", "join", "key", "leading", "left", "like", "limit", "localtime",
+    "localtimestamp", "minus", "minute", "month", "natural", "not", "null", "offset",
+    "on", "or", "order", "over", "partition", "primary", "qualify", "range",
+    "regexp", "right", "row", "rownum", "rows", "second", "select", "session_user",
+    "set", "some", "symmetric", "system_user", "table", "to", "top", "trailing",
+    "true", "uescape", "union", "unique", "unknown", "user", "using", "value",
+    "values", "when", "where", "window", "with", "year",
+)
+
+/**
+ * DM8 官方附录 1「带 * 系统保留字」全量（P-立项-05：eco.dameng.com
+ * /document/dm/zh-cn/pm/sql-appendix.html 逐词核对）。
+ *
+ * 与原「≈Oracle 集合」近似的双向差异（官方文档证实）：
+ *  - DM 保留而 Oracle 集合没有（漏包风险）：binary/domain/double/do/identity/if/ifnull/
+ *    index/int/array/exec/execute/function/get/large/list/member/model/new/next/object/
+ *    out/over/partition/print/record/ref/return/section/sets/short/struct/switch/top/
+ *    trim/extract 等；
+ *  - Oracle 保留而 DM 仅关键字（错包风险，引用后大小写敏感易失配）：number/size/level/
+ *    raw/varchar/date 等——不再包含，裸用折叠大写后合法。
+ * 注：ROWID/TRXID/VERSIONS_* 等在 DM 中即使加双引号也不能作列名（官方附录注记），
+ * 插件不输出此类标识符（实体列名不会是系统伪列），不进集合。
+ */
+val DM_RESERVED: Set<String> = setOf(
+    // A
+    "absolute", "abstract", "add", "admin", "all", "alter", "and", "any", "array",
+    "arraylen", "as", "asc", "assign", "audit", "auto_increment",
+    // B
+    "begin", "between", "bigdatediff", "binary", "bool", "both", "break", "bstring",
+    "by", "byte",
+    // C
+    "call", "case", "cast", "char", "check", "cluster", "clusterbtr", "collation",
+    "column", "comment", "commit", "commitwork", "connect", "connect_by_root",
+    "const", "constraint", "contains", "context", "continue", "convert", "create",
+    "cross", "crypto", "cube", "current", "current_date", "current_timestamp",
+    // D
+    "dateadd", "datediff", "datepart", "dbtimezone", "declare", "decode", "default",
+    "delete", "desc", "dimension", "disable", "diskspace", "distance", "distinct",
+    "distributed", "do", "domain", "double", "drop",
+    // E
+    "efconstruction", "else", "elseif", "elsif", "enable", "end", "equ", "exchange",
+    "exec", "execute", "exists", "exit", "explain", "extern", "extract",
+    // F
+    "fetch", "final", "finally", "first", "flashback", "float", "for", "foreign",
+    "from", "full", "fully", "function",
+    // G
+    "get", "goto", "grant", "group", "grouping",
+    // H
+    "having",
+    // I
+    "identity", "if", "ifnull", "immediate", "in", "index", "inner", "inline",
+    "insert", "int", "intersect", "interval", "into", "is",
+    // J
+    "join", "json_arrayagg", "json_table", "json_transform",
+    // K
+    "keep",
+    // L
+    "large", "leading", "left", "less", "lexer", "like", "list", "lnnvl",
+    "localtimestamp", "loop",
+    // M
+    "member", "minus", "model", "multiset",
+    // N
+    "natural", "new", "next", "nocopy", "nocycle", "nosort", "not", "null",
+    // O
+    "object", "of", "on", "optimize", "or", "order", "out", "over", "overlay",
+    "override",
+    // P
+    "parameters", "partition", "pendant", "percent", "pipe", "primary", "print",
+    "prior", "private", "privileges", "procedure", "protected", "public",
+    // R
+    "raise", "record", "ref", "reference", "references", "referencing",
+    "regexp_split_to_table", "relative", "replicate", "return", "returning",
+    "reverse", "revoke", "right", "rollback", "rollup", "row", "rownum", "rows",
+    // S
+    "savepoint", "sbyte", "schema", "section", "select", "sessiontimezone", "set",
+    "sets", "short", "some", "sql_calc_found_rows", "static", "struct",
+    "subpartition", "switch", "synonym", "sysdate", "systimestamp",
+    // T
+    "table", "than", "timestampadd", "timestampdiff", "to", "top", "to_vector",
+    "trailing", "treat", "trigger", "trim", "truncate", "try", "typedef", "typeof",
+    // U
+    "uint", "ulong", "union", "unique", "until", "update", "user", "ushort", "using",
+    // V
+    "values", "varray", "verify", "versions", "view", "virtual", "void",
+    // W
+    "when", "whenever", "where", "while", "window", "with", "within", "without",
+    // X
+    "xml", "xmlagg", "xmlattributes", "xmlcast", "xmlelement", "xmlnamespaces",
+    "xmlparse", "xmlquery", "xmlserialize", "xmltable",
+)
+
+/**
+ * KingbaseES V9 官方保留字全量（P-立项-05：bbs.kingbase.com.cn V9 手册《SQL保留字和关键字》
+ * 章节分类为「保留」的词逐词核对；PG 兼容模式）。
+ *
+ * = PG 保留字基线（含金仓同标「保留」的 authorization/binary/concurrently/freeze/isnull/
+ * notnull/similar）+ 金仓特有保留字：auto_increment/collation/ilike/minus/nocycle/nvl/nvl2/
+ * online/return/rowid/rownum/synonym/systimestamp/top/verbose/connect_by_* 等——
+ * 证伪原「≈PG 集合」近似（rowid/rownum/top 等在金仓裸用为列名会语法错误）。
+ */
+val KINGBASE_RESERVED: Set<String> = setOf(
+    "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric",
+    "authorization", "auto_increment", "binary", "both", "case", "cast", "check",
+    "collate", "collation", "column", "concurrently", "connect",
+    "connect_by_iscycle", "connect_by_isleaf", "connect_by_root", "constraint",
+    "create", "cross", "current_catalog", "current_date", "current_role",
+    "current_schema", "current_time", "current_timestamp", "current_user",
+    "default", "deferrable", "desc", "distinct", "do", "else", "end", "except",
+    "false", "fetch", "for", "foreign", "freeze", "from", "full", "grant", "group",
+    "having", "ilike", "in", "initially", "inner", "intersect", "into", "is",
+    "isnull", "join", "lateral", "leading", "left", "like", "limit", "localtime",
+    "localtimestamp", "minus", "natural", "nocycle", "not", "notnull", "null",
+    "nvl", "nvl2", "offset", "on", "online", "only", "or", "order", "outer",
+    "overlaps", "placing", "primary", "references", "return", "returning", "right",
+    "rowid", "rownum", "select", "session_user", "similar", "some", "symmetric",
+    "synonym", "sys_connect_by_path", "systimestamp", "table", "tablesample",
+    "then", "to", "top", "trailing", "true", "union", "unique", "user", "using",
+    "variadic", "verbose", "when", "where", "window", "with",
+)
+
+/**
+ * MariaDB 官方保留字全量（P-立项-05：mariadb.com/kb/en/reserved-words/ 逐词核对）。
+ *
+ * = MySQL 8.0 保留字基线（MariaDB 同标保留的部分）+ MariaDB 特有保留字——
+ * 证伪原「= MySQL 集合」近似：MariaDB 因实现 INTERSECT/EXCEPT 集合运算等，
+ * `except`/`intersect`/`binary`/`offset`/`returning`/`row_number` 等为 MariaDB 保留字
+ * 而 MySQL 8.0 非保留（裸用作列名在 MariaDB 直接语法错误）。
+ * 注：MySQL 8.0 保留而 MariaDB 非保留的词（cube/cume_dist/lag/of 等）不剔除——
+ * 多包无害（引用后 MariaDB 合法），保持与 MYSQL_RESERVED 的复用基线。
+ */
+val MARIA_RESERVED: Set<String> = MYSQL_RESERVED + setOf(
+    "binary", "current_role", "cursor", "delete_domain_id", "do_domain_ids",
+    "except", "general", "ignore_domain_ids", "ignore_server_ids", "intersect",
+    "master_heartbeat_period", "offset", "page_checksum", "parse_vcol_expr",
+    "portion", "ref_system_id", "returning", "row_number", "slow",
+    "stats_auto_recalc", "stats_persistent", "stats_sample_pages", "vector",
 )
