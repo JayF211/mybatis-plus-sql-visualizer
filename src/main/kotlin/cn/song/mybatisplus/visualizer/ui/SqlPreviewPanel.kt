@@ -128,6 +128,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         preferredSize = Dimension(240, 200)
         isOpaque = false
         viewport.isOpaque = false
+        // M36.5：去 LAF 默认 viewport 描边（左侧白色内边框根因）
+        border = JBUI.Borders.empty()
     }
     private val paramFields = mutableListOf<JBTextField>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
@@ -161,17 +163,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
 
-    // M36：SQL 执行结果面板（编辑器下方，展示执行状态/摘要）
-    private val resultPanel = SqlResultPanel()
-
-    // M36：下半区容器——状态行（resultPanel NORTH）+ 可内嵌的原生 Database 控制台组件（CENTER）
-    private val consoleHolder = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-        border = JBUI.Borders.empty()   // 去白边
-        isOpaque = false                // 透明底色
+    // M36.5：SQL 执行状态面板（主面板 SOUTH——仅在有状态/错误内容时可见，避免空白占位）
+    private val resultPanel = SqlResultPanel().apply {
+        isVisible = false
     }
-
-    /** M36：垂直分割（上半 SQL 编辑区 | 下半 consoleHolder），内嵌控制台后展开定位用。 */
-    private var verticalSplit: JSplitPane? = null
 
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     private var embeddedConsole: JComponent? = null
@@ -219,11 +214,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             add(metaLabel, BorderLayout.WEST)
             add(toolbar(), BorderLayout.EAST)
-            border = JBUI.Borders.empty(6, 0, 4, 8)
+            // M36.5：收边距与原生工具行对齐（上 6→4，右 8→8 保留）
+            border = JBUI.Borders.empty(4, 8, 2, 8)
         }
         add(topRow, BorderLayout.NORTH)
 
-        // 中部左右分栏：参数输入 | SQL 编辑器
+        // 中部左右分栏：参数输入 | SQL 编辑器/原生控制台
         // T-M26.3：按钮回挂分区标题行右侧（conditionSectionHeader/batchSectionHeader），
         // 左面板即参数滚动区（T-M26.2 的固定操作行已拆除——长文本按视口截断后按钮不再被推出视口）
         val split = ThemedSplitPane(paramScroll, editorHolder).apply {
@@ -231,34 +227,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             isContinuousLayout = true
             isOneTouchExpandable = false
             dividerSize = 3
+            border = JBUI.Borders.empty()   // M36.5：去 LAF 默认边框（白色描边根因之一）
             background = UIUtil.getPanelBackground()
         }
-
-        // M36：垂直分割——上方 SQL 编辑区 | 下方 consoleHolder（状态行 + 内嵌控制台）
-        // 默认只显示状态行（控制台区域空），执行后内嵌控制台并展开
-        consoleHolder.add(resultPanel, BorderLayout.NORTH)
-        val verticalSplit = object : JSplitPane(JSplitPane.VERTICAL_SPLIT, split, consoleHolder) {
-            override fun paint(g: java.awt.Graphics) {
-                // 覆盖 paint 去除默认边框绘制
-                super.paint(g)
-                // 覆盖分隔条区域为面板底色（消除白色边框感）
-                val loc = getDividerLocation()
-                if (loc > 0) {
-                    g.color = UIUtil.getPanelBackground()
-                    g.fillRect(0, loc, width, getDividerSize())
-                }
-            }
-        }.apply {
-            resizeWeight = 0.7
-            isContinuousLayout = true
-            isOneTouchExpandable = false
-            dividerSize = 3
-            border = JBUI.Borders.empty() // 去除默认边框
-            background = UIUtil.getPanelBackground()
-            minimumSize = Dimension(0, 0)
-        }
-        this.verticalSplit = verticalSplit
-        add(verticalSplit, BorderLayout.CENTER)
+        // M36.5：删除 verticalSplit 下半区——控制台已内嵌右侧，底部仅保留状态行
+        //（resultPanel SOUTH，无内容时隐藏不占高度，错误/执行状态正常显示）
+        add(split, BorderLayout.CENTER)
+        add(resultPanel, BorderLayout.SOUTH)
 
         // T-M26.6：注册格式化快捷键——组件级 custom shortcut 命中即消费按键，
         // 不与 IDE 全局 Reformat Code 双触发（预览语言无 formatter，全局动作本不可用）
@@ -299,6 +274,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (loc < 0) return
             g.color = UIUtil.getPanelBackground()
             g.fillRect(loc, 0, getDividerSize(), height)
+        }
+        init {
+            // M36.5：去 LAF 默认边框（面板四周白色描边根因之一）
+            border = JBUI.Borders.empty()
         }
     }
 
@@ -355,27 +334,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (confirm != Messages.YES) return
         }
 
-        // 2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
-        //    控制台 UI 组件就绪后内嵌到面板下方（原生编辑器+结果区，全原生能力）。
-        //    同步内嵌（回调线程已在 EDT：attachConsole 内部 invokeLater 派发）——
-        //    Selector 在 onConsole 返回后才取 editor，组件必须已挂载完成。
-        //    M36.2：控制台编辑器注入插件补全上下文（表/列注释），与 Database 原生补全叠加
+        // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
+        //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
         resultPanel.showLoading()
+        if (SqlExecutor.isPrepared()) {
+            // 执行前同步当前 SQL（用户可能改过参数/手动编辑）
+            nativeEditorDoc?.let { doc ->
+                if (doc.text != sql) {
+                    WriteCommandAction.runWriteCommandAction(proj) { doc.setText(sql) }
+                }
+            }
+            val executed = SqlExecutor.executePrepared(proj, onError = { errorMsg ->
+                resultPanel.showError(errorMsg)
+            })
+            if (executed) return
+        }
         SqlExecutor.execute(
             proj, sql, null, isQuery,
             onConsole = { consoleComponent -> embedConsole(consoleComponent) },
-            onEditor = { consoleEditor ->
-                val ctx = buildCompletionContext()
-                consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
-                consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
-                // M36.4：保存原生编辑器文档引用（参数回填用）
-                nativeEditorDoc = consoleEditor.document
-                // M36.4：释放自研编辑器（原生控制台将占据右侧）
-                if (editor != null) {
-                    releaseEditor()
-                    editorHolder.removeAll()
-                }
-            },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
             onError = { errorMsg ->
                 resultPanel.showError(errorMsg)
@@ -384,20 +361,47 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * M36.4：将完整原生 Database 控制台 UI 组件内嵌到右侧 SQL 显示栏。
-     * 完整控制台 = 工具栏 + 编辑器 + 结果/Output tabs。
+     * M36.5：原生控制台编辑器就绪统一处理——注入补全上下文、记录文档引用、
+     * 释放自研编辑器（原生控制台占据右侧）。
+     */
+    private fun onNativeEditorReady(consoleEditor: com.intellij.openapi.editor.Editor) {
+        val ctx = buildCompletionContext()
+        consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
+        consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
+        nativeEditorDoc = consoleEditor.document
+        if (editor != null) {
+            releaseEditor()
+            editorHolder.removeAll()
+        }
+    }
+
+    /**
+     * M36.5：发起控制台默认准备（面板展示时调用，不执行）——
+     * Ultimate 下原生控制台即刻可见（静默复用 last-used 数据源/唯一数据源）；
+     * Community 下静默回退自研编辑器；无数据源静默引导（不弹错误打断预览）。
+     */
+    private fun prepareDefaultConsole() {
+        val proj = project ?: return
+        val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        SqlExecutor.prepareConsole(
+            proj, sql,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent) },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+            // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
+            onError = null,
+        )
+    }
+
+    /**
+     * M36.4：将拼合的原生控制台 UI 组件（编辑器 + 结果区）内嵌到右侧 SQL 显示栏。
      * 重复执行时替换旧控制台（旧组件随 JdbcConsole 生命周期由 IDE 管理）。
      */
     private fun embedConsole(consoleComponent: JComponent) {
-        embeddedConsole?.let { old ->
-            editorHolder.remove(old)
-            consoleHolder.remove(old)
-        }
+        embeddedConsole?.let { old -> editorHolder.remove(old) }
         embeddedConsole = consoleComponent
         // 去边框防白边（内嵌组件/容器可能自带 border）
         consoleComponent.border = JBUI.Borders.empty()
         consoleComponent.isOpaque = false
-        // M36.4：完整控制台内嵌右侧（编辑器 + 工具栏 + 结果 tabs）
         editorHolder.add(consoleComponent, BorderLayout.CENTER)
         resultPanel.showEmpty()
         revalidate()
@@ -406,10 +410,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** M36：摘除已内嵌的控制台组件（清空预览时调用；JdbcConsole 生命周期由 IDE 管理）。 */
     private fun detachConsole() {
-        embeddedConsole?.let {
-            editorHolder.remove(it)
-            consoleHolder.remove(it)
-        }
+        embeddedConsole?.let { editorHolder.remove(it) }
         embeddedConsole = null
     }
 
@@ -481,6 +482,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         updateColumnInfoTab(result)
         // O-4：缓存当前 SQL 供下次 Compare
         previousSql = editor?.document?.text
+        // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
+        prepareDefaultConsole()
     }
 
     /**

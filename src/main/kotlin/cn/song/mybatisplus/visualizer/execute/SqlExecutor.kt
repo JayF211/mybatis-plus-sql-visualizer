@@ -7,24 +7,22 @@ import com.intellij.openapi.ui.Messages
 /**
  * SQL 执行引擎（M36，反射隔离）：弹出原生数据源选择 → Database 控制台内嵌执行。
  *
- * 通过 [DataSourceSelector.selectAndExecute] 触发 Database 插件原生数据源弹窗，
- * 选中后自动执行；[onConsole] 回调带回 JdbcConsole 的原生 UI 组件
- * （编辑器+结果区），由调用方（SQL 预览面板）内嵌展示。
+ * M36.5 执行链拆分：
+ *  - [prepareConsole]：准备控制台（选数据源 → 建 session → attachConsole → 拼合组件回调），**不执行**——
+ *    面板打开时调用，原生控制台即刻可见；
+ *  - [executePrepared]：在已准备的控制台上执行；未就绪返回 false（调用方回退全链）；
+ *  - [execute]：准备 + 执行合一（原语义，等价原生 Ctrl+Enter）。
  *
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
 object SqlExecutor {
 
     /**
-     * 执行 SQL（核心入口）。
+     * 准备 + 执行合一（M36 原语义）：选数据源 → 建控制台 → 直接执行。
      *
-     * @param project    当前项目
-     * @param sql        SQL 文本
-     * @param dataSource 保留参数（不使用，数据源由原生弹窗选择）
-     * @param isQuery    保留参数（SQL 类型分类已在面板层完成）
-     * @param onConsole  控制台 UI 组件就绪回调（供内嵌展示；null = 不内嵌）
-     * @param onEditor   控制台编辑器就绪回调（M36.2：注入插件补全上下文；null = 不需要）
-     * @param onError    错误回调（执行链失败时调用，参数为错误信息；null = 不通知）
+     * @param onConsole 控制台 UI 组件就绪回调（供内嵌展示；null = 不内嵌）
+     * @param onEditor  控制台编辑器就绪回调（注入插件补全上下文；null = 不需要）
+     * @param onError   错误回调（执行链失败时调用；null = 不通知）
      */
     fun execute(
         project: Project,
@@ -48,6 +46,49 @@ object SqlExecutor {
                 }
             }
         }
+    }
+
+    /**
+     * M36.5：准备控制台（不执行）——面板打开时调用，原生控制台默认展示。
+     * Community 下静默失败（callback(false)，不打扰用户——社区版走自研编辑器回退）。
+     */
+    fun prepareConsole(
+        project: Project,
+        sql: String,
+        onConsole: ((javax.swing.JComponent) -> Unit)? = null,
+        onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
+        callback: ((Boolean) -> Unit)? = null,
+    ) {
+        if (!ExecuteSqlSupport.isAvailable()) {
+            // 社区版：静默回退（不弹提示——自研编辑器已是回退态）
+            callback?.invoke(false)
+            return
+        }
+        DataSourceSelector.prepareConsole(
+            project, sql,
+            onConsole = onConsole,
+            onEditor = onEditor,
+            onError = onError,
+            callback = callback,
+        )
+    }
+
+    /**
+     * M36.5：在已准备的控制台上执行。
+     * @return false = 控制台未就绪（调用方回退 [execute] 全链）
+     */
+    fun executePrepared(project: Project, onError: ((String) -> Unit)? = null): Boolean {
+        if (!ExecuteSqlSupport.isAvailable()) return false
+        return DataSourceSelector.executePrepared(project, onError)
+    }
+
+    /** 控制台是否已就绪（[prepareConsole] 成功后 true）。 */
+    fun isPrepared(): Boolean = ExecuteSqlSupport.isAvailable() && DataSourceSelector.isPrepared()
+
+    /** 释放已准备控制台引用（面板清空/关闭时调用）。 */
+    fun clearPrepared() {
+        DataSourceSelector.clearPrepared()
     }
 
     private fun showInfo(project: Project, message: String) {
