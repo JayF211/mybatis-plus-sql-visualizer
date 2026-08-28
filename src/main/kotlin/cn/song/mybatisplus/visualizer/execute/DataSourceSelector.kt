@@ -219,17 +219,16 @@ object DataSourceSelector {
                 LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
             }
 
-            // 5. 内嵌完整原生控制台（M36.2h 方案）：
-            //    logView.getContent().getComponent() = Database 工具窗口完整原生 UI
-            //    （编辑器区域 + 工具栏 + 结果/Output tabs）。
-            //    M36.3 教训：编辑器组件（editor.component）从未显示的控制台提取时
-            //    为 0x0 尺寸且 hidden，无法单独内嵌右侧。完整控制台是唯一可靠方案。
-            //    时序：先执行（结果 Tab 创建 + 原生密码框/驱动框正常弹出）→ 再内嵌。
+            // 5. 拼合编辑器 + 结果区为垂直 SplitPane（M36.4 回归 098536c 方案）：
+            //    反编译实锤：logView.getContent().getComponent() = RunnerLayoutUi（仅结果 tabs），
+            //    不含编辑器。编辑器组件 = editor.component（EditorImpl）。
+            //    仿原生拼合：垂直 SplitPane（编辑器 40% / 结果区 60%）。
+            //    时序：先执行（结果 Tab 创建 + 原生密码框/驱动框正常弹出）→ 再拼合内嵌。
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
             }.getOrNull()
 
-            // 5.1 触发内容构建（独立 try-catch，失败不拖垮组件获取）
+            // 5.1 触发内容构建（独立 try-catch）
             if (logView != null) {
                 runCatching {
                     logView.javaClass.getMethod("ensureContentInitialized").invoke(logView)
@@ -238,23 +237,43 @@ object DataSourceSelector {
                 }
             }
 
-            // 5.2 取 ui（结果 Tab 选择用）
+            // 5.2 取 ui 与结果区组件
             val ui: Any? = logView?.let {
                 runCatching { it.javaClass.getMethod("getUi").invoke(it) }.getOrNull()
             } ?: runCatching { consoleClass.getMethod("getUi").invoke(console) }.getOrNull()
+            val resultComponent: javax.swing.JComponent? =
+                ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
 
-            // 5.3 拿完整控制台组件（logView.getContent；兜底 RunnerLayoutUi）
-            var component: javax.swing.JComponent? = logView?.let {
-                runCatching {
-                    val content = it.javaClass.getMethod("getContent").invoke(it)
-                    content?.javaClass?.getMethod("getComponent")?.invoke(content) as? javax.swing.JComponent
-                }.getOrNull()
+            // 5.3 SQL 编辑器组件（EditorImpl.component）
+            val editorComponent: javax.swing.JComponent? = editor?.component
+            LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponent")
+
+            // 5.4 拼合：编辑器（上）/ 结果区（下）——任一缺失单独内嵌另一块
+            val component: javax.swing.JComponent = when {
+                editorComponent != null && resultComponent != null ->
+                    object : javax.swing.JSplitPane(
+                        javax.swing.JSplitPane.VERTICAL_SPLIT, editorComponent, resultComponent,
+                    ) {
+                        override fun paint(g: java.awt.Graphics) {
+                            super.paint(g)
+                            g.color = com.intellij.util.ui.UIUtil.getPanelBackground()
+                            g.fillRect(0, getDividerLocation(), width, getDividerSize())
+                        }
+                    }.apply {
+                        resizeWeight = 0.4
+                        isContinuousLayout = true
+                        isOneTouchExpandable = false
+                        dividerSize = 3
+                        border = com.intellij.util.ui.JBUI.Borders.empty()
+                        background = com.intellij.util.ui.UIUtil.getPanelBackground()
+                    }
+                editorComponent != null -> editorComponent
+                resultComponent != null -> resultComponent
+                else -> return
             }
-            if (component == null) {
-                component = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
-            }
-            LOG.info("[M36] logView=$logView, component=$component")
-            if (component == null) return
+            LOG.info("[M36] combined component=$component")
+
+            // 5.5 内嵌（同步，已在 EDT）
             onConsole?.invoke(component)
 
             // 6. 默认激活查询结果 Tab：EDT Timer 非阻塞重试（结果 Tab 异步创建；10×400ms）

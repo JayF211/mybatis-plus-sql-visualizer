@@ -176,6 +176,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     private var embeddedConsole: JComponent? = null
 
+    // M36.4：原生编辑器文档引用（参数回填/格式化时使用）
+    /** 原生编辑器的文档引用（内嵌后参数变更同步用）。 */
+    private var nativeEditorDoc: com.intellij.openapi.editor.Document? = null
+
     private var current: PreviewResult? = null
     private var compactMode = false
 
@@ -333,7 +337,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     internal fun executeSql() {
         val proj = project ?: return
-        val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        // M36.4：优先取原生编辑器文档，兜底自研编辑器
+        val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+            ?: return
 
         // 1. SQL 类型分类 → 非查询语句二次确认
         val isQuery = SqlTypeClassifier.isQuery(sql)
@@ -361,6 +368,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val ctx = buildCompletionContext()
                 consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
                 consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
+                // M36.4：保存原生编辑器文档引用（参数回填用）
+                nativeEditorDoc = consoleEditor.document
+                // M36.4：释放自研编辑器（原生控制台将占据右侧）
+                if (editor != null) {
+                    releaseEditor()
+                    editorHolder.removeAll()
+                }
             },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
             onError = { errorMsg ->
@@ -370,35 +384,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * M36：将完整原生 Database 控制台 UI 组件内嵌到面板下方并展开分割。
-     * 完整控制台 = 编辑器区域 + 工具栏 + 结果/Output tabs（M36.2h 方案）。
-     * M36.3 说明：原生编辑器组件（editor.component）从未显示的控制台提取时
-     * 为 0x0 尺寸且 hidden，无法单独内嵌右侧。完整控制台是唯一可靠方案。
+     * M36.4：将完整原生 Database 控制台 UI 组件内嵌到右侧 SQL 显示栏。
+     * 完整控制台 = 工具栏 + 编辑器 + 结果/Output tabs。
      * 重复执行时替换旧控制台（旧组件随 JdbcConsole 生命周期由 IDE 管理）。
      */
     private fun embedConsole(consoleComponent: JComponent) {
-        embeddedConsole?.let { old -> consoleHolder.remove(old) }
+        embeddedConsole?.let { old ->
+            editorHolder.remove(old)
+            consoleHolder.remove(old)
+        }
         embeddedConsole = consoleComponent
         // 去边框防白边（内嵌组件/容器可能自带 border）
         consoleComponent.border = JBUI.Borders.empty()
         consoleComponent.isOpaque = false
-        consoleHolder.add(consoleComponent, BorderLayout.CENTER)
+        // M36.4：完整控制台内嵌右侧（编辑器 + 工具栏 + 结果 tabs）
+        editorHolder.add(consoleComponent, BorderLayout.CENTER)
         resultPanel.showEmpty()
-        // 展开下半区：分割线定位到 55%（上 55% SQL 区 / 下 45% 控制台）
-        verticalSplit?.let { split ->
-            if (split.dividerLocation <= 0 || split.height <= 0) {
-                split.resizeWeight = 0.55
-            } else {
-                split.setDividerLocation(0.55)
-            }
-        }
         revalidate()
         repaint()
     }
 
     /** M36：摘除已内嵌的控制台组件（清空预览时调用；JdbcConsole 生命周期由 IDE 管理）。 */
     private fun detachConsole() {
-        embeddedConsole?.let { consoleHolder.remove(it) }
+        embeddedConsole?.let {
+            editorHolder.remove(it)
+            consoleHolder.remove(it)
+        }
         embeddedConsole = null
     }
 
@@ -703,7 +714,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 格式化当前编辑器 SQL（关键字大写 / 子句换行 / 条件缩进，[SqlFormatter]）。 */
     fun formatSql() {
-        val doc = editor?.document ?: return
+        // M36.4：优先取原生编辑器文档，兜底自研编辑器
+        val doc = nativeEditorDoc ?: editor?.document ?: return
         val formatted = SqlFormatter.format(doc.text)
         if (formatted != doc.text) {
             WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
@@ -712,7 +724,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 关键字换行格式化：子句顶格换行、同行内容压一行（[SqlFormatter.formatClauseLine]）。 */
     private fun formatClauseLine() {
-        val doc = editor?.document ?: return
+        // M36.4：优先取原生编辑器文档，兜底自研编辑器
+        val doc = nativeEditorDoc ?: editor?.document ?: return
         val formatted = SqlFormatter.formatClauseLine(doc.text)
         if (formatted != doc.text) {
             WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
@@ -744,8 +757,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。 */
     fun copySql(): Boolean {
-        // M36.3：优先取原生编辑器文档，兜底自研编辑器
-        val raw = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return false
+        // M36.4：优先取原生编辑器文档，兜底自研编辑器
+        val raw = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+            ?: return false
         // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
         val text = SqlCommentStripper.strip(raw)
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
@@ -794,7 +809,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     fun showSqlDiff() {
         val proj = project ?: return
-        val currentSql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        // M36.4：优先取原生编辑器文档，兜底自研编辑器
+        val currentSql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+            ?: return
         val oldSql = previousSql ?: run {
             showDiffToast(MpSqlVisualizerBundle.message("preview.diff.noPrevious"))
             return
@@ -862,6 +880,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
         detachConsole()
+        // M36.4：重置原生编辑器文档引用
+        nativeEditorDoc = null
         revalidate()
         repaint()
     }
@@ -878,6 +898,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 由格式化器归一（关键字大写、主子句顶格、列清单换行缩进、AND 缩进、子查询缩进）；
         // 压缩模式保持紧凑（格式化会引入换行）
         val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(withFill) else withFill
+        // M36.4：优先写入原生编辑器文档（内嵌后）
+        val nativeDoc = nativeEditorDoc
+        if (nativeDoc != null && nativeDoc.text != text) {
+            suppressAutoPopup = true
+            try {
+                WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+            } finally {
+                suppressAutoPopup = false
+            }
+            return
+        }
         val existing = editor
         if (existing != null) {
             if (existing.document.text != text) {
