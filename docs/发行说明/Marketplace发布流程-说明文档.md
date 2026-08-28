@@ -50,7 +50,7 @@ flowchart LR
 | 要素 | 本插件现状 | 要求 | 状态 |
 |---|---|---|---|
 | `<id>` | `cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer` | 唯一 FQN，发布后不可改 | ✅ |
-| `<name>` | MyBatis-Plus SQL Visualizer | 建议 ≤20 字符、不含 "Plugin"/"Support" 等后缀词、无版本号 | ✅（21 字符，接近上限，可接受；若被建议缩短可改为 `MyBatis-Plus SQL Visualizer` 保持现状） |
+| `<name>` | SQL Visualizer | 建议 ≤20 字符、不含 "Plugin"/"Support" 等后缀词、无版本号 | ✅（14 字符，符合 ≤20 建议；2026-08-28 起由旧名更名，插件 ID 不变） |
 | `<description>` | 英文开头 ≥40 字符 + 中文段落 | Marketplace 预览卡取描述**前 40 字符（须英文摘要）** | ✅（英文在前） |
 | `<vendor url>` | https://gitee.com/SongRenShuo | 公网可达 | ✅ |
 | `<idea-version since-build>` | 243 | 兼容列表由此推导 | ✅ |
@@ -227,7 +227,7 @@ intellijPlatform {
 
 **Plugin details 细节（官方最佳实践）**：
 
-- **名称**：自动取自 `plugin.xml <name>`（当前 21 字符，符合 ≤60 硬限；官方建议 ≤20）；
+- **名称**：自动取自 `plugin.xml <name>`（当前 `SQL Visualizer`，14 字符，符合 ≤60 硬限与官方 ≤20 建议）；
 - **描述**：默认取自 `plugin.xml <description>`，预览卡取**前 40 字符英文摘要**（本插件英文段已满足）；可单独在页面编辑（与插件包分开保存）；
 - **图标**：自动取自插件包内图标；页面图标可单独上传更高质量的；
 - **截图**：推荐 1200×760，展示预览弹窗、动态条件面板、日志工具窗口实际效果（禁止默认主题截图、误导性图片）；
@@ -346,6 +346,7 @@ flowchart TD
 □ 8. Marketplace 表单：Apache-2.0 + 源码链接（GitHub）+ tags + 截图
 □ 9. 沙盒 runIde 冒烟：zip 安装后功能正常
 □ 10.（可选）签名配置后：signPlugin + verifyPluginSignature
+□ 11. **上传新版后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变**
 ```
 
 ---

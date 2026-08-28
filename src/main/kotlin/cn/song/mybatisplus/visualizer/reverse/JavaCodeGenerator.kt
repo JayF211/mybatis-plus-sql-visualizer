@@ -738,7 +738,7 @@ object JavaCodeGenerator {
             wrapperKind == GeneratedWrapper.MPJ_LAMBDA || wrapperKind == GeneratedWrapper.MPJ_QUERY -> "（MPJ 形态）"
             else -> ""
         }
-        sb.append("// SQL → MyBatis-Plus $kindLabel 反向生成（MyBatis-Plus SQL Visualizer）$formLabel\n")
+        sb.append("// SQL → MyBatis-Plus $kindLabel 反向生成（SQL Visualizer）$formLabel\n")
         if (entity == null) {
             val entityName = entityClassName(result.tableName)
             sb.append("// 实体类名 $entityName 由表名 ${result.tableName} 推断，请按实际类名调整\n")
