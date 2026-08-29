@@ -158,7 +158,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var suppressAutoPopup = false
     private var psiFile: PsiFile? = null
     /** M34 回归修复：预览 PSI 的临时 VirtualFile（PsiDocumentManager 追踪需真实 VFS 文件），releaseEditor 时删除。 */
+    @Volatile
     private var previewTempFile: com.intellij.openapi.vfs.VirtualFile? = null
+    /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
+    @Volatile
+    private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+    /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。 */
+    @Volatile
+    private var previewDisposed = false
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -254,6 +261,37 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
         Disposer.register(this, diagramPanel)
+
+        // T-M36.6-03：预热线程提前创建临时 SQL 文件 + VFS refresh + PSI 解析（后台线程慢操作合法），
+        // createEditor（EDT）优先消费预热产物——243 平台 EDT/EDT-ReadAction 均禁止慢操作
+        //（SlowOperations ERROR_EDT/ERROR_RA），面板打开期的 refreshAndFindFileByIoFile SEVERE 由此消除
+        if (project != null) {
+            prewarmPreviewTempFile()
+        }
+    }
+
+    /** T-M36.6-03：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
+    private fun prewarmPreviewTempFile() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (previewTempFile != null || previewDisposed) return@executeOnPooledThread
+            runCatching {
+                val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
+                io.writeText("")
+                io.deleteOnExit()
+                val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
+                    ?: return@executeOnPooledThread
+                if (previewDisposed) {
+                    java.io.File(vf.path).delete()
+                    return@executeOnPooledThread
+                }
+                val proj = project ?: return@executeOnPooledThread
+                val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
+                    com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                } ?: return@executeOnPooledThread
+                previewTempFile = vf
+                prewarmedTempFile = vf to psi
+            }
+        }
     }
 
     /** T-DarkTheme：主题变更回调——重绘面板（命名色已自动更新，仅需触发 UI 刷新）。 */
@@ -935,6 +973,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         nativeEditorDoc = null
         // M36.5：释放已准备控制台引用（下次预览重新准备）
         SqlExecutor.clearPrepared()
+        // T-M36.6-03：clear 释放了临时文件/预热产物——面板重用时重新预热（幂等，保持零慢操作路径）
+        if (project != null) {
+            prewarmPreviewTempFile()
+        }
         revalidate()
         repaint()
     }
@@ -1004,26 +1046,39 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
         val created = if (proj != null) {
-            // M34 回归修复：PSI 创建/解析整体包 ReadAction——PsiManager.findFile 触发
-            // SqlLanguageSubstitutor（SQL 方言映射）→ ProjectFileIndex 查询，2024.3 平台在
-            // EDT 上视为 slow operation 硬抛（SEVERE 递归堆栈）；ReadAction 内部允许慢操作。
-            // PSI 需被 PsiDocumentManager 追踪（createFileFromText 的 in-memory 文件不追踪，
-            // 补全框架 PsiDocumentManager.getPsiFile(document) 返回 null → "no PSI file"）。
-            val (vFile, psi) = com.intellij.openapi.application.ReadAction.compute<Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>, Throwable> {
-                val vf = previewTempFile ?: run {
-                    val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
-                    io.writeText(sql)  // 纯 java.io，无需 EDT/write action
-                    io.deleteOnExit()
-                    com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
-                        ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+            // T-M36.6-03：优先消费后台预热产物（prewarmPreviewTempFile 已完成 VFS refresh + PSI 解析，
+            // EDT 零慢操作）；预热未就绪（竞态）回退原 EDT 同步路径，整体包 allowSlowOperations——
+            // 243 平台 EDT 与 EDT-ReadAction 均禁止慢操作（SlowOperations ERROR_EDT/ERROR_RA），
+            // M36.5.2 的 ReadAction 包装对 findFile 无效的根因；面板打开期一次性轻量操作走平台
+            // 官方逃生舱（SlowOperations.GENERIC section，AccessToken 作用域）。
+            val (vFile, psi) = prewarmedTempFile?.also { prewarmedTempFile = null }
+                ?: com.intellij.util.SlowOperations.allowSlowOperations(
+                    com.intellij.util.SlowOperations.GENERIC,
+                ).use {
+                    com.intellij.openapi.application.ReadAction.compute<Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>, Throwable> {
+                        val vf = previewTempFile ?: run {
+                            val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
+                            io.writeText(sql)  // 纯 java.io，无需 EDT/write action
+                            io.deleteOnExit()
+                            com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
+                                ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+                        }
+                        vf to (com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                            ?: throw IllegalStateException("临时 SQL 文件无 PSI"))
+                    }
                 }
-                previewTempFile = vf
-                vf to (com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                    ?: throw IllegalStateException("临时 SQL 文件无 PSI"))
-            }
+            previewTempFile = vFile
             psiFile = psi
             val doc = com.intellij.psi.PsiDocumentManager.getInstance(proj)
                 .getDocument(psi) ?: throw IllegalStateException("临时 SQL 文件无关联文档")
+            // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+            //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+            if (doc.text != sql) {
+                com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
+                    doc.setText(sql)
+                    com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(doc)
+                }
+            }
             EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
@@ -1166,6 +1221,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M34 回归修复：临时 SQL 文件删除（java.io 删除免 write action；deleteOnExit 兜底）
         previewTempFile?.let { vFile -> java.io.File(vFile.path).delete() }
         previewTempFile = null
+        // T-M36.6-03：预热产物作废（面板重用时由 clear() 重新预热；dispose 由 previewDisposed 兜底）
+        prewarmedTempFile = null
     }
 
     // ------------------------------------------------------------------
@@ -1985,6 +2042,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 工具窗口模式下面板可能长期存活，由 [SqlPreviewDialog] 或工具窗口工厂调用释放。
      */
     override fun dispose() {
+        // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
+        previewDisposed = true
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this)
     }

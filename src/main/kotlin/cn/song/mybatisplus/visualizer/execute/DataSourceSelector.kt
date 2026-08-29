@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.22-submit-anchored"
+    private const val BUILD_STAMP = "M36.6.1-slowops-governance"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -1811,13 +1811,22 @@ object DataSourceSelector {
             // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
             // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
             val ioFile = projectExecFile(project, sql) ?: return null
-            val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
-                ?: return null
-            mapDialectBeforePsi(project, vf, LOG)
-            val psi = ReadAction.compute<PsiFile, Throwable> {
-                PsiManager.getInstance(project).findFile(vf)
-            } ?: return null
-            vf to psi
+            // T-M36.6-03：EDT 同步 VFS refresh 与 PsiManager.findFile（→ WorkspaceFileIndex
+            // ensureIsUpToDate）受平台 SlowOperations 管控（243 起 EDT 与 EDT-ReadAction 均禁止
+            // 慢操作，SlowOperations.ERROR_RA 实证——M36.5.2 的 ReadAction 包装对 findFile 无效的
+            // 根因）。面板打开期一次性轻量操作，走平台官方逃生舱 allowSlowOperations（GENERIC
+            // section，AccessToken 作用域）。**不后台化**：setMapping→handleMappingChange→
+            // pushAll/reparseFiles 的线程语义未验证（javap PerFileMappingsBase），方言预映射
+            // （M36.5.3 关键修复，dumb 模式执行依赖）不冒重构风险。
+            com.intellij.util.SlowOperations.allowSlowOperations(com.intellij.util.SlowOperations.GENERIC).use {
+                val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+                    ?: return null
+                mapDialectBeforePsi(project, vf, LOG)
+                val psi = ReadAction.compute<PsiFile, Throwable> {
+                    PsiManager.getInstance(project).findFile(vf)
+                } ?: return null
+                vf to psi
+            }
         }.getOrNull()
     }
 

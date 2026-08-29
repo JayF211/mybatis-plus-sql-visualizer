@@ -530,4 +530,10 @@ tasks.test {
     System.getProperties().forEach { (k, v) ->
         if (k is String && k.startsWith("mpvs.") && v is String) systemProperty(k, v)
     }
+    filter {
+        // M36.6.1：DB 集成测试仅在 testDatabase 任务运行（其 classpath 含 database jar）；
+        // 默认 test 已排除 database jar（上方 withType<Test>），该测试类加载即 NoClassDefFoundError，
+        // 必须排除——否则 "./gradlew test 不受影响" 的约定（M36.5.23）被破坏
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
+    }
 }
