@@ -17,7 +17,8 @@ import java.awt.BorderLayout
  *  - 执行耗时
  *  - 错误信息（执行失败时）
  *
- * 非查询语句（INSERT/UPDATE/DELETE 等）的结果直接在此面板展示。
+ * M36.5：自动可见性——有状态/错误内容时显示，空状态时隐藏（不占高度，
+ * 消除控制台下方空白占位）；宿主容器用 BorderLayout.SOUTH 承载。
  */
 class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
 
@@ -32,6 +33,13 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         border = JBUI.Borders.empty()
         isOpaque = false
         add(infoLabel, BorderLayout.CENTER)
+        // M36.5：初始隐藏（无内容不占高度）
+        isVisible = false
+    }
+
+    /** 有内容时显示面板（M36.5 自动可见性统一入口）。 */
+    private fun showContent() {
+        isVisible = true
     }
 
     /**
@@ -43,6 +51,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         } else ""
         infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.fileOpened")}$dsInfo</html>"
         infoLabel.foreground = JBColor.GRAY
+        showContent()
         revalidate()
         repaint()
     }
@@ -58,6 +67,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
             MpSqlVisualizerBundle.message("execute.result.loading")
         }
         infoLabel.foreground = JBColor.GRAY
+        showContent()
         revalidate()
         repaint()
     }
@@ -75,6 +85,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         } else ""
         infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.affected", affectedRows, elapsedMs)}$dsInfo</html>"
         infoLabel.foreground = JBColor.namedColor("Label.successForeground", JBColor(0x00, 0x00))
+        showContent()
         revalidate()
         repaint()
     }
@@ -93,6 +104,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         } else ""
         infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.rows", rowCount, elapsedMs)}$dsInfo</html>"
         infoLabel.foreground = JBColor.namedColor("Label.successForeground", JBColor(0x00, 0x00))
+        showContent()
         revalidate()
         repaint()
     }
@@ -105,15 +117,17 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     fun showError(error: String) {
         infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.error", error)}</html>"
         infoLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
+        showContent()
         revalidate()
         repaint()
     }
 
     /**
-     * 显示空状态（无执行）。
+     * 显示空状态（无执行）——M36.5：隐藏面板不占高度。
      */
     fun showEmpty() {
         infoLabel.text = ""
+        isVisible = false
         revalidate()
         repaint()
     }

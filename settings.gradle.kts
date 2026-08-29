@@ -17,6 +17,11 @@ plugins {
 dependencyResolutionManagement {
     // Configure all projects' repositories
     repositories {
+        // P-立项-05：阿里云公共镜像（Central 全量镜像）置前——本机代理（gradle.properties systemProp
+        // 127.0.0.1:7890）失效时 Maven Central 直连失败，新增测试依赖（H2/sqlite-jdbc 等）无法解析；
+        // 镜像与 Central 同源同版本，代理恢复后不影响构建正确性。
+        maven("https://maven.aliyun.com/repository/public")
+
         mavenCentral()
 
         // IntelliJ Platform Gradle Plugin Repositories Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-repositories-extension.html

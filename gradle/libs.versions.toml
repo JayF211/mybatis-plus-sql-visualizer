@@ -1,9 +1,37 @@
 [versions]
 junit = "4.13.2"
 mp = "3.5.17"
+# P-立项-05：方言真实验证（嵌入式数据库，仅测试 classpath，插件运行时零依赖不变）
+h2 = "2.3.232"
+sqlite-jdbc = "3.50.3.0"
+# P-立项-05 Phase 2：Docker 真实环境验证（本机无 Docker 时测试自动跳过，详见
+# DialectDockerVerificationTest；版本取自开发计划 20260828-2000）
+testcontainers = "1.19.3"
+mysql-connector = "8.0.33"
+postgresql = "42.7.1"
+mssql-jdbc = "12.4.2.jre11"
+mariadb-java-client = "3.3.3"
+ojdbc11 = "23.3.0.23.09"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+# P-立项-05：H2 嵌入式验证（REGULAR 模式验证 H2 方言；MODE=MySQL/MariaDB/PostgreSQL/Oracle/
+# MSSQLServer 兼容模式验证对应方言的 SQL 语法形态——无 Docker 环境下的最强本机证据）
+h2 = { module = "com.h2database:h2", version.ref = "h2" }
+# P-立项-05：SQLite 真实引擎验证（sqlite-jdbc 内嵌原生 SQLite，100% 真实语法证据）
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+# P-立项-05 Phase 2：Docker 容器验证（真实 MySQL/PG/MariaDB/SQL Server/Oracle 引擎）
+testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+testcontainers-mysql = { module = "org.testcontainers:mysql", version.ref = "testcontainers" }
+testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
+testcontainers-mariadb = { module = "org.testcontainers:mariadb", version.ref = "testcontainers" }
+testcontainers-mssqlserver = { module = "org.testcontainers:mssqlserver", version.ref = "testcontainers" }
+testcontainers-oracle-xe = { module = "org.testcontainers:oracle-xe", version.ref = "testcontainers" }
+mysql-connector = { module = "mysql:mysql-connector-java", version.ref = "mysql-connector" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+mssql-jdbc = { module = "com.microsoft.sqlserver:mssql-jdbc", version.ref = "mssql-jdbc" }
+mariadb-java-client = { module = "org.mariadb.jdbc:mariadb-java-client", version.ref = "mariadb-java-client" }
+ojdbc11 = { module = "com.oracle.database.jdbc:ojdbc11", version.ref = "ojdbc11" }
 # T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例的方法签名/注解元数据来源；
 # 与官方 API 覆盖矩阵基准一致；仅测试依赖，插件运行时零依赖不变）。
 # 注：MPJ 1.5.x 不在 Maven Central（实证 1.5.7~1.5.9 均 404，Central 最新 1.4.13），
