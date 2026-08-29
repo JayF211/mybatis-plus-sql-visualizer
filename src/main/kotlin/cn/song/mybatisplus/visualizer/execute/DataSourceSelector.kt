@@ -43,6 +43,12 @@ object DataSourceSelector {
     /** last-used 数据源记忆 key（prepareConsole 静默复用，PropertiesComponent per-project）。 */
     private const val LAST_RUNNER_KEY = "mpsql.visualizer.last.runner"
 
+    /**
+     * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
+     * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
+     */
+    private const val BUILD_STAMP = "M36.5.21d-transaction"
+
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
     private var preparedEditor: com.intellij.openapi.editor.Editor? = null
@@ -77,6 +83,14 @@ object DataSourceSelector {
     /** M36.5.9：最近一次换入宿主的结果区组件实例（执行后重取刷新的去重依据）。 */
     private var lastLiveResultSwapped: java.awt.Component? = null
 
+    /**
+     * M36.5.10：执行提交代际计数——executeQueries 提交经 DumbService.runWhenSmart 挂起期间，
+     * 若面板清空（clearPrepared）/新预览建立新控制台上下文（prepareInConsole/reuseSharedConsole），
+     * 代际不匹配的挂起提交直接放弃（否则会在新文档上执行旧预览的 SQL——文档共享）。
+     */
+    @Volatile
+    private var executionGeneration = 0
+
     // M36.5.7：共享缓存的分件存储——复用/换入时按**实时结果区组件**重建完整 SplitPane。
     // （组合组件引用在面板分离/重挂后会过期：M36.5.5 复用面板空显示、M36.5.6 第二次预览
     // 结果栏消失、contentAdded 换入未写回共享缓存导致复用嵌了旧编辑器块，均是此类过期引用。）
@@ -89,6 +103,8 @@ object DataSourceSelector {
     /** 释放已准备控制台引用（面板清空/关闭时调用；JdbcConsole 本体由 IDE 管理）。 */
     @JvmStatic
     fun clearPrepared() {
+        // M36.5.10：代际递增——作废所有挂起的 runWhenSmart 执行提交（面板清空）
+        executionGeneration++
         preparedConsole = null
         preparedEditor = null
         preparedScriptModel = null
@@ -276,6 +292,9 @@ object DataSourceSelector {
         val scriptModel = sharedScriptModel ?: return false
         val execOption = sharedExecOption ?: return false
         if (lastRunnerName(project) != dsName) return false
+        // M36.5.10：代际递增——复用会覆盖控制台文档（setText），作废挂起的 runWhenSmart 提交，
+        // 防止旧预览 SQL 在新文档上执行（文档共享串扰）
+        executionGeneration++
         val valid = runCatching {
             console.javaClass.getMethod("isValid").invoke(console) == true && !editor.isDisposed
         }.getOrDefault(false)
@@ -350,34 +369,47 @@ object DataSourceSelector {
     }
 
     /**
-     * M36.5.8/M36.5.9：执行后结果区刷新——**限时多次重取**。新执行会重建 RunnerLayoutUi 的
+     * M36.5.8/M36.5.9/M36.5.13：执行后结果区刷新——**限时多次重取**。新执行会重建 RunnerLayoutUi 的
      * 内容组件，重建时机与数据到达相关（单次重取可能仍取到旧实例——M36.5.8 实测刷新命中后
-     * 显示依旧停留上一轮）；EDT Timer 600ms×8 重取 `ui.getComponent()`，实例变化即重建
-     * 完整 SplitPane 换入宿主面板并写回缓存。顺带清提示符（插件会在执行/搜索路径变化后重设）。
+     * 显示依旧停留上一轮）；EDT Timer 600ms×8 重取 `ui.getComponent()`。
+     *
+     * M36.5.13 变更：
+     *  - [forceSwapIn] = true（startResultTabRetry 找到结果 Tab 后传入）：**立即强制换入一次**——
+     *    旧 ui 的组件实例可能恒定（M36.5.10 盘点实证"刷新定时器 8 拍实例恒定"），"实例变化才换入"
+     *    的去重导致新结果永远不显示（用户实测第二次执行后仍显示第一次结果）；换入后更新
+     *    lastLiveResultSwapped 基线，后续实例变化仍可继续换入。
+     *  - Timer **每拍清提示符**——DatabaseLogView 在执行/数据渲染时重设 prompt（用户实测
+     *    prepare/reuse/入口清理后仍重现），4.8s 窗口内持续压制。
      */
-    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger) {
+    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false) {
         val callback = pendingOnConsole ?: return
         val top = sharedTopBlock ?: preparedTopBlock ?: return
         val shared = sharedConsole
-        if (shared != null) clearConsolePrompt(shared, LOG)
         var ticks = 0
+        var swapped = false
         val timer = javax.swing.Timer(600, null)
         timer.addActionListener(object : java.awt.event.ActionListener {
             override fun actionPerformed(e: java.awt.event.ActionEvent) {
                 ticks++
+                // M36.5.13：每拍清提示符（压制执行后重设）
+                if (shared != null) clearConsolePrompt(shared, LOG)
                 val live = runCatching {
                     ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
                 }.getOrNull()
-                if (live != null && live !== lastLiveResultSwapped) {
+                val shouldSwap = live != null && (forceSwapIn && !swapped || live !== lastLiveResultSwapped)
+                if (shouldSwap && live != null) {
+                    val changed = live !== lastLiveResultSwapped
+                    swapped = true
                     lastLiveResultSwapped = live
                     val full = buildConsoleSplitPane(top, live)
                     sharedFullComponent = full
                     preparedFullComponent = full
                     val cb = pendingOnConsole
                     if (cb != null) {
-                        ApplicationManager.getApplication().invokeLater { cb.invoke(full) }
+                        // Timer 回调已在 EDT，直接换入（模态 pump 中 Timer 照常 fire）
+                        cb.invoke(full)
                     }
-                    LOG.info("[M36] results refreshed (tick=$ticks, component instance changed)")
+                    LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed)")
                 }
                 if (ticks >= 8) {
                     timer.stop()
@@ -413,7 +445,10 @@ object DataSourceSelector {
                     val name = event.content?.displayName ?: return
                     LOG.info("[M36] contentAdded: $name")
                     if (name.equals("Output", ignoreCase = true) || name.equals("输出", ignoreCase = true)) return
-                    val callback = pendingOnConsole ?: return
+                    val callback = pendingOnConsole ?: run {
+                        LOG.info("[M36] contentAdded swap-in SKIPPED (pendingOnConsole=null)")
+                        return
+                    }
                     // 换入时重新取结果区组件——RunnerLayoutUi 可能在面板分离/重挂后重建组件，
                     // prepare 时捕获的引用可能已非当前展示实例（M36.5.5 复用面板空显示的疑因）。
                     // 注意：**不消费** pendingOnConsole——contentAdded 在查询提交时触发，数据到达
@@ -432,7 +467,15 @@ object DataSourceSelector {
                     //（M36.5.6 第二次预览结果栏消失根因）
                     sharedTopBlock = topBlock
                     sharedFullComponent = full
-                    ApplicationManager.getApplication().invokeLater { callback.invoke(full) }
+                    // M36.5.19：换入打点——contentAdded 回调体内异常会静默吞掉换入（EDT），打点定位
+                    LOG.info("[M36] contentAdded swap-in dispatched (name=$name, cached=${fullCache != null})")
+                    // M36.5.13：ModalityState.any()——模态弹窗（File Cache Conflict/密码框）期间
+                    // 照常换入（默认 modality 的 invokeLater 会被冻结，沙盒 48s 挂起实证）
+                    ApplicationManager.getApplication().invokeLater({
+                        runCatching { callback.invoke(full) }.onFailure { ex ->
+                            LOG.warn("[M36] contentAdded swap-in FAILED: ${ex.javaClass.simpleName}: ${ex.message}", ex)
+                        }
+                    }, com.intellij.openapi.application.ModalityState.any())
                 }
             })
             LOG.info("[M36] results hook attached (contentAdded -> embed results)")
@@ -455,42 +498,52 @@ object DataSourceSelector {
         execOption: Any,
         LOG: com.intellij.openapi.diagnostic.Logger,
     ) {
-        ApplicationManager.getApplication().invokeLater {
+        // M36.5.13：ModalityState.any()——模态弹窗期间探针照常执行（默认 modality 下 invokeLater
+        // 被冻结：沙盒 12:09:55→12:10:50 延迟 55s 实证，探针日志失去诊断价值）
+        ApplicationManager.getApplication().invokeLater({
             runCatching {
-                val ctx = com.intellij.ide.DataManager.getInstance()
-                    .getDataContext(editorBlock)
-                val editorOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR.name) != null
-                val clientKeyName = runCatching {
-                    (Class.forName("com.intellij.database.console.client.SessionClientHolder")
-                        .getField("CLIENT_KEY").get(null)
-                            as com.intellij.openapi.actionSystem.DataKey<*>).name
-                }.getOrNull()
-                val consoleOk = clientKeyName != null && ctx.getData(clientKeyName) != null
-                val psiOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.name) != null
-                val sqlAtPlace = runCatching {
-                    Class.forName("com.intellij.database.console.JdbcConsoleProvider")
-                        .getMethod("isSqlAtPlace", PsiFile::class.java, com.intellij.openapi.editor.Editor::class.java)
-                        .invoke(null, ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.name), editor)
-                }.getOrNull()
-                val statementsRange = runCatching {
-                    val clientClass = Class.forName("com.intellij.database.console.client.DatabaseScriptingSessionClient")
-                    Class.forName("com.intellij.database.script.ScriptModelUtil")
-                        .getMethod(
-                            "getSelectedStatementsRange",
-                            clientClass,
-                            com.intellij.openapi.editor.Editor::class.java,
-                            execOption.javaClass,
-                        )
-                        .invoke(null, console, editor, execOption)
-                }.getOrNull()
-                LOG.info(
-                    "[M36] dataContext check: EDITOR=$editorOk, CLIENT_KEY=$consoleOk, PSI_FILE=$psiOk, " +
-                        "isSqlAtPlace=$sqlAtPlace, statementsRange=$statementsRange",
-                )
+                // M36.5.10：整个探针体包 ReadAction——lazy PSI 经 DataManager.getDataContext
+                // 在 EDT 无 read action 直查会被 DataValidators 判无效返回 null（探针假阴性，
+                // M36.5.9 日志 `PSI_FILE=false` 实为探针自身问题）；动作线程（ActionUpdater BGT
+                // 含 read action）不受影响，仅探针需要显式包。
+                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                ReadAction.compute<Unit, Throwable> {
+                    val ctx = com.intellij.ide.DataManager.getInstance()
+                        .getDataContext(editorBlock)
+                    val projectOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT.name) != null
+                    val editorOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR.name) != null
+                    val clientKeyName = runCatching {
+                        (Class.forName("com.intellij.database.console.client.SessionClientHolder")
+                            .getField("CLIENT_KEY").get(null)
+                                as com.intellij.openapi.actionSystem.DataKey<*>).name
+                    }.getOrNull()
+                    val consoleOk = clientKeyName != null && ctx.getData(clientKeyName) != null
+                    val psiOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.name) != null
+                    val sqlAtPlace = runCatching {
+                        Class.forName("com.intellij.database.console.JdbcConsoleProvider")
+                            .getMethod("isSqlAtPlace", PsiFile::class.java, com.intellij.openapi.editor.Editor::class.java)
+                            .invoke(null, ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.name), editor)
+                    }.getOrNull()
+                    val statementsRange = runCatching {
+                        val clientClass = Class.forName("com.intellij.database.console.client.DatabaseScriptingSessionClient")
+                        Class.forName("com.intellij.database.script.ScriptModelUtil")
+                            .getMethod(
+                                "getSelectedStatementsRange",
+                                clientClass,
+                                com.intellij.openapi.editor.Editor::class.java,
+                                execOption.javaClass,
+                            )
+                            .invoke(null, console, editor, execOption)
+                    }.getOrNull()
+                    LOG.info(
+                        "[M36] dataContext check: PROJECT=$projectOk, EDITOR=$editorOk, CLIENT_KEY=$consoleOk, PSI_FILE=$psiOk, " +
+                            "isSqlAtPlace=$sqlAtPlace, statementsRange=$statementsRange",
+                    )
+                }
             }.onFailure { e ->
                 LOG.warn("[M36] dataContext check FAILED: ${e.message}")
             }
-        }
+        }, com.intellij.openapi.application.ModalityState.any())
     }
 
     /**
@@ -552,10 +605,21 @@ object DataSourceSelector {
             // 3. scriptModel + execOption
             val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
             val execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings\$ExecOption")
-            val execOption = execOptionClass.getDeclaredConstructor().newInstance()
+            // M36.5.16：execOption 用 **DatabaseSettings.getDefaultExecOption()**（原生默认配置）
+            // 而非 new 空实例——空实例的 execSelection=0（非法值），ScriptModelUtil
+            // .getSelectedStatementsRange 按"执行选中部分"解析空选择 → model.getTextRange()
+            // = (N,N) 零长度 → 原生 ▶ isEnabled=false 恒灰（沙盒探针 statementsRange=(0,0)/
+            // (57,57) 实证，其余四键已全绿）。原生同源配置顺带修正 newTab/submitImmediately 执行语义。
+            val execOption: Any = runCatching {
+                Class.forName("com.intellij.database.settings.DatabaseSettings")
+                    .getMethod("getDefaultExecOption").invoke(null)
+            }.getOrNull() ?: execOptionClass.getDeclaredConstructor().newInstance()
             if (scriptModel == null) return
 
             // M36.5：缓存已备控制台（executePrepared 消费）
+            // M36.5.10：代际递增——新控制台上下文取代旧缓存（旧挂起的 runWhenSmart 提交作废，
+            // 防止在新控制台上执行旧预览 SQL）
+            executionGeneration++
             preparedConsole = console
             preparedEditor = editor
             preparedScriptModel = scriptModel
@@ -614,7 +678,11 @@ object DataSourceSelector {
             // （javap 实证）；嵌入面板无 FileEditor/平台 Provider 链，须直供。
             // PSI 预解析包 ReadAction（DataProvider.getData 可能在 BGT 动作更新线程调用）。
             val vfForData = vf
-            val psiForData = runCatching {
+            // M36.5.14：psiForData 不再是固定快照——文件内容每次预览都会更新（setText/
+            // setBinaryContent），PSI 随之重建，prepare 时预解析的 PsiFile 会 **isValid=false**，
+            // isSqlAtPlace(invalidPsi) 恒 false → 原生 ▶ 恒灰（12:29:49 探针 isSqlAtPlace=false
+            // 实证）。改为 lazy 取值时**失效检测 + 实时重解析**（lazy 回调在平台 read action 中）。
+            var psiForData: PsiFile? = runCatching {
                 @Suppress("DEPRECATION")
                 ReadAction.compute<PsiFile, Throwable> {
                     PsiManager.getInstance(project).findFile(vf)
@@ -630,9 +698,22 @@ object DataSourceSelector {
                     java.awt.BorderLayout(),
                 ), com.intellij.openapi.actionSystem.UiDataProvider {
                     override fun uiDataSnapshot(sink: com.intellij.openapi.actionSystem.DataSink) {
+                        // M36.5.15：补 PROJECT——原生动作（含 ▶ 执行）的 update 普遍依赖
+                        // CommonDataKeys.PROJECT，嵌入面板的 DataProvider 链缺失时 AnActionEvent
+                        // .project=null → 动作禁用（▶ 灰的最后一环：PSI_FILE/isSqlAtPlace 已
+                        // 12:42 版本修复为 true，唯 PROJECT 未直供）
+                        sink.set(com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT, project)
                         sink.set(com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR, editorForData)
                         sink.set(com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE, vfForData)
-                        sink.lazy(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE) { psiForData }
+                        // M36.5.14：PSI 失效检测 + 实时重解析（快照失效是 ▶ 恒灰根因）
+                        sink.lazy(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE) {
+                            if (psiForData?.isValid == true) psiForData else runCatching {
+                                @Suppress("DEPRECATION")
+                                ReadAction.compute<PsiFile, Throwable> {
+                                    PsiManager.getInstance(project).findFile(vfForData).also { psiForData = it }
+                                }
+                            }.getOrNull()
+                        }
                         if (clientKeyName != null) {
                             @Suppress("UNCHECKED_CAST")
                             sink.set(
@@ -800,54 +881,268 @@ object DataSourceSelector {
                 execOption.javaClass,
             )
 
-            // 后台线程执行，带超时检测
-            var executionStarted = false
-            val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
-            val future = executor.submit {
-                try {
-                    ReadAction.compute<Unit, Throwable> {
-                        execute.invoke(console, editor, scriptModel, execOption)
-                    }
-                    executionStarted = true
-                    LOG.info("[M36] executeQueries invoked OK")
-                } catch (e: Exception) {
-                    LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
-                    throw e
+            // M36.5.10：执行提交包 DumbService.runWhenSmart——索引期查询提交被 Database 插件
+            // 调度层推迟（沙盒实证 09:47 会话：dumb=true 下重试 16s 无 Tab、索引结束后才真正
+            // 执行，用户感知"一直加载中"）。改为**提交前等 smart**：查询只在索引完成后提交，
+            // 结果 Tab 重试在真实提交后才启动；面板清空/新预览（clearPrepared/prepareInConsole/
+            // reuseSharedConsole 递增 executionGeneration）→ 代际不匹配的挂起提交作废。
+            val generation = executionGeneration
+            // M36.5.21b：**构建版本戳**——jar 替换对运行中的沙盒 JVM 无效（class 已加载不重载），
+            // 曾连续多轮"修复未生效"实为用户未重启沙盒 IDE。版本戳让日志第一行即暴露运行版本，
+            // 与源码不符时先重启再排查，杜绝无效往返。
+            LOG.info("[M36] executeOnConsole begin (build=$BUILD_STAMP)")
+            com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+                if (generation != executionGeneration) {
+                    LOG.warn("[M36] execution submit cancelled (generation $generation != ${executionGeneration})")
+                    return@runWhenSmart
                 }
-            }
-            executor.shutdown()
+                // M36.5.20：vf 同步 + **强制 commitDocument**——同步只保证 document 内容一致，
+                // vf 的 PSI 需 commit 后才与 document 对齐（M36.5.18 的"滞后一轮"正是 PSI 未
+                // commit 时 createScriptModel 解析了旧内容）。commit 后 findFile 的 PSI 即为
+                // 用户所见 SQL。
+                runCatching {
+                    val consoleVf = consoleClass.getMethod("getVirtualFile").invoke(console)
+                        as? com.intellij.openapi.vfs.VirtualFile
+                    if (consoleVf != null) {
+                        val consoleText = editor.document.text
+                        @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+                        com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                            val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                                .getInstance().getDocument(consoleVf)
+                            when {
+                                fileDoc != null && fileDoc.text != consoleText -> {
+                                    fileDoc.setText(consoleText)
+                                    // setText 的 write command 结束时自动 commit；显式 commitDocument
+                                    // 双保险（同步后同 tick 内 findFile 的 PSI 立即对齐）
+                                    com.intellij.psi.PsiDocumentManager.getInstance(project)
+                                        .commitDocument(fileDoc)
+                                }
+                                fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
+                                    .commitDocument(fileDoc)
+                                fileDoc == null -> consoleVf.setBinaryContent(consoleText.toByteArray())
+                            }
+                        }
+                        LOG.info("[M36] console doc synced+committed to vf before execution (${consoleVf.name})")
+                    }
+                }.onFailure { e ->
+                    LOG.warn("[M36] sync console doc to vf FAILED: ${e.message}")
+                }
+                // 执行提交在 pooled thread 进行（executeQueries 内 Document.createRangeMarker 要求
+                // read action；池线程无 read action 上下文会抛 RuntimeExceptionWithAttachments），
+                // 但**所有 Swing 操作（JSplitPane 构造/换入/Timer 启动）必须在 EDT**——M36.5.10 曾
+                // 把 buildConsoleSplitPane 放进 pooled thread，JSplitPane 构造触发编辑器 hierarchy
+                // 事件 → ScrollingModelImpl.getVisibleArea → ThreadingAssertions 抛异常（用户堆栈
+                // 实锤），异常阻断 onResultsReady/startResultTabRetry → 结果区不刷新/提示不显示。
+                // M36.5.15：连接等待监控（单次 8s）——invoke 会在连接建立时同步等待凭据输入
+                //（密码弹窗被预览窗口遮挡，用户不输入则 invoke 长期阻塞、执行完成后的重试永不
+                // 启动，面板永远"执行中"，沙盒 13:25:08→13:25:25 实证 17s）。提交前挂 8s 监控：
+                // 到点仍无结果 Tab → 面板内红字提示（密码/驱动弹窗可能在预览窗口后方）。
+                // 不直接提前启动 startResultTabRetry——重复执行场景它第一拍就会命中**旧**结果
+                // Tab 并换入旧数据（新查询完成后无人再刷新）。
+                if (ui != null && onError != null) {
+                    val uiForWatch = ui
+                    val hintOnError = onError
+                    val consoleForWatch = console
+                    ApplicationManager.getApplication().invokeLater({
+                        val watch = javax.swing.Timer(8000, null)
+                        watch.addActionListener {
+                            watch.stop()
+                            val hasResult = runCatching {
+                                uiForWatch.javaClass.getMethod("getContents").invoke(uiForWatch)
+                                    as? Array<com.intellij.ui.content.Content>
+                            }.getOrNull()?.any {
+                                !it.displayName.equals("Output", ignoreCase = true) &&
+                                    !it.displayName.equals("输出", ignoreCase = true)
+                            } ?: false
+                            // M36.5.16：hasResult 不足以判定正常——连接失败（Access denied）时旧
+                            // 结果 Tab 仍在（用户实测 SQL 已改而表格停留旧数据），查询挂起无任何
+                            // 提示。补连接健康检查：getCurrentNamespace() 为空 = 连接未建立
+                            //（工具栏数据源显示 <schema> 佐证），即使有旧 Tab 也提示。
+                            val namespaceOk = runCatching {
+                                val ns = consoleForWatch.javaClass
+                                    .getMethod("getCurrentNamespace").invoke(consoleForWatch)
+                                ns != null && ns.toString().isNotBlank()
+                            }.getOrDefault(true)
+                            if (!hasResult || !namespaceOk) {
+                                LOG.info("[M36] no result tab within 8s (hasResult=$hasResult, namespaceOk=$namespaceOk) - panel hint")
+                                hintOnError.invoke(MpSqlVisualizerBundle.message("execute.credential.hint"))
+                            }
+                        }
+                        watch.isRepeats = false
+                        watch.start()
+                    }, com.intellij.openapi.application.ModalityState.any())
+                }
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    var executionStarted = false
+                    try {
+                        ReadAction.compute<Unit, Throwable> {
+                            // M36.5.20：fresh model 回退 **vf PSI 版**（createScriptModel(findFile(vf))）。
+                            // M36.5.18 的 createROFile 文本直构**不可靠**：14:55 会话 `stmts reflect
+                            // failed`——RO file model 的 statements() 反射即抛异常，executeQueries
+                            // 内部同样会失败 → 零语句执行（空结果 Tab）。vf 同步+commitDocument（EDT
+                            // 步骤）已保证 findFile 的 PSI = 用户所见 SQL；此处按 vf PSI 建 model
+                            //（DBN updateScriptModel 的同一重建路径）并**校验语句数**——count<=0 或
+                            // 反射异常时回退 console.getScriptModel()（DBN 内部 model 保底可执行）。
+                            val modelVf = runCatching {
+                                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                                    .getFile(editor.document)
+                            }.getOrNull()
+                                ?: runCatching {
+                                    consoleClass.getMethod("getVirtualFile").invoke(console)
+                                        as? com.intellij.openapi.vfs.VirtualFile
+                                }.getOrNull()
+                            val vfPsi = modelVf?.let {
+                                runCatching { PsiManager.getInstance(project).findFile(it) }.getOrNull()
+                            }
+                            fun statementsInfo(model: Any): String = runCatching {
+                                val stmts = model.javaClass.getMethod("statements").invoke(model) as? Iterable<Any>
+                                "count=${stmts?.toList()?.size}"
+                            }.getOrElse { ex -> "FAILED:${ex.javaClass.simpleName}: ${ex.message}" }
 
-            // 等待执行完成，带超时（5秒）
-            // 超时意味着可能弹出了密码/驱动弹窗（被面板遮挡），不取消 future，
-            // 让它在后台继续等待用户处理弹窗
-            try {
-                future.get(5, java.util.concurrent.TimeUnit.SECONDS)
-            } catch (e: java.util.concurrent.TimeoutException) {
-                LOG.warn("[M36] executeQueries TIMEOUT (5s) - may need credentials or driver download")
-            } catch (e: Exception) {
-                LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
-            }
-
-            // M36.5.2：执行触发成功后把右侧从「仅顶部块」切换为「顶部块+结果区」完整 UI
-            //（用户诉求：Console output 占位只在执行后出现）。换入组件按需构建并缓存——
-            // 仅准备路径预建的 SplitPane 已因顶部块内嵌被"偷"走子组件，不可复用；
-            // 已备实例（全链路径内嵌过）直接复用 + 面板同实例防抖，重复执行不重建。
-            // invoke 触发失败（含密码弹窗等待超时）不换入——结果区保留到真实执行后出现。
-            if (executionStarted && onResultsReady != null) {
-                val top = preparedTopBlock
-                val result = preparedResultComponent
-                if (top != null && result != null) {
-                    val full = preparedFullComponent ?: buildConsoleSplitPane(top, result)
-                        .also { preparedFullComponent = it }
-                    ApplicationManager.getApplication().invokeLater {
-                        onResultsReady.invoke(full)
+                            var freshModel: Any? = vfPsi?.let { pf ->
+                                runCatching {
+                                    val facade = Class.forName("com.intellij.sql.psi.SqlPsiFacade")
+                                        .getMethod("getInstance", Project::class.java)
+                                        .invoke(null, project)
+                                    facade.javaClass.getMethod("createScriptModel", PsiFile::class.java)
+                                        .invoke(facade, pf)
+                                }.getOrNull()
+                            }
+                            // 语句校验：vf PSI model 语句为空/反射异常 → 回退 console 内部 model
+                            if (freshModel != null && statementsInfo(freshModel).startsWith("count=0")) {
+                                LOG.warn("[M36] vf PSI model has 0 statements, fallback to console scriptModel")
+                                freshModel = null
+                            }
+                            if (freshModel == null) {
+                                freshModel = runCatching {
+                                    consoleClass.getMethod("getScriptModel").invoke(console)
+                                }.getOrNull() ?: scriptModel
+                            }
+                            if (freshModel !== scriptModel) {
+                                preparedScriptModel = freshModel
+                                if (sharedConsole === console) sharedScriptModel = freshModel
+                            }
+                            LOG.info("[M36] executing model: class=${freshModel.javaClass.simpleName}, " +
+                                "stmts=${statementsInfo(freshModel)}, vfPsiText tail=...${
+                                    vfPsi?.text?.replace("\n", " ")?.takeLast(30)
+                                }")
+                            // M36.5.21c：执行链拆两段——vf PSI/model 探针在本 ReadAction 内；
+                            // **原生 EDT 链挪到 ReadAction 外**（pooled 持读锁等 EDT、EDT 任务若需
+                            // write 会死锁）。详见下方原生链处注释。
+                            val vfPsiFinal = vfPsi
+                            val editorFinal = editor
+                            val execOptionFinal = execOption
+                            var nativeRun = false
+                            if (vfPsi != null) {
+                                val providerClass = Class.forName(CONSOLE_PROVIDER_CLASS)
+                                val findScriptModel = providerClass.getMethod(
+                                    "findScriptModel",
+                                    PsiFile::class.java,
+                                    com.intellij.psi.PsiElement::class.java,
+                                    com.intellij.openapi.editor.Editor::class.java,
+                                    execOption.javaClass,
+                                )
+                                val doRunMethod = runCatching {
+                                    providerClass.getMethod(
+                                        "doRunQueryInConsole",
+                                        consoleClass,
+                                        Class.forName("com.intellij.database.console.JdbcConsoleProvider\$Info"),
+                                    )
+                                }.getOrNull()
+                                if (doRunMethod == null) {
+                                    LOG.warn("[M36] native doRunQueryInConsole method not found, fallback")
+                                } else {
+                                    // M36.5.21d：原生链在 **EDT + write-safe 事务**执行——
+                                    // doRunQueryInConsole → chooseStatements → saveAllDocuments 需要
+                                    // write-safe context（用户堆栈实锤：invokeLater(any) 的 NON_MODAL
+                                    // 是 write-unsafe，TransactionGuard 抛 "not any"）。
+                                    // TransactionGuard.submitTransactionLater 与原生 Ctrl+Enter 用户
+                                    // 事件同机制，事务内 model 修改合法。事务挂 console 为 Disposable
+                                    // （面板关闭取消挂起事务）。不阻塞等待：pooled 持读锁等 EDT 会死锁；
+                                    // 提交后结果由 retry/contentAdded 链兜底换入。
+                                    ApplicationManager.getApplication().invokeLater({
+                                        val disposable = (console as? com.intellij.openapi.Disposable)
+                                            ?: com.intellij.openapi.Disposable { }
+                                        try {
+                                            com.intellij.openapi.application.TransactionGuard.getInstance()
+                                                .submitTransactionLater(disposable) {
+                                                    try {
+                                                        val info = findScriptModel.invoke(null, vfPsi, vfPsi, editor, execOption)
+                                                        if (info == null) {
+                                                            LOG.warn("[M36] native findScriptModel returned null (nothing to run?)")
+                                                            return@submitTransactionLater
+                                                        }
+                                                        LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
+                                                        doRunMethod.invoke(null, console, info)
+                                                    } catch (t: Throwable) {
+                                                        val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+                                                        LOG.warn(
+                                                            "[M36] native run chain FAILED: ${cause.javaClass.name}: ${cause.message}\n    " +
+                                                                cause.stackTrace.take(8).joinToString("\n    at ") { it.toString() },
+                                                            cause,
+                                                        )
+                                                    }
+                                                }
+                                        } catch (t: Throwable) {
+                                            LOG.warn("[M36] submitTransactionLater FAILED: ${t.javaClass.simpleName}: ${t.message}", t)
+                                        }
+                                    }, com.intellij.openapi.application.ModalityState.any())
+                                    nativeRun = true
+                                }
+                            }
+                            if (!nativeRun) {
+                                execute.invoke(console, editor, freshModel, execOption)
+                            }
+                        }
+                        executionStarted = true
+                        LOG.info("[M36] executeQueries invoked OK")
+                    } catch (e: Exception) {
+                        LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
+                        // 执行触发失败：通知调用方（UI 回调须在 EDT）
+                        val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+                        val msg = cause.message ?: cause.toString()
+                        // M36.5.13：ModalityState.any()——模态弹窗（如 File Cache Conflict/密码框）
+                        // 打开期间默认 modality 的 invokeLater 冻结（沙盒 12:10:02→12:10:50 实证
+                        // 48s 挂起），换入/重试/提示全不跑 → "执行中"卡住。any() 使任务在模态
+                        // pump 中照常执行（纯 Swing 更新，安全）。
+                        ApplicationManager.getApplication().invokeLater({
+                            onError?.invoke(msg)
+                        }, com.intellij.openapi.application.ModalityState.any())
+                        return@executeOnPooledThread
+                    }
+                    // 执行触发成功后把右侧从「仅顶部块」切换为「顶部块+结果区」完整 UI
+                    //（用户诉求：Console output 占位只在执行后出现）。换入组件按需构建并缓存——
+                    // 仅准备路径预建的 SplitPane 已因顶部块内嵌被"偷"走子组件，不可复用；
+                    // 已备实例（全链路径内嵌过）直接复用 + 面板同实例防抖，重复执行不重建。
+                    // invoke 触发失败（含密码弹窗等待超时）不换入——结果区保留到真实执行后出现。
+                    // **JSplitPane 构造（buildConsoleSplitPane）与换入均须 EDT**——M36.5.10 曾把
+                    // buildConsoleSplitPane 留在 pooled thread，JSplitPane.setLeftComponent 触发
+                    // 编辑器 hierarchy 事件 → SoftWrapApplianceManager → ScrollingModelImpl
+                    // .getVisibleArea → ThreadingAssertions 抛异常（用户堆栈实锤），异常阻断
+                    // onResultsReady/startResultTabRetry → 结果区不刷新、提示不显示。整个
+                    // 「构建+换入」必须包在同一 invokeLater 中。
+                    if (executionStarted && onResultsReady != null) {
+                        val top = preparedTopBlock
+                        val result = preparedResultComponent
+                        if (top != null && result != null) {
+                            val consoleForPrompt = console
+                            ApplicationManager.getApplication().invokeLater({
+                                val full = preparedFullComponent ?: buildConsoleSplitPane(top, result)
+                                    .also { preparedFullComponent = it }
+                                onResultsReady.invoke(full)
+                                // M36.5.13：执行后清提示符（DatabaseLogView 在执行/数据渲染时重设）
+                                clearConsolePrompt(consoleForPrompt, LOG)
+                            }, com.intellij.openapi.application.ModalityState.any())
+                        }
+                    }
+                    // 结果 Tab 默认激活：invoke 返回（真实提交完成）后启动（结果 Tab 异步创建）。
+                    // 连接等待期由上方的 8s 监控覆盖（避免重复执行时命中旧 Tab 换入旧数据）。
+                    if (executionStarted && ui != null) {
+                        ApplicationManager.getApplication().invokeLater({
+                            startResultTabRetry(project, ui, onError)
+                        }, com.intellij.openapi.application.ModalityState.any())
                     }
                 }
-            }
-
-            // 结果 Tab 默认激活：EDT Timer 非阻塞重试（结果 Tab 异步创建；10×400ms）
-            if (ui != null) {
-                startResultTabRetry(project, ui)
             }
         }.onFailure { e ->
             LOG.warn("[M36] executeOnConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
@@ -863,7 +1158,11 @@ object DataSourceSelector {
      * 超时后按状态给准确提示：索引中 → 索引提示（execute.indexing.hint），
      * 否则 → 检查被遮挡的密码/驱动弹窗（execute.credential.hint）。
      */
-    private fun startResultTabRetry(project: Project, ui: Any) {
+    private fun startResultTabRetry(
+        project: Project,
+        ui: Any,
+        onError: ((String) -> Unit)? = null,
+    ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val selectRetry = object : java.awt.event.ActionListener {
             var attempts = 0
@@ -892,51 +1191,34 @@ object DataSourceSelector {
                         LOG.warn("[M36] select result tab FAILED: ${ex.message}")
                     }
                     // M36.5.8：执行后结果区组件被 RunnerLayoutUi 重建，旧引用显示停留在上一轮
-                    //（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）——重取组件换入
-                    refreshResultsComponent(ui, LOG)
+                    //（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）——重取组件换入。
+                    // M36.5.13：forceSwapIn=true——结果 Tab 出现即有新结果，强制换入一次
+                    //（组件实例可能恒定，"实例变化才换入"导致新结果不显示）
+                    refreshResultsComponent(ui, LOG, forceSwapIn = true)
                 } else {
-                    // M36.5.3：索引中放宽窗口（查询提交可能被 dumb mode 推迟）
+                    // M36.5.3：索引中放宽窗口（查询提交可能被 dumb mode 推迟）；连接等待期由
+                    // 提交前的 8s 监控覆盖（M36.5.15），此处窗口保持原语义。
                     val dumb = runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)
                     val limit = if (dumb) 40 else 10
                     if (attempts >= limit) {
                         timer.stop()
                         LOG.info("[M36] result tab not appeared after $attempts attempts (dumb=$dumb)")
-                        ApplicationManager.getApplication().invokeLater {
-                            if (dumb) showIndexingHint(project) else showCredentialHint(project)
-                        }
+                        // M36.5.14：提示改走 onError（**面板内显示**，resultPanel.showError）——
+                        // 此前 Messages.showWarningDialog 弹窗也会被模态预览窗口遮挡（用户实测
+                        // "关闭窗口才出现提示"）；面板内红字必然可见，且不叠加新模态。
+                        // ModalityState.any() 保证模态弹窗（如密码框）期间提示照常落地。
+                        val hint = MpSqlVisualizerBundle.message(
+                            if (dumb) "execute.indexing.hint" else "execute.credential.hint",
+                        )
+                        ApplicationManager.getApplication().invokeLater({
+                            onError?.invoke(hint)
+                        }, com.intellij.openapi.application.ModalityState.any())
                     }
                 }
             }
             init { timer.addActionListener(this) }
         }
         selectRetry.timer.start()
-    }
-
-    /**
-     * M36.3：显示连接提示（密码过期/驱动未下载时，原生弹窗可能被面板遮挡）。
-     */
-    private fun showCredentialHint(project: Project) {
-        runCatching {
-            com.intellij.openapi.ui.Messages.showWarningDialog(
-                project,
-                MpSqlVisualizerBundle.message("execute.credential.hint"),
-                MpSqlVisualizerBundle.message("execute.title"),
-            )
-        }
-    }
-
-    /**
-     * M36.5.3：显示索引中提示（dumb mode 下查询提交被推迟——沙盒实证，非执行失败；
-     * 与密码/驱动问题区分，避免误报打断）。
-     */
-    private fun showIndexingHint(project: Project) {
-        runCatching {
-            com.intellij.openapi.ui.Messages.showWarningDialog(
-                project,
-                MpSqlVisualizerBundle.message("execute.indexing.hint"),
-                MpSqlVisualizerBundle.message("execute.title"),
-            )
-        }
     }
 
     /** M36.5：读取 last-used 数据源名（prepareConsole 静默复用；异常兜底 null）。 */
@@ -1061,9 +1343,12 @@ object DataSourceSelector {
     private fun createTempPsiFile(project: Project, sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return runCatching {
-            val ioFile = FileUtil.createTempFile("mpsql-exec-", ".sql", true)
-            FileUtil.writeToFile(ioFile, sql)
-            ioFile.deleteOnExit()
+            // M36.5.12：临时文件改存项目内 `.idea/mybatis-plus-sql-visualizer/exec/`
+            //（参考 sql-history 保存位置），不再用系统 Temp——Temp 文件不在数据源关联范围，
+            // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
+            // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
+            // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
+            val ioFile = projectExecFile(project, sql) ?: return null
             val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
                 ?: return null
             mapDialectBeforePsi(project, vf, LOG)
@@ -1072,6 +1357,43 @@ object DataSourceSelector {
             } ?: return null
             vf to psi
         }.getOrNull()
+    }
+
+    /**
+     * M36.5.12：项目内执行文件路径——`<projectBase>/.idea/mybatis-plus-sql-visualizer/exec/mpsql-exec.sql`。
+     * 目录不存在则创建；文件写入 SQL（覆盖）。与 sql-history 同根（.idea/mybatis-plus-sql-visualizer/），
+     * 但**独立子目录** exec（sql-history 读取器只扫 sql-history 子目录，互不污染）。
+     *
+     * M36.5.13：**VFS 安全写入**——文件已在 VFS（上次预览创建过，console 编辑器持有其 document）
+     * 时，直接 FileUtil.writeToFile 覆盖磁盘会触发 "File Cache Conflict" 模态弹窗
+     * （MemoryDiskConflictResolver，沙盒日志 12:08:06 实证），弹窗期间默认 modality 的
+     * invokeLater 全部冻结 → 执行链换入/重试挂起 → "执行中"卡住、结果区停在旧数据。
+     * 改为：vf 已存在 → WriteAction 里 setBinaryContent（VFS/document/磁盘三方同步）；
+     * 不存在 → 写盘后由调用方 refresh。
+     */
+    private fun projectExecFile(project: Project, sql: String): java.io.File? {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        val base = project.basePath ?: return null
+        val dir = java.io.File(base, ".idea${java.io.File.separator}mybatis-plus-sql-visualizer${java.io.File.separator}exec")
+        if (!dir.exists()) dir.mkdirs()
+        val f = java.io.File(dir, "mpsql-exec.sql")
+        val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
+        if (existing != null) {
+            val updated = runCatching {
+                @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+                com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                    existing.setBinaryContent(sql.toByteArray())
+                }
+                true
+            }.getOrDefault(false)
+            if (updated) {
+                LOG.info("[M36] exec file updated via VFS (no cache conflict): ${f.name}")
+                return f
+            }
+            // WriteAction 失败（非 EDT 等）→ 兜底直接写盘（可能 conflict，但不阻塞链路）
+        }
+        FileUtil.writeToFile(f, sql)
+        return f
     }
 
     /**

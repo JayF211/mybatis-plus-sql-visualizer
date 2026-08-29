@@ -411,6 +411,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * preferredSize=0 场景），强制一次 40%；首触后自移除监听，不干预用户后续拖拽。
      */
     private fun embedConsole(consoleComponent: JComponent) {
+        // M36.5.19：换入打点——"执行中不消失/结果区不出现"从此有判定依据
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] embedConsole: same=${consoleComponent === embeddedConsole}, type=${consoleComponent.javaClass.simpleName}")
         if (consoleComponent === embeddedConsole) return
         embeddedConsole?.let { old -> editorHolder.remove(old) }
         embeddedConsole = consoleComponent
