@@ -10,6 +10,12 @@
 
 ### Fixed
 
+- **SQL 预览面板原生控制台（M36.5 系列）——「密码框被遮挡」+「执行后显示上一次结果」两大阻塞终局修复**：
+  - **密码框不再被预览弹窗遮挡（M36.5.23f，用户确认解决）**：执行 SQL 时若数据源密码过期，IDEA「Change Credentials」密码框此前被模态预览弹窗挡在身后（显示"执行中"实则等待输入、关闭预览才见密码框）——预览弹窗改非模态（`IdeModalityType.MODELESS`），密码框正常置顶；工具型/查看型弹窗应让出模态栈（详见开发计划 M36.5.23f 踩坑记录）
+  - **「执行后显示上一次结果」修复（M36.5.22/22b）**：结果监听锚定到真实提交时刻 + 结果 Tab 按 displayName 判定新旧（DBN 复用 Content 实例改名不再误判），改参数后执行第 1 拍即切换到新结果 Tab
+  - **原生 Database 控制台整体融合**：面板打开即内嵌原生控制台（执行/Tx/会话/数据源选择工具栏）、跨预览共享控制台复用、方言预映射（索引期不再误报凭据/驱动）、索引期查询排队等 smart、执行链 EDT 合规、8s 连接等待面板内红字提示
+  - **测试防御**：`ResultTabSelectionTest`（13 用例）用动态代理精确模拟 DBN「复用 Content 实例改名」行为，锁定 Tab 新旧判定回归；`testDatabase` 集成测试骨架就绪（模拟 Ultimate 沙盒真实环境）
+
 - **方言输出真实验证（P-立项-05）——消除 4 类真实兼容性缺陷（H2 引擎实证 + 达梦/金仓官方文档逐词核对）**：
   - **H2 方言 UPSERT 整体不可用（最高优先级）**：原输出 `ON CONFLICT (k) DO UPDATE SET col = EXCLUDED.col` 在 H2 任何模式均为语法错误（H2 2.3.232 引擎实证：`ON CONFLICT` 仅 PG 兼容模式支持且仅 `DO NOTHING`、无冲突目标）——改为 H2 原生整语句形态 `MERGE INTO t (cols) KEY (主键) VALUES (...)`（SPI 新增 `renderUpsertStatement`，UPSERT 整语句形态优先于 INSERT+后缀），引擎实测冲突/插入双路径全通过
   - **H2 保留字漏包 20+ 词**：原用 PG 集合近似，`key`/`value`/`values`/`day`/`year`/`interval`/`row`/`if`/`minus`/`qualify`/`rownum`/`top`/`unknown`/`uescape` 等在 H2 裸用作列名直接语法错误——新增 `H2_RESERVED`（官方关键字表全量 100 词 + 引擎实测核对）

@@ -23,7 +23,7 @@ class SqlPreviewDialog(
     private val project: Project?,
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
-) : DialogWrapper(project, false) {
+) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val panel = SqlPreviewPanel(project)
 

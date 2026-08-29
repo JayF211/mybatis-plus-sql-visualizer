@@ -158,12 +158,17 @@ tasks.withType<JavaCompile>().configureEach {
 // M17：同样排除 Database 插件（com.intellij.database）——本地平台为 Ultimate 时测试沙盒会加载它，
 // 使 ExecuteSqlSupport.isAvailable() 恒为 true（无法单测 Community 降级路径）；排除后测试环境
 // 稳定模拟「无 database 插件」（按钮降级/提示分支可测）。排除 jar 名含 database/sql 的模块 jar。
+// M36.5.23：**testDatabase 任务除外**——DB 集成测试需要 Database 插件真实加载（模拟 Ultimate
+// 沙盒环境，见下方 intellijPlatformTesting.testIde.register("testDatabase")）。
 tasks.withType<Test>().configureEach {
+    val isDbIntegration = name == "testDatabase"
     classpath = classpath.filter {
         !it.name.contains("vue", ignoreCase = true) &&
-            !(it.name.contains("database", ignoreCase = true) && it.name.startsWith("intellij.")) &&
-            it.name != "database-plugin.jar" &&
-            !(it.name.contains("intellij.sql", ignoreCase = true))
+            (isDbIntegration || (
+                !(it.name.contains("database", ignoreCase = true) && it.name.startsWith("intellij.")) &&
+                    it.name != "database-plugin.jar" &&
+                    !(it.name.contains("intellij.sql", ignoreCase = true))
+                ))
     }
 }
 
@@ -349,6 +354,10 @@ tasks {
 // 前提：每片独立 sandbox 目录——多 worker 共享 .intellijPlatform/sandbox/.../system-test 会
 // PersistentFS 互踩损坏（实证：191 失败 + 卡死），分片隔离后无共享写点。
 // 新增测试类时加入最小编号片以保持均衡。
+// M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
+val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
+    .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
+
 intellijPlatformTesting {
     testIde {
         register("testShard1") {
@@ -453,6 +462,57 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.update.StartupUpdateCheckTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProviderTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.util.NamingStrategyTest")
+                }
+            }
+        }
+        register("testDatabase") {
+            testFramework(TestFrameworkType.Platform)
+            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/database"))
+            task {
+                testClassesDirs = sourceSets["test"].output.classesDirs
+                classpath = classpath + sourceSets["test"].output
+                // M36.5.23：DB 集成测试配置
+                //  - mpDemoProjectDir：demo 项目路径（读 dataSources.xml 连接信息），默认兄弟目录。
+                //    密码硬编码在测试里（root/root，从 demo application.yml 复制，本地开发库无敏感性）。
+                systemProperty(
+                    "mpDemoProjectDir",
+                    providers.gradleProperty("mpDemoProjectDir").getOrElse(mpDemoProjectDirDefault),
+                )
+                // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
+                // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
+                systemProperty("http.proxyHost", "127.0.0.1")
+                systemProperty("http.proxyPort", "7890")
+                systemProperty("https.proxyHost", "127.0.0.1")
+                systemProperty("https.proxyPort", "7890")
+                // 沙盒首次启动前预置 runIde 沙盒已下载的 jdbc-drivers（MySQL Connector/J），
+                // 免集成测试联网下驱动；runIde 沙盒不存在时静默跳过（首次连接时 DBN 自行下载）。
+                // 注意：doFirst 内不可引用 rootProject/layout（配置缓存不支持序列化 Project），
+                // 用相对路径 File（Test 任务工作目录 = 项目根）。
+                // M36.5.23d：IPGP testIde 任务的实际 config 目录是 `config_<任务名>`（非 `config`）——
+                // DBN 从 config_testDatabase/jdbc-drivers 读 driver 文件，复制到 `config/` 无效
+                //（实证：RemoteDriver.classpath.txt 只含 jdbc-console.jar，缺 mysql jar → ClassNotFound）。
+                doFirst {
+                    val srcDrivers = File(".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers")
+                    val dstDrivers = File("build/test-sandbox/database/config_testDatabase/jdbc-drivers")
+                    if (srcDrivers.isDirectory && !dstDrivers.isDirectory) {
+                        dstDrivers.parentFile.mkdirs()
+                        srcDrivers.copyRecursively(dstDrivers)
+                        logger.lifecycle("testDatabase: jdbc-drivers pre-seeded to config_testDatabase (${srcDrivers.name})")
+                    }
+                    // M36.5.23d：driver 就绪状态——databaseDrivers.xml 记录 mysql.8 已配置 artifact
+                    // （LocalDatabaseDriverManager）。测试沙盒缺此文件 → DBN 认为 driver 未配置 →
+                    // RemoteDriver.classpath.txt 缺 mysql jar → ClassNotFoundException。一并复制。
+                    val srcDriverState = File(".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/options/databaseDrivers.xml")
+                    val dstOptions = File("build/test-sandbox/database/config_testDatabase/options")
+                    val dstDriverState = File(dstOptions, "databaseDrivers.xml")
+                    if (srcDriverState.isFile && !dstDriverState.isFile) {
+                        dstOptions.mkdirs()
+                        srcDriverState.copyTo(dstDriverState)
+                        logger.lifecycle("testDatabase: databaseDrivers.xml pre-seeded (driver ready state)")
+                    }
+                }
+                filter {
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
                 }
             }
         }

@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.21d-transaction"
+    private const val BUILD_STAMP = "M36.5.22-submit-anchored"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -458,17 +458,20 @@ object DataSourceSelector {
                         ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
                     }.getOrNull() ?: resultComponent
                     lastLiveResultSwapped = liveResult
-                    val full = fullCache
-                        ?: buildConsoleSplitPane(topBlock, liveResult).also {
-                            fullCache = it
-                            preparedFullComponent = it
-                        }
+                    // M36.5.22：**每次 contentAdded 都重建**——原实现首次换入后 fullCache 恒不为
+                    // null，后续执行复用的是**含上一轮结果组件的旧 SplitPane**，新结果永远不显示
+                    //（第二次执行结果栏停留在上一轮的第二个机制）。M36.5.10 已实证结果组件实例
+                    // 恒定，故不能依赖"实例变化"判定，必须无条件按实时组件重建。
+                    val full = buildConsoleSplitPane(topBlock, liveResult).also {
+                        fullCache = it
+                        preparedFullComponent = it
+                    }
                     // M36.5.7：写回共享缓存——否则下次复用嵌的是换入前的旧编辑器块
                     //（M36.5.6 第二次预览结果栏消失根因）
                     sharedTopBlock = topBlock
                     sharedFullComponent = full
                     // M36.5.19：换入打点——contentAdded 回调体内异常会静默吞掉换入（EDT），打点定位
-                    LOG.info("[M36] contentAdded swap-in dispatched (name=$name, cached=${fullCache != null})")
+                    LOG.info("[M36] contentAdded swap-in dispatched (name=$name, rebuilt=true)")
                     // M36.5.13：ModalityState.any()——模态弹窗（File Cache Conflict/密码框）期间
                     // 照常换入（默认 modality 的 invokeLater 会被冻结，沙盒 48s 挂起实证）
                     ApplicationManager.getApplication().invokeLater({
@@ -933,47 +936,11 @@ object DataSourceSelector {
                 // 把 buildConsoleSplitPane 放进 pooled thread，JSplitPane 构造触发编辑器 hierarchy
                 // 事件 → ScrollingModelImpl.getVisibleArea → ThreadingAssertions 抛异常（用户堆栈
                 // 实锤），异常阻断 onResultsReady/startResultTabRetry → 结果区不刷新/提示不显示。
-                // M36.5.15：连接等待监控（单次 8s）——invoke 会在连接建立时同步等待凭据输入
-                //（密码弹窗被预览窗口遮挡，用户不输入则 invoke 长期阻塞、执行完成后的重试永不
-                // 启动，面板永远"执行中"，沙盒 13:25:08→13:25:25 实证 17s）。提交前挂 8s 监控：
-                // 到点仍无结果 Tab → 面板内红字提示（密码/驱动弹窗可能在预览窗口后方）。
-                // 不直接提前启动 startResultTabRetry——重复执行场景它第一拍就会命中**旧**结果
-                // Tab 并换入旧数据（新查询完成后无人再刷新）。
-                if (ui != null && onError != null) {
-                    val uiForWatch = ui
-                    val hintOnError = onError
-                    val consoleForWatch = console
-                    ApplicationManager.getApplication().invokeLater({
-                        val watch = javax.swing.Timer(8000, null)
-                        watch.addActionListener {
-                            watch.stop()
-                            val hasResult = runCatching {
-                                uiForWatch.javaClass.getMethod("getContents").invoke(uiForWatch)
-                                    as? Array<com.intellij.ui.content.Content>
-                            }.getOrNull()?.any {
-                                !it.displayName.equals("Output", ignoreCase = true) &&
-                                    !it.displayName.equals("输出", ignoreCase = true)
-                            } ?: false
-                            // M36.5.16：hasResult 不足以判定正常——连接失败（Access denied）时旧
-                            // 结果 Tab 仍在（用户实测 SQL 已改而表格停留旧数据），查询挂起无任何
-                            // 提示。补连接健康检查：getCurrentNamespace() 为空 = 连接未建立
-                            //（工具栏数据源显示 <schema> 佐证），即使有旧 Tab 也提示。
-                            val namespaceOk = runCatching {
-                                val ns = consoleForWatch.javaClass
-                                    .getMethod("getCurrentNamespace").invoke(consoleForWatch)
-                                ns != null && ns.toString().isNotBlank()
-                            }.getOrDefault(true)
-                            if (!hasResult || !namespaceOk) {
-                                LOG.info("[M36] no result tab within 8s (hasResult=$hasResult, namespaceOk=$namespaceOk) - panel hint")
-                                hintOnError.invoke(MpSqlVisualizerBundle.message("execute.credential.hint"))
-                            }
-                        }
-                        watch.isRepeats = false
-                        watch.start()
-                    }, com.intellij.openapi.application.ModalityState.any())
-                }
+                // M36.5.22：8s 连接等待监控**从提交时刻起算**（见 afterSubmitted）——此前挂在
+                // 提交请求处，而原生事务派发实测可延迟 6.7s（16:53 会话实证），会导致连接
+                // 正常时也误报"密码/驱动"提示。
                 ApplicationManager.getApplication().executeOnPooledThread {
-                    var executionStarted = false
+                    var submitted = false
                     try {
                         ReadAction.compute<Unit, Throwable> {
                             // M36.5.20：fresh model 回退 **vf PSI 版**（createScriptModel(findFile(vf))）。
@@ -1058,9 +1025,21 @@ object DataSourceSelector {
                                     // 是 write-unsafe，TransactionGuard 抛 "not any"）。
                                     // TransactionGuard.submitTransactionLater 与原生 Ctrl+Enter 用户
                                     // 事件同机制，事务内 model 修改合法。事务挂 console 为 Disposable
-                                    // （面板关闭取消挂起事务）。不阻塞等待：pooled 持读锁等 EDT 会死锁；
-                                    // 提交后结果由 retry/contentAdded 链兜底换入。
+                                    // （面板关闭取消挂起事务）。不阻塞等待：pooled 持读锁等 EDT 会死锁。
+                                    //
+                                    // M36.5.22：**提交时刻不可控**——javap 实证 TransactionGuardImpl
+                                    // .submitTransactionLater 内部是 invokeLaterOnWriteThread(runnable,
+                                    // ctx != null ? ctx.myModality : ModalityState.nonModal())，而
+                                    // getContextTransaction() 在写不安全/无全局进度时返回 null → 退化为
+                                    // NON_MODAL 派发。本轮沙盒实证该派发延迟 6.7s（首轮 43ms，次轮
+                                    // 6729ms）。因此**所有"提交后"动作（8s 监控 / 结果 Tab 监听 /
+                                    // 换入）必须在 doRunQueryInConsole 真正返回后**才启动，否则监听
+                                    // 窗口会在真实提交前跑完并把上一轮结果顶进面板（滞后一轮真因）。
                                     ApplicationManager.getApplication().invokeLater({
+                                        if (generation != executionGeneration) {
+                                            LOG.warn("[M36] execution submit cancelled at EDT (generation $generation != ${executionGeneration})")
+                                            return@invokeLater
+                                        }
                                         val disposable = (console as? com.intellij.openapi.Disposable)
                                             ?: com.intellij.openapi.Disposable { }
                                         try {
@@ -1074,6 +1053,9 @@ object DataSourceSelector {
                                                         }
                                                         LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                         doRunMethod.invoke(null, console, info)
+                                                        // 真实提交完成——此刻才启动结果监听
+                                                        LOG.info("[M36] native query SUBMITTED (starting result watch)")
+                                                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG)
                                                     } catch (t: Throwable) {
                                                         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
                                                         LOG.warn(
@@ -1092,10 +1074,17 @@ object DataSourceSelector {
                             }
                             if (!nativeRun) {
                                 execute.invoke(console, editor, freshModel, execOption)
+                                submitted = true
                             }
                         }
-                        executionStarted = true
-                        LOG.info("[M36] executeQueries invoked OK")
+                        // M36.5.22：此处**不代表执行已发生**——原生路径的提交是异步事务（延迟不可控），
+                        // 只有 executeQueries 兜底路径在此刻已真实提交。日志按路径区分，杜绝历轮
+                        // "executeQueries invoked OK 但结果陈旧"的误判。
+                        if (submitted) {
+                            LOG.info("[M36] executeQueries invoked OK (fallback path, submitted synchronously)")
+                        } else {
+                            LOG.info("[M36] native transaction posted (NOT submitted yet - watch starts at submit)")
+                        }
                     } catch (e: Exception) {
                         LOG.warn("[M36] executeQueries FAILED: ${e.message}", e)
                         // 执行触发失败：通知调用方（UI 回调须在 EDT）
@@ -1110,37 +1099,10 @@ object DataSourceSelector {
                         }, com.intellij.openapi.application.ModalityState.any())
                         return@executeOnPooledThread
                     }
-                    // 执行触发成功后把右侧从「仅顶部块」切换为「顶部块+结果区」完整 UI
-                    //（用户诉求：Console output 占位只在执行后出现）。换入组件按需构建并缓存——
-                    // 仅准备路径预建的 SplitPane 已因顶部块内嵌被"偷"走子组件，不可复用；
-                    // 已备实例（全链路径内嵌过）直接复用 + 面板同实例防抖，重复执行不重建。
-                    // invoke 触发失败（含密码弹窗等待超时）不换入——结果区保留到真实执行后出现。
-                    // **JSplitPane 构造（buildConsoleSplitPane）与换入均须 EDT**——M36.5.10 曾把
-                    // buildConsoleSplitPane 留在 pooled thread，JSplitPane.setLeftComponent 触发
-                    // 编辑器 hierarchy 事件 → SoftWrapApplianceManager → ScrollingModelImpl
-                    // .getVisibleArea → ThreadingAssertions 抛异常（用户堆栈实锤），异常阻断
-                    // onResultsReady/startResultTabRetry → 结果区不刷新、提示不显示。整个
-                    // 「构建+换入」必须包在同一 invokeLater 中。
-                    if (executionStarted && onResultsReady != null) {
-                        val top = preparedTopBlock
-                        val result = preparedResultComponent
-                        if (top != null && result != null) {
-                            val consoleForPrompt = console
-                            ApplicationManager.getApplication().invokeLater({
-                                val full = preparedFullComponent ?: buildConsoleSplitPane(top, result)
-                                    .also { preparedFullComponent = it }
-                                onResultsReady.invoke(full)
-                                // M36.5.13：执行后清提示符（DatabaseLogView 在执行/数据渲染时重设）
-                                clearConsolePrompt(consoleForPrompt, LOG)
-                            }, com.intellij.openapi.application.ModalityState.any())
-                        }
-                    }
-                    // 结果 Tab 默认激活：invoke 返回（真实提交完成）后启动（结果 Tab 异步创建）。
-                    // 连接等待期由上方的 8s 监控覆盖（避免重复执行时命中旧 Tab 换入旧数据）。
-                    if (executionStarted && ui != null) {
-                        ApplicationManager.getApplication().invokeLater({
-                            startResultTabRetry(project, ui, onError)
-                        }, com.intellij.openapi.application.ModalityState.any())
+                    // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
+                    // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
+                    if (submitted) {
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG)
                     }
                 }
             }
@@ -1152,16 +1114,136 @@ object DataSourceSelector {
     }
 
     /**
+     * M36.5.22：**真实提交后**的统一收尾（EDT, ModalityState.any()）。
+     *
+     * 背景（本轮沙盒 16:53 会话实证 + javap 反编译）：
+     * 原生链经 `TransactionGuard.submitTransactionLater` 投递，派发时刻由平台决定且**不可控**
+     *（首轮 43ms、次轮 6729ms）。原实现把「8s 连接监控 / onResultsReady 换入 / startResultTabRetry
+     * / refreshResultsComponent」全部挂在"提交请求发出"处，于是：
+     *   - retry 第 1 拍（400ms）就命中**上一轮**的 Result Tab → M36.5.13 的 forceSwapIn 把它
+     *     **强制顶进面板** → 用户看到旧数据（"滞后一轮"）；
+     *   - 4.8s 观察窗在真实提交前就关闭 → 之后无人再换入新结果。
+     *
+     * 修复：所有"提交后"动作改为在真实提交后启动，并以 `preExisting` 快照限定
+     * **只认本次提交之后新建的结果 Tab**。
+     */
+    private fun afterSubmitted(
+        project: Project,
+        ui: Any?,
+        console: Any,
+        onResultsReady: ((javax.swing.JComponent) -> Unit)?,
+        onError: ((String) -> Unit)?,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ) {
+        ApplicationManager.getApplication().invokeLater({
+            // ① 快照：本次提交时已存在的结果 Tab **名称**（判定"新结果"的基线）。
+            // M36.5.22b：实例身份判定失效——DBN 复用同一个 Content 实例并改名/更新
+            //（17:25 会话实证：pre-existing=[Result 1]，retry#1 已见 Result 2，但
+            // `it !in preExisting` 仍为 false → select=null）。改以 displayName 为键。
+            val pre = resultContents(ui)
+            val preExistingNames = pre.map { it.displayName }.toSet()
+            LOG.info("[M36] result watch started (pre-existing-names=$preExistingNames, ids=${pre.map { System.identityHashCode(it) }})")
+            // ② 8s 连接等待监控（从提交时刻起算）
+            if (ui != null && onError != null) {
+                val uiForWatch = ui
+                val hintOnError = onError
+                val consoleForWatch = console
+                val watch = javax.swing.Timer(8000, null)
+                watch.addActionListener {
+                    watch.stop()
+                    val newTab = resultContents(uiForWatch).any { it.displayName !in preExistingNames }
+                    // M36.5.16：连接健康检查——getCurrentNamespace() 为空 = 连接未建立
+                    //（工具栏数据源显示 <schema> 佐证）；旧 Tab 不足以判定正常。
+                    val namespaceOk = runCatching {
+                        val ns = consoleForWatch.javaClass
+                            .getMethod("getCurrentNamespace").invoke(consoleForWatch)
+                        ns != null && ns.toString().isNotBlank()
+                    }.getOrDefault(true)
+                    if (!newTab || !namespaceOk) {
+                        LOG.info("[M36] no NEW result tab within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - panel hint")
+                        hintOnError.invoke(MpSqlVisualizerBundle.message("execute.credential.hint"))
+                    }
+                }
+                watch.isRepeats = false
+                watch.start()
+            }
+            // ③ executePrepared 路径：把右侧从「仅顶部块」换入「顶部块+结果区」完整 UI。
+            //    JSplitPane 构造+换入必须一体在 EDT（M36.5.11 教训）。
+            if (onResultsReady != null) {
+                val top = preparedTopBlock
+                val result = preparedResultComponent
+                if (top != null && result != null) {
+                    val full = preparedFullComponent ?: buildConsoleSplitPane(top, result)
+                        .also { preparedFullComponent = it }
+                    onResultsReady.invoke(full)
+                    clearConsolePrompt(console, LOG)
+                }
+            }
+            // ④ 结果 Tab 监听（只认新 Tab 名）
+            if (ui != null) {
+                startResultTabRetry(project, ui, onError, preExistingNames)
+            }
+        }, com.intellij.openapi.application.ModalityState.any())
+    }
+
+    /** 读取 RunnerLayoutUi 当前全部结果内容（排除 Output/输出）。 */
+    internal fun resultContents(ui: Any?): List<com.intellij.ui.content.Content> {
+        if (ui == null) return emptyList()
+        val all = runCatching {
+            ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
+        }.getOrNull() ?: return emptyList()
+        return all.filter { !isOutputContent(it) }
+    }
+
+    private fun isOutputContent(c: com.intellij.ui.content.Content): Boolean =
+        c.displayName.equals("Output", ignoreCase = true) ||
+            c.displayName.equals("输出", ignoreCase = true)
+
+    /**
+     * M36.5.22b：结果 Tab 选择判定（纯函数，[startResultTabRetry] 每 tick 调用；抽出为
+     * 可测函数——DBN「复用 Content 实例改名」行为可在单测中用动态代理精确复现）。
+     *
+     * 判定规则（按优先级）：
+     *  1. displayName **不在** [preExistingNames]（提交时刻快照）中的第一个结果 Tab → 新结果，
+     *     **立即选中**。注意必须按名称而非实例身份——DBN 复用同一 Content 实例并改名
+     *     （17:25 沙盒实证：pre-existing=[Result 1]，retry#1 已见 Result 2 但实例身份
+     *     过滤判定为旧 Tab → select=null → 滞后一轮）。
+     *  2. 只有旧名称的 Tab 时：attempts >= [REUSE_ACCEPT_TICKS]（6s）才接受复用
+     *     （防"任意见到旧 Tab 就换入"把上一轮结果顶进面板——M36.5.22 真因）。
+     *  3. 无结果 Tab（仅 Output/空）→ null（继续等待）。
+     */
+    internal fun pickResultTab(
+        contents: Array<com.intellij.ui.content.Content>,
+        preExistingNames: Set<String>,
+        attempts: Int,
+    ): com.intellij.ui.content.Content? {
+        val newOne = contents.firstOrNull { !isOutputContent(it) && it.displayName !in preExistingNames }
+        if (newOne != null) return newOne
+        val staleOne = contents.firstOrNull { !isOutputContent(it) }
+        return if (staleOne != null && attempts >= REUSE_ACCEPT_TICKS) staleOne else null
+    }
+
+    /** M36.5.22b：旧 Tab 复用接受的最低 tick 数（400ms×15=6s）。 */
+    internal const val REUSE_ACCEPT_TICKS = 15
+
+    /**
      * 结果 Tab 激活重试（EDT Timer 400ms 非阻塞；结果 Tab 异步创建）。
      * M36.5.3 dumb-aware：dumb mode（索引）期间查询提交可能被推迟（沙盒实证：方言 push-all
-     * 与连接建立延至索引完成）——索引中把重试窗口从 10 次（4s）放宽到 40 次（16s）；
+     * 与连接建立延至索引完成）——索引中把重试窗口放宽到 40 次（16s）；
      * 超时后按状态给准确提示：索引中 → 索引提示（execute.indexing.hint），
      * 否则 → 检查被遮挡的密码/驱动弹窗（execute.credential.hint）。
+     *
+     * M36.5.22b：`preExistingNames` = 提交时刻已存在的结果 Tab **名称**快照；**只认本次提交后
+     * 新出现的名称**（此前按 Content 实例身份判定，DBN 复用同一个 Content 实例并改名/更新
+     * 导致新 Tab 被误判为旧 Tab）。
+     * 若 15 拍（6s）后仍只有旧名称，判定为 DBN 复用 Tab 未改名，接受旧 Tab 换入并打点
+     * `result tab reused`（可观测，避免永远等待）。
      */
     private fun startResultTabRetry(
         project: Project,
         ui: Any,
         onError: ((String) -> Unit)? = null,
+        preExistingNames: Set<String> = emptySet(),
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val selectRetry = object : java.awt.event.ActionListener {
@@ -1172,11 +1254,13 @@ object DataSourceSelector {
                 val contents = runCatching {
                     ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
                 }.getOrNull() ?: emptyArray()
-                val result = contents.firstOrNull {
-                    !it.displayName.equals("Output", ignoreCase = true) &&
-                        !it.displayName.equals("输出", ignoreCase = true)
+                val all = contents.map { it.displayName }
+                val ids = contents.map { System.identityHashCode(it) }
+                val result = pickResultTab(contents, preExistingNames, attempts)
+                if (result != null && result.displayName in preExistingNames) {
+                    LOG.info("[M36] result tab reused (name=${result.displayName}) - accepting existing tab")
                 }
-                LOG.info("[M36] retry#$attempts contents=${contents.map { it.displayName }}, select=${result?.displayName}")
+                LOG.info("[M36] retry#$attempts contents=$all, ids=$ids, select=${result?.displayName}, preExisting=$preExistingNames")
                 if (result != null) {
                     timer.stop()
                     runCatching {
@@ -1199,7 +1283,9 @@ object DataSourceSelector {
                     // M36.5.3：索引中放宽窗口（查询提交可能被 dumb mode 推迟）；连接等待期由
                     // 提交前的 8s 监控覆盖（M36.5.15），此处窗口保持原语义。
                     val dumb = runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)
-                    val limit = if (dumb) 40 else 10
+                    // M36.5.22：窗口统一放宽到 40 拍（16s）——监听已在真实提交后启动，且需覆盖
+                    // 15 拍（6s）的 "DBN 复用旧 Tab" 回退判定；连接等待另有 8s 监控负责提示。
+                    val limit = if (dumb) 100 else 40
                     if (attempts >= limit) {
                         timer.stop()
                         LOG.info("[M36] result tab not appeared after $attempts attempts (dumb=$dumb)")
