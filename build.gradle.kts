@@ -464,3 +464,10 @@ tasks.register("testShards") {
     description = "并行分片全量测试（4 片同时执行，各片独立沙盒）"
     dependsOn("testShard1", "testShard2")
 }
+
+// P-立项-05 真机验证：-Dmpvs.* 透传到测试 JVM（渲染导出 DialectRenderDumpTest / 外部实例入口）
+tasks.test {
+    System.getProperties().forEach { (k, v) ->
+        if (k is String && k.startsWith("mpvs.") && v is String) systemProperty(k, v)
+    }
+}
