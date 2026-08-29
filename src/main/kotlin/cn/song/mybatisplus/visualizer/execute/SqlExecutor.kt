@@ -76,11 +76,17 @@ object SqlExecutor {
 
     /**
      * M36.5：在已准备的控制台上执行。
+     * @param onResultsReady 执行触发成功回调（完整控制台 UI，顶部块+结果区）——
+     *                       调用方据此把右侧从纯编辑器切换为带结果区的完整控制台
      * @return false = 控制台未就绪（调用方回退 [execute] 全链）
      */
-    fun executePrepared(project: Project, onError: ((String) -> Unit)? = null): Boolean {
+    fun executePrepared(
+        project: Project,
+        onResultsReady: ((javax.swing.JComponent) -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
+    ): Boolean {
         if (!ExecuteSqlSupport.isAvailable()) return false
-        return DataSourceSelector.executePrepared(project, onError)
+        return DataSourceSelector.executePrepared(project, onResultsReady, onError)
     }
 
     /** 控制台是否已就绪（[prepareConsole] 成功后 true）。 */

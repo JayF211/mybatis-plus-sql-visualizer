@@ -313,13 +313,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *  3. 结果在打开的 Database 编辑器下方原生展示
      *
      * Community（无 database 插件）由 [SqlExecutor] 提示降级。
+     * M36.5.4：入口/中止日志——沙盒排查执行问题时此前无任何面板侧日志（静默 return 难定位）。
      */
     internal fun executeSql() {
         val proj = project ?: return
         // M36.4：优先取原生编辑器文档，兜底自研编辑器
         val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
             ?: editor?.document?.text?.takeIf { it.isNotBlank() }
-            ?: return
+            ?: run {
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[M36] executeSql aborted: no SQL text (nativeDoc=${nativeEditorDoc != null}, editor=${editor != null})")
+                return
+            }
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] executeSql: len=${sql.length}, prepared=${SqlExecutor.isPrepared()}")
 
         // 1. SQL 类型分类 → 非查询语句二次确认
         val isQuery = SqlTypeClassifier.isQuery(sql)
@@ -344,9 +351,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     WriteCommandAction.runWriteCommandAction(proj) { doc.setText(sql) }
                 }
             }
-            val executed = SqlExecutor.executePrepared(proj, onError = { errorMsg ->
-                resultPanel.showError(errorMsg)
-            })
+            val executed = SqlExecutor.executePrepared(
+                proj,
+                // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
+                onResultsReady = { fullConsole -> embedConsole(fullConsole) },
+                onError = { errorMsg ->
+                    resultPanel.showError(errorMsg)
+                },
+            )
             if (executed) return
         }
         SqlExecutor.execute(
@@ -393,16 +405,28 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * M36.4：将拼合的原生控制台 UI 组件（编辑器 + 结果区）内嵌到右侧 SQL 显示栏。
-     * 重复执行时替换旧控制台（旧组件随 JdbcConsole 生命周期由 IDE 管理）。
+     * M36.4：将拼合的原生控制台 UI 组件内嵌到右侧 SQL 显示栏。
+     * M36.5.2：同一组件（缓存完整 UI 重复回调，如重复执行）不重复内嵌，防闪烁；
+     * SplitPane 初始分隔保险——组件拿到尺寸后若分隔位置仍塌缩在顶（编辑器
+     * preferredSize=0 场景），强制一次 40%；首触后自移除监听，不干预用户后续拖拽。
      */
     private fun embedConsole(consoleComponent: JComponent) {
+        if (consoleComponent === embeddedConsole) return
         embeddedConsole?.let { old -> editorHolder.remove(old) }
         embeddedConsole = consoleComponent
         // 去边框防白边（内嵌组件/容器可能自带 border）
         consoleComponent.border = JBUI.Borders.empty()
         consoleComponent.isOpaque = false
         editorHolder.add(consoleComponent, BorderLayout.CENTER)
+        if (consoleComponent is javax.swing.JSplitPane) {
+            val sp = consoleComponent
+            sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
+                override fun componentResized(e: java.awt.event.ComponentEvent) {
+                    if (sp.width > 0 && sp.getDividerLocation() <= 0) sp.setDividerLocation(0.4)
+                    sp.removeComponentListener(this)
+                }
+            })
+        }
         resultPanel.showEmpty()
         revalidate()
         repaint()
@@ -1949,6 +1973,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun psiFileForTest(): PsiFile? = psiFile
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
+    /** M36.5.2：内嵌控制台组件（同实例防抖/替换断言用）。 */
+    internal fun embedConsoleForTest(component: JComponent) = embedConsole(component)
+    internal fun embeddedConsoleForTest(): JComponent? = embeddedConsole
 
     // ------------------------------------------------------------------
     // F-46：来源位置（来源列默认值）
