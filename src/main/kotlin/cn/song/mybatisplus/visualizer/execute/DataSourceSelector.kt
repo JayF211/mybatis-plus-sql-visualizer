@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.6.1-slowops-governance"
+    private const val BUILD_STAMP = "M36.6.2-divider-anchor"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -634,24 +634,50 @@ object DataSourceSelector {
                                 (sub?.javaClass?.getMethod("statements")?.invoke(sub) as? Iterable<*>)
                             }.getOrNull()?.toList()
                             val filterCond = runCatching {
-                                // 手工 filter：ScriptModelUtil.adjustSelectionRange$0 = EvaluationHelper.isStatement
-                                val utilClass = Class.forName("com.intellij.database.script.ScriptModelUtil")
-                                val stmtItClass = Class.forName("com.intellij.database.script.ScriptModel\$StatementIt")
                                 // 取 sub 的 statements 第一条做 isStatement 判定（经 EvaluationHelper）
                                 val first = subStmts?.firstOrNull()
                                 val api = first?.javaClass?.getMethod("api")?.invoke(first)
-                                val helper = Class.forName("com.intellij.sql.dialects.EvaluationHelper")
+                                // M36.6.2：探针假阴性修正——EvaluationHelper.isStatement 是**实例方法**
+                                //（javap：interface EvaluationHelper，EP: LanguageExtension 分发实现），
+                                // 旧探针 getMethod("isStatement", apiClass).invoke(null, api) 以 null
+                                // 接收者调实例方法必抛 NPE 被 runCatching 吞掉 → "isStatement=null" 自
+                                // M36.5.24 起一直是探针自身的假阴性（误导 24d/26 两轮方言修复方向）。
+                                // 正确链路：EP.forLanguage(model.language) 取实现 → 实例调用 isStatement。
+                                val ep = Class.forName("com.intellij.sql.dialects.EvaluationHelper")
+                                    .getField("EP").get(null) as com.intellij.lang.LanguageExtension<*>
+                                val helperInstance = runCatching {
+                                    lang?.let { ep.forLanguage(it) }
+                                }.getOrNull()
                                 val isStmt = runCatching {
-                                    helper.getMethod("isStatement", api?.javaClass)
-                                        .invoke(null, api) as? com.intellij.openapi.util.Condition<*>
+                                    helperInstance?.javaClass
+                                        ?.getMethod("isStatement", api?.javaClass)
+                                        ?.invoke(helperInstance, api) as? com.intellij.openapi.util.Condition<*>
                                 }.getOrNull()
                                 val v = runCatching {
                                     @Suppress("UNCHECKED_CAST")
                                     (isStmt as? com.intellij.openapi.util.Condition<Any>)?.value(first)
                                 }.getOrNull()
-                                "firstStmt=${
-                                    first?.javaClass?.simpleName
-                                }(${runCatching { first?.javaClass?.getMethod("range")?.invoke(first) }.getOrNull()}) api=${api?.javaClass?.simpleName} isStatement=$v"
+                                // M36.6.2：adjustSelectionRange 空 selection 分支复刻（javap 字节码）——
+                                // caret=0 时探测范围是 TextRange(0,1)（前两个字符），subScript 对 2 字符
+                                // 范围的语句语义（相交/包含）直接决定 statementsRange 是否非零
+                                val probe01 = runCatching {
+                                    val posRangeClass = Class.forName("com.intellij.database.script.ScriptModel\$PositionRange")
+                                    val pr = posRangeClass.getConstructor(com.intellij.openapi.util.TextRange::class.java)
+                                        .newInstance(com.intellij.openapi.util.TextRange.create(0, 1))
+                                    val sub = model?.javaClass
+                                        ?.getMethod("subModel", com.intellij.openapi.util.TextRange::class.java)
+                                        ?.invoke(model, pr)
+                                    val stmts = runCatching {
+                                        (sub?.javaClass?.getMethod("statements")?.invoke(sub) as? Iterable<*>)
+                                    }.getOrNull()?.toList()
+                                    val firstRange = stmts?.firstOrNull()?.let {
+                                        runCatching { it.javaClass.getMethod("range").invoke(it) }.getOrNull()
+                                    }
+                                    "${stmts?.size}:${firstRange ?: "none"}"
+                                }.getOrElse { "probe01 FAILED:${it.message}" }
+                                "firstStmt=${first?.javaClass?.simpleName}(${
+                                    runCatching { first?.javaClass?.getMethod("range")?.invoke(first) }.getOrNull()
+                                }) api=${api?.javaClass?.simpleName} helper=${helperInstance?.javaClass?.name} isStatement=$v probe01=$probe01"
                             }.getOrElse { "filter FAILED:${it.message}" }
                             "stmts=$stmtsList.size subModelStmts=${subStmts?.size} $filterCond"
                         }.getOrElse { "subDiag FAILED:${it.message}" }
@@ -678,7 +704,24 @@ object DataSourceSelector {
                                 "consoleFile=${file?.javaClass?.simpleName}:${file?.textLength}:" +
                                 "${file?.virtualFile?.name}"
                         }.getOrElse { "docRel FAILED:${it.message}" }
-                        "modelIsActual=$isActual stmts=$stmtsList.size modelRange=$tr lang=${lang?.id} stmtsDetail=[$stmtDetail] modelId=$modelIdentity docLen=${editor.document.textLength} caret=${editor.caretModel.offset} execSelection=${runCatching { execOption.javaClass.getField("execSelection").getInt(execOption) }.getOrNull()} $docRel | $subDiag"
+                        // M36.6.2：启用链模型身份判定——ScriptModelUtil.getSelectedStatementsRange 的
+                        // 模型来自 DatabaseScriptingSessionClient.getScriptModel()（javap offset 30
+                        // invokeinterface 实证）；SessionClientHolder<S>=<JdbcConsole,...> 说明 "client"
+                        // 即 JdbcConsole 本体（则读到的就是我们替换的 myScriptModel）。isInstance 一次
+                        // 判死，排除"替换未到达启用链"的可能
+                        val clientCheck = runCatching {
+                            val clientClass = Class.forName("com.intellij.database.console.client.DatabaseScriptingSessionClient")
+                            val isClient = clientClass.isInstance(console)
+                            val clientModel = if (isClient) {
+                                clientClass.getMethod("getScriptModel").invoke(console)
+                            } else null
+                            val consoleModel = Class.forName(CONSOLE_CLASS).getMethod("getScriptModel").invoke(console)
+                            "consoleIsClient=$isClient " +
+                                "clientModelId=${clientModel?.let { System.identityHashCode(it) }} " +
+                                "consoleModelId=${System.identityHashCode(consoleModel)} " +
+                                "sameModel=${clientModel === consoleModel}"
+                        }.getOrElse { "clientCheck FAILED:${it.message}" }
+                        "modelIsActual=$isActual stmts=$stmtsList.size modelRange=$tr lang=${lang?.id} stmtsDetail=[$stmtDetail] modelId=$modelIdentity docLen=${editor.document.textLength} caret=${editor.caretModel.offset} execSelection=${runCatching { execOption.javaClass.getField("execSelection").getInt(execOption) }.getOrNull()} $docRel $clientCheck | $subDiag"
                     }.getOrNull()
                     LOG.info(
                         "[M36] dataContext check: PROJECT=$projectOk, EDITOR=$editorOk, CLIENT_KEY=$consoleOk, PSI_FILE=$psiOk, " +
@@ -1226,6 +1269,20 @@ object DataSourceSelector {
             dividerSize = 3
             border = com.intellij.util.ui.JBUI.Borders.empty()
             background = com.intellij.util.ui.UIUtil.getPanelBackground()
+            // M36.6.2：分隔位置保险（每个实例自带，覆盖 prepare/reuse/contentAdded 重建全部路径）——
+            // 构造时子组件 0x0 invalid（沙盒日志 toString 实证），首次真实布局的 divider 由 preferred
+            // 尺寸推算，落点随构造时序漂移（用户三张截图：编辑器塌缩 ~40px / 编辑器截断无结果区 /
+            // 结果区仅剩窄条，每次打开形态不同）。首触获得真实高度后无条件强制 60%，一次性监听，
+            // 不干预用户后续拖拽。
+            addComponentListener(object : java.awt.event.ComponentAdapter() {
+                override fun componentResized(e: java.awt.event.ComponentEvent) {
+                    if (height < 200) return
+                    removeComponentListener(this)
+                    setDividerLocation(0.6)
+                    revalidate()
+                    repaint()
+                }
+            })
         }
     }
 

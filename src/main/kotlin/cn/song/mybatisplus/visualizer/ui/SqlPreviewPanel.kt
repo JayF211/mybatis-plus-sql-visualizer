@@ -472,8 +472,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val sp = consoleComponent
             sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
                 override fun componentResized(e: java.awt.event.ComponentEvent) {
-                    // M36.5.25f：divider 初始 60%（编辑器主导，SQL 不被压扁），自适应用户拖拽
-                    if (sp.width > 0 && sp.getDividerLocation() <= 0) sp.setDividerLocation(0.6)
+                    // M36.6.2：无条件首触强制 60%——旧条件 getDividerLocation()<=0 在首次布局后恒
+                    // false（divider 已是 preferred 推算的正值，只是落点错误），保险从未触发，
+                    // 分隔落点随构造时序漂移（用户三张截图实证：塌缩/截断/窄条三种形态）
+                    if (sp.height < 200) return
+                    sp.setDividerLocation(0.6)
                     sp.removeComponentListener(this)
                 }
             })
