@@ -48,6 +48,7 @@ build/
 AGENTS
 .reasonix/
 reasonix.toml
+.workbuddy/
 
 ### Mac OS ###
 .DS_Store
@@ -61,3 +62,7 @@ reasonix.toml
 ### ZCode ###
 .zcode/
 out/
+
+### Plugin Verifier（校验产物，不进仓库） ###
+dev-support/verify-target/
+verification-*/
