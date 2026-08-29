@@ -429,6 +429,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     sp.removeComponentListener(this)
                 }
             })
+        } else {
+            // M36.5.25：顶部块（非 SplitPane，首次预览 executeAfterPrepare=false）——
+            // 编辑器组件可能按 preferred=0 塌缩为 0 高（SQL 被 Console output 占位遮住），
+            // 获尺寸后强制重排一次（与 SplitPane divider 修复同机制）
+            consoleComponent.addComponentListener(object : java.awt.event.ComponentAdapter() {
+                override fun componentResized(e: java.awt.event.ComponentEvent) {
+                    consoleComponent.revalidate()
+                    consoleComponent.repaint()
+                    consoleComponent.removeComponentListener(this)
+                }
+            })
         }
         resultPanel.showEmpty()
         revalidate()

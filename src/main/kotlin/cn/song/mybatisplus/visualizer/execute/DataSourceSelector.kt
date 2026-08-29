@@ -308,6 +308,45 @@ object DataSourceSelector {
                 editor.document.setText(sql)
             }
         }
+        // M36.5.24：复用路径同款刷新——setText 只更新 console document，console.getScriptModel()
+        // 的缓存 model（isActual 仅比较 splitScriptMode）仍基于旧内容/空 vf → statementsRange=(0,0)
+        // → ▶ 灰 + 无绿色边框。同步 vf document 并 commit；model 重建移入 runWhenSmart（dialect
+        // push dumb task 完成后 PSI 才完整，M36.5.24g 22:30 实证）。
+        var refreshedModel: Any? = scriptModel
+        runCatching {
+            val consoleVf = console.javaClass.getMethod("getVirtualFile").invoke(console)
+                as? com.intellij.openapi.vfs.VirtualFile
+            if (consoleVf != null) {
+                @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+                com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                    val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                        .getInstance().getDocument(consoleVf)
+                    when {
+                        fileDoc != null && fileDoc.text != sql -> {
+                            fileDoc.setText(sql)
+                            com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
+                        }
+                        fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
+                            .commitDocument(fileDoc)
+                        fileDoc == null -> consoleVf.setBinaryContent(sql.toByteArray())
+                    }
+                }
+                // M36.5.24g：dumb 退出后重建（同 prepareInConsole）
+                val consoleForModel = console
+                val vfForModel = consoleVf
+                com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+                    ApplicationManager.getApplication().invokeLater({
+                        runCatching {
+                            refreshConsoleModel(project, consoleForModel, vfForModel, LOG)
+                        }.onFailure { e ->
+                            LOG.warn("[M36] shared scriptModel refresh (smart) FAILED: ${e.message}")
+                        }
+                    }, com.intellij.openapi.application.ModalityState.any())
+                }
+            }
+        }.onFailure { e ->
+            LOG.warn("[M36] shared scriptModel vf-sync FAILED (keep cached): ${e.message}")
+        }
         // M36.5.7：完整 UI 按**实时结果区组件**重建（组合引用在面板分离/重挂后会过期——
         // M36.5.5 复用面板空显示根因）；顶部块（原生头部+编辑器）自旧面板"偷"入新面板。
         val liveResult = runCatching {
@@ -320,8 +359,9 @@ object DataSourceSelector {
         sharedFullComponent = full
         preparedConsole = console
         preparedEditor = editor
-        preparedScriptModel = scriptModel
+        preparedScriptModel = refreshedModel ?: scriptModel
         preparedExecOption = execOption
+        sharedScriptModel = refreshedModel ?: scriptModel
         preparedUi = sharedUi
         preparedTopBlock = top
         preparedResultComponent = liveResult
@@ -335,7 +375,7 @@ object DataSourceSelector {
         clearConsolePrompt(console, LOG)
         LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
         if (executeAfterPrepare) {
-            executeOnConsole(project, console, editor, scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError)
+            executeOnConsole(project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError)
         }
         callback?.invoke(true)
         return true
@@ -538,9 +578,53 @@ object DataSourceSelector {
                             )
                             .invoke(null, console, editor, execOption)
                     }.getOrNull()
+                    // M36.5.23g：statementsRange 仍 (0,0) 时的诊断——打印 model 详情定位 stale/方言/光标
+                    val modelDiag = runCatching {
+                        val model = Class.forName(CONSOLE_CLASS).getMethod("getScriptModel").invoke(console)
+                        val isActual = model?.javaClass?.getMethod("isActual")?.invoke(model)
+                        val stmts = model?.javaClass?.getMethod("statements")?.invoke(model) as? Iterable<*>
+                        val tr = model?.javaClass?.getMethod("getTextRange")?.invoke(model)
+                        // M36.5.24e：language + 语句 range 诊断——subModel(光标行).statements()
+                        // .filter(isStatement) 失败的判定依据
+                        val lang = runCatching {
+                            model?.javaClass?.getMethod("getLanguage")?.invoke(model) as? com.intellij.lang.Language
+                        }.getOrNull()
+                        val stmtDetail = stmts?.take(3)?.map {
+                            val cls = it?.javaClass?.simpleName
+                            val r = runCatching {
+                                it?.javaClass?.getMethod("getTextRange")?.invoke(it)
+                            }.getOrNull()
+                            "$cls($r)"
+                        }?.joinToString(",")
+                        val modelIdentity = System.identityHashCode(model)
+                        // M36.5.24c：document 关系诊断——console.getDocument() 与 editor.document 是否
+                        // 同一对象；console.getFile() 的 PSI 状态；consoleVf document 内容。
+                        val docRel = runCatching {
+                            val consoleDoc = Class.forName(CONSOLE_CLASS).getMethod("getDocument").invoke(console)
+                            val consoleVf = Class.forName(CONSOLE_CLASS).getMethod("getVirtualFile").invoke(console)
+                            val fileDoc = if (consoleVf != null) {
+                                com.intellij.openapi.fileEditor.FileDocumentManager
+                                    .getInstance().getDocument(consoleVf as com.intellij.openapi.vfs.VirtualFile)
+                            } else null
+                            val file = runCatching {
+                                Class.forName(CONSOLE_CLASS).getMethod("getFile").invoke(console)
+                                    as? com.intellij.psi.PsiFile
+                            }.getOrNull()
+                            "consoleDoc(${System.identityHashCode(consoleDoc)}:${
+                                (consoleDoc as? com.intellij.openapi.editor.Document)?.textLength
+                            }) editorDoc(${System.identityHashCode(editor.document)}:${editor.document.textLength}) " +
+                                "same=${consoleDoc === editor.document} " +
+                                "vfDoc(${System.identityHashCode(fileDoc)}:${
+                                    (fileDoc as? com.intellij.openapi.editor.Document)?.textLength
+                                }) vfDocSameEditorDoc=${fileDoc === editor.document} " +
+                                "consoleFile=${file?.javaClass?.simpleName}:${file?.textLength}:" +
+                                "${file?.virtualFile?.name}"
+                        }.getOrElse { "docRel FAILED:${it.message}" }
+                        "modelIsActual=$isActual stmts=${stmts?.toList()?.size} modelRange=$tr lang=${lang?.id} stmtsDetail=[$stmtDetail] modelId=$modelIdentity docLen=${editor.document.textLength} caret=${editor.caretModel.offset} execSelection=${runCatching { execOption.javaClass.getField("execSelection").getInt(execOption) }.getOrNull()} $docRel"
+                    }.getOrNull()
                     LOG.info(
                         "[M36] dataContext check: PROJECT=$projectOk, EDITOR=$editorOk, CLIENT_KEY=$consoleOk, PSI_FILE=$psiOk, " +
-                            "isSqlAtPlace=$sqlAtPlace, statementsRange=$statementsRange",
+                            "isSqlAtPlace=$sqlAtPlace, statementsRange=$statementsRange, $modelDiag",
                     )
                 }
             }.onFailure { e ->
@@ -619,13 +703,70 @@ object DataSourceSelector {
             }.getOrNull() ?: execOptionClass.getDeclaredConstructor().newInstance()
             if (scriptModel == null) return
 
+            // M36.5.24：▶ 灰/无绿色边框根因修复——statementsRange=(0,0)（探针实证）。
+            // 根因链（javap 实证）：DBN 原生 ▶ isEnabled 依赖
+            //   ScriptModelUtil.getSelectedStatementsRange = getSelectionForConsole(editor, opt)
+            //     → client.getScriptModel()（= console.getScriptModel()）
+            //     → adjustModelForSelection → subModel(...).getTextRange()
+            //   console.getScriptModel() 缓存 model，isActual() **仅比较 splitScriptMode 配置**
+            //   （与文档/PSI 无关）→ attachConsole 早期（vf PSI 未 commit / document 内容未
+            //   同步）创建的 model 永不重建 → SqlScriptModel.getTextRange() = myScript.getRange()
+            //   = null（Script 基于 ScriptModelUtilCore.getScriptDocument(consoleVf)，空内容）
+            //   → statementsRange=(0,0) → ▶ 灰、StatementRangeAnnotator 无语句 → 无绿色边框。
+            // 修复两步：① console doc 内容同步进 console vf document 并 commit（PSI 对齐，
+            //   与 executeOnConsole 执行前同款同步）；② 反射强制重建 scriptModel
+            //   （JdbcConsole.updateScriptModel 内部 createScriptModel(console.getFile())），
+            //   isActual() 不再拦截。
+            var effectiveScriptModel = scriptModel
+            runCatching {
+                val consoleVf = consoleClass.getMethod("getVirtualFile").invoke(console)
+                    as? com.intellij.openapi.vfs.VirtualFile
+                if (consoleVf != null) {
+                    val consoleText = (document as com.intellij.openapi.editor.Document).text
+                    @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+                    com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                        val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                            .getInstance().getDocument(consoleVf)
+                        when {
+                            fileDoc != null && fileDoc.text != consoleText -> {
+                                fileDoc.setText(consoleText)
+                                com.intellij.psi.PsiDocumentManager.getInstance(project)
+                                    .commitDocument(fileDoc)
+                            }
+                            fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
+                                .commitDocument(fileDoc)
+                            fileDoc == null -> consoleVf.setBinaryContent(consoleText.toByteArray())
+                        }
+                    }
+                    // M36.5.24g：fresh 构造 + set 移入 DumbService.runWhenSmart——22:30 实证：
+                    // attachConsole 后 SqlDialectPusher 的 dumb task（58.443 运行 → 58.714 exit）
+                    // 触发 PSI 重建；在 dumb mode 中构造的 fresh（58.302，stmts=1）被 push 后
+                    // PSI 重建击穿 → 语句 range=null（SIt(null)）→ statementsRange 零长度。
+                    // runWhenSmart 保证 dialect push + PSI 完整后再构造 → 语句 range 非 null。
+                    val consoleForModel = console
+                    val vfForModel = consoleVf
+                    com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+                        // 延迟到 dialpct push 完全结束后（dumb 退出 + 一次 EDT 泵）再重建
+                        ApplicationManager.getApplication().invokeLater({
+                            runCatching {
+                                refreshConsoleModel(project, consoleForModel, vfForModel, LOG)
+                            }.onFailure { e ->
+                                LOG.warn("[M36] scriptModel refresh (smart) FAILED: ${e.message}")
+                            }
+                        }, com.intellij.openapi.application.ModalityState.any())
+                    }
+                }
+            }.onFailure { e ->
+                LOG.warn("[M36] scriptModel vf-sync FAILED (fallback to attach-time model): ${e.message}")
+            }
+
             // M36.5：缓存已备控制台（executePrepared 消费）
             // M36.5.10：代际递增——新控制台上下文取代旧缓存（旧挂起的 runWhenSmart 提交作废，
             // 防止在新控制台上执行旧预览 SQL）
             executionGeneration++
             preparedConsole = console
             preparedEditor = editor
-            preparedScriptModel = scriptModel
+            preparedScriptModel = effectiveScriptModel
             preparedExecOption = execOption
 
             // 4. 拼合原生控制台 UI：顶部块（工具栏+编辑器）/ 结果区——默认展示只嵌顶部块（M36.5.2）
@@ -658,6 +799,13 @@ object DataSourceSelector {
                 isVisible = true
                 if (preferredSize == null || preferredSize.height < 50) {
                     preferredSize = java.awt.Dimension(400, 200)
+                }
+                // M36.5.25：首次预览只嵌顶部块（非 SplitPane）时走不到 divider 修复，
+                // BorderLayout 按 preferred=0 分配高度 → 编辑器塌缩、SQL 被 Console output
+                // 占位遮住一大块（22:12 用户实证，第二次嵌完整 SplitPane 后需手动切换布局
+                // 才恢复）。minimumSize 兜底——空间不足时布局管理器至少给编辑器保留高度。
+                if (minimumSize == null || minimumSize.height < 200) {
+                    minimumSize = java.awt.Dimension(400, 200)
                 }
             }
             LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponentRaw")
@@ -807,7 +955,7 @@ object DataSourceSelector {
             // 不再新建 session/连接——挂死根因见 sharedConsole 字段注释）
             sharedConsole = console
             sharedEditor = editor
-            sharedScriptModel = scriptModel
+            sharedScriptModel = effectiveScriptModel
             sharedExecOption = execOption
             sharedUi = ui
             sharedTopBlock = topBlock
@@ -820,13 +968,162 @@ object DataSourceSelector {
 
             // 5. 可选立即执行（selectAndExecute 全链语义；结果区已随完整 UI 内嵌，onResultsReady=null）
             if (executeAfterPrepare) {
-                executeOnConsole(project, console, editor, scriptModel, execOption, ui, onResultsReady = null, onError = onError)
+                executeOnConsole(project, console, editor, effectiveScriptModel, execOption, ui, onResultsReady = null, onError = onError)
             }
         }.onFailure { e ->
             LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
             onError?.invoke(cause.message ?: cause.toString())
+        }
+    }
+
+    /**
+     * M36.5.24g：dumb 退出后重建 console 的 scriptModel——在 **DBN SqlDialectPusher 的 dialect push
+     * dumb task 完成之后**（PSI 已按 MySQL 方言完整重建）构造 fresh model，避免 dumb mode 中
+     * PSI 解析不完整导致语句 range=null（22:30 实证：attachConsole 后 dialect push 触发 PSI 重建，
+     * dumb 中构造的 fresh 语句 range 全失效）。构造 + splitMode 对齐 + set 缓存，并更新共享缓存。
+     */
+    private fun refreshConsoleModel(
+        project: Project,
+        console: Any,
+        consoleVf: com.intellij.openapi.vfs.VirtualFile,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ) {
+        runCatching {
+            val consoleClass = Class.forName(CONSOLE_CLASS)
+            val lang = com.intellij.lang.LanguageUtil.getLanguageForPsi(project, consoleVf)
+            val fresh = Class.forName("com.intellij.sql.script.SqlScriptModel")
+                .getConstructor(
+                    Project::class.java,
+                    com.intellij.openapi.vfs.VirtualFile::class.java,
+                    com.intellij.lang.Language::class.java,
+                )
+                .newInstance(project, consoleVf, lang)
+            val freshStmts = runCatching {
+                (fresh.javaClass.getMethod("statements").invoke(fresh) as? Iterable<*>)
+            }.getOrNull()?.toList()
+            val freshLang = runCatching {
+                fresh.javaClass.getMethod("getLanguage").invoke(fresh)
+            }.getOrNull()
+            if (freshStmts == null || freshStmts.isEmpty()) {
+                LOG.info(
+                    "[M36] refreshConsoleModel: model empty (lang=$freshLang, stmts=${freshStmts?.size}), keep console model",
+                )
+                return
+            }
+            // splitMode 对齐：isActual() = getSplitScriptMode(myScript) == settings.splitScriptMode；
+            // 调 settings 使 fresh.isActual()=true → set 持久化（否则 getScriptModel() 走 updateAndGet
+            // 重建为 console.getFile() 的 FileScript → 又失效）。副作用：DBN 全局 settings 的
+            // splitScriptMode 改变（target 是基于 Script 的合理值，符合 DBN 派发设计）。
+            val myScriptField = fresh.javaClass.getDeclaredField("myScript").apply { isAccessible = true }
+            val myScript = myScriptField.get(fresh)
+            val targetMode = runCatching {
+                Class.forName("com.intellij.database.script.ScriptModelUtilCore")
+                    .getMethod("getSplitScriptMode", Class.forName("com.intellij.sql.script.Script"))
+                    .invoke(null, myScript)
+            }.getOrNull()
+            val settings = Class.forName("com.intellij.database.settings.DatabaseSettings")
+                .getMethod("getSettings").invoke(null)
+            val splitField = settings.javaClass.getField("splitScriptMode")
+            val oldSplit = splitField.get(settings)
+            if (targetMode != null && targetMode != oldSplit) {
+                splitField.set(settings, targetMode)
+            }
+            val freshIsActual = runCatching {
+                fresh.javaClass.getMethod("isActual").invoke(fresh)
+            }.getOrNull()
+            // 反射替换 myScriptModel 缓存（getScriptModel 首查缓存）
+            val field = consoleClass.getDeclaredField("myScriptModel")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            (field.get(console) as java.util.concurrent.atomic.AtomicReference<Any>).set(fresh)
+            preparedScriptModel = fresh
+            if (sharedConsole === console) sharedScriptModel = fresh
+            // set 后立即验证：getScriptModel() 是否真的返回 fresh（22:38 实证 set 后 40ms
+            // post-probe 仍 stmts=0——identityHashCode 对比确认 set 持久化与否）
+            val afterSet = runCatching {
+                consoleClass.getMethod("getScriptModel").invoke(console)
+            }.getOrNull()
+            val afterStmts = runCatching {
+                (afterSet?.javaClass?.getMethod("statements")?.invoke(afterSet) as? Iterable<*>)
+            }.getOrNull()?.toList()?.size
+            LOG.info(
+                "[M36] refreshConsoleModel: replaced with explicit-language model: " +
+                    "newLang=$freshLang, stmts=${freshStmts.size}, freshIsActual=$freshIsActual, " +
+                    "splitMode=$oldSplit->$targetMode, setAfterGetIdentity=${
+                        System.identityHashCode(afterSet)
+                    }, setAfterStmts=$afterStmts",
+            )
+            // M36.5.24i：set 后 fresh 可能被 document modificationStamp 变化（editor 初始化/
+            // highlight 触发）击穿 sealed 缓存 → statements() 变 0（22:44 实证 set 后 20ms
+            // stmts=1→0、identity 不变）。启动 Timer 周期重查：若 console.getScriptModel()
+            // 的 statements 为空则重新构造 fresh 并 set（document 稳定后 sealed 不再重建），
+            // 连续稳定即停止，最多重试 6 次（约 6s，覆盖 editor 初始化窗口）。
+            var stable = 0
+            var retries = 0
+            val timer = javax.swing.Timer(1000, null)
+            timer.addActionListener {
+                runCatching {
+                    val cur = consoleClass.getMethod("getScriptModel").invoke(console)
+                    val curStmts = runCatching {
+                        (cur?.javaClass?.getMethod("statements")?.invoke(cur) as? Iterable<*>)
+                    }.getOrNull()?.toList()
+                    if (curStmts != null && curStmts.isNotEmpty()) {
+                        stable++
+                        if (stable >= 2) {
+                            timer.stop()
+                            LOG.info("[M36] refreshConsoleModel: model stable (stmts=${curStmts.size})")
+                        }
+                    } else {
+                        stable = 0
+                        retries++
+                        if (retries > 6) {
+                            timer.stop()
+                            LOG.warn("[M36] refreshConsoleModel: give up after $retries retries (stmts=${curStmts?.size})")
+                            return@addActionListener
+                        }
+                        // 重新构造 + set（document modificationStamp 已稳定）
+                        val freshN = Class.forName("com.intellij.sql.script.SqlScriptModel")
+                            .getConstructor(
+                                Project::class.java,
+                                com.intellij.openapi.vfs.VirtualFile::class.java,
+                                com.intellij.lang.Language::class.java,
+                            )
+                            .newInstance(project, consoleVf, lang)
+                        val nStmts = runCatching {
+                            (freshN.javaClass.getMethod("statements").invoke(freshN) as? Iterable<*>)
+                        }.getOrNull()?.toList()?.size
+                        if (nStmts != null && nStmts > 0) {
+                            val f2 = consoleClass.getDeclaredField("myScriptModel")
+                            f2.isAccessible = true
+                            @Suppress("UNCHECKED_CAST")
+                            (f2.get(console) as java.util.concurrent.atomic.AtomicReference<Any>).set(freshN)
+                            preparedScriptModel = freshN
+                            if (sharedConsole === console) sharedScriptModel = freshN
+                            LOG.info("[M36] refreshConsoleModel: retry#$retries re-set fresh (stmts=$nStmts)")
+                        } else {
+                            LOG.info("[M36] refreshConsoleModel: retry#$retries fresh empty (stmts=$nStmts), keep current")
+                        }
+                    }
+                }.onFailure { e ->
+                    LOG.warn("[M36] refreshConsoleModel timer FAILED: ${e.message}")
+                    timer.stop()
+                }
+            }
+            timer.isRepeats = true
+            timer.start()
+            // 重建后探针：确认 statementsRange 恢复非零（▶ isEnabled 依据）
+            runCatching {
+                val editorNow = preparedEditor ?: return@runCatching
+                val execNow = preparedExecOption ?: return@runCatching
+                val topNow = preparedTopBlock ?: return@runCatching
+                logDataContextCheck(topNow, console, editorNow, execNow, LOG)
+            }.onFailure { e ->
+                LOG.warn("[M36] refreshConsoleModel post-probe FAILED: ${e.message}")
+            }
+        }.onFailure { e ->
+            LOG.warn("[M36] refreshConsoleModel FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         }
     }
 
