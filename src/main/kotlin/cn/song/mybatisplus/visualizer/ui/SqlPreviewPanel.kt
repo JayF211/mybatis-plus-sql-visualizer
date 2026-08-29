@@ -161,7 +161,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var previewTempFile: com.intellij.openapi.vfs.VirtualFile? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
-    private val editorHolder = JBPanel<JBPanel<*>>(BorderLayout())
+    private val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
+        // M36.5.25e：GridLayout(1,1) 强制唯一子组件（内嵌控制台）fill——BorderLayout CENTER
+        // 受子组件 preferredSize 影响导致 editor 不 fill（实际高度≈preferred ~375，15 行 SQL
+        // 被截断）；GridLayout 按可用空间均分强制填满，editor 高度自适应窗口大小，无需固定
+        // minimumSize 兜底。首次塌缩兜底由 editorComponentRaw 的 minimumSize 承担。
+        isOpaque = false
+    }
 
     // M36.5：SQL 执行状态面板（主面板 SOUTH——仅在有状态/错误内容时可见，避免空白占位）
     private val resultPanel = SqlResultPanel().apply {
@@ -389,8 +395,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * M36.5：发起控制台默认准备（面板展示时调用，不执行）——
-     * Ultimate 下原生控制台即刻可见（静默复用 last-used 数据源/唯一数据源）；
+     * Ultimate 下原生控制台即刻可见（▶ 工具栏/Tx Auto/Playground 等 DBN 原生元素常驻预览面板）；
      * Community 下静默回退自研编辑器；无数据源静默引导（不弹错误打断预览）。
+     *
+     * M36.5.25g 试过回退"预览即 DBN 控制台"——但用户明确要求**预览阶段也显示 DBN 工具栏**
+     *（▶ 工具栏需始终可见），故恢复 prepareConsole 调用。
      */
     private fun prepareDefaultConsole() {
         val proj = project ?: return
@@ -425,7 +434,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val sp = consoleComponent
             sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
                 override fun componentResized(e: java.awt.event.ComponentEvent) {
-                    if (sp.width > 0 && sp.getDividerLocation() <= 0) sp.setDividerLocation(0.4)
+                    // M36.5.25f：divider 初始 60%（编辑器主导，SQL 不被压扁），自适应用户拖拽
+                    if (sp.width > 0 && sp.getDividerLocation() <= 0) sp.setDividerLocation(0.6)
                     sp.removeComponentListener(this)
                 }
             })

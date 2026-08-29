@@ -473,6 +473,8 @@ object DataSourceSelector {
         ui: Any?,
         topBlock: javax.swing.JComponent,
         resultComponent: javax.swing.JComponent?,
+        console: Any,
+        sql: String,
         LOG: com.intellij.openapi.diagnostic.Logger,
     ) {
         if (ui == null || resultComponent == null) return
@@ -491,32 +493,45 @@ object DataSourceSelector {
                     }
                     // 换入时重新取结果区组件——RunnerLayoutUi 可能在面板分离/重挂后重建组件，
                     // prepare 时捕获的引用可能已非当前展示实例（M36.5.5 复用面板空显示的疑因）。
-                    // 注意：**不消费** pendingOnConsole——contentAdded 在查询提交时触发，数据到达
-                    // 后 RunnerLayoutUi 可能再次重建组件，refreshResultsComponent 的限时重取
-                    // 依赖该回调（去重靠 lastLiveResultSwapped）。
                     val liveResult = runCatching {
                         ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
                     }.getOrNull() ?: resultComponent
                     lastLiveResultSwapped = liveResult
-                    // M36.5.22：**每次 contentAdded 都重建**——原实现首次换入后 fullCache 恒不为
-                    // null，后续执行复用的是**含上一轮结果组件的旧 SplitPane**，新结果永远不显示
-                    //（第二次执行结果栏停留在上一轮的第二个机制）。M36.5.10 已实证结果组件实例
-                    // 恒定，故不能依赖"实例变化"判定，必须无条件按实时组件重建。
                     val full = buildConsoleSplitPane(topBlock, liveResult).also {
                         fullCache = it
                         preparedFullComponent = it
                     }
-                    // M36.5.7：写回共享缓存——否则下次复用嵌的是换入前的旧编辑器块
-                    //（M36.5.6 第二次预览结果栏消失根因）
                     sharedTopBlock = topBlock
                     sharedFullComponent = full
-                    // M36.5.19：换入打点——contentAdded 回调体内异常会静默吞掉换入（EDT），打点定位
                     LOG.info("[M36] contentAdded swap-in dispatched (name=$name, rebuilt=true)")
-                    // M36.5.13：ModalityState.any()——模态弹窗（File Cache Conflict/密码框）期间
-                    // 照常换入（默认 modality 的 invokeLater 会被冻结，沙盒 48s 挂起实证）
                     ApplicationManager.getApplication().invokeLater({
                         runCatching { callback.invoke(full) }.onFailure { ex ->
                             LOG.warn("[M36] contentAdded swap-in FAILED: ${ex.javaClass.simpleName}: ${ex.message}", ex)
+                        }
+                        // M36.5.25c：换入后重写 SQL 到 console document——topBlock reparent 到新
+                        // SplitPane 后 editor 内容可能被清空（图1 SQL 区域空白根因），用 prepared
+                        // 时的 SQL 文本写回 console document 保证编辑器显示完整 SQL。
+                        runCatching {
+                            val consoleDoc = console.javaClass.getMethod("getDocument")
+                                .invoke(console) as? com.intellij.openapi.editor.Document
+                            if (consoleDoc != null && consoleDoc.text != sql && sql.isNotBlank()) {
+                                @Suppress("DEPRECATION")
+                                com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(
+                                    console.javaClass.getMethod("getProject").invoke(console) as? com.intellij.openapi.project.Project
+                                        ?: return@runCatching
+                                ) {
+                                    consoleDoc.setText(sql)
+                                }
+                                // 光标移到文档开头（用户体验：能立即看到第一条 SQL）
+                                runCatching {
+                                    val ed = com.intellij.openapi.editor.EditorFactory.getInstance()
+                                        .getEditors(consoleDoc).firstOrNull()
+                                    ed?.let { ed.selectionModel.removeSelection(); ed.caretModel.moveToOffset(0) }
+                                }
+                                LOG.info("[M36] contentAdded: console doc rewritten (len=${consoleDoc.textLength})")
+                            }
+                        }.onFailure { e ->
+                            LOG.warn("[M36] contentAdded rewrite FAILED: ${e.message}")
                         }
                     }, com.intellij.openapi.application.ModalityState.any())
                 }
@@ -553,19 +568,22 @@ object DataSourceSelector {
                 ReadAction.compute<Unit, Throwable> {
                     val ctx = com.intellij.ide.DataManager.getInstance()
                         .getDataContext(editorBlock)
-                    val projectOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT.name) != null
-                    val editorOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR.name) != null
-                    val clientKeyName = runCatching {
-                        (Class.forName("com.intellij.database.console.client.SessionClientHolder")
+                    // T-M52 修复（verifier 2026-08-29）：DataContext.getData(String) 在 262 既标
+                    // deprecated-for-removal 又标 Internal，改用 DataKey.getData(ctx) 类型化取值
+                    val projectOk = com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT.getData(ctx) != null
+                    val editorOk = com.intellij.openapi.actionSystem.CommonDataKeys.EDITOR.getData(ctx) != null
+                    val clientKey = runCatching {
+                        Class.forName("com.intellij.database.console.client.SessionClientHolder")
                             .getField("CLIENT_KEY").get(null)
-                                as com.intellij.openapi.actionSystem.DataKey<*>).name
+                                as com.intellij.openapi.actionSystem.DataKey<*>
                     }.getOrNull()
-                    val consoleOk = clientKeyName != null && ctx.getData(clientKeyName) != null
-                    val psiOk = ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.name) != null
+                    val consoleOk = clientKey != null && clientKey.getData(ctx) != null
+                    val psiFile = com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.getData(ctx)
+                    val psiOk = psiFile != null
                     val sqlAtPlace = runCatching {
                         Class.forName("com.intellij.database.console.JdbcConsoleProvider")
                             .getMethod("isSqlAtPlace", PsiFile::class.java, com.intellij.openapi.editor.Editor::class.java)
-                            .invoke(null, ctx.getData(com.intellij.openapi.actionSystem.CommonDataKeys.PSI_FILE.name), editor)
+                            .invoke(null, psiFile, editor)
                     }.getOrNull()
                     val statementsRange = runCatching {
                         val clientClass = Class.forName("com.intellij.database.console.client.DatabaseScriptingSessionClient")
@@ -589,14 +607,54 @@ object DataSourceSelector {
                         val lang = runCatching {
                             model?.javaClass?.getMethod("getLanguage")?.invoke(model) as? com.intellij.lang.Language
                         }.getOrNull()
-                        val stmtDetail = stmts?.take(3)?.map {
+                        // M36.5.24m：先 toList 再取 detail——statements() 是单次 JBIterable，
+                        // 先 take 会消耗迭代器导致 toList 返回 0（探针顺序 bug，23:10 实证）
+                        val stmtsList = stmts?.toList() ?: emptyList<Any>()
+                        val stmtDetail = stmtsList.take(3).map {
                             val cls = it?.javaClass?.simpleName
-                            val r = runCatching {
-                                it?.javaClass?.getMethod("getTextRange")?.invoke(it)
-                            }.getOrNull()
+                            // SIt 无 getTextRange()，有 range()（ModelItBase，javap 实证）
+                            val r = runCatching { it?.javaClass?.getMethod("getTextRange")?.invoke(it) }.getOrNull()
+                                ?: runCatching { it?.javaClass?.getMethod("range")?.invoke(it) }.getOrNull()
                             "$cls($r)"
-                        }?.joinToString(",")
+                        }.joinToString(",")
                         val modelIdentity = System.identityHashCode(model)
+                        // M36.5.24k/m：subModel/filter 诊断——statementsRange 零长度的直接环节。
+                        // getSelectedStatementsRange 的 adjustSelectionRange（isEmpty 分支）：
+                        //   subModel(PositionRange(光标行)).statements().filter(isStatement).last()
+                        // 返回 null → 回退 selection。PositionRange extends TextRange（javap 实证），
+                        // subModel 反射参数须用 TextRange.class（PositionRange.class 精确匹配失败）。
+                        val subDiag = runCatching {
+                            val posRangeClass = Class.forName("com.intellij.database.script.ScriptModel\$PositionRange")
+                            val posRange = posRangeClass.getConstructor(com.intellij.openapi.util.TextRange::class.java)
+                                .newInstance(com.intellij.openapi.util.TextRange.create(0, editor.document.textLength))
+                            val sub = model?.javaClass
+                                ?.getMethod("subModel", com.intellij.openapi.util.TextRange::class.java)
+                                ?.invoke(model, posRange)
+                            val subStmts = runCatching {
+                                (sub?.javaClass?.getMethod("statements")?.invoke(sub) as? Iterable<*>)
+                            }.getOrNull()?.toList()
+                            val filterCond = runCatching {
+                                // 手工 filter：ScriptModelUtil.adjustSelectionRange$0 = EvaluationHelper.isStatement
+                                val utilClass = Class.forName("com.intellij.database.script.ScriptModelUtil")
+                                val stmtItClass = Class.forName("com.intellij.database.script.ScriptModel\$StatementIt")
+                                // 取 sub 的 statements 第一条做 isStatement 判定（经 EvaluationHelper）
+                                val first = subStmts?.firstOrNull()
+                                val api = first?.javaClass?.getMethod("api")?.invoke(first)
+                                val helper = Class.forName("com.intellij.sql.dialects.EvaluationHelper")
+                                val isStmt = runCatching {
+                                    helper.getMethod("isStatement", api?.javaClass)
+                                        .invoke(null, api) as? com.intellij.openapi.util.Condition<*>
+                                }.getOrNull()
+                                val v = runCatching {
+                                    @Suppress("UNCHECKED_CAST")
+                                    (isStmt as? com.intellij.openapi.util.Condition<Any>)?.value(first)
+                                }.getOrNull()
+                                "firstStmt=${
+                                    first?.javaClass?.simpleName
+                                }(${runCatching { first?.javaClass?.getMethod("range")?.invoke(first) }.getOrNull()}) api=${api?.javaClass?.simpleName} isStatement=$v"
+                            }.getOrElse { "filter FAILED:${it.message}" }
+                            "stmts=$stmtsList.size subModelStmts=${subStmts?.size} $filterCond"
+                        }.getOrElse { "subDiag FAILED:${it.message}" }
                         // M36.5.24c：document 关系诊断——console.getDocument() 与 editor.document 是否
                         // 同一对象；console.getFile() 的 PSI 状态；consoleVf document 内容。
                         val docRel = runCatching {
@@ -620,7 +678,7 @@ object DataSourceSelector {
                                 "consoleFile=${file?.javaClass?.simpleName}:${file?.textLength}:" +
                                 "${file?.virtualFile?.name}"
                         }.getOrElse { "docRel FAILED:${it.message}" }
-                        "modelIsActual=$isActual stmts=${stmts?.toList()?.size} modelRange=$tr lang=${lang?.id} stmtsDetail=[$stmtDetail] modelId=$modelIdentity docLen=${editor.document.textLength} caret=${editor.caretModel.offset} execSelection=${runCatching { execOption.javaClass.getField("execSelection").getInt(execOption) }.getOrNull()} $docRel"
+                        "modelIsActual=$isActual stmts=$stmtsList.size modelRange=$tr lang=${lang?.id} stmtsDetail=[$stmtDetail] modelId=$modelIdentity docLen=${editor.document.textLength} caret=${editor.caretModel.offset} execSelection=${runCatching { execOption.javaClass.getField("execSelection").getInt(execOption) }.getOrNull()} $docRel | $subDiag"
                     }.getOrNull()
                     LOG.info(
                         "[M36] dataContext check: PROJECT=$projectOk, EDITOR=$editorOk, CLIENT_KEY=$consoleOk, PSI_FILE=$psiOk, " +
@@ -797,16 +855,15 @@ object DataSourceSelector {
             // 占位满屏）。强制可见 + 首选高度兜底，任何宿主布局下编辑器块均可占位可见。
             val editorComponentRaw: javax.swing.JComponent? = editor?.component?.apply {
                 isVisible = true
-                if (preferredSize == null || preferredSize.height < 50) {
-                    preferredSize = java.awt.Dimension(400, 200)
-                }
-                // M36.5.25：首次预览只嵌顶部块（非 SplitPane）时走不到 divider 修复，
-                // BorderLayout 按 preferred=0 分配高度 → 编辑器塌缩、SQL 被 Console output
-                // 占位遮住一大块（22:12 用户实证，第二次嵌完整 SplitPane 后需手动切换布局
-                // 才恢复）。minimumSize 兜底——空间不足时布局管理器至少给编辑器保留高度。
-                if (minimumSize == null || minimumSize.height < 200) {
-                    minimumSize = java.awt.Dimension(400, 200)
-                }
+                    // M36.5.25e：editor 兜底 200——GridLayout(1,1) 已强制 fill，固定高度不再
+                    // 需要（700 在窗口小时会溢出）；preferredSize/minimumSize 仅作首次塌缩
+                    //（preferred=0）的兜底，正常自适应由布局管理器保证。
+                    if (preferredSize == null || preferredSize.height < 50) {
+                        preferredSize = java.awt.Dimension(400, 200)
+                    }
+                    if (minimumSize == null || minimumSize.height < 200) {
+                        minimumSize = java.awt.Dimension(400, 200)
+                    }
             }
             LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponentRaw")
             if (editorComponentRaw == null) return
@@ -939,14 +996,16 @@ object DataSourceSelector {
             // 旧引用显示停留在上一轮（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）；
             // startResultTabRetry 找到结果 Tab 后重取组件换入（refreshResultsComponent）。
             pendingOnConsole = onConsole
-            val component: javax.swing.JComponent = if (executeAfterPrepare) (fullComponent ?: topBlock) else topBlock
+            // M36.5.25i：统一 embed fullComponent（完整 SplitPane 含 ▶ 工具栏 + SQL + 结果区占位）——
+            // executeAfterPrepare=false 也常驻结果区占位（Tx/Console output），布局与图2 一致。
+            val component: javax.swing.JComponent = fullComponent ?: topBlock
             preparedTopBlock = topBlock
             preparedResultComponent = resultComponent
             preparedFullComponent = if (executeAfterPrepare) fullComponent else null
             LOG.info("[M36] embed component=$component (executeAfterPrepare=$executeAfterPrepare)")
 
             if (!executeAfterPrepare) {
-                attachResultsHook(ui, topBlock, resultComponent, LOG)
+                attachResultsHook(ui, topBlock, resultComponent, console, editor.document.text, LOG)
             }
             logDataContextCheck(editorComponent, console, editor, execOption, LOG)
             clearConsolePrompt(console, LOG)
@@ -992,7 +1051,16 @@ object DataSourceSelector {
     ) {
         runCatching {
             val consoleClass = Class.forName(CONSOLE_CLASS)
-            val lang = com.intellij.lang.LanguageUtil.getLanguageForPsi(project, consoleVf)
+            // M36.5.26：model 的 language 必须用 **SqlDialect（方言 Language 实例）**——
+            // `LanguageUtil.getLanguageForPsi` 返回 SQL 插件的 MySQLLanguage（id="MySQL"），
+            // 而 DBN 的 `EvaluationHelper.isStatement` 经 `LanguageExtension.forLanguage` 注册在
+            // **SqlDialectMappings 的 SqlDialect 实例**上（00:26 探针实证 isStatement=null）——
+            // 两者不匹配导致 filter(isStatement) 抛弃全部语句 → statementsRange=(0,0) → ▶ 灰。
+            val lang = runCatching {
+                Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
+                    .getMethod("getMapping", Project::class.java, com.intellij.openapi.vfs.VirtualFile::class.java)
+                    .invoke(null, project, consoleVf) as? com.intellij.lang.Language
+            }.getOrNull() ?: com.intellij.lang.LanguageUtil.getLanguageForPsi(project, consoleVf)
             val fresh = Class.forName("com.intellij.sql.script.SqlScriptModel")
                 .getConstructor(
                     Project::class.java,
@@ -1074,6 +1142,15 @@ object DataSourceSelector {
                         if (stable >= 2) {
                             timer.stop()
                             LOG.info("[M36] refreshConsoleModel: model stable (stmts=${curStmts.size})")
+                            // stable 后最终探针——确认 statementsRange 恢复非零（▶ isEnabled 依据）
+                            runCatching {
+                                val editorNow = preparedEditor ?: return@runCatching
+                                val execNow = preparedExecOption ?: return@runCatching
+                                val topNow = preparedTopBlock ?: return@runCatching
+                                logDataContextCheck(topNow, console, editorNow, execNow, LOG)
+                            }.onFailure { e ->
+                                LOG.warn("[M36] refreshConsoleModel stable-probe FAILED: ${e.message}")
+                            }
                         }
                     } else {
                         stable = 0
@@ -1141,7 +1218,9 @@ object DataSourceSelector {
                 g.fillRect(0, getDividerLocation(), width, getDividerSize())
             }
         }.apply {
-            resizeWeight = 0.4
+            // M36.5.25f：编辑器 60% / 结果区 40%——原 0.4 导致 SQL 区域只占 40%（窗口放大时
+            // 额外空间 60% 给结果区，SQL 被压扁）；0.6 让编辑器主导高度，随窗口自适应。
+            resizeWeight = 0.6
             isContinuousLayout = true
             isOneTouchExpandable = false
             dividerSize = 3
