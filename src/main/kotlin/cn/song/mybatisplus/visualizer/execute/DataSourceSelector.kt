@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.6.2-divider-anchor"
+    private const val BUILD_STAMP = "M36.5.51-divider-force"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -90,6 +90,16 @@ object DataSourceSelector {
      */
     @Volatile
     private var executionGeneration = 0
+
+    /**
+     * M36.5.44：结果换入代际——每次**真实提交**递增（executeOnConsole 的 afterSubmitted 前），
+     * 作废上一个执行遗留的 refreshResultsComponent Timer。跨执行竞态根因：SQL1 执行后起
+     * refresh Timer A，SQL2 执行后起 Timer B；若 SQL1 的结果组件重建晚于 SQL2 换入，Timer A
+     * 拿到旧结果组件会**覆盖** SQL2 的新结果（"滞后一轮"用户实证）。代际不匹配的 Timer 回调
+     * 直接丢弃，杜绝互踩。
+     */
+    @Volatile
+    private var swapGeneration = 0
 
     // M36.5.7：共享缓存的分件存储——复用/换入时按**实时结果区组件**重建完整 SplitPane。
     // （组合组件引用在面板分离/重挂后会过期：M36.5.5 复用面板空显示、M36.5.6 第二次预览
@@ -347,15 +357,26 @@ object DataSourceSelector {
         }.onFailure { e ->
             LOG.warn("[M36] shared scriptModel vf-sync FAILED (keep cached): ${e.message}")
         }
-        // M36.5.7：完整 UI 按**实时结果区组件**重建（组合引用在面板分离/重挂后会过期——
-        // M36.5.5 复用面板空显示根因）；顶部块（原生头部+编辑器）自旧面板"偷"入新面板。
+        // M36.5.50：预览（execute=false 复用 console）时清空上个 SQL 的结果区残留——用户
+        // "还没执行就显示 t.id=1 旧结果"（预览 A=t.id=2 时结果区仍显示 B=t.id=1）。预览应显示
+        // 空态，执行后才出现结果。M36.5.46 的 realignSplitDivider 已保证清空后 bottom 为空
+        // 组件也校准 divider（不塌缩，M36.5.45b 的塌缩问题已修）。
+        if (!executeAfterPrepare) {
+            clearResultContents(sharedUi, LOG)
+        }
+        // M36.5.7：完整 UI 按**实时结果区组件**刷新——M36.5.41-A4 起不再重建 SplitPane：
+        // 持久整控台原位换底（身份稳定，sameAsPrev=true），仅整控台容器缺失时回退重建。
+        // （组合引用在面板分离/重挂后会过期——M36.5.5 复用面板空显示根因；顶部块（原生头部+编辑器）
+        // 自旧面板"偷"入新面板。）
         val liveResult = runCatching {
             sharedUi?.javaClass?.getMethod("getComponent")?.invoke(sharedUi) as? javax.swing.JComponent
         }.getOrNull()
-        val full = liveResult?.let { buildConsoleSplitPane(top, it) }
-            ?: sharedFullComponent
-            ?: return false
-        lastLiveResultSwapped = liveResult
+        val full = when {
+            liveResult == null -> sharedFullComponent
+            // M36.5.43：swap 助手强制换入（不再返回 null）——结果区从 DBN 宿主摘入本 SplitPane
+            else -> swapResultIntoPersistentConsole(sharedFullComponent, liveResult, top, LOG)
+        } ?: return false
+        if (liveResult != null) lastLiveResultSwapped = liveResult
         sharedFullComponent = full
         preparedConsole = console
         preparedEditor = editor
@@ -394,6 +415,80 @@ object DataSourceSelector {
     }
 
     /**
+     * M36.5.50：清空 RunnerLayoutUi 的**结果 Tab**（保留 Output 输出与 Tx 控制台），
+     * 用于预览切换时消除上个 SQL 的结果残留。反射调用 DBN 的 removeContent。
+     * 与 M36.5.45b 的差异：彼时清空后无 realignSplitDivider 兜底导致布局塌缩，已回退；
+     * 现 M36.5.46 换入后校准 divider，清空后 bottom 为空组件也不再塌缩。
+     */
+    private fun clearResultContents(ui: Any?, LOG: com.intellij.openapi.diagnostic.Logger) {
+        if (ui == null) return
+        runCatching {
+            val contents = ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
+                ?: return
+            val remove = ui.javaClass.getMethod("removeContent", com.intellij.ui.content.Content::class.java, Boolean::class.javaPrimitiveType)
+            contents.filter { !isOutputContent(it) }.forEach { content ->
+                runCatching { remove.invoke(ui, content, true) }.onFailure { ex ->
+                    LOG.warn("[M36] clear result content FAILED: ${ex.message}")
+                }
+            }
+            LOG.info("[M36] result contents cleared (preview switch, removed=${contents.count { !isOutputContent(it) }})")
+        }.onFailure { e ->
+            LOG.warn("[M36] clear result contents FAILED: ${e.message}")
+        }
+    }
+
+    /**
+     * M36.5.48：从 console 历史文档提取真实错误文本——仅当**超时无结果**（真失败/真超时）时
+     * 调用。DBN 查询执行失败（SQL 语法错/表不存在等）会把错误消息写入 console history。
+     *
+     * 提取规则（防误判）：只认**明确的 SQL 错误签名**（[ERROR_SIGNATURES]），且错误行不得是
+     * 纯 SQL 语句（含 SELECT/FROM/WHERE/JOIN 等 SQL 词），避免把正常 SQL 历史误判为错误
+     * （日志实证 `extracted console error: WHERE t.id = 1`——A 并无真失败，正常 SQL 片段被误报）。
+     */
+    private fun extractConsoleError(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger): String? {
+        if (console == null) return null
+        return runCatching {
+            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return null
+            val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return null
+            val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
+                ?: return null
+            val text = doc.javaClass.getMethod("getText").invoke(doc) as? String
+                ?: return null
+            if (text.isBlank()) return null
+            val lines = text.lines().filter { it.isNotBlank() }
+            // 从末尾往前找"明确错误签名"且"非纯 SQL"的行
+            val errorLine = lines.lastOrNull { line ->
+                ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) } && !isSqlLine(line)
+            } ?: return null
+            // 取错误行及其后非空行构成可读上下文（错误消息通常多行，后随详情）
+            val idx = lines.indexOf(errorLine)
+            val excerpt = lines.subList(idx, (idx + 4).coerceAtMost(lines.size)).joinToString("\n")
+            LOG.info("[M36] extracted console error: ${excerpt.take(160)}")
+            excerpt
+        }.getOrNull()
+    }
+
+    /** M36.5.48：明确 SQL 错误签名（防误报——只认这些才算真错误，而非正常 SQL 历史）。 */
+    private val ERROR_SIGNATURES = listOf(
+        "sql exception", "syntax error", "sqlstate", "unknown column",
+        "unknown table", "doesn't exist", "does not exist", "access denied",
+        "deadlock", "error code", "broken pipe", "connection refused",
+        "[\u65e5\u8bed\u9519\u8bef]", "sql\uff08", "exception in thread",
+    )
+
+    /** M36.5.48：判断一行是否纯 SQL 语句（避免把「WHERE t.id=1」等当错误）。 */
+    private fun isSqlLine(line: String): Boolean {
+        val lower = line.trim().lowercase()
+        // 含 SQL 关键字且无错误签名增强词 → 大概率是 SQL 文本而非错误
+        return (lower.startsWith("select") || lower.startsWith("from") ||
+            lower.startsWith("where") || lower.startsWith("join") ||
+            lower.startsWith("insert") || lower.startsWith("update") ||
+            lower.startsWith("delete") || lower.startsWith("create") ||
+            lower.startsWith("alter") || lower.startsWith("drop")) &&
+            !ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) }
+    }
+
+    /**
      * M36.5.8：清空控制台提示符（SQL 编辑器左侧 "rbac>"/">" 装饰）——用户反馈无用干扰。
      * 反编译实锤：DatabaseLogView 经 LanguageConsoleView.setPrompt(String) 维护（默认 ">"、
      * 带搜索路径时 "<数据源>>"）；置空后若数据源/搜索路径变化可能被插件重设，属可接受回退。
@@ -421,7 +516,7 @@ object DataSourceSelector {
      *  - Timer **每拍清提示符**——DatabaseLogView 在执行/数据渲染时重设 prompt（用户实测
      *    prepare/reuse/入口清理后仍重现），4.8s 窗口内持续压制。
      */
-    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false) {
+    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration) {
         val callback = pendingOnConsole ?: return
         val top = sharedTopBlock ?: preparedTopBlock ?: return
         val shared = sharedConsole
@@ -431,6 +526,12 @@ object DataSourceSelector {
         timer.addActionListener(object : java.awt.event.ActionListener {
             override fun actionPerformed(e: java.awt.event.ActionEvent) {
                 ticks++
+                // M36.5.44：代际不匹配 → 新执行已覆盖本 watch，丢弃（防"滞后一轮"互踩）
+                if (generation != swapGeneration) {
+                    timer.stop()
+                    LOG.info("[M36] results refresh cancelled (generation $generation != ${swapGeneration})")
+                    return
+                }
                 // M36.5.13：每拍清提示符（压制执行后重设）
                 if (shared != null) clearConsolePrompt(shared, LOG)
                 val live = runCatching {
@@ -438,10 +539,13 @@ object DataSourceSelector {
                 }.getOrNull()
                 val shouldSwap = live != null && (forceSwapIn && !swapped || live !== lastLiveResultSwapped)
                 if (shouldSwap && live != null) {
+                    // M36.5.41-A4：持久整控台原位换底（不重建 SplitPane，身份稳定）；
+                    // M36.5.43：swap 助手不再返回 null（强制换入），持久容器缺失时回退
+                    // buildConsoleSplitPane（feature flag）。
+                    val full = swapResultIntoPersistentConsole(sharedFullComponent, live, top, LOG)
                     val changed = live !== lastLiveResultSwapped
                     swapped = true
                     lastLiveResultSwapped = live
-                    val full = buildConsoleSplitPane(top, live)
                     sharedFullComponent = full
                     preparedFullComponent = full
                     val cb = pendingOnConsole
@@ -449,7 +553,7 @@ object DataSourceSelector {
                         // Timer 回调已在 EDT，直接换入（模态 pump 中 Timer 照常 fire）
                         cb.invoke(full)
                     }
-                    LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed)")
+                    LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, gen=$generation)")
                 }
                 if (ticks >= 8) {
                     timer.stop()
@@ -481,7 +585,6 @@ object DataSourceSelector {
         runCatching {
             val cm = ui.javaClass.getMethod("getContentManager").invoke(ui)
                 as com.intellij.ui.content.ContentManager
-            var fullCache: javax.swing.JComponent? = null
             cm.addContentManagerListener(object : com.intellij.ui.content.ContentManagerListener {
                 override fun contentAdded(event: com.intellij.ui.content.ContentManagerEvent) {
                     val name = event.content?.displayName ?: return
@@ -497,12 +600,15 @@ object DataSourceSelector {
                         ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
                     }.getOrNull() ?: resultComponent
                     lastLiveResultSwapped = liveResult
-                    val full = buildConsoleSplitPane(topBlock, liveResult).also {
-                        fullCache = it
-                        preparedFullComponent = it
-                    }
-                    sharedTopBlock = topBlock
+                    // M36.5.41-A4：持久整控台原位换底（不重建 SplitPane，身份稳定）；持久容器
+                    // 缺失时 swap 助手回退 buildConsoleSplitPane（feature flag，可回退旧路径）。
+                    val full = swapResultIntoPersistentConsole(
+                        sharedFullComponent ?: preparedFullComponent,
+                        liveResult, topBlock, LOG,
+                    )
+                    preparedFullComponent = full
                     sharedFullComponent = full
+                    sharedTopBlock = topBlock
                     LOG.info("[M36] contentAdded swap-in dispatched (name=$name, rebuilt=true)")
                     ApplicationManager.getApplication().invokeLater({
                         runCatching { callback.invoke(full) }.onFailure { ex ->
@@ -1044,7 +1150,9 @@ object DataSourceSelector {
             val component: javax.swing.JComponent = fullComponent ?: topBlock
             preparedTopBlock = topBlock
             preparedResultComponent = resultComponent
-            preparedFullComponent = if (executeAfterPrepare) fullComponent else null
+            // M36.5.41-A4：持久整控台**始终**缓存——executePrepared 的 onResultsReady 与
+            // 结果刷新都走原位换底，不再按次重建 SplitPane（身份稳定，sameAsPrev=true）。
+            preparedFullComponent = fullComponent
             LOG.info("[M36] embed component=$component (executeAfterPrepare=$executeAfterPrepare)")
 
             if (!executeAfterPrepare) {
@@ -1287,6 +1395,74 @@ object DataSourceSelector {
     }
 
     /**
+     * M36.5.41-A4：持久整控台——结果刷新时**原位换底**（bottomComponent 指向新结果实例），
+     * 不再重建 SplitPane。重建会让面板侧 embedConsole 身份漂移（sameAsPrev=false，方案 A 判据
+     * 失效），且旧 SplitPane 反复摘挂正是「右侧空白/显示链断裂」的来源（M36.5 根因级问题）。
+     * 顶部块（原生头部工具栏+编辑器）自构建起不再摘动；仅当整控台容器缺失（full 非分栏）时
+     * 回退 [buildConsoleSplitPane]（feature flag 语义，可回退旧路径）。
+     *
+     * M36.5.43 修正守卫：原实现"liveResult.parent != null 且 != sp → 跳过本拍"过度保守——
+     * 沙盒日志实证 `parent=ServiceViewComponentWrapper`（DBN 的服务视图宿主，结果的**长期老家**，
+     * 非 DBN 临时 reparent 中转），守卫把它误判为"临时持有"而**每拍跳过**，结果区永远进不了
+     * 面板（16:05 日志 `result component held by DBN ... skip this tick` 连续数十拍）。
+     * 正确语义：只要 liveResult 是当前结果实例且不在本 SplitPane（parent !== sp），就**强制换入**
+     *（从 ServiceView 摘出挂回面板）——DBN 的 ServiceView 是它"默认展示"宿主，方案 A 下结果
+     * 属于面板，我们保持不变式 SplitPane.bottom == liveResult。换入后 parent 必为 sp；被 DBN
+     * 抢走则下一拍再换回（幂等）。
+     */
+    private fun swapResultIntoPersistentConsole(
+        full: javax.swing.JComponent?,
+        liveResult: javax.swing.JComponent,
+        topBlock: javax.swing.JComponent,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ): javax.swing.JComponent {
+        val sp = full as? javax.swing.JSplitPane
+            ?: return buildConsoleSplitPane(topBlock, liveResult)
+        val current = sp.bottomComponent
+        if (current === liveResult && liveResult.parent === sp) {
+            // M36.5.45：同实例也要强制重绘——DBN 复用同一 Content 组件（DataGrid），实例不变
+            // 但内容已更新（如重复查询同一表），不重绘则用户仍看到上一个 SQL 结果（"执行 A
+            // 仍显示 B"沙盒实证 17:04:41 `instanceChanged=false`）。repaint 触发 DBN 重渲染。
+            // M36.5.46：同步校准 divider——同实例换入时 DBN 可能已 reparent/重挂，divider 落点
+            // 漂移到顶部（编辑器被压缩，用户截图"执行 A 后布局塌缩"实证）。布局初无尺寸不强改，
+            // 下一拍（尺寸就绪）再强制 60%。
+            realignSplitDivider(sp)
+            sp.revalidate()
+            sp.repaint()
+            return sp
+        }
+        // 强制换入：从 DBN 宿主（ServiceView 等）摘出，挂回本 SplitPane 底部。
+        if (current != null) sp.remove(current)
+        sp.bottomComponent = liveResult
+        realignSplitDivider(sp)
+        sp.revalidate()
+        sp.repaint()
+        LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${liveResult.parent?.javaClass?.simpleName ?: "null"})")
+        return sp
+    }
+
+    /**
+     * M36.5.46：校准整控台 SplitPane 分隔——DBN results refreshed/预览清空结果区后，
+     * divider 落点会漂移到顶部（编辑器被压缩，用户截图"布局塌缩"：SQL 区只剩 ~90px、
+     * 底部大片空白），或编辑器 preferred 偏小导致 top 不足。
+     *
+     * M36.5.51 增强：**无条件 invokeLater 强制 60%**——原实现只在 `topH < total*0.35` 或
+     * `height>=200` 才校准，但 clearResultContents 清空后 bottom 为空组件、top(编辑器)
+     * 塌缩且 topH 可能为 0，条件恒不满足 → 校准失效（塌缩复现）。换入后组件已在树中，
+     * 下一拍必有尺寸，直接强制 60%（编辑器主导），不依赖尺寸条件。幂等，不影响用户后续拖拽
+     *（换入=结果刷新，重置 60% 合理）。
+     */
+    private fun realignSplitDivider(sp: javax.swing.JSplitPane) {
+        ApplicationManager.getApplication().invokeLater({
+            if (sp.isShowing) {
+                sp.setDividerLocation(0.6)
+                sp.revalidate()
+                sp.repaint()
+            }
+        }, com.intellij.openapi.application.ModalityState.any())
+    }
+
+    /**
      * M36.5：在指定控制台上执行 SQL（后台线程 + ReadAction + 5s 超时 + 结果 Tab 激活重试）。
      * 由 [executePrepared]（已备控制台）与准备全链（executeAfterPrepare=true）共用。
      *
@@ -1482,6 +1658,11 @@ object DataSourceSelector {
                                                         val info = findScriptModel.invoke(null, vfPsi, vfPsi, editor, execOption)
                                                         if (info == null) {
                                                             LOG.warn("[M36] native findScriptModel returned null (nothing to run?)")
+                                                            // M36.5.48：findScriptModel 空 = 无可执行语句——显示**真实原因**，
+                                                            // 而非笼统凭据超时提示（此前误用 execute.credential.hint，误导用户查密码/驱动）。
+                                                            ApplicationManager.getApplication().invokeLater({
+                                                                onError?.invoke(MpSqlVisualizerBundle.message("execute.noStatement"))
+                                                            }, com.intellij.openapi.application.ModalityState.any())
                                                             return@submitTransactionLater
                                                         }
                                                         LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
@@ -1496,6 +1677,10 @@ object DataSourceSelector {
                                                                 cause.stackTrace.take(8).joinToString("\n    at ") { it.toString() },
                                                             cause,
                                                         )
+                                                        // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
+                                                        ApplicationManager.getApplication().invokeLater({
+                                                            onError?.invoke(cause.message ?: cause.toString())
+                                                        }, com.intellij.openapi.application.ModalityState.any())
                                                     }
                                                 }
                                         } catch (t: Throwable) {
@@ -1568,6 +1753,8 @@ object DataSourceSelector {
         onError: ((String) -> Unit)?,
         LOG: com.intellij.openapi.diagnostic.Logger,
     ) {
+        // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
+        swapGeneration++
         ApplicationManager.getApplication().invokeLater({
             // ① 快照：本次提交时已存在的结果 Tab **名称**（判定"新结果"的基线）。
             // M36.5.22b：实例身份判定失效——DBN 复用同一个 Content 实例并改名/更新
@@ -1576,7 +1763,11 @@ object DataSourceSelector {
             val pre = resultContents(ui)
             val preExistingNames = pre.map { it.displayName }.toSet()
             LOG.info("[M36] result watch started (pre-existing-names=$preExistingNames, ids=${pre.map { System.identityHashCode(it) }})")
-            // ② 8s 连接等待监控（从提交时刻起算）
+            // ② 8s 连接等待监控（从提交时刻起算）。M36.5.44 放宽：原判定 `!newTab || !namespaceOk`
+            // 双条件任一为假即报超时——但连接建立慢（首个 SQL，query 在 8s 后才完成）时
+            // newTab=false 且 namespace 可能暂空，**误报"执行超时"**（用户截图红字实证）。
+            // 改为：只要 8s 后**出现了新结果 Tab**（resultContents 有非 Output 且名不在快照）即视为
+            // 成功；仅当"既无新 Tab 又无有效 namespace"（连接确实没建起来）才提示凭据/驱动。
             if (ui != null && onError != null) {
                 val uiForWatch = ui
                 val hintOnError = onError
@@ -1585,29 +1776,36 @@ object DataSourceSelector {
                 watch.addActionListener {
                     watch.stop()
                     val newTab = resultContents(uiForWatch).any { it.displayName !in preExistingNames }
-                    // M36.5.16：连接健康检查——getCurrentNamespace() 为空 = 连接未建立
-                    //（工具栏数据源显示 <schema> 佐证）；旧 Tab 不足以判定正常。
                     val namespaceOk = runCatching {
                         val ns = consoleForWatch.javaClass
                             .getMethod("getCurrentNamespace").invoke(consoleForWatch)
                         ns != null && ns.toString().isNotBlank()
                     }.getOrDefault(true)
-                    if (!newTab || !namespaceOk) {
-                        LOG.info("[M36] no NEW result tab within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - panel hint")
+                    if (!newTab && !namespaceOk) {
+                        LOG.info("[M36] no NEW result tab AND no namespace within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - credential/driver hint")
                         hintOnError.invoke(MpSqlVisualizerBundle.message("execute.credential.hint"))
+                    } else {
+                        LOG.info("[M36] result/layout OK within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - no hint")
                     }
                 }
                 watch.isRepeats = false
                 watch.start()
             }
-            // ③ executePrepared 路径：把右侧从「仅顶部块」换入「顶部块+结果区」完整 UI。
-            //    JSplitPane 构造+换入必须一体在 EDT（M36.5.11 教训）。
+            // ③ executePrepared 路径：右侧已嵌持久整控台（M36.5.25i 统一 embed）——原位换底
+            //    后回调同一实例（面板侧 embedConsole 同实例防抖幂等吸收，身份稳定）。
+            //    JSplitPane 操作必须一体在 EDT（M36.5.11 教训）。
+            //    M36.5.44：换入**实时结果组件**（ui.getComponent()）而非 preparedResultComponent
+            //    （prepare 时捕获的占位，从未更新——用它会在第二次执行时把"首个 SQL 已换入的
+            //    真实结果"覆盖回占位，正是"滞后一轮"的直接来源）。拿不到实时组件则跳过，
+            //    交由 refreshResultsComponent 兜底。
             if (onResultsReady != null) {
                 val top = preparedTopBlock
-                val result = preparedResultComponent
-                if (top != null && result != null) {
-                    val full = preparedFullComponent ?: buildConsoleSplitPane(top, result)
-                        .also { preparedFullComponent = it }
+                val liveResult = runCatching {
+                    ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
+                }.getOrNull() ?: preparedResultComponent
+                if (top != null && liveResult != null) {
+                    // M36.5.43：swap 助手强制换入且不返回 null——结果区从 DBN 宿主摘入持久 SplitPane。
+                    val full = swapResultIntoPersistentConsole(preparedFullComponent, liveResult, top, LOG)
                     onResultsReady.invoke(full)
                     clearConsolePrompt(console, LOG)
                 }
@@ -1618,7 +1816,6 @@ object DataSourceSelector {
             }
         }, com.intellij.openapi.application.ModalityState.any())
     }
-
     /** 读取 RunnerLayoutUi 当前全部结果内容（排除 Output/输出）。 */
     internal fun resultContents(ui: Any?): List<com.intellij.ui.content.Content> {
         if (ui == null) return emptyList()
@@ -1641,8 +1838,9 @@ object DataSourceSelector {
      *     **立即选中**。注意必须按名称而非实例身份——DBN 复用同一 Content 实例并改名
      *     （17:25 沙盒实证：pre-existing=[Result 1]，retry#1 已见 Result 2 但实例身份
      *     过滤判定为旧 Tab → select=null → 滞后一轮）。
-     *  2. 只有旧名称的 Tab 时：attempts >= [REUSE_ACCEPT_TICKS]（6s）才接受复用
-     *     （防"任意见到旧 Tab 就换入"把上一轮结果顶进面板——M36.5.22 真因）。
+     *  2. 只有旧名称的 Tab 时：attempts >= [REUSE_ACCEPT_TICKS]（M36.5.44 降为 4 拍 1.6s）
+     *     才接受复用（防"任意见到旧 Tab 就换入"把上一轮结果顶进面板——M36.5.22 真因；
+     *     [swapGeneration] 已保证 watch 生命周期仅本次执行，同名 Tab 即本次结果，可快速接受）。
      *  3. 无结果 Tab（仅 Output/空）→ null（继续等待）。
      */
     internal fun pickResultTab(
@@ -1656,8 +1854,15 @@ object DataSourceSelector {
         return if (staleOne != null && attempts >= REUSE_ACCEPT_TICKS) staleOne else null
     }
 
-    /** M36.5.22b：旧 Tab 复用接受的最低 tick 数（400ms×15=6s）。 */
-    internal const val REUSE_ACCEPT_TICKS = 15
+    /**
+     * M36.5.44：旧 Tab 复用接受的 tick 数（400ms×N）。
+     * 原 15 拍（6s）对"重复执行同一 SQL、DBN 复用同名 Content"场景太慢——用户看到的上一次结果
+     * 会滞留 6 秒（沙盒 16:53 实证：执行2/执行3 `retry#1..#14` 全 select=null，retry#15 才换入，
+     * 期间状态栏恒"执行中..."）。降为 4 拍（1.6s）：既不卡 6 秒，又保留了"DBN 复用同名 Tab 时
+     * 内容更新需要时间"的合理缓冲（2 拍可能过早换入旧内容——提交后结果渲染未必即刻完成）。
+     * 同名 Tab 由 [swapGeneration] 保证属本次执行，最终都会换入；阈值只决定"多快接受复用"。
+     */
+    internal const val REUSE_ACCEPT_TICKS = 4
 
     /**
      * 结果 Tab 激活重试（EDT Timer 400ms 非阻塞；结果 Tab 异步创建）。
@@ -1669,14 +1874,15 @@ object DataSourceSelector {
      * M36.5.22b：`preExistingNames` = 提交时刻已存在的结果 Tab **名称**快照；**只认本次提交后
      * 新出现的名称**（此前按 Content 实例身份判定，DBN 复用同一个 Content 实例并改名/更新
      * 导致新 Tab 被误判为旧 Tab）。
-     * 若 15 拍（6s）后仍只有旧名称，判定为 DBN 复用 Tab 未改名，接受旧 Tab 换入并打点
-     * `result tab reused`（可观测，避免永远等待）。
+     * M36.5.44：接受旧 Tab 复用的阈值降为 [REUSE_ACCEPT_TICKS]（2 拍 0.8s）；且回调校验
+     * `generation != swapGeneration` 即停（新执行覆盖旧 watch，防空转造成"执行中..."卡顿）。
      */
     private fun startResultTabRetry(
         project: Project,
         ui: Any,
         onError: ((String) -> Unit)? = null,
         preExistingNames: Set<String> = emptySet(),
+        generation: Int = swapGeneration,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val selectRetry = object : java.awt.event.ActionListener {
@@ -1684,6 +1890,13 @@ object DataSourceSelector {
             val timer = javax.swing.Timer(400, null)
             override fun actionPerformed(e: java.awt.event.ActionEvent) {
                 attempts++
+                // M36.5.44：代际不匹配 → 新执行已覆盖本 watch，立即停止（否则空转到阈值，
+                // 期间用户看到上一次结果 + "执行中..."——滞后一轮的另一来源）。
+                if (generation != swapGeneration) {
+                    timer.stop()
+                    LOG.info("[M36] result tab retry cancelled (generation $generation != ${swapGeneration})")
+                    return
+                }
                 val contents = runCatching {
                     ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
                 }.getOrNull() ?: emptyArray()
@@ -1696,6 +1909,10 @@ object DataSourceSelector {
                 LOG.info("[M36] retry#$attempts contents=$all, ids=$ids, select=${result?.displayName}, preExisting=$preExistingNames")
                 if (result != null) {
                     timer.stop()
+                    // M36.5.48 勘误：此处**不**调用 extractConsoleError——结果 Tab 复用成功时
+                    // console history 含正常 SQL 文本（如 "WHERE t.id = 1"），会被误判为错误并
+                    // onError（日志实证 `extracted console error: WHERE t.id = 1`，误报 + 一闪而过）。
+                    // 真实失败原因只在"超时无结果"路径提取（那里才是真失败/超时）。
                     runCatching {
                         val select = ui.javaClass.getMethod(
                             "selectAndFocus",
@@ -1711,7 +1928,7 @@ object DataSourceSelector {
                     //（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）——重取组件换入。
                     // M36.5.13：forceSwapIn=true——结果 Tab 出现即有新结果，强制换入一次
                     //（组件实例可能恒定，"实例变化才换入"导致新结果不显示）
-                    refreshResultsComponent(ui, LOG, forceSwapIn = true)
+                    refreshResultsComponent(ui, LOG, forceSwapIn = true, generation = generation)
                 } else {
                     // M36.5.3：索引中放宽窗口（查询提交可能被 dumb mode 推迟）；连接等待期由
                     // 提交前的 8s 监控覆盖（M36.5.15），此处窗口保持原语义。
@@ -1726,9 +1943,13 @@ object DataSourceSelector {
                         // 此前 Messages.showWarningDialog 弹窗也会被模态预览窗口遮挡（用户实测
                         // "关闭窗口才出现提示"）；面板内红字必然可见，且不叠加新模态。
                         // ModalityState.any() 保证模态弹窗（如密码框）期间提示照常落地。
-                        val hint = MpSqlVisualizerBundle.message(
-                            if (dumb) "execute.indexing.hint" else "execute.credential.hint",
-                        )
+                        // M36.5.48：优先取 console 真实错误文本（DBN 查询失败写入 history）；
+                        // 读不到才 fallback 笼统 hint（超时/索引）。
+                        val realError = extractConsoleError(sharedConsole ?: preparedConsole, LOG)
+                        val hint = realError
+                            ?: MpSqlVisualizerBundle.message(
+                                if (dumb) "execute.indexing.hint" else "execute.credential.hint",
+                            )
                         ApplicationManager.getApplication().invokeLater({
                             onError?.invoke(hint)
                         }, com.intellij.openapi.application.ModalityState.any())
@@ -1910,7 +2131,24 @@ object DataSourceSelector {
             val updated = runCatching {
                 @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
                 com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
-                    existing.setBinaryContent(sql.toByteArray())
+                    // M36.5.43：优先 **document 驱动**三方同步（VFS/磁盘/document 一致），杜绝
+                    // MemoryDiskConflictResolver 弹 "File Cache Conflict"（16:05:39 沙盒实证
+                    // documentStamp:1742 vs oldFileStamp:779）。executeOnConsole 里"console doc
+                    // synced+committed to vf"同款模式已被验证无冲突；若仅 setBinaryContent（只改
+                    // VFS+磁盘、不动已打开的 document 内存），console 编辑器 hold 的 document 与
+                    // 磁盘 stamp 不一致 → 弹窗冻结后续换入链。
+                    val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                        .getInstance().getDocument(existing)
+                    when {
+                        fileDoc != null && fileDoc.text != sql -> {
+                            fileDoc.setText(sql)
+                            com.intellij.psi.PsiDocumentManager.getInstance(project)
+                                .commitDocument(fileDoc)
+                        }
+                        fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
+                            .commitDocument(fileDoc)
+                        fileDoc == null -> existing.setBinaryContent(sql.toByteArray())
+                    }
                 }
                 true
             }.getOrDefault(false)

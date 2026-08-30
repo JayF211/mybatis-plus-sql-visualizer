@@ -184,6 +184,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     private var embeddedConsole: JComponent? = null
 
+    /**
+     * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。
+     * DBN results refreshed 期间会临时拿走 console 组件，旧的直挂方式（editorHolder.add(console)）
+     * 会把 editorHolder 的显示链一并波及（holderShowing=false → 右侧空白）；隔离后 DBN 只动
+     * consoleHost 子层，editorHolder/ThemedSplitPane 显示链稳定。
+     */
+    private val consoleHost = JBPanel<JBPanel<*>>(java.awt.BorderLayout()).apply { isOpaque = false }
+
+    /** M36.5.39-A1：最近一次嵌入 console 的身份 id（identityHashCode）——sameAsPrev 探针判定用。 */
+    private var lastConsoleEmbeddedId: Int? = null
+
+    /** M36.5.44：上次 re-host 时刻（去抖用）——DBN 结果刷新期高频 reparent，需最小间隔抑制死循环。 */
+    private var lastRehostAt: Long = 0L
+
     // M36.4：原生编辑器文档引用（参数回填/格式化时使用）
     /** 原生编辑器的文档引用（内嵌后参数变更同步用）。 */
     private var nativeEditorDoc: com.intellij.openapi.editor.Document? = null
@@ -453,21 +467,40 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * M36.4：将拼合的原生控制台 UI 组件内嵌到右侧 SQL 显示栏。
-     * M36.5.2：同一组件（缓存完整 UI 重复回调，如重复执行）不重复内嵌，防闪烁；
-     * SplitPane 初始分隔保险——组件拿到尺寸后若分隔位置仍塌缩在顶（编辑器
-     * preferredSize=0 场景），强制一次 40%；首触后自移除监听，不干预用户后续拖拽。
+     * M36.5.39-A1：入口身份探针——`sameAsPrev=true` 判定方案 A 路线有效（DBN results refreshed
+     * 后传入的是同一对象），false 则需升级 B 路线（见「原生控制台嵌入方案AB-开发计划」决策树）。
+     * M36.5.39-A2：嵌入统一走持久 consoleHost（容器只此一份），DBN 拿走组件时只清空 host 子层，
+     * editorHolder 显示链不断裂。
+     * M36.5.39-A3：组件被 DBN 完全释放（parent==null）后由 hierarchy 监听自动重挂，不等轮询。
      */
     private fun embedConsole(consoleComponent: JComponent) {
-        // M36.5.19：换入打点——"执行中不消失/结果区不出现"从此有判定依据
+        val id = System.identityHashCode(consoleComponent)
+        val prev = lastConsoleEmbeddedId
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-            .info("[M36] embedConsole: same=${consoleComponent === embeddedConsole}, type=${consoleComponent.javaClass.simpleName}")
-        if (consoleComponent === embeddedConsole) return
-        embeddedConsole?.let { old -> editorHolder.remove(old) }
+            .info("[M36] embedConsole identity: id=$id, prevEmbedded=$prev, sameAsPrev=${prev == id}, sameInstance=${consoleComponent === embeddedConsole}")
+        if (consoleComponent === embeddedConsole) {
+            // M36.5.47：同实例防抖时**不清空结果、不重挂**（防闪烁），但必须清除"执行中"
+            // loading 态——A 执行成功后 onResultsReady 回调同一实例（复用共享 console），
+            // 原实现直接 return 导致 resultPanel 停留 loading，状态栏恒"执行中..."（用户
+            // 实测"A 执行后停滞"）。结果区已在 console 组件内显示，清状态条即执行完成标志。
+            // M36.5.49：用 showIdle() 而非 showEmpty()——只清 loading/成功态，**保留错误态**，
+            // 避免执行失败后 showError 被后续 results refreshed 的同实例回调覆盖（"一闪而过"）。
+            resultPanel.showIdle()
+            return
+        }
+        // 摘除旧控制台（旧组件的 hierarchy 监听随组件废弃，无需显式解绑）
+        detachConsole()
         embeddedConsole = consoleComponent
+        lastConsoleEmbeddedId = id
         // 去边框防白边（内嵌组件/容器可能自带 border）
         consoleComponent.border = JBUI.Borders.empty()
         consoleComponent.isOpaque = false
-        editorHolder.add(consoleComponent, BorderLayout.CENTER)
+        // A2：host 挂入 editorHolder（clear/removeAll 后重挂，容器实例保持唯一）
+        editorHolder.removeAll()
+        editorHolder.add(consoleHost, java.awt.BorderLayout.CENTER)
+        consoleHost.removeAll()
+        consoleHost.add(consoleComponent, java.awt.BorderLayout.CENTER)
+        attachRehostListener(consoleComponent)
         if (consoleComponent is javax.swing.JSplitPane) {
             val sp = consoleComponent
             sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
@@ -497,9 +530,54 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         repaint()
     }
 
-    /** M36：摘除已内嵌的控制台组件（清空预览时调用；JdbcConsole 生命周期由 IDE 管理）。 */
+    /**
+     * M36.5.39-A3：DBN 释放监听——仅当组件被完全释放（parent==null，DBN 不再持有）且仍是当前
+     * 嵌入实例时调度重挂；parent!=null 表示 DBN 临时 reparent（results refreshed 中转），不抢，
+     * 避免竞争（方案 A 铁律）。
+     *
+     * M36.5.44 去抖修正：DBN 在 results refreshed 窗口内会**高频** reparent 整控台 SplitPane
+     *（parent 在 null↔consoleHost 间横跳），若每次 parent==null 都立即重挂，会导致
+     * "重挂→DBN 拿走→重挂…"无限循环（沙盒 16:40 实证：`console component released by DBN` 在
+     * 毫秒级刷屏 2753 次，页面持续闪烁）。加入最小重挂间隔 [REHOST_MIN_INTERVAL_MS]：DBN 正忙于
+     * reparent 时（两次释放间隔 < 门槛）跳过，待它稳定后再挂回——真正释放（DBN 不再碰）时
+     * 间隔必然 > 门槛，兜底不丢。幂等重试仍由 [rehostConsoleForTest] 保证。
+     */
+    private fun attachRehostListener(component: JComponent) {
+        component.addHierarchyListener { e ->
+            val parentChanged = (e.changeFlags and java.awt.event.HierarchyEvent.PARENT_CHANGED.toLong()) != 0L
+            if (!parentChanged || e.component.parent != null || e.component !== embeddedConsole) return@addHierarchyListener
+            val now = System.currentTimeMillis()
+            val since = now - lastRehostAt
+            if (since in 0 until REHOST_MIN_INTERVAL_MS) return@addHierarchyListener
+            lastRehostAt = now
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[M36] console component released by DBN (id=${System.identityHashCode(e.component)}) → re-host (since=${since}ms)")
+            // ModalityState.any()：模态弹窗 pump 期间重挂照常执行（纯 Swing 操作安全，M36.5.13 教训）
+            ApplicationManager.getApplication().invokeLater({
+                rehostConsoleForTest(e.component as? JComponent ?: return@invokeLater)
+            }, com.intellij.openapi.application.ModalityState.any())
+        }
+    }
+
+    /**
+     * M36.5.39-A3：重挂（同步逻辑抽出可单测）。仅接受当前嵌入实例且尚未挂回 host 的组件；
+     * 返回 true = 已重挂。
+     */
+    internal fun rehostConsoleForTest(component: JComponent): Boolean {
+        if (component !== embeddedConsole || component.parent === consoleHost) return false
+        consoleHost.removeAll()
+        consoleHost.add(component, java.awt.BorderLayout.CENTER)
+        consoleHost.revalidate()
+        consoleHost.repaint()
+        return true
+    }
+
+    /**
+     * M36：摘除已内嵌的控制台组件（清空预览时调用；JdbcConsole 生命周期由 IDE 管理）。
+     * M36.5.39-A2：只清空 consoleHost 子层，容器保留——再次嵌入复用同一容器。
+     */
     private fun detachConsole() {
-        embeddedConsole?.let { editorHolder.remove(it) }
+        embeddedConsole?.let { consoleHost.remove(it) }
         embeddedConsole = null
     }
 
@@ -2062,6 +2140,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M36.5.2：内嵌控制台组件（同实例防抖/替换断言用）。 */
     internal fun embedConsoleForTest(component: JComponent) = embedConsole(component)
     internal fun embeddedConsoleForTest(): JComponent? = embeddedConsole
+    /** M36.5.39-A2：持久包装容器 + 显示链宿主（ConsoleHostTest 断言用）。 */
+    internal fun consoleHostForTest(): JComponent = consoleHost
+    internal fun editorHolderForTest(): JComponent = editorHolder
+    /** M36.5.39-A1：最近一次嵌入 console 的身份 id（sameAsPrev 探针断言用）。 */
+    internal fun lastConsoleEmbeddedIdForTest(): Int? = lastConsoleEmbeddedId
 
     // ------------------------------------------------------------------
     // F-46：来源位置（来源列默认值）
@@ -2148,6 +2231,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** F-45：列信息标签页标题。 */
         private const val COLUMN_INFO_TAB_TITLE = "列信息"
+
+        /** M36.5.44：re-host 最小重挂间隔（ms）——DBN 结果刷新期高频 reparent，低于此间隔视为"还在被 DBN 处理"，跳过不抢，防死循环刷新闪烁。 */
+        private const val REHOST_MIN_INTERVAL_MS = 800L
 
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */

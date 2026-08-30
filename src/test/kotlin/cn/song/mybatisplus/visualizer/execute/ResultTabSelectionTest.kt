@@ -103,13 +103,13 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
         assertEquals("Result 2", picked?.displayName)
     }
 
-    // ==================== 场景三：旧 Tab 复用阈值（M36.5.22 防抢跑） ====================
+    // ==================== 场景三：旧 Tab 复用阈值（M36.5.22 防抢跑；M36.5.44 降至 4 拍 1.6s） ====================
 
     /** 只有旧名称 Tab 时，阈值前不得选中——否则把上一轮结果顶进面板（滞后一轮真因）。 */
     @Test
     fun testStaleTabNotPickedBeforeThreshold() {
         val stale = FakeContent("Result 1").proxy
-        val picked = DataSourceSelector.pickResultTab(arrayOf(stale), setOf("Result 1"), attempts = 14)
+        val picked = DataSourceSelector.pickResultTab(arrayOf(stale), setOf("Result 1"), attempts = DataSourceSelector.REUSE_ACCEPT_TICKS - 1)
         assertNull("阈值前不应选中旧 Tab（防旧结果抢跑）", picked)
     }
 
@@ -117,7 +117,7 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
     @Test
     fun testStaleTabAcceptedAtThreshold() {
         val stale = FakeContent("Result 1").proxy
-        val picked = DataSourceSelector.pickResultTab(arrayOf(stale), setOf("Result 1"), attempts = 15)
+        val picked = DataSourceSelector.pickResultTab(arrayOf(stale), setOf("Result 1"), attempts = DataSourceSelector.REUSE_ACCEPT_TICKS)
         assertEquals("Result 1", picked?.displayName)
     }
 

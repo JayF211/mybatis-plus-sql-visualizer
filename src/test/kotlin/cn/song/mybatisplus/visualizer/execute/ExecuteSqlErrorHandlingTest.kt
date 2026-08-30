@@ -100,6 +100,8 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
         )
         // 验证：文本颜色为红色（错误色）
         assertEquals("Error color should be red", java.awt.Color.RED, panel.infoLabel.foreground)
+        // M36.5.48：错误文本可复制——currentError 保留完整文本供复制按钮使用
+        assertEquals("currentError should hold the full error text", "Connection failed", panel.currentErrorForTest())
     }
 
     /**
@@ -143,6 +145,27 @@ class ExecuteSqlErrorHandlingTest : BasePlatformTestCase() {
         // 清空 → 隐藏
         panel.showEmpty()
         assertTrue("Panel should hide when empty (no blank placeholder)", !panel.isVisible)
+    }
+
+    /**
+     * 测试（M36.5.49）：showError 后 showIdle 保留错误——防止执行失败的错误文本
+     * 被后续 results refreshed 触发的 embedConsole 同实例 showIdle() 覆盖（"一闪而过"）。
+     */
+    @Test
+    fun testShowIdlePreservesError() {
+        val panel = SqlResultPanel()
+        panel.showError("Table 'xx' doesn't exist")
+
+        // showIdle（执行完成收尾）不应覆盖错误态
+        panel.showIdle()
+        assertEquals("showIdle should keep error text", "Table 'xx' doesn't exist", panel.currentErrorForTest())
+        assertTrue("panel should stay visible when error preserved", panel.isVisible)
+        assertEquals("state should remain ERROR", "ERROR", panel.stateForTest())
+
+        // 显式 showEmpty 才真正清空
+        panel.showEmpty()
+        assertEquals("showEmpty should clear error", null, panel.currentErrorForTest())
+        assertEquals("state should become EMPTY", "EMPTY", panel.stateForTest())
     }
 
     // ======================== M36.5 控制台准备/执行拆分 ========================
