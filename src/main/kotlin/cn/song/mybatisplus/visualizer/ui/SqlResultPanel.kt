@@ -35,12 +35,16 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         border = JBUI.Borders.empty(1, 4)
     }
 
-    /** M36.5.48：错误复制按钮（仅 showError 时可见），一键复制完整错误文本到剪贴板。 */
-    private val errorCopyButton = JButton().apply {
+    /** M36.5.48：错误复制按钮（仅 showError 时可见），一键复制完整错误文本到剪贴板。
+     * M36.5.53：加可见文字（原实现 JButton() 无 text，按钮空白几乎不可见——用户"不方便复制"）。 */
+    private val errorCopyButton = JButton(MpSqlVisualizerBundle.message("panel.copyError")).apply {
         isVisible = false
         isOpaque = false
-        border = JBUI.Borders.empty()
-        toolTipText = MpSqlVisualizerBundle.message("panel.copyError")
+        isContentAreaFilled = false
+        border = JBUI.Borders.empty(1, 6)
+        font = font.deriveFont(11f)
+        foreground = JBColor.namedColor("Link.activeForeground", JBColor.GRAY)
+        margin = JBUI.insets(0, 6, 0, 6)
         addActionListener {
             currentError?.let { copyToClipboard(it) }
         }
@@ -162,8 +166,12 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     fun showError(error: String) {
         state = State.ERROR
         currentError = error
-        infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.error", error)}</html>"
+        // M36.5.53：转义 HTML（错误含 < > & [charset] 等会破坏布局），并有界显示——
+        // 长错误不横向挤压（infoLabel 单行 + tooltip 完整），复制按钮在 EAST 不被挤掉。
+        val esc = error.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.error", esc)}</html>"
         infoLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
+        infoLabel.toolTipText = error   // M36.5.53：hover 显示完整错误（超长不截断可读）
         // M36.5.48：错误时显示复制按钮（用户可一键复制完整错误文本）
         errorCopyButton.isVisible = true
         errorCopyButton.revalidate()

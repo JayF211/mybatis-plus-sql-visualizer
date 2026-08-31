@@ -458,7 +458,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
         SqlExecutor.prepareConsole(
             proj, sql,
-            onConsole = { consoleComponent -> embedConsole(consoleComponent) },
+            // M36.5.58：预览换入控制台组件后**清空状态栏**——预览是干净上下文，不应残留上次
+            // 执行的结果/错误（用户"执行第二个 SQL 后预览第一个，状态栏还显示之前的错误"）。
+            // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
+            // 与本预览回调互不影响。
+            onConsole = { consoleComponent -> embedConsole(consoleComponent); resultPanel.showEmpty() },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
             onError = null,
@@ -503,6 +507,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         attachRehostListener(consoleComponent)
         if (consoleComponent is javax.swing.JSplitPane) {
             val sp = consoleComponent
+            // M36.5.51：预览（execute=false）时也强制 divider 60%——一次性 componentListener
+            // 的 `if (height<200) return` 在布局初期塌缩时不触发，导致"预览 SQL 编辑器塌缩"，
+            // 执行后才被 swap 的 realignSplitDivider 恢复（用户截图：预览布局问题，点执行后恢复）。
+            // invokeLater 下一拍组件已在树中，强制 60%（编辑器主导），不依赖 resize 时机。
+            ApplicationManager.getApplication().invokeLater({
+                if (sp.height > 0) {
+                    sp.setDividerLocation(0.6)
+                    sp.revalidate()
+                    sp.repaint()
+                }
+            }, com.intellij.openapi.application.ModalityState.any())
             sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
                 override fun componentResized(e: java.awt.event.ComponentEvent) {
                     // M36.6.2：无条件首触强制 60%——旧条件 getDividerLocation()<=0 在首次布局后恒
@@ -525,7 +540,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             })
         }
-        resultPanel.showEmpty()
+        // M36.5.49：用 showIdle 而非 showEmpty——换入新控制台组件时若刚显示了 showError
+        //（SQL 失败），showEmpty 会清掉错误（用户实测"SQL 错误无具体原因/一闪而过"）。
+        // showIdle 只清 loading/成功态，保留 ERROR 态；组件换入成功的结果区已就绪。
+        resultPanel.showIdle()
         revalidate()
         repaint()
     }

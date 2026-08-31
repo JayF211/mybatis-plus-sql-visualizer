@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.51-divider-force"
+    private const val BUILD_STAMP = "M36.5.68-output-probe"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -82,6 +82,14 @@ object DataSourceSelector {
 
     /** M36.5.9：最近一次换入宿主的结果区组件实例（执行后重取刷新的去重依据）。 */
     private var lastLiveResultSwapped: java.awt.Component? = null
+
+    /** M36.5.52：最近一次已上报的 SQL 错误文本——早检去重用（避免 console history 里上次
+     * 执行的残留错误每次早检重复上报；同一错误用户已见过则不再打扰）。 */
+    private var lastReportedError: String? = null
+
+    /** M36.5.57：本次执行开始时 console history 的长度基线——早检只扫**本次执行之后**新增的
+     * 文本，忽略 history 里的旧错误残留（否则正常 SQL 会把上个失败的错误"带过来"，用户实测）。 */
+    private var consoleErrorBaseline: Int = 0
 
     /**
      * M36.5.10：执行提交代际计数——executeQueries 提交经 DumbService.runWhenSmart 挂起期间，
@@ -361,8 +369,11 @@ object DataSourceSelector {
         // "还没执行就显示 t.id=1 旧结果"（预览 A=t.id=2 时结果区仍显示 B=t.id=1）。预览应显示
         // 空态，执行后才出现结果。M36.5.46 的 realignSplitDivider 已保证清空后 bottom 为空
         // 组件也校准 divider（不塌缩，M36.5.45b 的塌缩问题已修）。
+        // M36.5.62：连 console 历史（Output tab 回显的上个 SQL）一起清空——预览时应显示干净空态，
+        // 不残留上个执行/预览 SQL 的回显文本（用户实测"预览 sqlA 时下方显示之前执行过的 sqlB"）。
         if (!executeAfterPrepare) {
             clearResultContents(sharedUi, LOG)
+            clearConsoleHistory(console, LOG)
         }
         // M36.5.7：完整 UI 按**实时结果区组件**刷新——M36.5.41-A4 起不再重建 SplitPane：
         // 持久整控台原位换底（身份稳定，sameAsPrev=true），仅整控台容器缺失时回退重建。
@@ -389,6 +400,17 @@ object DataSourceSelector {
         preparedFullComponent = full
         onEditor?.invoke(editor)
         onConsole?.invoke(full)
+        // M36.5.55：预览（execute=false）复用 console 时也把结果区（bottom）折叠——divider 压到
+        // 接近底部，bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
+        if (!executeAfterPrepare) {
+            (full as? javax.swing.JSplitPane)?.let { sp ->
+                ApplicationManager.getApplication().invokeLater({
+                    sp.setDividerLocation(1.0)
+                    sp.revalidate()
+                    sp.repaint()
+                }, com.intellij.openapi.application.ModalityState.any())
+            }
+        }
         // M36.5.6：接管结果换入回调——后续任意路径执行产生新结果内容时换入本面板；
         // 已嵌完整组件场景由面板同实例防抖幂等吸收。
         pendingOnConsole = onConsole
@@ -438,12 +460,29 @@ object DataSourceSelector {
     }
 
     /**
+     * M36.5.57：取 console history 文档长度（反射 LanguageConsoleView historyViewer），
+     * 用作早检基线——本次执行后新增文本的起始偏移。
+     */
+    private fun consoleHistoryLength(console: Any?): Int {
+        if (console == null) return 0
+        return runCatching {
+            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return 0
+            val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return 0
+            val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer) ?: return 0
+            (doc.javaClass.getMethod("getTextLength").invoke(doc) as? Int) ?: 0
+        }.getOrDefault(0)
+    }
+
+    /**
      * M36.5.48：从 console 历史文档提取真实错误文本——仅当**超时无结果**（真失败/真超时）时
      * 调用。DBN 查询执行失败（SQL 语法错/表不存在等）会把错误消息写入 console history。
      *
      * 提取规则（防误判）：只认**明确的 SQL 错误签名**（[ERROR_SIGNATURES]），且错误行不得是
      * 纯 SQL 语句（含 SELECT/FROM/WHERE/JOIN 等 SQL 词），避免把正常 SQL 历史误判为错误
      * （日志实证 `extracted console error: WHERE t.id = 1`——A 并无真失败，正常 SQL 片段被误报）。
+     *
+     * M36.5.57：只扫 **consoleErrorBaseline 之后**的文本——历史残留错误（上个失败 SQL 写入的
+     * Unknown column 等）不在本次范围，正常 SQL 执行后不会"带过来"旧错误。
      */
     private fun extractConsoleError(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger): String? {
         if (console == null) return null
@@ -452,8 +491,16 @@ object DataSourceSelector {
             val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return null
             val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
                 ?: return null
-            val text = doc.javaClass.getMethod("getText").invoke(doc) as? String
+            var text = doc.javaClass.getMethod("getText").invoke(doc) as? String
                 ?: return null
+            // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
+            // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，return null。
+            val baseline = consoleErrorBaseline
+            if (baseline > 0 && text.length > baseline) {
+                text = text.substring(baseline)
+            } else if (baseline > 0) {
+                return null
+            }
             if (text.isBlank()) return null
             val lines = text.lines().filter { it.isNotBlank() }
             // 从末尾往前找"明确错误签名"且"非纯 SQL"的行
@@ -493,6 +540,32 @@ object DataSourceSelector {
      * 反编译实锤：DatabaseLogView 经 LanguageConsoleView.setPrompt(String) 维护（默认 ">"、
      * 带搜索路径时 "<数据源>>"）；置空后若数据源/搜索路径变化可能被插件重设，属可接受回退。
      */
+    /**
+     * M36.5.62：清空 console 历史文档（LanguageConsoleView historyViewer 的 document）——
+     * 预览（execute=false）时清除上一个 SQL 的历史残留。DBN 每次执行/预览都会把 SQL 回显到
+     * historyViewer（Output tab），`clearResultContents` 只移除 result Tab（ui.removeContent），
+     * **保留 Output content**——Output tab 仍显示上个 SQL 的回显文本（用户实测"预览 sqlA 时下方有
+     * 之前预览执行过的 sqlB"）。预览应显示干净空态，须连历史文档一起清空。
+     * 注意：执行路径（execute=true）**不清**——执行后 DBN 需重新回显本次 SQL，历史清空会让
+     * 执行结果上下文断链，且 consoleErrorBaseline 依赖历史长度基线（清空会改变基线语义）。
+     */
+    private fun clearConsoleHistory(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger) {
+        if (console == null) return
+        runCatching {
+            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return
+            val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return
+            val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer) ?: return
+            doc.javaClass.getMethod("setText", String::class.java).invoke(doc, "")
+            LOG.info("[M36] console history cleared (preview switch)")
+        }.onFailure { e ->
+            LOG.warn("[M36] clear console history FAILED: ${e.message}")
+        }
+    }
+
+    /** M36.5.8：清空控制台提示符（SQL 编辑器左侧 "rbac>"/">" 装饰）——用户反馈无用干扰。
+     * 反编译实锤：DatabaseLogView 经 LanguageConsoleView.setPrompt(String) 维护（默认 ">"、
+     * 带搜索路径时 "<数据源>>"）；置空后若数据源/搜索路径变化可能被插件重设，属可接受回退。
+     */
     private fun clearConsolePrompt(console: Any, LOG: com.intellij.openapi.diagnostic.Logger) {
         runCatching {
             val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return
@@ -516,7 +589,7 @@ object DataSourceSelector {
      *  - Timer **每拍清提示符**——DatabaseLogView 在执行/数据渲染时重设 prompt（用户实测
      *    prepare/reuse/入口清理后仍重现），4.8s 窗口内持续压制。
      */
-    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration) {
+    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null) {
         val callback = pendingOnConsole ?: return
         val top = sharedTopBlock ?: preparedTopBlock ?: return
         val shared = sharedConsole
@@ -532,6 +605,20 @@ object DataSourceSelector {
                     LOG.info("[M36] results refresh cancelled (generation $generation != ${swapGeneration})")
                     return
                 }
+                // M36.5.57：每拍早检错误（refresh 8 拍窗口覆盖 DBN 错误写入较晚的时机）——
+                // 首次执行结果 Tab 复用后 startResultTabRetry 找到 result 即停，但 DBN 把错误
+                // 写入 history 可能晚于其时点 → 首次执行漏检（用户"执行两次才出现错误"）。
+                // 本 Timer 在此阶段仍运转，每拍检查本次执行新增的错误并上报。
+                extractConsoleError(shared ?: preparedConsole, LOG)
+                    ?.takeIf { it != lastReportedError }?.let { err ->
+                        timer.stop()
+                        lastReportedError = err
+                        LOG.info("[M36] refresh console error detected (tick=$ticks): ${err.take(120)}")
+                        ApplicationManager.getApplication().invokeLater({
+                            onError?.invoke(err)
+                        }, com.intellij.openapi.application.ModalityState.any())
+                        return
+                    }
                 // M36.5.13：每拍清提示符（压制执行后重设）
                 if (shared != null) clearConsolePrompt(shared, LOG)
                 val live = runCatching {
@@ -615,18 +702,24 @@ object DataSourceSelector {
                             LOG.warn("[M36] contentAdded swap-in FAILED: ${ex.javaClass.simpleName}: ${ex.message}", ex)
                         }
                         // M36.5.25c：换入后重写 SQL 到 console document——topBlock reparent 到新
-                        // SplitPane 后 editor 内容可能被清空（图1 SQL 区域空白根因），用 prepared
-                        // 时的 SQL 文本写回 console document 保证编辑器显示完整 SQL。
+                        // SplitPane 后 editor 内容可能被清空（图1 SQL 区域空白根因），用**当前** SQL
+                        // 文本写回 console document 保证编辑器显示完整 SQL。
+                        // M36.5.56 修复：原实现用 attachResultsHook 捕获的**准备时 sql 快照**
+                        // 重写——用户执行新 SQL 后 contentAdded 触发时用它覆盖，导致 SQL 回退
+                        // 成上一个（日志实证：执行 417 后 `console doc rewritten (len=183)`，SQL
+                        // 变回 183）。改用**当前编辑器文档文本**（用户当前 SQL），不再用过期快照。
                         runCatching {
+                            val currentSql = (sharedEditor ?: preparedEditor)
+                                ?.document?.text?.takeIf { it.isNotBlank() } ?: sql
                             val consoleDoc = console.javaClass.getMethod("getDocument")
                                 .invoke(console) as? com.intellij.openapi.editor.Document
-                            if (consoleDoc != null && consoleDoc.text != sql && sql.isNotBlank()) {
+                            if (consoleDoc != null && consoleDoc.text != currentSql) {
                                 @Suppress("DEPRECATION")
                                 com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(
                                     console.javaClass.getMethod("getProject").invoke(console) as? com.intellij.openapi.project.Project
                                         ?: return@runCatching
                                 ) {
-                                    consoleDoc.setText(sql)
+                                    consoleDoc.setText(currentSql)
                                 }
                                 // 光标移到文档开头（用户体验：能立即看到第一条 SQL）
                                 runCatching {
@@ -1083,7 +1176,34 @@ object DataSourceSelector {
                     }
                 }.apply {
                     isOpaque = false
-                    add(editorComponentRaw, java.awt.BorderLayout.CENTER)
+                    // M36.5.59：编辑器拉伸填充修正——BorderLayout.CENTER 尊重子组件 preferred（仅
+                    // ~4 行高），DBN 控制台编辑器在长文档/空余区不扩展，topBlock 下方留下大面积
+                    // 面板底色"空洞"（用户截图实证：编辑器仅 ~80px，顶部区 ~240px）。改 GridLayout
+                    // (1,1)，与 editorHolder（SqlPreviewPanel:171）同机制：强制唯一子组件（原生控制台
+                    // 编辑器）fill 满容器，忽略其 preferred/maximum，任何宿主布局下编辑器块均占满
+                    // 分配的 topBlock，不留空区。
+                    layout = java.awt.GridLayout(1, 1)
+                    // 解除编辑器组件可能的 maximumSize 上限，确保 GridLayout fill 不被 preferred 推算压回
+                    add(editorComponentRaw)
+                    editorComponentRaw.maximumSize = java.awt.Dimension(
+                        Int.MAX_VALUE, Int.MAX_VALUE,
+                    )
+                    // M36.5.65：GridLayout 在某些 DBN 编辑器（自身带 header+editor 内部布局）上不生效
+                    // ——沙盒 BOUNDS 实证 `top=...x403` 但 `top.child[0]=...x234`（编辑器组件未填满，
+                    // 只到 234px，下方留面板底色空洞）。GridLayout 依赖容器 doLayout，而 DBN 编辑器
+                    // 组件内部 preferred=220 且不随父高扩展。兜底：随父 resize 强制把编辑器组件
+                    // setSize 到父容器可用高度（header 之外的全部），任何布局管理器下编辑器都填满。
+                    addComponentListener(object : java.awt.event.ComponentAdapter() {
+                        override fun componentResized(e: java.awt.event.ComponentEvent) {
+                            val avail = size
+                            if (avail.width > 0 && avail.height > 0) {
+                                editorComponentRaw.setSize(
+                                    avail.width, avail.height,
+                                )
+                                editorComponentRaw.revalidate()
+                            }
+                        }
+                    })
                 }
 
             // 4.4 原生控制台头部（M36.5.3）：JdbcConsole.buildHeaderComponent(Editor, JdbcConsole)
@@ -1145,8 +1265,10 @@ object DataSourceSelector {
             // 旧引用显示停留在上一轮（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）；
             // startResultTabRetry 找到结果 Tab 后重取组件换入（refreshResultsComponent）。
             pendingOnConsole = onConsole
-            // M36.5.25i：统一 embed fullComponent（完整 SplitPane 含 ▶ 工具栏 + SQL + 结果区占位）——
-            // executeAfterPrepare=false 也常驻结果区占位（Tx/Console output），布局与图2 一致。
+            // M36.5.53：预览也要嵌**完整 SplitPane**（而非仅 topBlock）——同一 topBlock 不能同时被
+            // editorHolder（预览挂载）和 SplitPane（执行换入）持有，否则执行后 SplitPane 的 top
+            // 失效（沙盒实证 topH=0，setDividerLocation 撑不起）。预览时 bottom（结果区占位）通过
+            // 清空 + divider 压底折叠，满足"未执行不显示结果面板"。
             val component: javax.swing.JComponent = fullComponent ?: topBlock
             preparedTopBlock = topBlock
             preparedResultComponent = resultComponent
@@ -1169,12 +1291,29 @@ object DataSourceSelector {
             sharedExecOption = execOption
             sharedUi = ui
             sharedTopBlock = topBlock
-            sharedFullComponent = component
+            // M36.5.53：sharedFullComponent 始终缓存**完整 SplitPane**（preparedFullComponent 也是
+            // fullComponent），不随预览时内嵌的 component（可能为 topBlock 编辑器）变化——否则
+            // 执行时 swapResultIntoPersistentConsole 拿到的 sharedFullComponent 是 topBlock（非
+            // SplitPane）→ 回退 buildConsoleSplitPane 重建 → A4 身份漂移。预留给执行复用。
+            sharedFullComponent = fullComponent
             sharedDataSourceName = dataSourceName
             if (dataSourceName != null) rememberRunnerName(project, dataSourceName)
 
             // 4.7 内嵌（同步，已在 EDT）
             onConsole?.invoke(component)
+
+            // M36.5.55：预览（尚未执行）时把结果区（bottom）折叠——divider 压到接近底部，
+            // bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
+            // 执行时 realignSplitDivider 展开 60%。用 invokeLater 等组件布局后再设 divider。
+            if (!executeAfterPrepare) {
+                (component as? javax.swing.JSplitPane)?.let { sp ->
+                    ApplicationManager.getApplication().invokeLater({
+                        sp.setDividerLocation(1.0)
+                        sp.revalidate()
+                        sp.repaint()
+                    }, com.intellij.openapi.application.ModalityState.any())
+                }
+            }
 
             // 5. 可选立即执行（selectAndExecute 全链语义；结果区已随完整 UI 内嵌，onResultsReady=null）
             if (executeAfterPrepare) {
@@ -1360,6 +1499,18 @@ object DataSourceSelector {
         topBlock: javax.swing.JComponent,
         resultComponent: javax.swing.JComponent,
     ): javax.swing.JComponent {
+        // M36.5.55：给 top（编辑器块）设最小高度兜底——JSplitPane 初始 divider 按 preferred 推算，
+        // 编辑器块（BorderLayout 包装 editorComponentRaw）preferred 可能为 0（未布局），导致 top
+        // collapse 到 0 高（沙盒实证 topH=0，setDividerLocation(0.6) 也撑不起来）。minimumSize
+        // 让 JSplitPane 至少给编辑器块留 260px，不被压塌。
+        topBlock.minimumSize = java.awt.Dimension(topBlock.minimumSize?.width ?: 400, 260)
+        // M36.5.64：给底（结果区）设最小高度兜底——DBN 结果区（RunnerLayoutUi grid）preferred=84px
+        // （只够 Output 一行），re-parent 后 JSplitPane 每次重排都会把 bottom 拉回 preferred
+        // （沙盒实证 `topH=569 total=656`=86%，bottom=84px）。minimumSize 让 JSplitPane 无法把
+        // 结果区压到 84px，至少留 160px，配合 realignSplitDivider 双向校正 60%，结果网格不再塌缩。
+        resultComponent.minimumSize = java.awt.Dimension(
+            resultComponent.minimumSize?.width ?: 400, 160,
+        )
         return object : javax.swing.JSplitPane(
             javax.swing.JSplitPane.VERTICAL_SPLIT, topBlock, resultComponent,
         ) {
@@ -1425,8 +1576,13 @@ object DataSourceSelector {
             // 仍显示 B"沙盒实证 17:04:41 `instanceChanged=false`）。repaint 触发 DBN 重渲染。
             // M36.5.46：同步校准 divider——同实例换入时 DBN 可能已 reparent/重挂，divider 落点
             // 漂移到顶部（编辑器被压缩，用户截图"执行 A 后布局塌缩"实证）。布局初无尺寸不强改，
-            // 下一拍（尺寸就绪）再强制 60%。
-            realignSplitDivider(sp)
+            // 下一拍（尺寸就绪）再强制 60%。force=true：执行换入覆盖预览折叠的 divider=1.0。
+            // M36.5.64：同实例路径也设 bottom 最小高度——否则 JSplitPane 重排时把结果区压回
+            // preferred(84px)，结果网格塌缩（沙盒 topH=569 total=656 实证）。
+            liveResult.minimumSize = java.awt.Dimension(
+                liveResult.minimumSize?.width ?: 400, 160,
+            )
+            realignSplitDivider(sp, force = true)
             sp.revalidate()
             sp.repaint()
             return sp
@@ -1434,32 +1590,132 @@ object DataSourceSelector {
         // 强制换入：从 DBN 宿主（ServiceView 等）摘出，挂回本 SplitPane 底部。
         if (current != null) sp.remove(current)
         sp.bottomComponent = liveResult
-        realignSplitDivider(sp)
+        // M36.5.64：换入路径也设 bottom 最小高度——防 JSplitPane 重排时把结果区压回 preferred。
+        liveResult.minimumSize = java.awt.Dimension(
+            liveResult.minimumSize?.width ?: 400, 160,
+        )
+        // M36.5.63：取证 liveResult 运行时类型 + 其内部是否 JSplitPane（RunnerLayoutUi 结果页内部
+        // sub-split 塌缩是 "Restore Default Layout 修复" 的根源——内外层两个 SplitPane 嵌套时，
+        // 外层 setDividerLocation 只调外层，内层（结果页 Output/结果/消息）塌缩仍显示 Output 一行）。
+        runCatching {
+            LOG.info("[M36] liveResult class=${liveResult.javaClass.name}, hasSplit=${liveResult is javax.swing.JSplitPane}")
+            if (liveResult is javax.swing.JSplitPane) {
+                LOG.info("[M36] liveResult divider=${liveResult.dividerLocation} orientation=${liveResult.orientation} top=${liveResult.topComponent?.javaClass?.simpleName} bottom=${liveResult.bottomComponent?.javaClass?.simpleName}")
+            }
+        }
+        realignSplitDivider(sp, force = true)
         sp.revalidate()
         sp.repaint()
         LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${liveResult.parent?.javaClass?.simpleName ?: "null"})")
         return sp
     }
 
-    /**
-     * M36.5.46：校准整控台 SplitPane 分隔——DBN results refreshed/预览清空结果区后，
-     * divider 落点会漂移到顶部（编辑器被压缩，用户截图"布局塌缩"：SQL 区只剩 ~90px、
-     * 底部大片空白），或编辑器 preferred 偏小导致 top 不足。
-     *
-     * M36.5.51 增强：**无条件 invokeLater 强制 60%**——原实现只在 `topH < total*0.35` 或
-     * `height>=200` 才校准，但 clearResultContents 清空后 bottom 为空组件、top(编辑器)
-     * 塌缩且 topH 可能为 0，条件恒不满足 → 校准失效（塌缩复现）。换入后组件已在树中，
-     * 下一拍必有尺寸，直接强制 60%（编辑器主导），不依赖尺寸条件。幂等，不影响用户后续拖拽
-     *（换入=结果刷新，重置 60% 合理）。
-     */
-    private fun realignSplitDivider(sp: javax.swing.JSplitPane) {
+    /** M36.5.52/53：校准整控台 SplitPane 分隔——[force]=true（执行换入）时**无条件**拉回 60%
+     *（覆盖预览折叠的 1.0）；[force]=false（componentListener 兜底）时仅当顶部<35% 才校正。
+     * 调用方：执行结果换入（force=true）、预览折叠后布局漂移兜底（force=false）。 */
+    private fun realignSplitDivider(sp: javax.swing.JSplitPane, force: Boolean = false) {
+        // ① invokeLater 下一拍（组件已 add 到树）
         ApplicationManager.getApplication().invokeLater({
-            if (sp.isShowing) {
-                sp.setDividerLocation(0.6)
-                sp.revalidate()
-                sp.repaint()
-            }
+            realignDividerOnce(sp, force)
         }, com.intellij.openapi.application.ModalityState.any())
+        // ② componentListener：每次布局后检查（force=false，只在顶部不足时校正）
+        sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) {
+                realignDividerOnce(sp, force = false)
+            }
+        })
+    }
+
+    /** 单次 divider 校正：[force]=true 无条件 0.6；[force]=false 双向校正——
+     *  顶部过小（topH < total*0.35，编辑器被压）或**顶部过大**（topH > total*0.68，结果区塌缩到
+     *  preferred，只显示 Output 一行）都拉回 0.6。M36.5.64：原实现只校正"顶部过小"，漏掉
+     *  "结果区塌缩"方向——DBN 结果区（RunnerLayoutUi grid）preferred=84px，re-parent 后内部
+     *  内容变化会把 bottom 拉回 preferred（沙盒上限 `topH=569 total=656`=86%，bottom=84px），
+     *  force=false 分支不触发 → 结果区一直塌缩（用户截图"Output 没撑满下方空白"）。 */
+    private fun realignDividerOnce(sp: javax.swing.JSplitPane, force: Boolean) {
+        if (sp.height < 100) return   // 布局初无尺寸，等下次
+        val topH = sp.topComponent?.height ?: 0
+        val total = sp.height
+        val log = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        val tooAuto = force || topH < total * 0.35 || topH > total * 0.68
+        if (tooAuto) {
+            log.info("[M36] divider realign(force=$force): topH=$topH total=$total → 0.6")
+            sp.setDividerLocation(0.6)
+            sp.revalidate()
+            sp.repaint()
+            dumpSplitBounds(sp, log)
+        } else {
+            log.info("[M36] divider OK: topH=$topH total=$total (no change)")
+        }
+    }
+
+    /** M36.5.60：运行时组件边界取证——像素扫描无法区分"编辑器未拉伸"与"编辑器拉伸但背景同色"
+     *（editor bg 43,45,48 vs panel bg 43,45,48 无差异）。直接 dump SplitPane/top/bottom 及其直接
+     * 子组件的真实 bounds + size，一锤定音：topblock 是否被编辑器真的 fill，结果区是否占满 bottom。 */
+    private fun dumpSplitBounds(sp: javax.swing.JSplitPane, log: com.intellij.openapi.diagnostic.Logger) {
+        runCatching {
+            fun b(c: java.awt.Component?): String = if (c == null) "null" else
+                "${c.javaClass.simpleName}@${System.identityHashCode(c)} bounds=${c.bounds} pref=${c.preferredSize} min=${c.minimumSize} max=${c.maximumSize}"
+            log.info("[M36][BOUNDS] sp=${b(sp)} divider=${sp.dividerLocation}")
+            log.info("[M36][BOUNDS]   top=${b(sp.topComponent)}")
+            (sp.topComponent as? java.awt.Container)?.components?.forEachIndexed { i, c ->
+                log.info("[M36][BOUNDS]   top.child[$i]=${b(c)}")
+                if (c is java.awt.Container) c.components.forEachIndexed { j, d ->
+                    log.info("[M36][BOUNDS]   top.child[$i].child[$j]=${b(d)}")
+                    // M36.5.61：编辑器视图（PanelWithFloatingToolbar）内部是否含未拉伸的 scrollpane/
+                    // viewport——mask 真相在此层（编辑器 view 有 bounds 但只 paint 内容高度）
+                    if (d is java.awt.Container) d.components.forEachIndexed { k, e ->
+                        log.info("[M36][BOUNDS]   top.child[$i].child[$j].child[$k]=${b(e)}")
+                        if (e is javax.swing.JScrollPane) {
+                            log.info("[M36][BOUNDS]     scrollpane viewport=${e.viewport?.let { v -> "${b(v)} vsbV=${e.verticalScrollBar?.isVisible} hsbV=${e.horizontalScrollBar?.isVisible}" } }")
+                        }
+                    }
+                }
+            }
+            log.info("[M36][BOUNDS]   bottom=${b(sp.bottomComponent)}")
+            // M36.5.63：递归看结果区内部——RunnerLayoutUi 结果页有内部 layout（Output/结果 sub-split），
+            // 换入时若内部 divider 塌缩（结果页只显示 Output 一行），外层 bounds 正确但内部是坏的。
+            fun dumpDeep(c: java.awt.Component?, depth: Int, path: String) {
+                if (c == null || depth > 12) return
+                val spExtra = if (c is javax.swing.JSplitPane) " div=${c.dividerLocation} split(${c.orientation})" else ""
+                log.info("[M36][BOUNDS]   ${path}=${b(c)}$spExtra")
+                if (c is java.awt.Container) {
+                    var idx = 0
+                    for (d in c.components) {
+                        dumpDeep(d, depth + 1, "$path.child[$idx]")
+                        idx++
+                    }
+                }
+            }
+            // 结果区整体（MyNonOpaquePanel/MyComponent）+ 内部两级，重点找 JSplitPane/塌缩 divider
+            (sp.bottomComponent as? java.awt.Container)?.components?.forEachIndexed { i, c ->
+                log.info("[M36][BOUNDS]   bottom.child[$i]=${b(c)}")
+                if (c is java.awt.Container) c.components.forEachIndexed { j, d ->
+                    dumpDeep(d, 2, "bottom.child[$i].child[$j]")
+                }
+            }
+            // M36.5.68：定位 Output 控制台（ConsoleView/EditorImpl 文本视图）真实高度——问题 SQL 后
+            // 结果 grid 内容 ProviderWrapper 填满 234px，但承载 Output 历史文本的滚动视图可能只按
+            // 内容高度渲染（2 行），下方留白。深扫所有 JScrollPane/JTextComponent，看谁没撑满。
+            fun scanTextViews(c: java.awt.Component?, path: String) {
+                if (c == null) return
+                val cls = c.javaClass.name
+                if (c is javax.swing.JScrollPane || cls.contains("ConsoleView") || cls.contains("EditorImpl") || c is javax.swing.text.JTextComponent) {
+                    log.info("[M36][BOUNDS][TEXT] $path ${cls.substringAfterLast('.')} bounds=${c.bounds} pref=${c.preferredSize}")
+                    if (c is javax.swing.JScrollPane) {
+                        log.info("[M36][BOUNDS][TEXT]   viewport=${c.viewport?.let { it.bounds.toString() }} vsbV=${c.verticalScrollBar?.isVisible}")
+                        c.viewport?.let { scanTextViews(it.view, "$path.view") }
+                    }
+                }
+                if (c is java.awt.Container) {
+                    var idx = 0
+                    for (d in c.components) { scanTextViews(d, "$path.child[$idx]"); idx++ }
+                }
+            }
+            (sp.bottomComponent as? java.awt.Container)?.let { scanTextViews(it, "bottom") }
+        }.onFailure { e ->
+            log.info("[M36][BOUNDS] dump failed: ${e.message}")
+        }
     }
 
     /**
@@ -1480,6 +1736,11 @@ object DataSourceSelector {
         onError: ((String) -> Unit)?,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        // M36.5.52：新执行重置错误去重基线——本次执行产生的错误应上报，不与上次残留混淆。
+        lastReportedError = null
+        // M36.5.57：记录本次执行开始时 console history 基线长度——早检只扫本次之后新增文本，
+        // 忽略 history 残留（正常 SQL 不再"带过来"上个失败的错误）。
+        consoleErrorBaseline = consoleHistoryLength(console)
         runCatching {
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
@@ -1897,6 +2158,21 @@ object DataSourceSelector {
                     LOG.info("[M36] result tab retry cancelled (generation $generation != ${swapGeneration})")
                     return
                 }
+                // M36.5.56：每拍开头统一早检错误（**不再只放 else 分支**）——DBN 查询失败写
+                // console history 后应立即上报，无论结果 Tab 是否出现。原实现把早检放 else
+                //（result==null）分支，第一次执行结果 Tab 出现（复用）时走 if 分支不检查，
+                // 错误要等第二次执行（result=null 走 else）才报——用户"执行两次才出现错误"。
+                // extractConsoleError 用 ERROR_SIGNATURES+isSqlLine 精确匹配，不误判正常 SQL。
+                extractConsoleError(sharedConsole ?: preparedConsole, LOG)
+                    ?.takeIf { it != lastReportedError }?.let { err ->
+                        timer.stop()
+                        lastReportedError = err
+                        LOG.info("[M36] early console error detected (attempts=$attempts): ${err.take(120)}")
+                        ApplicationManager.getApplication().invokeLater({
+                            onError?.invoke(err)
+                        }, com.intellij.openapi.application.ModalityState.any())
+                        return
+                    }
                 val contents = runCatching {
                     ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
                 }.getOrNull() ?: emptyArray()
@@ -1928,8 +2204,10 @@ object DataSourceSelector {
                     //（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）——重取组件换入。
                     // M36.5.13：forceSwapIn=true——结果 Tab 出现即有新结果，强制换入一次
                     //（组件实例可能恒定，"实例变化才换入"导致新结果不显示）
-                    refreshResultsComponent(ui, LOG, forceSwapIn = true, generation = generation)
+                    refreshResultsComponent(ui, LOG, forceSwapIn = true, generation = generation, onError = onError)
                 } else {
+                    // M36.5.52：每拍错误早检——DBN 查询失败（Unknown column/syntax error 等）
+                    // 会立即写入 console history，无需等 40 拍（16s）超时；发现真实错误立即上报
                     // M36.5.3：索引中放宽窗口（查询提交可能被 dumb mode 推迟）；连接等待期由
                     // 提交前的 8s 监控覆盖（M36.5.15），此处窗口保持原语义。
                     val dumb = runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)
