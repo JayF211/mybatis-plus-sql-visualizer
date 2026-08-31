@@ -597,7 +597,7 @@ class SqlLogPanel(
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
      *
-     *  打开逻辑：
+     *  打开逻辑（仿 TranslationPlugin PlatformUtil.openOnlineDoc）：
      *  1. 从 resources 读取本地 HTML 帮助页面（marketplace-custom-page.html）；
      *  2. 写入临时文件后用 HTMLEditorProvider.openEditor 在内嵌 JCEF 浏览器中打开；
      *  3. 本地文件不受 JCEF --no-proxy-server 限制，无需网络，无代理问题；
@@ -616,21 +616,30 @@ class SqlLogPanel(
                 return
             }
             try {
-                // 写入临时文件，用 WebPreviewVirtualFile 在编辑器标签页中打开
-                // WebPreviewFileEditor.getName() 返回 "Web Preview - 标题" 格式，不会显示文件 URL
-                val tempFile = java.io.File.createTempFile("MyBatisPlusSQLVisualizer-Help-", ".html")
+                val tempFile = java.io.File.createTempFile("SqlVisualizer-Help-", ".html")
                 tempFile.deleteOnExit()
                 tempFile.writeText(htmlContent, java.nio.charset.StandardCharsets.UTF_8)
-                val url = com.intellij.util.Urls.newFromEncoded(tempFile.toURI().toString())
-                val dummyFile = com.intellij.testFramework.LightVirtualFile(HELP_TAB_TITLE, "")
-                val previewFile = com.intellij.ide.browsers.actions.WebPreviewVirtualFile(dummyFile, url)
+                val url = tempFile.toURI().toString()
+                // 仿 TranslationPlugin：附带 timeoutHtml，加载失败时显示降级页 + 跳转在线文档链接
+                val timeoutHtml = buildTimeoutHtml()
                 LOG.info("[HelpAction] Opening local help HTML: ${tempFile.absolutePath}")
-                com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
-                    .openFile(previewFile, true)
+                com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
+                    project, HELP_TAB_TITLE, url, timeoutHtml,
+                )
             } catch (ex: Throwable) {
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
             }
+        }
+
+        /** 构建 JCEF 加载失败时的降级 HTML 页面（含跳转在线文档的链接）。 */
+        private fun buildTimeoutHtml(): String {
+            val darkTheme = com.intellij.util.ui.UIUtil.isUnderDarcula()
+            return loadText("html", "Timeout.html")
+                .replace("__THEME__", if (darkTheme) "theme-dark" else "")
+                .replace("__TITLE__", MpSqlVisualizerBundle.message("help.html.timeout.title"))
+                .replace("__MESSAGE__", MpSqlVisualizerBundle.message("help.html.timeout.message"))
+                .replace("__ACTION__", MpSqlVisualizerBundle.message("help.html.timeout.action", HELP_DOCUMENTATION_URL))
         }
 
         /** 从 resources 加载文本文件。 */
