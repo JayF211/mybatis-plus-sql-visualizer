@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.71-output-doc"
+    private const val BUILD_STAMP = "M36.5.72-output-stretch"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -1726,6 +1726,52 @@ object DataSourceSelector {
         } else {
             log.info("[M36] divider OK: topH=$topH total=$total (no change)")
         }
+        // M36.5.72：布局后精准填满 Output 控制台（只在结果区，只碰 EditorImpl 专属类，绝不误伤结果网格）
+        ApplicationManager.getApplication().invokeLater({
+            fillOutputConsole(sp)
+        }, com.intellij.openapi.application.ModalityState.any())
+    }
+
+    /**
+     * M36.5.72：精准填满 Output 控制台编辑器的滚动视图。`[TEXT]` 探针实证 Output 的
+     * `EditorImpl$PanelWithFloatingToolbar`/`MyScrollPane` 只 44px（视作工具条高），其内容
+     * `EditorComponentImpl`（352px）被滚到 y=-308，用户看到 Output 只几行 + 下方空白。
+     * 结果区整体（bottom）有 270px，但 Output 编辑器没拉伸。**只**在结果区（bottom）内找类名含
+     * `EditorImpl$PanelWithFloatingToolbar` / `EditorImpl$MyScrollPane` 的 Output 编辑器组件，
+     * 把它们 setSize 到其**父容器**（ProviderWrapper/GridCellTabs）的可用高度。类名精确匹配——
+     * 结果网格的 JBScrollPane/DataGrid 类名不同，不会被误伤（M36.5.69 无差别 setSize 的教训）。
+     */
+    private fun fillOutputConsole(sp: javax.swing.JSplitPane) {
+        runCatching {
+            val bottom = sp.bottomComponent ?: return
+            fun isOutputEditor(c: java.awt.Component): Boolean {
+                val n = c.javaClass.name
+                return n.contains("EditorImpl\$PanelWithFloatingToolbar") ||
+                    n.contains("EditorImpl\$MyScrollPane")
+            }
+            fun fill(c: java.awt.Component) {
+                if (isOutputEditor(c)) {
+                    val parent = c.parent
+                    if (parent != null && parent.height > 50) {
+                        val wantH = parent.height
+                        if (c.height != wantH) {
+                            c.setSize(c.width.coerceAtLeast(parent.width), wantH)
+                            c.revalidate()
+                            c.repaint()
+                            // 把 viewport 的 view 也撑到可滚动区域（内容全可见）
+                            if (c is javax.swing.JScrollPane) {
+                                c.viewport?.view?.setSize(
+                                    c.viewport.width,
+                                    (c.viewport.view?.preferredSize?.height ?: 0).coerceAtLeast(wantH),
+                                )
+                            }
+                        }
+                    }
+                }
+                if (c is java.awt.Container) for (d in c.components) fill(d)
+            }
+            fill(bottom)
+        }.onFailure { }
     }
 
     /** M36.5.60：运行时组件边界取证——像素扫描无法区分"编辑器未拉伸"与"编辑器拉伸但背景同色"

@@ -609,7 +609,6 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            val title = MpSqlVisualizerBundle.message("help.dialog.title")
             val htmlContent = loadText("html", "marketplace-custom-page.html")
             if (htmlContent.isBlank()) {
                 LOG.warn("[HelpAction] Help HTML resource is empty, falling back to online doc")
@@ -617,12 +616,13 @@ class SqlLogPanel(
                 return
             }
             try {
-                val tempFile = java.io.File.createTempFile("mpvs-help-", ".html")
+                // 使用插件名作为临时文件名前缀，便于用户在编辑器标签页中识别
+                val tempFile = java.io.File.createTempFile("MyBatisPlusSQLVisualizer-Help-", ".html")
                 tempFile.deleteOnExit()
                 tempFile.writeText(htmlContent, java.nio.charset.StandardCharsets.UTF_8)
                 LOG.info("[HelpAction] Opening local help HTML: ${tempFile.absolutePath}")
                 com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
-                    project, title, tempFile.toURI().toString(),
+                    project, HELP_TAB_TITLE, tempFile.toURI().toString(),
                 )
             } catch (ex: Throwable) {
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
