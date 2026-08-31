@@ -593,14 +593,15 @@ class SqlLogPanel(
         }
     }
 
-    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 编辑器标签页内嵌浏览器打开在线文档。
+    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 编辑器标签页内嵌浏览器打开本地 HTML 帮助文档。
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
      *
-     *  打开逻辑（仿 Json Assistant）：
-     *  1. 检测 JCEF 是否可用 + 网络是否可达；
-     *  2. 均满足 → HTMLEditorProvider.openEditor（内嵌浏览器，加载失败时显示降级页 + 跳转系统浏览器链接）；
-     *  3. 任一不满足 → BrowserUtil.browse（降级系统浏览器）。 */
+     *  打开逻辑：
+     *  1. 从 resources 读取本地 HTML 帮助页面（marketplace-custom-page.html）；
+     *  2. 写入临时文件后用 HTMLEditorProvider.openEditor 在内嵌 JCEF 浏览器中打开；
+     *  3. 本地文件不受 JCEF --no-proxy-server 限制，无需网络，无代理问题；
+     *  4. 若读取失败或打开异常 → 降级 BrowserUtil.browse 打开在线文档。 */
     private inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.Help
@@ -608,12 +609,35 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            val url = HELP_DOCUMENTATION_URL
-            // JCEF 内置浏览器启动时带 --no-proxy-server 参数（平台硬编码），在国内网络环境下
-            // 直连 CloudFront CDN 节点（13.225.117.x）通常很慢或不通。
-            // 系统浏览器走 IDE 代理配置，能正常访问，故统一使用系统浏览器打开在线文档。
-            LOG.info("[HelpAction] Opening documentation in system browser: $url")
-            com.intellij.ide.BrowserUtil.browse(url)
+            val title = MpSqlVisualizerBundle.message("help.dialog.title")
+            val htmlContent = loadText("html", "marketplace-custom-page.html")
+            if (htmlContent.isBlank()) {
+                LOG.warn("[HelpAction] Help HTML resource is empty, falling back to online doc")
+                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
+                return
+            }
+            try {
+                val tempFile = java.io.File.createTempFile("mpvs-help-", ".html")
+                tempFile.deleteOnExit()
+                tempFile.writeText(htmlContent, java.nio.charset.StandardCharsets.UTF_8)
+                LOG.info("[HelpAction] Opening local help HTML: ${tempFile.absolutePath}")
+                com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
+                    project, title, tempFile.toURI().toString(),
+                )
+            } catch (ex: Throwable) {
+                LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
+                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
+            }
+        }
+
+        /** 从 resources 加载文本文件。 */
+        private fun loadText(basePath: String, fileName: String): String {
+            return try {
+                val stream = HelpAction::class.java.classLoader.getResourceAsStream("$basePath/$fileName")
+                stream?.bufferedReader()?.use { it.readText() } ?: ""
+            } catch (_: Throwable) {
+                ""
+            }
         }
     }
 
