@@ -1027,9 +1027,11 @@ class SqlLogPanel(
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
-        /** T-M39：帮助文档 URL（? 按钮 → 编辑器标签页内嵌浏览器打开在线文档）。 */
+        /** T-M39：帮助文档 URL（降级系统浏览器打开）。 */
         private const val HELP_DOCUMENTATION_URL =
             "https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer/documentation"
+        /** T-M39：帮助标签页标题。 */
+        private const val HELP_TAB_TITLE = "SQL Visualizer - Help"
 
         /** 类型 → 文案。 */
         private fun labelForType(type: StatementType): String = when (type) {
