@@ -90,6 +90,13 @@
 | [pitfall-sidebar-merge-confusion.md](pitfalls/pitfall-sidebar-merge-confusion.md) | F-44 侧边栏去除对象搞反（保留主侧边栏 log，去除独立 history） |
 | [sandbox-deployment-pitfalls.md](pitfalls/sandbox-deployment-pitfalls.md) | 沙盒 IDE 构建部署陷阱（prepareSandbox 文件锁 + 陈旧 jar） |
 | [pitfall-f42-join-diagram-render.md](pitfalls/pitfall-f42-join-diagram-render.md) | JOIN 图"渲染中/错误图"终极修复（F-42）——PlantUML 8059 硬依赖 Graphviz + 模态弹窗阻塞 invokeLater + hidden 标签页，三层根因（17bb741） |
+| [pitfall-dbn-output-console-layout-collapse.md](pitfalls/pitfall-dbn-output-console-layout-collapse.md) | DBN Output 控制台 44px 塌缩（M36.5.60→76）——平台 EditorMergedHorizontalScrollBarLayout"输入编辑器优先"策略；setSize 对抗布局必败、布局替换正解、同名类组件搜索错目标（c54eefc/daf75d1） |
+
+## 方法论（1 个）
+
+| 文件 | 内容摘要 |
+|------|----------|
+| [javap-platform-ui-debugging.md](methodology/javap-platform-ui-debugging.md) | 反编译平台 jar 定位私有布局/Swing UI 异常——一次 javap 顶十轮探针；含沙盒 jar 定位、沙盒进程精确识别（勿杀主 IDE）、构建产物 stamp 校验 |
 
 ## 用户环境（1 个）
 
