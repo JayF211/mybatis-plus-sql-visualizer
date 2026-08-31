@@ -616,14 +616,17 @@ class SqlLogPanel(
                 return
             }
             try {
-                // 使用插件名作为临时文件名前缀，便于用户在编辑器标签页中识别
+                // 写入临时文件，用 WebPreviewVirtualFile 在编辑器标签页中打开
+                // WebPreviewFileEditor.getName() 返回 "Web Preview - 标题" 格式，不会显示文件 URL
                 val tempFile = java.io.File.createTempFile("MyBatisPlusSQLVisualizer-Help-", ".html")
                 tempFile.deleteOnExit()
                 tempFile.writeText(htmlContent, java.nio.charset.StandardCharsets.UTF_8)
+                val url = com.intellij.util.Urls.newFromEncoded(tempFile.toURI().toString())
+                val dummyFile = com.intellij.testFramework.LightVirtualFile(HELP_TAB_TITLE, "")
+                val previewFile = com.intellij.ide.browsers.actions.WebPreviewVirtualFile(dummyFile, url)
                 LOG.info("[HelpAction] Opening local help HTML: ${tempFile.absolutePath}")
-                com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
-                    project, HELP_TAB_TITLE, tempFile.toURI().toString(),
-                )
+                com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    .openFile(previewFile, true)
             } catch (ex: Throwable) {
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
