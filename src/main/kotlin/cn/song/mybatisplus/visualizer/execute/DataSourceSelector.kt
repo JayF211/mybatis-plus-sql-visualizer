@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.70-output-log"
+    private const val BUILD_STAMP = "M36.5.71-output-doc"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -586,24 +586,71 @@ object DataSourceSelector {
      */
     private fun writeConsoleOutput(console: Any?, text: String, isError: Boolean = false) {
         if (console == null || text.isBlank()) return
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
-            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return
-            val contentClass = try {
-                Class.forName("com.intellij.execution.ui.ConsoleViewContentType")
-            } catch (e: Throwable) { return }
-            val ct = try {
-                // 错误用 ERROR_OUTPUT，普通用 NORMAL_OUTPUT（若枚举名不同则用第一个可用）
-                val fieldName = if (isError) "ERROR_OUTPUT" else "NORMAL_OUTPUT"
-                contentClass.getField(fieldName).get(null)
-            } catch (e: Throwable) {
-                contentClass.fields.firstOrNull()?.get(null)
-            } ?: return
-            val print = consoleView.javaClass.methods.firstOrNull { m ->
-                m.name == "print" && m.parameterCount >= 2 &&
-                    m.parameterTypes[0] == String::class.java
-            } ?: return
-            print.invoke(consoleView, text, ct)
-        }.onFailure { }
+            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console)
+            if (consoleView == null) { LOG.info("[M36] writeConsoleOutput: consoleView null"); return }
+            // ① 直接向 historyViewer 的 document 追加文本（Output 控制台显示的就是此 document）
+            //    ——比走 ConsoleView.print 更可靠（不依赖 ConsoleViewContentType 枚举类是否存在）。
+            val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView)
+            if (historyViewer != null) {
+                val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
+                if (doc is com.intellij.openapi.editor.Document) {
+                    val append = if (doc.text.isNotEmpty() && !doc.text.endsWith("\n")) "\n" else ""
+                    try {
+                        val proj = (console as? com.intellij.openapi.project.Project) ?: runCatching {
+                            console.javaClass.getMethod("getProject").invoke(console) as? com.intellij.openapi.project.Project
+                        }.getOrNull()
+                        @Suppress("DEPRECATION")
+                        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
+                            doc.insertString(doc.textLength, "$append$text")
+                        }
+                        // 滚到末尾（新输出可见）
+                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
+                            runCatching {
+                                // 滚动到底：LanguageConsoleView 的 caret/scrollPosition
+                                val editor = com.intellij.openapi.editor.EditorFactory.getInstance()
+                                    .getEditors(doc).firstOrNull()
+                                if (editor != null) {
+                                    editor.caretModel.moveToOffset(doc.textLength)
+                                    editor.scrollingModel.scrollToCaret(
+                                        com.intellij.openapi.editor.ScrollType.RELATIVE,
+                                    )
+                                }
+                            }
+                        }, com.intellij.openapi.application.ModalityState.any())
+                        LOG.info("[M36] writeConsoleOutput: appended to history doc len=${doc.textLength}")
+                        return
+                    } catch (e: Throwable) {
+                        LOG.info("[M36] writeConsoleOutput doc-append FAILED: ${e.message}")
+                    }
+                }
+            }
+            // ② 兜底 1：ConsoleView.print(String, ConsoleViewContentType) 反射
+            val contentClass = runCatching { Class.forName("com.intellij.execution.ui.ConsoleViewContentType") }.getOrNull()
+            if (contentClass != null) {
+                val ct = try {
+                    val fieldName = if (isError) "ERROR_OUTPUT" else "NORMAL_OUTPUT"
+                    contentClass.getField(fieldName).get(null)
+                } catch (e: Throwable) {
+                    contentClass.fields.firstOrNull()?.get(null)
+                }
+                val print = consoleView.javaClass.methods.firstOrNull { m ->
+                    m.name == "print" && m.parameterCount >= 2 && m.parameterTypes[0] == String::class.java
+                }
+                if (ct != null && print != null) {
+                    print.invoke(consoleView, text, ct)
+                    LOG.info("[M36] writeConsoleOutput: ConsoleView.print ok")
+                    return
+                } else {
+                    LOG.info("[M36] writeConsoleOutput: ct=${ct != null} print=${print != null}")
+                }
+            } else {
+                LOG.info("[M36] writeConsoleOutput: ConsoleViewContentType class not found")
+            }
+        }.onFailure { e ->
+            LOG.info("[M36] writeConsoleOutput FAILED: ${e.message}")
+        }
     }
 
     /**
