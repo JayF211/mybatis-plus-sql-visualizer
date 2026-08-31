@@ -42,7 +42,7 @@
 | `test/.../PluginDistributionSelfCheckTest.kt:38` | 1 | 断言 `<name>MyBatis-Plus SQL Visualizer</name>` |
 | `test/.../JavaCodeGeneratorTest.kt` | 2 | 生成代码注释黄金用例 |
 | `README.md:1,137` | 2 | 标题 + Settings 路径 |
-| `docs/marketplace-custom-page.html:334,350` | 2 | Settings 路径 |
+| `docs/发行说明/marketplace-custom-page.html:334,350` | 2 | Settings 路径 |
 | `CHANGELOG.md` | — | 新增更名条目 |
 
 ### 2.2 明确不修改的（改动会破坏升级/构建）
@@ -95,7 +95,7 @@ MyBatis-Plus SQL Visualizer  →  SQL Visualizer
 ### 3.4 Phase 4：面向用户文档
 
 1. **README.md**：标题改为 `# SQL Visualizer`，正文首段补一句更名说明（原 MyBatis-Plus SQL Visualizer，仍全面支持 MyBatis-Plus/MPJ/JPA），`Settings → Tools` 路径更新
-2. **docs/marketplace-custom-page.html**：两处 Settings 路径更新
+2. **docs/发行说明/marketplace-custom-page.html**：两处 Settings 路径更新
 3. **CHANGELOG.md**：`[Unreleased]` 增加更名条目；`build.gradle.kts patchPluginXml.changeNotes` 在**发版时**同步加入（遵循现有"单一来源、发版时同步修改"规则，本计划阶段不动）
 4. **docs/发行说明/Marketplace发布流程-说明文档.md**：若有旧名步骤描述则顺带更新，并新增一条注意事项——"上传新版后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer"
 
@@ -105,7 +105,7 @@ MyBatis-Plus SQL Visualizer  →  SQL Visualizer
 
    ```bash
    # 期望：仅 plugin.xml 描述中框架名、历史文档命中；src + README + marketplace 页应清零
-   grep -rn "MyBatis-Plus SQL Visualizer" src/main README.md docs/marketplace-custom-page.html
+   grep -rn "MyBatis-Plus SQL Visualizer" src/main README.md docs/发行说明/marketplace-custom-page.html
    ```
 
 2. **构建验证**：`gradlew buildPlugin`；解压 build/distributions zip 确认顶层目录仍为 `mybatis-plus-sql-visualizer/`（自更新兼容关键项）

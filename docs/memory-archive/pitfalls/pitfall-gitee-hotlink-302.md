@@ -33,7 +33,7 @@ https://cdn.jsdelivr.net/gh/用户名/仓库名@master/docs/images/screenshot-01
 
 **实施状态**：plugin.xml 已编辑完成（7 张图全部移除，替换为一行 Marketplace 链接文字）。Marketplace 截图上传待用户操作。
 
-**Custom Page 已生成（2026-08-19）**：`docs/marketplace-custom-page.html`——Marketplace Custom Tab 的完整 HTML，含 Feature Matrix（SQL 预览/日志/反向/其他四张功能对照表）+ FAQ（11 条，覆盖 IDE 版本/gutter 触发/MPJ 联表/预览差异/?占位符/日志捕获/编译保证/语言切换/方言/快捷键冲突/反馈信息）+ 默认快捷键 + 相关链接。深浅主题自适应 + 手风琴交互。用户可直接复制粘贴到 Marketplace Custom Tab 编辑器。Quick Start 节暂缓（无 GIF 素材）。
+**Custom Page 已生成（2026-08-19）**：`docs/发行说明/marketplace-custom-page.html`——Marketplace Custom Tab 的完整 HTML，含 Feature Matrix（SQL 预览/日志/反向/其他四张功能对照表）+ FAQ（11 条，覆盖 IDE 版本/gutter 触发/MPJ 联表/预览差异/?占位符/日志捕获/编译保证/语言切换/方言/快捷键冲突/反馈信息）+ 默认快捷键 + 相关链接。深浅主题自适应 + 手风琴交互。用户可直接复制粘贴到 Marketplace Custom Tab 编辑器。Quick Start 节暂缓（无 GIF 素材）。
 
 **Custom Tab 命名**：用户选定 **"Documentation"**（ Marketplace 通用命名，用户认知成本最低）。
 
