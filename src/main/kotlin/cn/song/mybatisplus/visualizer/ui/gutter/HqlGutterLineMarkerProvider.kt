@@ -63,6 +63,9 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
     /**
      * 检查方法调用的第一个参数是否为字符串（HQL/JPQL）。
      * 排除 cb.createQuery(Class) 等 CriteriaBuilder 调用。
+     *
+     * M36.5.79：Java 链式 `+`（"a" + "b" + "c"）在 PSI 中为 PsiPolyadicExpression，
+     * 与 PsiBinaryExpression 互不继承——漏判会导致多行拼接 HQL 无预览图标（用户实测）。
      */
     private fun hasStringFirstArgument(call: PsiMethodCallExpression): Boolean {
         val args = call.argumentList.expressions
@@ -71,8 +74,8 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         if (firstArg is com.intellij.psi.PsiLiteralExpression) {
             return firstArg.value is String
         }
-        if (firstArg is com.intellij.psi.PsiBinaryExpression) {
-            return true // 字符串拼接
+        if (firstArg is com.intellij.psi.PsiBinaryExpression || firstArg is com.intellij.psi.PsiPolyadicExpression) {
+            return true // 字符串拼接（含链式 `+`）
         }
         if (firstArg is PsiReferenceExpression) {
             // 变量引用：仅 String 类型视为有效 HQL 参数（排除 cq 等 CriteriaQuery 变量）

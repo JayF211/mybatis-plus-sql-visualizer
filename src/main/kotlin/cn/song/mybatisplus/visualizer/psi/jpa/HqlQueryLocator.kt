@@ -214,8 +214,14 @@ object HqlQueryLocator {
                 val paramMethodName = paramCall.methodExpression.referenceName ?: continue
                 if (paramMethodName !in SET_PARAM_METHODS) continue
                 val qualifier = paramCall.methodExpression.qualifierExpression ?: continue
-                val qualifierRef = qualifier as? PsiReferenceExpression ?: continue
-                if (qualifierRef.referenceName in queryVars) {
+                // M36.5.79：支持链式 qualifier——`.setParameter(...)` 的 qualifier 可能是
+                // createQuery 调用（PsiMethodCallExpression）而非变量引用，沿链向上找最终赋值变量。
+                val qualifierVar = when (qualifier) {
+                    is PsiReferenceExpression -> qualifier.referenceName
+                    is PsiMethodCallExpression -> findAssignedVariable(qualifier)
+                    else -> null
+                } ?: continue
+                if (qualifierVar in queryVars) {
                     extractParameter(paramCall, paramMethodName)?.let { parameters += it }
                 }
             }
@@ -364,17 +370,28 @@ object HqlQueryLocator {
 
     /**
      * 查找方法调用被赋值给的局部变量名（如 `Query q = session.createQuery(...)` 的 q）。
+     *
+     * M36.5.79：支持**链式赋值**——`Query q = em.createQuery(...).setParameter(...)` 中
+     * createQuery 的直接父层是 PsiReferenceExpression（.setParameter 的方法名引用，
+     * 其再上层才是 PsiMethodCallExpression），原实现只查直接父层导致 q 丢失
+     * （用户场景参数无法追踪）。修正：沿调用链（PsiReferenceExpression /
+     * PsiMethodCallExpression 中间节点）向上走，直到遇到变量声明/赋值语句。
      */
     private fun findAssignedVariable(call: PsiMethodCallExpression): String? {
-        val parent = call.parent ?: return null
-        // 局部变量声明：Type var = call;
-        if (parent is PsiLocalVariable && parent.initializer === call) {
-            return parent.name
-        }
-        // 赋值语句：var = call;
-        if (parent is com.intellij.psi.PsiAssignmentExpression) {
-            val lhs = parent.lExpression as? PsiReferenceExpression ?: return null
-            return lhs.referenceName
+        var current: PsiElement = call
+        while (current.parent != null) {
+            val parent = current.parent
+            when (parent) {
+                is PsiLocalVariable -> return parent.name
+                is com.intellij.psi.PsiAssignmentExpression -> {
+                    val lhs = parent.lExpression as? PsiReferenceExpression ?: return null
+                    return lhs.referenceName
+                }
+            }
+            // 仅允许沿链式调用向上：PsiMethodCallExpression（外层调用）或其
+            // methodExpression PsiReferenceExpression（如 .setParameter 的方法名引用）
+            current = parent
+            if (current !is PsiMethodCallExpression && current !is PsiReferenceExpression) return null
         }
         return null
     }

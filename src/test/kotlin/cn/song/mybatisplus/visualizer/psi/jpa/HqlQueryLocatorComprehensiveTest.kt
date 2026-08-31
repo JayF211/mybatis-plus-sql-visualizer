@@ -347,6 +347,43 @@ class HqlQueryLocatorComprehensiveTest : BasePlatformTestCase() {
         // SqlPreviewService.previewHql 的 info.parameters.ifEmpty { extractParamNamesFromHql(...) } 兜底。
     }
 
+    /** M36.5.79 用户场景精确复现：变量赋值 + 链式 setParameter + 多行 `+` 拼接（无图标根因回归）。 */
+    fun testUserScenarioVariableAssignmentChainedConcat() {
+        myFixture.configureByText("UserDao.java", """
+            public class UserDao {
+                public List<UserEntity> jpqlJoinFetch(String deptName) {
+                    javax.persistence.Query query = entityManager.createQuery(
+                            "SELECT u FROM UserEntity u " +
+                                    "JOIN FETCH u.department d " +
+                                    "WHERE d.name = :deptName")
+                            .setParameter("deptName", deptName);
+                    return query.getResultList();
+                }
+            }
+            interface EntityManager { Query createQuery(String qlString); }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+        """.trimIndent())
+        val method = findMethod("jpqlJoinFetch")
+        // gutter 锚点路径：anchor 为 createQuery 的 PsiMethodCallExpression（路径 1）
+        val call = com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(
+            method.body, com.intellij.psi.PsiMethodCallExpression::class.java,
+        ).firstOrNull { it.methodExpression.referenceName == "createQuery" }
+        assertNotNull("应找到 createQuery 调用", call)
+        val info = HqlQueryLocator.locate(call!!)
+        assertNotNull("变量赋值 + 链式 + 多行拼接应被识别（gutter 图标判定非 null）", info)
+        assertEquals(
+            "SELECT u FROM UserEntity u JOIN FETCH u.department d WHERE d.name = :deptName",
+            info!!.hql,
+        )
+        // 变量赋值场景：queryVars 追踪应捕获链上 setParameter
+        System.err.println("[DEBUG] parameters=" + info.parameters.map { "${it.paramName}:${it.valueExpr}:${it.isPositional}" })
+        assertTrue("变量赋值场景参数应被提取", info.parameters.any { it.paramName == "deptName" })
+    }
+
     // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
