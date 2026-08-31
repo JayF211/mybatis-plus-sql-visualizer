@@ -7,6 +7,75 @@
 ### Changed
 
 - **插件显示名更名 SQL Visualizer（原 MyBatis-Plus SQL Visualizer）**：`plugin.xml` `<name>` 与全部用户可见文案（设置页/弹窗标题/gutter tooltip/通知/工具窗口标题，中英双语）同步更名；插件 ID（`<id>`）、构建产物 zip 顶层短名、仓库与 Marketplace 页地址均不变——已安装用户正常升级，配置与历史记录全保留。仍全面支持 MyBatis-Plus / MPJ / JPA / Hibernate
+- **项目内数据目录随插件更名（F-44-4）**：`.idea/` 下插件数据目录由旧名 `mybatis-plus-sql-visualizer` 改为新名 `sql-visualizer`（含 `sql-history/` 历史 SQL 与 `exec/` 执行临时文件）——**不考虑向前兼容**，旧目录数据不再读取，历史 SQL 与新捕获从新目录起算；新增统一常量 `SqlLogAutoSaver.DATA_DIR_NAME` 供历史面板 / 历史 tab 显隐检测 / 数据源执行文件路径引用，设置页默认路径提示同步更新（中英文案 `settings.log.autoSave.path.tip/empty`）
+- **实时日志「精确跳转源码」可靠方案（F-44-6）**：原实时日志无 file:line（控制台 SQL 日志不含调用位置）只能「按表名猜实体」近似跳转、常跳不准。新方案在**应用 JVM** 用 MyBatis-Plus `InnerInterceptor`（`docs/instrumentation/SqlSourceInterceptor.kt` 自包含示例）于 SQL 执行线程捕获真实调用点，向 stdout 打印标记行 `SQLVIS-SOURCE|<相对路径>|<行号>`；`SqlLogConsoleBridge.processConsoleLine` 解析该标记写入 `LogSqlEntry.sourceFile/sourceLine`，实时日志复用与历史面板**一致**的精确 `OpenFileDescriptor` file:line 跳转。无标记时零影响、被动回退原表名搜索。新增 `SqlSourceMarker`（标记格式/解析）、`CallerSourceLocator`（调用栈→用户代码帧纯函数）；`SqlLogPanel` 抽 `internal sealed class LogJumpTarget`（Precise/NoSource/NotFound/SearchByTable/NoTable）+ `resolveEntryJump` 统一解析层；VFS 路径统一正斜杠（跨平台一致）
+
+### Fixed
+
+- **SQL 日志面板四项缺陷终局修复（F-44-2）**（开发计划 `20260831-1730-...`）：
+  - **列表 SQL 词法高亮恢复**：M46 重构为性能移除 HTML 通道，本次回滚——SQL 摘要走 `SqlListHtmlRenderer`（关键字/表名/字符串/数字/注释分色），时间戳与耗时走灰色 `#9E9E9E` 视觉分层不抢 SQL 颜色
+  - **耗时字段接入控制台链路（root fix）**：`ExecutionTimeParser` 已有完整 p6spy/MP TimeCount/自定义前缀实现，但 bridge `FilterProxyHandler` 从未调用——`LogSqlEntry.executionTimeMs` 始终为 null。`SqlLogConsoleBridge` 每次喂行前从 `PluginSettings.state.logTimePrefix` 读自定义前缀，调用 `ExecutionTimeParser.parse(line, prefix)` 并 `entry.copy(executionTimeMs = ...)`。耗时面板与历史面板均自动显示 `ms`，阈值色（<100ms 灰 / ≥100ms 橙 / ≥`slowQueryThresholdMs` 红）
+  - **「移除重复的sql」已存在条目同步去重**：用户勾选后面板新增 `SqlLogEntryBuffer.dedupeExisting()` 立即按窗口裁剪（窗口内同 SQL 留首条去后续），丢弃数累加到 `dedupeCounts`，徽章与列表内容同生命周期。panel 调用方 `SqlLogPanel.dedupeCheckBox.actionListener` 升级为 on/off 双分支
+  - **去重计数即时刷新**：原 `addEntry` 去重丢弃分支 `return false` 而不通知，徽章数据变了 UI 不知——本轮在去重分支也调用 `notifyChanged()`，`⨉N` 徽章与去重动作一帧同步（修改了两条既有测试 `去重窗口内相同 SQL 丢弃且不通知` → `... 且通知徽章`、`去重丢弃不触发监听器` → `去重丢弃触发监听器`）
+
+- **SQL 历史面板两项修复（F-44-2）**：
+  - **历史列表 SQL 高亮 + 耗时显示**：`HistorySqlLogPanel.HistoryCellRenderer` 改 HTML，SQL 段走 `SqlListHtmlRenderer`、耗时/时间戳/源码走灰色 `[...]` 包裹；耗时取自 `LogSqlEntry.executionTimeMs`（现已是真实解析值，非 `—`）
+  - **历史文件 SQL 注释恢复标准 `--` 注释**：F-44 一度写为 `--- source: ... ---`（三个 `-`），回归为标准 SQL 单行注释 `-- source: ... --`（两个 `-`）；更严格 SQL 方言对 3 个 `-` 整行注释兼容性差，且与 F-43 旧版注释格式一致便于人眼识读
+  - **历史文件读取端向后兼容**：`SqlLogFileReader.NEW_HEADER_REGEX` 升级为 `^--+ source: ...` / `... --+$`，可同时读 2/3 个 `-` 起结的文件（旧 3 `-` 文件仍可读，无需迁移）；`parseContent` 行首识别由 `startsWith("--- source:")` 升级为「含 source: 与 time: 关键字即视为新版」
+
+- **SQL 历史面板两级导航（F-44-3）——默认文件列表 → 双击进文件 SQL 列表 → 双击 SQL 预览**：
+  - **一级（默认视图）**：文件列表，每行 = 文件名（加粗）+ 文件大小（B/KB/MB）+ SQL 条数；空目录显示「暂无历史 SQL 文件」；搜索框按文件名过滤（emptyText「搜索文件名...」）
+  - **二级（文件内容）**：双击文件进入，展示该文件逐条 SQL（沿用 F-44-2 的 SQL 高亮 + 耗时 + 时间戳 + 源码 renderer）；双击 SQL → 预览面板；右键 → 复制 SQL / 跳转源码（仅二级可用）；顶部「← 返回」回一级；搜索框按 SQL 内容/源文件过滤
+  - **刷新语义**：`refresh()` 重新扫描目录生成文件摘要；正在浏览某文件且文件仍存在时保持二级视图（重载内容），否则回一级——`SqlLogPanel` tab 切换监听调 `refresh()` 不打断浏览
+  - **性能**：新增 `SqlLogFileReader.countInFile(file)` 轻量条数统计（只数头部行不构建 `LogSqlEntry`，`useLines` 惰性 IO），文件列表加载避免大文件全量解析；计数与 `readFromFile` 完整解析结果一致（新增 3 个一致性断言测试）
+  - **文案**：新增 `log.history.back / back.tip / files.empty / entries.empty / sqlCount / search.files` 六个中英文案
+
+- **实时日志跳转不可靠（F-44-6 根因）**：旧 `SqlLogConsoleBridge.extractSourceLocation` 在 **IDE 控制台线程**取调用栈，栈帧只有 JDK / IntelliJ / 插件帧，永远取不到应用调用点 → `sourceFile/sourceLine` 恒为 null/0 → `jumpToSource` 退化为 `WrapperSearchService` 表名猜实体（不可靠、常落空）。改为在应用线程用 `InnerInterceptor` 捕获（见 F-44-6 Changed），实时日志现在能精确跳到触发 SQL 的 Service / Controller 行
+
+### Test
+
+- **F-44-2 测试同步**：新增 `dedupeExisting 按窗口裁剪既有条目` / `dedupeExisting 关闭时不生效` / `dedupeExisting 单条不触发` / `dedupeExisting 超窗口保留所有` / `disableDedupe 清空累计计数` / `disableDedupe 重复调用幂等` 6 例；新增 `SqlLogFileReaderTest.解析双横线新版格式` / `兼容三横线历史新版格式` / `解析混合格式_F44-2与F43共存` 3 例；新增 `SqlLogAutoSaverTest.写入头使用双横线注释` 1 例；既有 `多条追加不覆盖` 断言由 `--- source:` 改 `-- source:`（与新格式一致）
+- **F-44-3 测试同步**：新增 `SqlLogFileReaderTest.countInFile` 3 例（双横线格式 / 三横线与旧版混合 / 空文件与缺失文件）——轻量条数统计与完整解析结果一致性锁定
+- **真实场景测试套件（F-44-2/3/4 用户反馈功能回归）**：
+  - `SqlLogHistoryRoundTripTest`（5 例，纯 JUnit）：自动保存 → 历史读取回环——捕获条目（带源码位置/耗时）经 `SqlLogAutoSaver` 写入后 `SqlLogFileReader` 读回，断言 SQL 文本/源码/耗时/时间戳/条数全一致；多文件多条目统计一致；F-43 旧格式兼容；混合格式单文件新老条目共存；空目录返回空
+  - `SqlLogCaptureRealtimeScenarioTest`（9 例，纯 JUnit）：真实控制台日志文本（MyBatis Preparing/Parameters、p6spy elapsed、自定义 Time: 前缀）经解析器 + bridge 耗时组装（`ExecutionTimeParser.parse` + `entry.copy`）→ 耗时字段写入；分页查询连续 5 次 → 去重留 1 条 + 徽章 4 + 通知 5 次；窗口滑过后重新计数；接口交错不同 SQL 互不影响；未开去重累积后勾选 → 立即裁剪并累计徽章；关闭清空再开启从零起算；耗时解析结果供排序与慢查询判定
+  - `HistorySqlLogPanelNavigationTest`（7 例，BasePlatformTestCase）：真实文件（新目录 `.idea/sql-visualizer/sql-history/`）两级导航全链路——一级文件列表（文件名/大小/条数）→ 双击进二级逐条 SQL（含耗时/源码）→ 二级按 SQL 搜索过滤 → 返回回一级 → 一级按文件名过滤 → 刷新保持二级 / 文件删除回一级 → 空目录空列表 → **旧目录数据不读取（F-44-4 不考虑向前兼容）**
+  - `SqlLogPanelDedupeToggleTest`（5 例，BasePlatformTestCase）：用户勾选「移除重复的sql」真实交互（`doClick()` 模拟点击）——勾选后既有重复条目立即裁剪（4→1 + 徽章 3）；不同 SQL 互不影响；取消勾选清空徽章且列表不变；去重开启下新重复徽章**即时**更新（原「不及时」缺陷回归锁定）；去重关闭全展示再开启累计
+  - **踩坑记录**：headless 测试环境 `JCheckBox.setSelected` 不触发 ActionEvent（须用 `doClick()` 模拟真实点击）；`invokeAndWait{空任务}` 泵不动 `invokeLater` 队列（须 `UIUtil.dispatchAllInvocationEvents()`）；BasePlatformTestCase 同测试类方法共享临时项目目录且残留不清（每个测试 `setUp` 自清理）；`Files.newBufferedWriter` 默认 TRUNCATE 同文件名会覆盖
+- **UI 渲染与交互专项测试（F-44 用户实测 UI 缺陷回归，本轮 5 文件 28 例）**：
+  - **生产可测化重构**：日志列表匿名渲染器抽为 `internal LogEntryListCellRenderer`（持有 `dedupeCounts`，`refreshList` 注入快照），耗时/时间戳格式化 helper 提为文件级；`WrapLayout` 与 `HistorySqlLogPanel` 两个单元格渲染器由 `private` 改 `internal`——均为此前不可测、UI 缺陷漏测的根因
+  - `SqlLogPanelRendererUiTest`（9 例）：空耗时/空源码条目渲染不崩溃且为 HTML；SQL 含 `<>&` 与注入式 `</span><script>` 被 HTML 转义（原样注入序列不出现）；超长 SQL 截断渲染不异常；耗时着色 慢查询红 `#D32F2F` / 偏慢橙 `#E67E22` / 正常灰 `#9E9E9E` / 选中白 `#FFFFFF`；去重 `⨉N` 徽章随 `dedupeCounts` 渲染（计数 0 或不存不显示）
+  - `HistoryCellRendererTest`（8 例）：二级条目空耗时/空源码/特殊字符/超长 SQL 渲染健壮；一级文件大小格式化边界 `0 B` / `1.0 KB`(恰 1024B) / `1.0 MB`(恰 1MB) 与条数/文件名展示
+  - `WrapLayoutTest`（2 例）：窄宽度下 `preferredLayoutSize` 高度明显大于单行（多行高度），锁定「SQL类型筛选项消失」原生 FlowLayout 只算单行高度缺陷
+  - `SqlLogPanelSortAndSlowQueryTest`（4 例）：真实点击排序按钮 → `DURATION_DESC` 且列表按耗时降序、再次点击回 `NONE`；无耗时信息时排序按钮隐藏；注入超阈值耗时 → 慢查询计数标签可见且文案含条数；无慢查询标签隐藏
+  - `WithTerminatorTest`（6 例）：复制/预览共用分号规范化边界（空串/补分号/已分号不重复/多行）
+- **跳转与布局兼容专项测试（F-44-5 全插件 UI 测试 · 用户反馈「缺代码位置无法跳转 + 布局错乱」回归，本轮 3 文件 13 例）**：
+  - **生产可测化重构（未改行为，仅为测试铺路）**：`HistorySqlLogPanel` 抽出 `internal sealed class HistoryJumpTarget`（`Navigate(virtualFile,line)` / `NoSource` / `NotFound(sourceFile)`）+ `internal fun resolveJumpTarget(entry)` 确定性解析层，原 `jumpToSource` 改 `when` 分发；新增 `jumpToSourceForTest` 等价右键「跳转到源码」；规避 headless 下 `Messages` 弹窗阻塞。`SqlLogPanel` 新增 `internal sealed class LiveJumpResolution`（`Proceed(tableName)` / `NoTable`）+ `internal fun resolveLiveJump(entry)` 表名决策接缝（后台 `WrapperSearchService` 搜索逻辑不变）；`applyTypeFilterForTest` 暴露类型筛选（供布局测试注入窄侧边栏）
+  - `HistorySqlLogPanelJumpToSourceTest`（6 例，BasePlatformTestCase）：用真实磁盘文件 + `VfsUtil.markDirtyAndRefresh` 构造可解析目标——缺源码位置 → `NoSource`；路径无效/文件不存在 → `NotFound`（携带 sourceFile）；文件存在且 `sourceLine=10` → `Navigate(line=9=sourceLine-1)` 且 virtualFile 与磁盘一致；`sourceLine=0` → `line` 被 `maxOf(0,-1)` 钳到 0 不崩；历史文件「自动保存 → 读取」往返后 sourceFile/sourceLine 保留且仍可 `Navigate`；`jumpToSourceForTest` 真实跳转不抛异常（跳转链路可达）
+  - `SqlLogPanelJumpToSourceTest`（3 例，BasePlatformTestCase）：实时日志不含 file:line 的架构性缺口锁定——`SELECT 1` 无表名 → `NoTable` 且断言 `e.sourceFile == null`；`FROM some_random_table_xyz` → `Proceed` 且 `WrapperSearchService.search` 返回 `None`（项目无对应实体，无法跳转）；`FROM user` → `Proceed("user")`（交由后台按表名定位实体 Wrapper）
+  - `SqlLogPanelLayoutTest`（4 例，BasePlatformTestCase）：工具栏关键组件（类型标签/按钮/去重勾选/搜索条）构建即存在 + 动作组 ≥5；默认可见性（无耗时隐藏排序按钮、搜索条默认隐藏）；注入 p6spy 耗时 → 排序按钮显示；**窄侧边栏 240px 下用生产 `WrapLayout` 承载类型筛选，断言按钮 `y≥0` 且 `y+height≤容器高`（不被单行高度裁掉）、整行高 > 单行按钮高**——锁定「SQL 类型筛选项消失」缺陷；写入历史文件重建面板 → `JBTabbedPane.tabCount ≥ 3`
+  - **补充踩坑**：`DefaultListCellRenderer.getListCellRendererComponent` 不接受 `null` list（生产环境 list 恒非空，测试须传真实 `JList`）
+
+- **F-44-6 可靠跳转测试（新增 4 文件 22 例）**：
+  - `SqlSourceMarkerTest`（6，纯 JUnit）：format/parse 往返、Windows 反斜杠可解析、非标记行/SELECT/畸形前缀/空路径/行号非数字返回 null、前后空白忽略
+  - `CallerSourceLocatorTest`（5，纯 JUnit）：跳过框架帧取首个应用帧、appPackages 限定、全框架帧返回 null、fileName 缺失跳过、行号负跳过；`classNameToRelativePath` 输出正斜杠（VFS 规范）
+  - `SqlLogConsoleBridgeMarkerTest`（5，纯 JUnit）：标记行先于 SQL → 源码位置写入条目；无标记 → sourceFile 为 null（回退）；标记后无 SQL 暂存保留；普通 SQL 行不误判；多语句各自绑定标记；直接以 `BridgeLineContext`+`processConsoleLine` 驱动
+  - `SqlLogPanelLiveJumpWithSourceTest`（6，BasePlatformTestCase）：携带源码位置 → `Precise`（line=sourceLine-1，virtualFile 命中磁盘）；`jumpToSourceForTest` 真实跳转不抛异常；文件不存在 → `NotFound`；无源码位置 → `SearchByTable("user")`；无表名 → `NoTable`；旧版 sourceFile=null 回退不崩（仅断言 `resolveEntryJump` 避开 headless `Messages` 弹窗）
+  - **回归锁定**：实时日志精确跳转链路可达；标记协议与 `docs/instrumentation/SqlSourceInterceptor.kt` 一致；VFS 正斜杠路径跨平台解析
+
+- **F-44-6 剩余 UI 组件「真实渲染 / 布局 / 交互」覆盖（用户"整个插件 UI 用例"收尾，新增 5 文件 18 例）**：
+  - `PluginSettingsPanelUiTest`（4，BasePlatformTestCase）：面板构建 + 关键控件正首选尺寸（无渲染塌缩）；section 显隐（仅 SQL 日志段隐藏其余段下拉）；真实交互（勾选「启动自动监听」→ isModified 翻转；切换语言写穿 + 重建不崩、控件仍存活）
+  - `LogToSqlPanelUiTest`（4）：编辑器 + 空态提示随内容显隐；MyBatis 日志（Preparing/Parameters）→ 参数替换进 SQL、默认格式化输出含换行；关闭格式化 → 同条 SQL 原样单行（格式开关真实生效）
+  - `SqlToJavaPanelUiTest`（4）：编辑器 + 生成形态下拉可见；SQL → 生成 `QueryWrapper` 且格式化渲染含换行（非塌缩）；ClassPicker 选取类后渲染图标与类名（弹窗落点渲染正确）
+  - `HelpUiTest`（3）：本地帮助 HTML 资源完整（JCEF 主路径内容，否则强制走最弱回退）；帮助入口展示 ? 图标 + 文案；JCEF 不可用回退路径本插件代码不崩溃
+  - `SqlPreviewPanelUiTest`（3）：面板构建 + showResult 将 SQL 渲染进编辑器（current 保持）；大结果（400 列超长 SQL）渲染不崩溃且完整持有（大结果性能冒烟）；非空标签 / 按钮正首选尺寸
+  - **headless 布局断言策略**：`doLayout` 在无 realized peer 时 GridBag 子控件尺寸算成 0，故布局断言改用 `preferredSize`（由字体 / 文本决定、与具体布局无关），更稳且同样能暴露「控件不渲染 / 消失」类缺陷；空文本 `JBLabel` 占位行首选宽 0 属正常，已排除
+- **F-44-6 续二（补用例 · 现成测试缝红利，用户"继续推进，补用例"）**：新增 4 文件 19 例，覆盖此前「已暴露缝却 0 测试」的组件——全仓 Explore 交叉比对定位的黄金候选：
+  - `SqlResultPanelUiTest`（6，BasePlatformTestCase）：执行结果面板状态机（EMPTY/LOADING/ERROR/SUCCESS）+ `showError` HTML 转义（防 `<>&` 注入破坏布局）、tooltip 存完整错误、`errorCopyButton` 显隐；`showIdle` 保留 ERROR（防"一闪而过"）但清 LOADING/SUCCESS；自动可见性（有内容显示 / 空态隐藏）；缝 `stateForTest()`/`currentErrorForTest()`。即此前点名的"SqlPreviewPanel 错误态"薄弱点。
+  - `SqlSelectionDialogTest`（5）：`displayText` 纯函数（两行 HTML / `<>&` 转义 / 超 80 字符截断加 `…`）；构造渲染 JList 模型顺序 + 预选首项；`doOKAction` 选中项经 `onSelect` 回调（缝 `listForTest()` + `public override doOKAction` 对齐 EntitySelectionDialog）。
+  - `IconScalerTest`（4，纯 JUnit）：比例缩放 0.5/0.75/1.0/2.0、非正方形按比例、最小 1px 兜底、`paintIcon` 不抛异常（零依赖，最高 ROI）。
+  - `PagesXmlGutterLineMarkerProviderTest`（4）：`statementsInRange` 返回选区内 maintainPage 候选按 offset 排序；`getLineMarkerInfo` 仅 `<pages>` 下 maintainPage 注册图标、非 maintainPage / 非 pages 不注册。
+  - **生产可测化微调（无行为变更）**：`SqlSelectionDialog.doOKAction` 由 `override` 改 `public override`（与 EntitySelectionDialog 一致，暴露给测试直接触发确认回调）。
 
 ### Fixed
 
@@ -29,6 +98,12 @@
 - **方言真实验证套件（P-立项-05，29 用例全绿）**：H2 六种兼容模式（REGULAR/MySQL/MariaDB/PostgreSQL/Oracle/MSSQLServer）配对验证 + SQLite 3.50.3 原生引擎验证——插件渲染 SQL（SqlGenerator/BatchModel 产物，非手写）在引擎上真实执行（TC-01~08：分页/引用/UPSERT/IN/聚合/UPDATE/DELETE）；9 方言 1538 个保留字逐词「渲染 → 执行」全量扫描 + 反向覆盖探测（引擎拒绝裸用的词必须已在集合内）；DM/KingBase 官方文档黄金断言（黄金清单独立于实现集合，防同步改坏）
 - **Docker 真实环境测试就绪（Tier 2）**：Testcontainers 五容器（mysql:8.0/postgres:16/mariadb:11/mssql:2022/oracle-free:23）+ docker-compose 编排 + 外部实例接入入口（`-Dmpvs.dialect.*`，DM/KingBase 真机标准流程）；无 Docker 时自动跳过
 - **测试基础设施**：新增测试依赖 H2/sqlite-jdbc/Testcontainers+JDBC 驱动（仅测试 classpath，插件运行时零依赖不变）；jackson 三件套约束对齐 2.17.1（testcontainers 传递的 2.10.3 缺失 `JsonProperty.namespace()`，遮蔽 IDEA 平台所用版本导致 XML 补全测试 NoSuchMethodError）；settings.gradle.kts 增加阿里云镜像源兜底（本机代理失效场景，与 Central 同源）
+- **F-44 续三（补用例大波次 · 生产主线优先 / 风险驱动小测试门）**：新增 11 文件 **33 例**，覆盖此前列为「需先加缝」的剩余未测面，**全程零生产行为变更**（仅一处最小测试缝 `ShareDialog.centerPanelForTest`，与项目 `*ForTest` 约定一致）。分三档：
+  - **纯函数（最高 ROI）**：`TableConfigSignatureTest` 3（签名 6 段竖线结构 / 配置变更即变 / 相同配置幂等）、`LogSqlEntryTest` 4（`toLogText` 回渲契约：无参仅 Preparing / 含参类型标注 / null 参数渲染 / 恰为 Preparing+Parameters 两行，与 MyBatisLogParser mixedPrefix 互逆）、`DataSourceSelectorTest` 2（冒烟：Community 测试 classpath 不含 Database 插件，仅锁「无准备态 isPrepared=false + clearPrepared 安全可重复」安全不变量）
+  - **gutter 确定性快路径**：`HqlGutterLineMarkerProviderTest` 5 + `CustomDaoHqlGutterLineMarkerProviderTest` 5（非 PsiIdentifier leaf / 变量名标识符 / `cb.createQuery(SomeClass.class)` 排除·回归 M36.5.79 / 标准 JPA 方法重叠排除避免双图标 / `showGutterIcon` 总开关 / 自定义 DAO 调用按命名约定识别注册）。解析器命中的正向注册（需 JPA 实体/持久化单元）非 `BasePlatformTestCase` 确定性，交由 `HqlQueryLocator`/`CustomDaoHqlLocator` 自身测试覆盖
+  - **构造与交互（真实 fixture，遍历取控件，无新增缝）**：`ShareDialogTest` 2（4 分享选项 + 默认选中 Markdown + 来源输入框 + 首选焦点为来源输入框）、`ProjectPluginSettingsConfigurableTest` 3（createComponent 构建「使用项目设置」开关+方言下拉 / isModified 契约 / 勾选翻转 + apply 写回 ProjectPluginSettings）、`PluginSettingsFolderConfigurableTest` 2（空搜索列 5 子页面 + 搜索无匹配清空）、`ConvertToSqlActionTest` 3 + `ConvertSqlToJavaActionTest` 2（update 可见性：Java/XML 启用、其它禁用、选择区驱动）、`SqlInputEditorTest` 2（构造持有初始 SQL / setSql 替换且相同文本幂等 / dispose 释放无害）
+  - **推进方式（用户新指令）**：本波次改为「一个自洽大波次 + 风险驱动小测试门」——同一批 11 文件一次性写出，先只跑这 11 类（定向门）修可恢复错误，再跑全量一次（回归门）；不逐小改动重跑大矩阵。踩坑已内化为可复用 skill `headless-intellij-ui-test`。
+- **F-44 续四（DataSourceSelector 集成骨架 · testDatabase）**：新增 `DataSourceSelectorIntegrationTest`（4 例），补 `DbConsoleIntegrationTest` 未覆盖的**数据源选择/发现层**——直接反射探针真实平台 API `DatabaseRunners.getAttachDataSourceRunners`（与 `DataSourceSelector.getAttachDataSourceRunners` 同签名），锁定选择契约：①无数据源→`prepareConsole` 回调 false + `onError` 非空（选择降级路径，不依赖 MySQL，**始终运行并 PASS**，证明骨架接线正确）；②单数据源→平台返回恰好 1 runner 且显示名含数据源名；③多数据源→返回 N runner（选择分支输入：N 个→弹选择框）；④`prepareConsole` 静默选中单源→`isPrepared()=true` 且 `sharedDataSourceName==数据源名`（无弹窗）。环境门控：demo 项目 + MySQL 可达（`../mybatis-plus-sql-visualizer-demo` + root/root），不可达时 `assumeTrue` skip（与本插件既有集成测试同约定，非缺陷）。build.gradle.kts 接线：默认 `test` 排除本类（剥离 database jar，否则类加载 `NoClassDefFoundError`）、`testDatabase` 过滤新增本类。
 
 ### Fixed
 

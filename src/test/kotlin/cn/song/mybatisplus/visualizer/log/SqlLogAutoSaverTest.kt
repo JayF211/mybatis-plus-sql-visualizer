@@ -37,11 +37,29 @@ class SqlLogAutoSaverTest {
         assertNotNull("File should be created", file)
         // 读取文件内容前不 close（close 会置 null）
         val content = file!!.readText()
-        // F-44：新格式 --- source: xxx | time: xxx | timestamp ---
+        // F-44-2：新格式 -- source: xxx | time: xxx | timestamp --（标准 SQL 单行注释）
         assertTrue("Should contain source header: $content", content.contains("source: unknown"))
         assertTrue("Should contain duration: $content", content.contains("time: —"))
         assertTrue("Should contain timestamp: $content", content.matches(Regex("(?s).*\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}.*")))
         assertTrue("Should contain SQL: $content", content.contains("SELECT 1"))
+        saver.close()
+    }
+
+    @Test
+    fun `写入头使用双横线注释`() {
+        // F-44-2：注释头部必须为 `--` 起结（标准 SQL 单行注释），不再用 `---`
+        val saver = SqlLogAutoSaver()
+        val dir = tempDir()
+        saver.configure("", "test.sql", dir)
+        saver.write(entry("SELECT 1"))
+        val file = saver.currentFile()!!
+        val content = file.readText()
+        // 起结行 -- source: ... -- （中间可能有内容，end 必须是 ` --`，不能再用 ` ---`）
+        val firstLine = content.lineSequence().first()
+        assertTrue("首行应以 `--` 起始: $firstLine", firstLine.startsWith("-- source:"))
+        assertTrue("首行应以 ` --` 结尾: $firstLine", firstLine.endsWith(" --"))
+        assertFalse("首行不应再有 `---`: $firstLine", firstLine.startsWith("---"))
+        assertFalse("首行不应再以 `---` 结尾: $firstLine", firstLine.endsWith("---"))
         saver.close()
     }
 
@@ -56,8 +74,8 @@ class SqlLogAutoSaverTest {
         val file = saver.currentFile()
         assertNotNull(file)
         val content = file!!.readText()
-        // F-44：新格式以 "--- source:" 开头
-        val count = content.split("--- source:").size - 1
+        // F-44-2：新格式以 "-- source:" 开头（标准 SQL 单行注释，两个 `-`）
+        val count = content.split("-- source:").size - 1
         assertEquals(3, count)
         saver.close()
     }

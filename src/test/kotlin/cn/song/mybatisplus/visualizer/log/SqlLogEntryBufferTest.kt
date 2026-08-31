@@ -140,14 +140,17 @@ class SqlLogEntryBufferTest {
     )
 
     @Test
-    fun `去重窗口内相同 SQL 丢弃且不通知`() {
+    fun `去重窗口内相同 SQL 丢弃且通知徽章`() {
+        // F-44-2：用户实测「重复值计数更新的也不及时」——徽章数据变了必须通知 UI，
+        // 本用例断言「首条入列通知 + 末尾丢弃通知」共 2 次。
         buffer.dedupeEnabled = true
         var notified = 0
         buffer.addListener { notified++ }
         assertTrue(buffer.addEntry(entryAt("SELECT 1", 0L)))
         assertFalse(buffer.addEntry(entryAt("SELECT 1", 500L))) // 窗口 1000ms 内
-        assertEquals(1, notified) // 丢弃不通知
+        assertEquals(2, notified) // 入列 1 次 + 丢弃通知 1 次
         assertEquals(1, buffer.snapshot().size)
+        assertEquals(1, buffer.dedupeCount("SELECT 1"))
     }
 
     @Test
@@ -249,12 +252,100 @@ class SqlLogEntryBufferTest {
     }
 
     @Test
-    fun `去重丢弃不触发监听器`() {
+    fun `去重丢弃触发监听器`() {
+        // F-44-2：徽章数据变了必须通知 UI（实测反馈「不及时」是缺陷）
         buffer.dedupeEnabled = true
         var notified = 0
         buffer.addListener { notified++ }
         buffer.addEntry(entryAt("SELECT 1", 0L))
         buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃
-        assertEquals(1, notified)
+        assertEquals(2, notified) // 第一条入列 + 第二条丢弃
+    }
+
+    // ---------- F-44-2：dedupeExisting / disableDedupe ----------
+
+    @Test
+    fun `dedupeExisting 按窗口裁剪既有条目`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        // 先关闭去重以便添加多条重复条目（验证 dedupeExisting 自身的去重逻辑，而非 addEntry 的）
+        buf.dedupeEnabled = false
+        buf.dedupeWindowMs = 1000L
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 1", 200L))
+        buf.addEntry(entryAt("SELECT 1", 400L))
+        buf.addEntry(entryAt("SELECT 2", 800L))
+        // 不动缓冲，先确认现有 4 条都在
+        assertEquals(4, buf.snapshot().size)
+        // 用户勾选「移除重复的sql」→ 启用 dedupeEnabled 后调用 dedupeExisting
+        buf.dedupeEnabled = true
+        val removed = buf.dedupeExisting()
+        // SELECT 1 三个 → 留首条、丢 2 个；SELECT 2 不重复 → 0 个；总移除 2
+        assertEquals(2, removed)
+        assertEquals(2, buf.snapshot().size)
+        assertEquals(0L, buf.snapshot()[0].timestamp) // 首条保留
+        assertEquals("SELECT 2", buf.snapshot()[1].restoredSql)
+        assertEquals(2, buf.dedupeCount("SELECT 1"))
+    }
+
+    @Test
+    fun `dedupeExisting 关闭时不生效`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = false
+        buf.dedupeWindowMs = 1000L
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 1", 100L))
+        assertEquals(0, buf.dedupeExisting())
+        assertEquals(2, buf.snapshot().size)
+    }
+
+    @Test
+    fun `dedupeExisting 单条不触发`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = true
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        assertEquals(0, buf.dedupeExisting())
+        assertEquals(1, buf.snapshot().size)
+    }
+
+    @Test
+    fun `dedupeExisting 超窗口保留所有`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        // 同上：先关闭以让多条重复都入列
+        buf.dedupeEnabled = false
+        buf.dedupeWindowMs = 1000L
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 1", 2000L)) // 超 1s 窗口
+        assertEquals(2, buf.snapshot().size)
+        // 再开启 dedupeEnabled 后调用 dedupeExisting，验证窗口判定
+        buf.dedupeEnabled = true
+        assertEquals(0, buf.dedupeExisting())
+        assertEquals(2, buf.snapshot().size)
+    }
+
+    @Test
+    fun `disableDedupe 清空累计计数`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = false
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 1", 100L))
+        // 关闭态 → 入列，不累计计数
+        assertEquals(0, buf.dedupeCount("SELECT 1"))
+        buf.dedupeEnabled = true
+        buf.addEntry(entryAt("SELECT 1", 200L)) // 现在窗口内，去重 +1
+        assertEquals(1, buf.dedupeCount("SELECT 1"))
+        buf.disableDedupe()
+        assertEquals(0, buf.dedupeCount("SELECT 1"))
+        assertFalse(buf.dedupeEnabled)
+    }
+
+    @Test
+    fun `disableDedupe 重复调用幂等`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = true
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.disableDedupe()
+        // 二次调用不应抛异常/重置状态报错
+        buf.disableDedupe()
+        assertEquals(0, buf.dedupeCount("SELECT 1"))
     }
 }

@@ -103,6 +103,10 @@ class ShareDialog(
 
     override fun getPreferredFocusedComponent(): JComponent = sourceField
 
+    /** 测试缝：返回中心面板（与 [createCenterPanel] 同构），供测试遍历断言。DialogWrapper 的
+     *  rootPane/contentPane 仅在 show() 时构建，headless 下构造即可用本缝取面板。 */
+    internal fun centerPanelForTest(): JComponent = createCenterPanel()
+
     override fun createActions(): Array<Action> = arrayOf(
         okAction.apply { putValue(Action.NAME, MpSqlVisualizerBundle.message("dialog.ok")) },
         cancelAction.apply { putValue(Action.NAME, MpSqlVisualizerBundle.message("share.dialog.cancel")) },

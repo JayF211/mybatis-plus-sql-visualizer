@@ -52,7 +52,7 @@ class SqlSelectionDialog<T>(
         minimumSize = Dimension(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
     }
 
-    override fun doOKAction() {
+    public override fun doOKAction() {
         val selected = list.selectedIndex
         if (selected in candidates.indices) {
             onSelect(candidates[selected])

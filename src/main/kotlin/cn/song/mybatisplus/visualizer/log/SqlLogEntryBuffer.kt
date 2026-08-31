@@ -47,12 +47,16 @@ class SqlLogEntryBuffer(
     /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
     var onEvicted: ((LogSqlEntry) -> Unit)? = null
 
-    /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃并计数；超过上限裁掉最旧）。 */
+    /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃并计数；超过上限裁掉最旧）。
+     *
+     * 去重丢弃分支也调用 [notifyChanged]——徽章数据已变，UI 必须即时刷新（用户实测：
+     * 不通知则 ⨉N 徽章要等下一条 SQL 入列才更新，「不及时」）。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
         if (isFiltered(entry.restoredSql)) return false
         if (dedupeEnabled && isDuplicate(entry)) {
             dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+            notifyChanged() // ← 徽章计数变了 → UI 必须即时刷新
             return false
         }
         synchronized(entries) {
@@ -64,6 +68,52 @@ class SqlLogEntryBuffer(
         }
         notifyChanged()
         return true
+    }
+
+    /**
+     * 手动触发去重裁剪（用户勾选「移除重复的sql」时）：扫描现有 entries，
+     * 时间窗内相同 SQL 保留最早一条、丢弃后续；丢弃数累加到 [dedupeCounts]
+     * （与运行时去重共享计数——徽章反映「本次去重开启以来的总丢弃量」，含开启前已存在的重复）。
+     *
+     * @return 本次裁剪移除的条目数（面板日志/测试断言）。
+     */
+    fun dedupeExisting(): Int {
+        if (!dedupeEnabled) return 0
+        var removed = 0
+        synchronized(entries) {
+            if (entries.size < 2) return@synchronized
+            val keep = mutableListOf<LogSqlEntry>()
+            for (entry in entries) {
+                val duplicate = keep.firstOrNull {
+                    it.restoredSql == entry.restoredSql &&
+                        kotlin.math.abs(entry.timestamp - it.timestamp) < dedupeWindowMs
+                }
+                if (duplicate != null) {
+                    dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+                    removed++
+                } else {
+                    keep += entry
+                }
+            }
+            if (removed > 0) {
+                entries.clear()
+                entries.addAll(keep)
+            }
+        }
+        if (removed > 0) notifyChanged()
+        return removed
+    }
+
+    /**
+     * 关闭去重：清空累计计数（语义：「关闭」= 清零；再次开启时从零起算）。
+     * 若原本未开启或计数本就为空，跳过通知（避免无意义 EDT 调度）。
+     */
+    fun disableDedupe() {
+        if (!dedupeEnabled) return
+        dedupeEnabled = false
+        val hadCounts = dedupeCounts.isNotEmpty()
+        resetDedupeCounts()
+        if (hadCounts) notifyChanged()
     }
 
     private fun isFiltered(sql: String): Boolean =

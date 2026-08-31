@@ -143,11 +143,112 @@ class SqlLogFileReaderTest {
     }
 
     @Test
-    fun `无源码行号时只返回文件`() {
+    fun `解析双横线新版格式`() {
+        // F-44-2：默认写作 `-- source: ... --`（两个 `-` 起结），Reader 必须正确解析
+        val content = "-- source: src/main/java/UserMapper.java:42 | time: 5ms | 2026-08-31 17:30:00.123 --\nSELECT * FROM user WHERE id = 1\n\n"
+        val entries = SqlLogFileReader.parseContent(content)
+        assertEquals(1, entries.size)
+        val entry = entries[0]
+        assertEquals("SELECT * FROM user WHERE id = 1", entry.restoredSql)
+        assertEquals("src/main/java/UserMapper.java", entry.sourceFile)
+        assertEquals(42, entry.sourceLine)
+        assertEquals(5L, entry.executionTimeMs)
+    }
+
+    @Test
+    fun `兼容三横线历史新版格式`() {
+        // F-44-2 已停止生产三横线，但历史文件仍可能存在——Reader 必须向后兼容
+        val content = "--- source: A.java:1 | time: 3ms | 2026-08-31 17:30:00.000 ---\nSELECT 1\n\n"
+        val entries = SqlLogFileReader.parseContent(content)
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 1", entries[0].restoredSql)
+        assertEquals("A.java", entries[0].sourceFile)
+        assertEquals(3L, entries[0].executionTimeMs)
+    }
+
+    @Test
+    fun `解析混合格式_F44-2与F43共存`() {
+        // 验证新版本启用的双横线格式能与旧版时间戳格式共存
+        val content = """
+            -- source: UserMapper.java:10 | time: 3ms | 2026-08-31 17:30:00.000 --
+            SELECT 1
+
+            -- 2026-08-31 09:00:00
+            SELECT 2
+
+            -- source: OrderMapper.java:20 | time: 10ms | 2026-08-31 17:30:01.000 --
+            SELECT 3
+
+        """.trimIndent()
+        val entries = SqlLogFileReader.parseContent(content)
+        assertEquals(3, entries.size)
+        assertEquals("UserMapper.java", entries[0].sourceFile)
+        assertEquals(3L, entries[0].executionTimeMs)
+        assertNull(entries[1].sourceFile)
+        assertEquals("OrderMapper.java", entries[2].sourceFile)
+        assertEquals(10L, entries[2].executionTimeMs)
+    }
+
+    @Test
+    fun `解析无源码行号时只返回文件`() {
         val content = "--- source: UserMapper.java | time: 5ms | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n"
         val entries = SqlLogFileReader.parseContent(content)
         assertEquals(1, entries.size)
         assertEquals("UserMapper.java", entries[0].sourceFile)
         assertEquals(0, entries[0].sourceLine)
+    }
+
+    // ---------- F-44-3：countInFile 轻量条数统计（一级文件列表数据源） ----------
+
+    @Test
+    fun `countInFile 统计新版双横线格式`() {
+        val dir = Files.createTempDirectory("f443-count-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "a.sql")
+        file.writeText("""
+            -- source: A.java:1 | time: 1ms | 2026-08-31 17:30:00.000 --
+            SELECT 1
+
+            -- source: B.java:2 | time: 2ms | 2026-08-31 17:30:01.000 --
+            SELECT 2
+
+            -- source: C.java:3 | time: 3ms | 2026-08-31 17:30:02.000 --
+            SELECT 3
+
+        """.trimIndent())
+        assertEquals(3, SqlLogFileReader.countInFile(file))
+        // 与 readFromFile 完整解析一致
+        assertEquals(3, SqlLogFileReader.readFromFile(file).size)
+    }
+
+    @Test
+    fun `countInFile 兼容三横线与旧版格式混合`() {
+        val dir = Files.createTempDirectory("f443-count-mix-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "mix.sql")
+        file.writeText("""
+            --- source: A.java:1 | time: 3ms | 2026-08-31 17:30:00.000 ---
+            SELECT 1
+
+            -- 2026-08-25 09:00:00
+            SELECT 2
+
+            -- source: B.java:2 | time: 5ms | 2026-08-31 17:30:01.000 --
+            SELECT 3
+
+        """.trimIndent())
+        assertEquals(3, SqlLogFileReader.countInFile(file))
+        // 与完整解析结果一致
+        assertEquals(3, SqlLogFileReader.readFromFile(file).size)
+    }
+
+    @Test
+    fun `countInFile 空文件与不存在文件返回0`() {
+        val dir = Files.createTempDirectory("f443-count-empty-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "empty.sql")
+        file.writeText("")
+        assertEquals(0, SqlLogFileReader.countInFile(file))
+        assertEquals(0, SqlLogFileReader.countInFile(File(dir, "missing.sql")))
     }
 }

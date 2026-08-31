@@ -222,7 +222,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             // 精确定位 null 源
             try {
                 val base = project.basePath ?: error("project.basePath null")
-                val dir = java.io.File(base, ".idea/mybatis-plus-sql-visualizer/exec").apply { mkdirs() }
+                val dir = java.io.File(base, ".idea/${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}/exec").apply { mkdirs() }
                 val f = java.io.File(dir, "mpsql-exec.sql").apply { writeText("SELECT 1") }
                 diag.append("step1 file written: ${f.absolutePath}\n")
                 val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)

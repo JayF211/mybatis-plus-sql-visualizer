@@ -2587,7 +2587,7 @@ object DataSourceSelector {
     private fun createTempPsiFile(project: Project, sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         return runCatching {
-            // M36.5.12：临时文件改存项目内 `.idea/mybatis-plus-sql-visualizer/exec/`
+            // M36.5.12：临时文件改存项目内 `.idea/sql-visualizer/exec/`（F-44-4：目录随插件更名）
             //（参考 sql-history 保存位置），不再用系统 Temp——Temp 文件不在数据源关联范围，
             // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
             // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
@@ -2613,8 +2613,9 @@ object DataSourceSelector {
     }
 
     /**
-     * M36.5.12：项目内执行文件路径——`<projectBase>/.idea/mybatis-plus-sql-visualizer/exec/mpsql-exec.sql`。
-     * 目录不存在则创建；文件写入 SQL（覆盖）。与 sql-history 同根（.idea/mybatis-plus-sql-visualizer/），
+     * M36.5.12：项目内执行文件路径——`<projectBase>/.idea/sql-visualizer/exec/mpsql-exec.sql`
+     * （F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再使用）。
+     * 目录不存在则创建；文件写入 SQL（覆盖）。与 sql-history 同根（.idea/sql-visualizer/），
      * 但**独立子目录** exec（sql-history 读取器只扫 sql-history 子目录，互不污染）。
      *
      * M36.5.13：**VFS 安全写入**——文件已在 VFS（上次预览创建过，console 编辑器持有其 document）
@@ -2627,7 +2628,7 @@ object DataSourceSelector {
     private fun projectExecFile(project: Project, sql: String): java.io.File? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val base = project.basePath ?: return null
-        val dir = java.io.File(base, ".idea${java.io.File.separator}mybatis-plus-sql-visualizer${java.io.File.separator}exec")
+        val dir = java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
         if (!dir.exists()) dir.mkdirs()
         val f = java.io.File(dir, "mpsql-exec.sql")
         val existing = LocalFileSystem.getInstance().findFileByIoFile(f)

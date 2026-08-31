@@ -512,8 +512,10 @@ intellijPlatformTesting {
                     }
                 }
                 filter {
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
-                }
+                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
+                // M36.5.23 续：DataSourceSelector 选择/发现层集成骨架（仅 testDatabase 跑，database jar 在 classpath）
+                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
+            }
             }
         }
     }
@@ -535,5 +537,7 @@ tasks.test {
         // 默认 test 已排除 database jar（上方 withType<Test>），该测试类加载即 NoClassDefFoundError，
         // 必须排除——否则 "./gradlew test 不受影响" 的约定（M36.5.23）被破坏
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
+        // M36.5.23 续：DataSourceSelector 选择/发现层集成骨架同样依赖 database jar（默认 test 已剥离）
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
     }
 }

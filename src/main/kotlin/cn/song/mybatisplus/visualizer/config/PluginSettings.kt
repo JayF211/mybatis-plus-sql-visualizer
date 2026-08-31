@@ -193,7 +193,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /**
          * 自动保存历史 SQL 的保存目录（F-43）：用户自定义保存位置。
-         * 空字符串表示使用默认路径（.idea/mybatis-plus-sql-visualizer/sql-history/）。
+         * 空字符串表示使用默认路径（.idea/sql-visualizer/sql-history/，F-44-4 随插件更名）。
          */
         var logAutoSavePath: String = "",
 

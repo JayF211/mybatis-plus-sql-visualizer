@@ -14,7 +14,8 @@ import java.util.Date
  * 自动保存历史 SQL 到文件（F-43）：[SqlLogManager] 装配为 buffer 的 onEvicted 回调。
  *
  * 文件规则：
- *  - 默认路径：.idea/mybatis-plus-sql-visualizer/sql-history/
+ *  - 默认路径：.idea/sql-visualizer/sql-history/（F-44-4：随插件更名由旧名
+ *    mybatis-plus-sql-visualizer 改为 sql-visualizer，**不考虑向前兼容**——旧目录数据不再读取）
  *  - 文件名模板：sql-history-$yyyy-MM-dd$.sql（支持 $yyyy$ $MM$ $dd$ $HH$ $mm$ $ss$ 占位符）
  *  - 文件滚动：单文件 ≥100MB 时滚动（.2.sql、.3.sql…）
  *  - 格式：`-- 时间戳\nSQL\n\n`（纯文本，可直接在数据库工具中打开）
@@ -114,8 +115,12 @@ class SqlLogAutoSaver {
 
     /**
      * 写入单条条目到文件。
-     * 格式（F-44）：--- source: xxx | time: xxx | timestamp ---\nSQL\n
+     * 格式（F-44-2）：-- source: xxx | time: xxx | timestamp --\nSQL\n
+     *
      * 旧版格式（F-43）：-- timestamp\nSQL\n（向后兼容，Reader 同时支持）
+     * 旧版 F-44 一度使用 `--- source: ... ---`（三个 `-`），本方法回归为标准 SQL 单行注释 `--`
+     * （更严格 SQL 方言对 3 个 `-` 整行注释兼容性差，且与历史 F-43 注释一致便于人眼识读）。
+     * Reader 正则兼容 2/3 个 `-` 起结，已存在的旧 3 `-` 文件仍可读。
      */
     private fun writeEntry(w: BufferedWriter, entry: LogSqlEntry) {
         runCatching {
@@ -126,7 +131,7 @@ class SqlLogAutoSaver {
                 } ?: "unknown"
                 val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
                 val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).format(Date(entry.timestamp))
-                w.write("--- source: $source | time: $duration | $timestamp ---\n")
+                w.write("-- source: $source | time: $duration | $timestamp --\n")
                 w.write(entry.restoredSql)
                 w.write("\n\n")
                 w.flush()
@@ -174,7 +179,16 @@ class SqlLogAutoSaver {
 
     companion object {
         private val LOG = Logger.getInstance(SqlLogAutoSaver::class.java)
-        private val DEFAULT_DIR = "mybatis-plus-sql-visualizer${File.separator}sql-history"
+
+        /**
+         * 项目内插件数据根目录名（F-44-4）：随插件更名「SQL Visualizer」由旧名
+         * `mybatis-plus-sql-visualizer` 改为 `sql-visualizer`，**不考虑向前兼容**
+         * （旧 `.idea/mybatis-plus-sql-visualizer/` 数据不再读取，历史 SQL 与新捕获从新目录起算）。
+         * 其他模块（HistorySqlLogPanel / SqlLogPanel.hasHistoryFiles / DataSourceSelector）统一引用本常量。
+         */
+        const val DATA_DIR_NAME = "sql-visualizer"
+
+        private val DEFAULT_DIR = "$DATA_DIR_NAME${File.separator}sql-history"
         /** 匹配 $变量$ 占位符。 */
         private val PLACEHOLDER_REGEX = Regex("""\$([^$]+)\$""")
     }

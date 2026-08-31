@@ -27,6 +27,9 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -131,6 +134,8 @@ class SqlLogPanel(
 
     private val listModel = DefaultListModel<LogSqlEntry>()
     private val list = SqlEntryList(listModel)
+    /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
+    private lateinit var entryCellRenderer: LogEntryListCellRenderer
     private val tabs = JBTabbedPane()
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)
@@ -143,13 +148,24 @@ class SqlLogPanel(
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener {
+            // 当前 UI 选中态（同步给 buffer）
+            val nowChecked = isSelected
             val wasEnabled = manager.entries.dedupeEnabled
-            manager.entries.dedupeEnabled = isSelected
-            if (!wasEnabled && isSelected) {
-                // 重新开启去重：丢弃计数从零起算（徽章只反映本次开启后的去重量）
+            if (nowChecked == wasEnabled) return@addActionListener
+            if (nowChecked) {
+                manager.entries.dedupeEnabled = true
                 manager.entries.resetDedupeCounts()
-                refreshList()
+                // F-44-2 用户实测缺：勾选「移除重复的sql」后立即对已有条目去重
+                // —— 此前仅清计数、不裁剪缓冲，重复 SQL 继续展示
+                val removed = manager.entries.dedupeExisting()
+                if (removed > 0) {
+                    LOG.info("dedupeCheckBox: 开启去重后裁掉了 $removed 条已存在重复 SQL")
+                }
+            } else {
+                // 关闭去重：清空累计计数（语义：关闭 = 本次累计清零）
+                manager.entries.disableDedupe()
             }
+            refreshList()
         }
     }
 
@@ -221,6 +237,9 @@ class SqlLogPanel(
     /** 耗时排序按钮（测试点击用）。 */
     internal val durationSortLabel: JToggleButton get() = sortButton
 
+    /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
+    internal val dedupeCheckBoxForTest: JCheckBox get() = dedupeCheckBox
+
     /** SQL类型多选按钮（测试断言文案）。 */
     internal val typeFilterButtonForTest: JButton get() = typeFilterButton
 
@@ -237,6 +256,9 @@ class SqlLogPanel(
 
     /** 搜索条（测试断言显隐/文本）。 */
     internal val searchFieldForTest: SearchTextField get() = searchField
+
+    /** 工具栏慢查询计数标签（测试断言显隐与文案）。 */
+    internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
 
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
@@ -542,10 +564,10 @@ class SqlLogPanel(
         }
     }
 
-    /** F-44：检查 .idea 目录中是否存在历史 SQL 文件。 */
+    /** F-44：检查 .idea 目录中是否存在历史 SQL 文件（F-44-4：目录名随插件更名，旧名不再读取）。 */
     private fun hasHistoryFiles(): Boolean {
         val basePath = project.basePath ?: return false
-        val dir = java.io.File("$basePath${java.io.File.separator}.idea${java.io.File.separator}mybatis-plus-sql-visualizer${java.io.File.separator}sql-history")
+        val dir = java.io.File("$basePath${java.io.File.separator}.idea${java.io.File.separator}${SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}sql-history")
         return dir.isDirectory && dir.listFiles { f -> f.extension == "sql" }?.isNotEmpty() == true
     }
 
@@ -667,36 +689,7 @@ class SqlLogPanel(
         list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
         // 多行 SQL 预览：启用可变行高（条目高度按内容自适应，支持 SQL 自动换行）
         list.fixedCellHeight = -1
-        list.cellRenderer = object : javax.swing.DefaultListCellRenderer() {
-            override fun getListCellRendererComponent(
-                list: javax.swing.JList<*>?,
-                value: Any?,
-                index: Int,
-                isSelected: Boolean,
-                cellHasFocus: Boolean,
-            ): java.awt.Component {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                val entry = value as? LogSqlEntry
-                text = null
-                if (entry != null) {
-                    // M46：纯文本渲染（移除 HTML 标签，消除 Swing HTML 引擎开销 + EDT 上的 SQL 词法分析）
-                    val timestamp = formatTimestamp(entry.timestamp)
-                    val duration = formatDuration(entry.executionTimeMs)
-                    // 去重徽章：该 SQL 被「移除重复的sql」丢弃过的次数（开启期间累计）
-                    val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-                    this.text = "$timestamp$duration${entry.summary}$dedupeBadge"
-                    toolTipText = entry.restoredSql
-                    // 耗时着色（仅前景色，不走 HTML）
-                    foreground = durationColor(entry.executionTimeMs, isSelected)
-                }
-                // 行底分隔线 + 四周内边距（条目视觉分隔清晰，解决"区分不清"）
-                border = BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-                    EmptyBorder(5, 8, 5, 8),
-                )
-                return this
-            }
-        }
+        list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount >= 2) {
@@ -734,6 +727,7 @@ class SqlLogPanel(
 
         // 去重丢弃计数快照（徽章渲染数据源；丢弃不触发通知，随下一次刷新呈现）
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
+        entryCellRenderer.dedupeCounts = dedupeCounts
 
         val filtered = filterByType(snapshot, activeFilter)
         val searched = filterBySearch(filtered, searchText)
@@ -780,52 +774,96 @@ class SqlLogPanel(
         refreshList()
     }
 
-    // ---------- 渲染辅助 ----------
+    // ---------- 渲染辅助（F-44-2：HTML 通道恢复 SQL 高亮 + 耗时） ----------
+    // 注：formatTimestampHtml / formatDurationHtml / escapeHtml 已抽为文件级 private 函数（见本文件末尾），
+    // 供 LogEntryListCellRenderer 与 SqlLogPanel 共用。
 
-    /** M46：纯文本时间戳前缀（替代 timestampHtml，不再生成 HTML）。 */
-    private fun formatTimestamp(timestamp: Long): String {
-        val state = PluginSettings.getInstance().state
-        if (!state.logTimestampEnabled) return ""
-        val formatted = try {
-            SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
-        } catch (_: IllegalArgumentException) {
-            SimpleDateFormat(DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp))
-        }
-        return "[$formatted] "
+    /**
+     * O-1：日志 ↔ 源码关联跳转的解析结果（internal 供 UI 测试断言「无法跳转」分支，
+     * 避免 headless 下 Messages 弹窗阻塞与后台 ReferencesSearch 的不确定性）：
+     * NoTable=SQL 无表名（无法定位实体）；Proceed=已提取表名，交由后台搜索实体。
+     *
+     * 注：实时 SQL 日志来自控制台输出（p6spy/MyBatis/Hibernate），本身不含 file:line
+     * 调用位置，故「跳转到源码」实为「按表名定位对应实体 Wrapper」——与历史面板
+     * （携带 sourceFile/sourceLine）的精确行跳转不同。
+     */
+    internal sealed class LiveJumpResolution {
+        data object NoTable : LiveJumpResolution()
+        data class Proceed(val tableName: String) : LiveJumpResolution()
     }
 
-    /** M46：纯文本耗时文本（替代 durationHtml，不再生成 HTML）。 */
-    private fun formatDuration(ms: Long?): String {
-        if (ms == null) return ""
-        return " ${ms}ms "
-    }
-
-    /** M46：耗时前景色（绿/黄/红，替代 HTML span 着色）。 */
-    private fun durationColor(ms: Long?, isSelected: Boolean): java.awt.Color {
-        if (isSelected) return list.selectionForeground
-        if (ms == null) return list.foreground
-        val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
-        return when {
-            ms >= threshold -> JBColor.RED
-            ms >= threshold / 2 -> JBColor.ORANGE
-            else -> list.foreground
-        }
+    /** 解析日志跳转目标（与 [jumpToSource] 共用；仅做廉价表名提取，不触发 PSI 搜索）。 */
+    internal fun resolveLiveJump(entry: LogSqlEntry): LiveJumpResolution {
+        val tableName = SqlTableExtractor.extractFirst(entry.restoredSql)
+        return if (tableName == null) LiveJumpResolution.NoTable else LiveJumpResolution.Proceed(tableName)
     }
 
     /**
-     * O-1：日志 ↔ 源码关联跳转（Phase A）：提取表名 → 搜索 Wrapper → 跳转。
+     * F-44-6：实时日志跳转的统一解析结果。优先级高于 [LiveJumpResolution]：
+     * 若条目携带源码位置（由 [SqlSourceInterceptor] 标记注入），直接精确 file:line 跳转；
+     * 否则回退到表名启发式（[LiveJumpResolution]）。
+     */
+    internal sealed class LogJumpTarget {
+        data class Precise(val virtualFile: VirtualFile, val line: Int) : LogJumpTarget()
+        data object NoSource : LogJumpTarget()
+        data class NotFound(val sourceFile: String) : LogJumpTarget()
+        data class SearchByTable(val tableName: String) : LogJumpTarget()
+        data object NoTable : LogJumpTarget()
+    }
+
+    /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
+    internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
+        if (entry.sourceFile != null) {
+            val basePath = project.basePath ?: return LogJumpTarget.NoSource
+            val fullPath = "$basePath/${entry.sourceFile}"
+            val vf = LocalFileSystem.getInstance().findFileByPath(fullPath)
+            return if (vf != null) {
+                LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
+            } else {
+                LogJumpTarget.NotFound(entry.sourceFile)
+            }
+        }
+        return when (val resolution = resolveLiveJump(entry)) {
+            is LiveJumpResolution.NoTable -> LogJumpTarget.NoTable
+            is LiveJumpResolution.Proceed -> LogJumpTarget.SearchByTable(resolution.tableName)
+        }
+    }
+
+    /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗/后台搜索）。 */
+    internal fun jumpToSourceForTest(entry: LogSqlEntry) = jumpToSource(entry)
+
+    /**
+     * F-44-6：日志 ↔ 源码关联跳转。
+     * 优先精确跳转（条目携带源码位置）；无源码位置时回退「按表名定位实体 Wrapper」。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
-        val tableName = SqlTableExtractor.extractFirst(entry.restoredSql)
-        if (tableName == null) {
-            Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("log.panel.jumpToSource.noTable"),
-                MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-            )
-            return
+        when (val target = resolveEntryJump(entry)) {
+            is LogJumpTarget.Precise ->
+                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
+            is LogJumpTarget.NoSource ->
+                Messages.showInfoMessage(
+                    project,
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"),
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+                )
+            is LogJumpTarget.NotFound ->
+                Messages.showInfoMessage(
+                    project,
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile),
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+                )
+            is LogJumpTarget.SearchByTable -> searchByTable(target.tableName)
+            is LogJumpTarget.NoTable ->
+                Messages.showInfoMessage(
+                    project,
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.noTable"),
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+                )
         }
-        // 后台搜索（ReferencesSearch 可能耗时，不阻塞 EDT）
+    }
+
+    /** 按表名后台搜索实体 Wrapper 并跳转（回退路径，尽力而为）。 */
+    private fun searchByTable(tableName: String) {
         object : Task.Backgroundable(
             project,
             "Searching Wrappers for table \"$tableName\"",
@@ -992,7 +1030,7 @@ class SqlLogPanel(
      * 尺寸按多行计算（原生 FlowLayout.preferredLayoutSize 只按单行算，折行后第二行会被裁掉，
      * 表现为「控件消失」——2026-08-27 用户实测 SQL类型按钮选中两个类型后触发的缺陷）。
      */
-    private class WrapLayout : FlowLayout(LEFT, 4, 2) {
+    internal class WrapLayout : FlowLayout(LEFT, 4, 2) {
 
         override fun preferredLayoutSize(target: Container): Dimension {
             return computeSize(target, preferred = true)
@@ -1046,7 +1084,7 @@ class SqlLogPanel(
     companion object {
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
-        private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
+        internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
          *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */
@@ -1063,5 +1101,74 @@ class SqlLogPanel(
             StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
             else -> "OTHER"
         }
+    }
+}
+
+// =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
+
+/** 时间戳 HTML 前缀：返回 `<span>` 片段，与 SQL 高亮共用 HTML 通道；未开启时间戳则返回空串。 */
+private fun formatTimestampHtml(timestamp: Long): String {
+    val state = PluginSettings.getInstance().state
+    if (!state.logTimestampEnabled) return ""
+    val formatted = try {
+        SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
+    } catch (_: IllegalArgumentException) {
+        SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp))
+    }
+    return "<span style='color:#9E9E9E'>[${escapeHtml(formatted)}]</span> "
+}
+
+/** 耗时 HTML 片段：根据阈值套不同颜色——无耗时则返回空串。 */
+private fun formatDurationHtml(ms: Long?, isSelected: Boolean): String {
+    if (ms == null) return ""
+    val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
+    val color = when {
+        isSelected -> "#FFFFFF"
+        ms >= threshold -> "#D32F2F"   // 红：慢查询
+        ms >= threshold / 2 -> "#E67E22" // 橙：偏慢
+        else -> "#9E9E9E"              // 灰：正常
+    }
+    return "<span style='color:${color}'>${ms}ms</span> "
+}
+
+/** 单行 HTML 转义（防注入日志中的特殊字符）。 */
+private fun escapeHtml(s: String): String = s
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+
+/**
+ * 日志列表条目单元格渲染器（F-44-2 重写）：HTML 通道恢复 SQL 高亮 + 耗时 + 时间戳 + 去重 ⨉N 徽章。
+ * 抽为具名 internal 类（原匿名 object），便于单元测试直接渲染各种条目状态、锁定渲染崩溃/配色缺陷。
+ */
+internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() {
+    /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
+    var dedupeCounts: Map<String, Int> = emptyMap()
+
+    override fun getListCellRendererComponent(
+        list: javax.swing.JList<*>?,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ): java.awt.Component {
+        super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+        val entry = value as? LogSqlEntry
+        text = null
+        if (entry != null) {
+            val timestampHtml = formatTimestampHtml(entry.timestamp)
+            val durationHtml = formatDurationHtml(entry.executionTimeMs, isSelected)
+            val sqlHtml = SqlListHtmlRenderer.render(entry.summary)
+            val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
+            this.text = "<html>${timestampHtml}${durationHtml}${sqlHtml}${dedupeBadge}</html>"
+            toolTipText = entry.restoredSql
+            foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
+            else (list?.foreground ?: JBColor.foreground())
+        }
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+            EmptyBorder(5, 8, 5, 8),
+        )
+        return this
     }
 }

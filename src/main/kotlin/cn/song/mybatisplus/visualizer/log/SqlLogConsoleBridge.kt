@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.ui.content.ContentManagerEvent
@@ -42,6 +43,8 @@ open class SqlLogConsoleBridge(
      * 值从 Boolean 改为 Pair<filter, ifaceClass>，供 [detachAllFilters] 移除 Filter 使用。
      */
     val attachedConsoles = IdentityHashMap<Any, Pair<Any, Class<*>>>()
+    /** 每个已挂载控制台 → 解析器上下文（含暂存源码位置，F-44-6）。 */
+    private val consoleContexts = IdentityHashMap<Any, BridgeLineContext>()
     private val contentListener = object : ContentManagerListener {
         override fun contentAdded(event: ContentManagerEvent) {
             val component = event.content.component
@@ -289,39 +292,32 @@ open class SqlLogConsoleBridge(
                     maxParseLength = config.maxParseLength,
                 )
                 val hibernateEnabled = config.hibernateEnabled
+                // 每个 console 持有独立解析器 + 暂存源码位置（避免多控制台相互干扰，F-44-6）
+                val cfg0 = parserConfig()
+                val ctx = BridgeLineContext(
+                    myBatisParser = MyBatisLogParser(
+                        sqlPrefix = cfg0.sqlPrefix,
+                        paramPrefix = cfg0.paramPrefix,
+                        mixedPrefix = cfg0.mixedPrefix,
+                        maxParseLength = cfg0.maxParseLength,
+                    ),
+                    hibernateParser = HibernateLogParser(
+                        sqlPrefix = cfg0.hibernateSqlPrefix,
+                        paramPrefix = cfg0.hibernateParamPrefix,
+                        mixedPrefix = cfg0.mixedPrefix,
+                        maxParseLength = cfg0.maxParseLength,
+                    ),
+                    jdbcParser = JdbcTemplateLogParser(enabled = cfg0.jdbcEnabled, maxParseLength = cfg0.maxParseLength),
+                    configProvider = parserConfig,
+                )
+                consoleContexts[console] = ctx
                 val filter = Proxy.newProxyInstance(
                     filterIface.classLoader,
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line ->
-                        // T-xx（设置生效性审计）：每次喂行前同步解析器配置——前缀/混合/最大长度即时生效，
-                        // 对齐 filterKeywords/去重窗口的 T-M31.18 实时同步策略；此前 parser 挂载时固化配置，
-                        // 捕捉中修改仅对**之后新挂载**的 console 生效（读缓存旧值），现同策略修齐
-                        val cfg = parserConfig()
-                        myBatisParser.sqlPrefix = cfg.sqlPrefix
-                        myBatisParser.paramPrefix = cfg.paramPrefix
-                        myBatisParser.mixedPrefix = cfg.mixedPrefix
-                        myBatisParser.maxParseLength = cfg.maxParseLength
-                        hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
-                        hibernateParser.paramPrefix = cfg.hibernateParamPrefix
-                        hibernateParser.mixedPrefix = cfg.mixedPrefix
-                        hibernateParser.maxParseLength = cfg.maxParseLength
-                        jdbcParser.enabled = cfg.jdbcEnabled
-                        jdbcParser.maxParseLength = cfg.maxParseLength
-                        LOG.debug("FilterProxy: line=${line.take(120)}")
-                        // 喂行到三个解析器（各自忽略不匹配的行）
-                        myBatisParser.feed(line)
-                        if (hibernateEnabled) hibernateParser.feed(line)
-                        jdbcParser.feed(line)
-                        // T-M31.18：每次入队前同步设置（去重窗口/过滤关键字即时生效，不再依赖重新捕捉）
-                        syncBufferConfig()
-                        val taken = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
-                        if (taken.isNotEmpty()) LOG.debug("FilterProxy: 捕获到 ${taken.size} 条 SQL: ${taken.first().restoredSql.take(80)}")
-                        // F-44：附加源码位置（从调用栈提取）
-                        val (sourceFile, sourceLine) = extractSourceLocation()
-                        taken.forEach { entry ->
-                            val withSource = entry.copy(sourceFile = sourceFile, sourceLine = sourceLine)
-                            buffer.addEntry(withSource)
-                        }
+                        val context = consoleContexts[console] ?: return@LogFilterProxyHandler
+                        val timePrefix = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
+                        processConsoleLine(line, context, timePrefix, syncBufferConfig).forEach { buffer.addEntry(it) }
                     },
                 )
                 console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
@@ -345,6 +341,7 @@ open class SqlLogConsoleBridge(
      */
     open fun detachAllFilters() {
         for ((console, filterPair) in attachedConsoles) {
+            consoleContexts.remove(console)
             val (filter, filterIface) = filterPair
             var removed = false
             // 优先尝试存储的接口
@@ -391,39 +388,10 @@ open class SqlLogConsoleBridge(
     }
 
     /**
-     * F-44：从当前线程调用栈中提取产生 SQL 的源码位置。
-     * 原理：SQL 日志由应用代码打印 → 调用栈中第一个非 JDK/非本插件/非 IntelliJ 平台的帧即为产生者。
-     * 返回：相对路径（如 "src/main/java/com/example/mapper/UserMapper.java"）+ 行号。
+     * F-44-6：实时日志的源码位置不再由本 IDE 线程取栈（取不到应用帧，恒为 null），
+     * 改为由运行期 [SqlSourceInterceptor] 在应用线程捕获、打印标记行，
+     * 经 [processConsoleLine] 解析为 sourceFile/sourceLine（见 [SqlSourceMarker] / [CallerSourceLocator]）。
      */
-    private fun extractSourceLocation(): Pair<String?, Int> {
-        val stackTrace = Thread.currentThread().stackTrace
-        // 跳过前几个帧（Thread.getStackTrace、本方法、Lambda、LogFilterProxyHandler）
-        for (i in minOf(6, stackTrace.size) until stackTrace.size) {
-            val frame = stackTrace[i]
-            val className = frame.className
-            // 跳过 JDK、IntelliJ 平台、本插件类
-            if (className.startsWith("java.") || className.startsWith("javax.") ||
-                className.startsWith("jdk.") || className.startsWith("sun.") ||
-                className.startsWith("com.intellij.") || className.startsWith("org.jetbrains.") ||
-                className.startsWith("cn.song.mybatisplus.visualizer.") ||
-                className.startsWith("com.sun.proxy.") || className.startsWith("\$Proxy")) {
-                continue
-            }
-            // 找到第一个应用代码帧
-            val relativePath = classNameToRelativePath(className, frame.fileName)
-            return relativePath to frame.lineNumber
-        }
-        return null to 0
-    }
-
-    /**
-     * 将类名 + 文件名转换为相对项目根目录的路径。
-     * 例如：com.example.mapper.UserMapper + UserMapper.java → com/example/mapper/UserMapper.java
-     */
-    private fun classNameToRelativePath(className: String, fileName: String): String? {
-        val packagePath = className.substringBeforeLast('.', "").replace('.', File.separatorChar)
-        return if (packagePath.isNotEmpty()) "$packagePath${File.separatorChar}$fileName" else fileName
-    }
 
     companion object {
         private val LOG = Logger.getInstance(SqlLogConsoleBridge::class.java)
@@ -475,6 +443,70 @@ open class SqlLogConsoleBridge(
             return null
         }
     }
+}
+
+/**
+ * 每个已挂载控制台持有的一组解析器 + 暂存源码位置（F-44-6）。
+ * 解析器跨行保持配对状态（MyBatis 的 Preparing/Parameters 跨多行），故须按 console 持久化。
+ */
+internal class BridgeLineContext(
+    val myBatisParser: MyBatisLogParser,
+    val hibernateParser: HibernateLogParser,
+    val jdbcParser: JdbcTemplateLogParser,
+    val configProvider: () -> ParserConfig,
+    var pendingSource: Pair<String, Int>? = null,
+)
+
+/**
+ * 处理一行控制台文本（F-44-6）：
+ *  1. 若为本插件源码标记（[SqlSourceInterceptor] 注入）→ 暂存，不喂解析器；
+ *  2. 同步解析器实时配置后喂行，取出已配对 SQL 条目；
+ *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
+ * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（[SqlLogConsoleBridgeMarkerTest]）。
+ */
+internal fun processConsoleLine(
+    line: String,
+    ctx: BridgeLineContext,
+    timePrefix: String?,
+    syncBufferConfig: () -> Unit,
+): List<LogSqlEntry> {
+    // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
+    val marker = SqlSourceMarker.parse(line)
+    if (marker != null) {
+        ctx.pendingSource = marker
+        return emptyList()
+    }
+    // 2) 每次喂行前同步解析器配置（捕捉中实时生效，对齐 T-M31.18）
+    val cfg = ctx.configProvider()
+    ctx.myBatisParser.sqlPrefix = cfg.sqlPrefix
+    ctx.myBatisParser.paramPrefix = cfg.paramPrefix
+    ctx.myBatisParser.mixedPrefix = cfg.mixedPrefix
+    ctx.myBatisParser.maxParseLength = cfg.maxParseLength
+    ctx.hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
+    ctx.hibernateParser.paramPrefix = cfg.hibernateParamPrefix
+    ctx.hibernateParser.mixedPrefix = cfg.mixedPrefix
+    ctx.hibernateParser.maxParseLength = cfg.maxParseLength
+    ctx.jdbcParser.enabled = cfg.jdbcEnabled
+    ctx.jdbcParser.maxParseLength = cfg.maxParseLength
+    // 3) 喂行到三个解析器（各自忽略不匹配的行）
+    ctx.myBatisParser.feed(line)
+    if (cfg.hibernateEnabled) ctx.hibernateParser.feed(line)
+    ctx.jdbcParser.feed(line)
+    syncBufferConfig()
+    val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
+    if (taken.isEmpty()) return emptyList()
+    // 4) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
+    val executionTimeMs = ExecutionTimeParser.parse(line, timePrefix)
+    val src = ctx.pendingSource
+    val result = taken.map { e ->
+        e.copy(
+            sourceFile = src?.first,
+            sourceLine = src?.second ?: 0,
+            executionTimeMs = executionTimeMs ?: e.executionTimeMs,
+        )
+    }
+    if (src != null) ctx.pendingSource = null
+    return result
 }
 
 /** 组件树中查找实现 `com.intellij.execution.ui.ConsoleView` 接口的组件（接口名匹配，无编译期引用）。 */
