@@ -47,7 +47,10 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.75-outfill-layout"
+    private const val BUILD_STAMP = "M36.5.76-outfill-bottom-scope"
+
+    /** M36.5.76：OUTFILL 未锚定诊断日志节流（EDT 串行访问，无需同步）。 */
+    private var lastOutFillDiagAt = 0L
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -1756,52 +1759,78 @@ object DataSourceSelector {
      */
     internal fun installOutputHistoryFillLayout(root: java.awt.Component, log: com.intellij.openapi.diagnostic.Logger) {
         runCatching {
-            if (root !is java.awt.Container) return
-            // 1) 定位 Output 历史编辑器（只在结果区子树内，类名精确匹配）
-            var target: java.awt.Component? = null
-            fun findTarget(c: java.awt.Component, depth: Int) {
-                if (target != null || depth > 24) return
-                if (c.javaClass.name.contains("EditorImpl\$PanelWithFloatingToolbar")) { target = c; return }
-                if (c is java.awt.Container) for (d in c.components) findTarget(d, depth + 1)
+            // M36.5.76：搜索范围收紧到**结果区（bottom）**——M36.5.75 实证缺陷：从整个 SplitPane
+            // 深搜时第一个命中的 PWT 是 topBlock 顶部编辑器（同为 EditorImpl$PanelWithFloatingToolbar），
+            // 从它向上找不到 EMHSBL 面板而整体 skip（沙盒 68 次 `not found; skip`，0 次安装）。
+            val sp = root as? javax.swing.JSplitPane
+            val searchRoot: java.awt.Component = sp?.bottomComponent ?: root
+            if (searchRoot !is java.awt.Container) return
+            // 1) 定位结果区内全部 Output 历史编辑器（类名精确匹配，结果网格类名不同绝不误伤）
+            val targets = ArrayList<java.awt.Component>()
+            fun findAll(c: java.awt.Component, depth: Int) {
+                if (targets.size >= 4 || depth > 24) return
+                if (c.javaClass.name.contains("EditorImpl\$PanelWithFloatingToolbar")) { targets.add(c); return }
+                if (c is java.awt.Container) for (d in c.components) findAll(d, depth + 1)
             }
-            findTarget(root, 0)
-            val t = target ?: run {
+            findAll(searchRoot, 0)
+            if (targets.isEmpty()) {
                 log.info("[M36][OUTFILL] no output editor (EditorImpl\$PanelWithFloatingToolbar) in result area; skip")
                 return
             }
-            // 2) 从 target 直接父层向上收集容器链，锚定到 EditorMergedHorizontalScrollBarLayout 面板（含）
-            val chain = ArrayList<java.awt.Container>()
-            var anchored = false
-            var cur: java.awt.Container? = t.parent
-            while (cur != null) {
-                chain.add(cur)
-                if (cur.layout?.javaClass?.name == "com.intellij.execution.console.EditorMergedHorizontalScrollBarLayout") {
-                    anchored = true
-                    break
+            var installedAny = false
+            for (t in targets) {
+                // 幂等：直接父层已装过则跳过（重复 realign/预览+执行双路径）
+                if (t.parent?.layout is FillTargetLayout) continue
+                // 2) 从 target 直接父层向上收集容器链，锚定到 EMHSBL 布局面板（含，contains 匹配兼容子类）
+                val chain = ArrayList<java.awt.Container>()
+                var anchored = false
+                var cur: java.awt.Container? = t.parent
+                while (cur != null) {
+                    chain.add(cur)
+                    if (cur.layout?.javaClass?.name?.contains("EditorMergedHorizontalScrollBarLayout") == true) {
+                        anchored = true
+                        break
+                    }
+                    if (cur === searchRoot) break
+                    cur = cur.parent
                 }
-                if (cur === root) break
-                cur = cur.parent
-            }
-            if (!anchored) {
-                log.info("[M36][OUTFILL] EditorMergedHorizontalScrollBarLayout panel not found above output editor; skip")
-                return
-            }
-            // 3) 逐层安装填充布局（跳过 JScrollPane——ScrollPaneLayout 由滚动机制管理，不可替换）
-            var child: java.awt.Component = t
-            for (c in chain) {
-                if (c is javax.swing.JScrollPane) {
-                    log.info("[M36][OUTFILL] chain node is JScrollPane (${c.javaClass.name}), keep its layout")
-                } else if (c.layout !is FillTargetLayout) {
-                    val oldLayout = c.layout?.javaClass?.name ?: "null"
-                    val before = child.bounds
-                    c.layout = FillTargetLayout(child)
-                    c.revalidate()
-                    log.info("[M36][OUTFILL] installed on ${c.javaClass.name} (was $oldLayout) target=${child.javaClass.simpleName} before=$before")
+                if (!anchored) {
+                    // M36.5.76：诊断——祖先链一次性打点（节流 2s），定位 Output 编辑器真实上层结构
+                    val now = System.currentTimeMillis()
+                    if (now - lastOutFillDiagAt > 2000) {
+                        lastOutFillDiagAt = now
+                        val chainDesc = StringBuilder()
+                        var p: java.awt.Container? = t.parent
+                        var lvl = 0
+                        while (p != null && lvl < 10) {
+                            chainDesc.append("\n  ↑$lvl ${p.javaClass.name} layout=${p.layout?.javaClass?.name} bounds=${p.bounds}")
+                            if (p === searchRoot) break
+                            p = p.parent; lvl++
+                        }
+                        log.info("[M36][OUTFILL] EMHSBL panel not found above output editor; ancestors=$chainDesc")
+                    }
+                    continue
                 }
-                child = c
+                // 3) 逐层安装填充布局（跳过 JScrollPane——ScrollPaneLayout 由滚动机制管理，不可替换）
+                var child: java.awt.Component = t
+                for (c in chain) {
+                    if (c is javax.swing.JScrollPane) {
+                        log.info("[M36][OUTFILL] chain node is JScrollPane (${c.javaClass.name}), keep its layout")
+                    } else if (c.layout !is FillTargetLayout) {
+                        val oldLayout = c.layout?.javaClass?.name ?: "null"
+                        val before = child.bounds
+                        c.layout = FillTargetLayout(child)
+                        c.revalidate()
+                        log.info("[M36][OUTFILL] installed on ${c.javaClass.name} (was $oldLayout) target=${child.javaClass.simpleName} before=$before")
+                        installedAny = true
+                    }
+                    child = c
+                }
             }
-            root.revalidate()
-            root.repaint()
+            if (installedAny) {
+                searchRoot.revalidate()
+                searchRoot.repaint()
+            }
         }.onFailure { e ->
             log.warn("[M36][OUTFILL] install failed: ${e.message}")
         }
