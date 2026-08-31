@@ -281,8 +281,9 @@ object CustomDaoHqlLocator {
                 val value = expression.value as? String
                 (value ?: expression.text) to true
             }
-            is PsiBinaryExpression -> {
-                // 字符串拼接："..." + "..." → 递归收集所有 PsiLiteralExpression 子节点
+            is PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression -> {
+                // 字符串拼接："..." + "..."（含链式 `+`，如 `"a" + "b" + "c"`——链式在 PSI 中为 PsiPolyadicExpression，
+                // 与 PsiBinaryExpression 互不继承）→ 递归收集所有 PsiLiteralExpression 子节点
                 val parts = collectStringLiterals(expression)
                 if (parts.isNotEmpty()) {
                     parts.joinToString("") to true
@@ -319,7 +320,7 @@ object CustomDaoHqlLocator {
     private fun extractArgumentText(expression: PsiExpression): String? {
         return when (expression) {
             is PsiLiteralExpression -> expression.value as? String ?: expression.text
-            is PsiBinaryExpression -> {
+            is PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression -> {
                 val parts = collectStringLiterals(expression)
                 if (parts.isNotEmpty()) parts.joinToString("") else expression.text
             }

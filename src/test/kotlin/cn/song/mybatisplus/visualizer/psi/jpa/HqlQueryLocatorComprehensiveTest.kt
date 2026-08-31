@@ -315,6 +315,39 @@ class HqlQueryLocatorComprehensiveTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // 多行字符串拼接（含 JOIN FETCH）
+    // ------------------------------------------------------------------
+
+    fun testMultiLineConcatWithJoinFetch() {
+        myFixture.configureByText("UserDao.java", """
+            public class UserDao {
+                public List<UserEntity> jpqlJoinFetch(EntityManager em, String deptName) {
+                    return em.createQuery(
+                            "SELECT u FROM UserEntity u " +
+                                    "JOIN FETCH u.department d " +
+                                    "WHERE d.name = :deptName")
+                            .setParameter("deptName", deptName)
+                            .getResultList();
+                }
+            }
+            interface EntityManager { Query createQuery(String qlString); }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+        """.trimIndent())
+        val method = findMethod("jpqlJoinFetch")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("多行拼接 em.createQuery (含 JOIN FETCH) 应被识别", info)
+        val expected = "SELECT u FROM UserEntity u JOIN FETCH u.department d WHERE d.name = :deptName"
+        assertEquals("多行拼接应正确合并", expected, info!!.hql)
+        assertTrue("HQL 应为字面量", info.isLiteralHql)
+        // 链式 setParameter 在 HqlQueryLocator 不被追踪（仅变量赋值场景），参数提取由
+        // SqlPreviewService.previewHql 的 info.parameters.ifEmpty { extractParamNamesFromHql(...) } 兜底。
+    }
+
+    // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
 

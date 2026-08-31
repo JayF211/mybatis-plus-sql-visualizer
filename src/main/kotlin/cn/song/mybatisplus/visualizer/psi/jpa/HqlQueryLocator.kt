@@ -162,6 +162,9 @@ object HqlQueryLocator {
     /**
      * 检查 createQuery 调用的第一个参数是否为字符串（HQL/JPQL）。
      * 排除 cb.createQuery(Class) 等 CriteriaBuilder 调用。
+     *
+     * 注意：Java 的链式 `+`（如 `"a" + "b" + "c"`）由 PsiPolyadicExpression 表示（PSI 多目表达式），
+     * 而非嵌套 PsiBinaryExpression；二者 PSI 类型层次上互不继承，必须同时识别。
      */
     private fun hasStringHqlArgument(call: PsiMethodCallExpression): Boolean {
         val args = call.argumentList.expressions
@@ -169,7 +172,8 @@ object HqlQueryLocator {
         val firstArg = args[0]
         return when (firstArg) {
             is com.intellij.psi.PsiLiteralExpression -> firstArg.value is String
-            is com.intellij.psi.PsiBinaryExpression -> true // 字符串拼接
+            is com.intellij.psi.PsiBinaryExpression -> true // 双目字符串拼接
+            is com.intellij.psi.PsiPolyadicExpression -> true // 链式字符串拼接（"a" + "b" + "c"）
             is PsiReferenceExpression -> {
                 // 变量引用：尝试解析类型，仅 String 类型视为有效 HQL 参数
                 val resolved = firstArg.resolve()
@@ -272,8 +276,8 @@ object HqlQueryLocator {
                 val value = firstArg.value as? String
                 (value ?: firstArg.text) to true
             }
-            is PsiBinaryExpression -> {
-                // 字符串拼接："..." + "..." → 递归收集所有字符串字面量并拼接
+            is PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression -> {
+                // 字符串拼接："..." + "..."（含链式 `+`）→ 递归收集所有字符串字面量并拼接
                 val parts = collectStringLiterals(firstArg)
                 if (parts.isNotEmpty()) parts.joinToString("") to true
                 else firstArg.text to false

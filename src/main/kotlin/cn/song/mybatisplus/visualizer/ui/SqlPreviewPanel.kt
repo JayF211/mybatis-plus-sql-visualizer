@@ -421,7 +421,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         SqlExecutor.execute(
             proj, sql, null, isQuery,
-            onConsole = { consoleComponent -> embedConsole(consoleComponent) },
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
             onError = { errorMsg ->
@@ -477,11 +477,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * editorHolder 显示链不断裂。
      * M36.5.39-A3：组件被 DBN 完全释放（parent==null）后由 hierarchy 监听自动重挂，不等轮询。
      */
-    private fun embedConsole(consoleComponent: JComponent) {
+    private fun embedConsole(consoleComponent: JComponent, previewMode: Boolean = false) {
         val id = System.identityHashCode(consoleComponent)
         val prev = lastConsoleEmbeddedId
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-            .info("[M36] embedConsole identity: id=$id, prevEmbedded=$prev, sameAsPrev=${prev == id}, sameInstance=${consoleComponent === embeddedConsole}")
+            .info("[M36] embedConsole identity: id=$id, prevEmbedded=$prev, sameAsPrev=${prev == id}, sameInstance=${consoleComponent === embeddedConsole}, previewMode=$previewMode")
         if (consoleComponent === embeddedConsole) {
             // M36.5.47：同实例防抖时**不清空结果、不重挂**（防闪烁），但必须清除"执行中"
             // loading 态——A 执行成功后 onResultsReady 回调同一实例（复用共享 console），
@@ -490,6 +490,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // M36.5.49：用 showIdle() 而非 showEmpty()——只清 loading/成功态，**保留错误态**，
             // 避免执行失败后 showError 被后续 results refreshed 的同实例回调覆盖（"一闪而过"）。
             resultPanel.showIdle()
+            // M36.5.77：execute 路径（previewMode=false）即使同实例也要确保 divider 展开——
+            // preview 时折叠为 1.0；execute 后必须恢复 0.6 显示结果区。
+            if (!previewMode && consoleComponent is javax.swing.JSplitPane) {
+                ApplicationManager.getApplication().invokeLater({
+                    if (consoleComponent.height > 0) {
+                        consoleComponent.setDividerLocation(0.6)
+                        consoleComponent.revalidate()
+                    }
+                }, com.intellij.openapi.application.ModalityState.any())
+            }
             return
         }
         // 摘除旧控制台（旧组件的 hierarchy 监听随组件废弃，无需显式解绑）
@@ -513,7 +523,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // invokeLater 下一拍组件已在树中，强制 60%（编辑器主导），不依赖 resize 时机。
             ApplicationManager.getApplication().invokeLater({
                 if (sp.height > 0) {
-                    sp.setDividerLocation(0.6)
+                    // M36.5.77：预览（previewMode=true）折叠底部（divider=1.0），隐藏无内容的
+                    // Console output 空框；execute 路径展开底部（divider=0.6）。
+                    sp.setDividerLocation(if (previewMode) 1.0 else 0.6)
                     sp.revalidate()
                     sp.repaint()
                 }
@@ -528,7 +540,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     // false（divider 已是 preferred 推算的正值，只是落点错误），保险从未触发，
                     // 分隔落点随构造时序漂移（用户三张截图实证：塌缩/截断/窄条三种形态）
                     if (sp.height < 200) return
-                    sp.setDividerLocation(0.6)
+                    // M36.5.77：preview 路径维持折叠（divider=1.0），execute 路径首触强制 0.6
+                    sp.setDividerLocation(if (previewMode) 1.0 else 0.6)
                     sp.removeComponentListener(this)
                 }
             })
