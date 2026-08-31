@@ -13,8 +13,8 @@ import org.junit.Assert.assertTrue
 /**
  * 帮助入口测试（T-M39）。
  *
- * 帮助按钮已改为 HTMLEditorProvider.openEditor 在编辑器标签页打开内嵌浏览器；
- * 测试聚焦：(1) 工具栏组含帮助入口；(2) 保留 bundle key 存在；(3) 废弃 key 已移除。
+ * 帮助按钮已改为 JBCefBrowser.loadHTML() 在弹窗中打开本地 HTML；
+ * 测试聚焦：(1) 工具栏组含帮助入口；(2) 弹窗可构造；(3) 保留 bundle key 存在。
  */
 class HelpDialogTest : BasePlatformTestCase() {
 
@@ -42,19 +42,25 @@ class HelpDialogTest : BasePlatformTestCase() {
     }
 
     fun testRetainedBundleKeysPresent() {
-        // 保留 key：仍被 HelpAction 引用
+        // 保留 key：仍被 HelpAction / HelpBrowserDialog 引用
         assertTrue(MpSqlVisualizerBundle.message("log.panel.help").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("help.dialog.title").isNotBlank())
+        assertTrue(MpSqlVisualizerBundle.message("help.dialog.close").isNotBlank())
+    }
+
+    fun testHelpBrowserDialogConstructsWithoutError() {
+        // 测试环境 JCEF 可能不可用，构造不抛异常即可（contentPanel 可能为 null）
+        var dialog: HelpBrowserDialog? = null
+        try {
+            dialog = HelpBrowserDialog(project, "<html><body>Test</body></html>")
+        } catch (e: Throwable) {
+            org.junit.Assert.fail("HelpBrowserDialog 构造不应抛异常: ${e.message}")
+        }
+        assertNotNull("帮助弹窗应可构造", dialog)
     }
 
     fun testRemovedBundleKeysAbsent() {
-        // 废弃 key：help.dialog.close 已移除
-        assertFalse(
-            "help.dialog.close 应已移除",
-            MpSqlVisualizerBundle.message("help.dialog.close").isNotBlank() &&
-                MpSqlVisualizerBundle.message("help.dialog.close") != "help.dialog.close",
-        )
-        // 内容 key 已迁移到在线文档
+        // 内容 key 已迁移到本地 HTML 文件
         assertFalse(
             "help.content.features 应已移除",
             MpSqlVisualizerBundle.message("help.content.features").contains("<h3>"),
