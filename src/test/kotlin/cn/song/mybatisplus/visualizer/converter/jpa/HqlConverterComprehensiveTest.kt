@@ -10,13 +10,20 @@ import org.junit.Test
 
 /**
  * HqlConverter 全方位测试——覆盖 demo 项目所有 HQL/JPQL 模式。
- * 注意：转换器保留表别名（如 FROM user u），这是正确的 SQL 行为。
+ *
+ * T-HQL-SELECT-01：`SELECT <别名>` 会展开为列清单（HQL 语义 = 取整个实体），
+ * 表别名本身在 FROM/JOIN 子句中保留。直接输出 `SELECT u` 会被 MySQL 解析为
+ * 「查询名为 u 的列」→ `[1054] Unknown column 'u' in 'field list'`。
  */
 class HqlConverterComprehensiveTest {
 
     private lateinit var userTable: TableInfo
     private lateinit var orderTable: TableInfo
     private lateinit var departmentTable: TableInfo
+
+    /** `SELECT u` 展开后的列清单（顺序与 userTable.columns 声明顺序一致）。 */
+    private val userColumns =
+        "u.id, u.username, u.email, u.first_name, u.last_name, u.age, u.status, u.department_id, u.create_time"
 
     @Before
     fun setup() {
@@ -66,8 +73,8 @@ class HqlConverterComprehensiveTest {
     fun testBasicNamedParamQuery() {
         val hql = "SELECT u FROM UserEntity u WHERE u.username = :username"
         val result = HqlConverter.convert(hql, userTable)
-        // 别名 u 保留（正确 SQL 行为）
-        assertEquals("SELECT u FROM user u WHERE u.username = ?", result.sql)
+        // T-HQL-SELECT-01：SELECT u → 列清单（原样保留别名会报 1054 Unknown column 'u'）
+        assertEquals("SELECT $userColumns FROM user u WHERE u.username = ?", result.sql)
         assertTrue("应含 1 个 ?", result.sql.count { it == '?' } == 1)
     }
 
@@ -75,7 +82,7 @@ class HqlConverterComprehensiveTest {
     fun testBasicPositionalParamQuery() {
         val hql = "SELECT u FROM UserEntity u WHERE u.username = ?1 AND u.age >= ?2"
         val result = HqlConverter.convert(hql, userTable)
-        assertEquals("SELECT u FROM user u WHERE u.username = ? AND u.age >= ?", result.sql)
+        assertEquals("SELECT $userColumns FROM user u WHERE u.username = ? AND u.age >= ?", result.sql)
         assertTrue("应含 2 个 ?", result.sql.count { it == '?' } == 2)
     }
 
@@ -312,7 +319,7 @@ class HqlConverterComprehensiveTest {
     fun testIsNullQuery() {
         val hql = "SELECT u FROM UserEntity u WHERE u.email IS NULL"
         val result = HqlConverter.convert(hql, userTable)
-        assertEquals("SELECT u FROM user u WHERE u.email IS NULL", result.sql)
+        assertEquals("SELECT $userColumns FROM user u WHERE u.email IS NULL", result.sql)
     }
 
     @Test

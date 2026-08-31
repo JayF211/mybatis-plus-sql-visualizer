@@ -17,6 +17,8 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
  *  7. 关联字段路径映射：`alias.field.id` → 外键列名（仅当有有效 TableInfo 时）
  *  8. 属性名 → 列名映射（仅当有有效 TableInfo 时）
+ *  9. SELECT 子句展开：`SELECT <别名>` → 列清单（T-HQL-SELECT-01）
+ *     HQL 语义 `SELECT u` = 取整个实体，须展开为全部映射列，否则 MySQL 报 1054
  *
  * 关键：返回的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
  * 转换器不解析条件树（conditions 为空），因此必须使用转换后的 SQL 字符串。
@@ -80,6 +82,11 @@ object HqlConverter {
             // Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table
             sql = mapFallbackEntityToTable(sql, table.tableName)
         }
+
+        // 9. SELECT 子句展开：SELECT <别名> → 列清单（T-HQL-SELECT-01）
+        // 必须排在步骤 5（JOIN FETCH 改写）之后——JOIN 别名只有改写后才存在，
+        // 早于该步解析会取不到副表别名。DELETE 语句内部已短路。
+        sql = expandSelectClause(sql, table)
 
         // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trimStart().uppercase().startsWith("DELETE")) {
@@ -316,6 +323,193 @@ object HqlConverter {
         val match = fromPattern.find(hql) ?: return hql
         val entityName = match.groupValues[1]
         return hql.replaceFirst(entityName, tableName)
+    }
+
+    // ------------------------------------------------------------------
+    // SELECT 子句展开（T-HQL-SELECT-01）
+    // ------------------------------------------------------------------
+
+    /**
+     * 将 SELECT 子句中的「实体别名」展开为列清单。
+     *
+     * HQL 语义：`SELECT u` = 取整个实体，Hibernate 会展开为该实体映射的全部列。
+     * 原样输出 `SELECT u` 会被 MySQL 解析为「查询名为 u 的列」→
+     * `[1054] Unknown column 'u' in 'field list'`（2026-08-31 用户实测）。
+     *
+     * 覆盖两类形态：
+     *  1. 已有 SELECT 子句：`SELECT u FROM user u` → `SELECT u.id, u.username, ... FROM user u`
+     *  2. 无 SELECT 子句（HQL 隐式查询）：`FROM user u WHERE ...` → 补 SELECT 列清单
+     *
+     * 展开规则（保守优先，宁可不展开也不误伤）：
+     *  - 仅展开「裸别名」项：纯标识符，且该标识符在 FROM/JOIN 中登记为表别名
+     *  - 列引用（含点号）、函数调用（含括号）、表达式、字面量、`*` → 原样保留
+     *  - 别名对应实体列信息已知 → `alias.col1, alias.col2, ...`
+     *  - 列信息不可得（JOIN 副表 / 元数据未解析）→ `alias.*` + 降级注释
+     *  - DELETE 语句不处理（无 SELECT 子句，语义不同）
+     *
+     * @param sql   已完成实体→表名、属性→列名映射的 SQL
+     * @param table 主表 TableInfo（提供主表列清单）
+     * @return 展开后的 SQL；无需展开或无法解析时原样返回
+     */
+    private fun expandSelectClause(sql: String, table: TableInfo): String {
+        // DELETE 无 SELECT 子句，且展开语义不同，直接短路
+        if (sql.trimStart().uppercase().startsWith("DELETE")) return sql
+
+        val selectIdx = indexOfTopLevelKeyword(sql, "SELECT")
+        val fromIdx = indexOfTopLevelKeyword(sql, "FROM")
+        if (fromIdx < 0) return sql
+
+        val hasSelect = selectIdx >= 0 && selectIdx < fromIdx
+        val selectKeyword = if (hasSelect) sql.substring(selectIdx, selectIdx + "SELECT".length) else "SELECT"
+        val selectRegion = if (hasSelect) sql.substring(selectIdx + "SELECT".length, fromIdx) else ""
+        if (hasSelect && selectRegion.isBlank()) return sql
+
+        // 别名 → 列清单映射（LinkedHashMap 保序，首项为主表别名）；value = null 表示降级为 alias.*
+        val aliasColumns = parseAliasColumns(sql, fromIdx, table)
+        if (aliasColumns.isEmpty()) return sql
+
+        if (!hasSelect) {
+            // 无 SELECT 子句：补主表列清单
+            val rootAlias = aliasColumns.keys.first()
+            val columns = aliasColumns[rootAlias] ?: return sql
+            return "$selectKeyword ${renderColumns(rootAlias, columns)} " + sql.substring(fromIdx)
+        }
+
+        val (distinct, itemText) = splitDistinct(selectRegion)
+        val items = splitTopLevelCommas(itemText)
+        if (items.isEmpty()) return sql
+
+        var changed = false
+        val rendered = items.map { raw ->
+            val item = raw.trim()
+            if (aliasColumns.containsKey(item)) {
+                changed = true
+                renderColumns(item, aliasColumns[item])
+            } else {
+                item
+            }
+        }
+        if (!changed) return sql
+
+        val distinctPart = if (distinct != null) "$distinct " else ""
+        return sql.substring(0, selectIdx) +
+            "$selectKeyword $distinctPart" + rendered.joinToString(", ") + " " +
+            sql.substring(fromIdx)
+    }
+
+    /** 渲染单个别名的展开结果：`alias.col1, alias.col2` 或降级 `alias.*`。 */
+    private fun renderColumns(alias: String, columns: List<String>?): String {
+        if (columns.isNullOrEmpty()) {
+            return "$alias.* /* 列信息未解析，降级为 $alias.* */"
+        }
+        return columns.joinToString(", ") { "$alias.$it" }
+    }
+
+    /**
+     * 解析 FROM 子句区域中的「别名 → 列清单」映射。
+     *
+     * 主表别名取主表列清单；JOIN 副表无列元数据（TableInfo 只含主表列），降级为 `alias.*`。
+     */
+    private fun parseAliasColumns(sql: String, fromIdx: Int, table: TableInfo): LinkedHashMap<String, List<String>?> {
+        val region = fromRegion(sql, fromIdx)
+        val result = LinkedHashMap<String, List<String>?>()
+
+        val rootPattern = Regex(
+            "^\\s*([a-zA-Z_][a-zA-Z0-9_.\$]*)\\s*(?:AS\\s+)?\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+            RegexOption.IGNORE_CASE,
+        )
+        val rootMatch = rootPattern.find(region)
+        if (rootMatch != null) {
+            val alias = rootMatch.groupValues[2]
+            val columns = table.columns.map { it.columnName }
+            result[alias] = if (columns.isEmpty()) null else columns
+        }
+
+        val joinPattern = Regex(
+            "\\bJOIN\\s+([a-zA-Z_][a-zA-Z0-9_.\$]*)\\s*(?:AS\\s+)?\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+            RegexOption.IGNORE_CASE,
+        )
+        for (match in joinPattern.findAll(region)) {
+            val alias = match.groupValues[2]
+            // 过滤误命中：JOIN 无别名时下一个词可能是 ON / WHERE 等子句关键字
+            if (alias.equals("ON", ignoreCase = true) || alias.equals("WHERE", ignoreCase = true)) continue
+            if (!result.containsKey(alias)) result[alias] = null
+        }
+        return result
+    }
+
+    /** 截取 FROM 之后、WHERE/GROUP BY/ORDER BY/HAVING/UNION/LIMIT 之前的子句区域。 */
+    private fun fromRegion(sql: String, fromIdx: Int): String {
+        val endKeywords = listOf("WHERE", "GROUP BY", "ORDER BY", "HAVING", "UNION", "LIMIT")
+        var end = sql.length
+        for (keyword in endKeywords) {
+            val idx = indexOfTopLevelKeyword(sql, keyword, fromIdx + "FROM".length)
+            if (idx >= 0 && idx < end) end = idx
+        }
+        return sql.substring(fromIdx + "FROM".length, end)
+    }
+
+    /** 剥离 SELECT 后的 DISTINCT 关键字，返回 (DISTINCT 原文或 null, 剩余文本)。 */
+    private fun splitDistinct(region: String): Pair<String?, String> {
+        val match = Regex("^\\s*(DISTINCT)\\s+", RegexOption.IGNORE_CASE).find(region)
+            ?: return Pair(null, region)
+        return Pair(match.groupValues[1], region.substring(match.value.length))
+    }
+
+    /** 按顶层逗号切分（括号内的逗号不切分）。 */
+    private fun splitTopLevelCommas(text: String): List<String> {
+        val parts = mutableListOf<String>()
+        var depth = 0
+        var start = 0
+        for (i in text.indices) {
+            when (text[i]) {
+                '(' -> depth++
+                ')' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) {
+                    parts.add(text.substring(start, i))
+                    start = i + 1
+                }
+            }
+        }
+        parts.add(text.substring(start))
+        return parts
+    }
+
+    /**
+     * 查找顶层（括号深度为 0）关键字的起始下标；未找到返回 -1。
+     *
+     * 括号内的同名词（如子查询中的 FROM）不参与匹配。
+     */
+    private fun indexOfTopLevelKeyword(sql: String, keyword: String, fromIndex: Int = 0): Int {
+        val upper = sql.uppercase()
+        val key = keyword.uppercase()
+        var depth = 0
+        for (i in 0 until fromIndex) {
+            when (sql[i]) {
+                '(' -> depth++
+                ')' -> if (depth > 0) depth--
+            }
+        }
+        var i = fromIndex
+        while (i < sql.length) {
+            when (sql[i]) {
+                '(' -> depth++
+                ')' -> if (depth > 0) depth--
+            }
+            if (depth == 0 && upper.startsWith(key, i) && isWordBoundary(sql, i, i + key.length)) {
+                return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /** 判断 [start, end) 区间前后是否为标识符边界（避免 SELECT 命中 SELECTED 之类）。 */
+    private fun isWordBoundary(sql: String, start: Int, end: Int): Boolean {
+        fun isIdentChar(c: Char) = c.isLetterOrDigit() || c == '_'
+        if (start > 0 && isIdentChar(sql[start - 1])) return false
+        if (end < sql.length && isIdentChar(sql[end])) return false
+        return true
     }
 
     // ------------------------------------------------------------------

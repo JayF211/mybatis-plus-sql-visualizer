@@ -58,7 +58,9 @@ class HqlConverterParamTest {
         assertTrue("SQL 应含 ?", result.sql.contains("?"))
 
         // 验证完整输出
-        val expected = "SELECT u FROM user_entity u LEFT JOIN department d ON d.id = u.department_id /* 推断的ON条件，请验证 */ WHERE d.name = ?"
+        // T-HQL-SELECT-01：SELECT u → 列清单
+        val expected = "SELECT u.id, u.username, u.age FROM user_entity u " +
+            "LEFT JOIN department d ON d.id = u.department_id /* 推断的ON条件，请验证 */ WHERE d.name = ?"
         assertEquals("SQL 应正确转换", expected, result.sql)
     }
 

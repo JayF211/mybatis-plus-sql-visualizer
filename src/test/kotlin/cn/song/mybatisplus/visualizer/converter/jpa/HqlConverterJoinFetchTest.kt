@@ -43,7 +43,9 @@ class HqlConverterJoinFetchTest {
         assertFalse("SQL 不应含 JOIN FETCH", result.sql.contains("JOIN FETCH"))
 
         // 验证完整输出
-        val expected = "SELECT u FROM user_entity u LEFT JOIN department d ON d.id = u.department_id /* 推断的ON条件，请验证 */ WHERE d.name = ?"
+        // T-HQL-SELECT-01：SELECT u → 列清单；JOIN 副表 d 无列元数据，降级为 d.*
+        val expected = "SELECT u.id, u.username, u.department_id FROM user_entity u " +
+            "LEFT JOIN department d ON d.id = u.department_id /* 推断的ON条件，请验证 */ WHERE d.name = ?"
         assertEquals("SQL 应正确转换", expected, result.sql)
     }
 
