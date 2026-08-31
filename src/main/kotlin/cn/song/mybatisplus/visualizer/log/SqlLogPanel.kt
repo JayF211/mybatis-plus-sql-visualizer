@@ -596,35 +596,23 @@ class SqlLogPanel(
         }
     }
 
-    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 打开在线帮助文档。
+    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
      *
-     *  打开逻辑（对齐 TranslationPlugin 的在线 URL + 降级模式，检测栈对齐 JCEF）：
-     *  1. JCEF 不可用 → 直接降级 BrowserUtil.browse 打开在线文档；
-     *  2. 异步做可达性检测，且检测网络栈 = JCEF 实际网络栈（关键）：
-     *     JCEF 的请求按 IDE 的 HTTP Proxy 设置（ProxySettings → JBCefProxySettings）
-     *     生成 --proxy-server / PAC 配置；IDE 配了手动代理时 JCEF 只走该代理（不会直连）。
-     *     因此：IDE 手动代理 → 用该代理检测；否则 → 无代理直连检测；
-     *  3. 检测可达 → HTMLEditorProvider.openEditor 在编辑器标签页打开在线 URL
-     *     （HTTPS URL 无 file:///data: 的 CSS 限制，样式正常渲染）；
-     *  4. 不可达 → 降级：
-     *     - IDE 配了手动代理但代理不可用 → 系统浏览器（Windows 系统代理与 IDE 代理可能不同）；
-     *     - 无代理配置且直连不通（离线/需代理但 JCEF 无代理可走）→ 本地 HTML 兜底。
+     *  打开逻辑（2026-08-31 定稿：本地 HTML 为主路径，零网络依赖）：
+     *  1. JCEF 可用 → HTMLEditorProvider.openEditor(project, title, html) 打开本地
+     *     marketplace-custom-page.html；3 参重载内部走 JCEFHtmlPanel.loadHTML 渲染，
+     *     内联 CSS 完整保留（data: URL 走 loadURL 会丢样式——已弃用）；
+     *  2. JCEF 不可用 / 资源缺失 / 异常 → BrowserUtil.browse 系统浏览器打开在线文档。
      *
-     *  取证（2024.3 平台字节码，app-client.jar）：
-     *  - HTMLFileEditor：URL 请求 loadURL + Alarm(Registry "html.editor.timeout" 默认 10s)
-     *    超时后 loadHTML(timeoutHtml) 显示降级页——超时页就是 JCEF 加载失败的呈现；
-     *  - 页面内任何链接导航 → onBeforeBrowse → browse() 系统浏览器（超时页链接天然可点）；
-     *  - JBCefProxySettings.getInstance() 从 ProxySettings 读 IDE 代理设置。 */
-    /** JCEF 可达性探测结果（仅 HelpAction 使用；Kotlin 禁止 inner class 内定义 enum）。 */
-    private enum class ProbeResult { REACHABLE, PROXY_DEAD, OFFLINE }
-
+     *  历史演进（详见 docs/开发计划/20260827-1700-...-开发计划.md）：
+     *  - data: URL（loadURL）→ CSS 丢失 ✗；
+     *  - 在线 URL + 网络探测（直连/IDE 代理）→ 国内网络 JCEF 加载超时，且检测栈复杂 ✗；
+     *  - 本地 HTML（loadHTML）→ 样式完整、秒开、零依赖 ✓（定稿）。
+     *  样式保证：marketplace-custom-page.html 为纯内联 <style>，无 link/script/img/url()，
+     *  不发起任何外部请求，不存在资源加载失败导致缺样式。 */
     private inner class HelpAction : AnAction() {
-        /** 防抖：检测进行中忽略重复点击（避免叠加多个后台检测/重复开标签）。 */
-        @Volatile
-        private var checking = false
-
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
@@ -636,84 +624,13 @@ class SqlLogPanel(
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
                 return
             }
-            if (checking) return
-            checking = true
-            // 网络检测（最多约 3s）不能阻塞 EDT —— 后台线程检测，回到 EDT 后再开页面
-            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
-                val result = probeJcefReachability()
-                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                    checking = false
-                    if (project.isDisposed) return@invokeLater
-                    when (result) {
-                        ProbeResult.REACHABLE -> openOnlineInEmbeddedBrowser()
-                        ProbeResult.PROXY_DEAD -> {
-                            // IDE 手动代理配置存在但不可用：JCEF 内嵌必失败 → 系统浏览器
-                            LOG.info("[HelpAction] IDE proxy configured but unreachable, falling back to system browser")
-                            com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
-                        }
-                        ProbeResult.OFFLINE -> {
-                            // 无代理配置且直连不通：完全离线或需系统级代理 → 本地 HTML 兜底
-                            LOG.info("[HelpAction] Offline, falling back to local HTML")
-                            openLocalHtml()
-                        }
-                    }
-                }
-            }
+            openLocalHtml()
         }
 
-        /** 用与 JCEF 相同的网络栈探测在线文档可达性。
-         *
-         * JCEF 网络行为（2024.3 平台）：JBCefProxySettings 从 IDE 的代理设置（ProxySettings）
-         * 读 HTTP Proxy 配置；配了手动代理（StaticProxyConfiguration）则 JCEF 只走该代理
-         * （不直连），未配则直连（--no-proxy-server 语义）。PAC（AutoDetectProxy）无法在
-         * JVM 侧精确模拟，按直连处理（PAC 命中可直连站点时行为一致）。
-         *
-         * 弃用迁移（M36.5.78）：HttpConfigurable.USE_HTTP_PROXY 等字段与 HttpConfigurable
-         * 本身已 @Deprecated(forRemoval)——2024.3+ 代理 API 为
-         * com.intellij.util.net.ProxySettings / ProxyConfiguration（Kotlin 接口，javap 实证）。
-         */
-        // @ApiStatus.Experimental 接口：Kotlin 访问需 opt-in（M36.5.78）
-        @OptIn(org.jetbrains.annotations.ApiStatus.Experimental::class)
-        private fun probeJcefReachability(): ProbeResult {
-            val settings: com.intellij.util.net.ProxySettings =
-                com.intellij.util.net.ProxySettings.getInstance()
-            val config = settings.getProxyConfiguration()
-            return when (config) {
-                is com.intellij.util.net.ProxyConfiguration.StaticProxyConfiguration -> {
-                    val type = if (config.protocol == com.intellij.util.net.ProxyConfiguration.ProxyProtocol.SOCKS)
-                        java.net.Proxy.Type.SOCKS else java.net.Proxy.Type.HTTP
-                    val proxy = java.net.Proxy(type, java.net.InetSocketAddress(config.host, config.port))
-                    if (isReachable(proxy)) ProbeResult.REACHABLE else ProbeResult.PROXY_DEAD
-                }
-                is com.intellij.util.net.ProxyConfiguration.AutoDetectProxy -> {
-                    // PAC：无法在 JVM 侧精确模拟，按直连处理（命中可直连站点时行为一致）
-                    if (isReachable(java.net.Proxy.NO_PROXY)) ProbeResult.REACHABLE else ProbeResult.OFFLINE
-                }
-                else -> { // DirectProxy 等：未配代理 → 直连
-                    if (isReachable(java.net.Proxy.NO_PROXY)) ProbeResult.REACHABLE else ProbeResult.OFFLINE
-                }
-            }
-        }
-
-        /** 直连可达 → 编辑器标签页内嵌浏览器打开在线 URL（CSS 正常渲染）。 */
-        private fun openOnlineInEmbeddedBrowser() {
-            try {
-                val timeoutHtml = buildTimeoutHtml()
-                LOG.info("[HelpAction] Opening online doc in embedded browser")
-                com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
-                    project, HELP_TAB_TITLE, HELP_DOCUMENTATION_URL, timeoutHtml,
-                )
-            } catch (ex: Throwable) {
-                LOG.warn("[HelpAction] Failed to open embedded browser, falling back to system browser", ex)
-                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
-            }
-        }
-
-        /**
-         * 完全离线/无可用代理时的兜底：本地 HTML 帮助页。
+        /** 内嵌浏览器打开本地 HTML 帮助页。
          *
          * 用 3 参 openEditor（内部走 JCEFHtmlPanel.loadHTML 渲染，内联 CSS 正常；
-         * 此前 4 参 data: URL 走 loadURL，JCEF 对 data: URL 的 CSS 渲染会丢失）。
+         * 此前 4 参 data: URL 走 loadURL，JCEF 对 data: URL 的 CSS 渲染会丢失——已弃用）。
          */
         private fun openLocalHtml() {
             val htmlContent = loadText("html", "marketplace-custom-page.html")
@@ -731,47 +648,6 @@ class SqlLogPanel(
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
             }
-        }
-
-        /**
-         * 可达性检测（HEAD 请求，短超时）。
-         *
-         * @param proxy 与 JCEF 一致的代理配置：IDE 手动代理 → 对应 Proxy；未配代理 → Proxy.NO_PROXY。
-         */
-        private fun isReachable(proxy: java.net.Proxy): Boolean {
-            return try {
-                val connection = java.net.URL(HELP_DOCUMENTATION_URL).openConnection(proxy) as java.net.HttpURLConnection
-                connection.apply {
-                    connectTimeout = 3000
-                    readTimeout = 3000
-                    requestMethod = "HEAD"
-                    instanceFollowRedirects = true
-                    useCaches = false
-                    setRequestProperty("User-Agent", "Mozilla/5.0 (IDEA plugin reachability check)")
-                }
-                val code = connection.responseCode
-                connection.disconnect()
-                val reachable = code in 200..399
-                LOG.info("[HelpAction] Reachability check (proxy=${proxy.type()}/${proxy.address()}): HTTP $code → $reachable")
-                reachable
-            } catch (ex: Throwable) {
-                LOG.info("[HelpAction] Reachability check (proxy=${proxy.type()}) failed: ${ex.message}")
-                false
-            }
-        }
-
-        /** 构建 JCEF 加载失败时的降级 HTML 页面（含跳转在线文档的链接）。
-         *  链接为真 <a href>：平台 HTMLFileEditor 的 onBeforeBrowse 会把页内链接导航
-         *  转成系统浏览器打开（BrowserUtil.browse），故超时页点击即可跳转。 */
-        private fun buildTimeoutHtml(): String {
-            val darkTheme = com.intellij.util.ui.StartupUiUtil.isDarkTheme
-            // URL 中的 & 等字符需 HTML 转义，避免破坏 <a href> 属性
-            val escapedUrl = HELP_DOCUMENTATION_URL.replace("&", "&amp;")
-            return loadText("html", "Timeout.html")
-                .replace("__THEME__", if (darkTheme) "theme-dark" else "")
-                .replace("__TITLE__", MpSqlVisualizerBundle.message("help.html.timeout.title"))
-                .replace("__MESSAGE__", MpSqlVisualizerBundle.message("help.html.timeout.message"))
-                .replace("__ACTION__", MpSqlVisualizerBundle.message("help.html.timeout.action", escapedUrl))
         }
 
         /** 从 resources 加载文本文件。 */
@@ -1171,9 +1047,11 @@ class SqlLogPanel(
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         private const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
-        /** T-M39：帮助文档 URL（降级系统浏览器打开）。 */
+        /** T-M39：帮助文档 URL（降级系统浏览器打开）。
+         *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
+         *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */
         private const val HELP_DOCUMENTATION_URL =
-            "https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer/documentation"
+            "https://mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html"
         /** T-M39：帮助标签页标题。 */
         private const val HELP_TAB_TITLE = "SQL Visualizer - Help"
 
