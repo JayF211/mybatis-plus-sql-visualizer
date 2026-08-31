@@ -42,21 +42,10 @@ class HelpDialogTest : BasePlatformTestCase() {
     }
 
     fun testRetainedBundleKeysPresent() {
-        // 保留 key：仍被 HelpAction / HelpBrowserDialog 引用
+        // 保留 key：仍被 HelpAction 引用
         assertTrue(MpSqlVisualizerBundle.message("log.panel.help").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("help.dialog.title").isNotBlank())
         assertTrue(MpSqlVisualizerBundle.message("help.dialog.close").isNotBlank())
-    }
-
-    fun testHelpBrowserDialogConstructsWithoutError() {
-        // 测试环境 JCEF 可能不可用，构造不抛异常即可（contentPanel 可能为 null）
-        var dialog: HelpBrowserDialog? = null
-        try {
-            dialog = HelpBrowserDialog(project, "<html><body>Test</body></html>")
-        } catch (e: Throwable) {
-            org.junit.Assert.fail("HelpBrowserDialog 构造不应抛异常: ${e.message}")
-        }
-        assertNotNull("帮助弹窗应可构造", dialog)
     }
 
     fun testRemovedBundleKeysAbsent() {

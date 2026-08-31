@@ -596,15 +596,16 @@ class SqlLogPanel(
         }
     }
 
-    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 弹窗内嵌浏览器打开本地 HTML 帮助文档。
+    /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 编辑器标签页内嵌浏览器打开本地 HTML 帮助文档。
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
      *
-     *  打开逻辑：
+     *  打开逻辑（仿 TranslationPlugin）：
      *  1. 从 resources 读取本地 HTML 帮助页面（marketplace-custom-page.html）；
-     *  2. 用 JBCefBrowser.loadHTML() 直接加载（绕过 file:// URL 的 CSS 安全限制）；
-     *  3. 本地文件不受 JCEF --no-proxy-server 限制，无需网络，无代理问题；
-     *  4. 若 JCEF 不可用或读取失败 → 降级 BrowserUtil.browse 打开在线文档。 */
+     *  2. 用 data:text/html URL 嵌入 HTML 内容（绕过 file:// 的 CSS 安全限制）；
+     *  3. HTMLEditorProvider.openEditor 在编辑器标签页中打开；
+     *  4. 本地文件不受 JCEF --no-proxy-server 限制，无需网络，无代理问题；
+     *  5. 若 JCEF 不可用或读取失败 → 降级 BrowserUtil.browse 打开在线文档。 */
     private inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.Help
@@ -623,8 +624,28 @@ class SqlLogPanel(
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
                 return
             }
-            LOG.info("[HelpAction] Opening local help HTML in JBCefBrowser dialog")
-            HelpBrowserDialog(project, htmlContent).show()
+            try {
+                // data:text/html URL 直接嵌入 HTML 内容，绕过 file:// 的 CSS 安全限制
+                val dataUrl = "data:text/html;charset=utf-8," + java.net.URLEncoder.encode(htmlContent, "UTF-8")
+                val timeoutHtml = buildTimeoutHtml()
+                LOG.info("[HelpAction] Opening local help HTML via data: URL")
+                com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
+                    project, HELP_TAB_TITLE, dataUrl, timeoutHtml,
+                )
+            } catch (ex: Throwable) {
+                LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
+                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
+            }
+        }
+
+        /** 构建 JCEF 加载失败时的降级 HTML 页面（含跳转在线文档的链接）。 */
+        private fun buildTimeoutHtml(): String {
+            val darkTheme = com.intellij.util.ui.UIUtil.isUnderDarcula()
+            return loadText("html", "Timeout.html")
+                .replace("__THEME__", if (darkTheme) "theme-dark" else "")
+                .replace("__TITLE__", MpSqlVisualizerBundle.message("help.html.timeout.title"))
+                .replace("__MESSAGE__", MpSqlVisualizerBundle.message("help.html.timeout.message"))
+                .replace("__ACTION__", MpSqlVisualizerBundle.message("help.html.timeout.action", HELP_DOCUMENTATION_URL))
         }
 
         /** 从 resources 加载文本文件。 */
@@ -1038,37 +1059,5 @@ class SqlLogPanel(
             StatementType.DELETE -> MpSqlVisualizerBundle.message("log.filter.delete")
             else -> "OTHER"
         }
-    }
-}
-
-/** T-M39：帮助弹窗，JBCefBrowser.loadHTML() 直接加载本地 HTML（绕过 file:// CSS 安全限制）。 */
-internal class HelpBrowserDialog(project: Project?, private val htmlContent: String) : DialogWrapper(project, true) {
-
-    init {
-        title = MpSqlVisualizerBundle.message("help.dialog.title")
-        isModal = false
-        init()
-        setCancelButtonText(MpSqlVisualizerBundle.message("help.dialog.close"))
-    }
-
-    override fun createCenterPanel(): JComponent {
-        val browser = com.intellij.ui.jcef.JBCefBrowser()
-        browser.loadHTML(htmlContent)
-        return browser.component.let { comp ->
-            JPanel(BorderLayout()).apply {
-                add(comp, BorderLayout.CENTER)
-                preferredSize = Dimension(DIALOG_WIDTH, DIALOG_HEIGHT)
-                minimumSize = Dimension(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
-            }
-        }
-    }
-
-    override fun createActions(): Array<Action> = arrayOf(cancelAction)
-
-    companion object {
-        const val DIALOG_WIDTH = 960
-        const val DIALOG_HEIGHT = 700
-        const val DIALOG_MIN_WIDTH = 600
-        const val DIALOG_MIN_HEIGHT = 400
     }
 }
