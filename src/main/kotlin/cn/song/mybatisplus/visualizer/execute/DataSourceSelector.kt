@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.77-preview-collapse-bottom"
+    private const val BUILD_STAMP = "M36.5.78-deprecated-cleanup"
 
     /** M36.5.76：OUTFILL 未锚定诊断日志节流（EDT 串行访问，无需同步）。 */
     private var lastOutFillDiagAt = 0L
