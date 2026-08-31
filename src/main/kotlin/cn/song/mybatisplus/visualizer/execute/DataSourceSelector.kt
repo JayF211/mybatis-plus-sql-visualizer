@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.73-output-big-ancestor"
+    private const val BUILD_STAMP = "M36.5.75-outfill-layout"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -1726,63 +1726,124 @@ object DataSourceSelector {
         } else {
             log.info("[M36] divider OK: topH=$topH total=$total (no change)")
         }
-        // M36.5.72：布局后精准填满 Output 控制台（只在结果区，只碰 EditorImpl 专属类，绝不误伤结果网格）
+        // M36.5.75：布局级修复 Output 控制台 44px 塌缩（替代 M36.5.72/73 的 fillOutputConsole
+        // 一次性 setSize——被平台 EditorMergedHorizontalScrollBarLayout 每轮 layout 压回，必然失效）
         ApplicationManager.getApplication().invokeLater({
-            fillOutputConsole(sp)
+            installOutputHistoryFillLayout(sp, log)
         }, com.intellij.openapi.application.ModalityState.any())
     }
 
     /**
-     * M36.5.72：精准填满 Output 控制台编辑器的滚动视图。`[TEXT]` 探针实证 Output 的
-     * `EditorImpl$PanelWithFloatingToolbar`/`MyScrollPane` 只 44px（视作工具条高），其内容
-     * `EditorComponentImpl`（352px）被滚到 y=-308，用户看到 Output 只几行 + 下方空白。
-     * 结果区整体（bottom）有 270px，GridCellTabs/ProviderWrapper 有 234px——但 Output 编辑器的
-     * **直接父容器** 是中间一层小容器（44px），`parent.height>50` 失败导致上次没撑起来。
-     * 修正：找到 Output 编辑器后**向上遍历**，取最近的 **>100px 的大容器**（ProviderWrapper/
-     * GridCellTabs）高度作为目标，把 Output 编辑器（PanelWithFloatingToolbar）setSize 到该高度。
-     * 类名精确匹配——结果网格的 JBScrollPane/DataGrid 类名不同，绝不误伤（M36.5.69 教训）。
+     * M36.5.75：Output 控制台「有内容但只显示 2 行（44px）」的根因修复——**布局替换**，非一次性 setSize。
+     *
+     * 根因（javap 反编译沙盒 IU-2024.3.7.1 `lib/app-client.jar` 铁证）：
+     * `LanguageConsoleImpl.myPanel`（ConsoleEditorsPanel）的布局是平台私有类
+     * `com.intellij.execution.console.EditorMergedHorizontalScrollBarLayout`——面板竖直二分：
+     * 上=historyViewer（Output 历史编辑器，`EditorImpl$PanelWithFloatingToolbar`）、下=输入编辑器
+     * （consoleExecutionEditor，其组件已被我们收养进 topBlock）。`layoutContainer` 的高度分配
+     * **输入编辑器优先**：容器高度不足时输入编辑器拿 preferred，history 被压到
+     * `getMinHistoryLineCount() × lineHeight`（字节码硬编码 `iconst_2` = 2 行 × 22px = **44px**；
+     * 沙盒 [BOUNDS] 实证 consoleImpl=864x235 满高而 PanelWithFloatingToolbar=44、pref=1122）。
+     * 平台唯一豁免分支「输入编辑器不可见 → history 占满整个容器」走不到——输入编辑器组件
+     * 在我们 topBlock 中可见（isVisible 与挂载位置无关）。这同时解释了 M36.5.72/73 的一次性
+     * setSize 为何必然失效：该布局管理器每轮 layout 都会重算并压回。
+     *
+     * 修复：在结果区（bottom）内定位 Output 历史编辑器（类名精确匹配
+     * `EditorImpl$PanelWithFloatingToolbar`——结果网格的 JBScrollPane/DataGrid/TableResultView
+     * 类名不同，绝不误伤，M36.5.69 教训），向上收集到 EMHSBL 布局面板（含）为止的容器链，
+     * 逐层安装 [FillTargetLayout]（链上目标子组件占满、其余子组件 0 高、可见 JScrollBar 保底条）。
+     * 布局管理器随每次 validate 重跑，无"被下一布局周期压回"的失效模式；逐层自证日志（教训 11）。
      */
-    private fun fillOutputConsole(sp: javax.swing.JSplitPane) {
+    internal fun installOutputHistoryFillLayout(root: java.awt.Component, log: com.intellij.openapi.diagnostic.Logger) {
         runCatching {
-            val bottom = sp.bottomComponent ?: return
-            fun isOutputEditor(c: java.awt.Component): Boolean {
-                val n = c.javaClass.name
-                return n.contains("EditorImpl\$PanelWithFloatingToolbar") ||
-                    n.contains("EditorImpl\$MyScrollPane")
+            if (root !is java.awt.Container) return
+            // 1) 定位 Output 历史编辑器（只在结果区子树内，类名精确匹配）
+            var target: java.awt.Component? = null
+            fun findTarget(c: java.awt.Component, depth: Int) {
+                if (target != null || depth > 24) return
+                if (c.javaClass.name.contains("EditorImpl\$PanelWithFloatingToolbar")) { target = c; return }
+                if (c is java.awt.Container) for (d in c.components) findTarget(d, depth + 1)
             }
-            fun findBigAncestor(c: java.awt.Component): java.awt.Component? {
-                var p: java.awt.Component? = c.parent
-                while (p != null) {
-                    if (p.height > 100) return p
-                    p = p.parent
+            findTarget(root, 0)
+            val t = target ?: run {
+                log.info("[M36][OUTFILL] no output editor (EditorImpl\$PanelWithFloatingToolbar) in result area; skip")
+                return
+            }
+            // 2) 从 target 直接父层向上收集容器链，锚定到 EditorMergedHorizontalScrollBarLayout 面板（含）
+            val chain = ArrayList<java.awt.Container>()
+            var anchored = false
+            var cur: java.awt.Container? = t.parent
+            while (cur != null) {
+                chain.add(cur)
+                if (cur.layout?.javaClass?.name == "com.intellij.execution.console.EditorMergedHorizontalScrollBarLayout") {
+                    anchored = true
+                    break
                 }
-                return null
+                if (cur === root) break
+                cur = cur.parent
             }
-            fun fill(c: java.awt.Component) {
-                if (isOutputEditor(c)) {
-                    val big = findBigAncestor(c)
-                    val wantH = big?.height
-                    if (wantH != null && wantH > 50) {
-                        val wantW = big.width.coerceAtLeast(c.width)
-                        if (c.height != wantH || c.width != wantW) {
-                            c.setSize(wantW, wantH)
-                            c.revalidate()
-                            c.repaint()
-                            if (c is javax.swing.JScrollPane) {
-                                c.viewport?.view?.setSize(
-                                    c.viewport.width,
-                                    (c.viewport.view?.preferredSize?.height ?: 0).coerceAtLeast(wantH),
-                                )
-                                c.viewport.revalidate()
-                                c.viewport.repaint()
-                            }
-                        }
-                    }
+            if (!anchored) {
+                log.info("[M36][OUTFILL] EditorMergedHorizontalScrollBarLayout panel not found above output editor; skip")
+                return
+            }
+            // 3) 逐层安装填充布局（跳过 JScrollPane——ScrollPaneLayout 由滚动机制管理，不可替换）
+            var child: java.awt.Component = t
+            for (c in chain) {
+                if (c is javax.swing.JScrollPane) {
+                    log.info("[M36][OUTFILL] chain node is JScrollPane (${c.javaClass.name}), keep its layout")
+                } else if (c.layout !is FillTargetLayout) {
+                    val oldLayout = c.layout?.javaClass?.name ?: "null"
+                    val before = child.bounds
+                    c.layout = FillTargetLayout(child)
+                    c.revalidate()
+                    log.info("[M36][OUTFILL] installed on ${c.javaClass.name} (was $oldLayout) target=${child.javaClass.simpleName} before=$before")
                 }
-                if (c is java.awt.Container) for (d in c.components) fill(d)
+                child = c
             }
-            fill(bottom)
-        }.onFailure { }
+            root.revalidate()
+            root.repaint()
+        }.onFailure { e ->
+            log.warn("[M36][OUTFILL] install failed: ${e.message}")
+        }
+    }
+
+    /**
+     * M36.5.75：目标子组件填充布局——[target] 占满容器可用高度（可见 [javax.swing.JScrollBar]
+     * 占底部条位），其余子组件高度 0（Output 内的输入编辑器是重复编辑表面，用户在 topBlock
+     * 编辑 SQL）。每次 validate 自动重跑（幂等），不存在一次性 setSize 被压回的问题；
+     * 自证日志节流（每实例前 3 次 target 高度修正打点，教训 11）。
+     */
+    private class FillTargetLayout(private val target: java.awt.Component) : java.awt.LayoutManager {
+        private var logged = 0
+        override fun addLayoutComponent(name: String?, comp: java.awt.Component?) {}
+        override fun removeLayoutComponent(comp: java.awt.Component?) {}
+        override fun preferredLayoutSize(parent: java.awt.Container?): java.awt.Dimension {
+            val p = parent ?: return java.awt.Dimension(0, 0)
+            // 已有尺寸时按当前尺寸申报，避免祖先按内容高（history pref=上千 px）扩张/滚动
+            if (p.height > 0) return java.awt.Dimension(p.width, p.height)
+            val sbH = p.components.firstOrNull { it is javax.swing.JScrollBar && it.isVisible }
+                ?.preferredSize?.height ?: 0
+            return java.awt.Dimension(p.width, target.preferredSize.height + sbH)
+        }
+        override fun minimumLayoutSize(parent: java.awt.Container?): java.awt.Dimension =
+            java.awt.Dimension(0, 0)
+        override fun layoutContainer(parent: java.awt.Container) {
+            val sb = parent.components.firstOrNull { it is javax.swing.JScrollBar && it.isVisible }
+            val reserved = if (sb != null) sb.preferredSize.height.coerceAtLeast(0) else 0
+            val avail = (parent.height - reserved).coerceAtLeast(0)
+            for (c in parent.components) {
+                when {
+                    c === target -> c.setBounds(0, 0, parent.width, avail)
+                    c === sb -> c.setBounds(0, avail, parent.width, reserved)
+                    else -> c.setBounds(0, avail, parent.width, 0)
+                }
+            }
+            if (logged < 3 && avail > 0 && target.height != avail) {
+                logged++
+                com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                    .info("[M36][OUTFILL] layout: parent=${parent.javaClass.simpleName} h=${parent.height} target(${target.javaClass.simpleName}) → $avail")
+            }
+        }
     }
 
     /** M36.5.60：运行时组件边界取证——像素扫描无法区分"编辑器未拉伸"与"编辑器拉伸但背景同色"

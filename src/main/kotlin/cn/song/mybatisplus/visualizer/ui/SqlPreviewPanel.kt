@@ -517,6 +517,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     sp.revalidate()
                     sp.repaint()
                 }
+                // M36.5.75：预览路径也安装 Output 控制台填充布局（幂等——执行路径 realign
+                // 时重复调用直接跳过）。根因与修复见 DataSourceSelector.installOutputHistoryFillLayout。
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+                    .installOutputHistoryFillLayout(sp, com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java))
             }, com.intellij.openapi.application.ModalityState.any())
             sp.addComponentListener(object : java.awt.event.ComponentAdapter() {
                 override fun componentResized(e: java.awt.event.ComponentEvent) {
