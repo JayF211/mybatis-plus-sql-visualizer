@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.5.69-revert-fill"
+    private const val BUILD_STAMP = "M36.5.70-output-log"
 
     // M36.5：已准备控制台缓存（prepareConsole 填充，executePrepared 消费；组件本体由 IDE 管理）
     private var preparedConsole: Any? = null
@@ -577,6 +577,36 @@ object DataSourceSelector {
     }
 
     /**
+     * M36.5.70：用 DBN ConsoleView 原生 print API 把文本写入 Output 控制台可视区。问题 SQL（报错
+     * 无结果行）时 DBN 结果区内 Output 内容视图（JBScrollPane）布局为 0x0（`[TEXT]` 探针实证），
+     * historyViewer document 有错误文本但 Output 面板不显示——用户"output 里没有信息"。走
+     * ConsoleView.print(String, ConsoleViewContentType) 会经 DBN 原生输出链路写入并刷新显示，
+     * 不依赖/不破坏结果区内部布局（结果网格照常）。反射调用避免对 ConsoleViewContentType 的
+     * 编译期依赖（其所在模块可能随 IDE 版本变动）。
+     */
+    private fun writeConsoleOutput(console: Any?, text: String, isError: Boolean = false) {
+        if (console == null || text.isBlank()) return
+        runCatching {
+            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return
+            val contentClass = try {
+                Class.forName("com.intellij.execution.ui.ConsoleViewContentType")
+            } catch (e: Throwable) { return }
+            val ct = try {
+                // 错误用 ERROR_OUTPUT，普通用 NORMAL_OUTPUT（若枚举名不同则用第一个可用）
+                val fieldName = if (isError) "ERROR_OUTPUT" else "NORMAL_OUTPUT"
+                contentClass.getField(fieldName).get(null)
+            } catch (e: Throwable) {
+                contentClass.fields.firstOrNull()?.get(null)
+            } ?: return
+            val print = consoleView.javaClass.methods.firstOrNull { m ->
+                m.name == "print" && m.parameterCount >= 2 &&
+                    m.parameterTypes[0] == String::class.java
+            } ?: return
+            print.invoke(consoleView, text, ct)
+        }.onFailure { }
+    }
+
+    /**
      * M36.5.8/M36.5.9/M36.5.13：执行后结果区刷新——**限时多次重取**。新执行会重建 RunnerLayoutUi 的
      * 内容组件，重建时机与数据到达相关（单次重取可能仍取到旧实例——M36.5.8 实测刷新命中后
      * 显示依旧停留上一轮）；EDT Timer 600ms×8 重取 `ui.getComponent()`。
@@ -614,7 +644,9 @@ object DataSourceSelector {
                         timer.stop()
                         lastReportedError = err
                         LOG.info("[M36] refresh console error detected (tick=$ticks): ${err.take(120)}")
+                        // M36.5.70：把错误写入 Output 控制台可视区（DBN 报错时 Output 内容视图 0x0 不显示）
                         ApplicationManager.getApplication().invokeLater({
+                            writeConsoleOutput(shared ?: preparedConsole, "执行失败: $err\n", isError = true)
                             onError?.invoke(err)
                         }, com.intellij.openapi.application.ModalityState.any())
                         return
