@@ -76,7 +76,7 @@
 | 主源码编译 | `compileJava compileKotlin` | ✅ BUILD SUCCESSFUL（前序会话已稳） |
 | 测试编译 | `compileTestKotlin` | ✅ BUILD SUCCESSFUL（本轮） |
 | 全量测试 | `./gradlew test` | ✅ BUILD SUCCESSFUL（**0 失败** / 1421 测试 / 139 套件，6 跳过） |
-| 插件校验 | `verifyPlugin` | 🟡 2 compatibility problems（缺失资源键 `log.panel.jumpToSource.*`）已修复，复验中（其余 deprecated / experimental / scheduled-for-removal 仅为警告，不阻断） |
+| 插件校验 | `verifyPlugin` | 🟡 2 compatibility problems（缺失资源键 `log.panel.jumpToSource.*`）已修复；复验因沙盒网络 SSL 受限（Remote host terminated handshake）无法连接 JetBrains 仓库，环境性阻断（非代码）。首次完整验证（IU-243/253/262）确认仅此 2 处且已修复 |
 | 产物 | `buildPlugin` | ✅ BUILD SUCCESSFUL（资源齐全、无 `$Kotlin` 元数据残留） |
 
 ---
@@ -112,7 +112,8 @@
 ```
 - 根因：`SqlLogPanel` 引用 `log.panel.jumpToSource.noSource` / `notFound`，但资源包仅在 `log.history.*` 前缀下定义了这两个键，`log.panel.*` 前缀缺失 → 运行期点「跳转源码」会抛 `MissingResourceException`。
 - **已确认非本分支回归**：master 的 `SqlLogPanel.kt`（L846 / L852）引用完全相同的键，master 资源包同样缺失 → 这是 master 既有缺陷，转换被忠实保留。
-- 修复：在 `MpSqlVisualizerBundle.properties` 与 `_zh.properties` 的 `log.panel.jumpToSource.*` 段补齐 `noSource` / `notFound` 两条键（英文 / 中文各一），文本对齐 `log.history.*` 对应键。复验待 `verifyPlugin` 重跑确认。
+- 修复：在 `MpSqlVisualizerBundle.properties` 与 `_zh.properties` 的 `log.panel.jumpToSource.*` 段补齐 `noSource` / `notFound` 两条键（英文 / 中文各一），文本对齐 `log.history.*` 对应键。
+- 复验状态：首次完整验证（IU-243/253/262 三版本）确认仅此 2 处 compatibility problems 且已修复；后续 `verifyPlugin` 重跑因沙盒网络 SSL 受限（Remote host terminated handshake，无法连接 JetBrains 仓库下载 IDE）环境性失败，**非代码问题**。修复逻辑确定（补的正是 verifier 报缺的 2 个键）。
 
 ### 5.5 对比 master 查漏补缺结论（零功能丢失）
 - 对比 master `src/main/kotlin`（213 类）与分支联合（java 263 + kotlin 47 = 309 类），仅 4 类「缺失」实为**重命名**：
