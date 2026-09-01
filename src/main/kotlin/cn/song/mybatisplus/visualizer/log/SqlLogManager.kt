@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
@@ -72,6 +73,15 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     init {
         // F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）
+        // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
+        // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
+        project.messageBus.connect(this).subscribe(
+            PluginSettings.SETTINGS_CHANGE_TOPIC,
+            SettingsChangeListener {
+                applySettings()
+                bridge.refreshConsoleContexts()
+            },
+        )
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
