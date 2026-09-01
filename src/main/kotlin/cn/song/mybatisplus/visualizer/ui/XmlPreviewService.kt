@@ -45,8 +45,7 @@ object XmlPreviewService {
             // T-M29.5：mapper 方法参数类型 → 回填引号映射（DTO 字段类型判定；Map/解析失败不含键 → 面板兜底引号）
             val paramQuotes = XmlParamTypeResolver.resolveQuotes(project, parsed.namespace, statement.id)
             XmlPreviewModel.from(
-                statement, parsed.errors,
-                staticFieldValues = staticValues, extraBindings = ewBindings, paramQuotes = paramQuotes,
+                statement, parsed.errors, emptySet(), staticValues, ewBindings, paramQuotes,
             ) to warnings
         } catch (e: XmlParseException) {
             return emptyResult(e.message ?: "XML 解析失败。")

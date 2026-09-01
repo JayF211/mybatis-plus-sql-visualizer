@@ -663,8 +663,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             xmlErrors = emptyList()
             // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
             val initial = model.renderSql(XmlPreviewState(
-                enabledIds = enabledIds.toSet(),
-                forEachCounts = xmlForEachCounts.toMap(),
+                enabledIds.toSet(),
+                xmlForEachCounts.toMap(),
+                emptySet(),
+                emptyMap(),
             ))
             initial.bindValues.forEach { (name, value) ->
                 if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
