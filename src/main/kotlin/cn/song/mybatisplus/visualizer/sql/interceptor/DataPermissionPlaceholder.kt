@@ -44,9 +44,9 @@ object DataPermissionPlaceholder {
         val condition = mockCondition.trim()
         if (condition.isBlank()) return statement
         return when (statement) {
-            is SelectStatement -> statement.copy(conditions = statement.conditions + Condition.Raw(condition))
-            is UpdateStatement -> statement.copy(conditions = statement.conditions + Condition.Raw(condition))
-            is DeleteStatement -> statement.copy(conditions = statement.conditions + Condition.Raw(condition))
+            is SelectStatement -> statement.copy(statement.conditions + Condition.Raw(condition))
+            is UpdateStatement -> statement.copy(statement.table, statement.sets, statement.conditions + Condition.Raw(condition), statement.rawTail, statement.tableAlias, statement.joins)
+            is DeleteStatement -> statement.copy(statement.conditions + Condition.Raw(condition))
         }
     }
 }

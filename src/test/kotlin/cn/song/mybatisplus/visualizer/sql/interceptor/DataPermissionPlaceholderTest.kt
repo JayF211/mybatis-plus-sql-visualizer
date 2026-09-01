@@ -19,14 +19,10 @@ import org.junit.Test
  */
 class DataPermissionPlaceholderTest {
 
-    private val table = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val table = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("name", "name"),
-        ),
-    )
+        ))
 
     // ------------------------------------------------------------------
     // buildWarning
@@ -50,10 +46,7 @@ class DataPermissionPlaceholderTest {
 
     @Test
     fun `injectMockCondition appends raw condition to SELECT`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "dept_id IN (1,2,3)")
         assertEquals(2, result.conditions.size)
         val raw = result.conditions.last() as Condition.Raw
@@ -62,14 +55,14 @@ class DataPermissionPlaceholderTest {
 
     @Test
     fun `injectMockCondition skips blank condition for SELECT`() {
-        val statement = SelectStatement(table = table)
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "   ")
         assertEquals(0, result.conditions.size)
     }
 
     @Test
     fun `injectMockCondition trims whitespace from condition`() {
-        val statement = SelectStatement(table = table)
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "  dept_id = 1  ")
         assertEquals(1, result.conditions.size)
         val raw = result.conditions.first() as Condition.Raw
@@ -82,11 +75,7 @@ class DataPermissionPlaceholderTest {
 
     @Test
     fun `injectMockCondition appends raw condition to UPDATE`() {
-        val statement = UpdateStatement(
-            table = table,
-            sets = listOf(cn.song.mybatisplus.visualizer.model.SetClause(ColumnRef(columnName = "name"), SqlValue.Placeholder("name"))),
-            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
-        )
+        val statement = UpdateStatement(table, listOf(cn.song.mybatisplus.visualizer.model.SetClause(ColumnRef("name"), SqlValue.Placeholder("name"))), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), null, null, emptyList())
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "tenant_id = 1")
         assertEquals(2, result.conditions.size)
         val raw = result.conditions.last() as Condition.Raw
@@ -95,7 +84,7 @@ class DataPermissionPlaceholderTest {
 
     @Test
     fun `injectMockCondition skips blank condition for UPDATE`() {
-        val statement = UpdateStatement(table = table, sets = emptyList())
+        val statement = UpdateStatement(table, emptyList(), emptyList(), null, null, emptyList())
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "")
         assertEquals(0, result.conditions.size)
     }
@@ -106,10 +95,7 @@ class DataPermissionPlaceholderTest {
 
     @Test
     fun `injectMockCondition appends raw condition to DELETE`() {
-        val statement = DeleteStatement(
-            table = table,
-            conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
-        )
+        val statement = DeleteStatement(table, listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), emptyList(), null, emptyList())
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "status = 0")
         assertEquals(2, result.conditions.size)
         val raw = result.conditions.last() as Condition.Raw
@@ -118,7 +104,7 @@ class DataPermissionPlaceholderTest {
 
     @Test
     fun `injectMockCondition skips blank condition for DELETE`() {
-        val statement = DeleteStatement(table = table)
+        val statement = DeleteStatement(table, emptyList(), emptyList(), null, emptyList())
         val result = DataPermissionPlaceholder.injectMockCondition(statement, "  ")
         assertEquals(0, result.conditions.size)
     }

@@ -100,28 +100,18 @@ object DialectVerifySupport {
     // ------------------------------------------------------------------
 
     /** 业务表模型：id(主键) + biz_name(普通) + order/table(保留字) + status(普通)。 */
-    fun businessTable(tableName: String = "dev_info"): TableInfo = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = tableName,
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    fun businessTable(tableName: String = "dev_info"): TableInfo = TableInfo("DeviceInfoEntity", tableName, listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("bizName", "biz_name"),
             ColumnInfo("order", "order"),
             ColumnInfo("table", "table"),
             ColumnInfo("status", "status"),
-        ),
-    )
+        ))
 
     /** TC-01/02：插件渲染的分页 SELECT。 */
     fun renderPagedSelect(dialect: Dialect, offset: Long?, count: Long): String =
         SqlGenerator.generate(
-            SelectStatement(
-                table = businessTable(),
-                limit = LimitClause(
-                    offset = offset?.let { SqlValue.Literal(it.toString()) },
-                    count = SqlValue.Literal(count.toString()),
-                ),
-            ),
+            SelectStatement(businessTable(), emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(offset?.let { SqlValue.Literal(it.toString()) }, SqlValue.Literal(count.toString())), null, null, null, emptyList(), null, null),
             compact = false,
             dialect = dialect,
         )
@@ -129,24 +119,14 @@ object DialectVerifySupport {
     /** TC-03/04：插件渲染的保留字列 SELECT（列清单 + WHERE + LIKE + ORDER BY 全走 quoteIfKeyword）。 */
     fun renderReservedColumnSelect(dialect: Dialect, tableName: String = "dev_info"): String =
         SqlGenerator.generate(
-            SelectStatement(
-                table = businessTable(tableName),
-                selectColumns = listOf(
-                    ColumnRef(columnName = "order"),
-                    ColumnRef(columnName = "table"),
-                    ColumnRef(columnName = "biz_name"),
-                ),
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "order"), "=", SqlValue.Literal("10")),
-                    Condition.Like(
-                        ColumnRef(columnName = "table"),
-                        negated = false,
-                        pattern = SqlValue.Literal("t"),
-                        position = LikePosition.RIGHT,
-                    ),
-                ),
-                orderBy = listOf(OrderByItem(ColumnRef(columnName = "order"), asc = true)),
-            ),
+            SelectStatement(businessTable(tableName), listOf(
+                    ColumnRef("order"),
+                    ColumnRef("table"),
+                    ColumnRef("biz_name"),
+                ), null, emptyList(), false, listOf(
+                    Condition.Simple(ColumnRef("order"), "=", SqlValue.Literal("10"), null),
+                    Condition.Like(ColumnRef("table"), false, SqlValue.Literal("t"), LikePosition.RIGHT, null),
+                ), emptyList(), null, listOf(OrderByItem(ColumnRef("order"), true)), null, null, null, null, emptyList(), null, null),
             compact = false,
             dialect = dialect,
         )
@@ -154,17 +134,9 @@ object DialectVerifySupport {
     /** TC-07：IN 子句（保留字列 + 多值）。 */
     fun renderInSelect(dialect: Dialect): String =
         SqlGenerator.generate(
-            SelectStatement(
-                table = businessTable(),
-                selectColumns = listOf(ColumnRef(columnName = "id")),
-                conditions = listOf(
-                    Condition.In(
-                        ColumnRef(columnName = "order"),
-                        negated = false,
-                        values = listOf(SqlValue.Literal("10"), SqlValue.Literal("20"), SqlValue.Literal("30")),
-                    ),
-                ),
-            ),
+            SelectStatement(businessTable(), listOf(ColumnRef("id")), null, emptyList(), false, listOf(
+                    Condition.In(ColumnRef("order"), false, listOf(SqlValue.Literal("10"), SqlValue.Literal("20"), SqlValue.Literal("30")), null),
+                ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null),
             compact = false,
             dialect = dialect,
         )
@@ -172,13 +144,9 @@ object DialectVerifySupport {
     /** TC-08：聚合函数（COUNT(status) + GROUP BY）。 */
     fun renderAggregateSelect(dialect: Dialect): String =
         SqlGenerator.generate(
-            SelectStatement(
-                table = businessTable(),
-                selectColumns = listOf(
-                    ColumnRef(columnName = "status", function = "COUNT", alias = "cnt"),
-                ),
-                groupBy = listOf(ColumnRef(columnName = "status")),
-            ),
+            SelectStatement(businessTable(), listOf(
+                    ColumnRef(null, "status", "cnt", "COUNT"),
+                ), null, emptyList(), false, emptyList(), listOf(ColumnRef("status")), null, emptyList(), null, null, null, null, emptyList(), null, null),
             compact = false,
             dialect = dialect,
         )
@@ -186,14 +154,10 @@ object DialectVerifySupport {
     /** UPDATE 语句（SET 保留字列 + WHERE 主键）。 */
     fun renderUpdate(dialect: Dialect): String =
         SqlGenerator.generate(
-            UpdateStatement(
-                table = businessTable(),
-                sets = listOf(
-                    SetClause(column = ColumnRef(columnName = "order"), value = SqlValue.Literal("20")),
-                    SetClause(column = ColumnRef(columnName = "biz_name"), value = SqlValue.Literal("'updated'")),
-                ),
-                conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
-            ),
+            UpdateStatement(businessTable(), listOf(
+                    SetClause(ColumnRef("order"), SqlValue.Literal("20")),
+                    SetClause(ColumnRef("biz_name"), SqlValue.Literal("'updated'")),
+                ), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), null, null, emptyList()),
             compact = false,
             dialect = dialect,
         )
@@ -201,28 +165,19 @@ object DialectVerifySupport {
     /** DELETE 语句（WHERE 主键）。 */
     fun renderDelete(dialect: Dialect, tableName: String = "dev_info"): String =
         SqlGenerator.generate(
-            DeleteStatement(
-                table = businessTable(tableName),
-                conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("3"))),
-            ),
+            DeleteStatement(businessTable(tableName), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("3"), null)), emptyList(), null, emptyList()),
             compact = false,
             dialect = dialect,
         )
 
     /** INSERT / UPSERT 批量模板（BatchModel 渲染，含保留字列；`?` 占位由执行侧绑定）。 */
     fun renderBatch(dialect: Dialect, kind: BatchKind, tableName: String = "dev_info"): String =
-        BatchModel(
-            kind = kind,
-            tableName = tableName,
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = null, checked = true),
-                BatchColumn("biz_name", "entity.bizName", quote = null, checked = true),
-                BatchColumn("order", "entity.order", quote = null, checked = true),
-                BatchColumn("table", "entity.table", quote = null, checked = true),
-            ),
-            conflictColumn = "id",
-            dialect = dialect,
-        ).renderSql(activeColumns = setOf("id", "biz_name", "order", "table"))
+        BatchModel(kind, tableName, listOf(
+                BatchColumn("id", "entity.id", null, true),
+                BatchColumn("biz_name", "entity.bizName", null, true),
+                BatchColumn("order", "entity.order", null, true),
+                BatchColumn("table", "entity.table", null, true),
+            ), emptyList(), null, "id", dialect).renderSql(setOf("id", "biz_name", "order", "table"))
 
     /** dev_info 表 BatchModel 模板的绑定值（列序 id, biz_name, order, table）。 */
     fun batchValues(id: Int): List<Any?> = listOf(id, "v", 1, "v")
@@ -315,11 +270,7 @@ object DialectVerifySupport {
         val failures = mutableListOf<String>()
         for (word in words) {
             val table = "kw_probe"
-            val kwTable = TableInfo(
-                entityClassName = "KwEntity",
-                tableName = table,
-                columns = listOf(ColumnInfo("id", "id", isId = true), ColumnInfo(word, word)),
-            )
+            val kwTable = TableInfo("KwEntity", table, listOf(ColumnInfo("id", "id", true), ColumnInfo(word, word)))
             try {
                 // 夹具 DDL：方言引用符号包裹保留字列（与插件渲染的引用一致）；DROP 兼容无 IF EXISTS 引擎
                 runCatching { exec(connection, "DROP TABLE $table") }
@@ -328,36 +279,22 @@ object DialectVerifySupport {
 
                 // 插件渲染：SELECT（WHERE + LIMIT）
                 val select = SqlGenerator.generate(
-                    SelectStatement(
-                        table = kwTable,
-                        selectColumns = listOf(ColumnRef(columnName = word)),
-                        conditions = listOf(Condition.Simple(ColumnRef(columnName = word), "=", SqlValue.Literal("1"))),
-                        limit = LimitClause(count = SqlValue.Literal("10")),
-                    ),
+                    SelectStatement(kwTable, listOf(ColumnRef(word)), null, emptyList(), false, listOf(Condition.Simple(ColumnRef(word), "=", SqlValue.Literal("1"), null)), emptyList(), null, emptyList(), LimitClause(null, SqlValue.Literal("10")), null, null, null, emptyList(), null, null),
                     compact = false,
                     dialect = dialect,
                 )
                 exec(connection, select)
 
                 // 插件渲染：INSERT 模板（全列，`?` 绑定）
-                val insert = BatchModel(
-                    kind = BatchKind.INSERT,
-                    tableName = table,
-                    toggleColumns = listOf(
-                        BatchColumn("id", "entity.id", quote = null, checked = true),
-                        BatchColumn(word, "entity.$word", quote = null, checked = true),
-                    ),
-                    dialect = dialect,
-                ).renderSql(setOf("id", word))
+                val insert = BatchModel(BatchKind.INSERT, table, listOf(
+                        BatchColumn("id", "entity.id", null, true),
+                        BatchColumn(word, "entity.$word", null, true),
+                    ), emptyList(), null, null, dialect).renderSql(setOf("id", word))
                 execParams(connection, insert, listOf(50, 1))
 
                 // 插件渲染：UPDATE（SET 保留字列）
                 val update = SqlGenerator.generate(
-                    UpdateStatement(
-                        table = kwTable,
-                        sets = listOf(SetClause(column = ColumnRef(columnName = word), value = SqlValue.Literal("2"))),
-                        conditions = listOf(Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))),
-                    ),
+                    UpdateStatement(kwTable, listOf(SetClause(ColumnRef(word), SqlValue.Literal("2"))), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), null, null, emptyList()),
                     compact = false,
                     dialect = dialect,
                 )
@@ -366,16 +303,10 @@ object DialectVerifySupport {
                 // 插件渲染：UPSERT（冲突键 = id；保留字列进更新列表——EXCLUDED./VALUES()/MERGE 引用路径）
                 // SKIP：引擎不支持该方言 upsert 形态（PG@H2 的 ON CONFLICT DO UPDATE）→ 跳过该步
                 if (spec.upsertMode == UpsertMode.SKIP) continue
-                val upsert = BatchModel(
-                    kind = BatchKind.UPSERT,
-                    tableName = table,
-                    toggleColumns = listOf(
-                        BatchColumn("id", "entity.id", quote = null, checked = true),
-                        BatchColumn(word, "entity.$word", quote = null, checked = true),
-                    ),
-                    conflictColumn = "id",
-                    dialect = dialect,
-                ).renderSql(setOf("id", word))
+                val upsert = BatchModel(BatchKind.UPSERT, table, listOf(
+                        BatchColumn("id", "entity.id", null, true),
+                        BatchColumn(word, "entity.$word", null, true),
+                    ), emptyList(), null, "id", dialect).renderSql(setOf("id", word))
                 if (upsert.startsWith("INSERT") && !upsert.contains("ON ")) {
                     // 降级纯 INSERT（Oracle/SQL Server/DM）：id=1 已存在 → 用新主键
                     execParams(connection, upsert, listOf(60, 2))

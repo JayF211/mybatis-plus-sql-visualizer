@@ -22,30 +22,22 @@ import org.junit.Test
  */
 class JpqlConverterEndToEndTest {
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("email", "email"),
             ColumnInfo("age", "age"),
             ColumnInfo("status", "status"),
             ColumnInfo("departmentId", "department_id"),
             ColumnInfo("createTime", "create_time"),
-        ),
-    )
+        ))
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "t_order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "t_order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("orderNo", "order_no"),
             ColumnInfo("customerId", "customer_id"),
             ColumnInfo("totalAmount", "total_amount"),
-        ),
-    )
+        ))
 
     /**
      * 端到端：JPQL → 转换后 SQL → 模拟面板参数回填。

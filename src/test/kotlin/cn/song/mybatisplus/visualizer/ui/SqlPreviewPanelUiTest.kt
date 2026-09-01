@@ -34,15 +34,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
     }
 
     private fun makeResult(sql: String, compact: String = sql, params: List<String> = emptyList()): PreviewResult =
-        PreviewResult(
-            sql = sql,
-            compactSql = compact,
-            unresolvedParams = params,
-            paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-            wrapperType = WrapperType.LAMBDA_QUERY,
-            tableName = "tbl",
-            columns = listOf("id", "name"),
-        )
+        PreviewResult(sql, compact, params, if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]", WrapperType.LAMBDA_QUERY, "tbl", listOf("id", "name"))
 
     fun test面板构建与结果渲染_编辑器含SQL() {
         val panel = SqlPreviewPanel(project)

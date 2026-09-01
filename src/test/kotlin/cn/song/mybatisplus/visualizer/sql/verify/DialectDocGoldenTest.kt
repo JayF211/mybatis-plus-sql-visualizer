@@ -99,8 +99,8 @@ class DialectDocGoldenTest {
     @Test
     fun `DM方言行为锚点_官方文档结论`() {
         // 分页：官方文法 LIMIT M,N（官方示例 LIMIT 4,3）与 LIMIT N
-        assertEquals("LIMIT 10", DmDialect.renderLimit(LimitClause(count = 10)))
-        assertEquals("LIMIT 5, 10", DmDialect.renderLimit(LimitClause(offset = 5, count = 10)))
+        assertEquals("LIMIT 10", DmDialect.renderLimit(LimitClause(null, 10)))
+        assertEquals("LIMIT 5, 10", DmDialect.renderLimit(LimitClause(5, 10)))
         // 引用：仅双引号（官方 FAQ：双引号屏蔽关键字；反引号需 8.1.3.37+ 且 MySQL 兼容模式，不采用）
         assertEquals("\"order\"", DmDialect.quoteIdentifier("order"))
         // 保留字判定（官方附录实证的双向差异）：
@@ -155,8 +155,8 @@ class DialectDocGoldenTest {
     @Test
     fun `KingBase方言行为锚点_官方文档结论`() {
         // 分页：PG 兼容形态
-        assertEquals("LIMIT 10", KingBaseDialect.renderLimit(LimitClause(count = 10)))
-        assertEquals("LIMIT 10 OFFSET 5", KingBaseDialect.renderLimit(LimitClause(offset = 5, count = 10)))
+        assertEquals("LIMIT 10", KingBaseDialect.renderLimit(LimitClause(null, 10)))
+        assertEquals("LIMIT 10 OFFSET 5", KingBaseDialect.renderLimit(LimitClause(5, 10)))
         // 引用：双引号（PG 内核）
         assertEquals("\"order\"", KingBaseDialect.quoteIdentifier("order"))
         // 保留字判定（官方清单实证的金仓特有保留字——原 ≈PG 集合漏包项）

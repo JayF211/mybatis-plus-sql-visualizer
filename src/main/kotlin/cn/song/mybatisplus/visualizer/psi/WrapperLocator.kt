@@ -525,11 +525,7 @@ object WrapperLocator {
         }
 
         return LocatedWrapper(
-            chain = WrapperChain(
-                wrapperType, table?.entityClassName ?: entityClass?.name, wrapperCalls, constructorAlias = null,
-                deleteConsumed = deleteConsumed, countConsumed = countConsumed, existsConsumed = existsConsumed,
-                updateEntityConsumed = updateEntityConsumed, pageLimit = pageLimit,
-            ),
+            chain = WrapperChain(wrapperType, table?.entityClassName ?: entityClass?.name, wrapperCalls, null, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit),
             table = table,
             entityFile = entityClass?.containingFile,
         )
@@ -588,12 +584,8 @@ object WrapperLocator {
 
         // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
         val columns = refs.map { it.second }.distinct()
-            .map { ColumnInfo(fieldName = it, columnName = NamingStrategy.INSTANCE.toSnakeCase(it)) }
-        return TableInfo(
-            entityClassName = className,
-            tableName = EntityResolver.inferDecoratedTableName(className),
-            columns = columns,
-        )
+            .map { ColumnInfo(it, NamingStrategy.INSTANCE.toSnakeCase(it), false, false, null, null, null, null) }
+        return TableInfo(className, EntityResolver.inferDecoratedTableName(className), columns, null, null, null, emptyList())
     }
 
     /** getter 方法名转属性名（`getStationId` → `stationId`，`isEnabled` → `enabled`）；非 getter/is 前缀返回 null。 */
@@ -965,7 +957,7 @@ object WrapperLocator {
             }
             else -> pageOffsetPlaceholder(current, size)
         }
-        return LimitClause(offset = offset, count = size)
+        return LimitClause(offset, size)
     }
 
     /** new Page 表达式解析：直接 new 表达式，或变量引用 → 初始化表达式（分步写法 `Page p = new Page<>(...); service.page(p, w)`）。 */
@@ -1226,10 +1218,6 @@ object WrapperLocator {
     private fun resolveTableInfo(entityClass: PsiClass?, typeArgName: String?): TableInfo? {
         entityClass?.let { return EntityResolver().resolve(it) }
         val name = typeArgName ?: return null
-        return TableInfo(
-            entityClassName = name,
-            tableName = EntityResolver.inferDecoratedTableName(name),
-            columns = emptyList(),
-        )
+        return TableInfo(name, EntityResolver.inferDecoratedTableName(name), emptyList(), null, null, null, emptyList())
     }
 }

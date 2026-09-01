@@ -24,50 +24,25 @@ class HqlConverterAssociationTest {
     @Before
     fun setup() {
         // 模拟用户截图中的 RuleTableItem 实体
-        ruleTableItemTable = TableInfo(
-            entityClassName = "RuleTableItem",
-            tableName = "THORN_RULE_TABLE_ITEM",
-            columns = listOf(
-                ColumnInfo("id", "ID", isId = true),
+        ruleTableItemTable = TableInfo("RuleTableItem", "THORN_RULE_TABLE_ITEM", listOf(
+                ColumnInfo("id", "ID", true),
                 ColumnInfo("gradeType", "GRADE_TYPE"),
                 ColumnInfo("type", "TYPE"),
                 ColumnInfo("lineNO", "LINE_NO"),
                 ColumnInfo("reference", "REFERENCE"),
-            ),
-            associations = listOf(
-                AssociationInfo(
-                    fieldName = "ruleTable",
-                    joinColumn = "RULE_TABLE_ID",
-                    targetTable = "THORN_RULE_TABLE",
-                    targetAlias = "thornRuleTable",
-                ),
-            ),
-        )
+            ), null, null, null, listOf(
+                AssociationInfo("ruleTable", "RULE_TABLE_ID", "THORN_RULE_TABLE", "thornRuleTable"),
+            ))
 
         // 模拟多关联场景
-        orderTable = TableInfo(
-            entityClassName = "OrderEntity",
-            tableName = "t_order",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+        orderTable = TableInfo("OrderEntity", "t_order", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("orderNo", "order_no"),
                 ColumnInfo("totalAmount", "total_amount"),
-            ),
-            associations = listOf(
-                AssociationInfo(
-                    fieldName = "customer",
-                    joinColumn = "customer_id",
-                    targetTable = "t_customer",
-                    targetAlias = "customer",
-                ),
-                AssociationInfo(
-                    fieldName = "product",
-                    joinColumn = "product_id",
-                    targetTable = "t_product",
-                    targetAlias = "product",
-                ),
-            ),
-        )
+            ), null, null, null, listOf(
+                AssociationInfo("customer", "customer_id", "t_customer", "customer"),
+                AssociationInfo("product", "product_id", "t_product", "product"),
+            ))
     }
 
     // ------------------------------------------------------------------
@@ -126,15 +101,10 @@ class HqlConverterAssociationTest {
 
     @Test
     fun `no associations keeps path unchanged`() {
-        val simpleTable = TableInfo(
-            entityClassName = "UserEntity",
-            tableName = "user",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+        val simpleTable = TableInfo("UserEntity", "user", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("name", "name"),
-            ),
-            associations = emptyList(),
-        )
+            ), null, null, null, emptyList())
         val hql = "SELECT u.name FROM UserEntity u WHERE u.id = :id"
         val result = HqlConverter.convert(hql, simpleTable)
         assertEquals("SELECT u.name FROM user u WHERE u.id = ?", result.sql)

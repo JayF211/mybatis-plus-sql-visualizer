@@ -142,12 +142,7 @@ object BatchOperationConverter {
      */
     private fun batchColumns(prefix: String, table: TableInfo, columns: List<ColumnInfo>, checked: (ColumnInfo) -> Boolean): List<BatchColumn> =
         columns.map { col ->
-            BatchColumn(
-                columnName = col.columnName,
-                source = idSource(prefix, col.columnName),
-                quote = ParamQuote.decide(col.fieldType),
-                checked = checked(col),
-            )
+            BatchColumn(col.columnName, idSource(prefix, col.columnName), ParamQuote.decide(col.fieldType), checked(col))
         }
 
     /**
@@ -156,8 +151,8 @@ object BatchOperationConverter {
      * T-M23.4：注入当前方言（关键字标识符引用——保留字列名按方言符号包裹；设置服务不可用时兜底 MySQL）。
      */
     private fun modelBuild(model: BatchModel): BatchBuild {
-        val model = model.copy(dialect = currentDialect())
-        val initialActive = (model.toggleColumns.filter { it.checked }.map { it.columnName } +
+        val model = model.copy(currentDialect())
+        val initialActive = (model.toggleColumns.filter { it.isChecked() }.map { it.columnName } +
             model.fixedColumns.map { it.columnName }).toSet()
         val params = model.orderedColumns(initialActive).map { ParamEntry(it.source, ParamHint(quote = it.quote)) }
         return BatchBuild(sql = model.renderSql(initialActive), params = params, model = model)
@@ -194,15 +189,7 @@ object BatchOperationConverter {
                 Operation.SELECT -> buildSelectBatch(call, methodName, table, injectLogicDelete, resolveVariables)
             }
         }
-        return BatchPreview(
-            methodName = methodName,
-            tableName = table.tableName,
-            sql = build.sql,
-            paramGroups = build.paramGroups,
-            paramSources = build.params.map { it.source },
-            paramHints = build.params.map { it.hint },
-            batchModel = build.model,
-        )
+        return BatchPreview(methodName, table.tableName, build.sql, build.paramGroups, build.params.map { it.source }, build.params.map { it.hint }, build.model)
     }
 
     /**
@@ -382,10 +369,10 @@ object BatchOperationConverter {
         val prefix = entityPrefix(call)
         val toggleColumns = batchColumns(prefix, table, setColumns) { true }
         val fixedColumns = listOf(
-            BatchColumn(idColumn.columnName, idSource(prefix, idColumn.columnName), ParamQuote.decide(idColumn.fieldType), checked = true),
+            BatchColumn(idColumn.columnName, idSource(prefix, idColumn.columnName), ParamQuote.decide(idColumn.fieldType), true),
         ) + listOfNotNull(versionColumn?.let { version ->
             val versionField = table.columns.firstOrNull { it.columnName == version }
-            BatchColumn(version, "$prefix.$version", ParamQuote.decide(versionField?.fieldType), checked = true)
+            BatchColumn(version, "$prefix.$version", ParamQuote.decide(versionField?.fieldType), true)
         })
         val paramGroups = buildParamGroups(setColumns.map { it.columnName } + idColumn.columnName + listOfNotNull(versionColumn))
         return modelBuild(BatchModel(BatchKind.UPDATE, table.tableName, toggleColumns, fixedColumns, versionColumn)).copy(paramGroups = paramGroups)
@@ -410,7 +397,7 @@ object BatchOperationConverter {
             table.columns
         }
         val prefix = entityPrefix(call)
-        var toggleColumns = batchColumns(prefix, table, columns) { col -> !(col.isId && col.idTypeAuto) }
+        var toggleColumns = batchColumns(prefix, table, columns) { col -> !(col.isId() && col.isIdTypeAuto()) }
         // T-TenantLine：INSERT 列清单追加租户列（固定列、默认勾选、恒参与——对齐 MP INSERT 含租户列语义）；
         // 实体已有 tenant 列（字段）时不重复追加（toggleColumns.none 检测去重）
         val tenantColumn = if (injectTenantLine) {
@@ -422,12 +409,7 @@ object BatchOperationConverter {
         if (tenantColumn != null) {
             if (toggleColumns.none { it.columnName == tenantColumn }) {
                 LOG.info("buildInsertBatch: INJECT col=$tenantColumn, method=$methodName, table=${table.tableName}")
-                toggleColumns = toggleColumns + BatchColumn(
-                    columnName = tenantColumn,
-                    source = "$prefix.$tenantColumn",
-                    quote = null,  // tenant_id 类型未知，面板走数字启发式
-                    checked = true,
-                )
+                toggleColumns = toggleColumns + BatchColumn(tenantColumn, "$prefix.$tenantColumn", null, true)
             } else {
                 LOG.info("buildInsertBatch: DEDUP col=$tenantColumn already in entity columns, method=$methodName")
             }
@@ -553,7 +535,7 @@ object BatchOperationConverter {
         val toggleColumns = batchColumns(prefix, table, table.columns) { true }
         val paramGroups = buildParamGroups(table.columns.map { it.columnName })
         return modelBuild(
-            BatchModel(BatchKind.UPSERT, table.tableName, toggleColumns, conflictColumn = idColumn.columnName),
+            BatchModel(BatchKind.UPSERT, table.tableName, toggleColumns, emptyList(), null, idColumn.columnName, null),
         ).copy(paramGroups = paramGroups)
     }
 

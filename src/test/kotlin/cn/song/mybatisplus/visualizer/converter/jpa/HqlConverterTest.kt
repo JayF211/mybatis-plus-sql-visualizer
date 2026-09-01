@@ -17,29 +17,21 @@ import org.junit.Test
  */
 class HqlConverterTest {
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user_entity",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user_entity", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("status", "status"),
             ColumnInfo("age", "age"),
             ColumnInfo("departmentId", "department_id"),
             ColumnInfo("createTime", "create_time"),
-        ),
-    )
+        ))
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "t_order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "t_order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("orderNo", "order_no"),
             ColumnInfo("customerId", "customer_id"),
             ColumnInfo("totalAmount", "total_amount"),
-        ),
-    )
+        ))
 
     // ------------------------------------------------------------------
     // 参数替换
@@ -171,14 +163,10 @@ class HqlConverterTest {
         val hql = "select count(1) from WmsZone z " +
             "left join WmsLocation loc on loc.zoneId = z.id " +
             "where loc.id in (:locIdList) and z.beAutoZone = true"
-        val wmsZoneTable = TableInfo(
-            entityClassName = "WmsZone",
-            tableName = "wms_zone",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+        val wmsZoneTable = TableInfo("WmsZone", "wms_zone", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("beAutoZone", "be_auto_zone"),
-            ),
-        )
+            ))
         val result = HqlConverter.convert(hql, wmsZoneTable)
         assertEquals("wms_zone", result.statement.table.tableName)
         assertTrue("SQL 应含 IN (?)", result.sql.contains("in (?)"))

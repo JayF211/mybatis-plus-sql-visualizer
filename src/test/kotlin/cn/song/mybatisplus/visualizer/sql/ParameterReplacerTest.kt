@@ -15,33 +15,18 @@ import org.junit.Test
  */
 class ParameterReplacerTest {
 
-    private val table = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val table = TableInfo("DeviceInfoEntity", "car_device_info", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("stationId", "station_id"),
             ColumnInfo("shareSchemeId", "share_scheme_id"),
-        ),
-    )
+        ))
 
     @Test
     fun `生成SQL收集未解析参数`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(
-                    ColumnRef(columnName = "station_id"),
-                    "=",
-                    SqlValue.Placeholder("stationId"),
-                ),
-                Condition.Simple(
-                    ColumnRef(columnName = "id"),
-                    "=",
-                    SqlValue.Literal("1001"),
-                ),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationId"), null),
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1001"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val generated = SqlGenerator.generateWithParams(statement)
         // 字面量内联，占位符收集
         assertEquals(listOf("stationId"), generated.unresolvedParams)
@@ -159,14 +144,10 @@ class ParameterReplacerTest {
 
     @Test
     fun `单行模式_子句空格连接`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1")),
-                Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("101")),
-            ),
-            orderBy = listOf(cn.song.mybatisplus.visualizer.model.OrderByItem(ColumnRef(columnName = "sort"), true)),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null),
+                Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("101"), null),
+            ), emptyList(), null, listOf(cn.song.mybatisplus.visualizer.model.OrderByItem(ColumnRef("sort"), true)), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement, compact = true)
         assertEquals(
             "SELECT id, station_id, share_scheme_id FROM car_device_info WHERE id = 1 AND station_id = 101 ORDER BY sort ASC",
@@ -176,12 +157,9 @@ class ParameterReplacerTest {
 
     @Test
     fun `多行模式_与单行模式一致内容`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1")),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val multi = SqlGenerator.generate(statement, compact = false)
         val single = SqlGenerator.generate(statement, compact = true)
         // 去掉空白后应一致

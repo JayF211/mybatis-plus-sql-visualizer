@@ -29,15 +29,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
 
     /** JPQL 预览：输入参数后 SQL 应实时更新（? → 输入值） */
     fun testPanelJpqlParamInputUpdatesSqlInRealTime() {
-        val result = PreviewResult(
-            sql = "SELECT id, username FROM user WHERE username = ?",
-            compactSql = "SELECT id, username FROM user WHERE username = ?",
-            unresolvedParams = listOf("username"),
-            paramTable = "-- 参数对照: [username=?]",
-            wrapperType = null,
-            tableName = "user",
-            columns = listOf("id", "username"),
-        )
+        val result = PreviewResult("SELECT id, username FROM user WHERE username = ?", "SELECT id, username FROM user WHERE username = ?", listOf("username"), "-- 参数对照: [username=?]", null, "user", listOf("id", "username"))
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
@@ -68,16 +60,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
 
     /** DELETE JPQL 预览：应显示全表删除警告 */
     fun testPanelDeleteJpqlShowsFullTableWarning() {
-        val result = PreviewResult(
-            sql = "DELETE FROM user",
-            compactSql = "DELETE FROM user",
-            unresolvedParams = emptyList(),
-            paramTable = null,
-            wrapperType = null,
-            tableName = "user",
-            warning = "WARNING: 无 WHERE 条件，将删除全表数据！",
-            columns = emptyList(),
-        )
+        val result = PreviewResult("DELETE FROM user", "DELETE FROM user", emptyList(), null, null, "user", "WARNING: 无 WHERE 条件，将删除全表数据！", emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, null, emptyMap(), null, null, null, null)
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
@@ -91,15 +74,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
 
     /** 面板初始化时应正确显示 JPQL 预览结果 */
     fun testPanelInitializesWithJpqlPreviewResult() {
-        val result = PreviewResult(
-            sql = "SELECT id, username, email FROM user WHERE status = ?",
-            compactSql = "SELECT id, username, email FROM user WHERE status = ?",
-            unresolvedParams = listOf("status"),
-            paramTable = "-- 参数对照: [status=?]",
-            wrapperType = null,
-            tableName = "user",
-            columns = listOf("id", "username", "email"),
-        )
+        val result = PreviewResult("SELECT id, username, email FROM user WHERE status = ?", "SELECT id, username, email FROM user WHERE status = ?", listOf("status"), "-- 参数对照: [status=?]", null, "user", listOf("id", "username", "email"))
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
@@ -125,15 +100,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
 
     /** 面板参数输入框初始值应为空 */
     fun testPanelParamFieldsStartEmpty() {
-        val result = PreviewResult(
-            sql = "SELECT id FROM user WHERE age > ? AND status = ?",
-            compactSql = "SELECT id FROM user WHERE age > ? AND status = ?",
-            unresolvedParams = listOf("minAge", "status"),
-            paramTable = "-- 参数对照: [minAge=?, status=?]",
-            wrapperType = null,
-            tableName = "user",
-            columns = listOf("id"),
-        )
+        val result = PreviewResult("SELECT id FROM user WHERE age > ? AND status = ?", "SELECT id FROM user WHERE age > ? AND status = ?", listOf("minAge", "status"), "-- 参数对照: [minAge=?, status=?]", null, "user", listOf("id"))
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)

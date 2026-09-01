@@ -58,15 +58,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val parsed = XmlMapperParser().parse(mapper)
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        return PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
-            unresolvedParams = rendered.mappings.map { it.property },
-            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
-        )
+        return PreviewResult(rendered.sql, rendered.sql.replace(Regex("\\s+"), " ").trim(), rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
     }
 
     private fun compact(text: String): String = text.replace(Regex("\\s+"), " ").trim()
@@ -187,15 +179,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql,
-            unresolvedParams = rendered.mappings.map { it.property },
-            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
-        )
+        val result = PreviewResult(rendered.sql, rendered.sql, rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         val keywordField = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
@@ -231,15 +215,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql,
-            unresolvedParams = rendered.mappings.map { it.property },
-            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
-        )
+        val result = PreviewResult(rendered.sql, rendered.sql, rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         val fields = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
@@ -267,15 +243,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
-            unresolvedParams = rendered.mappings.map { it.property },
-            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
-        )
+        val result = PreviewResult(rendered.sql, rendered.sql.replace(Regex("\\s+"), " ").trim(), rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         assertNotNull("编辑器应正常显示 SQL", panel.editorForTest())
@@ -295,15 +263,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql,
-            unresolvedParams = emptyList(),
-            paramTable = null,
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
-        )
+        val result = PreviewResult(rendered.sql, rendered.sql, emptyList(), null, null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         val button = panel.errorCopyButtonForTest()

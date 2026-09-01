@@ -24,29 +24,19 @@ import org.junit.Test
  */
 class EdgeCaseTest {
 
-    private val table = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(ColumnInfo("id", "id", isId = true), ColumnInfo("name", "name")),
-    )
+    private val table = TableInfo("DeviceInfoEntity", "car_device_info", listOf(ColumnInfo("id", "id", true), ColumnInfo("name", "name")))
 
     /** 便捷构造：eq(column, value)。 */
-    private fun eqCall(column: String, value: String) = WrapperCall(
-        "eq",
-        listOf(WrapperArg.ColumnArg(ColumnRef(columnName = column)), WrapperArg.ValueArg(SqlValue.Literal(value))),
-    )
+    private fun eqCall(column: String, value: String) = WrapperCall("eq", listOf(WrapperArg.ColumnArg(ColumnRef(column)), WrapperArg.ValueArg(SqlValue.Literal(value))))
 
     @Test
     fun `last非法片段_安全忽略`() {
-        val chain = WrapperChain(
-            WrapperType.LAMBDA_QUERY, "E",
-            listOf(
+        val chain = WrapperChain(WrapperType.LAMBDA_QUERY, "E", listOf(
                 eqCall("id", "1"),
                 // 非 limit 文本 / 非法格式：parseLimit 无法解析 → 忽略，不影响其他条件
                 WrapperCall("last", listOf(WrapperArg.ValueArg(SqlValue.Literal("order by name")))),
                 WrapperCall("last", listOf(WrapperArg.ValueArg(SqlValue.Literal("limit abc")))),
-            ),
-        )
+            ))
         val sql = SqlGenerator.generate(QueryWrapperParser(table).parse(chain))
         assertTrue("条件应保留", sql.contains("WHERE id = 1"))
         assertTrue("非法 limit 不输出", !sql.contains("LIMIT"))
@@ -65,14 +55,11 @@ class EdgeCaseTest {
 
     @Test
     fun `未知方法_不影响后续`() {
-        val chain = WrapperChain(
-            WrapperType.LAMBDA_QUERY, "E",
-            listOf(
+        val chain = WrapperChain(WrapperType.LAMBDA_QUERY, "E", listOf(
                 WrapperCall("apply", listOf(WrapperArg.ValueArg(SqlValue.Literal("custom")))),
                 WrapperCall("not", listOf(WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, "E", listOf(eqCall("id", "1")))))),
                 eqCall("name", "张"),
-            ),
-        )
+            ))
         val statement = QueryWrapperParser(table).parse(chain)
         // apply 已支持（T-M7-06 → Raw 片段）；not 官方 API 已支持（M15-P0 → NOT 组）；后续 eq 正常解析
         assertEquals(3, statement.conditions.size)
@@ -83,10 +70,7 @@ class EdgeCaseTest {
 
     @Test
     fun `性能基准_千次生成`() {
-        val chain = WrapperChain(
-            WrapperType.LAMBDA_QUERY, "E",
-            (1..10).map { eqCall("id", it.toString()) },
-        )
+        val chain = WrapperChain(WrapperType.LAMBDA_QUERY, "E", (1..10).map { eqCall("id", it.toString()) })
         val statement = QueryWrapperParser(table).parse(chain)
 
         // 预热

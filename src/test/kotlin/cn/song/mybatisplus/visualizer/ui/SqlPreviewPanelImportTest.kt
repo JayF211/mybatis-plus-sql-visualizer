@@ -42,15 +42,7 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
         compact: String = "SELECT id FROM tbl",
         params: List<String> = emptyList(),
         tableName: String? = "tbl",
-    ) = PreviewResult(
-        sql = sql,
-        compactSql = compact,
-        unresolvedParams = params,
-        paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-        wrapperType = WrapperType.LAMBDA_QUERY,
-        tableName = tableName,
-        columns = listOf("id", "name"),
-    )
+    ) = PreviewResult(sql, compact, params, if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]", WrapperType.LAMBDA_QUERY, tableName, listOf("id", "name"))
 
     // ------------------------------------------------------------------
     // 导入按钮存在性
@@ -242,27 +234,14 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
 
     fun testClearButtonClearsBatchValues() {
         // 清除按钮：填写列值 → 点击清除 → 输入框清空、勾选态保留
-        val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
-            ),
-        )
+        val model = BatchModel(BatchKind.INSERT, "biz_store_coupon", listOf(
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
+            ))
         val active = model.toggleColumns.filter { it.checked }.map { it.columnName }.toSet()
         val panel = SqlPreviewPanel(project)
         panel.showResult(
-            PreviewResult(
-                sql = model.renderSql(active),
-                compactSql = model.renderSql(active),
-                unresolvedParams = model.orderedSources(active),
-                paramTable = null,
-                wrapperType = null,
-                tableName = model.tableName,
-                columns = model.toggleColumns.map { it.columnName },
-                batchModel = model,
-            ),
+            PreviewResult(model.renderSql(active), model.renderSql(active), model.orderedSources(active), null, null, model.tableName, null, model.toggleColumns.map { it.columnName }, emptyMap(), null, null, emptyList(), emptyList(), model, null, emptyMap(), null, null, null, null),
         )
         // 清除按钮存在
         assertNotNull("批量清除按钮应存在", panel.batchClearButtonForTest())

@@ -17,15 +17,11 @@ import org.junit.Test
  */
 class BatchModelTest {
 
-    private fun insertModel(idChecked: Boolean = true) = BatchModel(
-        kind = BatchKind.INSERT,
-        tableName = "biz_store_coupon",
-        toggleColumns = listOf(
-            BatchColumn("id", "entity.id", quote = false, checked = idChecked),
-            BatchColumn("name", "entity.name", quote = true, checked = true),
-            BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
-        ),
-    )
+    private fun insertModel(idChecked: Boolean = true) = BatchModel(BatchKind.INSERT, "biz_store_coupon", listOf(
+            BatchColumn("id", "entity.id", false, idChecked),
+            BatchColumn("name", "entity.name", true, true),
+            BatchColumn("dic_status", "entity.dic_status", false, true),
+        ))
 
     @Test
     fun insertFullCheckedRendersAllColumns() {
@@ -81,15 +77,10 @@ class BatchModelTest {
 
     @Test
     fun updateInitialRendersSetAllAndWhereId() {
-        val model = BatchModel(
-            kind = BatchKind.UPDATE,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
-            ),
-            fixedColumns = listOf(BatchColumn("id", "entity.id", quote = false, checked = true)),
-        )
+        val model = BatchModel(BatchKind.UPDATE, "biz_store_coupon", listOf(
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
+            ), listOf(BatchColumn("id", "entity.id", false, true)))
         val active = model.toggleColumns.filter { it.checked }.map { it.columnName }.toSet()
         assertEquals(
             """
@@ -105,15 +96,10 @@ class BatchModelTest {
 
     @Test
     fun updateUncheckSetColumnKeepsWhereId() {
-        val model = BatchModel(
-            kind = BatchKind.UPDATE,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
-            ),
-            fixedColumns = listOf(BatchColumn("id", "entity.id", quote = false, checked = true)),
-        )
+        val model = BatchModel(BatchKind.UPDATE, "biz_store_coupon", listOf(
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
+            ), listOf(BatchColumn("id", "entity.id", false, true)))
         assertEquals(
             """
             UPDATE biz_store_coupon
@@ -126,16 +112,10 @@ class BatchModelTest {
 
     @Test
     fun updateWithVersionRendersLiteralAndFixedWhere() {
-        val model = BatchModel(
-            kind = BatchKind.UPDATE,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(BatchColumn("name", "entity.name", quote = true, checked = true)),
-            fixedColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = true),
-                BatchColumn("version", "entity.version", quote = false, checked = true),
-            ),
-            versionColumn = "version",
-        )
+        val model = BatchModel(BatchKind.UPDATE, "biz_store_coupon", listOf(BatchColumn("name", "entity.name", true, true)), listOf(
+                BatchColumn("id", "entity.id", false, true),
+                BatchColumn("version", "entity.version", false, true),
+            ), "version")
         assertEquals(
             """
             UPDATE biz_store_coupon
@@ -152,17 +132,11 @@ class BatchModelTest {
         // T-M23.2（用户实测：saveOrUpdate 主键应为可选）：主键为 toggle 列（默认勾选渲染完整 upsert；
         // 取消勾选 → 纯 INSERT 新记录路径，无 ON CONFLICT）
         // T-M43：PG 方言下断言 ON CONFLICT 形态（MySQL 形态断言见 upsertFollowsDialect）
-        val model = BatchModel(
-            kind = BatchKind.UPSERT,
-            tableName = "task_record",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = true),
-                BatchColumn("task_name", "entity.task_name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
-            ),
-            conflictColumn = "id",
-            dialect = PostgreSQLDialect,
-        )
+        val model = BatchModel(BatchKind.UPSERT, "task_record", listOf(
+                BatchColumn("id", "entity.id", false, true),
+                BatchColumn("task_name", "entity.task_name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
+            ), emptyList(), null, "id", PostgreSQLDialect)
         // 主键勾选（默认）：完整 upsert
         assertEquals(
             """
@@ -203,16 +177,12 @@ class BatchModelTest {
     @Test
     fun insertKeywordColumnsQuoted() {
         // 用户示例：biz_banner 的 table 字段为 MySQL 保留字 → 反引号包裹；普通列原样
-        val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_banner",
-            toggleColumns = listOf(
-                BatchColumn("title", "entity.title", quote = true, checked = true),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("table", "entity.table", quote = true, checked = true),
-                BatchColumn("image_url", "entity.image_url", quote = true, checked = true),
-            ),
-        )
+        val model = BatchModel(BatchKind.INSERT, "biz_banner", listOf(
+                BatchColumn("title", "entity.title", true, true),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("table", "entity.table", true, true),
+                BatchColumn("image_url", "entity.image_url", true, true),
+            ))
         val active = model.toggleColumns.map { it.columnName }.toSet()
         assertEquals(
             """
@@ -231,19 +201,19 @@ class BatchModelTest {
     @Test
     fun keywordQuoteFollowsDialect() {
         val columns = listOf(
-            BatchColumn("table", "entity.table", quote = true, checked = true),
-            BatchColumn("name", "entity.name", quote = true, checked = true),
+            BatchColumn("table", "entity.table", true, true),
+            BatchColumn("name", "entity.name", true, true),
         )
         val active = setOf("table", "name")
         // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
         assertEquals(
             "INSERT INTO biz_banner (\"table\", name)\nVALUES (?, ?)",
-            BatchModel(BatchKind.INSERT, "biz_banner", columns, dialect = PostgreSQLDialect).renderSql(active),
+            BatchModel(BatchKind.INSERT, "biz_banner", columns, emptyList(), null, null, PostgreSQLDialect).renderSql(active),
         )
         // SQL Server 方括号
         assertEquals(
             "INSERT INTO biz_banner ([table], name)\nVALUES (?, ?)",
-            BatchModel(BatchKind.INSERT, "biz_banner", columns, dialect = SqlServerDialect).renderSql(active),
+            BatchModel(BatchKind.INSERT, "biz_banner", columns, emptyList(), null, null, SqlServerDialect).renderSql(active),
         )
         // 默认（MySQL 形态）反引号
         assertEquals(
@@ -255,29 +225,19 @@ class BatchModelTest {
     @Test
     fun updateAndUpsertKeywordColumnsQuoted() {
         // UPDATE：SET 列 + WHERE 固定列 + 表名引用
-        val update = BatchModel(
-            kind = BatchKind.UPDATE,
-            tableName = "order",
-            toggleColumns = listOf(
-                BatchColumn("group", "entity.group", quote = false, checked = true),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-            ),
-            fixedColumns = listOf(BatchColumn("key", "entity.key", quote = false, checked = false)),
-        )
+        val update = BatchModel(BatchKind.UPDATE, "order", listOf(
+                BatchColumn("group", "entity.group", false, true),
+                BatchColumn("name", "entity.name", true, true),
+            ), listOf(BatchColumn("key", "entity.key", false, false)))
         assertEquals(
             "UPDATE `order`\nSET `group` = ?, name = ?\nWHERE `key` = ?",
             update.renderSql(setOf("group", "name")),
         )
         // UPSERT（T-M43）：默认 MySQL 方言 → ON DUPLICATE KEY UPDATE + VALUES()；列名按需引用
-        val upsert = BatchModel(
-            kind = BatchKind.UPSERT,
-            tableName = "biz_banner",
-            toggleColumns = listOf(
-                BatchColumn("table", "entity.table", quote = true, checked = true),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-            ),
-            conflictColumn = "table",
-        )
+        val upsert = BatchModel(BatchKind.UPSERT, "biz_banner", listOf(
+                BatchColumn("table", "entity.table", true, true),
+                BatchColumn("name", "entity.name", true, true),
+            ), emptyList(), null, "table")
         assertEquals(
             "INSERT INTO biz_banner (`table`, name)\nVALUES (?, ?)\n" +
                 "ON DUPLICATE KEY UPDATE name = VALUES(name)",
@@ -289,16 +249,16 @@ class BatchModelTest {
     fun upsertFollowsDialect() {
         // T-M43「设置里出现 = 承诺可用」：UPSERT 冲突子句按方言渲染全量断言
         val columns = listOf(
-            BatchColumn("id", "entity.id", quote = false, checked = true),
-            BatchColumn("name", "entity.name", quote = true, checked = true),
+            BatchColumn("id", "entity.id", false, true),
+            BatchColumn("name", "entity.name", true, true),
         )
         val active = setOf("id", "name")
         // MySQL（默认）/ MariaDB：ON DUPLICATE KEY UPDATE + VALUES()
         val dupKeySql = "INSERT INTO t (id, name)\nVALUES (?, ?)\nON DUPLICATE KEY UPDATE name = VALUES(name)"
-        assertEquals(dupKeySql, BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id").renderSql(active))
+        assertEquals(dupKeySql, BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id").renderSql(active))
         assertEquals(
             dupKeySql,
-            BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = MariaDbDialect).renderSql(active),
+            BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", MariaDbDialect).renderSql(active),
         )
         // PostgreSQL / SQLite / KingBase：ON CONFLICT + EXCLUDED（P-立项-05：H2 移出——
         // ON CONFLICT 在 H2 任何模式均语法错误，改为下方 MERGE 整语句形态）
@@ -306,20 +266,20 @@ class BatchModelTest {
         for (dialect in listOf(PostgreSQLDialect, SqliteDialect, KingBaseDialect)) {
             assertEquals(
                 conflictSql,
-                BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = dialect).renderSql(active),
+                BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", dialect).renderSql(active),
             )
         }
         // H2（P-立项-05）：原生 upsert 为整语句 MERGE INTO..KEY..VALUES（引擎实证 ON CONFLICT 不可用）
         assertEquals(
             "MERGE INTO t (id, name) KEY (id) VALUES (?, ?)",
-            BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = H2Dialect).renderSql(active),
+            BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", H2Dialect).renderSql(active),
         )
         // Oracle / SQL Server / DM：无原生 upsert → 降级纯 INSERT（SQL 在本方言可执行）
         val plainSql = "INSERT INTO t (id, name)\nVALUES (?, ?)"
         for (dialect in listOf(OracleDialect, SqlServerDialect, DmDialect)) {
             assertEquals(
                 plainSql,
-                BatchModel(BatchKind.UPSERT, "t", columns, conflictColumn = "id", dialect = dialect).renderSql(active),
+                BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", dialect).renderSql(active),
             )
         }
     }

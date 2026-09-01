@@ -22,20 +22,16 @@ import org.junit.Test
 class SqlGeneratorTest {
 
     /** 测试用实体表信息（对齐 docs/项目介绍.md 的 car_device_info）。 */
-    private val table = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val table = TableInfo("DeviceInfoEntity", "car_device_info", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("stationId", "station_id"),
             ColumnInfo("shareSchemeId", "share_scheme_id"),
             ColumnInfo("sort", "sort"),
-        ),
-    )
+        ))
 
     @Test
     fun `基本查询_无条件无排序`() {
-        val statement = SelectStatement(table = table)
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -48,13 +44,10 @@ class SqlGeneratorTest {
 
     @Test
     fun `带条件_多条件AND缩进`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1001")),
-                Condition.Unary(ColumnRef(columnName = "share_scheme_id"), "IS NOT NULL"),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1001"), null),
+                Condition.Unary(ColumnRef("share_scheme_id"), "IS NOT NULL", null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -69,16 +62,9 @@ class SqlGeneratorTest {
 
     @Test
     fun `占位符参数_变量渲染为问号`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(
-                    ColumnRef(columnName = "station_id"),
-                    "=",
-                    SqlValue.Placeholder("stationId"),
-                ),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationId"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -92,22 +78,10 @@ class SqlGeneratorTest {
 
     @Test
     fun `in与between条件`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.In(
-                    ColumnRef(columnName = "id"),
-                    negated = false,
-                    values = listOf(SqlValue.Literal("1"), SqlValue.Literal("2"), SqlValue.Literal("3")),
-                ),
-                Condition.Between(
-                    ColumnRef(columnName = "sort"),
-                    negated = false,
-                    lo = SqlValue.Literal("1"),
-                    hi = SqlValue.Literal("10"),
-                ),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.In(ColumnRef("id"), false, listOf(SqlValue.Literal("1"), SqlValue.Literal("2"), SqlValue.Literal("3")), null),
+                Condition.Between(ColumnRef("sort"), false, SqlValue.Literal("1"), SqlValue.Literal("10"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -122,18 +96,11 @@ class SqlGeneratorTest {
 
     @Test
     fun `like条件_不同位置百分号`() {
-        val tableWithName = TableInfo(
-            entityClassName = "UserEntity",
-            tableName = "user",
-            columns = listOf(ColumnInfo("name", "name")),
-        )
+        val tableWithName = TableInfo("UserEntity", "user", listOf(ColumnInfo("name", "name")))
         fun likeSql(position: LikePosition, negated: Boolean = false): String {
-            val statement = SelectStatement(
-                table = tableWithName,
-                conditions = listOf(
-                    Condition.Like(ColumnRef(columnName = "name"), negated, SqlValue.Literal("张"), position),
-                ),
-            )
+            val statement = SelectStatement(tableWithName, emptyList(), null, emptyList(), false, listOf(
+                    Condition.Like(ColumnRef("name"), negated, SqlValue.Literal("张"), position, null),
+                ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
             return SqlGenerator.generate(statement).substringAfter("WHERE ")
         }
         assertEquals("name LIKE '%张%'", likeSql(LikePosition.ANYWHERE))
@@ -144,19 +111,13 @@ class SqlGeneratorTest {
 
     @Test
     fun `逻辑分组_嵌套括号`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1")),
-                Condition.Group(
-                    connector = cn.song.mybatisplus.visualizer.model.Connector.OR,
-                    children = listOf(
-                        Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("101")),
-                        Condition.Simple(ColumnRef(columnName = "share_scheme_id"), "=", SqlValue.Literal("5")),
-                    ),
-                ),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null),
+                Condition.Group(cn.song.mybatisplus.visualizer.model.Connector.OR, listOf(
+                        Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("101"), null),
+                        Condition.Simple(ColumnRef("share_scheme_id"), "=", SqlValue.Literal("5"), null),
+                    ), null, false),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -171,22 +132,15 @@ class SqlGeneratorTest {
 
     @Test
     fun `完整查询_分组排序分页`() {
-        val statement = SelectStatement(
-            table = table,
-            selectColumns = listOf(
-                ColumnRef(columnName = "station_id"),
-                ColumnRef(columnName = "share_scheme_id"),
-            ),
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Placeholder("deviceId")),
-            ),
-            groupBy = listOf(ColumnRef(columnName = "station_id")),
-            orderBy = listOf(
-                OrderByItem(ColumnRef(columnName = "sort"), asc = true),
-                OrderByItem(ColumnRef(columnName = "id"), asc = false),
-            ),
-            limit = LimitClause(count = 10),
-        )
+        val statement = SelectStatement(table, listOf(
+                ColumnRef("station_id"),
+                ColumnRef("share_scheme_id"),
+            ), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Placeholder("deviceId"), null),
+            ), listOf(ColumnRef("station_id")), null, listOf(
+                OrderByItem(ColumnRef("sort"), true),
+                OrderByItem(ColumnRef("id"), false),
+            ), LimitClause(null, 10), null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -203,10 +157,7 @@ class SqlGeneratorTest {
 
     @Test
     fun `带偏移量分页`() {
-        val statement = SelectStatement(
-            table = table,
-            limit = LimitClause(offset = 20, count = 10),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(20, 10), null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -221,13 +172,7 @@ class SqlGeneratorTest {
     @Test
     fun `分页占位符_参数收集与回填提示`() {
         // T-M29-03：service.page 的运行时 pageNum/pageSize → `?` + 参数来源（面板参数区回填）
-        val statement = SelectStatement(
-            table = table,
-            limit = LimitClause(
-                offset = SqlValue.Placeholder("(pageNum - 1) * pageSize"),
-                count = SqlValue.Placeholder("pageSize"),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(SqlValue.Placeholder("(pageNum - 1) * pageSize"), SqlValue.Placeholder("pageSize")), null, null, null, emptyList(), null, null)
         val generated = SqlGenerator.generateWithParams(statement, compact = false)
         assertEquals(
             """
@@ -245,17 +190,13 @@ class SqlGeneratorTest {
     fun `组带开关_enabledIds不含子条件时组内容仍渲染`() {
         // T-M29.1：组开关行合并子条件后，子条件 id 不进面板 enabledIds——
         // 组带开关时子条件按各自 defaultEnabled 渲染（enabledIds 仅控制组本身显隐）
-        val group = Condition.Group(
-            Connector.OR,
-            listOf(
-                Condition.Like(ColumnRef(columnName = "code"), false, SqlValue.Placeholder("keyword"), LikePosition.RIGHT)
+        val group = Condition.Group(Connector.OR, listOf(
+                Condition.Like(ColumnRef("code"), false, SqlValue.Placeholder("keyword"), LikePosition.RIGHT, null)
                     .withToggle(ConditionToggle("c1", null, true, "code LIKE ?")),
-                Condition.Like(ColumnRef(columnName = "user_phone"), false, SqlValue.Placeholder("keyword"), LikePosition.RIGHT)
+                Condition.Like(ColumnRef("user_phone"), false, SqlValue.Placeholder("keyword"), LikePosition.RIGHT, null)
                     .withToggle(ConditionToggle("c2", null, true, "user_phone LIKE ?")),
-            ),
-            toggle = ConditionToggle("c0", "isNotBlank(keyword)", true, "(code LIKE ? OR user_phone LIKE ?)"),
-        )
-        val statement = SelectStatement(table = table, conditions = listOf(group))
+            ), ConditionToggle("c0", "isNotBlank(keyword)", true, "(code LIKE ? OR user_phone LIKE ?)"))
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(group), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0"))
         assertEquals(
             """
@@ -274,22 +215,14 @@ class SqlGeneratorTest {
     fun `having子条件_enabledIds不含时仍渲染`() {
         // T-M29.1：HAVING 子条件不在面板展示（无开关行）——按 defaultEnabled 渲染，
         // 面板 enabledIds 过滤不再丢失 HAVING（M19.5 预存缺陷）
-        val having = Condition.Group(
-            Connector.AND,
-            listOf(
-                Condition.Simple(ColumnRef(columnName = "amount"), ">", SqlValue.Literal("100"))
+        val having = Condition.Group(Connector.AND, listOf(
+                Condition.Simple(ColumnRef("amount"), ">", SqlValue.Literal("100"), null)
                     .withToggle(ConditionToggle("h0", null, true, "amount > 100")),
-            ),
-        )
-        val statement = SelectStatement(
-            table = table,
-            groupBy = listOf(ColumnRef(columnName = "station_id")),
-            having = having,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"))
+            ), null, false)
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)
                     .withToggle(ConditionToggle("w0", null, true, "id = 1")),
-            ),
-        )
+            ), listOf(ColumnRef("station_id")), having, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("w0"))
         assertTrue("HAVING 应渲染：$sql", sql.contains("HAVING (amount > 100)"))
     }
@@ -301,26 +234,19 @@ class SqlGeneratorTest {
     @Test
     fun `占位符参数_回填提示按列类型与LIKE位置`() {
         // id 数值列、name 字符串列、code 无类型（未知）
-        val typedTable = TableInfo(
-            entityClassName = "DeviceInfoEntity",
-            tableName = "car_device_info",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
-                ColumnInfo("name", "name", fieldType = "java.lang.String"),
+        val typedTable = TableInfo("DeviceInfoEntity", "car_device_info", listOf(
+                ColumnInfo("id", "id", true, false, "java.lang.Long"),
+                ColumnInfo("name", "name", false, false, "java.lang.String"),
                 ColumnInfo("code", "code"),
-            ),
-        )
-        val statement = SelectStatement(
-            table = typedTable,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar")),
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Placeholder("idVar")),
-                Condition.Simple(ColumnRef(columnName = "code"), "=", SqlValue.Placeholder("codeVar")),
-                Condition.Like(ColumnRef(columnName = "name"), negated = false, pattern = SqlValue.Placeholder("likeVar"), position = LikePosition.ANYWHERE),
-                Condition.Like(ColumnRef(columnName = "name"), negated = false, pattern = SqlValue.Placeholder("likeLeftVar"), position = LikePosition.LEFT),
-                Condition.Like(ColumnRef(columnName = "name"), negated = false, pattern = SqlValue.Placeholder("likeRightVar"), position = LikePosition.RIGHT),
-            ),
-        )
+            ))
+        val statement = SelectStatement(typedTable, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"), null),
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Placeholder("idVar"), null),
+                Condition.Simple(ColumnRef("code"), "=", SqlValue.Placeholder("codeVar"), null),
+                Condition.Like(ColumnRef("name"), false, SqlValue.Placeholder("likeVar"), LikePosition.ANYWHERE, null),
+                Condition.Like(ColumnRef("name"), false, SqlValue.Placeholder("likeLeftVar"), LikePosition.LEFT, null),
+                Condition.Like(ColumnRef("name"), false, SqlValue.Placeholder("likeRightVar"), LikePosition.RIGHT, null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val generated = SqlGenerator.generateWithParams(statement)
 
         // SQL 文本与 M12 基线一致（`?` 无引号/百分号，提示为附加信息）
@@ -357,12 +283,9 @@ class SqlGeneratorTest {
 
     @Test
     fun `无占位符_无回填提示`() {
-        val statement = SelectStatement(
-            table = table,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1001")),
-            ),
-        )
+        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1001"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val generated = SqlGenerator.generateWithParams(statement)
         assertEquals(emptyList<String>(), generated.unresolvedParams)
         assertEquals(emptyList<ParamHint>(), generated.paramHints)
@@ -373,25 +296,18 @@ class SqlGeneratorTest {
     // ------------------------------------------------------------------
 
     /** 含关键字列（table）与关键字表名（order）的实体表信息。 */
-    private val keywordTable = TableInfo(
-        entityClassName = "BizBannerEntity",
-        tableName = "order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val keywordTable = TableInfo("BizBannerEntity", "order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("title", "title"),
             ColumnInfo("table", "table"),
             ColumnInfo("imageUrl", "image_url"),
-        ),
-    )
+        ))
 
     @Test
     fun `关键字列_全列展开与条件反引号`() {
-        val statement = SelectStatement(
-            table = keywordTable,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "table"), "=", SqlValue.Placeholder("table")),
-            ),
-        )
+        val statement = SelectStatement(keywordTable, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("table"), "=", SqlValue.Placeholder("table"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -405,13 +321,9 @@ class SqlGeneratorTest {
 
     @Test
     fun `关键字列_表别名形态只包列名`() {
-        val statement = SelectStatement(
-            table = keywordTable,
-            tableAlias = "t",
-            conditions = listOf(
-                Condition.Simple(ColumnRef(tableAlias = "t", columnName = "table"), "=", SqlValue.Literal("1001")),
-            ),
-        )
+        val statement = SelectStatement(keywordTable, emptyList(), "t", emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("t", "table"), "=", SqlValue.Literal("1001"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -425,11 +337,7 @@ class SqlGeneratorTest {
 
     @Test
     fun `关键字列_排序与分组`() {
-        val statement = SelectStatement(
-            table = keywordTable,
-            groupBy = listOf(ColumnRef(columnName = "table")),
-            orderBy = listOf(OrderByItem(ColumnRef(columnName = "table"), asc = true)),
-        )
+        val statement = SelectStatement(keywordTable, emptyList(), null, emptyList(), false, emptyList(), listOf(ColumnRef("table")), null, listOf(OrderByItem(ColumnRef("table"), true)), null, null, null, null, emptyList(), null, null)
         val sql = SqlGenerator.generate(statement)
         assertEquals(
             """
@@ -444,12 +352,9 @@ class SqlGeneratorTest {
 
     @Test
     fun `关键字引用_符号按方言切换`() {
-        val statement = SelectStatement(
-            table = keywordTable,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "table"), "=", SqlValue.Literal("1001")),
-            ),
-        )
+        val statement = SelectStatement(keywordTable, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("table"), "=", SqlValue.Literal("1001"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
         assertEquals(
             "SELECT id, title, \"table\", image_url\nFROM \"order\"\nWHERE \"table\" = 1001",
@@ -470,12 +375,9 @@ class SqlGeneratorTest {
     @Test
     fun `关键字列_参数对照不受引用影响`() {
         // 模型层列名不包裹：quoteHint 按原始 columnName 匹配 → 参数来源/提示与未引用时一致
-        val statement = SelectStatement(
-            table = keywordTable,
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "table"), "=", SqlValue.Placeholder("table")),
-            ),
-        )
+        val statement = SelectStatement(keywordTable, emptyList(), null, emptyList(), false, listOf(
+                Condition.Simple(ColumnRef("table"), "=", SqlValue.Placeholder("table"), null),
+            ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val generated = SqlGenerator.generateWithParams(statement)
         assertEquals(listOf("table"), generated.unresolvedParams)
         // keywordTable 列无 fieldType → 引号提示 null（列类型未知，面板走数字启发式）
@@ -487,26 +389,17 @@ class SqlGeneratorTest {
     // ------------------------------------------------------------------
 
     /** 测试用关联表。 */
-    private val stationTable = TableInfo(
-        entityClassName = "StationEntity",
-        tableName = "station",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val stationTable = TableInfo("StationEntity", "station", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("stationName", "station_name"),
-        ),
-    )
+        ))
 
     @Test
     fun `generateFill_基础形态`() {
-        val fill = FillClause(
-            childTable = stationTable,
-            childAlias = "s",
-            selectColumns = listOf(
-                ColumnRef(tableAlias = "s", columnName = "id"),
-                ColumnRef(tableAlias = "s", columnName = "station_name"),
-            ),
-            tagField = "id",
-        )
+        val fill = FillClause(stationTable, "s", listOf(
+                ColumnRef("s", "id"),
+                ColumnRef("s", "station_name"),
+            ), "id", null, null, null)
         assertEquals(
             "SELECT s.id, s.station_name FROM station s WHERE s.id IN (?)",
             SqlGenerator.generateFill(fill),
@@ -515,13 +408,7 @@ class SqlGeneratorTest {
 
     @Test
     fun `generateFill_带limit`() {
-        val fill = FillClause(
-            childTable = stationTable,
-            childAlias = "s",
-            selectColumns = listOf(ColumnRef(tableAlias = "s", columnName = "id")),
-            tagField = "id",
-            limit = 10,
-        )
+        val fill = FillClause(stationTable, "s", listOf(ColumnRef("s", "id")), "id", 10, null, null)
         assertEquals(
             "SELECT s.id FROM station s WHERE s.id IN (?) LIMIT 10",
             SqlGenerator.generateFill(fill),
@@ -531,12 +418,7 @@ class SqlGeneratorTest {
     @Test
     fun `generateFill_默认方言为MySQL`() {
         // 验证默认参数：不传方言时走 MySQL（标识符引用反引号）
-        val fill = FillClause(
-            childTable = stationTable,
-            childAlias = "s",
-            selectColumns = listOf(ColumnRef(tableAlias = "s", columnName = "id")),
-            tagField = "id",
-        )
+        val fill = FillClause(stationTable, "s", listOf(ColumnRef("s", "id")), "id", null, null, null)
         // 非关键字列名 → 不引用
         val sql = SqlGenerator.generateFill(fill)
         assertEquals("SELECT s.id FROM station s WHERE s.id IN (?)", sql)

@@ -58,7 +58,7 @@ object ExpressionEvaluator {
             }
         }
         val joined = parts.joinToString("")
-        return SqlValue.Literal(raw = "'" + joined.replace("'", "''") + "'", unquoted = joined)
+        return SqlValue.Literal("'" + joined.replace("'", "''") + "'", joined)
     }
 
     /**
@@ -80,16 +80,13 @@ object ExpressionEvaluator {
             null -> SqlValue.Literal("NULL")
 
             // 字符串 → 单引号包裹（转义内部单引号）；unquoted 保留原始值供 SQL 片段场景使用
-            is String -> SqlValue.Literal(
-                raw = "'" + value.replace("'", "''") + "'",
-                unquoted = value,
-            )
+            is String -> SqlValue.Literal("'" + value.replace("'", "''") + "'", value)
 
             // 布尔
             is Boolean -> SqlValue.Literal(value.toString())
 
             // 字符 → 单引号包裹
-            is Char -> SqlValue.Literal("'$value'", unquoted = value.toString())
+            is Char -> SqlValue.Literal("'$value'", value.toString())
 
             // 数值类型（Byte/Short/Int/Long/Float/Double）
             is Number -> SqlValue.Literal(value.toString())

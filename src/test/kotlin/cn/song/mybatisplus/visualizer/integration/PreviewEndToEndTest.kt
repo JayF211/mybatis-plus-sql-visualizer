@@ -160,7 +160,7 @@ class PreviewEndToEndTest : BasePlatformTestCase() {
         val info = cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator.locate(method)
         assertNotNull("JOIN FETCH 应被定位", info)
         val userTable = TableInfo("UserEntity", "user", listOf(
-            ColumnInfo("id", "id", isId = true),
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
         ))
         val result = HqlConverter.convert(info!!.hql, userTable)

@@ -12,15 +12,11 @@ import org.junit.Test
  */
 class HqlConverterNewDtoTest {
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "t_order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "t_order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("customerId", "customer_id"),
             ColumnInfo("totalAmount", "total_amount"),
-        ),
-    )
+        ))
 
     @Test
     fun testNewDto_strippedFromSelect() {

@@ -83,11 +83,7 @@ object KtWrapperDetector {
             detectLineExtensionChain(trimmed)?.let { wrapperType ->
                 val calls = extractChainCalls(trimmed)
                 if (calls.isNotEmpty()) {
-                    chains += WrapperChain(
-                        wrapperType = wrapperType,
-                        entityClass = null, // MVP：暂不解析实体类
-                        calls = calls,
-                    )
+                    chains += WrapperChain(wrapperType, null, calls, null, false, false, false, false, null)
                 }
             }
 
@@ -95,11 +91,7 @@ object KtWrapperDetector {
             detectLineConstructorChain(trimmed)?.let { wrapperType ->
                 val calls = extractChainCalls(trimmed)
                 if (calls.isNotEmpty()) {
-                    chains += WrapperChain(
-                        wrapperType = wrapperType,
-                        entityClass = null,
-                        calls = calls,
-                    )
+                    chains += WrapperChain(wrapperType, null, calls, null, false, false, false, false, null)
                 }
             }
         }
@@ -155,7 +147,7 @@ object KtWrapperDetector {
             // MVP：参数仅做简单提取（文本占位）
             // 找到匹配位置之后的参数文本
             val args = extractCallArgs(line, match.range.first)
-            calls += WrapperCall(methodName = methodName, args = args)
+            calls += WrapperCall(methodName, args)
         }
 
         return calls

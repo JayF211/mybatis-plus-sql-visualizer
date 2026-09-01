@@ -13,15 +13,11 @@ import org.junit.Test
  */
 class HqlConverterJoinFetchTest {
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user_entity",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user_entity", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("departmentId", "department_id"),
-        ),
-    )
+        ))
 
     @Test
     fun testJoinFetchSingleCallNoDuplication() {

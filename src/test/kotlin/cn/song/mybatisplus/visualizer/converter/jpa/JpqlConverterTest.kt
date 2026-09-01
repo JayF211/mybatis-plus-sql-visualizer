@@ -29,29 +29,21 @@ class JpqlConverterTest {
     // 测试用 TableInfo
     // ------------------------------------------------------------------
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("email", "email"),
             ColumnInfo("age", "age"),
             ColumnInfo("departmentId", "department_id"),
             ColumnInfo("createTime", "create_time"),
-        ),
-    )
+        ))
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "t_order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "t_order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("orderNo", "order_no"),
             ColumnInfo("customerId", "customer_id"),
             ColumnInfo("totalAmount", "total_amount"),
-        ),
-    )
+        ))
 
     // ------------------------------------------------------------------
     // 命名参数替换测试

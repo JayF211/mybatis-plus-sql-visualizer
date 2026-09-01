@@ -132,14 +132,14 @@ object SqlGenerator {
         // T-M23.4：展开列改为 tableAlias + columnName 构造（原 `prefix + it` 拼进 columnName，
         // 关键字引用无法拆分别名前缀；顺带修复 quoteHint 按 columnName 匹配的隐患）
         val selectColumns = if (statement.selectColumns.isEmpty()) {
-            statement.table.allColumnNames.map { ColumnRef(tableAlias = statement.tableAlias, columnName = it) }
+            statement.table.allColumnNames.map { ColumnRef(statement.tableAlias, it, null, null, null, null, null) }
         } else {
             statement.selectColumns
         }
         // first 片段（官方 API）：置于 SELECT 之前（如 `/* hint */ SELECT ...`）
         val sb = StringBuilder(statement.rawFirst?.let { "$it " } ?: "")
         sb.append("SELECT ")
-        if (statement.distinct) sb.append("DISTINCT ")
+        if (statement.isDistinct()) sb.append("DISTINCT ")
         sb.append(selectColumns.joinToString(", ") { renderColumnRef(it, dialect) })
 
         // FROM 主表（可带别名）；T-M21-07：from(子查询主表) 形态 → FROM (子查询SQL) 外层别名
@@ -184,7 +184,7 @@ object SqlGenerator {
         if (statement.orderBy.isNotEmpty()) {
             sb.append(nl).append("ORDER BY ")
                 .append(statement.orderBy.joinToString(", ") {
-                    "${renderQualified(it.column, dialect)} ${if (it.asc) "ASC" else "DESC"}"
+                    "${renderQualified(it.column, dialect)} ${if (it.isAsc()) "ASC" else "DESC"}"
                 })
         }
 
@@ -306,7 +306,7 @@ object SqlGenerator {
         sb.append(" FROM ").append(renderTableName(fillClause.childTable.tableName, dialect))
         sb.append(" ").append(fillClause.childAlias)
         sb.append(" WHERE ").append(
-            renderQualified(ColumnRef(tableAlias = fillClause.childAlias, columnName = fillClause.tagField), dialect),
+            renderQualified(ColumnRef(fillClause.childAlias, fillClause.tagField, null, null, null, null, null), dialect),
         )
         sb.append(" IN (?)")
         fillClause.limit?.let { sb.append(" LIMIT ").append(it) }
@@ -396,7 +396,7 @@ object SqlGenerator {
      */
     private fun Condition.isConditionVisible(enabledIds: Set<String>?): Boolean {
         val t = toggle ?: return true
-        return if (enabledIds != null) t.id in enabledIds else t.defaultEnabled
+        return if (enabledIds != null) t.id in enabledIds else t.isDefaultEnabled()
     }
 
     /**
@@ -422,7 +422,7 @@ object SqlGenerator {
             "${renderQualified(condition.column, dialect)} ${condition.op}"
 
         is Condition.In -> {
-            val op = if (condition.negated) "NOT IN" else "IN"
+            val op = if (condition.isNegated()) "NOT IN" else "IN"
             // M19.6（用户实测）：IN 列表占位符标记 inList 提示——面板回填按逗号分割多值、每个值独立引号
             val values = condition.values.joinToString(", ") { value ->
                 when (value) {
@@ -438,12 +438,12 @@ object SqlGenerator {
         }
 
         is Condition.Between -> {
-            val op = if (condition.negated) "NOT BETWEEN" else "BETWEEN"
+            val op = if (condition.isNegated()) "NOT BETWEEN" else "BETWEEN"
             "${renderQualified(condition.column, dialect)} $op ${renderValue(condition.lo, paramSink, hintSink, quoteHint(table, condition.column))} AND ${renderValue(condition.hi, paramSink, hintSink, quoteHint(table, condition.column))}"
         }
 
         is Condition.Like -> {
-            val op = if (condition.negated) "NOT LIKE" else "LIKE"
+            val op = if (condition.isNegated()) "NOT LIKE" else "LIKE"
             "${renderQualified(condition.column, dialect)} $op ${renderLike(condition.pattern, condition.position, paramSink, hintSink)}"
         }
 
@@ -453,7 +453,7 @@ object SqlGenerator {
             // 无开关组维持 enabledIds 透传（子条件行仍可单独勾选）
             val childIds = if (condition.toggle != null) null else enabledIds
             val childrenSql = renderConditionList(condition.children, condition.connector, indent = false, paramSink, childIds, hintSink, table, dialect)
-            if (childrenSql.isEmpty()) "" else if (condition.negated) "NOT ($childrenSql)" else "($childrenSql)"
+            if (childrenSql.isEmpty()) "" else if (condition.isNegated()) "NOT ($childrenSql)" else "($childrenSql)"
         }
 
         is Condition.ColumnComparison ->

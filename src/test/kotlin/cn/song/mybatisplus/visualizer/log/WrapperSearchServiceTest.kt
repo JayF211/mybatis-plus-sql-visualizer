@@ -14,19 +14,19 @@ class WrapperSearchServiceTest {
 
     @Test
     fun `精确表名匹配返回 true`() {
-        val table = TableInfo(entityClassName = "User", tableName = "user", columns = emptyList())
+        val table = TableInfo("User", "user", emptyList())
         assertTrue(WrapperSearchService.matchesTable(table, "user"))
     }
 
     @Test
     fun `大小写不敏感匹配`() {
-        val table = TableInfo(entityClassName = "User", tableName = "user_info", columns = emptyList())
+        val table = TableInfo("User", "user_info", emptyList())
         assertTrue(WrapperSearchService.matchesTable(table, "USER_INFO"))
     }
 
     @Test
     fun `表名不匹配返回 false`() {
-        val table = TableInfo(entityClassName = "User", tableName = "user", columns = emptyList())
+        val table = TableInfo("User", "user", emptyList())
         assertFalse(WrapperSearchService.matchesTable(table, "order_info"))
     }
 
@@ -37,13 +37,13 @@ class WrapperSearchServiceTest {
 
     @Test
     fun `空表名返回 false`() {
-        val table = TableInfo(entityClassName = "User", tableName = "user", columns = emptyList())
+        val table = TableInfo("User", "user", emptyList())
         assertFalse(WrapperSearchService.matchesTable(table, ""))
     }
 
     @Test
     fun `空目标表名返回 false`() {
-        val table = TableInfo(entityClassName = "User", tableName = "user", columns = emptyList())
+        val table = TableInfo("User", "user", emptyList())
         assertFalse(WrapperSearchService.matchesTable(table, ""))
     }
 }

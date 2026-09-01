@@ -18,18 +18,14 @@ import org.junit.Test
  */
 class HqlConverterSelectExpandTest {
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user_entity",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user_entity", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("status", "status"),
             ColumnInfo("age", "age"),
             ColumnInfo("departmentId", "department_id"),
             ColumnInfo("createTime", "create_time"),
-        ),
-    )
+        ))
 
     /** `SELECT u` / 无 SELECT 子句时的期望展开结果（顺序与 columns 声明顺序一致）。 */
     private val expanded = "u.id, u.username, u.status, u.age, u.department_id, u.create_time"
@@ -175,11 +171,7 @@ class HqlConverterSelectExpandTest {
 
     @Test
     fun `emptyColumns_degradesToStarWithComment`() {
-        val emptyTable = TableInfo(
-            entityClassName = "EmptyEntity",
-            tableName = "empty_table",
-            columns = emptyList(),
-        )
+        val emptyTable = TableInfo("EmptyEntity", "empty_table", emptyList())
         val hql = "SELECT u FROM EmptyEntity u WHERE u.id = :id"
         val result = HqlConverter.convert(hql, emptyTable)
         assertEquals(

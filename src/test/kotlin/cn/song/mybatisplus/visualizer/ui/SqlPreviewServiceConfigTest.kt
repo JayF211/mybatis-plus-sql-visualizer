@@ -333,11 +333,7 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
         myFixture.configureByText("Entity.java", "public class E { private Long id; }")
         val entityFile = myFixture.file
         val wrapper = cn.song.mybatisplus.visualizer.psi.LocatedWrapper(
-            chain = cn.song.mybatisplus.visualizer.model.WrapperChain(
-                wrapperType = cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY,
-                entityClass = "E",
-                calls = emptyList(),
-            ),
+            chain = cn.song.mybatisplus.visualizer.model.WrapperChain(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, "E", emptyList(), null, false, false, false, false, null),
             table = null,
             entityFile = entityFile,
         )
@@ -350,11 +346,7 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
         assertFalse("实体文件变更后应失效", wrapper.entityFileValid())
         // 无实体文件（文本兜底）恒有效
         val noFile = cn.song.mybatisplus.visualizer.psi.LocatedWrapper(
-            chain = cn.song.mybatisplus.visualizer.model.WrapperChain(
-                wrapperType = cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY,
-                entityClass = "E",
-                calls = emptyList(),
-            ),
+            chain = cn.song.mybatisplus.visualizer.model.WrapperChain(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, "E", emptyList(), null, false, false, false, false, null),
             table = null,
         )
         assertTrue("无实体类（文本兜底）恒有效", noFile.entityFileValid())

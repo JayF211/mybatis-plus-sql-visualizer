@@ -19,24 +19,16 @@ import org.junit.Test
  */
 class TenantLineEnhancerTest {
 
-    private val table = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val table = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("name", "name"),
             ColumnInfo("tenantId", "tenant_id"),
-        ),
-    )
+        ))
 
-    private val tableWithoutTenant = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val tableWithoutTenant = TableInfo("OrderEntity", "order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("amount", "amount"),
-        ),
-    )
+        ))
 
     // ------------------------------------------------------------------
     // UPDATE: append tenant_id SET
@@ -44,10 +36,7 @@ class TenantLineEnhancerTest {
 
     @Test
     fun `enhanceUpdateSet appends tenant column to SET when absent`() {
-        val statement = UpdateStatement(
-            table = tableWithoutTenant,
-            sets = listOf(SetClause(ColumnRef(columnName = "amount"), SqlValue.Placeholder("amount"))),
-        )
+        val statement = UpdateStatement(tableWithoutTenant, listOf(SetClause(ColumnRef("amount"), SqlValue.Placeholder("amount"))), emptyList(), null, null, emptyList())
         val result = TenantLineEnhancer.enhanceUpdateSet(statement, "tenant_id", "1")
         assertEquals(2, result.sets.size)
         val tenantSet = result.sets.last()
@@ -57,13 +46,10 @@ class TenantLineEnhancerTest {
 
     @Test
     fun `enhanceUpdateSet skips when SET already references tenant column`() {
-        val statement = UpdateStatement(
-            table = table,
-            sets = listOf(
-                SetClause(ColumnRef(columnName = "name"), SqlValue.Placeholder("name")),
-                SetClause(ColumnRef(columnName = "tenant_id"), SqlValue.Placeholder("tenantId")),
-            ),
-        )
+        val statement = UpdateStatement(table, listOf(
+                SetClause(ColumnRef("name"), SqlValue.Placeholder("name")),
+                SetClause(ColumnRef("tenant_id"), SqlValue.Placeholder("tenantId")),
+            ), emptyList(), null, null, emptyList())
         val result = TenantLineEnhancer.enhanceUpdateSet(statement, "tenant_id", "1")
         // No additional SET clause appended
         assertEquals(2, result.sets.size)
@@ -71,7 +57,7 @@ class TenantLineEnhancerTest {
 
     @Test
     fun `enhanceUpdateSet handles empty SET list`() {
-        val statement = UpdateStatement(table = table, sets = emptyList())
+        val statement = UpdateStatement(table, emptyList(), emptyList(), null, null, emptyList())
         val result = TenantLineEnhancer.enhanceUpdateSet(statement, "tenant_id", "1")
         assertEquals(1, result.sets.size)
         assertEquals("tenant_id", result.sets.first().column?.columnName)
@@ -79,10 +65,7 @@ class TenantLineEnhancerTest {
 
     @Test
     fun `enhanceUpdateSet uses configured default value`() {
-        val statement = UpdateStatement(
-            table = tableWithoutTenant,
-            sets = listOf(SetClause(ColumnRef(columnName = "amount"), SqlValue.Placeholder("amount"))),
-        )
+        val statement = UpdateStatement(tableWithoutTenant, listOf(SetClause(ColumnRef("amount"), SqlValue.Placeholder("amount"))), emptyList(), null, null, emptyList())
         val result = TenantLineEnhancer.enhanceUpdateSet(statement, "org_id", "42")
         val tenantSet = result.sets.last()
         assertEquals("org_id", tenantSet.column?.columnName)
@@ -91,11 +74,7 @@ class TenantLineEnhancerTest {
 
     @Test
     fun `enhanceUpdateSet preserves tableAlias on SET column`() {
-        val statement = UpdateStatement(
-            table = tableWithoutTenant,
-            tableAlias = "t",
-            sets = listOf(SetClause(ColumnRef(tableAlias = "t", columnName = "amount"), SqlValue.Placeholder("amount"))),
-        )
+        val statement = UpdateStatement(tableWithoutTenant, listOf(SetClause(ColumnRef("t", "amount"), SqlValue.Placeholder("amount"))), emptyList(), null, "t", emptyList())
         val result = TenantLineEnhancer.enhanceUpdateSet(statement, "tenant_id", "1")
         val tenantSet = result.sets.last()
         assertEquals("t", tenantSet.column?.tableAlias)
@@ -143,21 +122,21 @@ class TenantLineEnhancerTest {
     @Test
     fun `setsReferenceColumn detects tenant in SET`() {
         val sets = listOf(
-            SetClause(ColumnRef(columnName = "name"), SqlValue.Placeholder("name")),
-            SetClause(ColumnRef(columnName = "tenant_id"), SqlValue.Placeholder("tenantId")),
+            SetClause(ColumnRef("name"), SqlValue.Placeholder("name")),
+            SetClause(ColumnRef("tenant_id"), SqlValue.Placeholder("tenantId")),
         )
         assertTrue(TenantLineEnhancer.setsReferenceColumn(sets, "tenant_id"))
     }
 
     @Test
     fun `setsReferenceColumn returns false when absent`() {
-        val sets = listOf(SetClause(ColumnRef(columnName = "name"), SqlValue.Placeholder("name")))
+        val sets = listOf(SetClause(ColumnRef("name"), SqlValue.Placeholder("name")))
         assertFalse(TenantLineEnhancer.setsReferenceColumn(sets, "tenant_id"))
     }
 
     @Test
     fun `setsReferenceColumn returns false for raw SET`() {
-        val sets = listOf(SetClause(rawSql = "name = CONCAT(name, '_suffix')"))
+        val sets = listOf(SetClause("name = CONCAT(name, '_suffix')"))
         assertFalse(TenantLineEnhancer.setsReferenceColumn(sets, "tenant_id"))
     }
 

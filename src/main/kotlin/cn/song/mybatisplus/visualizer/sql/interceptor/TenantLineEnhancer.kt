@@ -39,10 +39,12 @@ object TenantLineEnhancer {
         if (setsReferenceColumn(statement.sets, tenantColumn)) return statement
         val alias = statement.tableAlias
         return statement.copy(
-            sets = statement.sets + SetClause(
-                column = ColumnRef(tableAlias = alias, columnName = tenantColumn),
-                value = SqlValue.Literal(tenantDefault),
-            ),
+            statement.table,
+            statement.sets + SetClause(ColumnRef(alias, tenantColumn, null, null, null, null, null), SqlValue.Literal(tenantDefault), null),
+            statement.conditions,
+            statement.rawTail,
+            statement.tableAlias,
+            statement.joins,
         )
     }
 
@@ -63,12 +65,7 @@ object TenantLineEnhancer {
         tenantDefault: String,
     ): BatchColumn? {
         if (columnsReferenceColumn(existingColumns, tenantColumn)) return null
-        return BatchColumn(
-            columnName = tenantColumn,
-            source = "entity.$tenantColumn",
-            quote = null,  // tenant_id 类型未知，面板走数字启发式
-            checked = true,
-        )
+        return BatchColumn(tenantColumn, "entity.$tenantColumn", null, true)
     }
 
     /**

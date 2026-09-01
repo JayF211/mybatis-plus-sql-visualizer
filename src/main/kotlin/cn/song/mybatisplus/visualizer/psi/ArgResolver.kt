@@ -131,8 +131,8 @@ object ArgResolver {
      * getter 名 → 属性名 → 查实体字段映射；无实体信息时按命名策略兜底推断。
      */
     private fun resolveLambdaColumn(methodRef: PsiMethodReferenceExpression, table: TableInfo?): ColumnRef {
-        val methodName = methodRef.referenceName ?: return ColumnRef(columnName = methodRef.text)
-        val propertyName = getterToProperty(methodName) ?: return ColumnRef(columnName = methodName)
+        val methodName = methodRef.referenceName ?: return ColumnRef(null, methodRef.text, null, null, null, null, null)
+        val propertyName = getterToProperty(methodName) ?: return ColumnRef(null, methodName, null, null, null, null, null)
 
         // 优先从实体字段映射取列名
         val mapped = table?.columnByField(propertyName)?.columnName
@@ -141,7 +141,7 @@ object ArgResolver {
         // 提取方法引用接收者实体类名（用于 selectAs 图表列归属推断）
         val entityClass = (methodRef.qualifiedName?.substringBefore("::") ?: methodRef.firstChild?.text)
 
-        return ColumnRef(columnName = columnName, entityClass = entityClass)
+        return ColumnRef(null, columnName, null, null, null, entityClass, null)
     }
 
     /**
@@ -416,7 +416,7 @@ object ArgResolver {
             val key = (keyExpr as? PsiLiteralExpression)?.value as? String ?: return@mapNotNull null
             val value = if (resolveVariables) ExpressionEvaluator.evaluate(valueExpr)
             else SqlValue.Placeholder(valueExpr.text)
-            ColumnRef(columnName = key) to value
+            ColumnRef(null, key, null, null, null, null, null) to value
         }
         return WrapperArg.MapArg(entries, null2IsNull)
     }
@@ -441,9 +441,9 @@ object ArgResolver {
         val hasNegation = PsiTreeUtil.collectElementsOfType(body, PsiPrefixExpression::class.java)
             .any { it.operationSign.text == "!" }
         return if (hasNegation) {
-            WrapperArg.PredicateArg(include = emptyList(), exclude = names)
+            WrapperArg.PredicateArg(emptyList(), names)
         } else {
-            WrapperArg.PredicateArg(include = names, exclude = emptyList())
+            WrapperArg.PredicateArg(names, emptyList())
         }
     }
 

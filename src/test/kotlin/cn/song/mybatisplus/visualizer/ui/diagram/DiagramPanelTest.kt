@@ -14,40 +14,23 @@ import org.junit.Test
 
 class DiagramPanelTest {
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("name", "name"),
-        ),
-    )
+        ))
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("userId", "user_id"),
-        ),
-    )
+        ))
 
     private val joinDiagramModel: DiagramModel
         get() {
-            val stmt = SelectStatement(
-                table = userTable, tableAlias = "u",
-                joins = listOf(
-                    JoinClause(
-                        type = JoinType.LEFT, tableName = "order", alias = "o",
-                        onConditions = listOf(
-                            Condition.ColumnComparison(
-                                left = ColumnRef(tableAlias = "u", columnName = "id"),
-                                right = ColumnRef(tableAlias = "o", columnName = "user_id"),
-                            ),
-                        ),
-                    ),
-                ),
-            )
+            val stmt = SelectStatement(userTable, emptyList(), "u", listOf(
+                    JoinClause(JoinType.LEFT, "order", "o", listOf(
+                            Condition.ColumnComparison(ColumnRef("u", "id"), ColumnRef("o", "user_id"), null),
+                        )),
+                ), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
             return cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator.buildDiagramModel(stmt)
         }
 

@@ -46,11 +46,8 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
     // 表结构 fixture（对齐 demo 项目 @Table / @Column 映射）
     // ------------------------------------------------------------------
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("email", "email"),
             ColumnInfo("firstName", "first_name"),
@@ -59,20 +56,15 @@ class JpaDemoIntegrationTest : BasePlatformTestCase() {
             ColumnInfo("status", "status"),
             ColumnInfo("departmentId", "department_id"),
             ColumnInfo("createTime", "create_time"),
-        ),
-    )
+        ))
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "t_order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "t_order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("orderNo", "order_no"),
             ColumnInfo("customerId", "customer_id"),
             ColumnInfo("totalAmount", "total_amount"),
             ColumnInfo("createTime", "create_time"),
-        ),
-    )
+        ))
 
     // ------------------------------------------------------------------
     // 辅助方法

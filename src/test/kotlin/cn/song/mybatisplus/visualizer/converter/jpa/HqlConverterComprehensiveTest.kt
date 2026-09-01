@@ -27,11 +27,8 @@ class HqlConverterComprehensiveTest {
 
     @Before
     fun setup() {
-        userTable = TableInfo(
-            entityClassName = "UserEntity",
-            tableName = "user",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+        userTable = TableInfo("UserEntity", "user", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("username", "username"),
                 ColumnInfo("email", "email"),
                 ColumnInfo("firstName", "first_name"),
@@ -40,29 +37,20 @@ class HqlConverterComprehensiveTest {
                 ColumnInfo("status", "status"),
                 ColumnInfo("departmentId", "department_id"),
                 ColumnInfo("createTime", "create_time"),
-            ),
-        )
-        orderTable = TableInfo(
-            entityClassName = "OrderEntity",
-            tableName = "t_order",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+            ))
+        orderTable = TableInfo("OrderEntity", "t_order", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("orderNo", "order_no"),
                 ColumnInfo("customerId", "customer_id"),
                 ColumnInfo("totalAmount", "total_amount"),
                 ColumnInfo("createTime", "create_time"),
-            ),
-        )
-        departmentTable = TableInfo(
-            entityClassName = "DepartmentEntity",
-            tableName = "department",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+            ))
+        departmentTable = TableInfo("DepartmentEntity", "department", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("name", "name"),
                 ColumnInfo("code", "code"),
                 ColumnInfo("parentId", "parent_id"),
-            ),
-        )
+            ))
     }
 
     // ------------------------------------------------------------------

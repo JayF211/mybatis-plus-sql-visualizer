@@ -17,42 +17,25 @@ import java.awt.image.BufferedImage
 
 class DiagramRendererTest {
 
-    private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val userTable = TableInfo("UserEntity", "user", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("name", "name"),
             ColumnInfo("email", "email"),
-        ),
-    )
+        ))
 
-    private val orderTable = TableInfo(
-        entityClassName = "OrderEntity",
-        tableName = "order",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+    private val orderTable = TableInfo("OrderEntity", "order", listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("userId", "user_id"),
             ColumnInfo("amount", "amount"),
-        ),
-    )
+        ))
 
     private val joinModel: DiagramModel
         get() {
-            val stmt = SelectStatement(
-                table = userTable, tableAlias = "u",
-                joins = listOf(
-                    JoinClause(
-                        type = JoinType.LEFT, tableName = "order", alias = "o",
-                        onConditions = listOf(
-                            Condition.ColumnComparison(
-                                left = ColumnRef(tableAlias = "u", columnName = "id"),
-                                right = ColumnRef(tableAlias = "o", columnName = "user_id"),
-                            ),
-                        ),
-                    ),
-                ),
-            )
+            val stmt = SelectStatement(userTable, emptyList(), "u", listOf(
+                    JoinClause(JoinType.LEFT, "order", "o", listOf(
+                            Condition.ColumnComparison(ColumnRef("u", "id"), ColumnRef("o", "user_id"), null),
+                        )),
+                ), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
             return JoinDiagramGenerator.buildDiagramModel(stmt)
         }
 
@@ -90,20 +73,11 @@ class DiagramRendererTest {
     @Test
     fun `render different join types produce valid images`() {
         for (joinType in JoinType.entries) {
-            val stmt = SelectStatement(
-                table = userTable, tableAlias = "u",
-                joins = listOf(
-                    JoinClause(
-                        type = joinType, tableName = "order", alias = "o",
-                        onConditions = listOf(
-                            Condition.ColumnComparison(
-                                left = ColumnRef(tableAlias = "u", columnName = "id"),
-                                right = ColumnRef(tableAlias = "o", columnName = "user_id"),
-                            ),
-                        ),
-                    ),
-                ),
-            )
+            val stmt = SelectStatement(userTable, emptyList(), "u", listOf(
+                    JoinClause(joinType, "order", "o", listOf(
+                            Condition.ColumnComparison(ColumnRef("u", "id"), ColumnRef("o", "user_id"), null),
+                        ), null, null, null, null),
+                ), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
             val model = JoinDiagramGenerator.buildDiagramModel(stmt)
             assertEquals(joinType, model.relationships[0].joinType)
             val image = DiagramRenderer.render(model)
@@ -124,23 +98,14 @@ class DiagramRendererTest {
 
     @Test
     fun `render to svg escapes special xml characters`() {
-        val specialTable = TableInfo(
-            entityClassName = "SpecialEntity", tableName = "special",
-            columns = listOf(
-                ColumnInfo("id", "id", isId = true),
+        val specialTable = TableInfo("SpecialEntity", "special", listOf(
+                ColumnInfo("id", "id", true),
                 ColumnInfo("name", "name<tag>"),
                 ColumnInfo("desc", "a&b\"c"),
-            ),
-        )
-        val stmt = SelectStatement(
-            table = specialTable, tableAlias = "s",
-            joins = listOf(
-                JoinClause(
-                    type = JoinType.INNER, tableName = "other<tab>", alias = "o",
-                    onConditions = listOf(Condition.Raw("s.id = o.id AND x < 5")),
-                ),
-            ),
-        )
+            ))
+        val stmt = SelectStatement(specialTable, emptyList(), "s", listOf(
+                JoinClause(JoinType.INNER, "other<tab>", "o", listOf(Condition.Raw("s.id = o.id AND x < 5"))),
+            ), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val svg = DiagramRenderer.renderToSvg(model)
         assertTrue(svg.contains("&lt;"))
@@ -153,22 +118,13 @@ class DiagramRendererTest {
 
     @Test
     fun `render long column list truncates to PK only`() {
-        val manyColumns = (1..60).map { i -> ColumnInfo("field$i", "col_$i", isId = i == 1) }
-        val bigTable = TableInfo(entityClassName = "BigEntity", tableName = "big_table", columns = manyColumns)
-        val stmt = SelectStatement(
-            table = bigTable, tableAlias = "t",
-            joins = listOf(
-                JoinClause(
-                    type = JoinType.INNER, tableName = "order", alias = "o",
-                    onConditions = listOf(
-                        Condition.ColumnComparison(
-                            left = ColumnRef(tableAlias = "t", columnName = "col_1"),
-                            right = ColumnRef(tableAlias = "o", columnName = "id"),
-                        ),
-                    ),
-                ),
-            ),
-        )
+        val manyColumns = (1..60).map { i -> ColumnInfo("field$i", "col_$i", i == 1) }
+        val bigTable = TableInfo("BigEntity", "big_table", manyColumns)
+        val stmt = SelectStatement(bigTable, emptyList(), "t", listOf(
+                JoinClause(JoinType.INNER, "order", "o", listOf(
+                        Condition.ColumnComparison(ColumnRef("t", "col_1"), ColumnRef("o", "id"), null),
+                    )),
+            ), false, emptyList(), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(1, model.entities[0].columns.size)
         val image = DiagramRenderer.render(model)
