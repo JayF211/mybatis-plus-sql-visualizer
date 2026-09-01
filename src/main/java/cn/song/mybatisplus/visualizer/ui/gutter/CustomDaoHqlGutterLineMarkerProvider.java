@@ -99,8 +99,8 @@ public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider 
                     ? (PsiMethodCallExpression) parent.getParent() : null;
             if (call == null) return;
             SqlPreviewService service = project.getService(SqlPreviewService.class);
-            SqlPreviewService.Companion.previewAsync(project, () -> service.previewCustomDaoHql(call),
-                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            SqlPreviewService.previewAsync(project, () -> service.previewCustomDaoHql(call),
+                    result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

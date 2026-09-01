@@ -1,0 +1,119 @@
+package cn.song.mybatisplus.visualizer.xml;
+
+import org.junit.Assert.assertEquals;
+import org.junit.Assert.assertThrows;
+import org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * 注解 SQL 解析器测试（T-M25-02）：script/纯文本分派、动态标签渲染、参数名 mock 注入、
+ * kind 映射、非良构 script 报错——对齐 MyBatis MapperAnnotationBuilder 构建规则。
+ */
+public class AnnotationSqlParserTest {
+
+    private final AnnotationSqlParser parser = new AnnotationSqlParser();
+
+    private static String compact(String sql) {
+        return sql.replaceAll("\\s+", " ").trim();
+    }
+
+    @Test
+    public void 非script纯文本_参数占位与映射() {
+        XmlPreviewModel model = parser.parse("SELECT * FROM t WHERE id = #{id}", XmlStatementKind.SELECT, List.of());
+        RenderedXmlSql rendered = model.renderSql();
+        assertEquals("SELECT * FROM t WHERE id = ?", compact(rendered.sql()));
+        List<String> props = new ArrayList<>();
+        for (ParameterMapping m : rendered.mappings()) props.add(m.property());
+        assertEquals(List.of("id"), props);
+        assertTrue(model.getConditionViews().isEmpty());
+    }
+
+    @Test
+    public void 非script纯文本_尖括号无需转义() {
+        XmlPreviewModel model = parser.parse("SELECT * FROM t WHERE age < 18 AND id = #{id}", XmlStatementKind.SELECT, List.of());
+        assertEquals("SELECT * FROM t WHERE age < 18 AND id = ?", compact(model.renderSql().sql()));
+    }
+
+    @Test
+    public void 非script纯文本_dollar根变量占位求值() {
+        // 根变量统一占位 "1"（对齐 ContextMap → _parameter fallback）
+        XmlPreviewModel model = parser.parse("SELECT ${cols} FROM t", XmlStatementKind.SELECT, List.of());
+        assertEquals("SELECT 1 FROM t", compact(model.renderSql().sql()));
+    }
+
+    @Test
+    public void 非script纯文本_dollar属性链求值为空时提示() {
+        XmlPreviewModel model = parser.parse("SELECT ${x.y} FROM t", XmlStatementKind.SELECT, List.of());
+        RenderedXmlSql rendered = model.renderSql();
+        assertEquals("SELECT FROM t", compact(rendered.sql()));
+        boolean anyEmpty = rendered.errors().stream().anyMatch(e -> e.contains("求值为空"));
+        assertTrue(anyEmpty);
+    }
+
+    @Test
+    public void script_动态标签全兼容() {
+        XmlPreviewModel model = parser.parse(
+                "<script>SELECT * FROM t" +
+                        "<where><if test=\"a != null\">AND a = #{a}</if></where>" +
+                        "<if test=\"ids != null\">AND id IN <foreach collection=\"ids\" item=\"id\" open=\"(\" separator=\",\" close=\")\">#{id}</foreach></if>" +
+                        "</script>",
+                XmlStatementKind.SELECT,
+                List.of()
+        );
+        RenderedXmlSql rendered = model.renderSql();
+        assertEquals(
+                "SELECT * FROM t WHERE a = ? AND id IN ( ? , ? )",
+                compact(rendered.sql())
+        );
+        assertEquals(2, model.getConditionViews().size());
+        List<String> colls = new ArrayList<>();
+        for (XmlForEachView v : model.getForEachViews()) colls.add(v.collectionExpr());
+        assertEquals(List.of("ids"), colls);
+    }
+
+    @Test
+    public void script_条件开关关闭分支() {
+        XmlPreviewModel model = parser.parse(
+                "<script>SELECT * FROM t<if test=\"a != null\"> WHERE a = 1</if></script>",
+                XmlStatementKind.SELECT,
+                List.of()
+        );
+        XmlPreviewState state = new XmlPreviewState(Set.of(), Map.of(), Set.of(), Map.of());
+        assertEquals("SELECT * FROM t", compact(model.renderSql(state).sql()));
+    }
+
+    @Test
+    public void 参数名mock注入_param1可求值() {
+        // MyBatis 多参数 Map 键：@Param 名/实际名 + param1..N
+        XmlPreviewModel model = parser.parse(
+                "SELECT * FROM t WHERE a = ${param1} AND b = ${id}",
+                XmlStatementKind.SELECT,
+                List.of("id", "param1")
+        );
+        assertEquals("SELECT * FROM t WHERE a = 1 AND b = 1", compact(model.renderSql().sql()));
+    }
+
+    @Test
+    public void kind透传() {
+        XmlPreviewModel model = parser.parse("UPDATE t SET a = 1", XmlStatementKind.UPDATE, List.of());
+        assertEquals(XmlStatementKind.UPDATE, model.getKind());
+    }
+
+    @Test
+    public void script非良构报错() {
+        assertThrows(XmlParseException.class, () ->
+                parser.parse("<script><if test=\"a\">x</script>", XmlStatementKind.SELECT, List.of()));
+    }
+
+    @Test
+    public void script内include报未知元素_与MyBatis一致() {
+        assertThrows(XmlScriptException.class, () ->
+                parser.parse("<script>SELECT * FROM t <include refid=\"cols\"/></script>", XmlStatementKind.SELECT, List.of()));
+    }
+}

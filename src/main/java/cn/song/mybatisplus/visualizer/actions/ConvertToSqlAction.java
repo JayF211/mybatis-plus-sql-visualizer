@@ -105,7 +105,7 @@ public final class ConvertToSqlAction extends AnAction {
                         List<PsiMethodCallExpression> heads =
                                 WrapperLocator.INSTANCE.sqlCandidatesInRange(file, selStart, selEnd);
                         List<String> texts = heads.stream().map(head ->
-                                SqlSelectionDialog.Companion.displayText(
+                                SqlSelectionDialog.displayText(
                                         WrapperLocator.INSTANCE.sqlCandidateSummary(head),
                                         WrapperLocator.INSTANCE.sqlCandidateLineText(head))
                         ).collect(Collectors.toList());
@@ -127,7 +127,6 @@ public final class ConvertToSqlAction extends AnAction {
                             // 选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
                             locateEditorTo(editor, head);
                             preview(service, head, project, sourceLocation);
-                            return Unit.INSTANCE;
                         }).show();
                     }
                 });
@@ -143,18 +142,18 @@ public final class ConvertToSqlAction extends AnAction {
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览
         PsiAnnotation annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation.class, false);
         if (annotation != null && AnnotationSqlPreviewService.INSTANCE.isSqlAnnotation(annotation)) {
-            SqlPreviewService.Companion.previewAsync(project,
+            SqlPreviewService.previewAsync(project,
                     () -> AnnotationSqlPreviewService.INSTANCE.preview(annotation, project),
-                    (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
             return;
         }
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
-        SqlPreviewService.Companion.previewAsync(project,
+        SqlPreviewService.previewAsync(project,
                 () -> service.preview(element),
                 (PreviewResult result) -> {
                     if (result != null) {
-                        SqlPreviewService.Companion.showResult(project, result, sourceLocation);
+                        SqlPreviewService.showResult(project, result, sourceLocation);
                     } else if (!tryJpaFallback(service, project, element, sourceLocation)) {
                         // JPA 均未命中 → 回落文件级 SQL 注解候选
                         showAnnotationCandidates(project, file, editor, sourceLocation);
@@ -183,23 +182,23 @@ public final class ConvertToSqlAction extends AnAction {
         PsiMethod method = PsiTreeUtil.getParentOfType(element, PsiMethod.class, false);
         // 1. JPA 回落：@Query
         if (method != null && JpqlQueryLocator.INSTANCE.hasQueryAnnotation(method)) {
-            SqlPreviewService.Companion.previewAsync(project,
+            SqlPreviewService.previewAsync(project,
                     () -> service.previewJpql(method),
-                    (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
             return true;
         }
         // 2. JPA 回落：派生查询
         if (method != null && DerivedMethodLocator.INSTANCE.isDerivedQuery(method)) {
-            SqlPreviewService.Companion.previewAsync(project,
+            SqlPreviewService.previewAsync(project,
                     () -> service.previewDerivedQuery(method),
-                    (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
             return true;
         }
         // 3. JPA 回落：CriteriaQuery
         if (CriteriaQueryLocator.INSTANCE.locate(element) != null) {
-            SqlPreviewService.Companion.previewAsync(project,
+            SqlPreviewService.previewAsync(project,
                     () -> service.previewCriteriaQuery(element),
-                    (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
             return true;
         }
         return false;
@@ -216,7 +215,7 @@ public final class ConvertToSqlAction extends AnAction {
                         PsiMethod m = PsiTreeUtil.getParentOfType(anno, PsiMethod.class);
                         String qn = anno.getQualifiedName();
                         String shortName = qn != null ? qn.substring(qn.lastIndexOf('.') + 1) : "";
-                        return SqlSelectionDialog.Companion.displayText(
+                        return SqlSelectionDialog.displayText(
                                 (m != null ? m.getName() : "?") + "（" + shortName + "）",
                                 AnnotationSqlPreviewService.INSTANCE.sqlSnippet(anno, 80));
                     }).collect(Collectors.toList());
@@ -229,14 +228,13 @@ public final class ConvertToSqlAction extends AnAction {
             List<String> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (annotations.isEmpty()) {
-                    SqlPreviewService.Companion.showResult(project, null, sourceLocation);
+                    SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (annotations.size() == 1) {
                     previewAnnotation(project, annotations.get(0), sourceLocation);
                 } else {
                     new SqlSelectionDialog<>(project, annotations, displayTexts, (PsiAnnotation selected) -> {
                         locateEditorTo(editor, selected);
                         previewAnnotation(project, selected, sourceLocation);
-                        return Unit.INSTANCE;
                     }).show();
                 }
             });
@@ -256,7 +254,7 @@ public final class ConvertToSqlAction extends AnAction {
                         PsiMethod m = PsiTreeUtil.getParentOfType(anno, PsiMethod.class);
                         String qn = anno.getQualifiedName();
                         String shortName = qn != null ? qn.substring(qn.lastIndexOf('.') + 1) : "";
-                        return SqlSelectionDialog.Companion.displayText(
+                        return SqlSelectionDialog.displayText(
                                 (m != null ? m.getName() : "?") + "（" + shortName + "）",
                                 AnnotationSqlPreviewService.INSTANCE.sqlSnippet(anno, 80));
                     }).collect(Collectors.toList());
@@ -269,14 +267,13 @@ public final class ConvertToSqlAction extends AnAction {
             List<String> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (annotations.isEmpty()) {
-                    SqlPreviewService.Companion.showResult(project, null, sourceLocation);
+                    SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (annotations.size() == 1) {
                     previewAnnotation(project, annotations.get(0), sourceLocation);
                 } else {
                     new SqlSelectionDialog<>(project, annotations, displayTexts, (PsiAnnotation selected) -> {
                         locateEditorTo(editor, selected);
                         previewAnnotation(project, selected, sourceLocation);
-                        return Unit.INSTANCE;
                     }).show();
                 }
             });
@@ -285,9 +282,9 @@ public final class ConvertToSqlAction extends AnAction {
 
     /** 预览单个 SQL 注解（后台转换，EDT 渲染）。 */
     private void previewAnnotation(Project project, PsiAnnotation annotation, String sourceLocation) {
-        SqlPreviewService.Companion.previewAsync(project,
+        SqlPreviewService.previewAsync(project,
                 () -> AnnotationSqlPreviewService.INSTANCE.preview(annotation, project),
-                (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+                (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
     }
 
     /** T-M29.6：XML 选择区语句候选。 */
@@ -301,7 +298,7 @@ public final class ConvertToSqlAction extends AnAction {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.Companion.displayText(
+                        return SqlSelectionDialog.displayText(
                                 t.getName() + " " + (id != null ? id : "") + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList());
                     return Pair.create(tags, texts);
@@ -313,14 +310,13 @@ public final class ConvertToSqlAction extends AnAction {
             List<String> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (tags.isEmpty()) {
-                    SqlPreviewService.Companion.showResult(project, null, sourceLocation);
+                    SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (tags.size() == 1) {
                     previewXml(project, file, tags.get(0), sourceLocation);
                 } else {
                     new SqlSelectionDialog<>(project, tags, displayTexts, (XmlTag selected) -> {
                         locateEditorTo(editor, selected);
                         previewXml(project, file, selected, sourceLocation);
-                        return Unit.INSTANCE;
                     }).show();
                 }
             });
@@ -344,7 +340,7 @@ public final class ConvertToSqlAction extends AnAction {
                 .filter(it -> XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(it.getName()))
                 .collect(Collectors.toList());
         if (statements.isEmpty()) {
-            SqlPreviewService.Companion.showResult(project, null, sourceLocation);
+            SqlPreviewService.showResult(project, null, sourceLocation);
         } else if (statements.size() == 1) {
             previewXml(project, file, statements.get(0), sourceLocation);
         } else {
@@ -355,7 +351,7 @@ public final class ConvertToSqlAction extends AnAction {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.Companion.displayText(
+                        return SqlSelectionDialog.displayText(
                                 t.getName() + " " + (id != null ? id : "") + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList()));
                 } catch (Throwable t) {
@@ -363,13 +359,12 @@ public final class ConvertToSqlAction extends AnAction {
                 }
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (displayTextsHolder[0].size() != statements.size()) {
-                        SqlPreviewService.Companion.showResult(project, null, sourceLocation);
+                        SqlPreviewService.showResult(project, null, sourceLocation);
                         return;
                     }
                     new SqlSelectionDialog<>(project, statements, displayTextsHolder[0], (XmlTag selected) -> {
                         locateEditorTo(editor, selected);
                         previewXml(project, file, selected, sourceLocation);
-                        return Unit.INSTANCE;
                     }).show();
                 });
             });
@@ -378,17 +373,17 @@ public final class ConvertToSqlAction extends AnAction {
 
     /** 预览单个 XML 语句（注入实体上下文）。 */
     private void previewXml(Project project, XmlFile file, XmlTag tag, String sourceLocation) {
-        SqlPreviewService.Companion.previewAsync(project, () -> {
+        SqlPreviewService.previewAsync(project, () -> {
             SourceSqlContext src = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag);
             SqlCompletionContext entity = null;
             if (src.getMain() != null) {
                 SqlCompletionContext m = src.getMain();
                 entity = new SqlCompletionContext(
-                        m.getTableName(), m.getColumns(), m.getTableAlias(),
-                        m.getColumnComments(), m.getTableComment(), src.getCandidates());
+                        m.tableName, m.columns, m.tableAlias,
+                        m.columnComments, m.tableComment, src.getCandidates());
             }
             return XmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project, entity);
-        }, (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+        }, (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
     }
 
     /** F-45：maintainPage 语句预览。 */
@@ -408,7 +403,7 @@ public final class ConvertToSqlAction extends AnAction {
                 .filter(it -> "maintainPage".equals(it.getName()))
                 .collect(Collectors.toList());
         if (statements.isEmpty()) {
-            SqlPreviewService.Companion.showResult(project, null, null);
+            SqlPreviewService.showResult(project, null, null);
         } else if (statements.size() == 1) {
             previewPages(project, file, statements.get(0));
         } else {
@@ -419,7 +414,7 @@ public final class ConvertToSqlAction extends AnAction {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.Companion.displayText(
+                        return SqlSelectionDialog.displayText(
                                 (id != null ? id : "") + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList()));
                 } catch (Throwable t) {
@@ -427,13 +422,12 @@ public final class ConvertToSqlAction extends AnAction {
                 }
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (displayTextsHolder[0].size() != statements.size()) {
-                        SqlPreviewService.Companion.showResult(project, null, null);
+                        SqlPreviewService.showResult(project, null, null);
                         return;
                     }
                     new SqlSelectionDialog<>(project, statements, displayTextsHolder[0], (XmlTag selected) -> {
                         locateEditorTo(editor, selected);
                         previewPages(project, file, selected);
-                        return Unit.INSTANCE;
                     }).show();
                 });
             });
@@ -451,7 +445,7 @@ public final class ConvertToSqlAction extends AnAction {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.Companion.displayText(
+                        return SqlSelectionDialog.displayText(
                                 (id != null ? id : "") + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList());
                     return Pair.create(tags, texts);
@@ -463,14 +457,13 @@ public final class ConvertToSqlAction extends AnAction {
             List<String> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (tags.isEmpty()) {
-                    SqlPreviewService.Companion.showResult(project, null, null);
+                    SqlPreviewService.showResult(project, null, null);
                 } else if (tags.size() == 1) {
                     previewPages(project, file, tags.get(0));
                 } else {
                     new SqlSelectionDialog<>(project, tags, displayTexts, (XmlTag selected) -> {
                         locateEditorTo(editor, selected);
                         previewPages(project, file, selected);
-                        return Unit.INSTANCE;
                     }).show();
                 }
             });
@@ -479,16 +472,16 @@ public final class ConvertToSqlAction extends AnAction {
 
     /** 预览单个 maintainPage。 */
     private void previewPages(Project project, XmlFile file, XmlTag tag) {
-        SqlPreviewService.Companion.previewAsync(project,
+        SqlPreviewService.previewAsync(project,
                 () -> PagesXmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project),
-                (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, null); return Unit.INSTANCE; });
+                (PreviewResult result) -> { SqlPreviewService.showResult(project, result, null); return Unit.INSTANCE; });
     }
 
     /** 预览单个链首调用（后台转换，EDT 渲染）。 */
     private void preview(SqlPreviewService service, PsiElement anchor, Project project, String sourceLocation) {
-        SqlPreviewService.Companion.previewAsync(project,
+        SqlPreviewService.previewAsync(project,
                 () -> service.preview(anchor),
-                (PreviewResult result) -> { SqlPreviewService.Companion.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+                (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
     }
 
     /** T-M23.8：编辑器定位跳转到候选元素所在行。 */

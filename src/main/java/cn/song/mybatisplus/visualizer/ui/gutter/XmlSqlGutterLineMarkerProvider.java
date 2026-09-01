@@ -88,7 +88,7 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
             if (tag == null) return;
             XmlFile file = tag.getContainingFile() instanceof XmlFile ? (XmlFile) tag.getContainingFile() : null;
             if (file == null) return;
-            SqlPreviewService.Companion.previewAsync(project, () -> {
+            SqlPreviewService.previewAsync(project, () -> {
                 // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
                 // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
                 // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
@@ -96,11 +96,11 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
                 SqlCompletionContext entity = null;
                 var main = src.getMain();
                 if (main != null) {
-                    entity = new SqlCompletionContext(main.getTableName(), main.getColumns(), main.getTableAlias(),
-                            main.getColumnComments(), main.getTableComment(), src.getCandidates());
+                entity = new SqlCompletionContext(main.tableName, main.columns, main.tableAlias,
+                        main.columnComments, main.tableComment, src.getCandidates());
                 }
                 return XmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project, entity);
-            }, result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            }, result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

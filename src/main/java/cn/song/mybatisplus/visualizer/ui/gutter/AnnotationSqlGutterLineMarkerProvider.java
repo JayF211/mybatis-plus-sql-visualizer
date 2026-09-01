@@ -75,8 +75,8 @@ public class AnnotationSqlGutterLineMarkerProvider implements LineMarkerProvider
             Project project = elt.getProject();
             PsiAnnotation annotation = PsiTreeUtil.getParentOfType(elt, PsiAnnotation.class, false);
             if (annotation == null) return;
-            SqlPreviewService.Companion.previewAsync(project, () -> AnnotationSqlPreviewService.INSTANCE.preview(annotation, project),
-                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            SqlPreviewService.previewAsync(project, () -> AnnotationSqlPreviewService.INSTANCE.preview(annotation, project),
+                    result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

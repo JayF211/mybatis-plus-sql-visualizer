@@ -145,7 +145,7 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
     /** 主实体 Java 字段名（OGNL 用 fieldName）：candidates 中 tableName == main.tableName 的 TableInfo 的列字段名。 */
     private List<String> mainEntityFieldNames(SourceSqlContext context) {
         SqlCompletionContext main = context.getMain();
-        String mainTableName = main != null ? main.getTableName() : null;
+        String mainTableName = main != null ? main.tableName : null;
         if (mainTableName == null) {
             return List.of();
         }

@@ -42,16 +42,16 @@ object JoinDiagramGenerator {
         // 主表
         entities.add(
             EntityNode(
-                alias = mainAlias,
-                tableName = stmt.table.tableName,
-                columns = pickColumns(stmt.table).map { col ->
+                mainAlias,
+                stmt.table.tableName,
+                pickColumns(stmt.table).map { col ->
                     ColumnEntry(
-                        name = col.columnName,
-                        type = javaTypeToSqlType(col.fieldType),
-                        isPk = col.isId,
+                        col.columnName,
+                        javaTypeToSqlType(col.fieldType),
+                        col.isId,
                     )
                 },
-                isMain = true,
+                true,
             ),
         )
 
@@ -70,20 +70,20 @@ object JoinDiagramGenerator {
 
             entities.add(
                 EntityNode(
-                    alias = uniqueAlias,
-                    tableName = displayTableName,
-                    columns = joinColumns,
-                    isMain = false,
-                    joinType = join.type,
+                    uniqueAlias,
+                    displayTableName,
+                    joinColumns,
+                    false,
+                    join.type,
                 ),
             )
 
             relationships.add(
                 RelationshipLine(
-                    fromAlias = mainAlias,
-                    toAlias = uniqueAlias,
-                    joinType = join.type,
-                    label = buildOnLabel(join, aliasMap),
+                    mainAlias,
+                    uniqueAlias,
+                    join.type,
+                    buildOnLabel(join, aliasMap),
                 ),
             )
         }
@@ -231,7 +231,7 @@ object JoinDiagramGenerator {
             if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
                 seen.add(col.columnName)
                 val sqlType = javaTypeToSqlType(col.type) ?: sqlTypeFromTable(col.columnName)
-                columns.add(ColumnEntry(name = col.columnName, type = sqlType, isPk = false))
+                columns.add(ColumnEntry(col.columnName, sqlType, false))
             }
         }
 
@@ -240,11 +240,11 @@ object JoinDiagramGenerator {
             if (cond is Condition.ColumnComparison) {
                 if (cond.right.tableAlias == joinAlias && !seen.contains(cond.right.columnName)) {
                     seen.add(cond.right.columnName)
-                    columns.add(ColumnEntry(name = cond.right.columnName, type = sqlTypeFromTable(cond.right.columnName), isPk = false))
+                    columns.add(ColumnEntry(cond.right.columnName, sqlTypeFromTable(cond.right.columnName), false))
                 }
                 if (cond.left.tableAlias == joinAlias && !seen.contains(cond.left.columnName)) {
                     seen.add(cond.left.columnName)
-                    columns.add(ColumnEntry(name = cond.left.columnName, type = sqlTypeFromTable(cond.left.columnName), isPk = false))
+                    columns.add(ColumnEntry(cond.left.columnName, sqlTypeFromTable(cond.left.columnName), false))
                 }
             }
         }
@@ -255,7 +255,7 @@ object JoinDiagramGenerator {
                 for (col in fill.selectColumns) {
                     if (!seen.contains(col.columnName)) {
                         seen.add(col.columnName)
-                        columns.add(ColumnEntry(name = col.columnName, type = sqlTypeFromTable(col.columnName), isPk = false))
+                        columns.add(ColumnEntry(col.columnName, sqlTypeFromTable(col.columnName), false))
                     }
                 }
             }

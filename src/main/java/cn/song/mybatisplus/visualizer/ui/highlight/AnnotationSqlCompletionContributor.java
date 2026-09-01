@@ -70,7 +70,7 @@ public class AnnotationSqlCompletionContributor extends CompletionContributor im
                 if (shortName == null) {
                     return;
                 }
-                if (!AnnotationSqlPreviewService.INSTANCE.getLITERAL_ANNOTATIONS().contains(shortName)) {
+                if (!AnnotationSqlPreviewService.LITERAL_ANNOTATIONS.contains(shortName)) {
                     return;
                 }
                 // 守卫 4：字面量是该注解的 value 或 value 数组元素（不放大到非 value 属性）
@@ -135,7 +135,7 @@ public class AnnotationSqlCompletionContributor extends CompletionContributor im
     /** OGNL 补全：test/collection 值内——参数名 + 主表实体字段（`param.` 前缀时仅第二段字段）。 */
     private void addOgnlCompletions(SourceSqlContext context, String beforeCaret, PrefixMatcher prefix, CompletionResultSet result) {
         SqlCompletionContext main = context.getMain();
-        String mainTableName = main != null ? main.getTableName() : null;
+        String mainTableName = main != null ? main.tableName : null;
         List<String> fieldNames = context.getCandidates().stream()
                 .filter(it -> it.getTableName().equals(mainTableName))
                 .findFirst()

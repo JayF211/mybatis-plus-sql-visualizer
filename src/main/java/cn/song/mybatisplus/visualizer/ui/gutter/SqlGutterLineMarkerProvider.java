@@ -88,8 +88,8 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
             lastNavigateTime = now;
 
             Project project = elt.getProject();
-            SqlPreviewService.Companion.previewAsync(project, () -> project.getService(SqlPreviewService.class).preview(elt),
-                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            SqlPreviewService.previewAsync(project, () -> project.getService(SqlPreviewService.class).preview(elt),
+                    result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

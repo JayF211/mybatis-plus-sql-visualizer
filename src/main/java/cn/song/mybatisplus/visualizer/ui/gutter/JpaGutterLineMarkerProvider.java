@@ -83,11 +83,11 @@ public class JpaGutterLineMarkerProvider implements LineMarkerProvider {
             if (method == null) return;
             SqlPreviewService service = project.getService(SqlPreviewService.class);
             if (JpqlQueryLocator.hasQueryAnnotation(method)) {
-                SqlPreviewService.Companion.previewAsync(project, () -> service.previewJpql(method),
-                        result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+                SqlPreviewService.previewAsync(project, () -> service.previewJpql(method),
+                        result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
             } else {
-                SqlPreviewService.Companion.previewAsync(project, () -> service.previewDerivedQuery(method),
-                        result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+                SqlPreviewService.previewAsync(project, () -> service.previewDerivedQuery(method),
+                        result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
             }
         }
     }

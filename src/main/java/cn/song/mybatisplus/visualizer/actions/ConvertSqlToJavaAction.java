@@ -187,7 +187,7 @@ public final class ConvertSqlToJavaAction extends AnAction {
                     ));
                 }
             }
-            new EntitySelectionDialog(project, rows, (Map<String, ? extends PsiClass> selections) -> {
+            new EntitySelectionDialog(project, rows, (Map<String, PsiClass> selections) -> {
                 PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
                 SqlToJavaConverter.EntityCandidate main = mainPsi != null
                         ? SqlToJavaConverter.INSTANCE.candidateOf(mainPsi) : null;
@@ -203,12 +203,12 @@ public final class ConvertSqlToJavaAction extends AnAction {
                 }
                 if (main != null) {
                     showCodeDialog(project, result, main, format, subEntities);
-                    return Unit.INSTANCE;
+                    return;
                 } else {
                     // 主表未指定实体 → 回落字符串列名形态
                     new JavaCodePreviewDialog(project,
                             SqlToJavaConverter.INSTANCE.generateCode(result, null, format, null, Collections.emptyMap())).show();
-                    return Unit.INSTANCE;
+                    return;
                 }
             }).show();
             return;
@@ -221,16 +221,13 @@ public final class ConvertSqlToJavaAction extends AnAction {
         } else {
             // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
             List<String> displayTexts = candidates.stream().map(c ->
-                    SqlSelectionDialog.Companion.displayText(
+                    SqlSelectionDialog.displayText(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
                             c.psiClass().getContainingFile() != null
                                     ? c.psiClass().getContainingFile().getName() : ""
                     )
             ).collect(Collectors.toList());
-            new SqlSelectionDialog<>(project, candidates, displayTexts, (SqlToJavaConverter.EntityCandidate selected) -> {
-                showCodeDialog(project, result, selected, format);
-                return Unit.INSTANCE;
-            }).show();
+            new SqlSelectionDialog<>(project, candidates, displayTexts, (SqlToJavaConverter.EntityCandidate selected) -> showCodeDialog(project, result, selected, format)).show();
         }
     }
 

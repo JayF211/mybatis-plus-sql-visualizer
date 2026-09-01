@@ -93,8 +93,8 @@ public class JpqlGutterLineMarkerProvider implements LineMarkerProvider {
             PsiMethod method = PsiTreeUtil.getParentOfType(elt, PsiMethod.class, false);
             if (method == null) return;
             SqlPreviewService service = project.getService(SqlPreviewService.class);
-            SqlPreviewService.Companion.previewAsync(project, () -> service.previewJpql(method),
-                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            SqlPreviewService.previewAsync(project, () -> service.previewJpql(method),
+                    result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

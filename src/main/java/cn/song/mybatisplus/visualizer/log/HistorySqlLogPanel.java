@@ -324,7 +324,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     private void openPreview(LogSqlEntry entry) {
         String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
-        SqlPreviewService.Companion.showResult(project, new PreviewResult(
+        SqlPreviewService.showResult(project, new PreviewResult(
                 base,                                  // sql
                 entry.restoredSql(),                   // compactSql
                 List.of(),                             // unresolvedParams

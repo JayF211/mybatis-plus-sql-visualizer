@@ -73,8 +73,8 @@ public class CriteriaQueryGutterLineMarkerProvider implements LineMarkerProvider
         public void navigate(MouseEvent e, PsiElement elt) {
             Project project = elt.getProject();
             SqlPreviewService service = project.getService(SqlPreviewService.class);
-            SqlPreviewService.Companion.previewAsync(project, () -> service.previewCriteriaQuery(elt),
-                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+            SqlPreviewService.previewAsync(project, () -> service.previewCriteriaQuery(elt),
+                    result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

@@ -70,8 +70,8 @@ public final class SourceSqlCompleter {
                 // 主表列（带列注释）
                 SqlCompletionContext main = context.getMain();
                 if (main != null) {
-                    for (String col : main.getColumns().stream().distinct().toList()) {
-                        result.add(SourceSqlSuggestionFactory.column(col, main.getColumnComments().get(col)));
+                    for (String col : main.columns.stream().distinct().toList()) {
+                        result.add(SourceSqlSuggestionFactory.column(col, main.columnComments.get(col)));
                     }
                 }
                 // 全部绑定别名的列（`别名.` 前缀；主表别名也在 candidates 中一并覆盖）
@@ -88,9 +88,9 @@ public final class SourceSqlCompleter {
                 Set<String> seen = new LinkedHashSet<>();
                 SqlCompletionContext main = context.getMain();
                 if (main != null) {
-                    String mainName = main.getTableName();
+                    String mainName = main.tableName;
                     if (mainName != null && seen.add(mainName)) {
-                        result.add(SourceSqlSuggestionFactory.table(mainName, main.getTableComment()));
+                        result.add(SourceSqlSuggestionFactory.table(mainName, main.tableComment));
                     }
                 }
                 for (TableInfo table : context.getCandidates()) {

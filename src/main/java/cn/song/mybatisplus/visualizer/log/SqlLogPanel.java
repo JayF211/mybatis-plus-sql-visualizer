@@ -919,14 +919,14 @@ public class SqlLogPanel extends JPanel implements Disposable {
             String warning = entry.restoredSql().contains("?")
                     ? MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
                     : null;
-            SqlPreviewService.Companion.showResult(project, buildPreviewResult(
+            SqlPreviewService.showResult(project, buildPreviewResult(
                     sql, entry.restoredSql(), List.of(), null, null, null, warning), null);
             return;
         }
         // 识别成功：rawSql 回填参数行（param1..N + 日志值预填 + 类型引号提示），全识别无警告
         String base = SqlLogPanelKt.withTerminator(recognized.sql());
         String sql = state.getLogFormatSql() ? SqlFormatter.format(base) : base;
-        SqlPreviewService.Companion.showResult(project, buildPreviewResult(
+        SqlPreviewService.showResult(project, buildPreviewResult(
                 sql,
                 SqlLogPanelKt.withTerminator(recognized.compactSql()),
                 recognized.unresolvedParams(),

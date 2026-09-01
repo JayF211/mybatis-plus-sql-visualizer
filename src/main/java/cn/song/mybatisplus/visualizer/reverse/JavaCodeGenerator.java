@@ -997,7 +997,7 @@ public final class JavaCodeGenerator {
     }
 
     /** Java 字符串转义（引号/反斜杠/控制字符）。 */
-    private static String javaEscape(String value) {
+    public static String javaEscape(String value) {
         StringBuilder sb = new StringBuilder(value.length() + 4);
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);

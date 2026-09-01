@@ -1105,7 +1105,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 ));
             }
         }
-        new EntitySelectionDialog(project, rows, (Map<String, ? extends PsiClass> selections) -> {
+        new EntitySelectionDialog(project, rows, (Map<String, PsiClass> selections) -> {
             PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
             SqlToJavaConverter.EntityCandidate main = mainPsi != null
                     ? SqlToJavaConverter.INSTANCE.candidateOf(mainPsi) : null;
@@ -1121,8 +1121,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 }
             }
             cacheSubEntities = subEntities;
-            render(result, main != null ? Collections.singletonList(main) : Collections.emptyList(), format, subEntities);
-            return Unit.INSTANCE;
+            render(result, main != null ? Collections.singletonList(main) : Collections.<SqlToJavaConverter.EntityCandidate>emptyList(), format, subEntities);
         }).show();
     }
 
@@ -1174,7 +1173,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
             final int nextIndex = i + 1;
             List<String> displayTexts = ReadAction.compute(() -> candidates.stream().map(c ->
-                    SqlSelectionDialog.Companion.displayText(
+                    SqlSelectionDialog.displayText(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
                             c.psiClass().getContainingFile() != null
                                     ? c.psiClass().getContainingFile().getName() : ""
@@ -1183,7 +1182,6 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 JavaCodeGenerator.EntityTarget sub = toSubEntity(selected);
                 if (sub != null) subEntities.put(alias, sub);
                 resolveSubNext(subCandidates, aliases, subEntities, nextIndex, onComplete);
-                return Unit.INSTANCE;
             }).show();
             return;
         }
@@ -1302,7 +1300,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
             // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
             List<String> displayTexts = ReadAction.compute(() -> candidates.stream().map(c ->
-                    SqlSelectionDialog.Companion.displayText(
+                    SqlSelectionDialog.displayText(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
                             c.psiClass().getContainingFile() != null
                                     ? c.psiClass().getContainingFile().getName() : ""
@@ -1312,7 +1310,6 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 status(MpSqlVisualizerBundle.message(
                         "reverse.panel.status.entity",
                         selected.psiClass().getName() != null ? selected.psiClass().getName() : ""), false);
-                return Unit.INSTANCE;
             }).show();
         }
     }

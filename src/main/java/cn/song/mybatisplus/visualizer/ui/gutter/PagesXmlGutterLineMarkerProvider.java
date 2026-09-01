@@ -81,9 +81,9 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
             if (tag == null) return;
             XmlFile file = tag.getContainingFile() instanceof XmlFile ? (XmlFile) tag.getContainingFile() : null;
             if (file == null) return;
-            SqlPreviewService.Companion.previewAsync(project,
+            SqlPreviewService.previewAsync(project,
                     () -> PagesXmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project),
-                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
+                    result -> { SqlPreviewService.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 
