@@ -84,11 +84,13 @@ interface Dialect {
     /**
      * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
      *
-     * 返回 null → 本方言首版不支持（调用方按钮降级提示）：
-     *  - Oracle：需 `EXPLAIN PLAN FOR` + 查询 PLAN_TABLE 两步链，首版不接入；
-     *  - SQL Server：需会话级 `SET SHOWPLAN_XML`，非单语句形态；
-     *  - DM：EXPLAIN 语法未验证（P-立项-05 同款约束——不硬编码猜测）；
-     *  - KingBase：PG 兼容系预期可用，待真机验证后放开。
+     * 返回 null → 本方言不支持（调用方按钮降级提示）。支持矩阵真机实证（DBX 通道 2026-09-02）：
+     *  - MySQL 5.7/8.4、MariaDB：`EXPLAIN FORMAT=JSON`（MySQL 8.4/5.7 实测，MariaDB 同语法族）；
+     *  - PostgreSQL：`EXPLAIN (FORMAT JSON, VERBOSE)`（PG 16 实测）；
+     *  - KingBase：`EXPLAIN (FORMAT JSON)`（KingbaseES V8 实测，PG 兼容完整）；
+     *  - DM：`EXPLAIN <sql>`（DM8 实测，返回 #NSET2 计划文本）；
+     *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
+     *  - Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 SET SHOWPLAN_XML）不接入。
      *
      * @param sql 不含结尾分号的查询语句
      * @return 可直接提交执行的 EXPLAIN 语句，null = 不支持
@@ -316,6 +318,8 @@ object DmDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = DM_RESERVED
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**
@@ -341,6 +345,8 @@ object KingBaseDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderPgStyleUpsert(conflictKey, updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN (FORMAT JSON) $sql"
 }
 
 /**
