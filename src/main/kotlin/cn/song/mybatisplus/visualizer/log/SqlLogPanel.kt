@@ -814,9 +814,8 @@ class SqlLogPanel(
     /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
         if (entry.sourceFile != null) {
-            val basePath = project.basePath ?: return LogJumpTarget.NoSource
-            val fullPath = "$basePath/${entry.sourceFile}"
-            val vf = LocalFileSystem.getInstance().findFileByPath(fullPath)
+            // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+            val vf = cn.song.mybatisplus.visualizer.log.SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
             return if (vf != null) {
                 LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
             } else {

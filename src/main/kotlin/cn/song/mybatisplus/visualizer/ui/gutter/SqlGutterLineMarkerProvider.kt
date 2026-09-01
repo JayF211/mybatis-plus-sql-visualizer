@@ -51,8 +51,13 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
     }.getOrDefault(true)
 
     /**
-     * 点击处理：在 EDT 捕获锚点元素，转换走后台线程 + ReadAction（EDT 禁止 PSI 慢操作），
-     * 结果按显示方式配置（F-16）展示，与 ConvertToSqlAction 完全同链路。
+     * 点击处理：在 EDT 捕获锚点元素，转换走后台线程 + ReadAction（EDT 禁止 PSI 慢操作）。
+     *
+     * M37.1：点击弹两级菜单（原生 BaseListPopupStep 单击即选）——
+     *  1. 预览 SQL（原行为，首项保持一键路径最短）；
+     *  2. 最近执行记录：后台 ReadAction 取锚点相对路径+行号 → [EntrySourceMatcher] 反查
+     *     内存捕获条目 → 二级列表弹窗 → 选中走 [LogEntryPreviewOpener] 打开预览。
+     *     无匹配时提示（需工程内安装 SqlSourceInterceptor 标记才有精确位置）。
      *
      * 防抖（200ms 全局窗口）：连续点击同一 / 不同 gutter 图标时，仅首次触发 PSI resolve + 弹窗，
      * 窗口内后续点击静默丢弃，避免多后台线程并发执行同一解析 / 多弹窗叠加。
@@ -66,6 +71,12 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
         @Volatile
         private var lastNavigateTime = 0L
 
+        /** 一级菜单项。 */
+        private sealed class GutterAction(val labelKey: String) {
+            data object Preview : GutterAction("gutter.popup.preview")
+            data object Recent : GutterAction("gutter.popup.recent")
+        }
+
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
             val now = System.currentTimeMillis()
             // 防抖：200ms 内重复点击丢弃
@@ -73,11 +84,95 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             lastNavigateTime = now
 
             val project: Project = elt.project
+            val actions = listOf<GutterAction>(GutterAction.Preview, GutterAction.Recent)
+            val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<GutterAction>(
+                null,
+                actions,
+            ) {
+                override fun getTextFor(value: GutterAction): String =
+                    MpSqlVisualizerBundle.message(value.labelKey)
+
+                override fun onChosen(
+                    selectedValue: GutterAction?,
+                    finalChoice: Boolean,
+                ): com.intellij.openapi.ui.popup.PopupStep<*> {
+                    when (selectedValue) {
+                        is GutterAction.Recent -> showRecentEntriesPopup(project, elt, e)
+                        else -> previewSource(project, elt)
+                    }
+                    return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+                }
+            }
+            val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(step)
+            if (e != null) popup.show(com.intellij.ui.awt.RelativePoint(e)) else popup.showInFocusCenter()
+        }
+
+        /** 原行为：锚点转 SQL 并弹预览（后台转换，F-16 展示配置）。 */
+        private fun previewSource(project: Project, elt: PsiElement) {
             SqlPreviewService.previewAsync(project, {
                 project.getService(SqlPreviewService::class.java).preview(elt)
             }) { result ->
                 SqlPreviewService.showResult(project, result)
             }
+        }
+
+        /** M37.1：反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction）。 */
+        private fun showRecentEntriesPopup(project: Project, elt: PsiElement, e: MouseEvent?) {
+            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val anchor = runCatching {
+                    com.intellij.openapi.application.ReadAction.compute<Pair<String?, Int>, Throwable> {
+                        val file = elt.containingFile?.virtualFile ?: return@compute null to 0
+                        val rel = relativeToProject(project, file.path)
+                        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file)
+                        val line = if (doc != null) doc.getLineNumber(elt.textRange.startOffset) + 1 else 0
+                        rel to line
+                    }
+                }.getOrNull()
+                val manager = project.getService(cn.song.mybatisplus.visualizer.log.SqlLogManager::class.java)
+                val matched = cn.song.mybatisplus.visualizer.log.EntrySourceMatcher.match(
+                    manager.entries.snapshot(),
+                    anchor?.first,
+                    anchor?.second ?: 0,
+                )
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    if (project.isDisposed) return@invokeLater
+                    if (matched.isEmpty()) {
+                        com.intellij.openapi.ui.Messages.showInfoMessage(
+                            project,
+                            MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
+                            MpSqlVisualizerBundle.message("gutter.popup.recent"),
+                        )
+                        return@invokeLater
+                    }
+                    val entryStep = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<cn.song.mybatisplus.visualizer.log.LogSqlEntry>(
+                        MpSqlVisualizerBundle.message("gutter.popup.recent"),
+                        matched,
+                    ) {
+                        override fun getTextFor(value: cn.song.mybatisplus.visualizer.log.LogSqlEntry): String =
+                            value.summary
+
+                        override fun onChosen(
+                            selectedValue: cn.song.mybatisplus.visualizer.log.LogSqlEntry?,
+                            finalChoice: Boolean,
+                        ): com.intellij.openapi.ui.popup.PopupStep<*> {
+                            selectedValue?.let {
+                                cn.song.mybatisplus.visualizer.log.LogEntryPreviewOpener.open(project, it)
+                            }
+                            return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+                        }
+                    }
+                    val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(entryStep)
+                    if (e != null) popup.show(com.intellij.ui.awt.RelativePoint(e)) else popup.showInFocusCenter()
+                }
+            }
+        }
+
+        /** 绝对路径 → 相对项目根路径（项目外文件返回 null）。 */
+        private fun relativeToProject(project: Project, absolutePath: String): String? {
+            val base = project.basePath ?: return null
+            val normAbs = absolutePath.replace('\\', '/')
+            val normBase = base.replace('\\', '/').trimEnd('/')
+            return if (normAbs.startsWith("$normBase/")) normAbs.removePrefix("$normBase/") else null
         }
     }
 

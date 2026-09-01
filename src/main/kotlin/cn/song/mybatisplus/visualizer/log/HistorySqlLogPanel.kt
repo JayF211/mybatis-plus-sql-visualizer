@@ -297,9 +297,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。 */
     internal fun resolveJumpTarget(entry: LogSqlEntry): HistoryJumpTarget {
         if (entry.sourceFile == null) return HistoryJumpTarget.NoSource
-        val basePath = project.basePath ?: return HistoryJumpTarget.NoSource
-        val fullPath = "$basePath/${entry.sourceFile}"
-        val virtualFile = LocalFileSystem.getInstance().findFileByPath(fullPath)
+        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+        val virtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
         if (virtualFile != null) {
             return HistoryJumpTarget.Navigate(virtualFile, maxOf(0, entry.sourceLine - 1))
         }
