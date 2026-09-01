@@ -57,6 +57,9 @@ object LambdaUpdateConverter : WrapperConverter {
             val args = call.args
             // 布尔条件前缀剥离（U03）：`set(StrUtil.isNotBlank(x), col, val)` / `set(true, col, val)`
             val startIndex = if (args.size >= 3 && isFlagArgument(args[0])) 1 else 0
+            // M38.2（语义对照矩阵实证）：MP 运行时语义 condition=false → 该赋值整体不拼接，
+            // 原实现剥离布尔参后照常渲染（false 被当 true），静态渲染须同步忽略
+            if (isFalseFlag(args, startIndex == 1)) return null
             val column = args.getOrNull(startIndex).asColumn() ?: return null
             val value = args.getOrNull(startIndex + 1).asValue() ?: return null
             SetClause(column = column, value = value)
@@ -96,6 +99,13 @@ object LambdaUpdateConverter : WrapperConverter {
             is SqlValue.Placeholder -> true
             else -> false
         }
+    }
+
+    /** M38.2：布尔前缀是否为 false 字面量（MP 运行时语义——condition=false 整个子句不拼接）。 */
+    private fun isFalseFlag(args: List<WrapperArg>, hasFlag: Boolean): Boolean {
+        if (!hasFlag) return false
+        val flag = args[0].asValue()
+        return flag is SqlValue.Literal && flag.unquoted == "false"
     }
 
     /** setSql 绑定参数渲染：字面量原样（raw），运行时值渲染为 `?`。 */

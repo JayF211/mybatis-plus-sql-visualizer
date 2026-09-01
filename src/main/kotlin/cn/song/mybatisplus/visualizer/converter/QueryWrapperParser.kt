@@ -546,6 +546,12 @@ class QueryWrapperParser(
 
     /** HAVING：P1-06（M19.5）多条件支持——嵌套链**全部条件**组成 AND 组（M1 起仅取第一个）。 */
     private fun parseHaving(call: WrapperCall): Condition? {
+        // M38.2（语义对照矩阵实证）：字符串版 having("count(*) > 3")（MP 官方 API）——
+        // 原实现只认 lambda 嵌套形态，字符串片段被静默丢弃。按原生片段透传渲染。
+        val first = call.args.firstOrNull()
+        if (first is WrapperArg.ValueArg) {
+            (first.value as? SqlValue.Literal)?.unquoted?.takeIf { it.isNotBlank() }?.let { return Condition.Raw(it) }
+        }
         val nested = call.args.firstOrNull() as? WrapperArg.NestedArg ?: return null
         val conditions = parseInternal(nested.chain).conditions
         if (conditions.isEmpty()) return null
@@ -586,11 +592,13 @@ class QueryWrapperParser(
         val first = limitMatch.groupValues[1].toLongOrNull() ?: return null
         val second = limitMatch.groupValues[2].toLongOrNull()
         // "limit 5, 10" → offset=5, count=10；"limit 10" → count=10
-        return if (second != null) {
-            LimitClause(offset = first, count = second)
-        } else {
-            LimitClause(count = first)
-        }
+        if (second != null) return LimitClause(offset = first, count = second)
+        // M38.2（语义对照矩阵实证）：MySQL 另一形态 "limit 5 OFFSET 10"（MP last 常用）——
+        // 原正则不认 OFFSET，OFFSET 被静默丢弃
+        val offsetMatch = Regex("""(?i)offset\s+(\d+)""").find(text)
+        val offset = offsetMatch?.groupValues?.get(1)?.toLongOrNull()
+        return if (offset != null) LimitClause(offset = offset, count = first)
+        else LimitClause(count = first)
     }
 
     // ------------------------------------------------------------------
