@@ -162,7 +162,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
                 notesArea.text = renderNotes(result.manifest)
                 state = State.Available
             }
-            CheckResult.UpToDate -> {
+            is CheckResult.UpToDate -> {
                 pendingManifest = null
                 state = State.UpToDate
             }

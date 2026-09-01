@@ -48,7 +48,7 @@ class StartupUpdateCheck : ProjectActivity {
                 val result = PluginUpdateRunner.check(PluginVersion.current())
                 if (result !is PluginUpdateRunner.CheckResult.Available) return
                 // 忽略守卫：该版本已被用户忽略 → 静默（仅抑制自动通知，手动检查不受影响）
-                if (isVersionIgnored(result.manifest.version, ignoredVersions)) return
+                if (VersionIgnore.isVersionIgnored(result.manifest.version, ignoredVersions)) return
                 ApplicationManager.getApplication().invokeLater {
                     showAvailable(project, result.manifest)
                 }
@@ -75,7 +75,7 @@ class StartupUpdateCheck : ProjectActivity {
             // 忽略此版本：写入配置，仅抑制自动通知，手动检查不受影响
             PluginSettings.getInstance().loadState(
                 PluginSettings.getInstance().state.copy(
-                    ignoredUpdateVersions = ignoreVersion(manifest.version, ignoredVersions)
+                    ignoredUpdateVersions = VersionIgnore.ignoreVersion(manifest.version, ignoredVersions)
                 )
             )
             notification.expire()
@@ -100,7 +100,7 @@ class StartupUpdateCheck : ProjectActivity {
                 val result = PluginUpdateRunner.downloadAndInstall(manifest, indicator)
                 ApplicationManager.getApplication().invokeLater {
                     when (result) {
-                        PluginUpdateRunner.InstallResult.Installed -> showInstalled(project)
+                        is PluginUpdateRunner.InstallResult.Installed -> showInstalled(project)
                         is PluginUpdateRunner.InstallResult.Failed -> showInstallFailed(project, result.message)
                     }
                 }
