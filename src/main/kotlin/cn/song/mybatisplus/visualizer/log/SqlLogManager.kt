@@ -224,6 +224,9 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** 已挂载的 console 集合（bridge 访问）。 */
     val attachedConsoles: MutableMap<Any, Pair<Any, Class<*>>> get() = bridge.attachedConsoles
 
+    /** 桥访问（真实环境测试缝：scanComponent 挂载桩控制台用，对齐 installBridgeForTest 惯例）。 */
+    internal val consoleBridge: SqlLogConsoleBridge get() = bridge
+
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调。 */
     fun onConsoleRemoved() {
         if (!capturing || isWaitingForConsole) {
