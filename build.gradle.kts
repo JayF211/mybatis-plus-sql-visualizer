@@ -92,6 +92,8 @@ repositories {
 // "java.home/Packages does not exist"）。若后续引入 Java 源码或 GUI Forms 再评估开启。
 intellijPlatform {
     instrumentCode = false
+    // M37 并行开发期间临时隔离沙盒（parallel_tasks 登记 sandbox=m37-worktree），任务结束还原。
+    sandboxContainer.set(layout.buildDirectory.dir("m37-worktree"))
     // Windows 中文环境实测 buildSearchableOptions 报 "Locale must be default"（IDEA
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索
     // 索引（其余功能不受影响）；在非中文 locale 环境可改回 true 以获得设置搜索支持。

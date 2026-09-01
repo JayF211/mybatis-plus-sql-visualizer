@@ -1,5 +1,8 @@
 # SQL Visualizer
 
+> **别的插件给你文本，我们给你可执行的 SQL。**
+> 三条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
+
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
 
 ## 功能截图

@@ -186,8 +186,9 @@ class JdbcTemplateLogParser(
         val rawValue = match.groupValues[2]
         val className = match.groupValues[3]
 
-        // null 字面量：parameter value [null], value class [null]
-        if (rawValue == "null" && className == "null") {
+        // null 字面量：parameter value [null]（value class 可能是 null，也可能是具体类型如 java.lang.String）。
+        // 字符串字面值 "null" 与 SQL NULL 在该行无法区分，按 NULL 语义处理（M37.0 回归集实证）。
+        if (rawValue == "null") {
             return IndexedParam(columnIndex, null, null)
         }
 
