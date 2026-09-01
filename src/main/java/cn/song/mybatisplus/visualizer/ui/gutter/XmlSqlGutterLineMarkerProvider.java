@@ -20,6 +20,7 @@ import com.intellij.psi.xml.XmlToken;
 import com.intellij.psi.xml.XmlTokenType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -56,21 +57,21 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
         if (tag.getParentTag() == null || !"mapper".equals(tag.getParentTag().getName())) return null;
         if (!gutterEnabled()) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
                 SQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.xml.tooltip"),
                 XmlGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.xml.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.xml.accessible.name")
         );
     }
 
     /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -87,19 +88,19 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
             if (tag == null) return;
             XmlFile file = tag.getContainingFile() instanceof XmlFile ? (XmlFile) tag.getContainingFile() : null;
             if (file == null) return;
-            SqlPreviewService.previewAsync(project, () -> {
+            SqlPreviewService.Companion.previewAsync(project, () -> {
                 // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
                 // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
                 // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
-                var src = XmlSqlCompletionContextResolver.resolveXml(project, tag);
+                var src = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, tag);
                 SqlCompletionContext entity = null;
                 var main = src.getMain();
                 if (main != null) {
                     entity = new SqlCompletionContext(main.getTableName(), main.getColumns(), main.getTableAlias(),
                             main.getColumnComments(), main.getTableComment(), src.getCandidates());
                 }
-                return XmlPreviewService.preview(file.getText(), tag.getAttributeValue("id"), project, entity);
-            }, result -> SqlPreviewService.showResult(project, result));
+                return XmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project, entity);
+            }, result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 
@@ -117,7 +118,7 @@ public class XmlSqlGutterLineMarkerProvider implements LineMarkerProvider {
      * @return 命中的 mapper 语句标签列表（按起始 offset 升序）
      */
     public static List<XmlTag> statementsInRange(XmlFile file, int start, int end) {
-        List<XmlTag> all = PsiTreeUtil.collectElementsOfType(file, XmlTag.class);
+        List<XmlTag> all = new ArrayList<>(PsiTreeUtil.collectElementsOfType(file, XmlTag.class));
         List<XmlTag> result = new ArrayList<>();
         for (XmlTag it : all) {
             if (STATEMENT_TAGS.contains(it.getName())

@@ -155,6 +155,9 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     // Lombok 生成方法标注 @Generated，Plugin Verifier 据此忽略
     options.compilerArgs.add("-Alombok.addLombokGeneratedAnnotation=true")
+    // T-M36 转换：保留 Java 方法形参名，使 Kotlin 调用方可用具名参数构造
+    // （如 SqlToJavaPanel 的 JavaCodeGenerator.InvocationTarget(callerClass=…, voClass=…, mpj=…)）。
+    options.compilerArgs.add("-parameters")
 }
 
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：

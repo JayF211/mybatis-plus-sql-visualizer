@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight;
 import com.intellij.openapi.editor.colors.TextAttributesKey;
 import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.ui.JBColor;
-import org.jetbrains.annotationsSuppressWarnings;
+import java.lang.SuppressWarnings;
 
 import java.awt.Color;
 import java.awt.Font;

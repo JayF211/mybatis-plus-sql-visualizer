@@ -98,7 +98,7 @@ object SqlGenerator {
      * 渲染单个条件为文本（占位符渲染为 `?`，不收集参数）。
      * 供动态条件复选框标签 / 条件视图复用（M12）。
      */
-    internal fun renderConditionText(condition: Condition): String = renderCondition(condition)
+    fun renderConditionText(condition: Condition): String = renderCondition(condition)
 
     // ------------------------------------------------------------------
     // 内部渲染

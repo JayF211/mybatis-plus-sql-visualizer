@@ -15,7 +15,6 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
-import com.intellij.psi.PsiTypeArgumentList;
 import com.intellij.psi.util.PsiTreeUtil;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -338,12 +337,9 @@ public final class CriteriaQueryLocator {
             }
         }
         // 类型参数形式：cb.createQuery(Xxx.class) 已由 PsiMethodCallExpression 的类型参数提供
-        PsiTypeArgumentList typeArgList = call.getTypeArgumentList();
-        if (typeArgList != null) {
-            PsiType[] typeArgs = typeArgList.getTypeArguments();
-            if (typeArgs.length > 0 && typeArgs[0] instanceof PsiClassType) {
-                return ((PsiClassType) typeArgs[0]).getClassName();
-            }
+        PsiType[] typeArgs = call.getTypeArgumentList().getTypeArguments();
+        if (typeArgs.length > 0 && typeArgs[0] instanceof PsiClassType) {
+            return ((PsiClassType) typeArgs[0]).getClassName();
         }
         return null;
     }
@@ -507,7 +503,7 @@ public final class CriteriaQueryLocator {
     @NotNull
     private static PredicateModel extractPredicateFromCall(@NotNull PsiMethodCallExpression call) {
         String methodName = call.getMethodExpression().getReferenceName();
-        if (methodName == null) return PredicateModel.Raw(call.getText());
+        if (methodName == null) return new PredicateModel.Raw(call.getText());
         PsiExpression[] args = call.getArgumentList().getExpressions();
 
         return switch (methodName) {
@@ -527,16 +523,16 @@ public final class CriteriaQueryLocator {
             case "and" -> buildGroup(args, GroupConnector.AND);
             case "or" -> buildGroup(args, GroupConnector.OR);
             case "not" -> buildNot(args);
-            default -> PredicateModel.Raw(call.getText());
+            default -> new PredicateModel.Raw(call.getText());
         };
     }
 
     /** 构建二元比较条件（eq/ne/gt/ge/lt/le）。 */
     @NotNull
     private static PredicateModel buildSimple(@NotNull PsiMethodCallExpression call, @NotNull PsiExpression[] args, @NotNull String op) {
-        if (args.length < 2) return PredicateModel.Raw(call.getText());
+        if (args.length < 2) return new PredicateModel.Raw(call.getText());
         String fieldName = args.length > 0 ? extractFieldNameFromArg(args[0]) : null;
-        if (fieldName == null) return PredicateModel.Raw(call.getText());
+        if (fieldName == null) return new PredicateModel.Raw(call.getText());
         String valueExpr = args[1].getText();
         return new PredicateModel.Simple(fieldName, op, valueExpr);
     }
@@ -544,27 +540,27 @@ public final class CriteriaQueryLocator {
     /** 构建 BETWEEN 条件。 */
     @NotNull
     private static PredicateModel buildBetween(@NotNull PsiMethodCallExpression call, @NotNull PsiExpression[] args) {
-        if (args.length < 3) return PredicateModel.Raw(call.getText());
+        if (args.length < 3) return new PredicateModel.Raw(call.getText());
         String fieldName = args.length > 0 ? extractFieldNameFromArg(args[0]) : null;
-        if (fieldName == null) return PredicateModel.Raw(call.getText());
+        if (fieldName == null) return new PredicateModel.Raw(call.getText());
         return new PredicateModel.Between(fieldName, args[1].getText(), args[2].getText());
     }
 
     /** 构建 IS NULL / IS NOT NULL 条件。 */
     @NotNull
     private static PredicateModel buildIsNull(@NotNull PsiMethodCallExpression call, @NotNull PsiExpression[] args, boolean negated) {
-        if (args.length == 0) return PredicateModel.Raw(call.getText());
+        if (args.length == 0) return new PredicateModel.Raw(call.getText());
         String fieldName = args.length > 0 ? extractFieldNameFromArg(args[0]) : null;
-        if (fieldName == null) return PredicateModel.Raw(call.getText());
+        if (fieldName == null) return new PredicateModel.Raw(call.getText());
         return new PredicateModel.IsNull(fieldName, negated);
     }
 
     /** 构建 LIKE / NOT LIKE 条件。 */
     @NotNull
     private static PredicateModel buildLike(@NotNull PsiMethodCallExpression call, @NotNull PsiExpression[] args, boolean negated) {
-        if (args.length < 2) return PredicateModel.Raw(call.getText());
+        if (args.length < 2) return new PredicateModel.Raw(call.getText());
         String fieldName = args.length > 0 ? extractFieldNameFromArg(args[0]) : null;
-        if (fieldName == null) return PredicateModel.Raw(call.getText());
+        if (fieldName == null) return new PredicateModel.Raw(call.getText());
         return new PredicateModel.Like(fieldName, negated, args[1].getText());
     }
 
@@ -576,9 +572,9 @@ public final class CriteriaQueryLocator {
      */
     @NotNull
     private static PredicateModel buildIn(@NotNull PsiMethodCallExpression call, @NotNull PsiExpression[] args, boolean negated) {
-        if (args.length == 0) return PredicateModel.Raw(call.getText());
+        if (args.length == 0) return new PredicateModel.Raw(call.getText());
         String fieldName = args.length > 0 ? extractFieldNameFromArg(args[0]) : null;
-        if (fieldName == null) return PredicateModel.Raw(call.getText());
+        if (fieldName == null) return new PredicateModel.Raw(call.getText());
         // 直接参数：cb.in(root.get("a"), v1, v2, ...)
         List<String> directValues = args.length > 1
                 ? Arrays.stream(args, 1, args.length).map(PsiExpression::getText).collect(Collectors.toList())
@@ -626,9 +622,9 @@ public final class CriteriaQueryLocator {
     /** 构建 NOT 条件（cb.not(p) → Group(AND, [p], negated=true)）。 */
     @NotNull
     private static PredicateModel buildNot(@NotNull PsiExpression[] args) {
-        if (args.length == 0) return PredicateModel.Raw("cb.not()");
+        if (args.length == 0) return new PredicateModel.Raw("cb.not()");
         PredicateModel child = extractPredicate(args[0]);
-        if (child == null) return PredicateModel.Raw(args[0].getText());
+        if (child == null) return new PredicateModel.Raw(args[0].getText());
         return new PredicateModel.Group(GroupConnector.AND, List.of(child), true);
     }
 

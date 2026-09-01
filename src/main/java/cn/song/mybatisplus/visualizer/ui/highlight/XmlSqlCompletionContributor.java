@@ -89,7 +89,7 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
                 );
                 if (attributeNamePosition) {
                     List<String> attrs = SourceSqlSuggestionFactory.DYNAMIC_TAG_ATTRIBUTES.get(nearestTag.getName());
-                    for (String attribute : (attrs != null ? attrs : List.of())) {
+                    for (String attribute : (attrs != null ? attrs : List.<String>of())) {
                         if (prefix.prefixMatches(attribute)) {
                             result.addElement(SourceSqlSuggestionFactory.xmlAttribute(attribute));
                         }
@@ -144,7 +144,7 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
 
     /** 主实体 Java 字段名（OGNL 用 fieldName）：candidates 中 tableName == main.tableName 的 TableInfo 的列字段名。 */
     private List<String> mainEntityFieldNames(SourceSqlContext context) {
-        TableInfo main = context.getMain();
+        SqlCompletionContext main = context.getMain();
         String mainTableName = main != null ? main.getTableName() : null;
         if (mainTableName == null) {
             return List.of();

@@ -131,7 +131,7 @@ public class JsonLexer extends Lexer {
         while (currentPos < endOffset && (Character.isLetterOrDigit(buffer.charAt(currentPos)) || buffer.charAt(currentPos) == '_')) {
             currentPos++;
         }
-        String word = buffer.substring(start, currentPos);
+        String word = buffer.subSequence(start, currentPos).toString();
         tokenEnd = currentPos;
         switch (word) {
             case "true":

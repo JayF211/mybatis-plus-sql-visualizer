@@ -10,7 +10,6 @@ import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontRenderContext;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.RenderingHints;
@@ -91,11 +90,58 @@ public final class DiagramRenderer {
      * @param types      列类型列表（与 names 一一对应）
      * @param pks        是否主键列表（与 names 一一对应）
      */
-    public record Layout(
-            int width, int height,
-            @NotNull String header, @Nullable String joinBadge,
-            @NotNull List<String> names, @NotNull List<String> types, @NotNull List<Boolean> pks) {
+    public static final class Layout {
+    private final int width;
+    private final int height;
+    private final @NotNull String header;
+    private final @Nullable String joinBadge;
+    private final @NotNull List<String> names;
+    private final @NotNull List<String> types;
+    private final @NotNull List<Boolean> pks;
+
+    public Layout(int width, int height, @NotNull String header, @Nullable String joinBadge, @NotNull List<String> names, @NotNull List<String> types, @NotNull List<Boolean> pks) {
+        this.width = width;
+        this.height = height;
+        this.header = header;
+        this.joinBadge = joinBadge;
+        this.names = names;
+        this.types = types;
+        this.pks = pks;
     }
+
+    public int getWidth() { return width; }
+    public int width() { return width; }
+    public int getHeight() { return height; }
+    public int height() { return height; }
+    public @NotNull String getHeader() { return header; }
+    public @NotNull String header() { return header; }
+    public @Nullable String getJoinBadge() { return joinBadge; }
+    public @Nullable String joinBadge() { return joinBadge; }
+    public @NotNull List<String> getNames() { return names; }
+    public @NotNull List<String> names() { return names; }
+    public @NotNull List<String> getTypes() { return types; }
+    public @NotNull List<String> types() { return types; }
+    public @NotNull List<Boolean> getPks() { return pks; }
+    public @NotNull List<Boolean> pks() { return pks; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Layout)) return false;
+        Layout that = (Layout) o;
+        return java.util.Objects.equals(this.width, that.width) && java.util.Objects.equals(this.height, that.height) && java.util.Objects.equals(this.header, that.header) && java.util.Objects.equals(this.joinBadge, that.joinBadge) && java.util.Objects.equals(this.names, that.names) && java.util.Objects.equals(this.types, that.types) && java.util.Objects.equals(this.pks, that.pks);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(width, height, header, joinBadge, names, types, pks);
+    }
+
+    @Override
+    public String toString() {
+        return "Layout[" + "width=" + width + ", " + "height=" + height + ", " + "header=" + header + ", " + "joinBadge=" + joinBadge + ", " + "names=" + names + ", " + "types=" + types + ", " + "pks=" + pks + "]";
+    }
+}
 
     /**
      * 卡片在画布上的坐标。
@@ -103,16 +149,72 @@ public final class DiagramRenderer {
      * @param x 左上角 x
      * @param y 左上角 y
      */
-    public record Pos(int x, int y) {
+    public static final class Pos {
+    private final int x;
+    private final int y;
+
+    public Pos(int x, int y) {
+        this.x = x;
+        this.y = y;
     }
+
+    public int getX() { return x; }
+    public int x() { return x; }
+    public int getY() { return y; }
+    public int y() { return y; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Pos)) return false;
+        Pos that = (Pos) o;
+        return java.util.Objects.equals(this.x, that.x) && java.util.Objects.equals(this.y, that.y);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(x, y);
+    }
+
+    @Override
+    public String toString() {
+        return "Pos[" + "x=" + x + ", " + "y=" + y + "]";
+    }
+}
 
     /**
      * 正交路由段：一系列折线点。
      *
      * @param points 折线点列表
      */
-    public record OrthoPath(@NotNull List<Point> points) {
+    public static final class OrthoPath {
+    private final @NotNull List<Point> points;
+
+    public OrthoPath(@NotNull List<Point> points) {
+        this.points = points;
     }
+
+    public @NotNull List<Point> getPoints() { return points; }
+    public @NotNull List<Point> points() { return points; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof OrthoPath)) return false;
+        OrthoPath that = (OrthoPath) o;
+        return java.util.Objects.equals(this.points, that.points);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(points);
+    }
+
+    @Override
+    public String toString() {
+        return "OrthoPath[" + "points=" + points + "]";
+    }
+}
 
     /**
      * 关系线（用于绘制）。
@@ -122,10 +224,46 @@ public final class DiagramRenderer {
      * @param jt        JOIN 类型
      * @param label     关系线标签（ON 条件文本）
      */
-    public record Line(
-            @NotNull String fromAlias, @NotNull String toAlias,
-            @NotNull JoinType jt, @NotNull String label) {
+    public static final class Line {
+    private final @NotNull String fromAlias;
+    private final @NotNull String toAlias;
+    private final @NotNull JoinType jt;
+    private final @NotNull String label;
+
+    public Line(@NotNull String fromAlias, @NotNull String toAlias, @NotNull JoinType jt, @NotNull String label) {
+        this.fromAlias = fromAlias;
+        this.toAlias = toAlias;
+        this.jt = jt;
+        this.label = label;
     }
+
+    public @NotNull String getFromAlias() { return fromAlias; }
+    public @NotNull String fromAlias() { return fromAlias; }
+    public @NotNull String getToAlias() { return toAlias; }
+    public @NotNull String toAlias() { return toAlias; }
+    public @NotNull JoinType getJt() { return jt; }
+    public @NotNull JoinType jt() { return jt; }
+    public @NotNull String getLabel() { return label; }
+    public @NotNull String label() { return label; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Line)) return false;
+        Line that = (Line) o;
+        return java.util.Objects.equals(this.fromAlias, that.fromAlias) && java.util.Objects.equals(this.toAlias, that.toAlias) && java.util.Objects.equals(this.jt, that.jt) && java.util.Objects.equals(this.label, that.label);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(fromAlias, toAlias, jt, label);
+    }
+
+    @Override
+    public String toString() {
+        return "Line[" + "fromAlias=" + fromAlias + ", " + "toAlias=" + toAlias + ", " + "jt=" + jt + ", " + "label=" + label + "]";
+    }
+}
 
     /**
      * 画布尺寸。
@@ -133,14 +271,92 @@ public final class DiagramRenderer {
      * @param width  宽度
      * @param height 高度
      */
-    public record Size(int width, int height) {
+    public static final class Size {
+    private final int width;
+    private final int height;
+
+    public Size(int width, int height) {
+        this.width = width;
+        this.height = height;
     }
 
-    /** ON 条件标签的布局信息（用于重叠检测与交错排列）。 */
-    private record LabelInfo(
-            int lineIndex, int bx, int by, int bw, int bh,
-            @NotNull String text, int splitY) {
+    public int getWidth() { return width; }
+    public int width() { return width; }
+    public int getHeight() { return height; }
+    public int height() { return height; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Size)) return false;
+        Size that = (Size) o;
+        return java.util.Objects.equals(this.width, that.width) && java.util.Objects.equals(this.height, that.height);
     }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(width, height);
+    }
+
+    @Override
+    public String toString() {
+        return "Size[" + "width=" + width + ", " + "height=" + height + "]";
+    }
+}
+
+    /** ON 条件标签的布局信息（用于重叠检测与交错排列）。 */
+    private static final class LabelInfo {
+    private final int lineIndex;
+    private final int bx;
+    private final int by;
+    private final int bw;
+    private final int bh;
+    private final @NotNull String text;
+    private final int splitY;
+
+    public LabelInfo(int lineIndex, int bx, int by, int bw, int bh, @NotNull String text, int splitY) {
+        this.lineIndex = lineIndex;
+        this.bx = bx;
+        this.by = by;
+        this.bw = bw;
+        this.bh = bh;
+        this.text = text;
+        this.splitY = splitY;
+    }
+
+    public int getLineIndex() { return lineIndex; }
+    public int lineIndex() { return lineIndex; }
+    public int getBx() { return bx; }
+    public int bx() { return bx; }
+    public int getBy() { return by; }
+    public int by() { return by; }
+    public int getBw() { return bw; }
+    public int bw() { return bw; }
+    public int getBh() { return bh; }
+    public int bh() { return bh; }
+    public @NotNull String getText() { return text; }
+    public @NotNull String text() { return text; }
+    public int getSplitY() { return splitY; }
+    public int splitY() { return splitY; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof LabelInfo)) return false;
+        LabelInfo that = (LabelInfo) o;
+        return java.util.Objects.equals(this.lineIndex, that.lineIndex) && java.util.Objects.equals(this.bx, that.bx) && java.util.Objects.equals(this.by, that.by) && java.util.Objects.equals(this.bw, that.bw) && java.util.Objects.equals(this.bh, that.bh) && java.util.Objects.equals(this.text, that.text) && java.util.Objects.equals(this.splitY, that.splitY);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(lineIndex, bx, by, bw, bh, text, splitY);
+    }
+
+    @Override
+    public String toString() {
+        return "LabelInfo[" + "lineIndex=" + lineIndex + ", " + "bx=" + bx + ", " + "by=" + by + ", " + "bw=" + bw + ", " + "bh=" + bh + ", " + "text=" + text + ", " + "splitY=" + splitY + "]";
+    }
+}
 
     // ------------------------------------------------------------------
     // Public API
@@ -244,8 +460,8 @@ public final class DiagramRenderer {
             String hdrBase = e.getDisplayName();
             String hdr = truncate(hdrBase);
             int badgeW = (badgeText != null)
-                    ? (int) bold.getStringBounds(badgeText, frc).width + 2 * JOIN_BADGE_PADDING : 0;
-            int hdrW = (int) bold.getStringBounds(hdr, frc).width + 2 * ENTITY_PADDING + badgeW;
+                    ? (int) bold.getStringBounds(badgeText, frc).getWidth() + 2 * JOIN_BADGE_PADDING : 0;
+            int hdrW = (int) bold.getStringBounds(hdr, frc).getWidth() + 2 * ENTITY_PADDING + badgeW;
             List<String> names = new ArrayList<>();
             for (ColumnEntry c : e.getColumns()) names.add(truncate(c.getName()));
             List<String> types = new ArrayList<>();
@@ -254,12 +470,12 @@ public final class DiagramRenderer {
             for (ColumnEntry c : e.getColumns()) pks.add(c.isPk());
             int maxNameW = 0;
             for (String nm : names) {
-                int w = (int) font.getStringBounds(nm, frc).width;
+                int w = (int) font.getStringBounds(nm, frc).getWidth();
                 if (w > maxNameW) maxNameW = w;
             }
             int maxTypeW = 0;
             for (String tp : types) {
-                int w = (int) font.getStringBounds(tp, frc).width;
+                int w = (int) font.getStringBounds(tp, frc).getWidth();
                 if (w > maxTypeW) maxTypeW = w;
             }
             int contentW = Math.max(hdrW, ENTITY_PADDING + KEY_ICON_W + maxNameW + TYPE_GAP + maxTypeW + ENTITY_PADDING);
@@ -307,7 +523,7 @@ public final class DiagramRenderer {
 
     private static int labelWidth(String label, Font font, FontRenderContext frc) {
         String text = label.length() > MAX_LABEL_CHARS ? label.substring(0, MAX_LABEL_CHARS - 1) + "\u2026" : label;
-        return Math.min(Math.max((int) font.getStringBounds(text, frc).width + 20, MIN_LABEL_WIDTH), MAX_LABEL_WIDTH);
+        return Math.min(Math.max((int) font.getStringBounds(text, frc).getWidth() + 20, MIN_LABEL_WIDTH), MAX_LABEL_WIDTH);
     }
 
     private static int contentWidth(
@@ -440,7 +656,7 @@ public final class DiagramRenderer {
             String text = line.label().length() > MAX_LABEL_CHARS
                     ? line.label().substring(0, MAX_LABEL_CHARS - 1) + "\u2026" : line.label();
             int bw = labelWidth(line.label(), font, frc);
-            int bh = (int) (font.getStringBounds(text, frc).height + 12);
+            int bh = (int) (font.getStringBounds(text, frc).getHeight() + 12);
             int labelX = pts.get(1).x + LABEL_LINE_GAP;
             int labelY = pts.get(1).y - bh / 2 + idx * (bh + LABEL_LINE_GAP);
             onLabel(g2, text, labelX, labelY, bw, bh, font);
@@ -455,8 +671,8 @@ public final class DiagramRenderer {
             String fromText = cardText(line.jt(), false);
             String toText = cardText(line.jt(), true);
             int cbh = 20;
-            int fromW = (int) font.getStringBounds(fromText, frc).width + 16;
-            int toW = (int) font.getStringBounds(toText, frc).width + 16;
+            int fromW = (int) font.getStringBounds(fromText, frc).getWidth() + 16;
+            int toW = (int) font.getStringBounds(toText, frc).getWidth() + 16;
 
             int mainBottom = positions.get(fi).y() + layouts.get(fi).height();
             badge(g2, fromText, positions.get(fi).x() + layouts.get(fi).width() / 2 - fromW / 2, mainBottom + 4, fromW, cbh, font);
@@ -607,7 +823,7 @@ public final class DiagramRenderer {
             int needed = COLUMN_GAP;
             if (!r.getLabel().isEmpty()) {
                 String text = r.getLabel().length() > 120 ? r.getLabel().substring(0, 119) + "\u2026" : r.getLabel();
-                int tw = (int) font.getStringBounds(text, frc).width + 40;
+                int tw = (int) font.getStringBounds(text, frc).getWidth() + 40;
                 if (tw > needed) needed = tw;
             }
             needed = Math.min(needed + 120, 520);
@@ -693,7 +909,7 @@ public final class DiagramRenderer {
 
         // JOIN type badge (right side of header)
         if (lo.joinBadge() != null) {
-            int badgeW = (int) bold.getStringBounds(lo.joinBadge(), g2.getFontRenderContext()).width + 2 * JOIN_BADGE_PADDING;
+            int badgeW = (int) bold.getStringBounds(lo.joinBadge(), g2.getFontRenderContext()).getWidth() + 2 * JOIN_BADGE_PADDING;
             int badgeX = ix + iw - ENTITY_PADDING - badgeW;
             int badgeY = iy + (HEADER_HEIGHT - 16) / 2;
             g2.setColor(JOIN_BADGE_BG);
@@ -722,7 +938,7 @@ public final class DiagramRenderer {
 
             if (!type.isEmpty()) {
                 g2.setColor(TYPE_COLOR);
-                int tw = (int) font.getStringBounds(type, g2.getFontRenderContext()).width;
+                int tw = (int) font.getStringBounds(type, g2.getFontRenderContext()).getWidth();
                 g2.drawString(type, ix + iw - ENTITY_PADDING - tw, cy);
             }
             cy += ROW_HEIGHT;

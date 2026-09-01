@@ -68,7 +68,7 @@ public final class SourceSqlCompleter {
                 }
             } else if (clause != SqlClause.TABLE) {
                 // 主表列（带列注释）
-                TableInfo main = context.getMain();
+                SqlCompletionContext main = context.getMain();
                 if (main != null) {
                     for (String col : main.getColumns().stream().distinct().toList()) {
                         result.add(SourceSqlSuggestionFactory.column(col, main.getColumnComments().get(col)));
@@ -86,7 +86,7 @@ public final class SourceSqlCompleter {
             // 表名：FROM/JOIN 后——主表（表注释）+ candidates 其余表（去重，全给）
             if (clause == SqlClause.TABLE) {
                 Set<String> seen = new LinkedHashSet<>();
-                TableInfo main = context.getMain();
+                SqlCompletionContext main = context.getMain();
                 if (main != null) {
                     String mainName = main.getTableName();
                     if (mainName != null && seen.add(mainName)) {

@@ -27,6 +27,6 @@ class SqlCompletionContext(
     val candidateTables: List<TableInfo> = emptyList(),
 ) {
     companion object {
-        val KEY: Key<SqlCompletionContext> = Key.create("MP_SQL_COMPLETION_CONTEXT")
+        @JvmField val KEY: Key<SqlCompletionContext> = Key.create("MP_SQL_COMPLETION_CONTEXT")
     }
 }

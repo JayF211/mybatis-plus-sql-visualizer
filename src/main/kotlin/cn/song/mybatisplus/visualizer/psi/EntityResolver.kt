@@ -93,13 +93,13 @@ class EntityResolver {
         // T-M16.2-02 修复：父类字段同样识别，继承实体的 deleted 不再丢失）
         val logicDeleteColumn = fields
             .firstOrNull { hasAnnotation(it, TABLE_LOGIC) }
-            ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
+            ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.INSTANCE.toSnakeCase(it.name) }
         // T-M22-02：乐观锁版本列（@Version 标注字段——MP OptimisticLockerInnerInterceptor 语义：
         // UPDATE 自动追加 `version = version + 1` + `AND version = ?`；列名 = @TableField 值或 snake_case；
         // 与 @TableLogic 同模式：父类字段同样识别）
         val versionColumn = fields
             .firstOrNull { hasAnnotation(it, VERSION) }
-            ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
+            ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.INSTANCE.toSnakeCase(it.name) }
         // T-M16-05：表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
         return TableInfo(className, tableName, columns, logicDeleteColumn, versionColumn, comment)
@@ -141,7 +141,7 @@ class EntityResolver {
             return null
         }
         val columnName = annotationValue(field, TABLE_FIELD)
-            ?: NamingStrategy.toSnakeCase(fieldName)
+            ?: NamingStrategy.INSTANCE.toSnakeCase(fieldName)
         val isId = hasAnnotation(field, TABLE_ID)
         // T-M23-04：主键是否自增（@TableId(type = IdType.AUTO)）——取 type 属性文本判含 "AUTO"；
         // 注解类可解析且未显式写 type 时 findAttributeValue 返回默认值 IdType.NONE（不含 AUTO，恒勾选），
@@ -416,7 +416,7 @@ class EntityResolver {
             return if (strategy == PluginSettings.INFERENCE_CAMEL) {
                 className.replaceFirstChar { it.lowercaseChar() }
             } else {
-                NamingStrategy.toSnakeCase(className)
+                NamingStrategy.INSTANCE.toSnakeCase(className)
             }
         }
 

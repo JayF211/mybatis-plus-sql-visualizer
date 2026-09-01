@@ -91,7 +91,7 @@ public final class CopyExecutableSqlAction {
 
     /** Toast 通知（仅在非测试模式下显示，测试模式跳过避免通知系统依赖）。 */
     private void showToast(@NotNull String message) {
-        if (ApplicationManager.getApplication().isUnitTestMode) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) {
             return;
         }
         if (project == null) {

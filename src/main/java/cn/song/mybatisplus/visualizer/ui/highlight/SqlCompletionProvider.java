@@ -21,34 +21,34 @@ public interface SqlCompletionProvider {
 
     /** 主表名。 */
     default String tableName(SqlCompletionContext context) {
-        return context.tableName;
+        return context.getTableName();
     }
 
     /** 列名集合。 */
     default List<String> columns(SqlCompletionContext context) {
-        return context.columns;
+        return context.getColumns();
     }
 
     /** 列名 + 注释（M16：补全 tailText 展示与注释关键词检索；无注释列返回 null）。 */
     default List<Pair<String, String>> columnsWithComments(SqlCompletionContext context) {
-        return context.columns.stream()
-                .map(it -> new Pair<>(it, context.columnComments.get(it)))
+        return context.getColumns().stream()
+                .map(it -> new Pair<>(it, context.getColumnComments().get(it)))
                 .toList();
     }
 
     /** 主表别名（可为 null）。 */
     default String tableAlias(SqlCompletionContext context) {
-        return context.tableAlias;
+        return context.getTableAlias();
     }
 
     /** 表注释（M16：表名补全 tailText 与关键词检索）。 */
     default String tableComment(SqlCompletionContext context) {
-        return context.tableComment;
+        return context.getTableComment();
     }
 
     /** T-M27.4：联表候选表（@TableName 实体，含注释；表名补全全位置提示）。 */
     default List<TableInfo> candidateTables(SqlCompletionContext context) {
-        return context.candidateTables;
+        return context.getCandidateTables();
     }
 
     /**

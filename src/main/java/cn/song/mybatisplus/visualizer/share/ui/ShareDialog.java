@@ -1,4 +1,5 @@
 package cn.song.mybatisplus.visualizer.share.ui;
+import com.intellij.openapi.editor.Editor;
 
 import cn.song.mybatisplus.visualizer.share.SqlShareManager;
 import cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatter;
@@ -173,7 +174,7 @@ public class ShareDialog extends DialogWrapper {
                 "Save HTML report",
                 "html");
         FileSaverDialog dialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project);
-        com.intellij.openapi.vfs.VirtualFile saved = dialog.save((com.intellij.openapi.vfs.VirtualFile) null, "sql-report.html");
+        com.intellij.openapi.vfs.VirtualFileWrapper saved = dialog.save((com.intellij.openapi.vfs.VirtualFile) null, "sql-report.html");
         if (saved != null) {
             File file = saved.getFile();
             shareManager.saveHtmlReport(html, file.getAbsolutePath());

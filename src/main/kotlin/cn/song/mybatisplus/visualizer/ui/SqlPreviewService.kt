@@ -225,7 +225,7 @@ class SqlPreviewService(private val project: Project) {
                     (located.chain.wrapperType.isQueryLike() || located.chain.wrapperType == WrapperType.LAMBDA_UPDATE) &&
                     located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES ->
                     DeleteStatement(table, QueryWrapperParser(table).parse(located.chain).conditions)
-                else -> ConverterRegistry.convert(located.chain, table) ?: return null
+                else -> ConverterRegistry.INSTANCE.convert(located.chain, table) ?: return null
             }
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
@@ -1065,7 +1065,7 @@ class SqlPreviewService(private val project: Project) {
      * 非 SelectStatement 结果（异常路径）回退单表解析。与 `else -> ConverterRegistry.convert` 分支同源。
      */
     private fun parseQueryLike(chain: cn.song.mybatisplus.visualizer.model.WrapperChain, table: TableInfo): SelectStatement =
-        (ConverterRegistry.convert(chain, table) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
+        (ConverterRegistry.INSTANCE.convert(chain, table) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
 
     /**
      * 逻辑删除注入状态（T-M20-05）：MPJ 官方六方法按源码顺序求值的结果，驱动 [injectLogicDeleteCondition]。

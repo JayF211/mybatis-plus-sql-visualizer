@@ -13,6 +13,7 @@ import com.intellij.openapi.util.IconLoader;
 import com.intellij.psi.PsiElement;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -38,25 +39,25 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
     @Override
     @Nullable
     public LineMarkerInfo<PsiElement> getLineMarkerInfo(@NotNull PsiElement element) {
-        PsiElement anchor = WrapperAnchorDetector.anchorElement(element);
+        PsiElement anchor = WrapperAnchorDetector.INSTANCE.anchorElement(element);
         if (anchor == null) return null;
         if (!gutterEnabled()) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 anchor,
                 anchor.getTextRange(),
                 SQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.tooltip"),
                 SqlGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.accessible.name")
         );
     }
 
     /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -83,12 +84,12 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
         public void navigate(MouseEvent e, PsiElement elt) {
             long now = System.currentTimeMillis();
             // 防抖：200ms 内重复点击丢弃
-            if (!SqlGutterLineMarkerProviderKt.shouldNavigate(lastNavigateTime, now)) return;
+            if (now - lastNavigateTime < DEBOUNCE_MS) return;
             lastNavigateTime = now;
 
             Project project = elt.getProject();
-            SqlPreviewService.previewAsync(project, () -> project.getService(SqlPreviewService.class).preview(elt),
-                    result -> SqlPreviewService.showResult(project, result));
+            SqlPreviewService.Companion.previewAsync(project, () -> project.getService(SqlPreviewService.class).preview(elt),
+                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

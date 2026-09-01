@@ -622,12 +622,42 @@ public final class PartTreeParser {
      * @param requiresParameter 是否需要参数（IS_NULL 类不需要，BETWEEN 需要）
      * @param type            对应的 PartType
      */
-    private record KeywordRule(
-            @NotNull String keyword,
-            boolean requiresParameter,
-            @NotNull PartType type
-    ) {
+    private static final class KeywordRule {
+    private final @NotNull String keyword;
+    private final boolean requiresParameter;
+    private final @NotNull PartType type;
+
+    public KeywordRule(@NotNull String keyword, boolean requiresParameter, @NotNull PartType type) {
+        this.keyword = keyword;
+        this.requiresParameter = requiresParameter;
+        this.type = type;
     }
+
+    public @NotNull String getKeyword() { return keyword; }
+    public @NotNull String keyword() { return keyword; }
+    public boolean isRequiresParameter() { return requiresParameter; }
+    public boolean requiresParameter() { return requiresParameter; }
+    public @NotNull PartType getType() { return type; }
+    public @NotNull PartType type() { return type; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof KeywordRule)) return false;
+        KeywordRule that = (KeywordRule) o;
+        return java.util.Objects.equals(this.keyword, that.keyword) && java.util.Objects.equals(this.requiresParameter, that.requiresParameter) && java.util.Objects.equals(this.type, that.type);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(keyword, requiresParameter, type);
+    }
+
+    @Override
+    public String toString() {
+        return "KeywordRule[" + "keyword=" + keyword + ", " + "requiresParameter=" + requiresParameter + ", " + "type=" + type + "]";
+    }
+}
 
     // ------------------------------------------------------------------
     // 嵌套属性路径拆分
@@ -661,18 +691,138 @@ public final class PartTreeParser {
     }
 
     /** IgnoreCase 提取结果。 */
-    private record IgnoreCaseResult(@NotNull String body, boolean global) {
+    private static final class IgnoreCaseResult {
+    private final @NotNull String body;
+    private final boolean global;
+
+    public IgnoreCaseResult(@NotNull String body, boolean global) {
+        this.body = body;
+        this.global = global;
     }
+
+    public @NotNull String getBody() { return body; }
+    public @NotNull String body() { return body; }
+    public boolean isGlobal() { return global; }
+    public boolean global() { return global; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof IgnoreCaseResult)) return false;
+        IgnoreCaseResult that = (IgnoreCaseResult) o;
+        return java.util.Objects.equals(this.body, that.body) && java.util.Objects.equals(this.global, that.global);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(body, global);
+    }
+
+    @Override
+    public String toString() {
+        return "IgnoreCaseResult[" + "body=" + body + ", " + "global=" + global + "]";
+    }
+}
 
     /** OrderBy 提取结果。 */
-    private record OrderByResult(@NotNull String body, @NotNull List<OrderByPart> orderBy) {
+    private static final class OrderByResult {
+    private final @NotNull String body;
+    private final @NotNull List<OrderByPart> orderBy;
+
+    public OrderByResult(@NotNull String body, @NotNull List<OrderByPart> orderBy) {
+        this.body = body;
+        this.orderBy = orderBy;
     }
+
+    public @NotNull String getBody() { return body; }
+    public @NotNull String body() { return body; }
+    public @NotNull List<OrderByPart> getOrderBy() { return orderBy; }
+    public @NotNull List<OrderByPart> orderBy() { return orderBy; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof OrderByResult)) return false;
+        OrderByResult that = (OrderByResult) o;
+        return java.util.Objects.equals(this.body, that.body) && java.util.Objects.equals(this.orderBy, that.orderBy);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(body, orderBy);
+    }
+
+    @Override
+    public String toString() {
+        return "OrderByResult[" + "body=" + body + ", " + "orderBy=" + orderBy + "]";
+    }
+}
 
     /** 数字解析结果。 */
-    private record NumberResult(int number, @NotNull String rest) {
+    private static final class NumberResult {
+    private final int number;
+    private final @NotNull String rest;
+
+    public NumberResult(int number, @NotNull String rest) {
+        this.number = number;
+        this.rest = rest;
     }
 
-    /** 条件关键字匹配结果。 */
-    private record MatchResult(@NotNull String propertyPart, @NotNull PartType partType) {
+    public int getNumber() { return number; }
+    public int number() { return number; }
+    public @NotNull String getRest() { return rest; }
+    public @NotNull String rest() { return rest; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof NumberResult)) return false;
+        NumberResult that = (NumberResult) o;
+        return java.util.Objects.equals(this.number, that.number) && java.util.Objects.equals(this.rest, that.rest);
     }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(number, rest);
+    }
+
+    @Override
+    public String toString() {
+        return "NumberResult[" + "number=" + number + ", " + "rest=" + rest + "]";
+    }
+}
+
+    /** 条件关键字匹配结果。 */
+    private static final class MatchResult {
+    private final @NotNull String propertyPart;
+    private final @NotNull PartType partType;
+
+    public MatchResult(@NotNull String propertyPart, @NotNull PartType partType) {
+        this.propertyPart = propertyPart;
+        this.partType = partType;
+    }
+
+    public @NotNull String getPropertyPart() { return propertyPart; }
+    public @NotNull String propertyPart() { return propertyPart; }
+    public @NotNull PartType getPartType() { return partType; }
+    public @NotNull PartType partType() { return partType; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof MatchResult)) return false;
+        MatchResult that = (MatchResult) o;
+        return java.util.Objects.equals(this.propertyPart, that.propertyPart) && java.util.Objects.equals(this.partType, that.partType);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(propertyPart, partType);
+    }
+
+    @Override
+    public String toString() {
+        return "MatchResult[" + "propertyPart=" + propertyPart + ", " + "partType=" + partType + "]";
+    }
+}
 }

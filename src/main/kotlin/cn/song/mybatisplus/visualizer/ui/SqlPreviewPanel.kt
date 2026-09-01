@@ -412,8 +412,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val executed = SqlExecutor.executePrepared(
                 proj,
                 // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
-                onResultsReady = { fullConsole -> embedConsole(fullConsole) },
-                onError = { errorMsg ->
+                { fullConsole -> embedConsole(fullConsole) },
+                { errorMsg ->
                     resultPanel.showError(errorMsg)
                 },
             )
@@ -421,10 +421,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         SqlExecutor.execute(
             proj, sql, null, isQuery,
-            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
-            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+            { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
-            onError = { errorMsg ->
+            { errorMsg ->
                 resultPanel.showError(errorMsg)
             },
         )
@@ -462,10 +462,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 执行的结果/错误（用户"执行第二个 SQL 后预览第一个，状态栏还显示之前的错误"）。
             // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
             // 与本预览回调互不影响。
-            onConsole = { consoleComponent -> embedConsole(consoleComponent); resultPanel.showEmpty() },
-            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+            { consoleComponent -> embedConsole(consoleComponent); resultPanel.showEmpty() },
+            { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
-            onError = null,
+            null,
+            null,
         )
     }
 

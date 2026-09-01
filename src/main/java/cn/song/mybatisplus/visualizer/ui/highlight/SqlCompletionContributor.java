@@ -62,7 +62,7 @@ public class SqlCompletionContributor extends CompletionContributor {
 
     public static void registerContext(Document document, SqlCompletionContext ctx) {
         documentContexts.put(document, ctx);
-        LOG.info("[SqlCompletion] registerContext: doc=" + document.hashCode() + ", table=" + ctx.tableName + ", mapSize=" + documentContexts.size());
+        LOG.info("[SqlCompletion] registerContext: doc=" + document.hashCode() + ", table=" + ctx.getTableName() + ", mapSize=" + documentContexts.size());
     }
 
     public SqlCompletionContributor() {

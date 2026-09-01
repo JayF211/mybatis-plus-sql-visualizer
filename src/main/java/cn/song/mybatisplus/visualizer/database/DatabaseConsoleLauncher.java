@@ -11,6 +11,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 
 /**
  * 数据库执行器（M17 隔离实现，M19 去弹框直建临时文件）。
@@ -65,7 +66,7 @@ public final class DatabaseConsoleLauncher {
      * public 替代原 internal（迁移期 internal→public，供测试引用；测试沙盒无 database 插件，仅编译期可引用）。
      */
     @NotNull
-    public static VirtualFile createTempFile(@NotNull String sql) {
+    public static VirtualFile createTempFile(@NotNull String sql) throws IOException {
         File ioFile = createTempFile();
         writeSqlToFile(ioFile, sql);
         VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
@@ -82,7 +83,7 @@ public final class DatabaseConsoleLauncher {
      * @return 创建的临时文件
      */
     @NotNull
-    public static File createTempFile() {
+    public static File createTempFile() throws IOException {
         return FileUtil.createTempFile("mpsql-exec-", ".sql", true);
     }
 
@@ -92,7 +93,7 @@ public final class DatabaseConsoleLauncher {
      * @param file 目标文件
      * @param sql  SQL 文本
      */
-    public static void writeSqlToFile(@NotNull File file, @NotNull String sql) {
+    public static void writeSqlToFile(@NotNull File file, @NotNull String sql) throws IOException {
         FileUtil.writeToFile(file, sql);
     }
 

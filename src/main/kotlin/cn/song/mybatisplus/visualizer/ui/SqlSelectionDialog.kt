@@ -78,7 +78,7 @@ class SqlSelectionDialog<T>(
          * 第一行摘要（行号 + 类型/方法名 + 表名），第二行代码行内容（缩进两空格；
          * **先截断再转义**——`&`/`<`/`>` 转义防破坏 HTML 布局）。
          */
-        internal fun displayText(summary: String, lineText: String): String {
+        fun displayText(summary: String, lineText: String): String {
             val core = if (lineText.length > MAX_LINE_LENGTH) lineText.take(MAX_LINE_LENGTH) + "…" else lineText
             val escaped = core
                 .replace("&", "&amp;")

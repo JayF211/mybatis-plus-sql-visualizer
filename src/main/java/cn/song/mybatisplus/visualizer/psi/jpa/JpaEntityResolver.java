@@ -1,4 +1,5 @@
 package cn.song.mybatisplus.visualizer.psi.jpa;
+import com.intellij.psi.PsiAnnotationMemberValue;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.model.AssociationInfo;
@@ -485,16 +486,76 @@ public class JpaEntityResolver {
     private static final String MAPPED_SUPERCLASS_ANNOTATION = "jakarta.persistence.MappedSuperclass";
 
     /** JPA 实体解析缓存键（PsiFile + classQualifiedName + configSignature）。 */
-    private record JpaCacheKey(
-            PsiFile file,
-            String classQualifiedName,
-            String configSignature
-    ) {
+    private static final class JpaCacheKey {
+    private final PsiFile file;
+    private final String classQualifiedName;
+    private final String configSignature;
+
+    public JpaCacheKey(PsiFile file, String classQualifiedName, String configSignature) {
+        this.file = file;
+        this.classQualifiedName = classQualifiedName;
+        this.configSignature = configSignature;
     }
 
-    /** 缓存条目：文件修改戳 + 解析结果。 */
-    private record JpaEntry(long stamp, TableInfo value) {
+    public PsiFile getFile() { return file; }
+    public PsiFile file() { return file; }
+    public String getClassQualifiedName() { return classQualifiedName; }
+    public String classQualifiedName() { return classQualifiedName; }
+    public String getConfigSignature() { return configSignature; }
+    public String configSignature() { return configSignature; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof JpaCacheKey)) return false;
+        JpaCacheKey that = (JpaCacheKey) o;
+        return java.util.Objects.equals(this.file, that.file) && java.util.Objects.equals(this.classQualifiedName, that.classQualifiedName) && java.util.Objects.equals(this.configSignature, that.configSignature);
     }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(file, classQualifiedName, configSignature);
+    }
+
+    @Override
+    public String toString() {
+        return "JpaCacheKey[" + "file=" + file + ", " + "classQualifiedName=" + classQualifiedName + ", " + "configSignature=" + configSignature + "]";
+    }
+}
+
+    /** 缓存条目：文件修改戳 + 解析结果。 */
+    private static final class JpaEntry {
+    private final long stamp;
+    private final TableInfo value;
+
+    public JpaEntry(long stamp, TableInfo value) {
+        this.stamp = stamp;
+        this.value = value;
+    }
+
+    public long getStamp() { return stamp; }
+    public long stamp() { return stamp; }
+    public TableInfo getValue() { return value; }
+    public TableInfo value() { return value; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof JpaEntry)) return false;
+        JpaEntry that = (JpaEntry) o;
+        return java.util.Objects.equals(this.stamp, that.stamp) && java.util.Objects.equals(this.value, that.value);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(stamp, value);
+    }
+
+    @Override
+    public String toString() {
+        return "JpaEntry[" + "stamp=" + stamp + ", " + "value=" + value + "]";
+    }
+}
 
     /** 缓存键 → 条目（项目级，跟随 JpaEntityResolver 生命周期）。 */
     private static final ConcurrentHashMap<JpaCacheKey, JpaEntry> cache = new ConcurrentHashMap<>();

@@ -17,6 +17,7 @@ import com.intellij.psi.PsiJavaToken;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -42,24 +43,24 @@ public class AnnotationSqlGutterLineMarkerProvider implements LineMarkerProvider
         if (token.getTokenType() != JavaTokenType.AT) return null;
         PsiAnnotation annotation = PsiTreeUtil.getParentOfType(token, PsiAnnotation.class, false);
         if (annotation == null) return null;
-        if (!AnnotationSqlPreviewService.isSqlAnnotation(annotation)) return null;
+        if (!AnnotationSqlPreviewService.INSTANCE.isSqlAnnotation(annotation)) return null;
         if (!gutterEnabled()) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
                 SQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.annotation.tooltip"),
                 AnnotationGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.annotation.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.annotation.accessible.name")
         );
     }
 
     /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -74,8 +75,8 @@ public class AnnotationSqlGutterLineMarkerProvider implements LineMarkerProvider
             Project project = elt.getProject();
             PsiAnnotation annotation = PsiTreeUtil.getParentOfType(elt, PsiAnnotation.class, false);
             if (annotation == null) return;
-            SqlPreviewService.previewAsync(project, () -> AnnotationSqlPreviewService.preview(annotation, project),
-                    result -> SqlPreviewService.showResult(project, result));
+            SqlPreviewService.Companion.previewAsync(project, () -> AnnotationSqlPreviewService.INSTANCE.preview(annotation, project),
+                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

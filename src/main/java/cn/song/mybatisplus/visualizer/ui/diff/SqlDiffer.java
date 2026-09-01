@@ -28,19 +28,55 @@ public final class SqlDiffer {
     public enum DiffType { INSERT, DELETE, CHANGE, EQUAL }
 
     /** 单条差异记录。 */
-    public record DiffEntry(
-            /** 差异类型 */
-            DiffType type,
-            /** 旧 SQL 中的行号（1-based）；新增行时为 null */
-            @Nullable Integer oldLineNumber,
-            /** 新 SQL 中的行号（1-based）；删除行时为 null */
-            @Nullable Integer newLineNumber,
-            /** 旧行内容（新增行为 null） */
-            @Nullable String oldLine,
-            /** 新行内容（删除行为 null） */
-            @Nullable String newLine
-    ) {
+    public static final class DiffEntry {
+    /** 差异类型 */
+    private final DiffType type;
+    /** 旧 SQL 中的行号（1-based）；新增行时为 null */
+    private final @Nullable Integer oldLineNumber;
+    /** 新 SQL 中的行号（1-based）；删除行时为 null */
+    private final @Nullable Integer newLineNumber;
+    /** 旧行内容（新增行为 null） */
+    private final @Nullable String oldLine;
+    /** 新行内容（删除行为 null） */
+    private final @Nullable String newLine;
+
+    public DiffEntry(DiffType type, @Nullable Integer oldLineNumber, @Nullable Integer newLineNumber, @Nullable String oldLine, @Nullable String newLine) {
+        this.type = type;
+        this.oldLineNumber = oldLineNumber;
+        this.newLineNumber = newLineNumber;
+        this.oldLine = oldLine;
+        this.newLine = newLine;
     }
+
+    public DiffType getType() { return type; }
+    public DiffType type() { return type; }
+    public @Nullable Integer getOldLineNumber() { return oldLineNumber; }
+    public @Nullable Integer oldLineNumber() { return oldLineNumber; }
+    public @Nullable Integer getNewLineNumber() { return newLineNumber; }
+    public @Nullable Integer newLineNumber() { return newLineNumber; }
+    public @Nullable String getOldLine() { return oldLine; }
+    public @Nullable String oldLine() { return oldLine; }
+    public @Nullable String getNewLine() { return newLine; }
+    public @Nullable String newLine() { return newLine; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof DiffEntry)) return false;
+        DiffEntry that = (DiffEntry) o;
+        return java.util.Objects.equals(this.type, that.type) && java.util.Objects.equals(this.oldLineNumber, that.oldLineNumber) && java.util.Objects.equals(this.newLineNumber, that.newLineNumber) && java.util.Objects.equals(this.oldLine, that.oldLine) && java.util.Objects.equals(this.newLine, that.newLine);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(type, oldLineNumber, newLineNumber, oldLine, newLine);
+    }
+
+    @Override
+    public String toString() {
+        return "DiffEntry[" + "type=" + type + ", " + "oldLineNumber=" + oldLineNumber + ", " + "newLineNumber=" + newLineNumber + ", " + "oldLine=" + oldLine + ", " + "newLine=" + newLine + "]";
+    }
+}
 
     /**
      * 计算两段 SQL 文本的行级差异。

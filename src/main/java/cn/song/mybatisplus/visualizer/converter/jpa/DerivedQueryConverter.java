@@ -87,9 +87,9 @@ public final class DerivedQueryConverter {
                     : null;
 
             return switch (partTree.getSubject().getOperation()) {
-                case Operation.DELETE -> new DeleteStatement(tableInfo, conditions, List.of(), null, List.of());
+                case DELETE -> new DeleteStatement(tableInfo, conditions, List.of(), null, List.of());
 
-                case Operation.COUNT -> new SelectStatement(
+                case COUNT -> new SelectStatement(
                         tableInfo,
                         List.of(new ColumnRef(null, "*", null, "COUNT", null, null, null)),
                         null,
@@ -102,7 +102,7 @@ public final class DerivedQueryConverter {
                         limitClause,
                         null, null, null, List.of(), null, null);
 
-                case Operation.EXISTS -> new SelectStatement(
+                case EXISTS -> new SelectStatement(
                         tableInfo,
                         List.of(new ColumnRef(null, "1", null, null, null, null, null)),
                         null,
@@ -115,7 +115,7 @@ public final class DerivedQueryConverter {
                         limitClause,
                         null, null, null, List.of(), null, null);
 
-                case Operation.FIND -> new SelectStatement(
+                case FIND -> new SelectStatement(
                         tableInfo,
                         List.of(),
                         null,
@@ -169,7 +169,8 @@ public final class DerivedQueryConverter {
                             alias,
                             List.of(new Condition.ColumnComparison(
                                     new ColumnRef(alias, "id", null, null, null, null, null),
-                                    new ColumnRef(null, association.getJoinColumn(), null, null, null, null, null))),
+                                    new ColumnRef(null, association.getJoinColumn(), null, null, null, null, null),
+                                    null)),
                             null, null, null, null));
                 }
             }
@@ -232,7 +233,7 @@ public final class DerivedQueryConverter {
 
             // 检测嵌套属性路径（含点号分隔）
             if (isNestedProperty(condition.getPropertyPath())) {
-                return new Condition.Raw("关联查询: " + condition.getPropertyPath());
+                return new Condition.Raw("关联查询: " + condition.getPropertyPath(), null);
             }
 
             // 处理嵌套属性（驼峰形式，如 "addressCity"）
@@ -310,15 +311,15 @@ public final class DerivedQueryConverter {
                 case EXISTS:
                     return new Condition.Unary(column, "IS NOT NULL", null);
                 case REGEX:
-                    return new Condition.Raw("REGEXP(?, ?)");
+                    return new Condition.Raw("REGEXP(?, ?)", null);
                 case NEAR:
-                    return new Condition.Raw("空间查询不支持");
+                    return new Condition.Raw("空间查询不支持", null);
                 case WITHIN:
-                    return new Condition.Raw("空间查询不支持");
+                    return new Condition.Raw("空间查询不支持", null);
                 case IS_EMPTY:
-                    return new Condition.Raw("EMPTY 检查不支持");
+                    return new Condition.Raw("EMPTY 检查不支持", null);
                 case IS_NOT_EMPTY:
-                    return new Condition.Raw("EMPTY 检查不支持");
+                    return new Condition.Raw("EMPTY 检查不支持", null);
             }
             throw new IllegalArgumentException("未知的 PartType: " + type);
         }

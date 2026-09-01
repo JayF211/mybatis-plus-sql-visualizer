@@ -50,7 +50,7 @@ public final class HbmXmlEntityResolver {
         if (cached != null) return cached;
 
         // 搜索所有 .hbm.xml 文件
-        java.util.Collection<PsiFile> hbmFiles =
+        PsiFile[] hbmFiles =
                 FilenameIndex.getFilesByName(project, "*.hbm.xml", GlobalSearchScope.allScope(project));
 
         for (PsiFile file : hbmFiles) {

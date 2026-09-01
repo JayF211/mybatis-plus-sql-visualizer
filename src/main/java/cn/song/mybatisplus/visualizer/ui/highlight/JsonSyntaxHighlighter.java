@@ -51,7 +51,7 @@ public class JsonSyntaxHighlighter extends SyntaxHighlighterBase {
     private static final TextAttributesKey DEFAULT = TextAttributesKey.createTextAttributesKey("JSON_DEFAULT", DefaultLanguageHighlighterColors.BRACES);
     private static final TextAttributesKey BAD_CHARACTER = TextAttributesKey.createTextAttributesKey("JSON_BAD", HighlighterColors.BAD_CHARACTER);
 
-    private static TextAttributesKey[] pack(TextAttributesKey key) {
+    public static TextAttributesKey[] pack(TextAttributesKey key) {
         return SyntaxHighlighterBase.pack(key);
     }
 }

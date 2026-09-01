@@ -1,4 +1,5 @@
 package cn.song.mybatisplus.visualizer.ui.diagram;
+import java.util.List;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.openapi.Disposable;
@@ -249,7 +250,7 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
         FileSaverDescriptor descriptor = new FileSaverDescriptor(
                 MpSqlVisualizerBundle.message("diagram.export.title"),
                 MpSqlVisualizerBundle.message("diagram.export.desc"), ext);
-        com.intellij.openapi.fileChooser.FileChooserDialog dialog =
+        com.intellij.openapi.fileChooser.FileSaverDialog dialog =
                 FileChooserFactory.getInstance().createSaveFileDialog(descriptor, proj);
         VirtualFileWrapper vfsFile = dialog.save((VirtualFile) null, defaultName);
         if (vfsFile != null) {

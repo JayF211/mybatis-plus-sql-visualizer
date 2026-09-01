@@ -352,7 +352,7 @@ public final class PerfRulesBatch2 {
     }
 
     private static void extractSubQueries(PlainSelect select, List<PlainSelect> out) {
-        net.sf.jsqlparser.schema.FromItem fromItem = select.getFromItem();
+        net.sf.jsqlparser.statement.select.FromItem fromItem = select.getFromItem();
         if (fromItem instanceof ParenthesedSelect ps) {
             Select sub = ps.getSelect();
             if (sub instanceof PlainSelect psub) {
@@ -397,7 +397,7 @@ public final class PerfRulesBatch2 {
 
     private static int computeSubqueryDepth(PlainSelect select, int currentDepth) {
         int[] maxDepth = {currentDepth};
-        net.sf.jsqlparser.schema.FromItem fromItem = select.getFromItem();
+        net.sf.jsqlparser.statement.select.FromItem fromItem = select.getFromItem();
         if (fromItem instanceof ParenthesedSelect ps) {
             Select sub = ps.getSelect();
             if (sub instanceof PlainSelect psub) {

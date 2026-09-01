@@ -47,11 +47,42 @@ public final class JpqlConverter {
      * @param statement  语句模型（SelectStatement 或 DeleteStatement，用于 previewModel）
      * @param inClauseParams 使用 IN 子句的参数名集合（面板回填时逗号分割多值）
      */
-    public record Result(
-            @NotNull String sql,
-            @NotNull SqlStatement statement,
-            @NotNull Set<String> inClauseParams) {
+    public static final class Result {
+    private final @NotNull String sql;
+    private final @NotNull SqlStatement statement;
+    private final @NotNull Set<String> inClauseParams;
+
+    public Result(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Set<String> inClauseParams) {
+        this.sql = sql;
+        this.statement = statement;
+        this.inClauseParams = inClauseParams;
     }
+
+    public @NotNull String getSql() { return sql; }
+    public @NotNull String sql() { return sql; }
+    public @NotNull SqlStatement getStatement() { return statement; }
+    public @NotNull SqlStatement statement() { return statement; }
+    public @NotNull Set<String> getInClauseParams() { return inClauseParams; }
+    public @NotNull Set<String> inClauseParams() { return inClauseParams; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Result)) return false;
+        Result that = (Result) o;
+        return java.util.Objects.equals(this.sql, that.sql) && java.util.Objects.equals(this.statement, that.statement) && java.util.Objects.equals(this.inClauseParams, that.inClauseParams);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(sql, statement, inClauseParams);
+    }
+
+    @Override
+    public String toString() {
+        return "Result[" + "sql=" + sql + ", " + "statement=" + statement + ", " + "inClauseParams=" + inClauseParams + "]";
+    }
+}
 
     /**
      * 转换 JPQL 字符串为 SQL + 语句模型（tableInfo 取默认 null）。

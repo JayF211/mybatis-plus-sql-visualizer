@@ -342,7 +342,8 @@ public final class CriteriaQueryConverter {
             return List.of(
                     new Condition.ColumnComparison(
                             new ColumnRef(alias, "id", null, null, null, null, null),
-                            new ColumnRef(null, matchedColumn.getColumnName(), null, null, null, null, null)));
+                            new ColumnRef(null, matchedColumn.getColumnName(), null, null, null, null, null),
+                            null));
         }
 
         // 策略 2：按命名策略推断外键列名
@@ -350,7 +351,8 @@ public final class CriteriaQueryConverter {
         return List.of(
                 new Condition.ColumnComparison(
                         new ColumnRef(alias, "id", null, null, null, null, null),
-                        new ColumnRef(null, inferredFkColumn, null, null, null, null, null)));
+                        new ColumnRef(null, inferredFkColumn, null, null, null, null, null),
+                        null));
     }
 
     // ------------------------------------------------------------------

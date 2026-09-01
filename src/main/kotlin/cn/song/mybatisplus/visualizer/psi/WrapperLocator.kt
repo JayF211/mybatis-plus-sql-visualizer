@@ -588,7 +588,7 @@ object WrapperLocator {
 
         // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
         val columns = refs.map { it.second }.distinct()
-            .map { ColumnInfo(fieldName = it, columnName = NamingStrategy.toSnakeCase(it)) }
+            .map { ColumnInfo(fieldName = it, columnName = NamingStrategy.INSTANCE.toSnakeCase(it)) }
         return TableInfo(
             entityClassName = className,
             tableName = EntityResolver.inferDecoratedTableName(className),
@@ -1107,7 +1107,7 @@ object WrapperLocator {
      * factoryWrapperType 的 qualifier 分支恒映射；实体从链内方法引用推断）。
      * M10 起 internal 供 [WrapperAnchorDetector] 复用（gutter 锚点快速路径文本匹配）。
      */
-    internal val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers", "JoinWrappers", "MPJWrappers", "Db")
+    val wrapperFactoryClassNames: Set<String> = setOf("Wrappers", "ChainWrappers", "JoinWrappers", "MPJWrappers", "Db")
 
     /**
      * 服务链起点方法名（`service.lambdaQuery()` / `service.lambdaUpdate()`，T-M15-01；
@@ -1115,7 +1115,7 @@ object WrapperLocator {
      * 与 [wrapperFactoryMethodNames] 不同：只放行这些方法（`service.update(wrapper)` 等消费调用
      * 不在此列，避免误判为链起点）。
      */
-    internal val serviceChainMethodNames: Set<String> = setOf("lambdaQuery", "lambdaUpdate", "query", "update")
+    val serviceChainMethodNames: Set<String> = setOf("lambdaQuery", "lambdaUpdate", "query", "update")
 
     /**
      * 链式 wrapper 终结点（消费方法，非 Wrapper 操作，T-M15-01）：
@@ -1174,7 +1174,7 @@ object WrapperLocator {
      * M10 起为 internal：供 [WrapperAnchorDetector] 复用（gutter 锚点判定，快速路径
      * 只做 canonicalText 文本匹配，不 resolve），保证 Wrapper 类名集合单一来源。
      */
-    internal fun detectWrapperType(type: PsiType?): WrapperType? {
+    fun detectWrapperType(type: PsiType?): WrapperType? {
         val simpleName = (type as? PsiClassType)?.className ?: return null
         return when (simpleName) {
             "LambdaQueryWrapper" -> WrapperType.LAMBDA_QUERY

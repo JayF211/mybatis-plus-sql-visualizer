@@ -15,7 +15,6 @@ import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiPolyadicExpression;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
-import com.intellij.psi.PsiTypeArgumentList;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.util.PsiTreeUtil;
 import java.util.ArrayList;
@@ -55,12 +54,71 @@ public final class HqlQueryLocator {
             "setFloat", "setBoolean", "setByte", "setShort", "setCharacter");
 
     /** HQL 字符串 + 是否字面量（extractHqlString 返回值载体）。 */
-    private record HqlStringResult(@Nullable String hql, boolean isLiteral) {
+    private static final class HqlStringResult {
+    private final @Nullable String hql;
+    private final boolean literal;
+
+    public HqlStringResult(@Nullable String hql, boolean isLiteral) {
+        this.hql = hql;
+        this.literal = isLiteral;
     }
 
-    /** 实体类 + 实体类名（extractEntityInfo 返回值载体）。 */
-    private record EntityInfoResult(@Nullable PsiClass entityClass, @Nullable String entityClassName) {
+    public @Nullable String getHql() { return hql; }
+    public @Nullable String hql() { return hql; }
+    public boolean isLiteral() { return literal; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof HqlStringResult)) return false;
+        HqlStringResult that = (HqlStringResult) o;
+        return java.util.Objects.equals(this.hql, that.hql) && java.util.Objects.equals(this.literal, that.literal);
     }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(hql, literal);
+    }
+
+    @Override
+    public String toString() {
+        return "HqlStringResult[" + "hql=" + hql + ", " + "isLiteral=" + literal + "]";
+    }
+}
+
+    /** 实体类 + 实体类名（extractEntityInfo 返回值载体）。 */
+    private static final class EntityInfoResult {
+    private final @Nullable PsiClass entityClass;
+    private final @Nullable String entityClassName;
+
+    public EntityInfoResult(@Nullable PsiClass entityClass, @Nullable String entityClassName) {
+        this.entityClass = entityClass;
+        this.entityClassName = entityClassName;
+    }
+
+    public @Nullable PsiClass getEntityClass() { return entityClass; }
+    public @Nullable PsiClass entityClass() { return entityClass; }
+    public @Nullable String getEntityClassName() { return entityClassName; }
+    public @Nullable String entityClassName() { return entityClassName; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof EntityInfoResult)) return false;
+        EntityInfoResult that = (EntityInfoResult) o;
+        return java.util.Objects.equals(this.entityClass, that.entityClass) && java.util.Objects.equals(this.entityClassName, that.entityClassName);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(entityClass, entityClassName);
+    }
+
+    @Override
+    public String toString() {
+        return "EntityInfoResult[" + "entityClass=" + entityClass + ", " + "entityClassName=" + entityClassName + "]";
+    }
+}
 
     /**
      * 从光标位置定位 HQL 查询调用链。
@@ -121,7 +179,7 @@ public final class HqlQueryLocator {
         PsiCodeBlock body = method.getBody();
         if (body == null) return null;
         List<PsiMethodCallExpression> allCalls =
-                PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression.class);
+                new ArrayList<>(PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression.class));
         for (PsiMethodCallExpression call : allCalls) {
             String methodName = call.getMethodExpression().getReferenceName();
             if (methodName == null || !CREATE_QUERY_METHODS.contains(methodName)) continue;
@@ -179,7 +237,7 @@ public final class HqlQueryLocator {
         List<HqlParameter> parameters = new ArrayList<>();
         if (!queryVars.isEmpty()) {
             List<PsiMethodCallExpression> calls = allCalls != null ? allCalls
-                    : PsiTreeUtil.collectElementsOfType(method.getBody(), PsiMethodCallExpression.class);
+                    : new ArrayList<>(PsiTreeUtil.collectElementsOfType(method.getBody(), PsiMethodCallExpression.class));
             for (PsiMethodCallExpression paramCall : calls) {
                 String paramMethodName = paramCall.getMethodExpression().getReferenceName();
                 if (paramMethodName == null) continue;
@@ -285,13 +343,10 @@ public final class HqlQueryLocator {
         }
 
         // 尝试从类型参数推断
-        PsiTypeArgumentList typeArgList = call.getTypeArgumentList();
+        PsiType[] typeArgs = call.getTypeArgumentList().getTypeArguments();
         PsiClassType typeArg = null;
-        if (typeArgList != null) {
-            PsiType[] typeArgs = typeArgList.getTypeArguments();
-            if (typeArgs.length > 0 && typeArgs[0] instanceof PsiClassType ct) {
-                typeArg = ct;
-            }
+        if (typeArgs.length > 0 && typeArgs[0] instanceof PsiClassType ct) {
+            typeArg = ct;
         }
         if (typeArg != null) {
             return new EntityInfoResult(typeArg.resolve(), typeArg.getClassName());

@@ -1016,8 +1016,8 @@ class SqlToJavaPanel(
     ): JavaCodeGenerator.EntityTarget? {
         val className = candidate.psiClass.name ?: return null
         return JavaCodeGenerator.EntityTarget(
-            className = className,
-            columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
+            className,
+            candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
         )
     }
 
@@ -1090,9 +1090,9 @@ class SqlToJavaPanel(
         if (caller.isEmpty()) {
             // T-M50：仅选 VO（无调用类）→ VO 用于 selectAs 字段引用（Vo::getXxx），不生成调用行。
             // mpj = true 放开 JOIN/VO 判定（selectAs VO 引用不依赖调用类 MPJ 能力）
-            return JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = vo, mpj = true)
+            return JavaCodeGenerator.InvocationTarget("", vo, true)
         }
-        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods)
+        return JavaCodeGenerator.InvocationTarget(caller, vo, callerMpj, callerMethods)
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */

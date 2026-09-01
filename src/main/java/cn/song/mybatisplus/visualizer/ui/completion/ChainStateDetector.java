@@ -51,13 +51,49 @@ public final class ChainStateDetector {
      * @param isInsideMethodArgs 锚点是否在方法实参列表内（{@code .eq(|)} 的 {@code |} 位置）
      * @param currentMethodName  若在实参内，当前所在方法的名称（如 "eq"）；否则为 null
      */
-    public record ChainState(
-            @NotNull WrapperType wrapperType,
-            @NotNull List<String> calledMethods,
-            @Nullable String lastMethod,
-            boolean isInsideMethodArgs,
-            @Nullable String currentMethodName) {
+    public static final class ChainState {
+    private final @NotNull WrapperType wrapperType;
+    private final @NotNull List<String> calledMethods;
+    private final @Nullable String lastMethod;
+    private final boolean insideMethodArgs;
+    private final @Nullable String currentMethodName;
+
+    public ChainState(@NotNull WrapperType wrapperType, @NotNull List<String> calledMethods, @Nullable String lastMethod, boolean isInsideMethodArgs, @Nullable String currentMethodName) {
+        this.wrapperType = wrapperType;
+        this.calledMethods = calledMethods;
+        this.lastMethod = lastMethod;
+        this.insideMethodArgs = isInsideMethodArgs;
+        this.currentMethodName = currentMethodName;
     }
+
+    public @NotNull WrapperType getWrapperType() { return wrapperType; }
+    public @NotNull WrapperType wrapperType() { return wrapperType; }
+    public @NotNull List<String> getCalledMethods() { return calledMethods; }
+    public @NotNull List<String> calledMethods() { return calledMethods; }
+    public @Nullable String getLastMethod() { return lastMethod; }
+    public @Nullable String lastMethod() { return lastMethod; }
+    public boolean isInsideMethodArgs() { return insideMethodArgs; }
+    public @Nullable String getCurrentMethodName() { return currentMethodName; }
+    public @Nullable String currentMethodName() { return currentMethodName; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof ChainState)) return false;
+        ChainState that = (ChainState) o;
+        return java.util.Objects.equals(this.wrapperType, that.wrapperType) && java.util.Objects.equals(this.calledMethods, that.calledMethods) && java.util.Objects.equals(this.lastMethod, that.lastMethod) && java.util.Objects.equals(this.insideMethodArgs, that.insideMethodArgs) && java.util.Objects.equals(this.currentMethodName, that.currentMethodName);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(wrapperType, calledMethods, lastMethod, insideMethodArgs, currentMethodName);
+    }
+
+    @Override
+    public String toString() {
+        return "ChainState[" + "wrapperType=" + wrapperType + ", " + "calledMethods=" + calledMethods + ", " + "lastMethod=" + lastMethod + ", " + "isInsideMethodArgs=" + insideMethodArgs + ", " + "currentMethodName=" + currentMethodName + "]";
+    }
+}
 
     /**
      * 检测当前位置的链状态。

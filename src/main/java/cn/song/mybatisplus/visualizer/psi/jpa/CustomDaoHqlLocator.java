@@ -539,6 +539,36 @@ public final class CustomDaoHqlLocator {
      * @param hql     HQL 字符串（纯字面量直接取值；变量引用或拼接时为拼接结果）；可能为 null
      * @param literal 是否为纯字面量（true=直接字面量；false=变量引用或拼接）
      */
-    private record HqlStringResult(@Nullable String hql, boolean literal) {
+    private static final class HqlStringResult {
+    private final @Nullable String hql;
+    private final boolean literal;
+
+    public HqlStringResult(@Nullable String hql, boolean literal) {
+        this.hql = hql;
+        this.literal = literal;
     }
+
+    public @Nullable String getHql() { return hql; }
+    public @Nullable String hql() { return hql; }
+    public boolean isLiteral() { return literal; }
+    public boolean literal() { return literal; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof HqlStringResult)) return false;
+        HqlStringResult that = (HqlStringResult) o;
+        return java.util.Objects.equals(this.hql, that.hql) && java.util.Objects.equals(this.literal, that.literal);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(hql, literal);
+    }
+
+    @Override
+    public String toString() {
+        return "HqlStringResult[" + "hql=" + hql + ", " + "literal=" + literal + "]";
+    }
+}
 }

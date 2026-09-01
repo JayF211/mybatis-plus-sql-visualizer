@@ -16,6 +16,7 @@ import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiReferenceExpression;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -65,20 +66,20 @@ public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider 
         if (STANDARD_JPA_METHODS.contains(element.getText())) return null;
         if (!gutterEnabled()) return null;
         if (CustomDaoHqlLocator.locate(grandParent) == null) return null;
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
                 CUSTOM_DAO_HQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.customDaoHql.tooltip"),
                 CustomDaoHqlGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.customDaoHql.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.customDaoHql.accessible.name")
         );
     }
 
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -98,8 +99,8 @@ public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider 
                     ? (PsiMethodCallExpression) parent.getParent() : null;
             if (call == null) return;
             SqlPreviewService service = project.getService(SqlPreviewService.class);
-            SqlPreviewService.previewAsync(project, () -> service.previewCustomDaoHql(call),
-                    result -> SqlPreviewService.showResult(project, result));
+            SqlPreviewService.Companion.previewAsync(project, () -> service.previewCustomDaoHql(call),
+                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

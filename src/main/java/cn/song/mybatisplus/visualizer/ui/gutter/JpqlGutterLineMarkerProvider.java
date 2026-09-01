@@ -19,6 +19,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -64,20 +65,20 @@ public class JpqlGutterLineMarkerProvider implements LineMarkerProvider {
         if (DerivedMethodLocator.isDerivedQuery(method)) return null;
         if (!JpqlQueryLocator.hasQueryAnnotation(method)) return null;
         if (!gutterEnabled()) return null;
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
                 JPQL_SQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.jpql.tooltip"),
                 JpqlGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.jpql.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.jpql.accessible.name")
         );
     }
 
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -92,8 +93,8 @@ public class JpqlGutterLineMarkerProvider implements LineMarkerProvider {
             PsiMethod method = PsiTreeUtil.getParentOfType(elt, PsiMethod.class, false);
             if (method == null) return;
             SqlPreviewService service = project.getService(SqlPreviewService.class);
-            SqlPreviewService.previewAsync(project, () -> service.previewJpql(method),
-                    result -> SqlPreviewService.showResult(project, result));
+            SqlPreviewService.Companion.previewAsync(project, () -> service.previewJpql(method),
+                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 

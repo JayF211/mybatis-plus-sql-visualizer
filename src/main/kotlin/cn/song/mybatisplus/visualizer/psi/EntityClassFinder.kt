@@ -184,7 +184,7 @@ class EntityClassFinder(private val project: Project) {
         }
 
         /** 清除项目级反查缓存（设置页「清除缓存」；下次 find 重新全量扫描）。 */
-        internal fun clearReverseLookupCache(project: Project) {
+        fun clearReverseLookupCache(project: Project) {
             project.putUserData(REVERSE_LOOKUP_CACHE_KEY, null)
         }
 
@@ -192,7 +192,7 @@ class EntityClassFinder(private val project: Project) {
          * 反查缓存大小估算（设置页展示 KB/MB）：缓存内容为字符串（表名/类短名/全限定名），
          * 按 UTF-16 字符 2 字节 + 每条目/每值固定开销近似——展示用，非精确 JVM 内存。
          */
-        internal fun reverseLookupCacheSizeBytes(project: Project): Long {
+        fun reverseLookupCacheSizeBytes(project: Project): Long {
             val entry = project.getUserData(REVERSE_LOOKUP_CACHE_KEY) ?: return 0L
             var bytes = 0L
             for ((table, classes) in entry.names) {

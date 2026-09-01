@@ -23,7 +23,7 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiNameValuePair;
 import com.intellij.psi.PsiPolyadicExpression;
-import com.intellij.psi.PsiTreeUtil;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.ProcessingContext;
 
 import java.util.ArrayList;
@@ -100,9 +100,11 @@ public class AnnotationSqlCompletionContributor extends CompletionContributor im
                     Matcher tm = TAG_NAME_AT_CARET.matcher(beforeCaret);
                     String tagName = tm.find() ? tm.group(1) : null;
                     List<String> attrs = SourceSqlSuggestionFactory.DYNAMIC_TAG_ATTRIBUTES.get(tagName);
-                    for (String attr : (attrs != null ? attrs : List.of())) {
-                        if (prefix.prefixMatches(attr)) {
-                            result.addElement(SourceSqlSuggestionFactory.xmlAttribute(attr));
+                    if (attrs != null) {
+                        for (String attr : attrs) {
+                            if (prefix.prefixMatches(attr)) {
+                                result.addElement(SourceSqlSuggestionFactory.xmlAttribute(attr));
+                            }
                         }
                     }
                     return;
@@ -132,7 +134,7 @@ public class AnnotationSqlCompletionContributor extends CompletionContributor im
 
     /** OGNL 补全：test/collection 值内——参数名 + 主表实体字段（`param.` 前缀时仅第二段字段）。 */
     private void addOgnlCompletions(SourceSqlContext context, String beforeCaret, PrefixMatcher prefix, CompletionResultSet result) {
-        TableInfo main = context.getMain();
+        SqlCompletionContext main = context.getMain();
         String mainTableName = main != null ? main.getTableName() : null;
         List<String> fieldNames = context.getCandidates().stream()
                 .filter(it -> it.getTableName().equals(mainTableName))

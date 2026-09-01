@@ -18,6 +18,7 @@ import com.intellij.psi.xml.XmlToken;
 import com.intellij.psi.xml.XmlTokenType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -49,21 +50,21 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
         if (!"maintainPage".equals(tag.getName())) return null;
         if (tag.getParentTag() == null || !"pages".equals(tag.getParentTag().getName())) return null;
         if (!gutterEnabled()) return null;
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
                 SQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.pages.tooltip"),
                 PagesGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.pages.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.pages.accessible.name")
         );
     }
 
     /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -80,9 +81,9 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
             if (tag == null) return;
             XmlFile file = tag.getContainingFile() instanceof XmlFile ? (XmlFile) tag.getContainingFile() : null;
             if (file == null) return;
-            SqlPreviewService.previewAsync(project,
-                    () -> PagesXmlPreviewService.preview(file.getText(), tag.getAttributeValue("id"), project),
-                    result -> SqlPreviewService.showResult(project, result));
+            SqlPreviewService.Companion.previewAsync(project,
+                    () -> PagesXmlPreviewService.INSTANCE.preview(file.getText(), tag.getAttributeValue("id"), project),
+                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 
@@ -100,7 +101,7 @@ public class PagesXmlGutterLineMarkerProvider implements LineMarkerProvider {
      * @return 命中的 maintainPage 标签列表（按起始 offset 升序）
      */
     public static List<XmlTag> statementsInRange(XmlFile file, int start, int end) {
-        List<XmlTag> all = PsiTreeUtil.collectElementsOfType(file, XmlTag.class);
+        List<XmlTag> all = new ArrayList<>(PsiTreeUtil.collectElementsOfType(file, XmlTag.class));
         List<XmlTag> result = new ArrayList<>();
         for (XmlTag it : all) {
             if ("maintainPage".equals(it.getName())

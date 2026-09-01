@@ -152,7 +152,7 @@ object AnnotationSqlPreviewService {
     }
 
     /** 数组元素/单值常量求值：失败记录 warning（元素缺失/非常量）。 */
-    internal fun constantString(memberValue: PsiAnnotationMemberValue?, project: Project?, warnings: MutableList<String>): String {
+    fun constantString(memberValue: PsiAnnotationMemberValue?, project: Project?, warnings: MutableList<String>): String {
         val result = constantExpression(memberValue, project)
         if (result == null && memberValue != null) {
             warnings += MpSqlVisualizerBundle.message("annotation.constant.failed")

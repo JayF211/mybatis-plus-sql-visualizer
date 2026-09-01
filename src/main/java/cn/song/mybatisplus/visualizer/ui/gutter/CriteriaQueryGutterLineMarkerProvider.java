@@ -16,6 +16,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import kotlin.Unit;
 
 import java.awt.event.MouseEvent;
 import javax.swing.Icon;
@@ -46,20 +47,20 @@ public class CriteriaQueryGutterLineMarkerProvider implements LineMarkerProvider
         if (method.getNameIdentifier() != element) return null;
         // 复用 CriteriaQueryLocator.locate 非 null 判定（完整扫描代码块，开销可控）
         if (CriteriaQueryLocator.locate(element) == null) return null;
-        return new LineMarkerInfo<>(
+        return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
                 CRITERIA_SQL_PREVIEW_ICON,
                 elt -> MpSqlVisualizerBundle.message("gutter.criteria.tooltip"),
                 CriteriaQueryGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
-                elt -> MpSqlVisualizerBundle.message("gutter.criteria.accessible.name")
+                () -> MpSqlVisualizerBundle.message("gutter.criteria.accessible.name")
         );
     }
 
     private boolean gutterEnabled() {
         try {
-            return PluginSettings.getInstance().getState().isShowGutterIcon();
+            return PluginSettings.getInstance().getState().getShowGutterIcon();
         } catch (Throwable t) {
             return true;
         }
@@ -72,8 +73,8 @@ public class CriteriaQueryGutterLineMarkerProvider implements LineMarkerProvider
         public void navigate(MouseEvent e, PsiElement elt) {
             Project project = elt.getProject();
             SqlPreviewService service = project.getService(SqlPreviewService.class);
-            SqlPreviewService.previewAsync(project, () -> service.previewCriteriaQuery(elt),
-                    result -> SqlPreviewService.showResult(project, result));
+            SqlPreviewService.Companion.previewAsync(project, () -> service.previewCriteriaQuery(elt),
+                    result -> { SqlPreviewService.Companion.showResult(project, result, null); return kotlin.Unit.INSTANCE; });
         }
     }
 
