@@ -8,9 +8,12 @@
 
 ### Changed
 
+- **实时日志「精确跳转源码」可靠方案（F-44-6）**：原实时日志无 file:line（控制台 SQL 日志不含调用位置）只能「按表名猜实体」近似跳转、常跳不准。新方案在**应用 JVM** 用 MyBatis-Plus `InnerInterceptor`（`docs/instrumentation/SqlSourceInterceptor.kt` 自包含示例）于 SQL 执行线程捕获真实调用点，向 stdout 打印标记行 `SQLVIS-SOURCE|<相对路径>|<行号>`；`SqlLogConsoleBridge.processConsoleLine` 解析该标记写入 `LogSqlEntry.sourceFile/sourceLine`，实时日志复用与历史面板**一致**的精确 `OpenFileDescriptor` file:line 跳转。无标记时零影响、被动回退原表名搜索。新增 `SqlSourceMarker`（标记格式/解析）、`CallerSourceLocator`（调用栈→用户代码帧纯函数）；`SqlLogPanel` 抽 `internal sealed class LogJumpTarget`（Precise/NoSource/NotFound/SearchByTable/NoTable）+ `resolveEntryJump` 统一解析层；VFS 路径统一正斜杠（跨平台一致）
 - **插件显示名更名 SQL Visualizer（原 MyBatis-Plus SQL Visualizer）**：`plugin.xml` `<name>` 与全部用户可见文案（设置页/弹窗标题/gutter tooltip/通知/工具窗口标题，中英双语）同步更名；插件 ID（`<id>`）、构建产物 zip 顶层短名、仓库与 Marketplace 页地址均不变——已安装用户正常升级，配置与历史记录全保留。仍全面支持 MyBatis-Plus / MPJ / JPA / Hibernate
 - **项目内数据目录随插件更名（F-44-4）**：`.idea/` 下插件数据目录由旧名 `mybatis-plus-sql-visualizer` 改为新名 `sql-visualizer`（含 `sql-history/` 历史 SQL 与 `exec/` 执行临时文件）——**不考虑向前兼容**，旧目录数据不再读取，历史 SQL 与新捕获从新目录起算；新增统一常量 `SqlLogAutoSaver.DATA_DIR_NAME` 供历史面板 / 历史 tab 显隐检测 / 数据源执行文件路径引用，设置页默认路径提示同步更新（中英文案 `settings.log.autoSave.path.tip/empty`）
-- **实时日志「精确跳转源码」可靠方案（F-44-6）**：原实时日志无 file:line（控制台 SQL 日志不含调用位置）只能「按表名猜实体」近似跳转、常跳不准。新方案在**应用 JVM** 用 MyBatis-Plus `InnerInterceptor`（`docs/instrumentation/SqlSourceInterceptor.kt` 自包含示例）于 SQL 执行线程捕获真实调用点，向 stdout 打印标记行 `SQLVIS-SOURCE|<相对路径>|<行号>`；`SqlLogConsoleBridge.processConsoleLine` 解析该标记写入 `LogSqlEntry.sourceFile/sourceLine`，实时日志复用与历史面板**一致**的精确 `OpenFileDescriptor` file:line 跳转。无标记时零影响、被动回退原表名搜索。新增 `SqlSourceMarker`（标记格式/解析）、`CallerSourceLocator`（调用栈→用户代码帧纯函数）；`SqlLogPanel` 抽 `internal sealed class LogJumpTarget`（Precise/NoSource/NotFound/SearchByTable/NoTable）+ `resolveEntryJump` 统一解析层；VFS 路径统一正斜杠（跨平台一致）
+- **HQL SELECT 实体别名展开为列清单（M36.7）**：修复 HQL 预览生成的 SQL 在 MySQL 执行报 `[1054] Unknown column 'u' in 'field list'`——HQL 语义 `SELECT u` 表示取整个实体，此前原样输出导致别名被当作列名。新增 SELECT 子句展开（裸别名且登记在 FROM/JOIN 才展开；无 SELECT 子句自动补列清单；JOIN 副表/元数据缺失降级 `alias.*`；DELETE/DISTINCT/子查询/聚合/显式列不误伤）
+- **Gitee 抢先体验更新通道（原 v2026.8.22 计划）**：内部更新通道转为内测机制——只检查 `update/update.json`（Gitee 抢先体验），稳定版由 JetBrains Marketplace 推送；`autoCheckUpdate` 默认关闭（false），用户主动勾选设置页「启动时自动检查更新」才开启抢先体验；新增「忽略此版本」功能（仅抑制自动启动通知，跨重启持久化，手动检查不受影响）；通知弹窗优化（标题去掉版本号缩短一半，版本号移到正文第一行）；双 JSON 文件策略（`update/update.json` 为检查源，`preview.update.json` 为草稿）；新增 `VersionIgnore` 纯函数 + 全分支单测；新增本地清单测试工具（`local-manifest-server.py` + `run-ide-local-manifest.sh` + `Run IDE (Local Manifest)` 沙盒运行配置）
+- **帮助按钮本地 HTML 定稿（M36.5.80）**：JCEF 在线文档在国内网络加载超时、`data: URL` 样式丢失——内嵌浏览器改为主路径（`marketplace-custom-page.html`，纯内联样式），JCEF 不可用/资源缺失时降级系统浏览器打开在线文档，删除网络探测逻辑
 
 ### Fixed
 
