@@ -70,8 +70,37 @@ class SqlLogManager(private val project: Project) : Disposable {
     var isWaitingForConsole: Boolean = false
         private set
 
+    /** M37.3：上次自动展开时间戳（防抖基准；internal 供测试重置）。 */
+    @Volatile
+    internal var lastAutoShowAt = 0L
+
+    /** M37.3：自动展开请求处理器（internal 测试缝——默认查 ToolWindowManager 并 show，不 activate）。 */
+    @Volatile
+    internal var onAutoShowRequest: () -> Unit = {
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
+            val tw = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return@invokeLater
+            if (!tw.isVisible) tw.show()  // show 不 activate——不抢编辑器焦点
+        }
+    }
+
+    private val autoShowBufferListener = { maybeAutoShow() }
+
     init {
         // F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）
+        // M37.3：恢复 logAutoOpenOnCapture 行为——F-44 移除独立窗口时一并丢了解接线（设置项
+        // 与设置页勾选保留至今，形同虚设）。挂**无条件** buffer 监听（面板未创建/未订阅时
+        // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
+        buffer.addListener(autoShowBufferListener)
+    }
+
+    /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启且距上次展开超过防抖窗口）。 */
+    private fun maybeAutoShow() {
+        val now = System.currentTimeMillis()
+        if (!shouldAutoShow(PluginSettings.getInstance().state.logAutoOpenOnCapture, now - lastAutoShowAt)) return
+        lastAutoShowAt = now
+        LOG.info("[M37.3] 首条 SQL 自动展开日志工具窗（logAutoOpenOnCapture=true）")
+        onAutoShowRequest()
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
@@ -267,9 +296,7 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次；与面板是否已创建无关）。 */
     /** F-43 测试访问器：当前自动保存文件。 */
-    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()
-
-    /** F-43 测试访问器：解析文件名模板。 */
+    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()    /** F-43 测试访问器：解析文件名模板。 */
     internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
 
     private fun notifyUi() {
@@ -300,6 +327,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.paused = true
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
+        buffer.removeListener(autoShowBufferListener)
         uiListeners.clear()
         autoSaver.close()
     }
@@ -307,8 +335,15 @@ class SqlLogManager(private val project: Project) : Disposable {
     companion object {
         private val LOG = Logger.getInstance(SqlLogManager::class.java)
 
-        /** 原 toolWindow id（F-44 后不再注册，保留常量供其他引用）。 */
+        /** 主工具窗 id（plugin.xml toolWindow 注册；F-44 后历史 Tab 合并进本窗口）。 */
         const val TOOL_WINDOW_ID = "cn.song.mybatisplus.visualizer.log"
+
+        /** M37.3：自动展开防抖窗口（ms）——多条 SQL 连续到达时只展开一次。 */
+        internal const val AUTO_SHOW_DEBOUNCE_MS = 60_000L
+
+        /** M37.3：自动展开决策（纯函数，测试缝）——设置开启且距上次展开超过防抖窗口。 */
+        internal fun shouldAutoShow(enabled: Boolean, elapsedMs: Long): Boolean =
+            enabled && elapsedMs >= AUTO_SHOW_DEBOUNCE_MS
     }
 }
 
