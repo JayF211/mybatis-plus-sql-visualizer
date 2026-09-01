@@ -30,12 +30,14 @@ import javax.swing.JScrollPane
 class JavaCodePreviewDialog(
     private val project: Project?,
     private val code: String,
+    /** M37.4：自定义弹窗标题（null = 默认「SQL→Java」标题，既有调用点零影响）。 */
+    private val dialogTitle: String? = null,
 ) : DialogWrapper(project, true) {
 
     private val editor: Editor = createJavaEditor(code)
 
     init {
-        title = MpSqlVisualizerBundle.message("reverse.dialog.title")
+        title = dialogTitle ?: MpSqlVisualizerBundle.message("reverse.dialog.title")
         init()
         setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"))
     }
