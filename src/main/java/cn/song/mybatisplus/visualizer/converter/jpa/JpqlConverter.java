@@ -265,7 +265,9 @@ public final class JpqlConverter {
         Matcher matcher = joinFetchPattern.matcher(jpql);
         StringBuffer sb = new StringBuffer();
         while (matcher.find()) {
-            String joinType = matcher.group(1).toUpperCase();
+            // 组1 (LEFT|INNER)? 为可选分组，未参与匹配时 group(1) 为 null；对应 Kotlin 的 ?.uppercase()
+            String joinTypeRaw = matcher.group(1);
+            String joinType = joinTypeRaw != null ? joinTypeRaw.toUpperCase() : "";
             String rootAlias = matcher.group(2);
             String alias = matcher.group(3);
             String keyword;

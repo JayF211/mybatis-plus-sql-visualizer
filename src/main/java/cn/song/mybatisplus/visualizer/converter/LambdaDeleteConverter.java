@@ -29,6 +29,7 @@ public final class LambdaDeleteConverter implements WrapperConverter {
     @Override
     public SqlStatement convert(WrapperChain chain, TableInfo table) {
         List<Condition> conditions = new QueryWrapperParser(table).parse(chain).getConditions();
-        return new DeleteStatement(table, conditions, List.of(), null, null);
+        // joins 是 Kotlin data class 的非空默认参数（= emptyList()）；Java 侧必须显式传空集合，不能传 null
+        return new DeleteStatement(table, conditions, List.of(), null, List.of());
     }
 }

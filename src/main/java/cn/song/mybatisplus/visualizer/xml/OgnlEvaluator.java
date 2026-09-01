@@ -438,9 +438,16 @@ public final class OgnlEvaluator {
             return toDecimal((Number) left).add(toDecimal((Number) right));
         }
         if (left instanceof CharSequence || right instanceof CharSequence) {
-            return left.toString() + right.toString();
+            // 对齐 Kotlin 可空 toString() 扩展：null 渲染为 "null"（与 OGNL 一致），
+            // Java 侧 null.toString() 会 NPE，必须空判。
+            return toStr(left) + toStr(right);
         }
         return null;
+    }
+
+    /** 可空值转字符串：null → "null"（对齐 Kotlin Any?.toString() 扩展语义）。 */
+    private static String toStr(Object o) {
+        return o == null ? "null" : o.toString();
     }
 
     private static Object minus(Object left, Object right) {
@@ -710,7 +717,16 @@ public final class OgnlEvaluator {
                 }
             }
             String raw = text.substring(start, pos);
-            Object value = raw.contains(".") ? Double.parseDouble(raw) : Long.parseLong(raw);
+            // 关键：不能用三元表达式 `cond ? Double.parseDouble(raw) : Long.parseLong(raw)`——
+            // Java 条件运算符会对 long/double 做二进制数值提升（long 提升为 double），
+            // 导致整数 "42" 被归一成 Double 42.0，破坏 Kotlin 原 Long 语义（测试 assertEquals(42L, eval("42"))）。
+            // 用 if/else 语句分别装箱，保住 Long / Double 原始类型（对齐 Kotlin if/else 的装箱行为）。
+            Object value;
+            if (raw.contains(".")) {
+                value = Double.parseDouble(raw);
+            } else {
+                value = Long.parseLong(raw);
+            }
             return new Token(TokenKind.NUMBER, raw, value);
         }
 

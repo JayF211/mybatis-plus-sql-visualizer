@@ -29,7 +29,7 @@ import kotlin.Pair;
  * 驱动 F-43 自动保存 + 主侧边栏 Tab 0 实时展示。
  */
 @Service(Service.Level.PROJECT)
-public class SqlLogManager implements Disposable {
+public final class SqlLogManager implements Disposable {
 
     private final SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(
             PluginSettings.getInstance().getState().getLogMaxCount());

@@ -69,7 +69,8 @@ public final class LambdaUpdateConverter implements WrapperConverter {
             }
         }
 
-        return new UpdateStatement(table, sets, conditions, rawTail, null, null);
+        // joins 是 Kotlin data class 的非空默认参数（= emptyList()）；Java 侧必须显式传空集合，不能传 null
+        return new UpdateStatement(table, sets, conditions, rawTail, null, List.of());
     }
 
     /** 解析 set 类调用为赋值子句（T-M15-04 起支持布尔条件前缀与 {i} 参数）。 */

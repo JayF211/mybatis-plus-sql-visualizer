@@ -16,7 +16,7 @@ public final class SelectStarDetector {
     @NotNull
     public static final SelectStarDetector INSTANCE = new SelectStarDetector();
 
-    private static final Pattern ALIAS_STAR = Pattern.compile("^[\\w]+\\*$");
+    private static final Pattern ALIAS_STAR = Pattern.compile("^[\\w]+\\.\\*$");
 
     private SelectStarDetector() {
     }

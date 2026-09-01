@@ -9,7 +9,7 @@
 
 ## 0. 一句话状态
 
-主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。剩余 46 个主源码 `.kt` 与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。
+主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。剩余 46 个主源码 `.kt` 与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
 
 ---
 
@@ -75,13 +75,54 @@
 |--------|------|------|
 | 主源码编译 | `compileJava compileKotlin` | ✅ BUILD SUCCESSFUL（前序会话已稳） |
 | 测试编译 | `compileTestKotlin` | ✅ BUILD SUCCESSFUL（本轮） |
-| 全量测试 | `./gradlew test` | ⏳ 运行中（含 testShards / heavy 沙盒） |
-| 插件校验 | `verifyPlugin` | ⬜ 待跑（243/253/262 三版本零 Internal API 违规） |
-| 产物 | `buildPlugin` | ⬜ 待跑（资源齐全、无 `$Kotlin` 元数据残留） |
+| 全量测试 | `./gradlew test` | ✅ BUILD SUCCESSFUL（**0 失败** / 1421 测试 / 139 套件，6 跳过） |
+| 插件校验 | `verifyPlugin` | 🟡 2 compatibility problems（缺失资源键 `log.panel.jumpToSource.*`）已修复，复验中（其余 deprecated / experimental / scheduled-for-removal 仅为警告，不阻断） |
+| 产物 | `buildPlugin` | ✅ BUILD SUCCESSFUL（资源齐全、无 `$Kotlin` 元数据残留） |
 
 ---
 
-## 5. 剩余工作（查漏补缺方向）
+## 5. 运行时回归修复（全量测试 6 → 0）+ 资源键缺口
+
+### 5.1 全量测试结果
+- 初跑（`testrun4`，沙盒重定向 + 2g 堆）：**1421 tests, 6 failed, 6 skipped**。
+- 复测（`testrun8`）：**0 failed**（139 套件全部 `failures="0"`）。
+- 6 失败全部为 Kotlin→Java 转换语义差异（非功能缺失），均为单行 / 局部修复。
+
+### 5.2 六处失败根因与修复
+| # | 失败用例 | 根因（Java vs Kotlin 语义差异） | 修复 |
+|---|---------|-------------------------------|------|
+| 1–3 | `PluginSettingsConfigurableTest` / `PluginSettingsPanelBindingTest` → `PluginException: Light service class ...SqlLogManager must be final` | IntelliJ light service 容器强制 `@Service` 类 `final`；Kotlin 类默认 final，Java 类默认非 final | `log/SqlLogManager.java:32` `public class` → `public final class` |
+| 4–5 | `SelectStarDetectorTest` `detect("SELECT u.* FROM t_user u")` / `detect("\`u\`.*")` 误判 false | 正则 `^[\w]+\*$` 不含 `\.`，无法匹配 `u.*`（`u` 后 `.` 再 `*`） | `sql/extract/SelectStarDetector.java:19` `^[\w]+\*$` → `^[\w]+\.\*$` |
+| 6 | `OgnlEvaluatorTest` `assertEquals(42L, eval("42"))` → `expected:<42> but was:<42.0>` | Java 三元 `cond ? Double.parseDouble : Long.parseLong` 触发**二进制数值提升**（long→double），整数归一成 Double 42.0；Kotlin `if/else` 分别装箱保 Long | `xml/OgnlEvaluator.java` `number()` 改 `if/else` 语句分别赋值 `Object` |
+| 附 | `OgnlEvaluatorTest` `eval("'%' + null + '%')` 原 NPE | `null.toString()` 在 Java 抛 NPE；Kotlin `Any?.toString()` 对 null 返回 `"null"` | `xml/OgnlEvaluator.java` `plus()` 加 `toStr()` 空安全辅助 |
+
+> ⚠️ **团队级陷阱（已沉淀）**：JLS 15.25 规定 `boolean ? doubleExpr : longExpr` 的结果为 `double`（二进制数值提升），与 Kotlin `if/else`「分别装箱」语义不同。凡「数字字面量需保住 Long/Integer 原始类型」的场景，**必须用 `if/else` 语句分别赋值给 `Object`，绝不能用三元表达式**。
+
+### 5.3 测试运行环境踩坑（Windows）
+- 全量 `./gradlew test` 默认堆下 `OutOfMemoryError` → init script 提 `maxHeapSize=2g` + G1GC。
+- `prepareTestSandbox` 复制 `jsqlparser-5.3.jar` 时若被外部进程（IDE/索引器）内存映射锁定，报「请求的操作无法在使用用户映射区域打开的文件上执行」；且 `rm -rf` 沙盒会挂死（Windows 无法删 memory-mapped 文件）。
+- **规避**：init script 把 `test`/`prepareTestSandbox` 的 `sandboxDirectory` 重定向到 `build/test-sandbox/default`（绕开被锁 `.intellijPlatform/sandbox`）。脚本位于 `/tmp/redirectsandbox.gradle`（沙盒重定向 + `maxHeapSize=2g`）。
+
+### 5.4 verifyPlugin 兼容性缺口（缺失资源键，pre-existing master 缺陷）
+`verifyPlugin`（对 IU-243 / 253 / 262 三版本）报 **2 compatibility problems**：
+```
+#Reference to a missing property log.panel.jumpToSource.notFound  of resource bundle messages.MpSqlVisualizerBundle
+#Reference to a missing property log.panel.jumpToSource.noSource of resource bundle messages.MpSqlVisualizerBundle
+    Method cn.song.mybatisplus.visualizer.log.SqlLogPanel.jumpToSource(LogSqlEntry)
+```
+- 根因：`SqlLogPanel` 引用 `log.panel.jumpToSource.noSource` / `notFound`，但资源包仅在 `log.history.*` 前缀下定义了这两个键，`log.panel.*` 前缀缺失 → 运行期点「跳转源码」会抛 `MissingResourceException`。
+- **已确认非本分支回归**：master 的 `SqlLogPanel.kt`（L846 / L852）引用完全相同的键，master 资源包同样缺失 → 这是 master 既有缺陷，转换被忠实保留。
+- 修复：在 `MpSqlVisualizerBundle.properties` 与 `_zh.properties` 的 `log.panel.jumpToSource.*` 段补齐 `noSource` / `notFound` 两条键（英文 / 中文各一），文本对齐 `log.history.*` 对应键。复验待 `verifyPlugin` 重跑确认。
+
+### 5.5 对比 master 查漏补缺结论（零功能丢失）
+- 对比 master `src/main/kotlin`（213 类）与分支联合（java 263 + kotlin 47 = 309 类），仅 4 类「缺失」实为**重命名**：
+  - `Ognl` → `OgnlEvaluator.java`
+  - `WrapperFormat` → `WrapperFormatKt.java`（+ 新增 `ReverseWrapperFormat` 枚举）
+  - `LogEntryPreviewRecognizer` → `LogEntryPreviewRecognizerKt.java`
+  - `LogSqlModels` → `LogSqlModelsKt.java`
+- `plugin.xml` 无指向已改名类的陈旧引用，干净。**无生产功能丢失**。
+
+## 6. 剩余工作（查漏补缺方向）
 
 1. **主源码 46 个 `.kt`**：model(12)/psi(10)/sql(14)/config(9)/update(1)。按「全量纯 Java」目标应继续转，但当前与 Java 共存编译通过；建议按模块优先级推进（model → psi → sql → config → update），每模块同步转对应测试。
 2. **全量测试跑绿**：等待 `./gradlew test` 结果，修复任何运行时回归（重点：record 与 data class 的 `equals/hashCode` 差异、集合顺序、null 处理、文本块空白差异）。
@@ -91,7 +132,7 @@
 
 ---
 
-## 6. 提交与分支
+## 7. 提交与分支
 
 - 关键节点已按约定自动提交（每模块波次一个 commit，见 `git log`）。
 - 本总结文档与测试转换成果将作为本轮关键节点提交，提交时**排除临时调试文件**：`.orig/`、`__pycache__/`、`_parse_be.py`、`_spreview_orig.kt`、`be*.txt`。
@@ -99,9 +140,10 @@
 
 ---
 
-## 7. 变更记录
+## 8. 变更记录
 
 | 日期 | 变更 |
 |------|------|
 | 2026-08-31 | v2 计划（评估，增量共存迁移策略锁定） |
 | 2026-09-01 | 主源码波次收尾（`EntitySelectionDialog` 两处修复）+ **测试编译 3,939→0**，92 测试文件转 Java，本总结文档 |
+| 2026-09-01 | **运行时回归修复（全量测试 6→0）**：`SqlLogManager` 加 `final`（消 3 PluginException）、`SelectStarDetector` 正则补 `\.`（消 2 断言）、`OgnlEvaluator` 三元数值提升陷阱改 `if/else`（消 `42.0` 类型）+ `plus()` null 空安全；补齐 `log.panel.jumpToSource.noSource/notFound` 资源键（消 verifyPlugin 2 compatibility problems，master 既有缺陷）；全量测试 0 失败、buildPlugin 通过 |

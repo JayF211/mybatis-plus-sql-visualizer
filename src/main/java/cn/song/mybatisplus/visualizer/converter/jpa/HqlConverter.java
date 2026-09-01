@@ -269,10 +269,14 @@ public final class HqlConverter {
         StringBuffer sb = new StringBuffer();
         while (matcher.find()) {
             String leadingWhitespace = matcher.group(1);
-            String joinType = matcher.group(2).toUpperCase();
+            // 组2 (LEFT|INNER)? 为可选分组，未参与匹配时 group(2) 为 null；对应 Kotlin 的 ?.uppercase()
+            String joinTypeRaw = matcher.group(2);
+            String joinType = joinTypeRaw != null ? joinTypeRaw.toUpperCase() : "";
             String rootAlias = matcher.group(3);
             String relationName = matcher.group(4);
-            String alias = matcher.group(5).trim();
+            // 组5 别名同样可选，未匹配时为 null
+            String aliasRaw = matcher.group(5);
+            String alias = aliasRaw != null ? aliasRaw.trim() : "";
             String keyword;
             if ("INNER".equals(joinType)) keyword = "INNER JOIN";
             else keyword = "LEFT JOIN";
