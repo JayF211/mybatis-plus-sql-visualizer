@@ -16,6 +16,11 @@ plugins {
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     testImplementation(libs.junit)
+    // 迁移期 Lombok 已登记于版本目录（备选），但首波转换实际全部采用 record + 手写 POJO，
+    // 零 Lombok 依赖可让本机离线构建通过（`--offline` 下 lombok 无缓存会阻塞 compileClasspath）。
+    // 后续若确需 Lombok（可变 data class 减样板），取消下两行注释并确保联网解析一次。
+    // compileOnly(libs.lombok)
+    // annotationProcessor(libs.lombok)
     // T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例——方法签名/注解元数据可解析；
     // 仅测试依赖，插件运行时零依赖不变；MPJ 1.5.x 不在 Central，暂不加）
     testImplementation(libs.mp.core)
@@ -148,6 +153,8 @@ kotlin {
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+    // Lombok 生成方法标注 @Generated，Plugin Verifier 据此忽略
+    options.compilerArgs.add("-Alombok.addLombokGeneratedAnnotation=true")
 }
 
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：

@@ -1,0 +1,137 @@
+package cn.song.mybatisplus.visualizer.ui.gutter;
+
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator;
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.codeInsight.daemon.GutterIconNavigationHandler;
+import com.intellij.codeInsight.daemon.LineMarkerInfo;
+import com.intellij.codeInsight.daemon.LineMarkerProvider;
+import com.intellij.openapi.editor.markup.GutterIconRenderer;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.IconLoader;
+import com.intellij.psi.PsiBinaryExpression;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiIdentifier;
+import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.PsiMethodCallExpression;
+import com.intellij.psi.PsiPolyadicExpression;
+import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiVariable;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.awt.event.MouseEvent;
+import javax.swing.Icon;
+
+/**
+ * Hibernate HQL gutter 预览图标：在每个 `createQuery(...)` / `createNamedQuery(...)`
+ * 调用的方法名行显示预览图标，点击弹出 SQL 预览。
+ *
+ * <p><b>锚点策略</b>：与 {@link CustomDaoHqlGutterLineMarkerProvider} 一致——锚定在方法调用的方法名 PsiIdentifier 上。
+ * 一个方法体内可能有多个 createQuery 调用，每个调用各有独立图标，点击展示对应 SQL。
+ *
+ * <p><b>去重保证</b>：同一个 PsiMethodCallExpression 有且仅有一个方法名 identifier。
+ * 其他 provider（CustomDao / Jpql / Jpa / CriteriaQuery）的锚点策略与此不冲突。
+ *
+ * <p>注册见 plugin.xml {@code <codeInsight.lineMarkerProvider language="JAVA" .../>}。
+ */
+public class HqlGutterLineMarkerProvider implements LineMarkerProvider {
+
+    private static final java.util.Set<String> HQL_METHODS =
+            java.util.Set.of("createQuery", "createNamedQuery", "createNativeQuery");
+
+    @Override
+    @Nullable
+    public LineMarkerInfo<PsiElement> getLineMarkerInfo(@NotNull PsiElement element) {
+        // LineMarker 框架只传递 leaf 元素：锚点为 PsiIdentifier。
+        if (!(element instanceof PsiIdentifier)) return null;
+        // 锚定在方法调用的方法名 PsiIdentifier 上：
+        // element = "createQuery" 等方法名 identifier
+        // element.parent = PsiReferenceExpression（方法调用的方法名引用）
+        // element.parent.parent = PsiMethodCallExpression
+        PsiReferenceExpression parent = element.getParent() instanceof PsiReferenceExpression
+                ? (PsiReferenceExpression) element.getParent() : null;
+        if (parent == null) return null;
+        PsiMethodCallExpression grandParent = parent.getParent() instanceof PsiMethodCallExpression
+                ? (PsiMethodCallExpression) parent.getParent() : null;
+        if (grandParent == null) return null;
+        // 确认 element 是方法名而非 qualifier
+        if (!java.util.Objects.equals(grandParent.getMethodExpression().getReferenceName(), element.getText())) return null;
+        // 仅处理 createQuery / createNamedQuery / createNativeQuery 调用
+        if (!HQL_METHODS.contains(element.getText())) return null;
+        // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
+        if (!hasStringFirstArgument(grandParent)) return null;
+        if (!gutterEnabled()) return null;
+        // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
+        if (HqlQueryLocator.locate(grandParent) == null) return null;
+        return new LineMarkerInfo<>(
+                element,
+                element.getTextRange(),
+                HQL_SQL_PREVIEW_ICON,
+                elt -> MpSqlVisualizerBundle.message("gutter.hql.tooltip"),
+                HqlGutterNavigationHandler.INSTANCE,
+                GutterIconRenderer.Alignment.CENTER,
+                elt -> MpSqlVisualizerBundle.message("gutter.hql.accessible.name")
+        );
+    }
+
+    /**
+     * 检查方法调用的第一个参数是否为字符串（HQL/JPQL）。
+     * 排除 cb.createQuery(Class) 等 CriteriaBuilder 调用。
+     *
+     * <p>M36.5.79：Java 链式 `+`（"a" + "b" + "c"）在 PSI 中为 PsiPolyadicExpression，
+     * 与 PsiBinaryExpression 互不继承——漏判会导致多行拼接 HQL 无预览图标（用户实测）。
+     */
+    private boolean hasStringFirstArgument(PsiMethodCallExpression call) {
+        com.intellij.psi.PsiExpression[] args = call.getArgumentList().getExpressions();
+        if (args.length == 0) return false;
+        com.intellij.psi.PsiExpression firstArg = args[0];
+        if (firstArg instanceof PsiLiteralExpression) {
+            return ((PsiLiteralExpression) firstArg).getValue() instanceof String;
+        }
+        if (firstArg instanceof PsiBinaryExpression || firstArg instanceof PsiPolyadicExpression) {
+            return true; // 字符串拼接（含链式 `+`）
+        }
+        if (firstArg instanceof PsiReferenceExpression) {
+            // 变量引用：仅 String 类型视为有效 HQL 参数（排除 cq 等 CriteriaQuery 变量）
+            com.intellij.psi.PsiElement resolved = ((PsiReferenceExpression) firstArg).resolve();
+            if (resolved instanceof PsiVariable) {
+                String typeName = ((PsiVariable) resolved).getType().getCanonicalText();
+                return "java.lang.String".equals(typeName) || "String".equals(typeName);
+            }
+            return false;
+        }
+        return false; // Class 字面量等
+    }
+
+    private boolean gutterEnabled() {
+        try {
+            return PluginSettings.getInstance().getState().isShowGutterIcon();
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static final class HqlGutterNavigationHandler implements GutterIconNavigationHandler<PsiElement> {
+        static final HqlGutterNavigationHandler INSTANCE = new HqlGutterNavigationHandler();
+
+        @Override
+        public void navigate(MouseEvent e, PsiElement elt) {
+            Project project = elt.getProject();
+            // 直接从锚点向上查找 PsiMethodCallExpression（不依赖 locate() 反查）
+            PsiReferenceExpression parent = elt.getParent() instanceof PsiReferenceExpression
+                    ? (PsiReferenceExpression) elt.getParent() : null;
+            if (parent == null) return;
+            PsiMethodCallExpression call = parent.getParent() instanceof PsiMethodCallExpression
+                    ? (PsiMethodCallExpression) parent.getParent() : null;
+            if (call == null) return;
+            SqlPreviewService service = project.getService(SqlPreviewService.class);
+            SqlPreviewService.previewAsync(project, () -> service.previewHql(call),
+                    result -> SqlPreviewService.showResult(project, result));
+        }
+    }
+
+    private static final Icon HQL_SQL_PREVIEW_ICON =
+            IconLoader.getIcon("/icons/sqlGutter.svg", HqlGutterLineMarkerProvider.class);
+}

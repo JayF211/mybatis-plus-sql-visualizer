@@ -39,12 +39,12 @@ class SqlShareManager(private val project: Project?) {
         }
         val truncated = truncateIfNeeded(sql)
         val md = MarkdownFormatter.format(
-            sql = truncated,
-            sources = panel.unresolvedParams(),
-            paramValues = panel.paramValuesSnapshot(),
-            tableName = panel.currentTableName(),
-            dialect = panel.currentDialect(),
-            source = source,
+            truncated,
+            panel.unresolvedParams(),
+            panel.paramValuesSnapshot(),
+            panel.currentTableName(),
+            panel.currentDialect(),
+            source,
         )
         copyToClipboard(md)
         showToast(MpSqlVisualizerBundle.message("share.markdown.copied"))
@@ -60,12 +60,12 @@ class SqlShareManager(private val project: Project?) {
         }
         val truncated = truncateIfNeeded(sql)
         val md = MarkdownFormatter.formatAsTable(
-            sql = truncated,
-            sources = panel.unresolvedParams(),
-            paramValues = panel.paramValuesSnapshot(),
-            tableName = panel.currentTableName(),
-            dialect = panel.currentDialect(),
-            source = source,
+            truncated,
+            panel.unresolvedParams(),
+            panel.paramValuesSnapshot(),
+            panel.currentTableName(),
+            panel.currentDialect(),
+            source,
         )
         copyToClipboard(md)
         showToast(MpSqlVisualizerBundle.message("share.markdown.table.copied"))
@@ -83,9 +83,9 @@ class SqlShareManager(private val project: Project?) {
             return
         }
         val executable = ExecutableSqlFormatter.format(
-            sql = sql,
-            sources = panel.unresolvedParams(),
-            paramValues = panel.paramValuesSnapshot(),
+            sql,
+            panel.unresolvedParams(),
+            panel.paramValuesSnapshot(),
         )
         copyToClipboard(executable)
         showToast(MpSqlVisualizerBundle.message("share.executableSql.copied"))

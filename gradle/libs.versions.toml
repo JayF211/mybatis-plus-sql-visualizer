@@ -1,5 +1,7 @@
 [versions]
 junit = "4.13.2"
+# 迁移期允许：data class 可变/含方法场景可用 Lombok @Data/@Value 减少样板（Kotlin→Java 全量改写）
+lombok = "1.18.34"
 mp = "3.5.17"
 # P-立项-05：方言真实验证（嵌入式数据库，仅测试 classpath，插件运行时零依赖不变）
 h2 = "2.3.232"
@@ -15,6 +17,8 @@ ojdbc11 = "23.3.0.23.09"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+# 迁移期允许：Lombok（仅编译期注解处理器，运行时零依赖；插件产物由 annotationProcessor 展开方法）
+lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
 # P-立项-05：H2 嵌入式验证（REGULAR 模式验证 H2 方言；MODE=MySQL/MariaDB/PostgreSQL/Oracle/
 # MSSQLServer 兼容模式验证对应方言的 SQL 语法形态——无 Docker 环境下的最强本机证据）
 h2 = { module = "com.h2database:h2", version.ref = "h2" }
