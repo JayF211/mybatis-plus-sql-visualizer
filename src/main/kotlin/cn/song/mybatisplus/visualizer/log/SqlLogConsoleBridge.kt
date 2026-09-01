@@ -61,6 +61,8 @@ open class SqlLogConsoleBridge(
     private var pollTimer: Timer? = null
     /** 高频补捞定时器（attach 后短暂运行，捕获第一条 SQL）。 */
     private var catchUpTimer: Timer? = null
+    /** 当前快速轮询间隔（T-LogPerf-01：500ms 起步指数退避，上限=常规间隔）。 */
+    private var currentFastDelayMs = FAST_POLL_INTERVAL_MS
     /** 新控制台出现回调（由 manager 设置）。 */
     var onConsoleRemoved: () -> Unit = {}
 
@@ -91,13 +93,15 @@ open class SqlLogConsoleBridge(
     }
 
     /**
-     * 启动轮询：无控制台时快速轮询（500ms）→ 检测到新控制台后切换常规轮询（2s）。
-     * 性能：500ms 间隔仅在有项目运行且未检测到控制台时运行，检测到后立即切 2s。
+     * 启动轮询：无控制台时快速轮询（500ms 起步，每拍无主控制台间隔翻倍至 2s 封顶）
+     * → 检测到新控制台后切换常规轮询（2s）。
+     * 性能（T-LogPerf-01）：快速轮询不再 100ms 常驻——armed 态全程的 EDT 负载
+     * 从每秒 10 拍降至 2~4 拍起步并快速衰减到常规频率。
      */
     fun startPolling() {
         if (catchUpTimer != null || pollTimer != null) return
         startFastPolling()
-        LOG.debug("startPolling: 快速轮询已启动（500ms）")
+        LOG.debug("startPolling: 快速轮询已启动（${FAST_POLL_INTERVAL_MS}ms，指数退避至 ${POLL_INTERVAL_MS}ms）")
     }
 
     fun stopPolling() {
@@ -109,10 +113,20 @@ open class SqlLogConsoleBridge(
     /** 轮询是否活跃（测试断言用：验证 stop 后轮询已停止）。 */
     val isPollingActive: Boolean get() = pollTimer != null || catchUpTimer != null
 
-    /** 快速轮询（500ms）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
+    /** 快速轮询（500ms 起步）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
     private fun startFastPolling() {
         stopCatchUpPolling()
-        catchUpTimer = Timer(FAST_POLL_INTERVAL_MS) { scanAll() }.apply { isRepeats = true; start() }
+        currentFastDelayMs = FAST_POLL_INTERVAL_MS
+        catchUpTimer = Timer(currentFastDelayMs) { onCatchUpTick() }.apply { isRepeats = true; start() }
+    }
+
+    /** 快速轮询回调：先扫描（可能切走常规轮询），仍在等待且无主控制台则退避放宽下一拍。 */
+    private fun onCatchUpTick() {
+        scanAll()
+        if (catchUpTimer != null && !lastHadMainConsole) {
+            currentFastDelayMs = nextFastDelay(currentFastDelayMs, backoff = true)
+            catchUpTimer?.delay = currentFastDelayMs
+        }
     }
 
     /** 常规轮询（2s）—— 已检测到控制台后，低频兜底。 */
@@ -163,22 +177,9 @@ open class SqlLogConsoleBridge(
      */
     open fun hasMainConsole(): Boolean {
         val rcm = runContentManager ?: return false
-        val descriptors = try {
-            val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
-            when (raw) {
-                is Array<*> -> raw
-                is Collection<*> -> raw.toTypedArray()
-                else -> null
-            }
-        } catch (_: Throwable) {
-            null
-        } ?: return false
+        val descriptors = descriptorsOf(rcm) ?: return false
         for (descriptor in descriptors) {
-            val component = try {
-                descriptor?.javaClass?.getMethod("getComponent")?.invoke(descriptor) as? Component
-            } catch (_: Throwable) {
-                null
-            } ?: continue
+            val component = componentOf(descriptor) ?: continue
             val isMain = component.javaClass.name.contains("ConsoleViewImpl") ||
                 !component.javaClass.name.contains("HttpSingleResponseConsole")
             if (!isMain) continue
@@ -192,9 +193,10 @@ open class SqlLogConsoleBridge(
     private fun isProcessAlive(descriptor: Any?): Boolean {
         if (descriptor == null) return false
         return try {
-            val processHandler = descriptor.javaClass.getMethod("getProcessHandler").invoke(descriptor) ?: return false
-            val terminated = processHandler.javaClass.getMethod("isProcessTerminated").invoke(processHandler) as? Boolean ?: true
-            val terminating = processHandler.javaClass.getMethod("isProcessTerminating").invoke(processHandler) as? Boolean ?: true
+            val processHandler = cachedMethod(descriptor.javaClass, "getProcessHandler")?.invoke(descriptor)
+                ?: return false
+            val terminated = cachedMethod(processHandler.javaClass, "isProcessTerminated")?.invoke(processHandler) as? Boolean ?: true
+            val terminating = cachedMethod(processHandler.javaClass, "isProcessTerminating")?.invoke(processHandler) as? Boolean ?: true
             val alive = !terminated && !terminating
             LOG.debug("isProcessAlive: alive=$alive, descriptor=${descriptor.javaClass.simpleName}")
             alive
@@ -203,6 +205,9 @@ open class SqlLogConsoleBridge(
             true // 反射失败时保守视为存活（避免误停）
         }
     }
+
+    /** descriptor → 已解析 console 缓存（T-LogPerf-03：命中且已挂载时跳过组件树遍历）。 */
+    private val descriptorConsoleCache = IdentityHashMap<Any, Any?>()
 
     /**
      * 遍历 RunContentManager 全部运行描述符，对每个 console 挂载 filter（幂等）。
@@ -227,25 +232,17 @@ open class SqlLogConsoleBridge(
                 startNormalPolling()
             }
         }
-        // 挂载 filter（幂等）
+        // 挂载 filter（幂等）；已挂载的 console 经缓存短路，不再遍历组件树（T-LogPerf-03）
         val rcm = runContentManager ?: return
-        val descriptors = try {
-            val raw = rcm.javaClass.getMethod("getAllDescriptors").invoke(rcm)
-            when (raw) {
-                is Array<*> -> raw
-                is Collection<*> -> raw.toTypedArray()
-                else -> null
-            }
-        } catch (_: Throwable) {
-            null
-        } ?: return
+        val descriptors = descriptorsOf(rcm) ?: return
         for (descriptor in descriptors) {
-            val component = try {
-                descriptor?.javaClass?.getMethod("getComponent")?.invoke(descriptor) as? Component
-            } catch (_: Throwable) {
-                null
-            } ?: continue
+            if (descriptor == null) continue
+            val cachedConsole = descriptorConsoleCache[descriptor]
+            if (shouldSkipRescan(cachedConsole, attachedConsoles.keys)) continue
+            val component = componentOf(descriptor) ?: continue
             scanComponent(component)
+            descriptorConsoleCache[descriptor] = findConsoleView(component)
+            if (descriptorConsoleCache.size > DESCRIPTOR_CACHE_MAX) descriptorConsoleCache.clear()
         }
         lastHadMainConsole = hasMain
     }
@@ -309,15 +306,17 @@ open class SqlLogConsoleBridge(
                     ),
                     jdbcParser = JdbcTemplateLogParser(enabled = cfg0.jdbcEnabled, maxParseLength = cfg0.maxParseLength),
                     configProvider = parserConfig,
+                    hibernateEnabled = cfg0.hibernateEnabled,
                 )
                 consoleContexts[console] = ctx
+                // T-LogPerf-04：timePrefix 缓存化——设置变更走 refreshConsoleContexts，逐行不再读 PluginSettings
+                timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
                 val filter = Proxy.newProxyInstance(
                     filterIface.classLoader,
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line ->
                         val context = consoleContexts[console] ?: return@LogFilterProxyHandler
-                        val timePrefix = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
-                        processConsoleLine(line, context, timePrefix, syncBufferConfig).forEach { buffer.addEntry(it) }
+                        processConsoleLine(line, context, timePrefixCache, syncBufferConfig).forEach { buffer.addEntry(it) }
                     },
                 )
                 console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
@@ -329,6 +328,36 @@ open class SqlLogConsoleBridge(
             }
         }
         LOG.warn("attachFilter: all filter candidates failed on ${console.javaClass.name}")
+    }
+
+    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
+    @Volatile
+    var timePrefixCache: String? = null
+        private set
+
+    /**
+     * T-LogPerf-04：设置变更事件驱动刷新——[SqlLogManager] 订阅 SETTINGS_CHANGE_TOPIC 后调用，
+     * 一次同步全部已挂载上下文的解析器配置与 timePrefix 缓存，取代逐行 configProvider() 同步。
+     */
+    fun refreshConsoleContexts() {
+        val cfg = parserConfig()
+        for (ctx in consoleContexts.values) applyConfig(ctx, cfg)
+        timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
+    }
+
+    /** 把 [ParserConfig] 快照同步进 [BridgeLineContext]（挂载与设置变更共用）。 */
+    private fun applyConfig(ctx: BridgeLineContext, cfg: ParserConfig) {
+        ctx.myBatisParser.sqlPrefix = cfg.sqlPrefix
+        ctx.myBatisParser.paramPrefix = cfg.paramPrefix
+        ctx.myBatisParser.mixedPrefix = cfg.mixedPrefix
+        ctx.myBatisParser.maxParseLength = cfg.maxParseLength
+        ctx.hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
+        ctx.hibernateParser.paramPrefix = cfg.hibernateParamPrefix
+        ctx.hibernateParser.mixedPrefix = cfg.mixedPrefix
+        ctx.hibernateParser.maxParseLength = cfg.maxParseLength
+        ctx.jdbcParser.enabled = cfg.jdbcEnabled
+        ctx.jdbcParser.maxParseLength = cfg.maxParseLength
+        ctx.hibernateEnabled = cfg.hibernateEnabled
     }
 
     /**
@@ -368,6 +397,8 @@ open class SqlLogConsoleBridge(
             }
         }
         attachedConsoles.clear()
+        // T-LogPerf-03：挂载记录清空后缓存全部失效，下一轮重新全量扫描
+        descriptorConsoleCache.clear()
     }
 
     /**
@@ -408,7 +439,52 @@ open class SqlLogConsoleBridge(
         )
         private val CONTENT_LISTENER_CLASS = ContentManagerListener::class.java
         private const val POLL_INTERVAL_MS = 2000 // 常规轮询间隔
-        private const val FAST_POLL_INTERVAL_MS = 100 // 快速轮询间隔（未检测到控制台时）——捕获第一条 SQL
+        private const val FAST_POLL_INTERVAL_MS = 500 // 快速轮询起步间隔——T-LogPerf-01：指数退避至常规间隔，不再 100ms 常驻
+        private const val DESCRIPTOR_CACHE_MAX = 64 // descriptor→console 缓存上限（超限整体失效防死引用滞留）
+
+        /** T-LogPerf-01：快速轮询指数退避（纯函数便于单测）——无主控制台每拍翻倍，上限=常规间隔；重置回落起步间隔。 */
+        internal fun nextFastDelay(currentMs: Int, backoff: Boolean): Int =
+            if (!backoff) FAST_POLL_INTERVAL_MS
+            else (currentMs * 2).coerceAtMost(POLL_INTERVAL_MS)
+
+        /** T-LogPerf-03：短路判定（纯函数便于单测）——已知 console 且已挂载时跳过重新扫描。 */
+        internal fun shouldSkipRescan(cachedConsole: Any?, attachedConsoles: Collection<Any>): Boolean =
+            cachedConsole != null && attachedConsoles.any { it === cachedConsole }
+
+        /** T-LogPerf-02：反射 Method 缓存（热路径每拍轮询不再重复 getMethod 查找；找不到也缓存 null）。 */
+        private val methodCache = java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method?>()
+
+        private fun cachedMethod(clazz: Class<*>, name: String): java.lang.reflect.Method? {
+            val key = "${clazz.name}#$name"
+            methodCache[key]?.let { return it }
+            val method = try {
+                clazz.getMethod(name)
+            } catch (_: Throwable) {
+                null
+            }
+            methodCache[key] = method
+            return method
+        }
+
+        private fun descriptorsOf(rcm: Any): Array<*>? = try {
+            val raw = cachedMethod(rcm.javaClass, "getAllDescriptors")?.invoke(rcm)
+            when (raw) {
+                is Array<*> -> raw
+                is Collection<*> -> raw.toTypedArray()
+                else -> null
+            }
+        } catch (_: Throwable) {
+            null
+        }
+
+        private fun componentOf(descriptor: Any?): Component? {
+            if (descriptor == null) return null
+            return try {
+                cachedMethod(descriptor.javaClass, "getComponent")?.invoke(descriptor) as? Component
+            } catch (_: Throwable) {
+                null
+            }
+        }
 
         /** 平台 classloader（execution API 在此 classloader 中，不在插件 classloader 中）。 */
         private val platformClassLoader: ClassLoader =
@@ -448,6 +524,8 @@ open class SqlLogConsoleBridge(
 /**
  * 每个已挂载控制台持有的一组解析器 + 暂存源码位置（F-44-6）。
  * 解析器跨行保持配对状态（MyBatis 的 Preparing/Parameters 跨多行），故须按 console 持久化。
+ * T-LogPerf-04：配置快照在挂载/设置变更时经 [SqlLogConsoleBridge.refreshConsoleContexts] 写入，
+ * 逐行不再调 configProvider 同步（字段保留供测试直接构造）。
  */
 internal class BridgeLineContext(
     val myBatisParser: MyBatisLogParser,
@@ -455,12 +533,14 @@ internal class BridgeLineContext(
     val jdbcParser: JdbcTemplateLogParser,
     val configProvider: () -> ParserConfig,
     var pendingSource: Pair<String, Int>? = null,
+    /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
+    var hibernateEnabled: Boolean = true,
 )
 
 /**
  * 处理一行控制台文本（F-44-6）：
  *  1. 若为本插件源码标记（[SqlSourceInterceptor] 注入）→ 暂存，不喂解析器；
- *  2. 同步解析器实时配置后喂行，取出已配对 SQL 条目；
+ *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
  *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
  * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（[SqlLogConsoleBridgeMarkerTest]）。
  */
@@ -476,26 +556,13 @@ internal fun processConsoleLine(
         ctx.pendingSource = marker
         return emptyList()
     }
-    // 2) 每次喂行前同步解析器配置（捕捉中实时生效，对齐 T-M31.18）
-    val cfg = ctx.configProvider()
-    ctx.myBatisParser.sqlPrefix = cfg.sqlPrefix
-    ctx.myBatisParser.paramPrefix = cfg.paramPrefix
-    ctx.myBatisParser.mixedPrefix = cfg.mixedPrefix
-    ctx.myBatisParser.maxParseLength = cfg.maxParseLength
-    ctx.hibernateParser.sqlPrefix = cfg.hibernateSqlPrefix
-    ctx.hibernateParser.paramPrefix = cfg.hibernateParamPrefix
-    ctx.hibernateParser.mixedPrefix = cfg.mixedPrefix
-    ctx.hibernateParser.maxParseLength = cfg.maxParseLength
-    ctx.jdbcParser.enabled = cfg.jdbcEnabled
-    ctx.jdbcParser.maxParseLength = cfg.maxParseLength
-    // 3) 喂行到三个解析器（各自忽略不匹配的行）
+    // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
     ctx.myBatisParser.feed(line)
-    if (cfg.hibernateEnabled) ctx.hibernateParser.feed(line)
+    if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line)
     ctx.jdbcParser.feed(line)
-    syncBufferConfig()
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
     if (taken.isEmpty()) return emptyList()
-    // 4) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
+    // 3) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
     val executionTimeMs = ExecutionTimeParser.parse(line, timePrefix)
     val src = ctx.pendingSource
     val result = taken.map { e ->
