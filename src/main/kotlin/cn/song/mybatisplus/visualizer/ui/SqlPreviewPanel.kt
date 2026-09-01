@@ -361,6 +361,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.compare")) { showSqlDiff() })
         // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
         add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
+        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
     }
 
@@ -424,6 +426,38 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
+            onError = { errorMsg ->
+                resultPanel.showError(errorMsg)
+            },
+        )
+    }
+
+    /**
+     * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
+     * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
+     * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     */
+    internal fun explainSql() {
+        val proj = project ?: return
+        val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        val explainSql = dialect.renderExplainStatement(sql.trim().trimEnd(';'))
+        if (explainSql == null) {
+            Messages.showInfoMessage(
+                proj,
+                MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                MpSqlVisualizerBundle.message("panel.explain"),
+            )
+            return
+        }
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")
+        resultPanel.showLoading()
+        SqlExecutor.execute(
+            proj, explainSql, null, true,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             onError = { errorMsg ->
                 resultPanel.showError(errorMsg)
             },

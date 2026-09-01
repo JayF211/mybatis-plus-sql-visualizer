@@ -80,6 +80,20 @@ interface Dialect {
      * @param conflictKey 冲突键列名（原始值；必在 [columns] 内）
      */
     fun renderUpsertStatement(tableName: String, columns: List<String>, conflictKey: String): String? = null
+
+    /**
+     * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
+     *
+     * 返回 null → 本方言首版不支持（调用方按钮降级提示）：
+     *  - Oracle：需 `EXPLAIN PLAN FOR` + 查询 PLAN_TABLE 两步链，首版不接入；
+     *  - SQL Server：需会话级 `SET SHOWPLAN_XML`，非单语句形态；
+     *  - DM：EXPLAIN 语法未验证（P-立项-05 同款约束——不硬编码猜测）；
+     *  - KingBase：PG 兼容系预期可用，待真机验证后放开。
+     *
+     * @param sql 不含结尾分号的查询语句
+     * @return 可直接提交执行的 EXPLAIN 语句，null = 不支持
+     */
+    fun renderExplainStatement(sql: String): String? = null
 }
 
 /**
@@ -139,6 +153,8 @@ object MySqlDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderMySqlStyleUpsert(updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN FORMAT=JSON $sql"
 }
 
 /**
@@ -160,6 +176,8 @@ object PostgreSQLDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderPgStyleUpsert(conflictKey, updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN (FORMAT JSON, VERBOSE) $sql"
 }
 
 /**
@@ -228,6 +246,8 @@ object H2Dialect : Dialect {
         return "MERGE INTO ${quoteIfKeyword(tableName)} ($cols) KEY (${quoteIfKeyword(conflictKey)}) " +
             "VALUES (${columns.joinToString(", ") { "?" }})"
     }
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN PLAN FOR $sql"
 }
 
 /**
@@ -246,6 +266,8 @@ object SqliteDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderPgStyleUpsert(conflictKey, updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN QUERY PLAN $sql"
 }
 
 /**
@@ -269,6 +291,8 @@ object MariaDbDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderMySqlStyleUpsert(updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN FORMAT=JSON $sql"
 }
 
 /**
