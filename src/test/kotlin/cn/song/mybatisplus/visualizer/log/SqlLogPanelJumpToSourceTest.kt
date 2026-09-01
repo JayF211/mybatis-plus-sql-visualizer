@@ -43,7 +43,7 @@ class SqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
             // `SELECT 1` 无 FROM/表名 → 无法定位任何实体
             val e = entry("SELECT 1")
             val resolution = panel.resolveLiveJump(e)
-            assertTrue("无表名 SQL 应判定为 NoTable（无法跳转）", resolution is SqlLogPanel.LiveJumpResolution.NoTable)
+            assertTrue("无表名 SQL 应判定为 NoTable（无法跳转）", resolution is LjrNoTable)
             // 架构性缺口：实时日志条目本身不带源码位置，无法做精确行跳转
             assertNull("实时日志条目来源不含 sourceFile", e.sourceFile)
         } finally {
@@ -57,8 +57,8 @@ class SqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
             val tableName = "some_random_table_xyz"
             val e = entry("SELECT * FROM $tableName WHERE id = 1")
             val resolution = panel.resolveLiveJump(e)
-            assertTrue("有表名应进入 Proceed", resolution is SqlLogPanel.LiveJumpResolution.Proceed)
-            assertEquals(tableName, (resolution as SqlLogPanel.LiveJumpResolution.Proceed).tableName)
+            assertTrue("有表名应进入 Proceed", resolution is LjrProceed)
+            assertEquals(tableName, (resolution as LjrProceed).tableName)
 
             // 项目内不存在该表对应实体 → 搜索无候选 → 生产侧将提示「未找到 Wrapper」（无法跳转）
             val search = WrapperSearchService.search(project, tableName)
@@ -73,8 +73,8 @@ class SqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         try {
             val e = entry("SELECT u.id, u.name FROM user u WHERE u.id = 1")
             val resolution = panel.resolveLiveJump(e)
-            assertTrue("含表名应进入 Proceed", resolution is SqlLogPanel.LiveJumpResolution.Proceed)
-            assertEquals("应提取到 user 表", "user", (resolution as SqlLogPanel.LiveJumpResolution.Proceed).tableName)
+            assertTrue("含表名应进入 Proceed", resolution is LjrProceed)
+            assertEquals("应提取到 user 表", "user", (resolution as LjrProceed).tableName)
         } finally {
             panel.dispose()
         }

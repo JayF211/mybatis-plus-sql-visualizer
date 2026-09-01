@@ -1,0 +1,497 @@
+package cn.song.mybatisplus.visualizer.log;
+
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.project.Project;
+import com.intellij.ui.content.ContentManagerEvent;
+import com.intellij.ui.content.ContentManagerListener;
+
+import java.awt.Component;
+import java.lang.reflect.Proxy;
+import java.util.Collection;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+
+import javax.swing.Timer;
+
+import kotlin.Pair;
+
+/**
+ * 运行控制台反射桥（T-M31-03）：`com.intellij.execution.*`（RunContentManager/ConsoleView）
+ * 不在插件编译 classpath（IPGP SDK 发行版裁剪 execution 模块），运行期由真实 IDE 提供——
+ * 与既有 `execute/` 数据库链路同一隔离策略（build.gradle.kts 注释约定）。
+ *
+ * 全部调用经反射 + Proxy，任一步失败即优雅降级（返回 false / 静默跳过），不抛异常。
+ *
+ * T-xx（设置生效性审计）：`open` 开放子类化——[SqlLogManager] 内部测试缝（installBridgeForTest）
+ * 注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机，生产不受影响。
+ */
+public class SqlLogConsoleBridge {
+
+    private final SqlLogEntryBuffer buffer;
+    private final Supplier<ParserConfig> parserConfig;
+    private final Runnable syncBufferConfig;
+    private final Runnable onConsoleAppeared;
+    private final BooleanSupplier isCapturing;
+
+    private Object runContentManager;
+    /**
+     * 已挂载的控制台 → Filter 代理映射。
+     * 值从 Boolean 改为 Pair<filter, ifaceClass>，供 detachAllFilters 移除 Filter 使用。
+     */
+    public final IdentityHashMap<Object, Pair<Object, Class<?>>> attachedConsoles = new IdentityHashMap<>();
+    /** 每个已挂载控制台 → 解析器上下文（含暂存源码位置，F-44-6）。 */
+    private final IdentityHashMap<Object, BridgeLineContext> consoleContexts = new IdentityHashMap<>();
+
+    private final ContentManagerListener contentListener = new ContentManagerListener() {
+        @Override
+        public void contentAdded(ContentManagerEvent event) {
+            Component component = event.getContent().getComponent();
+            LOG.info("contentAdded: " + component.getClass().getName());
+            scanComponent(component);
+            onConsoleAppeared.run();
+        }
+
+        @Override
+        public void contentRemoved(ContentManagerEvent event) {
+            LOG.info("contentRemoved: " + event.getContent().getComponent().getClass().getName());
+            onConsoleRemoved.run();
+        }
+    };
+
+    private Timer pollTimer;
+    /** 高频补捞定时器（attach 后短暂运行，捕获第一条 SQL）。 */
+    private Timer catchUpTimer;
+    /** 新控制台出现回调（由 manager 设置）。 */
+    public Runnable onConsoleRemoved = () -> {
+    };
+
+    /** 上一轮是否检测到主运行控制台（ConsoleViewImpl——Spring Boot 等 run 进程）。 */
+    private boolean lastHadMainConsole = false;
+
+    /** ContentManagerListener 是否注册成功（243/253=成功，262+=失败→需轮询兜底）。 */
+    private boolean contentListenerRegistered = false;
+
+    public SqlLogConsoleBridge(SqlLogEntryBuffer buffer) {
+        this(buffer,
+                () -> new ParserConfig("Preparing:", "Parameters:", true, 20000),
+                () -> {
+                },
+                () -> {
+                },
+                () -> true);
+    }
+
+    public SqlLogConsoleBridge(SqlLogEntryBuffer buffer, Supplier<ParserConfig> parserConfig,
+                               Runnable syncBufferConfig, Runnable onConsoleAppeared, BooleanSupplier isCapturing) {
+        this.buffer = buffer;
+        this.parserConfig = parserConfig;
+        this.syncBufferConfig = syncBufferConfig;
+        this.onConsoleAppeared = onConsoleAppeared;
+        this.isCapturing = isCapturing;
+    }
+
+    /**
+     * 反射取 RunContentManager 实例（双包名候选）并挂载现有 console；环境缺 execution API 时返回 false。
+     * T-xx：`open` 供测试受控桥覆写（attach 恒成功/恒失败）。
+     */
+    public boolean attach(Project project) {
+        LOG.info("attach: 开始（project=" + project.getName() + ", runContentManager=" +
+                (runContentManager != null ? runContentManager.getClass().getName() : "null") + "）");
+        if (runContentManager != null) {
+            LOG.info("attach: already attached");
+            return true;
+        }
+        Object rcm = runContentManagerOrNull(project);
+        if (rcm == null) {
+            LOG.warn("attach: no RunContentManager candidate available (execution API missing in this environment)");
+            return false;
+        }
+        runContentManager = rcm;
+        attachContentListener(rcm);
+        scanAll();
+        LOG.info("attach: 成功 RCM=" + rcm.getClass().getName() + ", consolesAttached=" + attachedConsoles.size());
+        return true;
+    }
+
+    /** 停止快速轮询定时器。 */
+    private void stopCatchUpPolling() {
+        if (catchUpTimer != null) {
+            catchUpTimer.stop();
+            catchUpTimer = null;
+        }
+    }
+
+    /**
+     * 启动轮询：无控制台时快速轮询（500ms）→ 检测到新控制台后切换常规轮询（2s）。
+     */
+    public void startPolling() {
+        if (catchUpTimer != null || pollTimer != null) {
+            return;
+        }
+        startFastPolling();
+        LOG.debug("startPolling: 快速轮询已启动（500ms）");
+    }
+
+    public void stopPolling() {
+        if (pollTimer != null) {
+            pollTimer.stop();
+            pollTimer = null;
+        }
+        stopCatchUpPolling();
+    }
+
+    /** 轮询是否活跃（测试断言用：验证 stop 后轮询已停止）。 */
+    public boolean isPollingActive() {
+        return pollTimer != null || catchUpTimer != null;
+    }
+
+    /** 快速轮询（500ms）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
+    private void startFastPolling() {
+        stopCatchUpPolling();
+        catchUpTimer = new Timer(FAST_POLL_INTERVAL_MS, e -> scanAll());
+        catchUpTimer.setRepeats(true);
+        catchUpTimer.start();
+    }
+
+    /** 常规轮询（2s）—— 已检测到控制台后，低频兜底。 */
+    private void startNormalPolling() {
+        stopCatchUpPolling();
+        pollTimer = new Timer(POLL_INTERVAL_MS, e -> scanAll());
+        pollTimer.setRepeats(true);
+        pollTimer.start();
+    }
+
+    /** 移除挂载（项目关闭/面板销毁时）。 */
+    public void detach() {
+        stopPolling();
+        detachAllFilters();
+        Object rcm = runContentManager;
+        if (rcm == null) {
+            return;
+        }
+        try {
+            rcm.getClass().getMethod("removeContentManagerListener", CONTENT_LISTENER_CLASS).invoke(rcm, contentListener);
+        } catch (Throwable t) {
+            LOG.debug("detach: removeContentManagerListener failed", t);
+        }
+        runContentManager = null;
+    }
+
+    /** ContentManagerListener 是否注册成功。 */
+    public boolean isContentListenerRegistered() {
+        return contentListenerRegistered;
+    }
+
+    private void attachContentListener(Object rcm) {
+        try {
+            rcm.getClass().getMethod("addContentManagerListener", CONTENT_LISTENER_CLASS).invoke(rcm, contentListener);
+            contentListenerRegistered = true;
+            LOG.info("attach: ContentManagerListener 注册成功（" + rcm.getClass().getName() + "）");
+        } catch (Throwable t) {
+            // 2026.2 接口无此方法（不 extends ContentManager）→ 轮询兜底
+            contentListenerRegistered = false;
+            LOG.warn("attach: ContentManagerListener 不可用（" + rcm.getClass().getName() + "）— 轮询兜底");
+        }
+    }
+
+    /**
+     * 实时查询 RunContentManager 当前是否有**进程存活的**主运行控制台。
+     */
+    public boolean hasMainConsole() {
+        Object rcm = runContentManager;
+        if (rcm == null) {
+            return false;
+        }
+        Object raw;
+        try {
+            raw = rcm.getClass().getMethod("getAllDescriptors").invoke(rcm);
+        } catch (Throwable t) {
+            return false;
+        }
+        Object[] descriptors;
+        if (raw instanceof Object[]) {
+            descriptors = (Object[]) raw;
+        } else if (raw instanceof Collection) {
+            descriptors = ((Collection<?>) raw).toArray();
+        } else {
+            return false;
+        }
+        for (Object descriptor : descriptors) {
+            Component component = null;
+            try {
+                Object c = descriptor != null ? descriptor.getClass().getMethod("getComponent").invoke(descriptor) : null;
+                if (c instanceof Component) {
+                    component = (Component) c;
+                }
+            } catch (Throwable t) {
+                component = null;
+            }
+            if (component == null) {
+                continue;
+            }
+            boolean isMain = component.getClass().getName().contains("ConsoleViewImpl") ||
+                    !component.getClass().getName().contains("HttpSingleResponseConsole");
+            if (!isMain) {
+                continue;
+            }
+            if (isProcessAlive(descriptor)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 反射检查 RunContentDescriptor 关联的进程是否存活。 */
+    private boolean isProcessAlive(Object descriptor) {
+        if (descriptor == null) {
+            return false;
+        }
+        try {
+            Object processHandler = descriptor.getClass().getMethod("getProcessHandler").invoke(descriptor);
+            if (processHandler == null) {
+                return false;
+            }
+            Boolean terminated = (Boolean) processHandler.getClass().getMethod("isProcessTerminated").invoke(processHandler);
+            Boolean terminating = (Boolean) processHandler.getClass().getMethod("isProcessTerminating").invoke(processHandler);
+            boolean alive = (terminated == null || !terminated) && (terminating == null || !terminating);
+            LOG.debug("isProcessAlive: alive=" + alive + ", descriptor=" + descriptor.getClass().getSimpleName());
+            return alive;
+        } catch (Throwable t) {
+            LOG.debug("isProcessAlive: 反射失败（" + t.getClass().getSimpleName() + "），默认视为存活");
+            return true;
+        }
+    }
+
+    /**
+     * 遍历 RunContentManager 全部运行描述符，对每个 console 挂载 filter（幂等）。
+     */
+    public void scanAll() {
+        boolean hasMain = hasMainConsole();
+        LOG.debug("scanAll: hasMainConsole=" + hasMain + ", lastHadMainConsole=" + lastHadMainConsole);
+        if (lastHadMainConsole && !hasMain) {
+            LOG.info("scanAll: 主控制台已移除（上轮有、当前无），触发 onConsoleRemoved");
+            onConsoleRemoved.run();
+        }
+        if (!lastHadMainConsole && hasMain) {
+            LOG.info("scanAll: 主控制台出现，触发 onConsoleAppeared");
+            onConsoleAppeared.run();
+            if (catchUpTimer != null) {
+                LOG.info("scanAll: 检测到控制台，快速轮询 → 常规轮询（2s）");
+                startNormalPolling();
+            }
+        }
+        Object rcm = runContentManager;
+        if (rcm == null) {
+            return;
+        }
+        Object raw;
+        try {
+            raw = rcm.getClass().getMethod("getAllDescriptors").invoke(rcm);
+        } catch (Throwable t) {
+            return;
+        }
+        Object[] descriptors;
+        if (raw instanceof Object[]) {
+            descriptors = (Object[]) raw;
+        } else if (raw instanceof Collection) {
+            descriptors = ((Collection<?>) raw).toArray();
+        } else {
+            return;
+        }
+        for (Object descriptor : descriptors) {
+            Component component = null;
+            try {
+                Object c = descriptor != null ? descriptor.getClass().getMethod("getComponent").invoke(descriptor) : null;
+                if (c instanceof Component) {
+                    component = (Component) c;
+                }
+            } catch (Throwable t) {
+                component = null;
+            }
+            if (component == null) {
+                continue;
+            }
+            scanComponent(component);
+        }
+        lastHadMainConsole = hasMain;
+    }
+
+    /** 组件树中查找 ConsoleView 实现并挂载（供 contentAdded 与扫描复用）。 */
+    public void scanComponent(Component component) {
+        Object console = SqlLogConsoleBridgeKt.findConsoleView(component);
+        if (console == null) {
+            LOG.debug("scanComponent: no ConsoleView found under " + (component != null ? component.getClass().getName() : "null"));
+            return;
+        }
+        attachFilter(console);
+    }
+
+    private void attachFilter(Object console) {
+        // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
+        if (!isCapturing.getAsBoolean()) {
+            LOG.debug("attachFilter: 非捕捉态，跳过挂载 " + console.getClass().getName());
+            return;
+        }
+        if (attachedConsoles.containsKey(console)) {
+            LOG.debug("attachFilter: already attached " + console.getClass().getName());
+            return;
+        }
+        for (String filterIfaceName : FILTER_IFACE_CANDIDATES) {
+            try {
+                Class<?> filterIface = Class.forName(filterIfaceName, true, platformClassLoader);
+                ParserConfig config = parserConfig.get();
+                // 三解析器：MyBatis + Hibernate + JdbcTemplate 并列运行，互不干扰（M47）
+                MyBatisLogParser myBatisParser = new MyBatisLogParser(
+                        new LogSqlRestorer(), config.sqlPrefix(), config.paramPrefix(), config.mixedPrefix(), config.maxParseLength());
+                HibernateLogParser hibernateParser = new HibernateLogParser(
+                        new LogSqlRestorer(), config.hibernateSqlPrefix(), config.hibernateParamPrefix(),
+                        config.mixedPrefix(), config.maxParseLength(), true);
+                JdbcTemplateLogParser jdbcParser = new JdbcTemplateLogParser(
+                        new LogSqlRestorer(), config.jdbcEnabled(), config.maxParseLength());
+                ParserConfig cfg0 = parserConfig.get();
+                BridgeLineContext ctx = new BridgeLineContext(
+                        new MyBatisLogParser(new LogSqlRestorer(), cfg0.sqlPrefix(), cfg0.paramPrefix(),
+                                cfg0.mixedPrefix(), cfg0.maxParseLength()),
+                        new HibernateLogParser(new LogSqlRestorer(), cfg0.hibernateSqlPrefix(), cfg0.hibernateParamPrefix(),
+                                cfg0.mixedPrefix(), cfg0.maxParseLength(), true),
+                        new JdbcTemplateLogParser(new LogSqlRestorer(), cfg0.jdbcEnabled(), cfg0.maxParseLength()),
+                        parserConfig,
+                        null);
+                consoleContexts.put(console, ctx);
+                Object filter = Proxy.newProxyInstance(
+                        filterIface.getClassLoader(),
+                        new Class<?>[]{filterIface},
+                        new LogFilterProxyHandler(line -> {
+                            BridgeLineContext context = consoleContexts.get(console);
+                            if (context == null) {
+                                return;
+                            }
+                            String logTimePrefix = PluginSettings.getInstance().getState().getLogTimePrefix();
+                            String timePrefix = (logTimePrefix != null && !logTimePrefix.isBlank()) ? logTimePrefix : null;
+                            SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefix, syncBufferConfig)
+                                    .forEach(buffer::addEntry);
+                        }));
+                console.getClass().getMethod("addMessageFilter", filterIface).invoke(console, filter);
+                attachedConsoles.put(console, new Pair<>(filter, filterIface));
+                LOG.info("attachFilter: filter(" + filterIfaceName + ") attached to " + console.getClass().getName());
+                return;
+            } catch (Throwable t) {
+                LOG.debug("attachFilter: candidate " + filterIfaceName + " failed on " + console.getClass().getName(), t);
+            }
+        }
+        LOG.warn("attachFilter: all filter candidates failed on " + console.getClass().getName());
+    }
+
+    /**
+     * BUG FIX（停止后仍捕获）：移除所有已挂载控制台上的 Filter。
+     */
+    public void detachAllFilters() {
+        for (Map.Entry<Object, Pair<Object, Class<?>>> e : attachedConsoles.entrySet()) {
+            Object console = e.getKey();
+            consoleContexts.remove(console);
+            Pair<Object, Class<?>> filterPair = e.getValue();
+            Object filter = filterPair.getFirst();
+            Class<?> filterIface = filterPair.getSecond();
+            boolean removed = false;
+            try {
+                console.getClass().getMethod("removeMessageFilter", filterIface).invoke(console, filter);
+                removed = true;
+                LOG.info("detachAllFilters: filter removed from " + console.getClass().getName());
+            } catch (Throwable t) {
+                for (String candidateName : FILTER_IFACE_CANDIDATES) {
+                    try {
+                        Class<?> candidate = Class.forName(candidateName, true, platformClassLoader);
+                        console.getClass().getMethod("removeMessageFilter", candidate).invoke(console, filter);
+                        removed = true;
+                        LOG.info("detachAllFilters: filter removed via fallback " + candidateName +
+                                " from " + console.getClass().getName());
+                        break;
+                    } catch (Throwable ignored) {
+                        // continue trying
+                    }
+                }
+            }
+            if (!removed) {
+                LOG.warn("detachAllFilters: FAILED to remove filter from " + console.getClass().getName() +
+                        " (filter will remain active!)");
+            }
+        }
+        attachedConsoles.clear();
+    }
+
+    /**
+     * BUG FIX（停止后仍捕获）：移除 contentManagerListener（243/253 平台）。
+     */
+    public void detachContentListener() {
+        if (!contentListenerRegistered) {
+            return;
+        }
+        Object rcm = runContentManager;
+        if (rcm == null) {
+            return;
+        }
+        try {
+            rcm.getClass().getMethod("removeContentManagerListener", CONTENT_LISTENER_CLASS).invoke(rcm, contentListener);
+            LOG.info("detachContentListener: contentManagerListener removed");
+        } catch (Throwable t) {
+            LOG.debug("detachContentListener: removeContentManagerListener failed", t);
+        }
+        contentListenerRegistered = false;
+    }
+
+    private static final Logger LOG = Logger.getInstance(SqlLogConsoleBridge.class);
+
+    /** 双包名候选：2024.3/2025.3 在 execution 包，2026.2 移到 execution.ui 包（实证）。 */
+    private static final List<String> RCM_CLASS_CANDIDATES = List.of(
+            "com.intellij.execution.RunContentManager",
+            "com.intellij.execution.ui.RunContentManager");
+    /** Filter 接口双候选：243/253 为 ConsoleView 嵌套接口；2026.2 移除嵌套接口，addMessageFilter 参数改为独立接口。 */
+    private static final List<String> FILTER_IFACE_CANDIDATES = List.of(
+            "com.intellij.execution.ui.ConsoleView$Filter",
+            "com.intellij.execution.filters.Filter");
+    private static final Class<?> CONTENT_LISTENER_CLASS = ContentManagerListener.class;
+    private static final int POLL_INTERVAL_MS = 2000;
+    private static final int FAST_POLL_INTERVAL_MS = 100;
+
+    /** 平台 classloader（execution API 在此 classloader 中，不在插件 classloader 中）。 */
+    private static final ClassLoader platformClassLoader =
+            com.intellij.openapi.project.ProjectManager.class.getClassLoader();
+
+    /** 执行体系 API 在当前环境是否可用（测试环境/SDK 发行版为 false）。 */
+    public static boolean isConsoleApiAvailable() {
+        for (String it : RCM_CLASS_CANDIDATES) {
+            try {
+                Class.forName(it, true, platformClassLoader);
+                return true;
+            } catch (Throwable t) {
+                // continue
+            }
+        }
+        return false;
+    }
+
+    public static Object runContentManagerOrNull(Project project) {
+        LOG.info("runContentManagerOrNull: 尝试解析 RCM（candidates=" + RCM_CLASS_CANDIDATES +
+                ", cl=" + platformClassLoader.getClass().getSimpleName() + "）");
+        for (String className : RCM_CLASS_CANDIDATES) {
+            try {
+                Class<?> clazz = Class.forName(className, true, platformClassLoader);
+                LOG.info("runContentManagerOrNull: " + className + " 已加载，调用 getInstance");
+                Object rcm = clazz.getMethod("getInstance", Project.class).invoke(null, project);
+                if (rcm != null) {
+                    LOG.info("attach: RCM resolved via " + className);
+                    return rcm;
+                }
+                LOG.warn("runContentManagerOrNull: " + className + ".getInstance 返回 null");
+            } catch (Throwable t) {
+                LOG.warn("runContentManagerOrNull: " + className + " 不可用（" +
+                        t.getClass().getSimpleName() + ": " + t.getMessage() + "）");
+            }
+        }
+        return null;
+    }
+}

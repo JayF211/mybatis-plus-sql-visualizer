@@ -44,8 +44,8 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
         val panel = SqlLogPanel(project, manager)
         try {
             val target = panel.resolveEntryJump(entry("SELECT * FROM user WHERE id = 1", "com/example/service/UserService.java", 10))
-            assertTrue("有源码位置应精确跳转", target is SqlLogPanel.LogJumpTarget.Precise)
-            val precise = target as SqlLogPanel.LogJumpTarget.Precise
+            assertTrue("有源码位置应精确跳转", target is LjtPrecise)
+            val precise = target as LjtPrecise
             assertEquals("行号 = sourceLine-1", 9, precise.line)
             val vf = LocalFileSystem.getInstance().findFileByPath(File(project.basePath!!, "com/example/service/UserService.java").absolutePath)
             assertEquals(vf, precise.virtualFile)
@@ -59,7 +59,7 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
         val panel = SqlLogPanel(project, manager)
         try {
             val e = entry("SELECT * FROM nav WHERE id = 1", "com/example/service/NavService.java", 3)
-            assertTrue("解析应为 Precise", panel.resolveEntryJump(e) is SqlLogPanel.LogJumpTarget.Precise)
+            assertTrue("解析应为 Precise", panel.resolveEntryJump(e) is LjtPrecise)
             panel.jumpToSourceForTest(e) // 等价右键跳转，真实文件下不抛异常即证明 navigate 链路可达
         } finally {
             panel.dispose()
@@ -70,8 +70,8 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
         val panel = SqlLogPanel(project, manager)
         try {
             val target = panel.resolveEntryJump(entry("SELECT 1", "missing/Missing.java", 5))
-            assertTrue(target is SqlLogPanel.LogJumpTarget.NotFound)
-            assertEquals("missing/Missing.java", (target as SqlLogPanel.LogJumpTarget.NotFound).sourceFile)
+            assertTrue(target is LjtNotFound)
+            assertEquals("missing/Missing.java", (target as LjtNotFound).sourceFile)
         } finally {
             panel.dispose()
         }
@@ -82,8 +82,8 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
         try {
             val target = panel.resolveEntryJump(entry("SELECT * FROM user u WHERE u.id = 1"))
             // 无源码位置 → 走原表名启发式（尽力而为，不可靠）
-            assertTrue("无源码位置应回退表名搜索", target is SqlLogPanel.LogJumpTarget.SearchByTable)
-            assertEquals("user", (target as SqlLogPanel.LogJumpTarget.SearchByTable).tableName)
+            assertTrue("无源码位置应回退表名搜索", target is LjtSearchByTable)
+            assertEquals("user", (target as LjtSearchByTable).tableName)
         } finally {
             panel.dispose()
         }
@@ -93,7 +93,7 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
         val panel = SqlLogPanel(project, manager)
         try {
             val target = panel.resolveEntryJump(entry("SELECT 1"))
-            assertTrue(target is SqlLogPanel.LogJumpTarget.NoTable)
+            assertTrue(target is LjtNoTable)
         } finally {
             panel.dispose()
         }
@@ -107,7 +107,7 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
             val target = panel.resolveEntryJump(entry("SELECT * FROM t", sourceFile = null, sourceLine = 0))
             assertTrue(
                 "无源码位置应回退（SearchByTable / NoTable），不得抛异常",
-                target is SqlLogPanel.LogJumpTarget.SearchByTable || target is SqlLogPanel.LogJumpTarget.NoTable,
+                target is LjtSearchByTable || target is LjtNoTable,
             )
         } finally {
             panel.dispose()

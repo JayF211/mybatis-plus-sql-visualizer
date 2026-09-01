@@ -47,7 +47,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = null)
             val target = panel.resolveJumpTarget(entry)
-            assertTrue("缺源码位置应判定为 NoSource（无法跳转）", target is HistorySqlLogPanel.HistoryJumpTarget.NoSource)
+            assertTrue("缺源码位置应判定为 NoSource（无法跳转）", target is HjtNoSource)
         } finally {
             panel.dispose()
         }
@@ -58,8 +58,8 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = "src/missing/MissingMapper.java", sourceLine = 5)
             val target = panel.resolveJumpTarget(entry)
-            assertTrue("路径无效/文件不存在应判定为 NotFound", target is HistorySqlLogPanel.HistoryJumpTarget.NotFound)
-            assertEquals("NotFound 携带原始 sourceFile", "src/missing/MissingMapper.java", (target as HistorySqlLogPanel.HistoryJumpTarget.NotFound).sourceFile)
+            assertTrue("路径无效/文件不存在应判定为 NotFound", target is HjtNotFound)
+            assertEquals("NotFound 携带原始 sourceFile", "src/missing/MissingMapper.java", (target as HjtNotFound).sourceFile)
         } finally {
             panel.dispose()
         }
@@ -71,8 +71,8 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = "UserMapper.java", sourceLine = 10)
             val target = panel.resolveJumpTarget(entry)
-            assertTrue("源码存在应可跳转(Navigate)", target is HistorySqlLogPanel.HistoryJumpTarget.Navigate)
-            val nav = target as HistorySqlLogPanel.HistoryJumpTarget.Navigate
+            assertTrue("源码存在应可跳转(Navigate)", target is HjtNavigate)
+            val nav = target as HjtNavigate
             assertEquals("行号应为 sourceLine-1（1-based→0-based）", 9, nav.line)
             // virtualFile 必须真实解析到磁盘文件
             val vf = LocalFileSystem.getInstance().findFileByPath(File(project.basePath!!, "UserMapper.java").absolutePath)
@@ -88,8 +88,8 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         try {
             val entry = makeEntry("SELECT 1", sourceFile = "ZeroLineMapper.java", sourceLine = 0)
             val target = panel.resolveJumpTarget(entry)
-            assertTrue("行号为 0 也应可跳转", target is HistorySqlLogPanel.HistoryJumpTarget.Navigate)
-            assertEquals("line 应被 maxOf(0, -1) 钳到 0", 0, (target as HistorySqlLogPanel.HistoryJumpTarget.Navigate).line)
+            assertTrue("行号为 0 也应可跳转", target is HjtNavigate)
+            assertEquals("line 应被 maxOf(0, -1) 钳到 0", 0, (target as HjtNavigate).line)
         } finally {
             panel.dispose()
         }
@@ -120,8 +120,8 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
             assertEquals("源码行号经往返保留", 10, entry.sourceLine)
 
             val target = panel.resolveJumpTarget(entry)
-            assertTrue("往返后源码位置有效 → 可跳转", target is HistorySqlLogPanel.HistoryJumpTarget.Navigate)
-            assertEquals(9, (target as HistorySqlLogPanel.HistoryJumpTarget.Navigate).line)
+            assertTrue("往返后源码位置有效 → 可跳转", target is HjtNavigate)
+            assertEquals(9, (target as HjtNavigate).line)
         } finally {
             panel.dispose()
         }
@@ -134,7 +134,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
             val entry = makeEntry("SELECT * FROM nav WHERE id = 1", sourceFile = "NavMapper.java", sourceLine = 3)
             // 先确定性确认目标是可跳转的
             val target = panel.resolveJumpTarget(entry)
-            assertTrue("目标应可跳转", target is HistorySqlLogPanel.HistoryJumpTarget.Navigate)
+            assertTrue("目标应可跳转", target is HjtNavigate)
             // 实际执行跳转（等价右键「跳转到源码」）：真实文件下不抛异常即证明 navigate 链路可达
             panel.jumpToSourceForTest(entry)
         } finally {
