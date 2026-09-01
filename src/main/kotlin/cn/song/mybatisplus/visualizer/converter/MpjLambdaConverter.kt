@@ -626,12 +626,12 @@ object MpjLambdaConverter : WrapperConverter {
                                 )
                             } else {
                                 val value = right.asValue() ?: return@mapNotNull null
-                                Condition.Simple(leftCol, if (call.methodName == "ne") "!=" else "=", value)
+                                Condition.Simple(leftCol, if (call.methodName == "ne") "<>" else "=", value)
                             }
                         }
                         else -> {
                             val value = right?.asValue() ?: return@mapNotNull null
-                            Condition.Simple(leftCol, if (call.methodName == "ne") "!=" else "=", value)
+                            Condition.Simple(leftCol, if (call.methodName == "ne") "<>" else "=", value)
                         }
                     }
                 }
