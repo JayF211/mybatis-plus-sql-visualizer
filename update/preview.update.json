@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.22-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.22-beta.1/mybatis-plus-sql-visualizer-2026.8.22-beta.1.zip",
-  "changeNotes": "v2026.8.22：更新机制改为 Gitee 抢先体验通道（内测版）\n通知弹窗优化：标题精简 + 版本号行 + 忽略此版本按钮\n双 JSON 文件：update/update.json 为检查源，preview.update.json 为草稿\n支持同日多版本（-beta.N 序号递增）\n忽略此版本仅抑制自动通知，手动检查不受影响",
-  "publishDate": "2026-08-22",
+  "version": "2026.9.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.2/mybatis-plus-sql-visualizer-2026.9.2.zip",
+  "changeNotes": "实时日志精确跳转源码可靠方案（InnerInterceptor 应用线程捕获真实调用点，file:line 精确跳转替代按表名猜实体）\nSQL 日志面板四项修复（SQL 词法高亮恢复 / 耗时接入控制台链路 / 去重即时生效 / 徽章同步）\nSQL 历史面板两级导航（文件列表 → 双击进 SQL 列表 → 双击预览）+ 高亮 + 耗时\n插件显示名更名 SQL Visualizer（已装用户正常升级，配置保留）\nHQL SELECT 实体别名展开为列清单（修复 MySQL Unknown column）\n全插件 UI / 集成测试覆盖（50+ 文件 200+ 用例）",
+  "publishDate": "2026-09-02",
   "sinceBuild": "243"
 }

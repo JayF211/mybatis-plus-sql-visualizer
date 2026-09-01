@@ -1,8 +1,10 @@
 <!-- Keep a Changelog guide -> https://keepachangelog.com -->
 
-# Mybatis-plus-sql-visualizer Changelog
+# SQL Visualizer Changelog
 
 ## [Unreleased]
+
+## [2026.9.2] - 2026-09-02
 
 ### Changed
 
