@@ -1,0 +1,803 @@
+package cn.song.mybatisplus.visualizer.psi;
+
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.model.BatchColumn;
+import cn.song.mybatisplus.visualizer.model.BatchKind;
+import cn.song.mybatisplus.visualizer.model.BatchModel;
+import cn.song.mybatisplus.visualizer.model.BatchPreview;
+import cn.song.mybatisplus.visualizer.model.ColumnInfo;
+import cn.song.mybatisplus.visualizer.model.SqlValue;
+import cn.song.mybatisplus.visualizer.model.TableInfo;
+import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.ParamHint;
+import cn.song.mybatisplus.visualizer.sql.ParamQuote;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiClassObjectAccessExpression;
+import com.intellij.psi.PsiClassType;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiMethodCallExpression;
+import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiThisExpression;
+import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.PsiVariable;
+import com.intellij.psi.util.PsiTreeUtil;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+/**
+ * 批量/单实体操作转换器（F-15，M6-01 + T-M15-08 扩展 + M19.5 实体单条 CRUD）：识别
+ * {@code service.updateBatchById(list)} 等调用，生成 SQL 模板 + 参数组说明。
+ *
+ * <p>支持的批量方法：</p>
+ * <ul>
+ *  <li>{@code updateBatchById(list)} / {@code updateById(entity)}：UPDATE 表 SET 非主键列 = ? WHERE 主键 = ?</li>
+ *  <li>{@code saveBatch(list)} / {@code insertBatchSomeColumn(list)} / {@code save(entity)}（M19.5 补注册，
+ *      与注释一致化）/ {@code insert(list)} / {@code insert(entity)}（T-M20-08，BaseMapper 3.5.7+ 批量族，
+ *      单实体与集合同 INSERT 模板）：INSERT INTO 表 (列...) VALUES (?, ...)</li>
+ *  <li>{@code saveOrUpdate(entity)} / {@code saveOrUpdateBatch(list)}（U12，T-M15-08）/
+ *      {@code insertOrUpdate(entity)}（T-M20-08）：INSERT + 方言 upsert（PG {@code ON CONFLICT}）</li>
+ *  <li>{@code removeByIds(list)} / {@code removeById(id)} / {@code deleteByIds(ids)}（U11/P1-02，T-M15-08 + M19.5）/
+ *      {@code removeBatchByIds(list)}（T-M20-10 核对补注册）/ {@code deleteById(id)}（T-M22-04，Mapper 单删与
+ *      ActiveRecord 无参形态同主键等值模板）：DELETE FROM 表 WHERE 主键 IN/=；
+ *      <b>T-M23-01（用户确认）</b>：实体含 @TableLogic 时删除操作实际是修改操作——转软删除
+ *      {@code UPDATE 表 SET deleted = 1 WHERE ... AND deleted = 0}（对齐 MP LogicDeleteSqlInjector）；
+ *      无 @TableLogic 维持物理 DELETE。</li>
+ *  <li>{@code removeByMap(map)} / {@code deleteByMap(map)}（T-M20-07，MP/MPJ Map 条件删除）与
+ *      {@code selectByMap(map)} / {@code listByMap(map)}（T-M20-07 Map 条件查询）：
+ *      WHERE Map 等值条件占位（键值静态不可得，可读占位文本）</li>
+ *  <li>{@code getById(id)} / {@code getOptById(id)}（T-M20-10，IService 3.5.15）/ {@code listByIds(ids)} /
+ *      {@code selectByIds(ids)}（M19.5，实体单条查询，P2-08 同点合并）：SELECT 全列 FROM 表 WHERE 主键 =/IN；
+ *      <b>T-M23-01</b>：实体含 @TableLogic 时 WHERE 追加 {@code AND deleted = 0}（对齐 MP 内置 SQL）</li>
+ *  <li>{@code selectAll()}（T-M22-04，ActiveRecord）：SELECT 全列 FROM 表（无 WHERE；@TableLogic 时 WHERE deleted = 0）</li>
+ * </ul>
+ *
+ * <p>实体类解析顺序：集合参数泛型（{@code List<Entity>}）→ 实体参数类型 → service qualifier 泛型
+ * （{@code XxxService extends IService<Entity>} / {@code ServiceImpl<Mapper, Entity>}，getById/removeById 单参场景）
+ * → qualifier 实体类型（T-M22-04，ActiveRecord {@code entity.insert()} 等无参形态）。
+ * 运行时行值不可得，输出 {@code ?} 模板并附参数组说明（每行一组，字段顺序与 SQL 一致）。</p>
+ *
+ * <p>T-M23-02（参数面板）：单主键方法实参可静态求值（字面量/可追踪变量，{@link ExpressionEvaluator}）时
+ * <b>内联</b>进 SQL（{@code removeById(1L)} → {@code WHERE id = 1}）；不可求值 → {@code ?} + 参数登记
+ * （source=实参文本，面板参数行）；实体/集合方法每个 {@code ?} 登记 {@code 实体变量.列名}。</p>
+ */
+public final class BatchOperationConverter {
+
+    private BatchOperationConverter() {}
+
+    /** T-TenantLine 诊断日志：INSERT 列清单追加租户列决策。 */
+    private static final Logger LOG = Logger.getInstance(BatchOperationConverter.class);
+
+    /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
+    private static final String DEFAULT_TENANT_COLUMN = "tenant_id";
+
+    /** 批量方法 → SQL 模板生成策略。 */
+    private enum Operation {
+        UPDATE("UPDATE"),
+        INSERT("INSERT"),
+        DELETE("DELETE"),
+        UPSERT("UPSERT"),
+        SELECT("SELECT");
+
+        @SuppressWarnings("unused")
+        final String sqlPrefix;
+
+        Operation(String sqlPrefix) {
+            this.sqlPrefix = sqlPrefix;
+        }
+    }
+
+    private static final Map<String, Operation> BATCH_OPERATIONS = createBatchOperations();
+
+    private static Map<String, Operation> createBatchOperations() {
+        Map<String, Operation> map = new LinkedHashMap<>();
+        map.put("updateBatchById", Operation.UPDATE);
+        map.put("updateById", Operation.UPDATE);
+        map.put("saveBatch", Operation.INSERT);
+        map.put("insertBatchSomeColumn", Operation.INSERT);
+        // T-M20-08：BaseMapper 批量族（MP 3.5.7+）——insert(Collection)/insert(Collection, int)/insert(T)
+        // 同名共用一个 INSERT 模板；insert 为通用 Java 方法名，非实体调用由 isLikelyEntity 挡掉
+        map.put("insert", Operation.INSERT);
+        map.put("save", Operation.INSERT);
+        map.put("saveOrUpdate", Operation.UPSERT);
+        // T-M20-08：BaseMapper.insertOrUpdate（全重载同名，BiPredicate 参数忽略）与 saveOrUpdate 同 upsert 模板
+        map.put("insertOrUpdate", Operation.UPSERT);
+        map.put("saveOrUpdateBatch", Operation.UPSERT);
+        map.put("removeByIds", Operation.DELETE);
+        map.put("removeById", Operation.DELETE);
+        map.put("deleteByIds", Operation.DELETE);
+        // T-M22-04：Mapper.deleteById(id) 与 ActiveRecord 无参形态（entity.deleteById()）同模板——主键等值
+        map.put("deleteById", Operation.DELETE);
+        // T-M20-10 核对：IService 3.5.15 便捷重载 removeBatchByIds(Collection)——核对时补注册（与 removeByIds 同模板）
+        map.put("removeBatchByIds", Operation.DELETE);
+        // T-M20-07：Map 条件消费（MP/MPJ）——DELETE/SELECT WHERE Map 等值条件（独立 builder）
+        map.put("removeByMap", Operation.DELETE);
+        map.put("deleteByMap", Operation.DELETE);
+        map.put("getById", Operation.SELECT);
+        // T-M20-10：IService 3.5.15 getOptById(id) → 与 getById 同主键等值模板
+        map.put("getOptById", Operation.SELECT);
+        // T-M22-04：ActiveRecord（AbstractModel）selectAll() 全列查询——无 WHERE
+        map.put("selectAll", Operation.SELECT);
+        map.put("listByIds", Operation.SELECT);
+        map.put("selectByIds", Operation.SELECT);
+        map.put("selectByMap", Operation.SELECT);
+        map.put("listByMap", Operation.SELECT);
+        // T-Mxx：BaseMapper 核心方法（MP 3.5.x）——补全单数/列表/计数
+        map.put("selectById", Operation.SELECT);
+        map.put("selectList", Operation.SELECT);
+        map.put("selectMaps", Operation.SELECT);
+        map.put("selectObjs", Operation.SELECT);
+        map.put("selectCount", Operation.SELECT);
+        return map;
+    }
+
+    /** T-M20-07：Map 等值条件操作方法名（独立 builder，不并入主键等值/IN 分支）。 */
+    private static final Set<String> MAP_CONDITION_METHODS =
+        Set.of("removeByMap", "deleteByMap", "selectByMap", "listByMap");
+
+    /** T-M20-10：主键等值单条查询方法名（getById / getOptById，其余批量查询走主键 IN）。 */
+    private static final Set<String> SINGLE_ID_SELECT_METHODS = Set.of("getById", "getOptById", "selectById");
+
+    /** T-Mxx：全列查询无 WHERE 方法名（selectList / selectMaps / selectObjs——BaseMapper 列表查询）。 */
+    private static final Set<String> FULL_COLUMN_SELECT_METHODS = Set.of("selectList", "selectMaps", "selectObjs");
+
+    /** T-M22-04：主键等值删除方法名（removeById / deleteById，其余走主键 IN）。 */
+    private static final Set<String> SINGLE_ID_DELETE_METHODS = Set.of("removeById", "deleteById");
+
+    /**
+     * 批量操作方法名集合（M10 起供 {@link WrapperAnchorDetector} gutter 锚点复用）。
+     */
+    public static Set<String> getBatchOperationMethodNames() {
+        return BATCH_OPERATIONS.keySet();
+    }
+
+    /**
+     * T-M23-02：单个 {@code ?} 的参数登记（source + 回填引号提示，供面板参数行）。
+     */
+    private static final class ParamEntry {
+        final String source;
+        final ParamHint hint;
+
+        ParamEntry(String source, ParamHint hint) {
+            this.source = source;
+            this.hint = hint;
+        }
+    }
+
+    /**
+     * T-M23-02：批量构建结果（SQL 模板 + 按 {@code ?} 出现顺序的参数登记 + 参数组说明）。
+     * T-M23-04：INSERT/UPDATE/UPSERT 携带 {@link BatchModel}（面板勾选重建 SQL 的唯一结构源）。
+     */
+    private static final class BatchBuild {
+        final String sql;
+        final List<ParamEntry> params;
+        final String paramGroups;
+        final BatchModel model;
+
+        BatchBuild(String sql) {
+            this(sql, List.of(), null, null);
+        }
+
+        BatchBuild(String sql, List<ParamEntry> params) {
+            this(sql, params, null, null);
+        }
+
+        BatchBuild(String sql, List<ParamEntry> params, String paramGroups, BatchModel model) {
+            this.sql = sql;
+            this.params = params;
+            this.paramGroups = paramGroups;
+            this.model = model;
+        }
+
+        BatchBuild withParamGroups(String groups) {
+            return new BatchBuild(sql, params, groups, model);
+        }
+    }
+
+    /**
+     * T-M23-04：由列清单构造勾选列（source = {@code 实体前缀.列名}，hint 按列类型引号判定）。
+     */
+    private static List<BatchColumn> batchColumns(
+        String prefix,
+        TableInfo table,
+        List<ColumnInfo> columns,
+        Predicate<ColumnInfo> checked
+    ) {
+        List<BatchColumn> result = new ArrayList<>();
+        for (ColumnInfo col : columns) {
+            result.add(new BatchColumn(
+                col.getColumnName(),
+                idSource(prefix, col.getColumnName()),
+                ParamQuote.INSTANCE.decide(col.getFieldType()),
+                checked.test(col)));
+        }
+        return result;
+    }
+
+    /**
+     * T-M23-04：模型驱动的批量构建（初始 SQL 与参数登记均出自 {@link BatchModel#renderSql}/ordered*，
+     * 与面板勾选重建共用唯一渲染源）。
+     * T-M23.4：注入当前方言（关键字标识符引用——保留字列名按方言符号包裹；设置服务不可用时兜底 MySQL）。
+     */
+    private static BatchBuild modelBuild(BatchModel model) {
+        BatchModel withDialect = model.copy(PsiDialect.currentDialect());
+        Set<String> initialActive = new LinkedHashSet<>();
+        for (BatchColumn column : withDialect.getToggleColumns()) {
+            if (column.isChecked()) initialActive.add(column.getColumnName());
+        }
+        for (BatchColumn column : withDialect.getFixedColumns()) {
+            initialActive.add(column.getColumnName());
+        }
+        List<ParamEntry> params = new ArrayList<>();
+        for (BatchColumn column : withDialect.orderedColumns(initialActive)) {
+            params.add(new ParamEntry(column.getSource(), new ParamHint(column.getQuote(), null, false)));
+        }
+        return new BatchBuild(withDialect.renderSql(initialActive), params, null, withDialect);
+    }
+
+    /**
+     * 转换批量/单实体方法调用。
+     *
+     * @param call              service 方法调用表达式
+     * @param injectLogicDelete 逻辑删除注入开关（T-M23-01，settings.injectLogicDelete）：
+     *                          关闭时 SELECT 不追加 {@code deleted = 0}、删除不转软删除
+     * @param resolveVariables  变量求值开关（T-M23-02，settings.replaceParams）：false 时跳过
+     *                          实参静态求值，一律 {@code ?} + 参数行（对齐 Wrapper 路径 ArgResolver）
+     * @param injectTenantLine  租户列注入开关（T-TenantLine，INSERT 列清单追加租户列）
+     * @return 批量预览；方法不匹配或实体无法解析时返回 null
+     */
+    public static BatchPreview convert(
+        PsiMethodCallExpression call,
+        boolean injectLogicDelete,
+        boolean resolveVariables,
+        boolean injectTenantLine
+    ) {
+        String methodName = call.getMethodExpression().getReferenceName();
+        if (methodName == null) return null;
+        Operation operation = BATCH_OPERATIONS.get(methodName);
+        if (operation == null) return null;
+        TableInfo table = resolveEntityTable(call);
+        if (table == null) return null;
+        // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 模板）
+        BatchBuild build;
+        if (MAP_CONDITION_METHODS.contains(methodName)) {
+            build = buildMapConditionBatch(methodName, table, injectLogicDelete);
+        } else {
+            switch (operation) {
+                case UPDATE:
+                    build = buildUpdateBatch(call, methodName, table);
+                    break;
+                case INSERT:
+                    build = buildInsertBatch(call, methodName, table, injectTenantLine);
+                    break;
+                case DELETE:
+                    build = buildDeleteBatch(call, methodName, table, injectLogicDelete, resolveVariables);
+                    break;
+                case UPSERT:
+                    build = buildUpsertBatch(call, methodName, table);
+                    break;
+                case SELECT:
+                default:
+                    build = buildSelectBatch(call, methodName, table, injectLogicDelete, resolveVariables);
+                    break;
+            }
+        }
+        List<String> sources = new ArrayList<>();
+        List<ParamHint> hints = new ArrayList<>();
+        for (ParamEntry entry : build.params) {
+            sources.add(entry.source);
+            hints.add(entry.hint);
+        }
+        return new BatchPreview(methodName, table.getTableName(), build.sql, build.paramGroups,
+            sources, hints, build.model);
+    }
+
+    /** 便捷重载：全默认开关（injectLogicDelete / resolveVariables / injectTenantLine 均为 true）。 */
+    public static BatchPreview convert(PsiMethodCallExpression call) {
+        return convert(call, true, true, true);
+    }
+
+    /**
+     * 解析目标实体表信息（T-M15-08 起支持三种来源，T-M22-04 增补第四种）：
+     * <ol>
+     *  <li>集合参数泛型（{@code List<Entity>}，批量形态）</li>
+     *  <li>实体参数类型（{@code save(entity)} / {@code updateById(entity)} 单实体形态）</li>
+     *  <li>service qualifier 泛型（{@code getById(id)} / {@code removeById(id)} 单参形态：
+     *      {@code XxxService extends IService<Entity>}）</li>
+     *  <li>qualifier 实体类型（T-M22-04，ActiveRecord：{@code entity.insert()} / {@code entity.updateById()} /
+     *      {@code entity.deleteById()} / {@code entity.selectAll()} 无实参形态）</li>
+     * </ol>
+     *
+     * <p>M19.6（2026-08-13 用户实测）：步骤 1/2 增加 {@link #isLikelyEntity} 限定——{@code getById(dto.getId())}
+     * 的实参 Long 在真实 IDE 可解析，原实现把 java.lang.Long 当实体；限定后 Long/String 等基础类型跳过，
+     * 走步骤 3 service 泛型。</p>
+     */
+    private static TableInfo resolveEntityTable(PsiMethodCallExpression call) {
+        PsiExpression[] args = call.getArgumentList().getExpressions();
+        // 1. 集合参数泛型（List<Entity>）；2. 实体参数类型（save(entity) / updateById(entity)）
+        if (args.length > 0) {
+            PsiExpression firstArg = args[0];
+            PsiClass entityFromList = resolveGenericArg(firstArg.getType(), 0);
+            if (entityFromList != null && isLikelyEntity(entityFromList)) {
+                return new EntityResolver().resolve(entityFromList);
+            }
+            // 类字面量实参（Db.getById(User.class, id) / Db.list(User.class, wrapper)，T-M22-04）显式处理：
+            // LightPlatform 下 `User.class` 表达式的 type（Class<User>）可能不可解析，
+            // operand 类型（User 本身）更可靠
+            PsiClass entityFromArg;
+            if (firstArg instanceof PsiClassObjectAccessExpression) {
+                PsiTypeElement operand = ((PsiClassObjectAccessExpression) firstArg).getOperand();
+                PsiType operandType = operand != null ? operand.getType() : null;
+                entityFromArg = operandType instanceof PsiClassType ? ((PsiClassType) operandType).resolve() : null;
+            } else {
+                entityFromArg = firstArg.getType() instanceof PsiClassType
+                    ? ((PsiClassType) firstArg.getType()).resolve() : null;
+            }
+            if (entityFromArg != null && isLikelyEntity(entityFromArg)) {
+                return new EntityResolver().resolve(entityFromArg);
+            }
+        }
+        // 3. service qualifier 泛型（getById(id) 等单参非实体场景）
+        PsiClass entityFromService = resolveServiceEntityClass(call);
+        if (entityFromService != null) return new EntityResolver().resolve(entityFromService);
+        // 3b. 隐式 this 回退（this.getById(id)）
+        PsiClass entityFromImplicitThis = resolveEntityFromImplicitThis(call);
+        if (entityFromImplicitThis != null) return new EntityResolver().resolve(entityFromImplicitThis);
+        // 3c. 方法调用 qualifier 回退（getBaseMapper().selectById(id)）
+        PsiClass entityFromMethodQualifier = resolveEntityFromMethodQualifier(call);
+        if (entityFromMethodQualifier != null) return new EntityResolver().resolve(entityFromMethodQualifier);
+        // 4. qualifier 实体类型（T-M22-04，ActiveRecord 无参形态）
+        PsiClass entityFromQualifier = resolveQualifierEntityClass(call);
+        if (entityFromQualifier == null) return null;
+        return new EntityResolver().resolve(entityFromQualifier);
+    }
+
+    /** 取类类型的第 index 个泛型参数并 resolve（类型不匹配或无该参数时返回 null）。 */
+    private static PsiClass resolveGenericArg(PsiType type, int index) {
+        if (!(type instanceof PsiClassType)) return null;
+        PsiType[] parameters = ((PsiClassType) type).getParameters();
+        if (parameters.length <= index) return null;
+        PsiType parameter = parameters[index];
+        return parameter instanceof PsiClassType ? ((PsiClassType) parameter).resolve() : null;
+    }
+
+    /**
+     * T-Mxx：隐式/显式 this 调用的实体解析——{@code getById(id)}（隐式 this，qualifierExpression 为 null）
+     * 或 {@code this.getById(id)}（显式 this）时，从 containing class 的父类/接口泛型参数解析实体
+     * （{@code ServiceImpl<M, User> → User}）。高置信度：方法名已在 BATCH_OPERATIONS 白名单中。
+     */
+    private static PsiClass resolveEntityFromImplicitThis(PsiMethodCallExpression call) {
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        // 仅当 qualifier 为 null（隐式 this）或 PsiThisExpression（显式 this）时触发
+        if (qualifier != null && !(qualifier instanceof PsiThisExpression)) return null;
+        PsiClass containingClass = PsiTreeUtil.getParentOfType(call, PsiClass.class);
+        if (containingClass == null) return null;
+        // 沿父类/接口链取最后一个类型参数（ServiceImpl<M, User> → User）
+        return lastSuperTypeParam(containingClass);
+    }
+
+    /**
+     * T-Mxx：方法调用 qualifier 的实体解析——{@code getBaseMapper().selectById(id)} 时 qualifier 是
+     * PsiMethodCallExpression，从 qualifier 方法的返回类型泛型参数解析实体（{@code BaseMapper<User> → User}）。
+     * 返回类型自身无泛型参数时（如 {@code UserMapper extends BaseMapper<User>}），回退到父类/接口泛型参数。
+     */
+    private static PsiClass resolveEntityFromMethodQualifier(PsiMethodCallExpression call) {
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        if (!(qualifier instanceof PsiMethodCallExpression)) return null;
+        PsiType returnType = ((PsiMethodCallExpression) qualifier).getMethodExpression().getType();
+        if (!(returnType instanceof PsiClassType)) return null;
+        PsiClassType classType = (PsiClassType) returnType;
+        // 返回类型自身泛型参数（BaseMapper<User> → User）
+        PsiClass fromParameter = resolveGenericArg(classType, 0);
+        if (fromParameter != null && !isJdkBasePackage(fromParameter)) {
+            return fromParameter;
+        }
+        // 回退：返回类型的父类/接口泛型参数（UserMapper extends BaseMapper<User> → User）
+        PsiClass resolved = classType.resolve();
+        return resolved != null ? lastSuperTypeParam(resolved) : null;
+    }
+
+    /** 沿父类/接口链取最后一个类型参数（{@code ServiceImpl<M, User> → User}），跳过 JDK 基础包。 */
+    private static PsiClass lastSuperTypeParam(PsiClass clazz) {
+        for (PsiClassType superType : clazz.getSuperTypes()) {
+            PsiType[] params = superType.getParameters();
+            if (params.length == 0) continue;
+            if (!(params[params.length - 1] instanceof PsiClassType)) continue;
+            PsiClass resolved = ((PsiClassType) params[params.length - 1]).resolve();
+            if (resolved == null) continue;
+            if (isJdkBasePackage(resolved)) continue;
+            return resolved;
+        }
+        return null;
+    }
+
+    private static boolean isJdkBasePackage(PsiClass psiClass) {
+        String qualifiedName = psiClass.getQualifiedName();
+        if (qualifiedName == null) return true;
+        return qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.");
+    }
+
+    /**
+     * T-M22-04（ActiveRecord 识别）：从 qualifier 变量类型解析实体——{@code entity.insert()} 的
+     * qualifier 变量类型即实体本身（AbstractModel 子类）；{@link #isLikelyEntity} 限定避免
+     * {@code service.getById(id)} 等 service/mapper 变量被误判为实体。
+     */
+    private static PsiClass resolveQualifierEntityClass(PsiMethodCallExpression call) {
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        if (!(qualifier instanceof PsiReferenceExpression)) return null;
+        PsiElement target = ((PsiReferenceExpression) qualifier).resolve();
+        if (!(target instanceof PsiVariable)) return null;
+        PsiType varType = ((PsiVariable) target).getType();
+        if (!(varType instanceof PsiClassType)) return null;
+        PsiClass resolved = ((PsiClassType) varType).resolve();
+        return resolved != null && isLikelyEntity(resolved) ? resolved : null;
+    }
+
+    /**
+     * 实体类启发式判定（M19.6）：仅接受 <b>@TableName 注解实体</b>（真实实体，兼容无 Entity 后缀命名
+     * 如 SpWorkflow）或<b>类名含 "Entity"</b> 的类；排除 JDK 基础类型（java./javax. 前缀）——
+     * 避免 getById/removeById 的 Long/String 等实参类型被误当实体解析。
+     */
+    private static boolean isLikelyEntity(PsiClass psiClass) {
+        String qualifiedName = psiClass.getQualifiedName();
+        if (qualifiedName == null) return false;
+        if (qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.")) return false;
+        for (PsiAnnotation annotation : psiClass.getAnnotations()) {
+            String annotationName = annotation.getQualifiedName();
+            if (annotationName != null && annotationName.endsWith(".TableName")) return true;
+        }
+        String name = psiClass.getName();
+        return name != null && name.contains("Entity");
+    }
+
+    /**
+     * 从 service qualifier 解析实体类（{@code XxxService extends IService<Entity>} /
+     * {@code ServiceImpl<Mapper, Entity>}）：变量类型自身泛型参数优先（{@code XxxService<Entity>}），
+     * 否则沿父类型链取「最后一个类型参数」。
+     */
+    private static PsiClass resolveServiceEntityClass(PsiMethodCallExpression call) {
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        if (!(qualifier instanceof PsiReferenceExpression)) return null;
+        PsiElement target = ((PsiReferenceExpression) qualifier).resolve();
+        if (!(target instanceof PsiVariable)) return null;
+        PsiType varType = ((PsiVariable) target).getType();
+        if (!(varType instanceof PsiClassType)) return null;
+        PsiClassType classType = (PsiClassType) varType;
+        // 变量类型自身泛型（XxxService<Entity>）——T-M22-04：加 isLikelyEntity 限定
+        // （selectAll 等常见方法名防误伤：`List<String> list.selectAll()` 的 String 不得解析为实体）
+        PsiClass fromParameter = resolveGenericArg(classType, 0);
+        if (fromParameter != null && isLikelyEntity(fromParameter)) {
+            return fromParameter;
+        }
+        // 父类/接口泛型参数（ServiceImpl<M, Entity> / IService<Entity> 的 Entity）
+        PsiClass clazz = classType.resolve();
+        return clazz != null ? lastSuperTypeParam(clazz) : null;
+    }
+
+    // ------------------------------------------------------------------
+    // SQL 模板构建（T-M23-01：逻辑删除/软删除；T-M23-02：参数登记）
+    // ------------------------------------------------------------------
+
+    /**
+     * UPDATE 模板：非主键列 SET + 主键 WHERE（无主键标记时用首列；updateById 同 update-strategy: always 全列语义）。
+     *
+     * <p>T-M22-02（@Version 乐观锁）：实体含 @Version 字段时（对齐 MP OptimisticLockerInnerInterceptor）——
+     * version 列不进实体 SET（{@code version = ?} 由 {@code version = version + 1} 取代），
+     * WHERE 末尾追加 {@code AND version = ?}；参数组说明同步追加 version（buildParamGroups 顺序与 SQL 一致）。
+     * T-M23-04：SET 列为可勾选（默认全勾选），WHERE 主键/@Version 为固定列（无勾选）。</p>
+     */
+    private static BatchBuild buildUpdateBatch(
+        PsiMethodCallExpression call,
+        String methodName,
+        TableInfo table
+    ) {
+        List<ColumnInfo> columns = table.getColumns();
+        ColumnInfo idColumn = firstIdColumn(columns);
+        String versionColumn = table.getVersionColumn();
+        List<ColumnInfo> setColumns = new ArrayList<>();
+        for (ColumnInfo column : columns) {
+            if (!column.getColumnName().equals(idColumn.getColumnName())
+                && !column.getColumnName().equals(versionColumn)) {
+                setColumns.add(column);
+            }
+        }
+        String prefix = entityPrefix(call);
+        List<BatchColumn> toggleColumns = batchColumns(prefix, table, setColumns, column -> true);
+        List<BatchColumn> fixedColumns = new ArrayList<>();
+        fixedColumns.add(new BatchColumn(idColumn.getColumnName(), idSource(prefix, idColumn.getColumnName()),
+            ParamQuote.INSTANCE.decide(idColumn.getFieldType()), true));
+        if (versionColumn != null) {
+            String versionFieldType = null;
+            for (ColumnInfo column : columns) {
+                if (column.getColumnName().equals(versionColumn)) {
+                    versionFieldType = column.getFieldType();
+                    break;
+                }
+            }
+            fixedColumns.add(new BatchColumn(versionColumn, prefix + "." + versionColumn,
+                ParamQuote.INSTANCE.decide(versionFieldType), true));
+        }
+        List<String> groupColumns = new ArrayList<>();
+        for (ColumnInfo column : setColumns) groupColumns.add(column.getColumnName());
+        groupColumns.add(idColumn.getColumnName());
+        if (versionColumn != null) groupColumns.add(versionColumn);
+        String paramGroups = buildParamGroups(groupColumns);
+        return modelBuild(new BatchModel(
+            BatchKind.UPDATE, table.getTableName(), toggleColumns, fixedColumns, versionColumn))
+            .withParamGroups(paramGroups);
+    }
+
+    /**
+     * INSERT 模板：全列 + VALUES。
+     *
+     * <p>{@code insertBatchSomeColumn}（自定义注入器，X09）：排除 {@code FieldFill.UPDATE} 填充列；
+     * {@code save(entity)} 单实体同模板（F-15 语义一致）。
+     * T-M23-04：全列可勾选，<b>主键默认不勾选</b>（{@code @TableId(type = IdType.AUTO)} 自增场景）。
+     * T-TenantLine：INSERT 列清单追加租户列（固定、默认勾选、恒参与），实体已有该列时不重复追加。</p>
+     */
+    private static BatchBuild buildInsertBatch(
+        PsiMethodCallExpression call,
+        String methodName,
+        TableInfo table,
+        boolean injectTenantLine
+    ) {
+        List<ColumnInfo> columns;
+        if ("insertBatchSomeColumn".equals(methodName)) {
+            columns = new ArrayList<>();
+            for (ColumnInfo column : table.getColumns()) {
+                if (!"UPDATE".equals(column.getFill())) columns.add(column);
+            }
+        } else {
+            columns = table.getColumns();
+        }
+        String prefix = entityPrefix(call);
+        List<BatchColumn> toggleColumns = new ArrayList<>(
+            batchColumns(prefix, table, columns, column -> !(column.isId() && column.isIdTypeAuto())));
+        String tenantColumn;
+        if (injectTenantLine) {
+            String configured = PluginSettings.getInstance().getState().getTenantColumnName();
+            tenantColumn = (configured == null || configured.isBlank()) ? DEFAULT_TENANT_COLUMN : configured;
+        } else {
+            LOG.info("buildInsertBatch: SKIP injectTenantLine=false, method=" + methodName
+                + ", table=" + table.getTableName());
+            tenantColumn = null;
+        }
+        if (tenantColumn != null) {
+            boolean exists = false;
+            for (BatchColumn column : toggleColumns) {
+                if (column.getColumnName().equals(tenantColumn)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                LOG.info("buildInsertBatch: INJECT col=" + tenantColumn + ", method=" + methodName
+                    + ", table=" + table.getTableName());
+                toggleColumns.add(new BatchColumn(tenantColumn, prefix + "." + tenantColumn, null, true));
+            } else {
+                LOG.info("buildInsertBatch: DEDUP col=" + tenantColumn + " already in entity columns, method="
+                    + methodName);
+            }
+        }
+        List<String> groupColumns = new ArrayList<>();
+        for (ColumnInfo column : columns) groupColumns.add(column.getColumnName());
+        String paramGroups = buildParamGroups(groupColumns);
+        return modelBuild(new BatchModel(BatchKind.INSERT, table.getTableName(), toggleColumns))
+            .withParamGroups(paramGroups);
+    }
+
+    /**
+     * DELETE 模板（T-M23-01）：主键 IN 列表（removeByIds/deleteByIds）/ 主键等值（removeById / deleteById）。
+     *
+     * <p><b>有 @TableLogic（且逻辑删除开关开启）→ 软删除</b>（删除操作实际是修改操作）：
+     * {@code UPDATE 表 SET deleted = 1 WHERE 主键 ... AND deleted = 0}；无 @TableLogic → 物理 DELETE。
+     * T-M23-02：主键等值实参可静态求值 → 内联（{@code removeById(1L)} → {@code WHERE id = 1}）。</p>
+     */
+    private static BatchBuild buildDeleteBatch(
+        PsiMethodCallExpression call,
+        String methodName,
+        TableInfo table,
+        boolean injectLogicDelete,
+        boolean resolveVariables
+    ) {
+        Dialect dialect = PsiDialect.currentDialect();
+        ColumnInfo idColumn = firstIdColumn(table.getColumns());
+        String logicColumn = injectLogicDelete ? table.getLogicDeleteColumn() : null;
+        boolean singleId = SINGLE_ID_DELETE_METHODS.contains(methodName);
+        kotlin.Pair<String, List<ParamEntry>> idCondition = singleId
+            ? renderIdCondition(call, idColumn, resolveVariables, dialect)
+            : new kotlin.Pair<>(dialect.quoteIfKeyword(idColumn.getColumnName()) + " IN (?, ?, ...)",
+                List.<ParamEntry>of());
+        String idWhere = idCondition.getFirst();
+        List<ParamEntry> idParams = idCondition.getSecond();
+        if (logicColumn != null) {
+            // 软删除：删除转 UPDATE（deleted = 1 为字面量，不进参数行）；T-M23.5 表名/列名按方言引用
+            String logic = dialect.quoteIfKeyword(logicColumn);
+            return new BatchBuild("UPDATE " + dialect.quoteIfKeyword(table.getTableName())
+                + "\nSET " + logic + " = 1\nWHERE " + idWhere + " AND " + logic + " = 0", idParams);
+        }
+        return new BatchBuild("DELETE FROM " + dialect.quoteIfKeyword(table.getTableName())
+            + "\nWHERE " + idWhere, idParams);
+    }
+
+    /**
+     * SELECT 模板（M19.5，实体单条查询，P1-02/P2-08 同点合并）：
+     * 全列清单 + 主键等值（getById/getOptById）/ 主键 IN（listByIds/selectByIds）。
+     *
+     * <p>T-M22-04：ActiveRecord selectAll() 全列查询——<b>无 WHERE</b>。
+     * T-M23-01：实体含 @TableLogic（开关开启）→ WHERE 追加 {@code AND deleted = 0}。
+     * T-M23-02：主键等值实参可静态求值 → 内联。</p>
+     */
+    private static BatchBuild buildSelectBatch(
+        PsiMethodCallExpression call,
+        String methodName,
+        TableInfo table,
+        boolean injectLogicDelete,
+        boolean resolveVariables
+    ) {
+        Dialect dialect = PsiDialect.currentDialect();
+        ColumnInfo idColumn = firstIdColumn(table.getColumns());
+        // T-M23.5：全列清单/表名/条件列名按方言引用
+        String selectColumns = table.getColumns().stream()
+            .map(column -> dialect.quoteIfKeyword(column.getColumnName()))
+            .collect(Collectors.joining(", "));
+        String logicCond = injectLogicDelete && table.getLogicDeleteColumn() != null
+            ? dialect.quoteIfKeyword(table.getLogicDeleteColumn()) + " = 0"
+            : null;
+        if ("selectAll".equals(methodName) || FULL_COLUMN_SELECT_METHODS.contains(methodName)) {
+            String where = logicCond != null ? "\nWHERE " + logicCond : "";
+            return new BatchBuild("SELECT " + selectColumns + "\nFROM "
+                + dialect.quoteIfKeyword(table.getTableName()) + where);
+        }
+        if ("selectCount".equals(methodName)) {
+            String where = logicCond != null ? "\nWHERE " + logicCond : "";
+            return new BatchBuild("SELECT COUNT(*)\nFROM "
+                + dialect.quoteIfKeyword(table.getTableName()) + where);
+        }
+        if (SINGLE_ID_SELECT_METHODS.contains(methodName)) {
+            kotlin.Pair<String, List<ParamEntry>> idCondition =
+                renderIdCondition(call, idColumn, resolveVariables, dialect);
+            String where = idCondition.getFirst() + (logicCond != null ? " AND " + logicCond : "");
+            return new BatchBuild("SELECT " + selectColumns + "\nFROM "
+                + dialect.quoteIfKeyword(table.getTableName()) + "\nWHERE " + where, idCondition.getSecond());
+        }
+        String where = dialect.quoteIfKeyword(idColumn.getColumnName()) + " IN (?, ?, ...)"
+            + (logicCond != null ? " AND " + logicCond : "");
+        return new BatchBuild("SELECT " + selectColumns + "\nFROM "
+            + dialect.quoteIfKeyword(table.getTableName()) + "\nWHERE " + where);
+    }
+
+    /**
+     * T-M20-07（Map 条件消费）：{@code removeByMap(Map)} / {@code deleteByMap(Map)} / {@code selectByMap(Map)} /
+     * {@code listByMap(Map)} 的 Map 等值条件模板——Map 键值均为运行时数据，列名与取值静态不可得，
+     * WHERE 用可读占位文本 {@code col = ? AND col = ? ...}；删除/查询由方法名前缀区分。
+     * 参数组说明置空（Map 键不可静态枚举）。
+     */
+    private static BatchBuild buildMapConditionBatch(
+        String methodName,
+        TableInfo table,
+        boolean injectLogicDelete
+    ) {
+        Dialect dialect = PsiDialect.currentDialect();
+        boolean isDelete = methodName.startsWith("remove") || methodName.startsWith("delete");
+        String logicColumn = injectLogicDelete ? table.getLogicDeleteColumn() : null;
+        String condition = "<Map 等值条件: col = ? AND col = ? ...>"
+            + (logicColumn != null ? " AND " + dialect.quoteIfKeyword(logicColumn) + " = 0" : "");
+        String tableName = dialect.quoteIfKeyword(table.getTableName());
+        if (isDelete && logicColumn != null) {
+            return new BatchBuild("UPDATE " + tableName + "\nSET " + dialect.quoteIfKeyword(logicColumn)
+                + " = 1\nWHERE " + condition);
+        }
+        if (isDelete) {
+            return new BatchBuild("DELETE FROM " + tableName + "\nWHERE " + condition);
+        }
+        String selectColumns = table.getColumns().stream()
+            .map(column -> dialect.quoteIfKeyword(column.getColumnName()))
+            .collect(Collectors.joining(", "));
+        return new BatchBuild("SELECT " + selectColumns + "\nFROM " + tableName + "\nWHERE " + condition);
+    }
+
+    /**
+     * UPSERT 模板（saveOrUpdate / saveOrUpdateBatch，U12，T-M15-08；insertOrUpdate，T-M20-08）：
+     * INSERT + 方言冲突子句（T-M43——PG 系 {@code ON CONFLICT}、MySQL 系 {@code ON DUPLICATE KEY UPDATE}、
+     * Oracle/SQL Server/DM 降级纯 INSERT，由 {@link BatchModel#renderSql} 按 Dialect.renderUpsert 渲染）。
+     *
+     * <p>T-M23.2（用户实测：saveOrUpdate 主键应为可选）：主键纳入 toggleColumns（默认勾选，完整 upsert；
+     * 取消勾选 → 纯 INSERT 新记录路径）。</p>
+     */
+    private static BatchBuild buildUpsertBatch(
+        PsiMethodCallExpression call,
+        String methodName,
+        TableInfo table
+    ) {
+        ColumnInfo idColumn = firstIdColumn(table.getColumns());
+        String prefix = entityPrefix(call);
+        List<BatchColumn> toggleColumns = batchColumns(prefix, table, table.getColumns(), column -> true);
+        List<String> groupColumns = new ArrayList<>();
+        for (ColumnInfo column : table.getColumns()) groupColumns.add(column.getColumnName());
+        String paramGroups = buildParamGroups(groupColumns);
+        return modelBuild(new BatchModel(BatchKind.UPSERT, table.getTableName(), toggleColumns,
+            List.of(), null, idColumn.getColumnName(), null)).withParamGroups(paramGroups);
+    }
+
+    // ------------------------------------------------------------------
+    // T-M23-02：参数登记辅助
+    // ------------------------------------------------------------------
+
+    /**
+     * 单主键方法的 {@code ?} 渲染与参数登记：
+     * <ul>
+     *  <li>实参可静态求值（字面量/可追踪变量，{@link ExpressionEvaluator}；受 resolveVariables 开关控制）→
+     *      <b>内联</b>进 SQL（{@code removeById(1L)} → {@code id = 1}，无参数行）；</li>
+     *  <li>运行时值 → {@code ?} + 参数行（source=实参表达式文本，如 {@code id} / {@code dto.getId()}）；</li>
+     *  <li>无实参（ActiveRecord 形态）→ {@code ?} + {@code 实体.主键列} 参数行。</li>
+     * </ul>
+     *
+     * @return (WHERE 片段, 参数登记)；Db.getById(Class, id) 两参形态 id 取第二个实参
+     */
+    private static kotlin.Pair<String, List<ParamEntry>> renderIdCondition(
+        PsiMethodCallExpression call,
+        ColumnInfo idColumn,
+        boolean resolveVariables,
+        Dialect dialect
+    ) {
+        PsiExpression[] args = call.getArgumentList().getExpressions();
+        PsiExpression idExpr = args.length > 1 ? args[1] : (args.length > 0 ? args[0] : null);
+        String idName = dialect.quoteIfKeyword(idColumn.getColumnName());
+        if (idExpr != null) {
+            SqlValue value = resolveVariables
+                ? ExpressionEvaluator.evaluate(idExpr)
+                : new SqlValue.Placeholder(idExpr.getText());
+            if (value instanceof SqlValue.Literal) {
+                return new kotlin.Pair<>(idName + " = " + ((SqlValue.Literal) value).getRaw(), List.of());
+            }
+            return new kotlin.Pair<>(idName + " = ?", List.of(new ParamEntry(
+                ((SqlValue.Placeholder) value).getSource(),
+                new ParamHint(ParamQuote.INSTANCE.decide(idColumn.getFieldType()), null, false))));
+        }
+        // ActiveRecord 无参形态：id 来自实体字段
+        return new kotlin.Pair<>(idName + " = ?", List.of(new ParamEntry(
+            idSource(entityPrefix(call), idColumn.getColumnName()),
+            new ParamHint(ParamQuote.INSTANCE.decide(idColumn.getFieldType()), null, false))));
+    }
+
+    /** 主键列（无主键标记时用首列）。 */
+    private static ColumnInfo firstIdColumn(List<ColumnInfo> columns) {
+        for (ColumnInfo column : columns) {
+            if (column.isId()) return column;
+        }
+        return columns.get(0);
+    }
+
+    /**
+     * 实体/集合参数前缀：首实参文本（{@code save(entity)} → {@code entity}、{@code saveBatch(list)} → {@code list}）；
+     * 无实参（ActiveRecord {@code entity.insert()} 形态）→ qualifier 文本；均无 → 空串。
+     */
+    private static String entityPrefix(PsiMethodCallExpression call) {
+        PsiExpression[] args = call.getArgumentList().getExpressions();
+        if (args.length > 0) return args[0].getText();
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        return qualifier instanceof PsiReferenceExpression ? qualifier.getText() : "";
+    }
+
+    /** 实体字段参数来源：{@code 实体变量.列名}；无前缀（ActiveRecord 形态）时仅列名。 */
+    private static String idSource(String prefix, String columnName) {
+        return prefix.isEmpty() ? columnName : prefix + "." + columnName;
+    }
+
+    /** 参数组说明（docs/项目介绍.md 格式）：{@code -- 实际参数: [col=?, col=?] × N}。 */
+    private static String buildParamGroups(List<String> columns) {
+        String group = String.join(", ", columns.stream().map(c -> c + "=?").collect(Collectors.toList()));
+        return "-- 实际参数: [" + group + "] × N（每行一组，运行时值不可静态获取）";
+    }
+}
