@@ -1,0 +1,406 @@
+package cn.song.mybatisplus.visualizer.config;
+
+import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner;
+import cn.song.mybatisplus.visualizer.update.PluginVersion;
+import cn.song.mybatisplus.visualizer.update.UpdateManifest;
+import cn.song.mybatisplus.visualizer.update.UpdateSource;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.ide.BrowserUtil;
+import com.intellij.openapi.application.ApplicationInfo;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.progress.Task;
+import com.intellij.openapi.progress.util.ProgressIndicatorBase;
+import com.intellij.ui.components.JBLabel;
+import com.intellij.ui.components.JBTextArea;
+import com.intellij.ui.components.labels.LinkLabel;
+import com.intellij.util.ui.RestartDialogImpl;
+import com.intellij.util.ui.UIUtil;
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JPanel;
+import javax.swing.JProgressBar;
+import javax.swing.JScrollPane;
+import kotlin.Unit;
+import kotlin.jvm.functions.Function0;
+import kotlin.jvm.functions.Function2;
+
+/**
+ * 设置页「更新」分区（M28）：当前版本 / 启动自动检查开关 / 检查更新 / 下载并安装 /
+ * 重启提示——状态机渲染（Idle→Checking→UpToDate|Available→Downloading→Installed|Failed）。
+ *
+ * 异步流程全部经 {@link PluginUpdateRunner}（check/downloadAndInstall），本类只做 UI 编排与
+ * 渲染（网络/平台安装不在本类）；测试可直接调用 {@link #renderCheck} / {@link #renderInstall}
+ * 驱动状态（仿 ShortcutEditor 的组件内嵌模式，随语言切换经 {@link #updateTexts} 刷新）。
+ */
+public class UpdateSection extends JPanel {
+
+    /** 分区状态（internal 供测试断言；状态渲染集中 {@link #renderState}）。 */
+    private State state = State.Idle;
+
+    public enum State { Idle, Checking, UpToDate, Available, Downloading, Installed, Failed }
+
+    private UpdateManifest pendingManifest = null;
+
+    private String failureReason = null;
+
+    /**
+     * 检查编排 seam（T-M28.1）：测试注入 fake 不触网；默认走 {@link PluginUpdateRunner#check} 真实实现。
+     * 与按钮绑定配套——交互测试经 doClick 驱动全链路。
+     */
+    private Function0<PluginUpdateRunner.CheckResult> checkRunner =
+        () -> PluginUpdateRunner.check(PluginVersion.current());
+
+    /** 下载安装编排 seam（T-M28.1：测试注入 fake；默认真实实现，indicator 驱动进度条）。 */
+    private Function2<UpdateManifest, ProgressIndicator, PluginUpdateRunner.InstallResult> installRunner =
+        (manifest, indicator) -> PluginUpdateRunner.downloadAndInstall(manifest, indicator);
+
+    /** 重启回调 seam（T-M28.1：测试注入 fake 不弹原生重启确认框）。 */
+    private Function0<Unit> restartAction = () -> {
+        RestartDialogImpl.restartWithConfirmation();
+        return Unit.INSTANCE;
+    };
+
+    private final JBLabel versionLabel = new JBLabel();
+    private final JCheckBox autoCheckCheck = new JCheckBox();
+    private final JButton checkButton = new JButton();
+    private final JBLabel statusLabel = new JBLabel();
+    private final JProgressBar progressBar = new JProgressBar();
+    private final JBTextArea notesArea = new JBTextArea(5, 42);
+    private final JButton installButton = new JButton();
+    private final JBLabel installedLabel = new JBLabel();
+    private final JButton restartButton = new JButton();
+
+    /** 变更日志标题（T-M28.4：标题行 = 左标题 + 右 Gitee 发布页链接）。 */
+    private final JBLabel notesTitleLabel = new JBLabel();
+
+    /** 变更日志 → Gitee 发布页链接（用户要求可点击跳转）。 */
+    private final LinkLabel<Object> giteeLink = new LinkLabel<>(
+        MpSqlVisualizerBundle.message("settings.update.viewOnGitee"),
+        null,
+        (link, data) -> BrowserUtil.browse(UpdateSource.GITEE_RELEASES_URL));
+
+    private final JPanel notesContainer;
+    private final JPanel doneContainer;
+
+    private final PluginSettings settings;
+
+    public UpdateSection(PluginSettings settings) {
+        super(new GridBagLayout());
+        this.settings = settings;
+        notesTitleLabel.setName("notesTitle");
+
+        // 变更日志容器：标题行（左标题 + 右链接）+ 滚动日志区（初始隐藏）
+        notesContainer = new JPanel(new BorderLayout(0, 2));
+        JPanel notesTitleRow = new JPanel(new BorderLayout(8, 0));
+        notesTitleRow.add(notesTitleLabel, BorderLayout.WEST);
+        notesTitleRow.add(giteeLink, BorderLayout.EAST);
+        notesContainer.add(notesTitleRow, BorderLayout.NORTH);
+        JScrollPane notesScroll = new JScrollPane(notesArea);
+        notesScroll.setBorder(UIUtil.getTextFieldBorder());
+        notesScroll.setVisible(false);
+        notesContainer.add(notesScroll, BorderLayout.CENTER);
+
+        // 安装完成容器：左「已安装」标签 + 右「立即重启」按钮
+        doneContainer = new JPanel(new BorderLayout(8, 0));
+        doneContainer.add(installedLabel, BorderLayout.WEST);
+        doneContainer.add(restartButton, BorderLayout.EAST);
+
+        notesArea.setEditable(false);
+        notesArea.setLineWrap(true);
+        notesArea.setWrapStyleWord(true);
+        // T-M28.1：三按钮事件绑定（此前缺失——用户实测点击检查更新无反应；测试盲区：只测渲染未测交互）
+        checkButton.addActionListener(e -> runCheck());
+        installButton.addActionListener(e -> runInstall());
+        restartButton.addActionListener(e -> restartIde());
+        buildLayout();
+        resetState();
+        updateTexts();
+    }
+
+    // ------------------------------------------------------------------
+    // 布局（GridBag 行：版本/开关/按钮+状态/进度/日志/安装完成）
+    // ------------------------------------------------------------------
+
+    private void buildLayout() {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.insets = new Insets(2, 0, 2, 0);
+
+        // 版本内容行（当前版本 + 检查/安装按钮 + 状态反馈）；「版本信息」标签由设置面板
+        // addRow 提供（统一标签列——与插件缓存/内部构建号左对齐，用户反馈对齐问题）
+        JPanel versionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        versionRow.setOpaque(false);
+        versionRow.add(versionLabel);
+        versionRow.add(checkButton);
+        versionRow.add(installButton);
+        versionRow.add(statusLabel);
+        addRow(versionRow, gbc);
+        addRow(autoCheckCheck, gbc);
+        addRow(progressBar, gbc);
+        addRow(notesContainer, gbc);
+        addRow(doneContainer, gbc);
+        // 底部占位（与设置页整体一致：内容顶置）
+        gbc.gridy++;
+        gbc.weighty = 1.0;
+        gbc.fill = GridBagConstraints.BOTH;
+        add(new JPanel(), gbc);
+    }
+
+    private void addRow(javax.swing.JComponent component, GridBagConstraints gbc) {
+        gbc.gridx = 0;
+        gbc.gridy++;
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        add(component, gbc);
+    }
+
+    // ------------------------------------------------------------------
+    // 状态机渲染
+    // ------------------------------------------------------------------
+
+    /** 检查结果渲染（EDT；测试直接调用）。 */
+    public void renderCheck(PluginUpdateRunner.CheckResult result) {
+        if (result instanceof PluginUpdateRunner.CheckResult.Available a) {
+            pendingManifest = a.manifest();
+            notesArea.setText(renderNotes(a.manifest()));
+            state = State.Available;
+        } else if (result instanceof PluginUpdateRunner.CheckResult.UpToDate) {
+            pendingManifest = null;
+            state = State.UpToDate;
+        } else if (result instanceof PluginUpdateRunner.CheckResult.Failure f) {
+            pendingManifest = null;
+            state = State.Failed;
+            failureReason = f.message();
+        }
+        renderState();
+    }
+
+    /** 日志区内容：changeNotes + 兼容性警告（sinceBuild 高于当前 IDE 构建时提示不阻塞）。 */
+    private String renderNotes(UpdateManifest manifest) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(manifest.changeNotes() != null ? manifest.changeNotes() : "—");
+        Integer current = currentBuildMajor();
+        if (manifest.warnsIncompatible(current)) {
+            sb.append("\n").append(
+                MpSqlVisualizerBundle.message("settings.update.incompatible", manifest.sinceBuild(), current));
+        }
+        return sb.toString();
+    }
+
+    /** 当前 IDE 构建主号（如 `243`）；读取失败返回 null。 */
+    private Integer currentBuildMajor() {
+        String build = ApplicationInfo.getInstance().getBuild().asStringWithoutProductCode();
+        if (build == null) return null;
+        Matcher m = Pattern.compile("^\\d+").matcher(build);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** 安装结果渲染（EDT；测试直接调用）。安装失败保留 pendingManifest 以区分失败文案。 */
+    public void renderInstall(PluginUpdateRunner.InstallResult result) {
+        state = result instanceof PluginUpdateRunner.InstallResult.Installed ? State.Installed : State.Failed;
+        if (result instanceof PluginUpdateRunner.InstallResult.Failed f) {
+            failureReason = f.message();
+        }
+        renderState();
+    }
+
+    private void renderState() {
+        State s = state;
+        checkButton.setEnabled(s != State.Checking && s != State.Downloading && s != State.Installed);
+        installButton.setVisible(s == State.Available || s == State.Downloading);
+        installButton.setEnabled(s == State.Available);
+        restartButton.setVisible(s == State.Installed);
+        installedLabel.setVisible(s == State.Installed);
+        progressBar.setVisible(s == State.Downloading);
+        progressBar.setIndeterminate(true);
+        notesContainer.setVisible(s == State.Available);
+        doneContainer.setVisible(s == State.Installed);
+        switch (s) {
+            case Checking -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.checking"));
+            case UpToDate -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.upToDate"));
+            case Available -> statusLabel.setText(
+                MpSqlVisualizerBundle.message("settings.update.available", pendingManifest != null ? pendingManifest.version() : "?"));
+            case Downloading -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.downloading"));
+            case Installed -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installed"));
+            case Failed -> statusLabel.setText(MpSqlVisualizerBundle.message(
+                "settings.update." + (pendingManifest == null ? "checkFailed" : "installFailed"),
+                failureReason != null ? failureReason : "?"));
+            case Idle -> statusLabel.setText(" ");
+        }
+    }
+
+    /** 版本行/开关/日志与按钮文本刷新（语言切换 rebuild 时调用，仿 ShortcutEditor.updateTexts）。 */
+    public void updateTexts() {
+        String cv = PluginVersion.current();
+        versionLabel.setText(MpSqlVisualizerBundle.message("settings.update.currentVersion")
+            + ": " + (cv != null ? cv : "—"));
+        autoCheckCheck.setText(MpSqlVisualizerBundle.message("settings.update.autoCheck"));
+        autoCheckCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.update.autoCheck.tip"));
+        checkButton.setText(MpSqlVisualizerBundle.message("settings.update.check"));
+        installButton.setText(MpSqlVisualizerBundle.message("settings.update.downloadInstall"));
+        installedLabel.setText(MpSqlVisualizerBundle.message("settings.update.installed"));
+        restartButton.setText(MpSqlVisualizerBundle.message("settings.update.restartNow"));
+        notesTitleLabel.setText(MpSqlVisualizerBundle.message("settings.update.changelog"));
+        giteeLink.setText(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"));
+        renderState();
+    }
+
+    /** 从配置加载（Settings 打开/Reset 时调用）。 */
+    public void resetState() {
+        autoCheckCheck.setSelected(settings.getState().getAutoCheckUpdate());
+        pendingManifest = null;
+        failureReason = null;
+        state = State.Idle;
+        renderState();
+    }
+
+    // ------------------------------------------------------------------
+    // 异步流程（Task.Backgroundable；回调 EDT + 判活，面板销毁则静默）
+    // ------------------------------------------------------------------
+
+    /** 检查更新（防重入：Checking/Downloading 中忽略）。 */
+    public void runCheck() {
+        if (state == State.Checking || state == State.Downloading) return;
+        state = State.Checking;
+        renderState();
+        ProgressManager.getInstance().run(new Task.Backgroundable(
+            null,
+            MpSqlVisualizerBundle.message("update.task.check"),
+            true) {
+            @Override
+            public void run(ProgressIndicator indicator) {
+                PluginUpdateRunner.CheckResult result = checkRunner.invoke();
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (isDisplayable()) renderCheck(result);
+                });
+            }
+        });
+    }
+
+    /** 下载并安装（进度条 fraction 经 {@link SectionProgress} 驱动；防重入：Downloading 中忽略）。 */
+    public void runInstall() {
+        UpdateManifest manifest = pendingManifest;
+        if (manifest == null) return;
+        if (state == State.Downloading) return;
+        state = State.Downloading;
+        renderState();
+        SectionProgress progress = new SectionProgress(progressBar);
+        ProgressManager.getInstance().run(new Task.Backgroundable(
+            null,
+            MpSqlVisualizerBundle.message("update.task.download"),
+            true) {
+            @Override
+            public void run(ProgressIndicator indicator) {
+                PluginUpdateRunner.InstallResult result = installRunner.invoke(manifest, progress);
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (isDisplayable()) renderInstall(result);
+                });
+            }
+        });
+    }
+
+    /** 重启 IDE（IDE 原生重启确认框，可选「稍后」——用户拍板，不自动重启）。 */
+    public void restartIde() {
+        restartAction.invoke();
+    }
+
+    // ------------------------------------------------------------------
+    // 访问器（供测试与外层设置页访问组件）
+    // ------------------------------------------------------------------
+
+    public State getState() {
+        return state;
+    }
+
+    public JBLabel getVersionLabel() {
+        return versionLabel;
+    }
+
+    public JCheckBox getAutoCheckCheck() {
+        return autoCheckCheck;
+    }
+
+    public JButton getCheckButton() {
+        return checkButton;
+    }
+
+    public JBLabel getStatusLabel() {
+        return statusLabel;
+    }
+
+    public JProgressBar getProgressBar() {
+        return progressBar;
+    }
+
+    public JBTextArea getNotesArea() {
+        return notesArea;
+    }
+
+    public JButton getInstallButton() {
+        return installButton;
+    }
+
+    public JBLabel getInstalledLabel() {
+        return installedLabel;
+    }
+
+    public JButton getRestartButton() {
+        return restartButton;
+    }
+
+    public LinkLabel<Object> getGiteeLink() {
+        return giteeLink;
+    }
+
+    public void setCheckRunner(Function0<PluginUpdateRunner.CheckResult> checkRunner) {
+        this.checkRunner = checkRunner;
+    }
+
+    public void setInstallRunner(Function2<UpdateManifest, ProgressIndicator, PluginUpdateRunner.InstallResult> installRunner) {
+        this.installRunner = installRunner;
+    }
+
+    public void setRestartAction(Function0<Unit> restartAction) {
+        this.restartAction = restartAction;
+    }
+
+    /** 进度条适配：下载 fraction → 确定态进度（EDT 更新）。 */
+    private static final class SectionProgress extends ProgressIndicatorBase {
+        private final JProgressBar bar;
+
+        SectionProgress(JProgressBar bar) {
+            this.bar = bar;
+        }
+
+        @Override
+        public void setFraction(double fraction) {
+            super.setFraction(fraction);
+            int value = (int) (fraction * 100);
+            if (value < 0) value = 0;
+            if (value > 100) value = 100;
+            final int finalValue = value;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                bar.setIndeterminate(fraction <= 0);
+                bar.setValue(finalValue);
+            });
+        }
+    }
+}
