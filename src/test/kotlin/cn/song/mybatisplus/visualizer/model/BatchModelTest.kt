@@ -136,7 +136,7 @@ class BatchModelTest {
                 BatchColumn("id", "entity.id", false, true),
                 BatchColumn("task_name", "entity.task_name", true, true),
                 BatchColumn("dic_status", "entity.dic_status", false, true),
-            ), emptyList(), null, "id", PostgreSQLDialect)
+            ), emptyList(), null, "id", PostgreSQLDialect.INSTANCE)
         // 主键勾选（默认）：完整 upsert
         assertEquals(
             """
@@ -208,12 +208,12 @@ class BatchModelTest {
         // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
         assertEquals(
             "INSERT INTO biz_banner (\"table\", name)\nVALUES (?, ?)",
-            BatchModel(BatchKind.INSERT, "biz_banner", columns, emptyList(), null, null, PostgreSQLDialect).renderSql(active),
+            BatchModel(BatchKind.INSERT, "biz_banner", columns, emptyList(), null, null, PostgreSQLDialect.INSTANCE).renderSql(active),
         )
         // SQL Server 方括号
         assertEquals(
             "INSERT INTO biz_banner ([table], name)\nVALUES (?, ?)",
-            BatchModel(BatchKind.INSERT, "biz_banner", columns, emptyList(), null, null, SqlServerDialect).renderSql(active),
+            BatchModel(BatchKind.INSERT, "biz_banner", columns, emptyList(), null, null, SqlServerDialect.INSTANCE).renderSql(active),
         )
         // 默认（MySQL 形态）反引号
         assertEquals(
@@ -258,12 +258,12 @@ class BatchModelTest {
         assertEquals(dupKeySql, BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id").renderSql(active))
         assertEquals(
             dupKeySql,
-            BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", MariaDbDialect).renderSql(active),
+            BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", MariaDbDialect.INSTANCE).renderSql(active),
         )
         // PostgreSQL / SQLite / KingBase：ON CONFLICT + EXCLUDED（P-立项-05：H2 移出——
         // ON CONFLICT 在 H2 任何模式均语法错误，改为下方 MERGE 整语句形态）
         val conflictSql = "INSERT INTO t (id, name)\nVALUES (?, ?)\nON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
-        for (dialect in listOf(PostgreSQLDialect, SqliteDialect, KingBaseDialect)) {
+        for (dialect in listOf(PostgreSQLDialect.INSTANCE, SqliteDialect.INSTANCE, KingBaseDialect.INSTANCE)) {
             assertEquals(
                 conflictSql,
                 BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", dialect).renderSql(active),
@@ -272,11 +272,11 @@ class BatchModelTest {
         // H2（P-立项-05）：原生 upsert 为整语句 MERGE INTO..KEY..VALUES（引擎实证 ON CONFLICT 不可用）
         assertEquals(
             "MERGE INTO t (id, name) KEY (id) VALUES (?, ?)",
-            BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", H2Dialect).renderSql(active),
+            BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", H2Dialect.INSTANCE).renderSql(active),
         )
         // Oracle / SQL Server / DM：无原生 upsert → 降级纯 INSERT（SQL 在本方言可执行）
         val plainSql = "INSERT INTO t (id, name)\nVALUES (?, ?)"
-        for (dialect in listOf(OracleDialect, SqlServerDialect, DmDialect)) {
+        for (dialect in listOf(OracleDialect.INSTANCE, SqlServerDialect.INSTANCE, DmDialect.INSTANCE)) {
             assertEquals(
                 plainSql,
                 BatchModel(BatchKind.UPSERT, "t", columns, emptyList(), null, "id", dialect).renderSql(active),

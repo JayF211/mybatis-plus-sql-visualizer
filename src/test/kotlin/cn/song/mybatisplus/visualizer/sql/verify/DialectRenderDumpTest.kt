@@ -28,7 +28,7 @@ class DialectRenderDumpTest {
         val out = File(dir)
         out.mkdirs()
         val mapper = ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT)
-        for (dialect in DialectRegistry.dialects) {
+        for (dialect in DialectRegistry.INSTANCE.dialects) {
             mapper.writeValue(File(out, dumpFileName(dialect) + ".json"), RenderSet.of(dialect))
         }
     }

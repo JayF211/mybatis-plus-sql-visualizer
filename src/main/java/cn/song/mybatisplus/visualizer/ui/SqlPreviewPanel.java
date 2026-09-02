@@ -634,7 +634,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 && !((SelectStatement) pm.getStatement()).getJoins().isEmpty();
         if (hasJoins) {
             ensureTabbedContent(true);
-            DiagramModel model = JoinDiagramGenerator.INSTANCE.buildDiagramModel((SelectStatement) pm.getStatement());
+            DiagramModel model = JoinDiagramGenerator.buildDiagramModel((SelectStatement) pm.getStatement());
             diagramPanel.showDiagram(model);
         } else {
             removeDiagramTab();

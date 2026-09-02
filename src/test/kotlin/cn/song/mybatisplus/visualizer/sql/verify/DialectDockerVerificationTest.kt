@@ -176,7 +176,7 @@ class DialectDockerVerificationTest {
      *   -Dmpvs.dialect.name="DM（达梦）"
      * ```
      *
-     * 方言取 [cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName]（名称与 Settings 下拉一致）；
+     * 方言取 [cn.song.mybatisplus.visualizer.sql.DialectRegistry.INSTANCE.byName]（名称与 Settings 下拉一致）；
      * 执行与容器/嵌入式完全相同的 TC 套件 + 保留字扫描——DM/KingBase 真实环境验证的标准流程。
      */
     @Test
@@ -186,7 +186,7 @@ class DialectDockerVerificationTest {
         val user = System.getProperty("mpvs.dialect.user")
         val password = System.getProperty("mpvs.dialect.password")
         val dialectName = System.getProperty("mpvs.dialect.name") ?: "MySQL"
-        val dialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.byName(dialectName)
+        val dialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.INSTANCE.byName(dialectName)
         val spec = DialectVerifySupport.EngineSpec(
             label = "$dialectName (external)",
             jdbcUrlTemplate = url,

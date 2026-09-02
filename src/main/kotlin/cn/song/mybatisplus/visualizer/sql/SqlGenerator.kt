@@ -68,7 +68,7 @@ object SqlGenerator {
     fun generate(
         statement: SqlStatement,
         compact: Boolean,
-        dialect: Dialect = MySqlDialect,
+        dialect: Dialect = MySqlDialect.INSTANCE,
         enabledConditionIds: Set<String>? = null,
     ): String = generateInternal(statement, compact, null, null, dialect, enabledConditionIds)
 
@@ -85,7 +85,7 @@ object SqlGenerator {
     fun generateWithParams(
         statement: SqlStatement,
         compact: Boolean = false,
-        dialect: Dialect = MySqlDialect,
+        dialect: Dialect = MySqlDialect.INSTANCE,
         enabledConditionIds: Set<String>? = null,
     ): GeneratedSql {
         val params = mutableListOf<String>()
@@ -300,7 +300,7 @@ object SqlGenerator {
      * @param dialect     数据库方言（影响标识符引用与 LIMIT 形态，默认 MySQL）
      * @return fill 附加 SELECT SQL（无末尾分号）
      */
-    fun generateFill(fillClause: FillClause, dialect: Dialect = MySqlDialect): String {
+    fun generateFill(fillClause: FillClause, dialect: Dialect = MySqlDialect.INSTANCE): String {
         val sb = StringBuilder("SELECT ")
         sb.append(fillClause.selectColumns.joinToString(", ") { renderColumnRef(it, dialect) })
         sb.append(" FROM ").append(renderTableName(fillClause.childTable.tableName, dialect))
@@ -375,7 +375,7 @@ object SqlGenerator {
         enabledIds: Set<String>? = null,
         hintSink: MutableList<ParamHint>? = null,
         table: TableInfo? = null,
-        dialect: Dialect = MySqlDialect,
+        dialect: Dialect = MySqlDialect.INSTANCE,
     ): String {
         // 动态条件按启用集合/defaultEnabled 过滤；组内全空的 Group 渲染为空字符串后剔除
         val rendered = conditions
@@ -413,7 +413,7 @@ object SqlGenerator {
         hintSink: MutableList<ParamHint>? = null,
         table: TableInfo? = null,
         enabledIds: Set<String>? = null,
-        dialect: Dialect = MySqlDialect,
+        dialect: Dialect = MySqlDialect.INSTANCE,
     ): String = when (condition) {
         is Condition.Simple ->
             "${renderQualified(condition.column, dialect)} ${condition.op} ${renderValue(condition.value, paramSink, hintSink, quoteHint(table, condition.column))}"

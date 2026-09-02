@@ -22,7 +22,7 @@ class SqlKeywordsTest {
             "drop", "between", "like", "limit", "in",
             "is", "null", "not", "and", "or", "as", "on", "into", "values",
             "read", "release", "replace", "restrict", "return", "user",
-        ).forEach { assertTrue("MySQL 应命中保留字: $it", it in MYSQL_RESERVED) }
+        ).forEach { assertTrue("MySQL 应命中保留字: $it", it in SqlKeywords.MYSQL_RESERVED) }
     }
 
     @Test
@@ -37,30 +37,30 @@ class SqlKeywordsTest {
     @Test
     fun `方言差异_判定按本方言`() {
         // number 是 Oracle 保留字但 MySQL 合法：MySQL 不包、Oracle 包（用户提醒：方言有多种）
-        assertFalse("number 在 MySQL 合法", "number" in MYSQL_RESERVED)
-        assertTrue("number 是 Oracle 保留字", "number" in ORACLE_RESERVED)
+        assertFalse("number 在 MySQL 合法", "number" in SqlKeywords.MYSQL_RESERVED)
+        assertTrue("number 是 Oracle 保留字", "number" in SqlKeywords.ORACLE_RESERVED)
         assertEquals("number", MySqlDialect.quoteIfKeyword("number"))
         assertEquals("\"number\"", OracleDialect.quoteIfKeyword("number"))
         // offset：MySQL 非保留字（limit 才是）→ 不包；PG 保留字 → 包
         assertEquals("offset", MySqlDialect.quoteIfKeyword("offset"))
         assertEquals("\"offset\"", PostgreSQLDialect.quoteIfKeyword("offset"))
         // SQLite / PG / SQLServer 特有词
-        assertTrue("abort 是 SQLite 关键字", "abort" in SQLITE_RESERVED)
-        assertTrue("analyse 是 PG 保留字", "analyse" in PG_RESERVED)
-        assertTrue("merge 是 SQLServer 保留字", "merge" in SQLSERVER_RESERVED)
-        assertFalse("abort 不是 MySQL 保留字", "abort" in MYSQL_RESERVED)
+        assertTrue("abort 是 SQLite 关键字", "abort" in SqlKeywords.SQLITE_RESERVED)
+        assertTrue("analyse 是 PG 保留字", "analyse" in SqlKeywords.PG_RESERVED)
+        assertTrue("merge 是 SQLServer 保留字", "merge" in SqlKeywords.SQLSERVER_RESERVED)
+        assertFalse("abort 不是 MySQL 保留字", "abort" in SqlKeywords.MYSQL_RESERVED)
     }
 
     @Test
     fun `普通标识符与方言非保留字不命中`() {
         // 普通列名/表名
         listOf("biz_banner", "image_url", "dic_status", "dic_jump_type", "sort", "title")
-            .forEach { assertFalse("不应命中: $it", it in MYSQL_RESERVED) }
+            .forEach { assertFalse("不应命中: $it", it in SqlKeywords.MYSQL_RESERVED) }
         // MySQL 非保留字（MySQL 中合法，不包裹不报错——刻意排除，避免输出噪音）
         listOf("name", "status", "type", "code", "content", "value", "key_name", "create_time", "number")
-            .forEach { assertFalse("MySQL 非保留字不应命中: $it", it in MYSQL_RESERVED) }
+            .forEach { assertFalse("MySQL 非保留字不应命中: $it", it in SqlKeywords.MYSQL_RESERVED) }
         // PG 非保留字（如 value）
-        assertFalse("value 不是 PG 保留字", "value" in PG_RESERVED)
+        assertFalse("value 不是 PG 保留字", "value" in SqlKeywords.PG_RESERVED)
     }
 
     @Test

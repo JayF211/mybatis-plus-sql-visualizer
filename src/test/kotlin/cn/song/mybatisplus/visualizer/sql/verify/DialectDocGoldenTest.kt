@@ -1,16 +1,16 @@
 package cn.song.mybatisplus.visualizer.sql.verify
 
 import cn.song.mybatisplus.visualizer.model.LimitClause
-import cn.song.mybatisplus.visualizer.sql.DM_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.DM_RESERVED
 import cn.song.mybatisplus.visualizer.sql.DmDialect
 import cn.song.mybatisplus.visualizer.sql.H2_RESERVED
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
-import cn.song.mybatisplus.visualizer.sql.KINGBASE_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.KINGBASE_RESERVED
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
-import cn.song.mybatisplus.visualizer.sql.MARIA_RESERVED
-import cn.song.mybatisplus.visualizer.sql.MYSQL_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.MARIA_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.MYSQL_RESERVED
 import cn.song.mybatisplus.visualizer.sql.MariaDbDialect
-import cn.song.mybatisplus.visualizer.sql.PG_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.PG_RESERVED
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

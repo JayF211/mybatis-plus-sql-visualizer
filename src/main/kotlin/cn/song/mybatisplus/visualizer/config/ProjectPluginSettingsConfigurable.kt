@@ -61,7 +61,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         // 方言下拉（示例项，后续可扩展更多）
         val dialectPanel = JPanel(BorderLayout(8, 0)).apply {
             add(JBLabel(MpSqlVisualizerBundle.message("settings.dialect")), BorderLayout.WEST)
-            val combo = JComboBox(DialectRegistry.dialects.map { it.name }.toTypedArray())
+            val combo = JComboBox(DialectRegistry.INSTANCE.dialects.map { it.name }.toTypedArray())
             combo.selectedItem = projectSettings.state.dialect.ifBlank {
                 PluginSettings.getInstance().state.dialect
             }

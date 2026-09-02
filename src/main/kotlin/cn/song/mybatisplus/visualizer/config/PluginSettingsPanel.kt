@@ -127,7 +127,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     /** 方言下拉（选项来自方言注册表）。 */
-    private val dialectCombo = JComboBox(DialectRegistry.dialects.map { it.name }.toTypedArray())
+    private val dialectCombo = JComboBox(DialectRegistry.INSTANCE.dialects.map { it.name }.toTypedArray())
 
     /** 参数替换开关。 */
     private val replaceParamsCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.replaceParams"))
