@@ -535,6 +535,12 @@ internal class BridgeLineContext(
     var pendingSource: Pair<String, Int>? = null,
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
+    /**
+     * F-44-7：最近来源标记队列（用于 COUNT 查询等 MP 内部触发的 SQL）。
+     * MP 分页拦截器执行的 COUNT 查询不经过本拦截器，故无标记行；
+     * 通过此队列回溯同一线程的上一个来源，关联到 COUNT 查询。
+     */
+    val recentSources: ArrayDeque<Pair<String, Int>> = ArrayDeque(8),
 )
 
 /**
@@ -554,6 +560,9 @@ internal fun processConsoleLine(
     val marker = SqlSourceMarker.parse(line)
     if (marker != null) {
         ctx.pendingSource = marker
+        // F-44-7：同时加入最近来源队列（用于 COUNT 查询回溯）
+        ctx.recentSources.addLast(marker)
+        if (ctx.recentSources.size > 8) ctx.recentSources.removeFirst()
         return emptyList()
     }
     // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
@@ -566,7 +575,14 @@ internal fun processConsoleLine(
     // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
     // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
     val lineDuration = ExecutionTimeParser.parse(line, timePrefix)
-    val src = ctx.pendingSource
+    var src = ctx.pendingSource
+    if (src == null) {
+        // F-44-7：无标记时，检测是否为 COUNT 查询 → 回溯最近来源
+        val isCountQuery = taken.any { it.restoredSql.trimStart().startsWith("SELECT COUNT(", ignoreCase = true) }
+        if (isCountQuery && ctx.recentSources.isNotEmpty()) {
+            src = ctx.recentSources.last()
+        }
+    }
     val result = taken.map { e ->
         val duration = lineDuration ?: LogDurationParser.parse(e)
         e.copy(
@@ -575,7 +591,7 @@ internal fun processConsoleLine(
             executionTimeMs = duration ?: e.executionTimeMs,
         )
     }
-    if (src != null) ctx.pendingSource = null
+    if (ctx.pendingSource != null) ctx.pendingSource = null
     return result
 }
 

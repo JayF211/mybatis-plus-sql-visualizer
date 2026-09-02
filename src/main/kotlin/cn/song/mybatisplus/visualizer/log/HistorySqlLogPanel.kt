@@ -431,7 +431,8 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = entry.sourceFile?.let { file ->
-                val name = file.substringAfterLast(File.separatorChar)
+                // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
+                val name = file.substringAfterLast('/')
                 if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
             } ?: "unknown"
             val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
