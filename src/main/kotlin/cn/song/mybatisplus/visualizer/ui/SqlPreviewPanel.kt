@@ -17,6 +17,8 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
+import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
@@ -210,6 +212,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     // F-1：JOIN 关系图（仅 SELECT 含 JOIN 时显示标签页）
     private val diagramPanel = DiagramPanel(project)
+    // T-Dgm-04：标签页宿主——原生图框架组件（joinDiagramNative=true 且 Diagrams 插件可用）与
+    // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
+    private val diagramTabHost = javax.swing.JPanel(java.awt.BorderLayout())
+    private var currentNativeDiagram: JComponent? = null
     // F-45：maintainPage 列信息（仅 <pages> 预览非 null 时显示标签页）
     private var columnInfoPanel: JComponent? = null
     /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
@@ -275,6 +281,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
         Disposer.register(this, diagramPanel)
+        // T-Dgm-04：标签页实际展示 diagramTabHost（内嵌原生组件或 diagramPanel）
+        diagramTabHost.isOpaque = false
+        diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
 
         // T-M36.6-03：预热线程提前创建临时 SQL 文件 + VFS refresh + PSI 解析（后台线程慢操作合法），
         // createEditor（EDT）优先消费预热产物——243 平台 EDT/EDT-ReadAction 均禁止慢操作
@@ -700,14 +709,51 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (hasJoins) {
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
-            // 构建结构化模型并展示
+            // 构建结构化模型并展示（原生框架优先，缺席/异常降级自绘）
             val model = JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement)
-            diagramPanel.showDiagram(model)
+            showJoinDiagram(model)
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
             removeDiagramTab()
             diagramPanel.clear()
+            clearNativeDiagram()
         }
+    }
+
+    /**
+     * T-Dgm-04：按设置与 Diagrams 插件可用性渲染 JOIN 图。
+     *
+     * 原生路径：快照登记 → UmlEditorProvider.createEditor → 组件嵌入 [diagramTabHost]
+     * （缩放/布局/折叠/导出全框架托管）；Diagrams 插件缺席或框架异常（buildTabComponent 返回 null）
+     * 自动降级自绘 [DiagramPanel]，与 Community 行为一致。
+     */
+    private fun showJoinDiagram(model: DiagramModel) {
+        val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
+        val native = if (nativeEnabled) {
+            NativeJoinDiagramSupport.buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+        } else {
+            null
+        }
+        clearNativeDiagram()
+        diagramTabHost.removeAll()
+        if (native != null) {
+            currentNativeDiagram = native
+            diagramTabHost.add(native, java.awt.BorderLayout.CENTER)
+        } else {
+            diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
+            diagramPanel.showDiagram(model)
+        }
+        diagramTabHost.revalidate()
+        diagramTabHost.repaint()
+    }
+
+    /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
+    private fun clearNativeDiagram() {
+        currentNativeDiagram?.let {
+            NativeJoinDiagramSupport.disposeNativeEditor(it)
+            diagramTabHost.remove(it)
+        }
+        currentNativeDiagram = null
     }
 
     /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
@@ -721,14 +767,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val pane = JTabbedPane().apply {
             addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
             if (addDiagramTab) {
-                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel)
+                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramTabHost)
             }
         }
         // F-42 修复：渲染完成时组件可能处于 hidden（标签页未被选中），swapContent/revalidate
         // 对 hidden 组件无效——切到"JOIN 图"标签页时强制刷新，使图像真正显示
         if (addDiagramTab) {
             pane.addChangeListener {
-                if (pane.selectedIndex == 1) {
+                if (pane.selectedIndex == 1 && currentNativeDiagram == null) {
                     diagramPanel.refreshAfterVisible()
                 }
             }
@@ -1082,6 +1128,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // F-1：清除图集 + 恢复纯 SQL 视图
         removeDiagramTab()
         diagramPanel.clear()
+        clearNativeDiagram()
         // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
         detachConsole()

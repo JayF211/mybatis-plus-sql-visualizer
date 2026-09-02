@@ -1,0 +1,12 @@
+<!--
+  T-Dgm-01/03：原生 JOIN 图——可选依赖描述文件（官方规范：<depends optional="true" config-file="...">）。
+
+  本文件仅在 com.intellij.diagram 插件（Ultimate 捆绑 "Diagrams"，类图/关系图底座）存在时加载。
+  diagram.Provider EP 声明在此而非主 plugin.xml——Community 下 EP 缺席，SqlPreviewPanel 经
+  NativeJoinDiagramSupport 门面探测后降级回自绘 DiagramPanel（与 database-optional.xml 同模式）。
+-->
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <diagram.Provider implementation="cn.song.mybatisplus.visualizer.ui.diagram.nativefw.SqlJoinDiagramProvider"/>
+    </extensions>
+</idea-plugin>

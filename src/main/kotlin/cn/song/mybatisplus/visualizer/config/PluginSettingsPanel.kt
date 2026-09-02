@@ -139,6 +139,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
+    private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
 
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
@@ -544,6 +545,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
         if (SECTION_UI in sections) {
             sectionGroup("settings.section.ui") { p, g ->
                 addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
+                addRow(p, g, "", joinDiagramNativeCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.joinDiagramNative")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.joinDiagramNative.tip")
+                })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
                     model = DefaultComboBoxModel(languageOptions())
                     selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
@@ -974,6 +979,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     private fun isModifiedUi(s: PluginSettings.State): Boolean =
         gutterIconCheck.isSelected != s.showGutterIcon
+            || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
             || shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)
             || reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
@@ -1043,6 +1049,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             s.showGutterIcon = gutterIconCheck.isSelected
+            s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
             if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
                 applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
@@ -1100,6 +1107,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             gutterIconCheck.isSelected = s.showGutterIcon
+            joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
             shortcutEditor.shortcut = currentShortcut(ConvertToSqlAction.ACTION_ID)
             reverseShortcutEditor.shortcut = currentShortcut(ConvertSqlToJavaAction.ACTION_ID)

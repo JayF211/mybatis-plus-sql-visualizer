@@ -144,7 +144,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // M47：Spring JdbcTemplate 日志捕获开关 +1
             // F-43：自动保存历史 SQL 开关 +1
             // 2026-08-27 筛选精简：移除「显示类型筛选条」开关 -1（SQL 类型多选改面板工具栏直出）
-            assertEquals("复选框总数应为 18（-显示类型筛选条开关）", 18, texts.size)
+            // T-Dgm-04：界面组新增「JOIN 图原生框架渲染」开关（+1）——此前 F-44-7 源码位置捕获等
+            // 开关加入后 master 基线已漂移至 20（预期 18 的断言在 master 即失败），现随实际更新
+            assertEquals("复选框总数应为 21", 21, texts.size)
         } finally {
             settings.state.language = old
         }
