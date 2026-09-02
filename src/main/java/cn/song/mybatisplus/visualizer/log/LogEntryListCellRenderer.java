@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBList;
 
@@ -32,8 +33,9 @@ public class LogEntryListCellRenderer extends DefaultListCellRenderer {
         setText(null);
         if (entry != null) {
             String timestampHtml = SqlLogPanelKt.formatTimestampHtml(entry.timestamp());
-            String durationHtml = SqlLogPanelKt.formatDurationHtml(entry.executionTimeMs(), isSelected);
-            String sqlHtml = SqlListHtmlRenderer.render(entry.summary());
+            String durationHtml = PluginSettings.getInstance().getState().getShowDurationInLogList()
+                    ? SqlLogPanelKt.formatDurationHtml(entry.executionTimeMs(), isSelected) : "";
+            String sqlHtml = SqlListHtmlRenderer.render(SqlLogPanelKt.withTerminator(entry.summary()));
             Integer cnt = dedupeCounts.get(entry.restoredSql());
             String dedupeBadge = (cnt != null && cnt > 0) ? " ⨉" + cnt + " " : "";
             this.setText("<html>" + timestampHtml + durationHtml + sqlHtml + dedupeBadge + "</html>");

@@ -34,6 +34,8 @@ public final class SqlHistoryEntry {
     private boolean favorite = false;
     /** 用户自定义标签列表（唯一、有序）。 */
     private List<String> tags = new ArrayList<>();
+    /** 执行耗时（毫秒）；null 表示无耗时信息。 */
+    private Long executionTimeMs = null;
 
     public SqlHistoryEntry() {
     }
@@ -124,6 +126,14 @@ public final class SqlHistoryEntry {
         this.tags = tags != null ? tags : new ArrayList<>();
     }
 
+    public Long getExecutionTimeMs() {
+        return executionTimeMs;
+    }
+
+    public void setExecutionTimeMs(Long executionTimeMs) {
+        this.executionTimeMs = executionTimeMs;
+    }
+
     /** 分配唯一 id（仅当当前为空白时）。 */
     public void ensureId() {
         if (getId().isBlank()) {
@@ -162,18 +172,19 @@ public final class SqlHistoryEntry {
         return timestamp == that.timestamp && sourceLine == that.sourceLine && favorite == that.favorite
                 && Objects.equals(id, that.id) && Objects.equals(sql, that.sql)
                 && Objects.equals(compactSql, that.compactSql) && Objects.equals(sourceFile, that.sourceFile)
-                && Objects.equals(tableName, that.tableName) && Objects.equals(tags, that.tags);
+                && Objects.equals(tableName, that.tableName) && Objects.equals(tags, that.tags)
+                && Objects.equals(executionTimeMs, that.executionTimeMs);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, sql, compactSql, timestamp, sourceFile, sourceLine, tableName, favorite, tags);
+        return Objects.hash(id, sql, compactSql, timestamp, sourceFile, sourceLine, tableName, favorite, tags, executionTimeMs);
     }
 
     @Override
     public String toString() {
         return "SqlHistoryEntry(id=" + id + ", sql=" + sql + ", compactSql=" + compactSql
                 + ", timestamp=" + timestamp + ", sourceFile=" + sourceFile + ", sourceLine=" + sourceLine
-                + ", tableName=" + tableName + ", favorite=" + favorite + ", tags=" + tags + ")";
+                + ", tableName=" + tableName + ", favorite=" + favorite + ", tags=" + tags + ", executionTimeMs=" + executionTimeMs + ")";
     }
 }

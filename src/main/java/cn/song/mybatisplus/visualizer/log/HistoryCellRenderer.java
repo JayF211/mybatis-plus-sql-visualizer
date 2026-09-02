@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.log.SqlLogPanelKt;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBList;
 
@@ -43,7 +44,7 @@ public class HistoryCellRenderer extends DefaultListCellRenderer {
             } else {
                 source = "unknown";
             }
-            String sqlHtml = SqlListHtmlRenderer.render(entry.summary());
+            String sqlHtml = SqlListHtmlRenderer.render(SqlLogPanelKt.withTerminator(entry.summary()));
             // 选中态用 selectionForeground；非选中走 uniform 前景色（不要按耗时变色避免与 SQL 高亮冲突）
             String durationHtml = "<span style='color:#9E9E9E'>[" + duration + "]</span> ";
             String timestampHtml = "<span style='color:#9E9E9E'>[" + timestamp + "]</span> ";

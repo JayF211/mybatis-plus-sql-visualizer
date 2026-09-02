@@ -18,7 +18,7 @@ public final class SqlLogConsoleBridgeKt {
     /**
      * 处理一行控制台文本（F-44-6）：
      *  1. 若为本插件源码标记（[SqlSourceInterceptor] 注入）→ 暂存，不喂解析器；
-     *  2. 同步解析器实时配置后喂行，取出已配对 SQL 条目；
+     *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
      *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
      * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动。
      */
@@ -34,27 +34,12 @@ public final class SqlLogConsoleBridgeKt {
             ctx.pendingSource = marker;
             return List.of();
         }
-        // 2) 每次喂行前同步解析器配置（捕捉中实时生效，对齐 T-M31.18）
-        ParserConfig cfg = ctx.configProvider.get();
-        ctx.myBatisParser.setSqlPrefix(cfg.sqlPrefix());
-        ctx.myBatisParser.setParamPrefix(cfg.paramPrefix());
-        ctx.myBatisParser.setMixedPrefix(cfg.mixedPrefix());
-        ctx.myBatisParser.setMaxParseLength(cfg.maxParseLength());
-        ctx.hibernateParser.setSqlPrefix(cfg.hibernateSqlPrefix());
-        ctx.hibernateParser.setParamPrefix(cfg.hibernateParamPrefix());
-        ctx.hibernateParser.setMixedPrefix(cfg.mixedPrefix());
-        ctx.hibernateParser.setMaxParseLength(cfg.maxParseLength());
-        ctx.jdbcParser.setEnabled(cfg.jdbcEnabled());
-        ctx.jdbcParser.setMaxParseLength(cfg.maxParseLength());
-        // 3) 喂行到三个解析器（各自忽略不匹配的行）
+        // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
         ctx.myBatisParser.feed(line);
-        if (cfg.hibernateEnabled()) {
+        if (ctx.hibernateEnabled()) {
             ctx.hibernateParser.feed(line);
         }
         ctx.jdbcParser.feed(line);
-        if (syncBufferConfig != null) {
-            syncBufferConfig.run();
-        }
         List<LogSqlEntry> taken = new ArrayList<>();
         taken.addAll(ctx.myBatisParser.takeEntries());
         taken.addAll(ctx.hibernateParser.takeEntries());
@@ -62,11 +47,14 @@ public final class SqlLogConsoleBridgeKt {
         if (taken.isEmpty()) {
             return List.of();
         }
-        // 4) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
-        Long executionTimeMs = ExecutionTimeParser.parse(line, timePrefix);
+        // 3) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
+        // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
+        // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
+        Long lineDuration = ExecutionTimeParser.parse(line, timePrefix);
         Pair<String, Integer> src = ctx.pendingSource;
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry e : taken) {
+            Long duration = lineDuration != null ? lineDuration : LogDurationParser.parse(e);
             result.add(new LogSqlEntry(
                     e.rawSql(),
                     e.restoredSql(),
@@ -74,7 +62,7 @@ public final class SqlLogConsoleBridgeKt {
                     e.timestamp(),
                     e.summary(),
                     e.source(),
-                    executionTimeMs != null ? executionTimeMs : e.executionTimeMs(),
+                    duration != null ? duration : e.executionTimeMs(),
                     src != null ? src.getFirst() : e.sourceFile(),
                     src != null ? src.getSecond() : e.sourceLine()));
         }

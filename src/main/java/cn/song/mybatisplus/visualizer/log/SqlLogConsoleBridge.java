@@ -45,6 +45,10 @@ public class SqlLogConsoleBridge {
     public final IdentityHashMap<Object, Pair<Object, Class<?>>> attachedConsoles = new IdentityHashMap<>();
     /** 每个已挂载控制台 → 解析器上下文（含暂存源码位置，F-44-6）。 */
     private final IdentityHashMap<Object, BridgeLineContext> consoleContexts = new IdentityHashMap<>();
+    /** descriptor → 已解析 console 缓存（T-LogPerf-03：命中且已挂载时跳过组件树遍历）。 */
+    private final IdentityHashMap<Object, Object> descriptorConsoleCache = new IdentityHashMap<>();
+    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
+    private volatile String timePrefixCache = null;
 
     private final ContentManagerListener contentListener = new ContentManagerListener() {
         @Override
@@ -65,6 +69,8 @@ public class SqlLogConsoleBridge {
     private Timer pollTimer;
     /** 高频补捞定时器（attach 后短暂运行，捕获第一条 SQL）。 */
     private Timer catchUpTimer;
+    /** 当前快速轮询间隔（T-LogPerf-01：500ms 起步指数退避，上限=常规间隔）。 */
+    private int currentFastDelayMs = FAST_POLL_INTERVAL_MS;
     /** 新控制台出现回调（由 manager 设置）。 */
     public Runnable onConsoleRemoved = () -> {
     };
@@ -126,14 +132,15 @@ public class SqlLogConsoleBridge {
     }
 
     /**
-     * 启动轮询：无控制台时快速轮询（500ms）→ 检测到新控制台后切换常规轮询（2s）。
+     * 启动轮询：无控制台时快速轮询（500ms 起步，每拍无主控制台间隔翻倍至 2s 封顶）
+     * → 检测到新控制台后切换常规轮询（2s）。
      */
     public void startPolling() {
         if (catchUpTimer != null || pollTimer != null) {
             return;
         }
         startFastPolling();
-        LOG.debug("startPolling: 快速轮询已启动（500ms）");
+        LOG.debug("startPolling: 快速轮询已启动（" + FAST_POLL_INTERVAL_MS + "ms，指数退避至 " + POLL_INTERVAL_MS + "ms）");
     }
 
     public void stopPolling() {
@@ -149,12 +156,22 @@ public class SqlLogConsoleBridge {
         return pollTimer != null || catchUpTimer != null;
     }
 
-    /** 快速轮询（500ms）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
+    /** 快速轮询（500ms 起步）—— 项目运行中但未检测到控制台时，尽快捕获第一条 SQL。 */
     private void startFastPolling() {
         stopCatchUpPolling();
-        catchUpTimer = new Timer(FAST_POLL_INTERVAL_MS, e -> scanAll());
+        currentFastDelayMs = FAST_POLL_INTERVAL_MS;
+        catchUpTimer = new Timer(currentFastDelayMs, e -> onCatchUpTick());
         catchUpTimer.setRepeats(true);
         catchUpTimer.start();
+    }
+
+    /** 快速轮询回调：先扫描（可能切走常规轮询），仍在等待且无主控制台则退避放宽下一拍。 */
+    private void onCatchUpTick() {
+        scanAll();
+        if (catchUpTimer != null && !lastHadMainConsole) {
+            currentFastDelayMs = nextFastDelay(currentFastDelayMs, true);
+            catchUpTimer.setDelay(currentFastDelayMs);
+        }
     }
 
     /** 常规轮询（2s）—— 已检测到控制台后，低频兜底。 */
@@ -206,30 +223,12 @@ public class SqlLogConsoleBridge {
         if (rcm == null) {
             return false;
         }
-        Object raw;
-        try {
-            raw = rcm.getClass().getMethod("getAllDescriptors").invoke(rcm);
-        } catch (Throwable t) {
-            return false;
-        }
-        Object[] descriptors;
-        if (raw instanceof Object[]) {
-            descriptors = (Object[]) raw;
-        } else if (raw instanceof Collection) {
-            descriptors = ((Collection<?>) raw).toArray();
-        } else {
+        Object[] descriptors = descriptorsOf(rcm);
+        if (descriptors == null) {
             return false;
         }
         for (Object descriptor : descriptors) {
-            Component component = null;
-            try {
-                Object c = descriptor != null ? descriptor.getClass().getMethod("getComponent").invoke(descriptor) : null;
-                if (c instanceof Component) {
-                    component = (Component) c;
-                }
-            } catch (Throwable t) {
-                component = null;
-            }
+            Component component = componentOf(descriptor);
             if (component == null) {
                 continue;
             }
@@ -251,12 +250,12 @@ public class SqlLogConsoleBridge {
             return false;
         }
         try {
-            Object processHandler = descriptor.getClass().getMethod("getProcessHandler").invoke(descriptor);
+            Object processHandler = cachedMethod(descriptor.getClass(), "getProcessHandler").invoke(descriptor);
             if (processHandler == null) {
                 return false;
             }
-            Boolean terminated = (Boolean) processHandler.getClass().getMethod("isProcessTerminated").invoke(processHandler);
-            Boolean terminating = (Boolean) processHandler.getClass().getMethod("isProcessTerminating").invoke(processHandler);
+            Boolean terminated = (Boolean) cachedMethod(processHandler.getClass(), "isProcessTerminated").invoke(processHandler);
+            Boolean terminating = (Boolean) cachedMethod(processHandler.getClass(), "isProcessTerminating").invoke(processHandler);
             boolean alive = (terminated == null || !terminated) && (terminating == null || !terminating);
             LOG.debug("isProcessAlive: alive=" + alive + ", descriptor=" + descriptor.getClass().getSimpleName());
             return alive;
@@ -288,34 +287,28 @@ public class SqlLogConsoleBridge {
         if (rcm == null) {
             return;
         }
-        Object raw;
-        try {
-            raw = rcm.getClass().getMethod("getAllDescriptors").invoke(rcm);
-        } catch (Throwable t) {
+        Object[] descriptors = descriptorsOf(rcm);
+        if (descriptors == null) {
             return;
         }
-        Object[] descriptors;
-        if (raw instanceof Object[]) {
-            descriptors = (Object[]) raw;
-        } else if (raw instanceof Collection) {
-            descriptors = ((Collection<?>) raw).toArray();
-        } else {
-            return;
-        }
+        // 挂载 filter（幂等）；已挂载的 console 经缓存短路，不再遍历组件树（T-LogPerf-03）
         for (Object descriptor : descriptors) {
-            Component component = null;
-            try {
-                Object c = descriptor != null ? descriptor.getClass().getMethod("getComponent").invoke(descriptor) : null;
-                if (c instanceof Component) {
-                    component = (Component) c;
-                }
-            } catch (Throwable t) {
-                component = null;
+            if (descriptor == null) {
+                continue;
             }
+            Object cachedConsole = descriptorConsoleCache.get(descriptor);
+            if (shouldSkipRescan(cachedConsole, attachedConsoles.keySet())) {
+                continue;
+            }
+            Component component = componentOf(descriptor);
             if (component == null) {
                 continue;
             }
             scanComponent(component);
+            descriptorConsoleCache.put(descriptor, SqlLogConsoleBridgeKt.findConsoleView(component));
+            if (descriptorConsoleCache.size() > DESCRIPTOR_CACHE_MAX) {
+                descriptorConsoleCache.clear();
+            }
         }
         lastHadMainConsole = hasMain;
     }
@@ -328,6 +321,34 @@ public class SqlLogConsoleBridge {
             return;
         }
         attachFilter(console);
+    }
+
+    /**
+     * T-LogPerf-04：设置变更事件驱动刷新——[SqlLogManager] 订阅 SETTINGS_CHANGE_TOPIC 后调用，
+     * 一次同步全部已挂载上下文的解析器配置与 timePrefix 缓存，取代逐行 configProvider() 同步。
+     */
+    void refreshConsoleContexts() {
+        ParserConfig cfg = parserConfig.get();
+        for (BridgeLineContext ctx : consoleContexts.values()) {
+            applyConfig(ctx, cfg);
+        }
+        String raw = PluginSettings.getInstance().getState().getLogTimePrefix();
+        timePrefixCache = (raw != null && !raw.isBlank()) ? raw : null;
+    }
+
+    /** 把 [ParserConfig] 快照同步进 [BridgeLineContext]（挂载与设置变更共用）。 */
+    private void applyConfig(BridgeLineContext ctx, ParserConfig cfg) {
+        ctx.myBatisParser.setSqlPrefix(cfg.sqlPrefix());
+        ctx.myBatisParser.setParamPrefix(cfg.paramPrefix());
+        ctx.myBatisParser.setMixedPrefix(cfg.mixedPrefix());
+        ctx.myBatisParser.setMaxParseLength(cfg.maxParseLength());
+        ctx.hibernateParser.setSqlPrefix(cfg.hibernateSqlPrefix());
+        ctx.hibernateParser.setParamPrefix(cfg.hibernateParamPrefix());
+        ctx.hibernateParser.setMixedPrefix(cfg.mixedPrefix());
+        ctx.hibernateParser.setMaxParseLength(cfg.maxParseLength());
+        ctx.jdbcParser.setEnabled(cfg.jdbcEnabled());
+        ctx.jdbcParser.setMaxParseLength(cfg.maxParseLength());
+        ctx.hibernateEnabled = cfg.hibernateEnabled();
     }
 
     private void attachFilter(Object console) {
@@ -360,8 +381,11 @@ public class SqlLogConsoleBridge {
                                 cfg0.mixedPrefix(), cfg0.maxParseLength(), true),
                         new JdbcTemplateLogParser(new LogSqlRestorer(), cfg0.jdbcEnabled(), cfg0.maxParseLength()),
                         parserConfig,
-                        null);
+                        cfg0.hibernateEnabled());
                 consoleContexts.put(console, ctx);
+                // T-LogPerf-04：timePrefix 缓存化——设置变更走 refreshConsoleContexts，逐行不再读 PluginSettings
+                String rawTimePrefix = PluginSettings.getInstance().getState().getLogTimePrefix();
+                timePrefixCache = (rawTimePrefix != null && !rawTimePrefix.isBlank()) ? rawTimePrefix : null;
                 Object filter = Proxy.newProxyInstance(
                         filterIface.getClassLoader(),
                         new Class<?>[]{filterIface},
@@ -370,9 +394,7 @@ public class SqlLogConsoleBridge {
                             if (context == null) {
                                 return;
                             }
-                            String logTimePrefix = PluginSettings.getInstance().getState().getLogTimePrefix();
-                            String timePrefix = (logTimePrefix != null && !logTimePrefix.isBlank()) ? logTimePrefix : null;
-                            SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefix, syncBufferConfig)
+                            SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig)
                                     .forEach(buffer::addEntry);
                         }));
                 console.getClass().getMethod("addMessageFilter", filterIface).invoke(console, filter);
@@ -421,6 +443,8 @@ public class SqlLogConsoleBridge {
             }
         }
         attachedConsoles.clear();
+        // T-LogPerf-03：挂载记录清空后缓存全部失效，下一轮重新全量扫描
+        descriptorConsoleCache.clear();
     }
 
     /**
@@ -454,8 +478,9 @@ public class SqlLogConsoleBridge {
             "com.intellij.execution.ui.ConsoleView$Filter",
             "com.intellij.execution.filters.Filter");
     private static final Class<?> CONTENT_LISTENER_CLASS = ContentManagerListener.class;
-    private static final int POLL_INTERVAL_MS = 2000;
-    private static final int FAST_POLL_INTERVAL_MS = 100;
+    private static final int POLL_INTERVAL_MS = 2000; // 常规轮询间隔
+    private static final int FAST_POLL_INTERVAL_MS = 500; // 快速轮询起步间隔——T-LogPerf-01：指数退避至常规间隔，不再 100ms 常驻
+    private static final int DESCRIPTOR_CACHE_MAX = 64; // descriptor→console 缓存上限（超限整体失效防死引用滞留）
 
     /** 平台 classloader（execution API 在此 classloader 中，不在插件 classloader 中）。 */
     private static final ClassLoader platformClassLoader =
@@ -472,6 +497,80 @@ public class SqlLogConsoleBridge {
             }
         }
         return false;
+    }
+
+    /** T-LogPerf-01：快速轮询指数退避（纯函数便于单测）——无主控制台每拍翻倍，上限=常规间隔；重置回落起步间隔。 */
+    static int nextFastDelay(int currentMs, boolean backoff) {
+        if (!backoff) {
+            return FAST_POLL_INTERVAL_MS;
+        }
+        return Math.min(currentMs * 2, POLL_INTERVAL_MS);
+    }
+
+    /** T-LogPerf-03：短路判定（纯函数便于单测）——已知 console 且已挂载时跳过重新扫描。 */
+    static boolean shouldSkipRescan(Object cachedConsole, Collection<?> attachedConsoles) {
+        if (cachedConsole == null) {
+            return false;
+        }
+        for (Object c : attachedConsoles) {
+            if (c == cachedConsole) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** T-LogPerf-02：反射 Method 缓存（热路径每拍轮询不再重复 getMethod 查找；找不到也缓存 null）。 */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method> methodCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static java.lang.reflect.Method cachedMethod(Class<?> clazz, String name) {
+        String key = clazz.getName() + "#" + name;
+        java.lang.reflect.Method cached = methodCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        if (methodCache.containsKey(key)) {
+            return null; // 已缓存的 null
+        }
+        java.lang.reflect.Method m;
+        try {
+            m = clazz.getMethod(name);
+        } catch (Throwable t) {
+            m = null;
+        }
+        methodCache.put(key, m);
+        return m;
+    }
+
+    private static Object[] descriptorsOf(Object rcm) {
+        try {
+            Object raw = cachedMethod(rcm.getClass(), "getAllDescriptors").invoke(rcm);
+            if (raw instanceof Object[]) {
+                return (Object[]) raw;
+            }
+            if (raw instanceof Collection) {
+                return ((Collection<?>) raw).toArray();
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static Component componentOf(Object descriptor) {
+        if (descriptor == null) {
+            return null;
+        }
+        try {
+            Object c = cachedMethod(descriptor.getClass(), "getComponent").invoke(descriptor);
+            if (c instanceof Component) {
+                return (Component) c;
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     public static Object runContentManagerOrNull(Project project) {

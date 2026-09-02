@@ -85,23 +85,23 @@ public final class SqlLogPanelKt {
         return "<span style='color:#9E9E9E'>[" + escapeHtml(formatted) + "]</span> ";
     }
 
-    /** 耗时 HTML 片段：根据阈值套不同颜色——无耗时则返回空串。 */
+    /** 耗时 HTML 片段：根据阈值套不同颜色——无耗时显示 "—" 占位。 */
     public static String formatDurationHtml(Long ms, boolean isSelected) {
-        if (ms == null) {
-            return "";
-        }
         long threshold = PluginSettings.getInstance().getState().getSlowQueryThresholdMs();
         String color;
         if (isSelected) {
             color = "#FFFFFF";
+        } else if (ms == null) {
+            color = "#9E9E9E";            // 灰：无耗时
         } else if (ms >= threshold) {
-            color = "#D32F2F";   // 红：慢查询
+            color = "#D32F2F";      // 红：慢查询
         } else if (ms >= threshold / 2) {
-            color = "#E67E22"; // 橙：偏慢
+            color = "#E67E22";  // 橙：偏慢
         } else {
-            color = "#9E9E9E";  // 灰：正常
+            color = "#4CAF50";                 // 绿：正常
         }
-        return "<span style='color:" + color + "'>" + ms + "ms</span> ";
+        String text = (ms != null) ? (ms + "ms") : "—";
+        return "<span style='color:" + color + "'>" + text + "</span> ";
     }
 
     /** 单行 HTML 转义（防注入日志中的特殊字符）。 */

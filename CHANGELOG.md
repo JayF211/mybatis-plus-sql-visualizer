@@ -1,16 +1,51 @@
 <!-- Keep a Changelog guide -> https://keepachangelog.com -->
 
-# Mybatis-plus-sql-visualizer Changelog
+# SQL Visualizer Changelog
 
 ## [Unreleased]
 
+## [2026.9.2] - 2026-09-02
+
 ### Changed
 
-- **插件显示名更名 SQL Visualizer（原 MyBatis-Plus SQL Visualizer）**：`plugin.xml` `<name>` 与全部用户可见文案（设置页/弹窗标题/gutter tooltip/通知/工具窗口标题，中英双语）同步更名；插件 ID（`<id>`）、构建产物 zip 顶层短名、仓库与 Marketplace 页地址均不变——已安装用户正常升级，配置与历史记录全保留。仍全面支持 MyBatis-Plus / MPJ / JPA / Hibernate
-- **项目内数据目录随插件更名（F-44-4）**：`.idea/` 下插件数据目录由旧名 `mybatis-plus-sql-visualizer` 改为新名 `sql-visualizer`（含 `sql-history/` 历史 SQL 与 `exec/` 执行临时文件）——**不考虑向前兼容**，旧目录数据不再读取，历史 SQL 与新捕获从新目录起算；新增统一常量 `SqlLogAutoSaver.DATA_DIR_NAME` 供历史面板 / 历史 tab 显隐检测 / 数据源执行文件路径引用，设置页默认路径提示同步更新（中英文案 `settings.log.autoSave.path.tip/empty`）
-- **实时日志「精确跳转源码」可靠方案（F-44-6）**：原实时日志无 file:line（控制台 SQL 日志不含调用位置）只能「按表名猜实体」近似跳转、常跳不准。新方案在**应用 JVM** 用 MyBatis-Plus `InnerInterceptor`（`docs/instrumentation/SqlSourceInterceptor.kt` 自包含示例）于 SQL 执行线程捕获真实调用点，向 stdout 打印标记行 `SQLVIS-SOURCE|<相对路径>|<行号>`；`SqlLogConsoleBridge.processConsoleLine` 解析该标记写入 `LogSqlEntry.sourceFile/sourceLine`，实时日志复用与历史面板**一致**的精确 `OpenFileDescriptor` file:line 跳转。无标记时零影响、被动回退原表名搜索。新增 `SqlSourceMarker`（标记格式/解析）、`CallerSourceLocator`（调用栈→用户代码帧纯函数）；`SqlLogPanel` 抽 `internal sealed class LogJumpTarget`（Precise/NoSource/NotFound/SearchByTable/NoTable）+ `resolveEntryJump` 统一解析层；VFS 路径统一正斜杠（跨平台一致）
-
+- **SQL 预览面板原生 Database 控制台内嵌（M36 系列）**：执行链改为 `getConsoleView()` 提取 JdbcConsole 原生 UI 组件（编辑器+结果区），不再打开主编辑器窗口——执行/Tx/会话/数据源选择工具栏全保留；默认结果 Tab + 编辑器融合；错误回调链路（`extractConsoleError` 读 console history + `ERROR_SIGNATURES` 防误判，`SqlResultPanel` 状态机 + 复制按钮）；原生融合优化（去空白/去白边/控制台默认展示，唯一数据源/last-used 静默复用）；布局全链修复（持久 SplitPane 强制换底 + 结果区隔离 + 分隔条保险条件修正）；EDT SlowOperations 治理；HQL SELECT 实体别名展开（M36.7）
+- **SQL 预览原生语法高亮 + 智能补全（M34）**：编辑器从自研 `SqlPreviewLanguage` 切换为 IDEA 原生 SQL FileType——`SqlPreviewPanel`/`SqlInputEditor`/`LogToSqlPanel` 三处统一升级；原生高亮器 + 全语言补全贡献者；差异对比改用 IDEA 原生 Diff；删除 4 个废弃文件
+- **数据源 schema 字段注释补全（M35）**：`DatabaseSchemaResolver` 全反射访问 `com.intellij.database` 取 DB COMMENT 作为列注释，数据源 schema 注释优先于实体注释，Community 兼容
+- **HQL 关联字段解析 + Hibernate XML 映射（F-45）**：`HqlConverter.mapAssociationPath` 外键列名映射 + `HbmXmlEntityResolver` 解析 `.hbm.xml` 映射文件
+- **maintainPage XML SQL 预览（F-45）**：支持 vTradex Forest 框架 `<pages>` XML 格式中 `<maintainPage>` 的 `<datasource>` CDATA SQL 预览（`PagesXmlParser` + `PagesXmlPreviewService` + gutter 图标 + 列信息 tab）
+- **SQL 日志合并主侧边栏 + 源码定位 + 历史读取（F-44）**：去除独立 SQL 日志工具窗口，合并到主侧边栏；`LogSqlEntry` 增加 `sourceFile/sourceLine` 字段；新建 `SqlLogFileReader` 反解析历史文件 + `HistorySqlLogPanel`
+- **自动保存历史 SQL（F-43）**：设置页新增「自动保存历史 SQL」配置组（开关 + 保存目录 + 文件名模板），单文件 ≥100MB 自动滚动
+- **JOIN 关系图自绘 Swing 引擎（F-42）**：移除 PlantUML + Batik 依赖改用纯 Graphics2D 自绘——插件体积 42MB→5.3MB，渲染 2-6s→<50ms；梳状拓扑 + 正交路由 + 动态间距 + UML cardinality 基数标签
+- **实时日志「精确跳转源码」可靠方案（F-44-6）**：运行期用 MyBatis-Plus `InnerInterceptor` 在 SQL 执行线程捕获真实调用点，向 stdout 打印标记行 `SQLVIS-SOURCE|<相对路径>|<行号>`；精确 `OpenFileDescriptor` file:line 跳转替代按表名猜实体
 - **主源码 Kotlin → Java 全量改写完成**：生产源码（包 `cn.song.mybatisplus.visualizer` 下 model / psi / sql / config / update 五包，共 351 个 `.java`、0 个 `.kt`）全部由 Kotlin 转写为 Java，采用「共存迁移」策略（测试源集保留 140 个 `.kt` + 93 个 `.java`，均可编译可运行）。转换覆盖 `object`→单例 `INSTANCE`、`data class`→`final class` 含值语义 `equals/hashCode`、`sealed`/接口分支 `instanceof` 化、`suspend fun`→`Continuation` 实现、`Regex`→`Pattern`、`record` 访问器 `x()` 等互操作铁律；全量测试 **1421/0/0/6 绿（139 套件）**，`buildPlugin` + `verifyPlugin` 终验通过。与 `master` 对比零功能丢失（4 个类为等价重命名：`Ognl`→`OgnlEvaluator`、`WrapperFormat`→`WrapperFormatKt`、`LogEntryPreviewRecognizer`→`LogEntryPreviewRecognizerKt`、`LogSqlModels`→`LogSqlModelsKt`）。详见 `docs/开发计划/20260901-Kotlin转Java全量改写-进度总结.md`
+- **Spring JdbcTemplate SQL 日志捕获（M47）**：新增 `JdbcTemplateLogParser` 与 MyBatis/Hibernate 三解析器并列，23 个单元测试
+- **SQL 日志筛选项精简**：SQL 类型多选 + Ctrl+F 搜索 + 去重 `⨉N` 徽章 + 高频折叠移除 + 工具栏 WrapLayout 布局
+- **设置页左侧树导航 + 布局优化**：5 个独立子页面 + 折叠面板 + Tab 拆分 + 搜索过滤 + 同对话框导航 + `JBColor` 主题适配
+- **插件显示名更名 SQL Visualizer**：`plugin.xml` `<name>` 与全部用户可见文案同步更名，插件 ID 不变，已装用户正常升级
+- **Gitee 抢先体验更新通道（原 v2026.8.22 计划）**：内测机制 + 「忽略此版本」功能 + 通知弹窗优化 + 双 JSON 文件策略 + 本地清单测试工具
+- **帮助按钮本地 HTML 定稿（M36.5.80）**：内嵌浏览器改为主路径（`marketplace-custom-page.html`），JCEF 不可用时降级系统浏览器
+
+### Fixed
+
+- **SQL 日志 EDT 冻结修复（M46）**：`rebuildListModel` 逐条 `addElement` O(N²)→`addAll` O(N) + cell renderer 纯文本化 + 新增 `logMaxCount` 设置项
+- **日志捕捉性能优化（T-LogPerf-01~05）**：轮询指数退避（100ms→500ms→2s）+ 反射 Method 缓存 + descriptor→console 身份缓存短路 + 配置同步改事件驱动
+- **SQL 日志面板四项缺陷终局修复（F-44-2）**：列表 SQL 词法高亮恢复 / 耗时字段接入控制台链路（root fix）/ 已存在条目同步去重 / 去重计数即时刷新
+- **历史面板高亮 + 耗时 + 注释格式（F-44-2）**：历史列表 SQL 高亮 + 耗时显示；历史文件注释回归标准 `--` 注释，`NEW_HEADER_REGEX` 兼容 2/3 个 `-` 起结
+- **SQL 历史面板两级导航（F-44-3）**：一级文件列表 → 二级逐条 SQL → 双击预览
+- **多行拼接 HQL gutter 漏检（M36.5.79）**：修复 gutter 漏检 `PsiPolyadicExpression`，`findAssignedVariable` 沿引用链上溯
+- **复制为 MD 表格格式修复（F-46）**：多行 SQL→`<br>`，列序调整，`ShareDialog` 来源字段预填充文件名:行号
+- **弃用 API 清理（M36.5.78）**：`HttpConfigurable`→`ProxySettings.getProxyConfiguration()`，`isUnderDarcula()`→`StartupUiUtil.isDarkTheme()`
+- **数据源选择器 NPE 修复**：runner 列表为空时返回降级路径
+- **预览编辑器 PSI 解析 EDT SlowOperations 硬抛**：临时文件创建 + `findFile` 整体包 `ReadAction.compute`
+- **消除 SettingsEditor(@ApiStatus.Internal) 编译期依赖**：`Class.forName` 反射替代
+
+### Test
+
+- **全插件 UI / 交互测试覆盖（F-44 系列，50+ 文件 200+ 用例）**：日志面板 / 历史面板 / 设置页 / 转换面板 / 弹窗与控件 / Gutter / 更新机制 / 执行器全覆盖
+- **真实场景端到端测试**：`SqlLogHistoryRoundTripTest`（5）/ `SqlLogCaptureRealtimeScenarioTest`（9）/ `SqlLogConsoleBridgePerfTest`（6）/ `DataSourceSelectorIntegrationTest`（4）
+- **可靠跳转链路测试（F-44-6，4 文件 22 例）**：`SqlSourceMarkerTest`（6）/ `CallerSourceLocatorTest`（5）/ `SqlLogConsoleBridgeMarkerTest`（5）/ `SqlLogPanelLiveJumpWithSourceTest`（6）
+- **纯函数单测**：`TableConfigSignatureTest`（3）/ `LogSqlEntryTest`（4）/ `DataSourceSelectorTest`（2）/ `HqlConverterSelectExpandTest`（197）/ `JdbcTemplateLogParserTest`（322）/ `HqlConverterAssociationTest`（181）/ `HbmXmlEntityResolverTest`（106）
+- **生产可测化重构**：日志列表渲染器 / `HistoryJumpTarget` / `LiveJumpResolution` 抽出 internal 测试缝
 
 ### Fixed
 

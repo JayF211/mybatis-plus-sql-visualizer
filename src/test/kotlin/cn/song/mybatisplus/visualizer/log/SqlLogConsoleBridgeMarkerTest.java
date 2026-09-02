@@ -24,7 +24,7 @@ public class SqlLogConsoleBridgeMarkerTest {
                 new HibernateLogParser(new LogSqlRestorer(), cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength(), true),
                 new JdbcTemplateLogParser(new LogSqlRestorer(), cfg.jdbcEnabled(), cfg.maxParseLength()),
                 (Supplier<ParserConfig>) () -> cfg,
-                null);
+                true);
     }
 
     @Test

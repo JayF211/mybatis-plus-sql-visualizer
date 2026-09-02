@@ -40,6 +40,7 @@ import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.SearchTextField;
+import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBList;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTabbedPane;
@@ -644,12 +645,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 return;
             }
             try {
+                // 暗色检测：IDE 主题为暗色时注入 class（JCEF 不读取 IDE 的 prefers-color-scheme）
+                if (isDarkTheme()) {
+                    htmlContent = htmlContent.replaceAll("(?i)<body>", "<body class=\"dark\">");
+                    LOG.info("[HelpAction] Dark theme detected, injected .dark class");
+                }
                 LOG.info("[HelpAction] Opening local help HTML via loadHTML");
                 HTMLEditorProvider.openEditor(project, HELP_TAB_TITLE, htmlContent);
             } catch (Throwable ex) {
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex);
                 BrowserUtil.browse(HELP_DOCUMENTATION_URL);
             }
+        }
+
+        /** 检测当前 IDE 是否为暗色主题（JBColor.isBright 反映用户设置，不依赖 OS）。 */
+        private boolean isDarkTheme() {
+            return !JBColor.isBright();
         }
 
         /** 从 resources 加载文本文件。 */

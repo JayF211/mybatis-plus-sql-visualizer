@@ -354,6 +354,7 @@ public class PluginSettingsPanel {
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private final JBTextField logTimePrefixField = new JBTextField(12);
     private final JBTextField slowQueryThresholdField = new JBTextField(12);
+    private final JBCheckBox logShowDurationCheck = new JBCheckBox();
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -527,6 +528,9 @@ public class PluginSettingsPanel {
                 addRow(p, g, msg("settings.log.timePrefix"), logTimePrefixField);
                 slowQueryThresholdField.setToolTipText(msg("settings.log.slowQueryThreshold.tip"));
                 addRow(p, g, msg("settings.log.slowQueryThreshold"), slowQueryThresholdField);
+                logShowDurationCheck.setText(msg("settings.log.showDuration"));
+                logShowDurationCheck.setToolTipText(msg("settings.log.showDuration.tip"));
+                addRow(p, g, "", logShowDurationCheck);
             });
 
             sectionGroup(panel, gbc, "settings.log.tab.orm", (p, g) -> {
@@ -1092,6 +1096,7 @@ public class PluginSettingsPanel {
             || !Objects.equals(parseIntOrNull(logMaxCountField.getText().trim()), s.getLogMaxCount())
             || !logTimePrefixField.getText().trim().equals(s.getLogTimePrefix())
             || !Objects.equals(parseLongOrNull(slowQueryThresholdField.getText().trim()), s.getSlowQueryThresholdMs())
+            || logShowDurationCheck.isSelected() != s.getShowDurationInLogList()
             || logHibernateEnabledCheck.isSelected() != s.getLogHibernateEnabled()
             || !logHibernateSqlPrefixField.getText().trim().equals(s.getLogHibernateSqlPrefix())
             || !logHibernateParamPrefixField.getText().trim().equals(s.getLogHibernateParamPrefix())
@@ -1174,6 +1179,7 @@ public class PluginSettingsPanel {
             s.setLogTimePrefix(logTimePrefixField.getText().trim());
             Long slowQuery = parseLongOrNull(slowQueryThresholdField.getText().trim());
             s.setSlowQueryThresholdMs(slowQuery != null ? slowQuery : PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS);
+            s.setShowDurationInLogList(logShowDurationCheck.isSelected());
             s.setLogHibernateEnabled(logHibernateEnabledCheck.isSelected());
             s.setLogHibernateSqlPrefix(logHibernateSqlPrefixField.getText().trim());
             s.setLogHibernateParamPrefix(logHibernateParamPrefixField.getText().trim());
@@ -1271,6 +1277,7 @@ public class PluginSettingsPanel {
             logMaxCountField.setText(String.valueOf(s.getLogMaxCount()));
             logTimePrefixField.setText(s.getLogTimePrefix());
             slowQueryThresholdField.setText(String.valueOf(s.getSlowQueryThresholdMs()));
+            logShowDurationCheck.setSelected(s.getShowDurationInLogList());
             logHibernateEnabledCheck.setSelected(s.getLogHibernateEnabled());
             logHibernateSqlPrefixField.setText(s.getLogHibernateSqlPrefix());
             logHibernateParamPrefixField.setText(s.getLogHibernateParamPrefix());

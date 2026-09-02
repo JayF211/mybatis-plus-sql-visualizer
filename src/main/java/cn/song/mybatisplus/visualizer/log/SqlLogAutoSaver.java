@@ -7,6 +7,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -96,7 +97,11 @@ public class SqlLogAutoSaver {
             if (file.getParentFile() != null) {
                 file.getParentFile().mkdirs();
             }
-            writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8);
+            // APPEND 模式：多次启动后历史内容追加而非覆盖
+            writer = Files.newBufferedWriter(
+                    file.toPath(), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND
+            );
             currentFile = file;
         } catch (Throwable t) {
             LOG.warn("自动保存历史 SQL：无法打开文件 " + file.getAbsolutePath(), t);
@@ -137,7 +142,7 @@ public class SqlLogAutoSaver {
                 String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH)
                         .format(new Date(entry.timestamp()));
                 w.write("-- source: " + source + " | time: " + duration + " | " + timestamp + " --\n");
-                w.write(entry.restoredSql());
+                w.write(SqlLogPanelKt.withTerminator(entry.restoredSql()));
                 w.write("\n\n");
                 w.flush();
             }

@@ -14,6 +14,8 @@ import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser;
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTree;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager;
+import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
+import cn.song.mybatisplus.visualizer.log.SqlLogManager;
 import cn.song.mybatisplus.visualizer.model.AssociationInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRef;
@@ -106,6 +108,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
@@ -1264,8 +1267,20 @@ public final class SqlPreviewService {
                 sourceLine = 0;
             }
             String tableName = (result.getTableName() != null) ? result.getTableName() : "";
-            manager.add(new SqlHistoryEntry("", result.getSql(), result.getCompactSql(), System.currentTimeMillis(),
-                    sourceFile, sourceLine, tableName, false, List.of()));
+            // 尝试从最近日志条目补全耗时（SQL 指纹匹配）
+            Long executionTimeMs = null;
+            SqlLogManager logManager = anchor.getProject().getService(SqlLogManager.class);
+            if (logManager != null) {
+                executionTimeMs = logManager.getEntries().snapshot().stream()
+                        .filter(e -> Objects.equals(e.restoredSql(), result.getSql()))
+                        .findFirst()
+                        .map(LogSqlEntry::executionTimeMs)
+                        .orElse(null);
+            }
+            SqlHistoryEntry entry = new SqlHistoryEntry("", result.getSql(), result.getCompactSql(), System.currentTimeMillis(),
+                    sourceFile, sourceLine, tableName, false, List.of());
+            entry.setExecutionTimeMs(executionTimeMs);
+            manager.add(entry);
         } catch (Throwable e) {
             // 服务不可用时静默跳过（不阻塞预览）
         }

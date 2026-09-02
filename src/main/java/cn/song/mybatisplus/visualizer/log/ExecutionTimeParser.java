@@ -8,9 +8,12 @@ import java.util.regex.Pattern;
  * 支持格式（正则匹配，< 1ms）：
  * - **p6spy**：`elapsed 123 ms` / `consumed 456ms`
  * - **MP TimeCount**：`TimeCount: 789ms` / `time: 100 ms`
+ * - **druid**：`executeMillis:123` / `"executeMillis":123`
+ * - **MP ExecuteTime**：`ExecuteTime: 456ms`
+ * - **行尾纯数字 + ms**：`select ... ] 789ms`（通用兜底）
  * - **自定义前缀**：通过 `logTimePrefix` 配置（如 `Time:`）+ 数字 + `ms`
  *
- * 解析策略：先尝试通用格式（p6spy/TimeCount），再尝试自定义前缀。都不命中返回 null。
+ * 解析策略：先尝试通用格式（p6spy/TimeCount/druid/MP），再尝试自定义前缀。都不命中返回 null。
  */
 public final class ExecutionTimeParser {
 
@@ -28,10 +31,19 @@ public final class ExecutionTimeParser {
     /** 通用 `time` 关键字格式：`time: 100 ms` / `time 200ms`。 */
     private static final Pattern GENERIC_TIME_REGEX = Pattern.compile("(?i)\\btime\\s*[:=]?\\s+(\\d+)\\s*ms?\\b");
 
+    /** druid 格式：`executeMillis:123` / `"executeMillis":123`。 */
+    private static final Pattern DRUID_REGEX = Pattern.compile("(?i)executeMillis[\"']?\\s*[:=]\\s*(\\d+)");
+
+    /** MP ExecuteTime 格式：`ExecuteTime: 456ms` / `ExecuteTime=789`。 */
+    private static final Pattern MP_EXECUTE_TIME_REGEX = Pattern.compile("(?i)\\bExecuteTime\\s*[:=]\\s*(\\d+)\\s*ms?\\b");
+
+    /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
+    private static final Pattern TRAILING_MS_REGEX = Pattern.compile("[\\]\\s]\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
+
     /**
      * 从日志文本中解析执行耗时（毫秒）。
      *
-     * 解析顺序：p6spy → TimeCount → 通用 time 格式 → 自定义前缀。
+     * 解析顺序：p6spy → TimeCount → 通用 time 格式 → druid → MP ExecuteTime → 行尾兜底 → 自定义前缀。
      *
      * @param text         日志文本（可能含多行）
      * @param customPrefix 自定义耗时前缀（如 `Time:`）；null 时跳过自定义匹配
@@ -68,13 +80,28 @@ public final class ExecutionTimeParser {
         if (m3.find()) {
             return toLongOrNull(m3.group(1));
         }
-        // 4. 自定义前缀（动态构建正则）
+        // 4. druid executeMillis
+        java.util.regex.Matcher m4 = DRUID_REGEX.matcher(text);
+        if (m4.find()) {
+            return toLongOrNull(m4.group(1));
+        }
+        // 5. MP ExecuteTime
+        java.util.regex.Matcher m5 = MP_EXECUTE_TIME_REGEX.matcher(text);
+        if (m5.find()) {
+            return toLongOrNull(m5.group(1));
+        }
+        // 6. 行尾纯数字 + ms 兜底
+        java.util.regex.Matcher m6 = TRAILING_MS_REGEX.matcher(text);
+        if (m6.find()) {
+            return toLongOrNull(m6.group(1));
+        }
+        // 7. 自定义前缀（动态构建正则）
         if (customPrefix != null && !customPrefix.isBlank()) {
             String escaped = Pattern.quote(customPrefix);
             Pattern dynamicRegex = Pattern.compile("(?i)" + escaped + "\\s*(\\d+)\\s*ms?\\b");
-            java.util.regex.Matcher m4 = dynamicRegex.matcher(text);
-            if (m4.find()) {
-                return toLongOrNull(m4.group(1));
+            java.util.regex.Matcher m7 = dynamicRegex.matcher(text);
+            if (m7.find()) {
+                return toLongOrNull(m7.group(1));
             }
         }
         return null;

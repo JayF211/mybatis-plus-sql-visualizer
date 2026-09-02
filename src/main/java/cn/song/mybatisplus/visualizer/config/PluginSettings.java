@@ -115,6 +115,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private String logAutoSaveFileNamePattern = DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN;
         private String logTimePrefix = DEFAULT_LOG_TIME_PREFIX;
         private long slowQueryThresholdMs = DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+        /**
+         * 是否在 SQL 日志列表中显示耗时列（默认开启）。
+         * false 时隐藏耗时，节省列表宽度。
+         */
+        private boolean showDurationInLogList = true;
         private String paramHistoryJson = "";
         private boolean logHibernateEnabled = true;
         private String logHibernateSqlPrefix = DEFAULT_LOG_HIBERNATE_SQL_PREFIX;
@@ -246,6 +251,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public long getSlowQueryThresholdMs() { return slowQueryThresholdMs; }
         public void setSlowQueryThresholdMs(long slowQueryThresholdMs) { this.slowQueryThresholdMs = slowQueryThresholdMs; }
 
+        public boolean getShowDurationInLogList() { return showDurationInLogList; }
+        public void setShowDurationInLogList(boolean showDurationInLogList) { this.showDurationInLogList = showDurationInLogList; }
+
         public String getParamHistoryJson() { return paramHistoryJson; }
         public void setParamHistoryJson(String paramHistoryJson) { this.paramHistoryJson = paramHistoryJson; }
 
@@ -320,6 +328,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logAutoSaveFileNamePattern = logAutoSaveFileNamePattern;
             c.logTimePrefix = logTimePrefix;
             c.slowQueryThresholdMs = slowQueryThresholdMs;
+            c.showDurationInLogList = showDurationInLogList;
             c.paramHistoryJson = paramHistoryJson;
             c.logHibernateEnabled = logHibernateEnabled;
             c.logHibernateSqlPrefix = logHibernateSqlPrefix;
@@ -360,6 +369,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && logMaxParseLength == that.logMaxParseLength
                     && logMaxCount == that.logMaxCount
                     && slowQueryThresholdMs == that.slowQueryThresholdMs
+                    && showDurationInLogList == that.showDurationInLogList
                     && historyMaxSize == that.historyMaxSize
                     && Objects.equals(dialect, that.dialect)
                     && Objects.equals(language, that.language)
@@ -400,7 +410,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat,
                     logFormatSql, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
-                    logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs,
+                    logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize, collapsedGroups);
         }

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.config.SettingsChangeListener;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
@@ -60,6 +61,14 @@ public final class SqlLogManager implements Disposable {
     public SqlLogManager(Project project) {
         this.project = project;
         this.bridge.onConsoleRemoved = this::onConsoleRemoved;
+        // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
+        // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
+        project.getMessageBus().connect(this).subscribe(
+                PluginSettings.SETTINGS_CHANGE_TOPIC,
+                (SettingsChangeListener) () -> {
+                    applySettings();
+                    bridge.refreshConsoleContexts();
+                });
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。 */
@@ -212,6 +221,11 @@ public final class SqlLogManager implements Disposable {
     /** 已挂载的 console 集合（bridge 访问）。 */
     public Map<Object, Pair<Object, Class<?>>> getAttachedConsoles() {
         return bridge.attachedConsoles;
+    }
+
+    /** 桥访问（真实环境测试缝：scanComponent 挂载桩控制台用，对齐 installBridgeForTest 惯例）。 */
+    SqlLogConsoleBridge getConsoleBridge() {
+        return bridge;
     }
 
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调。 */

@@ -316,6 +316,13 @@ public final class HqlQueryLocator {
                 if (initializer instanceof PsiLiteralExpression li) {
                     return new HqlStringResult(li.getValue() instanceof String s ? s : li.getText(), true);
                 }
+                // 字符串拼接：String hql = "select" + " ..." —— 收集字面量片段静态还原
+                if (initializer instanceof PsiBinaryExpression || initializer instanceof PsiPolyadicExpression) {
+                    List<String> parts = collectStringLiterals(initializer);
+                    if (!parts.isEmpty()) {
+                        return new HqlStringResult(String.join("", parts), true);
+                    }
+                }
                 return new HqlStringResult(ref.getReferenceName(), false);
             }
             return new HqlStringResult(ref.getReferenceName(), false);

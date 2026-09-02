@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.history;
 
+import cn.song.mybatisplus.visualizer.log.SlowQueryDetector;
+import cn.song.mybatisplus.visualizer.log.SqlLogPanelKt;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
@@ -168,12 +170,26 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             if (value instanceof SqlHistoryEntry entry) {
                 String ts = new SimpleDateFormat("HH:mm:ss").format(new Date(entry.getTimestamp()));
-                String summary = entry.summary();
+                String summary = SqlLogPanelKt.withTerminator(entry.summary());
                 String source = entry.sourceLabel();
+                String durationColor;
+                SlowQueryDetector.DurationLevel level = SlowQueryDetector.level(entry.getExecutionTimeMs());
+                if (level == SlowQueryDetector.DurationLevel.SLOW) {
+                    durationColor = "#D32F2F";
+                } else if (level == SlowQueryDetector.DurationLevel.MODERATE) {
+                    durationColor = "#E67E22";
+                } else if (level == SlowQueryDetector.DurationLevel.FAST) {
+                    durationColor = "#4CAF50";
+                } else {
+                    durationColor = "#9E9E9E";
+                }
+                String durationText = entry.getExecutionTimeMs() != null ? (entry.getExecutionTimeMs() + "ms") : "—";
+                String durationPart = "  <span style='color:" + durationColor + "'>" + durationText + "</span>";
                 String sourcePart = source.isBlank() ? "" : "  <span style='color:#9E9E9E'>(" + source + ")</span>";
                 String tagPart = !entry.getTags().isEmpty()
                         ? "  <span style='color:#9E9E9E'>[" + String.join(", ", entry.getTags()) + "]</span>" : "";
                 this.setText("<html>" + (entry.isFavorite() ? "&#9733; " : "") + "<b>" + escapeHtml(summary) + "</b>"
+                        + durationPart
                         + "  <span style='color:#9E9E9E'>" + ts + "</span>" + sourcePart + tagPart + "</html>");
                 this.setToolTipText(entry.getSql());
                 this.setIcon(entry.isFavorite() ? favoriteIcon : emptyIcon);
