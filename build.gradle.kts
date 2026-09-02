@@ -234,6 +234,18 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.2</h2>
+            <ul>
+                <li>SQL preview panel: native Database console embedding (execution/Tx/session/data-source toolbar fully preserved, no separate editor window)</li>
+                <li>SQL preview: native syntax highlighting + code completion (IDEA native SQL FileType, data-source schema comments)</li>
+                <li>JPA/Hibernate: HQL association field resolution + Hibernate XML mapping + maintainPage XML preview</li>
+                <li>SQL log: merge into main sidebar + source location + auto-save history + two-level navigation</li>
+                <li>JOIN diagram: self-drawn Swing engine (plugin size 42MB→5.3MB, render &lt;50ms)</li>
+                <li>Real-time log: precise source jump via InnerInterceptor (file:line instead of table-name guessing)</li>
+                <li>Spring JdbcTemplate SQL log capture (triple-parser architecture)</li>
+                <li>Settings page: left tree navigation + collapsible panels + search filter</li>
+                <li>Full plugin UI/integration test coverage (50+ files, 200+ cases)</li>
+            </ul>
             <h2>v2026.8.21</h2>
             <ul>
                 <li>JPA/Hibernate SQL 预览支持（Derived / CriteriaQuery / HQL 三种查询风格）</li>

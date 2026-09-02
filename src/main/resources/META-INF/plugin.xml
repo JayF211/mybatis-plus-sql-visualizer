@@ -27,23 +27,25 @@
         <ul>
             <li>Wrapper chains to SQL: LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / string QueryWrapper / UpdateWrapper / MPJLambdaWrapper / MPJQueryWrapper joins / service chains</li>
             <li>JPA / Hibernate: Spring Data derived query methods (findByXxx), CriteriaBuilder queries, JPQL/@Query annotations — preview generated SQL with entity annotation resolution (@Entity/@Table/@Column/@ManyToOne)</li>
-            <li>XML mapper dynamic SQL and Java annotation SQL (@Select/@Insert/...) preview (dynamic tags, OGNL conditions, parameter backfill)</li>
+            <li>XML mapper dynamic SQL and Java annotation SQL (@Select/@Insert/...) preview (dynamic tags, OGNL conditions, parameter backfill); maintainPage XML preview</li>
+            <li>Native Database console embedding: execute SQL with full data-source/Tx/session toolbar (Ultimate); native syntax highlighting + code completion with data-source schema comments</li>
             <li>Replace <code>?</code> placeholders with actual parameter values; dynamic condition checkboxes; SQL auto formatting</li>
-            <li>Console SQL log capture &amp; restore; Log-to-SQL batch conversion</li>
+            <li>Console SQL log capture &amp; restore (MyBatis / Hibernate / JdbcTemplate); precise source jump via InnerInterceptor; auto-save history with two-level navigation</li>
             <li>SQL to MP Java code reverse conversion (QueryWrapper / LambdaQueryWrapper / Wrappers / MPJ, CRUD &amp; joins, compilable output)</li>
-            <li>9 database dialects, execute SQL (Ultimate), trigger via context menu / shortcut / gutter icon</li>
+            <li>JOIN diagram: self-drawn Swing ER diagram (PNG/SVG export); 9 database dialects; trigger via context menu / shortcut / gutter icon</li>
         </ul>
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         <hr/>
         <h2>核心能力（中文说明）</h2>
-        <p>MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。</p>
+        <p>MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。</p>
         <ul>
             <li>Wrapper 链转 SQL：<code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> / 字符串版 <code>QueryWrapper</code> / <code>UpdateWrapper</code> / <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表 / 服务链</li>
-            <li>XML mapper 动态 SQL 与 <code>@Select</code> 等注解 SQL 预览：动态标签、OGNL 条件勾选、参数回填</li>
+            <li>XML mapper 动态 SQL 与 <code>@Select</code> 等注解 SQL 预览：动态标签、OGNL 条件勾选、参数回填；maintainPage XML 预览</li>
+            <li>原生 Database 控制台内嵌：执行 SQL 保留完整数据源/Tx/会话工具栏（Ultimate）；原生语法高亮 + 数据源 schema 字段注释补全</li>
             <li>参数替换：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；动态条件复选框</li>
-            <li>控制台 SQL 日志捕获还原 + 「日志转 SQL」批量还原</li>
+            <li>控制台 SQL 日志捕获还原（MyBatis / Hibernate / JdbcTemplate）+ 精确跳转源码（InnerInterceptor）+ 自动保存历史 + 两级导航</li>
             <li>SQL 反向转 MP Java 代码：增删改查 / 多表 JOIN，QueryWrapper / Lambda / Wrappers / MPJ 四种形态，生成代码可直接编译</li>
-            <li>SQL 自动格式化（多行 / 压缩）、9 种数据库方言分页差异渲染、执行 SQL（Ultimate）</li>
+            <li>JOIN 关系图：自绘 Swing ER 关系图（PNG/SVG 导出）；9 种数据库方言分页差异渲染；执行 SQL（Ultimate）</li>
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
