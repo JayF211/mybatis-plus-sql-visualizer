@@ -294,7 +294,7 @@ public final class SqlPreviewService {
             if (injectTenantLine() && tenantWhereStatement instanceof UpdateStatement) {
                 String tenantColumn = blank(settings != null && settings.getState() != null
                         ? settings.getState().getTenantColumnName() : null);
-                tenantStatement = TenantLineEnhancer.INSTANCE.enhanceUpdateSet(
+                tenantStatement = TenantLineEnhancer.enhanceUpdateSet(
                         (UpdateStatement) tenantWhereStatement, tenantColumn,
                         blank(settings != null && settings.getState() != null
                                 ? settings.getState().getTenantColumnDefault() : null));
@@ -922,7 +922,7 @@ public final class SqlPreviewService {
         if (rules == null) return statement;
         rules = rules.stream().filter(r -> r.getEnabled() && r.getPattern() != null && !r.getPattern().isBlank()).toList();
         if (rules.isEmpty()) return statement;
-        String newTableName = DynamicTableNameProcessor.INSTANCE.process(table.getTableName(), rules);
+        String newTableName = DynamicTableNameProcessor.process(table.getTableName(), rules);
         if (newTableName == null) return statement;
         return rewriteTableName(statement, newTableName);
     }

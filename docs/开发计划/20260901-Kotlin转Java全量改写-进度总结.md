@@ -150,6 +150,7 @@
 | 2026-09-01 | **运行时回归修复（全量测试 6→0）**：`SqlLogManager` 加 `final`（消 3 PluginException）、`SelectStarDetector` 正则补 `\.`（消 2 断言）、`OgnlEvaluator` 三元数值提升陷阱改 `if/else`（消 `42.0` 类型）+ `plus()` null 空安全；补齐 `log.panel.jumpToSource.noSource/notFound` 资源键（消 verifyPlugin 2 compatibility problems，master 既有缺陷）；全量测试 0 失败、buildPlugin 通过 |
 | 2026-09-02 | **Wave 1 + Wave 2（9/10）主源 Kotlin→Java**：model 12 文件 + psi 9 文件（PsiDialect/WrapperCache/ExpressionEvaluator/KtWrapperDetector/EntityClassFinder/WrapperAnchorDetector/EntityResolver/ArgResolver/BatchOperationConverter）转 Java，每批全量测试 1421/0/0/6 绿后提交（`ad34b26`→`e913f3c` 共 8 commit）；详见下方第 9 节 |
 | 2026-09-02 | **Wave 2 完结（10/10，`868808c`）**：`WrapperLocator.kt`（1223 行）+ `LocatedWrapper` 转 Java，63 处调用点去 INSTANCE、internal 去 mangled；转换期修复 `expandHelperCalls` 越界差异（1 测试暴露）；全量 1421/0/0/6 绿。**psi 包主源 `.kt` 清零**，剩余 24（sql 14 / config 9 / update 1） |
+| 2026-09-02 | **Wave 3 批 1 + 批 2（`b0040b2`/`a67d857`）**：ParamHint/ParamQuote/DataPermissionPlaceholder + SqlCommentStripper/SqlPerfAnalyzer/ParameterReplacer 转 Java；ParamHint 双 getter（`isInList`+`getInList` 装箱 Boolean 兼容）、`buildExecutableSql` 默认参→重载、LRU 缓存匿名子类、测试具名实参 30+ 处转位置实参；全量 1421/0/0/6 绿。剩余 16 kt |
 
 ---
 
@@ -161,11 +162,11 @@
 |------|------|------|
 | Wave 1 | model 12 `.kt` → Java | ✅ 完成（`ad34b26`，首轮子代理遗留 2 个测试失败已修复） |
 | Wave 2 | psi 10 `.kt` → Java | ✅ **完成**（10/10，`868808c`；psi 包主源 `.kt` 清零） |
-| Wave 3 | sql 14 + interceptor 3 | 待开始 |
+| Wave 3 | sql 14 + interceptor 3 | 🔄 进行中（6/17：ParamHint/ParamQuote/DataPermissionPlaceholder `b0040b2`；SqlCommentStripper/SqlPerfAnalyzer/ParameterReplacer `a67d857`；interceptor 2 已转待提交） |
 | Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 待开始 |
 | Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 待开始 |
 
-- 剩余主源 `.kt`：**24**（sql 14 / config 9 / update 1）；主源 Java 文件 **302**（含新增 `LocatedWrapper.java`）。
+- 剩余主源 `.kt`：**16**（sql 6 / config 9 / update 1；interceptor 包 kt 清零）；主源 Java 文件 **309**。
 - 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
 
 ### 9.2 Wave 1 回归根因（重要教训）
