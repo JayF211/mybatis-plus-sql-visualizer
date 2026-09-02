@@ -148,3 +148,43 @@
 | 2026-08-31 | v2 计划（评估，增量共存迁移策略锁定） |
 | 2026-09-01 | 主源码波次收尾（`EntitySelectionDialog` 两处修复）+ **测试编译 3,939→0**，92 测试文件转 Java，本总结文档 |
 | 2026-09-01 | **运行时回归修复（全量测试 6→0）**：`SqlLogManager` 加 `final`（消 3 PluginException）、`SelectStarDetector` 正则补 `\.`（消 2 断言）、`OgnlEvaluator` 三元数值提升陷阱改 `if/else`（消 `42.0` 类型）+ `plus()` null 空安全；补齐 `log.panel.jumpToSource.noSource/notFound` 资源键（消 verifyPlugin 2 compatibility problems，master 既有缺陷）；全量测试 0 失败、buildPlugin 通过 |
+| 2026-09-02 | **Wave 1 + Wave 2（9/10）主源 Kotlin→Java**：model 12 文件 + psi 9 文件（PsiDialect/WrapperCache/ExpressionEvaluator/KtWrapperDetector/EntityClassFinder/WrapperAnchorDetector/EntityResolver/ArgResolver/BatchOperationConverter）转 Java，每批全量测试 1421/0/0/6 绿后提交（`ad34b26`→`e913f3c` 共 8 commit）；详见下方第 9 节 |
+
+---
+
+## 9. Wave 1 / Wave 2 推进明细（2026-09-02）
+
+### 9.1 波次状态
+
+| 波次 | 范围 | 状态 |
+|------|------|------|
+| Wave 1 | model 12 `.kt` → Java | ✅ 完成（`ad34b26`，首轮子代理遗留 2 个测试失败已修复） |
+| Wave 2 | psi 10 `.kt` → Java | 🔄 **9/10**（剩 `WrapperLocator.kt` 1223 行） |
+| Wave 3 | sql 14 + interceptor 3 | 待开始 |
+| Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 待开始 |
+| Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 待开始 |
+
+- 剩余主源 `.kt`：**25**（psi 1 / sql 14 / config 9 / update 1）；主源 Java 文件 **300**。
+- 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
+
+### 9.2 Wave 1 回归根因（重要教训）
+
+- 首轮子代理把 `return modelBuild(BatchModel(...)).copy(paramGroups = paramGroups)` 改写成丢弃 `.copy` 的形式 → `BatchBuild.paramGroups` 恒为 null → 批量路径 `paramTable` 为 null（2 个测试失败）。已恢复 3 处 `.copy`（buildUpdateBatch / buildInsertBatch / buildUpsertBatch）。
+- **教训：子代理批量改写后必须逐处核对「链式调用尾部方法是否被静默丢弃」；同类型相邻位置参数逐一对照构造器签名。**
+
+### 9.3 object→Java 转换模式与踩坑沉淀
+
+- `object Foo` → `final class Foo` + `INSTANCE` + static 转发器；**Java 不允许同签名 static+instance 并存**——`WrapperAnchorDetector` 采取全 static 方案，Java 调用点同步改为 `WrapperAnchorDetector.anchorElement(...)`。
+- **测试字节码过期假失败**：Gradle 不检测测试字节码过期，object 转 Java 后测试仍按旧 Kotlin 实例方法调用编译 → `IncompatibleClassChangeError`。对策：每次转换后 `./gradlew compileTestKotlin --rerun-tasks` 强制重编译再跑 test。
+- **Kotlin `internal` 成员从 Java 调用需 mangled 名**（`xxx$mybatis_plus_sql_visualizer`）；对应类自身转 Java 后须回头去 mangled（`BatchOperationConverter` 转 Java 时已同步修正 `WrapperAnchorDetector`/`SqlPreviewService` 调用点；`WrapperLocator` 转 Java 后还剩 `WrapperSearchService.java:111` 一处）。
+- **Kotlin 侧调用 Java static getter 不做属性语法合成**：`WrapperLocator.kt` 中 `BatchOperationConverter.batchOperationMethodNames` 需改为 `BatchOperationConverter.getBatchOperationMethodNames()`。
+- 其他：`reverseLookupCacheInfo` 返回 `kotlin.Pair<Integer,Integer>` 保 Kotlin 解构测试；`Map.of/Set.of` 迭代序未定义→ 首个命中即返回的场景用 `LinkedHashMap`；Java `String.regionMatches` 无 ignoreCase 重载（Kotlin 扩展）→ 手写比较；companion `const val` → 外层静态字段（`PluginSettings.INFERENCE_SNAKE`）。
+
+### 9.4 验证流程（每批固定）
+
+```
+./gradlew compileJava compileKotlin -I /tmp/redirectsandbox.gradle
+./gradlew compileTestKotlin --rerun-tasks -I /tmp/redirectsandbox.gradle
+./gradlew test -I /tmp/redirectsandbox.gradle   # 目标 1421/0/0/6，XML 计数核对
+git add -A && git commit
+```
