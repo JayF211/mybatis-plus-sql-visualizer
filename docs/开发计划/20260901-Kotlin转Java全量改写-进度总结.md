@@ -9,7 +9,7 @@
 
 ## 0. 一句话状态
 
-主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。剩余 46 个主源码 `.kt` 与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
+主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。剩余 **10** 个主源码 `.kt`（config 9 / update 1）与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
 
 ---
 
@@ -17,8 +17,8 @@
 
 | 维度 | 数量 | 说明 |
 |------|------|------|
-| 主源码 Java 文件 | **264** | 迁移产物（含 3 个既有手写 Java 样板） |
-| 主源码 Kotlin 文件（仍保留） | **46** | config 9 / model 12 / psi 10 / sql 14 / update 1 |
+| 主源码 Java 文件 | **318** | 迁移产物（含 3 个既有手写 Java 样板） |
+| 主源码 Kotlin 文件（仍保留） | **10** | config 9 / update 1（model / psi / sql 包主源 `.kt` 已清零） |
 | 测试 Java 文件 | **93** | 本轮新增 92 个转换 + 既有 1 个（`JavaCodeGeneratorTest`，前序会话） |
 | 测试 Kotlin 文件（仍保留） | **140** | 均编译通过，且只调用 Kotlin 友好 API（model 等仍是 Kotlin），无需转换 |
 | 测试编译错误 | **3,939 → 0** | 本轮收敛结果 |
@@ -125,7 +125,7 @@
 
 ## 6. 剩余工作（查漏补缺方向）
 
-1. **主源码 46 个 `.kt`**：model(12)/psi(10)/sql(14)/config(9)/update(1)。按「全量纯 Java」目标应继续转，但当前与 Java 共存编译通过；建议按模块优先级推进（model → psi → sql → config → update），每模块同步转对应测试。
+1. **主源码剩余 10 个 `.kt`**：config 9（含 `PluginSettingsPanel.kt` 1161 行）/ update 1（`StartupUpdateCheck.kt`）。model(12)/psi(10)/sql(14) 主源已全转 Java；按「全量纯 Java」目标继续推进 config → update，每模块同步转对应测试。
 2. **全量测试跑绿**：等待 `./gradlew test` 结果，修复任何运行时回归（重点：record 与 data class 的 `equals/hashCode` 差异、集合顺序、null 处理、文本块空白差异）。
 3. **`verifyPlugin` / `buildPlugin`**：确认无 Verifier 违规、产物无 Kotlin 元数据残留。
 4. **对比 `master` 查漏**：`git diff master...feature/kotlin-to-java` 复核 API 漂移、未转生产类、功能缺失，逐项补正。
@@ -153,6 +153,7 @@
 | 2026-09-02 | **Wave 3 批 1 + 批 2（`b0040b2`/`a67d857`）**：ParamHint/ParamQuote/DataPermissionPlaceholder + SqlCommentStripper/SqlPerfAnalyzer/ParameterReplacer 转 Java；ParamHint 双 getter（`isInList`+`getInList` 装箱 Boolean 兼容）、`buildExecutableSql` 默认参→重载、LRU 缓存匿名子类、测试具名实参 30+ 处转位置实参；全量 1421/0/0/6 绿。剩余 16 kt |
 | 2026-09-02 | **Wave 3 批 4+5（Dialect/SqlKeywords/JoinDiagramGenerator）**：`interface Dialect` + 9 个方言类（各含 `INSTANCE` 单例）+ `DialectRegistry` 转 Java；保留字集合抽 `SqlKeywords` 静态字段；object→INSTANCE 调用点批量改写（`SqlGenerator.kt` 默认参、`DialectTest`/`BatchModelTest`/`DialectRenderDumpTest` 裸实例→`.INSTANCE`、`SqlKeywordsTest`/`DialectDocGoldenTest` 加 `SqlKeywords.` 限定、config 两个 `.kt` 的 `DialectRegistry.dialects`→`INSTANCE`）；`JoinDiagramGenerator` object→全 static；全量 1421/0/0/6 绿。剩余 13 kt |
 | 2026-09-02 | **Wave 3 批 6+7（SqlTextAnalysis / ComplexityScorer，`7bd756d`）**：两个 sql 文件转 Java（顶层函数 stripXmlTags/detectClause/parseTableAliases + 内嵌 `SqlClause` enum/`TableAlias` data class → `SqlTextAnalysis`/`SqlClause`/`TableAlias` 静态类；`ComplexityScorer` object → 全 static final class，`ScoreLevel` 嵌套 enum，`Regex`→`Pattern`，`linkedMapOf`→`LinkedHashMap`，手动累加）；4 主源 Java 调用方 `SqlTextAnalysisKt.`→`SqlTextAnalysis.`、测试裸调用加类名限定；**并修复上一波 Dialect/SqlKeywords 批漏改的 verify 包测试文件**（stale 测试字节码掩盖，本次 `--rerun-tasks` 重编译才暴露：方言类裸引用加 `.INSTANCE`、保留字集合 import 改 `SqlKeywords.*`、`quoteIfKeyword` 等实例方法加 `.INSTANCE`）——全量 1421/0/0/6 绿。剩余 11 kt（sql 1：SqlGenerator；config 9；update 1） |
+| 2026-09-02 | **Wave 3 批 8 收尾（SqlGenerator，`653fffb`）**：`object SqlGenerator` → `final class SqlGenerator` + `INSTANCE` 单例字段（兼容既有 Java/Kotlin `.INSTANCE.` 调用方）+ 全 static 方法（默认参→多重载，新增 `generate(SqlStatement,boolean,Set<String>)` 便捷重载；`when` 语句分发→`instanceof` 链；`Condition` 扩展 `isConditionVisible`→private static；`fromSubQuery` 用 `kotlin.Pair` 的 `getFirst/getSecond`；`ColumnRef.qualifiedName(Dialect)` 成员方法）；`data class GeneratedSql` → `final class GeneratedSql`（含 2 参默认空 `paramHints` 构造器 + getter + equals/hashCode/toString）；3 主源 Java 调用方 `SqlGenerator.INSTANCE.`→`SqlGenerator.`（QueryWrapperParser/SqlPreviewPanel/SqlPreviewService），MpjLambdaConverter 保留 `.INSTANCE.`（INSTANCE 字段存在仍兼容）；**测试 Kotlin 具名参数调用改位置参数**（Kotlin 禁止对 Java 方法用具名参数）：SqlGeneratorTest/DialectTest/ParameterReplacerTest/QueryWrapperParserTest 单/双行 + DialectVerifySupport 多行共 16 处 `compact =/dialect =/enabledConditionIds =` → 位置实参；全量 1421/0/0/6 绿。**Wave 3 完结（17/17）**，剩余 10 kt（config 9 + update 1） |
 
 ---
 
@@ -164,11 +165,11 @@
 |------|------|------|
 | Wave 1 | model 12 `.kt` → Java | ✅ 完成（`ad34b26`，首轮子代理遗留 2 个测试失败已修复） |
 | Wave 2 | psi 10 `.kt` → Java | ✅ **完成**（10/10，`868808c`；psi 包主源 `.kt` 清零） |
-| Wave 3 | sql 14 + interceptor 3 | 🔄 进行中（16/17：+ SqlTextAnalysis / ComplexityScorer 本批；SqlGenerator 待批 6；interceptor 3 已全转） |
+| Wave 3 | sql 14 + interceptor 3 | ✅ **完成**（17/17：SqlGenerator 本批收尾；interceptor 3 + SqlTextAnalysis / ComplexityScorer / SqlGenerator / ParamHint 等全转） |
 | Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 待开始 |
 | Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 待开始 |
 
-- 剩余主源 `.kt`：**11**（sql 1：SqlGenerator；config 9 / update 1；interceptor + sql 包其余 kt 清零）；主源 Java 文件 **316**。
+- 剩余主源 `.kt`：**10**（config 9；update 1；sql 包主源 `.kt` 已清零）；主源 Java 文件 **318**。
 - 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
 
 ### 9.2 Wave 1 回归根因（重要教训）
