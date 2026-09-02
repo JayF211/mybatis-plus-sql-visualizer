@@ -430,11 +430,15 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
         if (entry != null) {
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
-            val source = entry.sourceFile?.let { file ->
-                // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
-                val name = file.substringAfterLast('/')
-                if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
-            } ?: "unknown"
+            val source = when {
+                SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+                entry.sourceFile != null -> {
+                    // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
+                    val name = entry.sourceFile.substringAfterLast('/')
+                    if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+                }
+                else -> "unknown"
+            }
             val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
             // 选中态用 selectionForeground；非选中走 uniform 前景色（不要按耗时变色避免与 SQL 高亮冲突）
             val durationHtml = "<span style='color:#9E9E9E'>[$duration]</span> "

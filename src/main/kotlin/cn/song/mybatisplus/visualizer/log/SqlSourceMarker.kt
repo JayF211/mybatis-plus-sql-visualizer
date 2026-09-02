@@ -32,3 +32,18 @@ object SqlSourceMarker {
         return path to ln
     }
 }
+
+/**
+ * F-44-7：特殊来源标记——MP 分页 COUNT 查询。
+ * MP PaginationInnerInterceptor 自动执行的 COUNT 查询不经过本拦截器，无源码标记。
+ * 使用特殊标记 "__MP_PAGINATION_COUNT__" 标识，UI 层据此展示友好文案。
+ */
+object SourceMarkers {
+    const val MP_PAGINATION_COUNT = "__MP_PAGINATION_COUNT__"
+
+    /** MP 分页 COUNT 查询的来源标记。 */
+    fun mpPaginationCount(): Pair<String, Int> = MP_PAGINATION_COUNT to 0
+
+    /** 是否为 MP 分页 COUNT 查询标记。 */
+    fun isMpPaginationCount(sourceFile: String?): Boolean = sourceFile == MP_PAGINATION_COUNT
+}

@@ -828,6 +828,10 @@ class SqlLogPanel(
     /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
         if (entry.sourceFile != null) {
+            // F-44-7：MP 分页 COUNT 查询特殊标记 → 无源码可跳转
+            if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
+                return LogJumpTarget.NoSource
+            }
             // F-44-7：标记路径相对于源码根目录（如 src/main/java），需在所有源码根目录中搜索
             val vf = findSourceFile(entry.sourceFile)
             return if (vf != null) {
@@ -1197,9 +1201,10 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             val timestampHtml = formatTimestampHtml(entry.timestamp)
             val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
                 formatDurationHtml(entry.executionTimeMs, isSelected) else ""
+            val sourceHtml = formatSourceHtml(entry, isSelected)
             val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
             val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-            this.text = "<html>${timestampHtml}${durationHtml}${sqlHtml}${dedupeBadge}</html>"
+            this.text = "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
             toolTipText = entry.restoredSql
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
             else (list?.foreground ?: JBColor.foreground())
@@ -1209,5 +1214,19 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             EmptyBorder(5, 8, 5, 8),
         )
         return this
+    }
+
+    /** F-44-7：格式化来源为 HTML 片段（用于列表渲染）。 */
+    private fun formatSourceHtml(entry: LogSqlEntry, isSelected: Boolean): String {
+        val source = when {
+            SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+            entry.sourceFile != null -> {
+                val name = entry.sourceFile.substringAfterLast('/')
+                if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+            }
+            else -> return ""
+        }
+        val color = if (isSelected) "color:#FFFFFF" else "color:#9E9E9E"
+        return "<span style='$color'>[$source]</span> "
     }
 }
