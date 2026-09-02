@@ -29,9 +29,9 @@ class StartupUpdateCheck : ProjectActivity {
 
     override suspend fun execute(project: Project) {
         val settings = PluginSettings.getInstance()
-        if (!shouldStartupCheck(settings.state.autoCheckUpdate, alreadyChecked)) return
+        if (!shouldStartupCheck(settings.getState().getAutoCheckUpdate(), alreadyChecked)) return
         alreadyChecked = true
-        ignoredVersions = settings.state.ignoredUpdateVersions
+        ignoredVersions = settings.getState().getIgnoredUpdateVersions()
         ApplicationManager.getApplication().invokeLater {
             checkAndNotify(project)
         }
@@ -73,11 +73,10 @@ class StartupUpdateCheck : ProjectActivity {
         })
         notification.addAction(NotificationAction.createSimple(MpSqlVisualizerBundle.message("update.notification.ignore")) {
             // 忽略此版本：写入配置，仅抑制自动通知，手动检查不受影响
-            PluginSettings.getInstance().loadState(
-                PluginSettings.getInstance().state.copy(
-                    ignoredUpdateVersions = VersionIgnore.ignoreVersion(manifest.version, ignoredVersions)
-                )
-            )
+            val s = PluginSettings.getInstance().getState()
+            val copy = s.copy()
+            copy.ignoredUpdateVersions = VersionIgnore.ignoreVersion(manifest.version, ignoredVersions)
+            PluginSettings.getInstance().loadState(copy)
             notification.expire()
         })
         notification.addAction(

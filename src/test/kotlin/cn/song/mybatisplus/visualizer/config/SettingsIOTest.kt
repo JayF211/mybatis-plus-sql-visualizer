@@ -19,17 +19,17 @@ class SettingsIOTest {
 
     @Test
     fun testExportContainsAllFields() {
-        val state = PluginSettings.State(
-            dialect = "PostgreSQL",
-            replaceParams = false,
-            formatSql = false,
-            injectLogicDelete = false,
-            logicDeleteValue = "1",
-            tablePrefix = "sys_",
-            tableSuffix = "_log",
-            ignoredFields = "remark;transientField",
-            tableNameInference = PluginSettings.INFERENCE_CAMEL,
-        )
+        val state = PluginSettings.State().apply {
+            dialect = "PostgreSQL"
+            replaceParams = false
+            formatSql = false
+            injectLogicDelete = false
+            logicDeleteValue = "1"
+            tablePrefix = "sys_"
+            tableSuffix = "_log"
+            ignoredFields = "remark;transientField"
+            tableNameInference = PluginSettings.INFERENCE_CAMEL
+        }
         val json = SettingsIO.exportToJson(state)
         assertTrue("JSON 应含 version", json.contains("\"version\": $currentVersion"))
         assertTrue("JSON 应含 dialect", json.contains("\"dialect\": \"PostgreSQL\""))
@@ -138,17 +138,17 @@ class SettingsIOTest {
     @Test
     fun testRoundTrip() {
         // 导出 → 导入往返一致
-        val original = PluginSettings.State(
-            dialect = "MySQL",
-            replaceParams = false,
-            formatSql = false,
-            injectLogicDelete = false,
-            logicDeleteValue = "1",
-            tablePrefix = "t_",
-            tableSuffix = "_bak",
-            ignoredFields = "temp",
-            tableNameInference = PluginSettings.INFERENCE_CAMEL,
-        )
+        val original = PluginSettings.State().apply {
+            dialect = "MySQL"
+            replaceParams = false
+            formatSql = false
+            injectLogicDelete = false
+            logicDeleteValue = "1"
+            tablePrefix = "t_"
+            tableSuffix = "_bak"
+            ignoredFields = "temp"
+            tableNameInference = PluginSettings.INFERENCE_CAMEL
+        }
         val json = SettingsIO.exportToJson(original)
         val restored = SettingsIO.importFromJson(json)
         assertEquals("往返后 dialect 一致", original.dialect, restored.dialect)
