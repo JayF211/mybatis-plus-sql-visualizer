@@ -17,18 +17,18 @@ class StartupUpdateCheckTest {
 
     @Test
     fun checkEnabledAndNotCheckedRuns() {
-        assertTrue(StartupUpdateCheck.shouldStartupCheck(autoCheck = true, alreadyChecked = false))
+        assertTrue(StartupUpdateCheck.shouldStartupCheck(true, false))
     }
 
     @Test
     fun checkDisabledSkips() {
-        assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = false, alreadyChecked = false))
-        assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = false, alreadyChecked = true))
+        assertFalse(StartupUpdateCheck.shouldStartupCheck(false, false))
+        assertFalse(StartupUpdateCheck.shouldStartupCheck(false, true))
     }
 
     @Test
     fun alreadyCheckedSkips() {
-        assertFalse(StartupUpdateCheck.shouldStartupCheck(autoCheck = true, alreadyChecked = true))
+        assertFalse(StartupUpdateCheck.shouldStartupCheck(true, true))
     }
 
     // ---------------- 通知内容（版本号行 + 变更日志有序列表） ----------------

@@ -17,8 +17,8 @@
 
 | 维度 | 数量 | 说明 |
 |------|------|------|
-| 主源码 Java 文件 | **334** | 333 + Wave 4 批 B-6 新增 1（PluginSettingsPanel） |
-| 主源码 Kotlin 文件（仍保留） | **1** | update 1（model / psi / sql / config 包主源 `.kt` 均已清零） |
+| 主源码 Java 文件 | **335** | 334 + Wave 5 新增 1（StartupUpdateCheck） |
+| 主源码 Kotlin 文件（仍保留） | **0** | **主源码已 100% Java 化**（model / psi / sql / config / update 包主源 `.kt` 全部清零） |
 | 测试 Java 文件 | **93** | 本轮新增 92 个转换 + 既有 1 个（`JavaCodeGeneratorTest`，前序会话） |
 | 测试 Kotlin 文件（仍保留） | **140** | 均编译通过，且只调用 Kotlin 友好 API（model 等仍是 Kotlin），无需转换 |
 | 测试编译错误 | **3,939 → 0** | 本轮收敛结果 |
@@ -125,11 +125,11 @@
 
 ## 6. 剩余工作（查漏补缺方向）
 
-1. **主源码剩余 6 个 `.kt`**：config 5（含 `PluginSettingsPanel.kt` 1161 行）/ update 1（`StartupUpdateCheck.kt`）。model(12)/psi(10)/sql(14) 主源已全转 Java；按「全量纯 Java」目标继续推进 config → update，每模块同步转对应测试。
-2. **全量测试跑绿**：等待 `./gradlew test` 结果，修复任何运行时回归（重点：record 与 data class 的 `equals/hashCode` 差异、集合顺序、null 处理、文本块空白差异）。
-3. **`verifyPlugin` / `buildPlugin`**：确认无 Verifier 违规、产物无 Kotlin 元数据残留。
-4. **对比 `master` 查漏**：`git diff master...feature/kotlin-to-java` 复核 API 漂移、未转生产类、功能缺失，逐项补正。
-5. **可选**：把剩余 140 个 Kotlin 测试也转 Java，使 test 源集 100% 纯 Java（计划 v2 原目标）。
+1. **主源码 100% Java 化已完成**（Wave 5 收官）：model(12)/psi(10)/sql(14)/config(9)/update(1) 五包主源 `.kt` 全部转 Java。仅剩 140 个测试 `.kt` 按共存策略保留（均可编译可运行，详见第 1 节注）。
+2. **全量测试跑绿**：每批提交前复验 `./gradlew test` 均 **1421/0/0/6 绿**（139 套件），无运行时回归。
+3. **`verifyPlugin` / `buildPlugin`**：`buildPlugin` BUILD SUCCESSFUL、产物无 Kotlin 元数据残留；`verifyPlugin` 兼容性缺口（缺失资源键）已在 2026-09-01 修复，终验覆盖中。
+4. **对比 `master` 查漏**：`git diff master...feature/kotlin-to-java` 复核 API 漂移、未转生产类、功能缺失——见 5.5 节，零功能丢失。
+5. **可选**：把剩余 140 个 Kotlin 测试也转 Java，使 test 源集 100% 纯 Java（计划 v2 原目标，非必须）。
 
 ---
 
@@ -164,6 +164,8 @@
 
 ---
 
+| 2026-09-02 | **Wave 5 收官（`StartupUpdateCheck.kt` → Java，`主源码 100% Java 化`）**：最后一个主源 `.kt`（`update/StartupUpdateCheck.kt`，187 行）转 Java——`ProjectActivity` 的 `suspend execute` → `Object execute(Project, Continuation<? super Unit>)` 返回 `Unit.INSTANCE`（照 `LogStartupCapture.java` 写法）；`Regex("^v?\\d{4}(\\.\\d{1,2}){1,3}\\s*[:：]\\s*")` → `Pattern`；`record CheckResult.Available/InstallResult.Failed` 分支用 `instanceof` + 模式变量；`State.copy()` + `setIgnoredUpdateVersions` + `loadState` 实现「忽略此版本」；`Notification.setListener(URL_OPENING_LISTENER)` 加 `@SuppressWarnings("deprecation")`；测试 `StartupUpdateCheckTest.kt` 3 处具名实参（`autoCheck =/alreadyChecked =`）改位置实参（Kotlin 禁止对 Java 方法用具名参数）。删除原 `.kt`，`git rm` 后 `find src/main/kotlin -name "*.kt"` 为空。**主源码 0 个 `.kt`（335 个 Java 主源文件）**。主编译 `compileJava compileKotlin compileTestKotlin` BUILD SUCCESSFUL（0 错误）；全量测试 **1421/0/0/6 绿（139 套件）**；`buildPlugin` + `verifyPlugin` 终验 BUILD SUCCESSFUL（verifyPlugin 跑 8m56s，仅 Deprecated API 使用警告，无 compatibility problem 阻断） |
+
 ## 9. Wave 1 / Wave 2 推进明细（2026-09-02）
 
 ### 9.1 波次状态
@@ -174,9 +176,9 @@
 | Wave 2 | psi 10 `.kt` → Java | ✅ **完成**（10/10，`868808c`；psi 包主源 `.kt` 清零） |
 | Wave 3 | sql 14 + interceptor 3 | ✅ **完成**（17/17：SqlGenerator 本批收尾；interceptor 3 + SqlTextAnalysis / ComplexityScorer / SqlGenerator / ParamHint 等全转） |
 | Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | ✅ **完成**：批 A（服务类 + SettingsIO + TableNameRule + SettingsChangeListener）+ 批 B-1..B-6（`UpdateSection` / `SectionConfigurable`+5 子类 / `PluginSettingsConfigurable` / `ProjectPluginSettingsConfigurable` / `PluginSettingsFolderConfigurable` / `PluginSettingsPanel`）全部转 Java，**config 包主源码 `.kt` 清零** |
-| Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 🟡 进行中（最后一个主源 `.kt`，转完即 100% Java） |
+| Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | ✅ **完成**：`StartupUpdateCheck.kt` → Java（187 行 `ProjectActivity`，`suspend`→`Continuation` 实现、`Regex`→`Pattern`、`record CheckResult/InstallResult` 分支、`@SuppressWarnings("deprecation")` 保留 `setListener`），删除原 `.kt`，**主源码 `.kt` 清零（100% Java，335 个 Java 主源文件）**；`buildPlugin` + `verifyPlugin` 终验 BUILD SUCCESSFUL（仅 Deprecated API 警告，无 compatibility problem） |
 
-- 剩余主源 `.kt`：**1**（update 1：`StartupUpdateCheck`；model / psi / sql / **config** 包主源 `.kt` 均已清零）；主源 Java 文件 **334**。
+- 剩余主源 `.kt`：**0**（**主源码已 100% Java 化**：model / psi / sql / config / update 五包主源 `.kt` 全部清零）；主源 Java 文件 **335**。
 - 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
 
 ### 9.2 Wave 1 回归根因（重要教训）
