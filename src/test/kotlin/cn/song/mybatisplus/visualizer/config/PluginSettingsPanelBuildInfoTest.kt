@@ -79,11 +79,13 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.log.tab.mybatis",
             "settings.log.tab.orm",
             "settings.log.tab.autoSave",
+            // F-44-7：源码位置捕获子组
+            "settings.log.tab.sourceCapture",
             "settings.section.ui",
             "settings.section.updateDiagnostics",
         ).map { MpSqlVisualizerBundle.message(it) }
         assertEquals(
-            "8 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/ORM 框架/自动保存 3 子组）",
+            "9 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/ORM 框架/自动保存/源码位置捕获 4 子组）",
             expected, separators,
         )
     }

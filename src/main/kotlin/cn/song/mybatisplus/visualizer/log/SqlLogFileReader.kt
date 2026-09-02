@@ -114,7 +114,9 @@ object SqlLogFileReader {
         val lines = block.lines()
         if (lines.isEmpty()) return null
         val header = lines.first()
-        val sql = lines.drop(1).joinToString("\n").trim()
+        // 写入端 withTerminator 会补 `;`（T-SqlDuration），读回去掉还原为原始 SQL——
+        // 展示/复制路径会重新调用 withTerminator() 补回，此处只剥结尾一个
+        val sql = lines.drop(1).joinToString("\n").trim().removeSuffix(";").trim()
         if (sql.isEmpty()) return null
 
         // 尝试新版格式
