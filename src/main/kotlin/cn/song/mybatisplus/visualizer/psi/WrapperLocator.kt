@@ -191,7 +191,7 @@ object WrapperLocator {
      * internal 供选择区扫描（[sqlCandidatesInRange]）与 ConvertToSqlAction 复用。
      */
     internal fun isSqlCandidate(call: PsiMethodCallExpression): Boolean =
-        isChainHeadCall(call) || call.methodExpression.referenceName in BatchOperationConverter.batchOperationMethodNames
+        isChainHeadCall(call) || call.methodExpression.referenceName in BatchOperationConverter.getBatchOperationMethodNames()
 
     /**
      * T-M23.7：扫描选择区（offset 范围）内全部 SQL 候选调用（wrapper 链首 + 批量操作方法，

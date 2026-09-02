@@ -332,7 +332,7 @@ public final class SqlPreviewService {
             cur = cur.getParent();
         }
         BatchPreview batch = batchCall != null
-                ? BatchOperationConverter.INSTANCE.convert(
+                ? BatchOperationConverter.convert(
                 batchCall,
                 injectLogicDelete(),
                 (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true,

@@ -118,7 +118,7 @@ public final class WrapperAnchorDetector {
                 return isInsideWrapperVariableInitializer(call) ? null : element;
             }
             // 场景 D：批量操作调用（`service.updateBatchById(list)` 等，F-15/M6）
-            if (BatchOperationConverter.INSTANCE.getBatchOperationMethodNames$mybatis_plus_sql_visualizer().contains(referenceName)) {
+            if (BatchOperationConverter.getBatchOperationMethodNames().contains(referenceName)) {
                 if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
                 PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
                 if (call.getArgumentList().getExpressions().length == 0) return null;
