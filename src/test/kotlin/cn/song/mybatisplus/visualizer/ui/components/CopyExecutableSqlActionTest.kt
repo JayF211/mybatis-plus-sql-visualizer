@@ -22,7 +22,7 @@ class CopyExecutableSqlActionTest {
             sql = sql,
             sources = listOf("id", "name", "age"),
             paramValues = mapOf("id" to "1", "name" to "Alice", "age" to "18"),
-            hints = listOf(ParamHint(quote = false), ParamHint(quote = true), ParamHint(quote = false)),
+            hints = listOf(ParamHint(false), ParamHint(true), ParamHint(false)),
         )
         assertEquals("SELECT * FROM t WHERE id = 1 AND name = 'Alice' AND age > 18", result)
     }
@@ -34,7 +34,7 @@ class CopyExecutableSqlActionTest {
             sql = sql,
             sources = listOf("id", "name"),
             paramValues = mapOf("id" to "1"),
-            hints = listOf(ParamHint(quote = false), ParamHint(quote = true)),
+            hints = listOf(ParamHint(false), ParamHint(true)),
         )
         // id 替换，name 未填保留 ?
         assertEquals("SELECT * FROM t WHERE id = 1 AND name = ?", result)
@@ -47,7 +47,7 @@ class CopyExecutableSqlActionTest {
             sql = sql,
             sources = listOf("id", "name"),
             paramValues = emptyMap(),
-            hints = listOf(ParamHint(quote = false), ParamHint(quote = true)),
+            hints = listOf(ParamHint(false), ParamHint(true)),
         )
         assertEquals(sql, result)
     }
@@ -59,7 +59,7 @@ class CopyExecutableSqlActionTest {
             sql = sql,
             sources = listOf("createdAt"),
             paramValues = mapOf("createdAt" to "2026-01-01"),
-            hints = listOf(ParamHint(quote = true)),
+            hints = listOf(ParamHint(true)),
         )
         assertEquals("SELECT * FROM t WHERE created_at > '2026-01-01'", result)
     }
@@ -71,7 +71,7 @@ class CopyExecutableSqlActionTest {
             sql = sql,
             sources = listOf("price"),
             paramValues = mapOf("price" to "19.99"),
-            hints = listOf(ParamHint(quote = false)),
+            hints = listOf(ParamHint(false)),
         )
         assertEquals("SELECT * FROM t WHERE price < 19.99", result)
     }
@@ -105,7 +105,7 @@ class CopyExecutableSqlActionTest {
             sql = sql,
             sources = listOf("name"),
             paramValues = mapOf("name" to "It's a test"),
-            hints = listOf(ParamHint(quote = true)),
+            hints = listOf(ParamHint(true)),
         )
         assertEquals("SELECT * FROM t WHERE name = 'It''s a test'", result)
     }

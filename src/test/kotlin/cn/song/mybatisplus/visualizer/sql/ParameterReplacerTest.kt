@@ -65,7 +65,7 @@ class ParameterReplacerTest {
             sql = sql,
             sources = listOf("id", "age"),
             paramValues = mapOf("id" to "1001", "age" to "18"),
-            hints = listOf(ParamHint(quote = false), ParamHint(quote = false)),
+            hints = listOf(ParamHint(false), ParamHint(false)),
         )
         assertEquals("SELECT id FROM tbl WHERE id = 1001 AND age > 18", result)
     }
@@ -77,7 +77,7 @@ class ParameterReplacerTest {
             sql = sql,
             sources = listOf("name", "city"),
             paramValues = mapOf("name" to "John", "city" to "Beijing"),
-            hints = listOf(ParamHint(quote = true), ParamHint(quote = true)),
+            hints = listOf(ParamHint(true), ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE name = 'John' AND city = 'Beijing'", result)
     }
@@ -89,7 +89,7 @@ class ParameterReplacerTest {
             sql = sql,
             sources = listOf("id", "name"),
             paramValues = mapOf("id" to "1001"),
-            hints = listOf(ParamHint(quote = false), ParamHint(quote = true)),
+            hints = listOf(ParamHint(false), ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE id = 1001 AND name = ?", result)
     }
@@ -101,7 +101,7 @@ class ParameterReplacerTest {
             sql = sql,
             sources = listOf("name"),
             paramValues = mapOf("name" to "O'Brien"),
-            hints = listOf(ParamHint(quote = true)),
+            hints = listOf(ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE name = 'O''Brien'", result)
     }
@@ -137,7 +137,7 @@ class ParameterReplacerTest {
             sql = sql,
             sources = listOf("id"),
             paramValues = mapOf("id" to "1", "extra" to "x"),
-            hints = listOf(ParamHint(quote = false)),
+            hints = listOf(ParamHint(false)),
         )
         assertEquals("SELECT id FROM tbl WHERE id = 1", result)
     }

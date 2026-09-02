@@ -183,7 +183,7 @@ class SqlGeneratorTest {
             generated.sql,
         )
         assertEquals(listOf("(pageNum - 1) * pageSize", "pageSize"), generated.unresolvedParams)
-        assertEquals(listOf(ParamHint(quote = false), ParamHint(quote = false)), generated.paramHints)
+        assertEquals(listOf(ParamHint(false), ParamHint(false)), generated.paramHints)
     }
 
     @Test
@@ -270,12 +270,12 @@ class SqlGeneratorTest {
         )
         assertEquals(
             listOf(
-                ParamHint(quote = true),                          // String 列恒引号
-                ParamHint(quote = false),                         // 数值列恒原样
-                ParamHint(quote = null),                          // 类型未知
-                ParamHint(quote = true, likePosition = LikePosition.ANYWHERE), // LIKE 恒引号 + %位置
-                ParamHint(quote = true, likePosition = LikePosition.LEFT),
-                ParamHint(quote = true, likePosition = LikePosition.RIGHT),
+                ParamHint(true),                          // String 列恒引号
+                ParamHint(false),                         // 数值列恒原样
+                ParamHint(null),                          // 类型未知
+                ParamHint(true, LikePosition.ANYWHERE), // LIKE 恒引号 + %位置
+                ParamHint(true, LikePosition.LEFT),
+                ParamHint(true, LikePosition.RIGHT),
             ),
             generated.paramHints,
         )
@@ -381,7 +381,7 @@ class SqlGeneratorTest {
         val generated = SqlGenerator.generateWithParams(statement)
         assertEquals(listOf("table"), generated.unresolvedParams)
         // keywordTable 列无 fieldType → 引号提示 null（列类型未知，面板走数字启发式）
-        assertEquals(listOf(ParamHint(quote = null)), generated.paramHints)
+        assertEquals(listOf(ParamHint(null)), generated.paramHints)
     }
 
     // ------------------------------------------------------------------

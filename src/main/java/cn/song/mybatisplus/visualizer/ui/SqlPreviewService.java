@@ -963,7 +963,7 @@ public final class SqlPreviewService {
      */
     private SqlStatement injectDataPermissionCondition(@NotNull TableInfo table, @NotNull SqlStatement statement) {
         if (settings == null || settings.getState() == null || !settings.getState().getDataPermissionHint()) return statement;
-        return DataPermissionPlaceholder.INSTANCE.injectMockCondition(statement, settings.getState().getDataPermissionMockCondition());
+        return DataPermissionPlaceholder.injectMockCondition(statement, settings.getState().getDataPermissionMockCondition());
     }
 
     /**
@@ -1323,7 +1323,7 @@ public final class SqlPreviewService {
                 baseWarning = "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！";
             }
         }
-        String dataPermissionWarning = DataPermissionPlaceholder.INSTANCE.buildWarning(
+        String dataPermissionWarning = DataPermissionPlaceholder.buildWarning(
                 settings != null && settings.getState() != null && settings.getState().getDataPermissionHint());
         List<String> parts = new ArrayList<>();
         if (baseWarning != null) parts.add(baseWarning);

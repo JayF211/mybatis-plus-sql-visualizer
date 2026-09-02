@@ -48,12 +48,12 @@ public final class XmlParamTypeResolver {
             PsiType type = param.getType();
             PsiClass psiClass = (type instanceof PsiClassType) ? ((PsiClassType) type).resolve() : null;
             if (psiClass == null) {
-                Boolean decision = ParamQuote.INSTANCE.decide(type.getCanonicalText());
+                Boolean decision = ParamQuote.decide(type.getCanonicalText());
                 result.put(paramName, decision != null ? decision : Boolean.TRUE);
             } else if (isDtoLike(psiClass)) {
                 collectFieldQuotes(paramName, psiClass, result);
             } else {
-                Boolean decision = ParamQuote.INSTANCE.decide(psiClass.getQualifiedName());
+                Boolean decision = ParamQuote.decide(psiClass.getQualifiedName());
                 result.put(paramName, decision != null ? decision : Boolean.TRUE);
             }
         }
@@ -69,7 +69,7 @@ public final class XmlParamTypeResolver {
             if (fieldClass != null && isDtoLike(fieldClass)) {
                 collectFieldQuotes(key, fieldClass, sink);
             } else {
-                Boolean decision = ParamQuote.INSTANCE.decide(field.getType().getCanonicalText());
+                Boolean decision = ParamQuote.decide(field.getType().getCanonicalText());
                 sink.put(key, decision != null ? decision : Boolean.TRUE);
             }
         }

@@ -428,7 +428,7 @@ object SqlGenerator {
                 when (value) {
                     is SqlValue.Placeholder -> {
                         paramSink?.add(value.source)
-                        hintSink?.add(ParamHint(quote = quoteHint(table, condition.column), inList = true))
+                        hintSink?.add(ParamHint(quoteHint(table, condition.column), null, true))
                         "?"
                     }
                     is SqlValue.Literal -> value.raw
@@ -492,7 +492,7 @@ object SqlGenerator {
         is SqlValue.Literal -> value.raw
         is SqlValue.Placeholder -> {
             paramSink?.add(value.source)
-            hintSink?.add(ParamHint(quote = quote))
+            hintSink?.add(ParamHint(quote))
             "?"
         }
     }
@@ -504,7 +504,7 @@ object SqlGenerator {
     private fun renderLike(pattern: SqlValue, position: LikePosition, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?): String = when (pattern) {
         is SqlValue.Placeholder -> {
             paramSink?.add(pattern.source)
-            hintSink?.add(ParamHint(quote = true, likePosition = position))
+            hintSink?.add(ParamHint(true, position))
             "?"
         }
         is SqlValue.Literal -> {
@@ -526,7 +526,7 @@ object SqlGenerator {
     private fun collectLimitValue(value: SqlValue?, paramSink: MutableList<String>?, hintSink: MutableList<ParamHint>?) {
         if (value is SqlValue.Placeholder) {
             paramSink?.add(value.source)
-            hintSink?.add(ParamHint(quote = false))
+            hintSink?.add(ParamHint(false))
         }
     }
 

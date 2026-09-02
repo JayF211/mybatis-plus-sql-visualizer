@@ -218,7 +218,7 @@ public final class BatchOperationConverter {
             result.add(new BatchColumn(
                 col.getColumnName(),
                 idSource(prefix, col.getColumnName()),
-                ParamQuote.INSTANCE.decide(col.getFieldType()),
+                ParamQuote.decide(col.getFieldType()),
                 checked.test(col)));
         }
         return result;
@@ -515,7 +515,7 @@ public final class BatchOperationConverter {
         List<BatchColumn> toggleColumns = batchColumns(prefix, table, setColumns, column -> true);
         List<BatchColumn> fixedColumns = new ArrayList<>();
         fixedColumns.add(new BatchColumn(idColumn.getColumnName(), idSource(prefix, idColumn.getColumnName()),
-            ParamQuote.INSTANCE.decide(idColumn.getFieldType()), true));
+            ParamQuote.decide(idColumn.getFieldType()), true));
         if (versionColumn != null) {
             String versionFieldType = null;
             for (ColumnInfo column : columns) {
@@ -525,7 +525,7 @@ public final class BatchOperationConverter {
                 }
             }
             fixedColumns.add(new BatchColumn(versionColumn, prefix + "." + versionColumn,
-                ParamQuote.INSTANCE.decide(versionFieldType), true));
+                ParamQuote.decide(versionFieldType), true));
         }
         List<String> groupColumns = new ArrayList<>();
         for (ColumnInfo column : setColumns) groupColumns.add(column.getColumnName());
@@ -763,12 +763,12 @@ public final class BatchOperationConverter {
             }
             return new kotlin.Pair<>(idName + " = ?", List.of(new ParamEntry(
                 ((SqlValue.Placeholder) value).getSource(),
-                new ParamHint(ParamQuote.INSTANCE.decide(idColumn.getFieldType()), null, false))));
+                new ParamHint(ParamQuote.decide(idColumn.getFieldType()), null, false))));
         }
         // ActiveRecord 无参形态：id 来自实体字段
         return new kotlin.Pair<>(idName + " = ?", List.of(new ParamEntry(
             idSource(entityPrefix(call), idColumn.getColumnName()),
-            new ParamHint(ParamQuote.INSTANCE.decide(idColumn.getFieldType()), null, false))));
+            new ParamHint(ParamQuote.decide(idColumn.getFieldType()), null, false))));
     }
 
     /** 主键列（无主键标记时用首列）。 */
