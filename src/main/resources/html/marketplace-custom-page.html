@@ -169,6 +169,17 @@
           （含 <code>&lt;script&gt;</code> 与 Provider 注解）</td>
     </tr>
     <tr>
+      <td>JPA / Hibernate <span class="tag tag-new">New</span></td>
+      <td>gutter 图标</td>
+      <td>Derived 派生查询（<code>findByXxx</code>）/ CriteriaQuery 强类型 / HQL 自定义 DAO；
+          嵌套对象属性路径自动展开 JOIN；<code>Pageable</code> 分页 LIMIT 生成</td>
+    </tr>
+    <tr>
+      <td>maintainPage XML <span class="tag tag-new">New</span></td>
+      <td><code>&lt;maintainPage&gt;</code> 行 gutter 图标</td>
+      <td>vTradex Forest 框架 <code>&lt;pages&gt;</code> XML 格式中 <code>&lt;datasource&gt;</code> CDATA SQL 预览</td>
+    </tr>
+    <tr>
       <td>参数替换</td>
       <td>面板左侧输入框</td>
       <td><code>?</code> 占位符替换为实际值；LIKE 自动拼百分号；按字段类型加引号</td>
@@ -187,8 +198,13 @@
     <tr>
       <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
       <td>弹窗内「执行」按钮</td>
-      <td>自动创建临时 .sql 文件，选数据源后 <code>Ctrl+Enter</code> 执行
-          （需 IntelliJ IDEA Ultimate + Database 插件）</td>
+      <td>原生 Database 控制台内嵌（执行/Tx/会话/数据源选择工具栏全保留）；
+          唯一数据源静默复用，多数据源弹选；错误真实展示</td>
+    </tr>
+    <tr>
+      <td>JOIN 关系图</td>
+      <td>弹窗内「JOIN 图」tab</td>
+      <td>自绘 Swing ER 关系图（梳状拓扑 + 正交路由 + UML cardinality）；PNG / SVG 导出</td>
     </tr>
   </tbody>
 </table>
@@ -201,8 +217,8 @@
   <tbody>
     <tr>
       <td>自动捕获</td>
-      <td>侧边栏「SQL Logs」→ 捕捉</td>
-      <td>监听运行控制台 <code>Preparing:</code> / <code>Parameters:</code> 行还原可执行 SQL；支持混合前缀宽容匹配</td>
+      <td>侧边栏「捕捉」按钮</td>
+      <td>监听运行控制台还原可执行 SQL；支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式</td>
     </tr>
     <tr>
       <td>日志 → SQL</td>
@@ -210,14 +226,30 @@
       <td>粘贴整段日志批量还原；多组语句自动分隔</td>
     </tr>
     <tr>
-      <td>去重 / 过滤</td>
+      <td>自动保存历史 <span class="tag tag-new">New</span></td>
       <td>设置页配置</td>
-      <td>去重窗口可调；按关键字过滤；移除包含指定关键字的 SQL</td>
+      <td>超出内存上限时写入文件（<code>.idea/sql-visualizer/sql-history/</code>）；
+          单文件 ≥100MB 自动滚动；支持文件名模板</td>
+    </tr>
+    <tr>
+      <td>历史面板 <span class="tag tag-new">New</span></td>
+      <td>侧边栏「SQL 历史」tab</td>
+      <td>两级导航（文件列表 → SQL 列表 → 预览）；SQL 词法高亮 + 耗时 + 时间戳 + 源码定位</td>
+    </tr>
+    <tr>
+      <td>精确跳转源码 <span class="tag tag-new">New</span></td>
+      <td>双击 / 右键「跳转到源码」</td>
+      <td>运行期 InnerInterceptor 捕获真实调用点，精确跳到触发 SQL 的 Service / Controller 行</td>
+    </tr>
+    <tr>
+      <td>去重 / 过滤</td>
+      <td>工具栏</td>
+      <td>SQL 类型多选筛选；Ctrl+F 搜索；去重 <code>⨉N</code> 徽章即时显示</td>
     </tr>
   </tbody>
 </table>
 
-<h3>SQL → Java 反向转换 <span class="tag tag-beta">Beta</span></h3>
+<h3>SQL → Java 反向转换</h3>
 <table>
   <thead>
     <tr><th style="width:160px">功能</th><th>触发方式</th><th>说明</th></tr>
@@ -250,7 +282,7 @@
   <tbody>
     <tr>
       <td>SQL 代码补全</td>
-      <td>预览面板输入区 + mapper XML/注解 SQL 内 <code>Ctrl+Space</code> 补全：表名、列名、<code>#{}</code> 参数名、XML 动态标签</td>
+      <td>预览面板输入区 + mapper XML/注解 SQL 内 <code>Ctrl+Space</code> 补全：表名、列名、<code>#{}</code> 参数名、XML 动态标签；数据源 schema 字段注释优先于实体注释</td>
     </tr>
     <tr>
       <td>逻辑删除注入</td>
@@ -262,7 +294,11 @@
     </tr>
     <tr>
       <td>检查更新</td>
-      <td>设置页一键检查更新，后台下载安装（重启生效）；支持启动时自动检查</td>
+      <td>设置页一键检查更新，后台下载安装（重启生效）；支持 Gitee 抢先体验通道 + 忽略此版本</td>
+    </tr>
+    <tr>
+      <td>分享</td>
+      <td>预览弹窗「分享」按钮：复制为 Markdown 表格 / 纯 SQL / Java 代码 / 链接</td>
     </tr>
   </tbody>
 </table>
@@ -288,6 +324,8 @@
     <li>Wrapper 链末尾行（<code>.eq()</code> 等终止调用所在行）</li>
     <li>mapper XML 的 <code>&lt;select&gt;</code> / <code>&lt;update&gt;</code> 等语句行</li>
     <li>Java Mapper 接口中 <code>@Select</code> 等注解行</li>
+    <li>JPA Repository 的 <code>findByXxx</code> 方法或 <code>@Query</code> 方法</li>
+    <li><code>&lt;pages&gt;</code> XML 中 <code>&lt;maintainPage&gt;</code> 行</li>
   </ul>
   确认光标位于上述位置；如仍不显示，检查设置页「代码左侧显示预览 SQL 图标」是否开启。
 </div>
@@ -327,6 +365,8 @@
     <li>确认已点击侧边栏「捕捉」按钮开始监听（按钮变为「停止」）</li>
     <li>确认应用日志包含 <code>Preparing:</code> / <code>Parameters:</code> 格式</li>
     <li>如日志格式为 <code>==&gt; Preparing:</code>，需开启设置页「启用混合前缀」</li>
+    <li>如使用 Hibernate，需开启设置页「启用 Hibernate/JPA 日志捕获」</li>
+    <li>如使用 Spring JdbcTemplate，需开启设置页「启用 JdbcTemplate 日志捕获」</li>
     <li>检查是否被「移除包含关键字」过滤规则命中</li>
     <li>确认日志输出到运行控制台（非独立日志文件）</li>
   </ul>
@@ -344,7 +384,7 @@
 <input type="checkbox" id="faq-8" class="faq-toggle">
 <label for="faq-8" class="faq-question">如何切换插件界面语言？</label>
 <div class="faq-answer">
-  <code>Settings → Tools → SQL Visualizer → 界面语言</code>。
+  <code>Settings → Tools → SQL Visualizer → 界面与操作 → 界面语言</code>。
   支持 简体中文 / English / 跟随系统。
   插件语言独立于 IDE 语言设置，切换后重新打开预览弹窗即生效。
 </div>
@@ -360,18 +400,26 @@
 <input type="checkbox" id="faq-10" class="faq-toggle">
 <label for="faq-10" class="faq-question">快捷键冲突怎么办？</label>
 <div class="faq-answer">
-  在 <code>Settings → Tools → SQL Visualizer</code> 点击快捷键旁的「编辑」按钮重新录制。
+  在 <code>Settings → Tools → SQL Visualizer → 界面与操作</code> 点击快捷键旁的「编辑」按钮重新录制。
   若与其他插件冲突，弹窗提供「使用」（共存）或「强制使用」（抢占）选项。
   也可在 <code>Settings → Keymap</code> 中直接修改。
 </div>
 
 <input type="checkbox" id="faq-11" class="faq-toggle">
-<label for="faq-11" class="faq-question">反馈问题需要提供什么信息？</label>
+<label for="faq-11" class="faq-question">实时日志的「跳转到源码」不准怎么办？</label>
+<div class="faq-answer">
+  精确跳转需要应用集成 MyBatis-Plus <code>InnerInterceptor</code> 拦截器（打印 <code>SQLVIS-SOURCE</code> 标记行）。
+  未集成时自动回退为按表名搜索实体（近似跳转）。
+  集成示例代码见插件内置文档（帮助按钮 → 「源码定位集成」）。
+</div>
+
+<input type="checkbox" id="faq-12" class="faq-toggle">
+<label for="faq-12" class="faq-question">反馈问题需要提供什么信息？</label>
 <div class="faq-answer">
   请到 <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues" target="_blank">Gitee Issues</a> 提交反馈。
   建议附上：
   <ul>
-    <li>插件版本号（设置页「内部构建号」可一键复制）</li>
+    <li>插件版本号（设置页「关于」可一键复制内部构建号）</li>
     <li>IDE 版本（<code>Help → About</code>）</li>
     <li>复现步骤与示例代码</li>
     <li>相关日志或截图</li>
