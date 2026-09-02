@@ -103,11 +103,11 @@ public final class ConvertToSqlAction extends AnAction {
                 try {
                     payload = ReadAction.compute(() -> {
                         List<PsiMethodCallExpression> heads =
-                                WrapperLocator.INSTANCE.sqlCandidatesInRange(file, selStart, selEnd);
+                                WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd);
                         List<String> texts = heads.stream().map(head ->
                                 SqlSelectionDialog.displayText(
-                                        WrapperLocator.INSTANCE.sqlCandidateSummary(head),
-                                        WrapperLocator.INSTANCE.sqlCandidateLineText(head))
+                                        WrapperLocator.sqlCandidateSummary(head),
+                                        WrapperLocator.sqlCandidateLineText(head))
                         ).collect(Collectors.toList());
                         return Pair.create(heads, texts);
                     });
@@ -487,7 +487,7 @@ public final class ConvertToSqlAction extends AnAction {
     /** T-M23.8：编辑器定位跳转到候选元素所在行。 */
     private void locateEditorTo(Editor editor, PsiElement element) {
         try {
-            kotlin.Pair<Integer, Integer> off = WrapperLocator.INSTANCE.lineOffsetsOf(element);
+            kotlin.Pair<Integer, Integer> off = WrapperLocator.lineOffsetsOf(element);
             int start = off.getFirst();
             int end = off.getSecond();
             editor.getCaretModel().moveToOffset(start);

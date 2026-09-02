@@ -159,7 +159,7 @@ public final class ChainStateDetector {
         // new 构造链首：new LambdaQueryWrapper<X>()
         if (qualifier instanceof PsiNewExpression) {
             PsiType type = ((PsiNewExpression) qualifier).getType();
-            return WrapperLocator.INSTANCE.detectWrapperType(type);
+            return WrapperLocator.detectWrapperType(type);
         }
 
         // 工厂/服务链首：Wrappers.<X>lambdaQuery() / service.lambdaQuery()
@@ -183,11 +183,11 @@ public final class ChainStateDetector {
      */
     @Nullable
     private static WrapperType detectFactoryChainHeadType(@Nullable String qualifierName, @NotNull String methodName) {
-        if (qualifierName != null && WrapperLocator.INSTANCE.getWrapperFactoryClassNames().contains(qualifierName)) {
+        if (qualifierName != null && WrapperLocator.WRAPPER_FACTORY_CLASS_NAMES.contains(qualifierName)) {
             return mapWrapperFactoryMethod(methodName, qualifierName);
         }
         // 服务链（service.lambdaQuery() 等）按方法名映射
-        if (!WrapperLocator.INSTANCE.getServiceChainMethodNames().contains(methodName)) {
+        if (!WrapperLocator.SERVICE_CHAIN_METHOD_NAMES.contains(methodName)) {
             return null;
         }
         return mapServiceChainMethod(methodName);

@@ -73,7 +73,7 @@ public final class WrapperAnchorDetector {
                     && variable.getParent().getParent() instanceof PsiLambdaExpression) {
                 return null;
             }
-            if (WrapperLocator.INSTANCE.detectWrapperType(variable.getType()) != null) return element;
+            if (WrapperLocator.detectWrapperType(variable.getType()) != null) return element;
             // 降级：变量用抽象基类型声明（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`），
             // 初始化表达式链首是具体 wrapper 构造 / Wrappers 工厂 → 仍应标变量声明。
             // 仅限 Wrapper 基类型（T-M15-01 回归）：`long total = service.lambdaQuery()...` 的 total 不是锚点
@@ -88,7 +88,7 @@ public final class WrapperAnchorDetector {
         if (element instanceof PsiKeyword && "new".equals(element.getText())) {
             if (!(element.getParent() instanceof PsiNewExpression)) return null;
             PsiNewExpression newExpr = (PsiNewExpression) element.getParent();
-            if (WrapperLocator.INSTANCE.detectWrapperType(newExpr.getType()) == null) return null;
+            if (WrapperLocator.detectWrapperType(newExpr.getType()) == null) return null;
             // 该 new 位于某 Wrapper 变量初始化表达式内（`w = new W()...`）→ 去重，只标变量声明
             return isInsideWrapperVariableInitializer(newExpr) ? null : element;
         }
@@ -103,16 +103,16 @@ public final class WrapperAnchorDetector {
             PsiReferenceExpression ref = (PsiReferenceExpression) element.getParent();
             if (ref.getReferenceNameElement() != element) return null;
             String referenceName = ref.getReferenceName();
-            if (WrapperLocator.INSTANCE.getWrapperFactoryMethodNames$mybatis_plus_sql_visualizer().contains(referenceName)) {
+            if (WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES.contains(referenceName)) {
                 if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
                 PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
                 boolean isWrappersFactory = false;
                 if (ref.getQualifierExpression() instanceof PsiReferenceExpression) {
-                    isWrappersFactory = WrapperLocator.INSTANCE.getWrapperFactoryClassNames()
+                    isWrappersFactory = WrapperLocator.WRAPPER_FACTORY_CLASS_NAMES
                         .contains(((PsiReferenceExpression) ref.getQualifierExpression()).getReferenceName());
                 }
-                boolean isServiceChain = WrapperLocator.INSTANCE.getServiceChainMethodNames().contains(referenceName)
-                    && WrapperLocator.INSTANCE.isServiceChainStart$mybatis_plus_sql_visualizer(call);
+                boolean isServiceChain = WrapperLocator.SERVICE_CHAIN_METHOD_NAMES.contains(referenceName)
+                    && WrapperLocator.isServiceChainStart(call);
                 if (!isWrappersFactory && !isServiceChain) return null;
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重
                 return isInsideWrapperVariableInitializer(call) ? null : element;
@@ -137,7 +137,7 @@ public final class WrapperAnchorDetector {
                         resolved = ((PsiReferenceExpression) call.getMethodExpression().getQualifierExpression()).resolve();
                     }
                     if (resolved instanceof PsiVariable
-                            && WrapperLocator.INSTANCE.isWrapperVariable$mybatis_plus_sql_visualizer((PsiVariable) resolved)) {
+                            && WrapperLocator.isWrapperVariable((PsiVariable) resolved)) {
                         return null;
                     }
                 }
@@ -169,22 +169,22 @@ public final class WrapperAnchorDetector {
             headCall = (PsiMethodCallExpression) expr;
             PsiExpression qualifier = headCall.getMethodExpression().getQualifierExpression();
             // 若当前方法名即工厂方法（如 JoinWrappers.lambda）→ 该调用即链头，无需再回溯
-            if (WrapperLocator.INSTANCE.getWrapperFactoryMethodNames$mybatis_plus_sql_visualizer()
+            if (WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES
                     .contains(headCall.getMethodExpression().getReferenceName())) {
                 break;
             }
             if (qualifier == null) break;
             expr = qualifier;
         }
-        if (headCall != null && WrapperLocator.INSTANCE.getWrapperFactoryMethodNames$mybatis_plus_sql_visualizer()
+        if (headCall != null && WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES
                 .contains(headCall.getMethodExpression().getReferenceName())) {
             return true;
         }
         if (expr instanceof PsiNewExpression) {
-            return WrapperLocator.INSTANCE.detectWrapperType(((PsiNewExpression) expr).getType()) != null;
+            return WrapperLocator.detectWrapperType(((PsiNewExpression) expr).getType()) != null;
         }
         if (expr instanceof PsiMethodCallExpression) {
-            return WrapperLocator.INSTANCE.getWrapperFactoryMethodNames$mybatis_plus_sql_visualizer()
+            return WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES
                 .contains(((PsiMethodCallExpression) expr).getMethodExpression().getReferenceName());
         }
         return false;
@@ -210,7 +210,7 @@ public final class WrapperAnchorDetector {
     private static boolean isInsideWrapperVariableInitializer(PsiElement expr) {
         PsiVariable variable = PsiTreeUtil.getParentOfType(expr, PsiVariable.class, false);
         if (variable == null) return false;
-        return WrapperLocator.INSTANCE.isWrapperVariable$mybatis_plus_sql_visualizer(variable);
+        return WrapperLocator.isWrapperVariable(variable);
     }
 
     // ------------------------------------------------------------------

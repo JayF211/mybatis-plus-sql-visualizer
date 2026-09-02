@@ -88,7 +88,7 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
                 """.stripIndent());
         com.intellij.psi.PsiFile file = myFixture.getFile();
         List<PsiMethodCallExpression> candidates =
-                WrapperLocator.INSTANCE.sqlCandidatesInRange(file, 0, file.getTextLength());
+                WrapperLocator.sqlCandidatesInRange(file, 0, file.getTextLength());
         assertTrue("fixture 应含多个候选（触发多选弹窗分支）", candidates.size() >= 2);
         List<String> displayTexts = new ArrayList<>();
         for (int i = 0; i < candidates.size(); i++) {

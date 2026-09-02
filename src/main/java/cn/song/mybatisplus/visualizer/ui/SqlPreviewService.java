@@ -228,11 +228,11 @@ public final class SqlPreviewService {
                 ? settings.getState().getReplaceParams() : true;
         LocatedWrapper located = cache.getOrCompute(
                 file, anchor.getTextRange().getStartOffset(), resolveVariables, tableConfigSignature(),
-                () -> WrapperLocator.INSTANCE.locateWithTable(anchor, resolveVariables));
+                () -> WrapperLocator.locateWithTable(anchor, resolveVariables));
         // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
         // 实体文件变化不触发）：命中缓存时校验实体文件戳，变更则重算
         LocatedWrapper effectiveLocated = (located != null && !located.entityFileValid())
-                ? WrapperLocator.INSTANCE.locateWithTable(anchor, resolveVariables) : located;
+                ? WrapperLocator.locateWithTable(anchor, resolveVariables) : located;
 
         // 1. Wrapper 转换（优先）
         if (effectiveLocated != null) {

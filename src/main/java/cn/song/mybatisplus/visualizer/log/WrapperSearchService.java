@@ -71,7 +71,7 @@ public final class WrapperSearchService {
         JavaPsiFacade facade = JavaPsiFacade.getInstance(project);
 
         try {
-            for (String className : WrapperLocator.INSTANCE.getWrapperFactoryClassNames()) {
+            for (String className : WrapperLocator.WRAPPER_FACTORY_CLASS_NAMES) {
                 PsiClass psiClass = facade.findClass(className, GlobalSearchScope.allScope(project));
                 if (psiClass == null) {
                     continue;
@@ -108,7 +108,7 @@ public final class WrapperSearchService {
             List<WrapperCandidate> out
     ) {
         for (PsiMethod method : psiClass.getMethods()) {
-            if (!WrapperLocator.INSTANCE.getWrapperFactoryMethodNames$mybatis_plus_sql_visualizer().contains(method.getName())) {
+            if (!WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES.contains(method.getName())) {
                 continue;
             }
             Collection<com.intellij.psi.PsiReference> refs;
@@ -119,7 +119,7 @@ public final class WrapperSearchService {
             }
             for (com.intellij.psi.PsiReference ref : refs) {
                 com.intellij.psi.PsiElement element = ref.getElement();
-                cn.song.mybatisplus.visualizer.psi.LocatedWrapper located = WrapperLocator.INSTANCE.locateWithTable(element, true);
+                cn.song.mybatisplus.visualizer.psi.LocatedWrapper located = WrapperLocator.locateWithTable(element, true);
                 if (located == null) {
                     continue;
                 }
