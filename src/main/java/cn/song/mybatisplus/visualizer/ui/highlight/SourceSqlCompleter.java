@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.sql.SqlClause;
-import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisKt;
+import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysis;
 import cn.song.mybatisplus.visualizer.sql.TableAlias;
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext;
 import com.intellij.codeInsight.lookup.LookupElementBuilder;
@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
  * {@link SourceSqlContext}"，输出未过滤前缀的补全项；**调用方负责 {@code prefixMatches} 过滤与
  * {@code result.addElement}**（prefixMatcher 来自真实补全会话，本模块不感知）。
  *
- * 防御：任何异常 → 空列表（不抛，补全静默降级）；offset 越界 clamp（{@link SqlTextAnalysisKt} 已防御，
+ * 防御：任何异常 → 空列表（不抛，补全静默降级）；offset 越界 clamp（{@link SqlTextAnalysis} 已防御，
  * 本模块再 clamp 一次用于 substring）。
  */
 public final class SourceSqlCompleter {
@@ -43,8 +43,8 @@ public final class SourceSqlCompleter {
         try {
             int safeOffset = Math.max(0, Math.min(offset, text.length()));
             String before = text.substring(0, safeOffset);
-            SqlClause clause = SqlTextAnalysisKt.detectClause(text, safeOffset);
-            Map<String, TableInfo> aliasMap = bindAliases(SqlTextAnalysisKt.parseTableAliases(text), context);
+            SqlClause clause = SqlTextAnalysis.detectClause(text, safeOffset);
+            Map<String, TableInfo> aliasMap = bindAliases(SqlTextAnalysis.parseTableAliases(text), context);
 
             List<LookupElementBuilder> result = new ArrayList<>();
 

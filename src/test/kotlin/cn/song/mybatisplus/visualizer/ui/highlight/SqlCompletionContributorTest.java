@@ -25,7 +25,7 @@ import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 
 import cn.song.mybatisplus.visualizer.sql.SqlClause;
-import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisKt;
+import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysis;
 
 import kotlin.Pair;
 
@@ -115,16 +115,16 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     public void testDetectClausePositionAware() {
         // T-M16-04：位置感知——FROM/JOIN 后表名位、WHERE/ON/HAVING/GROUP BY/ORDER BY 后列名位、
         // SELECT 列位、无法判定全量（T-M27-01：改走 SqlTextAnalysis 公共 API，语义不变）
-        assertEquals(SqlClause.TABLE, SqlTextAnalysisKt.detectClauseFromText("SELECT id FROM "));
-        assertEquals(SqlClause.TABLE, SqlTextAnalysisKt.detectClauseFromText("SELECT t.id FROM device t LEFT JOIN "));
-        assertEquals(SqlClause.COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT id FROM device WHERE "));
-        assertEquals(SqlClause.COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT id FROM device WHERE id = 1 AND "));
-        assertEquals(SqlClause.COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT id FROM device ORDER BY "));
-        assertEquals(SqlClause.COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT id FROM device GROUP BY "));
-        assertEquals(SqlClause.COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT id FROM device t ON "));
-        assertEquals(SqlClause.SELECT_COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT "));
-        assertEquals(SqlClause.SELECT_COLUMN, SqlTextAnalysisKt.detectClauseFromText("SELECT id, "));
-        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysisKt.detectClauseFromText(""));
+        assertEquals(SqlClause.TABLE, SqlTextAnalysis.detectClauseFromText("SELECT id FROM "));
+        assertEquals(SqlClause.TABLE, SqlTextAnalysis.detectClauseFromText("SELECT t.id FROM device t LEFT JOIN "));
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT id FROM device WHERE "));
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT id FROM device WHERE id = 1 AND "));
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT id FROM device ORDER BY "));
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT id FROM device GROUP BY "));
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT id FROM device t ON "));
+        assertEquals(SqlClause.SELECT_COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT "));
+        assertEquals(SqlClause.SELECT_COLUMN, SqlTextAnalysis.detectClauseFromText("SELECT id, "));
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClauseFromText(""));
     }
 
     @Test
@@ -132,14 +132,14 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
         // T-M16.2-01：offset 越界 clamp 不抛异常（旧 PSI 未随编辑更新时 offset 可能超过新文档长度——
         // substring 越界异常被 IDE 吞掉 → 补全静默失效的回归点 C）（T-M27-01：改走 SqlTextAnalysis 公共 API）
         // offset 超过文本长度 → clamp 到末尾，按全量文本判定（不抛异常）
-        assertEquals(SqlClause.TABLE, SqlTextAnalysisKt.detectClause("SELECT id FROM t", 999));
+        assertEquals(SqlClause.TABLE, SqlTextAnalysis.detectClause("SELECT id FROM t", 999));
         // offset 为负 → clamp 到 0 → 空前缀 → UNKNOWN
-        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysisKt.detectClause("SELECT id FROM t", -1));
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClause("SELECT id FROM t", -1));
         // 空文本 → UNKNOWN
-        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysisKt.detectClause("", 0));
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClause("", 0));
         // 正常位置不受影响
         String text = "SELECT id FROM t WHERE id = 1 ";
-        assertEquals(SqlClause.COLUMN, SqlTextAnalysisKt.detectClause(text, text.length()));
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClause(text, text.length()));
     }
 
     @Test

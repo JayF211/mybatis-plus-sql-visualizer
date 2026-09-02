@@ -2,7 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight;
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
-import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisKt;
+import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysis;
 import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext;
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver;
@@ -114,7 +114,7 @@ public class AnnotationSqlCompletionContributor extends CompletionContributor im
                     return;
                 }
                 // <script>/XML 标签等长剥离（偏移量 1:1，offset 无需换算）
-                String text = SqlTextAnalysisKt.stripXmlTags(raw);
+                String text = SqlTextAnalysis.stripXmlTags(raw);
                 try {
                     List<LookupElementBuilder> items = SourceSqlCompleter.sqlCompletions(text, caretInRaw, sourceContext);
                     for (LookupElementBuilder item : items) {

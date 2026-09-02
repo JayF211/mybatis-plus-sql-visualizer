@@ -74,16 +74,16 @@ object DialectVerifySupport {
 
     /** H2 引擎配对（兼容模式见类注释；`{db}` 由 [open] 替换为唯一内存库名）。 */
     val h2Engines: List<EngineSpec> = listOf(
-        EngineSpec("H2", "jdbc:h2:mem:{db};DB_CLOSE_DELAY=-1", H2Dialect, UpsertMode.REAL),
-        EngineSpec("MySQL@H2", "jdbc:h2:mem:{db};MODE=MySQL;DB_CLOSE_DELAY=-1", MySqlDialect, UpsertMode.REAL),
-        EngineSpec("MariaDB@H2", "jdbc:h2:mem:{db};MODE=MariaDB;DB_CLOSE_DELAY=-1", MariaDbDialect, UpsertMode.REAL),
-        EngineSpec("PostgreSQL@H2", "jdbc:h2:mem:{db};MODE=PostgreSQL;DB_CLOSE_DELAY=-1", PostgreSQLDialect, UpsertMode.SKIP),
-        EngineSpec("Oracle@H2", "jdbc:h2:mem:{db};MODE=Oracle;DB_CLOSE_DELAY=-1", OracleDialect, UpsertMode.DEGRADE_ONLY),
-        EngineSpec("SQLServer@H2", "jdbc:h2:mem:{db};MODE=MSSQLServer;DB_CLOSE_DELAY=-1", SqlServerDialect, UpsertMode.DEGRADE_ONLY),
+        EngineSpec("H2", "jdbc:h2:mem:{db};DB_CLOSE_DELAY=-1", H2Dialect.INSTANCE, UpsertMode.REAL),
+        EngineSpec("MySQL@H2", "jdbc:h2:mem:{db};MODE=MySQL;DB_CLOSE_DELAY=-1", MySqlDialect.INSTANCE, UpsertMode.REAL),
+        EngineSpec("MariaDB@H2", "jdbc:h2:mem:{db};MODE=MariaDB;DB_CLOSE_DELAY=-1", MariaDbDialect.INSTANCE, UpsertMode.REAL),
+        EngineSpec("PostgreSQL@H2", "jdbc:h2:mem:{db};MODE=PostgreSQL;DB_CLOSE_DELAY=-1", PostgreSQLDialect.INSTANCE, UpsertMode.SKIP),
+        EngineSpec("Oracle@H2", "jdbc:h2:mem:{db};MODE=Oracle;DB_CLOSE_DELAY=-1", OracleDialect.INSTANCE, UpsertMode.DEGRADE_ONLY),
+        EngineSpec("SQLServer@H2", "jdbc:h2:mem:{db};MODE=MSSQLServer;DB_CLOSE_DELAY=-1", SqlServerDialect.INSTANCE, UpsertMode.DEGRADE_ONLY),
     )
 
     /** SQLite 真实引擎配对（`:memory:` 每连接独立库）。 */
-    val sqliteEngine: EngineSpec = EngineSpec("SQLite", "jdbc:sqlite::memory:", SqliteDialect, UpsertMode.REAL)
+    val sqliteEngine: EngineSpec = EngineSpec("SQLite", "jdbc:sqlite::memory:", SqliteDialect.INSTANCE, UpsertMode.REAL)
 
     /** 打开独立内存库连接（每用例独立，避免 H2 具名内存库跨用例共享）。 */
     fun open(spec: EngineSpec, dbName: String): Connection {

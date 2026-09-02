@@ -358,17 +358,17 @@ class SqlGeneratorTest {
         // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
         assertEquals(
             "SELECT id, title, \"table\", image_url\nFROM \"order\"\nWHERE \"table\" = 1001",
-            SqlGenerator.generate(statement, compact = false, dialect = PostgreSQLDialect).trim(),
+            SqlGenerator.generate(statement, compact = false, dialect = PostgreSQLDialect.INSTANCE).trim(),
         )
         // SQL Server 方括号
         assertEquals(
             "SELECT id, title, [table], image_url\nFROM [order]\nWHERE [table] = 1001",
-            SqlGenerator.generate(statement, compact = false, dialect = SqlServerDialect).trim(),
+            SqlGenerator.generate(statement, compact = false, dialect = SqlServerDialect.INSTANCE).trim(),
         )
         // MySQL（默认）反引号
         assertEquals(
             "SELECT id, title, `table`, image_url\nFROM `order`\nWHERE `table` = 1001",
-            SqlGenerator.generate(statement, compact = false, dialect = MySqlDialect).trim(),
+            SqlGenerator.generate(statement, compact = false, dialect = MySqlDialect.INSTANCE).trim(),
         )
     }
 

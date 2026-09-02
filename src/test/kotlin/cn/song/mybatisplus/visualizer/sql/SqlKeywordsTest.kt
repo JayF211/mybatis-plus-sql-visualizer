@@ -28,10 +28,10 @@ class SqlKeywordsTest {
     @Test
     fun `大小写不敏感`() {
         // 判定大小写不敏感；包裹保留标识符原大小写（引用不改变标识符）
-        assertEquals("`Table`", MySqlDialect.quoteIfKeyword("Table"))
-        assertEquals("`TABLE`", MySqlDialect.quoteIfKeyword("TABLE"))
-        assertEquals("`Order`", MySqlDialect.quoteIfKeyword("Order"))
-        assertEquals("`Group`", MySqlDialect.quoteIfKeyword("Group"))
+        assertEquals("`Table`", MySqlDialect.INSTANCE.quoteIfKeyword("Table"))
+        assertEquals("`TABLE`", MySqlDialect.INSTANCE.quoteIfKeyword("TABLE"))
+        assertEquals("`Order`", MySqlDialect.INSTANCE.quoteIfKeyword("Order"))
+        assertEquals("`Group`", MySqlDialect.INSTANCE.quoteIfKeyword("Group"))
     }
 
     @Test
@@ -39,11 +39,11 @@ class SqlKeywordsTest {
         // number 是 Oracle 保留字但 MySQL 合法：MySQL 不包、Oracle 包（用户提醒：方言有多种）
         assertFalse("number 在 MySQL 合法", "number" in SqlKeywords.MYSQL_RESERVED)
         assertTrue("number 是 Oracle 保留字", "number" in SqlKeywords.ORACLE_RESERVED)
-        assertEquals("number", MySqlDialect.quoteIfKeyword("number"))
-        assertEquals("\"number\"", OracleDialect.quoteIfKeyword("number"))
+        assertEquals("number", MySqlDialect.INSTANCE.quoteIfKeyword("number"))
+        assertEquals("\"number\"", OracleDialect.INSTANCE.quoteIfKeyword("number"))
         // offset：MySQL 非保留字（limit 才是）→ 不包；PG 保留字 → 包
-        assertEquals("offset", MySqlDialect.quoteIfKeyword("offset"))
-        assertEquals("\"offset\"", PostgreSQLDialect.quoteIfKeyword("offset"))
+        assertEquals("offset", MySqlDialect.INSTANCE.quoteIfKeyword("offset"))
+        assertEquals("\"offset\"", PostgreSQLDialect.INSTANCE.quoteIfKeyword("offset"))
         // SQLite / PG / SQLServer 特有词
         assertTrue("abort 是 SQLite 关键字", "abort" in SqlKeywords.SQLITE_RESERVED)
         assertTrue("analyse 是 PG 保留字", "analyse" in SqlKeywords.PG_RESERVED)
@@ -66,16 +66,16 @@ class SqlKeywordsTest {
     @Test
     fun `方言引用符号按方言切换`() {
         // quoteIfKeyword：命中 → 按方言符号包裹；未命中 → 原样
-        assertEquals("`table`", MySqlDialect.quoteIfKeyword("table"))
-        assertEquals("\"table\"", PostgreSQLDialect.quoteIfKeyword("table"))
-        assertEquals("\"table\"", OracleDialect.quoteIfKeyword("table"))
-        assertEquals("[table]", SqlServerDialect.quoteIfKeyword("table"))
-        assertEquals("\"table\"", H2Dialect.quoteIfKeyword("table"))
-        assertEquals("\"table\"", SqliteDialect.quoteIfKeyword("table"))
-        assertEquals("`table`", MariaDbDialect.quoteIfKeyword("table"))
-        assertEquals("\"table\"", DmDialect.quoteIfKeyword("table"))
-        assertEquals("\"table\"", KingBaseDialect.quoteIfKeyword("table"))
-        assertEquals("biz_banner", MySqlDialect.quoteIfKeyword("biz_banner"))
-        assertEquals("name", MySqlDialect.quoteIfKeyword("name"))
+        assertEquals("`table`", MySqlDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("\"table\"", PostgreSQLDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("\"table\"", OracleDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("[table]", SqlServerDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("\"table\"", H2Dialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("\"table\"", SqliteDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("`table`", MariaDbDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("\"table\"", DmDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("\"table\"", KingBaseDialect.INSTANCE.quoteIfKeyword("table"))
+        assertEquals("biz_banner", MySqlDialect.INSTANCE.quoteIfKeyword("biz_banner"))
+        assertEquals("name", MySqlDialect.INSTANCE.quoteIfKeyword("name"))
     }
 }

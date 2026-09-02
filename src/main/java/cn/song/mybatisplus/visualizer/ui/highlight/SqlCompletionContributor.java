@@ -2,7 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight;
 
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.sql.SqlClause;
-import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisKt;
+import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysis;
 import com.intellij.codeInsight.completion.CompletionContributor;
 import com.intellij.codeInsight.completion.CompletionParameters;
 import com.intellij.codeInsight.completion.CompletionProvider;
@@ -39,7 +39,7 @@ import java.util.WeakHashMap;
  *    嵌入式编辑器中用户输入后 {@code PsiDocumentManager} commit 会重建非项目 PSI 文件（userData 丢失），
  *    而 Editor 对象编辑期间稳定不重建；
  *  - **ctx 为 null 时不再直接 return**：关键字补全不依赖上下文（恢复 M9 语义，{@code if (ctx != null)} 包裹实体补全）；
- *  - {@link SqlTextAnalysisKt#detectClause} 防御：offset clamp 到文本长度 + 空文本/异常回退 UNKNOWN
+ *  - {@link SqlTextAnalysis#detectClause} 防御：offset clamp 到文本长度 + 空文本/异常回退 UNKNOWN
  *    （旧 PSI offset 与新文档长度不一致时 {@code substring} 越界抛异常 → Contributor 异常被 IDE 吞掉 → 补全静默失效）。
  *
  * T-M27-01（M27）：{@code detectClause} / {@code SqlClause} 迁入 {@code sql.SqlTextAnalysis} 纯函数模块
@@ -114,7 +114,7 @@ public class SqlCompletionContributor extends CompletionContributor {
                     PsiFile cf = parameters.getPosition().getContainingFile();
                     String fileText = cf != null ? cf.getText() : "";
                     int off = parameters.getPosition().getTextRange().getStartOffset();
-                    clause = SqlTextAnalysisKt.detectClause(fileText, off);
+                    clause = SqlTextAnalysis.detectClause(fileText, off);
                 } catch (Throwable e) {
                     clause = SqlClause.UNKNOWN;
                 }

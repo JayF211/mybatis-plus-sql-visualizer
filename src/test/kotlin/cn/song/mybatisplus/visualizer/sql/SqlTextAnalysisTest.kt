@@ -17,7 +17,7 @@ class SqlTextAnalysisTest {
     fun `stripXmlTags_带标签mapper语句等长剥离`() {
         // 带 if 标签的 mapper 语句：标签区间换空格、文本内容保留（含 #{} 占位符）、长度不变
         val sql = "SELECT * FROM t <if test=\"name != null\">WHERE name = #{name}</if> ORDER BY id"
-        val stripped = stripXmlTags(sql)
+        val stripped = SqlTextAnalysis.stripXmlTags(sql)
         assertEquals("等长剥离（偏移量 1:1 映射）", sql.length, stripped.length)
         assertEquals(
             "SELECT * FROM t " + " ".repeat("<if test=\"name != null\">".length) +
@@ -31,12 +31,12 @@ class SqlTextAnalysisTest {
         val include = "SELECT <include refid=\"Base_Column_List\"/> FROM t"
         assertEquals(
             "SELECT " + " ".repeat("<include refid=\"Base_Column_List\"/>".length) + " FROM t",
-            stripXmlTags(include),
+            SqlTextAnalysis.stripXmlTags(include),
         )
         val comment = "SELECT 1 <!-- 注释 --> FROM t"
         assertEquals(
             "SELECT 1 " + " ".repeat("<!-- 注释 -->".length) + " FROM t",
-            stripXmlTags(comment),
+            SqlTextAnalysis.stripXmlTags(comment),
         )
     }
 
@@ -49,7 +49,7 @@ class SqlTextAnalysisTest {
             WHERE id = #{id}
             </select>
         """.trimIndent()
-        val stripped = stripXmlTags(sql)
+        val stripped = SqlTextAnalysis.stripXmlTags(sql)
         assertEquals("多行等长剥离", sql.length, stripped.length)
         assertTrue("文本内容应保留", stripped.contains("SELECT a, b\nFROM t"))
         assertTrue("#{} 占位符应保留", stripped.contains("WHERE id = #{id}"))
@@ -59,15 +59,15 @@ class SqlTextAnalysisTest {
     @Test
     fun `stripXmlTags_无标签原样返回`() {
         val plain = "SELECT * FROM t WHERE id = #{id}"
-        assertEquals(plain, stripXmlTags(plain))
-        assertEquals("", stripXmlTags(""))
+        assertEquals(plain, SqlTextAnalysis.stripXmlTags(plain))
+        assertEquals("", SqlTextAnalysis.stripXmlTags(""))
     }
 
     @Test
     fun `stripXmlTags_未闭合标签残段等长换空格`() {
         // 标签未闭合（无 `>`）：残段同样换空格，长度不变
         val sql = "SELECT 1 <if"
-        val stripped = stripXmlTags(sql)
+        val stripped = SqlTextAnalysis.stripXmlTags(sql)
         assertEquals(sql.length, stripped.length)
         assertEquals("SELECT 1 " + " ".repeat("<if".length), stripped)
     }
@@ -78,54 +78,54 @@ class SqlTextAnalysisTest {
     fun `detectClause_迁移语义回归`() {
         // T-M27-01 迁移回归：语义与 M16.2 完全一致（FROM/JOIN 后 TABLE、WHERE/ON/HAVING/GROUP BY/ORDER BY
         // 后 COLUMN、SELECT 列位 SELECT_COLUMN、无法判定 UNKNOWN）
-        assertEquals(SqlClause.TABLE, detectClause("SELECT id FROM ", "SELECT id FROM ".length))
+        assertEquals(SqlClause.TABLE, SqlTextAnalysis.detectClause("SELECT id FROM ", "SELECT id FROM ".length))
         assertEquals(
             SqlClause.TABLE,
-            detectClause("SELECT t.id FROM device t LEFT JOIN ", "SELECT t.id FROM device t LEFT JOIN ".length),
+            SqlTextAnalysis.detectClause("SELECT t.id FROM device t LEFT JOIN ", "SELECT t.id FROM device t LEFT JOIN ".length),
         )
         assertEquals(
             SqlClause.COLUMN,
-            detectClause("SELECT id FROM device WHERE ", "SELECT id FROM device WHERE ".length),
+            SqlTextAnalysis.detectClause("SELECT id FROM device WHERE ", "SELECT id FROM device WHERE ".length),
         )
         assertEquals(
             SqlClause.COLUMN,
-            detectClause("SELECT id FROM device ORDER BY ", "SELECT id FROM device ORDER BY ".length),
+            SqlTextAnalysis.detectClause("SELECT id FROM device ORDER BY ", "SELECT id FROM device ORDER BY ".length),
         )
-        assertEquals(SqlClause.SELECT_COLUMN, detectClause("SELECT id, ", "SELECT id, ".length))
-        assertEquals(SqlClause.UNKNOWN, detectClause("", 0))
+        assertEquals(SqlClause.SELECT_COLUMN, SqlTextAnalysis.detectClause("SELECT id, ", "SELECT id, ".length))
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClause("", 0))
     }
 
     @Test
     fun `detectClause_offset越界clamp与空文本`() {
         // offset 越界不抛异常：clamp 到文本长度（M16.2 回归点 C——substring 越界会让补全静默失效）
-        assertEquals(SqlClause.TABLE, detectClause("SELECT id FROM t", 999))
-        assertEquals(SqlClause.UNKNOWN, detectClause("SELECT id FROM t", -1))
-        assertEquals(SqlClause.UNKNOWN, detectClause("", 0))
-        assertEquals(SqlClause.UNKNOWN, detectClause("", 5))
+        assertEquals(SqlClause.TABLE, SqlTextAnalysis.detectClause("SELECT id FROM t", 999))
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClause("SELECT id FROM t", -1))
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClause("", 0))
+        assertEquals(SqlClause.UNKNOWN, SqlTextAnalysis.detectClause("", 5))
     }
 
     // ---------- parseTableAliases ----------
 
     @Test
     fun `parseTableAliases_单表无别名`() {
-        assertEquals(listOf(TableAlias("t", null)), parseTableAliases("SELECT * FROM t"))
+        assertEquals(listOf(TableAlias("t", null)), SqlTextAnalysis.parseTableAliases("SELECT * FROM t"))
     }
 
     @Test
     fun `parseTableAliases_AS别名与无AS别名`() {
-        assertEquals(listOf(TableAlias("t", "a")), parseTableAliases("SELECT * FROM t AS a"))
-        assertEquals(listOf(TableAlias("t", "a")), parseTableAliases("SELECT * FROM t a"))
+        assertEquals(listOf(TableAlias("t", "a")), SqlTextAnalysis.parseTableAliases("SELECT * FROM t AS a"))
+        assertEquals(listOf(TableAlias("t", "a")), SqlTextAnalysis.parseTableAliases("SELECT * FROM t a"))
     }
 
     @Test
     fun `parseTableAliases_逗号多表`() {
         assertEquals(
             listOf(TableAlias("a", "a1"), TableAlias("b", "b1")),
-            parseTableAliases("SELECT * FROM a a1, b b1"),
+            SqlTextAnalysis.parseTableAliases("SELECT * FROM a a1, b b1"),
         )
         assertEquals(
             listOf(TableAlias("t", "x"), TableAlias("u", null)),
-            parseTableAliases("FROM t AS x, u"),
+            SqlTextAnalysis.parseTableAliases("FROM t AS x, u"),
         )
     }
 
@@ -133,35 +133,35 @@ class SqlTextAnalysisTest {
     fun `parseTableAliases_JOIN修饰词`() {
         assertEquals(
             listOf(TableAlias("device", "t"), TableAlias("station", "s")),
-            parseTableAliases("SELECT t.id, s.name FROM device t LEFT JOIN station s ON t.id = s.id"),
+            SqlTextAnalysis.parseTableAliases("SELECT t.id, s.name FROM device t LEFT JOIN station s ON t.id = s.id"),
         )
         assertEquals(
             listOf(TableAlias("a", null), TableAlias("b", null)),
-            parseTableAliases("FROM a INNER JOIN b ON a.id = b.id"),
+            SqlTextAnalysis.parseTableAliases("FROM a INNER JOIN b ON a.id = b.id"),
         )
         assertEquals(
             listOf(TableAlias("a", null), TableAlias("b", null)),
-            parseTableAliases("FROM a CROSS JOIN b"),
+            SqlTextAnalysis.parseTableAliases("FROM a CROSS JOIN b"),
         )
         assertEquals(
             listOf(TableAlias("a", null), TableAlias("b", "x")),
-            parseTableAliases("FROM a FULL OUTER JOIN b x ON a.id = b.id"),
+            SqlTextAnalysis.parseTableAliases("FROM a FULL OUTER JOIN b x ON a.id = b.id"),
         )
     }
 
     @Test
     fun `parseTableAliases_子查询括号跳过`() {
         // FROM 后直接跟 (（子查询）→ 无表名，跳过该段
-        assertEquals(emptyList<TableAlias>(), parseTableAliases("SELECT * FROM (SELECT id FROM inner_t) sub"))
+        assertEquals(emptyList<TableAlias>(), SqlTextAnalysis.parseTableAliases("SELECT * FROM (SELECT id FROM inner_t) sub"))
         // WHERE 内 IN 子查询不影响外层表解析
         assertEquals(
             listOf(TableAlias("t", null)),
-            parseTableAliases("SELECT * FROM t WHERE id IN (SELECT x FROM t2)"),
+            SqlTextAnalysis.parseTableAliases("SELECT * FROM t WHERE id IN (SELECT x FROM t2)"),
         )
         // 子查询占位后的后续 JOIN 表仍解析
         assertEquals(
             listOf(TableAlias("t1", null), TableAlias("t3", null)),
-            parseTableAliases("SELECT * FROM t1 JOIN (SELECT id FROM t2) sub ON t1.id = sub.id JOIN t3 ON t3.id = t1.id"),
+            SqlTextAnalysis.parseTableAliases("SELECT * FROM t1 JOIN (SELECT id FROM t2) sub ON t1.id = sub.id JOIN t3 ON t3.id = t1.id"),
         )
     }
 
@@ -170,21 +170,21 @@ class SqlTextAnalysisTest {
         // JOIN/ON/WHERE 等关键字不当作别名或表名
         assertEquals(
             listOf(TableAlias("t", null), TableAlias("u", null)),
-            parseTableAliases("FROM t JOIN u ON t.id = u.id"),
+            SqlTextAnalysis.parseTableAliases("FROM t JOIN u ON t.id = u.id"),
         )
         assertEquals(
             listOf(TableAlias("t", null)),
-            parseTableAliases("SELECT * FROM t WHERE id = 1"),
+            SqlTextAnalysis.parseTableAliases("SELECT * FROM t WHERE id = 1"),
         )
         // 无 FROM/JOIN → 空清单
-        assertEquals(emptyList<TableAlias>(), parseTableAliases("SELECT 1"))
+        assertEquals(emptyList<TableAlias>(), SqlTextAnalysis.parseTableAliases("SELECT 1"))
     }
 
     @Test
     fun `parseTableAliases_大小写混合`() {
         assertEquals(
             listOf(TableAlias("T", "a"), TableAlias("U", "b")),
-            parseTableAliases("select * From T a join U b on a.id=b.id"),
+            SqlTextAnalysis.parseTableAliases("select * From T a join U b on a.id=b.id"),
         )
     }
 
@@ -192,17 +192,17 @@ class SqlTextAnalysisTest {
     fun `parseTableAliases_占位符不影响解析`() {
         assertEquals(
             listOf(TableAlias("t", null)),
-            parseTableAliases("SELECT * FROM t WHERE id = #{id}"),
+            SqlTextAnalysis.parseTableAliases("SELECT * FROM t WHERE id = #{id}"),
         )
         assertEquals(
             listOf(TableAlias("t", null)),
-            parseTableAliases("SELECT * FROM t WHERE id IN (#{a}, #{b})"),
+            SqlTextAnalysis.parseTableAliases("SELECT * FROM t WHERE id IN (#{a}, #{b})"),
         )
     }
 
     @Test
     fun `parseTableAliases_点分与反引号表名`() {
-        assertEquals(listOf(TableAlias("db.t", "t")), parseTableAliases("FROM db.t t"))
-        assertEquals(listOf(TableAlias("`my table`", "x")), parseTableAliases("FROM `my table` x"))
+        assertEquals(listOf(TableAlias("db.t", "t")), SqlTextAnalysis.parseTableAliases("FROM db.t t"))
+        assertEquals(listOf(TableAlias("`my table`", "x")), SqlTextAnalysis.parseTableAliases("FROM `my table` x"))
     }
 }

@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.sql.verify
 
-import cn.song.mybatisplus.visualizer.sql.MYSQL_RESERVED
-import cn.song.mybatisplus.visualizer.sql.ORACLE_RESERVED
-import cn.song.mybatisplus.visualizer.sql.PG_RESERVED
-import cn.song.mybatisplus.visualizer.sql.SQLSERVER_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.MYSQL_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.ORACLE_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.PG_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.SQLSERVER_RESERVED
 import cn.song.mybatisplus.visualizer.sql.verify.DialectVerifySupport.UpsertMode
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -73,7 +73,7 @@ class DialectDockerVerificationTest {
             val spec = DialectVerifySupport.EngineSpec(
                 label = "MySQL 8.0 (Docker)",
                 jdbcUrlTemplate = container.jdbcUrl,
-                dialect = cn.song.mybatisplus.visualizer.sql.MySqlDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.MySqlDialect.INSTANCE,
                 upsertMode = UpsertMode.REAL,
             )
             DriverManager.getConnection(container.jdbcUrl, container.username, container.password).use { conn ->
@@ -92,7 +92,7 @@ class DialectDockerVerificationTest {
             val spec = DialectVerifySupport.EngineSpec(
                 label = "PostgreSQL 16 (Docker)",
                 jdbcUrlTemplate = container.jdbcUrl,
-                dialect = cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect.INSTANCE,
                 upsertMode = UpsertMode.REAL,
             )
             DriverManager.getConnection(container.jdbcUrl, container.username, container.password).use { conn ->
@@ -111,7 +111,7 @@ class DialectDockerVerificationTest {
             val spec = DialectVerifySupport.EngineSpec(
                 label = "MariaDB 11 (Docker)",
                 jdbcUrlTemplate = container.jdbcUrl,
-                dialect = cn.song.mybatisplus.visualizer.sql.MariaDbDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.MariaDbDialect.INSTANCE,
                 upsertMode = UpsertMode.REAL,
             )
             DriverManager.getConnection(container.jdbcUrl, container.username, container.password).use { conn ->
@@ -131,7 +131,7 @@ class DialectDockerVerificationTest {
             val spec = DialectVerifySupport.EngineSpec(
                 label = "SQL Server 2022 (Docker)",
                 jdbcUrlTemplate = container.jdbcUrl,
-                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
                 upsertMode = UpsertMode.DEGRADE_ONLY,
             )
             DriverManager.getConnection(container.jdbcUrl, container.username, container.password).use { conn ->
@@ -150,7 +150,7 @@ class DialectDockerVerificationTest {
             val spec = DialectVerifySupport.EngineSpec(
                 label = "Oracle 23ai Free (Docker)",
                 jdbcUrlTemplate = container.jdbcUrl,
-                dialect = cn.song.mybatisplus.visualizer.sql.OracleDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.OracleDialect.INSTANCE,
                 upsertMode = UpsertMode.DEGRADE_ONLY,
                 multiRowValues = false, // Oracle 不支持多行 VALUES
             )

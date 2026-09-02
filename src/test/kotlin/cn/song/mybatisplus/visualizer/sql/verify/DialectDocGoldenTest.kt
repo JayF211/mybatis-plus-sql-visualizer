@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.sql.verify
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.sql.SqlKeywords.DM_RESERVED
 import cn.song.mybatisplus.visualizer.sql.DmDialect
-import cn.song.mybatisplus.visualizer.sql.H2_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.H2_RESERVED
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.SqlKeywords.KINGBASE_RESERVED
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
@@ -99,25 +99,25 @@ class DialectDocGoldenTest {
     @Test
     fun `DM方言行为锚点_官方文档结论`() {
         // 分页：官方文法 LIMIT M,N（官方示例 LIMIT 4,3）与 LIMIT N
-        assertEquals("LIMIT 10", DmDialect.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 5, 10", DmDialect.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", DmDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
+        assertEquals("LIMIT 5, 10", DmDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
         // 引用：仅双引号（官方 FAQ：双引号屏蔽关键字；反引号需 8.1.3.37+ 且 MySQL 兼容模式，不采用）
-        assertEquals("\"order\"", DmDialect.quoteIdentifier("order"))
+        assertEquals("\"order\"", DmDialect.INSTANCE.quoteIdentifier("order"))
         // 保留字判定（官方附录实证的双向差异）：
         //   DM 保留而原 Oracle 集合没有 → 必须包裹（漏包即语法错误）
-        assertEquals("\"top\"", DmDialect.quoteIfKeyword("top"))
-        assertEquals("\"domain\"", DmDialect.quoteIfKeyword("domain"))
-        assertEquals("\"section\"", DmDialect.quoteIfKeyword("section"))
-        assertEquals("\"identity\"", DmDialect.quoteIfKeyword("identity"))
-        assertEquals("\"int\"", DmDialect.quoteIfKeyword("int"))
+        assertEquals("\"top\"", DmDialect.INSTANCE.quoteIfKeyword("top"))
+        assertEquals("\"domain\"", DmDialect.INSTANCE.quoteIfKeyword("domain"))
+        assertEquals("\"section\"", DmDialect.INSTANCE.quoteIfKeyword("section"))
+        assertEquals("\"identity\"", DmDialect.INSTANCE.quoteIfKeyword("identity"))
+        assertEquals("\"int\"", DmDialect.INSTANCE.quoteIfKeyword("int"))
         //   Oracle 保留而 DM 仅关键字（NUMBER/SIZE/LEVEL/RAW/DATE）→ 不包裹
         //   （DM CASE_SENSITIVE=Y 下错包 + 小写原文 = 双引号大小写敏感失配风险）
-        assertEquals("number", DmDialect.quoteIfKeyword("number"))
-        assertEquals("size", DmDialect.quoteIfKeyword("size"))
-        assertEquals("level", DmDialect.quoteIfKeyword("level"))
+        assertEquals("number", DmDialect.INSTANCE.quoteIfKeyword("number"))
+        assertEquals("size", DmDialect.INSTANCE.quoteIfKeyword("size"))
+        assertEquals("level", DmDialect.INSTANCE.quoteIfKeyword("level"))
         // UPSERT：官方仅 MERGE INTO 复杂形态 → 降级纯 INSERT
-        assertNull(DmDialect.renderUpsert("id", listOf("name")))
-        assertNull(DmDialect.renderUpsertStatement("t", listOf("id", "name"), "id"))
+        assertNull(DmDialect.INSTANCE.renderUpsert("id", listOf("name")))
+        assertNull(DmDialect.INSTANCE.renderUpsertStatement("t", listOf("id", "name"), "id"))
     }
 
     // ------------------------------------------------------------------
@@ -155,26 +155,26 @@ class DialectDocGoldenTest {
     @Test
     fun `KingBase方言行为锚点_官方文档结论`() {
         // 分页：PG 兼容形态
-        assertEquals("LIMIT 10", KingBaseDialect.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 10 OFFSET 5", KingBaseDialect.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", KingBaseDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
+        assertEquals("LIMIT 10 OFFSET 5", KingBaseDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
         // 引用：双引号（PG 内核）
-        assertEquals("\"order\"", KingBaseDialect.quoteIdentifier("order"))
+        assertEquals("\"order\"", KingBaseDialect.INSTANCE.quoteIdentifier("order"))
         // 保留字判定（官方清单实证的金仓特有保留字——原 ≈PG 集合漏包项）
-        assertEquals("\"rowid\"", KingBaseDialect.quoteIfKeyword("rowid"))
-        assertEquals("\"rownum\"", KingBaseDialect.quoteIfKeyword("rownum"))
-        assertEquals("\"top\"", KingBaseDialect.quoteIfKeyword("top"))
-        assertEquals("\"binary\"", KingBaseDialect.quoteIfKeyword("binary"))
-        assertEquals("\"minus\"", KingBaseDialect.quoteIfKeyword("minus"))
+        assertEquals("\"rowid\"", KingBaseDialect.INSTANCE.quoteIfKeyword("rowid"))
+        assertEquals("\"rownum\"", KingBaseDialect.INSTANCE.quoteIfKeyword("rownum"))
+        assertEquals("\"top\"", KingBaseDialect.INSTANCE.quoteIfKeyword("top"))
+        assertEquals("\"binary\"", KingBaseDialect.INSTANCE.quoteIfKeyword("binary"))
+        assertEquals("\"minus\"", KingBaseDialect.INSTANCE.quoteIfKeyword("minus"))
         //   常见业务词在金仓非保留（裸用合法）→ 不包裹
-        assertEquals("value", KingBaseDialect.quoteIfKeyword("value"))
-        assertEquals("name", KingBaseDialect.quoteIfKeyword("name"))
-        assertEquals("status", KingBaseDialect.quoteIfKeyword("status"))
+        assertEquals("value", KingBaseDialect.INSTANCE.quoteIfKeyword("value"))
+        assertEquals("name", KingBaseDialect.INSTANCE.quoteIfKeyword("name"))
+        assertEquals("status", KingBaseDialect.INSTANCE.quoteIfKeyword("status"))
         // UPSERT：官方 INSERT 文法 on_conflict_clause + 官方示例 EXCLUDED 用法
         assertEquals(
             "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
-            KingBaseDialect.renderUpsert("id", listOf("name")),
+            KingBaseDialect.INSTANCE.renderUpsert("id", listOf("name")),
         )
-        assertNull(KingBaseDialect.renderUpsertStatement("t", listOf("id", "name"), "id"))
+        assertNull(KingBaseDialect.INSTANCE.renderUpsertStatement("t", listOf("id", "name"), "id"))
     }
 
     // ------------------------------------------------------------------
@@ -190,10 +190,10 @@ class DialectDocGoldenTest {
             "current_schema", "user", "order", "group", "limit", "offset", "table",
         ).forEach { assertTrue("H2 保留字缺失: $it", it in H2_RESERVED) }
         // 常见业务词 H2 非保留（引擎实测裸用合法）→ 不包裹
-        assertEquals("name", H2Dialect.quoteIfKeyword("name"))
-        assertEquals("status", H2Dialect.quoteIfKeyword("status"))
+        assertEquals("name", H2Dialect.INSTANCE.quoteIfKeyword("name"))
+        assertEquals("status", H2Dialect.INSTANCE.quoteIfKeyword("status"))
         // UPSERT 整语句形态（H2 原生 MERGE..KEY；ON CONFLICT 在 H2 任何模式语法错误）
-        assertNull(H2Dialect.renderUpsert("id", listOf("name")))
+        assertNull(H2Dialect.INSTANCE.renderUpsert("id", listOf("name")))
     }
 
     @Test
@@ -208,7 +208,7 @@ class DialectDocGoldenTest {
         // UPSERT 同 MySQL 形态
         assertEquals(
             "ON DUPLICATE KEY UPDATE name = VALUES(name)",
-            MariaDbDialect.renderUpsert("id", listOf("name")),
+            MariaDbDialect.INSTANCE.renderUpsert("id", listOf("name")),
         )
     }
 
@@ -221,7 +221,7 @@ class DialectDocGoldenTest {
         // UPSERT：PG 9.5+ 官方文法（真 PG 容器验证在 Docker 测试）
         assertEquals(
             "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
-            PostgreSQLDialect.renderUpsert("id", listOf("name")),
+            PostgreSQLDialect.INSTANCE.renderUpsert("id", listOf("name")),
         )
     }
 }

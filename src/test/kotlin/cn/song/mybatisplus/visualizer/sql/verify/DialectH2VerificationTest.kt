@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.sql.verify
 
-import cn.song.mybatisplus.visualizer.sql.H2_RESERVED
-import cn.song.mybatisplus.visualizer.sql.MYSQL_RESERVED
-import cn.song.mybatisplus.visualizer.sql.PG_RESERVED
-import cn.song.mybatisplus.visualizer.sql.SQLITE_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.H2_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.MYSQL_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.PG_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.SQLITE_RESERVED
 import org.junit.Assert.assertTrue
 import org.junit.Test
 

@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql.verify
 
-import cn.song.mybatisplus.visualizer.sql.SQLITE_RESERVED
+import cn.song.mybatisplus.visualizer.sql.SqlKeywords.SQLITE_RESERVED
 import org.junit.Assert.assertTrue
 import org.junit.Test
 

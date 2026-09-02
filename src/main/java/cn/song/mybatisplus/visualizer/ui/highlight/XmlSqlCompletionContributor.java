@@ -2,7 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight;
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
-import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisKt;
+import cn.song.mybatisplus.visualizer.sql.SqlTextAnalysis;
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext;
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver;
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider;
@@ -28,7 +28,7 @@ import java.util.List;
  * Mapper XML 源码 SQL 补全贡献器（T-M27-03 + T-M27-04）。
  *
  * 背景：为 {@code <select|insert|update|delete>} 语句提供四类补全，全部基于**纯文本**分析
- * （{@link SqlTextAnalysisKt#stripXmlTags} 等长剥离 + {@link SourceSqlCompleter}），零 PSI 语义分析：
+ * （{@link SqlTextAnalysis#stripXmlTags} 等长剥离 + {@link SourceSqlCompleter}），零 PSI 语义分析：
  *  a. 动态标签补全（T-M27-04）
  *  b. 属性补全
  *  c. OGNL 值内补全（T-M27-04）
@@ -98,7 +98,7 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
                 }
 
                 // d. SQL 补全：语句文本等长剥离标签 → 纯文本分析 → prefixMatches 过滤
-                String stripped = SqlTextAnalysisKt.stripXmlTags(statementText);
+                String stripped = SqlTextAnalysis.stripXmlTags(statementText);
                 SourceSqlContext sqlContext = resolveContext(statementTag);
                 for (LookupElementBuilder item : SourceSqlCompleter.sqlCompletions(stripped, caretInStatement, sqlContext)) {
                     if (prefix.prefixMatches(item.getLookupString())) {
