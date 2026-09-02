@@ -408,6 +408,166 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         assertEquals("UserEntity.findByStatus", info!!.hql)
     }
 
+    // ------------------------------------------------------------------
+    // 变量引用场景（修复：提取为变量的 HQL 应展开为实际字符串）
+    // ------------------------------------------------------------------
+
+    fun testEntityManager_createQuery_variableLiteral() {
+        // String hql = "..."; em.createQuery(hql) — 直接字面量变量
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByUsername(EntityManager em) {
+                    String hql = "SELECT u FROM UserEntity u WHERE u.username = :username";
+                    return em.createQuery(hql, UserEntity.class)
+                        .setParameter("username", "test")
+                        .getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByUsername")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("变量字面量 HQL 应被识别", info)
+        assertEquals("应展开变量值为实际 HQL", "SELECT u FROM UserEntity u WHERE u.username = :username", info!!.hql)
+        assertTrue("应标记为字面量", info.isLiteralHql)
+    }
+
+    fun testEntityManager_createQuery_variableConcat() {
+        // String hql = "select" + " ..."; em.createQuery(hql) — 拼接变量
+        myFixture.configureByText(
+            "BookingService.java",
+            """
+            public class BookingService {
+                public List<Object[]> test(EntityManager em) {
+                    String hql = "select"
+                        + " count(booking.id),"
+                        + " count(case when booking.arrivalTime is not null"
+                        + "   and booking.initialETA is not null"
+                        + "   and booking.arrivalTime < booking.initialETA then 0 end),"
+                        + " count(case when booking.status = 'F' then 0 end)"
+                        + " from WmsDockBooking booking"
+                        + " where booking.warehouseId = :warehouseId"
+                        + " and booking.type = 'R'"
+                        + " and booking.updateInfo.createdTime >= :startTime"
+                        + " and booking.updateInfo.createdTime < :endTime";
+                    return em.createQuery(hql).getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString);
+            }
+            interface Query {
+                List getResultList();
+            }
+            class WmsDockBooking {}
+            """.trimIndent(),
+        )
+        val method = findMethod("test")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("拼接变量 HQL 应被识别", info)
+        // 拼接结果应包含关键片段
+        assertTrue("应展开拼接结果，非变量名", !info!!.hql.equals("hql", ignoreCase = true))
+        assertTrue("应含 select 片段", info.hql.contains("select"))
+        assertTrue("应含 from 片段", info.hql.contains("from WmsDockBooking"))
+        assertTrue("应含 where 片段", info.hql.contains("where"))
+        assertTrue("应标记为字面量", info.isLiteralHql)
+    }
+
+    fun testEntityManager_createQuery_finalConstantField() {
+        // static final String HQL = "..."; em.createQuery(HQL) — final 常量字段
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                static final String HQL = "SELECT u FROM UserEntity u WHERE u.status = :status";
+                public List<UserEntity> findByStatus(EntityManager em) {
+                    return em.createQuery(HQL, UserEntity.class)
+                        .setParameter("status", 1)
+                        .getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List getResultList();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByStatus")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("final 常量字段 HQL 应被识别", info)
+        assertEquals("应展开常量值为实际 HQL", "SELECT u FROM UserEntity u WHERE u.status = :status", info!!.hql)
+        assertTrue("应标记为字面量", info.isLiteralHql)
+    }
+
+    fun testEntityManager_createQuery_methodParameter_gracefulDegradation() {
+        // void foo(String hql) { em.createQuery(hql); } — 方法参数无法静态解析
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByHql(EntityManager em, String hql) {
+                    return em.createQuery(hql, UserEntity.class).getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query {
+                List getResultList();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByHql")
+        val info = HqlQueryLocator.locate(method)
+        // 方法参数无 initializer，应优雅降级：返回变量名 + isLiteralHql=false
+        assertNotNull("方法参数场景不应崩溃", info)
+        assertEquals("无法解析时应返回变量名", "hql", info!!.hql)
+        assertFalse("非字面量应标记 false", info.isLiteralHql)
+    }
+
+    fun testEntityManager_createQuery_variableConcat_withParam() {
+        // String hql = "..." + userName + "..."; em.createQuery(hql) — 拼接中含变量引用
+        // collectStringLiterals 只收集 PsiLiteralExpression，变量引用部分会丢失
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findByName(EntityManager em, String userName) {
+                    String hql = "select u from UserEntity u where u.name = '" + userName + "'";
+                    return em.createQuery(hql, UserEntity.class).getResultList();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString, Class resultClass);
+            }
+            interface Query { List getResultList(); }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByName")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("含参数拼接变量不应崩溃", info)
+        // 字面量部分能收集到，变量引用部分丢失：结果为 "select u from UserEntity u where u.name = ''"
+        assertTrue("应展开字面量部分，非变量名", !info!!.hql.equals("hql", ignoreCase = true))
+        assertTrue("应含 select 片段", info.hql.contains("select u from UserEntity u where u.name = '"))
+        assertTrue("应标记为字面量（部分展开）", info.isLiteralHql)
+    }
+
     private fun findMethod(methodName: String): PsiMethod {
         val methods = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethod::class.java)
         return methods.firstOrNull { it.name == methodName }
