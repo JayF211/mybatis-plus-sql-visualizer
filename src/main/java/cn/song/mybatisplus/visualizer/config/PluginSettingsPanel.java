@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo;
+import cn.song.mybatisplus.visualizer.log.InjectionResult;
+import cn.song.mybatisplus.visualizer.log.SqlSourceInterceptorAutoInjector;
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager;
 import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -354,6 +356,9 @@ public class PluginSettingsPanel {
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private final JBTextField logTimePrefixField = new JBTextField(12);
     private final JBTextField slowQueryThresholdField = new JBTextField(12);
+
+    // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
+    private final JBCheckBox autoInjectInterceptorCheck = new JBCheckBox();
     private final JBCheckBox logShowDurationCheck = new JBCheckBox();
 
     /**
@@ -599,6 +604,19 @@ public class PluginSettingsPanel {
 
                 logAutoSavePatternPreview.setToolTipText(msg("settings.log.autoSave.pattern.preview.tip"));
                 addRow(p, g, "", logAutoSavePatternPreview);
+            });
+
+            // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
+            sectionGroup(panel, gbc, "settings.log.tab.sourceCapture", (p2, g2) -> {
+                autoInjectInterceptorCheck.setText(msg("settings.log.autoInjectInterceptor"));
+                autoInjectInterceptorCheck.setToolTipText(msg("settings.log.autoInjectInterceptor.tip"));
+                autoInjectInterceptorCheck.addActionListener(e -> {
+                    if (autoInjectInterceptorCheck.isSelected()) {
+                        // 触发注入
+                        triggerInterceptorInjection();
+                    }
+                });
+                addRow(p2, g2, "", autoInjectInterceptorCheck);
             });
         }
 
@@ -1020,6 +1038,51 @@ public class PluginSettingsPanel {
     }
 
     // ------------------------------------------------------------------
+    // F-44-7：SqlSourceInterceptor 自动注入
+    // ------------------------------------------------------------------
+
+    /** 触发拦截器注入（用户勾选开关后调用）。 */
+    private void triggerInterceptorInjection() {
+        Project project = ProjectManager.getInstance().getOpenProjects().length > 0
+                ? ProjectManager.getInstance().getOpenProjects()[0]
+                : null;
+        if (project == null) {
+            Messages.showWarningDialog(
+                    (Component) null,
+                    "请先打开一个项目，再启用源码捕获拦截器自动注入。",
+                    "源码跳转配置");
+            autoInjectInterceptorCheck.setSelected(false);
+            return;
+        }
+        InjectionResult result = SqlSourceInterceptorAutoInjector.inject(project);
+        if (result instanceof InjectionResult.Success) {
+            Messages.showInfoMessage(
+                    project,
+                    ((InjectionResult.Success) result).getMessage(),
+                    "源码跳转配置");
+        } else if (result instanceof InjectionResult.AlreadyExists) {
+            Messages.showInfoMessage(
+                    project,
+                    "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
+                    "源码跳转配置");
+            autoInjectInterceptorCheck.setSelected(false);
+        } else if (result instanceof InjectionResult.UnsupportedProject) {
+            Messages.showWarningDialog(
+                    project,
+                    "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n"
+                            + "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
+                    "源码跳转配置");
+            autoInjectInterceptorCheck.setSelected(false);
+        } else if (result instanceof InjectionResult.CannotDetectStructure) {
+            Messages.showWarningDialog(
+                    project,
+                    "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
+                    "源码跳转配置");
+            autoInjectInterceptorCheck.setSelected(false);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 配置读写
     // ------------------------------------------------------------------
 
@@ -1103,7 +1166,8 @@ public class PluginSettingsPanel {
             || logJdbcEnabledCheck.isSelected() != s.getLogJdbcEnabled()
             || logAutoSaveCheck.isSelected() != s.getLogAutoSaveEnabled()
             || !logAutoSavePathField.getText().trim().equals(s.getLogAutoSavePath())
-            || !logAutoSavePatternField.getText().trim().equals(s.getLogAutoSaveFileNamePattern());
+            || !logAutoSavePatternField.getText().trim().equals(s.getLogAutoSaveFileNamePattern())
+            || autoInjectInterceptorCheck.isSelected() != s.getAutoInjectSqlSourceInterceptor();
     }
 
     private boolean isModifiedUi(PluginSettings.State s) {
@@ -1190,6 +1254,7 @@ public class PluginSettingsPanel {
             s.setLogAutoSaveFileNamePattern(pattern.isEmpty()
                 ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
                 : pattern);
+            s.setAutoInjectSqlSourceInterceptor(autoInjectInterceptorCheck.isSelected());
         }
         if (sections.contains(SECTION_UI)) {
             s.setShowGutterIcon(gutterIconCheck.isSelected());
@@ -1290,6 +1355,7 @@ public class PluginSettingsPanel {
             logAutoSaveBrowseButton.setEnabled(autoSaveEnabled);
             logAutoSavePatternField.setEnabled(autoSaveEnabled);
             updateAutoSavePreview();
+            autoInjectInterceptorCheck.setSelected(s.getAutoInjectSqlSourceInterceptor());
         }
     }
 

@@ -34,11 +34,14 @@ import com.intellij.openapi.fileEditor.impl.HTMLEditorProvider;
 import com.intellij.openapi.options.ShowSettingsUtil;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.Task;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.ui.SearchTextField;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBList;
@@ -801,12 +804,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
     public LogJumpTarget resolveEntryJump(LogSqlEntry entry) {
         if (entry.sourceFile() != null) {
-            String basePath = project.getBasePath();
-            if (basePath == null) {
-                return LjtNoSource.INSTANCE;
-            }
-            String fullPath = basePath + "/" + entry.sourceFile();
-            VirtualFile vf = LocalFileSystem.getInstance().findFileByPath(fullPath);
+            // F-44-7：标记路径相对于源码根目录（如 src/main/java），需在所有源码根目录中搜索
+            VirtualFile vf = findSourceFile(entry.sourceFile());
             if (vf != null) {
                 return new LjtPrecise(vf, Math.max(0, entry.sourceLine() - 1));
             }
@@ -824,6 +823,32 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗/后台搜索）。 */
     public void jumpToSourceForTest(LogSqlEntry entry) {
         jumpToSource(entry);
+    }
+
+    /**
+     * F-44-7：在项目所有源码根目录中搜索文件。
+     * 标记路径（如 cn/example/service/UserService.java）相对于源码根目录，
+     * 需拼接 src/main/java 等前缀才能定位到实际文件。
+     */
+    private VirtualFile findSourceFile(String relativePath) {
+        // 策略 1：直接在项目根目录查找（兼容历史面板精确跳转）
+        String basePath = project.getBasePath();
+        if (basePath != null) {
+            VirtualFile direct = LocalFileSystem.getInstance().findFileByPath(basePath + "/" + relativePath);
+            if (direct != null) {
+                return direct;
+            }
+        }
+        // 策略 2：在所有源码根目录中搜索（兼容 SqlSourceInterceptor 标记路径）
+        for (Module module : ModuleManager.getInstance(project).getModules()) {
+            for (VirtualFile sourceRoot : ModuleRootManager.getInstance(module).getSourceRoots()) {
+                VirtualFile file = LocalFileSystem.getInstance().findFileByPath(sourceRoot.getPath() + "/" + relativePath);
+                if (file != null) {
+                    return file;
+                }
+            }
+        }
+        return null;
     }
 
     /**

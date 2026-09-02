@@ -129,6 +129,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean dataPermissionHint = false;
         private String dataPermissionMockCondition = "";
         private int historyMaxSize = DEFAULT_HISTORY_MAX_SIZE;
+        // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
+        /** F-44-7：自动注入 SqlSourceInterceptor（源码位置捕获）。默认关。 */
+        private boolean autoInjectSqlSourceInterceptor = false;
         private Set<String> collapsedGroups = new HashSet<>();
 
         public String getDialect() { return dialect; }
@@ -281,6 +284,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public int getHistoryMaxSize() { return historyMaxSize; }
         public void setHistoryMaxSize(int historyMaxSize) { this.historyMaxSize = historyMaxSize; }
 
+        public boolean getAutoInjectSqlSourceInterceptor() { return autoInjectSqlSourceInterceptor; }
+        public void setAutoInjectSqlSourceInterceptor(boolean autoInjectSqlSourceInterceptor) { this.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor; }
+
         public Set<String> getCollapsedGroups() { return collapsedGroups; }
         public void setCollapsedGroups(Set<String> collapsedGroups) { this.collapsedGroups = collapsedGroups; }
 
@@ -338,6 +344,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.dataPermissionHint = dataPermissionHint;
             c.dataPermissionMockCondition = dataPermissionMockCondition;
             c.historyMaxSize = historyMaxSize;
+            c.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor;
             c.collapsedGroups = collapsedGroups;
             return c;
         }
@@ -371,6 +378,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && slowQueryThresholdMs == that.slowQueryThresholdMs
                     && showDurationInLogList == that.showDurationInLogList
                     && historyMaxSize == that.historyMaxSize
+                    && autoInjectSqlSourceInterceptor == that.autoInjectSqlSourceInterceptor
                     && Objects.equals(dialect, that.dialect)
                     && Objects.equals(language, that.language)
                     && Objects.equals(logicDeleteValue, that.logicDeleteValue)
@@ -412,7 +420,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logFormatSql, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
-                    dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize, collapsedGroups);
+                    dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
+                    autoInjectSqlSourceInterceptor, collapsedGroups);
         }
 
         @Override

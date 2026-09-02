@@ -244,6 +244,16 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.2</h2>
+            <ul>
+                <li>SQL 预览面板原生 Database 控制台内嵌</li>
+                <li>SQL 预览原生语法高亮 + 智能补全</li>
+                <li>JPA/Hibernate：HQL 关联字段解析 + Hibernate XML 映射支持 + maintainPage XML 预览</li>
+                <li>SQL 日志合并主侧边栏 + 精确跳转源码 + 自动保存历史 + 两级导航</li>
+                <li>JOIN 关系图自绘 Swing 引擎</li>
+                <li>Spring JdbcTemplate SQL 日志捕获</li>
+                <li>设置页左侧树导航 + 折叠面板 + 搜索过滤</li>
+            </ul>
             <h2>v2026.8.21</h2>
             <ul>
                 <li>JPA/Hibernate SQL 预览支持（Derived / CriteriaQuery / HQL 三种查询风格）</li>
