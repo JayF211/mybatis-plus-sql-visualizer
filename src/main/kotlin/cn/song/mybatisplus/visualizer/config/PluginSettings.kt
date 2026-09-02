@@ -219,6 +219,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var slowQueryThresholdMs: Long = DEFAULT_SLOW_QUERY_THRESHOLD_MS,
 
         /**
+         * 是否在 SQL 日志列表中显示耗时列（默认开启）。
+         * false 时隐藏耗时，节省列表宽度。
+         */
+        var showDurationInLogList: Boolean = true,
+
+        /**
          * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
          * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
          * 空字符串表示无历史。

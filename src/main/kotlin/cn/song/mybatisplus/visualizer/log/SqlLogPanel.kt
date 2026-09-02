@@ -1118,17 +1118,18 @@ private fun formatTimestampHtml(timestamp: Long): String {
     return "<span style='color:#9E9E9E'>[${escapeHtml(formatted)}]</span> "
 }
 
-/** 耗时 HTML 片段：根据阈值套不同颜色——无耗时则返回空串。 */
+/** 耗时 HTML 片段：根据阈值套不同颜色——无耗时显示 "—" 占位。 */
 private fun formatDurationHtml(ms: Long?, isSelected: Boolean): String {
-    if (ms == null) return ""
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
         isSelected -> "#FFFFFF"
-        ms >= threshold -> "#D32F2F"   // 红：慢查询
-        ms >= threshold / 2 -> "#E67E22" // 橙：偏慢
-        else -> "#9E9E9E"              // 灰：正常
+        ms == null -> "#9E9E9E"            // 灰：无耗时
+        ms >= threshold -> "#D32F2F"      // 红：慢查询
+        ms >= threshold / 2 -> "#E67E22"  // 橙：偏慢
+        else -> "#4CAF50"                 // 绿：正常
     }
-    return "<span style='color:${color}'>${ms}ms</span> "
+    val text = ms?.let { "${it}ms" } ?: "—"
+    return "<span style='color:${color}'>$text</span> "
 }
 
 /** 单行 HTML 转义（防注入日志中的特殊字符）。 */
@@ -1157,8 +1158,9 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
         text = null
         if (entry != null) {
             val timestampHtml = formatTimestampHtml(entry.timestamp)
-            val durationHtml = formatDurationHtml(entry.executionTimeMs, isSelected)
-            val sqlHtml = SqlListHtmlRenderer.render(entry.summary)
+            val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
+                formatDurationHtml(entry.executionTimeMs, isSelected) else ""
+            val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
             val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
             this.text = "<html>${timestampHtml}${durationHtml}${sqlHtml}${dedupeBadge}</html>"
             toolTipText = entry.restoredSql

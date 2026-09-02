@@ -563,13 +563,16 @@ internal fun processConsoleLine(
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
     if (taken.isEmpty()) return emptyList()
     // 3) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
-    val executionTimeMs = ExecutionTimeParser.parse(line, timePrefix)
+    // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
+    // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
+    val lineDuration = ExecutionTimeParser.parse(line, timePrefix)
     val src = ctx.pendingSource
     val result = taken.map { e ->
+        val duration = lineDuration ?: LogDurationParser.parse(e)
         e.copy(
             sourceFile = src?.first,
             sourceLine = src?.second ?: 0,
-            executionTimeMs = executionTimeMs ?: e.executionTimeMs,
+            executionTimeMs = duration ?: e.executionTimeMs,
         )
     }
     if (src != null) ctx.pendingSource = null

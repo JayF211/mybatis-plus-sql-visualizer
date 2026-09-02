@@ -222,6 +222,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private val logTimePrefixField = JBTextField(12)
     private val slowQueryThresholdField = JBTextField(12)
+    private val logShowDurationCheck = JBCheckBox()
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -447,6 +448,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
+                })
+                addRow(p, g, "", logShowDurationCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.showDuration")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
                 })
             }
 
@@ -885,6 +890,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logMaxCountField.text.trim().toIntOrNull() != s.logMaxCount
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
+            || logShowDurationCheck.isSelected != s.showDurationInLogList
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -951,6 +957,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logTimePrefix = logTimePrefixField.text.trim()
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
+            s.showDurationInLogList = logShowDurationCheck.isSelected
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -1042,6 +1049,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logMaxCountField.text = s.logMaxCount.toString()
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
+            logShowDurationCheck.isSelected = s.showDurationInLogList
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix
