@@ -91,26 +91,36 @@
         <!-- 界面与操作（gutter图标/语言/快捷键） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.ui"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.ui"
                                  instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
 
         <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.preview"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.preview"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlPreviewConfigurable"/>
 
         <!-- 表名映射（前缀/后缀/移除/忽略字段/推断策略） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.tableMapping"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.tableMapping"
                                  instance="cn.song.mybatisplus.visualizer.config.TableMappingConfigurable"/>
 
         <!-- SQL 日志（前缀/自动捕获/时间戳/格式化/过滤/去重/最大条数/耗时/慢查询/Hibernate/Jdbc/自动保存） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.sqlLog"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.sqlLog"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
 
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
@@ -200,10 +210,8 @@
                     factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/> -->
     </extensions>
 
-    <!-- F-4：Kotlin plugin mode 声明（Marketplace 要求：依赖 Kotlin 插件需声明兼容模式） -->
-    <extensions defaultExtensionNs="org.jetbrains.kotlin">
-        <supportsKotlinPluginMode supportsKotlinPluginMode="true"/>
-    </extensions>
+    <!-- F-4：Kotlin plugin mode 声明已移除——supportsKotlinPluginMode 非当前 Kotlin 插件版本识别的扩展点；
+         可选依赖已通过上方 <depends optional="true" config-file="kotlin-optional.xml"> 声明，Marketplace 合规无影响 -->
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
     <actions>
