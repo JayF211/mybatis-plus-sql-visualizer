@@ -80,7 +80,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private List<LogSqlEntry> currentEntries = List.of();
 
     private final SearchTextField searchField = new SearchTextField();
-    private final JButton backButton = new JButton(MpSqlVisualizerBundle.message("log.history.back"));
+    private final JButton backButton = new JButton();
+    private final JButton refreshButton = new JButton();
 
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel cards = new JPanel(cardLayout);
@@ -91,11 +92,18 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         super(new BorderLayout());
         this.project = project;
         backButton.setIcon(AllIcons.Actions.Back);
-        backButton.setHorizontalTextPosition(SwingConstants.RIGHT); // 图标在左、文字在右
         backButton.setFocusable(false);
         backButton.setToolTipText(MpSqlVisualizerBundle.message("log.history.back.tip"));
+        backButton.setPreferredSize(new Dimension(28, 28));
+        backButton.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
         backButton.addActionListener(e -> showFileList());
         backButton.setVisible(false); // 默认一级，不显示返回
+        refreshButton.setIcon(AllIcons.Actions.Refresh);
+        refreshButton.setToolTipText(MpSqlVisualizerBundle.message("log.history.refresh.tip"));
+        refreshButton.setFocusable(false);
+        refreshButton.setPreferredSize(new Dimension(28, 28));
+        refreshButton.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+        refreshButton.addActionListener(e -> refresh());
         buildUI();
         refresh();
     }
@@ -144,9 +152,6 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         toolbar.add(backButton);
-        JButton refreshButton = new JButton(MpSqlVisualizerBundle.message("log.history.refresh"));
-        refreshButton.setToolTipText(MpSqlVisualizerBundle.message("log.history.refresh.tip"));
-        refreshButton.addActionListener(e -> refresh());
         toolbar.add(refreshButton);
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.files"));
         Dimension minSize = searchField.getTextEditor().getMinimumSize();
