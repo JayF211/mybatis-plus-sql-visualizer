@@ -14,7 +14,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
-import cn.song.mybatisplus.visualizer.psi.PsiDialectKt;
+import cn.song.mybatisplus.visualizer.psi.PsiDialect;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
@@ -48,12 +48,12 @@ public final class QueryWrapperParser {
 
     /** 单表查询（无列前缀，方言取当前设置）。 */
     public QueryWrapperParser(TableInfo table) {
-        this(table, null, PsiDialectKt.currentDialect());
+        this(table, null, PsiDialect.currentDialect());
     }
 
     /** 联表场景（指定列前缀，方言取当前设置）。 */
     public QueryWrapperParser(TableInfo table, String columnPrefix) {
-        this(table, columnPrefix, PsiDialectKt.currentDialect());
+        this(table, columnPrefix, PsiDialect.currentDialect());
     }
 
     /** 完整构造（子查询递归沿用同一方言）。 */

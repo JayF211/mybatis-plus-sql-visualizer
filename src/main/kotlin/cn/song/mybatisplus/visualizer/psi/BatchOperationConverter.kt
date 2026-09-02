@@ -151,7 +151,7 @@ object BatchOperationConverter {
      * T-M23.4：注入当前方言（关键字标识符引用——保留字列名按方言符号包裹；设置服务不可用时兜底 MySQL）。
      */
     private fun modelBuild(model: BatchModel): BatchBuild {
-        val model = model.copy(currentDialect())
+        val model = model.copy(PsiDialect.currentDialect())
         val initialActive = (model.toggleColumns.filter { it.isChecked() }.map { it.columnName } +
             model.fixedColumns.map { it.columnName }).toSet()
         val params = model.orderedColumns(initialActive).map { ParamEntry(it.source, ParamHint(quote = it.quote)) }
@@ -433,7 +433,7 @@ object BatchOperationConverter {
         injectLogicDelete: Boolean,
         resolveVariables: Boolean,
     ): BatchBuild {
-        val dialect = currentDialect()
+        val dialect = PsiDialect.currentDialect()
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
         val singleId = methodName in SINGLE_ID_DELETE_METHODS
@@ -472,7 +472,7 @@ object BatchOperationConverter {
         injectLogicDelete: Boolean,
         resolveVariables: Boolean,
     ): BatchBuild {
-        val dialect = currentDialect()
+        val dialect = PsiDialect.currentDialect()
         val idColumn = table.columns.firstOrNull { it.isId } ?: table.columns.first()
         // T-M23.5：全列清单/表名/条件列名按方言引用（用户实测：批量 SELECT 未处理关键字列）
         val selectColumns = table.columns.joinToString(", ") { dialect.quoteIfKeyword(it.columnName) }
@@ -506,7 +506,7 @@ object BatchOperationConverter {
      * SELECT 同理追加 `AND deleted = 0`。
      */
     private fun buildMapConditionBatch(methodName: String, table: TableInfo, injectLogicDelete: Boolean): BatchBuild {
-        val dialect = currentDialect()
+        val dialect = PsiDialect.currentDialect()
         val isDelete = methodName.startsWith("remove") || methodName.startsWith("delete")
         val logicColumn = if (injectLogicDelete) table.logicDeleteColumn else null
         val condition = "<Map 等值条件: col = ? AND col = ? ...>" + (logicColumn?.let { " AND ${dialect.quoteIfKeyword(it)} = 0" } ?: "")
@@ -556,7 +556,7 @@ object BatchOperationConverter {
         call: PsiMethodCallExpression,
         idColumn: ColumnInfo,
         resolveVariables: Boolean,
-        dialect: Dialect = currentDialect(),
+        dialect: Dialect = PsiDialect.currentDialect(),
     ): Pair<String, List<ParamEntry>> {
         val args = call.argumentList.expressions
         val idExpr = if (args.size > 1) args[1] else args.firstOrNull()
