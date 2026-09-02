@@ -449,7 +449,7 @@ public final class SqlPreviewService {
             else tableName = "";
             return new PreviewResult(
                     convertedSql, convertedSql, paramNames,
-                    ParameterReplacer.INSTANCE.buildParamTable(paramNames),
+                    ParameterReplacer.buildParamTable(paramNames),
                     null, tableName, null,
                     table != null ? table.getAllColumnNames() : List.of(),
                     Map.of(), null, null,
@@ -545,7 +545,7 @@ public final class SqlPreviewService {
         if (tableName == null) tableName = (info.getEntityClassName() != null) ? info.getEntityClassName() : "";
         return new PreviewResult(
                 sql, sql.replaceAll("\\s+", " ").trim(), paramNames,
-                ParameterReplacer.INSTANCE.buildParamTable(paramNames),
+                ParameterReplacer.buildParamTable(paramNames),
                 null, tableName, null,
                 List.of(), Map.of(), null, null,
                 paramNames.stream().map(n -> new ParamHint(Boolean.valueOf(!isNumericParam(info.getMethod(), n)), null, false)).toList(),
@@ -642,7 +642,7 @@ public final class SqlPreviewService {
                 convertedSql,
                 convertedSql.replaceAll("\\s+", " ").trim(),
                 paramNames,
-                ParameterReplacer.INSTANCE.buildParamTable(paramNames),
+                ParameterReplacer.buildParamTable(paramNames),
                 null,
                 tableName,
                 buildJpaWarning(statement),
@@ -726,7 +726,7 @@ public final class SqlPreviewService {
                 generated.getSql(),
                 SqlGenerator.INSTANCE.generate(statement, true, dialect, null),
                 generated.getUnresolvedParams(),
-                ParameterReplacer.INSTANCE.buildParamTable(generated.getUnresolvedParams()),
+                ParameterReplacer.buildParamTable(generated.getUnresolvedParams()),
                 wrapperType,
                 table.getTableName(),
                 buildWarning(statement),
@@ -750,7 +750,7 @@ public final class SqlPreviewService {
      */
     private List<PerfWarning> analyzePerf(@NotNull String sql, @NotNull SqlStatement statement) {
         if (!(statement instanceof SelectStatement)) return null;
-        List<PerfWarning> warnings = SqlPerfAnalyzer.INSTANCE.analyze(sql);
+        List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql);
         return warnings.isEmpty() ? null : warnings;
     }
 

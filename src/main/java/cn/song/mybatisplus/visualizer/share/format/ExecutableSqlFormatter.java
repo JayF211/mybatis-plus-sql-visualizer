@@ -38,7 +38,7 @@ public final class ExecutableSqlFormatter {
             @NotNull List<String> sources,
             @NotNull Map<String, String> paramValues,
             @Nullable List<ParamHint> hints) {
-        return ParameterReplacer.INSTANCE.buildExecutableSql(sql, sources, paramValues, hints);
+        return ParameterReplacer.buildExecutableSql(sql, sources, paramValues, hints);
     }
 
     /** 便捷重载：无回填提示时调用（对应 Kotlin 默认值 {@code hints = emptyList()}）。 */

@@ -62,10 +62,10 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_数值参数_不加引号`() {
         val sql = "SELECT id FROM tbl WHERE id = ? AND age > ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id", "age"),
-            paramValues = mapOf("id" to "1001", "age" to "18"),
-            hints = listOf(ParamHint(false), ParamHint(false)),
+            sql,
+            listOf("id", "age"),
+            mapOf("id" to "1001", "age" to "18"),
+            listOf(ParamHint(false), ParamHint(false)),
         )
         assertEquals("SELECT id FROM tbl WHERE id = 1001 AND age > 18", result)
     }
@@ -74,10 +74,10 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_字符串参数_加引号`() {
         val sql = "SELECT id FROM tbl WHERE name = ? AND city = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("name", "city"),
-            paramValues = mapOf("name" to "John", "city" to "Beijing"),
-            hints = listOf(ParamHint(true), ParamHint(true)),
+            sql,
+            listOf("name", "city"),
+            mapOf("name" to "John", "city" to "Beijing"),
+            listOf(ParamHint(true), ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE name = 'John' AND city = 'Beijing'", result)
     }
@@ -86,10 +86,10 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_空值保留占位符`() {
         val sql = "SELECT id FROM tbl WHERE id = ? AND name = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id", "name"),
-            paramValues = mapOf("id" to "1001"),
-            hints = listOf(ParamHint(false), ParamHint(true)),
+            sql,
+            listOf("id", "name"),
+            mapOf("id" to "1001"),
+            listOf(ParamHint(false), ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE id = 1001 AND name = ?", result)
     }
@@ -98,10 +98,10 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_单引号转义防注入`() {
         val sql = "SELECT id FROM tbl WHERE name = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("name"),
-            paramValues = mapOf("name" to "O'Brien"),
-            hints = listOf(ParamHint(true)),
+            sql,
+            listOf("name"),
+            mapOf("name" to "O'Brien"),
+            listOf(ParamHint(true)),
         )
         assertEquals("SELECT id FROM tbl WHERE name = 'O''Brien'", result)
     }
@@ -110,9 +110,9 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_无参数原样返回`() {
         val sql = "SELECT id FROM tbl"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = emptyList(),
-            paramValues = emptyMap(),
+            sql,
+            emptyList(),
+            emptyMap(),
         )
         assertEquals("SELECT id FROM tbl", result)
     }
@@ -121,10 +121,10 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_启发式数值判定_无hint时`() {
         val sql = "SELECT id FROM tbl WHERE id = ? AND name = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id", "name"),
-            paramValues = mapOf("id" to "42", "name" to "Alice"),
-            hints = emptyList(),
+            sql,
+            listOf("id", "name"),
+            mapOf("id" to "42", "name" to "Alice"),
+            emptyList(),
         )
         // 无 hint 时走启发式：纯数字不加引号，非数字加引号
         assertEquals("SELECT id FROM tbl WHERE id = 42 AND name = 'Alice'", result)
@@ -134,10 +134,10 @@ class ParameterReplacerTest {
     fun `buildExecutableSql_参数多于占位符_忽略多余参数`() {
         val sql = "SELECT id FROM tbl WHERE id = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id"),
-            paramValues = mapOf("id" to "1", "extra" to "x"),
-            hints = listOf(ParamHint(false)),
+            sql,
+            listOf("id"),
+            mapOf("id" to "1", "extra" to "x"),
+            listOf(ParamHint(false)),
         )
         assertEquals("SELECT id FROM tbl WHERE id = 1", result)
     }

@@ -83,7 +83,7 @@ public final class PagesXmlPreviewService {
                 sql,
                 WHITESPACE_REGEX.matcher(sql).replaceAll(" ").trim(),
                 params,
-                ParameterReplacer.INSTANCE.buildParamTable(params),
+                ParameterReplacer.buildParamTable(params),
                 null,
                 entityContext != null ? entityContext.tableName : null,
                 null,

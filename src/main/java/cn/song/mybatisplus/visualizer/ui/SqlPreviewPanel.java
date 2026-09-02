@@ -867,7 +867,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public boolean copySql() {
         String raw = firstNonBlankSql();
         if (raw == null) return false;
-        String text = SqlCommentStripper.INSTANCE.strip(raw);
+        String text = SqlCommentStripper.strip(raw);
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
         if (project != null) {
             String[] options = new String[]{

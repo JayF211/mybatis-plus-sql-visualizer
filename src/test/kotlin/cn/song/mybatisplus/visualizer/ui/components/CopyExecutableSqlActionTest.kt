@@ -19,10 +19,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_委托验证_数值与字符串混合`() {
         val sql = "SELECT * FROM t WHERE id = ? AND name = ? AND age > ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id", "name", "age"),
-            paramValues = mapOf("id" to "1", "name" to "Alice", "age" to "18"),
-            hints = listOf(ParamHint(false), ParamHint(true), ParamHint(false)),
+            sql,
+            listOf("id", "name", "age"),
+            mapOf("id" to "1", "name" to "Alice", "age" to "18"),
+            listOf(ParamHint(false), ParamHint(true), ParamHint(false)),
         )
         assertEquals("SELECT * FROM t WHERE id = 1 AND name = 'Alice' AND age > 18", result)
     }
@@ -31,10 +31,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_空值保留占位符_复制时跳过`() {
         val sql = "SELECT * FROM t WHERE id = ? AND name = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id", "name"),
-            paramValues = mapOf("id" to "1"),
-            hints = listOf(ParamHint(false), ParamHint(true)),
+            sql,
+            listOf("id", "name"),
+            mapOf("id" to "1"),
+            listOf(ParamHint(false), ParamHint(true)),
         )
         // id 替换，name 未填保留 ?
         assertEquals("SELECT * FROM t WHERE id = 1 AND name = ?", result)
@@ -44,10 +44,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_全空值_结果与原始一致`() {
         val sql = "SELECT * FROM t WHERE id = ? AND name = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("id", "name"),
-            paramValues = emptyMap(),
-            hints = listOf(ParamHint(false), ParamHint(true)),
+            sql,
+            listOf("id", "name"),
+            emptyMap(),
+            listOf(ParamHint(false), ParamHint(true)),
         )
         assertEquals(sql, result)
     }
@@ -56,10 +56,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_日期字符串_加引号`() {
         val sql = "SELECT * FROM t WHERE created_at > ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("createdAt"),
-            paramValues = mapOf("createdAt" to "2026-01-01"),
-            hints = listOf(ParamHint(true)),
+            sql,
+            listOf("createdAt"),
+            mapOf("createdAt" to "2026-01-01"),
+            listOf(ParamHint(true)),
         )
         assertEquals("SELECT * FROM t WHERE created_at > '2026-01-01'", result)
     }
@@ -68,10 +68,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_小数数值_不加引号`() {
         val sql = "SELECT * FROM t WHERE price < ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("price"),
-            paramValues = mapOf("price" to "19.99"),
-            hints = listOf(ParamHint(false)),
+            sql,
+            listOf("price"),
+            mapOf("price" to "19.99"),
+            listOf(ParamHint(false)),
         )
         assertEquals("SELECT * FROM t WHERE price < 19.99", result)
     }
@@ -80,10 +80,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_启发式_负数数值`() {
         val sql = "SELECT * FROM t WHERE delta = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("delta"),
-            paramValues = mapOf("delta" to "-5"),
-            hints = emptyList(),
+            sql,
+            listOf("delta"),
+            mapOf("delta" to "-5"),
+            emptyList(),
         )
         // 无 hint 走启发式：-5 匹配 NUMBER_REGEX → 不加引号
         assertEquals("SELECT * FROM t WHERE delta = -5", result)
@@ -102,10 +102,10 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_值含单引号_转义为双单引号`() {
         val sql = "SELECT * FROM t WHERE name = ?"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = listOf("name"),
-            paramValues = mapOf("name" to "It's a test"),
-            hints = listOf(ParamHint(true)),
+            sql,
+            listOf("name"),
+            mapOf("name" to "It's a test"),
+            listOf(ParamHint(true)),
         )
         assertEquals("SELECT * FROM t WHERE name = 'It''s a test'", result)
     }
@@ -114,9 +114,9 @@ class CopyExecutableSqlActionTest {
     fun `buildExecutableSql_无参数SQL_原样返回`() {
         val sql = "SELECT 1"
         val result = ParameterReplacer.buildExecutableSql(
-            sql = sql,
-            sources = emptyList(),
-            paramValues = emptyMap(),
+            sql,
+            emptyList(),
+            emptyMap(),
         )
         assertEquals("SELECT 1", result)
     }

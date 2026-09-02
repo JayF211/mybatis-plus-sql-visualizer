@@ -49,7 +49,7 @@ public final class CopyExecutableSqlAction {
             return false;
         }
         // 复制时剥离 SQL 注释（与 copySql 对齐）
-        String sql = SqlCommentStripper.INSTANCE.strip(raw);
+        String sql = SqlCommentStripper.strip(raw);
         List<String> sources = panel.unresolvedParams();
         Map<String, String> paramValues = panel.paramValuesSnapshot();
 
@@ -58,7 +58,7 @@ public final class CopyExecutableSqlAction {
             executableSql = sql;
         } else {
             // hints 默认值 emptyList()：显式传入（Java 调用 Kotlin 带默认参数方法须全参）
-            executableSql = ParameterReplacer.INSTANCE.buildExecutableSql(sql, sources, paramValues, List.of());
+            executableSql = ParameterReplacer.buildExecutableSql(sql, sources, paramValues, List.of());
         }
 
         copyToClipboard(executableSql);

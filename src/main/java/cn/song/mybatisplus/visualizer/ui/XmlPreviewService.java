@@ -177,7 +177,7 @@ public final class XmlPreviewService {
         for (ParameterMapping mp : rendered.mappings()) {
             unresolvedParams.add(mp.property());
         }
-        String paramTable = ParameterReplacer.INSTANCE.buildParamTable(unresolvedParams);
+        String paramTable = ParameterReplacer.buildParamTable(unresolvedParams);
 
         String joined = String.join("；", errors);
         String warning = joined.isEmpty() ? null : joined;
