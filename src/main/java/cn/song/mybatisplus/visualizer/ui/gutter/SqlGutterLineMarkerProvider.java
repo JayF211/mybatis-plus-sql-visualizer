@@ -39,7 +39,7 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
     @Override
     @Nullable
     public LineMarkerInfo<PsiElement> getLineMarkerInfo(@NotNull PsiElement element) {
-        PsiElement anchor = WrapperAnchorDetector.INSTANCE.anchorElement(element);
+        PsiElement anchor = WrapperAnchorDetector.anchorElement(element);
         if (anchor == null) return null;
         if (!gutterEnabled()) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
