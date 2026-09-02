@@ -112,8 +112,9 @@ object DialectVerifySupport {
     fun renderPagedSelect(dialect: Dialect, offset: Long?, count: Long): String =
         SqlGenerator.generate(
             SelectStatement(businessTable(), emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(offset?.let { SqlValue.Literal(it.toString()) }, SqlValue.Literal(count.toString())), null, null, null, emptyList(), null, null),
-            compact = false,
-            dialect = dialect,
+            false,
+            dialect,
+            null,
         )
 
     /** TC-03/04：插件渲染的保留字列 SELECT（列清单 + WHERE + LIKE + ORDER BY 全走 quoteIfKeyword）。 */
@@ -127,8 +128,9 @@ object DialectVerifySupport {
                     Condition.Simple(ColumnRef("order"), "=", SqlValue.Literal("10"), null),
                     Condition.Like(ColumnRef("table"), false, SqlValue.Literal("t"), LikePosition.RIGHT, null),
                 ), emptyList(), null, listOf(OrderByItem(ColumnRef("order"), true)), null, null, null, null, emptyList(), null, null),
-            compact = false,
-            dialect = dialect,
+            false,
+            dialect,
+            null,
         )
 
     /** TC-07：IN 子句（保留字列 + 多值）。 */
@@ -137,8 +139,9 @@ object DialectVerifySupport {
             SelectStatement(businessTable(), listOf(ColumnRef("id")), null, emptyList(), false, listOf(
                     Condition.In(ColumnRef("order"), false, listOf(SqlValue.Literal("10"), SqlValue.Literal("20"), SqlValue.Literal("30")), null),
                 ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null),
-            compact = false,
-            dialect = dialect,
+            false,
+            dialect,
+            null,
         )
 
     /** TC-08：聚合函数（COUNT(status) + GROUP BY）。 */
@@ -147,8 +150,9 @@ object DialectVerifySupport {
             SelectStatement(businessTable(), listOf(
                     ColumnRef(null, "status", "cnt", "COUNT"),
                 ), null, emptyList(), false, emptyList(), listOf(ColumnRef("status")), null, emptyList(), null, null, null, null, emptyList(), null, null),
-            compact = false,
-            dialect = dialect,
+            false,
+            dialect,
+            null,
         )
 
     /** UPDATE 语句（SET 保留字列 + WHERE 主键）。 */
@@ -158,16 +162,18 @@ object DialectVerifySupport {
                     SetClause(ColumnRef("order"), SqlValue.Literal("20")),
                     SetClause(ColumnRef("biz_name"), SqlValue.Literal("'updated'")),
                 ), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), null, null, emptyList()),
-            compact = false,
-            dialect = dialect,
+            false,
+            dialect,
+            null,
         )
 
     /** DELETE 语句（WHERE 主键）。 */
     fun renderDelete(dialect: Dialect, tableName: String = "dev_info"): String =
         SqlGenerator.generate(
             DeleteStatement(businessTable(tableName), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("3"), null)), emptyList(), null, emptyList()),
-            compact = false,
-            dialect = dialect,
+            false,
+            dialect,
+            null,
         )
 
     /** INSERT / UPSERT 批量模板（BatchModel 渲染，含保留字列；`?` 占位由执行侧绑定）。 */
@@ -280,8 +286,9 @@ object DialectVerifySupport {
                 // 插件渲染：SELECT（WHERE + LIMIT）
                 val select = SqlGenerator.generate(
                     SelectStatement(kwTable, listOf(ColumnRef(word)), null, emptyList(), false, listOf(Condition.Simple(ColumnRef(word), "=", SqlValue.Literal("1"), null)), emptyList(), null, emptyList(), LimitClause(null, SqlValue.Literal("10")), null, null, null, emptyList(), null, null),
-                    compact = false,
-                    dialect = dialect,
+                    false,
+                    dialect,
+                    null,
                 )
                 exec(connection, select)
 
@@ -295,8 +302,9 @@ object DialectVerifySupport {
                 // 插件渲染：UPDATE（SET 保留字列）
                 val update = SqlGenerator.generate(
                     UpdateStatement(kwTable, listOf(SetClause(ColumnRef(word), SqlValue.Literal("2"))), listOf(Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)), null, null, emptyList()),
-                    compact = false,
-                    dialect = dialect,
+                    false,
+                    dialect,
+                    null,
                 )
                 exec(connection, update)
 

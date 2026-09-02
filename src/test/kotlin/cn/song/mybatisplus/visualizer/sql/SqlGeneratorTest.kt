@@ -173,7 +173,7 @@ class SqlGeneratorTest {
     fun `分页占位符_参数收集与回填提示`() {
         // T-M29-03：service.page 的运行时 pageNum/pageSize → `?` + 参数来源（面板参数区回填）
         val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(SqlValue.Placeholder("(pageNum - 1) * pageSize"), SqlValue.Placeholder("pageSize")), null, null, null, emptyList(), null, null)
-        val generated = SqlGenerator.generateWithParams(statement, compact = false)
+        val generated = SqlGenerator.generateWithParams(statement, false)
         assertEquals(
             """
             SELECT id, station_id, share_scheme_id, sort
@@ -197,7 +197,7 @@ class SqlGeneratorTest {
                     .withToggle(ConditionToggle("c2", null, true, "user_phone LIKE ?")),
             ), ConditionToggle("c0", "isNotBlank(keyword)", true, "(code LIKE ? OR user_phone LIKE ?)"))
         val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(group), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
-        val sql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0"))
+        val sql = SqlGenerator.generate(statement, false, setOf("c0"))
         assertEquals(
             """
             SELECT id, station_id, share_scheme_id, sort
@@ -207,7 +207,7 @@ class SqlGeneratorTest {
             sql,
         )
         // 组未勾选（enabledIds 不含 c0）→ 整组不渲染
-        val disabledSql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = emptySet())
+        val disabledSql = SqlGenerator.generate(statement, false, emptySet())
         assertTrue("组未勾选应整组消失：$disabledSql", !disabledSql.contains("LIKE"))
     }
 
@@ -223,7 +223,7 @@ class SqlGeneratorTest {
                 Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null)
                     .withToggle(ConditionToggle("w0", null, true, "id = 1")),
             ), listOf(ColumnRef("station_id")), having, emptyList(), null, null, null, null, emptyList(), null, null)
-        val sql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("w0"))
+        val sql = SqlGenerator.generate(statement, false, setOf("w0"))
         assertTrue("HAVING 应渲染：$sql", sql.contains("HAVING (amount > 100)"))
     }
 
@@ -358,17 +358,17 @@ class SqlGeneratorTest {
         // PostgreSQL / H2 / SQLite / DM / KingBase 双引号
         assertEquals(
             "SELECT id, title, \"table\", image_url\nFROM \"order\"\nWHERE \"table\" = 1001",
-            SqlGenerator.generate(statement, compact = false, dialect = PostgreSQLDialect.INSTANCE).trim(),
+            SqlGenerator.generate(statement, false, PostgreSQLDialect.INSTANCE, null).trim(),
         )
         // SQL Server 方括号
         assertEquals(
             "SELECT id, title, [table], image_url\nFROM [order]\nWHERE [table] = 1001",
-            SqlGenerator.generate(statement, compact = false, dialect = SqlServerDialect.INSTANCE).trim(),
+            SqlGenerator.generate(statement, false, SqlServerDialect.INSTANCE, null).trim(),
         )
         // MySQL（默认）反引号
         assertEquals(
             "SELECT id, title, `table`, image_url\nFROM `order`\nWHERE `table` = 1001",
-            SqlGenerator.generate(statement, compact = false, dialect = MySqlDialect.INSTANCE).trim(),
+            SqlGenerator.generate(statement, false, MySqlDialect.INSTANCE, null).trim(),
         )
     }
 

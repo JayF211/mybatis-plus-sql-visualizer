@@ -148,7 +148,7 @@ class ParameterReplacerTest {
                 Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null),
                 Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("101"), null),
             ), emptyList(), null, listOf(cn.song.mybatisplus.visualizer.model.OrderByItem(ColumnRef("sort"), true)), null, null, null, null, emptyList(), null, null)
-        val sql = SqlGenerator.generate(statement, compact = true)
+        val sql = SqlGenerator.generate(statement, true)
         assertEquals(
             "SELECT id, station_id, share_scheme_id FROM car_device_info WHERE id = 1 AND station_id = 101 ORDER BY sort ASC",
             sql,
@@ -160,8 +160,8 @@ class ParameterReplacerTest {
         val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(
                 Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"), null),
             ), emptyList(), null, emptyList(), null, null, null, null, emptyList(), null, null)
-        val multi = SqlGenerator.generate(statement, compact = false)
-        val single = SqlGenerator.generate(statement, compact = true)
+        val multi = SqlGenerator.generate(statement, false)
+        val single = SqlGenerator.generate(statement, true)
         // 去掉空白后应一致
         assertEquals(multi.replace(Regex("\\s+"), " ").trim(), single)
     }

@@ -403,7 +403,7 @@ public final class SqlPreviewService {
             for (PsiParameter param : method.getParameterList().getParameters()) names.add(param.getName());
             paramNames = names;
         }
-        String sql = SqlGenerator.INSTANCE.generate(statement);
+        String sql = SqlGenerator.generate(statement);
         return buildJpaPreviewResult(statement, sql, table.getTableName(), paramNames, method);
     }
 
@@ -509,7 +509,7 @@ public final class SqlPreviewService {
         List<String> paramNames = (method != null)
                 ? Arrays.stream(method.getParameterList().getParameters()).map(PsiParameter::getName).toList()
                 : List.of();
-        String sql = SqlGenerator.INSTANCE.generate(statement);
+        String sql = SqlGenerator.generate(statement);
         String tableName = (model.getEntityClassName() != null)
                 ? JpaEntityResolver.inferDecoratedTableName(model.getEntityClassName()) : "";
         return buildJpaPreviewResult(statement, sql, tableName, paramNames, method);
@@ -712,7 +712,7 @@ public final class SqlPreviewService {
             @NotNull SqlStatement statement) {
         Dialect dialect = currentDialect();
         boolean compact = !formatSql();
-        GeneratedSql generated = SqlGenerator.INSTANCE.generateWithParams(statement, compact, dialect, null);
+        GeneratedSql generated = SqlGenerator.generateWithParams(statement, compact, dialect, null);
         List<ConditionView> views = collectConditionViews(statement);
         Map<String, String> columnComments = new HashMap<>();
         for (ColumnInfo col : table.getColumns()) {
@@ -724,7 +724,7 @@ public final class SqlPreviewService {
                 ? ((SelectStatement) statement).getFillClauses() : null;
         return new PreviewResult(
                 generated.getSql(),
-                SqlGenerator.INSTANCE.generate(statement, true, dialect, null),
+                SqlGenerator.generate(statement, true, dialect, null),
                 generated.getUnresolvedParams(),
                 ParameterReplacer.buildParamTable(generated.getUnresolvedParams()),
                 wrapperType,

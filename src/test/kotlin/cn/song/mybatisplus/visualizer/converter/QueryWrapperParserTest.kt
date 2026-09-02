@@ -287,7 +287,7 @@ class QueryWrapperParserTest {
         assertFalse("默认不渲染：$defaultSql", defaultSql.contains("station_id = 101"))
         // 勾选后渲染（enabledConditionIds 语义为「仅渲染集合内动态条件」——须含全部条件 id，含组内子条件）
         val allIds = statement.conditions.flatMap { it.allToggleIds() }.toSet()
-        val enabledSql = SqlGenerator.generate(statement, compact = false, enabledConditionIds = allIds)
+        val enabledSql = SqlGenerator.generate(statement, false, allIds)
         assertTrue("勾选后渲染：$enabledSql", enabledSql.contains("AND (station_id = 101)"))
     }
 
@@ -535,11 +535,11 @@ class QueryWrapperParserTest {
         assertFalse("false 条件默认不应拼接", base.contains("station_id = 2"))
 
         // 显式启用 c0+c2（M19.6：普通条件 name 也占 id c1）→ 三个条件都在
-        val all = SqlGenerator.generate(statement, compact = false, enabledConditionIds = setOf("c0", "c2"))
+        val all = SqlGenerator.generate(statement, false, setOf("c0", "c2"))
         assertTrue(all.contains("AND station_id = 2"))
 
         // 全禁用（空集合）→ 所有条件均关闭（M19.6：普通条件同样挂 toggle 可勾选，原"普通条件恒保留"语义扩展）
-        val none = SqlGenerator.generate(statement, compact = false, enabledConditionIds = emptySet())
+        val none = SqlGenerator.generate(statement, false, emptySet())
         assertFalse(none.contains("id = 1"))
         assertFalse(none.contains("name = '张三'"))
         assertFalse(none.contains("station_id = 2"))

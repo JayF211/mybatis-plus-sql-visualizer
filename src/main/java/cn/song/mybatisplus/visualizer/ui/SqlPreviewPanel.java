@@ -801,7 +801,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     sources != null ? sources : Collections.emptyList(),
                     hints != null ? hints : Collections.emptyList()));
         } else if (model != null) {
-            Object generated = SqlGenerator.INSTANCE.generateWithParams(model.getStatement(), compactMode, model.getDialect(), enabledIds);
+            Object generated = SqlGenerator.generateWithParams(model.getStatement(), compactMode, model.getDialect(), enabledIds);
             String sql = ((cn.song.mybatisplus.visualizer.sql.GeneratedSql) generated).getSql();
             List<String> up = ((cn.song.mybatisplus.visualizer.sql.GeneratedSql) generated).getUnresolvedParams();
             List<ParamHint> ph = ((cn.song.mybatisplus.visualizer.sql.GeneratedSql) generated).getParamHints();
@@ -1004,7 +1004,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         StringBuilder sb = new StringBuilder(sql);
         sb.append("\n\n-- ").append(MpSqlVisualizerBundle.message("panel.fill.section")).append("\n");
         for (FillClause fill : fills) {
-            sb.append(SqlGenerator.INSTANCE.generateFill(fill, dialect));
+            sb.append(SqlGenerator.generateFill(fill, dialect));
             sb.append("\n");
         }
         return sb.toString();

@@ -452,7 +452,7 @@ public final class QueryWrapperParser {
         WrapperArg.NestedArg nested = argAt(call.getArgs(), 2) instanceof WrapperArg.NestedArg n ? n : null;
         if (nested == null) return null;
         SelectStatement subStatement = new QueryWrapperParser(subTable.getTableInfo(), null, dialect).parse(nested.getChain());
-        String subSql = SqlGenerator.INSTANCE.generate(subStatement, true, MySqlDialect.INSTANCE, null);
+        String subSql = SqlGenerator.generate(subStatement, true, MySqlDialect.INSTANCE, null);
         return new Condition.Raw(column.qualifiedName(dialect) + " " + op + " (" + subSql + ")", null);
     }
 
@@ -677,7 +677,7 @@ public final class QueryWrapperParser {
                 "c" + (toggleSeq++),
                 analysis != null ? analysis.flagSource() : null,
                 analysis != null ? analysis.defaultEnabled() : true,
-                SqlGenerator.INSTANCE.renderConditionText(condition),
+                SqlGenerator.renderConditionText(condition),
                 sources.isEmpty() ? null : sources.get(0),
                 sources
         );
@@ -790,7 +790,7 @@ public final class QueryWrapperParser {
                 "c" + (toggleSeq++),
                 t.flagSource(),
                 t.defaultEnabled(),
-                SqlGenerator.INSTANCE.renderConditionText(new Condition.Raw(t.sql(), null)),
+                SqlGenerator.renderConditionText(new Condition.Raw(t.sql(), null)),
                 null,
                 List.of()
         ));
@@ -828,7 +828,7 @@ public final class QueryWrapperParser {
                     "c" + (toggleSeq++),
                     t.flagSource(),
                     t.defaultEnabled(),
-                    SqlGenerator.INSTANCE.renderConditionText(new Condition.Raw(sql, null)),
+                    SqlGenerator.renderConditionText(new Condition.Raw(sql, null)),
                     null,
                     List.of()
             );

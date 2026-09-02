@@ -196,7 +196,7 @@ class DialectTest {
     fun `生成器_方言分页联动`() {
         val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(5, 10), null, null, null, emptyList(), null, null)
 
-        val mysql = SqlGenerator.generate(statement, compact = false, dialect = MySqlDialect.INSTANCE)
+        val mysql = SqlGenerator.generate(statement, false, MySqlDialect.INSTANCE, null)
         assertEquals(
             """
             SELECT id
@@ -206,7 +206,7 @@ class DialectTest {
             mysql,
         )
 
-        val pg = SqlGenerator.generate(statement, compact = false, dialect = PostgreSQLDialect.INSTANCE)
+        val pg = SqlGenerator.generate(statement, false, PostgreSQLDialect.INSTANCE, null)
         assertEquals(
             """
             SELECT id
@@ -216,7 +216,7 @@ class DialectTest {
             pg,
         )
 
-        val oracle = SqlGenerator.generate(statement, compact = false, dialect = OracleDialect.INSTANCE)
+        val oracle = SqlGenerator.generate(statement, false, OracleDialect.INSTANCE, null)
         assertEquals(
             """
             SELECT id
