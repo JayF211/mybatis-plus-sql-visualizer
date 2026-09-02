@@ -79,6 +79,8 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.log.tab.mybatis",
             "settings.log.tab.orm",
             "settings.log.tab.autoSave",
+            // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
+            "settings.log.tab.sourceCapture",
             "settings.section.ui",
             "settings.section.updateDiagnostics",
         ).map { MpSqlVisualizerBundle.message(it) }

@@ -51,7 +51,7 @@ class SqlLogHistoryRoundTripTest {
         saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
         // 真实捕获条目：带源码位置 + 5ms 耗时
         val captured = capturedEntry(
-            sql = "SELECT id, username, password FROM user WHERE id = 1",
+            sql = "SELECT id, username, password FROM user WHERE id = 1;",
             sourceFile = "src/main/java/com/example/mapper/UserMapper.java",
             sourceLine = 42,
             executionTimeMs = 5L,
