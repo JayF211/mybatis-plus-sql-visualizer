@@ -7,33 +7,40 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
+import com.intellij.openapi.actionSystem.ActionGroup
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import com.intellij.psi.PsiElement
 import java.awt.event.MouseEvent
 import javax.swing.Icon
+import javax.swing.SwingUtilities
 
 /**
  * 代码左侧预览 SQL 图标（M10-02，F-04/05/07 新增 gutter 入口）。
  *
- * 在 Wrapper 调用链锚点行显示预览图标，点击弹出 SQL 预览（复用 [SqlPreviewService] 链路）。
+ * 在 Wrapper 调用链锚点行显示预览图标。
+ *
+ * **交互约定（M38.2 调整为更贴合调试直觉）**：
+ *  - 左键（单击）→ 直接预览 SQL（一键路径最短，对齐原行为）；
+ *  - 右键 → 弹出菜单：预览 SQL / 最近执行记录。
  *
  * **性能红线（M10 开发计划 §2.4，硬性约束）**：
  *  - 快速路径 [getLineMarkerInfo] 逐元素回调，只做 [WrapperAnchorDetector] 的 O(1) 纯语法判定，
  *    零 resolve、零遍历、零转换；负例立即返回 null；
  *  - tooltip 返回静态文案，不计算 SQL 内容；
- *  - 点击（EDT 回调）只捕获锚点元素，转换一律经 [SqlPreviewService.previewAsync] 后台执行；
+ *  - 转换一律经 [SqlPreviewService.previewAsync] 后台执行（EDT 禁止 PSI 慢操作）；
  *  - [PluginSettings.state.showGutterIcon] 可一键关闭（性能/视觉兜底）。
- *
- * 注册见 plugin.xml `<codeInsight.lineMarkerProvider language="JAVA" .../>`。
  */
 class SqlGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
         val anchor = WrapperAnchorDetector.anchorElement(element) ?: return null
         if (!gutterEnabled()) return null
-        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
+        // 七参构造器（2020.3+）：通过 GutterIconNavigationHandler 处理点击，在 navigate() 内按鼠标按钮区分左右键。
         return LineMarkerInfo(
             anchor,
             anchor.textRange,
@@ -51,16 +58,16 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
     }.getOrDefault(true)
 
     /**
-     * 点击处理：在 EDT 捕获锚点元素，转换走后台线程 + ReadAction（EDT 禁止 PSI 慢操作）。
+     * 点击处理（M38.2 重构：左键直接预览 + 右键弹菜单）。
      *
-     * M37.1：点击弹两级菜单（原生 BaseListPopupStep 单击即选）——
-     *  1. 预览 SQL（原行为，首项保持一键路径最短）；
-     *  2. 最近执行记录：后台 ReadAction 取锚点相对路径+行号 → [EntrySourceMatcher] 反查
-     *     内存捕获条目 → 二级列表弹窗 → 选中走 [LogEntryPreviewOpener] 打开预览。
-     *     无匹配时提示（需工程内安装 SqlSourceInterceptor 标记才有精确位置）。
+     * 防抖（200ms 全局窗口）：连续点击同一 / 不同 gutter 图标时，仅首次触发，避免多后台线程并发 / 多弹窗叠加。
      *
-     * 防抖（200ms 全局窗口）：连续点击同一 / 不同 gutter 图标时，仅首次触发 PSI resolve + 弹窗，
-     * 窗口内后续点击静默丢弃，避免多后台线程并发执行同一解析 / 多弹窗叠加。
+     * 左右键语义：
+     *  - 左键 → 直接预览 SQL（一键路径最短）；
+     *  - 右键 → 弹出两选项菜单（预览 SQL / 最近执行记录）。
+     *
+     * NPE 修复：M37.1 方案在 BaseListPopupStep.onChosen 的 finalChoice=false（悬停预览）分支也执行动作并返回
+     * FINAL_CHOICE，导致 ListPopupImpl 抛 NPE("FINAL_CHOICE must not be null")。现仅在 finalChoice=true 时执行。
      */
     private object SqlGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
 
@@ -71,7 +78,7 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
         @Volatile
         private var lastNavigateTime = 0L
 
-        /** 一级菜单项。 */
+        /** 菜单项。 */
         private sealed class GutterAction(val labelKey: String) {
             data object Preview : GutterAction("gutter.popup.preview")
             data object Recent : GutterAction("gutter.popup.recent")
@@ -84,6 +91,19 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             lastNavigateTime = now
 
             val project: Project = elt.project
+
+            // 右键（或 popupTrigger）→ 弹出两选项菜单。
+            if (e != null && (SwingUtilities.isRightMouseButton(e) || e.isPopupTrigger)) {
+                showMenuPopup(project, elt, e)
+                return
+            }
+
+            // 左键 → 直接预览 SQL（一键路径最短）。
+            previewSource(project, elt)
+        }
+
+        /** 右键菜单：预览 SQL / 最近执行记录。 */
+        private fun showMenuPopup(project: Project, elt: PsiElement, e: MouseEvent) {
             val actions = listOf<GutterAction>(GutterAction.Preview, GutterAction.Recent)
             val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<GutterAction>(
                 null,
@@ -95,19 +115,21 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                 override fun onChosen(
                     selectedValue: GutterAction?,
                     finalChoice: Boolean,
-                ): com.intellij.openapi.ui.popup.PopupStep<*> {
+                ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                    // 仅 finalChoice=true 时执行；finalChoice=false 是悬停预览，不响应（避免 M37.1 的 NPE）。
+                    if (!finalChoice) return null
                     when (selectedValue) {
-                        is GutterAction.Recent -> showRecentEntriesPopup(project, elt, e)
+                        is GutterAction.Recent -> showRecentEntriesPopup(project, elt)
                         else -> previewSource(project, elt)
                     }
                     return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
                 }
             }
             val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(step)
-            if (e != null) popup.show(com.intellij.ui.awt.RelativePoint(e)) else popup.showInFocusCenter()
+            popup.show(com.intellij.ui.awt.RelativePoint(e))
         }
 
-        /** 原行为：锚点转 SQL 并弹预览（后台转换，F-16 展示配置）。 */
+        /** 左键原行为：锚点转 SQL 并弹预览（后台转换，F-16 展示配置）。 */
         private fun previewSource(project: Project, elt: PsiElement) {
             SqlPreviewService.previewAsync(project, {
                 project.getService(SqlPreviewService::class.java).preview(elt)
@@ -116,8 +138,8 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             }
         }
 
-        /** M37.1：反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction）。 */
-        private fun showRecentEntriesPopup(project: Project, elt: PsiElement, e: MouseEvent?) {
+        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction）。 */
+        private fun showRecentEntriesPopup(project: Project, elt: PsiElement) {
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
                 val anchor = runCatching {
                     com.intellij.openapi.application.ReadAction.compute<Pair<String?, Int>, Throwable> {
@@ -154,7 +176,9 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                         override fun onChosen(
                             selectedValue: cn.song.mybatisplus.visualizer.log.LogSqlEntry?,
                             finalChoice: Boolean,
-                        ): com.intellij.openapi.ui.popup.PopupStep<*> {
+                        ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                            // 仅 finalChoice=true 时执行；避免悬停预览分支误触发 NPE。
+                            if (!finalChoice) return null
                             selectedValue?.let {
                                 cn.song.mybatisplus.visualizer.log.LogEntryPreviewOpener.open(project, it)
                             }
@@ -162,7 +186,7 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                         }
                     }
                     val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(entryStep)
-                    if (e != null) popup.show(com.intellij.ui.awt.RelativePoint(e)) else popup.showInFocusCenter()
+                    popup.showInFocusCenter()
                 }
             }
         }
@@ -182,13 +206,6 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
     }
 }
 
-/**
- * 防抖判定（纯函数，便于单测）。
- *
- * @param lastTimeMs 上次导航时间戳（毫秒）
- * @param nowMs     当前时间戳（毫秒）
- * @param windowMs  防抖窗口（毫秒）
- * @return 是否应执行导航（true = 执行，false = 丢弃）
- */
+// 保留供可能外部引用的防抖纯函数。
 internal fun shouldNavigate(lastTimeMs: Long, nowMs: Long, windowMs: Long = 200L): Boolean =
     nowMs - lastTimeMs >= windowMs
