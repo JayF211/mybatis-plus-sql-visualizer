@@ -9,7 +9,7 @@
 
 ## 0. 一句话状态
 
-主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。随后 **Wave 4 批 A** 把 config 包 3 个核心 Kotlin 生产类（`PluginSettings`/`ProjectPluginSettings`/`SettingsIO`）转 Java（另新建 `TableNameRule`/`SettingsChangeListener`，共 5 个 Java 生产类），并删除对应 3 个 `.kt`；**Wave 4 批 B-1** 已把 config 的 `UpdateSection.kt`（含 `State` 枚举 + 三编排 seam 改 kotlin `Function0<CheckResult>` / `Function2<UpdateManifest,ProgressIndicator,InstallResult>` / `Function0<Unit>`）转 Java 并删除原 `.kt`。**Wave 4 批 B-2/3/4** 继续把 `SectionConfigurable`（+5 子类拆 6 文件）、`PluginSettingsConfigurable`、`ProjectPluginSettingsConfigurable` 转 Java 并删除原 `.kt`。**Wave 4 批 B-6** 把 `PluginSettingsPanel.kt`（1161 行，本项目最大单文件）转 Java——**config 包主源码 `.kt` 清零**。剩余 **1** 个主源码 `.kt`（update 1：`StartupUpdateCheck`）与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
+主源码 **100% Java 化（0 个 `.kt`、351 个 `.java`）**，测试源码共存（140 个 `.kt` + 93 个 `.java`，均可编译可运行）；**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。随后 **Wave 4 批 A** 把 config 包 3 个核心 Kotlin 生产类（`PluginSettings`/`ProjectPluginSettings`/`SettingsIO`）转 Java（另新建 `TableNameRule`/`SettingsChangeListener`，共 5 个 Java 生产类），并删除对应 3 个 `.kt`；**Wave 4 批 B-1** 已把 config 的 `UpdateSection.kt`（含 `State` 枚举 + 三编排 seam 改 kotlin `Function0<CheckResult>` / `Function2<UpdateManifest,ProgressIndicator,InstallResult>` / `Function0<Unit>`）转 Java 并删除原 `.kt`。**Wave 4 批 B-2/3/4** 继续把 `SectionConfigurable`（+5 子类拆 6 文件）、`PluginSettingsConfigurable`、`ProjectPluginSettingsConfigurable` 转 Java 并删除原 `.kt`。**Wave 4 批 B-6** 把 `PluginSettingsPanel.kt`（1161 行，本项目最大单文件）转 Java——**config 包主源码 `.kt` 清零**。剩余 **1** 个主源码 `.kt`（update 1：`StartupUpdateCheck`）与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
 
 ---
 
@@ -210,3 +210,27 @@
 ./gradlew test -I /tmp/redirectsandbox.gradle   # 目标 1421/0/0/6，XML 计数核对
 git add -A && git commit
 ```
+
+---
+
+## 10. 迁移完成声明（2026-09-02 收官）
+
+**主源码已 100% Java 化，Kotlin → Java 全量改写目标达成。**
+
+| 验收项 | 结果 |
+|--------|------|
+| 主源码 `.kt` 残留 | **0**（`find src/main/kotlin -name "*.kt"` 为空） |
+| 主源码 Java 文件 | **351**（model 12 / psi 10 / sql 14 / config 9 / update 1 五包全清） |
+| 主源码编译 `compileJava compileKotlin compileTestKotlin` | BUILD SUCCESSFUL，0 错误 |
+| 全量测试 `./gradlew test` | **1421 / 0 失败 / 0 错误 / 6 跳过**（139 套件） |
+| 产物 `buildPlugin` | BUILD SUCCESSFUL，无 Kotlin 元数据残留 |
+| 插件校验 `verifyPlugin` | BUILD SUCCESSFUL（仅 Deprecated API 使用警告，无 compatibility problem 阻断） |
+| 与 `master` 对比 | 零功能丢失（4 类等价重命名，见 5.5 节） |
+
+**结论**：生产代码全部为 Java， IntelliJ 插件构建、运行、升级链路均正常。测试源集保留 140 个 `.kt` + 93 个 `.java`（共存策略，均可编译可运行），如后续需 test 源集也纯 Java，再补转 140 个测试 `.kt` 即可，不影响功能。分支 `feature/kotlin-to-java` 可合入 `master`。
+
+**提交里程碑**：
+- Wave 1–2（psi 清零）：`ad34b26` → `868808c`
+- Wave 3（sql 14 + interceptor 3 清零）：`b0040b2`/`a67d857`/`7bd756d`/`653fffb`
+- Wave 4（config 9 清零）：`a8228c7`/`b10acec`/`fe10072`/`8829a9f`/`7ebb2de`/`ad079f3`
+- Wave 5（update 1 清零，主源 100% Java）：`589fbc9`

@@ -10,6 +10,8 @@
 - **项目内数据目录随插件更名（F-44-4）**：`.idea/` 下插件数据目录由旧名 `mybatis-plus-sql-visualizer` 改为新名 `sql-visualizer`（含 `sql-history/` 历史 SQL 与 `exec/` 执行临时文件）——**不考虑向前兼容**，旧目录数据不再读取，历史 SQL 与新捕获从新目录起算；新增统一常量 `SqlLogAutoSaver.DATA_DIR_NAME` 供历史面板 / 历史 tab 显隐检测 / 数据源执行文件路径引用，设置页默认路径提示同步更新（中英文案 `settings.log.autoSave.path.tip/empty`）
 - **实时日志「精确跳转源码」可靠方案（F-44-6）**：原实时日志无 file:line（控制台 SQL 日志不含调用位置）只能「按表名猜实体」近似跳转、常跳不准。新方案在**应用 JVM** 用 MyBatis-Plus `InnerInterceptor`（`docs/instrumentation/SqlSourceInterceptor.kt` 自包含示例）于 SQL 执行线程捕获真实调用点，向 stdout 打印标记行 `SQLVIS-SOURCE|<相对路径>|<行号>`；`SqlLogConsoleBridge.processConsoleLine` 解析该标记写入 `LogSqlEntry.sourceFile/sourceLine`，实时日志复用与历史面板**一致**的精确 `OpenFileDescriptor` file:line 跳转。无标记时零影响、被动回退原表名搜索。新增 `SqlSourceMarker`（标记格式/解析）、`CallerSourceLocator`（调用栈→用户代码帧纯函数）；`SqlLogPanel` 抽 `internal sealed class LogJumpTarget`（Precise/NoSource/NotFound/SearchByTable/NoTable）+ `resolveEntryJump` 统一解析层；VFS 路径统一正斜杠（跨平台一致）
 
+- **主源码 Kotlin → Java 全量改写完成**：生产源码（包 `cn.song.mybatisplus.visualizer` 下 model / psi / sql / config / update 五包，共 351 个 `.java`、0 个 `.kt`）全部由 Kotlin 转写为 Java，采用「共存迁移」策略（测试源集保留 140 个 `.kt` + 93 个 `.java`，均可编译可运行）。转换覆盖 `object`→单例 `INSTANCE`、`data class`→`final class` 含值语义 `equals/hashCode`、`sealed`/接口分支 `instanceof` 化、`suspend fun`→`Continuation` 实现、`Regex`→`Pattern`、`record` 访问器 `x()` 等互操作铁律；全量测试 **1421/0/0/6 绿（139 套件）**，`buildPlugin` + `verifyPlugin` 终验通过。与 `master` 对比零功能丢失（4 个类为等价重命名：`Ognl`→`OgnlEvaluator`、`WrapperFormat`→`WrapperFormatKt`、`LogEntryPreviewRecognizer`→`LogEntryPreviewRecognizerKt`、`LogSqlModels`→`LogSqlModelsKt`）。详见 `docs/开发计划/20260901-Kotlin转Java全量改写-进度总结.md`
+
 ### Fixed
 
 - **SQL 日志面板四项缺陷终局修复（F-44-2）**（开发计划 `20260831-1730-...`）：
