@@ -75,6 +75,9 @@ dependencies {
         // M17：Database 插件（数据源/控制台 API，仅 Ultimate 捆绑）。
         // 注：2026.2 中 SQL 语言支持（com.intellij.sql）已并入平台核心，无需/无法单独声明
         bundledPlugin("com.intellij.database")
+        // T-Dgm-01：Diagrams 插件（类图/关系图底座，仅 Ultimate 捆绑）——JOIN 图原生渲染编译期类。
+        // 与 database 同为运行期可选依赖（plugin.xml optional depends + diagram-optional.xml EP 注册）。
+        bundledPlugin("com.intellij.diagram")
     }
 }
 
@@ -457,6 +460,11 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
                     // F-42：SvgRasterizer（Batik SVG 栅格化）
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.SvgRasterizerTest")
+                    // T-Dgm-05：JOIN 图原生框架适配层（快照注册表 + 图构建工厂 + 关系样式）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramAdapterTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramScenariosTest")
+                    // T-Dgm-05 Heavy：真实平台打开链路（反射桥 + EP 挂载 + createEditor 全链）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyNativeJoinDiagramOpenChainTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.model.BatchModelTest")

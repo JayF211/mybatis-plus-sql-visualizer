@@ -32,7 +32,7 @@
             <li>Replace <code>?</code> placeholders with actual parameter values; dynamic condition checkboxes; SQL auto formatting</li>
             <li>Console SQL log capture &amp; restore (MyBatis / Hibernate / JdbcTemplate); precise source jump via InnerInterceptor; auto-save history with two-level navigation</li>
             <li>SQL to MP Java code reverse conversion (QueryWrapper / LambdaQueryWrapper / Wrappers / MPJ, CRUD &amp; joins, compilable output)</li>
-            <li>JOIN diagram: self-drawn Swing ER diagram (PNG/SVG export); 9 database dialects; trigger via context menu / shortcut / gutter icon</li>
+            <li>JOIN diagram rendered by the IDE native Diagrams framework (class-diagram look; classic self-drawn renderer as fallback, PNG/SVG export); 9 database dialects; trigger via context menu / shortcut / gutter icon</li>
         </ul>
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         <hr/>
@@ -74,6 +74,11 @@
          主描述文件不得直接引用可选插件类（本插件经反射隔离调用，Community 下优雅降级）；
          database-optional.xml 存放可选插件存在时才激活的声明（当前无 EP 注册，为占位） -->
     <depends optional="true" config-file="database-optional.xml">com.intellij.database</depends>
+
+    <!-- T-Dgm-01 JOIN 图原生渲染：com.intellij.diagram（Ultimate 捆绑 "Diagrams"，类图/关系图底座）——
+         与 database 同为可选依赖；diagram-optional.xml 注册 diagram.Provider（SqlJoinDiagramProvider），
+         Community / Diagrams 缺席时经 NativeJoinDiagramSupport 门面降级回自绘 DiagramPanel -->
+    <depends optional="true" config-file="diagram-optional.xml">com.intellij.diagram</depends>
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">

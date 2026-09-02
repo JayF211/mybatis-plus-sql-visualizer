@@ -79,7 +79,7 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.log.tab.mybatis",
             "settings.log.tab.orm",
             "settings.log.tab.autoSave",
-            // F-44-7：源码位置捕获子组
+            // F-44-7：源码位置捕获子组（T-SqlDuration 会话同步 + joinfw 分支合并共同确认）
             "settings.log.tab.sourceCapture",
             "settings.section.ui",
             "settings.section.updateDiagnostics",

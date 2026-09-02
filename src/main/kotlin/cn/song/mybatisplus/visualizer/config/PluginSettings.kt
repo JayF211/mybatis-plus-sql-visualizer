@@ -43,6 +43,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */
         var showGutterIcon: Boolean = true,
 
+        /**
+         * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
+         * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
+         * Community / Diagrams 插件缺席时无论此值均自动降级自绘。
+         */
+        var joinDiagramNative: Boolean = true,
+
         /** 插件界面语言（M14）：默认 `zh`（简体中文）；`en`=English；`AUTO`=跟随 IDE。 */
         var language: String = DEFAULT_LANGUAGE,
 
