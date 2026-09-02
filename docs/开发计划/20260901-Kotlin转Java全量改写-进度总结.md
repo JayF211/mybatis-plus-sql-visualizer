@@ -9,7 +9,7 @@
 
 ## 0. 一句话状态
 
-主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。随后 **Wave 4 批 A** 把 config 包 3 个核心 Kotlin 生产类（`PluginSettings`/`ProjectPluginSettings`/`SettingsIO`）转 Java（另新建 `TableNameRule`/`SettingsChangeListener`，共 5 个 Java 生产类），并删除对应 3 个 `.kt`；剩余 **7** 个主源码 `.kt`（config 6 / update 1）与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
+主源码与测试源码**当前 `compileJava` + `compileKotlin` + `compileTestKotlin` 全部 BUILD SUCCESSFUL（0 错误）**。本轮把卡住全量构建的 **3,939 处测试编译错误全部归零**，方式是把调用 Java 生产 API 的 **92 个 Kotlin 测试文件改写为 Java**。随后 **Wave 4 批 A** 把 config 包 3 个核心 Kotlin 生产类（`PluginSettings`/`ProjectPluginSettings`/`SettingsIO`）转 Java（另新建 `TableNameRule`/`SettingsChangeListener`，共 5 个 Java 生产类），并删除对应 3 个 `.kt`；**Wave 4 批 B-1** 已把 config 的 `UpdateSection.kt`（含 `State` 枚举 + 三编排 seam 改 kotlin `Function0<CheckResult>` / `Function2<UpdateManifest,ProgressIndicator,InstallResult>` / `Function0<Unit>`）转 Java 并删除原 `.kt`。剩余 **6** 个主源码 `.kt`（config 5 / update 1）与 140 个测试 `.kt` 仍按共存策略保留（均可编译）。**全量测试已跑绿（1421 测试 / 139 套件，0 失败，6 跳过）**；`verifyPlugin` 的 2 个兼容性 problem（缺失资源键）已修复，复验中。
 
 ---
 
@@ -17,8 +17,8 @@
 
 | 维度 | 数量 | 说明 |
 |------|------|------|
-| 主源码 Java 文件 | **323** | 318 + Wave 4 批 A 新增 5（PluginSettings / ProjectPluginSettings / SettingsIO / TableNameRule / SettingsChangeListener） |
-| 主源码 Kotlin 文件（仍保留） | **7** | config 6 / update 1（model / psi / sql 包主源 `.kt` 已清零） |
+| 主源码 Java 文件 | **324** | 323 + Wave 4 批 B-1 新增 1（UpdateSection） |
+| 主源码 Kotlin 文件（仍保留） | **6** | config 5 / update 1（model / psi / sql 包主源 `.kt` 已清零） |
 | 测试 Java 文件 | **93** | 本轮新增 92 个转换 + 既有 1 个（`JavaCodeGeneratorTest`，前序会话） |
 | 测试 Kotlin 文件（仍保留） | **140** | 均编译通过，且只调用 Kotlin 友好 API（model 等仍是 Kotlin），无需转换 |
 | 测试编译错误 | **3,939 → 0** | 本轮收敛结果 |
@@ -125,7 +125,7 @@
 
 ## 6. 剩余工作（查漏补缺方向）
 
-1. **主源码剩余 10 个 `.kt`**：config 9（含 `PluginSettingsPanel.kt` 1161 行）/ update 1（`StartupUpdateCheck.kt`）。model(12)/psi(10)/sql(14) 主源已全转 Java；按「全量纯 Java」目标继续推进 config → update，每模块同步转对应测试。
+1. **主源码剩余 6 个 `.kt`**：config 5（含 `PluginSettingsPanel.kt` 1161 行）/ update 1（`StartupUpdateCheck.kt`）。model(12)/psi(10)/sql(14) 主源已全转 Java；按「全量纯 Java」目标继续推进 config → update，每模块同步转对应测试。
 2. **全量测试跑绿**：等待 `./gradlew test` 结果，修复任何运行时回归（重点：record 与 data class 的 `equals/hashCode` 差异、集合顺序、null 处理、文本块空白差异）。
 3. **`verifyPlugin` / `buildPlugin`**：确认无 Verifier 违规、产物无 Kotlin 元数据残留。
 4. **对比 `master` 查漏**：`git diff master...feature/kotlin-to-java` 复核 API 漂移、未转生产类、功能缺失，逐项补正。
@@ -155,6 +155,7 @@
 | 2026-09-02 | **Wave 3 批 6+7（SqlTextAnalysis / ComplexityScorer，`7bd756d`）**：两个 sql 文件转 Java（顶层函数 stripXmlTags/detectClause/parseTableAliases + 内嵌 `SqlClause` enum/`TableAlias` data class → `SqlTextAnalysis`/`SqlClause`/`TableAlias` 静态类；`ComplexityScorer` object → 全 static final class，`ScoreLevel` 嵌套 enum，`Regex`→`Pattern`，`linkedMapOf`→`LinkedHashMap`，手动累加）；4 主源 Java 调用方 `SqlTextAnalysisKt.`→`SqlTextAnalysis.`、测试裸调用加类名限定；**并修复上一波 Dialect/SqlKeywords 批漏改的 verify 包测试文件**（stale 测试字节码掩盖，本次 `--rerun-tasks` 重编译才暴露：方言类裸引用加 `.INSTANCE`、保留字集合 import 改 `SqlKeywords.*`、`quoteIfKeyword` 等实例方法加 `.INSTANCE`）——全量 1421/0/0/6 绿。剩余 11 kt（sql 1：SqlGenerator；config 9；update 1） |
 | 2026-09-02 | **Wave 3 批 8 收尾（SqlGenerator，`653fffb`）**：`object SqlGenerator` → `final class SqlGenerator` + `INSTANCE` 单例字段（兼容既有 Java/Kotlin `.INSTANCE.` 调用方）+ 全 static 方法（默认参→多重载，新增 `generate(SqlStatement,boolean,Set<String>)` 便捷重载；`when` 语句分发→`instanceof` 链；`Condition` 扩展 `isConditionVisible`→private static；`fromSubQuery` 用 `kotlin.Pair` 的 `getFirst/getSecond`；`ColumnRef.qualifiedName(Dialect)` 成员方法）；`data class GeneratedSql` → `final class GeneratedSql`（含 2 参默认空 `paramHints` 构造器 + getter + equals/hashCode/toString）；3 主源 Java 调用方 `SqlGenerator.INSTANCE.`→`SqlGenerator.`（QueryWrapperParser/SqlPreviewPanel/SqlPreviewService），MpjLambdaConverter 保留 `.INSTANCE.`（INSTANCE 字段存在仍兼容）；**测试 Kotlin 具名参数调用改位置参数**（Kotlin 禁止对 Java 方法用具名参数）：SqlGeneratorTest/DialectTest/ParameterReplacerTest/QueryWrapperParserTest 单/双行 + DialectVerifySupport 多行共 16 处 `compact =/dialect =/enabledConditionIds =` → 位置实参；全量 1421/0/0/6 绿。**Wave 3 完结（17/17）**，剩余 10 kt（config 9 + update 1） |
 | 2026-09-02 | **Wave 4 批 A（config 服务类 + SettingsIO，`待提交`）**：`PluginSettings.kt`/`ProjectPluginSettings.kt`/`SettingsIO.kt` 三核心生产类 → Java（同步新建 `TableNameRule`/`SettingsChangeListener`，共 5 个 Java 生产类），删除对应 3 个 `.kt`；`State` 保留 `copy()` + 值语义 `equals/hashCode` + 无参构造 + 全 `getXxx()/setXxx()`（布尔用 `getXxx()` 形式以对齐 Kotlin `state.xxx` 调用方）；`fun interface SettingsChangeListener`→`@FunctionalInterface`、`data class TableNameRule`→`final class`（`getEnabled()`/`isEnabled()` 双别名对齐原 Kotlin `var enabled` 生成）、`companion const val`→静态字段、`@JvmStatic getInstance`→`static getInstance`、`object SettingsIO`→全 static。主编译 `compileJava compileKotlin` + `compileTestKotlin` 全 **BUILD SUCCESSFUL（0 错误）**；全量测试复验中（目标 1421/0/0/6）。关键互操作修复：① `getState()/getInstance()/copy()` 加 `@NotNull`（org.jetbrains.annotations）使 Kotlin 合成属性 `settings.state` 判为非空，消除「Only safe (?.) calls allowed on nullable receiver」；② `TableNameRule.getEnabled()` 别名补齐（调用方 `SqlPreviewService`/`DynamicTableNameProcessor` 用 `getEnabled()`）；③ `SettingsIO.ImportException` 改 `extends RuntimeException`（对齐 Kotlin 非受检语义，省去 `throws` 传播）；④ 测试 `SettingsIOTest` 具名构造 `PluginSettings.State(dialect=…)`→`State().apply{…}`、`DynamicTableNameProcessorTest` 具名实参 `enabled=…`→位置实参。剩余 7 kt |
+| 2026-09-02 | **Wave 4 批 B-1（`a8228c7`）：`UpdateSection.kt` → Java**：`class UpdateSection(private val settings)`（JPanel + GridBag 布局 + 状态机渲染）转 `UpdateSection.java`；`internal enum class State`→`public enum State`（Idle/Checking/UpToDate/Available/Downloading/Installed/Failed）；`internal var state`→私有字段 + `getState()`（对齐测试 `section.state` 只读）；5 个 UI 组件 `internal val`→`final` 字段 + 公共 getter（`getVersionLabel`/`getAutoCheckCheck`/`getCheckButton`/`getStatusLabel`/`getNotesArea`/`getInstallButton`/`getRestartButton`/`getGiteeLink` 等）；`updateTexts()`/`resetState()`/`renderCheck`/`renderInstall`/`renderState`/`runCheck`/`runInstall`/`restartIde` 逐字迁移（`when`→`switch`/`instanceof`、`Regex`→`Pattern`、`Task.Backgroundable` 回调 `isDisplayable()` 判活）；`notesContainer`/`doneContainer`/`giteeLink`(LinkListener 二参 lambda) 内嵌构建；私有 `SectionProgress extends ProgressIndicatorBase` 驱动进度条（`setFraction` 经 `invokeLater` 更新，lambda 捕获的 `value` 用 final 局部承接避免「非 final变量」报错）。**三编排 seam 改 kotlin 函数类型**：`checkRunner: () -> CheckResult`→`Function0<PluginUpdateRunner.CheckResult>`（默认 `PluginUpdateRunner.check(PluginVersion.current())`）、`installRunner: (UpdateManifest, ProgressIndicator?) -> InstallResult`→`Function2<UpdateManifest,ProgressIndicator,InstallResult>`（默认 `downloadAndInstall`）、`restartAction: () -> Unit`→`Function0<Unit>`（默认 `RestartDialogImpl.restartWithConfirmation()` 返回 `Unit.INSTANCE`）；测试 `UpdateSectionTest.java` 的 SAM lambda（`setCheckRunner(() -> CheckResult.UpToDate.INSTANCE)` 等）天然兼容。主编译 `compileJava compileKotlin` + `compileTestKotlin --rerun-tasks` 全 **BUILD SUCCESSFUL（0 错误）**；全量测试复验 **1421/0/0/6 绿**。剩余 6 kt |
 
 ---
 
@@ -167,10 +168,10 @@
 | Wave 1 | model 12 `.kt` → Java | ✅ 完成（`ad34b26`，首轮子代理遗留 2 个测试失败已修复） |
 | Wave 2 | psi 10 `.kt` → Java | ✅ **完成**（10/10，`868808c`；psi 包主源 `.kt` 清零） |
 | Wave 3 | sql 14 + interceptor 3 | ✅ **完成**（17/17：SqlGenerator 本批收尾；interceptor 3 + SqlTextAnalysis / ComplexityScorer / SqlGenerator / ParamHint 等全转） |
-| Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 🟡 批 A 完成（服务类 + SettingsIO + TableNameRule + SettingsChangeListener 转 Java，主编译绿灯）；批 B 转剩余 6 config `.kt` 进行中 |
+| Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 🟡 批 A 完成（服务类 + SettingsIO + TableNameRule + SettingsChangeListener 转 Java，主编译绿灯）；批 B 进行中（`UpdateSection` 已转、`SectionConfigurable`/`PluginSettingsConfigurable`/`ProjectPluginSettingsConfigurable`/`PluginSettingsFolderConfigurable`/`PluginSettingsPanel` 待转） |
 | Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 待开始 |
 
-- 剩余主源 `.kt`：**7**（config 6：`UpdateSection` / `SectionConfigurable` / `PluginSettingsConfigurable` / `ProjectPluginSettingsConfigurable` / `PluginSettingsFolderConfigurable` / `PluginSettingsPanel`；update 1：`StartupUpdateCheck`；sql 包主源 `.kt` 已清零）；主源 Java 文件 **323**。
+- 剩余主源 `.kt`：**6**（config 5：`SectionConfigurable` / `PluginSettingsConfigurable` / `ProjectPluginSettingsConfigurable` / `PluginSettingsFolderConfigurable` / `PluginSettingsPanel`；update 1：`StartupUpdateCheck`；sql 包主源 `.kt` 已清零）；主源 Java 文件 **324**。
 - 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
 
 ### 9.2 Wave 1 回归根因（重要教训）
