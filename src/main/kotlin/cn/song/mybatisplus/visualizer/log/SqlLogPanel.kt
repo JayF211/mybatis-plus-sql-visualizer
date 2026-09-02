@@ -655,13 +655,22 @@ class SqlLogPanel(
          * 此前 4 参 data: URL 走 loadURL，JCEF 对 data: URL 的 CSS 渲染会丢失——已弃用）。
          */
         private fun openLocalHtml() {
-            val htmlContent = loadText("html", "marketplace-custom-page.html")
+            var htmlContent = loadText("html", "marketplace-custom-page.html")
             if (htmlContent.isBlank()) {
                 LOG.warn("[HelpAction] Help HTML resource is empty, falling back to online doc")
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
                 return
             }
             try {
+                // 暗色检测：IDE 主题为暗色时注入 class（JCEF 不读取 IDE 的 prefers-color-scheme）
+                if (isDarkTheme()) {
+                    htmlContent = htmlContent.replace(
+                        "<body>",
+                        "<body class=\"dark\">",
+                        ignoreCase = true
+                    )
+                    LOG.info("[HelpAction] Dark theme detected, injected .dark class")
+                }
                 LOG.info("[HelpAction] Opening local help HTML via loadHTML")
                 com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
                     project, HELP_TAB_TITLE, htmlContent,
@@ -670,6 +679,11 @@ class SqlLogPanel(
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
             }
+        }
+
+        /** 检测当前 IDE 是否为暗色主题（JBColor.isBright 反映用户设置，不依赖 OS）。 */
+        private fun isDarkTheme(): Boolean {
+            return !com.intellij.ui.JBColor.isBright()
         }
 
         /** 从 resources 加载文本文件。 */
