@@ -152,6 +152,7 @@
 | 2026-09-02 | **Wave 2 完结（10/10，`868808c`）**：`WrapperLocator.kt`（1223 行）+ `LocatedWrapper` 转 Java，63 处调用点去 INSTANCE、internal 去 mangled；转换期修复 `expandHelperCalls` 越界差异（1 测试暴露）；全量 1421/0/0/6 绿。**psi 包主源 `.kt` 清零**，剩余 24（sql 14 / config 9 / update 1） |
 | 2026-09-02 | **Wave 3 批 1 + 批 2（`b0040b2`/`a67d857`）**：ParamHint/ParamQuote/DataPermissionPlaceholder + SqlCommentStripper/SqlPerfAnalyzer/ParameterReplacer 转 Java；ParamHint 双 getter（`isInList`+`getInList` 装箱 Boolean 兼容）、`buildExecutableSql` 默认参→重载、LRU 缓存匿名子类、测试具名实参 30+ 处转位置实参；全量 1421/0/0/6 绿。剩余 16 kt |
 | 2026-09-02 | **Wave 3 批 4+5（Dialect/SqlKeywords/JoinDiagramGenerator）**：`interface Dialect` + 9 个方言类（各含 `INSTANCE` 单例）+ `DialectRegistry` 转 Java；保留字集合抽 `SqlKeywords` 静态字段；object→INSTANCE 调用点批量改写（`SqlGenerator.kt` 默认参、`DialectTest`/`BatchModelTest`/`DialectRenderDumpTest` 裸实例→`.INSTANCE`、`SqlKeywordsTest`/`DialectDocGoldenTest` 加 `SqlKeywords.` 限定、config 两个 `.kt` 的 `DialectRegistry.dialects`→`INSTANCE`）；`JoinDiagramGenerator` object→全 static；全量 1421/0/0/6 绿。剩余 13 kt |
+| 2026-09-02 | **Wave 3 批 6+7（SqlTextAnalysis / ComplexityScorer，`7bd756d`）**：两个 sql 文件转 Java（顶层函数 stripXmlTags/detectClause/parseTableAliases + 内嵌 `SqlClause` enum/`TableAlias` data class → `SqlTextAnalysis`/`SqlClause`/`TableAlias` 静态类；`ComplexityScorer` object → 全 static final class，`ScoreLevel` 嵌套 enum，`Regex`→`Pattern`，`linkedMapOf`→`LinkedHashMap`，手动累加）；4 主源 Java 调用方 `SqlTextAnalysisKt.`→`SqlTextAnalysis.`、测试裸调用加类名限定；**并修复上一波 Dialect/SqlKeywords 批漏改的 verify 包测试文件**（stale 测试字节码掩盖，本次 `--rerun-tasks` 重编译才暴露：方言类裸引用加 `.INSTANCE`、保留字集合 import 改 `SqlKeywords.*`、`quoteIfKeyword` 等实例方法加 `.INSTANCE`）——全量 1421/0/0/6 绿。剩余 11 kt（sql 1：SqlGenerator；config 9；update 1） |
 
 ---
 
@@ -163,11 +164,11 @@
 |------|------|------|
 | Wave 1 | model 12 `.kt` → Java | ✅ 完成（`ad34b26`，首轮子代理遗留 2 个测试失败已修复） |
 | Wave 2 | psi 10 `.kt` → Java | ✅ **完成**（10/10，`868808c`；psi 包主源 `.kt` 清零） |
-| Wave 3 | sql 14 + interceptor 3 | 🔄 进行中（14/17：+ JoinDiagramGenerator / Dialect / SqlKeywords 本批；interceptor 3 已全转） |
+| Wave 3 | sql 14 + interceptor 3 | 🔄 进行中（16/17：+ SqlTextAnalysis / ComplexityScorer 本批；SqlGenerator 待批 6；interceptor 3 已全转） |
 | Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 待开始 |
 | Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 待开始 |
 
-- 剩余主源 `.kt`：**13**（sql 3：SqlTextAnalysis / ComplexityScorer / SqlGenerator；config 9 / update 1；interceptor 包 kt 清零）；主源 Java 文件 **312**。
+- 剩余主源 `.kt`：**11**（sql 1：SqlGenerator；config 9 / update 1；interceptor + sql 包其余 kt 清零）；主源 Java 文件 **316**。
 - 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
 
 ### 9.2 Wave 1 回归根因（重要教训）
