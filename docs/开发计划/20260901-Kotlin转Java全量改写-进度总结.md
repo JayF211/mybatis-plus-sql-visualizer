@@ -149,6 +149,7 @@
 | 2026-09-01 | 主源码波次收尾（`EntitySelectionDialog` 两处修复）+ **测试编译 3,939→0**，92 测试文件转 Java，本总结文档 |
 | 2026-09-01 | **运行时回归修复（全量测试 6→0）**：`SqlLogManager` 加 `final`（消 3 PluginException）、`SelectStarDetector` 正则补 `\.`（消 2 断言）、`OgnlEvaluator` 三元数值提升陷阱改 `if/else`（消 `42.0` 类型）+ `plus()` null 空安全；补齐 `log.panel.jumpToSource.noSource/notFound` 资源键（消 verifyPlugin 2 compatibility problems，master 既有缺陷）；全量测试 0 失败、buildPlugin 通过 |
 | 2026-09-02 | **Wave 1 + Wave 2（9/10）主源 Kotlin→Java**：model 12 文件 + psi 9 文件（PsiDialect/WrapperCache/ExpressionEvaluator/KtWrapperDetector/EntityClassFinder/WrapperAnchorDetector/EntityResolver/ArgResolver/BatchOperationConverter）转 Java，每批全量测试 1421/0/0/6 绿后提交（`ad34b26`→`e913f3c` 共 8 commit）；详见下方第 9 节 |
+| 2026-09-02 | **Wave 2 完结（10/10，`868808c`）**：`WrapperLocator.kt`（1223 行）+ `LocatedWrapper` 转 Java，63 处调用点去 INSTANCE、internal 去 mangled；转换期修复 `expandHelperCalls` 越界差异（1 测试暴露）；全量 1421/0/0/6 绿。**psi 包主源 `.kt` 清零**，剩余 24（sql 14 / config 9 / update 1） |
 
 ---
 
@@ -159,12 +160,12 @@
 | 波次 | 范围 | 状态 |
 |------|------|------|
 | Wave 1 | model 12 `.kt` → Java | ✅ 完成（`ad34b26`，首轮子代理遗留 2 个测试失败已修复） |
-| Wave 2 | psi 10 `.kt` → Java | 🔄 **9/10**（剩 `WrapperLocator.kt` 1223 行） |
+| Wave 2 | psi 10 `.kt` → Java | ✅ **完成**（10/10，`868808c`；psi 包主源 `.kt` 清零） |
 | Wave 3 | sql 14 + interceptor 3 | 待开始 |
 | Wave 4 | config 9（含 `PluginSettingsPanel.kt` 1161 行） | 待开始 |
 | Wave 5 | `update/StartupUpdateCheck.kt` + `buildPlugin`/`verifyPlugin` 终验 | 待开始 |
 
-- 剩余主源 `.kt`：**25**（psi 1 / sql 14 / config 9 / update 1）；主源 Java 文件 **300**。
+- 剩余主源 `.kt`：**24**（sql 14 / config 9 / update 1）；主源 Java 文件 **302**（含新增 `LocatedWrapper.java`）。
 - 基线：全量测试 **1421 / 0 失败 / 0 错误 / 6 跳过**（每批提交前复验；`XmlPreviewPanelTest` 出现过 1 次 `cannot open system clipboard` 环境性偶发失败，重跑即绿，与本轮改动无关）。
 
 ### 9.2 Wave 1 回归根因（重要教训）
@@ -179,6 +180,14 @@
 - **Kotlin `internal` 成员从 Java 调用需 mangled 名**（`xxx$mybatis_plus_sql_visualizer`）；对应类自身转 Java 后须回头去 mangled（`BatchOperationConverter` 转 Java 时已同步修正 `WrapperAnchorDetector`/`SqlPreviewService` 调用点；`WrapperLocator` 转 Java 后还剩 `WrapperSearchService.java:111` 一处）。
 - **Kotlin 侧调用 Java static getter 不做属性语法合成**：`WrapperLocator.kt` 中 `BatchOperationConverter.batchOperationMethodNames` 需改为 `BatchOperationConverter.getBatchOperationMethodNames()`。
 - 其他：`reverseLookupCacheInfo` 返回 `kotlin.Pair<Integer,Integer>` 保 Kotlin 解构测试；`Map.of/Set.of` 迭代序未定义→ 首个命中即返回的场景用 `LinkedHashMap`；Java `String.regionMatches` 无 ignoreCase 重载（Kotlin 扩展）→ 手写比较；companion `const val` → 外层静态字段（`PluginSettings.INFERENCE_SNAKE`）。
+
+### 9.3.1 WrapperLocator 转换（Wave 2 最难，1223 行，`868808c`）
+
+- **全 static final 类方案**：63 处 `WrapperLocator.INSTANCE.` 调用点 sed 批量去 INSTANCE（5 主源 Java + 2 测试 Java）；Kotlin 测试 `WrapperLocator.locateWithTable(...)` 语法对静态方法天然兼容。
+- **internal 成员去 mangled 并常量化**：`wrapperFactoryMethodNames`→`WRAPPER_FACTORY_METHOD_NAMES`、`wrapperFactoryClassNames`→`WRAPPER_FACTORY_CLASS_NAMES`、`serviceChainMethodNames`→`SERVICE_CHAIN_METHOD_NAMES`、`delete/count/pageConsumerMethodNames`→`DELETE/COUNT/PAGE_CONSUMER_METHOD_NAMES`（外部代码引用仅注释，零影响）；`isServiceChainStart`/`isWrapperVariable`/`isChainHeadCall`/`isSqlCandidate`/`detectWrapperType` 转 public static。
+- **顶层 `LocatedWrapper` data class 拆独立文件**（外部以 `psi.LocatedWrapper` 引用；Java 一文件一 public 类）；`entityFileStamp` 构造时计算；测试访问 `getChain()/getTable()/entityFileValid()`。
+- **转换期发现 2 个真差异**：① Kotlin 具名实参构造 `LocatedWrapper(chain=…, table=…)` 对 Java 构造器非法（测试改位置实参）；② **`getParameter(index)` 越界返回 null vs Java 数组下标抛 `ArrayIndexOutOfBoundsException`**（`expandHelperCalls` 实参数多于形参数场景，1 个测试失败暴露）——已加边界检查。
+- 语义保真要点：`distinctBy{endOffset}`→LinkedHashSet；双键 `compareBy`→`Comparator.comparingInt().thenComparingInt()`；PSI 引用相等去重（`seenIfStatements`）用 IdentityHashMap-backed Set；扩展函数 `consumingCall()`→静态方法；解构返回值→私有嵌套 holder 类。
 
 ### 9.4 验证流程（每批固定）
 
