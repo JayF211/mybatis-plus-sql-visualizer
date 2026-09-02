@@ -244,7 +244,9 @@ class JoinTableNode(
 
     override fun getIcon(): javax.swing.Icon = AllIcons.Nodes.DataTables
 
-    override fun getTooltip(): String = entity.tableName
+    /** 别名≠表名时显示 "tableName AS alias"（与 [JoinTableElementManager.getNodeTooltip] 同语义）。 */
+    override fun getTooltip(): String =
+        if (entity.alias != entity.tableName) "${entity.tableName} AS ${entity.alias}" else entity.tableName
 }
 
 /** 关系边（样式由 [joinRelationshipInfo] 按 JOIN 类型给出）。 */

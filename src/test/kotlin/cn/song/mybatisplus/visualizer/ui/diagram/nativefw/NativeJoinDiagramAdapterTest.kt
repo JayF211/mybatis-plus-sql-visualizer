@@ -159,7 +159,8 @@ class NativeJoinDiagramAdapterTest {
             SqlJoinDiagramProvider(),
         )
         assertEquals("u", node.identifyingElement.alias)
-        assertEquals("user", node.tooltip)
+        // 别名≠表名时 tooltip 显示 AS 形式（T-Dgm-05 场景测试发现的缺陷修复后语义）
+        assertEquals("user AS u", node.tooltip)
         assertNotNull(node.icon)
     }
 
@@ -169,7 +170,7 @@ class NativeJoinDiagramAdapterTest {
         val graph = JoinDiagramGraph.build(JoinDiagramSnapshotRegistry.get(id), SqlJoinDiagramProvider())
         assertEquals(2, graph.nodes.size)
         assertEquals(1, graph.edges.size)
-        assertEquals("user", graph.nodes.first { it.identifyingElement.isMain }.tooltip)
+        assertEquals("user AS u", graph.nodes.first { it.identifyingElement.isMain }.tooltip)
         assertEquals("u", graph.edges[0].source.identifyingElement.alias)
         assertEquals("o", graph.edges[0].target.identifyingElement.alias)
     }

@@ -462,6 +462,9 @@ intellijPlatformTesting {
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.SvgRasterizerTest")
                     // T-Dgm-05：JOIN 图原生框架适配层（快照注册表 + 图构建工厂 + 关系样式）
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramAdapterTest")
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramScenariosTest")
+                    // T-Dgm-05 Heavy：真实平台打开链路（反射桥 + EP 挂载 + createEditor 全链）
+                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyNativeJoinDiagramOpenChainTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")
                     includeTestsMatching("cn.song.mybatisplus.visualizer.model.BatchModelTest")
