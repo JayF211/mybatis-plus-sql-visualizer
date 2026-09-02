@@ -59,13 +59,22 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
     private val searchField = SearchTextField()
-    private val backButton = JButton(MpSqlVisualizerBundle.message("log.history.back")).apply {
+    private val backButton = JButton().apply {
         icon = AllIcons.Actions.Back
-        horizontalTextPosition = SwingConstants.RIGHT // 图标在左、文字在右
-        isFocusable = false
         toolTipText = MpSqlVisualizerBundle.message("log.history.back.tip")
+        isFocusable = false
+        preferredSize = Dimension(28, 28)
+        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
         addActionListener { showFileList() }
         isVisible = false // 默认一级，不显示返回
+    }
+    private val refreshButton = JButton().apply {
+        icon = AllIcons.Actions.Refresh
+        toolTipText = MpSqlVisualizerBundle.message("log.history.refresh.tip")
+        isFocusable = false
+        preferredSize = Dimension(28, 28)
+        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
+        addActionListener { refresh() }
     }
 
     private val cardLayout = CardLayout()
@@ -104,10 +113,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(backButton)
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("log.history.refresh")).apply {
-            toolTipText = MpSqlVisualizerBundle.message("log.history.refresh.tip")
-            addActionListener { refresh() }
-        })
+        toolbar.add(refreshButton)
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
@@ -423,11 +429,16 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
         if (entry != null) {
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
-            val source = entry.sourceFile?.let { file ->
-                val name = file.substringAfterLast(File.separatorChar)
-                if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
-            } ?: "unknown"
-            val sqlHtml = SqlListHtmlRenderer.render(entry.summary)
+            val source = when {
+                SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+                entry.sourceFile != null -> {
+                    // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
+                    val name = entry.sourceFile.substringAfterLast('/')
+                    if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+                }
+                else -> "unknown"
+            }
+            val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
             // 选中态用 selectionForeground；非选中走 uniform 前景色（不要按耗时变色避免与 SQL 高亮冲突）
             val durationHtml = "<span style='color:#9E9E9E'>[$duration]</span> "
             val timestampHtml = "<span style='color:#9E9E9E'>[$timestamp]</span> "

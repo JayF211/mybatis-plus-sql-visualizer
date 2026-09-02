@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
+import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder
 import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
 import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
@@ -1208,6 +1209,7 @@ class SqlPreviewService(private val project: Project) {
      * F-7：预览完成后自动记录历史。
      *
      * 从锚点元素提取来源文件名/行号，与预览结果一并写入 [SqlHistoryManager]。
+     * 尝试从 [SqlLogManager] 最近日志条目中匹配相同 SQL 指纹补全执行耗时。
      * 服务不可用时静默跳过（不阻塞预览）。
      */
     private fun recordHistory(result: PreviewResult, anchor: PsiElement) {
@@ -1221,6 +1223,11 @@ class SqlPreviewService(private val project: Project) {
                     text.substring(0, offset.coerceAtMost(text.length)).count { it == '\n' } + 1
                 } ?: 0
             }
+            // 尝试从最近日志条目补全耗时（SQL 指纹匹配）
+            val logManager = anchor.project.getService(SqlLogManager::class.java)
+            val executionTimeMs = logManager.entries.snapshot()
+                .firstOrNull { it.restoredSql == result.sql }
+                ?.executionTimeMs
             manager.add(
                 SqlHistoryEntry(
                     sql = result.sql,
@@ -1229,6 +1236,7 @@ class SqlPreviewService(private val project: Project) {
                     sourceFile = sourceFile,
                     sourceLine = sourceLine,
                     tableName = result.tableName ?: "",
+                    executionTimeMs = executionTimeMs,
                 ),
             )
         }

@@ -6,6 +6,8 @@ import java.io.BufferedWriter
 import java.io.File
 import java.nio.charset.Charset
 import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import cn.song.mybatisplus.visualizer.log.withTerminator
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.Date
@@ -90,7 +92,11 @@ class SqlLogAutoSaver {
         val file = File(currentFileName())
         runCatching {
             file.parentFile?.mkdirs()
-            writer = Files.newBufferedWriter(file.toPath(), Charsets.UTF_8)
+            // APPEND 模式：多次启动后历史内容追加而非覆盖
+            writer = Files.newBufferedWriter(
+                file.toPath(), Charsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND
+            )
             currentFile = file
         }.onFailure {
             LOG.warn("自动保存历史 SQL：无法打开文件 ${file.absolutePath}", it)
@@ -132,7 +138,7 @@ class SqlLogAutoSaver {
                 val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
                 val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).format(Date(entry.timestamp))
                 w.write("-- source: $source | time: $duration | $timestamp --\n")
-                w.write(entry.restoredSql)
+                w.write(withTerminator(entry.restoredSql))
                 w.write("\n\n")
                 w.flush()
             }

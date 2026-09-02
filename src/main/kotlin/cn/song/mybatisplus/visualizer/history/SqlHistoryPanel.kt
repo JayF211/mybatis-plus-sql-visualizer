@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.history
 
+import cn.song.mybatisplus.visualizer.log.SlowQueryDetector
+import cn.song.mybatisplus.visualizer.log.withTerminator
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
@@ -188,14 +190,23 @@ class SqlHistoryPanel(
             text = null
             if (entry != null) {
                 val ts = SimpleDateFormat("HH:mm:ss").format(Date(entry.timestamp))
-                val summary = entry.summary()
+                val summary = withTerminator(entry.summary())
                 val source = entry.sourceLabel()
+                val durationColor = when (SlowQueryDetector.level(entry.executionTimeMs)) {
+                    SlowQueryDetector.DurationLevel.SLOW -> "#D32F2F"
+                    SlowQueryDetector.DurationLevel.MODERATE -> "#E67E22"
+                    SlowQueryDetector.DurationLevel.FAST -> "#4CAF50"
+                    SlowQueryDetector.DurationLevel.NONE -> "#9E9E9E"
+                }
+                val durationText = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
+                val durationPart = "  <span style='color:$durationColor'>$durationText</span>"
                 val sourcePart = if (source.isNotBlank()) "  <span style='color:#9E9E9E'>($source)</span>" else ""
                 val tagPart = if (entry.tags.isNotEmpty())
                     "  <span style='color:#9E9E9E'>[${entry.tags.joinToString(", ")}]</span>" else ""
                 this.text = "<html>" +
                     "${if (entry.favorite) "&#9733; " else ""}" +
                     "<b>${escapeHtml(summary)}</b>" +
+                    durationPart +
                     "  <span style='color:#9E9E9E'>$ts</span>" +
                     sourcePart + tagPart +
                     "</html>"

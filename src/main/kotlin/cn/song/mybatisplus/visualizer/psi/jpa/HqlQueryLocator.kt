@@ -10,6 +10,7 @@ import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.util.PsiTreeUtil
 
@@ -289,14 +290,22 @@ object HqlQueryLocator {
                 else firstArg.text to false
             }
             is PsiReferenceExpression -> {
-                // 变量引用：尝试解析为常量
+                // 变量引用：尝试解析 initializer 为字符串
                 val resolved = firstArg.resolve()
                 if (resolved is PsiVariable) {
                     val initializer = resolved.initializer
-                    if (initializer is PsiLiteralExpression) {
-                        (initializer.value as? String ?: initializer.text) to true
-                    } else {
-                        firstArg.referenceName to false
+                    when {
+                        // 直接字面量：String hql = "select ..." / static final String HQL = "..."
+                        initializer is PsiLiteralExpression ->
+                            (initializer.value as? String ?: initializer.text) to true
+                        // 字符串拼接：String hql = "select" + " ..."
+                        initializer is PsiBinaryExpression || initializer is PsiPolyadicExpression -> {
+                            val parts = collectStringLiterals(initializer)
+                            if (parts.isNotEmpty()) parts.joinToString("") to true
+                            else firstArg.referenceName to false
+                        }
+                        // PsiParameter / 其他非空表达式 / 无 initializer：无法静态解析，优雅降级
+                        else -> firstArg.referenceName to false
                     }
                 } else {
                     firstArg.referenceName to false

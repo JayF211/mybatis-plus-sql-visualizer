@@ -655,13 +655,22 @@ class SqlLogPanel(
          * 此前 4 参 data: URL 走 loadURL，JCEF 对 data: URL 的 CSS 渲染会丢失——已弃用）。
          */
         private fun openLocalHtml() {
-            val htmlContent = loadText("html", "marketplace-custom-page.html")
+            var htmlContent = loadText("html", "marketplace-custom-page.html")
             if (htmlContent.isBlank()) {
                 LOG.warn("[HelpAction] Help HTML resource is empty, falling back to online doc")
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
                 return
             }
             try {
+                // 暗色检测：IDE 主题为暗色时注入 class（JCEF 不读取 IDE 的 prefers-color-scheme）
+                if (isDarkTheme()) {
+                    htmlContent = htmlContent.replace(
+                        "<body>",
+                        "<body class=\"dark\">",
+                        ignoreCase = true
+                    )
+                    LOG.info("[HelpAction] Dark theme detected, injected .dark class")
+                }
                 LOG.info("[HelpAction] Opening local help HTML via loadHTML")
                 com.intellij.openapi.fileEditor.impl.HTMLEditorProvider.openEditor(
                     project, HELP_TAB_TITLE, htmlContent,
@@ -670,6 +679,11 @@ class SqlLogPanel(
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
                 com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
             }
+        }
+
+        /** 检测当前 IDE 是否为暗色主题（JBColor.isBright 反映用户设置，不依赖 OS）。 */
+        private fun isDarkTheme(): Boolean {
+            return !com.intellij.ui.JBColor.isBright()
         }
 
         /** 从 resources 加载文本文件。 */
@@ -814,6 +828,10 @@ class SqlLogPanel(
     /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
         if (entry.sourceFile != null) {
+            // F-44-7：MP 分页 COUNT 查询特殊标记 → 无源码可跳转
+            if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
+                return LogJumpTarget.NoSource
+            }
             // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
             val vf = cn.song.mybatisplus.visualizer.log.SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
             return if (vf != null) {
@@ -826,6 +844,30 @@ class SqlLogPanel(
             is LiveJumpResolution.NoTable -> LogJumpTarget.NoTable
             is LiveJumpResolution.Proceed -> LogJumpTarget.SearchByTable(resolution.tableName)
         }
+    }
+
+    /**
+     * F-44-7：在项目所有源码根目录中搜索文件。
+     * 标记路径（如 cn/example/service/UserService.java）相对于源码根目录，
+     * 需拼接 src/main/java 等前缀才能定位到实际文件。
+     */
+    private fun findSourceFile(relativePath: String): VirtualFile? {
+        // 策略 1：直接在项目根目录查找（兼容历史面板精确跳转）
+        val basePath = project.basePath
+        if (basePath != null) {
+            val direct = LocalFileSystem.getInstance().findFileByPath("$basePath/$relativePath")
+            if (direct != null) return direct
+        }
+        // 策略 2：在所有源码根目录中搜索（兼容 SqlSourceInterceptor 标记路径）
+        val modules = com.intellij.openapi.module.ModuleManager.getInstance(project).modules
+        for (module in modules) {
+            val rootManager = com.intellij.openapi.roots.ModuleRootManager.getInstance(module)
+            for (sourceRoot in rootManager.sourceRoots) {
+                val file = LocalFileSystem.getInstance().findFileByPath("${sourceRoot.path}/$relativePath")
+                if (file != null) return file
+            }
+        }
+        return null
     }
 
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗/后台搜索）。 */
@@ -1117,17 +1159,18 @@ private fun formatTimestampHtml(timestamp: Long): String {
     return "<span style='color:#9E9E9E'>[${escapeHtml(formatted)}]</span> "
 }
 
-/** 耗时 HTML 片段：根据阈值套不同颜色——无耗时则返回空串。 */
+/** 耗时 HTML 片段：根据阈值套不同颜色——无耗时显示 "—" 占位。 */
 private fun formatDurationHtml(ms: Long?, isSelected: Boolean): String {
-    if (ms == null) return ""
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
         isSelected -> "#FFFFFF"
-        ms >= threshold -> "#D32F2F"   // 红：慢查询
-        ms >= threshold / 2 -> "#E67E22" // 橙：偏慢
-        else -> "#9E9E9E"              // 灰：正常
+        ms == null -> "#9E9E9E"            // 灰：无耗时
+        ms >= threshold -> "#D32F2F"      // 红：慢查询
+        ms >= threshold / 2 -> "#E67E22"  // 橙：偏慢
+        else -> "#4CAF50"                 // 绿：正常
     }
-    return "<span style='color:${color}'>${ms}ms</span> "
+    val text = ms?.let { "${it}ms" } ?: "—"
+    return "<span style='color:${color}'>$text</span> "
 }
 
 /** 单行 HTML 转义（防注入日志中的特殊字符）。 */
@@ -1156,10 +1199,12 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
         text = null
         if (entry != null) {
             val timestampHtml = formatTimestampHtml(entry.timestamp)
-            val durationHtml = formatDurationHtml(entry.executionTimeMs, isSelected)
-            val sqlHtml = SqlListHtmlRenderer.render(entry.summary)
+            val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
+                formatDurationHtml(entry.executionTimeMs, isSelected) else ""
+            val sourceHtml = formatSourceHtml(entry, isSelected)
+            val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
             val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-            this.text = "<html>${timestampHtml}${durationHtml}${sqlHtml}${dedupeBadge}</html>"
+            this.text = "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
             toolTipText = entry.restoredSql
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
             else (list?.foreground ?: JBColor.foreground())
@@ -1169,5 +1214,19 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             EmptyBorder(5, 8, 5, 8),
         )
         return this
+    }
+
+    /** F-44-7：格式化来源为 HTML 片段（用于列表渲染）。 */
+    private fun formatSourceHtml(entry: LogSqlEntry, isSelected: Boolean): String {
+        val source = when {
+            SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+            entry.sourceFile != null -> {
+                val name = entry.sourceFile.substringAfterLast('/')
+                if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+            }
+            else -> return ""
+        }
+        val color = if (isSelected) "color:#FFFFFF" else "color:#9E9E9E"
+        return "<span style='$color'>[$source]</span> "
     }
 }

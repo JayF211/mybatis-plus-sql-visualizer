@@ -219,6 +219,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var slowQueryThresholdMs: Long = DEFAULT_SLOW_QUERY_THRESHOLD_MS,
 
         /**
+         * 是否在 SQL 日志列表中显示耗时列（默认开启）。
+         * false 时隐藏耗时，节省列表宽度。
+         */
+        var showDurationInLogList: Boolean = true,
+
+        /**
          * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
          * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
          * 空字符串表示无历史。
@@ -282,6 +288,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 收藏条目无数量上限。
          */
         var historyMaxSize: Int = DEFAULT_HISTORY_MAX_SIZE,
+
+        // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
+
+        /**
+         * F-44-7：自动注入 SqlSourceInterceptor（源码位置捕获）。
+         * 开启后，插件在用户项目中自动生成拦截器类和配置类，
+         * 应用重启后实时日志携带源码位置，实现精确跳转。
+         * 默认关——用户需主动开启并按提示确认生成。
+         */
+        var autoInjectSqlSourceInterceptor: Boolean = false,
 
         // ---------- 设置页布局（Phase 1：折叠面板状态持久化） ----------
 

@@ -17,6 +17,7 @@ import java.util.UUID
  * @param tableName  目标表名（可为空）
  * @param favorite   是否收藏（收藏条目不参与上限淘汰）
  * @param tags       用户自定义标签列表（唯一、有序）
+ * @param executionTimeMs 执行耗时（毫秒）；null 表示无耗时信息
  */
 data class SqlHistoryEntry(
     var id: String = "",
@@ -28,6 +29,7 @@ data class SqlHistoryEntry(
     var tableName: String = "",
     var favorite: Boolean = false,
     var tags: MutableList<String> = mutableListOf(),
+    var executionTimeMs: Long? = null,
 ) {
     /** 分配唯一 id（仅当当前为空白时）。 */
     fun ensureId() {

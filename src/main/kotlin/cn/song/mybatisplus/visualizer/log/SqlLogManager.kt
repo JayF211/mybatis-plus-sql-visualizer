@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
@@ -92,6 +93,16 @@ class SqlLogManager(private val project: Project) : Disposable {
         // 与设置页勾选保留至今，形同虚设）。挂**无条件** buffer 监听（面板未创建/未订阅时
         // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
         buffer.addListener(autoShowBufferListener)
+
+        // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
+        // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
+        project.messageBus.connect(this).subscribe(
+            PluginSettings.SETTINGS_CHANGE_TOPIC,
+            SettingsChangeListener {
+                applySettings()
+                bridge.refreshConsoleContexts()
+            },
+        )
     }
 
     /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启且距上次展开超过防抖窗口）。 */
@@ -242,6 +253,9 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 已挂载的 console 集合（bridge 访问）。 */
     val attachedConsoles: MutableMap<Any, Pair<Any, Class<*>>> get() = bridge.attachedConsoles
+
+    /** 桥访问（真实环境测试缝：scanComponent 挂载桩控制台用，对齐 installBridgeForTest 惯例）。 */
+    internal val consoleBridge: SqlLogConsoleBridge get() = bridge
 
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调。 */
     fun onConsoleRemoved() {
