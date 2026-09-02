@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
+import cn.song.mybatisplus.visualizer.log.SqlSourceInterceptorAutoInjector
+import cn.song.mybatisplus.visualizer.log.InjectionResult
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -218,6 +220,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logAutoSaveBrowseButton = JButton("...")
     private val logAutoSavePatternField = JBTextField(20)
     private val logAutoSavePatternPreview = JBLabel(" ")
+
+    // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
+    private val autoInjectInterceptorCheck = JBCheckBox()
 
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private val logTimePrefixField = JBTextField(12)
@@ -517,6 +522,20 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 )
                 addRow(p, g, "", logAutoSavePatternPreview.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
+                })
+            }
+
+            // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
+            sectionGroup("settings.log.tab.sourceCapture") { p, g ->
+                addRow(p, g, "", autoInjectInterceptorCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor.tip")
+                    addActionListener {
+                        if (isSelected) {
+                            // 触发注入
+                            triggerInterceptorInjection()
+                        }
+                    }
                 })
             }
         }
@@ -824,6 +843,59 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal fun clearCacheButtonForTest(): JButton = clearCacheButton
 
     // ------------------------------------------------------------------
+    // F-44-7：SqlSourceInterceptor 自动注入
+    // ------------------------------------------------------------------
+
+    /** 触发拦截器注入（用户勾选开关后调用）。 */
+    private fun triggerInterceptorInjection() {
+        val project = ProjectManager.getInstance().openProjects.firstOrNull()
+        if (project == null) {
+            Messages.showWarningDialog(
+                null,
+                "请先打开一个项目，再启用源码捕获拦截器自动注入。",
+                "源码跳转配置",
+            )
+            autoInjectInterceptorCheck.isSelected = false
+            return
+        }
+        val result = SqlSourceInterceptorAutoInjector.inject(project)
+        when (result) {
+            is InjectionResult.Success -> {
+                Messages.showInfoMessage(
+                    project,
+                    result.message,
+                    "源码跳转配置",
+                )
+            }
+            is InjectionResult.AlreadyExists -> {
+                Messages.showInfoMessage(
+                    project,
+                    "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
+                    "源码跳转配置",
+                )
+                autoInjectInterceptorCheck.isSelected = false
+            }
+            is InjectionResult.UnsupportedProject -> {
+                Messages.showWarningDialog(
+                    project,
+                    "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n" +
+                        "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
+                    "源码跳转配置",
+                )
+                autoInjectInterceptorCheck.isSelected = false
+            }
+            is InjectionResult.CannotDetectStructure -> {
+                Messages.showWarningDialog(
+                    project,
+                    "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
+                    "源码跳转配置",
+                )
+                autoInjectInterceptorCheck.isSelected = false
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 配置读写
     // ------------------------------------------------------------------
 
@@ -898,6 +970,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logAutoSaveCheck.isSelected != s.logAutoSaveEnabled
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
+            || autoInjectInterceptorCheck.isSelected != s.autoInjectSqlSourceInterceptor
 
     private fun isModifiedUi(s: PluginSettings.State): Boolean =
         gutterIconCheck.isSelected != s.showGutterIcon
@@ -966,6 +1039,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logAutoSavePath = logAutoSavePathField.text.trim()
             s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
                 .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+            s.autoInjectSqlSourceInterceptor = autoInjectInterceptorCheck.isSelected
         }
         if (SECTION_UI in sections) {
             s.showGutterIcon = gutterIconCheck.isSelected
@@ -1062,6 +1136,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
             logAutoSavePatternField.isEnabled = autoSaveEnabled
             updateAutoSavePreview()
+            autoInjectInterceptorCheck.isSelected = s.autoInjectSqlSourceInterceptor
         }
     }
 
