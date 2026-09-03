@@ -178,13 +178,15 @@ object SqlStringConcatenator {
             .filter { call ->
                 val methodName = call.methodExpression.referenceName ?: return@filter false
                 if (methodName != "append") return@filter false
-                // qualifier 是变量引用且解析到目标变量
-                val qualifier = call.methodExpression.qualifierExpression ?: return@filter false
-                if (qualifier !is PsiReferenceExpression) return@filter false
-                val resolved = qualifier.resolve() as? PsiVariable ?: return@filter false
-                resolved == variable
+                // qualifier 可以是直接变量引用，也可以是链式方法调用（sql.append("A").append(x)）——
+                // 沿 qualifier 链回溯到根变量，判定是否为目标变量
+                val rootVar = resolveRootVariable(call.methodExpression.qualifierExpression)
+                    ?: return@filter false
+                rootVar == variable
             }
-            .sortedBy { it.textRange.startOffset }
+            // 按 startOffset 升序；链式调用中多层 append 共享同一 startOffset（都从 `sql` 起），
+            // 此时按文本长度升序（内层最短 → 排前面），保证 append 实参按正确顺序拼接
+            .sortedWith(compareBy({ it.textRange.startOffset }, { it.textLength }))
 
         for (call in appendCalls) {
             val args = call.argumentList.expressions
@@ -201,6 +203,29 @@ object SqlStringConcatenator {
             }
         }
         return results
+    }
+
+    /**
+     * 沿 qualifier 链回溯根变量。
+     *
+     * 处理两种形态：
+     *  - 直接调用 `sql.append(...)` → qualifier 是 PsiReferenceExpression → 直接解析
+     *  - 链式调用 `sql.append("A").append(x).append("B")` → 外层 qualifier 是 PsiMethodCallExpression →
+     *    递归取 qualifier 的 qualifier，直到回溯到 PsiReferenceExpression
+     *
+     * @param qualifier 方法调用的 qualifier 表达式（可能 null）
+     * @return 根变量；无法解析返回 null
+     */
+    private fun resolveRootVariable(qualifier: PsiExpression?): PsiVariable? {
+        var current: PsiExpression? = qualifier
+        while (current != null) {
+            current = when (current) {
+                is PsiReferenceExpression -> return current.resolve() as? PsiVariable
+                is PsiMethodCallExpression -> current.methodExpression.qualifierExpression
+                else -> return null
+            }
+        }
+        return null
     }
 
     // ------------------------------------------------------------------

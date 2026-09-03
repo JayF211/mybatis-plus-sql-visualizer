@@ -129,4 +129,61 @@ class JdbcTemplateSqlPreviewServiceTest : BasePlatformTestCase() {
         val result = previewOfCall(call)
         assertNull(result)
     }
+
+    // ------------------------------------------------------------------
+    // 端到端：用户真实 dynamicSqlWithStringBuilder 场景
+    // ------------------------------------------------------------------
+
+    fun testPreview_dynamicSqlWithStringBuilder_runtimeValuesMarkedIncomplete() {
+        // 用户原始代码：StringBuilder + 链式 append + 条件运行时值
+        // 关键验证：运行时参数值（username/status/roleId/deptId）被标记为占位而非丢失
+        myFixture.configureByText("Demo.java", """
+            import org.springframework.jdbc.core.JdbcTemplate;
+            import org.springframework.util.StringUtils;
+            public class Demo {
+                public List<Map<String, Object>> dynamicSqlWithStringBuilder(
+                        JdbcTemplate jdbcTemplate, String username, Integer status,
+                        Integer roleId, Integer deptId) {
+                    StringBuilder sql = new StringBuilder();
+                    sql.append("SELECT u.id, u.username, u.age, u.email, u.status, ");
+                    sql.append("       r.name AS role_name, d.name AS dept_name ");
+                    sql.append("FROM user u ");
+                    sql.append("LEFT JOIN role r ON u.role_id = r.id ");
+                    sql.append("LEFT JOIN department d ON u.dept_id = d.id ");
+                    sql.append("WHERE u.deleted = 0 ");
+                    if (StringUtils.hasText(username)) {
+                        sql.append("AND u.username LIKE '%").append(username).append("%' ");
+                    }
+                    if (status != null) {
+                        sql.append("AND u.status = ").append(status).append(" ");
+                    }
+                    sql.append("ORDER BY u.id DESC");
+                    return jdbcTemplate.queryForList(sql.toString());
+                }
+            }
+        """.trimIndent())
+        val call = findFirstCall("queryForList")!!
+        // 通过 toString() 引用定位到 StringBuilder 变量
+        val locatorCall = JdbcTemplateSqlLocator.locateFromCall(call)
+        assertNotNull("应定位到 JdbcTemplate 调用", locatorCall)
+        val result = JdbcTemplateSqlPreviewService.preview(locatorCall!!, call)
+        assertNotNull(result)
+        // 静态片段应完整保留（格式化后可能有换行，用 contains 检查关键 token）
+        val compact = result!!.sql.replace("\\s+".toRegex(), " ").trim()
+        assertTrue("应包含 SELECT 列 u.id", compact.contains("u.id,"))
+        assertTrue("应包含 SELECT 列 u.username", compact.contains("u.username,"))
+        assertTrue("应包含 role_name 别名", compact.contains("role_name"))
+        assertTrue("应包含 dept_name 别名", compact.contains("dept_name"))
+        assertTrue("应包含 FROM user u", compact.contains("FROM user u"))
+        assertTrue("应包含 LEFT JOIN role", compact.contains("LEFT JOIN role r"))
+        assertTrue("应包含 LEFT JOIN department", compact.contains("LEFT JOIN department d"))
+        assertTrue("应包含 WHERE deleted = 0", compact.contains("WHERE u.deleted = 0"))
+        assertTrue("应包含 ORDER BY", compact.contains("ORDER BY u.id DESC"))
+        // 运行时值不应丢失（被标记为占位）
+        assertTrue("应标记 username 为运行时值", result.sql.contains("username"))
+        assertTrue("应标记 status 为运行时值", result.sql.contains("status"))
+        // 含运行时值 → warning 提示
+        assertNotNull("应有降级 warning", result.warning)
+        assertTrue("warning 应提及运行时值", result.warning!!.contains("运行时"))
+    }
 }
