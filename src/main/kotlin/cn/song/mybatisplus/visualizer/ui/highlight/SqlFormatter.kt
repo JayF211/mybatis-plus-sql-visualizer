@@ -119,6 +119,7 @@ object SqlFormatter {
                     flushSpace()
                     sb.append(upper)
                     pendingSpace = true
+                    atLineStart = false
                 }
 
                 // 左括号：运算符关键字后留空格（IN (）、函数名后不留（COUNT(）；记录起始行缩进
@@ -280,6 +281,7 @@ object SqlFormatter {
                     flushSpace()
                     sb.append(upper)
                     pendingSpace = true
+                    atLineStart = false
                 }
 
                 // 左括号：运算符关键字后留空格（IN (）；函数名后不留（COUNT(）；深度+1
