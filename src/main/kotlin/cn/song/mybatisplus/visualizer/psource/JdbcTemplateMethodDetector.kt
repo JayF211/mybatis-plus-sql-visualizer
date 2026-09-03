@@ -21,10 +21,13 @@ package cn.song.mybatisplus.visualizer.psource
 object JdbcTemplateMethodDetector {
 
     /**
-     * JdbcTemplate / NamedParameterJdbcTemplate 字符串 SQL 方法名集合。
+     * JdbcTemplate / NamedParameterJdbcTemplate / 团队自研 DB 工具层（如 DbHelper）的字符串 SQL 方法名集合。
      *
      * 大小写不敏感（Spring 方法名全小写，但用户可能写扩展方法）。
-     * 仅含"字符串 SQL 作为第 1 实参"的重载；回调重载由定位器按实参类型排除。
+     * 除 Spring 原生方法外，含自研工具层常见的 `delete`/`insert`（Spring JdbcTemplate 无这两个
+     * 方法，但团队 DAO 常用）——只要**第 1 实参为字符串 SQL**，方法名在此集合即预览候选。
+     *
+     * 注意：第 1 实参约束在定位器层保证（非字符串实参 → 不聚合 → 不预览）；本集合仅做 O(1) 方法名判定。
      */
     val JDBC_TEMPLATE_METHODS: Set<String> = setOf(
         // query 族
@@ -36,9 +39,11 @@ object JdbcTemplateMethodDetector {
         "queryForLong",
         "queryForInt",
         "queryForStream",
-        // 更新
+        // 更新 / 删除 / 插入
         "update",
         "batchUpdate",
+        "delete",
+        "insert",
         // 通用执行
         "execute",
     )
@@ -46,7 +51,7 @@ object JdbcTemplateMethodDetector {
     /**
      * 判定方法名引用是否为 JdbcTemplate 模板方法候选。
      *
-     * @param referenceName 方法名（如 `queryForList`、`update`）
+     * @param referenceName 方法名（如 `queryForList`、`update`、`delete`）
      * @return true = 候选；false = 非候选
      */
     fun isJdbcTemplateMethodReference(referenceName: String?): Boolean {

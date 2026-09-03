@@ -47,6 +47,9 @@ object JdbcTemplateSqlPreviewService {
     fun preview(call: JdbcTemplateSqlLocator.JdbcTemplateSqlCall, anchor: PsiElement): PreviewResult? {
         val sqlText = call.sqlString
         if (sqlText.isBlank()) return null
+        // SQL 形态校验：误将通用字符串方法（list.insert("x")、log.delete("...") 等）当 SQL 预览——
+        // 仅在聚合文本像是可执行 SQL 时才接住，否则返回 null（对齐 T-M20-08 防误伤语义）
+        if (!isLikelySql(sqlText)) return null
 
         val warnings = mutableListOf<String>()
         if (!call.isLiteral) {
@@ -102,6 +105,39 @@ object JdbcTemplateSqlPreviewService {
     // ------------------------------------------------------------------
     // 工具
     // ------------------------------------------------------------------
+
+    /** SQL 语句特征关键字（转小写比对）。匹配任意即视为 SQL，避免把通用字符串方法当 SQL 预览。 */
+    private val SQL_KEYWORDS = listOf(
+        "select", "insert", "update", "delete", "with", "values", "create", "alter",
+        "drop", "truncate", "merge", "replace", "grant", "revoke", "show", "describe",
+        "explain", "call", "begin", "commit", "rollback",
+    )
+
+    /** 语句内部结构词（不限于开头，覆盖以 `(`/注释开头的 SQL、子查询等）。 */
+    private val SQL_FRAGMENTS = listOf(
+        " from ", " into ", " set ", " where ", " join ", " left join ", " right join ",
+        " order by ", " group by ", " having ", " limit ", " union ", " values (",
+        " select ", " insert into ", " update ", " delete from ",
+    )
+
+    /**
+     * SQL 形态校验：聚合后的字符串是否**像可执行的 SQL**。
+     *
+     * 防误成分略（对齐 T-M20-08）：`insert`/`delete`/`update` 等是通用方法名，
+     * `list.insert("x")`、`log.delete("...")` 这类第 1 实参为普通字符串的调用不应触发
+     * SQL 预览。判定规则（大小写不敏感，去掉首尾空白后）：
+     *  - 以 SQL 语句关键字开头（select/insert/update/delete/with...）
+     *  - 或含语句内结构词（from/into/set/where/join...）——覆盖以 `(`/注释开头的情形
+     * 两者皆不满足 → false（非 SQL，不预览）。
+     */
+    private fun isLikelySql(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
+        val lower = t.lowercase()
+        if (SQL_KEYWORDS.any { lower.startsWith(it) }) return true
+        if (SQL_FRAGMENTS.any { lower.contains(it) }) return true
+        return false
+    }
 
     /** 启发式提取首个表名（FROM / JOIN 后首个标识符）；提取失败返回 null。 */
     private fun extractFirstTableName(sql: String): String? {

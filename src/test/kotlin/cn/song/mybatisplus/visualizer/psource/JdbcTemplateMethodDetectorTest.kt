@@ -38,6 +38,16 @@ class JdbcTemplateMethodDetectorTest {
     }
 
     // ------------------------------------------------------------------
+    // 自研 DAO 工具层（DbHelper 等）的 delete / insert 命中
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `isJdbcTemplateMethodReference - dao helper delete and insert hit`() {
+        assertTrue(JdbcTemplateMethodDetector.isJdbcTemplateMethodReference("delete"))
+        assertTrue(JdbcTemplateMethodDetector.isJdbcTemplateMethodReference("insert"))
+    }
+
+    // ------------------------------------------------------------------
     // 非 JDBC 方法名排除
     // ------------------------------------------------------------------
 
@@ -61,7 +71,7 @@ class JdbcTemplateMethodDetectorTest {
         val expected = setOf(
             "query", "queryForObject", "queryForList", "queryForMap",
             "queryForRowSet", "queryForLong", "queryForInt", "queryForStream",
-            "update", "batchUpdate", "execute",
+            "update", "batchUpdate", "delete", "insert", "execute",
         )
         assertEquals(expected, JdbcTemplateMethodDetector.JDBC_TEMPLATE_METHODS)
     }

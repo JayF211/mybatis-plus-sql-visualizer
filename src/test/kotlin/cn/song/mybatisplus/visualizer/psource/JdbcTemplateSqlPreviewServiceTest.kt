@@ -186,4 +186,60 @@ class JdbcTemplateSqlPreviewServiceTest : BasePlatformTestCase() {
         assertNotNull("应有降级 warning", result.warning)
         assertTrue("warning 应提及运行时值", result.warning!!.contains("运行时"))
     }
+
+    // ------------------------------------------------------------------
+    // 团队自研 DAO 工具层（DbHelper 等）的 delete / insert 场景
+    // ------------------------------------------------------------------
+
+    fun testPreview_dbHelperDeleteNamedParam() {
+        // 用户真实场景：dbHelper.delete(sql, paramMap)——方法名 delete 不在 Spring JdbcTemplate
+        // 方法集（update/query 族），但第 1 实参为字符串 SQL，应被识别为 SQL 预览候选。
+        myFixture.configureByText("Demo.java", """
+            import java.util.HashMap;
+            import java.util.Map;
+            public class Demo {
+                public int deleteByDbHelper(DbHelper dbHelper, Integer id) {
+                    String sql = "UPDATE user SET deleted = 1, update_time = NOW() WHERE id = :id";
+                    Map<String, Object> paramMap = new HashMap<>();
+                    paramMap.put("id", id);
+                    return dbHelper.delete(sql, paramMap);
+                }
+                static class DbHelper {
+                    public int delete(String sql, Map<String, Object> paramMap) { return 0; }
+                }
+            }
+        """.trimIndent())
+        val call = findFirstCall("delete")!!
+        val result = previewOfCall(call)
+        assertNotNull("dbHelper.delete 应被识别为 SQL 预览", result)
+        // 命名参数 :id 被识别
+        assertTrue("应识别命名参数 id", result!!.namedParamHints.containsKey("id"))
+        // SQL 含 DELETE/UPDATE 语义
+        assertTrue("SQL 应含 UPDATE", result.sql.contains("UPDATE"))
+        assertTrue("SQL 应含 deleted", result.sql.contains("deleted"))
+    }
+
+    fun testPreview_dbHelperInsertNamedParam() {
+        // DbHelper.insert(sql, paramMap) 同样应被识别（方法名 insert）
+        myFixture.configureByText("Demo.java", """
+            import java.util.HashMap;
+            import java.util.Map;
+            public class Demo {
+                public int insertByDbHelper(DbHelper dbHelper, String name) {
+                    String sql = "INSERT INTO user(username, status) VALUES (:name, 1)";
+                    Map<String, Object> paramMap = new HashMap<>();
+                    paramMap.put("name", name);
+                    return dbHelper.insert(sql, paramMap);
+                }
+                static class DbHelper {
+                    public int insert(String sql, Map<String, Object> paramMap) { return 0; }
+                }
+            }
+        """.trimIndent())
+        val call = findFirstCall("insert")!!
+        val result = previewOfCall(call)
+        assertNotNull("dbHelper.insert 应被识别为 SQL 预览", result)
+        assertTrue("应识别命名参数 name", result!!.namedParamHints.containsKey("name"))
+        assertTrue("SQL 应含 INSERT", result.sql.contains("INSERT"))
+    }
 }
