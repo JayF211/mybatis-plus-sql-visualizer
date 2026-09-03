@@ -247,6 +247,7 @@ object SqlFormatter {
                     sb.append(upper)
                     atLineStart = false
                     pendingSpace = true
+                    pendingComma = false
                 }
 
                 // 主子句 → 顶层新行（括号内不换行 — 子查询同行，保留前导空格）
@@ -261,6 +262,7 @@ object SqlFormatter {
                     sb.append(upper)
                     atLineStart = false
                     pendingSpace = true
+                    pendingComma = false
                 }
 
                 // AND/OR：不换行，保持同行（前导双空格 — 子句分隔视觉醒目）
@@ -274,6 +276,7 @@ object SqlFormatter {
                     sb.append(upper)
                     atLineStart = false
                     pendingSpace = true
+                    pendingComma = false
                 }
 
                 // 其余关键字
@@ -282,6 +285,7 @@ object SqlFormatter {
                     sb.append(upper)
                     pendingSpace = true
                     atLineStart = false
+                    pendingComma = false
                 }
 
                 // 左括号：运算符关键字后留空格（IN (）；函数名后不留（COUNT(）；深度+1
@@ -302,12 +306,14 @@ object SqlFormatter {
                 }
 
                 // 逗号：SELECT/SET 列清单或括号内 → 逗号紧贴（无空格）；其余 → 逗号+空格
+                // F-CASE：始终设置 pendingSpace=true，后续关键字通过 flushSpace() 加空格；
+                // 标识符通过 pendingComma 标记跳过空格（紧凑列清单）
                 type == SqlTokenTypes.OPERATOR && text == "," -> {
                     if (sb.isNotEmpty() && sb.last() == ' ') sb.deleteCharAt(sb.length - 1)
                     sb.append(',')
                     pendingComma = currentClause == "SELECT" || currentClause == "SET" || depth > 0
                     atLineStart = false
-                    if (!pendingComma) pendingSpace = true
+                    pendingSpace = true
                 }
 
                 // 点号：无空格
