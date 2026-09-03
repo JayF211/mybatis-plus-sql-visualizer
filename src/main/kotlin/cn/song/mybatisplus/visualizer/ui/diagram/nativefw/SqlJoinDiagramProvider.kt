@@ -66,7 +66,7 @@ class SqlJoinDiagramProvider : DiagramProvider<JoinDiagramSnapshotRegistry.Nativ
     override fun getRelationshipManager(): DiagramRelationshipManager<JoinDiagramSnapshotRegistry.NativeEntity> =
         JoinRelationshipManager()
 
-    override fun createNodeContentManager(): DiagramNodeContentManager = JoinDiagramNodeContentManager
+    override fun createNodeContentManager(): DiagramNodeContentManager = DiagramNodeContentManager.NO_CATEGORIES
 
     override fun getColorManager(): com.intellij.diagram.DiagramColorManager = DiagramColorManagerBase()
 
@@ -84,6 +84,57 @@ class SqlJoinDiagramProvider : DiagramProvider<JoinDiagramSnapshotRegistry.Nativ
     }
 }
 
+
+/**
+ * 表节点元素管理器：节点标题 / 列 items / tooltip。
+ * 用 NO_CATEGORIES（不启用 DiagramCategory，避免框架按分类持久化状态过滤导致字段消失），
+ * getNodeItems 直接返回 ColumnEntry，渲染 列名+类型+注释。
+ */
+class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapshotRegistry.NativeEntity>() {
+
+    override fun findInDataContext(dataContext: DataContext): JoinDiagramSnapshotRegistry.NativeEntity? = null
+
+    override fun isAcceptableAsNode(o: Any?): Boolean = o is JoinDiagramSnapshotRegistry.NativeEntity
+
+    /** 节点内容行 = 表列（名称 + 类型 + 注释）。 */
+    override fun getNodeItems(e: JoinDiagramSnapshotRegistry.NativeEntity): Array<Any> = e.columns.toTypedArray()
+
+    override fun canCollapse(e: JoinDiagramSnapshotRegistry.NativeEntity): Boolean = false
+
+    override fun isContainerFor(
+        container: JoinDiagramSnapshotRegistry.NativeEntity,
+        inner: JoinDiagramSnapshotRegistry.NativeEntity,
+    ): Boolean = false
+
+    override fun getElementTitle(e: JoinDiagramSnapshotRegistry.NativeEntity): String = e.displayName
+
+    override fun getItemName(item: Any?, builder: DiagramBuilder): SimpleColoredText {
+        val text = SimpleColoredText()
+        val column = item as? ColumnEntry
+        // 列名（主键加粗）+ 类型（灰色）
+        text.append(
+            column?.name ?: "",
+            if (column?.isPk == true) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
+        )
+        column?.type?.let { text.append(" $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+        return text
+    }
+
+    override fun getItemType(item: Any?): SimpleColoredText {
+        // 字段注释（DB COMMENT）
+        val text = SimpleColoredText()
+        (item as? ColumnEntry)?.comment?.takeIf { it.isNotBlank() }?.let {
+            text.append(it, SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+        }
+        return text
+    }
+
+    override fun getItemIcon(item: Any?, state: DiagramState): Icon? =
+        (item as? ColumnEntry)?.let { if (it.isPk) AllIcons.Nodes.FieldPK else AllIcons.Nodes.DataColumn }
+
+    override fun getNodeTooltip(e: JoinDiagramSnapshotRegistry.NativeEntity): String =
+        if (e.alias != e.tableName) "${e.tableName} AS ${e.alias}" else e.tableName
+}
 
 /**
  * FQN 解析：FQN = 快照 id；解析回主表实体（框架用它作为 createDataModel 的种子元素）。
