@@ -8,6 +8,7 @@ import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.util.PsiTreeUtil
@@ -36,11 +37,12 @@ data class CustomDaoHqlInfo(
  *
  * 用于描述 HQL 之后的参数列表组织形式：
  *  - NAME_VALUE_PAIRS：("name1", v1, "name2", v2) 交替传递
+ *  - NAME_VALUE_ARRAYS：new String[]{"name1","name2"} + new Object[]{v1, v2} 双数组传递（老式 DAO）
  *  - MAP：单 Map 参数包含所有键值
  *  - POSITIONAL：仅传值，按位置顺序
  *  - NONE：无额外参数
  */
-enum class ParamSource { NAME_VALUE_PAIRS, MAP, POSITIONAL, NONE }
+enum class ParamSource { NAME_VALUE_PAIRS, NAME_VALUE_ARRAYS, MAP, POSITIONAL, NONE }
 
 /**
  * 自定义 DAO HQL 定位器（F-JPA-02 / Wave2 扩展）。
@@ -312,33 +314,16 @@ object CustomDaoHqlLocator {
     /**
      * 从参数表达式提取文本内容（用于内容启发检测）。
      *
-     * 对于字面量直接取值；对于拼接表达式拼接所有字面量部分；其他情况返回表达式文本。
+     * 与 [extractHqlString] 共用同一提取逻辑（单一来源）：字面量直接取值；拼接表达式拼接
+     * 所有字面量部分；变量引用递归解析初始化式（含拼接初始化式）。此前的独立实现只处理
+     * 字面量初始化式，拼接变量回退为变量名导致内容启发误判（2026-09-03 用户反馈
+     * `String hql = "select" + " ..."` 后传入自定义 DAO 无预览图标，根因即两套逻辑分叉）。
      *
      * @param expression 参数表达式
      * @return 提取的文本内容；无法提取时返回 null
      */
     private fun extractArgumentText(expression: PsiExpression): String? {
-        return when (expression) {
-            is PsiLiteralExpression -> expression.value as? String ?: expression.text
-            is PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression -> {
-                val parts = collectStringLiterals(expression)
-                if (parts.isNotEmpty()) parts.joinToString("") else expression.text
-            }
-            is PsiReferenceExpression -> {
-                val resolved = expression.resolve()
-                if (resolved is PsiVariable) {
-                    val initializer = resolved.initializer
-                    if (initializer is PsiLiteralExpression) {
-                        initializer.value as? String
-                    } else {
-                        expression.referenceName
-                    }
-                } else {
-                    expression.referenceName
-                }
-            }
-            else -> expression.text
-        }
+        return extractHqlString(expression).first
     }
 
     /**
@@ -418,9 +403,28 @@ object CustomDaoHqlLocator {
         return when {
             extraParams.isEmpty() -> ParamSource.NONE
             isNameValuePairs(extraParams) -> ParamSource.NAME_VALUE_PAIRS
+            isNameValueArrays(extraParams) -> ParamSource.NAME_VALUE_ARRAYS
             extraParams.size == 1 && extraParams[0] !is PsiLiteralExpression -> ParamSource.MAP
             else -> ParamSource.POSITIONAL
         }
+    }
+
+    /**
+     * 判断额外参数是否为「名字数组 + 值数组」双数组形式（老式 DAO 常用）。
+     *
+     * 即 `findByQueryUniqueResult(hql, new String[]{"name1","name2"}, new Object[]{v1, v2})`：
+     * 第一个额外参数为字符串数组创建表达式，数组元素全部是字符串字面量（参数名）。
+     *
+     * @param extraParams HQL 参数之后的额外参数列表
+     * @return 是否为名字数组+值数组形式
+     */
+    private fun isNameValueArrays(extraParams: List<PsiExpression>): Boolean {
+        if (extraParams.size < 2) return false
+        val namesArg = extraParams[0] as? PsiNewExpression ?: return false
+        val elements = namesArg.arrayInitializer?.initializers ?: return false
+        if (elements.isEmpty()) return false
+        // 名字数组元素必须全部是字符串字面量（参数名），排除 Object[] 等值数组误判
+        return elements.all { it is PsiLiteralExpression && (it.value as? String) != null }
     }
 
     /**
@@ -448,6 +452,7 @@ object CustomDaoHqlLocator {
      *
      * 以 HQL 中提取的 :paramName 为主键，从方法参数中按名匹配值：
      *  - NAME_VALUE_PAIRS：从交替参数中提取 {paramName: valueExpr}
+     *  - NAME_VALUE_ARRAYS：名字数组 + 值数组，按名匹配、按索引取值
      *  - MAP：标注参数名，值表达式引用 Map 变量
      *  - POSITIONAL/NONE：仅标注参数名，无值信息
      *
@@ -465,6 +470,27 @@ object CustomDaoHqlLocator {
                 hqlParamNames.map { paramName ->
                     val valueExpr = nameValueMap[paramName] ?: ""
                     HqlParameter(paramName = paramName, valueExpr = valueExpr, isPositional = false)
+                }
+            }
+            ParamSource.NAME_VALUE_ARRAYS -> {
+                // 名字数组 + 值数组（老式 DAO）：如 findByQueryUniqueResult(hql,
+                // new String[]{"warehouseId","startTime"}, new Object[]{warehouseId, startTime})
+                val extraParams = call.argumentList.expressions.drop(1)
+                val names = (extraParams.getOrNull(0) as? PsiNewExpression)
+                    ?.arrayInitializer?.initializers
+                    ?.mapNotNull { (it as? PsiLiteralExpression)?.value as? String }
+                    ?: emptyList()
+                val valueTexts = (extraParams.getOrNull(1) as? PsiNewExpression)
+                    ?.arrayInitializer?.initializers
+                    ?.map { it.text }
+                    ?: emptyList()
+                hqlParamNames.map { paramName ->
+                    val index = names.indexOf(paramName)
+                    HqlParameter(
+                        paramName = paramName,
+                        valueExpr = if (index >= 0) valueTexts.getOrNull(index) ?: "" else "",
+                        isPositional = false,
+                    )
                 }
             }
             ParamSource.MAP -> {
