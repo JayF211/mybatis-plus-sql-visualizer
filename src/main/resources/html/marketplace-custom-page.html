@@ -430,6 +430,30 @@
   </ul>
 </div>
 
+<input type="checkbox" id="faq-13" class="faq-toggle">
+<label for="faq-13" class="faq-question">从插件市场安装时提示 "Remote host terminated the handshake"？</label>
+<div class="faq-answer">
+  这是 TLS 握手阶段网络中断导致的瞬时错误，<b>不影响最终安装结果</b>（重试后通常成功）。
+  常见成因与对策：
+  <ul>
+    <li><b>本地代理拦截</b>：若使用 HTTP 代理（如 127.0.0.1:7890），尝试 <code>Settings → Appearance &amp; Behavior → System Settings → HTTP Proxy</code> 切换为「No proxy」或「Auto-detect」后重试</li>
+    <li><b>网络抖动</b>：等待几秒后点击「Install」重试即可</li>
+    <li><b>防火墙/安全软件</b>：确认未拦截 plugins.jetbrains.com 的 HTTPS 连接</li>
+  </ul>
+  若反复失败，可手动下载 zip 后通过 <code>Settings → Plugins → ⚙ → Install from disk</code> 安装。
+</div>
+
+<input type="checkbox" id="faq-14" class="faq-toggle">
+<label for="faq-14" class="faq-question">安装时提示 "Required plugin 'com.intellij.database' is not installed"？</label>
+<div class="faq-answer">
+  <code>com.intellij.database</code> 是本插件的<b>可选依赖</b>（仅「执行 SQL」功能需要），缺失不影响核心预览/日志/反向转换功能。
+  <ul>
+    <li><b>IntelliJ IDEA Ultimate 用户</b>：点击「Install」安装 Database 插件即可解锁「执行 SQL」能力（原生控制台内嵌）</li>
+    <li><b>IntelliJ IDEA Community 用户</b>：无 Database 模块，点击「Cancel」跳过即可；预览、日志、SQL→Java 等功能完全可用，仅「执行」按钮降级为提示</li>
+  </ul>
+  该提示在 v2026.9.2 起已优化为可选依赖声明，旧版本可能仍弹确认，<b>直接点 Cancel 跳过不影响使用</b>。
+</div>
+
 <hr/>
 
 <!-- ========== SHORTCUTS ========== -->
