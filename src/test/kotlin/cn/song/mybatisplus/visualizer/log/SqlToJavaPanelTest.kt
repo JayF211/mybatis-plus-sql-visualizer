@@ -804,6 +804,22 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue("Controller 不应被选中", panel.callerFieldForTest().text.isEmpty())
     }
 
+    // T-CallerPicker：接口/抽象类拒绝（isInterface/hasModifierProperty 已收进单次 ReadAction，
+    // 拒绝矩阵仍须与修复前一致）
+
+    fun testInterfaceClassRejected() {
+        // 接口（PsiClass.isInterface 走 stub 属性读取）→ 拒绝；类名不得落入白名单（Service 结尾会被放行）
+        val interfaceFile = myFixture.configureByText(
+            "IUserAuth.java",
+            "package demo; public interface IUserAuth {}",
+        )
+        val iface = PsiTreeUtil.findChildOfType(interfaceFile, PsiClass::class.java)!!
+        panel.pickPsiClassForTest(iface)
+        assertTrue("接口不应被选中", panel.callerFieldForTest().text.isEmpty())
+        // 中英文 bundle 均含 "Mapper/Service"（语言无关断言；zh 版为「接口/抽象类」）
+        assertTrue("状态行应显示接口拒绝提示", panel.statusForTest().contains("Mapper/Service"))
+    }
+
     fun testMapperClassAccepted() {
         val psiClass = createPsiClassNamed("UserMapper")
         panel.pickPsiClassForTest(psiClass)
@@ -829,7 +845,7 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // T-Mxx：this/baseMapper tooltip 上下文感知（兼顾 PM + MPJ）
+    // T-CallerPicker：this/baseMapper tooltip 上下文感知（兼顾 PM + MPJ）
     // ------------------------------------------------------------------
 
     fun testThisTooltipWithCurrentClass() {
