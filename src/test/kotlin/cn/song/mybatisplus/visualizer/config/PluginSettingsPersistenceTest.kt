@@ -146,7 +146,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // 2026-08-27 筛选精简：移除「显示类型筛选条」开关 -1（SQL 类型多选改面板工具栏直出）
             // F-44-7：源码位置自动注入开关 +1；T-SqlDuration：耗时显示开关 +1；
             // T-Dgm-04：JOIN 图原生框架渲染开关 +1（合并双方共同确认的最终基线）
-            assertEquals("复选框总数应为 21", 21, texts.size)
+            // JdbcTemplate SQL 字符串预览开关 +1
+            assertEquals("复选框总数应为 22", 22, texts.size)
         } finally {
             settings.state.language = old
         }

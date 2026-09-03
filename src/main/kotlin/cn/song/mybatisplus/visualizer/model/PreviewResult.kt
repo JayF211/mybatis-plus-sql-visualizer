@@ -58,4 +58,11 @@ data class PreviewResult(
     val previousSql: String? = null,
     /** F-45：maintainPage 列元数据（仅 pages XML 预览非 null；面板「列信息」tab 展示源）。 */
     val pagesColumns: List<PagesColumn>? = null,
+    /**
+     * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）：参数名 → 引号提示。
+     *
+     * 非空时面板按名回填（同名参数全部出现共用输入值）；空表示纯 `?` 顺序回填（既有语义）。
+     * 默认空 map，既有构造点零影响（向后兼容）。
+     */
+    val namedParamHints: Map<String, ParamHint> = emptyMap(),
 )

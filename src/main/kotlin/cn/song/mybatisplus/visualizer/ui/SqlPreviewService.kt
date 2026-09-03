@@ -44,6 +44,8 @@ import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
@@ -160,6 +162,14 @@ class SqlPreviewService(private val project: Project) {
      * @return 预览结果；两者均未命中时返回 null
      */
     fun preview(anchor: PsiElement): PreviewResult? {
+        // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
+        // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
+        if (settings?.state?.jdbcSqlPreviewEnabled != false) {
+            JdbcTemplateSqlLocator.locate(anchor)?.let { call ->
+                return JdbcTemplateSqlPreviewService.preview(call, anchor)
+            }
+        }
+
         val file = anchor.containingFile ?: return null
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
         // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果

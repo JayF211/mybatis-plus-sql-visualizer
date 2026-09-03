@@ -12,9 +12,6 @@ package cn.song.mybatisplus.visualizer.sql
  */
 object ParameterReplacer {
 
-    /** 数值启发式正则（无 [ParamHint] 时判定是否加引号）。 */
-    private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
-
     /**
      * 将 SQL 中的 `?` 按出现顺序标注来源注释。
      *
@@ -108,4 +105,62 @@ object ParameterReplacer {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // JDBC 命名参数（NamedParameterJdbcTemplate `:name`）按名回填
+    // ------------------------------------------------------------------
+
+    /**
+     * 按命名参数名把 SQL 中 `:name` 替换为用户输入值（NamedParameterJdbcTemplate 语义）。
+     *
+     * 替换规则：
+     *  - `:name` 出现在 [paramValues] 中且值非空 → 按 [ParamHint.quote] 渲染
+     *  - `:name` 未出现在参数值表 / 值空 → 原样保留（与 `?` 空值保留语义一致）
+     *  - `::name`（双冒号）→ 跳过（双冒号守卫，避免误标 PostgreSQL 类型转换）
+     *  - `?` 占位符不受影响（由调用方走 [buildExecutableSql] 按序回填）
+     *  - 同名参数在 SQL 中多次出现 → 全部替换（NamedParameterJdbcTemplate 语义：同名复用）
+     *
+     * 值含单引号 → 转义 `''`（与 [renderValue] 一致）。
+     *
+     * @param sql         含 `:name` 的 SQL（`?` 与 `:name` 可共存）
+     * @param paramValues 参数值映射（source → 用户输入值）；source 即命名参数名
+     * @param hints       参数名 → 引号提示；缺失走启发式（数值裸 / 字符串引号）
+     * @return 替换后的 SQL
+     */
+    fun replaceNamedParams(sql: String, paramValues: Map<String, String>, hints: Map<String, ParamHint>): String {
+        if (paramValues.isEmpty() || hints.isEmpty()) return sql
+        return NAMED_PARAM_PATTERN.replace(sql) { m ->
+            val name = m.groupValues[1]
+            val value = paramValues[name]
+            if (value.isNullOrBlank()) {
+                m.value // 空值 → 原样保留 `:name`
+            } else {
+                renderNamedValue(value, hints[name])
+            }
+        }
+    }
+
+    /** 命名参数单值渲染：按 [ParamHint.quote] 决定引号规则；值中单引号转义为 `''`。 */
+    private fun renderNamedValue(value: String, hint: ParamHint?): String {
+        val escaped = value.replace("'", "''")
+        return when {
+            hint?.quote == true -> "'$escaped'"
+            hint?.quote == false -> value.trim()
+            else -> {
+                val trimmed = value.trim()
+                if (NUMBER_REGEX.matches(trimmed)) trimmed else "'$escaped'"
+            }
+        }
+    }
+
+    /** 数值启发式正则（无 [ParamHint] 时判定是否加引号）。 */
+    private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
+
+    /**
+     * 命名参数正则。
+     *
+     * 负向前瞻 `(?<![::])` 排除双冒号（前一个字符不是 `:`），避免误标 `::msgId` /
+     * `1::integer`。捕获组 1 = 参数名（字母 / 数字 / 下划线）。
+     */
+    private val NAMED_PARAM_PATTERN = Regex("(?<![::])[:]([A-Za-z_][A-Za-z0-9_]*)")
 }
