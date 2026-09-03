@@ -108,23 +108,26 @@ class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapsho
 
     override fun getElementTitle(e: JoinDiagramSnapshotRegistry.NativeEntity): String = e.displayName
 
-    override fun getItemName(item: Any?, builder: DiagramBuilder): SimpleColoredText {
+    // 框架 DiagramNodeItemComponent 调用的是 3 参重载（identifyingElement, item, builder）——
+    // 只实现 2 参会让字段文字落回空默认，只剩图标。故实现 3 参并按 Database 原生样式渲染。
+    override fun getItemName(identifyingElement: JoinDiagramSnapshotRegistry.NativeEntity?, item: Any?, builder: DiagramBuilder): SimpleColoredText {
         val text = SimpleColoredText()
         val column = item as? ColumnEntry
-        // 列名（主键加粗）+ 类型（灰色）
+        // 字段名（主键加粗）
         text.append(
             column?.name ?: "",
             if (column?.isPk == true) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
         )
-        column?.type?.let { text.append(" $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
         return text
     }
 
-    override fun getItemType(item: Any?): SimpleColoredText {
-        // 字段注释（DB COMMENT）
+    override fun getItemType(identifyingElement: JoinDiagramSnapshotRegistry.NativeEntity?, item: Any?, builder: DiagramBuilder?): SimpleColoredText {
         val text = SimpleColoredText()
-        (item as? ColumnEntry)?.comment?.takeIf { it.isNotBlank() }?.let {
-            text.append(it, SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+        val column = item as? ColumnEntry
+        // 类型（灰色）+ 字段注释（灰色斜体），对齐 IDEA Database 原生图
+        column?.type?.let { text.append(it, SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+        column?.comment?.takeIf { it.isNotBlank() }?.let {
+            text.append("  $it", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
         }
         return text
     }
