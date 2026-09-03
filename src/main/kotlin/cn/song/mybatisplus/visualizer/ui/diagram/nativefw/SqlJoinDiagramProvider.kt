@@ -2,10 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.diagram.nativefw
 
 import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.ui.diagram.ColumnEntry
-import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.diagram.AbstractDiagramElementManager
-import com.intellij.diagram.AbstractDiagramNodeContentManager
-import com.intellij.diagram.DiagramCategory
 import com.intellij.diagram.DiagramBuilder
 import com.intellij.diagram.DiagramColorManagerBase
 import com.intellij.diagram.DiagramDataModel
@@ -25,13 +22,13 @@ import com.intellij.diagram.EmptyDiagramVisibilityManager
 import com.intellij.diagram.presentation.DiagramLineType
 import com.intellij.diagram.presentation.DiagramState
 import com.intellij.icons.AllIcons
-import javax.swing.Icon
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.ModificationTracker
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SimpleColoredText
 import com.intellij.ui.SimpleTextAttributes
+import javax.swing.Icon
 
 /**
  * T-Dgm-01/03：JOIN 图的 IDEA 原生图框架 Provider。
@@ -50,7 +47,7 @@ class SqlJoinDiagramProvider : DiagramProvider<JoinDiagramSnapshotRegistry.Nativ
 
     override fun getID(): String = ID
 
-    override fun getPresentableName(): String = MpSqlVisualizerBundle.message("diagram.native.provider.name")
+    override fun getPresentableName(): String = "SQL Visualizer JOIN Diagram"
 
     override fun createDataModel(
         project: Project,
@@ -69,7 +66,7 @@ class SqlJoinDiagramProvider : DiagramProvider<JoinDiagramSnapshotRegistry.Nativ
     override fun getRelationshipManager(): DiagramRelationshipManager<JoinDiagramSnapshotRegistry.NativeEntity> =
         JoinRelationshipManager()
 
-    override fun createNodeContentManager(): DiagramNodeContentManager = JoinDiagramNodeContentManager
+    override fun createNodeContentManager(): DiagramNodeContentManager = DiagramNodeContentManager.NO_CATEGORIES
 
     override fun getColorManager(): com.intellij.diagram.DiagramColorManager = DiagramColorManagerBase()
 
@@ -82,66 +79,9 @@ class SqlJoinDiagramProvider : DiagramProvider<JoinDiagramSnapshotRegistry.Nativ
         fun registeredProvider(): DiagramProvider<JoinDiagramSnapshotRegistry.NativeEntity>? =
             DiagramProvider.findByID<JoinDiagramSnapshotRegistry.NativeEntity>(ID)
 
-        /**
-         * 原生渲染可用性：diagram-optional.xml 的 EP 已挂载（= Diagrams 插件存在且启用）。
-         * Community 下本类不可加载，调用方（门面）以 try/catch 兜底。
-         */
         @JvmStatic
         fun isProviderRegistered(): Boolean = registeredProvider() != null
     }
-}
-
-/**
- * 节点内容分类（对齐 IDEA Database 原生图）：
- *  - COLUMNS：普通列（名称 + 类型）
- *  - KEY_COLUMNS：主键列（名称 + 类型 + PK 图标）
- *  - COMMENTS：字段注释（DB COMMENT，独立分类可切换显隐）
- *
- * 框架原生提供分类切换工具栏，用户可独立显隐列/主键/注释。
- */
-object JoinDiagramNodeContentManager : AbstractDiagramNodeContentManager() {
-
-    /** 普通列分类。 */
-    val COLUMNS = DiagramCategory({ "Columns" }, AllIcons.Nodes.DataColumn)
-
-    /** 主键列分类。 */
-    val KEY_COLUMNS = DiagramCategory({ "Key columns" }, AllIcons.Nodes.FieldPK)
-
-    /** 字段注释分类（DB COMMENT）。 */
-    val COMMENTS = DiagramCategory({ "Comments" }, null)
-
-    /** 所有分类（有序：主键列 → 普通列 → 注释）。 */
-    private val CATEGORIES: Array<DiagramCategory> = arrayOf(KEY_COLUMNS, COLUMNS, COMMENTS)
-
-    override fun getContentCategories(): Array<DiagramCategory> = CATEGORIES
-
-    override fun isCategoryEnabled(category: DiagramCategory): Boolean = true
-
-    override fun setCategoryEnabled(category: DiagramCategory, enabled: Boolean) {
-        // 分类显隐由框架持久化（DiagramContentSettings），此处无需额外处理
-    }
-
-    override fun isInCategory(
-        item: Any?,
-        identifyingElement: Any?,
-        category: DiagramCategory,
-        builder: DiagramBuilder?,
-    ): Boolean = when (item) {
-        is JoinDiagramItem.Column ->
-            if (item.entry.isPk) category == KEY_COLUMNS else category == COLUMNS
-        is JoinDiagramItem.Comment -> category == COMMENTS
-        else -> false
-    }
-
-    override fun isEditCategoriesSettings(): Boolean = false
-}
-
-/**
- * 节点内容项（对齐 IDEA Database 原生的分类展示）。
- */
-sealed interface JoinDiagramItem {
-    data class Column(val entry: ColumnEntry) : JoinDiagramItem
-    data class Comment(val text: String) : JoinDiagramItem
 }
 
 /**
@@ -154,17 +94,8 @@ class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapsho
 
     override fun isAcceptableAsNode(o: Any?): Boolean = o is JoinDiagramSnapshotRegistry.NativeEntity
 
-    /** 节点内容行 = 列（普通列 + 主键列）+ 字段注释（独立项，归入 COMMENTS 分类）。 */
-    override fun getNodeItems(e: JoinDiagramSnapshotRegistry.NativeEntity): Array<Any> {
-        val items = mutableListOf<Any>()
-        for (column in e.columns) {
-            items.add(JoinDiagramItem.Column(column))
-            column.comment?.takeIf { it.isNotBlank() }?.let {
-                items.add(JoinDiagramItem.Comment(it))
-            }
-        }
-        return items.toTypedArray()
-    }
+    /** 节点内容行 = 表列（名称 + 类型 + 注释）。 */
+    override fun getNodeItems(e: JoinDiagramSnapshotRegistry.NativeEntity): Array<Any> = e.columns.toTypedArray()
 
     override fun canCollapse(e: JoinDiagramSnapshotRegistry.NativeEntity): Boolean = false
 
@@ -175,34 +106,33 @@ class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapsho
 
     override fun getElementTitle(e: JoinDiagramSnapshotRegistry.NativeEntity): String = e.displayName
 
-    override fun getItemName(identifyingElement: JoinDiagramSnapshotRegistry.NativeEntity?, item: Any?, builder: DiagramBuilder): SimpleColoredText? {
+    override fun getItemName(item: Any?, builder: DiagramBuilder): SimpleColoredText {
         val text = SimpleColoredText()
-        when (item) {
-            is JoinDiagramItem.Column -> {
-                text.append(
-                    item.entry.name,
-                    if (item.entry.isPk) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
-                )
-                item.entry.type?.let { text.append(" $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
-            }
-            is JoinDiagramItem.Comment -> text.append(item.text, SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+        val column = item as? ColumnEntry
+        // 列名（主键加粗）+ 类型（灰色）
+        text.append(
+            column?.name ?: "",
+            if (column?.isPk == true) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
+        )
+        column?.type?.let { text.append(" $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+        return text
+    }
+
+    override fun getItemType(item: Any?): SimpleColoredText {
+        // 字段注释（DB COMMENT）—— 对齐 IDEA Database 原生图「显示图」的注释展示。
+        val text = SimpleColoredText()
+        (item as? ColumnEntry)?.comment?.takeIf { it.isNotBlank() }?.let {
+            text.append(it, SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
         }
         return text
     }
 
-    override fun getItemType(item: Any?): SimpleColoredText = SimpleColoredText()
-
-    override fun getItemIcon(item: Any?, state: DiagramState): Icon? = when (item) {
-        is JoinDiagramItem.Column ->
-            if (item.entry.isPk) AllIcons.Nodes.FieldPK else AllIcons.Nodes.DataColumn
-        is JoinDiagramItem.Comment -> null
-        else -> null
-    }
+    override fun getItemIcon(item: Any?, state: DiagramState): Icon? =
+        (item as? ColumnEntry)?.let { if (it.isPk) AllIcons.Nodes.FieldPK else AllIcons.Nodes.DataColumn }
 
     override fun getNodeTooltip(e: JoinDiagramSnapshotRegistry.NativeEntity): String =
         if (e.alias != e.tableName) "${e.tableName} AS ${e.alias}" else e.tableName
 }
-
 
 /**
  * FQN 解析：FQN = 快照 id；解析回主表实体（框架用它作为 createDataModel 的种子元素）。
@@ -315,7 +245,6 @@ class JoinTableNode(
 
     override fun getIcon(): javax.swing.Icon = AllIcons.Nodes.DataTables
 
-    /** 别名≠表名时显示 "tableName AS alias"（与 [JoinTableElementManager.getNodeTooltip] 同语义）。 */
     override fun getTooltip(): String =
         if (entity.alias != entity.tableName) "${entity.tableName} AS ${entity.alias}" else entity.tableName
 }
