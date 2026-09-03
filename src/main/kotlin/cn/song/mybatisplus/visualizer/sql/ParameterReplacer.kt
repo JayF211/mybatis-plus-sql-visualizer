@@ -161,6 +161,8 @@ object ParameterReplacer {
      *
      * 负向前瞻 `(?<![::])` 排除双冒号（前一个字符不是 `:`），避免误标 `::msgId` /
      * `1::integer`。捕获组 1 = 参数名（字母 / 数字 / 下划线）。
+     * 冒号后容忍**可选空白** `\s*`——SQL 经 [cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter] 格式化后
+     * 会把 `:name` 的冒号当作运算符空格化为 `: name`（用户实测绘点），务必同样命中。
      */
-    private val NAMED_PARAM_PATTERN = Regex("(?<![::])[:]([A-Za-z_][A-Za-z0-9_]*)")
+    private val NAMED_PARAM_PATTERN = Regex("(?<![::])[:]\\s*([A-Za-z_][A-Za-z0-9_]*)")
 }

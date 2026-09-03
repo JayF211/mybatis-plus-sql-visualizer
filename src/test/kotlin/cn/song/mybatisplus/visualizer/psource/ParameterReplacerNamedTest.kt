@@ -146,4 +146,38 @@ class ParameterReplacerNamedTest {
         val result = ParameterReplacer.replaceNamedParams(sql, values, hints)
         assertEquals("WHERE WT.OWNER = 'user123' OR WT.ASSIGNEE = 'user123'", result)
     }
+
+    // ------------------------------------------------------------------
+    // 用户实测：SqlFormatter 空格化冒号后 → `: name`
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `replaceNamedParams - space after colon, formatted sql`() {
+        // SqlFormatter 把 `:name` 的冒号当作运算符 → 空格化为 `: name`，仍在 SQL 中被格式化后的文本
+        val sql = "AND username LIKE : username AND status = : status"
+        val values = mapOf("username" to "admin", "status" to "1")
+        val hints = mapOf("username" to ParamHint(quote = true), "status" to ParamHint(quote = false))
+        val result = ParameterReplacer.replaceNamedParams(sql, values, hints)
+        assertEquals("AND username LIKE 'admin' AND status = 1", result)
+    }
+
+    @Test
+    fun `replaceNamedParams - mixed space and no-space colon`() {
+        // 混合：格式化的 `: name` 与原始 `:name` 都应替换
+        val sql = "WHERE a = :name AND b = : code"
+        val values = mapOf("name" to "alice", "code" to "42")
+        val hints = mapOf("name" to ParamHint(quote = true), "code" to ParamHint(quote = false))
+        val result = ParameterReplacer.replaceNamedParams(sql, values, hints)
+        assertEquals("WHERE a = 'alice' AND b = 42", result)
+    }
+
+    @Test
+    fun `replaceNamedParams - double colon with space not confused`() {
+        // `1 :: integer`（双冒号）不应被替换；`: id` 应替换
+        val sql = "WHERE a = 1 :: integer AND b = : id"
+        val values = mapOf("id" to "7")
+        val hints = mapOf("id" to ParamHint(quote = false))
+        val result = ParameterReplacer.replaceNamedParams(sql, values, hints)
+        assertEquals("WHERE a = 1 :: integer AND b = 7", result)
+    }
 }
