@@ -50,7 +50,7 @@
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
-        <p>Screenshots are available on the <a href="https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer">plugin Marketplace page</a>.</p>
+        <p>Screenshots are available on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">plugin Marketplace page</a>.</p>
         <!-- M18.1 问题反馈入口：跳转仓库 Issues 页（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
         <p>Found an issue? Please report it at <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues">Gitee Issues</a> / 遇到问题？请到仓库 Issues 页提交反馈</p>
         ]]></description>
