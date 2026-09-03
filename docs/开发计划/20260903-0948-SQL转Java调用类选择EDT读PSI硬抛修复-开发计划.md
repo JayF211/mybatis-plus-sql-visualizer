@@ -149,3 +149,4 @@ T-CallerPicker-01 (pickClass 入口包裹) ──→ T-CallerPicker-02 (elementC
 | 日期 | 变更 |
 |------|------|
 | 2026-09-03 | 立项：用户实测堆栈定位（pickClass→detectCurrentEditorClass→getClasses 硬抛），T-CallerPicker-01~04 任务拆分；同链 `validateCallerClass`/`buildSpecialTooltip` 隐患识别 |
+| 2026-09-03 | T-CallerPicker-01~03 交付：pickClass 入口包 ReadAction（EDT 同步）+ pickPsiClassForTest 校验与读取合并单次 ReadAction（Pair<拒绝原因?, Triple>，规避嵌套类构造）+ buildSpecialTooltip ReadAction 提取 + T-Mxx 占位符落位。新增 testInterfaceClassRejected（接口拒绝矩阵）。SqlToJavaPanelTest 55/55 绿 + 关联 UI 测试类全绿；全套 3 失败经 stash 基线验证为 dev 既有（PluginSettingsPanelBuildInfoTest/PluginSettingsPersistenceTest/SqlLogHistoryRoundTripTest），与本次无关。提交 7546264（dev 分支，沙盒 callerpicker-fix 已还原） |

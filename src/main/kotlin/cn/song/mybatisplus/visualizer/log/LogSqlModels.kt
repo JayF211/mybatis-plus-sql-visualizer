@@ -60,6 +60,15 @@ data class LogSqlEntry(
      */
     val sourceLine: Int = 0,
 ) {
+    /**
+     * 列表渲染 HTML 缓存（T-LogListFreeze-02）：惰性计算，避免每次 layout pass 重复走 SqlListHtmlRenderer + BasicHTML 解析。
+     * null = 未计算 / 已失效；非 null = 可直接 setText 的完整 `<html>...</html>` 字符串。
+     *
+     * 失效时机：[SqlLogPanel.refreshList] 重新执行时清空全部 entry 的缓存。
+     */
+    @Volatile
+    var cachedListHtml: String? = null
+
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
     }
