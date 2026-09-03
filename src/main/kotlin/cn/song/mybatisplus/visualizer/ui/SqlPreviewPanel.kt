@@ -24,6 +24,7 @@ import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
@@ -1256,16 +1257,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
         created.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         (created as EditorEx).apply {
-            // 原生 SQL 高亮器（手动设置，因内存 PSI 文件不自动关联）
-            val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
-                .getStdFileType("SQL")
-            if (sqlFileType != null) {
-                val sqlHighlighter = com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
-                    .getSyntaxHighlighter(sqlFileType, project, null)
-                if (sqlHighlighter != null) {
-                    highlighter = LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().globalScheme)
-                }
-            }
+            // F-CASE：自研 SQL 高亮器（SqlLexer 将 CASE/WHEN/THEN/ELSE/END 标记为 KEYWORD，
+            // 字段名标记为 IDENTIFIER → 双击选择不会跨 token 粘连；不依赖 Database 插件）
+            highlighter = LexerEditorHighlighter(
+                SqlSyntaxHighlighter(), EditorColorsManager.getInstance().globalScheme
+            )
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
