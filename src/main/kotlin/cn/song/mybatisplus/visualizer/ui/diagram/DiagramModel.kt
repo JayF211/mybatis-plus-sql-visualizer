@@ -45,12 +45,14 @@ data class EntityNode(
  *
  * @param name  列名
  * @param type  字段类型字符串（可为 null）
- * @param isPk  是否主键
+ * @param isPk     是否主键
+ * @param comment  字段注释（DB COMMENT，对齐 IDEA Database 原生图显示）
  */
 data class ColumnEntry(
     val name: String,
     val type: String?,
     val isPk: Boolean,
+    val comment: String? = null,
 )
 
 /**

@@ -113,16 +113,21 @@ class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapsho
     override fun getItemName(item: Any?, builder: DiagramBuilder): SimpleColoredText {
         val text = SimpleColoredText()
         val column = item as? ColumnEntry
+        // 列名 + 类型（对齐 IDEA Database 原生图：name type 同行，注释在下方灰色斜体）。
         text.append(
             column?.name ?: "",
             if (column?.isPk == true) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
         )
+        column?.type?.let { text.append(" $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
         return text
     }
 
     override fun getItemType(item: Any?): SimpleColoredText {
+        // 字段注释（DB COMMENT）—— 对齐 IDEA Database 原生图「显示图」的注释展示。
         val text = SimpleColoredText()
-        (item as? ColumnEntry)?.type?.let { text.append(it, SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+        (item as? ColumnEntry)?.comment?.takeIf { it.isNotBlank() }?.let {
+            text.append(it, SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+        }
         return text
     }
 

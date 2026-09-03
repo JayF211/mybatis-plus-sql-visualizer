@@ -49,6 +49,7 @@ object JoinDiagramGenerator {
                         name = col.columnName,
                         type = javaTypeToSqlType(col.fieldType),
                         isPk = col.isId,
+                        comment = col.comment,
                     )
                 },
                 isMain = true,
@@ -226,12 +227,17 @@ object JoinDiagramGenerator {
             return javaTypeToSqlType(fieldType)
         }
 
+        // Helper: resolve comment from tableInfo by column name
+        fun commentFromTable(colName: String): String? {
+            return join.tableInfo?.columns?.firstOrNull { it.columnName == colName }?.comment
+        }
+
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (col in stmt.selectColumns) {
             if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
                 seen.add(col.columnName)
                 val sqlType = javaTypeToSqlType(col.type) ?: sqlTypeFromTable(col.columnName)
-                columns.add(ColumnEntry(name = col.columnName, type = sqlType, isPk = false))
+                columns.add(ColumnEntry(name = col.columnName, type = sqlType, isPk = false, comment = commentFromTable(col.columnName)))
             }
         }
 
@@ -240,11 +246,11 @@ object JoinDiagramGenerator {
             if (cond is Condition.ColumnComparison) {
                 if (cond.right.tableAlias == joinAlias && !seen.contains(cond.right.columnName)) {
                     seen.add(cond.right.columnName)
-                    columns.add(ColumnEntry(name = cond.right.columnName, type = sqlTypeFromTable(cond.right.columnName), isPk = false))
+                    columns.add(ColumnEntry(name = cond.right.columnName, type = sqlTypeFromTable(cond.right.columnName), isPk = false, comment = commentFromTable(cond.right.columnName)))
                 }
                 if (cond.left.tableAlias == joinAlias && !seen.contains(cond.left.columnName)) {
                     seen.add(cond.left.columnName)
-                    columns.add(ColumnEntry(name = cond.left.columnName, type = sqlTypeFromTable(cond.left.columnName), isPk = false))
+                    columns.add(ColumnEntry(name = cond.left.columnName, type = sqlTypeFromTable(cond.left.columnName), isPk = false, comment = commentFromTable(cond.left.columnName)))
                 }
             }
         }
@@ -255,7 +261,7 @@ object JoinDiagramGenerator {
                 for (col in fill.selectColumns) {
                     if (!seen.contains(col.columnName)) {
                         seen.add(col.columnName)
-                        columns.add(ColumnEntry(name = col.columnName, type = sqlTypeFromTable(col.columnName), isPk = false))
+                        columns.add(ColumnEntry(name = col.columnName, type = sqlTypeFromTable(col.columnName), isPk = false, comment = commentFromTable(col.columnName)))
                     }
                 }
             }

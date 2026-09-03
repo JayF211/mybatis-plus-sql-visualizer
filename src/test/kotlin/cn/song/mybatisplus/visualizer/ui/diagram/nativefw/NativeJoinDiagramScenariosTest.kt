@@ -33,8 +33,8 @@ class NativeJoinDiagramScenariosTest {
         entityClassName = "cn.song.mpjdemo.entity.UserDO",
         tableName = "user",
         columns = listOf(
-            ColumnInfo("id", "id", isId = true),
-            ColumnInfo("name", "name"),
+            ColumnInfo("id", "id", isId = true, comment = "用户主键"),
+            ColumnInfo("name", "name", comment = "用户姓名"),
             ColumnInfo("sex", "sex"),
         ),
     )
@@ -43,11 +43,11 @@ class NativeJoinDiagramScenariosTest {
         entityClassName = "cn.song.mpjdemo.entity.AddressDO",
         tableName = "user_address",
         columns = listOf(
-            ColumnInfo("id", "id", isId = true),
-            ColumnInfo("userId", "user_id"),
-            ColumnInfo("tel", "tel"),
+            ColumnInfo("id", "id", isId = true, comment = "地址主键"),
+            ColumnInfo("userId", "user_id", comment = "关联用户"),
+            ColumnInfo("tel", "tel", comment = "联系电话"),
             ColumnInfo("address", "address"),
-            ColumnInfo("status", "status"),
+            ColumnInfo("status", "status", comment = "状态"),
         ),
     )
 
@@ -56,7 +56,7 @@ class NativeJoinDiagramScenariosTest {
         tableName = "area",
         columns = listOf(
             ColumnInfo("id", "id", isId = true),
-            ColumnInfo("province", "province"),
+            ColumnInfo("province", "province", comment = "省份"),
         ),
     )
 
@@ -146,8 +146,18 @@ class NativeJoinDiagramScenariosTest {
         val graph = JoinDiagramGraph.build(snapshot, SqlJoinDiagramProvider())
         assertEquals(3, graph.nodes.size)
         assertEquals(2, graph.edges.size)
-
+        // 字段注释经适配层往返保留（对齐 IDEA Database 原生图「显示图」的注释展示）
+        val mainNode = graph.nodes.first { it.identifyingElement.isMain }
+        val idCol = mainNode.identifyingElement.columns.first { it.name == "id" }
+        assertEquals("用户主键", idCol.comment)
+        val nameCol = mainNode.identifyingElement.columns.first { it.name == "name" }
+        assertEquals("用户姓名", nameCol.comment)
+        val sexCol = mainNode.identifyingElement.columns.first { it.name == "sex" }
+        assertNull(sexCol.comment)
+        // JOIN 表列注释（ON 条件引用列，注释来自 tableInfo）
         val addrNode = graph.nodes.first { it.identifyingElement.alias == "addr" }
+        val userIdCol = addrNode.identifyingElement.columns.first { it.name == "user_id" }
+        assertEquals("关联用户", userIdCol.comment)
         assertEquals("user_address (addr)", addrNode.identifyingElement.displayName)
         assertEquals("user_address AS addr", addrNode.tooltip)
         // 边端点与 ON 标签在图边中保序
