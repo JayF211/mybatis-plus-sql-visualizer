@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.21",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.21/mybatis-plus-sql-visualizer-2026.8.21.zip",
-  "changeNotes": "JPA/Hibernate SQL 预览支持（Derived 派生查询 / CriteriaQuery 强类型 / HQL 自定义 DAO，gutter 图标点击直接弹窗看 SQL）\nHibernate/JPA SQL 日志捕获支持（双解析器并列架构：MyBatis + Hibernate 日志同时解析互不干扰）\nSQL→Java 反向子查询 JOIN 解析 + MConsumer 形态 + ext 条件 lambda 化增强\nJPA 分页修复（Pageable → LIMIT）+ @Query 路由优先 + 拼接字符串提取\nJPQL IN 子句三层修复（括号补全 + 数值引号 + inList 逗号分割多值）+ 复制时剥离注释",
-  "publishDate": "2026-08-21",
+  "version": "2026.9.2",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.2/mybatis-plus-sql-visualizer-2026.9.2.zip",
+  "changeNotes": "SQL 预览面板原生 Database 控制台内嵌\nSQL 预览原生语法高亮 + 智能补全\nJPA/Hibernate：HQL 关联字段解析 + Hibernate XML 映射支持 + maintainPage XML 预览\nSQL 日志合并主侧边栏 + 精确跳转源码 + 自动保存历史 + 两级导航\nJOIN 关系图自绘 Swing 引擎\nSpring JdbcTemplate SQL 日志捕获\n设置页左侧树导航 + 折叠面板 + 搜索过滤",
+  "publishDate": "2026-09-02",
   "sinceBuild": "243"
 }

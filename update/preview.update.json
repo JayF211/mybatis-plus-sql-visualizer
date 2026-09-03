@@ -1,7 +1,7 @@
 {
   "version": "2026.9.2",
   "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.2/mybatis-plus-sql-visualizer-2026.9.2.zip",
-  "changeNotes": "SQL预览面板原生Database控制台内嵌（执行/Tx/会话/数据源选择工具栏全保留，不再打开主编辑器窗口）\nSQL预览原生语法高亮+智能补全（切换为IDEA原生SQL FileType）\n数据源schema字段注释补全（DB COMMENT优先于实体注释）\nHQL关联字段解析+Hibernate XML映射+maintainPage XML预览\nSQL日志合并主侧边栏+源码定位+历史读取+自动保存历史SQL\nJOIN关系图自绘Swing引擎（插件体积42MB→5.3MB，渲染<50ms）\n实时日志精确跳转源码可靠方案（InnerInterceptor应用线程捕获）\nSpring JdbcTemplate SQL日志捕获（三解析器并列）\nSQL日志EDT冻结修复+日志捕捉性能优化\n设置页左侧树导航+折叠面板+搜索过滤\n插件更名SQL Visualizer（已装用户正常升级）\nGitee抢先体验更新通道+忽略此版本功能",
+  "changeNotes": "SQL 预览面板原生 Database 控制台内嵌\nSQL 预览原生语法高亮 + 智能补全\nJPA/Hibernate：HQL 关联字段解析 + Hibernate XML 映射支持 + maintainPage XML 预览\nSQL 日志合并主侧边栏 + 精确跳转源码 + 自动保存历史 + 两级导航\nJOIN 关系图自绘 Swing 引擎\nSpring JdbcTemplate SQL 日志捕获\n设置页左侧树导航 + 折叠面板 + 搜索过滤",
   "publishDate": "2026-09-02",
   "sinceBuild": "243"
 }
