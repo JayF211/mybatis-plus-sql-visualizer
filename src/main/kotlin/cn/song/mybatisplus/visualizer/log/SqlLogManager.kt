@@ -8,6 +8,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.wm.ex.ToolWindowManagerListener
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -75,6 +76,20 @@ class SqlLogManager(private val project: Project) : Disposable {
     @Volatile
     internal var lastAutoShowAt = 0L
 
+    /** T-AutoShowSuppress：用户手动关闭日志工具窗后置位——本会话内不再自动展开。
+     *  恢复途径：设置开关重新开启（显式表达诉求）或重启 IDE/重开项目（会话自然重置）。 */
+    @Volatile
+    internal var autoShowSuppressedByUserClose = false
+
+    /** T-AutoShowSuppress：日志窗可见性沿检测基准（只在 可见→不可见 沿认定手动关闭；
+     *  初值 false——启动布局恢复等中间态不误判）。 */
+    @Volatile
+    internal var logWindowWasVisible = false
+
+    /** T-AutoShowSuppress：设置开关上次取值——检测 false→true 重启用沿，清除会话抑制。 */
+    @Volatile
+    internal var lastSeenAutoOpenOnCapture = PluginSettings.getInstance().state.logAutoOpenOnCapture
+
     /** M37.3：自动展开请求处理器（internal 测试缝——默认查 ToolWindowManager 并 show，不 activate）。 */
     @Volatile
     internal var onAutoShowRequest: () -> Unit = {
@@ -101,14 +116,48 @@ class SqlLogManager(private val project: Project) : Disposable {
             SettingsChangeListener {
                 applySettings()
                 bridge.refreshConsoleContexts()
+                // T-AutoShowSuppress：设置开关 false→true 重启用沿——用户显式重新表达诉求，解除会话抑制
+                val autoOpen = PluginSettings.getInstance().state.logAutoOpenOnCapture
+                if (autoOpen && !lastSeenAutoOpenOnCapture && autoShowSuppressedByUserClose) {
+                    autoShowSuppressedByUserClose = false
+                    LOG.info("[T-AutoShowSuppress] logAutoOpenOnCapture 重新开启——解除本会话抑制")
+                }
+                lastSeenAutoOpenOnCapture = autoOpen
+            },
+        )
+
+        // T-AutoShowSuppress：日志窗手动关闭检测——两参 stateChanged（公开 API；三参重载为
+        // @Experimental+@Internal 会触发 Marketplace 违规，且新 UI 下 ContentManagerListener
+        // 的 contentRemoved 不触发，见全局 pitfall-toolwindow-manager-listener）。任何 ToolWindow
+        // 状态变化都会回调，内部过滤目标窗口并只沿「可见→不可见」转换沿置抑制。
+        project.messageBus.connect(this).subscribe(
+            ToolWindowManagerListener.TOPIC,
+            object : ToolWindowManagerListener {
+                override fun stateChanged(toolWindowManager: ToolWindowManager) {
+                    if (project.isDisposed) return
+                    val tw = toolWindowManager.getToolWindow(TOOL_WINDOW_ID) ?: return
+                    val visible = tw.isVisible
+                    if (isUserCloseTransition(logWindowWasVisible, visible)) {
+                        autoShowSuppressedByUserClose = true
+                        LOG.info("[T-AutoShowSuppress] 日志工具窗被关闭——本会话内不再自动展开")
+                    }
+                    logWindowWasVisible = visible
+                }
             },
         )
     }
 
-    /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启且距上次展开超过防抖窗口）。 */
+    /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启、未被用户关闭抑制、且距上次展开超过防抖窗口）。 */
     private fun maybeAutoShow() {
         val now = System.currentTimeMillis()
-        if (!shouldAutoShow(PluginSettings.getInstance().state.logAutoOpenOnCapture, now - lastAutoShowAt)) return
+        if (!shouldAutoShow(
+                PluginSettings.getInstance().state.logAutoOpenOnCapture,
+                now - lastAutoShowAt,
+                autoShowSuppressedByUserClose,
+            )
+        ) {
+            return
+        }
         lastAutoShowAt = now
         LOG.info("[M37.3] 首条 SQL 自动展开日志工具窗（logAutoOpenOnCapture=true）")
         onAutoShowRequest()
@@ -355,9 +404,14 @@ class SqlLogManager(private val project: Project) : Disposable {
         /** M37.3：自动展开防抖窗口（ms）——多条 SQL 连续到达时只展开一次。 */
         internal const val AUTO_SHOW_DEBOUNCE_MS = 60_000L
 
-        /** M37.3：自动展开决策（纯函数，测试缝）——设置开启且距上次展开超过防抖窗口。 */
-        internal fun shouldAutoShow(enabled: Boolean, elapsedMs: Long): Boolean =
-            enabled && elapsedMs >= AUTO_SHOW_DEBOUNCE_MS
+        /** M37.3：自动展开决策（纯函数，测试缝）——设置开启、未被用户关闭抑制、且距上次展开超过防抖窗口。 */
+        internal fun shouldAutoShow(enabled: Boolean, elapsedMs: Long, suppressedByUserClose: Boolean): Boolean =
+            enabled && !suppressedByUserClose && elapsedMs >= AUTO_SHOW_DEBOUNCE_MS
+
+        /** T-AutoShowSuppress：手动关闭判定（纯函数，测试缝）——只在「可见→不可见」转换沿认定。
+         *  自动展开自身只产生 不可见→可见 沿，不会误判；初值 false 时启动/布局中间态不触发。 */
+        internal fun isUserCloseTransition(wasVisible: Boolean, isVisible: Boolean): Boolean =
+            wasVisible && !isVisible
     }
 }
 
