@@ -237,6 +237,16 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.4</h2>
+            <ul>
+                <li>JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览</li>
+                <li>JOIN 图换用 IDEA 原生图框架</li>
+                <li>JOIN 图渲染对齐 Database 原生显示图</li>
+                <li>JOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线</li>
+                <li>非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览</li>
+                <li>SQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复</li>
+                <li>SqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复</li>
+            </ul>
             <h2>v2026.9.2</h2>
             <ul>
                 <li>SQL 预览面板原生 Database 控制台内嵌</li>
