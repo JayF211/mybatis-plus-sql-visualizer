@@ -37,7 +37,6 @@ object DatabaseSchemaResolver {
     // invoke 抛 IllegalAccessException（15:54 沙盒日志实证）。getManagers 从接口拿所以一直成功。
     private const val DAS_DATA_SOURCE = "com.intellij.database.model.DasDataSource"
     private const val DAS_MODEL = "com.intellij.database.model.DasModel"
-    private const val JB_ITERABLE = "com.intellij.util.containers.JBIterable"
     private const val DAS_TYPED_OBJECT = "com.intellij.database.model.DasTypedObject"
     private const val DATA_TYPE = "com.intellij.database.model.DataType"
 
@@ -125,9 +124,22 @@ object DatabaseSchemaResolver {
                 ?: return TableMeta(null, emptyMap())
             val traverser = Class.forName(DAS_MODEL).getMethod("traverser").invoke(model)
                 ?: return TableMeta(null, emptyMap())
-            // JBIterable.toList() — 反射遍历所有 DasObject
-            val toList = Class.forName(JB_ITERABLE).getMethod("toList")
-            val elements = toList.invoke(traverser) as? List<*> ?: return TableMeta(null, emptyMap())
+            // 16:09 沙盒日志实证：DasModel.traverser() 返回 JBTreeTraverser（extends
+            // FilteredTraverserBase，非 JBIterable 子类）——对 JBIterable 取 toList invoke 抛
+            // IllegalArgumentException: object is not an instance of declaring class。
+            // FilteredTraverserBase implements java.lang.Iterable，iterator() 为其 public final——
+            // 用 Iterable/Iterator 接口方法手动收集（= Kotlin 直调 toList 扩展同语义）
+            val elements = try {
+                // java.util.Iterator 为 JDK 接口，cast 后 hasNext/next 直调（避免再反射一层）
+                val iterator = java.lang.Iterable::class.java.getMethod("iterator")
+                    .invoke(traverser) as java.util.Iterator<*>
+                val out = mutableListOf<Any?>()
+                while (iterator.hasNext()) out.add(iterator.next())
+                out
+            } catch (e: Throwable) {
+                LOG.warn("DatabaseSchemaResolver: traverse elements failed", e)
+                return TableMeta(null, emptyMap())
+            }
             val objectKindClass = Class.forName(OBJECT_KIND)
             val columnKind = objectKindClass.enumConstants?.firstOrNull { (it as Enum<*>).name == "COLUMN" }
                 ?: return TableMeta(null, emptyMap())
@@ -158,8 +170,8 @@ object DatabaseSchemaResolver {
                 }
             }
         }.onFailure { e ->
-            // 升 WARN：真机排障依赖此行（debug 级在默认 idea.log 不可见，T-Embed-09 曾因此长期无观测）
-            LOG.warn("DatabaseSchemaResolver.collectFromDataSource failed: ${e}")
+            // 升 WARN+堆栈：真机排障依赖此行（仅消息无法定位炸点，16:09 日志教训）
+            LOG.warn("DatabaseSchemaResolver.collectFromDataSource failed", e)
         }
         return TableMeta(tableComment, out)
     }

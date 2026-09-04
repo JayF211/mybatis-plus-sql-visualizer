@@ -187,8 +187,13 @@ object NativeDatabaseDiagramSupport {
             for (element in elements) {
                 dataModel.addElement(element)
             }
+            // T-Embed-10.4 根因（javap initializeDataModelAsync 实证）：addElement 只登记
+            // myTablesAddedByUser（DbTable 分支才建节点但不写 myNodes），节点生成必须走
+            // refreshDataModel——原生 fillDataModel 后正是调 refreshDataModelAsync。
+            // 此前仅 queryUpdate().withDataReload() 未触发它 → nodes 恒 0 画布空白。
+            dataModel.refreshDataModel()
             LOG.info(
-                "B path fillDataModel done: elements=${elements.size}, " +
+                "B path fillDataModel+refresh done: elements=${elements.size}, " +
                     "nodes=${runCatching { dataModel.nodes.size }.getOrNull()}",
             )
             b
