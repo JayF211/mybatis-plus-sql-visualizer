@@ -1,7 +1,7 @@
 {
-  "version": "2026.9.2",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.2/mybatis-plus-sql-visualizer-2026.9.2.zip",
-  "changeNotes": "SQL 预览面板原生 Database 控制台内嵌\nSQL 预览原生语法高亮 + 智能补全\nJPA/Hibernate：HQL 关联字段解析 + Hibernate XML 映射支持 + maintainPage XML 预览\nSQL 日志合并主侧边栏 + 精确跳转源码 + 自动保存历史 + 两级导航\nJOIN 关系图自绘 Swing 引擎\nSpring JdbcTemplate SQL 日志捕获\n设置页左侧树导航 + 折叠面板 + 搜索过滤",
-  "publishDate": "2026-09-02",
+  "version": "2026.9.4",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.4/mybatis-plus-sql-visualizer-2026.9.4.zip",
+  "changeNotes": "JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览\nJOIN 图换用 IDEA 原生图框架\nJOIN 图渲染对齐 Database 原生显示图\nJOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线\n非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览\nSQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复\nSqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复",
+  "publishDate": "2026-09-04",
   "sinceBuild": "243"
 }
