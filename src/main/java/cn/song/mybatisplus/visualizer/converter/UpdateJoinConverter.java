@@ -138,7 +138,9 @@ public final class UpdateJoinConverter implements WrapperConverter {
                 if (column == null) return List.of();
                 SqlValue value = WrapperConverterKt.asValue(argAt(args, startIndex + 1));
                 if (value == null) return List.of();
-                String qualified = withMainAliasIfUnqualified(column, mainAlias).getQualifiedName();
+                // T-M23.5：列名按方言引用（保留字列名反引号包裹，如 t.`table`）
+                String qualified = withMainAliasIfUnqualified(column, mainAlias)
+                        .qualifiedName(cn.song.mybatisplus.visualizer.psi.PsiDialect.currentDialect());
                 String op = SET_INCR.equals(call.getMethodName()) ? "+" : "-";
                 return List.of(new SetClause(null, null, qualified + " = " + qualified + " " + op + " " + renderSetValue(value)));
             }

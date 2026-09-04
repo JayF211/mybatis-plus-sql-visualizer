@@ -4,8 +4,8 @@
 # 下次同步只比对增量： git diff <synced_master>..origin/master
 # 注意：本仓库坚持「生产代码 100% Java」，切勿把 master 的 .kt 直接 merge 进来。
 
-synced_master = ca5f45684d6bcfcbe29d7f77270fae076cdbbcba
-synced_master_short = ca5f456
-synced_date = 2026-09-03
-synced_by_commit = 16d46a1
-note = 主源码 Kotlin→Java 端口收尾：历史面板返回/刷新按钮图标化 + 采用 master 已发布 marketplace 页；master 自 ca5f456 后又有 15 个提交（0abc9b4），含 JOIN 图原生框架新功能，尚未移植。
+synced_master = 9bd6315658ee65d1d85c0972748ef43bb70361e8
+synced_master_short = 9bd6315
+synced_date = 2026-09-05
+synced_by_commit = (本次收尾提交)
+note = 2026-09-05 完成 master ca5f456..9bd6315 共 52 提交的全量移植：JOIN 图原生图框架全链（T-Dgm/T-NativeUI/T-Embed，A/B 双路径）、psource JdbcTemplate 预览、T-PreviewShortcut、T-GutterDedup、T-LogListFreeze/T-AutoSaverSOE/T-CallerPicker 修复、v2026.9.4 发行资源；同期修复测试源集断裂（93 个 Java 测试重连执行）并清零全部历史失败。全量 3060/0/0/6 绿，buildPlugin+verifyPlugin 通过。

@@ -173,7 +173,7 @@ class HeavyNativeJoinDiagramOpenChainTest : HeavyPlatformTestCase() {
         // JoinDiagramNodeContentManager 为包私有类（nativefw），跨包（heavy）测试反射取 COLUMNS 常量断言
         val columnsCategory = Class
             .forName("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.JoinDiagramNodeContentManager")
-            .getField("COLUMNS").get(null) as com.intellij.diagram.DiagramCategory
+            .getField("COLUMNS").apply { isAccessible = true }.get(null) as com.intellij.diagram.DiagramCategory
         assertTrue(contentManager.isCategoryEnabled(columnsCategory))
         // T-NativeUI-02（回归）：字段项须通过框架真实过滤后保留——`getNodeItemsAccordingToCurrentContentSettings`
         // 正是此前「isInCategory 参数序/分类过滤 → 字段全部被滤掉」的路径。注意分类分组会在组间插入

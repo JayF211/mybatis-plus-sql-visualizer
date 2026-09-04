@@ -391,4 +391,36 @@ class JpqlConverterTest {
         assertEquals("应有 2 个 IN (?) 占位符", 2, count)
         assertFalse("不应有裸 IN ?: ${result.sql}", result.sql.contains("IN ?)"))
     }
+
+    // ------------------------------------------------------------------
+    // SELECT 子句展开（T-BareFromSelect）：与 HqlConverter 共用 SelectClauseExpander
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `bareFrom_implicitSelect_expandsColumnList`() {
+        // @NamedQuery 常见 `from Entity` 形态，此前只输出 FROM 表名
+        val result = JpqlConverter.convert("from UserEntity", userTable)
+        assertEquals(
+            "SELECT user.id, user.username, user.email, user.age, user.department_id, user.create_time from user",
+            result.sql,
+        )
+    }
+
+    @Test
+    fun `selectAlias_expandsColumnList`() {
+        // HQL/JPQL 语义 `SELECT u` = 取整个实体，应展开为全部映射列（对齐 HqlConverter）
+        val result = JpqlConverter.convert("SELECT u FROM UserEntity u WHERE u.username = :username", userTable)
+        assertEquals(
+            "SELECT u.id, u.username, u.email, u.age, u.department_id, u.create_time " +
+                "FROM user u WHERE u.username = ?",
+            result.sql,
+        )
+    }
+
+    @Test
+    fun `explicitColumns_notExpandedBySharedExpander`() {
+        // 列引用（含点号）不在展开白名单，应原样保留
+        val result = JpqlConverter.convert("SELECT u.username, u.email FROM UserEntity u", userTable)
+        assertEquals("SELECT u.username, u.email FROM user u", result.sql)
+    }
 }

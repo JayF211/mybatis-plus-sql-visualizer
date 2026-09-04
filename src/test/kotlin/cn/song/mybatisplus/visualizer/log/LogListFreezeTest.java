@@ -65,18 +65,19 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     @Test
     public void test刷新后缓存清空_render重新填充() throws Exception {
         LogSqlEntry e = entry("SELECT 1");
-        render(e, false);
+        String first = render(e, false);
         assertNotNull(cachedHtml(e));
 
         // 模拟 refreshList 清空缓存
         renderer.invalidateListHtmlCache();
         assertNull("清空后缓存为 null", cachedHtml(e));
 
-        String text = render(e, false);
+        // 重新渲染：走重算路径，产生「新的」HTML 实例（与失效前的旧实例不同）
+        String second = render(e, false);
         String cached = cachedHtml(e);
         assertNotNull("重新渲染后缓存恢复", cached);
-        assertEquals(text, cached);
-        assertNotSame("清空后渲染结果应为新的 HTML 实例", (Object) text, (Object) cached);
+        assertEquals(first, second);
+        assertNotSame("清空后渲染结果应为新的 HTML 实例", (Object) first, (Object) cached);
     }
 
     @Test

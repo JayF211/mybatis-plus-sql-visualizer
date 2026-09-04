@@ -99,8 +99,6 @@ repositories {
 // 禁用后可绕开 JDK 环境下 instrumentCode 的 jrt 模块解析问题（Windows 中文环境实测报
 // "java.home/Packages does not exist"）。若后续引入 Java 源码或 GUI Forms 再评估开启。
 intellijPlatform {
-    // 临时：并行测试隔离沙盒（parallel_tasks 登记 port-sync-master-52），终验后还原删除
-    sandboxContainer.set(layout.buildDirectory.dir("portsync52"))
     instrumentCode = false
     // Windows 中文环境实测 buildSearchableOptions 报 "Locale must be default"（IDEA
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索

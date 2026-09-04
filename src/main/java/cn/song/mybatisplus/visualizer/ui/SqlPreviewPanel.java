@@ -1152,17 +1152,34 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         createdEx.getSettings().setIndentGuidesShown(false);
         createdEx.getSettings().setAdditionalPageAtBottom(false);
         editorHolder.removeAll();
-        JBPanel<JBPanel<?>> wrapper = new JBPanel<JBPanel<?>>(new BorderLayout()) {
-            public Object getData(String dataId) {
-                return CommonDataKeys.EDITOR.is(dataId) ? created : null;
-            }
-        };
+        // T-M27.1：外层包装必须「实现 DataProvider 接口」（master 显式声明）——仅写 getData 方法
+        // 不声明接口时 instanceof DataProvider 不成立，DataManager 沿父链找不到 EDITOR 数据
+        EditorDataWrapper wrapper = new EditorDataWrapper();
+        wrapper.editor = created;
         wrapper.add(created.getComponent(), BorderLayout.CENTER);
         editorHolder.add(wrapper, BorderLayout.CENTER);
         editorHolder.revalidate();
         editorHolder.repaint();
         editor = created;
         bindAutoPopup(created);
+    }
+
+    /**
+     * T-M27.1：编辑器组件链 DataProvider 包装——必须显式实现 DataProvider 接口
+     * （2025.3 平台编辑器内部 UiCompatibleDataProvider 仅新 UI 兼容查询路径生效，
+     * 传统 DataManager.getDataContext 沿父链只认 DataProvider 接口）。
+     */
+    private static final class EditorDataWrapper extends JBPanel<JBPanel<?>> implements com.intellij.openapi.actionSystem.DataProvider {
+        Editor editor;
+
+        EditorDataWrapper() {
+            super(new BorderLayout());
+        }
+
+        @Override
+        public Object getData(@NotNull String dataId) {
+            return CommonDataKeys.EDITOR.is(dataId) ? editor : null;
+        }
     }
 
     /** T-M27.2：自建输入自动补全。 */

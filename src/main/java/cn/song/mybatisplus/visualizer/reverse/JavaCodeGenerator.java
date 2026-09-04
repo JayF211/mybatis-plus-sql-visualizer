@@ -765,9 +765,15 @@ public final class JavaCodeGenerator {
         return out;
     }
 
-    /** 列归属解析：返回 (实体类名, 字段名)；null = 未映射。 */
+    /** 列归属解析：返回 (实体类名, 字段名)；null = 未映射。
+     * alias 非空但非副实体键（主表别名如 t）时回落主实体（Kotlin elvis 语义：
+     * {@code entity?.subEntities?.get(alias) ?: entity}）。 */
     private static Pair<String, String> resolveColumn(String columnName, EntityTarget entity, String alias) {
-        EntityTarget target = (alias != null && entity != null) ? entity.subEntities().get(alias) : entity;
+        EntityTarget target = entity;
+        if (alias != null && entity != null) {
+            EntityTarget sub = entity.subEntities().get(alias);
+            if (sub != null) target = sub;
+        }
         String field = target != null && target.columnToField() != null ? target.columnToField().get(columnName) : null;
         if (field != null && target != null) return new Pair<>(target.className(), field);
         if (alias == null || (entity != null && !entity.subEntities().containsKey(alias))) {
@@ -980,9 +986,10 @@ public final class JavaCodeGenerator {
         return method + "(" + args + ")";
     }
 
-    /** LIMIT 渲染（MySQL 形态）。 */
+    /** LIMIT 渲染（MySQL 形态）。offset 非字面量（占位符等）渲染为 "?" 并保留偏移形态。 */
     private static String renderLimit(LimitClause limit) {
-        String offset = (limit.getOffset() instanceof SqlValue.Literal lit) ? lit.getRaw() : null;
+        String offset = limit.getOffset() == null ? null
+                : (limit.getOffset() instanceof SqlValue.Literal lit ? lit.getRaw() : "?");
         String count = (limit.getCount() instanceof SqlValue.Literal lit) ? lit.getRaw() : "?";
         return offset != null ? "LIMIT " + offset + ", " + count : "LIMIT " + count;
     }

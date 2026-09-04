@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.xml;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -210,8 +211,9 @@ public class XmlPreviewModel {
         List<XmlConditionView> conditionViews = new ArrayList<>();
         List<XmlForEachView> forEachViews = new ArrayList<>();
         List<XmlBindView> bindViews = new ArrayList<>();
-        Set<String> variables = new HashSet<>();
-        Set<String> paramProps = new HashSet<>();
+        // Kotlin mutableSetOf() = LinkedHashSet（保序）：paramProps 顺序 = 动态标签收集序 + extraParamProps
+        Set<String> variables = new LinkedHashSet<>();
+        Set<String> paramProps = new LinkedHashSet<>();
         collect(statement.node(), conditionViews, forEachViews, bindViews, variables, paramProps);
         variables.remove(DynamicContext.PARAMETER_OBJECT_KEY);
         variables.remove(DynamicContext.DATABASE_ID_KEY);
