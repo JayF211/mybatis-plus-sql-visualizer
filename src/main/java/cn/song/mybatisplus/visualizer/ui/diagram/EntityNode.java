@@ -14,21 +14,31 @@ public final class EntityNode {
     @NotNull public final List<ColumnEntry> columns;
     public final boolean isMain;
     @Nullable public final JoinType joinType;
+    /** 表注释（T-Embed：数据库 COMMENT 优先，回落实体注释；null = 无）。 */
+    @Nullable public final String tableComment;
 
     public EntityNode(@NotNull String alias, @NotNull String tableName,
                       @NotNull List<ColumnEntry> columns, boolean isMain,
-                      @Nullable JoinType joinType) {
+                      @Nullable JoinType joinType, @Nullable String tableComment) {
         this.alias = alias;
         this.tableName = tableName;
         this.columns = columns;
         this.isMain = isMain;
         this.joinType = joinType;
+        this.tableComment = tableComment;
+    }
+
+    /** 旧形态：无表注释。 */
+    public EntityNode(@NotNull String alias, @NotNull String tableName,
+                      @NotNull List<ColumnEntry> columns, boolean isMain,
+                      @Nullable JoinType joinType) {
+        this(alias, tableName, columns, isMain, joinType, null);
     }
 
     /** 主表便捷构造：joinType 默认 null。 */
     public EntityNode(@NotNull String alias, @NotNull String tableName,
                       @NotNull List<ColumnEntry> columns, boolean isMain) {
-        this(alias, tableName, columns, isMain, null);
+        this(alias, tableName, columns, isMain, null, null);
     }
 
     @NotNull public String getAlias() { return alias; }
@@ -36,6 +46,7 @@ public final class EntityNode {
     @NotNull public List<ColumnEntry> getColumns() { return columns; }
     public boolean isMain() { return isMain; }
     @Nullable public JoinType getJoinType() { return joinType; }
+    @Nullable public String getTableComment() { return tableComment; }
 
     /** 显示名：别名与表名不同时显示 "tableName (alias)"。 */
     @NotNull

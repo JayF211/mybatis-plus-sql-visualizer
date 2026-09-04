@@ -10,16 +10,25 @@ public final class ColumnEntry {
     @NotNull public final String name;
     @Nullable public final String type;
     public final boolean isPk;
+    /** 字段注释（T-Embed：DB COMMENT，对齐 IDEA Database 原生图显示；null = 无）。 */
+    @Nullable public final String comment;
 
-    public ColumnEntry(@NotNull String name, @Nullable String type, boolean isPk) {
+    public ColumnEntry(@NotNull String name, @Nullable String type, boolean isPk, @Nullable String comment) {
         this.name = name;
         this.type = type;
         this.isPk = isPk;
+        this.comment = comment;
+    }
+
+    /** 旧形态：无注释。 */
+    public ColumnEntry(@NotNull String name, @Nullable String type, boolean isPk) {
+        this(name, type, isPk, null);
     }
 
     @NotNull public String getName() { return name; }
     @Nullable public String getType() { return type; }
     public boolean isPk() { return isPk; }
+    @Nullable public String getComment() { return comment; }
 
     @Override
     public boolean equals(Object o) {

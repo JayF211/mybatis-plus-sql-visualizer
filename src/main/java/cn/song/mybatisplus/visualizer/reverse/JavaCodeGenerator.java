@@ -1053,7 +1053,7 @@ public final class JavaCodeGenerator {
             String fieldBase = (entity != null && entity.columnToField().containsKey(column))
                     ? entity.columnToField().get(column) : camelFromUnderscore(column);
             SqlValue value = colIndex < row.size() ? row.get(colIndex) : null;
-            if (i == 0) sb.append("new ").append(entityName);
+            if (i == 0) sb.append("new ").append(entityName).append("()");
             else sb.append("\n    ");
             sb.append(".set").append(capitalize(fieldBase)).append("(")
                     .append(value != null ? javaValue(value) : "null").append(")");

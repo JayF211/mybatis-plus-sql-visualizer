@@ -682,7 +682,7 @@ public final class PartTreeParser {
         // 第一个 token 小写后作为候选关联字段名
         String firstToken = tokens.get(0);
         String candidateAssociation = firstToken.substring(0, 1).toLowerCase() + firstToken.substring(1);
-        List<String> remainingTokens = tokens.subList(1, tokens.size());
+        List<String> remainingTokens = tokens.size() > 1 ? tokens.subList(1, tokens.size()) : java.util.List.of();
         String remainingPath = String.join("", remainingTokens);
 
         return new NestedPropertyPath(

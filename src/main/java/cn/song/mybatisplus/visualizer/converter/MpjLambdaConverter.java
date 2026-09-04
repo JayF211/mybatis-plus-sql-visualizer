@@ -257,7 +257,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
             SqlValue secondVal = WrapperConverterKt.asValue(argAt(call.getArgs(), 1));
             if (secondVal instanceof SqlValue.Literal lit2) return new Pair<>(first, lit2.getUnquoted());
         }
-        return new Pair<>(null, renderJoinSql(first, call.getArgs().subList(1, call.getArgs().size())));
+        return new Pair<>(null, renderJoinSql(first, call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.List.of()));
     }
 
     /** 解析 fill 调用 → FillClause（MPJ 1.5.1+）。 */
@@ -418,7 +418,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
             String joinSql = literalUnquoted(argAt(args, 2));
             if (joinSql == null) return null;
             return new JoinClause(type, "", "", List.of(),
-                    renderJoinSql(joinSql, args.subList(3, args.size())), keyword, null, null);
+                    renderJoinSql(joinSql, args.size() > 3 ? args.subList(3, args.size()) : java.util.List.of()), keyword, null, null);
         }
 
         // 5. 字符串 SQL join：leftJoin("address t1 on ...", args)
@@ -433,7 +433,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
                     String sql = literalUnquoted(argAt(args, startIndex));
                     if (sql == null) return null;
                     return new JoinClause(type, "", "", List.of(),
-                            renderJoinSql(sql, args.subList(startIndex + 1, args.size())), null, null, null);
+                            renderJoinSql(sql, args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of()), null, null, null);
                 }
             }
         }
@@ -463,7 +463,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
         List<Condition> onConditions = new ArrayList<>();
         String logicDelete = tableInfo != null ? tableInfo.getLogicDeleteColumn() : null;
 
-        List<WrapperArg> rest = args.subList(1, args.size());
+        List<WrapperArg> rest = args.size() > 1 ? args.subList(1, args.size()) : java.util.List.of();
         WrapperArg firstRest = argAt(rest, 0);
 
         if (args.size() == 5 && args.get(1) instanceof WrapperArg.ValueArg && args.get(2) instanceof WrapperArg.ColumnArg
@@ -531,7 +531,8 @@ public final class MpjLambdaConverter implements WrapperConverter {
             if (aliasNext instanceof WrapperArg.NestedArg na) {
                 onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias));
             } else if (aliasNext instanceof WrapperArg.OnConditionArg oca) {
-                for (WrapperArg restArg : rest.subList(index, rest.size())) {
+                List<WrapperArg> tailArgs = rest.size() > index ? rest.subList(index, rest.size()) : java.util.Collections.emptyList();
+                for (WrapperArg restArg : tailArgs) {
                     if (restArg instanceof WrapperArg.OnConditionArg oc) {
                         onConditions.add(new Condition.ColumnComparison(
                                 WrapperConverterKt.withTableAlias(oc.getLeft(), mainAlias),
@@ -660,7 +661,9 @@ public final class MpjLambdaConverter implements WrapperConverter {
         }
         int excludeStart = prefix != null ? 2 : 1;
         Set<String> exclude = new HashSet<>();
-        for (WrapperArg a : args.subList(excludeStart, args.size())) {
+        // Kotlin drop(n) 语义：入参不足 n 个时返回空表（subList 会越界）
+        List<WrapperArg> rest = args.size() > excludeStart ? args.size() > excludeStart ? args.subList(excludeStart, args.size()) : java.util.List.of() : List.of();
+        for (WrapperArg a : rest) {
             ColumnRef col = WrapperConverterKt.asColumn(a);
             if (col != null) exclude.add(col.getColumnName());
         }

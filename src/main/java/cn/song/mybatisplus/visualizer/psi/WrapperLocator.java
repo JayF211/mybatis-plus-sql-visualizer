@@ -906,7 +906,7 @@ public final class WrapperLocator {
             // dropWhile { isWrapperFactoryCall(it) }
             int start = 0;
             while (start < initCalls.size() && isWrapperFactoryCall(initCalls.get(start))) start++;
-            for (PsiMethodCallExpression call : expandFactoryCalls(initCalls.subList(start, initCalls.size()))) {
+            for (PsiMethodCallExpression call : expandFactoryCalls(initCalls.size() > start ? initCalls.subList(start, initCalls.size()) : java.util.List.of())) {
                 callElements.add(new Object[]{call, call.getTextRange().getEndOffset()});
             }
         }
@@ -1280,7 +1280,7 @@ public final class WrapperLocator {
         List<PsiMethodCallExpression> argumentChain = resolveFactoryArgumentChain(first, method);
         List<PsiMethodCallExpression> result = new ArrayList<>(argumentChain);
         result.addAll(factoryChain);
-        result.addAll(calls.subList(1, calls.size()));
+        result.addAll(calls.size() > 1 ? calls.subList(1, calls.size()) : java.util.List.of());
         return result;
     }
 

@@ -495,7 +495,7 @@ public final class DiagramRenderer {
         if (layouts.size() == 1) return List.of(new Pos(MARGIN, MARGIN));
 
         Layout main = layouts.get(0);
-        List<Layout> joinLayouts = layouts.subList(1, layouts.size());
+        List<Layout> joinLayouts = layouts.size() > 1 ? layouts.subList(1, layouts.size()) : java.util.List.of();
         int maxLabelWidth = 0;
         for (RelationshipLine rel : model.getRelationships()) {
             if (!rel.getLabel().isBlank()) {

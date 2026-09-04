@@ -60,7 +60,7 @@ public final class MpjJoinSupport {
             SqlValue js = WrapperConverterKt.asValue(argAt(args, 2));
             String joinSql = js instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
             if (joinSql == null) return null;
-            return new JoinClause(type, "", "", List.of(), renderJoinSql(joinSql, args.subList(3, args.size())), keyword, null, null);
+            return new JoinClause(type, "", "", List.of(), renderJoinSql(joinSql, args.size() > 3 ? args.subList(3, args.size()) : java.util.List.of()), keyword, null, null);
         }
 
         WrapperArg first = argAt(args, 0);
@@ -73,7 +73,7 @@ public final class MpjJoinSupport {
                     SqlValue s = WrapperConverterKt.asValue(argAt(args, startIndex));
                     String sql = s instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
                     if (sql == null) return null;
-                    return new JoinClause(type, "", "", List.of(), renderJoinSql(sql, args.subList(startIndex + 1, args.size())), null, null, null);
+                    return new JoinClause(type, "", "", List.of(), renderJoinSql(sql, args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of()), null, null, null);
                 }
             }
         }
@@ -98,7 +98,7 @@ public final class MpjJoinSupport {
         String alias = lowerFirst(className);
         List<Condition> onConditions = new ArrayList<>();
 
-        List<WrapperArg> rest = args.subList(1, args.size());
+        List<WrapperArg> rest = args.size() > 1 ? args.subList(1, args.size()) : java.util.List.of();
         WrapperArg firstRest = argAt(rest, 0);
         if (firstRest instanceof WrapperArg.NestedArg na) {
             onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias));
@@ -116,7 +116,8 @@ public final class MpjJoinSupport {
             if (aliasNext instanceof WrapperArg.NestedArg na) {
                 onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias));
             } else if (aliasNext instanceof WrapperArg.OnConditionArg oc) {
-                for (WrapperArg a : rest.subList(index, rest.size())) {
+                List<WrapperArg> tailArgs = rest.size() > index ? rest.subList(index, rest.size()) : java.util.Collections.emptyList();
+                for (WrapperArg a : tailArgs) {
                     if (a instanceof WrapperArg.OnConditionArg o) {
                         onConditions.add(new Condition.ColumnComparison(
                                 WrapperConverterKt.withTableAlias(o.getLeft(), mainAlias),

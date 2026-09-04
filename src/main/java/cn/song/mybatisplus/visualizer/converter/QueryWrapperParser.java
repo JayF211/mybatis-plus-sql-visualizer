@@ -210,14 +210,14 @@ public final class QueryWrapperParser {
                     SqlValue condValue = WrapperConverterKt.asValue(argAt(orderArgs, 0));
                     if (orderArgs.size() >= 3 && condValue instanceof SqlValue.Literal lit
                             && ("true".equals(lit.getUnquoted()) || "false".equals(lit.getUnquoted()))) {
-                        orderArgs = orderArgs.subList(1, orderArgs.size());
+                        orderArgs = orderArgs.size() > 1 ? orderArgs.subList(1, orderArgs.size()) : java.util.List.of();
                     }
                     SqlValue ascValue = WrapperConverterKt.asValue(argAt(orderArgs, 0));
                     boolean isAscLiteral = ascValue instanceof SqlValue.Literal lit2
                             && ("true".equals(lit2.getUnquoted()) || "false".equals(lit2.getUnquoted()));
                     WrapperCall columnsCall;
                     if (isAscLiteral) {
-                        columnsCall = new WrapperCall(call.getMethodName(), orderArgs.subList(1, orderArgs.size()));
+                        columnsCall = new WrapperCall(call.getMethodName(), orderArgs.size() > 1 ? orderArgs.subList(1, orderArgs.size()) : java.util.List.of());
                     } else {
                         columnsCall = new WrapperCall(call.getMethodName(), orderArgs);
                     }
@@ -473,7 +473,8 @@ public final class QueryWrapperParser {
             return subQueryCondition(call, negated ? "NOT IN" : "IN");
         }
         List<SqlValue> values = new ArrayList<>();
-        for (WrapperArg a : call.getArgs().subList(1, call.getArgs().size())) {
+        List<WrapperArg> callArgsTail = call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.Collections.emptyList();
+        for (WrapperArg a : callArgsTail) {
             SqlValue v = argAsValue(a);
             if (v != null) values.add(v);
         }
@@ -570,7 +571,7 @@ public final class QueryWrapperParser {
         else flagText = null;
         if (firstValue instanceof SqlValue.Literal && !"true".equals(flagText) && !"false".equals(flagText)) return null;
         boolean defaultEnabled = !(firstValue instanceof SqlValue.Literal lit && "false".equals(lit.getUnquoted()));
-        return new FlagAnalysis(new WrapperCall(call.getMethodName(), call.getArgs().subList(1, call.getArgs().size())),
+        return new FlagAnalysis(new WrapperCall(call.getMethodName(), call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.List.of()),
                 flagText, defaultEnabled);
     }
 
@@ -591,7 +592,8 @@ public final class QueryWrapperParser {
             String alias = v instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
             if (alias != null && !alias.isEmpty()) {
                 List<OrderByItem> result = new ArrayList<>();
-                for (WrapperArg a : call.getArgs().subList(1, call.getArgs().size())) {
+                List<WrapperArg> callArgsTail = call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.Collections.emptyList();
+        for (WrapperArg a : callArgsTail) {
                     if (a instanceof WrapperArg.ColumnArg ca) {
                         result.add(new OrderByItem(WrapperConverterKt.withTableAlias(ca.getColumn(), alias), asc));
                     }
@@ -666,7 +668,7 @@ public final class QueryWrapperParser {
         else flagText = null;
         if (firstValue instanceof SqlValue.Literal && !"true".equals(flagText) && !"false".equals(flagText)) return null;
         boolean defaultEnabled = !(firstValue instanceof SqlValue.Literal lit && "false".equals(lit.getUnquoted()));
-        return new FlagAnalysis(new WrapperCall(call.getMethodName(), call.getArgs().subList(1, call.getArgs().size())),
+        return new FlagAnalysis(new WrapperCall(call.getMethodName(), call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.List.of()),
                 flagText, defaultEnabled);
     }
 
@@ -762,7 +764,8 @@ public final class QueryWrapperParser {
         if (!(tv instanceof SqlValue.Literal lit)) return null;
         String template = lit.getUnquoted();
         List<SqlValue> values = new ArrayList<>();
-        for (WrapperArg a : args.subList(startIndex + 1, args.size())) {
+        List<WrapperArg> tailArgs = args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.Collections.emptyList();
+        for (WrapperArg a : tailArgs) {
             SqlValue v = WrapperConverterKt.asValue(a);
             if (v != null) values.add(v);
         }

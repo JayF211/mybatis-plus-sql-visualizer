@@ -90,7 +90,7 @@ public final class LambdaUpdateConverter implements WrapperConverter {
                 SqlValue rawV = WrapperConverterKt.asValue(argAt(args, startIndex));
                 if (!(rawV instanceof SqlValue.Literal lit)) return null;
                 String sql = lit.getUnquoted();
-                List<WrapperArg> tail = args.subList(startIndex + 1, args.size());
+                List<WrapperArg> tail = args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of();
                 for (int index = 0; index < tail.size(); index++) {
                     SqlValue v = WrapperConverterKt.asValue(tail.get(index));
                     if (v == null) continue;
