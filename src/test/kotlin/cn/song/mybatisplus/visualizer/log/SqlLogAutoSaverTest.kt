@@ -5,9 +5,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.text.SimpleDateFormat
 
 /**
  * 自动保存历史 SQL 写入器单元测试（F-43，纯 JUnit，无平台依赖）。
@@ -172,6 +174,74 @@ class SqlLogAutoSaverTest {
         assertNotNull(file)
         assertEquals(dir2, file!!.parentFile.absolutePath)
         assertEquals("file2.sql", file.name)
+        saver.close()
+    }
+
+    /** 解析本地时间字符串为 epoch 毫秒（时钟注入用）。 */
+    private fun timeOf(dateTime: String): Long =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateTime).time
+
+    @Test
+    fun `跨天切换文件不再无限递归`() {
+        // 回归：旧实现在文件名变化分支递归重写，但 currentResolvedName 永不更新，
+        // 跨天后首次写入即 StackOverflowError（真机 2026-09-04 00:09 堆栈）
+        var now = timeOf("2026-09-04 23:59:50")
+        val saver = SqlLogAutoSaver(clock = { now })
+        val dir = tempDir()
+        saver.configure(dir, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        saver.write(entry("SELECT 1"))
+        val day1 = saver.currentFile()!!
+        now = timeOf("2026-09-05 00:00:10")
+        saver.write(entry("SELECT 2"))
+        val day2 = saver.currentFile()!!
+        assertNotEquals("跨天后应切换文件: $day1 -> $day2", day1.name, day2.name)
+        assertEquals("sql-history-2026-09-05.sql", day2.name)
+        assertEquals(1, day1.readText().split("-- source:").size - 1)
+        assertEquals(1, day2.readText().split("-- source:").size - 1)
+        saver.close()
+    }
+
+    @Test
+    fun `秒级模板连续写入不再无限递归`() {
+        // 回归：模板含 $ss$ 等细粒度占位符时，旧实现第二次写入即 StackOverflowError
+        var now = timeOf("2026-09-04 10:00:00")
+        val saver = SqlLogAutoSaver(clock = { now })
+        val dir = tempDir()
+        saver.configure(dir, "log-\$HH-mm-ss\$.sql", null)
+        repeat(3) { i ->
+            saver.write(entry("SELECT $i"))
+            now += 2000
+        }
+        val names = File(dir).listFiles()!!.map { it.name }.sorted()
+        assertEquals(listOf("log-10-00-00.sql", "log-10-00-02.sql", "log-10-00-04.sql"), names)
+        saver.close()
+    }
+
+    @Test
+    fun `单文件超限滚动序号递增`() {
+        // 回归：旧实现滚动分支条件恒真且递归无出口，达阈值即 StackOverflowError
+        val saver = SqlLogAutoSaver(rollThresholdBytes = 100)
+        val dir = tempDir()
+        saver.configure(dir, "test.sql", null)
+        repeat(3) { i -> saver.write(entry("SELECT $i")) }
+        val names = File(dir).listFiles()!!.map { it.name }.sorted()
+        assertEquals(listOf("test.2.sql", "test.sql"), names)
+        assertEquals(2, File(dir, "test.sql").readText().split("-- source:").size - 1)
+        assertEquals(1, File(dir, "test.2.sql").readText().split("-- source:").size - 1)
+        saver.close()
+    }
+
+    @Test
+    fun `跨天后滚动序号复位`() {
+        var now = timeOf("2026-09-04 10:00:00")
+        val saver = SqlLogAutoSaver(clock = { now }, rollThresholdBytes = 100)
+        val dir = tempDir()
+        saver.configure(dir, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        repeat(3) { i -> saver.write(entry("SELECT $i")) }
+        assertTrue(File(dir, "sql-history-2026-09-04.2.sql").exists())
+        now = timeOf("2026-09-05 10:00:00")
+        saver.write(entry("SELECT 9"))
+        assertEquals("sql-history-2026-09-05.sql", saver.currentFile()!!.name)
         saver.close()
     }
 }

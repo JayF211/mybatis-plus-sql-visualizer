@@ -1,7 +1,7 @@
 {
-  "version": "2026.8.21",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.8.21/mybatis-plus-sql-visualizer-2026.8.21.zip",
-  "changeNotes": "JPA/Hibernate SQL 预览支持（Derived 派生查询 / CriteriaQuery 强类型 / HQL 自定义 DAO，gutter 图标点击直接弹窗看 SQL）\nHibernate/JPA SQL 日志捕获支持（双解析器并列架构：MyBatis + Hibernate 日志同时解析互不干扰）\nSQL→Java 反向子查询 JOIN 解析 + MConsumer 形态 + ext 条件 lambda 化增强\nJPA 分页修复（Pageable → LIMIT）+ @Query 路由优先 + 拼接字符串提取\nJPQL IN 子句三层修复（括号补全 + 数值引号 + inList 逗号分割多值）+ 复制时剥离注释",
-  "publishDate": "2026-08-21",
+  "version": "2026.9.4",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.4/mybatis-plus-sql-visualizer-2026.9.4.zip",
+  "changeNotes": "JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览\nJOIN 图换用 IDEA 原生图框架\nJOIN 图渲染对齐 Database 原生显示图\nJOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线\n非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览\nSQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复\nSqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复",
+  "publishDate": "2026-09-04",
   "sinceBuild": "243"
 }

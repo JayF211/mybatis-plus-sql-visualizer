@@ -2,8 +2,13 @@ package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.PagesXmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
@@ -23,6 +28,7 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethod
@@ -141,12 +147,69 @@ class ConvertToSqlAction : AnAction() {
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
                 SqlPreviewService.showResult(project, result, sourceLocation)
-            } else if (!tryJpaFallback(service, project, element, sourceLocation)) {
-                // JPA 均未命中（tryJpaFallback 返回 false）→ 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
+            } else if (!tryHqlFallback(service, project, element, sourceLocation)
+                && !tryNamedQueryFallback(service, project, element, sourceLocation)
+                && !tryJdbcTemplateFallback(project, element, sourceLocation)
+                && !tryJpaFallback(service, project, element, sourceLocation)) {
+                // 均未命中 → 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
                 showAnnotationCandidates(project, file, editor, sourceLocation)
             }
-            // tryJpaFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
+            // 任一 tryXxxFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
         }
+    }
+
+    /**
+     * HQL 兜底（T-PreviewShortcut）：标准 HQL/JPQL 运行时字符串调用 + 自定义 DAO HQL。
+     * 两定位器 locate(任意 PSI 元素) 均可从光标元素定位到宿主方法体内匹配调用，命中任一即触发预览并返回 true。
+     * 与 CriteriaQuery（首参 Class/CriteriaQuery 变量）无冲突——hasStringHqlArgument 已排除。
+     */
+    private fun tryHqlFallback(service: SqlPreviewService, project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        // 1. 标准 HQL/JPQL：session/em.createQuery / createNativeQuery / createNamedQuery（字符串首参）
+        if (HqlQueryLocator.locate(element) != null) {
+            SqlPreviewService.previewAsync(project, { service.previewHql(element) }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return true
+        }
+        // 2. 自定义 DAO HQL：commonDao.findByQuery(...) / findByQueryUniqueResult(...) 等
+        if (CustomDaoHqlLocator.locate(element) != null) {
+            SqlPreviewService.previewAsync(project, { service.previewCustomDaoHql(element) }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
+     * @NamedQuery 实体级兜底（T-PreviewShortcut）：光标落在实体类 @NamedQuery(...) 注解内时，
+     * 反查实体类 → previewNamedQuery 转换对应命名查询的 JPQL。
+     */
+    private fun tryNamedQueryFallback(service: SqlPreviewService, project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false) ?: return false
+        val simpleName = annotation.qualifiedName?.substringAfterLast('.')
+            ?: annotation.nameReferenceElement?.referenceName
+        if (simpleName != "NamedQuery") return false
+        val cls = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java, false) ?: return false
+        if (NamedQueryLocator.locate(cls).none { it.annotation === annotation }) return false
+        SqlPreviewService.previewAsync(project, { service.previewNamedQuery(annotation) }) { result ->
+            SqlPreviewService.showResult(project, result, sourceLocation)
+        }
+        return true
+    }
+
+    /**
+     * JDBC 模板兜底（T-PreviewShortcut）：jdbcTemplate.queryForList / update 等 →
+     * JdbcTemplateSqlPreviewService.preview（支持命名参数 / 字符串拼接）。
+     */
+    private fun tryJdbcTemplateFallback(project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        if (JdbcTemplateSqlLocator.locate(element) != null) {
+            SqlPreviewService.previewAsync(project, { JdbcTemplateSqlPreviewService.preview(element, project) }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return true
+        }
+        return false
     }
 
     /**

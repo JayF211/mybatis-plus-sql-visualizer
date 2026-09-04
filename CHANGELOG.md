@@ -2,7 +2,36 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.9.4] - 2026-09-04
+
+### Changed
+
+- **JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览（psource 系列）**：`jdbcTemplate.queryForList("select ...")` 等调用字符串首参可预览——命名参数 `:name` 按名回填（`NamedParamParser` + `ParameterReplacerNamed`）、`StringBuilder` 链式 append 分片聚合（`SqlStringConcatenator`）、方法识别（`JdbcTemplateMethodDetector`）与定位（`JdbcTemplateSqlLocator`）独立纯函数包，gutter 图标与注解预览同款模式；收尾加固（270b8f2）：DbHelper 自研 DAO delete/insert 识别 + `isLikelySql` 形态门（防通用字符串方法误触发）+ JPA gutter 误判普通类方法修复（接收者校验 Repository 接口）
+- **T-PreviewShortcut 非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览**：`ConvertToSqlAction` 兜底链新增 `tryHqlFallback` / `tryNamedQueryFallback` / `tryJdbcTemplateFallback` 短路（接 `previewHql` / `previewCustomDaoHql` / `JdbcTemplateSqlPreviewService.preview`）；`@NamedQuery` 实体级预览——`NamedQueryLocator.findByQueryName`（按 `<实体>.<方法>` 前缀 `JavaPsiFacade.findClasses`）+ `previewNamedQuery` + `@` token gutter 图标（含 `@interface` 声明区分）
+- **JOIN 图换用 IDEA 原生图框架（T-Dgm 系列）**：新增 `SqlJoinDiagramProvider` 注册 `com.intellij.diagram.Provider` EP（Ultimate 捆绑 Diagrams 插件，类图同款观感），缩放/自动布局/节点折叠/导出全框架托管；快照注册表 + 图构建工厂纯函数适配 `JoinDiagramGenerator` 现有解析产物；设置页新增「使用 IDE 原生图框架渲染 JOIN 图」开关（默认开）；Diagrams 插件缺席（Community）或框架异常自动降级回自绘渲染器；13 个适配层纯单测
+- **JOIN 图渲染对齐 IDEA Database「显示图」（T-NativeUI）**：表头显示「表名 + 表注释（灰色斜体）」，字段行显示「列名 + 类型 + 字段注释」（主键加粗 + 键图标），连接线按 JOIN 类型区分箭头/线型/ON 标签（INNER/LEFT/RIGHT/FULL），工具栏原生分类切换（列/主键列/注释）
+- **JOIN 图深度对齐原生显示图（T-Embed）**：字段行改原生「列名 /* 注释 */ + 类型右对齐独立列」布局，主键沉底独立分区（对齐 Database 原生）；数据源可用时列类型/列注释/表头注释升级为 DB 真实值（`int(11)`/DB COMMENT——表头注释数据库 COMMENT 优先，数据库没写才回落实体类注释，无数据源静默回落）；修复 JOIN 表节点字段行为空的缺陷（转换器原始别名匹配）
+- **JOIN 图 B 路径——直接内嵌 Database 原生「显示图」（T-Embed-03/04）**：数据源可用且全部表定位成功时直接以真实 DbTable 开原生 Database 图（注释/类型/主键分区/工具栏全原生），JOIN 连线经 `modelRelationProvider` 扩展点以虚拟外键注入（会话级注册表随图释放回收）；含子查询或表定位失败自动降级自实现路径；修复其初始画布空白（开图链缺原生 `fillDataModel` 等价的逐表 addElement）与数据源富化反射链断裂（243 平台无 `getDasObject()`，改 `DasDataSource.getModel()` 直达）
+
+### Fixed
+
+- **自动保存历史 SQL 文件切换无限递归致 StackOverflowError（T-AutoSaverSOE）**：历史文件切换链在每次保存回调中重建目录列表，同文件反复触发切换死循环——保存回调前判定目标文件已存在即终止递归
+- **SQL 日志列表 EDT 冻结（T-LogListFreeze）**：批量抑制（`addAll` 合并事件风暴）+ 渲染缓存（重复条目按摘要走缓存）+ 分批写入（大列表分段插入）
+- **SQL→Java 调用类选择 EDT 读 PSI 硬抛（T-CallerPicker）**：类选择弹窗 `populate()` 在 EDT 直读 PSI 触发 262 平台 read access 硬抛——`ReadAction.compute` 包裹候选类解析
+- **HQL 拼接变量自定义 DAO 预览（T-HQLGutter）**：`extractArgumentText` 只认字面量初始化式漏掉拼接初始化——委托 `extractHqlString(expression).first` 单一来源；新增 `ParamSource.NAME_VALUE_ARRAYS` 支持老式「名字数组+值数组」双数组传参（此前误判 POSITIONAL 致参数面板值错误）
+- **SqlFormatter 关键字分派缺陷链**：CASE 后字段粘连（「其余关键字」分支缺失 `atLineStart=false`）、逗号后关键字缺空格（`pendingComma` 未重置 + `pendingSpace` 未设置）、命名参数冒号被空格化为 `: name`（回填正则容忍 `[:]\s*`）
+- **psource 链式 append 运行时值丢失**：多层共享同一 PSI startOffset 致排序错乱——`resolveRootVariable` 根部变量解析 + 文本长度作排序次键
+- **原生 JOIN 图框架适配真机修复链**：`Cannot create DiagramBuilder` 两次修复（绕过 `convertFile` 旧格式转换 → `VirtualFileManager.findFileByUrl` 走注册单例 FS）、空白画布（createEditor 后须触发 `queryUpdate` 建图）、字段列表不显示（分类系统两次尝试失败后回退 `NO_CATEGORIES` / 直接实现 `DiagramNodeContentManager`）、字段文字不显示（框架 `DiagramNodeItemComponent` 调用 3 参 `getItemName`/`getItemType`）
+- **SQL 预览关键字选择粘连**：原生 SQL 高亮器关键字词选择粘连——自研 `SqlSyntaxHighlighter` 替代原生高亮器
+- **历史读回剥除 SQL 结束符（T-SqlDuration）**：历史文件读回时 SQL 尾部结束符（`;`）未剥除导致耗时解析偏移——`SqlLogFileReader` 读回剥除，设置页测试断言同步
+
+### Test
+
+- **psource 家族（6 文件 919 行）**：`JdbcTemplateMethodDetectorTest`（78）/ `JdbcTemplateSqlLocatorTest`（92）/ `JdbcTemplateSqlPreviewServiceTest`（245）/ `NamedParamParserTest`（171）/ `ParameterReplacerNamedTest`（183）/ `SqlStringConcatenatorTest`（150）
+- **原生 JOIN 图家族（7 文件）**：`NativeJoinDiagramAdapterTest`（360）/ `NativeJoinDiagramScenariosTest`（461）/ `HeavyNativeJoinDiagramOpenChainTest`（213）/ `HeavyNativeDatabaseDiagramJoinChainTest`（199）/ `JoinDiagramGeneratorTest`（+165）/ `DiagramSchemaEnricherTest`（116）/ `JoinFkRegistryTest`（68）
+- **SQL 高亮**：`SqlSyntaxHighlighterTest`（442）
+- **日志与历史**：`LogListFreezeTest`（110）/ `SqlLogAutoSaverTest`（70）
+- **JPA/NamedQuery**：`NamedQueryLocatorTest`（56）/ `NamedQueryGutterLineMarkerProviderTest`（74）/ `JpaGutterLineMarkerProviderTest`（35）/ `CustomDaoHqlLocatorTest`（+85）
 
 ## [2026.9.2] - 2026-09-02
 

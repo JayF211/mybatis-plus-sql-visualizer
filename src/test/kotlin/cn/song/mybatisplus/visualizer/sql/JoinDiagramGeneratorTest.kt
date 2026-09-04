@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -431,5 +432,169 @@ class JoinDiagramGeneratorTest {
         assertEquals(JoinType.LEFT, model.entities[1].joinType)
         assertEquals(null, model.entities[0].joinType)
     }
+
+    // ---- T-NativeUI-01 表注释数据链路 ----
+
+    @Test
+    fun `main table comment flows to entity`() {
+        val commentedTable = tableWithComment("user", "用户表", userTable)
+        val stmt = SelectStatement(
+            table = commentedTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals("用户表", model.entities[0].tableComment)
+        assertNull(model.entities[1].tableComment)
+    }
+
+    @Test
+    fun `join table comment flows from join tableInfo`() {
+        val deptWithComment = tableWithComment("dept", "部门表", deptTable)
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.INNER, tableName = "dept", alias = "d", tableInfo = deptWithComment,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "dept_id"),
+                            right = ColumnRef(tableAlias = "d", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals("部门表", model.entities[1].tableComment)
+    }
+
+    @Test
+    fun `column comment flows through columns`() {
+        val commentedTable = TableInfo(
+            entityClassName = "UserEntity", tableName = "user",
+            columns = listOf(
+                ColumnInfo("id", "id", isId = true),
+                ColumnInfo("name", "name", comment = "姓名"),
+                ColumnInfo("email", "email", comment = "邮箱"),
+            ),
+        )
+        val stmt = SelectStatement(
+            table = commentedTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val nameCol = model.entities[0].columns.first { it.name == "name" }
+        assertEquals("姓名", nameCol.comment)
+        assertEquals("邮箱", model.entities[0].columns.first { it.name == "email" }.comment)
+    }
+
+    // ---- T-Embed-07 JOIN 表字段空缺陷（转换器原始别名） ----
+
+    @Test
+    fun `join table columns extracted with converter original alias`() {
+        // MPJ 真机形态：join.alias = 类名小驼峰（stationInfoEntity），显示别名归一为 t1；
+        // selectAs/ON 的列引用携带原始别名，ON 标签经 aliasMap 归一显示正常，
+        // 列提取须双别名匹配——否则 JOIN 表字段全部落空（2026-09-04 真机截图实证）
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            selectColumns = listOf(
+                ColumnRef(tableAlias = "stationInfoEntity", columnName = "station_name", type = "java.lang.String"),
+            ),
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "station_info", alias = "stationInfoEntity",
+                    tableInfo = deptTable,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "stationInfoEntity", columnName = "station_id"),
+                            right = ColumnRef(tableAlias = "t", columnName = "station_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val joinEntity = model.entities[1]
+        assertEquals("t1", joinEntity.alias)
+        assertEquals("station_info", joinEntity.tableName)
+        val colNames = joinEntity.columns.map { it.name }
+        assertTrue("selectAs 列（原始别名）应提取，实际=$colNames", colNames.contains("station_name"))
+        assertTrue("ON 列（原始别名）应提取，实际=$colNames", colNames.contains("station_id"))
+    }
+
+    // ---- T-Embed-04 ON 等值列配对（虚拟外键数据基础） ----
+
+    @Test
+    fun `on column pairs extracted with main-to-join orientation`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "station_info", alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t1", columnName = "station_id"),
+                            right = ColumnRef(tableAlias = "t", columnName = "station_id"),
+                        ),
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t", columnName = "id"),
+                            right = ColumnRef(tableAlias = "t1", columnName = "owner_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val pairs = model.relationships[0].columnPairs
+        assertEquals(2, pairs.size)
+        // 方向统一为 (主表侧列, JOIN 表侧列)
+        assertTrue("t1.station_id = t.station_id → (station_id, station_id)", Pair("station_id", "station_id") in pairs)
+        assertTrue("t.id = t1.owner_id → (id, owner_id)", Pair("id", "owner_id") in pairs)
+    }
+
+    @Test
+    fun `on column pairs skip non-comparison conditions`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                            right = ColumnRef(tableAlias = "t", columnName = "id"),
+                        ),
+                        Condition.Raw("t.deleted = 0"),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(1, model.relationships[0].columnPairs.size)
+    }
+
+    /** 生成带表注释的副本。 */
+    private fun tableWithComment(tableName: String, comment: String?, base: TableInfo): TableInfo =
+        base.copy(tableName = tableName, comment = comment)
 
 }

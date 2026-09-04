@@ -222,6 +222,27 @@ ORDER BY t1.create_time DESC
 
 弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入，右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、复制、复制可执行 SQL、对比（Diff）、分享、执行（Ultimate 原生控制台内嵌）等操作。
 
+## 安装常见问题
+
+**Q: 从插件市场安装时提示 "Remote host terminated the handshake"？**
+
+这是 TLS 握手阶段网络中断导致的瞬时错误，不影响最终安装结果（重试后通常成功）。常见成因：
+
+- **本地代理拦截**：若使用 HTTP 代理（如 127.0.0.1:7890），尝试 `Settings → Appearance & Behavior → System Settings → HTTP Proxy` 切换为「No proxy」或「Auto-detect」后重试
+- **网络抖动**：等待几秒后点击「Install」重试
+- **防火墙/安全软件**：确认未拦截 plugins.jetbrains.com 的 HTTPS 连接
+
+若反复失败，可手动下载 zip 后通过 `Settings → Plugins → ⚙ → Install from disk` 安装。
+
+**Q: 安装时提示 "Required plugin 'com.intellij.database' is not installed"？**
+
+`com.intellij.database` 是可选依赖（仅「执行 SQL」功能需要），缺失不影响核心预览/日志/反向转换功能：
+
+- **Ultimate 用户**：点「Install」安装 Database 插件即可解锁「执行 SQL」能力（原生控制台内嵌）
+- **Community 用户**：无 Database 模块，点「Cancel」跳过即可；预览、日志、SQL→Java 完全可用
+
+该提示在 v2026.9.2 起已优化为可选依赖声明，旧版本可能仍弹确认，直接点 Cancel 跳过不影响使用。
+
 ## 文档
 
 | 文档 | 说明 |

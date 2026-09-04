@@ -74,6 +74,14 @@ import javax.swing.event.DocumentListener
 internal fun withTerminator(sql: String): String =
     if (sql.isEmpty() || sql.endsWith(";")) sql else sql + ";"
 
+// ---------- T-LogListFreeze：列表刷新分批常量 ----------
+
+/** 首屏立即写入条数（保证快速首屏，EDT 冻结可控）。 */
+internal const val REFRESH_FIRST_BATCH_SIZE = 30
+
+/** 每批异步追加条数（invokeLater 每批一次 EDT 脉冲）。 */
+internal const val REFRESH_CHUNK_SIZE = 30
+
 /**
  * 日志条目列表（T-M42）：覆写 JBList.itemToText——内置 Ctrl+C 复制默认返回 cellRenderer
  * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
@@ -747,11 +755,37 @@ class SqlLogPanel(
         val searched = filterBySearch(filtered, searchText)
         val sorted = applySort(searched)
 
+        // T-LogListFreeze-02：清空全部缓存（过滤/排序/设置变更后 HTML 需重新生成）
+        snapshot.forEach { it.cachedListHtml = null }
+
+        // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
+        list.ignoreRepaint = true
         listModel.clear()
-        // 一次性替换全部内容：fireIntervalAdded 仅触发一次布局计算（M46：O(N²) → O(N)）
         if (sorted.isNotEmpty()) {
-            listModel.addAll(sorted)
+            // 首屏批次（立即写入，保证快速首屏）
+            val firstBatch = sorted.take(REFRESH_FIRST_BATCH_SIZE)
+            listModel.addAll(firstBatch)
         }
+        list.ignoreRepaint = false
+        list.revalidate()
+        list.repaint()
+
+        // T-LogListFreeze-03：剩余批次通过 invokeLater 异步追加（每批一次 EDT 脉冲，避免长冻结）
+        if (sorted.size > REFRESH_FIRST_BATCH_SIZE) {
+            val remaining = sorted.drop(REFRESH_FIRST_BATCH_SIZE)
+            val iterator = remaining.iterator()
+            fun appendNext() {
+                if (!iterator.hasNext()) return
+                val chunk = mutableListOf<LogSqlEntry>()
+                repeat(REFRESH_CHUNK_SIZE) { if (iterator.hasNext()) chunk.add(iterator.next()) }
+                listModel.addAll(chunk)
+                if (iterator.hasNext()) {
+                    ApplicationManager.getApplication().invokeLater { appendNext() }
+                }
+            }
+            ApplicationManager.getApplication().invokeLater { appendNext() }
+        }
+
         updateSortButton()
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）
@@ -1198,13 +1232,17 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
         val entry = value as? LogSqlEntry
         text = null
         if (entry != null) {
-            val timestampHtml = formatTimestampHtml(entry.timestamp)
-            val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
-                formatDurationHtml(entry.executionTimeMs, isSelected) else ""
-            val sourceHtml = formatSourceHtml(entry, isSelected)
-            val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-            val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-            this.text = "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
+            // T-LogListFreeze-02：取缓存或惰性计算；避免每次 layout pass 重复走 SqlListHtmlRenderer + BasicHTML 解析
+            val html = entry.cachedListHtml ?: run {
+                val timestampHtml = formatTimestampHtml(entry.timestamp)
+                val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
+                    formatDurationHtml(entry.executionTimeMs, isSelected) else ""
+                val sourceHtml = formatSourceHtml(entry, isSelected)
+                val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+                val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
+                "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
+            }.also { entry.cachedListHtml = it }
+            this.text = html
             toolTipText = entry.restoredSql
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
             else (list?.foreground ?: JBColor.foreground())

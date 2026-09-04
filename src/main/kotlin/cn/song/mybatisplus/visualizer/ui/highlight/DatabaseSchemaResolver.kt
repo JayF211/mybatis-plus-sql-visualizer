@@ -32,23 +32,61 @@ object DatabaseSchemaResolver {
     private const val DAS_OBJECT = "com.intellij.database.model.DasObject"
     private const val OBJECT_KIND = "com.intellij.database.model.ObjectKind"
 
+    // T-Embed-10 真机二轮：Method 一律从「声明接口/类」获取，禁止 obj.javaClass.getMethod——
+    // 实现类（LocalDataSource 等）在 database-plugin 内部包（非导出），跨插件 classloader 反射
+    // invoke 抛 IllegalAccessException（15:54 沙盒日志实证）。getManagers 从接口拿所以一直成功。
+    private const val DAS_DATA_SOURCE = "com.intellij.database.model.DasDataSource"
+    private const val DAS_MODEL = "com.intellij.database.model.DasModel"
+    private const val DAS_TYPED_OBJECT = "com.intellij.database.model.DasTypedObject"
+    private const val DATA_TYPE = "com.intellij.database.model.DataType"
+
     /** 列名 → 数据源注释（表名匹配不到返回空 Map，调用方回落实体注释）。 */
-    fun columnComments(project: Project, tableName: String): Map<String, String> {
-        if (tableName.isBlank()) return emptyMap()
-        return if (!isDatabaseAvailable()) emptyMap() else ReadAction.compute<Map<String, String>, Throwable> {
-            tryCompute(project, tableName)
-        }
+    fun columnComments(project: Project, tableName: String): Map<String, String> =
+        columnMeta(project, tableName).mapValues { it.value.comment ?: "" }
+
+    /**
+     * 列名 → 列元数据（注释 + DB 真实类型串，T-Embed-02）。
+     *
+     * 类型串 = `DasTypedObject.getDataType().getSpecification()`（如 `int(11)` / `varchar(64)`，
+     * javap 实证 DataType.getSpecification 即 Database「显示图」右对齐类型的渲染来源）。
+     * 表名匹配不到返回空 Map，调用方回落实体推断值。
+     */
+    fun columnMeta(project: Project, tableName: String): Map<String, ColumnMeta> =
+        tableMeta(project, tableName).columns
+
+    /**
+     * 表级元数据（表注释 + 列元数据，T-Embed-09 一次遍历同时取）。
+     *
+     * @param comment 数据源表 COMMENT（`DasTable.getComment()`，null/空白 = 数据库没写，调用方回落实体注释）
+     */
+    fun tableMeta(project: Project, tableName: String): TableMeta {
+        if (tableName.isBlank()) return TableMeta(null, emptyMap())
+        if (!isDatabaseAvailable()) return TableMeta(null, emptyMap())
+        return ReadAction.compute<TableMeta, Throwable> { tryCompute(project, tableName) }
     }
 
-    private fun tryCompute(project: Project, tableName: String): Map<String, String> {
-        val dataSources = dataSources(project) ?: return emptyMap()
-        if (dataSources.isEmpty()) return emptyMap()
+    /** 数据源侧元数据（表注释为 null 时该维度缺失，调用方逐维度回落）。 */
+    data class TableMeta(val comment: String?, val columns: Map<String, ColumnMeta>)
+
+    /** 数据源侧列元数据（均为 null 时表示该维度缺失，调用方逐维度回落）。 */
+    data class ColumnMeta(val comment: String?, val typeSpec: String?)
+
+    private fun tryCompute(project: Project, tableName: String): TableMeta {
+        val dataSources = dataSources(project) ?: return TableMeta(null, emptyMap()).also {
+            LOG.warn("DatabaseSchemaResolver: dataSources(project) reflection failed, table=$tableName")
+        }
+        if (dataSources.isEmpty()) {
+            LOG.info("DatabaseSchemaResolver: no data sources configured, table=$tableName")
+            return TableMeta(null, emptyMap())
+        }
         val dasTableClass = Class.forName(DAS_TABLE)
         for (ds in dataSources) {
             val found = collectFromDataSource(ds, tableName, dasTableClass)
-            if (found.isNotEmpty()) return found
+            if (found.columns.isNotEmpty() || found.comment != null) return found
         }
-        return emptyMap()
+        // 表在所有数据源都找不到（通常=未连接/introspection 未完成/表不在当前库）
+        LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${dataSources.size} data sources")
+        return TableMeta(null, emptyMap())
     }
 
     /** database 插件是否可用（Ultimate/DataGrip）。 */
@@ -64,49 +102,87 @@ object DatabaseSchemaResolver {
         val managers = managersMethod.invoke(null, project) as? List<*> ?: return@runCatching emptyList()
         val dsList = mutableListOf<Any>()
         for (m in managers) {
-            val getDataSources = m?.javaClass?.getMethod("getDataSources") ?: continue
+            if (m == null) continue
+            val getDataSources = managerClass.getMethod("getDataSources")
             val list = getDataSources.invoke(m) as? List<*> ?: continue
             dsList.addAll(list.mapNotNull { it })
         }
         dsList
     }.getOrNull()
 
-    /** 从单个数据源收集匹配表的列注释（遍历 DasModel.traverser().toList()）。 */
-    private fun collectFromDataSource(ds: Any, tableName: String, dasTableClass: Class<*>): Map<String, String> {
-        val out = linkedMapOf<String, String>()
+    /** 从单个数据源收集匹配表的表注释 + 列元数据（遍历 DasModel.traverser().toList()）。 */
+    private fun collectFromDataSource(ds: Any, tableName: String, dasTableClass: Class<*>): TableMeta {
+        var tableComment: String? = null
+        val out = linkedMapOf<String, ColumnMeta>()
+        // T-Embed-10.5 探针：B 路径 locateDbTables 直调同模型命中而本链 not found——
+        // 分辨 elements 空遍历 / DasTable 筛不出 / 名称不匹配三种情形
+        var scannedTables = 0
+        var hit = false
         runCatching {
             val dasObjClass = Class.forName(DAS_OBJECT)
             val dasColumnClass = Class.forName(DAS_COLUMN)
-            val dasObject = ds.javaClass.getMethod("getDasObject").invoke(ds) ?: return emptyMap()
-            val model = dasObject.javaClass.getMethod("getModel").invoke(dasObject) ?: return emptyMap()
-            val traverser = model.javaClass.getMethod("traverser").invoke(model) ?: return emptyMap()
-            // JBIterable.toList() — 反射遍历所有 DasObject
-            val toList = traverser.javaClass.getMethod("toList")
-            val elements = toList.invoke(traverser) as? List<*> ?: return emptyMap()
+            // T-Embed-09 真机修复：243 字节码实证 RawDataSource/DbDataSource 均无 getDasObject()，
+            // getModel() 声明在父接口 DasDataSource（B 路径 locateDbTables 直调 ds.model 同源）——
+            // 旧链 getDasObject().getModel() 反射 NoSuchMethodException 被吞 → 全量静默回落
+            val model = Class.forName(DAS_DATA_SOURCE).getMethod("getModel").invoke(ds)
+                ?: return TableMeta(null, emptyMap())
+            val traverser = Class.forName(DAS_MODEL).getMethod("traverser").invoke(model)
+                ?: return TableMeta(null, emptyMap())
+            // 16:09 沙盒日志实证：DasModel.traverser() 返回 JBTreeTraverser（extends
+            // FilteredTraverserBase，非 JBIterable 子类）——对 JBIterable 取 toList invoke 抛
+            // IllegalArgumentException: object is not an instance of declaring class。
+            // FilteredTraverserBase implements java.lang.Iterable，iterator() 为其 public final——
+            // 用 Iterable/Iterator 接口方法手动收集（= Kotlin 直调 toList 扩展同语义）
+            val elements = try {
+                // java.util.Iterator 为 JDK 接口，cast 后 hasNext/next 直调（避免再反射一层）
+                val iterator = java.lang.Iterable::class.java.getMethod("iterator")
+                    .invoke(traverser) as java.util.Iterator<*>
+                val out = mutableListOf<Any?>()
+                while (iterator.hasNext()) out.add(iterator.next())
+                out
+            } catch (e: Throwable) {
+                LOG.warn("DatabaseSchemaResolver: traverse elements failed", e)
+                return TableMeta(null, emptyMap())
+            }
             val objectKindClass = Class.forName(OBJECT_KIND)
             val columnKind = objectKindClass.enumConstants?.firstOrNull { (it as Enum<*>).name == "COLUMN" }
-                ?: return emptyMap()
+                ?: return TableMeta(null, emptyMap())
             val getNameM = dasObjClass.getMethod("getName")
             val getCommentM = dasObjClass.getMethod("getComment")
             val getChildrenM = dasObjClass.getMethod("getDasChildren", objectKindClass)
 
             for (element in elements) {
                 if (element == null || !dasTableClass.isInstance(element)) continue
+                scannedTables++
                 val tName = getNameM.invoke(element) as? String ?: continue
                 if (!tName.equals(tableName, ignoreCase = true)) continue
+                hit = true
+                // 表级 COMMENT 与列遍历同一元素读取（blank 视为数据库没写，保留 null 供调用方回落）
+                tableComment = (getCommentM.invoke(element) as? String)?.takeIf { it.isNotBlank() }
                 val columns = getChildrenM.invoke(element, columnKind) as? Iterable<*> ?: continue
                 for (col in columns) {
                     if (col == null || !dasColumnClass.isInstance(col)) continue
                     val cName = getNameM.invoke(col) as? String ?: continue
+                    if (cName.isBlank()) continue
                     val comment = getCommentM.invoke(col) as? String
-                    if (cName.isNotBlank() && !comment.isNullOrBlank()) {
-                        out[cName] = comment
+                    // DasTypedObject.getDataType().getSpecification()（反射；列无类型信息时为 null）
+                    val typeSpec = runCatching {
+                        val dataType = Class.forName(DAS_TYPED_OBJECT).getMethod("getDataType").invoke(col)
+                        dataType?.let { Class.forName(DATA_TYPE).getMethod("getSpecification").invoke(it) } as? String
+                    }.getOrNull()
+                    if (!comment.isNullOrBlank() || !typeSpec.isNullOrBlank()) {
+                        out[cName] = ColumnMeta(comment = comment?.takeIf { it.isNotBlank() }, typeSpec = typeSpec?.takeIf { it.isNotBlank() })
                     }
                 }
             }
         }.onFailure { e ->
-            LOG.debug("DatabaseSchemaResolver.collectFromDataSource failed: ${e.message}")
+            // 升 WARN+堆栈：真机排障依赖此行（仅消息无法定位炸点，16:09 日志教训）
+            LOG.warn("DatabaseSchemaResolver.collectFromDataSource failed", e)
         }
-        return out
+        LOG.info(
+            "DatabaseSchemaResolver scan: table=$tableName, tablesScanned=$scannedTables, " +
+                "hit=$hit, foundColumns=${out.size}, tableComment=${tableComment != null}",
+        )
+        return TableMeta(tableComment, out)
     }
 }
