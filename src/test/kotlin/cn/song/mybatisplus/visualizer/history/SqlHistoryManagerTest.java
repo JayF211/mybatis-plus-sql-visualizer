@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.history;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -47,7 +47,7 @@ public class SqlHistoryManagerTest {
     // ---------- 添加 / 查询 ----------
 
     @Test
-    public void add_increases_entry_count() {
+    public void add_increases_entry_count() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         assertEquals(0, manager.getEntries().size());
         manager.add(entry("SELECT 1"));
@@ -56,7 +56,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void add_assigns_unique_id_when_blank() {
+    public void add_assigns_unique_id_when_blank() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         SqlHistoryEntry e = entry();
         assertTrue(e.getId().isBlank());
@@ -65,7 +65,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void entries_returned_newest_first() {
+    public void entries_returned_newest_first() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         SqlHistoryEntry first = entry("FIRST");
         first.setTimestamp(1000L);
@@ -85,7 +85,7 @@ public class SqlHistoryManagerTest {
     // ---------- 上限淘汰 ----------
 
     @Test
-    public void evicts_oldest_non_favorite_when_over_limit() {
+    public void evicts_oldest_non_favorite_when_over_limit() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         // 默认上限 200，添加 200 条
         for (int i = 0; i < 200; i++) {
@@ -106,7 +106,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void favorite_entries_are_never_evicted() {
+    public void favorite_entries_are_never_evicted() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         // 添加 1 条收藏 + 200 条非收藏 = 201 条
         SqlHistoryEntry fav = entry("FAV");
@@ -132,7 +132,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void respects_custom_max_size() {
+    public void respects_custom_max_size() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.setMaxSize(5);
         for (int i = 0; i < 7; i++) {
@@ -148,7 +148,7 @@ public class SqlHistoryManagerTest {
     // ---------- 收藏 ----------
 
     @Test
-    public void toggleFavorite_flips_state() {
+    public void toggleFavorite_flips_state() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry("SELECT 1"));
         String id = manager.getEntries().get(0).getId();
@@ -160,7 +160,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void toggleFavorite_on_unknown_id_is_no_op() {
+    public void toggleFavorite_on_unknown_id_is_no_op() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry());
         // 不应抛异常
@@ -171,7 +171,7 @@ public class SqlHistoryManagerTest {
     // ---------- 标签 ----------
 
     @Test
-    public void addTag_and_removeTag() {
+    public void addTag_and_removeTag() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry());
         String id = manager.getEntries().get(0).getId();
@@ -183,7 +183,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void addTag_ignores_duplicate() {
+    public void addTag_ignores_duplicate() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry());
         String id = manager.getEntries().get(0).getId();
@@ -193,7 +193,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void allTags_returns_union_of_all_tags() {
+    public void allTags_returns_union_of_all_tags() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         SqlHistoryEntry e1 = entry();
         e1.getTags().add("慢查询");
@@ -211,7 +211,7 @@ public class SqlHistoryManagerTest {
     // ---------- 搜索 / 筛选 ----------
 
     @Test
-    public void search_filters_by_substring_ignore_case() {
+    public void search_filters_by_substring_ignore_case() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry("SELECT * FROM user WHERE id = 1"));
         manager.add(entry("SELECT * FROM order WHERE user_id = 1"));
@@ -223,7 +223,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void search_empty_query_returns_all() {
+    public void search_empty_query_returns_all() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry("A"));
         manager.add(entry("B"));
@@ -231,7 +231,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void filterByTag_returns_matching_entries() {
+    public void filterByTag_returns_matching_entries() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         SqlHistoryEntry e1 = entry("SELECT 1");
         e1.getTags().add("慢查询");
@@ -245,7 +245,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void filterFavorites_returns_only_favorites() {
+    public void filterFavorites_returns_only_favorites() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         SqlHistoryEntry a = entry("A");
         a.setFavorite(true);
@@ -262,7 +262,7 @@ public class SqlHistoryManagerTest {
     // ---------- 删除 / 清空 ----------
 
     @Test
-    public void remove_deletes_by_id() {
+    public void remove_deletes_by_id() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry("A"));
         String id = manager.getEntries().get(0).getId();
@@ -271,7 +271,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void clear_removes_all() {
+    public void clear_removes_all() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry("A"));
         manager.add(entry("B"));
@@ -282,7 +282,7 @@ public class SqlHistoryManagerTest {
     // ---------- 持久化往返 ----------
 
     @Test
-    public void state_round_trip_preserves_entries_and_favorites_and_tags() {
+    public void state_round_trip_preserves_entries_and_favorites_and_tags() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         SqlHistoryEntry e1 = entry("SELECT 1");
         e1.setFavorite(true);
@@ -306,7 +306,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void loadState_with_corrupt_data_falls_back_gracefully() {
+    public void loadState_with_corrupt_data_falls_back_gracefully() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         // 空状态（模拟损坏/空文件）不抛异常
         manager.loadState(new SqlHistoryManager.State());
@@ -314,7 +314,7 @@ public class SqlHistoryManagerTest {
     }
 
     @Test
-    public void loadState_replaces_existing_entries() {
+    public void loadState_replaces_existing_entries() throws Exception {
         SqlHistoryManager manager = new SqlHistoryManager();
         manager.add(entry("OLD"));
         assertEquals(1, manager.getEntries().size());

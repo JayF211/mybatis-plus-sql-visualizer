@@ -2,8 +2,8 @@ package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -45,7 +45,7 @@ public class SqlLogPanelDedupeToggleTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test勾选去重_既有重复条目立即裁剪() {
+    public void test勾选去重_既有重复条目立即裁剪() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             // 用户未勾选时捕获了 4 条重复（真实场景：同一分页查询重复执行）
@@ -68,7 +68,7 @@ public class SqlLogPanelDedupeToggleTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test勾选去重_不同SQL互不影响() {
+    public void test勾选去重_不同SQL互不影响() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             String sqlA = "SELECT * FROM user WHERE id = 1";
@@ -90,7 +90,7 @@ public class SqlLogPanelDedupeToggleTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test取消勾选_清空徽章计数() {
+    public void test取消勾选_清空徽章计数() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             String sql = "SELECT COUNT(*) FROM orders";
@@ -113,7 +113,7 @@ public class SqlLogPanelDedupeToggleTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test去重开启下新重复_徽章计数即时更新() {
+    public void test去重开启下新重复_徽章计数即时更新() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             // 用户先勾选去重，再捕获首条 SQL
@@ -143,7 +143,7 @@ public class SqlLogPanelDedupeToggleTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test去重关闭时重复SQL全展示_再开启累计() {
+    public void test去重关闭时重复SQL全展示_再开启累计() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             String sql = "SELECT * FROM user WHERE id = 7";

@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
 import java.util.List;
@@ -24,7 +24,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void MP_前缀格式配对_Preparing_与_Parameters() {
+    public void MP_前缀格式配对_Preparing_与_Parameters() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT id, name FROM user WHERE id = ? AND status = ?",
@@ -37,7 +37,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void MyBatis_原生格式无前缀配对() {
+    public void MyBatis_原生格式无前缀配对() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Preparing: DELETE FROM t WHERE id = ?",
@@ -47,7 +47,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 带日志框架前缀的行按关键字定位() {
+    public void 带日志框架前缀的行按关键字定位() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "2026-08-15 10:00:00.123  INFO 1234 --- [main] c.s.m.Log : ==>  Preparing: SELECT * FROM user WHERE id = ?",
@@ -57,7 +57,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 多条语句连续配对() {
+    public void 多条语句连续配对() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM a WHERE x = ?",
@@ -70,7 +70,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 无参语句直接闭合不替换() {
+    public void 无参语句直接闭合不替换() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT COUNT(*) FROM user",
@@ -82,7 +82,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 噪声行忽略() {
+    public void 噪声行忽略() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "2026-08-15 10:00:00.100  INFO --- [main] c.s.m.Application : started in 2s",
@@ -94,7 +94,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 无参_Preparing_由下一条_Preparing_闭合() {
+    public void 无参_Preparing_由下一条_Preparing_闭合() throws Exception {
         MyBatisLogParser p = parser();
         p.feed("==>  Preparing: SELECT 1"); // 无参语句
         p.feed("==>  Preparing: SELECT * FROM t WHERE id = ?"); // 新语句闭合上一条
@@ -107,7 +107,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 值内逗号与括号的字符串参数() {
+    public void 值内逗号与括号的字符串参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM t WHERE name IN (?, ?)",
@@ -117,7 +117,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void null_字面量位于参数列表中间() {
+    public void null_字面量位于参数列表中间() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ? AND c = ?",
@@ -126,7 +126,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 无类型标注参数回落启发式() {
+    public void 无类型标注参数回落启发式() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?",
@@ -136,7 +136,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 占位符少于参数时忽略多余参数() {
+    public void 占位符少于参数时忽略多余参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM t WHERE id = ?",
@@ -145,7 +145,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 占位符多于参数时保留问号() {
+    public void 占位符多于参数时保留问号() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?",
@@ -154,7 +154,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 参数值包含单引号时转义() {
+    public void 参数值包含单引号时转义() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM t WHERE name = ?",
@@ -163,7 +163,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void takeEntries_取走后缓冲区清空() {
+    public void takeEntries_取走后缓冲区清空() throws Exception {
         MyBatisLogParser p = parser();
         p.feed("==>  Preparing: SELECT 1");
         p.closePending();
@@ -175,7 +175,7 @@ public class MyBatisLogParserTest {
     // ---------- T-M31.14 可配置前缀 / 混合模式 / 最大长度 ----------
 
     @Test
-    public void 自定义前缀解析() {
+    public void 自定义前缀解析() throws Exception {
         MyBatisLogParser p = new MyBatisLogParser(new LogSqlRestorer(), "==> SQL:", "==> ARGS:", true, 20000);
         p.feed("==> SQL: SELECT * FROM t WHERE id = ?");
         p.feed("==> ARGS: 5(Long)");
@@ -186,7 +186,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 混合模式关闭时仅行首精确匹配() {
+    public void 混合模式关闭时仅行首精确匹配() throws Exception {
         MyBatisLogParser p = new MyBatisLogParser(new LogSqlRestorer(), "Preparing:", "Parameters:", false, 20000);
         p.feed("2026-08-15 INFO ==>  Preparing: SELECT 1"); // 带日志前缀 → 不匹配（非行首）
         p.feed("Preparing: SELECT 2"); // 行首匹配
@@ -197,7 +197,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 混合模式开启时带日志前缀仍匹配() {
+    public void 混合模式开启时带日志前缀仍匹配() throws Exception {
         MyBatisLogParser p = new MyBatisLogParser(new LogSqlRestorer(), "Preparing:", "Parameters:", true, 20000);
         p.feed("2026-08-15 INFO ==>  Preparing: SELECT 1");
         p.closePending();
@@ -207,7 +207,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 超长_SQL_截断() {
+    public void 超长_SQL_截断() throws Exception {
         MyBatisLogParser p = new MyBatisLogParser(new LogSqlRestorer(), "Preparing:", "Parameters:", true, 20);
         p.feed("Preparing: SELECT * FROM very_long_table_name WHERE id = 1");
         p.closePending();
@@ -218,7 +218,7 @@ public class MyBatisLogParserTest {
     // ---------- T-M31.xx 前缀与 SQL 分行兼容 ----------
 
     @Test
-    public void MP_前缀分行_Preparing_独占一行加_SQL_在下一行() {
+    public void MP_前缀分行_Preparing_独占一行加_SQL_在下一行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing:",
@@ -232,7 +232,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 原生前缀分行() {
+    public void 原生前缀分行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Preparing:",
@@ -243,7 +243,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 带日志框架前缀分行() {
+    public void 带日志框架前缀分行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "2026-08-15 10:00:00.123 INFO --- [main] c.s.m.Log : ==>  Preparing:",
@@ -254,7 +254,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 前缀与_SQL_间有空白行() {
+    public void 前缀与_SQL_间有空白行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing:",
@@ -266,7 +266,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 无参语句分行() {
+    public void 无参语句分行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing:",
@@ -278,7 +278,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 多条语句每条_Preparing_分行() {
+    public void 多条语句每条_Preparing_分行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing:",
@@ -293,7 +293,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void Parameters_也分行极端形态() {
+    public void Parameters_也分行极端形态() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing:",
@@ -305,7 +305,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 分行混合噪声行正确识别() {
+    public void 分行混合噪声行正确识别() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "2026-08-15 INFO started",
@@ -318,7 +318,7 @@ public class MyBatisLogParserTest {
     }
 
     @Test
-    public void 严格模式下前缀分行仍生效() {
+    public void 严格模式下前缀分行仍生效() throws Exception {
         MyBatisLogParser p = new MyBatisLogParser(new LogSqlRestorer(), "Preparing:", "Parameters:", false, 20000);
         p.feed("Preparing:");
         p.feed("SELECT * FROM t WHERE id = ?");

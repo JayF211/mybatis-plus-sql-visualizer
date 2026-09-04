@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.history;
 
 import org.junit.After;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -18,13 +18,13 @@ public class SqlHistoryPanelTest {
     private SqlHistoryManager manager;
 
     @Before
-    public void setUp() {
+    public void setUp() throws Exception {
         manager = new SqlHistoryManager();
         manager.clear();
     }
 
     @After
-    public void tearDown() {
+    public void tearDown() throws Exception {
         manager.clear();
     }
 
@@ -35,7 +35,7 @@ public class SqlHistoryPanelTest {
     // ---------- 视图编排（收藏 + 非收藏合并为单一倒序视图） ----------
 
     @Test
-    public void panelViewMergesFavoriteAndNonFavoriteDescendingByTime() {
+    public void panelViewMergesFavoriteAndNonFavoriteDescendingByTime() throws Exception {
         manager.add(entry("FAV", true, List.of(), 1000L));
         manager.add(entry("NORMAL_NEW", false, List.of(), 3000L));
         manager.add(entry("NORMAL_OLD", false, List.of(), 2000L));
@@ -46,7 +46,7 @@ public class SqlHistoryPanelTest {
     }
 
     @Test
-    public void favoriteMarkRetainedInMergedView() {
+    public void favoriteMarkRetainedInMergedView() throws Exception {
         manager.add(entry("FAV", true, List.of(), 1000L));
         manager.add(entry("NORMAL", false, List.of(), 2000L));
         List<SqlHistoryEntry> view = manager.getEntries();
@@ -57,7 +57,7 @@ public class SqlHistoryPanelTest {
     // ---------- 标签筛选 + 搜索组合 ----------
 
     @Test
-    public void tagFilterThenSearchTakesIntersection() {
+    public void tagFilterThenSearchTakesIntersection() throws Exception {
         manager.add(entry("SELECT * FROM user", false, List.of("慢查询"), 1000L));
         manager.add(entry("SELECT * FROM order", false, List.of("慢查询"), 2000L));
         manager.add(entry("UPDATE user SET x = 1", false, List.of(), 3000L));
@@ -71,7 +71,7 @@ public class SqlHistoryPanelTest {
     }
 
     @Test
-    public void favoriteFilterExcludesNonFavorite() {
+    public void favoriteFilterExcludesNonFavorite() throws Exception {
         manager.add(entry("FAV_1", true, List.of(), 1000L));
         manager.add(entry("NORMAL_1", false, List.of(), 2000L));
         manager.add(entry("FAV_2", true, List.of(), 3000L));
@@ -83,7 +83,7 @@ public class SqlHistoryPanelTest {
     }
 
     @Test
-    public void searchWorksOnFavoriteView() {
+    public void searchWorksOnFavoriteView() throws Exception {
         manager.add(entry("SELECT * FROM user", true, List.of(), 1000L));
         manager.add(entry("SELECT * FROM order", true, List.of(), 2000L));
         List<SqlHistoryEntry> favs = manager.filterFavorites();
@@ -96,7 +96,7 @@ public class SqlHistoryPanelTest {
     // ---------- 筛选态切换（面板 onFilterChanged 逻辑） ----------
 
     @Test
-    public void switchFromFavoriteFilterToAllRestoresNonFavorite() {
+    public void switchFromFavoriteFilterToAllRestoresNonFavorite() throws Exception {
         manager.add(entry("FAV", true, List.of(), 1000L));
         manager.add(entry("NORMAL", false, List.of(), 2000L));
         assertEquals(1, manager.filterFavorites().size());
@@ -104,7 +104,7 @@ public class SqlHistoryPanelTest {
     }
 
     @Test
-    public void missingTagFilterReturnsEmpty() {
+    public void missingTagFilterReturnsEmpty() throws Exception {
         manager.add(entry("SELECT 1", false, List.of("慢查询"), 1000L));
         List<SqlHistoryEntry> result = manager.filterByTag("不存在的标签");
         assertEquals(0, result.size());

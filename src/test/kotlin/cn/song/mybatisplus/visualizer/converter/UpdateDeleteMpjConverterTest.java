@@ -108,7 +108,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 注册表_按类型分发() {
+    public void 注册表_按类型分发() throws Exception {
         SqlStatement s1 = ConverterRegistry.INSTANCE.convert(
             chain(WrapperType.LAMBDA_QUERY, "E", List.of(eqCall("id", "1"))), table);
         assertTrue(s1 instanceof SelectStatement);
@@ -131,7 +131,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void update_set与条件() {
+    public void update_set与条件() throws Exception {
         WrapperChain chain = chain(WrapperType.LAMBDA_UPDATE, "DeviceInfoEntity", List.of(
             call("set", List.of(col("station_id"), val("101"))),
             eqCall("id", "1")
@@ -148,7 +148,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void update_setSql原始片段() {
+    public void update_setSql原始片段() throws Exception {
         WrapperChain chain = chain(WrapperType.LAMBDA_UPDATE, "DeviceInfoEntity", List.of(
             call("setSql", List.of(val("share_scheme_id = share_scheme_id + 1")))
         ));
@@ -163,7 +163,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void update_无where条件集为空() {
+    public void update_无where条件集为空() throws Exception {
         WrapperChain chain = chain(WrapperType.LAMBDA_UPDATE, "DeviceInfoEntity", List.of(
             call("set", List.of(col("station_id"), val("1")))
         ));
@@ -176,7 +176,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void delete_带条件() {
+    public void delete_带条件() throws Exception {
         WrapperChain chain = chain(WrapperType.LAMBDA_DELETE, "DeviceInfoEntity", List.of(
             eqCall("id", "1001")
         ));
@@ -191,7 +191,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void delete_无where条件集为空() {
+    public void delete_无where条件集为空() throws Exception {
         WrapperChain chain = chain(WrapperType.LAMBDA_DELETE, "DeviceInfoEntity", List.of());
         DeleteStatement statement = (DeleteStatement) LambdaDeleteConverter.INSTANCE.convert(chain, table);
         assertTrue("无 WHERE 条件", statement.getConditions().isEmpty());
@@ -203,7 +203,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjLambda_selectAs与leftJoin() {
+    public void mpjLambda_selectAs与leftJoin() throws Exception {
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectAs", List.of(col("id"), val("device_id"))),
             call("leftJoin", List.of(
@@ -226,7 +226,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjQuery_字符串字段与join() {
+    public void mpjQuery_字符串字段与join() throws Exception {
         WrapperChain chain = chain(WrapperType.MPJ_QUERY, "DeviceInfoEntity", List.of(
             call("select", List.of(val("t.id AS device_id"))),
             call("leftJoin", List.of(
@@ -248,7 +248,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectAs方法引用别名() {
+    public void mpjLambda_selectAs方法引用别名() throws Exception {
         // P01/P02/P04：selectAs(Entity::getX, VO::getY)，别名 = VO 属性名（保留驼峰）
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectAs", List.of(col("id"), aliasArg("deviceId"))),
@@ -265,7 +265,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectAs字符串列不补主表前缀() {
+    public void mpjLambda_selectAs字符串列不补主表前缀() throws Exception {
         // P11：selectAs("auditAccount.username", VO::getY) → 已含表别名限定，不再补 t.
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "WalletWithdrawEntity", List.of(
             call("selectAs", List.of(val("auditAccount.username"), aliasArg("auditedUsername")))
@@ -281,7 +281,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectAll主表全列() {
+    public void mpjLambda_selectAll主表全列() throws Exception {
         // P01：selectAll(Class) → 主表全列（带 t. 前缀）+ selectAs 别名列追加
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectAll", List.of(val("DeviceInfoEntity"))),
@@ -298,7 +298,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_distinct与innerJoin() {
+    public void mpjLambda_distinct与innerJoin() throws Exception {
         // P05：distinct + 多级 innerJoin
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "StationSchemeMerchantInfoEntity", List.of(
             call("select", List.of(col("station_id"))),
@@ -322,7 +322,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectMax与selectCount() {
+    public void mpjLambda_selectMax与selectCount() throws Exception {
         // P18：selectMax 无别名；selectCount 第二参为 VO 属性名（保留驼峰）
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "OrderMonitorRecordEntity", List.of(
             call("selectMax", List.of(col("power"))),
@@ -355,7 +355,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectFunc聚合() {
+    public void mpjLambda_selectFunc聚合() throws Exception {
         // P09：selectFunc 模板 %s 列占位 + {0}/{1} 绑定参数 + func.accept/values + 别名
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "WalletWithdrawEntity", List.of(
             call("selectFunc", List.of(
@@ -388,7 +388,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectCollection子查询() {
+    public void mpjLambda_selectCollection子查询() throws Exception {
         // P06 子查询形态：selectAll + selectCollection(子表, VO::get集合, map.id/result)
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "OccupyRecordEntity", List.of(
             call("selectAll", List.of(val("OccupyRecordEntity"))),
@@ -416,7 +416,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectAssociation不产生额外SQL() {
+    public void mpjLambda_selectAssociation不产生额外SQL() throws Exception {
         // P08：selectAssociation 仅结果映射标记，leftJoin 已体现关联，SQL 不重复生成
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectAll", List.of(val("DeviceInfoEntity"))),
@@ -441,7 +441,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectCollection嵌套collection() {
+    public void mpjLambda_selectCollection嵌套collection() throws Exception {
         // P07：子映射内嵌套 collection → 子查询内递归 LEFT JOIN
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "StationPriceTaskRecordEntity", List.of(
             call("selectCollection", List.of(
@@ -468,7 +468,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_三参leftJoin() {
+    public void mpjLambda_三参leftJoin() throws Exception {
         // P01/P05：leftJoin(Class, 关联表字段, 主表字段) → ON alias.左 = t.右
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("leftJoin", List.of(
@@ -489,7 +489,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_四参带别名join() {
+    public void mpjLambda_四参带别名join() throws Exception {
         // P11：leftJoin(Class, "rel", 关联表字段, 主表字段) → 显式别名
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "InvoiceApplyEntity", List.of(
             call("innerJoin", List.of(
@@ -511,7 +511,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_lambdaOn条件() {
+    public void mpjLambda_lambdaOn条件() throws Exception {
         // P13：leftJoin(Class, on -> on.eq(关联表字段, 主表字段).eq(关联表字段, 值))
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "CouponEntity", List.of(
             call("leftJoin", List.of(
@@ -534,7 +534,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_表别名构造() {
+    public void mpjLambda_表别名构造() throws Exception {
         // C4/P11：new MPJLambdaWrapper<>(Class, "apply_info") → 主表别名 apply_info
         WrapperChain chain = chainAlias(WrapperType.MPJ_LAMBDA, "InvoiceApplyEntity", List.of(
             call("eq", List.of(col("id"), val("1")))
@@ -551,7 +551,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_orderBy字符串别名() {
+    public void mpjLambda_orderBy字符串别名() throws Exception {
         // P11：orderByAsc("auditAccount", Entity::getCreateTime) → 字符串别名排序
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "WalletWithdrawEntity", List.of(
             call("orderByAsc", List.of(
@@ -571,7 +571,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_join类型映射() {
+    public void mpjLambda_join类型映射() throws Exception {
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "E", List.of(
             call("innerJoin", List.of(
                 val("Foo"),
@@ -591,7 +591,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjQuery_selectIgnore从全列剔除字符串列() {
+    public void mpjQuery_selectIgnore从全列剔除字符串列() throws Exception {
         // T-M20-04：MPJQueryWrapper（全字符串）selectAll + selectIgnore("t.station_id", "t.share_scheme_id AS s")
         WrapperChain chain = chain(WrapperType.MPJ_QUERY, "DeviceInfoEntity", List.of(
             call("selectAll", List.of(val("DeviceInfoEntity"))),
@@ -611,7 +611,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambdaQuery_selectIgnore从全列剔除lambda列() {
+    public void mpjLambdaQuery_selectIgnore从全列剔除lambda列() throws Exception {
         // T-M20-04：MPJLambdaQueryWrapper（lambda 列）selectAll + selectIgnore(Entity::getX, "t.share_scheme_id")
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA_QUERY, "DeviceInfoEntity", List.of(
             call("selectAll", List.of(val("DeviceInfoEntity"))),
@@ -631,7 +631,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambdaQuery_lambda与stringQuery中间节点不破坏解析() {
+    public void mpjLambdaQuery_lambda与stringQuery中间节点不破坏解析() throws Exception {
         // T-M20-04：stringQuery()/lambda() 为链中间节点，转换器静默忽略
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA_QUERY, "DeviceInfoEntity", List.of(
             call("select", List.of(col("id"))),
@@ -653,7 +653,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjQuery_stringQuery与lambda中间节点不破坏解析() {
+    public void mpjQuery_stringQuery与lambda中间节点不破坏解析() throws Exception {
         // T-M20-04：MPJQueryWrapper 链含 stringQuery()/lambda() 中间节点
         WrapperChain chain = chain(WrapperType.MPJ_QUERY, "DeviceInfoEntity", List.of(
             call("select", List.of(val("t.id AS device_id"))),
@@ -679,7 +679,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjLambda_leftJoin实体引用携带逻辑删除列() {
+    public void mpjLambda_leftJoin实体引用携带逻辑删除列() throws Exception {
         // T-M20-05：EntityRefArg 形态（psi 解析实体）填充 logicDeleteColumn；类名字面量兜底形态无 TableInfo → 不填充
         TableInfo subTable = new TableInfo(
             "CouponEntity",
@@ -717,7 +717,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void update_setIfExists归一为set() {
+    public void update_setIfExists归一为set() throws Exception {
         // T-M21-09：setIfExists(col, val) → 归一为 set 处理渲染 SET 子句
         WrapperChain chain = chain(WrapperType.LAMBDA_UPDATE, "DeviceInfoEntity", List.of(
             call("setIfExists", List.of(col("station_id"), val("101"))),
@@ -739,7 +739,7 @@ public class UpdateDeleteMpjConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjLambda_allEq展开等值条件带主表前缀() {
+    public void mpjLambda_allEq展开等值条件带主表前缀() throws Exception {
         // T-M21-04：allEq(Map) 在 MPJ 联表上下文 → 键列带主表别名前缀
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("allEq", List.of(
@@ -761,7 +761,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectFilter过滤列带主表前缀() {
+    public void mpjLambda_selectFilter过滤列带主表前缀() throws Exception {
         // T-M21-01：selectFilter(Class, Predicate) 在 MPJ 上下文 → 过滤后列带主表别名前缀
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectFilter", List.of(
@@ -780,7 +780,7 @@ public class UpdateDeleteMpjConverterTest {
     }
 
     @Test
-    public void mpjLambda_selectFunc枚举形态带主表前缀() {
+    public void mpjLambda_selectFunc枚举形态带主表前缀() throws Exception {
         // T-M21-06：selectFunc(DefaultFuncEnum.SUM, col, alias) 在 MPJ 上下文 → SUM(t.col) AS alias
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectFunc", List.of(

@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -30,7 +30,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void myBatisLineOnlyMyBatisParserProduces() {
+    public void myBatisLineOnlyMyBatisParserProduces() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),
@@ -42,7 +42,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void hibernateLineOnlyHibernateParserProduces() {
+    public void hibernateLineOnlyHibernateParserProduces() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),
@@ -54,7 +54,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void mixedOutputEachProducesCorrectly() {
+    public void mixedOutputEachProducesCorrectly() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),
@@ -70,7 +70,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void interleavedOutputNotConfused() {
+    public void interleavedOutputNotConfused() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),
@@ -94,7 +94,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void multilineHibernateSummaryTruncatesAtFirstLineEnd() {
+    public void multilineHibernateSummaryTruncatesAtFirstLineEnd() throws Exception {
         String rawSql = "select\n            userentity0_.id as id1_2_,\n            userentity0_.username as username9_2_\n        from\n            user userentity0_\n        where\n            userentity0_.username=?";
         String restoredSql = "select\n            userentity0_.id as id1_2_,\n            userentity0_.username as username9_2_\n        from\n            user userentity0_\n        where\n            userentity0_.username='1'";
         LogSqlEntry multilineSql = new LogSqlEntry(rawSql, restoredSql, List.of(new LogSqlParam("1", "VARCHAR")), SqlSource.HIBERNATE);
@@ -111,13 +111,13 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void multilineHibernateShortSqlNotTruncated() {
+    public void multilineHibernateShortSqlNotTruncated() throws Exception {
         LogSqlEntry shortEntry = new LogSqlEntry("select 1", "select 1", List.of(), SqlSource.HIBERNATE);
         assertEquals("select 1", shortEntry.summary());
     }
 
     @Test
-    public void hibernateParserDisabledNotProduces() {
+    public void hibernateParserDisabledNotProduces() throws Exception {
         MyBatisLogParser myBatis = new MyBatisLogParser();
         HibernateLogParser hibernate = new HibernateLogParser();
         List<String> lines = List.of(
@@ -137,7 +137,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void noiseLinesAffectNeitherSide() {
+    public void noiseLinesAffectNeitherSide() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),
@@ -152,7 +152,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void interfereNativeMyBatisPreparingInHibernateCollectingNotPollute() {
+    public void interfereNativeMyBatisPreparingInHibernateCollectingNotPollute() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),
@@ -185,7 +185,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void interfereHibernateLineInMyBatisPrefixMatchedNotMisCollected() {
+    public void interfereHibernateLineInMyBatisPrefixMatchedNotMisCollected() throws Exception {
         MyBatisLogParser myBatis = new MyBatisLogParser();
         myBatis.feed("Preparing:");
         myBatis.feed("Hibernate: select user0_.id from users user0_ where user0_.id=?");
@@ -204,7 +204,7 @@ public class DualParserIntegrationTest {
     }
 
     @Test
-    public void interfereMpMyBatisInHibernateCollectingNotPollute() {
+    public void interfereMpMyBatisInHibernateCollectingNotPollute() throws Exception {
         List<LogSqlEntry> entries = feedDual(
                 new MyBatisLogParser(),
                 new HibernateLogParser(),

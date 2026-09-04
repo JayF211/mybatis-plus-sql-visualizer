@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.update;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
 /**
@@ -10,7 +10,7 @@ import org.junit.Test;
 public class UpdateManifestTest {
 
     @Test
-    public void parseFullValid() {
+    public void parseFullValid() throws Exception {
         UpdateManifest m = UpdateManifest.parseManifest("""
                 {
                   "version": "2026.8.15",
@@ -28,7 +28,7 @@ public class UpdateManifestTest {
     }
 
     @Test
-    public void parseMinimal() {
+    public void parseMinimal() throws Exception {
         UpdateManifest m = UpdateManifest.parseManifest("{\"version\":\"2026.8.14\",\"downloadUrl\":\"https://x/y.zip\"}");
         assertEquals("2026.8.14", m.version());
         assertEquals("https://x/y.zip", m.downloadUrl());
@@ -38,7 +38,7 @@ public class UpdateManifestTest {
     }
 
     @Test
-    public void missingRequiredFieldsIsNull() {
+    public void missingRequiredFieldsIsNull() throws Exception {
         assertNull(UpdateManifest.parseManifest("{\"downloadUrl\":\"https://x/y.zip\"}"));
         assertNull(UpdateManifest.parseManifest("{\"version\":\"2026.8.14\"}"));
         assertNull(UpdateManifest.parseManifest("{\"version\":\"\",\"downloadUrl\":\"https://x/y.zip\"}"));
@@ -46,14 +46,14 @@ public class UpdateManifestTest {
     }
 
     @Test
-    public void malformedJsonIsNull() {
+    public void malformedJsonIsNull() throws Exception {
         assertNull(UpdateManifest.parseManifest(""));
         assertNull(UpdateManifest.parseManifest("not json"));
         assertNull(UpdateManifest.parseManifest("{\"version\": 123}"));
     }
 
     @Test
-    public void blankOptionalFieldsBecomeNull() {
+    public void blankOptionalFieldsBecomeNull() throws Exception {
         UpdateManifest m = UpdateManifest.parseManifest(
                 "{\"version\":\"2026.8.14\",\"downloadUrl\":\"https://x/y.zip\",\"changeNotes\":\"  \",\"sinceBuild\":\"\"}");
         assertNull(m.changeNotes());
@@ -61,7 +61,7 @@ public class UpdateManifestTest {
     }
 
     @Test
-    public void sinceBuildWarn() {
+    public void sinceBuildWarn() throws Exception {
         UpdateManifest m = UpdateManifest.parseManifest("{\"version\":\"2026.8.14\",\"downloadUrl\":\"https://x/y.zip\",\"sinceBuild\":\"243\"}");
         assertEquals(false, m.warnsIncompatible(243));
         assertEquals(false, m.warnsIncompatible(244));

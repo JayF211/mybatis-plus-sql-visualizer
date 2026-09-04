@@ -48,7 +48,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
         List<EwPlaceholder> placeholders = XmlEwExpander.placeholders(xml);
         XmlEwResolver.CallFinder finder = method -> {
             List<PsiMethodCallExpression> calls =
-                    PsiTreeUtil.collectElementsOfType(serviceFile, PsiMethodCallExpression.class);
+                    new java.util.ArrayList<>(PsiTreeUtil.collectElementsOfType(serviceFile, PsiMethodCallExpression.class));
             return calls.stream()
                     .filter(e -> method.getName().equals(e.getMethodExpression().getReferenceName()))
                     .collect(Collectors.<PsiElement>toList());
@@ -76,7 +76,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
     """.stripIndent();
 
     @Test
-    public void testEwCustomSqlSegmentExpanded() {
+    public void testEwCustomSqlSegmentExpanded() throws Exception {
         myFixture.addFileToProject(
                 "UserMapper.java",
                 """
@@ -106,7 +106,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
                 """.stripIndent());
         // Light 测试注入轻量调用查找（生产走 ReferencesSearch，此处直接扫描调用表达式）
         PsiFile serviceFile = myFixture.getFile();
-        PreviewResult result = previewWithFinder(MAPPER_XML, "selectList", project, serviceFile);
+        PreviewResult result = previewWithFinder(MAPPER_XML, "selectList", getProject(), serviceFile);
         assertTrue("应展开 ew.customSqlSegment：" + result.getSql(), result.getSql().contains("WHERE (id = 1"));
         assertTrue("不应有占位求值为空提示：" + result.getWarning(),
                 result.getWarning() == null || !result.getWarning().contains("求值为空"));
@@ -114,7 +114,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testEwNoCallDegradesWithWarning() {
+    public void testEwNoCallDegradesWithWarning() throws Exception {
         // 接口存在但无调用处 → 降级提示（占位保持空）
         myFixture.addFileToProject(
                 "UserMapper.java",
@@ -127,26 +127,26 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
                 }
                 """.stripIndent());
         myFixture.configureByText("Unrelated.java", "public class Unrelated { int x = 1; }");
-        PreviewResult result = XmlPreviewService.INSTANCE.preview(MAPPER_XML, "selectList", project);
+        PreviewResult result = XmlPreviewService.INSTANCE.preview(MAPPER_XML, "selectList", getProject());
         assertTrue("应提示未找到调用：" + result.getWarning(),
                 result.getWarning() != null && result.getWarning().contains("未找到"));
         assertEquals("SELECT * FROM t_user", compact(result.getSql()));
     }
 
     @Test
-    public void testEwNoNamespaceDegrades() {
+    public void testEwNoNamespaceDegrades() throws Exception {
         String noNsXml = """
         <mapper>
           <select id="selectList">SELECT * FROM t WHERE ${ew.customSqlSegment}</select>
         </mapper>
         """.stripIndent();
-        PreviewResult result = XmlPreviewService.INSTANCE.preview(noNsXml, "selectList", project);
+        PreviewResult result = XmlPreviewService.INSTANCE.preview(noNsXml, "selectList", getProject());
         assertTrue("应提示缺 namespace：" + result.getWarning(),
                 result.getWarning() != null && result.getWarning().contains("namespace"));
     }
 
     @Test
-    public void testEwWithoutProjectKeepsOldBehavior() {
+    public void testEwWithoutProjectKeepsOldBehavior() throws Exception {
         // 无 project（纯文本）→ 不展开（占位求值为空提示）
         PreviewResult result = XmlPreviewService.INSTANCE.preview(MAPPER_XML, "selectList", null);
         assertTrue("无 project 时应保持占位求值为空提示",

@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.log;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JLabel;
@@ -54,7 +54,7 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test点击耗时排序按钮_列表按耗时降序_再次点击回正序() {
+    public void test点击耗时排序按钮_列表按耗时降序_再次点击回正序() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             manager.getEntries().addEntry(entry("SELECT a FROM t", 50L, 100L));
@@ -87,7 +87,7 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test无耗时信息_排序按钮隐藏() {
+    public void test无耗时信息_排序按钮隐藏() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             // 纯 SQL，无 p6spy/druid 格式、executionTimeMs 为 null → 无耗时信息
@@ -100,7 +100,7 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test注入慢查询_工具栏计数标签可见且含条数() {
+    public void test注入慢查询_工具栏计数标签可见且含条数() throws Exception {
         long saved = PluginSettings.getInstance().getState().getSlowQueryThresholdMs();
         PluginSettings.getInstance().getState().setSlowQueryThresholdMs(1000);
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
@@ -121,7 +121,7 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test无慢查询_工具栏计数标签隐藏() {
+    public void test无慢查询_工具栏计数标签隐藏() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             manager.getEntries().addEntry(entry("SELECT ok FROM t", 50L, 100L));

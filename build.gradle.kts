@@ -96,6 +96,8 @@ repositories {
 // 禁用后可绕开 JDK 环境下 instrumentCode 的 jrt 模块解析问题（Windows 中文环境实测报
 // "java.home/Packages does not exist"）。若后续引入 Java 源码或 GUI Forms 再评估开启。
 intellijPlatform {
+    // 临时：并行测试隔离沙盒（parallel_tasks 登记 port-sync-master-52），终验后还原删除
+    sandboxContainer.set(layout.buildDirectory.dir("portsync52"))
     instrumentCode = false
     // Windows 中文环境实测 buildSearchableOptions 报 "Locale must be default"（IDEA
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索
@@ -148,6 +150,16 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
 
 kotlin {
     jvmToolchain(17)
+}
+
+// 2026-09-04 移植同步修复：c100f1f 把 92 个 .kt 测试转成 .java 后仍放在 src/test/kotlin 目录，
+// 该目录默认只属于 Kotlin 测试源集，compileTestJava 恒为 NO-SOURCE——这批 Java 测试从此从未被
+// 编译执行（历史 1421/1426 全绿仅统计 .kt 测试类）。显式把该目录并入 Java 测试源集
+// （SourceDirectorySet 默认只收 *.java，与 Kotlin 编译互不干扰），恢复这批测试的执行。
+sourceSets {
+    test {
+        java.srcDir("src/test/kotlin")
+    }
 }
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败

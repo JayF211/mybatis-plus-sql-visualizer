@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import kotlin.Pair;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -28,7 +28,7 @@ public class SqlLogConsoleBridgeMarkerTest {
     }
 
     @Test
-    public void 标记行先于SQL_源码位置写入条目() {
+    public void 标记行先于SQL_源码位置写入条目() throws Exception {
         BridgeLineContext ctx = newCtx();
         // 标记行（拦截器打印）→ 不产生 SQL 条目，仅暂存
         assertTrue(SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|src/main/java/com/example/service/UserService.java|87", ctx, null, () -> {}).isEmpty());
@@ -43,7 +43,7 @@ public class SqlLogConsoleBridgeMarkerTest {
     }
 
     @Test
-    public void 无标记_源码位置为null_回退表名搜索() {
+    public void 无标记_源码位置为null_回退表名搜索() throws Exception {
         BridgeLineContext ctx = newCtx();
         SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM user WHERE id = 1", ctx, null, () -> {});
         List<LogSqlEntry> entries = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 1(Long)", ctx, null, () -> {});
@@ -53,7 +53,7 @@ public class SqlLogConsoleBridgeMarkerTest {
     }
 
     @Test
-    public void 标记后无SQL_暂存保留() {
+    public void 标记后无SQL_暂存保留() throws Exception {
         BridgeLineContext ctx = newCtx();
         SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|com/x.java|5", ctx, null, () -> {});
         assertEquals("com/x.java", ctx.pendingSource.getFirst());
@@ -61,13 +61,13 @@ public class SqlLogConsoleBridgeMarkerTest {
     }
 
     @Test
-    public void 普通SQL行不误判为标记() {
+    public void 普通SQL行不误判为标记() throws Exception {
         assertNull(SqlSourceMarker.parse("==>  Preparing: SELECT 1"));
         assertNull(SqlSourceMarker.parse("==>  Parameters: 1(Long)"));
     }
 
     @Test
-    public void 多语句各自绑定标记() {
+    public void 多语句各自绑定标记() throws Exception {
         BridgeLineContext ctx = newCtx();
         SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|a/A.java|1", ctx, null, () -> {});
         SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, () -> {});

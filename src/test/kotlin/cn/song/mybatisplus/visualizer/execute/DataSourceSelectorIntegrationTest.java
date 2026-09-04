@@ -20,11 +20,11 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.sql.dialects.SqlDialectMappings;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
-import org.junit.Assume.assumeTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import org.junit.Test;
 import org.w3c.dom.Document;
 import org.w3c.dom.Node;
@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 import java.util.function.BooleanSupplier;
 
@@ -126,7 +127,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     }
 
     private LocalDataSource createDataSource(DataSourceInfo info, String nameSuffix) {
-        LocalDataSourceManager mgr = LocalDataSourceManager.getInstance(project);
+        LocalDataSourceManager mgr = LocalDataSourceManager.getInstance(getProject());
         LocalDataSource ds = mgr.createEmpty();
         ds.setName("mpj_demo@localhost-itest" + nameSuffix);
         ds.setUrl(info.url);
@@ -140,7 +141,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
             // 反射失败忽略（包私有/不存在）
         }
         ds.resolveDriver();
-        ds.setWorkingDir(project.getBasePath());
+        ds.setWorkingDir(getProject().getBasePath());
         ds.setPasswordStorage(LocalDataSource.Storage.MEMORY);
         mgr.addDataSource(ds);
         new DbCredentialManager().setPassword(ds, new OneTimeString(getDbPassword()), LocalDataSource.Storage.MEMORY);
@@ -150,10 +151,10 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     private String introspectDataSource(LocalDataSource ds) {
         try {
             DatabaseConnectionManager mgr = DatabaseConnectionManager.getInstance();
-            Object builder = mgr.build(project, ds);
+            Object builder = mgr.build(getProject(), ds);
             builder.getClass().getMethod("setAskPassword", boolean.class).invoke(builder, false);
             Future<GuardedRef> future = ApplicationManager.getApplication().executeOnPooledThread(
-                    (Computable<GuardedRef>) () -> {
+                    (Callable<GuardedRef>) () -> {
                         EmptyProgressIndicator indicator = new EmptyProgressIndicator();
                         return ProgressManager.getInstance().runProcess((Computable<GuardedRef>) () -> {
                             try {
@@ -165,7 +166,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
                     });
             GuardedRef ref = future.get();
             if (ref == null) return "createBlocking future null";
-            boolean loaded = waitUntil(90_000, () -> !LocalDataSourceManager.getInstance(project).isLoading(ds));
+            boolean loaded = waitUntil(90_000, () -> !LocalDataSourceManager.getInstance(getProject()).isLoading(ds));
             ref.close();
             return loaded ? null : "isLoading 未结束（90s 超时）";
         } catch (Exception e) {
@@ -201,7 +202,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     }
 
     private PsiFile buildExecPsiFile(String sql) {
-        String base = project.getBasePath();
+        String base = getProject().getBasePath();
         if (base == null) return null;
         File dir = new File(base, ".idea/sql-visualizer/exec");
         dir.mkdirs();
@@ -213,7 +214,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
         }
         VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f);
         if (vf == null) return null;
-        SqlDialectMappings mappings = SqlDialectMappings.getInstance(project);
+        SqlDialectMappings mappings = SqlDialectMappings.getInstance(getProject());
         try {
             Method getAvailable = mappings.getClass().getMethod("getAvailableValues");
             Object valuesObj = getAvailable.invoke(mappings);
@@ -221,7 +222,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
                 @SuppressWarnings("unchecked")
                 List<Object> values = (List<Object>) valuesObj;
                 Object mysql = values.stream()
-                        .filter(it -> it instanceof Language && "MySQL".equalsIgnoreCase(((Language) it).getId()))
+                        .filter(it -> it instanceof Language && "MySQL".equalsIgnoreCase(((Language) it).getID()))
                         .findFirst().orElse(null);
                 if (mysql != null) {
                     Method setMapping = mappings.getClass().getMethod("setMapping", VirtualFile.class, Object.class);
@@ -231,7 +232,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
         } catch (Exception ignored) {
             // 反射失败忽略
         }
-        return ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
+        return ReadAction.compute(() -> PsiManager.getInstance(getProject()).findFile(vf));
     }
 
     private List<Object> discoverRunners(PsiFile psiFile, String sql) {
@@ -277,12 +278,12 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     // ───────────────────────────── 用例 ─────────────────────────────
 
     @Test
-    public void testNoDataSourceReportedAsUnavailable() {
+    public void testNoDataSourceReportedAsUnavailable() throws Exception {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable());
         boolean[] cbResult = {false};
         List<String> errors = new ArrayList<>();
         DataSourceSelector.prepareConsole(
-                project,
+                getProject(),
                 "SELECT 1",
                 null,
                 null,
@@ -296,7 +297,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSingleSourceDiscoverableByRunner() {
+    public void testSingleSourceDiscoverableByRunner() throws Exception {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable());
         DataSourceInfo info = readDemoDataSource("mpj_demo");
         assumeTrue("demo 项目数据源配置不可读: " + demoProjectDir.getAbsolutePath(), info != null);
@@ -314,7 +315,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMultiSourceDiscoveryReturnsAllRunners() {
+    public void testMultiSourceDiscoveryReturnsAllRunners() throws Exception {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable());
         DataSourceInfo info = readDemoDataSource("mpj_demo");
         assumeTrue("demo 项目数据源配置不可读: " + demoProjectDir.getAbsolutePath(), info != null);
@@ -335,7 +336,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testPrepareConsoleSilentlySelectsSingleSource() {
+    public void testPrepareConsoleSilentlySelectsSingleSource() throws Exception {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable());
         DataSourceInfo info = readDemoDataSource("mpj_demo");
         assumeTrue("demo 项目数据源配置不可读: " + demoProjectDir.getAbsolutePath(), info != null);
@@ -346,7 +347,7 @@ public class DataSourceSelectorIntegrationTest extends BasePlatformTestCase {
         boolean[] prepared = {false};
         List<String> errors = new ArrayList<>();
         DataSourceSelector.prepareConsole(
-                project,
+                getProject(),
                 "SELECT id, station_id FROM car_device_info WHERE id = 1",
                 null,
                 null,

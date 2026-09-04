@@ -18,10 +18,10 @@ import cn.song.mybatisplus.visualizer.reverse.SqlReverseResult;
 import cn.song.mybatisplus.visualizer.reverse.SelectColumn;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -99,12 +99,12 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void 无WHERE_空语句闭环() {
+    public void 无WHERE_空语句闭环() throws Exception {
         roundTrip(full(List.of(ID), null, List.of(), List.of(), List.of(), null));
     }
 
     @Test
-    public void 比较操作符闭环() {
+    public void 比较操作符闭环() throws Exception {
         roundTrip(stmt(List.of(
                 new Condition.Simple(col("a"), "=", lit("1"), null),
                 new Condition.Simple(col("b"), "!=", lit("'x'", "x"), null),
@@ -115,7 +115,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void 一元与集合条件闭环() {
+    public void 一元与集合条件闭环() throws Exception {
         roundTrip(stmt(List.of(
                 new Condition.Unary(col("a"), "IS NULL", null),
                 new Condition.Unary(col("b"), "IS NOT NULL", null),
@@ -126,7 +126,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void LIKE四位置闭环_正反向等价() {
+    public void LIKE四位置闭环_正反向等价() throws Exception {
         String sql1 = roundTrip(stmt(List.of(
                 new Condition.Like(col("a"), false, lit("'%abc%'", "abc"), LikePosition.ANYWHERE, null),
                 new Condition.Like(col("b"), false, lit("'abc%'", "abc"), LikePosition.RIGHT, null),
@@ -136,7 +136,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void LIKE降级Raw_原样透传闭环() {
+    public void LIKE降级Raw_原样透传闭环() throws Exception {
         String sql1 = SqlGenerator.INSTANCE.generate(stmt(List.of(new Condition.Raw("a LIKE 'a_b'", null))));
         SqlReverseResult parsed = SqlReverseParser.INSTANCE.parse(sql1);
         assertEquals("a LIKE 'a_b'", ((Condition.Raw) parsed.conditions().get(0)).getSqlText());
@@ -146,21 +146,21 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void ORDERBY与LIMIT闭环() {
+    public void ORDERBY与LIMIT闭环() throws Exception {
         String sql1 = roundTrip(stmt(
                 List.of(new Condition.Simple(col("a"), "=", lit("1"), null)),
                 List.of(new OrderByItem(col("create_time"), false), new OrderByItem(col("id"), true)),
-                new LimitClause(lit("10"))));
+                new LimitClause(null, lit("10"))));
         assertEquals("SELECT id\nFROM `user`\nWHERE a = 1\nORDER BY create_time DESC, id ASC\nLIMIT 10", sql1);
     }
 
     @Test
-    public void LIMIT偏移形态闭环() {
+    public void LIMIT偏移形态闭环() throws Exception {
         roundTrip(stmt(List.of(), List.of(), new LimitClause(lit("5"), lit("10"))));
     }
 
     @Test
-    public void 括号组_逐字符闭环() {
+    public void 括号组_逐字符闭环() throws Exception {
         String sql1 = roundTrip(stmt(List.of(
                 new Condition.Group(Connector.OR, List.of(
                         new Condition.Simple(col("a"), "=", lit("1"), null),
@@ -170,7 +170,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void AND组与NOT组_逐字符闭环() {
+    public void AND组与NOT组_逐字符闭环() throws Exception {
         String sql1 = roundTrip(stmt(List.of(
                 new Condition.Group(Connector.AND, List.of(
                         new Condition.Simple(col("a"), "=", lit("1"), null),
@@ -182,7 +182,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void 顶层OR_语义等价闭环() {
+    public void 顶层OR_语义等价闭环() throws Exception {
         SqlReverseResult parsed = SqlReverseParser.INSTANCE.parse("SELECT * FROM `user` WHERE a = 1 OR b = 2");
         Condition.Group group = (Condition.Group) parsed.conditions().get(0);
         assertEquals(Connector.OR, group.getConnector());
@@ -193,7 +193,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void 降级Raw_函数与子查询透传闭环() {
+    public void 降级Raw_函数与子查询透传闭环() throws Exception {
         for (String sqlText : List.of(
                 "SELECT * FROM `user` WHERE DATE_FORMAT(create_time, '%Y') = '2024'",
                 "SELECT * FROM `user` WHERE a IN (SELECT id FROM u)")) {
@@ -206,7 +206,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void 参数占位符_逐字符闭环() {
+    public void 参数占位符_逐字符闭环() throws Exception {
         String sql1 = SqlGenerator.INSTANCE.generate(stmt(List.of(
                 new Condition.Simple(col("a"), "=", new SqlValue.Placeholder("?"), null),
                 new Condition.In(col("b"), false, List.of(new SqlValue.Placeholder("?"), new SqlValue.Placeholder("?")), null))));
@@ -220,7 +220,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void LEFTJOIN单等值_逐字符闭环() {
+    public void LEFTJOIN单等值_逐字符闭环() throws Exception {
         List<JoinClause> joins = List.of(new JoinClause(JoinType.LEFT, "address", "t1",
                 List.of(new Condition.ColumnComparison(
                         new ColumnRef("t1", "user_id", null, null, null, null, null),
@@ -231,17 +231,17 @@ public class SqlToJavaRoundTripTest {
                 "t", joins));
         SqlReverseResult parsed = SqlReverseParser.INSTANCE.parse(sql1);
         assertEquals(1, parsed.joins().size());
-        assertEquals("address", parsed.joins().get(0).getTableName());
+        assertEquals("address", parsed.joins().get(0).tableName());
         SelectStatement rebuilt = full(List.of(ID), "t",
-                parsed.joins().stream().map(j -> new JoinClause(j.getType(), j.getTableName(),
-                        j.getAlias() == null ? "" : j.getAlias(), j.getOnConditions(), null, null, null, null))
+                parsed.joins().stream().map(j -> new JoinClause(j.type(), j.tableName(),
+                        j.alias() == null ? "" : j.alias(), j.onConditions(), null, null, null, null))
                         .collect(Collectors.toList()),
                 parsed.conditions(), List.of(), null);
         assertEquals(sql1, SqlGenerator.INSTANCE.generate(rebuilt));
     }
 
     @Test
-    public void demo_joinExtAndSubTable_子查询JOIN不报错() {
+    public void demo_joinExtAndSubTable_子查询JOIN不报错() throws Exception {
         String sql = "SELECT\n" +
                 "    t.id,\n" +
                 "    t.station_id,\n" +
@@ -259,14 +259,14 @@ public class SqlToJavaRoundTripTest {
                 "WHERE t.id = 1";
         SqlReverseResult result = SqlReverseParser.INSTANCE.parse(sql);
         assertEquals(2, result.joins().size());
-        String secondJoinName = result.joins().get(1).getTableName();
+        String secondJoinName = result.joins().get(1).tableName();
         assertTrue("第二个 JOIN 应为子查询, 实际: " + secondJoinName, secondJoinName.contains("(") && secondJoinName.contains("SELECT"));
         String code = JavaCodeGenerator.generate(result);
         assertTrue("生成代码应包含 leftJoin", code.contains("leftJoin"));
     }
 
     @Test
-    public void demo_selectJoinSubQuery_子查询JOIN不报错() {
+    public void demo_selectJoinSubQuery_子查询JOIN不报错() throws Exception {
         String sql = "SELECT t.id, t.name, addr.tel\n" +
                 "FROM user t\n" +
                 "LEFT JOIN (\n" +
@@ -275,14 +275,14 @@ public class SqlToJavaRoundTripTest {
                 "WHERE t.id = 1";
         SqlReverseResult result = SqlReverseParser.INSTANCE.parse(sql);
         assertEquals(1, result.joins().size());
-        String joinName = result.joins().get(0).getTableName();
+        String joinName = result.joins().get(0).tableName();
         assertTrue("JOIN 应为子查询, 实际: " + joinName, joinName.contains("(") && joinName.contains("SELECT"));
         String code = JavaCodeGenerator.generate(result);
         assertTrue("生成代码应包含 leftJoin", code.contains("leftJoin"));
     }
 
     @Test
-    public void demo_joinFromAndPage_FROM子查询不报错() {
+    public void demo_joinFromAndPage_FROM子查询不报错() throws Exception {
         String sql = "SELECT t.id, t.device_name\n" +
                 "FROM (\n" +
                 "    SELECT id, device_name FROM car_device_info WHERE id >= 0 LIMIT 100\n" +
@@ -295,7 +295,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void demo_selectJoinFrom_FROM子查询不报错() {
+    public void demo_selectJoinFrom_FROM子查询不报错() throws Exception {
         String sql = "SELECT t.id, t.name, addr.tel\n" +
                 "FROM (\n" +
                 "    SELECT id, name FROM user WHERE id >= 0 LIMIT 10\n" +
@@ -306,11 +306,11 @@ public class SqlToJavaRoundTripTest {
         String fromTable = result.tableName();
         assertTrue("FROM 子查询 tableName 应包含子查询文本, 实际: " + fromTable, fromTable.contains("(") && fromTable.contains("SELECT"));
         assertEquals(1, result.joins().size());
-        assertEquals("user_address", result.joins().get(0).getTableName());
+        assertEquals("user_address", result.joins().get(0).tableName());
     }
 
     @Test
-    public void demo_joinExtAndSubTable_ext条件生成4参lambda() {
+    public void demo_joinExtAndSubTable_ext条件生成4参lambda() throws Exception {
         String sql = "SELECT\n" +
                 "    t.id,\n" +
                 "    t.station_id,\n" +
@@ -342,7 +342,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void demo_selectJoinWithOnCondition_ext条件生成4参lambda() {
+    public void demo_selectJoinWithOnCondition_ext条件生成4参lambda() throws Exception {
         String sql = "SELECT t.id, t.name, t1.tel, t1.address\n" +
                 "FROM user t\n" +
                 "LEFT JOIN user_address t1 ON t1.user_id = t.id AND t1.status = 1\n" +
@@ -365,7 +365,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void demo_joinExtAndSubTable_MConsumer子查询形态() {
+    public void demo_joinExtAndSubTable_MConsumer子查询形态() throws Exception {
         String sql = "SELECT\n" +
                 "    t.id,\n" +
                 "    t.station_id,\n" +
@@ -383,12 +383,12 @@ public class SqlToJavaRoundTripTest {
                 "WHERE t.id = 1";
         SqlReverseResult result = SqlReverseParser.INSTANCE.parse(sql);
         assertEquals(2, result.joins().size());
-        assertNotNull("第二个 JOIN 应有 subQuery", result.joins().get(1).getSubQuery());
-        JoinSubQuery subQuery = result.joins().get(1).getSubQuery();
-        assertEquals("station_info", subQuery.getTableName());
-        assertEquals("tt", subQuery.getAlias());
+        assertNotNull("第二个 JOIN 应有 subQuery", result.joins().get(1).subQuery());
+        JoinSubQuery subQuery = result.joins().get(1).subQuery();
+        assertEquals("station_info", subQuery.tableName());
+        assertEquals("tt", subQuery.alias());
         assertFalse(subQuery.selectAll());
-        assertEquals(1, subQuery.getWhereConditions().size());
+        assertEquals(1, subQuery.whereConditions().size());
 
         JavaCodeGenerator.EntityTarget stationSub = new JavaCodeGenerator.EntityTarget("StationInfoEntity",
                 Map.of("id", "id", "station_id", "stationId", "station_name", "stationName", "merchant_id", "merchantId"));
@@ -403,7 +403,7 @@ public class SqlToJavaRoundTripTest {
     }
 
     @Test
-    public void demo_selectJoinSubQuery_MConsumer形态() {
+    public void demo_selectJoinSubQuery_MConsumer形态() throws Exception {
         String sql = "SELECT t.id, t.name, addr.tel\n" +
                 "FROM user t\n" +
                 "LEFT JOIN (\n" +
@@ -412,7 +412,7 @@ public class SqlToJavaRoundTripTest {
                 "WHERE t.id = 1";
         SqlReverseResult result = SqlReverseParser.INSTANCE.parse(sql);
         assertEquals(1, result.joins().size());
-        assertNotNull("应有 subQuery", result.joins().get(0).getSubQuery());
+        assertNotNull("应有 subQuery", result.joins().get(0).subQuery());
 
         JavaCodeGenerator.EntityTarget addressSub = new JavaCodeGenerator.EntityTarget("AddressDO",
                 Map.of("user_id", "userId", "tel", "tel", "address", "address", "status", "status"));

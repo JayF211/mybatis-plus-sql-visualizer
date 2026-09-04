@@ -81,9 +81,9 @@ public interface UserMapper {
     }
 
     @Test
-    public void testSelectSingleValue() {
+    public void testSelectSingleValue() throws Exception {
         myFixture.configureByText("UserMapper.java", MAPPER);
-        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectById"), project);
+        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectById"), getProject());
         assertNotNull(result);
         assertEquals("SELECT * FROM t_user WHERE id = ?", compact(result.getSql()));
         assertEquals(List.of("id"), result.getUnresolvedParams());
@@ -91,18 +91,18 @@ public interface UserMapper {
     }
 
     @Test
-    public void testSelectArrayJoinedWithSpace() {
+    public void testSelectArrayJoinedWithSpace() throws Exception {
         myFixture.configureByText("UserMapper.java", MAPPER);
-        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectByName"), project);
+        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectByName"), getProject());
         // 数组元素以单个空格连接（对齐 String.join(" ", value).trim()）
         assertEquals("SELECT * FROM t_user WHERE name = ?", compact(result.getSql()));
         assertEquals(List.of("name"), result.getUnresolvedParams());
     }
 
     @Test
-    public void testUpdateScriptDynamicTags() {
+    public void testUpdateScriptDynamicTags() throws Exception {
         myFixture.configureByText("UserMapper.java", MAPPER);
-        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("updateById"), project);
+        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("updateById"), getProject());
         assertEquals("UPDATE t_user SET name = ? WHERE id = ?", compact(result.getSql()));
         // @Param 名 + param1..N 注入 mock
         List<String> filtered = result.getXmlModel().getParamProps().stream()
@@ -115,25 +115,25 @@ public interface UserMapper {
     }
 
     @Test
-    public void testProviderConstantFolding() {
+    public void testProviderConstantFolding() throws Exception {
         myFixture.configureByText("UserMapper.java", MAPPER);
-        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectByStatus"), project);
+        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectByStatus"), getProject());
         assertNotNull(result);
         assertEquals("SELECT * FROM t_user WHERE status = ?", compact(result.getSql()));
         assertNull(result.getWarning());
     }
 
     @Test
-    public void testProviderDynamicSqlDegrades() {
+    public void testProviderDynamicSqlDegrades() throws Exception {
         myFixture.configureByText("UserMapper.java", MAPPER);
-        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectDynamic"), project);
+        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("selectDynamic"), getProject());
         // 含参数依赖的 return（"..." + id）→ 常量折叠失败 → 降级提示
         assertNotNull(result);
         assertTrue(result.getWarning() != null && result.getWarning().contains("无法静态预览"));
     }
 
     @Test
-    public void testLangCustomDriverWarning() {
+    public void testLangCustomDriverWarning() throws Exception {
         myFixture.configureByText(
                 "LangMapper.java",
                 """
@@ -147,12 +147,12 @@ public interface UserMapper {
                 }
                 """.stripIndent());
         // 默认 XML 语言驱动 → 无警告
-        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("one"), project);
+        PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("one"), getProject());
         assertEquals("SELECT 1", compact(result.getSql()));
     }
 
     @Test
-    public void testXmlPreviewResolvesStaticConstantFromProject() {
+    public void testXmlPreviewResolvesStaticConstantFromProject() throws Exception {
         // T-M25.2（用户实测）：bind 表达式 @类全名@静态字段——PSI 解析用户项目常量类字段初始值
         myFixture.configureByText(
                 "DicConstants.java",
@@ -171,7 +171,7 @@ public interface UserMapper {
           </select>
         </mapper>
         """.stripIndent();
-        PreviewResult result = XmlPreviewService.INSTANCE.preview(mapper, "s1", project);
+        PreviewResult result = XmlPreviewService.INSTANCE.preview(mapper, "s1", getProject());
         assertNull("静态常量解析成功不应有警告", result.getWarning());
         assertEquals("SELECT * FROM t WHERE status = ? AND type = ?", compact(result.getSql()));
         assertEquals(List.of("status", "type"), result.getUnresolvedParams());
@@ -180,7 +180,7 @@ public interface UserMapper {
     }
 
     @Test
-    public void testXmlPreviewStaticConstantUnresolvedWarning() {
+    public void testXmlPreviewStaticConstantUnresolvedWarning() throws Exception {
         myFixture.configureByText(
                 "DicConstants.java",
                 """
@@ -197,12 +197,12 @@ public interface UserMapper {
           </select>
         </mapper>
         """.stripIndent();
-        PreviewResult result = XmlPreviewService.INSTANCE.preview(mapper, "s1", project);
+        PreviewResult result = XmlPreviewService.INSTANCE.preview(mapper, "s1", getProject());
         assertTrue("字段不存在应提示", result.getWarning() != null && result.getWarning().contains("无法解析"));
     }
 
     @Test
-    public void testAnnotationCandidatesFromFile() {
+    public void testAnnotationCandidatesFromFile() throws Exception {
         // M26-A：文件级多注解候选——收集全部 SQL 注解（含 Provider 族），排除非 SQL 注解
         myFixture.configureByText(
                 "MultiMapper.java",
@@ -265,7 +265,7 @@ public interface MultiMapper {
 """.stripIndent();
 
     @Test
-    public void testAnnotationCandidatesInRangeCollectsSelectionAnnotations() {
+    public void testAnnotationCandidatesInRangeCollectsSelectionAnnotations() throws Exception {
         myFixture.configureByText("MultiMapper.java", SELECTION_MAPPER);
         PsiAnnotation first = annotationOf("selectById");
         PsiAnnotation last = annotationOf("updateName");
@@ -280,7 +280,7 @@ public interface MultiMapper {
     }
 
     @Test
-    public void testAnnotationCandidatesInRangeEmptyWhenSelectionContainsNoAnnotationStart() {
+    public void testAnnotationCandidatesInRangeEmptyWhenSelectionContainsNoAnnotationStart() throws Exception {
         myFixture.configureByText("MultiMapper.java", SELECTION_MAPPER);
         // 选择区从 selectById 注解内部开始（不含注解起始点）→ 无注解起始点（startOffset 判定与 Java 候选一致）
         PsiAnnotation first = annotationOf("selectById");
@@ -292,7 +292,7 @@ public interface MultiMapper {
     }
 
     @Test
-    public void testAnnotationCandidatesInRangeExcludesAnnotationAtSelectionEnd() {
+    public void testAnnotationCandidatesInRangeExcludesAnnotationAtSelectionEnd() throws Exception {
         myFixture.configureByText("MultiMapper.java", SELECTION_MAPPER);
         // until 语义：注解起始恰好等于选择区结束 → 不计入
         PsiAnnotation first = annotationOf("selectById");

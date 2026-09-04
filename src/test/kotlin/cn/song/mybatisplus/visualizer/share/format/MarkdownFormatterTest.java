@@ -13,7 +13,7 @@ import java.util.Map;
 public class MarkdownFormatterTest {
 
     @Test
-    public void format_普通SQL_生成代码块加元信息() {
+    public void format_普通SQL_生成代码块加元信息() throws Exception {
         String sql = "SELECT id, name FROM user WHERE name = 'zhangsan'";
         String md = MarkdownFormatter.format(sql, "user", "MySQL", "UserService.java:42");
         assertTrue(md.contains("```sql"));
@@ -25,7 +25,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void format_无参数SQL_省略参数对照() {
+    public void format_无参数SQL_省略参数对照() throws Exception {
         String sql = "SELECT id FROM user";
         String md = MarkdownFormatter.format(sql, List.of(), Map.of(), "user", "MySQL", null);
         assertTrue(md.contains("```sql"));
@@ -35,7 +35,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void format_有参数SQL_包含参数对照() {
+    public void format_有参数SQL_包含参数对照() throws Exception {
         String sql = "SELECT id FROM user WHERE name = ? AND age = ?";
         String md = MarkdownFormatter.format(sql, List.of("name", "age"),
                 Map.of("name", "zhangsan", "age", "25"), "user", "MySQL", null);
@@ -46,14 +46,14 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void format_SQL含特殊字符_原样保留() {
+    public void format_SQL含特殊字符_原样保留() throws Exception {
         String sql = "SELECT id FROM user WHERE name = 'O''Brien' -- comment";
         String md = MarkdownFormatter.format(sql, "user", "MySQL", null);
         assertTrue(md.contains("O''Brien"));
     }
 
     @Test
-    public void format_空source和dialect_省略对应元信息() {
+    public void format_空source和dialect_省略对应元信息() throws Exception {
         String sql = "SELECT id FROM user";
         String md = MarkdownFormatter.format(sql, "user", null, null);
         assertTrue(md.contains("```sql"));
@@ -61,7 +61,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_生成Markdown表格() {
+    public void formatAsTable_生成Markdown表格() throws Exception {
         String sql = "SELECT id FROM user WHERE name = ?";
         String md = MarkdownFormatter.formatAsTable(sql, List.of("name"),
                 Map.of("name", "zhangsan"), "user", "MySQL", "UserService.java:42");
@@ -73,7 +73,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_多行SQL_换行替换为br() {
+    public void formatAsTable_多行SQL_换行替换为br() throws Exception {
         String sql = "SELECT\n    t.id,\n    t.name\nFROM user";
         String md = MarkdownFormatter.formatAsTable(sql, List.of(), Map.of(), "user", "MySQL", null);
         // 换行应替换为 <br>，不应保留原 \n
@@ -85,7 +85,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_SQL含管道符_转义为竖线() {
+    public void formatAsTable_SQL含管道符_转义为竖线() throws Exception {
         String sql = "SELECT id FROM user WHERE a = 1 | b = 2";
         String md = MarkdownFormatter.formatAsTable(sql, List.of(), Map.of(), "user", "MySQL", null);
         // | 应被转义为 \|
@@ -93,7 +93,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_参数含管道符_转义为竖线() {
+    public void formatAsTable_参数含管道符_转义为竖线() throws Exception {
         String sql = "SELECT id FROM user WHERE name = ?";
         String md = MarkdownFormatter.formatAsTable(sql, List.of("name"),
                 Map.of("name", "a|b"), "user", "MySQL", null);
@@ -101,7 +101,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_多行SQL_表格结构完整() {
+    public void formatAsTable_多行SQL_表格结构完整() throws Exception {
         String sql = "SELECT\n    t.id,\n    t.name\nFROM `user` t\nWHERE t.id = 1";
         String md = MarkdownFormatter.formatAsTable(sql, List.of(), Map.of(), "user", "MySQL",
                 "UserService.java:42");
@@ -118,7 +118,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_六列表头_来源SQL参数表方言时间() {
+    public void formatAsTable_六列表头_来源SQL参数表方言时间() throws Exception {
         String sql = "SELECT id FROM user";
         String md = MarkdownFormatter.formatAsTable(sql, List.of(), Map.of(), "user", "MySQL",
                 "UserService.java:42");
@@ -140,7 +140,7 @@ public class MarkdownFormatterTest {
     }
 
     @Test
-    public void formatAsTable_无来源_显示横杠() {
+    public void formatAsTable_无来源_显示横杠() throws Exception {
         String sql = "SELECT id FROM user";
         String md = MarkdownFormatter.formatAsTable(sql, List.of(), Map.of(), "user", "MySQL", null);
         String dataRow = md.split("\n")[2];

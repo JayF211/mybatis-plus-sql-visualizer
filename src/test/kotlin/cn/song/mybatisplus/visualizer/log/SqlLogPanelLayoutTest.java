@@ -2,9 +2,9 @@ package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JButton;
@@ -27,7 +27,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        manager = new SqlLogManager(project);
+        manager = new SqlLogManager(getProject());
         manager.getEntries().setDedupeEnabled(false);
     }
 
@@ -42,8 +42,8 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void toolbarKeyComponentsPresentDefaultVisibilityCorrect() {
-        SqlLogPanel panel = new SqlLogPanel(project, manager);
+    public void toolbarKeyComponentsPresentDefaultVisibilityCorrect() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             waitForEdt();
             assertNotNull("SQL类型标签应存在", panel.getTypeFilterLabelForTest());
@@ -63,8 +63,8 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void injectDurationInfoSortsShows() {
-        SqlLogPanel panel = new SqlLogPanel(project, manager);
+    public void injectDurationInfoSortsShows() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             manager.getEntries().addEntry(new LogSqlEntry(
                     "1723456789012|1500|statement|SELECT * FROM t",
@@ -82,8 +82,8 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void narrowSidebarWrapLayoutTypeFilterNotClipped() {
-        SqlLogPanel panel = new SqlLogPanel(project, manager);
+    public void narrowSidebarWrapLayoutTypeFilterNotClipped() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             panel.applyTypeFilterForTest(Set.of(StatementType.SELECT, StatementType.UPDATE));
             waitForEdt();
@@ -113,11 +113,11 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void switchHistoryTabHistoryPanelAssembles() {
-        SqlLogPanel panel = new SqlLogPanel(project, manager);
+    public void switchHistoryTabHistoryPanelAssembles() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             waitForEdt();
-            File dir = new File(project.getBasePath() + File.separator + ".idea"
+            File dir = new File(getProject().getBasePath() + File.separator + ".idea"
                     + File.separator + SqlLogAutoSaver.DATA_DIR_NAME
                     + File.separator + "sql-history");
             dir.mkdirs();
@@ -126,7 +126,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                 w.write("-- source: A.java:1 | time: 1ms | 2026-08-31 17:30:00.000 --\nSELECT 1\n\n");
             }
             panel.dispose();
-            SqlLogPanel panel2 = new SqlLogPanel(project, manager);
+            SqlLogPanel panel2 = new SqlLogPanel(getProject(), manager);
             waitForEdt();
             int tabCount = (panel2.getComponent(0) instanceof JTabbedPane)
                     ? ((JTabbedPane) panel2.getComponent(0)).getTabCount() : -1;

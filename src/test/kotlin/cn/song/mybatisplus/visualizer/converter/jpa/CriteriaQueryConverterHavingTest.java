@@ -15,11 +15,11 @@ import cn.song.mybatisplus.visualizer.psi.jpa.JoinModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.PredicateModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.SelectColumn;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -63,7 +63,7 @@ public class CriteriaQueryConverterHavingTest {
     // GROUP BY 测试
 
     @Test
-    public void groupBy_singleColumn_generatesGroupByClause() {
+    public void groupBy_singleColumn_generatesGroupByClause() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(new SelectColumn("status", null, null)),
@@ -79,7 +79,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void groupBy_multipleColumns_generatesGroupByClause() {
+    public void groupBy_multipleColumns_generatesGroupByClause() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -96,7 +96,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void groupBy_fieldNameMapping_appliesSnakeCase() {
+    public void groupBy_fieldNameMapping_appliesSnakeCase() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -111,7 +111,7 @@ public class CriteriaQueryConverterHavingTest {
     // HAVING 测试
 
     @Test
-    public void having_singleCondition_generatesHavingClause() {
+    public void having_singleCondition_generatesHavingClause() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -127,7 +127,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void having_multipleConditions_andConnected() {
+    public void having_multipleConditions_andConnected() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -146,7 +146,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void noGroupBy_noHaving() {
+    public void noGroupBy_noHaving() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -162,7 +162,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void groupByWithoutHaving_generatesGroupByOnly() {
+    public void groupByWithoutHaving_generatesGroupByOnly() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -181,7 +181,7 @@ public class CriteriaQueryConverterHavingTest {
     // 聚合函数测试
 
     @Test
-    public void aggregateCount_star_generatesCountStar() {
+    public void aggregateCount_star_generatesCountStar() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(new SelectColumn(null, null, new AggregateInfo("COUNT", null, false))),
@@ -198,7 +198,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void aggregateSum_generatesSumFunction() {
+    public void aggregateSum_generatesSumFunction() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(new SelectColumn("age", null, new AggregateInfo("SUM", "age", false))),
@@ -214,7 +214,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void multiselect_withAggregateAndColumn() {
+    public void multiselect_withAggregateAndColumn() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(
@@ -237,7 +237,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void aggregate_fieldNameMapping_appliesSnakeCase() {
+    public void aggregate_fieldNameMapping_appliesSnakeCase() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(new SelectColumn("departmentId", null, new AggregateInfo("SUM", "departmentId", false))),
@@ -252,7 +252,7 @@ public class CriteriaQueryConverterHavingTest {
     // JOIN ON 条件推断测试
 
     @Test
-    public void join_withMatchingColumn_generatesOnCondition() {
+    public void join_withMatchingColumn_generatesOnCondition() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -271,7 +271,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void join_withoutMatchingColumn_infersOnCondition() {
+    public void join_withoutMatchingColumn_infersOnCondition() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -287,7 +287,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void join_defaultAlias_fromFieldName() {
+    public void join_defaultAlias_fromFieldName() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -300,7 +300,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void join_innerJoin_generatesInnerJoin() {
+    public void join_innerJoin_generatesInnerJoin() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(),
@@ -317,7 +317,7 @@ public class CriteriaQueryConverterHavingTest {
     // 综合场景测试
 
     @Test
-    public void groupByHavingAggregate_fullQuery() {
+    public void groupByHavingAggregate_fullQuery() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(
@@ -337,7 +337,7 @@ public class CriteriaQueryConverterHavingTest {
     }
 
     @Test
-    public void joinWithGroupByHaving_fullQuery() {
+    public void joinWithGroupByHaving_fullQuery() throws Exception {
         CriteriaQueryModel m = model(
                 "UserEntity",
                 List.of(

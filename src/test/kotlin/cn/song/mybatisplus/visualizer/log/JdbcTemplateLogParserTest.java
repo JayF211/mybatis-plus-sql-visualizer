@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -38,7 +38,7 @@ public class JdbcTemplateLogParserTest {
     // ========== 基础 SQL 行识别 ==========
 
     @Test
-    public void testPreparedStatementWith2Params() {
+    public void testPreparedStatementWith2Params() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             withPrefix("Executing prepared SQL query"),
@@ -61,7 +61,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNoParamPreparedStatement() {
+    public void testNoParamPreparedStatement() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             withPrefix("Executing prepared SQL statement [SELECT 1]"));
@@ -72,7 +72,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testExecutingPreparedSqlQueryNoSqlIgnored() {
+    public void testExecutingPreparedSqlQueryNoSqlIgnored() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             withPrefix("Executing prepared SQL query"));
@@ -80,7 +80,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testExecutingSqlQueryStringOverload() {
+    public void testExecutingSqlQueryStringOverload() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "2026-08-24 ... DEBUG ... Executing SQL query [SELECT id, name FROM users WHERE status = ?]",
@@ -92,7 +92,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testExecutingSqlUpdateStringOverload() {
+    public void testExecutingSqlUpdateStringOverload() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing SQL update [UPDATE users SET name = ? WHERE id = ?]",
@@ -105,7 +105,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testExecutingSqlBatchUpdate() {
+    public void testExecutingSqlBatchUpdate() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing SQL batch update [INSERT INTO logs (msg) VALUES (?)]",
@@ -116,7 +116,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testCallingStoredProcedure() {
+    public void testCallingStoredProcedure() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Calling stored procedure [{call sp_get_user(?)}]",
@@ -129,7 +129,7 @@ public class JdbcTemplateLogParserTest {
     // ========== 参数类型映射 ==========
 
     @Test
-    public void testNullParamValue() {
+    public void testNullParamValue() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM users WHERE deleted = ?]",
@@ -142,7 +142,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testQualifiedTypeInteger() {
+    public void testQualifiedTypeInteger() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE id = ?]",
@@ -153,7 +153,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testQualifiedTypeString() {
+    public void testQualifiedTypeString() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE name = ?]",
@@ -163,7 +163,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testQualifiedTypeBigDecimal() {
+    public void testQualifiedTypeBigDecimal() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE amount > ?]",
@@ -174,7 +174,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testQualifiedTypeTimestamp() {
+    public void testQualifiedTypeTimestamp() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE created > ?]",
@@ -187,7 +187,7 @@ public class JdbcTemplateLogParserTest {
     // ========== 参数排序 ==========
 
     @Test
-    public void testParamColumnIndexOutOfOrder() {
+    public void testParamColumnIndexOutOfOrder() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE a = ? AND b = ?]",
@@ -205,7 +205,7 @@ public class JdbcTemplateLogParserTest {
     // ========== 多条 SQL ==========
 
     @Test
-    public void testMultipleSqlConsecutive() {
+    public void testMultipleSqlConsecutive() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t1 WHERE id = ?]",
@@ -220,7 +220,7 @@ public class JdbcTemplateLogParserTest {
     // ========== 噪声隔离 ==========
 
     @Test
-    public void testMyBatisLineMixedIgnored() {
+    public void testMyBatisLineMixedIgnored() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "==>  Preparing: SELECT * FROM users WHERE id = ?",
@@ -229,7 +229,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testHibernateLineMixedIgnored() {
+    public void testHibernateLineMixedIgnored() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Hibernate: select user0_.id from users user0_ where user0_.id=?",
@@ -238,7 +238,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testPureNoiseLineIgnored() {
+    public void testPureNoiseLineIgnored() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "2026-08-24 10:00:00.000 INFO  [main] com.example.Service - Some business log");
@@ -248,7 +248,7 @@ public class JdbcTemplateLogParserTest {
     // ========== 边界场景 ==========
 
     @Test
-    public void testDisabledNoOutput() {
+    public void testDisabledNoOutput() throws Exception {
         JdbcTemplateLogParser p = new JdbcTemplateLogParser();
         p.setEnabled(false);
         feedAll(p, "Executing prepared SQL statement [SELECT * FROM t]");
@@ -256,7 +256,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testParamValueWithQuoteEscaped() {
+    public void testParamValueWithQuoteEscaped() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE name = ?]",
@@ -266,7 +266,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testParamValueWithBracketGreedy() {
+    public void testParamValueWithBracketGreedy() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing prepared SQL statement [SELECT * FROM t WHERE data = ?]",
@@ -276,7 +276,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testLongSqlTruncated() {
+    public void testLongSqlTruncated() throws Exception {
         String longSql = "x".repeat(25000);
         JdbcTemplateLogParser p = new JdbcTemplateLogParser();
         p.setMaxParseLength(100);
@@ -288,7 +288,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testParamLineWithoutSqlContextIgnored() {
+    public void testParamLineWithoutSqlContextIgnored() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Setting SQL statement parameter value: column index 1, parameter value [test], value class [java.lang.String], SQL type unknown");
@@ -296,7 +296,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testExecutingSqlStatementStringOverload() {
+    public void testExecutingSqlStatementStringOverload() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "Executing SQL statement [SELECT id FROM users]");
@@ -308,7 +308,7 @@ public class JdbcTemplateLogParserTest {
     // ========== NamedParameterJdbcTemplate 单行格式 ==========
 
     @Test
-    public void testNamedParameterBasicFormat() {
+    public void testNamedParameterBasicFormat() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "sql = SELECT \"owner\", \"modifiedTime\" FROM ipm_RunPlanProject WHERE ( (\"deleted\" = :param1) AND (\"runPlanId\" = :param2) )  , parameters = {param1=0, param2=b9bd4c306fee44bebc3dd6fe1b716357}");
@@ -322,7 +322,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNamedParameterWithLogPrefix() {
+    public void testNamedParameterWithLogPrefix() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "2026-08-24 15:46:42.444 Line:243 - sql = SELECT * FROM users WHERE id = :id AND name = :name , parameters = {id=42, name=Alice}");
@@ -332,7 +332,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNamedParameterNullValue() {
+    public void testNamedParameterNullValue() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "sql = SELECT * FROM t WHERE a = :p1 , parameters = {p1=null}");
@@ -341,7 +341,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNamedParameterValueWithEquals() {
+    public void testNamedParameterValueWithEquals() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "sql = SELECT * FROM t WHERE a = :p1 , parameters = {p1=a=b=c}");
@@ -350,7 +350,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNamedParameterValueWithComma() {
+    public void testNamedParameterValueWithComma() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "sql = SELECT * FROM t WHERE a = :p1 AND b = :p2 , parameters = {p1=a,b,c, p2=ok}");
@@ -360,7 +360,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNamedParameterEmptyParams() {
+    public void testNamedParameterEmptyParams() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "sql = SELECT 1 , parameters = {}");
@@ -370,7 +370,7 @@ public class JdbcTemplateLogParserTest {
     }
 
     @Test
-    public void testNamedParameterMultipleConsecutive() {
+    public void testNamedParameterMultipleConsecutive() throws Exception {
         List<LogSqlEntry> entries = feedAll(
             parser(),
             "sql = SELECT * FROM t1 WHERE id = :id , parameters = {id=1}",

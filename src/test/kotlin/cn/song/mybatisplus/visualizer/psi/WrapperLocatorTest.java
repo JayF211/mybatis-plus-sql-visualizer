@@ -22,10 +22,10 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.util.List;
 import java.util.stream.Collectors;
 import kotlin.Pair;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * WrapperLocator + EntityResolver + 全链路 PSI 集成测试（M1-02，F-01）。
@@ -44,7 +44,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
         public class Demo {
-            public void query() {
+            public void query() throws Exception {
                 LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
                     .eq(DeviceInfoEntity::getId, 1001L)
                     .isNotNull(DeviceInfoEntity::getStationId);
@@ -91,7 +91,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         return idx < 0 ? s : s.substring(0, idx);
     }
 
-    public void testChainStyleLocate() {
+    public void testChainStyleLocate() throws Exception {
         myFixture.configureByText("Demo.java", DEMO_CODE.stripIndent());
 
         WrapperChain chain = WrapperLocator.locate(anchor());
@@ -103,7 +103,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("eq", "isNotNull"), methodNames(chain));
     }
 
-    public void testChainStyleFullSql() {
+    public void testChainStyleFullSql() throws Exception {
         myFixture.configureByText("Demo.java", DEMO_CODE.stripIndent());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull(located);
@@ -122,14 +122,14 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 sql);
     }
 
-    public void testStepByStepLocate() {
+    public void testStepByStepLocate() throws Exception {
         myFixture.configureByText(
                 "Demo.java",
                 """
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>();
                         w.eq(DeviceInfoEntity::getId, 1001L);
                         w.orderByDesc(DeviceInfoEntity::getSort);
@@ -147,12 +147,12 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("eq", "orderByDesc"), methodNames(chain));
     }
 
-    public void testNotWrapperReturnsNull() {
+    public void testNotWrapperReturnsNull() throws Exception {
         myFixture.configureByText(
                 "Demo.java",
                 """
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         String s = "hello";
                     }
                 }
@@ -161,14 +161,14 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertNull("非 Wrapper 代码应返回 null", chain);
     }
 
-    public void testAndOrNestedLambda() {
+    public void testAndOrNestedLambda() throws Exception {
         myFixture.configureByText(
                 "Demo.java",
                 """
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
                             .eq(DeviceInfoEntity::getId, 1L)
                             .and(x -> x.eq(DeviceInfoEntity::getStationId, 101L)
@@ -195,7 +195,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
     // T-M29-02/03：分页消费识别（service.page / selectPage / 链式 page 终结点）
     // ------------------------------------------------------------------
 
-    public void testPageConsumptionLiteralLimit() {
+    public void testPageConsumptionLiteralLimit() throws Exception {
         // 用户实测形态：service.page(new Page<>(pageNum, pageSize), wrapper) —— 字面量直接计算 LIMIT
         myFixture.configureByText(
                 "Demo.java",
@@ -203,7 +203,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
                                 .eq(DeviceInfoEntity::getId, 1001L);
                         MyService.page(new Page<>(1, 10), w);
@@ -225,7 +225,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(new LimitClause(new SqlValue.Literal("0"), new SqlValue.Literal("10")), limit);
     }
 
-    public void testPageConsumptionVariableLimit() {
+    public void testPageConsumptionVariableLimit() throws Exception {
         // 运行时变量 pageNum/pageSize → 占位符（offset 来源标注计算公式，对齐 MP getOffet）
         myFixture.configureByText(
                 "Demo.java",
@@ -255,7 +255,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(new SqlValue.Placeholder("pageSize"), limit.getCount());
     }
 
-    public void testSelectPageInlineAndChainTerminalPage() {
+    public void testSelectPageInlineAndChainTerminalPage() throws Exception {
         // BaseMapper.selectPage 实参形态（内联 new）+ 链式 lambdaQuery()...page(Page) 终结点形态
         myFixture.configureByText(
                 "Demo.java",
@@ -263,7 +263,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         MyMapper.selectPage(new Page<>(2, 20), new LambdaQueryWrapper<DeviceInfoEntity>()
                                 .eq(DeviceInfoEntity::getId, 1L));
                         MyService.lambdaQuery().eq("a", "b").page(new Page<>(3, 30));
@@ -288,7 +288,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 chainLocated.getChain().getPageLimit());
     }
 
-    public void testVariableTracingInlinedValue() {
+    public void testVariableTracingInlinedValue() throws Exception {
         myFixture.configureByText(
                 "Demo.java",
                 """
@@ -320,7 +320,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("methodParam"), generated.getUnresolvedParams());
     }
 
-    public void testReplaceParamsOffKeepsVariablePlaceholder() {
+    public void testReplaceParamsOffKeepsVariablePlaceholder() throws Exception {
         // M14.6「替换 ? 占位符」开关关闭：可静态求值的变量也渲染为 ?；字面量恒内联
         myFixture.configureByText(
                 "Demo.java",
@@ -328,7 +328,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         Long deviceId = 1001L;
                         LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
                             .eq(DeviceInfoEntity::getId, deviceId)
@@ -353,14 +353,14 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("deviceId"), generated.getUnresolvedParams());
     }
 
-    public void testVariableTracingMultiLevel() {
+    public void testVariableTracingMultiLevel() throws Exception {
         myFixture.configureByText(
                 "Demo.java",
                 """
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         Long a = 1001L;
                         Long b = a;
                         LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
@@ -380,7 +380,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertTrue("应内联变量值 1001: " + sql, sql.contains("WHERE id = 1001"));
     }
 
-    public void testMpjLambdaQueryWrapperInlineNew() {
+    public void testMpjLambdaQueryWrapperInlineNew() throws Exception {
         // P17：list(new MPJLambdaQueryWrapper<X>().select(...).eq(...)) 内联构造（无变量）
         myFixture.configureByText(
                 "Demo.java",
@@ -388,7 +388,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.query.MPJLambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         subAccountStationService.list(new MPJLambdaQueryWrapper<SubAccountStationEntity>()
                             .select(SubAccountStationEntity::getStationId)
                             .eq(SubAccountStationEntity::getAccountId, 100L));
@@ -405,7 +405,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("select", "eq"), methodNames(located.getChain()));
     }
 
-    public void testStaticFactoryInlineGetOne() {
+    public void testStaticFactoryInlineGetOne() throws Exception {
         // 用户反馈：getOne(Wrappers.<T>lambdaQuery().select(多列).eq(列, dto.getPhone()))
         // 静态工厂调用不产生 new 表达式、也不绑定 Wrapper 变量，需按工厂链定位
         myFixture.configureByText(
@@ -414,7 +414,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         MerchantEntity merchant = merchantService.getOne(Wrappers.<MerchantEntity>lambdaQuery()
                                 .select(
                                         MerchantEntity::getId,
@@ -450,7 +450,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("select", "eq"), methodNames(located.getChain()));
     }
 
-    public void testStaticFactoryVariableHeld() {
+    public void testStaticFactoryVariableHeld() throws Exception {
         // 变量持有：LambdaQueryWrapper<T> w = Wrappers.<T>lambdaQuery().eq(...)
         // 工厂调用应从链中剔除，只保留 Wrapper 操作
         myFixture.configureByText(
@@ -459,7 +459,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         LambdaQueryWrapper<MerchantEntity> w = Wrappers.<MerchantEntity>lambdaQuery()
                                 .eq(MerchantEntity::getPhone, "13800000000");
                     }
@@ -477,7 +477,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("eq"), methodNames(located.getChain()));
     }
 
-    public void testServiceChainFactoryLocates() {
+    public void testServiceChainFactoryLocates() throws Exception {
         // T-M15-01 行为变更：`MyHelper.lambdaQuery()`（qualifier 任意引用，语法级匹配）按服务链识别。
         // 快速路径（gutter 锚点）零 resolve 约束下无法区分 service 引用与自定义工具类，宽松匹配是设计决策；
         // 真实项目 35 文件约 177 处 `service.lambdaQuery()` 依赖此识别。
@@ -485,7 +485,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 "Demo.java",
                 """
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         MyHelper.lambdaQuery().eq("a", "b");
                     }
                 }
@@ -495,13 +495,13 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(WrapperType.LAMBDA_QUERY, located.getChain().getWrapperType());
     }
 
-    public void testConsumerCallIsNotChainStart() {
+    public void testConsumerCallIsNotChainStart() throws Exception {
         // 消费调用（update/count 等）不是链起点（不在 serviceChainMethodNames）→ 不误识别
         myFixture.configureByText(
                 "Demo.java",
                 """
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         MyHelper.update(wrapper);
                         MyHelper.count(wrapper);
                     }
@@ -517,7 +517,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
     // T-M20-02：MPJ 官方工厂 JoinWrappers / 旧工厂 MPJWrappers
     // ------------------------------------------------------------------
 
-    public void testJoinWrappersLambdaFactoryLocatesWithSql() {
+    public void testJoinWrappersLambdaFactoryLocatesWithSql() throws Exception {
         // T-M20-02：JoinWrappers.lambda(Class) → MPJ_LAMBDA（qualifier 文本匹配，无 MPJ classpath 也生效）；
         // selectJoinList 消费 + selectAll + eq → 完整联表 SQL（主表默认别名 t）
         myFixture.configureByText(
@@ -526,7 +526,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.toolkit.JoinWrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.selectJoinList(UserEntity.class, JoinWrappers.lambda(UserEntity.class)
                                 .selectAll()
                                 .eq(UserEntity::getId, 1001L));
@@ -557,7 +557,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 SqlGenerator.INSTANCE.generate(statement));
     }
 
-    public void testJoinWrappersQueryFactoryLocates() {
+    public void testJoinWrappersQueryFactoryLocates() throws Exception {
         // T-M20-02 关键区分：JoinWrappers.query(Class) → MPJ_QUERY（而 Wrappers.query() → QUERY，见下方回归）
         myFixture.configureByText(
                 "Demo.java",
@@ -565,7 +565,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.toolkit.JoinWrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.selectJoinList(UserEntity.class, JoinWrappers.query(UserEntity.class)
                                 .eq(UserEntity::getId, 1001L));
                     }
@@ -582,7 +582,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals("UserEntity", chain.getEntityClass());
     }
 
-    public void testWrappersQueryStillMapsToQuery() {
+    public void testWrappersQueryStillMapsToQuery() throws Exception {
         // T-M20-02 回归：Wrappers.query() 仍为 QUERY（qualifier 区分后不受 JoinWrappers.query → MPJ_QUERY 影响）
         myFixture.configureByText(
                 "Demo.java",
@@ -590,7 +590,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.selectList(Wrappers.query().eq("id", 1001L));
                     }
                 }
@@ -601,7 +601,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(WrapperType.QUERY, chain.getWrapperType());
     }
 
-    public void testMpjWrappersOldFactoryLocates() {
+    public void testMpjWrappersOldFactoryLocates() throws Exception {
         // T-M20-02：旧工厂 MPJWrappers.lambdaJoin(Class) → MPJ_LAMBDA、queryJoin(Class) → MPJ_QUERY
         myFixture.configureByText(
                 "Demo.java",
@@ -609,7 +609,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.toolkit.MPJWrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.selectJoinList(UserEntity.class, MPJWrappers.lambdaJoin(UserEntity.class)
                                 .eq(UserEntity::getId, 1001L));
                         mapper.selectJoinList(UserEntity.class, MPJWrappers.queryJoin(UserEntity.class)
@@ -640,7 +640,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals("UserEntity", qj.getEntityClass());
     }
 
-    public void testJoinWrappersUpdateDeleteFactoryLocates() {
+    public void testJoinWrappersUpdateDeleteFactoryLocates() throws Exception {
         // T-M21-08（原 P3-01 提前）：JoinWrappers.update(Class) → UPDATE_JOIN、delete(Class) → DELETE_JOIN
         // （Wave 1 占位返回 null，本任务补齐类型映射）；消费方法 updateJoin/deleteJoin 不误识别为链起点
         myFixture.configureByText(
@@ -649,7 +649,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.toolkit.JoinWrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.deleteJoin(UserEntity.class, JoinWrappers.delete(UserEntity.class));
                         mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class));
                     }
@@ -676,7 +676,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(WrapperType.DELETE_JOIN, deleteChain.getWrapperType());
     }
 
-    public void testJoinWrappersUpdateFactoryChainRendersUpdateJoinSql() {
+    public void testJoinWrappersUpdateFactoryChainRendersUpdateJoinSql() throws Exception {
         // T-M21-08 全链路：JoinWrappers.update(Class).set(...).leftJoin(...).eq(...) →
         // UPDATE 联表 SQL（WrapperLocator → ConverterRegistry → SqlGenerator；
         // 实体经 inferEntityFromChain 文本兜底：UserEntity::getName 方法引用 → 类名 + getter 属性）
@@ -686,7 +686,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.toolkit.JoinWrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class)
                                 .set(UserEntity::getName, "x")
                                 .leftJoin(AddressEntity.class, AddressEntity::getUserId, UserEntity::getId)
@@ -724,7 +724,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 SqlGenerator.INSTANCE.generate(statement));
     }
 
-    public void testJoinWrappersUpdateAndNullTerminalStripped() {
+    public void testJoinWrappersUpdateAndNullTerminalStripped() throws Exception {
         // T-M21-08：UpdateJoin 链终结点 updateAndNull()（MPJ 1.4.10+）从链中剔除（非 Wrapper 操作）
         myFixture.configureByText(
                 "Demo.java",
@@ -732,7 +732,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.toolkit.JoinWrappers;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         mapper.updateJoin(entity, JoinWrappers.update(UserEntity.class)
                                 .set(UserEntity::getName, "x")
                                 .updateAndNull());
@@ -756,7 +756,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
     // T-M20-03：MPJLambdaWrapper 实体变量构造（菱形 + 实体实例实参）
     // ------------------------------------------------------------------
 
-    public void testMpjLambdaWrapperDiamondEntityVariable() {
+    public void testMpjLambdaWrapperDiamondEntityVariable() throws Exception {
         // T-M20-03：`new MPJLambdaWrapper<>(userEntity)` 菱形 + 实体变量实参（无泛型实参，
         // entityInfoFromType 解析不到实体）→ 从构造第一参表达式类型解析实体与表名
         myFixture.configureByText(
@@ -765,7 +765,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.wrapper.MPJLambdaWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         UserEntity userEntity = new UserEntity();
                         mapper.selectJoinList(UserEntity.class, new MPJLambdaWrapper<>(userEntity)
                                 .selectAll()
@@ -785,7 +785,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("selectAll", "eq"), methodNames(located.getChain()));
     }
 
-    public void testMpjLambdaWrapperDiamondEntityVariableWithAlias() {
+    public void testMpjLambdaWrapperDiamondEntityVariableWithAlias() throws Exception {
         // T-M20-03：(T entity, alias) 双参形态——实体变量 + 字符串别名（extractConstructorAlias 复用）：
         // 实体解析 + 主表别名 u 生效
         myFixture.configureByText(
@@ -794,7 +794,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.github.yulichang.wrapper.MPJLambdaWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         UserEntity userEntity = new UserEntity();
                         mapper.selectJoinList(UserEntity.class, new MPJLambdaWrapper<>(userEntity, "u")
                                 .selectAll()
@@ -827,7 +827,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
     // T-M23.7：任意位置触发（eq/list 调用处）定位增强 + 选择区扫描
     // ------------------------------------------------------------------
 
-    public void testChainStyleNewLocatesAtEqCall() {
+    public void testChainStyleNewLocatesAtEqCall() throws Exception {
         // 用户需求：光标在 eq 调用处（链中）也可触发——定位增强沿 parent 找最近调用、
         // 回溯链首（new wrapper 构造）构建链
         myFixture.configureByText(
@@ -836,7 +836,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1001L);
                     }
 
@@ -857,13 +857,13 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(List.of("eq"), methodNames(located.getChain()));
     }
 
-    public void testServiceChainLocatesAtListCall() {
+    public void testServiceChainLocatesAtListCall() throws Exception {
         // 用户需求：光标在 .list() 调用处（链尾）也可触发——回溯链首（服务工厂调用）构建链
         myFixture.configureByText(
                 "Demo.java",
                 """
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         DeviceInfoService service = new DeviceInfoService();
                         service.lambdaQuery().eq("station_id", 1001L).list();
                     }
@@ -882,7 +882,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals(WrapperType.LAMBDA_QUERY, located.getChain().getWrapperType());
     }
 
-    public void testPlainMethodChainNotMisdetected() {
+    public void testPlainMethodChainNotMisdetected() throws Exception {
         // 防误伤：普通方法调用（非 wrapper 链首）在任意位置 → null
         myFixture.configureByText(
                 "Demo.java",
@@ -900,7 +900,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertNull("普通方法实参处不应误定位", WrapperLocator.locateWithTable(arg));
     }
 
-    public void testSqlCandidatesInRangeCollectsAndDeduplicates() {
+    public void testSqlCandidatesInRangeCollectsAndDeduplicates() throws Exception {
         // 选择区扫描（T-M23.7 增量，用户实测）：wrapper 链首 + 批量方法调用（getById）都是候选——
         // 两个 wrapper 链首 + 1 个批量调用 + 普通调用（applyFilter 不计）
         myFixture.configureByText(
@@ -909,7 +909,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L).isNotNull(DeviceInfoEntity::getId);
                         DeviceInfoService service = new DeviceInfoService();
                         service.lambdaQuery().eq("station_id", 2L).list();
@@ -939,7 +939,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertEquals("getById", heads.get(2).getMethodExpression().getReferenceName());
     }
 
-    public void testChainHeadSummaryFormat() {
+    public void testChainHeadSummaryFormat() throws Exception {
         // 摘要：wrapper 链首 → `L{行号} {类型} {表名}`；批量方法调用 → `L{行号} {方法名}`
         myFixture.configureByText(
                 "Demo.java",
@@ -947,7 +947,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L);
                         DeviceInfoService service = new DeviceInfoService();
                         service.getById(2L);
@@ -976,7 +976,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
         assertTrue("批量摘要应以行号开头: " + batchSummary, batchSummary.startsWith("L"));
     }
 
-    public void testSqlCandidateLineTextAndLineOffsets() {
+    public void testSqlCandidateLineTextAndLineOffsets() throws Exception {
         // T-M23.8：代码行预览与定位——候选调用所在行完整文本 + 行首/行尾 offset
         myFixture.configureByText(
                 "Demo.java",
@@ -984,7 +984,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         new LambdaQueryWrapper<DeviceInfoEntity>().eq(DeviceInfoEntity::getId, 1L);
                         DeviceInfoService service = new DeviceInfoService();
                         service.getById(2L);

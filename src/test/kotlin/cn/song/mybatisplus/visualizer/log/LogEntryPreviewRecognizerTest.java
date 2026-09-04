@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -20,6 +20,10 @@ public class LogEntryPreviewRecognizerTest {
         return new LogSqlEntry(rawSql, restoredSql.isEmpty() ? rawSql : restoredSql, params);
     }
 
+    private LogSqlEntry entry(String rawSql, List<LogSqlParam> params) {
+        return entry(rawSql, params, "");
+    }
+
     private static List<Boolean> quotes(RecognizedLogPreview recognized) {
         return recognized.paramHints().stream().map(ParamHint::getQuote).collect(Collectors.toList());
     }
@@ -29,7 +33,7 @@ public class LogEntryPreviewRecognizerTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 占位符数与参数数一致时识别成功() {
+    public void 占位符数与参数数一致时识别成功() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE username = ? AND id = ?",
                 List.of(new LogSqlParam("admin", "String"), new LogSqlParam("10", "Long"))));
@@ -41,7 +45,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 类型映射为引号提示() {
+    public void 类型映射为引号提示() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ? AND b = ? AND c = ?",
                 List.of(
@@ -55,7 +59,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 无类型标注提示为_null_走面板启发式() {
+    public void 无类型标注提示为_null_走面板启发式() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ?",
                 List.of(new LogSqlParam("abc", null))));
@@ -63,7 +67,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 时间等未知类型标注保守引号() {
+    public void 时间等未知类型标注保守引号() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ? AND b = ?",
                 List.of(
@@ -77,7 +81,7 @@ public class LogEntryPreviewRecognizerTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 参数为空时回退() {
+    public void 参数为空时回退() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ?",
                 List.of()));
@@ -88,7 +92,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 参数多于占位符时回退() {
+    public void 参数多于占位符时回退() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ?",
                 List.of(new LogSqlParam("1", "Long"), new LogSqlParam("2", "Long"))));
@@ -96,7 +100,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 参数少于占位符时回退() {
+    public void 参数少于占位符时回退() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ? AND b = ?",
                 List.of(new LogSqlParam("1", "Long"))));
@@ -104,7 +108,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 无占位符无参数纯静态_SQL_回退() {
+    public void 无占位符无参数纯静态_SQL_回退() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT 1 FROM t",
                 List.of()));
@@ -116,7 +120,7 @@ public class LogEntryPreviewRecognizerTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void null_参数值预填空串() {
+    public void null_参数值预填空串() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ?",
                 List.of(new LogSqlParam(null, null))));
@@ -126,7 +130,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void 字符串字面量内问号计数与还原语义一致() {
+    public void 字符串字面量内问号计数与还原语义一致() throws Exception {
         // rawSql 中 `'what?'` 的 `?` 同语义计数（LogSqlRestorer 裸 indexOf 替换）——
         // 3 个 `?` 配 3 个参数 ⇔ 还原无残留，识别成功
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
@@ -140,7 +144,7 @@ public class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    public void IN_列表多占位符按序识别() {
+    public void IN_列表多占位符按序识别() throws Exception {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE id IN (?, ?, ?)",
                 List.of(new LogSqlParam("1", "Long"), new LogSqlParam("2", "Long"), new LogSqlParam("3", "Long"))));

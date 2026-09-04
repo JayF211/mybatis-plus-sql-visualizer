@@ -10,10 +10,10 @@ import cn.song.mybatisplus.visualizer.model.JoinType;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -56,7 +56,7 @@ public class DerivedQueryJoinConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void findByAddressCity_生成_LEFT_JOIN() {
+    public void findByAddressCity_生成_LEFT_JOIN() throws Exception {
         // 使用 PartTreeParser 解析
         PartTree partTree = PartTreeParser.parse("findByAddressCity");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
@@ -84,7 +84,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByAddressCityAndName_混合条件() {
+    public void findByAddressCityAndName_混合条件() throws Exception {
         PartTree partTree = PartTreeParser.parse("findByAddressCityAndName");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
 
@@ -101,7 +101,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByDepartmentName_单嵌套条件() {
+    public void findByDepartmentName_单嵌套条件() throws Exception {
         PartTree partTree = PartTreeParser.parse("findByDepartmentName");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
 
@@ -118,7 +118,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByAddressCityAndAddressStreet_同表多字段() {
+    public void findByAddressCityAndAddressStreet_同表多字段() throws Exception {
         PartTree partTree = PartTreeParser.parse("findByAddressCityAndAddressStreet");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
 
@@ -133,7 +133,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByAddressCityAndAddressCountry_同关联去重() {
+    public void findByAddressCityAndAddressCountry_同关联去重() throws Exception {
         PartTree partTree = PartTreeParser.parse("findByAddressCityAndAddressCountry");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
 
@@ -148,7 +148,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByAddressCityAndDepartmentName_多表_JOIN() {
+    public void findByAddressCityAndDepartmentName_多表_JOIN() throws Exception {
         PartTree partTree = PartTreeParser.parse("findByAddressCityAndDepartmentName");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
 
@@ -166,7 +166,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByCity_非嵌套属性不生成_JOIN() {
+    public void findByCity_非嵌套属性不生成_JOIN() throws Exception {
         PartTree partTree = PartTreeParser.parse("findByCity");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE_WITH_ASSOCIATIONS);
 
@@ -180,7 +180,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void findByUnknownField_关联未找到_降级() {
+    public void findByUnknownField_关联未找到_降级() throws Exception {
         // 创建一个 TableInfo，没有 address 关联
         TableInfo tableNoAssoc = new TableInfo(
                 "UserEntity",
@@ -207,7 +207,7 @@ public class DerivedQueryJoinConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void splitNestedPath_AddressCity() {
+    public void splitNestedPath_AddressCity() throws Exception {
         NestedPropertyPath result = PartTreeParser.splitNestedPath("AddressCity");
         assertEquals("address", result.getAssociationPath());
         assertEquals("City", result.getRemainingPath());
@@ -215,7 +215,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void splitNestedPath_Name() {
+    public void splitNestedPath_Name() throws Exception {
         NestedPropertyPath result = PartTreeParser.splitNestedPath("Name");
         assertNull(result.getAssociationPath());
         assertEquals("Name", result.getRemainingPath());
@@ -223,7 +223,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void splitNestedPath_DepartmentName() {
+    public void splitNestedPath_DepartmentName() throws Exception {
         NestedPropertyPath result = PartTreeParser.splitNestedPath("DepartmentName");
         assertEquals("department", result.getAssociationPath());
         assertEquals("Name", result.getRemainingPath());
@@ -231,7 +231,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void splitNestedPath_空字符串() {
+    public void splitNestedPath_空字符串() throws Exception {
         NestedPropertyPath result = PartTreeParser.splitNestedPath("");
         assertNull(result.getAssociationPath());
         assertEquals("", result.getRemainingPath());
@@ -239,7 +239,7 @@ public class DerivedQueryJoinConverterTest {
     }
 
     @Test
-    public void splitNestedPath_单字符() {
+    public void splitNestedPath_单字符() throws Exception {
         NestedPropertyPath result = PartTreeParser.splitNestedPath("A");
         assertNull(result.getAssociationPath());
         assertEquals("A", result.getRemainingPath());

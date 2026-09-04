@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertThrows;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -24,7 +24,7 @@ public class AnnotationSqlParserTest {
     }
 
     @Test
-    public void 非script纯文本_参数占位与映射() {
+    public void 非script纯文本_参数占位与映射() throws Exception {
         XmlPreviewModel model = parser.parse("SELECT * FROM t WHERE id = #{id}", XmlStatementKind.SELECT, List.of());
         RenderedXmlSql rendered = model.renderSql();
         assertEquals("SELECT * FROM t WHERE id = ?", compact(rendered.sql()));
@@ -35,20 +35,20 @@ public class AnnotationSqlParserTest {
     }
 
     @Test
-    public void 非script纯文本_尖括号无需转义() {
+    public void 非script纯文本_尖括号无需转义() throws Exception {
         XmlPreviewModel model = parser.parse("SELECT * FROM t WHERE age < 18 AND id = #{id}", XmlStatementKind.SELECT, List.of());
         assertEquals("SELECT * FROM t WHERE age < 18 AND id = ?", compact(model.renderSql().sql()));
     }
 
     @Test
-    public void 非script纯文本_dollar根变量占位求值() {
+    public void 非script纯文本_dollar根变量占位求值() throws Exception {
         // 根变量统一占位 "1"（对齐 ContextMap → _parameter fallback）
         XmlPreviewModel model = parser.parse("SELECT ${cols} FROM t", XmlStatementKind.SELECT, List.of());
         assertEquals("SELECT 1 FROM t", compact(model.renderSql().sql()));
     }
 
     @Test
-    public void 非script纯文本_dollar属性链求值为空时提示() {
+    public void 非script纯文本_dollar属性链求值为空时提示() throws Exception {
         XmlPreviewModel model = parser.parse("SELECT ${x.y} FROM t", XmlStatementKind.SELECT, List.of());
         RenderedXmlSql rendered = model.renderSql();
         assertEquals("SELECT FROM t", compact(rendered.sql()));
@@ -57,7 +57,7 @@ public class AnnotationSqlParserTest {
     }
 
     @Test
-    public void script_动态标签全兼容() {
+    public void script_动态标签全兼容() throws Exception {
         XmlPreviewModel model = parser.parse(
                 "<script>SELECT * FROM t" +
                         "<where><if test=\"a != null\">AND a = #{a}</if></where>" +
@@ -78,7 +78,7 @@ public class AnnotationSqlParserTest {
     }
 
     @Test
-    public void script_条件开关关闭分支() {
+    public void script_条件开关关闭分支() throws Exception {
         XmlPreviewModel model = parser.parse(
                 "<script>SELECT * FROM t<if test=\"a != null\"> WHERE a = 1</if></script>",
                 XmlStatementKind.SELECT,
@@ -89,7 +89,7 @@ public class AnnotationSqlParserTest {
     }
 
     @Test
-    public void 参数名mock注入_param1可求值() {
+    public void 参数名mock注入_param1可求值() throws Exception {
         // MyBatis 多参数 Map 键：@Param 名/实际名 + param1..N
         XmlPreviewModel model = parser.parse(
                 "SELECT * FROM t WHERE a = ${param1} AND b = ${id}",
@@ -100,19 +100,19 @@ public class AnnotationSqlParserTest {
     }
 
     @Test
-    public void kind透传() {
+    public void kind透传() throws Exception {
         XmlPreviewModel model = parser.parse("UPDATE t SET a = 1", XmlStatementKind.UPDATE, List.of());
         assertEquals(XmlStatementKind.UPDATE, model.getKind());
     }
 
     @Test
-    public void script非良构报错() {
+    public void script非良构报错() throws Exception {
         assertThrows(XmlParseException.class, () ->
                 parser.parse("<script><if test=\"a\">x</script>", XmlStatementKind.SELECT, List.of()));
     }
 
     @Test
-    public void script内include报未知元素_与MyBatis一致() {
+    public void script内include报未知元素_与MyBatis一致() throws Exception {
         assertThrows(XmlScriptException.class, () ->
                 parser.parse("<script>SELECT * FROM t <include refid=\"cols\"/></script>", XmlStatementKind.SELECT, List.of()));
     }

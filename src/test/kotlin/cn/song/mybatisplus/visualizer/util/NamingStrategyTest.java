@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.util;
 
-import org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
 /**
@@ -9,7 +9,7 @@ import org.junit.Test;
 public class NamingStrategyTest {
 
     @Test
-    public void 驼峰转下划线_常规场景() {
+    public void 驼峰转下划线_常规场景() throws Exception {
         assertEquals("share_scheme_id", NamingStrategy.INSTANCE.toSnakeCase("shareSchemeId"));
         assertEquals("id", NamingStrategy.INSTANCE.toSnakeCase("id"));
         assertEquals("car_device_info", NamingStrategy.INSTANCE.toSnakeCase("carDeviceInfo"));
@@ -17,7 +17,7 @@ public class NamingStrategyTest {
     }
 
     @Test
-    public void 驼峰转下划线_边界() {
+    public void 驼峰转下划线_边界() throws Exception {
         // 空串与单字符
         assertEquals("", NamingStrategy.INSTANCE.toSnakeCase(""));
         assertEquals("a", NamingStrategy.INSTANCE.toSnakeCase("a"));

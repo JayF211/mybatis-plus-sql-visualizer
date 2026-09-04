@@ -20,9 +20,9 @@ import cn.song.mybatisplus.visualizer.psi.jpa.OrderByModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.PredicateModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.SelectColumn;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -117,7 +117,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void equal_生成等值条件() {
+    public void equal_生成等值条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -136,7 +136,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void notEqual_生成不等条件() {
+    public void notEqual_生成不等条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -151,7 +151,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void greaterThan_生成大于条件() {
+    public void greaterThan_生成大于条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -165,7 +165,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void greaterThanOrEqualTo_生成大于等于条件() {
+    public void greaterThanOrEqualTo_生成大于等于条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -178,7 +178,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void lessThan_生成小于条件() {
+    public void lessThan_生成小于条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -191,7 +191,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void lessThanOrEqualTo_生成小于等于条件() {
+    public void lessThanOrEqualTo_生成小于等于条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -208,7 +208,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void isNull_生成IS_NULL条件() {
+    public void isNull_生成IS_NULL条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -222,7 +222,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void isNotNull_生成IS_NOT_NULL条件() {
+    public void isNotNull_生成IS_NOT_NULL条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -239,7 +239,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void between_生成BETWEEN条件() {
+    public void between_生成BETWEEN条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -261,7 +261,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void like_生成LIKE条件() {
+    public void like_生成LIKE条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -279,7 +279,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void notLike_生成NOT_LIKE条件() {
+    public void notLike_生成NOT_LIKE条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -299,7 +299,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void in_生成IN条件() {
+    public void in_生成IN条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -317,7 +317,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void notIn_生成NOT_IN条件() {
+    public void notIn_生成NOT_IN条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -337,7 +337,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void and_生成AND组() {
+    public void and_生成AND组() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -352,7 +352,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void or_生成OR组() {
+    public void or_生成OR组() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -369,7 +369,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void not_生成NOT包装条件() {
+    public void not_生成NOT包装条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -389,7 +389,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void orderByAsc_生成ASC排序() {
+    public void orderByAsc_生成ASC排序() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -407,7 +407,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void orderByDesc_生成DESC排序() {
+    public void orderByDesc_生成DESC排序() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -426,7 +426,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void multiselect_生成指定列() {
+    public void multiselect_生成指定列() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(new SelectColumn("id", null, null), new SelectColumn("username", null, null)),
@@ -444,7 +444,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void 空selectColumns_生成全列SELECT() {
+    public void 空selectColumns_生成全列SELECT() throws Exception {
         // 空 selectColumns + 带列映射的表 → 生成器展开为全列
         CriteriaQueryModel model = model(
                 "UserEntity",
@@ -461,7 +461,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void 空selectColumns_无列映射时生成降级SELECT() {
+    public void 空selectColumns_无列映射时生成降级SELECT() throws Exception {
         // 空 selectColumns + 无列映射的表 → 列名来自 table.allColumnNames（空）
         // 此时生成器会渲染空列列表，验证不抛异常即可
         TableInfo emptyTable = new TableInfo(
@@ -485,7 +485,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void join_生成LEFT_JOIN子句() {
+    public void join_生成LEFT_JOIN子句() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -506,7 +506,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void raw条件_生成Raw占位() {
+    public void raw条件_生成Raw占位() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -526,7 +526,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 完整CriteriaQueryModel_生成正确SQL() {
+    public void 完整CriteriaQueryModel_生成正确SQL() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(new SelectColumn("username", null, null), new SelectColumn("status", null, null)),
@@ -549,7 +549,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 字符串值_正确处理引号() {
+    public void 字符串值_正确处理引号() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -562,7 +562,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void 数值值_去除类型后缀() {
+    public void 数值值_去除类型后缀() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -575,7 +575,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void null值_转为NULL() {
+    public void null值_转为NULL() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -588,7 +588,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void 变量引用_转为占位符() {
+    public void 变量引用_转为占位符() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -605,7 +605,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 无实体类信息_按命名策略推断表名() {
+    public void 无实体类信息_按命名策略推断表名() throws Exception {
         CriteriaQueryModel model = new CriteriaQueryModel(
                 "OrderEntity", null, List.of(), List.of(simple("status", "=", "1")),
                 List.of(), List.of(), List.of(), List.of(), null);

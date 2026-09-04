@@ -10,10 +10,10 @@ import com.intellij.psi.xml.XmlTag;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.util.ArrayList;
 import java.util.List;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * SqlPreviewDialog 弹窗测试（T-M23.6）：底部按钮区（执行 SQL / 复制 SQL / 关闭）+
@@ -32,21 +32,21 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
                 List.of("id"));
     }
 
-    public void testClosePanelCallbackInjectedToPanel() {
+    public void testClosePanelCallbackInjectedToPanel() throws Exception {
         // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」
         // → 回调 dispose 关闭预览弹窗）；面板持有与对话框一致的当前结果
         SqlPreviewDialog dialog = new SqlPreviewDialog(getProject(), previewResult());
         SqlPreviewPanel panel = dialog.panelForTest();
         assertNotNull("弹窗应注入关闭面板回调", panel);
-        if (panel.getOnClosePanelRequested() != null) {
-            panel.getOnClosePanelRequested().run();
+        if (panel.onClosePanelRequested != null) {
+            panel.onClosePanelRequested.run();
         }
         assertNotNull("dispose 调用后对话框仍可引用（回调链路不抛异常）", dialog);
         // 释放编辑器（面板生命周期约定，同 SqlPreviewPanelTest 的 clear 收尾）
         dialog.panelForTest().clear();
     }
 
-    public void testDisplayTextTwoLineWithTruncationAndEscape() {
+    public void testDisplayTextTwoLineWithTruncationAndEscape() throws Exception {
         // T-M23.8：列表项显示文本纯函数——两行布局（摘要 + 代码行缩进）、
         // 超长行截断 80 字符 + 省略号、& < > HTML 转义防破坏布局
         String shortText = SqlSelectionDialog.displayText("L3 LAMBDA_QUERY  tbl", "service.getById(id);");
@@ -64,7 +64,7 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
         assertFalse("原始 < 不应直接出现在 HTML 中", escaped.contains("a<b"));
     }
 
-    public void testDialogRendersPrecomputedTextsWithoutPsiResolve() {
+    public void testDialogRendersPrecomputedTextsWithoutPsiResolve() throws Exception {
         // T-M23.8 增量修复（EDT 慢操作回归防护）：弹窗构造只渲染调用方后台预计算的显示文本——
         // 若构造内仍从 PSI 重新计算摘要（旧实现，EDT 上会被 2025.3+ SlowOperations 守卫禁止），
         // 传入的预计算文本会被覆盖，逐项断言即失败
@@ -103,7 +103,7 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
         }
     }
 
-    public void testDialogRendersXmlTagCandidates() {
+    public void testDialogRendersXmlTagCandidates() throws Exception {
         // T-M25-01 泛化回归补测（T-M29.6）：XmlTag 语句候选同样走预计算文本渲染——
         // 弹窗构造不触碰 PSI，XML 语句候选与 Wrapper 候选行为一致（选择区/全文件候选共用）
         myFixture.configureByText(

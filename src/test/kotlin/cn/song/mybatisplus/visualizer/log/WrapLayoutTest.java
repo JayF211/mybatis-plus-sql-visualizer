@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -33,7 +33,7 @@ public class WrapLayoutTest {
     }
 
     @Test
-    public void 窄宽度换行时高度大于单行高度_控件不被裁掉() {
+    public void 窄宽度换行时高度大于单行高度_控件不被裁掉() throws Exception {
         Dimension singleRow = preferredSizeAt(400); // 足够宽 → 单行
         Dimension multiRow = preferredSizeAt(130);   // 窄 → 3 个 60 宽组件折成 2 行
 
@@ -46,7 +46,7 @@ public class WrapLayoutTest {
     }
 
     @Test
-    public void 组件全部可见且计入多行宽度() {
+    public void 组件全部可见且计入多行宽度() throws Exception {
         Dimension dim = preferredSizeAt(130);
         // 两行各最多 2 个 60 宽组件 + hgap(4)：单行宽度约 60+4+60=124
         assertTrue("多行布局宽度应能容纳至少两个组件(>120)", dim.width > 120);

@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JLabel;
@@ -40,7 +40,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test二级条目_空耗时空源码_渲染为HTML不崩溃() {
+    public void test二级条目_空耗时空源码_渲染为HTML不崩溃() throws java.io.IOException {
         String text = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
         assertTrue("应渲染为 HTML", text.startsWith("<html>"));
         assertTrue("含 SQL 关键字", text.contains("SELECT"));
@@ -49,14 +49,14 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test二级条目_含源码位置_渲染源码段() {
+    public void test二级条目_含源码位置_渲染源码段() throws java.io.IOException {
         String text = renderSql(sqlEntry("SELECT 1", "UserMapper.java", 12, 3L));
         assertTrue("应渲染耗时 3ms", text.contains("3ms"));
         assertTrue("应渲染源码 UserMapper.java:12", text.contains("UserMapper.java:12"));
     }
 
     @Test
-    public void test二级条目_特殊字符SQL被转义() {
+    public void test二级条目_特殊字符SQL被转义() throws java.io.IOException {
         String text = renderSql(sqlEntry("SELECT * FROM t WHERE a < 5 AND b > 3", null, 0, null));
         assertTrue("小于号转义", text.contains("&lt;"));
         assertTrue("大于号转义", text.contains("&gt;"));
@@ -64,7 +64,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test二级条目_超长SQL渲染不异常() {
+    public void test二级条目_超长SQL渲染不异常() throws java.io.IOException {
         StringBuilder sb = new StringBuilder();
         for (int i = 1; i <= 200; i++) {
             if (i > 1) sb.append(", ");
@@ -76,7 +76,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test一级文件_大小为0字节显示0B() {
+    public void test一级文件_大小为0字节显示0B() throws java.io.IOException {
         File f = File.createTempFile("hist0", ".sql");
         f.deleteOnExit();
         String text = renderFile(f, 0);
@@ -86,7 +86,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test一级文件_大小恰为1KB显示1点0KB() {
+    public void test一级文件_大小恰为1KB显示1点0KB() throws java.io.IOException {
         File f = File.createTempFile("hist1k", ".sql");
         f.deleteOnExit();
         Files.write(f.toPath(), new byte[1024]);
@@ -96,7 +96,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test一级文件_大小恰为1MB显示1点0MB() {
+    public void test一级文件_大小恰为1MB显示1点0MB() throws java.io.IOException {
         File f = File.createTempFile("hist1m", ".sql");
         f.deleteOnExit();
         Files.write(f.toPath(), new byte[1024 * 1024]);
@@ -106,7 +106,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test一级文件_渲染含文件名与条数() {
+    public void test一级文件_渲染含文件名与条数() throws java.io.IOException {
         File f = File.createTempFile("my-history-file", ".sql");
         f.deleteOnExit();
         Files.write(f.toPath(), new byte[500]);

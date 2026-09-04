@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
 import java.util.Map;
@@ -21,7 +21,7 @@ public class ParamHistoryCacheTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void testSaveAndRecallRoundTrip() {
+    public void testSaveAndRecallRoundTrip() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache();
         cache.clear();
         String key = cache.computeKey("user", "SELECT * FROM user WHERE id = ?");
@@ -33,7 +33,7 @@ public class ParamHistoryCacheTest {
     }
 
     @Test
-    public void testRecallMissReturnsNull() {
+    public void testRecallMissReturnsNull() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache();
         cache.clear();
         String key = cache.computeKey("user", "SELECT * FROM user");
@@ -45,7 +45,7 @@ public class ParamHistoryCacheTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void testLruEvictionOverMaxSize() {
+    public void testLruEvictionOverMaxSize() throws Exception {
         // 小上限便于测试淘汰（上限 3）
         ParamHistoryCache cache = new ParamHistoryCache(3);
         cache.clear();
@@ -65,7 +65,7 @@ public class ParamHistoryCacheTest {
     }
 
     @Test
-    public void testLruAccessOrderUpdate() {
+    public void testLruAccessOrderUpdate() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache(3);
         cache.clear();
         for (int i = 0; i < 3; i++) cache.save("tbl:" + i, Map.of("id", String.valueOf(i)));
@@ -82,7 +82,7 @@ public class ParamHistoryCacheTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void testComputeKeyConsistency() {
+    public void testComputeKeyConsistency() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache();
         cache.clear();
         String key1 = cache.computeKey("user", "SELECT * FROM user WHERE id = ?");
@@ -91,7 +91,7 @@ public class ParamHistoryCacheTest {
     }
 
     @Test
-    public void testComputeKeyDifferentSql() {
+    public void testComputeKeyDifferentSql() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache();
         cache.clear();
         String key1 = cache.computeKey("user", "SELECT * FROM user WHERE id = ?");
@@ -100,7 +100,7 @@ public class ParamHistoryCacheTest {
     }
 
     @Test
-    public void testComputeKeyNullTableNameReturnsNull() {
+    public void testComputeKeyNullTableNameReturnsNull() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache();
         cache.clear();
         assertNull("无表名应返回 null（不缓存）", cache.computeKey(null, "SELECT 1"));
@@ -112,7 +112,7 @@ public class ParamHistoryCacheTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void testFingerprintStability() {
+    public void testFingerprintStability() throws Exception {
         String sql = "SELECT * FROM user WHERE id = ?";
         String fp1 = ParamHistoryCache.fingerprint(sql);
         String fp2 = ParamHistoryCache.fingerprint(sql);
@@ -121,7 +121,7 @@ public class ParamHistoryCacheTest {
     }
 
     @Test
-    public void testFingerprintDifferentSql() {
+    public void testFingerprintDifferentSql() throws Exception {
         String fp1 = ParamHistoryCache.fingerprint("SELECT * FROM user");
         String fp2 = ParamHistoryCache.fingerprint("SELECT * FROM order");
         assertFalse("不同 SQL → 不同指纹", fp1.equals(fp2));
@@ -132,7 +132,7 @@ public class ParamHistoryCacheTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void testClearEmptiesCache() {
+    public void testClearEmptiesCache() throws Exception {
         ParamHistoryCache cache = new ParamHistoryCache();
         cache.clear();
         String key = cache.computeKey("user", "SELECT * FROM user");
@@ -148,7 +148,7 @@ public class ParamHistoryCacheTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void testPersistenceRoundTrip() {
+    public void testPersistenceRoundTrip() throws Exception {
         ParamHistoryCache cache1 = new ParamHistoryCache();
         cache1.clear();
         String key = cache1.computeKey("user", "SELECT * FROM user WHERE id = ?");

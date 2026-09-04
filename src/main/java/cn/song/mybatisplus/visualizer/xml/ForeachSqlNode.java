@@ -60,6 +60,22 @@ public final class ForeachSqlNode implements SqlNode {
         return item;
     }
 
+    public String getIndex() {
+        return index;
+    }
+
+    public String getOpen() {
+        return open;
+    }
+
+    public String getClose() {
+        return close;
+    }
+
+    public String getSeparator() {
+        return separator;
+    }
+
     @Override
     public boolean apply(DynamicContext context) {
         Map<String, Object> bindings = context.getBindings();

@@ -4,9 +4,9 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.openapi.project.Project;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import kotlin.Pair;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.lang.reflect.Method;
@@ -126,7 +126,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testStartCaptureKeepsCapturingOffWhenAttachFails() {
+    public void testStartCaptureKeepsCapturingOffWhenAttachFails() throws Exception {
         // Option A：无控制台 + attach 失败仍进入 armed 态（capturing=true），用户可重试
         FakeBridge bridge = new FakeBridge(false, false);
         SqlLogManager manager = managerWith(bridge);
@@ -137,7 +137,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testStartCaptureSkipsWithoutMainConsole() {
+    public void testStartCaptureSkipsWithoutMainConsole() throws Exception {
         // Option A：无控制台时立即进入 armed 态（capturing=true, isWaitingForConsole=true）
         FakeBridge bridge = new FakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
@@ -151,7 +151,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testStartCaptureSetsCapturingWhenAttachSucceeds() {
+    public void testStartCaptureSetsCapturingWhenAttachSucceeds() throws Exception {
         SqlLogManager manager = managerWith(new FakeBridge(true, true));
         manager.startCapture();
         assertTrue("attach 成功且存在主控制台才进入捕捉态", manager.isCapturing());
@@ -162,7 +162,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     // F-44：自动打开独立窗口功能已移除，相关测试删除。
 
     @Test
-    public void testDisposeResetsCapturing() {
+    public void testDisposeResetsCapturing() throws Exception {
         SqlLogManager manager = managerWith(new FakeBridge(true, true));
         manager.startCapture();
         assertTrue("startCapture 后应进入捕捉态", manager.isCapturing());
@@ -173,7 +173,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     // ===== T-13：手动捕捉无需等待项目运行（userRequestedCapture 意图传递） =====
 
     @Test
-    public void testT01_ManualCaptureWithoutConsole_EnterWaitingState() {
+    public void testT01_ManualCaptureWithoutConsole_EnterWaitingState() throws Exception {
         FakeBridge bridge = new FakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture(true);
@@ -184,7 +184,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT02_WaitingConsoleAppeared_AutoEntersCapture() {
+    public void testT02_WaitingConsoleAppeared_AutoEntersCapture() throws Exception {
         MutableFakeBridge bridge = new MutableFakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture(true);
@@ -198,7 +198,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT03_WaitingManualStop_ClearsAllFlags() {
+    public void testT03_WaitingManualStop_ClearsAllFlags() throws Exception {
         FakeBridge bridge = new FakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture(true);
@@ -210,7 +210,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT04_AutoStartSetting_UnaffectedByNewFeature() {
+    public void testT04_AutoStartSetting_UnaffectedByNewFeature() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean old = settings.getState().getLogAutoCaptureOnStart();
         try {
@@ -232,7 +232,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT05_HasConsoleManualCapture_DirectCapture() {
+    public void testT05_HasConsoleManualCapture_DirectCapture() throws Exception {
         FakeBridge bridge = new FakeBridge(true, true);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture(true);
@@ -242,7 +242,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT06_DisposeWhileWaiting_ClearsAllFlags() {
+    public void testT06_DisposeWhileWaiting_ClearsAllFlags() throws Exception {
         FakeBridge bridge = new FakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture(true);
@@ -256,7 +256,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     // ===== 项目停止后回到 armed 态，重启自动恢复捕捉 =====
 
     @Test
-    public void testT07_ProjectStop_GoesBackToArmedState() {
+    public void testT07_ProjectStop_GoesBackToArmedState() throws Exception {
         MutableFakeBridge bridge = new MutableFakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         // 点击捕捉 → armed
@@ -275,7 +275,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT08_ProjectRestart_AutoResumesCapture() {
+    public void testT08_ProjectRestart_AutoResumesCapture() throws Exception {
         MutableFakeBridge bridge = new MutableFakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         // 点击捕捉 → armed → 项目启动 → 捕捉
@@ -295,7 +295,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT09_AfterManualStop_NoAutoCapture() {
+    public void testT09_AfterManualStop_NoAutoCapture() throws Exception {
         MutableFakeBridge bridge = new MutableFakeBridge(true, false);
         SqlLogManager manager = managerWith(bridge);
         // 点击捕捉 → armed → 项目启动 → 捕捉
@@ -314,7 +314,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     // ===== 自动启动（logAutoCaptureOnStart=true）行为 =====
 
     @Test
-    public void testT10_AutoStart_ProjectStop_StopsCompletely() {
+    public void testT10_AutoStart_ProjectStop_StopsCompletely() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean old = settings.getState().getLogAutoCaptureOnStart();
         try {
@@ -340,7 +340,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT11_AutoStart_ProjectRestart_AutoCapturesAgain() {
+    public void testT11_AutoStart_ProjectRestart_AutoCapturesAgain() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean old = settings.getState().getLogAutoCaptureOnStart();
         try {
@@ -367,7 +367,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT12_ManualAndAutoStart_ProjectStop_StopsCompletely() {
+    public void testT12_ManualAndAutoStart_ProjectStop_StopsCompletely() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean old = settings.getState().getLogAutoCaptureOnStart();
         try {
@@ -392,7 +392,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT13_AutoStart_UserStop_SuppressedPreventsRestart() {
+    public void testT13_AutoStart_UserStop_SuppressedPreventsRestart() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
         boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
@@ -444,7 +444,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT15_StopCapture_stopsPolling() {
+    public void testT15_StopCapture_stopsPolling() throws Exception {
         SpyBridge bridge = new SpyBridge(true);
         SqlLogManager manager = managerWith(bridge);
         // 启动捕捉 → 启动轮询
@@ -493,7 +493,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     // ===== BUG FIX：buffer.paused 安全网 =====
 
     @Test
-    public void testT18_StopCapture_setsBufferPaused() {
+    public void testT18_StopCapture_setsBufferPaused() throws Exception {
         SpyBridge bridge = new SpyBridge(true);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture();
@@ -504,7 +504,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT19_PausedBuffer_rejectsAddEntry() {
+    public void testT19_PausedBuffer_rejectsAddEntry() throws Exception {
         SpyBridge bridge = new SpyBridge(true);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture();
@@ -519,7 +519,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT20_StartCapture_clearsPaused() {
+    public void testT20_StartCapture_clearsPaused() throws Exception {
         SpyBridge bridge = new SpyBridge(true);
         SqlLogManager manager = managerWith(bridge);
         manager.startCapture();
@@ -533,7 +533,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     // ===== BUG FIX：onConsoleAppeared 尊重 suppressed 标志 =====
 
     @Test
-    public void testT21_SuppressedPreventsAutoRestart() {
+    public void testT21_SuppressedPreventsAutoRestart() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
         boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
@@ -553,7 +553,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT22_NotSuppressed_allowsAutoRestart() {
+    public void testT22_NotSuppressed_allowsAutoRestart() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
         boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
@@ -573,7 +573,7 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testT23_ArmedState_allowsAutoRestart() {
+    public void testT23_ArmedState_allowsAutoRestart() throws Exception {
         PluginSettings settings = PluginSettings.getInstance();
         boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
         try {

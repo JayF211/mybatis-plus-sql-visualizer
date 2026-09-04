@@ -1,10 +1,10 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
@@ -32,7 +32,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 写入单条生成正确格式() {
+    public void 写入单条生成正确格式() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         String dir = tempDir();
         saver.configure("", "test-$yyyy-MM-dd$.sql", dir);
@@ -51,7 +51,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 写入头使用双横线注释() {
+    public void 写入头使用双横线注释() throws Exception {
         // F-44-2：注释头部必须为 `--` 起结（标准 SQL 单行注释），不再用 `---`
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         String dir = tempDir();
@@ -69,7 +69,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 多条追加不覆盖() {
+    public void 多条追加不覆盖() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         String dir = tempDir();
         saver.configure("", "test.sql", dir);
@@ -86,7 +86,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 文件名模板解析() {
+    public void 文件名模板解析() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         saver.configure("", "sql-history-$yyyy-MM-dd$.sql", "/tmp");
         String resolved = saver.resolveFileName();
@@ -98,7 +98,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 文件名模板解析_冒号替换为横线() {
+    public void 文件名模板解析_冒号替换为横线() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         saver.configure("", "log-$HH:mm:ss$.sql", "/tmp");
         String resolved = saver.resolveFileName();
@@ -108,7 +108,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 文件名模板解析_未知占位符原样保留() {
+    public void 文件名模板解析_未知占位符原样保留() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         saver.configure("", "log-$unknown$-$yyyy$.sql", "/tmp");
         String resolved = saver.resolveFileName();
@@ -117,7 +117,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 默认目录解析() {
+    public void 默认目录解析() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         saver.configure("", "test.sql", "/home/user/myproject");
         String resolved = saver.resolveFileName();
@@ -125,7 +125,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 自定义路径() {
+    public void 自定义路径() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         String customDir = tempDir();
         saver.configure(customDir, "custom.sql", "/other/path");
@@ -138,7 +138,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void 无效路径不抛异常() {
+    public void 无效路径不抛异常() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         // 使用包含空字符的路径（Windows/macOS 均不允许路径含 \0）
         saver.configure("invalid\u0000path", "test.sql", null);
@@ -150,7 +150,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void close后写入安全() {
+    public void close后写入安全() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         String dir = tempDir();
         saver.configure("", "test.sql", dir);
@@ -162,7 +162,7 @@ public class SqlLogAutoSaverTest {
     }
 
     @Test
-    public void configure关闭旧文件重置状态() {
+    public void configure关闭旧文件重置状态() throws Exception {
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         String dir1 = tempDir();
         String dir2 = tempDir();

@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
 import java.util.List;
@@ -11,62 +11,62 @@ import java.util.List;
 public class LogStatementClassifierTest {
 
     @Test
-    public void SELECT标准大写() {
+    public void SELECT标准大写() throws Exception {
         assertEquals(StatementType.SELECT, LogStatementClassifier.classify("SELECT * FROM user"));
     }
 
     @Test
-    public void SELECT小写() {
+    public void SELECT小写() throws Exception {
         assertEquals(StatementType.SELECT, LogStatementClassifier.classify("select * from user"));
     }
 
     @Test
-    public void SELECT前导空白() {
+    public void SELECT前导空白() throws Exception {
         assertEquals(StatementType.SELECT, LogStatementClassifier.classify("\n  SELECT * FROM user"));
     }
 
     @Test
-    public void WITH_CTE() {
+    public void WITH_CTE() throws Exception {
         assertEquals(StatementType.SELECT, LogStatementClassifier.classify("WITH t AS (SELECT 1) SELECT * FROM t"));
     }
 
     @Test
-    public void INSERT() {
+    public void INSERT() throws Exception {
         assertEquals(StatementType.INSERT, LogStatementClassifier.classify("INSERT INTO user VALUES (1, 'a')"));
     }
 
     @Test
-    public void UPDATE() {
+    public void UPDATE() throws Exception {
         assertEquals(StatementType.UPDATE, LogStatementClassifier.classify("UPDATE user SET name = 'x'"));
     }
 
     @Test
-    public void DELETE() {
+    public void DELETE() throws Exception {
         assertEquals(StatementType.DELETE, LogStatementClassifier.classify("DELETE FROM user WHERE id = 1"));
     }
 
     @Test
-    public void MERGE归OTHER() {
+    public void MERGE归OTHER() throws Exception {
         assertEquals(StatementType.OTHER, LogStatementClassifier.classify("MERGE INTO target USING source"));
     }
 
     @Test
-    public void TRUNCATE归OTHER() {
+    public void TRUNCATE归OTHER() throws Exception {
         assertEquals(StatementType.OTHER, LogStatementClassifier.classify("TRUNCATE TABLE user"));
     }
 
     @Test
-    public void 空串归OTHER() {
+    public void 空串归OTHER() throws Exception {
         assertEquals(StatementType.OTHER, LogStatementClassifier.classify(""));
     }
 
     @Test
-    public void 仅空白归OTHER() {
+    public void 仅空白归OTHER() throws Exception {
         assertEquals(StatementType.OTHER, LogStatementClassifier.classify("   "));
     }
 
     @Test
-    public void 按条目分类取restoredSql() {
+    public void 按条目分类取restoredSql() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
             "Preparing: SELECT 1",
             "SELECT * FROM t",

@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -30,7 +30,7 @@ public class HibernateLogParserTest {
     // ========== 基础 SQL 行识别 ==========
 
     @Test
-    public void Hibernate_前缀_select_语句() {
+    public void Hibernate_前缀_select_语句() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select user0_.id as id1_0_0_, user0_.name as name2_0_0_ from users user0_ where user0_.id=?");
@@ -42,7 +42,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void Hibernate_前缀_update_语句() {
+    public void Hibernate_前缀_update_语句() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: update users set name=? where id=?");
@@ -51,7 +51,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void Hibernate_前缀_insert_语句() {
+    public void Hibernate_前缀_insert_语句() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: insert into users (name, email, id) values (?, ?, ?)");
@@ -60,7 +60,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void Hibernate_前缀_delete_语句() {
+    public void Hibernate_前缀_delete_语句() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: delete from users where id=?");
@@ -71,7 +71,7 @@ public class HibernateLogParserTest {
     // ========== 注释前缀 SQL 行 ==========
 
     @Test
-    public void 注释前缀_load_Entity() {
+    public void 注释前缀_load_Entity() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* load com.example.User */ select user0_.id as id1_0_0_, user0_.name as name2_0_0_ from users user0_ where user0_.id=?");
@@ -81,7 +81,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 注释前缀_criteria_query() {
+    public void 注释前缀_criteria_query() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* criteria query */ select order0_.id as id1_0_0_, order0_.amount as amount2_0_0_ from orders order0_ where order0_.user_id=? and order0_.status=?");
@@ -90,7 +90,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 注释前缀_update_Entity() {
+    public void 注释前缀_update_Entity() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* update com.example.User */ update users set name=?, email=? where id=?");
@@ -99,7 +99,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 注释前缀含复杂注释内容() {
+    public void 注释前缀含复杂注释内容() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* com.example.repository.UserRepository.findById */ select user0_.id as id1_0_0_ from users user0_ where user0_.id=?");
@@ -110,7 +110,7 @@ public class HibernateLogParserTest {
     // ========== 参数绑定 ==========
 
     @Test
-    public void 单参数_BIGINT() {
+    public void 单参数_BIGINT() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select user0_.id from users user0_ where user0_.id=?",
@@ -123,7 +123,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 多参数混合类型() {
+    public void 多参数混合类型() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select user0_.id, user0_.name from users user0_ where user0_.id=? and user0_.name=?",
@@ -139,7 +139,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void VARCHAR_参数含单引号() {
+    public void VARCHAR_参数含单引号() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where name=?",
@@ -149,7 +149,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void TIMESTAMP_参数() {
+    public void TIMESTAMP_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where created_at > ?",
@@ -159,7 +159,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void INTEGER_参数() {
+    public void INTEGER_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where age between ? and ?",
@@ -170,7 +170,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void DOUBLE_参数() {
+    public void DOUBLE_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from products where price < ?",
@@ -180,7 +180,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void BOOLEAN_参数() {
+    public void BOOLEAN_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where active = ?",
@@ -190,7 +190,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void null_参数值() {
+    public void null_参数值() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where email = ?",
@@ -202,7 +202,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 空字符串参数值() {
+    public void 空字符串参数值() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where nickname = ?",
@@ -212,7 +212,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void BIT_参数() {
+    public void BIT_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from flags where bit_col = ?",
@@ -222,7 +222,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void DECIMAL_参数() {
+    public void DECIMAL_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from orders where total = ?",
@@ -234,7 +234,7 @@ public class HibernateLogParserTest {
     // ========== 完整流程（SQL + 参数） ==========
 
     @Test
-    public void 完整流程_select_with_join_and_params() {
+    public void 完整流程_select_with_join_and_params() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* load com.example.Order */ select order0_.id as id1_0_0_, order0_.user_id as user_id2_0_0_, order0_.amount as amount3_0_0_ from orders order0_ left join users user1_ on order0_.user_id=user1_.id where order0_.id=?",
@@ -246,7 +246,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 完整流程_update_with_multiple_params() {
+    public void 完整流程_update_with_multiple_params() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: update users set name=?, email=?, age=? where id=?",
@@ -261,7 +261,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 完整流程_insert_batch() {
+    public void 完整流程_insert_batch() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: insert into users (name, email, id) values (?, ?, ?)",
@@ -277,7 +277,7 @@ public class HibernateLogParserTest {
     // ========== 无参 SQL ==========
 
     @Test
-    public void 无参_select_语句() {
+    public void 无参_select_语句() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select count(*) from users");
@@ -287,7 +287,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 无参_count_由下一条_SQL_闭合() {
+    public void 无参_count_由下一条_SQL_闭合() throws Exception {
         HibernateLogParser p = parser();
         p.feed("Hibernate: select count(*) from users");
         p.feed("Hibernate: select user0_.id from users user0_ where user0_.id=?");
@@ -302,7 +302,7 @@ public class HibernateLogParserTest {
     // ========== 多条语句 ==========
 
     @Test
-    public void 多条语句连续捕获() {
+    public void 多条语句连续捕获() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select user0_.id from users user0_ where user0_.id=?",
@@ -320,7 +320,7 @@ public class HibernateLogParserTest {
     // ========== 噪声行 ==========
 
     @Test
-    public void 噪声行忽略() {
+    public void 噪声行忽略() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "2026-08-21 10:00:00.123 INFO [main] o.s.b.StartedApplication : Started Application in 2.5 seconds",
@@ -332,7 +332,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void MyBatis_格式行被_Hibernate_解析器忽略() {
+    public void MyBatis_格式行被_Hibernate_解析器忽略() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "==>  Preparing: SELECT * FROM user WHERE id = ?",
@@ -343,7 +343,7 @@ public class HibernateLogParserTest {
     // ========== 纯 SQL 行（无前缀） ==========
 
     @Test
-    public void 纯_SQL_行识别() {
+    public void 纯_SQL_行识别() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "select user0_.id from users user0_ where user0_.id=?");
@@ -352,7 +352,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 纯_SQL_行关闭时不识别() {
+    public void 纯_SQL_行关闭时不识别() throws Exception {
         HibernateLogParser p = new HibernateLogParser(new LogSqlRestorer(), "Hibernate:", "binding parameter", true, 20000, false);
         p.feed("select user0_.id from users user0_ where user0_.id=?");
         p.closePending();
@@ -361,7 +361,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 纯_SQL_行排除_binding_parameter() {
+    public void 纯_SQL_行排除_binding_parameter() throws Exception {
         HibernateLogParser p = new HibernateLogParser(new LogSqlRestorer(), "Hibernate:", "binding parameter", true, 20000, true);
         p.feed("binding parameter [1] as [BIGINT] - [1]");
         p.closePending();
@@ -373,7 +373,7 @@ public class HibernateLogParserTest {
     // ========== 带日志框架前缀 ==========
 
     @Test
-    public void 带日志框架前缀的_Hibernate_SQL() {
+    public void 带日志框架前缀的_Hibernate_SQL() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "2026-08-21 10:00:00.123 DEBUG [main] o.h.SQL : Hibernate: select user0_.id from users user0_ where user0_.id=?",
@@ -383,7 +383,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 严格模式下带日志前缀不匹配() {
+    public void 严格模式下带日志前缀不匹配() throws Exception {
         HibernateLogParser p = new HibernateLogParser(new LogSqlRestorer(), "Hibernate:", "binding parameter", false, 20000, true);
         p.feed("2026-08-21 DEBUG [main] o.h.SQL : Hibernate: select user0_.id from users user0_ where user0_.id=?");
         p.feed("Hibernate: select user0_.id from users user0_ where user0_.id=?");
@@ -396,7 +396,7 @@ public class HibernateLogParserTest {
     // ========== 可配置前缀 ==========
 
     @Test
-    public void 自定义_SQL_前缀() {
+    public void 自定义_SQL_前缀() throws Exception {
         HibernateLogParser p = new HibernateLogParser(new LogSqlRestorer(), "JPA:", "binding parameter", true, 20000, true);
         p.feed("JPA: select u from User u where u.id = ?");
         p.feed("binding parameter [1] as [BIGINT] - [1]");
@@ -409,7 +409,7 @@ public class HibernateLogParserTest {
     // ========== 最大长度截断 ==========
 
     @Test
-    public void 超长_SQL_截断() {
+    public void 超长_SQL_截断() throws Exception {
         HibernateLogParser p = new HibernateLogParser(new LogSqlRestorer(), "Hibernate:", "binding parameter", true, 30, true);
         p.feed("Hibernate: select * from very_long_table_name where id = 1");
         p.closePending();
@@ -420,7 +420,7 @@ public class HibernateLogParserTest {
     // ========== takeEntries 清空 ==========
 
     @Test
-    public void takeEntries_取走后缓冲区清空() {
+    public void takeEntries_取走后缓冲区清空() throws Exception {
         HibernateLogParser p = parser();
         p.feed("Hibernate: select 1");
         p.closePending();
@@ -432,7 +432,7 @@ public class HibernateLogParserTest {
     // ========== 来源标记 ==========
 
     @Test
-    public void 所有产出条目_source_为_HIBERNATE() {
+    public void 所有产出条目_source_为_HIBERNATE() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select user0_.id from users user0_ where user0_.id=?",
@@ -448,7 +448,7 @@ public class HibernateLogParserTest {
     // ========== 参数在 SQL 之前（异常顺序） ==========
 
     @Test
-    public void 参数在_SQL_之前被忽略() {
+    public void 参数在_SQL_之前被忽略() throws Exception {
         HibernateLogParser p = parser();
         p.feed("binding parameter [1] as [BIGINT] - [1]"); // 无 SQL 上下文
         p.feed("Hibernate: select user0_.id from users user0_ where user0_.id=?");
@@ -462,7 +462,7 @@ public class HibernateLogParserTest {
     // ========== 占位符与参数数量不匹配 ==========
 
     @Test
-    public void 占位符多于参数时保留问号() {
+    public void 占位符多于参数时保留问号() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where a = ? and b = ?",
@@ -472,7 +472,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 占位符少于参数时忽略多余参数() {
+    public void 占位符少于参数时忽略多余参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where id = ?",
@@ -485,7 +485,7 @@ public class HibernateLogParserTest {
     // ========== 值含特殊字符 ==========
 
     @Test
-    public void 参数值含方括号() {
+    public void 参数值含方括号() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where data = ?",
@@ -495,7 +495,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 参数值含逗号() {
+    public void 参数值含逗号() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select * from users where name in (?, ?)",
@@ -508,7 +508,7 @@ public class HibernateLogParserTest {
     // ========== 真实场景端到端 ==========
 
     @Test
-    public void 真实场景_Spring_Boot_show_sql_无参数() {
+    public void 真实场景_Spring_Boot_show_sql_无参数() throws Exception {
         // spring.jpa.show-sql=true 时的典型输出
         List<LogSqlEntry> entries = feedAll(
                 parser(),
@@ -521,7 +521,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 真实场景_Criteria_查询() {
+    public void 真实场景_Criteria_查询() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* criteria query */ select order0_.id as id1_0_0_, order0_.status as status2_0_0_, order0_.total as total3_0_0_ from orders order0_ where order0_.user_id=? and order0_.status=? and order0_.total>=?",
@@ -535,7 +535,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 真实场景批量插入() {
+    public void 真实场景批量插入() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: insert into audit_log (action, user_id, created_at, id) values (?, ?, ?, ?)",
@@ -550,7 +550,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 真实场景含_null_参数的更新() {
+    public void 真实场景含_null_参数的更新() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: update users set name=?, email=?, last_login=? where id=?",
@@ -565,7 +565,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 真实场景_MyBatis_与_Hibernate_混合输出() {
+    public void 真实场景_MyBatis_与_Hibernate_混合输出() throws Exception {
         // 同一个控制台同时输出两种格式（混合 ORM 项目）
         HibernateLogParser p = parser();
         // MyBatis 行应被忽略
@@ -584,7 +584,7 @@ public class HibernateLogParserTest {
     // ========== Multiline SQL 解析（状态机改造） ==========
 
     @Test
-    public void 用户日志完整复刻_多行_HQL_注释_多行_SQL_参数() {
+    public void 用户日志完整复刻_多行_HQL_注释_多行_SQL_参数() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: ",
@@ -614,7 +614,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void Hibernate_独占一行_单行_SQL() {
+    public void Hibernate_独占一行_单行_SQL() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate:",
@@ -624,7 +624,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void Hibernate_独占一行_多行_SQL() {
+    public void Hibernate_独占一行_多行_SQL() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate:",
@@ -639,7 +639,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 同行注释_多行_SQL_续行() {
+    public void 同行注释_多行_SQL_续行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* load User */ select id",
@@ -652,7 +652,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 注释块含_SQL_关键字不误判() {
+    public void 注释块含_SQL_关键字不误判() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* SELECT u FROM UserEntity */ select id from user");
@@ -661,7 +661,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 多条多行语句连续() {
+    public void 多条多行语句连续() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 // 第一条 multiline SQL
@@ -680,7 +680,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 单行_SQL_仍正常_回归() {
+    public void 单行_SQL_仍正常_回归() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "Hibernate: select id from user");
@@ -689,7 +689,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 纯_SQL_多行无前缀_bare_SQL_续行() {
+    public void 纯_SQL_多行无前缀_bare_SQL_续行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "select id from user",
@@ -700,7 +700,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void 混合注释_bare_SQL_续行() {
+    public void 混合注释_bare_SQL_续行() throws Exception {
         List<LogSqlEntry> entries = feedAll(
                 parser(),
                 "/* load User */ select id from user",
@@ -715,7 +715,7 @@ public class HibernateLogParserTest {
     }
 
     @Test
-    public void Hibernate_独占一行出现在_COLLECTING_态中应闭合前条目开启新条目() {
+    public void Hibernate_独占一行出现在_COLLECTING_态中应闭合前条目开启新条目() throws Exception {
         // 复现真实场景：org.hibernate.SQL 输出 comment+SQL 后，Hibernate: 独占一行再输出第二份
         List<LogSqlEntry> entries = feedAll(
                 parser(),

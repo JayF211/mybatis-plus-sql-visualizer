@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.log;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -66,7 +66,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     // ---------- 类型过滤（filterByType 纯函数） ----------
 
     @Test
-    public void testFilterSelectOnly() {
+    public void testFilterSelectOnly() throws Exception {
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT 1"),
                 entryOfType(StatementType.INSERT, "INSERT 1"),
@@ -76,7 +76,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFilterMultiType() {
+    public void testFilterMultiType() throws Exception {
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT 1"),
                 entryOfType(StatementType.INSERT, "INSERT 1"),
@@ -88,7 +88,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFilterAllPassesOtherThrough() {
+    public void testFilterAllPassesOtherThrough() throws Exception {
         // 全选（= FILTERABLE_TYPES 全集）时 OTHER 透传——修正原筛选条 OTHER 被隐性过滤的缺陷
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT 1"),
@@ -99,7 +99,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFilterPartialHidesOther() {
+    public void testFilterPartialHidesOther() throws Exception {
         // 非全选时 OTHER 不透传（不在可筛选集合中）
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT 1"),
@@ -109,7 +109,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFilterEmptySelectionShowsNothing() {
+    public void testFilterEmptySelectionShowsNothing() throws Exception {
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT 1"),
                 entryOfType(StatementType.INSERT, "INSERT 1"));
@@ -119,7 +119,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     // ---------- 搜索过滤（filterBySearch 纯函数） ----------
 
     @Test
-    public void testSearchEmptyQueryPassesAll() {
+    public void testSearchEmptyQueryPassesAll() throws Exception {
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT * FROM user"),
                 entryOfType(StatementType.SELECT, "SELECT * FROM orders"));
@@ -128,14 +128,14 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSearchCaseInsensitive() {
+    public void testSearchCaseInsensitive() throws Exception {
         List<LogSqlEntry> entries = List.of(entryOfType(StatementType.SELECT, "SELECT * FROM user"));
         assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "USER").size());
         assertEquals(1, SqlLogPanelKt.filterBySearch(entries, "select").size());
     }
 
     @Test
-    public void testSearchMatchesParameterValue() {
+    public void testSearchMatchesParameterValue() throws Exception {
         // 摘要（restoredSql 首行截断）含参数还原值——按订单号等参数值检索是常见场景
         LogSqlEntry entry = new LogSqlEntry(
                 "SELECT * FROM orders WHERE id = ?",
@@ -146,7 +146,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSearchCombinedWithTypeFilter() {
+    public void testSearchCombinedWithTypeFilter() throws Exception {
         // 过滤 + 搜索叠加：先类型后搜索（与面板 refreshList 顺序一致）
         List<LogSqlEntry> entries = List.of(
                 entryOfType(StatementType.SELECT, "SELECT * FROM user"),
@@ -159,16 +159,16 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     // ---------- 耗时排序（委托 LogDurationParser） ----------
 
     @Test
-    public void testDurationSortHiddenWithoutDurationInfo() {
+    public void testDurationSortHiddenWithoutDurationInfo() throws Exception {
         List<LogSqlEntry> snapshot = List.of(
                 entryOfType(StatementType.SELECT, "SELECT 1"),
                 entryOfType(StatementType.SELECT, "SELECT 2"));
-        boolean any = snapshot.stream().anyMatch(LogDurationParser.INSTANCE::hasDurationInfo);
+        boolean any = snapshot.stream().anyMatch(LogDurationParser::hasDurationInfo);
         assertFalse(any);
     }
 
     @Test
-    public void testDurationSortOrderDesc() {
+    public void testDurationSortOrderDesc() throws Exception {
         LogSqlEntry e1 = new LogSqlEntry(
                 "1723456789012|100|statement|SELECT * FROM a", "SELECT * FROM a", List.of(), 0L);
         LogSqlEntry e2 = new LogSqlEntry(
@@ -189,7 +189,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     // ---------- 缓冲层去重计数联动（面板徽章数据源） ----------
 
     @Test
-    public void testDedupeBadgeDataFromBuffer() {
+    public void testDedupeBadgeDataFromBuffer() throws Exception {
         manager.getEntries().setDedupeEnabled(true);
         manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", 0L));
         manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM t WHERE id = 1", 100L)); // 丢弃
@@ -201,7 +201,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testClearResetsBadgeCounts() {
+    public void testClearResetsBadgeCounts() throws Exception {
         manager.getEntries().setDedupeEnabled(true);
         manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT dup", 0L));
         manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT dup", 100L)); // 丢弃
@@ -213,7 +213,7 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
     // ---------- PluginSettings 默认值（改造后残留状态检查） ----------
 
     @Test
-    public void testPluginSettingsDefaultsAfterCleanup() {
+    public void testPluginSettingsDefaultsAfterCleanup() throws Exception {
         // 去重开关在 buffer 层（SqlLogEntryBuffer.dedupeEnabled 默认 true，T-M31.13），
         // 不再断言 PluginSettings（筛选条相关字段已随精简改造移除）
         boolean enabled = PluginSettings.getInstance().getState().getLogAutoSaveEnabled();

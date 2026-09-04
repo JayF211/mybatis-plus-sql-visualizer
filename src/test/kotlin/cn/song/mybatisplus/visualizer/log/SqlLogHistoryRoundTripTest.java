@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
 import java.io.File;
@@ -147,12 +147,12 @@ public class SqlLogHistoryRoundTripTest {
         assertEquals(3, entries.size());
         // 新格式：源码 + 耗时
         assertEquals("UserMapper.java", entries.get(0).sourceFile());
-        assertEquals(3L, entries.get(0).executionTimeMs());
+        assertEquals(Long.valueOf(3L), entries.get(0).executionTimeMs());
         // 旧格式：无源码无耗时
         assertNull(entries.get(1).sourceFile());
         // 新格式
         assertEquals("OrderMapper.java", entries.get(2).sourceFile());
-        assertEquals(10L, entries.get(2).executionTimeMs());
+        assertEquals(Long.valueOf(10L), entries.get(2).executionTimeMs());
         assertEquals("轻量计数与完整解析一致", 3, SqlLogFileReader.INSTANCE.countInFile(file));
     }
 

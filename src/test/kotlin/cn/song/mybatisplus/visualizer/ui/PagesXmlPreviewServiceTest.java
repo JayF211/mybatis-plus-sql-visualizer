@@ -42,7 +42,7 @@ public class PagesXmlPreviewServiceTest {
     """.stripIndent();
 
     @Test
-    public void 标准预览_SQL完整() {
+    public void 标准预览_SQL完整() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(SAMPLE_XML, "maintainLangLibPage");
         assertTrue(result.getSql().contains("SELECT"));
@@ -52,7 +52,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void compactSql_单行() {
+    public void compactSql_单行() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(SAMPLE_XML, "maintainLangLibPage");
         String compact = result.getCompactSql();
@@ -62,7 +62,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 按id定位_命中目标() {
+    public void 按id定位_命中目标() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="page1" title="P1" autoQuery="true" entityClass="com.A">
@@ -79,7 +79,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void id未命中_回落首个() {
+    public void id未命中_回落首个() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="page1" title="P1" autoQuery="true" entityClass="com.A">
@@ -96,7 +96,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void id为null_取首个() {
+    public void id为null_取首个() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="page1" title="P1" autoQuery="true" entityClass="com.A">
@@ -113,7 +113,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 无maintainPage_空结果加warning() {
+    public void 无maintainPage_空结果加warning() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview("<pages></pages>", null);
         assertEquals("", result.getSql());
@@ -122,7 +122,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 非pages根元素_警告提示() {
+    public void 非pages根元素_警告提示() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview("<configuration></configuration>", null);
         assertEquals("", result.getSql());
@@ -131,14 +131,14 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 非良构XML_警告提示() {
+    public void 非良构XML_警告提示() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview("<pages><maintainPage></pages>", null);
         assertNotNull(result.getWarning());
     }
 
     @Test
-    public void 无参数SQL_参数列表为空() {
+    public void 无参数SQL_参数列表为空() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(SAMPLE_XML, "maintainLangLibPage");
         assertEquals(List.of(), result.getUnresolvedParams());
@@ -146,7 +146,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 含占位符SQL_参数提取正确() {
+    public void 含占位符SQL_参数提取正确() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="p1" title="P1" autoQuery="true" entityClass="com.A">
@@ -161,7 +161,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 列信息传递_pagesColumns非空() {
+    public void 列信息传递_pagesColumns非空() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(SAMPLE_XML, "maintainLangLibPage");
         assertNotNull(result.getPagesColumns());
@@ -171,7 +171,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void 无列信息_pagesColumns为null() {
+    public void 无列信息_pagesColumns为null() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="p1" title="P1" autoQuery="true" entityClass="com.A">
@@ -185,7 +185,7 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void HQL内容_直接展示无参数() {
+    public void HQL内容_直接展示无参数() throws Exception {
         String xml = """
         <pages>
             <maintainPage id="hqlPage" title="HQL" autoQuery="true"
@@ -208,14 +208,14 @@ public class PagesXmlPreviewServiceTest {
     }
 
     @Test
-    public void wrapperType为null() {
+    public void wrapperType为null() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(SAMPLE_XML, "maintainLangLibPage");
         assertNull(result.getWrapperType());
     }
 
     @Test
-    public void xmlModel和previewModel为null() {
+    public void xmlModel和previewModel为null() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(SAMPLE_XML, "maintainLangLibPage");
         assertNull(result.getXmlModel());

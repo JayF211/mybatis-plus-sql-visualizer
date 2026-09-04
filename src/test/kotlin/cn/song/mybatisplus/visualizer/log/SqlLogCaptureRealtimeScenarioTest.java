@@ -1,10 +1,10 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -61,7 +61,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     // ---------- 真实场景 1：登录接口多表查询（Preparing/Parameters 配对） ----------
 
     @Test
-    public void 真实日志_登录查询_参数还原与耗时null() {
+    public void 真实日志_登录查询_参数还原与耗时null() throws Exception {
         String[] lines = {
                 "2026-08-31 17:30:00.001  INFO 1234 --- [nio-8080-exec-1] c.s.demo.mapper.UserMapper.selectOne : ==>  Preparing: SELECT id,username,password,create_time FROM user WHERE username = ? AND deleted = 0",
                 "2026-08-31 17:30:00.002  INFO 1234 --- [nio-8080-exec-1] c.s.demo.mapper.UserMapper.selectOne : ==> Parameters: admin(String)",
@@ -76,7 +76,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     }
 
     @Test
-    public void 真实日志_带p6spy耗时行的批量插入_耗时5ms() {
+    public void 真实日志_带p6spy耗时行的批量插入_耗时5ms() throws Exception {
         // p6spy 控制台：日志行含 elapsed 耗时 → 捕获时写入 entry.executionTimeMs
         String p6spyLine = "2026-08-31 17:31:00.123  INFO 1234 --- [pool-2-thread-1] p6spy : #1725000000000 | elapsed 5 ms | statement | INSERT INTO user_order (user_id, amount) VALUES (?, ?)";
         // p6spy 语句行不含 `Preparing:` 前缀——此处用标准 MyBatis 前缀形态验证：
@@ -94,7 +94,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     }
 
     @Test
-    public void 真实日志_自定义耗时前缀Time_耗时200ms() {
+    public void 真实日志_自定义耗时前缀Time_耗时200ms() throws Exception {
         // 用户配置 logTimePrefix=Time: 后，日志 `Time: 200ms` 行被解析
         List<LogSqlEntry> entries = assembleWithDuration(
                 feedAll(
@@ -112,7 +112,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     // ---------- 真实场景 2：分页查询连续 5 次 → 去重留 1 条 + 徽章 4 ----------
 
     @Test
-    public void 真实场景_分页查询连续5次_去重留1条徽章4() {
+    public void 真实场景_分页查询连续5次_去重留1条徽章4() throws Exception {
         SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(200);
         buffer.setDedupeEnabled(true);
         buffer.setDedupeWindowMs(60000L);
@@ -136,7 +136,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     }
 
     @Test
-    public void 真实场景_超窗口后相同SQL重新计数() {
+    public void 真实场景_超窗口后相同SQL重新计数() throws Exception {
         SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(200);
         buffer.setDedupeEnabled(true);
         buffer.setDedupeWindowMs(1000L);
@@ -156,7 +156,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     }
 
     @Test
-    public void 真实场景_接口交错执行不同SQL_去重互不影响() {
+    public void 真实场景_接口交错执行不同SQL_去重互不影响() throws Exception {
         SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(200);
         buffer.setDedupeEnabled(true);
         buffer.setDedupeWindowMs(60000L);
@@ -181,7 +181,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     // ---------- 真实场景 3：勾选「移除重复的sql」前后 ----------
 
     @Test
-    public void 真实场景_未开去重累积后勾选_立即裁剪并累计徽章() {
+    public void 真实场景_未开去重累积后勾选_立即裁剪并累计徽章() throws Exception {
         SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(200);
         buffer.setDedupeEnabled(false); // 用户未勾选，重复 SQL 全保留
         String sql = "SELECT * FROM user WHERE id = 42";
@@ -205,7 +205,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     }
 
     @Test
-    public void 真实场景_关闭去重清空徽章_再开启从零起算() {
+    public void 真实场景_关闭去重清空徽章_再开启从零起算() throws Exception {
         SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(200);
         buffer.setDedupeEnabled(false);
         String sql = "SELECT 1";
@@ -230,7 +230,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
     // ---------- 真实场景 4：耗时字段参与面板排序/着色数据源 ----------
 
     @Test
-    public void 真实场景_耗时解析结果供排序与慢查询判定() {
+    public void 真实场景_耗时解析结果供排序与慢查询判定() throws Exception {
         // 真实 p6spy 日志：rawSql 为 `时间戳|毫秒|statement|SQL`——LogDurationParser 从 rawSql 解析，
         // 而显示层读 executionTimeMs（FilterProxyHandler 同帧解析 elapsed 行写入）。
         // 两条数据源在真实 p6spy 日志中同源（同一行的 elapsed 与 |ms| 一致），此处对齐模拟。
@@ -255,7 +255,7 @@ public class SqlLogCaptureRealtimeScenarioTest {
         assertEquals("SELECT 1 (5ms) 最后", "SELECT 1", sorted.get(2).restoredSql());
 
         // 慢查询判定：阈值 1000ms
-        long threshold = PluginSettings.Companion.DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+        long threshold = PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS;
         assertEquals("1500ms 是慢查询", true, SlowQueryDetector.isSlow(e3.executionTimeMs(), threshold));
         assertEquals("200ms 不是慢查询", false, SlowQueryDetector.isSlow(e2.executionTimeMs(), threshold));
     }

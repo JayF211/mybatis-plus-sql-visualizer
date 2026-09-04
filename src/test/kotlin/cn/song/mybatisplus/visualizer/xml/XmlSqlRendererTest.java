@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertThrows;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.HashSet;
@@ -49,7 +49,7 @@ public class XmlSqlRendererTest {
         return new XmlPreviewState(base.enabledIds(), forEachCounts, base.forEachNulls(), base.bindOverrides());
     }
 
-    private static XmlPreviewState copy(XmlPreviewState base, Map<String, String> bindOverrides) {
+    private static XmlPreviewState copyWithBinds(XmlPreviewState base, Map<String, String> bindOverrides) {
         return new XmlPreviewState(base.enabledIds(), base.forEachCounts(), base.forEachNulls(), bindOverrides);
     }
 
@@ -88,7 +88,7 @@ public class XmlSqlRendererTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 默认渲染_全标签组合() {
+    public void 默认渲染_全标签组合() throws Exception {
         XmlPreviewModel m = model(mapperTemplate);
         RenderedXmlSql result = m.renderSql();
 
@@ -109,7 +109,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 默认勾选态启发式() {
+    public void 默认勾选态启发式() throws Exception {
         XmlPreviewModel m = model(mapperTemplate);
         Map<String, Boolean> ids = m.getConditionViews().stream()
                 .collect(Collectors.toMap(XmlConditionView::id, XmlConditionView::defaultEnabled));
@@ -129,7 +129,7 @@ public class XmlSqlRendererTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 关闭条件后where整体消失() {
+    public void 关闭条件后where整体消失() throws Exception {
         XmlPreviewModel m = model(mapperTemplate);
         XmlPreviewState state = copy(m.defaultState(), Set.of("ids != null")); // 只剩 foreach 条件
         RenderedXmlSql result = m.renderSql(state);
@@ -140,7 +140,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void foreach次数可调_零次为空集() {
+    public void foreach次数可调_零次为空集() throws Exception {
         XmlPreviewModel m = model(mapperTemplate);
         XmlPreviewState state = copy(m.defaultState(), Map.of("ids", 3));
         assertEquals(
@@ -152,9 +152,9 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void bind覆盖值优先于表达式求值() {
+    public void bind覆盖值优先于表达式求值() throws Exception {
         XmlPreviewModel m = model(mapperTemplate);
-        XmlPreviewState state = copy(m.defaultState(), Map.of("likeName", "'%用户输入%'"));
+        XmlPreviewState state = copyWithBinds(m.defaultState(), Map.of("likeName", "'%用户输入%'"));
         RenderedXmlSql result = m.renderSql(state);
         assertEquals(
                 "SELECT * FROM t_biz WHERE type = ? AND status = ? AND create_time > ? " +
@@ -164,7 +164,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void choose关闭首个when时走otherwise() {
+    public void choose关闭首个when时走otherwise() throws Exception {
         XmlPreviewModel m = model(mapperTemplate);
         XmlPreviewState base = m.defaultState();
         Set<String> enabled = new HashSet<>(base.enabledIds());
@@ -178,7 +178,7 @@ public class XmlSqlRendererTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 纯静态语句_无参数() {
+    public void 纯静态语句_无参数() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT 1</select>
@@ -192,7 +192,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 纯参数语句_含jdbcType属性() {
+    public void 纯参数语句_含jdbcType属性() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE a = #{a} AND b = #{b, jdbcType=VARCHAR}</select>
@@ -206,7 +206,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 转义dollar在静态文本中原样保留() {
+    public void 转义dollar在静态文本中原样保留() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT \\${col} FROM t</select>
@@ -217,7 +217,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void dollar表达式未解析时输出空串并记录错误() {
+    public void dollar表达式未解析时输出空串并记录错误() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE ${ew.customSqlSegment}</select>
@@ -230,7 +230,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void set与if组合_update语句() {
+    public void set与if组合_update语句() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <update id="s1">
@@ -252,7 +252,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 未知标签报错() {
+    public void 未知标签报错() throws Exception {
         assertThrows(XmlScriptException.class, () -> new XmlMapperParser().parse("""
                 <mapper namespace="n">
                   <select id="s1"><else>oops</else></select>
@@ -261,17 +261,17 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 根元素非mapper报错() {
+    public void 根元素非mapper报错() throws Exception {
         assertThrows(XmlParseException.class, () -> new XmlMapperParser().parse("<configuration></configuration>"));
     }
 
     @Test
-    public void 非良构XML报错() {
+    public void 非良构XML报错() throws Exception {
         assertThrows(XmlParseException.class, () -> new XmlMapperParser().parse("<mapper><select id=\"a\"></mapper>"));
     }
 
     @Test
-    public void include缺失记录错误且不中断() {
+    public void include缺失记录错误且不中断() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t <include refid="missing"/></select>
@@ -282,7 +282,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void bind自动求值结果提取() {
+    public void bind自动求值结果提取() throws Exception {
         // T-M25.5（用户实测：bind 变量未自动求值）——渲染结果携带 bind 求值结果
         XmlMapperModel parsed = new XmlMapperParser().parse("""
                 <mapper namespace="n">
@@ -299,7 +299,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void bind覆盖值优先于自动求值() {
+    public void bind覆盖值优先于自动求值() throws Exception {
         XmlMapperModel parsed = new XmlMapperParser().parse("""
                 <mapper namespace="n">
                   <select id="s1">
@@ -309,12 +309,12 @@ public class XmlSqlRendererTest {
                 </mapper>
                 """.stripIndent());
         XmlPreviewModel m = XmlPreviewModel.from(parsed.statements().get(0), parsed.errors());
-        XmlPreviewState state = copy(m.defaultState(), Map.of("status", "9"));
+        XmlPreviewState state = copyWithBinds(m.defaultState(), Map.of("status", "9"));
         assertEquals("9", m.renderSql(state).bindValues().get("status"));
     }
 
     @Test
-    public void 官方DTD声明可解析() {
+    public void 官方DTD声明可解析() throws Exception {
         // T-M25.1（用户实测）：MyBatis 官方 DTD 声明（<!DOCTYPE mapper PUBLIC ...>）
         // 此前被 disallow-doctype-decl 拒绝——允许声明 + EntityResolver 拦截（不联网）
         XmlPreviewModel m = model("""
@@ -328,7 +328,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 内部实体定义可解析() {
+    public void 内部实体定义可解析() throws Exception {
         XmlPreviewModel m = model("""
                 <!DOCTYPE mapper [<!ENTITY status "ACTIVE">]>
                 <mapper namespace="n">
@@ -339,7 +339,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void 外部实体被清空_XXE防护() {
+    public void 外部实体被清空_XXE防护() throws Exception {
         // 外部实体引用解析为空（不注入外部文件内容）——实测 /etc/hosts 内容不出现
         XmlPreviewModel m = model("""
                 <!DOCTYPE mapper [<!ENTITY xxe SYSTEM "file:///etc/hosts">]>
@@ -352,7 +352,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void bind静态常量引用_注入值渲染() {
+    public void bind静态常量引用_注入值渲染() throws Exception {
         // T-M25.2（用户实测）：OGNL 静态字段引用 @类全名@字段名（MyBatis mapper 常见）
         XmlMapperModel parsed = new XmlMapperParser().parse("""
                 <mapper namespace="n">
@@ -373,7 +373,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void bind双竖线包裹_兼容解析并提示() {
+    public void bind双竖线包裹_兼容解析并提示() throws Exception {
         // 用户实测场景：value="||@class@FIELD||"（非标准写法，真实 OGNL 运行时会失败）
         XmlMapperModel parsed = new XmlMapperParser().parse("""
                 <mapper namespace="n">
@@ -393,7 +393,7 @@ public class XmlSqlRendererTest {
     }
 
     @Test
-    public void bind静态常量引用_未注入时提示可填写覆盖值() {
+    public void bind静态常量引用_未注入时提示可填写覆盖值() throws Exception {
         XmlMapperModel parsed = new XmlMapperParser().parse("""
                 <mapper namespace="n">
                   <select id="s1">

@@ -10,6 +10,7 @@ import com.intellij.codeInsight.lookup.LookupElementBuilder;
 import com.intellij.codeInsight.lookup.LookupElementPresentation;
 import com.intellij.lang.Language;
 import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.project.Project;
 import com.intellij.openapi.fileTypes.FileType;
 import com.intellij.openapi.fileTypes.FileTypeManager;
 import com.intellij.openapi.fileTypes.LanguageFileType;
@@ -61,15 +62,15 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testPsiFileCreatedForNativeSql() {
-        PsiFile file = PsiFileFactory.getInstance(project)
+    public void testPsiFileCreatedForNativeSql() throws Exception {
+        PsiFile file = PsiFileFactory.getInstance(getProject())
                 .createFileFromText("preview.sql", sqlFileType(), "SELECT 1 FROM t");
         assertNotNull("原生 SQL FileType 应能生成 PSI 文件", file);
         assertEquals(sqlLanguage(), file.getLanguage());
     }
 
     @Test
-    public void testCompletionContributorRegistered() {
+    public void testCompletionContributorRegistered() throws Exception {
         // M34 回归：全语言注册（无 language 属性）→ CompletionContributor.forLanguage 不返回，
         // 故改为验证贡献者类存在且可实例化（注册本身由平台 EP 机制保证，运行时行为需 runIde 验证）。
         SqlCompletionContributor contributor = new SqlCompletionContributor();
@@ -77,7 +78,7 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testProviderKeywords() {
+    public void testProviderKeywords() throws Exception {
         List<String> keywords = SqlCompletionProvider.getInstance().keywords();
         assertTrue("关键字应含 SELECT", keywords.contains("SELECT"));
         assertTrue("关键字应含 FROM", keywords.contains("FROM"));
@@ -85,14 +86,14 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testDefaultProviderUsesContext() {
+    public void testDefaultProviderUsesContext() throws Exception {
         SqlCompletionContext ctx = new SqlCompletionContext("merchant_entity", List.of("id", "phone"), null);
         assertEquals("merchant_entity", SqlCompletionProvider.getInstance().tableName(ctx));
         assertEquals(List.of("id", "phone"), SqlCompletionProvider.getInstance().columns(ctx));
     }
 
     @Test
-    public void testColumnsWithCommentsMergesContext() {
+    public void testColumnsWithCommentsMergesContext() throws Exception {
         // T-M16-03：columnsWithComments 合并 columns 与 columnComments（无注释列返回 null）
         SqlCompletionContext ctx = new SqlCompletionContext("merchant_entity", List.of("id", "name"), null,
                 Map.of("name", "设备名称"));
@@ -105,14 +106,14 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testTableCommentFromContext() {
+    public void testTableCommentFromContext() throws Exception {
         // T-M16-05：表注释经 context 传递
         SqlCompletionContext ctx = new SqlCompletionContext("merchant_entity", List.of(), null, Map.of(), "商户表");
         assertEquals("商户表", SqlCompletionProvider.getInstance().tableComment(ctx));
     }
 
     @Test
-    public void testDetectClausePositionAware() {
+    public void testDetectClausePositionAware() throws Exception {
         // T-M16-04：位置感知——FROM/JOIN 后表名位、WHERE/ON/HAVING/GROUP BY/ORDER BY 后列名位、
         // SELECT 列位、无法判定全量（T-M27-01：改走 SqlTextAnalysis 公共 API，语义不变）
         assertEquals(SqlClause.TABLE, SqlTextAnalysis.detectClauseFromText("SELECT id FROM "));
@@ -128,7 +129,7 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testDetectClauseOffsetClamped() {
+    public void testDetectClauseOffsetClamped() throws Exception {
         // T-M16.2-01：offset 越界 clamp 不抛异常（旧 PSI 未随编辑更新时 offset 可能超过新文档长度——
         // substring 越界异常被 IDE 吞掉 → 补全静默失效的回归点 C）（T-M27-01：改走 SqlTextAnalysis 公共 API）
         // offset 超过文本长度 → clamp 到末尾，按全量文本判定（不抛异常）
@@ -143,11 +144,11 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testContextEditorCarrierPreferredOverPsi() {
+    public void testContextEditorCarrierPreferredOverPsi() throws Exception {
         // T-M16.2-01：上下文双载体读取——Editor userData 优先（嵌入式编辑器编辑后 PSI 重建丢失 userData，
         // 回归点 B）、PSI 文件 userData 兜底
         SqlCompletionContributor contributor = new SqlCompletionContributor();
-        PsiFile file = PsiFileFactory.getInstance(project)
+        PsiFile file = PsiFileFactory.getInstance(getProject())
                 .createFileFromText("preview.sql", sqlFileType(), "SELECT 1");
         PsiElement position = PsiTreeUtil.getDeepestFirst(file);
 
@@ -156,13 +157,13 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
         file.putUserData(SqlCompletionContext.KEY, psiCtx);
         SqlCompletionContext fallback = contributor.resolveContext(null, position);
         assertNotNull("Editor 无上下文时应回退 PSI userData", fallback);
-        assertEquals("psi_tbl", fallback.getTableName());
+        assertEquals("psi_tbl", fallback.tableName);
 
         // ② Editor 有上下文 → Editor 优先（与 PSI 不一致时取 Editor）
         SqlCompletionContext editorCtx = new SqlCompletionContext("editor_tbl", List.of("name"), null);
         SqlCompletionContext preferred = contributor.resolveContext(editorCtx, position);
         assertNotNull("Editor 有上下文时应优先使用", preferred);
-        assertEquals("editor_tbl", preferred.getTableName());
+        assertEquals("editor_tbl", preferred.tableName);
 
         // ③ 双载体均无 → null（关键字补全不受影响，实体补全跳过）
         file.putUserData(SqlCompletionContext.KEY, null);
@@ -171,7 +172,7 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testWithCommentCarriesTailTextAndLookupString() {
+    public void testWithCommentCarriesTailTextAndLookupString() throws Exception {
         // T-M16.3-02（用户实测「字段可补全但看不到注释」根因）：LookupElementBuilder 不可变——
         // withTailText/withLookupString 返回新实例，原实现丢弃返回值导致注释 tailText 从不展示。
         // 渲染验证：注释作为灰色尾缀展示 + 进入 lookup strings 支持注释关键词检索
@@ -192,11 +193,11 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testResolveContextLevel3DocumentMap() {
+    public void testResolveContextLevel3DocumentMap() throws Exception {
         // M34 回归修复（registerContext 从未被调用，documentContexts 恒空 → level 3 死路径）：
         // 注册后 Editor/PSI userData 均丢失时，Document→Context 映射应兜底返回上下文。
         SqlCompletionContributor contributor = new SqlCompletionContributor();
-        PsiFile file = PsiFileFactory.getInstance(project)
+        PsiFile file = PsiFileFactory.getInstance(getProject())
                 .createFileFromText("preview.sql", sqlFileType(), "SELECT 1 FROM merchant");
         PsiElement position = PsiTreeUtil.getDeepestFirst(file);
 
@@ -214,17 +215,17 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
         file.putUserData(SqlCompletionContext.KEY, null);
         SqlCompletionContext hit = contributor.resolveContext(null, position);
         assertNotNull("Document 已注册时 level 3 应兜底命中", hit);
-        assertEquals("merchant_entity", hit.getTableName());
+        assertEquals("merchant_entity", hit.tableName);
     }
 
     @Test
-    public void testRealTempFileTrackedByPsiDocumentManager() {
+    public void testRealTempFileTrackedByPsiDocumentManager() throws Exception {
         // M34 回归修复根因：CodeCompletionHandlerBase.invokeCompletion 内部调用
         // PsiDocumentManager.getPsiFile(document)——PsiFileFactory.createFileFromText 创建的
         // in-memory 文件不被追踪（getDocument=null → "no PSI file" 断言）。
         // 回归断言：createEditor 采用的真实临时文件（java.io + LocalFileSystem）必须能被
         // PsiDocumentManager 追踪（document→psi round-trip），补全框架初始化才不 NPE。
-        Project proj = project;
+        Project proj = getProject();
         File io = File.createTempFile("mp-sql-preview-", ".sql");
         Files.writeString(io.toPath(), "SELECT 1 FROM t");
         io.deleteOnExit();

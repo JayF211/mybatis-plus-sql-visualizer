@@ -41,7 +41,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Toolkit;
-import java.awt.Transferable;
+import java.awt.datatransfer.Transferable;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -54,12 +54,12 @@ import javax.swing.JCheckBox;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
 import javax.swing.plaf.basic.BasicSplitPaneUI;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * SqlPreviewPanel 行为测试（M8/M9）：编辑器视图 + 单行多行切换 + 生命周期 + 参数回填。
@@ -144,7 +144,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         return mk(sql, compact, params, columns, tableName, candidateTables);
     }
 
-    public void testShowResultCreatesEditorView() {
+    public void testShowResultCreatesEditorView() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result());
         Editor editor = panel.editorForTest();
@@ -153,7 +153,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testShowResultReplacesEditor() {
+    public void testShowResultReplacesEditor() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result("SELECT 1 FROM t1", "SELECT 1 FROM t1"));
         Editor first = panel.editorForTest();
@@ -165,7 +165,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testToggleCompactSwitchesSql() {
+    public void testToggleCompactSwitchesSql() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result());
         assertEquals("SELECT id\nFROM tbl", panel.editorForTest().getDocument().getText());
@@ -179,7 +179,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testRefreshResetsModeToSettingsDefault() {
+    public void testRefreshResetsModeToSettingsDefault() throws Exception {
         // M19.3（用户实测：点刷新后 SQL 仍停留在单行模式）：
         // 刷新 = 模式复位为与设置「SQL 格式化输出」对齐（默认多行）——手动切到单行后刷新应回多行
         // （setUp 关闭格式化以保持渲染断言——本测试需默认开启语义，显式恢复）
@@ -197,7 +197,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testCopySqlWithContent() {
+    public void testCopySqlWithContent() throws Exception {
         // 无 project 时不弹成功提示（测试环境 Messages 对话框会抛异常）
         SqlPreviewPanel panel = new SqlPreviewPanel(null);
         panel.showResult(result());
@@ -205,7 +205,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testCopySqlClosePanelCallbackInjectable() {
+    public void testCopySqlClosePanelCallbackInjectable() throws Exception {
         // T-M23.6：onClosePanelRequested 回调默认 null、可注入（预览弹窗赋值 dispose）；
         // project null → 弹框跳过（回调不触发），注入的回调可被面板外部链路触发
         SqlPreviewPanel panel = new SqlPreviewPanel(null);
@@ -221,7 +221,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testClearReleasesEditor() {
+    public void testClearReleasesEditor() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result());
         assertNotNull(panel.editorForTest());
@@ -230,21 +230,21 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         assertNull(panel.currentForTest());
     }
 
-    public void testShowResultBuildsParamFields() {
+    public void testShowResultBuildsParamFields() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
-        panel.showResult(result(List.of("dto.getPhone()", "id")));
+        panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of("dto.getPhone()", "id")));
         assertEquals(2, panel.paramFieldForTest(1) != null ? 2 : 0);
         assertNotNull("应生成参数输入框", panel.paramFieldForTest(0));
         panel.clear();
     }
 
-    public void testParamRowLabelWidthAdaptsAndTooltipForLongNames() {
+    public void testParamRowLabelWidthAdaptsAndTooltipForLongNames() throws Exception {
         // T-M19.4-01 + T-M26.3
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         String shortName = "id";
         String medium = "productInfo.getDicProtocolType()";   // 用户实测场景：约 200px
         String longName = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo()";
-        panel.showResult(result(List.of(shortName, medium, longName)));
+        panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(shortName, medium, longName)));
         JBLabel shortLabel = panel.paramRowLabelForTest(0);
         JBLabel mediumLabel = panel.paramRowLabelForTest(1);
         JBLabel longLabel = panel.paramRowLabelForTest(2);
@@ -266,7 +266,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
     // M9：参数回填 / 可编辑 / 补全上下文
     // ------------------------------------------------------------------
 
-    public void testParamBackfillUpdatesSql() {
+    public void testParamBackfillUpdatesSql() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         String sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?";
         panel.showResult(result(sql, sql, List.of("dto.getPhone()", "type")));
@@ -283,7 +283,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testParamBackfillEmptyKeepsPlaceholder() {
+    public void testParamBackfillEmptyKeepsPlaceholder() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         String sql = "SELECT id FROM tbl WHERE phone = ?";
         panel.showResult(result(sql, sql, List.of("phone")));
@@ -296,7 +296,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
     // T-M42：日志双击预览参数识别——initialParamValues 预填
     // ------------------------------------------------------------------
 
-    public void testInitialParamValuesPrefillFieldAndRender() {
+    public void testInitialParamValuesPrefillFieldAndRender() throws Exception {
         // 日志识别路径：param1 预填 "admin"（String → 引号提示）——初始显示与现状（值内联 'admin'）一致
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         String sql = "SELECT id FROM tbl WHERE username = ?";
@@ -328,7 +328,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testInitialParamValuesEditableAfterPrefill() {
+    public void testInitialParamValuesEditableAfterPrefill() throws Exception {
         // 预填值可编辑：改参数行值 → SQL 实时回填
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         String sql = "SELECT id FROM tbl WHERE username = ?";
@@ -361,7 +361,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testInitialParamValuesMissingSourceFallsBackToEmpty() {
+    public void testInitialParamValuesMissingSourceFallsBackToEmpty() throws Exception {
         // 预填表缺失的来源回落空串（参数行初始为空 → 渲染保留 `?`）
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         String sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?";
@@ -394,7 +394,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testEditorIsEditable() {
+    public void testEditorIsEditable() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result());
         Editor editor = panel.editorForTest();
@@ -402,23 +402,23 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testCompletionContextAttached() {
+    public void testCompletionContextAttached() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
-        panel.showResult(result(List.of("id", "phone")));
+        panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of("id", "phone")));
         PsiFile psi = panel.psiFileForTest();
         assertNotNull("应创建预览 PSI 文件", psi);
         SqlCompletionContext ctx = psi.getUserData(SqlCompletionContext.KEY);
         assertNotNull("应挂补全上下文", ctx);
-        assertEquals("tbl", ctx.getTableName());
-        assertEquals(List.of("id", "phone"), ctx.getColumns());
+        assertEquals("tbl", ctx.tableName);
+        assertEquals(List.of("id", "phone"), ctx.columns);
 
         // M16.2 双载体：Editor 上同样挂载补全上下文
         Editor editor = panel.editorForTest();
         assertNotNull("应创建编辑器", editor);
         SqlCompletionContext editorCtx = editor.getUserData(SqlCompletionContext.KEY);
         assertNotNull("Editor 上应挂补全上下文（M16.2）", editorCtx);
-        assertEquals("tbl", editorCtx.getTableName());
-        assertEquals(List.of("id", "phone"), editorCtx.getColumns());
+        assertEquals("tbl", editorCtx.tableName);
+        assertEquals(List.of("id", "phone"), editorCtx.columns);
         panel.clear();
     }
 
@@ -467,7 +467,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         return dynamicResult(conditions, views, List.of());
     }
 
-    public void testDynamicConditionCheckboxTogglesSql() {
+    public void testDynamicConditionCheckboxTogglesSql() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
                 List.of(
@@ -496,7 +496,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testSelectAllNoneTogglesAllConditions() {
+    public void testSelectAllNoneTogglesAllConditions() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
                 List.of(
@@ -535,7 +535,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testClearButtonClearsConditionValues() {
+    public void testClearButtonClearsConditionValues() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
                 List.of(
@@ -571,7 +571,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testDynamicConditionValueBlankKeepsChecked() {
+    public void testDynamicConditionValueBlankKeepsChecked() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
                 List.of(
@@ -599,7 +599,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testDynamicConditionLikePlaceholderPercentBackfill() {
+    public void testDynamicConditionLikePlaceholderPercentBackfill() throws Exception {
         // M13：LIKE 占位符回填自动拼百分号（name 为 String 列）→ name LIKE '%张三%'
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
@@ -614,7 +614,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testDynamicConditionStringColumnNumericValueQuoted() {
+    public void testDynamicConditionStringColumnNumericValueQuoted() throws Exception {
         // M13：String 列（java.lang.String）输入数字 → 恒加引号
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
@@ -629,7 +629,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testDynamicConditionNumericColumnValueRaw() {
+    public void testDynamicConditionNumericColumnValueRaw() throws Exception {
         // M13：数值列（java.lang.Long）输入数字 → 原样不带引号
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
@@ -644,7 +644,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testDynamicConditionDateTimeColumnValueQuoted() {
+    public void testDynamicConditionDateTimeColumnValueQuoted() throws Exception {
         // T-M23-03（用户实测：LocalDateTime 参数回填不带引号）：除确定的数值类型外其他类型默认带引号
         TableInfo base = tableInfo();
         List<ColumnInfo> newCols = new ArrayList<>(base.getColumns());
@@ -723,7 +723,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
                 null);
     }
 
-    public void testBatchModelAutoIdDefaultUncheckedRendersWithoutId() {
+    public void testBatchModelAutoIdDefaultUncheckedRendersWithoutId() throws Exception {
         // T-M23-04（用户建议）：save(entity) 自增主键默认不勾选 → 初始 SQL 无 id 列
         BatchModel model = new BatchModel(BatchKind.INSERT, "biz_store_coupon",
                 List.of(
@@ -736,11 +736,11 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         String sql = panel.editorForTest().getDocument().getText();
         assertTrue("初始 SQL 应含勾选列", sql.contains("INSERT INTO biz_store_coupon (name, dic_status)"));
         assertFalse("初始 SQL 不应含 id 列", sql.contains("id"));
-        assertFalse("id 复选框默认不勾选", panel.batchCheckboxForTest(0).isSelected);
+        assertFalse("id 复选框默认不勾选", panel.batchCheckboxForTest(0).isSelected());
         panel.clear();
     }
 
-    public void testBatchModelCheckboxToggleRebuildsSql() {
+    public void testBatchModelCheckboxToggleRebuildsSql() throws Exception {
         BatchModel model = new BatchModel(BatchKind.INSERT, "biz_store_coupon",
                 List.of(
                         new BatchColumn("id", "entity.id", false, false),
@@ -751,7 +751,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.showResult(batchResult(model));
         // 勾选 id → INSERT 恢复 id 列
         panel.batchCheckboxForTest(0).doClick();
-        assertTrue(panel.batchCheckboxForTest(0).isSelected);
+        assertTrue(panel.batchCheckboxForTest(0).isSelected());
         assertTrue(
                 "勾选后 SQL 应含 id",
                 panel.editorForTest().getDocument().getText().contains("INSERT INTO biz_store_coupon (id, name, dic_status)"));
@@ -771,7 +771,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testBatchModelFixedColumnHasNoCheckbox() {
+    public void testBatchModelFixedColumnHasNoCheckbox() throws Exception {
         // T-M23-04：UPDATE 的 WHERE 主键为固定列——仅值输入框（无复选框），复选框数 = toggle 列数
         BatchModel model = new BatchModel(BatchKind.UPDATE, "device_info",
                 List.of(new BatchColumn("name", "entity.name", true, true)),
@@ -788,7 +788,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testBatchModelSelectAllNoneButtons() {
+    public void testBatchModelSelectAllNoneButtons() throws Exception {
         // T-M23.2（用户要求：参数可选场景必须有【全选/全不选】按钮）
         BatchModel model = new BatchModel(BatchKind.INSERT, "biz_store_coupon",
                 List.of(
@@ -802,21 +802,21 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         assertNotNull("批量区应有全不选按钮", panel.batchSelectNoneButtonForTest());
         // 全不选 → 空列清单（文档化边界）
         panel.batchSelectNoneButtonForTest().doClick();
-        assertFalse(panel.batchCheckboxForTest(0).isSelected);
-        assertFalse(panel.batchCheckboxForTest(1).isSelected);
-        assertFalse(panel.batchCheckboxForTest(2).isSelected);
+        assertFalse(panel.batchCheckboxForTest(0).isSelected());
+        assertFalse(panel.batchCheckboxForTest(1).isSelected());
+        assertFalse(panel.batchCheckboxForTest(2).isSelected());
         assertTrue(panel.editorForTest().getDocument().getText().contains("INSERT INTO biz_store_coupon ()"));
         // 全选 → 全列恢复
         panel.batchSelectAllButtonForTest().doClick();
-        assertTrue(panel.batchCheckboxForTest(0).isSelected);
-        assertTrue(panel.batchCheckboxForTest(1).isSelected);
-        assertTrue(panel.batchCheckboxForTest(2).isSelected);
+        assertTrue(panel.batchCheckboxForTest(0).isSelected());
+        assertTrue(panel.batchCheckboxForTest(1).isSelected());
+        assertTrue(panel.batchCheckboxForTest(2).isSelected());
         assertTrue(
                 panel.editorForTest().getDocument().getText().contains("INSERT INTO biz_store_coupon (id, name, dic_status)"));
         panel.clear();
     }
 
-    public void testInListMultiValueBackfill() {
+    public void testInListMultiValueBackfill() throws Exception {
         // M19.6（用户实测）：IN 列表占位符回填按逗号分割多值、每个值独立引号
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(dynamicResult(
@@ -838,7 +838,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
     // M17：执行 SQL
     // ------------------------------------------------------------------
 
-    public void testExecuteSqlWithoutDatabasePluginNoThrow() {
+    public void testExecuteSqlWithoutDatabasePluginNoThrow() throws Exception {
         // 测试沙盒无 Database 插件 → 走 Community 降级提示，不抛异常
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result("SELECT id FROM tbl", "SELECT id FROM tbl"));
@@ -846,7 +846,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testExecuteSqlDisabledWithoutProject() {
+    public void testExecuteSqlDisabledWithoutProject() throws Exception {
         // 无项目面板（纯组件预览）：执行无动作（project null 直接返回），不抛异常
         SqlPreviewPanel panel = new SqlPreviewPanel(null);
         panel.showResult(result());
@@ -854,7 +854,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testExecuteSqlBlankSqlNoop() {
+    public void testExecuteSqlBlankSqlNoop() throws Exception {
         // 空 SQL：不触发执行链路，不抛异常
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result("   ", "   "));
@@ -862,7 +862,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testSplitDividerPaintedAsPanelBackground() {
+    public void testSplitDividerPaintedAsPanelBackground() throws Exception {
         // T-M26.1：分隔条绘制应等于面板底色
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         JSplitPane split = panel.splitPaneForTest();
@@ -883,7 +883,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testSelectAllButtonsOnConditionSectionHeader() {
+    public void testSelectAllButtonsOnConditionSectionHeader() throws Exception {
         // T-M26.3：全选/全不选回挂「动态条件」分区标题行右侧
         String longExpr = "stationIds != null and stationIds.size() > 0";
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
@@ -923,14 +923,14 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         }
     }
 
-    public void testReformatShortcutRegistered() {
+    public void testReformatShortcutRegistered() throws Exception {
         // T-M26.6：格式化快捷键注册
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         assertNotNull("应注册格式化 action", panel.reformatActionForTest());
         panel.clear();
     }
 
-    public void testReformatShortcutFormatsSql() {
+    public void testReformatShortcutFormatsSql() throws Exception {
         // T-M26.6：触发格式化 action 后 SQL 被格式化
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result("select id from tbl", "select id from tbl"));
@@ -942,7 +942,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testActionButtonGroupsSwitchByScene() {
+    public void testActionButtonGroupsSwitchByScene() throws Exception {
         // T-M26.3：按钮组按场景构建
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         // 无参数 → 无按钮
@@ -973,7 +973,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
     // T-M27.1：SQL 面板补全触发
     // ------------------------------------------------------------------
 
-    public void testPanelEditorWrapsDataProviderForEditor() {
+    public void testPanelEditorWrapsDataProviderForEditor() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result());
         Editor editor = panel.editorForTest();
@@ -984,7 +984,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testPanelEditorCompletionOffersKeywordsAndColumns() {
+    public void testPanelEditorCompletionOffersKeywordsAndColumns() throws Exception {
         if (Language.findLanguageByID("SQL") == null) return; // 测试环境无 SQL 语言，真实 IDE 才执行补全断言
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result());
@@ -1034,7 +1034,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
     // T-M27.2：面板输入自动弹出补全
     // ------------------------------------------------------------------
 
-    public void testTypingTriggersAutoPopup() {
+    public void testTypingTriggersAutoPopup() throws Exception {
         if (Language.findLanguageByID("SQL") == null) return;
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result("SELECT id FROM ", "SELECT id FROM tbl"));
@@ -1063,7 +1063,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testTypingTriggersAutoPopupXmlScene() {
+    public void testTypingTriggersAutoPopupXmlScene() throws Exception {
         if (Language.findLanguageByID("SQL") == null) return;
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result("SELECT id FROM ", "SELECT id FROM tbl", List.of(), List.of(), null));
@@ -1092,7 +1092,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testTypingTriggersAutoPopupXmlSceneWithEntity() {
+    public void testTypingTriggersAutoPopupXmlSceneWithEntity() throws Exception {
         if (Language.findLanguageByID("SQL") == null) return;
         // T-M27.3：XML 预览注入实体上下文后——输入应弹**列名**
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
@@ -1122,7 +1122,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testRenderAutoFormatsSql() {
+    public void testRenderAutoFormatsSql() throws Exception {
         // T-M27.4：渲染自动格式化（设置开启）
         PluginSettings.getInstance().getState().setFormatSql(true);
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
@@ -1136,7 +1136,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
-    public void testTableNameCompletionInWhereClauseWithCandidates() {
+    public void testTableNameCompletionInWhereClauseWithCandidates() throws Exception {
         if (Language.findLanguageByID("SQL") == null) return;
         // T-M27.4：表名全位置提示
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());

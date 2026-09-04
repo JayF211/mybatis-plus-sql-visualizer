@@ -13,8 +13,8 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -72,7 +72,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void updateJoin_set与setSql与setIncrBy与join与条件() {
+    public void updateJoin_set与setSql与setIncrBy与join与条件() throws Exception {
         WrapperChain chain = chain(WrapperType.UPDATE_JOIN, List.of(
                 new WrapperCall("set", List.of(
                         new WrapperArg.ColumnArg(col("name")),
@@ -109,7 +109,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void updateJoin_setDecrBy与on两列比较与跨表条件() {
+    public void updateJoin_setDecrBy与on两列比较与跨表条件() throws Exception {
         WrapperChain chain = chain(WrapperType.UPDATE_JOIN, List.of(
                 new WrapperCall("leftJoin", List.of(
                         new WrapperArg.EntityRefArg(addressTable),
@@ -139,7 +139,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void updateJoin_setUpdateEntity近似主表非主键全列占位() {
+    public void updateJoin_setUpdateEntity近似主表非主键全列占位() throws Exception {
         WrapperChain chain = chain(WrapperType.UPDATE_JOIN, List.of(
                 new WrapperCall("setUpdateEntity", List.of(new WrapperArg.ValueArg(ph("entity")))),
                 eqCall("id", "1001")
@@ -154,9 +154,8 @@ public class UpdateJoinDeleteJoinConverterTest {
                 sql);
 
         String andNull = SqlGenerator.INSTANCE.generate(UpdateJoinConverter.INSTANCE.convert(
-                chain(WrapperType.UPDATE_JOIN, "UserEntity", List.of(
-                        new WrapperCall("setUpdateEntityAndNull", List.of(new WrapperArg.ValueArg(ph("entity"))))),
-                null, false, false, false, false, null),
+                chain(WrapperType.UPDATE_JOIN, List.of(
+                        new WrapperCall("setUpdateEntityAndNull", List.of(new WrapperArg.ValueArg(ph("entity")))))),
                 table));
         assertEquals(
                 """
@@ -167,7 +166,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void updateJoin_setAlias主表别名与lambdaOn() {
+    public void updateJoin_setAlias主表别名与lambdaOn() throws Exception {
         WrapperChain chain = chain(WrapperType.UPDATE_JOIN, List.of(
                 new WrapperCall("setAlias", List.of(new WrapperArg.ValueArg(lit("u")))),
                 new WrapperCall("leftJoin", List.of(
@@ -197,7 +196,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void updateJoin_set布尔前缀剥离与字符串sqlJoin() {
+    public void updateJoin_set布尔前缀剥离与字符串sqlJoin() throws Exception {
         WrapperChain chain = chain(WrapperType.UPDATE_JOIN, List.of(
                 new WrapperCall("set", List.of(
                         new WrapperArg.ValueArg(lit("true")),
@@ -221,7 +220,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void deleteJoin_deleteAll全表目标() {
+    public void deleteJoin_deleteAll全表目标() throws Exception {
         WrapperChain chain = chain(WrapperType.DELETE_JOIN, List.of(
                 leftJoinCall(),
                 new WrapperCall("deleteAll", List.of()),
@@ -240,7 +239,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void deleteJoin_deleteClass主表与关联表目标() {
+    public void deleteJoin_deleteClass主表与关联表目标() throws Exception {
         WrapperChain mainTarget = chain(WrapperType.DELETE_JOIN, List.of(
                 leftJoinCall(),
                 new WrapperCall("delete", List.of(new WrapperArg.ValueArg(lit("UserEntity.class")))),
@@ -273,7 +272,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void deleteJoin_无delete调用默认主别名与字符串目标() {
+    public void deleteJoin_无delete调用默认主别名与字符串目标() throws Exception {
         WrapperChain defaultChain = chain(WrapperType.DELETE_JOIN, List.of(
                 leftJoinCall(),
                 eqCall("id", "1001")
@@ -291,7 +290,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void deleteJoin_单表无join保持既有形态() {
+    public void deleteJoin_单表无join保持既有形态() throws Exception {
         WrapperChain chain = chain(WrapperType.DELETE_JOIN, List.of(eqCall("id", "1")));
         String sql = SqlGenerator.INSTANCE.generate(DeleteJoinConverter.INSTANCE.convert(chain, table));
         assertEquals(
@@ -310,7 +309,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void 注册表_新类型分发到联表更新与删除转换器() {
+    public void 注册表_新类型分发到联表更新与删除转换器() throws Exception {
         assertTrue(ConverterRegistry.INSTANCE.convert(
                 chain(WrapperType.UPDATE_JOIN, List.of(eqCall("id", "1"))), table) instanceof UpdateStatement);
         assertTrue(ConverterRegistry.INSTANCE.convert(
@@ -318,7 +317,7 @@ public class UpdateJoinDeleteJoinConverterTest {
     }
 
     @Test
-    public void updateJoin_setIncrBy关键字列引用() {
+    public void updateJoin_setIncrBy关键字列引用() throws Exception {
         WrapperChain chain = chain(WrapperType.UPDATE_JOIN, List.of(
                 new WrapperCall("setIncrBy", List.of(
                         new WrapperArg.ColumnArg(col("table")),

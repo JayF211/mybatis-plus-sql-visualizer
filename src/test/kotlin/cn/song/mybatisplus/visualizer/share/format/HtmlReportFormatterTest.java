@@ -14,7 +14,7 @@ import java.util.Map;
 public class HtmlReportFormatterTest {
 
     @Test
-    public void format_生成完整HTML结构() {
+    public void format_生成完整HTML结构() throws Exception {
         String sql = "SELECT id FROM user";
         String html = HtmlReportFormatter.INSTANCE.format(sql, List.of(), Map.of(), "user", "MySQL");
         assertTrue(html.contains("<!DOCTYPE html>"));
@@ -27,7 +27,7 @@ public class HtmlReportFormatterTest {
     }
 
     @Test
-    public void format_关键字高亮标签存在() {
+    public void format_关键字高亮标签存在() throws Exception {
         String html = HtmlReportFormatter.INSTANCE.format("SELECT id FROM user WHERE name = 'tom'",
                 List.of(), Map.of(), "user", "MySQL");
         // 关键字 SELECT / FROM / WHERE 应有 kw 类
@@ -39,7 +39,7 @@ public class HtmlReportFormatterTest {
     }
 
     @Test
-    public void format_参数对照表_有参数时生成() {
+    public void format_参数对照表_有参数时生成() throws Exception {
         String html = HtmlReportFormatter.INSTANCE.format(
                 "SELECT id FROM user WHERE name = ? AND age = ?",
                 List.of("name", "age"), Map.of("name", "tom", "age", "25"), "user", null);
@@ -51,14 +51,14 @@ public class HtmlReportFormatterTest {
     }
 
     @Test
-    public void format_参数对照表_无参数时省略() {
+    public void format_参数对照表_无参数时省略() throws Exception {
         String html = HtmlReportFormatter.INSTANCE.format("SELECT id FROM user",
                 List.of(), Map.of(), "user", null);
         assertFalse(html.contains("Parameters"));
     }
 
     @Test
-    public void format_HTML特殊字符_正确转义() {
+    public void format_HTML特殊字符_正确转义() throws Exception {
         String html = HtmlReportFormatter.INSTANCE.format("SELECT id FROM user WHERE name = '<script>'",
                 List.of(), Map.of(), "user", null);
         // < 应转义为 &lt;
@@ -67,7 +67,7 @@ public class HtmlReportFormatterTest {
     }
 
     @Test
-    public void format_null表名和dialect_省略对应元信息() {
+    public void format_null表名和dialect_省略对应元信息() throws Exception {
         String sql = "SELECT id FROM user";
         String html = HtmlReportFormatter.INSTANCE.format(sql, List.of(), Map.of(), null, null);
         assertTrue(html.contains("<!DOCTYPE html>"));
@@ -76,7 +76,7 @@ public class HtmlReportFormatterTest {
     }
 
     @Test
-    public void format_注释高亮_cmt类存在() {
+    public void format_注释高亮_cmt类存在() throws Exception {
         String html = HtmlReportFormatter.INSTANCE.format("SELECT id FROM user -- get all",
                 List.of(), Map.of(), "user", null);
         assertTrue(html.contains("class=\"cmt\""));

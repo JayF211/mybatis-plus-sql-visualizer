@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -16,7 +16,7 @@ import java.util.List;
 public class LogSqlEntryTest {
 
     @Test
-    public void testToLogText_无参数_仅Preparing行() {
+    public void testToLogText_无参数_仅Preparing行() throws Exception {
         LogSqlEntry entry = new LogSqlEntry("SELECT 1", "SELECT 1", List.of());
         String text = LogSqlModelsKt.toLogText(entry);
         assertTrue(text.startsWith("==>  Preparing: SELECT 1"));
@@ -24,7 +24,7 @@ public class LogSqlEntryTest {
     }
 
     @Test
-    public void testToLogText_含参数_渲染类型标注() {
+    public void testToLogText_含参数_渲染类型标注() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "select * from t where id=? and name=?",
                 "select * from t where id=? and name=?",
@@ -35,7 +35,7 @@ public class LogSqlEntryTest {
     }
 
     @Test
-    public void testToLogText_null参数_渲染为null() {
+    public void testToLogText_null参数_渲染为null() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "select ?",
                 "select ?",
@@ -45,7 +45,7 @@ public class LogSqlEntryTest {
     }
 
     @Test
-    public void testToLogText_结构为Preparing加Parameters两行() {
+    public void testToLogText_结构为Preparing加Parameters两行() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "insert into t(a) values(?)",
                 "insert into t(a) values(?)",

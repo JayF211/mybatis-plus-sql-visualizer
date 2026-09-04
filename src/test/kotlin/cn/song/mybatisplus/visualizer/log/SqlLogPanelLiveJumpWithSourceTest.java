@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.log;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
@@ -51,7 +51,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test携带源码位置_精确跳转_Precise() {
+    public void test携带源码位置_精确跳转_Precise() throws Exception {
         writeRealSource("com/example/service/UserService.java", "class UserService {}\n");
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
@@ -68,7 +68,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test携带源码位置_真实跳转不抛异常_链路可达() {
+    public void test携带源码位置_真实跳转不抛异常_链路可达() throws Exception {
         writeRealSource("com/example/service/NavService.java", "class NavService {}\n");
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
@@ -81,7 +81,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test源码文件不存在_NotFound_提示() {
+    public void test源码文件不存在_NotFound_提示() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             LogJumpTarget target = panel.resolveEntryJump(entry("SELECT 1", "missing/Missing.java", 5));
@@ -93,7 +93,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test无源码位置_回退表名搜索_SearchByTable() {
+    public void test无源码位置_回退表名搜索_SearchByTable() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             LogJumpTarget target = panel.resolveEntryJump(entry("SELECT * FROM user u WHERE u.id = 1"));
@@ -106,7 +106,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test无源码位置_无表名_NoTable() {
+    public void test无源码位置_无表名_NoTable() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             LogJumpTarget target = panel.resolveEntryJump(entry("SELECT 1"));
@@ -117,7 +117,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test旧版条目_sourceFile为null_回退路径不崩() {
+    public void test旧版条目_sourceFile为null_回退路径不崩() throws Exception {
         // 旧版 F-43 保存的实时条目 sourceFile 恒为 null → 必须回退表名搜索，不得 NPE
         // （headless 下不实际调用 jumpToSourceForTest，因其会触发 Messages 弹窗；仅断言决策分支）
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);

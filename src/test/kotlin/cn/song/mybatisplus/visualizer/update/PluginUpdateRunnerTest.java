@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.update;
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.CheckResult;
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.InstallResult;
 import com.intellij.openapi.util.io.FileUtil;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.BufferedOutputStream;
@@ -32,7 +32,7 @@ public class PluginUpdateRunnerTest {
     // ---------------- check ----------------
 
     @Test
-    public void checkCurrentVersionUnavailableIsFailure() {
+    public void checkCurrentVersionUnavailableIsFailure() throws Exception {
         CheckResult result = PluginUpdateRunner.check(null, s -> {
             throw new AssertionError("fetch must not be called");
         });
@@ -40,26 +40,26 @@ public class PluginUpdateRunnerTest {
     }
 
     @Test
-    public void checkFetchFailureIsFailure() {
+    public void checkFetchFailureIsFailure() throws Exception {
         CheckResult result = PluginUpdateRunner.check("2026.8.14", s -> null);
         assertTrue(result instanceof CheckResult.Failure);
     }
 
     @Test
-    public void checkMalformedManifestIsFailure() {
+    public void checkMalformedManifestIsFailure() throws Exception {
         CheckResult result = PluginUpdateRunner.check("2026.8.14", s -> "not json");
         assertTrue(result instanceof CheckResult.Failure);
     }
 
     @Test
-    public void checkNewerVersionIsAvailable() {
+    public void checkNewerVersionIsAvailable() throws Exception {
         CheckResult result = PluginUpdateRunner.check("2026.8.14", s ->
                 "{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}");
         assertEquals(new CheckResult.Available(manifest), result);
     }
 
     @Test
-    public void checkSameOrOlderIsUpToDate() {
+    public void checkSameOrOlderIsUpToDate() throws Exception {
         CheckResult same = PluginUpdateRunner.check("2026.8.15", s ->
                 "{\"version\":\"2026.8.15\",\"downloadUrl\":\"https://example.com/plugin.zip\"}");
         CheckResult older = PluginUpdateRunner.check("2026.8.16", s ->
@@ -71,11 +71,11 @@ public class PluginUpdateRunnerTest {
     // ---------------- downloadAndInstall ----------------
 
     @Test
-    public void downloadAndInstallHappyPath() {
+    public void downloadAndInstallHappyPath() throws Exception {
         final boolean[] installCalled = {false};
         InstallResult result = runWithTempZip(zip ->
                 PluginUpdateRunner.downloadAndInstall(manifest, null,
-                        (url, target) -> copyTo(zip, target),
+                        (url, target) -> { try { copyTo(zip, target); } catch (java.io.IOException e) { throw new RuntimeException(e); } },
                         path -> {
                             installCalled[0] = true;
                             return InstallResult.Installed.INSTANCE;
@@ -91,7 +91,11 @@ public class PluginUpdateRunnerTest {
             List<File> tempFiles = new ArrayList<>();
             PluginUpdateRunner.downloadAndInstall(manifest, null,
                     (url, target) -> {
-                        writeZip(target.toFile());
+                        try {
+                            writeZip(target.toFile());
+                        } catch (java.io.IOException e) {
+                            throw new RuntimeException(e);
+                        }
                         tempFiles.add(target.toFile());
                     },
                     path -> InstallResult.Installed.INSTANCE);
@@ -102,7 +106,7 @@ public class PluginUpdateRunnerTest {
     }
 
     @Test
-    public void downloadAndInstallDownloadFailureCleansUp() {
+    public void downloadAndInstallDownloadFailureCleansUp() throws Exception {
         InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, null,
                 (url, target) -> {
                     throw new RuntimeException("connection refused");
@@ -115,7 +119,7 @@ public class PluginUpdateRunnerTest {
     }
 
     @Test
-    public void downloadAndInstallInvalidZipIsFailed() {
+    public void downloadAndInstallInvalidZipIsFailed() throws Exception {
         final boolean[] installCalled = {false};
         InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, null,
                 (url, target) -> {
@@ -134,7 +138,7 @@ public class PluginUpdateRunnerTest {
     }
 
     @Test
-    public void downloadAndInstallEmptyFileIsFailed() {
+    public void downloadAndInstallEmptyFileIsFailed() throws Exception {
         InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, null,
                 (url, target) -> {
                 },
@@ -143,17 +147,17 @@ public class PluginUpdateRunnerTest {
     }
 
     @Test
-    public void downloadAndInstallInstallFailurePropagates() {
+    public void downloadAndInstallInstallFailurePropagates() throws Exception {
         InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, null,
-                (url, target) -> writeZip(target.toFile()),
+                (url, target) -> { try { writeZip(target.toFile()); } catch (java.io.IOException e) { throw new RuntimeException(e); } },
                 path -> new InstallResult.Failed("install rejected"));
         assertEquals(new InstallResult.Failed("install rejected"), result);
     }
 
     @Test
-    public void downloadAndInstallInstallExceptionIsFailed() {
+    public void downloadAndInstallInstallExceptionIsFailed() throws Exception {
         InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, null,
-                (url, target) -> writeZip(target.toFile()),
+                (url, target) -> { try { writeZip(target.toFile()); } catch (java.io.IOException e) { throw new RuntimeException(e); } },
                 path -> {
                     throw new RuntimeException("boom");
                 });

@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.execute;
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.content.Content;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.lang.reflect.InvocationHandler;
@@ -71,7 +71,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     // ==================== 场景一：实例复用改名（M36.5.22b 回归核心） ====================
 
     @Test
-    public void testRenamedContentInstancePickedImmediately() {
+    public void testRenamedContentInstancePickedImmediately() throws Exception {
         FakeContent reused = new FakeContent("Result 1");
         Set<String> preExisting = Set.of("Result 1");
         reused.displayName = "Result 2";
@@ -81,7 +81,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSnapshotThenRenameFullChain() {
+    public void testSnapshotThenRenameFullChain() throws Exception {
         FakeContent reused = new FakeContent("Result 1");
         FakeUi ui = new FakeUi(new Content[]{reused.proxy});
         Set<String> preExistingNames = DataSourceSelector.resultContents(ui).stream()
@@ -99,7 +99,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     // ==================== 场景二：新 Tab 新名称 ====================
 
     @Test
-    public void testNewTabNameWinsImmediately() {
+    public void testNewTabNameWinsImmediately() throws Exception {
         Content old = new FakeContent("Result 1").proxy;
         Content newTab = new FakeContent("Result 2").proxy;
         Content picked = DataSourceSelector.pickResultTab(new Content[]{old, newTab}, Set.of("Result 1"), 1);
@@ -107,7 +107,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMultipleNewTabsPicksFirst() {
+    public void testMultipleNewTabsPicksFirst() throws Exception {
         Content a = new FakeContent("Result 2").proxy;
         Content b = new FakeContent("Result 3").proxy;
         Content picked = DataSourceSelector.pickResultTab(new Content[]{a, b}, Set.of("Result 1"), 1);
@@ -117,7 +117,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     // ==================== 场景三：旧 Tab 复用阈值 ====================
 
     @Test
-    public void testStaleTabNotPickedBeforeThreshold() {
+    public void testStaleTabNotPickedBeforeThreshold() throws Exception {
         Content stale = new FakeContent("Result 1").proxy;
         Content picked = DataSourceSelector.pickResultTab(
                 new Content[]{stale}, Set.of("Result 1"), DataSourceSelector.REUSE_ACCEPT_TICKS - 1);
@@ -125,7 +125,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testStaleTabAcceptedAtThreshold() {
+    public void testStaleTabAcceptedAtThreshold() throws Exception {
         Content stale = new FakeContent("Result 1").proxy;
         Content picked = DataSourceSelector.pickResultTab(
                 new Content[]{stale}, Set.of("Result 1"), DataSourceSelector.REUSE_ACCEPT_TICKS);
@@ -135,7 +135,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     // ==================== 场景四：Output 过滤 ====================
 
     @Test
-    public void testOutputTabExcluded() {
+    public void testOutputTabExcluded() throws Exception {
         Content output = new FakeContent("Output").proxy;
         Content result = new FakeContent("Result 1").proxy;
         Content picked = DataSourceSelector.pickResultTab(new Content[]{output, result}, Set.of(), 1);
@@ -143,7 +143,7 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testChineseOutputTabExcluded() {
+    public void testChineseOutputTabExcluded() throws Exception {
         Content output = new FakeContent("输出").proxy;
         Content result = new FakeContent("Result 1").proxy;
         Content picked = DataSourceSelector.pickResultTab(new Content[]{output, result}, Set.of(), 1);
@@ -151,20 +151,20 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testOnlyOutputYieldsNull() {
+    public void testOnlyOutputYieldsNull() throws Exception {
         Content output = new FakeContent("Output").proxy;
         assertNull(DataSourceSelector.pickResultTab(new Content[]{output}, Set.of(), 40));
     }
 
     @Test
-    public void testEmptyContentsYieldsNull() {
+    public void testEmptyContentsYieldsNull() throws Exception {
         assertNull(DataSourceSelector.pickResultTab(new Content[0], Set.of(), 40));
     }
 
     // ==================== resultContents 反射读取 ====================
 
     @Test
-    public void testResultContentsFiltersOutputTabs() {
+    public void testResultContentsFiltersOutputTabs() throws Exception {
         Content output = new FakeContent("Output").proxy;
         Content outputCn = new FakeContent("输出").proxy;
         Content result = new FakeContent("Result 1").proxy;
@@ -173,12 +173,12 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testResultContentsNullUiYieldsEmpty() {
+    public void testResultContentsNullUiYieldsEmpty() throws Exception {
         assertTrue(DataSourceSelector.resultContents(null).isEmpty());
     }
 
     @Test
-    public void testResultContentsNonReflectiveUiYieldsEmpty() {
+    public void testResultContentsNonReflectiveUiYieldsEmpty() throws Exception {
         assertTrue(DataSourceSelector.resultContents(new Object()).isEmpty());
     }
 }

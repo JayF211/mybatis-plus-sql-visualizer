@@ -1,12 +1,12 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertSame;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JLabel;
@@ -40,7 +40,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     // ---------- T-02：缓存行为 ----------
 
     @Test
-    public void test新条目缓存为null_首次渲染后缓存非null() {
+    public void test新条目缓存为null_首次渲染后缓存非null() throws Exception {
         LogSqlEntry e = entry("SELECT * FROM t");
         assertNull("新建条目缓存应为 null", cachedHtml(e));
 
@@ -51,7 +51,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test同一条目二次渲染_命中缓存_不再重新计算Html() {
+    public void test同一条目二次渲染_命中缓存_不再重新计算Html() throws Exception {
         LogSqlEntry e = entry("SELECT 1");
         String first = render(e, false);
         String cached = cachedHtml(e);
@@ -63,7 +63,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test刷新后缓存清空_render重新填充() {
+    public void test刷新后缓存清空_render重新填充() throws Exception {
         LogSqlEntry e = entry("SELECT 1");
         render(e, false);
         assertNotNull(cachedHtml(e));
@@ -80,7 +80,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test不同条目缓存相互独立() {
+    public void test不同条目缓存相互独立() throws Exception {
         LogSqlEntry e1 = entry("SELECT 1");
         LogSqlEntry e2 = entry("SELECT 2");
         render(e1, false);
@@ -93,7 +93,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     // ---------- T-01/03：常量存在性 ----------
 
     @Test
-    public void test首屏批次数大于0且小于总批次数() {
+    public void test首屏批次数大于0且小于总批次数() throws Exception {
         // REFRESH_FIRST_BATCH_SIZE 和 REFRESH_CHUNK_SIZE 应为合理正数
         assertTrue("首屏批次应 > 0", SqlLogPanelKt.REFRESH_FIRST_BATCH_SIZE > 0);
         assertTrue("异步批次应 > 0", SqlLogPanelKt.REFRESH_CHUNK_SIZE > 0);
@@ -102,7 +102,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test200条数据分两批以上写入() {
+    public void test200条数据分两批以上写入() throws Exception {
         int total = 200;
         int firstBatchSize = SqlLogPanelKt.REFRESH_FIRST_BATCH_SIZE;
         int chunkSize = SqlLogPanelKt.REFRESH_CHUNK_SIZE;

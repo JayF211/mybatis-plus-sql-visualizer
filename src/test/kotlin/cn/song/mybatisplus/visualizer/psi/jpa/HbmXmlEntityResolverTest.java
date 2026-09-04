@@ -5,7 +5,7 @@ import cn.song.mybatisplus.visualizer.model.AssociationInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
-import org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
 import java.util.List;
@@ -13,16 +13,16 @@ import java.util.List;
 public class HbmXmlEntityResolverTest {
 
     @Test
-    public void classMappingDataModelIsCorrectlyStructured() {
+    public void classMappingDataModelIsCorrectlyStructured() throws Exception {
         HbmXmlMapping.ClassMapping mapping = new HbmXmlMapping.ClassMapping(
                 "RuleTableItem",
                 "com.vtradex.rule.server.model.rule.RuleTableItem",
                 "THORN_RULE_TABLE_ITEM",
                 List.of(
                         new HbmXmlMapping.PropertyMapping("id", "ID", true),
-                        new HbmXmlMapping.PropertyMapping("gradeType", "GRADE_TYPE"),
-                        new HbmXmlMapping.PropertyMapping("type", "TYPE"),
-                        new HbmXmlMapping.PropertyMapping("lineNO", "LINE_NO")
+                        new HbmXmlMapping.PropertyMapping("gradeType", "GRADE_TYPE", false),
+                        new HbmXmlMapping.PropertyMapping("type", "TYPE", false),
+                        new HbmXmlMapping.PropertyMapping("lineNO", "LINE_NO", false)
                 ),
                 List.of(
                         new HbmXmlMapping.AssociationMapping(
@@ -40,7 +40,7 @@ public class HbmXmlEntityResolverTest {
     }
 
     @Test
-    public void propertyMappingCorrectlyIdentifiesId() {
+    public void propertyMappingCorrectlyIdentifiesId() throws Exception {
         HbmXmlMapping.PropertyMapping idProp = new HbmXmlMapping.PropertyMapping("id", "ID", true);
         HbmXmlMapping.PropertyMapping regularProp = new HbmXmlMapping.PropertyMapping("lineNO", "LINE_NO", false);
 
@@ -49,7 +49,7 @@ public class HbmXmlEntityResolverTest {
     }
 
     @Test
-    public void associationMappingStoresJoinColumn() {
+    public void associationMappingStoresJoinColumn() throws Exception {
         HbmXmlMapping.AssociationMapping assoc = new HbmXmlMapping.AssociationMapping(
                 "ruleTable",
                 "com.vtradex.rule.server.model.rule.ThornRuleTable",
@@ -61,7 +61,7 @@ public class HbmXmlEntityResolverTest {
     }
 
     @Test
-    public void hqlConversionWithHbmMappingTableInfo() {
+    public void hqlConversionWithHbmMappingTableInfo() throws Exception {
         TableInfo tableInfo = new TableInfo(
                 "RuleTableItem",
                 "THORN_RULE_TABLE_ITEM",

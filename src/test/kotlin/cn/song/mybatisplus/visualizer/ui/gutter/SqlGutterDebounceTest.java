@@ -18,43 +18,43 @@ import cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProviderKt;
 public class SqlGutterDebounceTest {
 
     @Test
-    public void shouldNavigate_firstCallAllowed() {
+    public void shouldNavigate_firstCallAllowed() throws Exception {
         // 上次时间戳为 0（从未导航），当前任意时间均应允许
         assertTrue(SqlGutterLineMarkerProviderKt.shouldNavigate(0L, 1000L));
     }
 
     @Test
-    public void shouldNavigate_withinWindowBlocked() {
+    public void shouldNavigate_withinWindowBlocked() throws Exception {
         // 间隔 100ms < 200ms 窗口 → 丢弃
         assertFalse(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1100L));
     }
 
     @Test
-    public void shouldNavigate_afterWindowAllowed() {
+    public void shouldNavigate_afterWindowAllowed() throws Exception {
         // 间隔 200ms = 窗口 → 允许（>= 窗口）
         assertTrue(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1200L));
     }
 
     @Test
-    public void shouldNavigate_wellAfterWindowAllowed() {
+    public void shouldNavigate_wellAfterWindowAllowed() throws Exception {
         // 间隔远大于窗口 → 允许
         assertTrue(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 5000L));
     }
 
     @Test
-    public void shouldNavigate_boundaryExactlyAtWindow() {
+    public void shouldNavigate_boundaryExactlyAtWindow() throws Exception {
         // 刚好等于 200ms → 允许
         assertTrue(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1200L));
     }
 
     @Test
-    public void shouldNavigate_justBeforeWindowBlocked() {
+    public void shouldNavigate_justBeforeWindowBlocked() throws Exception {
         // 间隔 199ms < 200ms → 丢弃
         assertFalse(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1199L));
     }
 
     @Test
-    public void shouldNavigate_differentElementsShareGlobalWindow() {
+    public void shouldNavigate_differentElementsShareGlobalWindow() throws Exception {
         // 全局粒度：点击 A 后立即点击 B（不同元素），B 被防抖丢弃
         long lastTime = 1000L;
         long now = 1050L; // 间隔 50ms < 200ms
@@ -63,7 +63,7 @@ public class SqlGutterDebounceTest {
     }
 
     @Test
-    public void shouldNavigate_customWindowSize() {
+    public void shouldNavigate_customWindowSize() throws Exception {
         // 自定义窗口 500ms：间隔 400ms → 丢弃
         assertFalse(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1400L, 500L));
         // 自定义窗口 500ms：间隔 500ms → 允许
@@ -71,7 +71,7 @@ public class SqlGutterDebounceTest {
     }
 
     @Test
-    public void shouldNavigate_zeroWindowAlwaysAllows() {
+    public void shouldNavigate_zeroWindowAlwaysAllows() throws Exception {
         // 窗口为 0：任何间隔都允许
         assertTrue(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1000L, 0L));
         assertTrue(SqlGutterLineMarkerProviderKt.shouldNavigate(1000L, 1001L, 0L));

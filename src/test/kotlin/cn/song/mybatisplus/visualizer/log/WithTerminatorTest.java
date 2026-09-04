@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.log.SqlLogPanelKt;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
@@ -11,34 +11,34 @@ import org.junit.Test;
 public class WithTerminatorTest {
 
     @Test
-    public void emptyStringStaysEmpty() {
+    public void emptyStringStaysEmpty() throws Exception {
         assertEquals("", SqlLogPanelKt.withTerminator(""));
     }
 
     @Test
-    public void plainSqlAppendsSemicolon() {
+    public void plainSqlAppendsSemicolon() throws Exception {
         assertEquals("SELECT 1;", SqlLogPanelKt.withTerminator("SELECT 1"));
     }
 
     @Test
-    public void trailingSemicolonNotDuplicated() {
+    public void trailingSemicolonNotDuplicated() throws Exception {
         assertEquals("SELECT 1;", SqlLogPanelKt.withTerminator("SELECT 1;"));
     }
 
     @Test
-    public void spaceThenSemicolonNotDuplicated() {
+    public void spaceThenSemicolonNotDuplicated() throws Exception {
         assertEquals("SELECT 1 ;", SqlLogPanelKt.withTerminator("SELECT 1 ;"));
     }
 
     @Test
-    public void multilineWithoutSemicolonAppendsAtEnd() {
+    public void multilineWithoutSemicolonAppendsAtEnd() throws Exception {
         String sql = "SELECT a\nFROM t\nWHERE id = 1";
         assertEquals(sql + ";", SqlLogPanelKt.withTerminator(sql));
         assertTrue("结尾为分号", SqlLogPanelKt.withTerminator(sql).endsWith(";"));
     }
 
     @Test
-    public void multilineWithSemicolonNotDuplicated() {
+    public void multilineWithSemicolonNotDuplicated() throws Exception {
         String sql = "SELECT a\nFROM t;";
         assertEquals(sql, SqlLogPanelKt.withTerminator(sql));
     }

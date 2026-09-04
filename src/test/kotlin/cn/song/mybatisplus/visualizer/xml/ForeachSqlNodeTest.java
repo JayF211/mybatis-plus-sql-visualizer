@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -57,14 +57,14 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void 基本展开_item重写为frch名() {
+    public void 基本展开_item重写为frch名() throws Exception {
         RenderedXmlSql result = render(foreach("list"), Map.<String, Object>of("list", List.of("a", "b")));
         assertEquals("( ? , ? )", result.sql());
         assertEquals(List.of("__frch_x_0", "__frch_x_1"), props(result));
     }
 
     @Test
-    public void 嵌套属性重写() {
+    public void 嵌套属性重写() throws Exception {
         RenderedXmlSql result = render(foreach("list", new StaticTextSqlNode("#{x.id}")),
                 Map.<String, Object>of("list", List.of("a")));
         assertEquals("( ? )", result.sql());
@@ -72,14 +72,14 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void itemName不重写() {
+    public void itemName不重写() throws Exception {
         RenderedXmlSql result = render(foreach("list", new StaticTextSqlNode("#{xname}")),
                 Map.<String, Object>of("list", List.of("a")));
         assertEquals(List.of("xname"), props(result));
     }
 
     @Test
-    public void index绑定为序号() {
+    public void index绑定为序号() throws Exception {
         RenderedXmlSql result = render(
                 foreach("list", "x", "i", new StaticTextSqlNode("#{i}:#{x}"), ",", "(", ")", false),
                 Map.<String, Object>of("list", List.of("a", "b")));
@@ -90,7 +90,7 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void Map迭代_index为键_item为值() {
+    public void Map迭代_index为键_item为值() throws Exception {
         RenderedXmlSql result = render(
                 foreach("m", "x", "i", new StaticTextSqlNode("#{i}:#{x}"), ",", "(", ")", false),
                 Map.<String, Object>of("m", Map.of("k1", 1, "k2", 2)));
@@ -101,20 +101,20 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void 空集合整段不输出_open与close都不出现() {
+    public void 空集合整段不输出_open与close都不出现() throws Exception {
         RenderedXmlSql result = render(foreach("list"), Map.<String, Object>of("list", List.of()));
         assertEquals("", result.sql());
     }
 
     @Test
-    public void null集合默认报错记录() {
+    public void null集合默认报错记录() throws Exception {
         RenderedXmlSql result = render(foreach("list"), Map.<String, Object>of("list", null));
         assertEquals("", result.sql());
         assertTrue(result.errors().stream().anyMatch(e -> e.contains("evaluated to a null value")));
     }
 
     @Test
-    public void nullable为true时null集合静默跳过() {
+    public void nullable为true时null集合静默跳过() throws Exception {
         RenderedXmlSql result = render(foreach("list", "x", null, new StaticTextSqlNode("#{x}"), ",", "(", ")", true),
                 Map.<String, Object>of("list", null));
         assertEquals("", result.sql());
@@ -122,13 +122,13 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void separator仅在项之间_首尾无() {
+    public void separator仅在项之间_首尾无() throws Exception {
         RenderedXmlSql result = render(foreach("list"), Map.<String, Object>of("list", List.of(1, 2, 3)));
         assertEquals("( ? , ? , ? )", result.sql());
     }
 
     @Test
-    public void 首项无内容时separator顺延到有内容的迭代() {
+    public void 首项无内容时separator顺延到有内容的迭代() throws Exception {
         ForeachSqlNode node = foreach("list", "x", null,
                 new IfSqlNode(new StaticTextSqlNode("#{x}"), "x != null"), ",", "(", ")", false);
         // 第一项 null → if 关闭（无输出）；第二项 "v" → 输出；first 顺延 → 无 separator
@@ -138,14 +138,14 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void open与close自定义() {
+    public void open与close自定义() throws Exception {
         ForeachSqlNode node = foreach("list", "x", null, new StaticTextSqlNode("#{x}"), ", ", "IN (", ")", false);
         RenderedXmlSql result = render(node, Map.<String, Object>of("list", List.of(1, 2)));
         assertEquals("IN ( ? ,  ? )", result.sql());
     }
 
     @Test
-    public void 迭代内容换行缩进被trim_预览紧凑() {
+    public void 迭代内容换行缩进被trim_预览紧凑() throws Exception {
         // T-M25.5（用户实测）：foreach 体 "\n  #{x}\n" 原样输出使 IN 每项换行——trim 后单行紧凑
         ForeachSqlNode node = new ForeachSqlNode(
                 new MixedSqlNode(List.of(new StaticTextSqlNode("\n  #{x}\n"))),
@@ -161,7 +161,7 @@ public class ForeachSqlNodeTest {
     }
 
     @Test
-    public void 嵌套foreach同名item内层遮蔽外层() {
+    public void 嵌套foreach同名item内层遮蔽外层() throws Exception {
         ForeachSqlNode outer = new ForeachSqlNode(
                 new MixedSqlNode(
                         List.of(

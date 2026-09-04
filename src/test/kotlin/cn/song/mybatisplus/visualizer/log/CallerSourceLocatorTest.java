@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import kotlin.Pair;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
 import java.lang.StackTraceElement;
@@ -19,7 +19,7 @@ public class CallerSourceLocatorTest {
     }
 
     @Test
-    public void 跳过框架帧_取首个应用帧() {
+    public void 跳过框架帧_取首个应用帧() throws Exception {
         StackTraceElement[] stack = new StackTraceElement[]{
             el("cn.song.mybatisplus.visualizer.log.SqlLogConsoleBridge", "SqlLogConsoleBridge.kt", 100),
             el("org.apache.ibatis.executor.BaseExecutor", "BaseExecutor.java", 200),
@@ -32,7 +32,7 @@ public class CallerSourceLocatorTest {
     }
 
     @Test
-    public void appPackages_限定_只接受指定包() {
+    public void appPackages_限定_只接受指定包() throws Exception {
         StackTraceElement[] stack = new StackTraceElement[]{
             el("org.apache.ibatis.executor.BaseExecutor", "BaseExecutor.java", 1),
             el("com.other.Lib", "Lib.java", 5),
@@ -43,7 +43,7 @@ public class CallerSourceLocatorTest {
     }
 
     @Test
-    public void 全为框架帧_返回null() {
+    public void 全为框架帧_返回null() throws Exception {
         StackTraceElement[] stack = new StackTraceElement[]{
             el("java.lang.Thread", "Thread.java", 1),
             el("com.intellij.openapi.foo.Bar", "Bar.java", 2),
@@ -52,7 +52,7 @@ public class CallerSourceLocatorTest {
     }
 
     @Test
-    public void fileName缺失_跳过该帧取下一个() {
+    public void fileName缺失_跳过该帧取下一个() throws Exception {
         StackTraceElement[] stack = new StackTraceElement[]{
             el("org.apache.ibatis.executor.BaseExecutor", "BaseExecutor.java", 1),
             el("com.example.service.UserService", null, 87),
@@ -62,7 +62,7 @@ public class CallerSourceLocatorTest {
     }
 
     @Test
-    public void 行号为负_跳过该帧() {
+    public void 行号为负_跳过该帧() throws Exception {
         StackTraceElement[] stack = new StackTraceElement[]{
             el("org.apache.ibatis.executor.BaseExecutor", "BaseExecutor.java", -1),
             el("com.example.service.UserService", "UserService.java", 87),

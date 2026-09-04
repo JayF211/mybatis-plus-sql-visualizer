@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
@@ -19,7 +19,7 @@ import org.junit.Test;
 public class LogStartupCaptureTest {
 
     @Test
-    public void suppressed_true_does_not_start() {
+    public void suppressed_true_does_not_start() throws Exception {
         // 用户已显式停止 → 无论其他条件如何，不启动
         assertFalse(
                 "suppressed=true 时应不启动",
@@ -33,7 +33,7 @@ public class LogStartupCaptureTest {
     }
 
     @Test
-    public void autoStart_true_not_suppressed_starts() {
+    public void autoStart_true_not_suppressed_starts() throws Exception {
         // 设置开启 + 未抑制 + 有项目 → 启动
         assertTrue(
                 "autoStart=true, suppressed=false, hasOpenProject=true 应启动",
@@ -41,7 +41,7 @@ public class LogStartupCaptureTest {
     }
 
     @Test
-    public void autoStart_false_does_not_start_even_with_project() {
+    public void autoStart_false_does_not_start_even_with_project() throws Exception {
         // 设置未开启 → 不启动（无论是否有项目）
         assertFalse(
                 "autoStart=false + hasOpenProject=true 应不启动",
@@ -49,7 +49,7 @@ public class LogStartupCaptureTest {
     }
 
     @Test
-    public void autoStart_false_no_project_does_not_start() {
+    public void autoStart_false_no_project_does_not_start() throws Exception {
         // 设置未开启 + 无项目 → 不启动
         assertFalse(
                 "autoStart=false + hasOpenProject=false 应不启动",
@@ -57,7 +57,7 @@ public class LogStartupCaptureTest {
     }
 
     @Test
-    public void no_open_project_does_not_start() {
+    public void no_open_project_does_not_start() throws Exception {
         // 有设置 + 未抑制 + 无打开项目 → 不启动
         assertFalse(
                 "hasOpenProject=false 时应不启动",

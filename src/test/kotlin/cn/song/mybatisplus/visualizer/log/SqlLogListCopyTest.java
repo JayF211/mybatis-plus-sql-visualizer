@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.DefaultListModel;
@@ -33,7 +33,7 @@ public class SqlLogListCopyTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testItemToTextReturnsPureSqlWithTerminator() {
+    public void testItemToTextReturnsPureSqlWithTerminator() throws Exception {
         ExposedSqlEntryList list = new ExposedSqlEntryList();
         LogSqlEntry e = entry("SELECT * FROM t WHERE username = 'admin'", "SELECT * FROM t WHERE username = 'admin'");
         String text = list.textFor(0, e);
@@ -44,21 +44,21 @@ public class SqlLogListCopyTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testItemToTextDoesNotDuplicateExistingSemicolon() {
+    public void testItemToTextDoesNotDuplicateExistingSemicolon() throws Exception {
         ExposedSqlEntryList list = new ExposedSqlEntryList();
         LogSqlEntry e = entry("SELECT 1;", "SELECT 1;");
         assertEquals("已有分号不重复追加", "SELECT 1;", list.textFor(0, e));
     }
 
     @Test
-    public void testItemToTextEmptySqlNoTerminator() {
+    public void testItemToTextEmptySqlNoTerminator() throws Exception {
         ExposedSqlEntryList list = new ExposedSqlEntryList();
         LogSqlEntry e = entry("", "");
         assertEquals("空 SQL 不追加分号", "", list.textFor(0, e));
     }
 
     @Test
-    public void testItemToTextMultiSelectionJoinSemantics() {
+    public void testItemToTextMultiSelectionJoinSemantics() throws Exception {
         // 平台 doCopyToClipboardAction 对选中项逐条调 itemToText 后 StringUtil.join("\n")——
         // 断言各条输出与拼接形态（多选换行拼接链路为平台既有行为）
         ExposedSqlEntryList list = new ExposedSqlEntryList();
@@ -70,7 +70,7 @@ public class SqlLogListCopyTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testItemToTextUsesRestoredSqlNotRawSql() {
+    public void testItemToTextUsesRestoredSqlNotRawSql() throws Exception {
         // 复制内容应为值内联的还原 SQL（与右键「复制」一致），而非含 `?` 的 Preparing 原文
         ExposedSqlEntryList list = new ExposedSqlEntryList();
         LogSqlEntry e = entry(

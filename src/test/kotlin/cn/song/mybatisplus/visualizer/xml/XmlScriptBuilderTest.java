@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertThrows;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 import org.w3c.dom.Element;
 
@@ -81,12 +81,12 @@ public class XmlScriptBuilderTest {
     }
 
     @Test
-    public void 未知元素报错() {
+    public void 未知元素报错() throws Exception {
         assertThrows(XmlScriptException.class, () -> parse("<else>oops</else>"));
     }
 
     @Test
-    public void choose多otherwise报错() {
+    public void choose多otherwise报错() throws Exception {
         assertThrows(XmlScriptException.class, () ->
                 parse("<choose><when test=\"a\">A</when><otherwise>B</otherwise><otherwise>C</otherwise></choose>"));
     }

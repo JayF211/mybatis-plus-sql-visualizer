@@ -7,10 +7,10 @@ import com.intellij.codeInsight.lookup.LookupElementPresentation;
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.psi.PsiElement;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.HashSet;
@@ -30,7 +30,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testContributorRegisteredForJava() {
+    public void testContributorRegisteredForJava() throws Exception {
         List<CompletionContributor> contributors =
                 CompletionContributor.forLanguage(JavaLanguage.INSTANCE);
         boolean found = false;
@@ -44,7 +44,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupFactory_generatesConditionMethodsAtHead() {
+    public void testMethodLookupFactory_generatesConditionMethodsAtHead() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of(), null, false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         Set<String> names = lookupNames(lookups);
@@ -57,7 +57,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupFactory_afterConditionMethod() {
+    public void testMethodLookupFactory_afterConditionMethod() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of("eq"), "eq", false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         Set<String> names = lookupNames(lookups);
@@ -68,7 +68,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupFactory_afterSelect() {
+    public void testMethodLookupFactory_afterSelect() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of("select"), "select", false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         Set<String> names = lookupNames(lookups);
@@ -80,7 +80,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupFactory_afterOrderBy() {
+    public void testMethodLookupFactory_afterOrderBy() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of("eq", "orderBy"), "orderBy", false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         Set<String> names = lookupNames(lookups);
@@ -93,7 +93,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupFactory_mpjHeadIncludesJoinMethods() {
+    public void testMethodLookupFactory_mpjHeadIncludesJoinMethods() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.MPJ_LAMBDA, List.of(), null, false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         Set<String> names = lookupNames(lookups);
@@ -104,21 +104,21 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupFactory_terminalMethodReturnsEmpty() {
+    public void testMethodLookupFactory_terminalMethodReturnsEmpty() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of("eq", "list"), "list", false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         assertEquals("终结点后应无方法名补全", 0, lookups.size());
     }
 
     @Test
-    public void testMethodLookupFactory_insideArgsReturnsEmpty() {
+    public void testMethodLookupFactory_insideArgsReturnsEmpty() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of(), null, true, "eq");
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         assertEquals("实参内应无方法名补全", 0, lookups.size());
     }
 
     @Test
-    public void testMethodLookupFactory_updateAfterSet() {
+    public void testMethodLookupFactory_updateAfterSet() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_UPDATE, List.of("set"), "set", false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         Set<String> names = lookupNames(lookups);
@@ -131,7 +131,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMethodLookupElements_haveTypeText() {
+    public void testMethodLookupElements_haveTypeText() throws Exception {
         ChainStateDetector.ChainState state = state(WrapperType.LAMBDA_QUERY, List.of(), null, false, null);
         List<LookupElement> lookups = MethodLookupFactory.createLookups(state);
         assertTrue("应生成补全项", !lookups.isEmpty());
@@ -149,14 +149,14 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testChainStateDetector_integrationWithContributor() {
-        getFixture().configureByText(
+    public void testChainStateDetector_integrationWithContributor() throws Exception {
+        myFixture.configureByText(
                 "Demo.java",
                 """
                 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
                 public class Demo {
-                    public void query() {
+                    public void query() throws Exception {
                         LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
                             .eq(DeviceInfoEntity::getId, 1L)
                             .like(DeviceInfoEntity::getName, "test");
@@ -168,7 +168,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
                     }
                 }
                 """.stripIndent());
-        String text = getFixture().getFile().getText();
+        String text = myFixture.getFile().getText();
         int likeNameOffset = text.indexOf(".like(") + 2;
         PsiElement element = findAtMyFile(likeNameOffset);
         ChainStateDetector.ChainState state = ChainStateDetector.detect(element);
@@ -191,7 +191,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
     }
 
     private PsiElement findAtMyFile(int offset) {
-        PsiElement current = getFixture().getFile();
+        PsiElement current = myFixture.getFile();
         while (true) {
             PsiElement child = null;
             for (PsiElement c : current.getChildren()) {

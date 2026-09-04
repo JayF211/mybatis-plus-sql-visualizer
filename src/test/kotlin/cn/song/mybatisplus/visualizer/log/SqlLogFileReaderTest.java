@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
@@ -23,7 +23,7 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
-    public void 解析新版格式() {
+    public void 解析新版格式() throws Exception {
         String content = "--- source: src/main/java/com/example/mapper/UserMapper.java:42 | time: 5ms | 2026-08-25 10:00:00.123 ---\n"
                 + "SELECT * FROM user WHERE id = 1\n\n";
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
@@ -32,13 +32,13 @@ public class SqlLogFileReaderTest {
         assertEquals("SELECT * FROM user WHERE id = 1", entry.restoredSql());
         assertEquals("src/main/java/com/example/mapper/UserMapper.java", entry.sourceFile());
         assertEquals(42, entry.sourceLine());
-        assertEquals(5L, entry.executionTimeMs());
+        assertEquals(Long.valueOf(5L), entry.executionTimeMs());
         // 时区无关：仅验证 timestamp > 0
         assertTrue("Timestamp should be positive: " + entry.timestamp(), entry.timestamp() > 0);
     }
 
     @Test
-    public void 解析新版格式_unknown_source() {
+    public void 解析新版格式_unknown_source() throws Exception {
         String content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n";
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
         assertEquals(1, entries.size());
@@ -49,7 +49,7 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
-    public void 解析旧版格式() {
+    public void 解析旧版格式() throws Exception {
         String content = "-- 2026-08-25 10:00:00\nSELECT * FROM user\n\n";
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
         assertEquals(1, entries.size());
@@ -60,7 +60,7 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
-    public void 解析混合格式() {
+    public void 解析混合格式() throws Exception {
         String content = "-- source: UserMapper.java:10 | time: 3ms | 2026-08-25 10:00:00.000 --\n"
                 + "SELECT 1\n\n"
                 + "-- 2026-08-25 09:00:00\n"
@@ -79,7 +79,7 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
-    public void 解析多条新版格式() {
+    public void 解析多条新版格式() throws Exception {
         String content = "-- source: A.java:1 | time: 1ms | 2026-08-25 10:00:00.000 --\n"
                 + "SELECT 1\n\n"
                 + "-- source: B.java:2 | time: 2ms | 2026-08-25 10:00:01.000 --\n"
@@ -94,13 +94,13 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
-    public void 空内容返回空列表() {
+    public void 空内容返回空列表() throws Exception {
         assertTrue(SqlLogFileReader.INSTANCE.parseContent("").isEmpty());
         assertTrue(SqlLogFileReader.INSTANCE.parseContent("   \n\n   ").isEmpty());
     }
 
     @Test
-    public void 损坏格式返回空列表() {
+    public void 损坏格式返回空列表() throws Exception {
         String content = "这不是有效的格式\nSELECT 1\n";
         assertTrue(SqlLogFileReader.INSTANCE.parseContent(content).isEmpty());
     }
@@ -143,7 +143,7 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
-    public void 解析双横线新版格式() {
+    public void 解析双横线新版格式() throws Exception {
         // F-44-2：默认写作 `-- source: ... --`（两个 `-` 起结），Reader 必须正确解析
         String content = "-- source: src/main/java/UserMapper.java:42 | time: 5ms | 2026-08-31 17:30:00.123 --\n"
                 + "SELECT * FROM user WHERE id = 1\n\n";
@@ -153,22 +153,22 @@ public class SqlLogFileReaderTest {
         assertEquals("SELECT * FROM user WHERE id = 1", entry.restoredSql());
         assertEquals("src/main/java/UserMapper.java", entry.sourceFile());
         assertEquals(42, entry.sourceLine());
-        assertEquals(5L, entry.executionTimeMs());
+        assertEquals(Long.valueOf(5L), entry.executionTimeMs());
     }
 
     @Test
-    public void 兼容三横线历史新版格式() {
+    public void 兼容三横线历史新版格式() throws Exception {
         // F-44-2 已停止生产三横线，但历史文件仍可能存在——Reader 必须向后兼容
         String content = "--- source: A.java:1 | time: 3ms | 2026-08-31 17:30:00.000 ---\nSELECT 1\n\n";
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
         assertEquals(1, entries.size());
         assertEquals("SELECT 1", entries.get(0).restoredSql());
         assertEquals("A.java", entries.get(0).sourceFile());
-        assertEquals(3L, entries.get(0).executionTimeMs());
+        assertEquals(Long.valueOf(3L), entries.get(0).executionTimeMs());
     }
 
     @Test
-    public void 解析混合格式_F44_2与F43共存() {
+    public void 解析混合格式_F44_2与F43共存() throws Exception {
         // 验证新版本启用的双横线格式能与旧版时间戳格式共存
         String content = "-- source: UserMapper.java:10 | time: 3ms | 2026-08-31 17:30:00.000 --\n"
                 + "SELECT 1\n\n"
@@ -179,14 +179,14 @@ public class SqlLogFileReaderTest {
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
         assertEquals(3, entries.size());
         assertEquals("UserMapper.java", entries.get(0).sourceFile());
-        assertEquals(3L, entries.get(0).executionTimeMs());
+        assertEquals(Long.valueOf(3L), entries.get(0).executionTimeMs());
         assertNull(entries.get(1).sourceFile());
         assertEquals("OrderMapper.java", entries.get(2).sourceFile());
-        assertEquals(10L, entries.get(2).executionTimeMs());
+        assertEquals(Long.valueOf(10L), entries.get(2).executionTimeMs());
     }
 
     @Test
-    public void 解析无源码行号时只返回文件() {
+    public void 解析无源码行号时只返回文件() throws Exception {
         String content = "--- source: UserMapper.java | time: 5ms | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n";
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
         assertEquals(1, entries.size());

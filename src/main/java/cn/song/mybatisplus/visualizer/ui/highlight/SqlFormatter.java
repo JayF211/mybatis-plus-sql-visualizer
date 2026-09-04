@@ -101,6 +101,7 @@ public final class SqlFormatter {
                 st.flushSpace();
                 sb.append(upper);
                 st.pendingSpace = true;
+                st.atLineStart = false;
             } else if (type == SqlTokenTypes.PAREN && text.equals("(")) {
                 if (!FUNCTION_NAMES.contains(st.prevText.toUpperCase())) {
                     st.flushSpace();
@@ -202,6 +203,7 @@ public final class SqlFormatter {
                 sb.append(upper);
                 st.atLineStart = false;
                 st.pendingSpace = true;
+                st.pendingComma = false;
             } else if (type == SqlTokenTypes.KEYWORD && (upper.equals("AND") || upper.equals("OR"))) {
                 st.pendingSpace = false;
                 if (!st.atLineStart) {
@@ -211,10 +213,13 @@ public final class SqlFormatter {
                 sb.append(upper);
                 st.atLineStart = false;
                 st.pendingSpace = true;
+                st.pendingComma = false;
             } else if (type == SqlTokenTypes.KEYWORD) {
                 st.flushSpace();
                 sb.append(upper);
                 st.pendingSpace = true;
+                st.atLineStart = false;
+                st.pendingComma = false;
             } else if (type == SqlTokenTypes.PAREN && text.equals("(")) {
                 if (!FUNCTION_NAMES.contains(st.prevText.toUpperCase())) {
                     st.flushSpace();
@@ -234,11 +239,11 @@ public final class SqlFormatter {
                     sb.deleteCharAt(sb.length() - 1);
                 }
                 sb.append(',');
+                // F-CASE：始终设置 pendingSpace=true，后续关键字通过 flushSpace() 加空格；
+                // 标识符通过 pendingComma 标记跳过空格（紧凑列清单）
                 st.pendingComma = st.currentClause.equals("SELECT") || st.currentClause.equals("SET") || st.depth > 0;
                 st.atLineStart = false;
-                if (!st.pendingComma) {
-                    st.pendingSpace = true;
-                }
+                st.pendingSpace = true;
             } else if (type == SqlTokenTypes.OPERATOR && text.equals(".")) {
                 sb.append('.');
                 st.pendingSpace = false;

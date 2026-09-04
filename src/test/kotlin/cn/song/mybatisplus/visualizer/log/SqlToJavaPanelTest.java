@@ -10,17 +10,17 @@ import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.icons.AllIcons;
-import com.intellij.ide.util.ChooseByNameModel;
+import com.intellij.ide.util.gotoByName.ChooseByNameModel;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.Icon;
@@ -92,7 +92,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertNoEntityFallsBackToQueryWrapper() {
+    public void testConvertNoEntityFallsBackToQueryWrapper() throws Exception {
         // 手动选择开关关闭 → 0 候选直接回落（开关开启的弹窗路径由 EntitySelectionDialogTest 覆盖）
         PluginSettings.State state = PluginSettings.getInstance().getState();
         boolean original = state.getReverseManualEntitySelection();
@@ -110,7 +110,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertParseErrorShowsStatus() {
+    public void testConvertParseErrorShowsStatus() throws Exception {
         panel.inputEditorForTest().setSql("SELECT * FROM t WHERE a = 'abc");
         panel.convertForTest();
         String result = awaitResult();
@@ -119,7 +119,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertQueryFormatSyncPath() {
+    public void testConvertQueryFormatSyncPath() throws Exception {
         // QUERY 形态：跳过实体查找（同步路径直测）
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
@@ -136,7 +136,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFormatInputSql() {
+    public void testFormatInputSql() throws Exception {
         String raw = "SELECT * FROM user WHERE a = 1 AND b = 2";
         panel.inputEditorForTest().setSql(raw);
         // 格式化按钮走 FormatAction——直接验证 SqlFormatter 幂等接入（按钮触发同路径）
@@ -148,14 +148,14 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testPanelDisposeReleasesEditors() {
+    public void testPanelDisposeReleasesEditors() throws Exception {
         // dispose 幂等（重复调用不抛）
         panel.dispose();
         panel.dispose();
     }
 
     @Test
-    public void testBundleKeysPresent() {
+    public void testBundleKeysPresent() throws Exception {
         // tab 标题与按钮文案 bundle key 存在（防拼写回归）
         assertTrue(MpSqlVisualizerBundle.message("log.tab.sqlToJava").isBlank() == false);
         assertTrue(MpSqlVisualizerBundle.message("reverse.panel.convert").isBlank() == false);
@@ -172,7 +172,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testSetInputSqlWritesInputArea() {
+    public void testSetInputSqlWritesInputArea() throws Exception {
         String sql = "SELECT id FROM user WHERE id = 1";
         panel.setInputSql(sql);
         // 写入输入区 + 清空结果区与状态行提示
@@ -182,7 +182,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSetInputSqlThenConvertGeneratesResult() {
+    public void testSetInputSqlThenConvertGeneratesResult() throws Exception {
         // 发送 SQL 后用户点「转换」→ 完整链路产出（输入区已写入，无需再手动 setSql）
         panel.setInputSql("SELECT id, name FROM user WHERE name = '张三'");
         panel.convertForTest();
@@ -196,7 +196,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testConvertJoinFallsBackToMpjQueryWithoutEntities() {
+    public void testConvertJoinFallsBackToMpjQueryWithoutEntities() throws Exception {
         // 无实体：手动选择开关关闭 → 副表候选为空 → 跳过（该表列回落字符串），主表也无候选 → MPJ_QUERY raw join
         PluginSettings.State state = PluginSettings.getInstance().getState();
         boolean original = state.getReverseManualEntitySelection();
@@ -213,7 +213,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFindSubEntityCandidatesKeysByAlias() {
+    public void testFindSubEntityCandidatesKeysByAlias() throws Exception {
         SqlReverseResult result = SqlToJavaConverter.parse(
             "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id");
         assertEquals(1, result.joins().size());
@@ -229,7 +229,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFindSubEntityCandidatesSkipsNoAliasJoin() {
+    public void testFindSubEntityCandidatesSkipsNoAliasJoin() throws Exception {
         // 无别名的 join 不归属（P1 默认别名规则）→ 结果 map 为空
         SqlReverseResult result = SqlToJavaConverter.parse(
             "SELECT t.id, a.city FROM user t LEFT JOIN address ON a.user_id = t.id");
@@ -244,7 +244,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testCanAutoInferUniqueMainAndSingleSub() {
+    public void testCanAutoInferUniqueMainAndSingleSub() throws Exception {
         // 主表 1 候选 + 每个副表各 1 候选 → 唯一可推断 → 跳过弹窗
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of(
@@ -256,7 +256,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCanAutoInferMultipleMainCandidates() {
+    public void testCanAutoInferMultipleMainCandidates() throws Exception {
         // 主表多候选 → 有歧义 → 弹窗
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"), mockCandidate("UserEntity"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of("t1", List.of(mockCandidate("Address")));
@@ -266,7 +266,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCanAutoInferMultipleSubCandidates() {
+    public void testCanAutoInferMultipleSubCandidates() throws Exception {
         // 副表多候选 → 有歧义 → 弹窗
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of(
@@ -277,7 +277,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCanAutoInferEmptySubCandidates() {
+    public void testCanAutoInferEmptySubCandidates() throws Exception {
         // 副表 0 候选 → 不可推断 → 弹窗
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of(
@@ -288,7 +288,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCanAutoInferNoSubTables() {
+    public void testCanAutoInferNoSubTables() throws Exception {
         // 主表 1 候选 + 无副表（空 map）→ all 对空集合返回 true → 唯一可推断
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
         assertTrue(
@@ -312,7 +312,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testOptionsRowUsesStretchLayout() {
+    public void testOptionsRowUsesStretchLayout() throws Exception {
         // T-M39 增量：选项（形态下拉/调用类/VO）独立成行 GridBag 拉伸——
         // 防回退到原 BorderLayout.EAST + FlowLayout 三控件挤一行（窄窗口下拉被挤压截断）
         javax.swing.JComboBox<?> combo = panel.formatComboForTest();
@@ -323,10 +323,10 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFormatComboCellTooltipShowsFullLabel() {
+    public void testFormatComboCellTooltipShowsFullLabel() throws Exception {
         // T-M39 五次增量：弹出列表长选项截断时 hover 应显示完整文案（JList cell renderer tooltip）
         javax.swing.JComboBox<?> combo = panel.formatComboForTest();
-        ListCellRenderer<Object> renderer = (ListCellRenderer<Object>) combo.getCellRenderer();
+        ListCellRenderer<Object> renderer = (ListCellRenderer<Object>) combo.getRenderer();
         for (int i = 0; i < combo.getModel().getSize(); i++) {
             Object option = combo.getModel().getElementAt(i);
             // DefaultListCellRenderer 要求非 null list（读 componentOrientation）
@@ -336,7 +336,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFormatComboTooltipTracksSelection() {
+    public void testFormatComboTooltipTracksSelection() throws Exception {
         // 选中态（关闭态）截断时 hover 显示完整文案——combo tooltip 跟随选中项
         javax.swing.JComboBox<?> combo = panel.formatComboForTest();
         assertEquals("初始选中项 tooltip 应为完整文案", combo.getSelectedItem().toString(), combo.getToolTipText());
@@ -345,9 +345,9 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testClassPickerPlaceholderTooltip() {
+    public void testClassPickerPlaceholderTooltip() throws Exception {
         // 占位文案截断时 hover 显示完整提示；选中后不遮蔽字段级全限定名 tooltip
-        ClassPickerField caller = panel.callerFieldForTest();
+        SqlToJavaPanel.ClassPickerField caller = panel.callerFieldForTest();
         assertNull(caller.getToolTipText());
         assertEquals(
             "占位态文本标签 tooltip 应为完整占位文案",
@@ -358,7 +358,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFormatComboInitialFromSettings() {
+    public void testFormatComboInitialFromSettings() throws Exception {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
         try {
@@ -376,7 +376,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testFormatComboWriteThroughAndRegenerate() {
+    public void testFormatComboWriteThroughAndRegenerate() throws Exception {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
         try {
@@ -410,8 +410,8 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testClassPickerSelectAndClear() {
-        ClassPickerField caller = panel.callerFieldForTest();
+    public void testClassPickerSelectAndClear() throws Exception {
+        SqlToJavaPanel.ClassPickerField caller = panel.callerFieldForTest();
         // 初始：空值 → 占位提示 + 无类图标
         assertEquals("", caller.getText());
         assertNull("空值不应显示类图标", caller.iconForTest());
@@ -428,7 +428,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testClassPickerWholeFieldClickable() {
+    public void testClassPickerWholeFieldClickable() throws Exception {
         // 整块可点：iconLabel/textLabel/按钮宿主均挂鼠标监听 + 手型光标（Swing 事件不冒泡——
         // 仅挂父面板时子组件区域点击失效，用户反馈「只能点三点」）
         List<JComponent> targets = panel.pickerClickTargetsForTest();
@@ -448,7 +448,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testHintLabelsShowWhenEmptyAndHideOnContent() {
+    public void testHintLabelsShowWhenEmptyAndHideOnContent() throws Exception {
         // 空文档 → 提示可见且灰字；输入 SQL 后 → 隐藏（结果区同理）
         assertTrue("初始输入区空 → 提示应可见", panel.inputHintLabelForTest().isVisible());
         assertTrue("初始结果区空 → 提示应可见", panel.resultHintLabelForTest().isVisible());
@@ -460,7 +460,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testClassPickerSelectionRegenerates() {
+    public void testClassPickerSelectionRegenerates() throws Exception {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
         try {
@@ -483,7 +483,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCallerAndVoGenerateInvocation() {
+    public void testCallerAndVoGenerateInvocation() throws Exception {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
         try {
@@ -683,8 +683,8 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testClassPickerSpecialValuesPickable() {
-        ClassPickerField caller = panel.callerFieldForTest();
+    public void testClassPickerSpecialValuesPickable() throws Exception {
+        SqlToJavaPanel.ClassPickerField caller = panel.callerFieldForTest();
         // 特殊项「this」：选中 → 文本 = this（字段图标 + 用途说明 tooltip）
         caller.pickForTest("this", null, AllIcons.Nodes.Field);
         assertEquals("this", caller.getText());
@@ -697,7 +697,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testThisCallerRegeneratesServiceInvocation() {
+    public void testThisCallerRegeneratesServiceInvocation() throws Exception {
         // 选中特殊项 this → 已有转换结果自动重生成 service 形态调用（this.list(wrapper)）
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
@@ -721,7 +721,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testBaseMapperCallerRegeneratesMapperInvocation() {
+    public void testBaseMapperCallerRegeneratesMapperInvocation() throws Exception {
         // 选中特殊项 baseMapper → 自动重生成 mapper 形态调用（baseMapper.selectList(wrapper)）
         PluginSettings.State state = PluginSettings.getInstance().getState();
         String original = state.getReverseWrapperFormat();
@@ -764,7 +764,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testInvocationHasMpjSpecialValuesShortCircuit() {
+    public void testInvocationHasMpjSpecialValuesShortCircuit() throws Exception {
         // T-M42：this/baseMapper 非类名，索引反查必然落空——invocationHasMpj 开头纯字符串分支
         // 直出 true（Light 无索引也可验证；普通类名分支依赖索引见 InvocationMpjHeavyTest）
         assertTrue(SqlToJavaConverter.invocationHasMpj(getProject(), "this"));
@@ -774,7 +774,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCallerModelGetFullNameReadActionSafe() {
+    public void testCallerModelGetFullNameReadActionSafe() throws Exception {
         // T-M44 增量：ChooseByNamePopup.close（EDT）→ getFullName → GotoClassModel2 委托读 PSI 全限定名，
         // 262 平台 stub 断言硬抛（用户实测堆栈 SqlToJavaPanel.kt CallerClassByNameModel.getFullName）——
         // 生产实现已包 ReadAction（EDT 同步执行）；测试在非 read 上下文直接调用（模拟无 read access
@@ -788,7 +788,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCallerModelGetElementNameReadActionSafe() {
+    public void testCallerModelGetElementNameReadActionSafe() throws Exception {
         ChooseByNameModel model = panel.callerModelForTest();
         assertEquals("this", model.getElementName("this"));
         PsiClass psiClass = psiClassFixture();
@@ -796,7 +796,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testPickPsiClassForTestSelection() {
+    public void testPickPsiClassForTestSelection() throws Exception {
         // elementChosen 的 PsiClass 分支同一路径：ReadAction 内读取 name/qualifiedName/getIcon 并写入字段
         PsiClass psiClass = psiClassFixture();
         panel.pickPsiClassForTest(psiClass);
@@ -814,7 +814,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testVoClassRejected() {
+    public void testVoClassRejected() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserVO");
         panel.pickPsiClassForTest(psiClass);
         assertTrue("VO 不应被选中", panel.callerFieldForTest().getText().isEmpty());
@@ -822,42 +822,42 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testDtoClassRejected() {
+    public void testDtoClassRejected() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserDTO");
         panel.pickPsiClassForTest(psiClass);
         assertTrue("DTO 不应被选中", panel.callerFieldForTest().getText().isEmpty());
     }
 
     @Test
-    public void testBoClassRejected() {
+    public void testBoClassRejected() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserBO");
         panel.pickPsiClassForTest(psiClass);
         assertTrue("BO 不应被选中", panel.callerFieldForTest().getText().isEmpty());
     }
 
     @Test
-    public void testPoClassRejected() {
+    public void testPoClassRejected() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserPO");
         panel.pickPsiClassForTest(psiClass);
         assertTrue("PO 不应被选中", panel.callerFieldForTest().getText().isEmpty());
     }
 
     @Test
-    public void testUtilsClassRejected() {
+    public void testUtilsClassRejected() throws Exception {
         PsiClass psiClass = createPsiClassNamed("StringUtils");
         panel.pickPsiClassForTest(psiClass);
         assertTrue("Utils 不应被选中", panel.callerFieldForTest().getText().isEmpty());
     }
 
     @Test
-    public void testControllerClassRejected() {
+    public void testControllerClassRejected() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserController");
         panel.pickPsiClassForTest(psiClass);
         assertTrue("Controller 不应被选中", panel.callerFieldForTest().getText().isEmpty());
     }
 
     @Test
-    public void testInterfaceClassRejected() {
+    public void testInterfaceClassRejected() throws Exception {
         // T-CallerPicker：接口拒绝（isInterface/hasModifierProperty 已收进单次 ReadAction，
         // 拒绝矩阵仍须与修复前一致）
         // 接口（PsiClass.isInterface 走 stub 属性读取）→ 拒绝；类名不得落入白名单（Service 结尾会被放行）
@@ -871,28 +871,28 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testMapperClassAccepted() {
+    public void testMapperClassAccepted() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserMapper");
         panel.pickPsiClassForTest(psiClass);
         assertEquals("UserMapper", panel.callerFieldForTest().getText());
     }
 
     @Test
-    public void testServiceClassAccepted() {
+    public void testServiceClassAccepted() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserService");
         panel.pickPsiClassForTest(psiClass);
         assertEquals("UserService", panel.callerFieldForTest().getText());
     }
 
     @Test
-    public void testServiceImplClassAccepted() {
+    public void testServiceImplClassAccepted() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserServiceImpl");
         panel.pickPsiClassForTest(psiClass);
         assertEquals("UserServiceImpl", panel.callerFieldForTest().getText());
     }
 
     @Test
-    public void testImplClassAccepted() {
+    public void testImplClassAccepted() throws Exception {
         PsiClass psiClass = createPsiClassNamed("UserImpl");
         panel.pickPsiClassForTest(psiClass);
         assertEquals("UserImpl", panel.callerFieldForTest().getText());
@@ -903,7 +903,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testThisTooltipWithCurrentClass() {
+    public void testThisTooltipWithCurrentClass() throws Exception {
         PsiClass currentClass = createPsiClassWithSuper("UserServiceImpl", "ServiceImpl<UserMapper, User>");
         panel.setCurrentEditorClassForTest(currentClass);
         panel.callerFieldForTest().pickSpecialForTest("this");
@@ -913,7 +913,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testBaseMapperTooltipWithServiceImpl() {
+    public void testBaseMapperTooltipWithServiceImpl() throws Exception {
         // PM 场景：UserServiceImpl extends ServiceImpl<UserMapper, User>
         PsiClass currentClass = createPsiClassWithSuper("UserServiceImpl", "ServiceImpl<UserMapper, User>");
         panel.setCurrentEditorClassForTest(currentClass);
@@ -927,7 +927,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testBaseMapperTooltipWithBaseMapper() {
+    public void testBaseMapperTooltipWithBaseMapper() throws Exception {
         // PM 场景：独立 UserMapper extends BaseMapper<User>
         PsiClass currentClass = createPsiClassWithSuper("UserMapper", "BaseMapper<User>");
         panel.setCurrentEditorClassForTest(currentClass);
@@ -941,7 +941,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testBaseMapperTooltipWithMpjMapper() {
+    public void testBaseMapperTooltipWithMpjMapper() throws Exception {
         // MPJ 场景：UserMapper extends MPJBaseMapper<User>
         PsiClass currentClass = createPsiClassWithSuper("UserMapper", "MPJBaseMapper<User>");
         panel.setCurrentEditorClassForTest(currentClass);
@@ -955,7 +955,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testBaseMapperTooltipNoSuperType() {
+    public void testBaseMapperTooltipNoSuperType() throws Exception {
         // 无泛型父类 → 仅展示类名，不报错
         PsiClass currentClass = createPsiClassNamed("UserMapper");
         panel.setCurrentEditorClassForTest(currentClass);
@@ -966,7 +966,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testThisTooltipNoCurrentClass() {
+    public void testThisTooltipNoCurrentClass() throws Exception {
         // 当前无打开 Java 文件 → tooltip 保持原样（无追加）
         panel.callerFieldForTest().pickSpecialForTest("this");
         assertTrue("无当前类时 tooltip 不含「当前：」",

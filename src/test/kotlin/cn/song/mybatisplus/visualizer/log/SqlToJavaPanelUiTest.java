@@ -4,10 +4,10 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JComboBox;
@@ -45,7 +45,7 @@ public class SqlToJavaPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test面板构建_编辑器提示与格式下拉可见() {
+    public void test面板构建_编辑器提示与格式下拉可见() throws Exception {
         SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
         try {
             waitForEdt();
@@ -94,11 +94,11 @@ public class SqlToJavaPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testClassPicker_选取类后渲染图标与类名() {
+    public void testClassPicker_选取类后渲染图标与类名() throws Exception {
         SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
         try {
             waitForEdt();
-            ClassPickerField picker = panel.callerFieldForTest();
+            SqlToJavaPanel.ClassPickerField picker = panel.callerFieldForTest();
             // 模拟用户在 ClassPicker 弹窗选中一个类（落点渲染）
             picker.pickForTest("Order", "com.example.Order", null);
             waitForEdt();
@@ -112,7 +112,7 @@ public class SqlToJavaPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test布局_非空标签与下拉有正首选尺寸() {
+    public void test布局_非空标签与下拉有正首选尺寸() throws Exception {
         SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
         try {
             waitForEdt();

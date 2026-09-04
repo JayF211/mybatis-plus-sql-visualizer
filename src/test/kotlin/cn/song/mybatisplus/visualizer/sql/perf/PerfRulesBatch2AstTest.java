@@ -5,8 +5,8 @@ import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch2;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -28,7 +28,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- join_without_on ----------
 
     @Test
-    public void join_without_on_joinNoOn() {
+    public void join_without_on_joinNoOn() throws Exception {
         String sql = "SELECT u.id FROM user u INNER JOIN order o";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.JoinWithoutOnRule.INSTANCE.check(sql, ast);
@@ -38,7 +38,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void join_without_on_joinWithOnNoTrigger() {
+    public void join_without_on_joinWithOnNoTrigger() throws Exception {
         String sql = "SELECT u.id FROM user u INNER JOIN order o ON o.user_id = u.id";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.JoinWithoutOnRule.INSTANCE.check(sql, ast);
@@ -46,7 +46,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void join_without_on_noJoinNoTrigger() {
+    public void join_without_on_noJoinNoTrigger() throws Exception {
         String sql = "SELECT id FROM user";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.JoinWithoutOnRule.INSTANCE.check(sql, ast);
@@ -56,7 +56,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- subquery_depth ----------
 
     @Test
-    public void subquery_depth_1LevelNoTrigger() {
+    public void subquery_depth_1LevelNoTrigger() throws Exception {
         String sql = "SELECT id FROM user WHERE id IN (SELECT user_id FROM order)";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.SubqueryDepthRule.INSTANCE.check(sql, ast);
@@ -64,7 +64,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void subquery_depth_3LevelTrigger() {
+    public void subquery_depth_3LevelTrigger() throws Exception {
         String sql = "SELECT id FROM user WHERE id IN " +
                 "(SELECT user_id FROM order WHERE product_id IN " +
                 "(SELECT id FROM product WHERE category_id IN " +
@@ -78,7 +78,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- in_clause_overflow ----------
 
     @Test
-    public void in_clause_overflow_50ItemsNoTrigger() {
+    public void in_clause_overflow_50ItemsNoTrigger() throws Exception {
         String items = rangeItems(1, 50);
         String sql = "SELECT id FROM user WHERE id IN (" + items + ")";
         Statement ast = CCJSqlParserUtil.parse(sql);
@@ -87,7 +87,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void in_clause_overflow_150ItemsTrigger() {
+    public void in_clause_overflow_150ItemsTrigger() throws Exception {
         String items = rangeItems(1, 150);
         String sql = "SELECT id FROM user WHERE id IN (" + items + ")";
         Statement ast = CCJSqlParserUtil.parse(sql);
@@ -99,7 +99,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- function_on_column ----------
 
     @Test
-    public void function_on_column_upperTrigger() {
+    public void function_on_column_upperTrigger() throws Exception {
         String sql = "SELECT id FROM user WHERE UPPER(name) = 'ABC'";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.FunctionOnColumnRule.INSTANCE.check(sql, ast);
@@ -108,7 +108,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void function_on_column_noFunctionNoTrigger() {
+    public void function_on_column_noFunctionNoTrigger() throws Exception {
         String sql = "SELECT id FROM user WHERE name = 'ABC'";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.FunctionOnColumnRule.INSTANCE.check(sql, ast);
@@ -118,7 +118,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- or_condition_count ----------
 
     @Test
-    public void or_condition_count_2OrNoTrigger() {
+    public void or_condition_count_2OrNoTrigger() throws Exception {
         String sql = "SELECT id FROM user WHERE a = 1 OR b = 2";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.OrConditionCountRule.INSTANCE.check(sql, ast);
@@ -126,7 +126,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void or_condition_count_5OrTrigger() {
+    public void or_condition_count_5OrTrigger() throws Exception {
         String sql = "SELECT id FROM user WHERE a = 1 OR b = 2 OR c = 3 OR d = 4 OR e = 5";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.OrConditionCountRule.INSTANCE.check(sql, ast);
@@ -137,7 +137,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- distinct_with_join ----------
 
     @Test
-    public void distinct_with_join_trigger() {
+    public void distinct_with_join_trigger() throws Exception {
         String sql = "SELECT DISTINCT u.id FROM user u INNER JOIN order o ON o.user_id = u.id";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.DistinctWithJoinRule.INSTANCE.check(sql, ast);
@@ -146,7 +146,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void distinct_with_join_noJoinNoTrigger() {
+    public void distinct_with_join_noJoinNoTrigger() throws Exception {
         String sql = "SELECT DISTINCT id FROM user";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.DistinctWithJoinRule.INSTANCE.check(sql, ast);
@@ -156,7 +156,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- group_by_without_aggregate ----------
 
     @Test
-    public void group_by_without_aggregate_trigger() {
+    public void group_by_without_aggregate_trigger() throws Exception {
         String sql = "SELECT id, name FROM user GROUP BY name";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.GroupByWithoutAggregateRule.INSTANCE.check(sql, ast);
@@ -165,7 +165,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void group_by_without_aggregate_withAggregateNoTrigger() {
+    public void group_by_without_aggregate_withAggregateNoTrigger() throws Exception {
         String sql = "SELECT name, COUNT(*) FROM user GROUP BY name";
         Statement ast = CCJSqlParserUtil.parse(sql);
         List<PerfWarning> warnings = PerfRulesBatch2.GroupByWithoutAggregateRule.INSTANCE.check(sql, ast);
@@ -175,7 +175,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- no_limit_large_result ----------
 
     @Test
-    public void no_limit_large_result_trigger() {
+    public void no_limit_large_result_trigger() throws Exception {
         String sql = "SELECT u.id FROM user u " +
                 "INNER JOIN order o ON o.user_id = u.id " +
                 "INNER JOIN product p ON p.id = o.product_id";
@@ -186,7 +186,7 @@ public class PerfRulesBatch2AstTest {
     }
 
     @Test
-    public void no_limit_large_result_withLimitNoTrigger() {
+    public void no_limit_large_result_withLimitNoTrigger() throws Exception {
         String sql = "SELECT u.id FROM user u " +
                 "INNER JOIN order o ON o.user_id = u.id " +
                 "INNER JOIN product p ON p.id = o.product_id LIMIT 10";
@@ -198,7 +198,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- AST 为 null 时降级 ----------
 
     @Test
-    public void batch2_nullAstSafeDegrade() {
+    public void batch2_nullAstSafeDegrade() throws Exception {
         String sql = "SELECT id FROM user";
         assertTrue(PerfRulesBatch2.JoinWithoutOnRule.INSTANCE.check(sql, null).isEmpty());
         assertTrue(PerfRulesBatch2.SubqueryDepthRule.INSTANCE.check(sql, null).isEmpty());
@@ -213,7 +213,7 @@ public class PerfRulesBatch2AstTest {
     // ---------- 综合 ----------
 
     @Test
-    public void batch2_allRulesRegistered() {
+    public void batch2_allRulesRegistered() throws Exception {
         assertEquals(8, PerfRulesBatch2.all.size());
     }
 }

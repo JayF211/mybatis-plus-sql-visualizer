@@ -131,7 +131,7 @@ public class MpjJoinExtConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjJoin_5参rightAlias右列别名() {
+    public void mpjJoin_5参rightAlias右列别名() throws Exception {
         // T-M21-02：leftJoin(Class, "st", 左列, "t", 右列) → ON st.左列 = t.右列
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("leftJoin", List.of(
@@ -154,7 +154,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_4参rightAlias右列别名() {
+    public void mpjJoin_4参rightAlias右列别名() throws Exception {
         // T-M21-02：leftJoin(Class, 左列, "t", 右列) → ON 关联别名.左列 = t.右列
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("leftJoin", List.of(
@@ -176,7 +176,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_ext函数追加ON条件() {
+    public void mpjJoin_ext函数追加ON条件() throws Exception {
         // T-M21-02：leftJoin(Class, 左列, 右列, ext -> ext.eq(...)) → ON 关联别名.左列 = 主别名.右列 + ext 内条件追加
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("leftJoin", List.of(
@@ -200,7 +200,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_子表MConsumer子查询join() {
+    public void mpjJoin_子表MConsumer子查询join() throws Exception {
         // T-M21-02：leftJoin(Class, t -> t.setAlias("tt").selectAll().ge(...), 左列, 右列)
         TableInfo childTable = new TableInfo(
             "OccupyRecordEntity",
@@ -264,7 +264,7 @@ public class MpjJoinExtConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjJoin_selectCollectionPrefix子查询别名() {
+    public void mpjJoin_selectCollectionPrefix子查询别名() throws Exception {
         // T-M21-03：selectCollection("consumption", Child.class, VO::getList, map) → 子查询表别名用 prefix
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectCollection", List.of(
@@ -290,7 +290,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_selectCollectionFree不产生子查询() {
+    public void mpjJoin_selectCollectionFree不产生子查询() throws Exception {
         // T-M21-03：selectCollection(VO::getList, map)（首参方法引用、无子表类）→ 结果映射标记不产生 SQL
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectAll", List.of(val("DeviceInfoEntity"))),
@@ -314,7 +314,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_selectCollection类名形态回归() {
+    public void mpjJoin_selectCollection类名形态回归() throws Exception {
         // T-M21-03 回归：既有 selectCollection(Child.class, VO::getList[, map]) 形态不变
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectCollection", List.of(
@@ -343,7 +343,7 @@ public class MpjJoinExtConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjJoin_selectCollectionEntityRefArg子查询表名正确() {
+    public void mpjJoin_selectCollectionEntityRefArg子查询表名正确() throws Exception {
         // T-1800（Bug1）：EntityRefArg 携带 @TableName("user_address") 时子查询表名应为 user_address
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "UserDO", List.of(
             call("selectCollection", List.of(
@@ -362,7 +362,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_selectCollectionPrefix去重普通join() {
+    public void mpjJoin_selectCollectionPrefix去重普通join() throws Exception {
         // T-1800（Bug2）：selectCollection + 同子表 leftJoin 不应重复渲染
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "UserDO", List.of(
             call("selectCollection", List.of(
@@ -387,7 +387,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_selectCollectionPrefixOn条件别名一致() {
+    public void mpjJoin_selectCollectionPrefixOn条件别名一致() throws Exception {
         // T-1800（Bug3）：ON 条件别名应使用 collection 别名（prefix），而非 leftJoin 默认别名
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "UserDO", List.of(
             call("selectCollection", List.of(
@@ -417,7 +417,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_selectCollection普通形态EntityRefArg() {
+    public void mpjJoin_selectCollection普通形态EntityRefArg() throws Exception {
         // T-1800（Bug4）：普通形态（非 prefix）EntityRefArg 兼容 + 表名正确
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "UserDO", List.of(
             call("selectCollection", List.of(
@@ -435,7 +435,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_selectAssociationEntityRefArg不产生重复join() {
+    public void mpjJoin_selectAssociationEntityRefArg不产生重复join() throws Exception {
         // T-1800（Bug5）：selectAssociation EntityRefArg 形态不产生重复 join
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "UserDO", List.of(
             call("selectAssociation", List.of(
@@ -458,7 +458,7 @@ public class MpjJoinExtConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjJoin_from子查询主表() {
+    public void mpjJoin_from子查询主表() throws Exception {
         // T-M21-07：from(w -> w.setAlias("tb").selectAll().ge(User::getId, 0).last("LIMIT 10"))
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("from", List.of(nestedArg(nested(List.of(
@@ -466,7 +466,7 @@ public class MpjJoinExtConverterTest {
                 call("selectAll", List.of()),
                 call("ge", List.of(col("id"), val("0"))),
                 call("last", List.of(val("LIMIT 10")))
-            )))),
+            ))))),
             call("eq", List.of(col("id"), val("1001")))
         ));
         String sql = SqlGenerator.INSTANCE.generate(MpjLambdaConverter.INSTANCE.convert(chain, table));
@@ -485,7 +485,7 @@ public class MpjJoinExtConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mpjJoin_around位置与参数替换() {
+    public void mpjJoin_around位置与参数替换() throws Exception {
         // T-M21-09：around 渲染于 ORDER BY 之后、LIMIT 之前；模板 {i} 绑定参数替换
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("orderByAsc", List.of(col("id"))),
@@ -511,7 +511,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_around双字符串形态() {
+    public void mpjJoin_around双字符串形态() throws Exception {
         // T-M21-09：around(firstSql, lastSql)
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("around", List.of(val("/* around hint */"), val("FOR UPDATE"))),
@@ -530,7 +530,7 @@ public class MpjJoinExtConverterTest {
     }
 
     @Test
-    public void mpjJoin_setTableName与pageByMain不破坏() {
+    public void mpjJoin_setTableName与pageByMain不破坏() throws Exception {
         // T-M21-09：setTableName(Function) 与 pageByMain() 从解析链过滤，链不报错且 SQL 正常
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
             call("selectAll", List.of(val("DeviceInfoEntity"))),

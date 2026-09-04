@@ -3,8 +3,8 @@ package cn.song.mybatisplus.visualizer.execute;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel;
 import cn.song.mybatisplus.visualizer.ui.SqlResultPanel;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JComponent;
@@ -29,12 +29,12 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：Database 插件不可用时，onError 回调被调用。 */
     @Test
-    public void testErrorCallbackInvokedWhenPluginUnavailable() {
+    public void testErrorCallbackInvokedWhenPluginUnavailable() throws Exception {
         List<String> errors = new ArrayList<>();
         boolean[] callbackResult = {false};
 
         DataSourceSelector.selectAndExecute(
-                project,
+                getProject(),
                 "SELECT * FROM users",
                 null,
                 null,
@@ -52,9 +52,9 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：未设置 onError 回调时不会空指针异常。 */
     @Test
-    public void testNoErrorCallbackDoesNotThrow() {
+    public void testNoErrorCallbackDoesNotThrow() throws Exception {
         DataSourceSelector.selectAndExecute(
-                project,
+                getProject(),
                 "SELECT * FROM users",
                 null,
                 null,
@@ -65,12 +65,12 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：runners 为空（无数据源）时，onError 回调被调用。 */
     @Test
-    public void testErrorCallbackInvokedWhenRunnersEmpty() {
+    public void testErrorCallbackInvokedWhenRunnersEmpty() throws Exception {
         List<String> errors = new ArrayList<>();
         boolean[] callbackResult = {false};
 
         DataSourceSelector.selectAndExecute(
-                project,
+                getProject(),
                 "SELECT * FROM users",
                 null,
                 null,
@@ -86,7 +86,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：SqlResultPanel.showError 正确设置错误文本和颜色。 */
     @Test
-    public void testResultPanelShowError() {
+    public void testResultPanelShowError() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         panel.showError("Connection failed");
 
@@ -100,7 +100,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：SqlResultPanel 从 loading 状态切换到 error 状态。 */
     @Test
-    public void testResultPanelLoadingToErrorTransition() {
+    public void testResultPanelLoadingToErrorTransition() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
 
         panel.showLoading((String) null);
@@ -117,7 +117,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：SqlResultPanel 初始/空状态隐藏，有内容（错误/loading）时显示。 */
     @Test
-    public void testResultPanelAutoVisibility() {
+    public void testResultPanelAutoVisibility() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         assertTrue("Panel should start hidden (no blank placeholder)", !panel.isVisible());
 
@@ -133,7 +133,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试（M36.5.49）：showError 后 showIdle 保留错误。 */
     @Test
-    public void testShowIdlePreservesError() {
+    public void testShowIdlePreservesError() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         panel.showError("Table 'xx' doesn't exist");
 
@@ -151,19 +151,19 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：executePrepared 在控制台未就绪时返回 false（不抛异常）。 */
     @Test
-    public void testExecutePreparedNotReadyReturnsFalse() {
+    public void testExecutePreparedNotReadyReturnsFalse() throws Exception {
         DataSourceSelector.clearPrepared();
-        boolean executed = DataSourceSelector.executePrepared(project, null, null);
+        boolean executed = DataSourceSelector.executePrepared(getProject(), null, null);
         assertTrue("executePrepared should return false when console not prepared", !executed);
     }
 
     /** 测试（M36.5.2）：executePrepared 未就绪时不触发 onResultsReady。 */
     @Test
-    public void testExecutePreparedNotReadyDoesNotFireResultsReady() {
+    public void testExecutePreparedNotReadyDoesNotFireResultsReady() throws Exception {
         DataSourceSelector.clearPrepared();
         boolean[] resultsReadyFired = {false};
         boolean executed = DataSourceSelector.executePrepared(
-                project,
+                getProject(),
                 c -> resultsReadyFired[0] = true,
                 null
         );
@@ -173,11 +173,11 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试（M36.5.2）：SqlExecutor.executePrepared 同样在未就绪时返回 false。 */
     @Test
-    public void testSqlExecutorExecutePreparedNotReadyReturnsFalse() {
+    public void testSqlExecutorExecutePreparedNotReadyReturnsFalse() throws Exception {
         SqlExecutor.clearPrepared();
         assertTrue(
                 "SqlExecutor.executePrepared should return false when console not prepared",
-                !SqlExecutor.executePrepared(project, null, null)
+                !SqlExecutor.executePrepared(getProject(), null, null)
         );
     }
 
@@ -185,8 +185,8 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试（M36.5.2）：embedConsole 替换旧控制台；同一组件重复回调不重复内嵌（防闪烁）。 */
     @Test
-    public void testEmbedConsoleReplacesAndDebounces() {
-        SqlPreviewPanel panel = new SqlPreviewPanel(project);
+    public void testEmbedConsoleReplacesAndDebounces() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         JPanel first = new JPanel();
         JPanel second = new JPanel();
 
@@ -198,7 +198,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
         assertTrue("second embed should be attached", second.getParent() != null);
         assertTrue("first embed should be detached after replace", first.getParent() == null);
 
-        JComponent parentBefore = second.getParent();
+        JComponent parentBefore = (JComponent) second.getParent();
         embedConsoleForTest(panel, second);
         assertTrue("same instance re-embed should keep current", embeddedConsoleForTest(panel) == second);
         assertTrue("same instance re-embed should keep parent", second.getParent() == parentBefore);
@@ -206,12 +206,12 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：SqlExecutor.prepareConsole 在插件不可用环境（单元测试沙盒）静默回退。 */
     @Test
-    public void testPrepareConsoleSilentFallbackWhenPluginUnavailable() {
+    public void testPrepareConsoleSilentFallbackWhenPluginUnavailable() throws Exception {
         boolean[] callbackResult = {false};
         boolean[] errorInvoked = {false};
 
         SqlExecutor.prepareConsole(
-                project,
+                getProject(),
                 "SELECT 1",
                 null,
                 null,
@@ -225,14 +225,14 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：clearPrepared 重置就绪状态。 */
     @Test
-    public void testClearPrepared() {
+    public void testClearPrepared() throws Exception {
         DataSourceSelector.clearPrepared();
         assertTrue("isPrepared should be false after clearPrepared", !DataSourceSelector.isPrepared());
     }
 
     /** 测试：SqlResultPanel.clear 清空状态。 */
     @Test
-    public void testResultPanelClear() {
+    public void testResultPanelClear() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         panel.showError("Some error");
         assertTrue("Error should be set", !infoLabel(panel).getText().isEmpty());
@@ -245,11 +245,11 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：SqlExecutor.execute 在插件不可用时调用 onError。 */
     @Test
-    public void testSqlExecutorPropagatesError() {
+    public void testSqlExecutorPropagatesError() throws Exception {
         List<String> errors = new ArrayList<>();
 
         SqlExecutor.execute(
-                project,
+                getProject(),
                 "SELECT 1",
                 null,
                 true,
@@ -263,9 +263,9 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
 
     /** 测试：SqlExecutor.execute 未设置 onError 时不抛异常。 */
     @Test
-    public void testSqlExecutorNoErrorCallbackDoesNotThrow() {
+    public void testSqlExecutorNoErrorCallbackDoesNotThrow() throws Exception {
         SqlExecutor.execute(
-                project,
+                getProject(),
                 "SELECT 1",
                 null,
                 true,

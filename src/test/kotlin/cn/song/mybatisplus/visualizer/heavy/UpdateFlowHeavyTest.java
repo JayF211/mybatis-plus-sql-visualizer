@@ -7,8 +7,8 @@ import cn.song.mybatisplus.visualizer.update.UpdateSource;
 import com.intellij.testFramework.HeavyPlatformTestCase;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -91,7 +91,7 @@ public class UpdateFlowHeavyTest extends HeavyPlatformTestCase {
     }
 
     @Test
-    public void testCheckDownloadInstallFullChainOverHttp() {
+    public void testCheckDownloadInstallFullChainOverHttp() throws Exception {
         serveManifest("9999.1.1", base() + "/plugin.zip");
         serveZip(true);
         System.setProperty(UpdateSource.MANIFEST_URL_OVERRIDE, base() + "/update.json");
@@ -127,7 +127,7 @@ public class UpdateFlowHeavyTest extends HeavyPlatformTestCase {
     }
 
     @Test
-    public void testInvalidZipDownloadIsRejectedOverHttp() {
+    public void testInvalidZipDownloadIsRejectedOverHttp() throws Exception {
         serveManifest("9999.1.1", base() + "/plugin.zip");
         serveZip(false);
         System.setProperty(UpdateSource.MANIFEST_URL_OVERRIDE, base() + "/update.json");

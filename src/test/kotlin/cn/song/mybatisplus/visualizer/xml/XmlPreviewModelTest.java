@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -56,7 +56,7 @@ public class XmlPreviewModelTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 变量收集_来自bind与dollar表达式_排除保留键() {
+    public void 变量收集_来自bind与dollar表达式_排除保留键() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">
@@ -73,7 +73,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void 变量收集_if条件不参与() {
+    public void 变量收集_if条件不参与() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t<if test="status != null and type == 1"> WHERE x = 1</if></select>
@@ -90,7 +90,7 @@ public class XmlPreviewModelTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 启发式默认_非判空展开_判null关闭() {
+    public void 启发式默认_非判空展开_判null关闭() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t
@@ -118,7 +118,7 @@ public class XmlPreviewModelTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void foreach默认展开两次_次数可调() {
+    public void foreach默认展开两次_次数可调() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE id IN
@@ -133,7 +133,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void foreach集合为null时错误提示() {
+    public void foreach集合为null时错误提示() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE id IN
@@ -148,7 +148,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void bind覆盖优先于表达式求值() {
+    public void bind覆盖优先于表达式求值() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">
@@ -165,7 +165,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void 条件开关切换分支() {
+    public void 条件开关切换分支() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t
@@ -182,7 +182,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void 表达式解析失败的test默认展开_开关可关闭() {
+    public void 表达式解析失败的test默认展开_开关可关闭() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t
@@ -197,7 +197,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void 语句元信息透传() {
+    public void 语句元信息透传() throws Exception {
         XmlPreviewModel m = model("""
                 <mapper namespace="com.example.BizMapper">
                   <update id="updateById" parameterType="map">UPDATE t SET a = 1 WHERE id = 2</update>
@@ -213,7 +213,7 @@ public class XmlPreviewModelTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void quoteFor_精确与前缀匹配() {
+    public void quoteFor_精确与前缀匹配() throws Exception {
         XmlPreviewModel m = XmlPreviewModel.from(
                 new XmlMapperParser().parse("""
                         <mapper namespace="n">
@@ -233,7 +233,7 @@ public class XmlPreviewModelTest {
     }
 
     @Test
-    public void quoteFor_Map参数前缀兜底() {
+    public void quoteFor_Map参数前缀兜底() throws Exception {
         // Map 入参：键 = 参数名 p，任意 p.* 属性前缀命中（T-M29.4 兜底语义）
         XmlPreviewModel m = XmlPreviewModel.from(
                 new XmlMapperParser().parse("""

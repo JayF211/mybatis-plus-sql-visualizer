@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
 import java.util.List;
@@ -13,13 +13,13 @@ import java.util.List;
 public class LogSqlModelsTest {
 
     @Test
-    public void 无参数条目只渲染_Preparing_行() {
+    public void 无参数条目只渲染_Preparing_行() throws Exception {
         LogSqlEntry entry = new LogSqlEntry("SELECT 1", "SELECT 1", List.of());
         assertEquals("==>  Preparing: SELECT 1", LogSqlModelsKt.toLogText(entry));
     }
 
     @Test
-    public void 带类型标注参数渲染为_value_括号_type_形态() {
+    public void 带类型标注参数渲染为_value_括号_type_形态() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "SELECT * FROM t WHERE id = ? AND name = ?",
                 "SELECT * FROM t WHERE id = 1 AND name = '张三'",
@@ -30,7 +30,7 @@ public class LogSqlModelsTest {
     }
 
     @Test
-    public void null_参数渲染为_null_字面量() {
+    public void null_参数渲染为_null_字面量() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "SELECT * FROM t WHERE a = ?",
                 "SELECT * FROM t WHERE a = NULL",
@@ -39,7 +39,7 @@ public class LogSqlModelsTest {
     }
 
     @Test
-    public void 无类型标注参数直出值() {
+    public void 无类型标注参数直出值() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "SELECT * FROM t WHERE a = ?",
                 "SELECT * FROM t WHERE a = 'x'",
@@ -48,7 +48,7 @@ public class LogSqlModelsTest {
     }
 
     @Test
-    public void 渲染文本可被解析器重新解析为等价条目() {
+    public void 渲染文本可被解析器重新解析为等价条目() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
                 "SELECT * FROM t WHERE id = ? AND name = ? AND age > ?",
                 "SELECT * FROM t WHERE id = 1 AND name = 'a, b' AND age > 3",

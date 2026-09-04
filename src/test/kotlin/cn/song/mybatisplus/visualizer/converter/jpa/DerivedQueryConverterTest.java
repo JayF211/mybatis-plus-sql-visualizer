@@ -10,11 +10,11 @@ import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -54,6 +54,11 @@ public class DerivedQueryConverterTest {
         return simpleProp(property, PartType.SIMPLE_PROPERTY, false);
     }
 
+    private static cn.song.mybatisplus.visualizer.converter.jpa.Condition simpleProp(
+            String property, PartType type) {
+        return simpleProp(property, type, false);
+    }
+
     private static PartTree findTree(PredicatePart... predicates) {
         return new PartTree(new Subject(Operation.FIND, false, null), List.of(predicates), List.of());
     }
@@ -91,7 +96,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void findByLastName_生成等值条件() {
+    public void findByLastName_生成等值条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("lastName"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -104,7 +109,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByLastNameAndFirstName_生成AND连接条件() {
+    public void findByLastNameAndFirstName_生成AND连接条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(
                 simpleProp("lastName"),
                 simpleProp("firstName"))));
@@ -126,7 +131,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByAgeBetween_生成BETWEEN条件() {
+    public void findByAgeBetween_生成BETWEEN条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("age", PartType.BETWEEN))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -145,7 +150,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByNameLike_生成LIKE条件() {
+    public void findByNameLike_生成LIKE条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.LIKE))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -165,7 +170,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByStatusIn_生成IN条件() {
+    public void findByStatusIn_生成IN条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("status", PartType.IN))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -188,7 +193,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void countByDepartmentId_生成COUNT聚合() {
+    public void countByDepartmentId_生成COUNT聚合() throws Exception {
         PartTree partTree = countTree(new PredicatePart(Connector.AND, List.of(simpleProp("departmentId"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -205,7 +210,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void existsByDepartmentId_生成SELECT_1() {
+    public void existsByDepartmentId_生成SELECT_1() throws Exception {
         PartTree partTree = existsTree(new PredicatePart(Connector.AND, List.of(simpleProp("departmentId"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -225,7 +230,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void deleteByStatus_生成DELETE语句() {
+    public void deleteByStatus_生成DELETE语句() throws Exception {
         PartTree partTree = deleteTree(new PredicatePart(Connector.AND, List.of(simpleProp("status"))));
         SqlStatement statement = DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -244,7 +249,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void findTop10ByOrderByCreateTimeDesc_生成ORDER_BY和LIMIT() {
+    public void findTop10ByOrderByCreateTimeDesc_生成ORDER_BY和LIMIT() throws Exception {
         PartTree partTree = findTreeLimitOrderBy(10,
                 List.of(new OrderByPart("createTime", SortDirection.DESC)));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
@@ -267,7 +272,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findDistinctByStatus_生成DISTINCT查询() {
+    public void findDistinctByStatus_生成DISTINCT查询() throws Exception {
         PartTree partTree = findTreeDistinct(new PredicatePart(Connector.AND, List.of(simpleProp("status"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -286,7 +291,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void findByStatusAndAgeIn_生成复合条件() {
+    public void findByStatusAndAgeIn_生成复合条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(
                 simpleProp("status"),
                 simpleProp("age", PartType.IN))));
@@ -299,7 +304,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByFirstNameOrLastName_生成OR连接条件() {
+    public void findByFirstNameOrLastName_生成OR连接条件() throws Exception {
         PartTree partTree = new PartTree(
                 new Subject(Operation.FIND, false, null),
                 List.of(
@@ -318,7 +323,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByAgeGreaterThan_生成大于条件() {
+    public void findByAgeGreaterThan_生成大于条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("age", PartType.GREATER_THAN))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -331,7 +336,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByStatusIsNull_生成IS_NULL条件() {
+    public void findByStatusIsNull_生成IS_NULL条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("status", PartType.IS_NULL))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -343,7 +348,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByNameStartingWith_生成前缀匹配条件() {
+    public void findByNameStartingWith_生成前缀匹配条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.STARTING_WITH))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -353,7 +358,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByNameEndingWith_生成后缀匹配条件() {
+    public void findByNameEndingWith_生成后缀匹配条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.ENDING_WITH))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -363,7 +368,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByNameContaining_生成包含匹配条件() {
+    public void findByNameContaining_生成包含匹配条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.CONTAINING))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -373,7 +378,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByNameNotContaining_生成不包含匹配条件() {
+    public void findByNameNotContaining_生成不包含匹配条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.NOT_CONTAINING))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -383,7 +388,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByStatusNotEqual_生成不等条件() {
+    public void findByStatusNotEqual_生成不等条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("status", PartType.NEGATING_SIMPLE_PROPERTY))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -395,7 +400,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByStatusNotIn_生成NOT_IN条件() {
+    public void findByStatusNotIn_生成NOT_IN条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("status", PartType.NOT_IN))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -407,7 +412,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByActiveTrue_生成布尔true条件() {
+    public void findByActiveTrue_生成布尔true条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("active", PartType.TRUE))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -417,7 +422,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByActiveFalse_生成布尔false条件() {
+    public void findByActiveFalse_生成布尔false条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("active", PartType.FALSE))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -427,7 +432,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByCreateTimeBefore_生成BEFORE条件() {
+    public void findByCreateTimeBefore_生成BEFORE条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("createTime", PartType.BEFORE))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -436,7 +441,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByCreateTimeAfter_生成AFTER条件() {
+    public void findByCreateTimeAfter_生成AFTER条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("createTime", PartType.AFTER))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -445,7 +450,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByAgeLessThan_生成小于条件() {
+    public void findByAgeLessThan_生成小于条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("age", PartType.LESS_THAN))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -454,7 +459,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByAgeLessThanEqual_生成小于等于条件() {
+    public void findByAgeLessThanEqual_生成小于等于条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("age", PartType.LESS_THAN_EQUAL))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -463,7 +468,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByAgeGreaterThanEqual_生成大于等于条件() {
+    public void findByAgeGreaterThanEqual_生成大于等于条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("age", PartType.GREATER_THAN_EQUAL))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -472,7 +477,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByStatusIsNotNull_生成IS_NOT_NULL条件() {
+    public void findByStatusIsNotNull_生成IS_NOT_NULL条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("status", PartType.IS_NOT_NULL))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -481,7 +486,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void findByNameNotLike_生成NOT_LIKE条件() {
+    public void findByNameNotLike_生成NOT_LIKE条件() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.NOT_LIKE))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -495,7 +500,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 嵌套属性路径_生成降级提示() {
+    public void 嵌套属性路径_生成降级提示() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("address.city"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -506,7 +511,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void NEAR空间查询_生成降级提示() {
+    public void NEAR空间查询_生成降级提示() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("location", PartType.NEAR))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -515,7 +520,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void WITHIN空间查询_生成降级提示() {
+    public void WITHIN空间查询_生成降级提示() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("location", PartType.WITHIN))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -524,7 +529,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void IS_EMPTY_生成降级提示() {
+    public void IS_EMPTY_生成降级提示() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("tags", PartType.IS_EMPTY))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -533,7 +538,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void IS_NOT_EMPTY_生成降级提示() {
+    public void IS_NOT_EMPTY_生成降级提示() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("tags", PartType.IS_NOT_EMPTY))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -542,7 +547,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void REGEX正则匹配_生成降级REGEXP() {
+    public void REGEX正则匹配_生成降级REGEXP() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("name", PartType.REGEX))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -551,7 +556,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void 嵌套属性EXISTS_生成IS_NOT_NULL() {
+    public void 嵌套属性EXISTS_生成IS_NOT_NULL() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("department", PartType.EXISTS))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -564,7 +569,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 无条件FIND_生成无条件SELECT() {
+    public void 无条件FIND_生成无条件SELECT() throws Exception {
         PartTree partTree = findTree();
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -579,7 +584,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void 无条件DELETE_生成无条件DELETE() {
+    public void 无条件DELETE_生成无条件DELETE() throws Exception {
         PartTree partTree = deleteTree();
         DeleteStatement statement = (DeleteStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -596,7 +601,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void 驼峰属性名_正确映射为下划线列名() {
+    public void 驼峰属性名_正确映射为下划线列名() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("departmentId"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -608,7 +613,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void 未知属性名_使用驼峰转下划线兜底() {
+    public void 未知属性名_使用驼峰转下划线兜底() throws Exception {
         PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("unknownField"))));
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
 
@@ -621,7 +626,7 @@ public class DerivedQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void PartTreeParser解析findByLastName_转换为正确SQL() {
+    public void PartTreeParser解析findByLastName_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("findByLastName");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -631,7 +636,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void PartTreeParser解析findByLastNameAndFirstName_转换为正确SQL() {
+    public void PartTreeParser解析findByLastNameAndFirstName_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("findByLastNameAndFirstName");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -642,7 +647,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void PartTreeParser解析findByAgeBetween_转换为正确SQL() {
+    public void PartTreeParser解析findByAgeBetween_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("findByAgeBetween");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -652,7 +657,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void PartTreeParser解析countByDepartmentId_转换为正确SQL() {
+    public void PartTreeParser解析countByDepartmentId_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("countByDepartmentId");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -662,7 +667,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void PartTreeParser解析deleteByStatus_转换为正确SQL() {
+    public void PartTreeParser解析deleteByStatus_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("deleteByStatus");
         SqlStatement statement = DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -672,7 +677,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void PartTreeParser解析findTop10ByAgeOrderByCreateTimeDesc_转换为正确SQL() {
+    public void PartTreeParser解析findTop10ByAgeOrderByCreateTimeDesc_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("findTop10ByAgeOrderByCreateTimeDesc");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);
@@ -683,7 +688,7 @@ public class DerivedQueryConverterTest {
     }
 
     @Test
-    public void PartTreeParser解析findDistinctByStatus_转换为正确SQL() {
+    public void PartTreeParser解析findDistinctByStatus_转换为正确SQL() throws Exception {
         PartTree partTree = PartTreeParser.INSTANCE.parse("findDistinctByStatus");
         SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
         String sql = SqlGenerator.INSTANCE.generate(statement);

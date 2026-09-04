@@ -9,9 +9,9 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
 import kotlin.Unit;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import javax.swing.JFrame;
 
@@ -45,7 +45,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         super.tearDown();
     }
 
-    public void testInitialState() {
+    public void testInitialState() throws Exception {
         // 版本行展示当前插件版本（读自身 META-INF/plugin.xml）
         String cv = PluginVersion.current();
         String expected = MpSqlVisualizerBundle.message("settings.update.currentVersion")
@@ -60,7 +60,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertTrue(section.getCheckButton().isEnabled());
     }
 
-    public void testRenderAvailable() {
+    public void testRenderAvailable() throws Exception {
         UpdateManifest manifest = new UpdateManifest("2026.8.15", "https://example.com/p.zip", "line1\nline2", null, null);
         section.renderCheck(new PluginUpdateRunner.CheckResult.Available(manifest));
 
@@ -75,14 +75,14 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertTrue(section.getNotesArea().getText().contains("line2"));
     }
 
-    public void testRenderUpToDate() {
+    public void testRenderUpToDate() throws Exception {
         section.renderCheck(PluginUpdateRunner.CheckResult.UpToDate.INSTANCE);
         assertEquals(UpdateSection.State.UpToDate, section.getState());
         assertEquals(MpSqlVisualizerBundle.message("settings.update.upToDate"), section.getStatusLabel().getText());
         assertFalse(section.getInstallButton().isVisible());
     }
 
-    public void testRenderCheckFailure() {
+    public void testRenderCheckFailure() throws Exception {
         section.renderCheck(new PluginUpdateRunner.CheckResult.Failure("network unavailable"));
         assertEquals(UpdateSection.State.Failed, section.getState());
         assertEquals(
@@ -93,7 +93,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertFalse(section.getInstallButton().isVisible());
     }
 
-    public void testRenderInstalled() {
+    public void testRenderInstalled() throws Exception {
         UpdateManifest manifest = new UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null);
         section.renderCheck(new PluginUpdateRunner.CheckResult.Available(manifest));
         section.renderInstall(PluginUpdateRunner.InstallResult.Installed.INSTANCE);
@@ -106,7 +106,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertFalse(section.getCheckButton().isEnabled());
     }
 
-    public void testRenderInstallFailed() {
+    public void testRenderInstallFailed() throws Exception {
         UpdateManifest manifest = new UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null);
         section.renderCheck(new PluginUpdateRunner.CheckResult.Available(manifest));
         section.renderInstall(new PluginUpdateRunner.InstallResult.Failed("install rejected"));
@@ -118,7 +118,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertTrue(section.getCheckButton().isEnabled());
     }
 
-    public void testAutoCheckFromState() {
+    public void testAutoCheckFromState() throws Exception {
         PluginSettings.getInstance().getState().setAutoCheckUpdate(false);
         section.resetState();
         assertFalse("开关应跟随配置（取消勾选）", section.getAutoCheckCheck().isSelected());
@@ -128,7 +128,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertTrue(section.getAutoCheckCheck().isSelected());
     }
 
-    public void testLanguageSwitchRefreshesTexts() {
+    public void testLanguageSwitchRefreshesTexts() throws Exception {
         // updateTexts 由 rebuild 调用：切换语言后按钮文案随 bundle 刷新（同 M19.2 复选框修复模式）
         section.updateTexts();
         assertEquals(MpSqlVisualizerBundle.message("settings.update.check"), section.getCheckButton().getText());
@@ -137,7 +137,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
 
     // ---------------- T-M28.1 按钮交互（此前缺失绑定——用户实测点击无反应；盲区补测） ----------------
 
-    public void testButtonsHaveActionListeners() {
+    public void testButtonsHaveActionListeners() throws Exception {
         assertTrue("检查更新按钮应绑定事件", section.getCheckButton().getActionListeners().length > 0);
         assertTrue("下载并安装按钮应绑定事件", section.getInstallButton().getActionListeners().length > 0);
         assertTrue("重启按钮应绑定事件", section.getRestartButton().getActionListeners().length > 0);
@@ -173,7 +173,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertTrue("安装完成应显示重启按钮", section.getRestartButton().isVisible());
     }
 
-    public void testRestartButtonClickInvokesRestartAction() {
+    public void testRestartButtonClickInvokesRestartAction() throws Exception {
         final int[] restarts = {0};
         section.setRestartAction(() -> {
             restarts[0]++;
@@ -186,7 +186,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         assertEquals(1, restarts[0]);
     }
 
-    public void testGiteeLinkPresent() {
+    public void testGiteeLinkPresent() throws Exception {
         // T-M28.4：变更日志关联 Gitee——链接存在且文案走 bundle
         assertEquals(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), section.getGiteeLink().getText());
     }

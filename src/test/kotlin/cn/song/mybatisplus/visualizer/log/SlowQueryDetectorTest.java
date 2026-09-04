@@ -1,8 +1,8 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
@@ -13,27 +13,27 @@ import org.junit.Test;
 public class SlowQueryDetectorTest {
 
     @Test
-    public void 耗时超过阈值判定为慢查询() {
+    public void 耗时超过阈值判定为慢查询() throws Exception {
         assertTrue(SlowQueryDetector.isSlow(1500L, 1000L));
     }
 
     @Test
-    public void 耗时低于阈值判定为正常() {
+    public void 耗时低于阈值判定为正常() throws Exception {
         assertFalse(SlowQueryDetector.isSlow(500L, 1000L));
     }
 
     @Test
-    public void 耗时等于阈值判定为慢查询() {
+    public void 耗时等于阈值判定为慢查询() throws Exception {
         assertTrue(SlowQueryDetector.isSlow(1000L, 1000L));
     }
 
     @Test
-    public void 耗时缺失判定为正常() {
+    public void 耗时缺失判定为正常() throws Exception {
         assertFalse(SlowQueryDetector.isSlow(null, 1000L));
     }
 
     @Test
-    public void 计数统计正确() {
+    public void 计数统计正确() throws Exception {
         SlowQueryCounter counter = new SlowQueryCounter(1000L);
         assertEquals(0, counter.getSlowCount());
 
@@ -48,7 +48,7 @@ public class SlowQueryDetectorTest {
     }
 
     @Test
-    public void 重置计数器归零() {
+    public void 重置计数器归零() throws Exception {
         SlowQueryCounter counter = new SlowQueryCounter(1000L);
         counter.report(1500L);
         counter.report(2000L);
@@ -59,7 +59,7 @@ public class SlowQueryDetectorTest {
     }
 
     @Test
-    public void 阈值0时任何耗时都判定为慢查询() {
+    public void 阈值0时任何耗时都判定为慢查询() throws Exception {
         assertTrue(SlowQueryDetector.isSlow(1L, 0L));
     }
 }

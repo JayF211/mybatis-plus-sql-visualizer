@@ -39,7 +39,7 @@ public class MpjFillConverterTest {
         null, null, null, List.of()
     );
 
-    private final TableInfo stationTable = new TableInfo(
+    private static final TableInfo stationTable = new TableInfo(
         "StationEntity",
         "station",
         List.of(
@@ -51,6 +51,10 @@ public class MpjFillConverterTest {
 
     private static ColumnRef crefAlias(String tableAlias, String column) {
         return new ColumnRef(tableAlias, column, null, null, null, null, null);
+    }
+
+    private static WrapperArg.ColumnArg col(String column) {
+        return colA(null, column);
     }
 
     private static WrapperArg.ColumnArg colA(String tableAlias, String column) {
@@ -92,7 +96,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_基础形态2参() {
+    public void fill_基础形态2参() throws Exception {
         // fill(Device::getStationId, Station::getId) + leftJoin(StationEntity, "s", ...)
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -123,7 +127,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_limit限制_4参() {
+    public void fill_limit限制_4参() throws Exception {
         // fill(Device::getStationId, Station::getId, "id", 10)
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -140,7 +144,7 @@ public class MpjFillConverterTest {
         assertEquals(1, fills.size());
 
         FillClause fill = fills.get(0);
-        assertEquals(10, fill.getLimit());
+        assertEquals(Integer.valueOf(10), fill.getLimit());
         assertNull(fill.getCondition());
         assertNull(fill.getData());
 
@@ -153,7 +157,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_condition_false跳过() {
+    public void fill_condition_false跳过() throws Exception {
         // fill(Device::getStationId, Station::getId, "id", false) → 不生成 FillClause
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -173,7 +177,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_condition_true执行() {
+    public void fill_condition_true执行() throws Exception {
         // fill(Device::getStationId, Station::getId, "id", true) → 生成 FillClause
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -196,7 +200,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_data数据源() {
+    public void fill_data数据源() throws Exception {
         // fill(Device::getStationId, Station::getId, "id", dataObj) → data 占位
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -220,7 +224,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_limit_data_5参() {
+    public void fill_limit_data_5参() throws Exception {
         // fill(Device::getStationId, Station::getId, "id", 5, dataObj)
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -238,7 +242,7 @@ public class MpjFillConverterTest {
         assertEquals(1, fills.size());
 
         FillClause fill = fills.get(0);
-        assertEquals(5, fill.getLimit());
+        assertEquals(Integer.valueOf(5), fill.getLimit());
         assertNotNull(fill.getData());
 
         String fillSql = SqlGenerator.INSTANCE.generateFill(fill, MySqlDialect.INSTANCE);
@@ -250,7 +254,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_多次fill_按顺序追加() {
+    public void fill_多次fill_按顺序追加() throws Exception {
         // 两次 fill 调用 → 两个 FillClause 按 chain 顺序
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -274,7 +278,7 @@ public class MpjFillConverterTest {
         assertNull(fills.get(0).getLimit());
 
         assertEquals("station_name", fills.get(1).getTagField());
-        assertEquals(3, fills.get(1).getLimit());
+        assertEquals(Integer.valueOf(3), fills.get(1).getLimit());
     }
 
     // ------------------------------------------------------------------
@@ -282,7 +286,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_结合主查询join() {
+    public void fill_结合主查询join() throws Exception {
         // 主查询有 leftJoin + fill → 主 SELECT 独立（已有 join），fill 段追加
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
@@ -312,7 +316,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_无join上下文_容错返回null() {
+    public void fill_无join上下文_容错返回null() throws Exception {
         // 无 leftJoin → aliasToTable 为空 → parseFill 返回 null → fillClauses 为 null
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             call("fill", List.of(
@@ -329,7 +333,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_参数不足_容错返回null() {
+    public void fill_参数不足_容错返回null() throws Exception {
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             call("fill", List.of(
                 colA("t", "station_id")
@@ -344,7 +348,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_字符串tagField_无上下文容错() {
+    public void fill_字符串tagField_无上下文容错() throws Exception {
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             call("fill", List.of(
                 colA("t", "station_id"),
@@ -360,7 +364,7 @@ public class MpjFillConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void fill_condition_false仅跳过当次() {
+    public void fill_condition_false仅跳过当次() throws Exception {
         WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceEntity", List.of(
             leftJoinWithAliasS(),
             call("fill", List.of(

@@ -2,9 +2,9 @@ package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.openapi.project.Project;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -45,7 +45,7 @@ public class SqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSQL无表名_无法跳转_NoTable() {
+    public void testSQL无表名_无法跳转_NoTable() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             // `SELECT 1` 无 FROM/表名 → 无法定位任何实体
@@ -60,7 +60,7 @@ public class SqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSQL有表名_但项目无对应实体_搜索返回None_无法跳转到代码位置() {
+    public void testSQL有表名_但项目无对应实体_搜索返回None_无法跳转到代码位置() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             String tableName = "some_random_table_xyz";
@@ -78,7 +78,7 @@ public class SqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSQL有表名_提取正确表名_进入Proceed() {
+    public void testSQL有表名_提取正确表名_进入Proceed() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             LogSqlEntry e = entry("SELECT u.id, u.name FROM user u WHERE u.id = 1");

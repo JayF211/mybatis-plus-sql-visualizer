@@ -4,11 +4,11 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.awt.Component;
 import java.awt.Container;
@@ -68,7 +68,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
         return null;
     }
 
-    public void testShowError_状态与复制按钮与可见性() {
+    public void testShowError_状态与复制按钮与可见性() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         try {
             panel.showError("boom: connection refused");
@@ -84,7 +84,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
         }
     }
 
-    public void testShowError_HTML转义防布局破坏() {
+    public void testShowError_HTML转义防布局破坏() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         try {
             // 含 < > & 与注入式序列——必须被转义，否则会破坏 infoLabel HTML 渲染
@@ -104,7 +104,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
         }
     }
 
-    public void testShowIdle_保留错误态防一闪而过() {
+    public void testShowIdle_保留错误态防一闪而过() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         try {
             panel.showError("boom");
@@ -120,7 +120,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
         }
     }
 
-    public void testShowIdle_清除非错误态() {
+    public void testShowIdle_清除非错误态() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         try {
             panel.showLoading("ds1");
@@ -136,7 +136,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
         }
     }
 
-    public void test成功与加载态_隐藏复制按钮且可见() {
+    public void test成功与加载态_隐藏复制按钮且可见() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         try {
             panel.showQueryResult(10, 25, "mysql");
@@ -149,7 +149,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
             waitForEdt();
             assertEquals("showUpdateResult 应为 SUCCESS 态", "SUCCESS", panel.stateForTest());
 
-            panel.showLoading();
+            panel.showLoading("");
             waitForEdt();
             assertEquals("showLoading 应为 LOADING 态", "LOADING", panel.stateForTest());
             assertFalse("加载态不应显示错误复制按钮", copyButton(panel).isVisible());
@@ -158,7 +158,7 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
         }
     }
 
-    public void testShowEmpty_隐藏面板且清空错误() {
+    public void testShowEmpty_隐藏面板且清空错误() throws Exception {
         SqlResultPanel panel = new SqlResultPanel();
         try {
             panel.showError("boom");

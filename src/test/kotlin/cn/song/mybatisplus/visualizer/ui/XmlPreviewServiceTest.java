@@ -35,7 +35,7 @@ public class XmlPreviewServiceTest {
     }
 
     @Test
-    public void 语句预览_参数对照与模型() {
+    public void 语句预览_参数对照与模型() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview(MAPPER, "selectById");
         assertEquals("SELECT * FROM t_biz WHERE id = ?", compact(result.getSql()));
@@ -47,21 +47,21 @@ public class XmlPreviewServiceTest {
     }
 
     @Test
-    public void 语句id未命中时回落首个语句() {
+    public void 语句id未命中时回落首个语句() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview(MAPPER, "missing");
         assertEquals("selectById", result.getXmlModel().getStatementId());
     }
 
     @Test
-    public void id为null时取首个语句() {
+    public void id为null时取首个语句() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview(MAPPER, null);
         assertEquals("selectById", result.getXmlModel().getStatementId());
     }
 
     @Test
-    public void 非mapper根元素_警告提示() {
+    public void 非mapper根元素_警告提示() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview("<configuration></configuration>", null);
         assertTrue(result.getWarning() != null && result.getWarning().contains("mapper"));
@@ -69,14 +69,14 @@ public class XmlPreviewServiceTest {
     }
 
     @Test
-    public void 非良构XML_警告提示() {
+    public void 非良构XML_警告提示() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview("<mapper><select id=\"a\"></mapper>", null);
         assertTrue(result.getWarning() != null);
     }
 
     @Test
-    public void 渲染期错误合并进警告() {
+    public void 渲染期错误合并进警告() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview("""
                 <mapper namespace="n">
@@ -91,7 +91,7 @@ public class XmlPreviewServiceTest {
     }
 
     @Test
-    public void 无语句时提示() {
+    public void 无语句时提示() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview("""
                 <mapper namespace="n">
@@ -104,7 +104,7 @@ public class XmlPreviewServiceTest {
     // T-M27.3：XML 预览注入实体上下文（namespace → Mapper 接口 → 主实体）——
     // 预览弹窗 SQL 编辑器补全的表名/列名/注释来源
     @Test
-    public void testEntityContextInjectedIntoResult() {
+    public void testEntityContextInjectedIntoResult() throws Exception {
         SqlCompletionContext ctx = new SqlCompletionContext("t_biz", List.of("id", "name"), null,
                 Map.of("name", "业务名"), "业务表");
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
@@ -117,7 +117,7 @@ public class XmlPreviewServiceTest {
 
     // T-M27.3：无实体上下文（解析失败/未关联）→ 保持 null 行为（兼容既有路径）
     @Test
-    public void testEntityContextNullKeepsNullTable() {
+    public void testEntityContextNullKeepsNullTable() throws Exception {
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 XmlPreviewService.INSTANCE.preview(MAPPER, "selectById");
         assertNull(result.getTableName());

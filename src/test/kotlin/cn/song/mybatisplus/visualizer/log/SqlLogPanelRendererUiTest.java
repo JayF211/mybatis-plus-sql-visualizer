@@ -2,10 +2,10 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import javax.swing.JLabel;
@@ -48,7 +48,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test空耗时空源码条目_渲染不崩溃且为HTML() {
+    public void test空耗时空源码条目_渲染不崩溃且为HTML() throws Exception {
         String text = render(entry("SELECT * FROM user"));
         assertTrue("渲染结果应为 HTML 片段", text.startsWith("<html>"));
         assertTrue("正常 SQL 高亮后含 SELECT", text.contains("SELECT"));
@@ -57,7 +57,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test含小于大于与号的特殊字符SQL_被HTML转义() {
+    public void test含小于大于与号的特殊字符SQL_被HTML转义() throws Exception {
         // WHERE a < 5 AND b > 3 AND c & d —— 若未转义，Swing 会把 <b 当作标签导致破版
         String text = render(entry("SELECT * FROM t WHERE a < 5 AND b > 3 AND c & d"));
         assertTrue("小于号应转义为 &lt;", text.contains("&lt;"));
@@ -68,7 +68,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testSQL含注入式闭合标签_不生成真实标签() {
+    public void testSQL含注入式闭合标签_不生成真实标签() throws Exception {
         // 模拟用户 SQL 里夹带 </span><script> 企图破坏高亮——必须被转义，不得原样渲染
         String text = render(entry("SELECT '</span><script>'"));
         assertTrue("注入的闭合标签中的 < 应转义为 &lt;", text.contains("&lt;/span&gt;"));
@@ -77,7 +77,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test超长SQL_渲染不异常且含截断摘要() {
+    public void test超长SQL_渲染不异常且含截断摘要() throws Exception {
         StringBuilder sb = new StringBuilder();
         for (int i = 1; i <= 200; i++) {
             if (i > 1) sb.append(", ");
@@ -92,7 +92,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test慢查询耗时着色为红色_正常为灰色() {
+    public void test慢查询耗时着色为红色_正常为灰色() throws Exception {
         PluginSettings.State pluginSettings = PluginSettings.getInstance().getState();
         long saved = pluginSettings.getSlowQueryThresholdMs();
         try {
@@ -109,14 +109,14 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test选中态耗时着色用白色_不抢SQL高亮() {
+    public void test选中态耗时着色用白色_不抢SQL高亮() throws Exception {
         String text = render(entry("SELECT x", 2000L, null, 0), true);
         // 选中态耗时套白色 #FFFFFF（避免与选中背景/SQL 高亮冲突）
         assertTrue(text.contains("color:#FFFFFF"));
     }
 
     @Test
-    public void test去重徽章随dedupeCounts渲染() {
+    public void test去重徽章随dedupeCounts渲染() throws Exception {
         String sql = "SELECT * FROM repeated WHERE id = 1";
         renderer.dedupeCounts = Map.of(sql, 4);
         String text = render(entry(sql));
@@ -133,7 +133,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test渲染返回值非空_组件有效() {
+    public void test渲染返回值非空_组件有效() throws Exception {
         java.awt.Component c = renderer.getListCellRendererComponent(list, entry("SELECT 1"), 0, false, false);
         assertNotNull("渲染组件不应为 null", c);
         assertTrue("渲染组件应为 JLabel", c instanceof JLabel);

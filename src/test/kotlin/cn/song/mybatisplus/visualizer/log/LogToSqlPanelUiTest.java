@@ -3,10 +3,10 @@ package cn.song.mybatisplus.visualizer.log;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.UIUtil;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.awt.Component;
@@ -42,7 +42,7 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test面板构建_编辑器与空态提示可见() {
+    public void test面板构建_编辑器与空态提示可见() throws Exception {
         LogToSqlPanel panel = new LogToSqlPanel(getProject());
         try {
             waitForEdt();
@@ -64,7 +64,7 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test转换_格式化输出含换行与参数替换() {
+    public void test转换_格式化输出含换行与参数替换() throws Exception {
         LogToSqlPanel panel = new LogToSqlPanel(getProject());
         try {
             String input = "Preparing: SELECT * FROM user WHERE id = ?\nParameters: 1(Integer)";
@@ -82,7 +82,7 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test格式切换_原样输出无换行() {
+    public void test格式切换_原样输出无换行() throws Exception {
         LogToSqlPanel panel = new LogToSqlPanel(getProject());
         try {
             String input = "Preparing: SELECT * FROM user WHERE id = ?\nParameters: 1(Integer)";
@@ -102,7 +102,7 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test布局_非空标签有正首选尺寸() {
+    public void test布局_非空标签有正首选尺寸() throws Exception {
         LogToSqlPanel panel = new LogToSqlPanel(getProject());
         try {
             waitForEdt();

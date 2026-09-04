@@ -4,10 +4,10 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlTag;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 
@@ -44,7 +44,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 1. 泛型基类主实体（BaseMapper<X> → 主表）
     // ------------------------------------------------------------------
 
-    public void testGenericBaseMapperEntityResolved() {
+    public void testGenericBaseMapperEntityResolved() throws Exception {
         addMapperFile(
                 """
                 @com.baomidou.mybatisplus.annotation.TableName("t_device_info")
@@ -76,7 +76,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 2. 语句方法实体参数兜底（无泛型基类时）
     // ------------------------------------------------------------------
 
-    public void testMethodEntityParamFallback() {
+    public void testMethodEntityParamFallback() throws Exception {
         myFixture.addFileToProject(
                 "OrderMapper.java",
                 """
@@ -110,7 +110,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 3. 方法参数实体优先级（泛型缺失时从参数找 + 非实体过滤）
     // ------------------------------------------------------------------
 
-    public void testEntityParamSkipsNonEntityTypes() {
+    public void testEntityParamSkipsNonEntityTypes() throws Exception {
         myFixture.addFileToProject(
                 "UserMapper.java",
                 """
@@ -143,7 +143,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 4. 参数名（@Param 值优先 + param1..N 补充）
     // ------------------------------------------------------------------
 
-    public void testParamNamesParamValueFirstThenParam1N() {
+    public void testParamNamesParamValueFirstThenParam1N() throws Exception {
         addMapperFile(
                 """
                 public interface UserMapper {
@@ -170,7 +170,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 5. 无 namespace → main=null、无异常
     // ------------------------------------------------------------------
 
-    public void testNoNamespaceDegradesToNullMain() {
+    public void testNoNamespaceDegradesToNullMain() throws Exception {
         SourceSqlContext ctx = resolveXml(
                 """
                 <mapper>
@@ -188,7 +188,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 6. 接口找不到 / 无方法 → main=null、无异常
     // ------------------------------------------------------------------
 
-    public void testMapperNotFoundAndMethodNotFoundDegrade() {
+    public void testMapperNotFoundAndMethodNotFoundDegrade() throws Exception {
         // 6a：namespace 对应接口不存在（findClass 返回 null）
         SourceSqlContext ctxNoMapper = resolveXml(
                 """
@@ -223,7 +223,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
     // 8. resolveAnnotation：注解方法场景主实体解析
     // ------------------------------------------------------------------
 
-    public void testResolveAnnotationMethodMainEntity() {
+    public void testResolveAnnotationMethodMainEntity() throws Exception {
         myFixture.configureByText(
                 "UserMapper.java",
                 """

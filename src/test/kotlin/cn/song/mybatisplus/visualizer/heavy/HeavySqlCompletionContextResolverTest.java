@@ -5,15 +5,17 @@ import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.vfs.VfsUtil;
+
+import java.io.IOException;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlTag;
 import com.intellij.testFramework.HeavyPlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
@@ -34,19 +36,23 @@ public class HeavySqlCompletionContextResolverTest extends HeavyPlatformTestCase
 
     /** 在项目 src 根下创建源文件（磁盘 + 索引），返回 PsiFile（HeavyAnchorSemanticsTest 同款）。 */
     private PsiFile addSourceFile(String name, String content) {
-        return WriteCommandAction.runWriteCommandAction(project, (Computable<PsiFile>) () -> {
+        return WriteCommandAction.runWriteCommandAction(getProject(), (Computable<PsiFile>) () -> {
             VirtualFile root = createTestProjectStructure();
-            VirtualFile src = root.findChild("src") != null
-                    ? root.findChild("src")
-                    : root.createChildDirectory(this, "src");
-            VirtualFile vf = src.createChildData(this, name);
-            VfsUtil.saveText(vf, content.stripIndent());
-            return PsiManager.getInstance(project).findFile(vf);
+            try {
+                VirtualFile src = root.findChild("src") != null
+                        ? root.findChild("src")
+                        : root.createChildDirectory(this, "src");
+                VirtualFile vf = src.createChildData(this, name);
+                VfsUtil.saveText(vf, content.stripIndent());
+                return PsiManager.getInstance(getProject()).findFile(vf);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         });
     }
 
     @Test
-    public void testCandidatesCollectTableNameEntitiesDeduped() {
+    public void testCandidatesCollectTableNameEntitiesDeduped() throws Exception {
         // 主实体 + Mapper 接口同文件（不依赖索引的类型解析）
         addSourceFile(
                 "UserMapper.java",
@@ -94,7 +100,7 @@ public class HeavySqlCompletionContextResolverTest extends HeavyPlatformTestCase
                 .filter(it -> "selectList".equals(it.getAttributeValue("id")))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("statement tag selectList not found"));
-        SourceSqlContext ctx = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(project, statementTag);
+        SourceSqlContext ctx = XmlSqlCompletionContextResolver.INSTANCE.resolveXml(getProject(), statementTag);
 
         // Heavy 沙盒实证：FileBasedIndex（JavaAnnotationIndex）对测试创建文件恒 0 命中
         // （src 目录不入索引范围），@TableName 候选路径只能在真实 IDE 验证（开发计划 §6 沙盒实测项）；

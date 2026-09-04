@@ -3,9 +3,9 @@ package cn.song.mybatisplus.visualizer.log;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
@@ -49,7 +49,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test缺源码位置_nullSource_无法跳转_NoSource() {
+    public void test缺源码位置_nullSource_无法跳转_NoSource() throws Exception {
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
         try {
             LogSqlEntry entry = makeEntry("SELECT * FROM user WHERE id = 1", null, 0);
@@ -61,7 +61,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test源码路径无效_文件不存在_无法跳转_NotFound() {
+    public void test源码路径无效_文件不存在_无法跳转_NotFound() throws Exception {
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
         try {
             LogSqlEntry entry = makeEntry("SELECT * FROM user WHERE id = 1", "src/missing/MissingMapper.java", 5);
@@ -74,7 +74,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test源码位置有效_文件存在_可跳转_Navigate且行号正确() {
+    public void test源码位置有效_文件存在_可跳转_Navigate且行号正确() throws Exception {
         writeRealSource("UserMapper.java", "public class UserMapper {}\n");
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
         try {
@@ -93,7 +93,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test源码行号0_不崩溃_跳转到第0行() {
+    public void test源码行号0_不崩溃_跳转到第0行() throws Exception {
         writeRealSource("ZeroLineMapper.java", "public class ZeroLineMapper {}\n");
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
         try {
@@ -107,7 +107,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test历史文件往返_源码位置保留_可跳转() {
+    public void test历史文件往返_源码位置保留_可跳转() throws Exception {
         // 写出真实源文件（与历史文件头部声明的 source 一致）
         writeRealSource("UserMapper.java", "public class UserMapper {\n  void selectById(Long id) {}\n}\n");
 
@@ -139,7 +139,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test可跳转条目_jumpToSource不抛异常_跳转链路可达() {
+    public void test可跳转条目_jumpToSource不抛异常_跳转链路可达() throws Exception {
         writeRealSource("NavMapper.java", "public class NavMapper {}\n");
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
         try {

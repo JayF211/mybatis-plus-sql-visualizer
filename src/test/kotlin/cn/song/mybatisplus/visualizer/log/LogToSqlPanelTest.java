@@ -2,8 +2,8 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
@@ -31,7 +31,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertSingleStatementReplacesParams() {
+    public void testConvertSingleStatementReplacesParams() throws Exception {
         panel.setInputForTest(
             "==>  Preparing: SELECT * FROM user WHERE id = ? AND name = ?\n" +
                 "==> Parameters: 1(Long), 张三(String)");
@@ -45,7 +45,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertNullParamRendersNull() {
+    public void testConvertNullParamRendersNull() throws Exception {
         panel.setInputForTest("Preparing: SELECT * FROM t WHERE a = ?\nParameters: null");
         panel.convertForTest();
         String result = panel.resultTextForTest();
@@ -53,7 +53,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertMultipleStatementsGrouped() {
+    public void testConvertMultipleStatementsGrouped() throws Exception {
         panel.setInputForTest(
             "==>  Preparing: SELECT * FROM a WHERE id = ?\n" +
                 "==> Parameters: 1(Long)\n" +
@@ -71,7 +71,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertNoLogLinesShowsError() {
+    public void testConvertNoLogLinesShowsError() throws Exception {
         panel.setInputForTest("hello world 业务日志");
         panel.convertForTest();
         assertEquals("", panel.resultTextForTest());
@@ -79,7 +79,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertBlankInputShowsError() {
+    public void testConvertBlankInputShowsError() throws Exception {
         panel.setInputForTest("");
         panel.convertForTest();
         assertEquals("", panel.resultTextForTest());
@@ -87,7 +87,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertMissingParamsKeepsPlaceholderAndWarns() {
+    public void testConvertMissingParamsKeepsPlaceholderAndWarns() throws Exception {
         panel.setInputForTest(
             "==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?\n" +
                 "==> Parameters: 1(Long)");
@@ -101,7 +101,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testDefaultMultiLineAndToggleToSingleLine() {
+    public void testDefaultMultiLineAndToggleToSingleLine() throws Exception {
         panel.setInputForTest("==>  Preparing: SELECT * FROM user WHERE id = ?\n==> Parameters: 1(Long)");
         panel.convertForTest();
         String multi = panel.resultTextForTest();
@@ -120,7 +120,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testLoadFromEntryRoundTrip() {
+    public void testLoadFromEntryRoundTrip() throws Exception {
         LogSqlEntry entry = new LogSqlEntry(
             "SELECT * FROM t WHERE id = ? AND name = ?",
             "SELECT * FROM t WHERE id = 1 AND name = '张三'",
@@ -137,7 +137,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     // ---------- Hibernate 日志格式支持 ----------
 
     @Test
-    public void testConvertHibernateFormatWithParams() {
+    public void testConvertHibernateFormatWithParams() throws Exception {
         panel.setInputForTest(
             "Hibernate: select user0_.id as id1_0_0_, user0_.name as name2_0_0_ from users user0_ where user0_.id=?\n" +
                 "binding parameter [1] as [BIGINT] - [1]");
@@ -151,7 +151,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertHibernateFormatNullParam() {
+    public void testConvertHibernateFormatNullParam() throws Exception {
         panel.setInputForTest(
             "Hibernate: select * from users where email=?\n" +
                 "binding parameter [1] as [VARCHAR] - [null]");
@@ -161,7 +161,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertHibernateLogFormattedToMultiline() {
+    public void testConvertHibernateLogFormattedToMultiline() throws Exception {
         // 验证 Hibernate 日志转换后 SQL 格式化为多行（面板需正确渲染多行输出）
         panel.setInputForTest(
             "Hibernate: select user0_.id as id1_0_0_, user0_.name as name2_0_0_, user0_.email as email3_0_0_ from users user0_ where user0_.id=? and user0_.name=?\n" +
@@ -179,7 +179,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertHibernateCommentPrefix() {
+    public void testConvertHibernateCommentPrefix() throws Exception {
         panel.setInputForTest(
             "/* load com.example.User */ select user0_.id from users user0_ where user0_.name=?\n" +
                 "binding parameter [1] as [VARCHAR] - [Alice]");
@@ -191,7 +191,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     // ---------- JdbcTemplate 日志格式支持（M47） ----------
 
     @Test
-    public void testConvertJdbcTemplateFormatWithParams() {
+    public void testConvertJdbcTemplateFormatWithParams() throws Exception {
         panel.setInputForTest(
             "Executing prepared SQL statement [SELECT * FROM users WHERE id = ? AND name = ?]\n" +
                 "Setting SQL statement parameter value: column index 1, parameter value [42], value class [java.lang.Integer], SQL type unknown\n" +
@@ -206,7 +206,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertJdbcTemplateNullParam() {
+    public void testConvertJdbcTemplateNullParam() throws Exception {
         panel.setInputForTest(
             "Executing prepared SQL statement [SELECT * FROM users WHERE deleted = ?]\n" +
                 "Setting SQL statement parameter value: column index 1, parameter value [null], value class [null], SQL type unknown");
@@ -216,7 +216,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testConvertMixedMyBatisAndHibernate() {
+    public void testConvertMixedMyBatisAndHibernate() throws Exception {
         panel.setInputForTest(
             "==>  Preparing: SELECT * FROM config WHERE key = ?\n" +
                 "==> Parameters: timeout(Integer)\n" +
@@ -232,13 +232,13 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testPanelDisposeReleasesEditors() {
+    public void testPanelDisposeReleasesEditors() throws Exception {
         panel.dispose();
         panel.dispose();
     }
 
     @Test
-    public void testBundleKeysPresent() {
+    public void testBundleKeysPresent() throws Exception {
         assertTrue(MpSqlVisualizerBundle.message("log.tab.logToSql").isBlank() == false);
         assertTrue(MpSqlVisualizerBundle.message("logToSql.panel.convert").isBlank() == false);
         assertTrue(MpSqlVisualizerBundle.message("logToSql.panel.copy").isBlank() == false);
@@ -247,7 +247,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testHintLabelsShowWhenEmptyAndHideOnContent() {
+    public void testHintLabelsShowWhenEmptyAndHideOnContent() throws Exception {
         // 空文档 → 提示可见；输入日志后 → 隐藏（结果区同理）
         assertTrue("初始输入区空 → 提示应可见", panel.inputHintLabelForTest().isVisible());
         assertTrue("初始结果区空 → 提示应可见", panel.resultHintLabelForTest().isVisible());

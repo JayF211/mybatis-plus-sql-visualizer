@@ -131,4 +131,68 @@ public final class ParameterReplacer {
         String trimmed = value.trim();
         return NUMBER_REGEX.matcher(trimmed).matches() ? trimmed : "'" + escaped + "'";
     }
+
+    // ------------------------------------------------------------------
+    // JDBC 命名参数（NamedParameterJdbcTemplate `:name`）按名回填
+    // ------------------------------------------------------------------
+
+    /**
+     * 按命名参数名把 SQL 中 {@code :name} 替换为用户输入值（NamedParameterJdbcTemplate 语义）。
+     *
+     * <p>替换规则：
+     * <ul>
+     *  <li>{@code :name} 出现在 paramValues 中且值非空 → 按 ParamHint.quote 渲染</li>
+     *  <li>{@code :name} 未出现在参数值表 / 值空 → 原样保留（与 {@code ?} 空值保留语义一致）</li>
+     *  <li>{@code ::name}（双冒号）→ 跳过（双冒号守卫，避免误标 PostgreSQL 类型转换）</li>
+     *  <li>{@code ?} 占位符不受影响（由调用方走 {@link #buildExecutableSql} 按序回填）</li>
+     *  <li>同名参数在 SQL 中多次出现 → 全部替换（NamedParameterJdbcTemplate 语义：同名复用）</li>
+     * </ul>
+     * 值含单引号 → 转义 {@code ''}（与 {@link #renderValue} 一致）。
+     *
+     * @param sql         含 {@code :name} 的 SQL（{@code ?} 与 {@code :name} 可共存）
+     * @param paramValues 参数值映射（source → 用户输入值）；source 即命名参数名
+     * @param hints       参数名 → 引号提示；缺失走启发式（数值裸 / 字符串引号）
+     * @return 替换后的 SQL
+     */
+    public static String replaceNamedParams(String sql, Map<String, String> paramValues, Map<String, ParamHint> hints) {
+        if (paramValues.isEmpty() || hints.isEmpty()) return sql;
+        java.util.regex.Matcher m = NAMED_PARAM_PATTERN.matcher(sql);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String name = m.group(1);
+            String value = paramValues.get(name);
+            if (value == null || value.isBlank()) {
+                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group(0)));
+            } else {
+                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(renderNamedValue(value, hints.get(name))));
+            }
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /** 命名参数单值渲染：按 {@link ParamHint#getQuote()} 决定引号规则；值中单引号转义为 {@code ''}。 */
+    private static String renderNamedValue(String value, ParamHint hint) {
+        String escaped = value.replace("'", "''");
+        if (hint != null && Boolean.TRUE.equals(hint.getQuote())) {
+            return "'" + escaped + "'";
+        }
+        if (hint != null && Boolean.FALSE.equals(hint.getQuote())) {
+            return value.trim();
+        }
+        String trimmed = value.trim();
+        return NUMBER_REGEX.matcher(trimmed).matches() ? trimmed : "'" + escaped + "'";
+    }
+
+    /**
+     * 命名参数正则。
+     *
+     * <p>负向后顾 {@code (?<!:)} 排除双冒号（前一个字符不是 {@code :}），避免误标 {@code ::msgId} /
+     * {@code 1::integer}。捕获组 1 = 参数名（字母 / 数字 / 下划线）。
+     * 冒号后容忍<b>可选空白</b> {@code \s*}——SQL 经
+     * {@link cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter} 格式化后
+     * 会把 {@code :name} 的冒号当作运算符空格化为 {@code : name}（用户实测绘点），务必同样命中。
+     */
+    private static final Pattern NAMED_PARAM_PATTERN =
+            Pattern.compile("(?<!:)[:]\\s*([A-Za-z_][A-Za-z0-9_]*)");
 }

@@ -8,10 +8,10 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
@@ -75,7 +75,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testCreateQuery_from_识别实体类() {
+    public void testCreateQuery_from_识别实体类() throws Exception {
         myFixture.configureByText(
                 "CriteriaDemo.java",
                 """
@@ -118,12 +118,12 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCreateQuery_未找到返回null() {
+    public void testCreateQuery_未找到返回null() throws Exception {
         myFixture.configureByText(
                 "NoQuery.java",
                 """
                 public class NoQuery {
-                    public void normalMethod() {
+                    public void normalMethod() throws Exception {
                         String s = "hello";
                         System.out.println(s);
                     }
@@ -139,7 +139,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testCb_equal_解析为Simple条件() {
+    public void testCb_equal_解析为Simple条件() throws Exception {
         myFixture.configureByText(
                 "CriteriaDemo.java",
                 """
@@ -208,7 +208,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCb_greaterThan_解析为大于条件() {
+    public void testCb_greaterThan_解析为大于条件() throws Exception {
         myFixture.configureByText(
                 "CriteriaDemo.java",
                 """
@@ -272,7 +272,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void testCq_orderBy_解析为排序项() {
+    public void testCq_orderBy_解析为排序项() throws Exception {
         myFixture.configureByText(
                 "CriteriaDemo.java",
                 """
@@ -331,7 +331,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testCq_multiselect_解析为列列表() {
+    public void testCq_multiselect_解析为列列表() throws Exception {
         myFixture.configureByText(
                 "CriteriaDemo.java",
                 """
@@ -393,7 +393,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
     // ------------------------------------------------------------------
 
     @Test
-    public void test完整CriteriaQuery_解析所有子句() {
+    public void test完整CriteriaQuery_解析所有子句() throws Exception {
         myFixture.configureByText(
                 "CriteriaDemo.java",
                 """

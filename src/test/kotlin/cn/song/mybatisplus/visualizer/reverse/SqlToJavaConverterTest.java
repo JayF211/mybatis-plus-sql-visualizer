@@ -12,10 +12,10 @@ import cn.song.mybatisplus.visualizer.model.SqlValue;
 
 import com.intellij.psi.PsiClass;
 
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertNull;
-import org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.lang.reflect.Proxy;
@@ -34,7 +34,7 @@ public class SqlToJavaConverterTest {
             "SELECT id, name FROM user WHERE name = '张三' AND age > 18 ORDER BY id ASC LIMIT 10");
 
     @Test
-    public void 解析_结构与生成输入完整() {
+    public void 解析_结构与生成输入完整() throws Exception {
         assertEquals("user", RESULT.tableName());
         assertEquals(List.of(new SelectColumn("id", null), new SelectColumn("name", null)), RESULT.selectColumns());
         assertEquals(2, RESULT.conditions().size());
@@ -43,14 +43,14 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void 无候选_回落字符串QueryWrapper() {
+    public void 无候选_回落字符串QueryWrapper() throws Exception {
         String code = SqlToJavaConverter.generateCode(RESULT, null, ReverseWrapperFormat.AUTO, null, new java.util.HashMap<>());
         assertTrue(code, code.contains("new QueryWrapper<User>()"));
         assertTrue(code, code.contains(".eq(\"name\", \"张三\")"));
     }
 
     @Test
-    public void 有候选_AUTO形态生成Lambda() {
+    public void 有候选_AUTO形态生成Lambda() throws Exception {
         String code = SqlToJavaConverter.generateCode(RESULT, candidate("User"), ReverseWrapperFormat.AUTO, null, new java.util.HashMap<>());
         assertTrue(code, code.contains("new LambdaQueryWrapper<User>()"));
         assertTrue(code, code.contains(".eq(User::getName, \"张三\")"));
@@ -60,20 +60,20 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void 有候选_MPJ形态生成MPJLambdaWrapper() {
+    public void 有候选_MPJ形态生成MPJLambdaWrapper() throws Exception {
         String code = SqlToJavaConverter.generateCode(RESULT, candidate("User"), ReverseWrapperFormat.MPJ_LAMBDA, null, new java.util.HashMap<>());
         assertTrue(code, code.contains("new MPJLambdaWrapper<User>()"));
         assertTrue(code, code.contains(".eq(User::getName, \"张三\")"));
     }
 
     @Test
-    public void 有候选_QUERY形态按无实体处理() {
+    public void 有候选_QUERY形态按无实体处理() throws Exception {
         String code = SqlToJavaConverter.generateCode(RESULT, null, ReverseWrapperFormat.QUERY, null, new java.util.HashMap<>());
         assertTrue(code, code.contains("new QueryWrapper<User>()"));
     }
 
     @Test
-    public void 未映射列_回落字符串并注释() {
+    public void 未映射列_回落字符串并注释() throws Exception {
         SqlReverseResult result2 = SqlToJavaConverter.parse("SELECT * FROM t WHERE extra_col = 1");
         String code = SqlToJavaConverter.generateCode(
                 result2,
@@ -84,7 +84,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void 解析错误_行号计算() {
+    public void 解析错误_行号计算() throws Exception {
         SqlReverseException ex;
         try {
             SqlToJavaConverter.parse("SELECT * FROM t WHERE a = 'abc");
@@ -120,7 +120,7 @@ public class SqlToJavaConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void splitStatements_双语句拆分() {
+    public void splitStatements_双语句拆分() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT * FROM user; SELECT * FROM order");
         assertEquals(2, stmts.size());
         assertEquals("SELECT * FROM user", stmts.get(0));
@@ -128,14 +128,14 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void splitStatements_字符串内分号不拆分() {
+    public void splitStatements_字符串内分号不拆分() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT 'a;b' FROM t");
         assertEquals(1, stmts.size());
         assertEquals("SELECT 'a;b' FROM t", stmts.get(0));
     }
 
     @Test
-    public void splitStatements_行注释内分号不拆分() {
+    public void splitStatements_行注释内分号不拆分() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT 1; -- a; comment\nSELECT 2");
         assertEquals(2, stmts.size());
         assertEquals("SELECT 1", stmts.get(0));
@@ -143,7 +143,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void splitStatements_块注释内分号不拆分() {
+    public void splitStatements_块注释内分号不拆分() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT 1; /* a; */ SELECT 2");
         assertEquals(2, stmts.size());
         assertEquals("SELECT 1", stmts.get(0));
@@ -151,7 +151,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void splitStatements_空语句跳过() {
+    public void splitStatements_空语句跳过() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT 1;; SELECT 2");
         assertEquals(2, stmts.size());
         assertEquals("SELECT 1", stmts.get(0));
@@ -159,27 +159,27 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void splitStatements_末段无分号() {
+    public void splitStatements_末段无分号() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT 1");
         assertEquals(1, stmts.size());
         assertEquals("SELECT 1", stmts.get(0));
     }
 
     @Test
-    public void splitStatements_单条不拆分() {
+    public void splitStatements_单条不拆分() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements("SELECT * FROM user WHERE id = 1");
         assertEquals(1, stmts.size());
         assertEquals("SELECT * FROM user WHERE id = 1", stmts.get(0));
     }
 
     @Test
-    public void splitStatements_纯空白跳过() {
+    public void splitStatements_纯空白跳过() throws Exception {
         List<String> stmts = SqlToJavaConverter.splitStatements(";;;");
         assertEquals(0, stmts.size());
     }
 
     @Test
-    public void parseBatch_错误隔离() {
+    public void parseBatch_错误隔离() throws Exception {
         List<SqlToJavaConverter.BatchItemResult> results = SqlToJavaConverter.parseBatch(
                 List.of("SELECT * FROM user", "INVALID SQL"));
         assertEquals(2, results.size());
@@ -192,7 +192,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void parseBatch_全部成功() {
+    public void parseBatch_全部成功() throws Exception {
         List<SqlToJavaConverter.BatchItemResult> results = SqlToJavaConverter.parseBatch(
                 List.of("SELECT * FROM user", "SELECT * FROM order"));
         assertEquals(2, results.size());
@@ -200,7 +200,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void generateBatchCode_两条有效SELECT输出两段代码() {
+    public void generateBatchCode_两条有效SELECT输出两段代码() throws Exception {
         List<SqlToJavaConverter.BatchItemResult> results = SqlToJavaConverter.parseBatch(
                 List.of("SELECT id, name FROM user WHERE name = '张三'", "SELECT id FROM user WHERE age > 18"));
         String code = SqlToJavaConverter.generateBatchCode(
@@ -215,7 +215,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void generateBatchCode_错误占位不中断整体() {
+    public void generateBatchCode_错误占位不中断整体() throws Exception {
         List<SqlToJavaConverter.BatchItemResult> results = SqlToJavaConverter.parseBatch(
                 List.of("SELECT id FROM user WHERE id = 1", "INVALID SQL"));
         String code = SqlToJavaConverter.generateBatchCode(
@@ -228,7 +228,7 @@ public class SqlToJavaConverterTest {
     }
 
     @Test
-    public void generateBatchCode_空列表输出空串() {
+    public void generateBatchCode_空列表输出空串() throws Exception {
         String code = SqlToJavaConverter.generateBatchCode(
                 List.of(),
                 new java.util.HashMap<>(),

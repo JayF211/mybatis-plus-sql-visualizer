@@ -23,10 +23,10 @@ import com.intellij.psi.PsiManager;
 import com.intellij.sql.dialects.SqlDialectMappings;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.content.Content;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
-import org.junit.Assume.assumeTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import org.junit.Test;
 import org.w3c.dom.Document;
 import org.w3c.dom.Node;
@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 import java.util.function.BooleanSupplier;
 
@@ -124,7 +125,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
 
     /** 编程创建数据源（LocalDataSourceManager + 凭据注入），返回 DBN LocalDataSource。 */
     private LocalDataSource createDataSource(DataSourceInfo info) {
-        LocalDataSourceManager mgr = LocalDataSourceManager.getInstance(project);
+        LocalDataSourceManager mgr = LocalDataSourceManager.getInstance(getProject());
         LocalDataSource ds = mgr.createEmpty();
         ds.setName("mpj_demo@localhost-itest");
         ds.setUrl(info.url);
@@ -137,7 +138,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
         } catch (Exception ignored) {
         }
         ds.resolveDriver();
-        ds.setWorkingDir(project.getBasePath());
+        ds.setWorkingDir(getProject().getBasePath());
         ds.setPasswordStorage(LocalDataSource.Storage.MEMORY);
         mgr.addDataSource(ds);
         new DbCredentialManager().setPassword(ds, new OneTimeString(getDbPassword()), LocalDataSource.Storage.MEMORY);
@@ -147,10 +148,10 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
     private String introspectDataSource(LocalDataSource ds) {
         try {
             DatabaseConnectionManager mgr = DatabaseConnectionManager.getInstance();
-            Object builder = mgr.build(project, ds);
+            Object builder = mgr.build(getProject(), ds);
             builder.getClass().getMethod("setAskPassword", boolean.class).invoke(builder, false);
             Future<GuardedRef> future = ApplicationManager.getApplication().executeOnPooledThread(
-                    (Computable<GuardedRef>) () -> {
+                    (Callable<GuardedRef>) () -> {
                         EmptyProgressIndicator indicator = new EmptyProgressIndicator();
                         return ProgressManager.getInstance().runProcess((Computable<GuardedRef>) () -> {
                             try {
@@ -162,7 +163,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
                     });
             GuardedRef ref = future.get();
             if (ref == null) return "createBlocking future null";
-            boolean loaded = waitUntil(90_000, () -> !LocalDataSourceManager.getInstance(project).isLoading(ds));
+            boolean loaded = waitUntil(90_000, () -> !LocalDataSourceManager.getInstance(getProject()).isLoading(ds));
             ref.close();
             return loaded ? null : "isLoading 未结束（90s 超时）";
         } catch (Exception e) {
@@ -235,7 +236,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
      * 端到端：准备 → 执行 → 改参 → 再执行 → 断言新结果 Tab。
      */
     @Test
-    public void testPrepareExecuteAndParameterChangeEndToEnd() {
+    public void testPrepareExecuteAndParameterChangeEndToEnd() throws Exception {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable());
         DataSourceInfo info = readDemoDataSource("mpj_demo");
         assumeTrue("demo 项目数据源配置不可读: " + demoProjectDir.getAbsolutePath(), info != null);
@@ -248,7 +249,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
 
         StringBuilder diag = new StringBuilder();
         try {
-            LocalDataSourceManager mgr = LocalDataSourceManager.getInstance(project);
+            LocalDataSourceManager mgr = LocalDataSourceManager.getInstance(getProject());
             List<LocalDataSource> all = mgr.getDataSources();
             diag.append("LocalDataSourceManager.dataSources count=").append(all.size()).append("\n");
             for (LocalDataSource it : all) {
@@ -259,7 +260,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
             diag.append("DataSource visible: ").append(!all.isEmpty()).append("\n");
             try {
                 Object psiFacade = Class.forName("com.intellij.database.psi.DbPsiFacade")
-                        .getMethod("getInstance", com.intellij.openapi.project.Project.class).invoke(null, project);
+                        .getMethod("getInstance", com.intellij.openapi.project.Project.class).invoke(null, getProject());
                 List<?> psiDs = (List<?>) psiFacade.getClass().getMethod("getDataSources").invoke(psiFacade);
                 diag.append("DbPsiFacade.getDataSources count=").append(psiDs.size()).append("\n");
                 for (Object it : psiDs) diag.append("  psi ds=").append(it).append("\n");
@@ -267,8 +268,8 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
                 diag.append("DbPsiFacade dump failed: ").append(t.getClass().getSimpleName()).append(": ").append(t.getMessage()).append("\n");
             }
             try {
-                String base = project.getBasePath() != null ? project.getBasePath() : null;
-                if (base == null) throw new IllegalStateException("project.basePath null");
+                String base = getProject().getBasePath() != null ? getProject().getBasePath() : null;
+                if (base == null) throw new IllegalStateException("getProject().basePath null");
                 File dir = new File(base, ".idea/" + SqlLogAutoSaver.DATA_DIR_NAME + "/exec");
                 dir.mkdirs();
                 File f = new File(dir, "mpsql-exec.sql");
@@ -277,22 +278,22 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
                 VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f);
                 if (vf == null) throw new IllegalStateException("refreshAndFindFileByIoFile null");
                 diag.append("step2 vf=").append(vf.getPath()).append("\n");
-                SqlDialectMappings mappings = SqlDialectMappings.getInstance(project);
+                SqlDialectMappings mappings = SqlDialectMappings.getInstance(getProject());
                 List<?> values = (List<?>) mappings.getClass().getMethod("getAvailableValues").invoke(mappings);
                 diag.append("step3 available dialects=")
-                        .append(values.stream().map(o -> o instanceof Language ? ((Language) o).getId() : null).collect(java.util.stream.Collectors.toList()))
+                        .append(values.stream().map(o -> o instanceof Language ? ((Language) o).getID() : null).collect(java.util.stream.Collectors.toList()))
                         .append("\n");
                 Object mysql = values.stream()
-                        .filter(o -> o instanceof Language && "MySQL".equalsIgnoreCase(((Language) o).getId()))
+                        .filter(o -> o instanceof Language && "MySQL".equalsIgnoreCase(((Language) o).getID()))
                         .findFirst().orElse(null);
-                diag.append("step3b mysql dialect=").append(mysql != null ? ((Language) mysql).getId() : null).append("\n");
+                diag.append("step3b mysql dialect=").append(mysql != null ? ((Language) mysql).getID() : null).append("\n");
                 if (mysql != null) {
                     mappings.getClass().getMethod("setMapping", VirtualFile.class, Object.class).invoke(mappings, vf, mysql);
                     diag.append("step3c mapping set OK\n");
                 }
-                PsiFile psi = PsiManager.getInstance(project).findFile(vf);
-                diag.append("step4 psi=").append(psi != null ? psi.getClass().getSimpleName() : null)
-                        .append(" dialect=").append(psi != null && psi.getLanguage() != null ? psi.getLanguage().getId() : null).append("\n");
+                PsiFile psi = PsiManager.getInstance(getProject()).findFile(vf);
+                diag.append("step4 psi=").append(psi != null ? psi.getClass().getSimpleName()  : (String) null)
+                        .append(" dialect=").append(psi != null && psi.getLanguage() != null ? psi.getLanguage().getID()  : (String) null).append("\n");
                 Iterable<?> appropriate = (Iterable<?>) Class.forName("com.intellij.database.util.DbImplUtil")
                         .getMethod("getAppropriateDataSourcesForExec", PsiFile.class).invoke(null, psi);
                 int step5count = 0;
@@ -301,25 +302,25 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
                 Object sqlDialect = Class.forName("com.intellij.database.util.DbImplUtil")
                         .getMethod("getSqlLanguageDialectForExec", PsiFile.class).invoke(null, psi);
                 diag.append("step6 sqlDialectForExec=").append(sqlDialect).append(" (")
-                        .append(sqlDialect instanceof Language ? ((Language) sqlDialect).getId() : null).append(")\n");
+                        .append(sqlDialect instanceof Language ? ((Language) sqlDialect).getID() : (String) null).append(")\n");
                 Object dbDialect = null;
                 try {
                     dbDialect = sqlDialect.getClass().getMethod("getDatabaseDialect").invoke(sqlDialect);
                 } catch (Throwable ignored) {
                 }
-                diag.append("step6b dbDialect=").append(dbDialect != null ? dbDialect.getClass().getSimpleName() : null)
-                        .append(" id=").append(dbDialect instanceof Language ? ((Language) dbDialect).getId() : null).append("\n");
+                diag.append("step6b dbDialect=").append(dbDialect != null ? dbDialect.getClass().getSimpleName() : (String) null)
+                        .append(" id=").append(dbDialect instanceof Language ? ((Language) dbDialect).getID() : (String) null).append("\n");
                 try {
                     Object psiFacade2 = Class.forName("com.intellij.database.psi.DbPsiFacade")
-                            .getMethod("getInstance", com.intellij.openapi.project.Project.class).invoke(null, project);
+                            .getMethod("getInstance", com.intellij.openapi.project.Project.class).invoke(null, getProject());
                     List<?> psiDs2 = (List<?>) psiFacade2.getClass().getMethod("getDataSources").invoke(psiFacade2);
                     Object dsEl = psiDs2.get(0);
                     Object isValid = dsEl.getClass().getMethod("isValid").invoke(dsEl);
                     diag.append("step7 psi ds isValid=").append(isValid).append(" class=").append(dsEl.getClass().getSimpleName()).append("\n");
                     Object dsDialect = Class.forName("com.intellij.database.util.DbImplUtilCore")
                             .getMethod("getDatabaseDialect", Class.forName("com.intellij.database.psi.DbElement")).invoke(null, dsEl);
-                    diag.append("step8 ds dialect=").append(dsDialect != null ? dsDialect.getClass().getSimpleName() : null)
-                            .append(" id=").append(dsDialect instanceof Language ? ((Language) dsDialect).getId() : null).append("\n");
+                    diag.append("step8 ds dialect=").append(dsDialect != null ? dsDialect.getClass().getSimpleName()  : (String) null)
+                            .append(" id=").append(dsDialect instanceof Language ? ((Language) dsDialect).getID() : null).append("\n");
                     if (dbDialect != null && dsDialect != null) {
                         Object similar = dbDialect.getClass().getMethod("similarTo", Class.forName("com.intellij.database.dialects.DatabaseDialect"))
                                 .invoke(dbDialect, dsDialect);
@@ -331,7 +332,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
                         } catch (Throwable ignored) {
                         }
                         diag.append("step10 SqlDataSource.containsFile(vf)=").append(contains)
-                                .append(" sqlDsClass=").append(sqlDs != null ? sqlDs.getClass().getSimpleName() : null).append("\n");
+                                .append(" sqlDsClass=").append(sqlDs != null ? sqlDs.getClass().getSimpleName()  : (String) null).append("\n");
                         Object wd = dsEl.getClass().getMethod("getWorkingDir").invoke(dsEl);
                         diag.append("step11 ds workingDir=").append(wd).append("\n");
                     }
@@ -352,7 +353,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
         List<String> errors = new ArrayList<>();
         boolean[] prepared = {false};
         DataSourceSelector.prepareConsole(
-                project,
+                getProject(),
                 "SELECT id, station_id FROM car_device_info WHERE id = 1",
                 c -> consoleReady[0] = true,
                 e -> {
@@ -372,7 +373,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
         boolean[] resultsReady = {false};
         List<String> execErrors = new ArrayList<>();
         DataSourceSelector.executePrepared(
-                project,
+                getProject(),
                 c -> resultsReady[0] = true,
                 it -> execErrors.add(it)
         );
@@ -388,7 +389,7 @@ public class DbConsoleIntegrationTest extends BasePlatformTestCase {
 
         boolean[] secondReady = {false};
         DataSourceSelector.executePrepared(
-                project,
+                getProject(),
                 c -> secondReady[0] = true,
                 it -> execErrors.add(it)
         );

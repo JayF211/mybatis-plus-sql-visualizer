@@ -13,10 +13,12 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.testFramework.HeavyPlatformTestCase;
 import com.intellij.ui.components.JBTextField;
-import org.junit.Assert.assertEquals;
-import org.junit.Assert.assertFalse;
-import org.junit.Assert.assertNotNull;
-import org.junit.Assert.assertTrue;
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -45,20 +47,24 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
     private PsiFile addSourceFile(String name, String content) {
         HeavyXmlParamTypeResolverTest self = this;
         Computable<PsiFile> computable = () -> {
-            VirtualFile root = self.createTestProjectStructure();
-            VirtualFile src = root.findChild("src");
-            if (src == null) {
-                src = root.createChildDirectory(self, "src");
+            try {
+                VirtualFile root = self.createTestProjectStructure();
+                VirtualFile src = root.findChild("src");
+                if (src == null) {
+                    src = root.createChildDirectory(self, "src");
+                }
+                VirtualFile vf = src.createChildData(self, name);
+                VfsUtil.saveText(vf, content.stripIndent());
+                return PsiManager.getInstance(self.getProject()).findFile(vf);
+            } catch (java.io.IOException e) {
+                throw new RuntimeException(e);
             }
-            VirtualFile vf = src.createChildData(self, name);
-            VfsUtil.saveText(vf, content.stripIndent());
-            return PsiManager.getInstance(self.getProject()).findFile(vf);
         };
         return WriteCommandAction.runWriteCommandAction(getProject(), computable);
     }
 
     @Test
-    public void testDtoParamFieldTypesResolved() {
+    public void testDtoParamFieldTypesResolved() throws Exception {
         addSourceFile("SettlementMapper.java", DTO_MAPPER);
         Map<String, Boolean> quotes =
                 XmlParamTypeResolver.INSTANCE.resolveQuotes(getProject(), "com.example.SettlementMapper", "statistics");
@@ -68,7 +74,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
     }
 
     @Test
-    public void testMapParamPrefixFallback() {
+    public void testMapParamPrefixFallback() throws Exception {
         addSourceFile(
                 "MapMapper.java",
                 """
@@ -85,7 +91,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
     }
 
     @Test
-    public void testNestedDtoAndNoParamAndPrimitive() {
+    public void testNestedDtoAndNoParamAndPrimitive() throws Exception {
         addSourceFile(
                 "NestedMapper.java",
                 """
@@ -124,7 +130,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
     }
 
     @Test
-    public void testUnknownNamespaceOrStatementReturnsEmpty() {
+    public void testUnknownNamespaceOrStatementReturnsEmpty() throws Exception {
         addSourceFile("SettlementMapper.java", DTO_MAPPER);
         assertTrue(XmlParamTypeResolver.INSTANCE
                 .resolveQuotes(getProject(), "com.example.Unknown", "statistics").isEmpty());
@@ -135,7 +141,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
     }
 
     @Test
-    public void testEndToEndPanelBackfillByParamType() {
+    public void testEndToEndPanelBackfillByParamType() throws Exception {
         addSourceFile("SettlementMapper.java", DTO_MAPPER);
         String xml = """
             <mapper namespace="com.example.SettlementMapper">
