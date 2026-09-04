@@ -508,6 +508,40 @@ class JoinDiagramGeneratorTest {
         assertEquals("邮箱", model.entities[0].columns.first { it.name == "email" }.comment)
     }
 
+    // ---- T-Embed-07 JOIN 表字段空缺陷（转换器原始别名） ----
+
+    @Test
+    fun `join table columns extracted with converter original alias`() {
+        // MPJ 真机形态：join.alias = 类名小驼峰（stationInfoEntity），显示别名归一为 t1；
+        // selectAs/ON 的列引用携带原始别名，ON 标签经 aliasMap 归一显示正常，
+        // 列提取须双别名匹配——否则 JOIN 表字段全部落空（2026-09-04 真机截图实证）
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            selectColumns = listOf(
+                ColumnRef(tableAlias = "stationInfoEntity", columnName = "station_name", type = "java.lang.String"),
+            ),
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "station_info", alias = "stationInfoEntity",
+                    tableInfo = deptTable,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "stationInfoEntity", columnName = "station_id"),
+                            right = ColumnRef(tableAlias = "t", columnName = "station_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val joinEntity = model.entities[1]
+        assertEquals("t1", joinEntity.alias)
+        assertEquals("station_info", joinEntity.tableName)
+        val colNames = joinEntity.columns.map { it.name }
+        assertTrue("selectAs 列（原始别名）应提取，实际=$colNames", colNames.contains("station_name"))
+        assertTrue("ON 列（原始别名）应提取，实际=$colNames", colNames.contains("station_id"))
+    }
+
     /** 生成带表注释的副本。 */
     private fun tableWithComment(tableName: String, comment: String?, base: TableInfo): TableInfo =
         base.copy(tableName = tableName, comment = comment)

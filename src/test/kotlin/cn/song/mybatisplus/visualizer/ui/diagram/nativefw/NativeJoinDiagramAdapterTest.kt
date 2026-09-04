@@ -310,4 +310,51 @@ class NativeJoinDiagramAdapterTest {
         assertEquals(DiagramRelationshipInfo.DELTA, endArrowOf(JoinType.INNER))
         assertEquals(DiagramRelationshipInfo.WHITE_DELTA, endArrowOf(JoinType.FULL))
     }
+
+    // ---- T-Embed-07 原生样式对齐（/* */ 注释 / PK 沉底分区） ----
+
+    @Test
+    fun contentManagerOrdersColumnsBeforeKeysForNativePkPartition() {
+        // 分类顺序即画布分区顺序（框架逐 enabled 分类 append、组间分隔符）——
+        // COLUMNS 在前、KEY_COLUMNS 收尾 = 原生 Database「显示图」PK 底部独立分区
+        val cats = JoinDiagramNodeContentManager.contentCategories
+        val columnsIdx = cats.indexOf(JoinDiagramNodeContentManager.COLUMNS)
+        val keysIdx = cats.indexOf(JoinDiagramNodeContentManager.KEY_COLUMNS)
+        assertTrue("COLUMNS 应排在 KEY_COLUMNS 之前（PK 沉底），实际=$cats", columnsIdx < keysIdx)
+    }
+
+    @Test
+    fun itemNameInlinesCommentAsNativeBlockCommentStyle() {
+        val rendered = joinItemNameText("station_id", isPk = false, comment = "站点ID").toString()
+        assertTrue("字段名应保留，实际=$rendered", rendered.contains("station_id"))
+        assertTrue("注释应内联为 /* */ 样式，实际=$rendered", rendered.contains("/* 站点ID */"))
+    }
+
+    @Test
+    fun itemNameBoldWhenPk() {
+        val rendered = joinItemNameText("id", isPk = true, comment = null).toString()
+        assertEquals("id", rendered.trim())
+    }
+
+    @Test
+    fun itemTypeCarriesTypeOnly() {
+        val rendered = joinItemTypeText("int(11)").toString()
+        assertTrue("类型列应保留，实际=$rendered", rendered.contains("int(11)"))
+        assertFalse("类型列不承载注释", rendered.contains("站点ID"))
+    }
+
+    @Test
+    fun presentableTitleShowsTableCommentAsBlockComment() {
+        val rendered = joinTitleText("car_device_info (t)", "设备信息表").toString()
+        assertTrue("表名应保留，实际=$rendered", rendered.contains("car_device_info (t)"))
+        assertTrue("表注释应为 /* */ 样式，实际=$rendered", rendered.contains("/* 设备信息表 */"))
+    }
+
+    @Test
+    fun rendererDelegatesKeepNativeLayout() {
+        // 覆写方法与顶层纯函数一致（类型列独立、不承载注释）
+        val col = ColumnEntry("station_id", "int(11)", isPk = false, comment = "站点ID")
+        val viaOverride = JoinTableElementManager().getItemType(null, col, null)
+        assertEquals(joinItemTypeText("int(11)").toString(), viaOverride.toString())
+    }
 }

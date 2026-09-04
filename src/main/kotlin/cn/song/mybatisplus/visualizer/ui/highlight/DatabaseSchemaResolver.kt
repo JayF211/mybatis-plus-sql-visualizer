@@ -33,14 +33,27 @@ object DatabaseSchemaResolver {
     private const val OBJECT_KIND = "com.intellij.database.model.ObjectKind"
 
     /** 列名 → 数据源注释（表名匹配不到返回空 Map，调用方回落实体注释）。 */
-    fun columnComments(project: Project, tableName: String): Map<String, String> {
+    fun columnComments(project: Project, tableName: String): Map<String, String> =
+        columnMeta(project, tableName).mapValues { it.value.comment ?: "" }
+
+    /**
+     * 列名 → 列元数据（注释 + DB 真实类型串，T-Embed-02）。
+     *
+     * 类型串 = `DasTypedObject.getDataType().getSpecification()`（如 `int(11)` / `varchar(64)`，
+     * javap 实证 DataType.getSpecification 即 Database「显示图」右对齐类型的渲染来源）。
+     * 表名匹配不到返回空 Map，调用方回落实体推断值。
+     */
+    fun columnMeta(project: Project, tableName: String): Map<String, ColumnMeta> {
         if (tableName.isBlank()) return emptyMap()
-        return if (!isDatabaseAvailable()) emptyMap() else ReadAction.compute<Map<String, String>, Throwable> {
+        return if (!isDatabaseAvailable()) emptyMap() else ReadAction.compute<Map<String, ColumnMeta>, Throwable> {
             tryCompute(project, tableName)
         }
     }
 
-    private fun tryCompute(project: Project, tableName: String): Map<String, String> {
+    /** 数据源侧列元数据（均为 null 时表示该维度缺失，调用方逐维度回落）。 */
+    data class ColumnMeta(val comment: String?, val typeSpec: String?)
+
+    private fun tryCompute(project: Project, tableName: String): Map<String, ColumnMeta> {
         val dataSources = dataSources(project) ?: return emptyMap()
         if (dataSources.isEmpty()) return emptyMap()
         val dasTableClass = Class.forName(DAS_TABLE)
@@ -71,9 +84,9 @@ object DatabaseSchemaResolver {
         dsList
     }.getOrNull()
 
-    /** 从单个数据源收集匹配表的列注释（遍历 DasModel.traverser().toList()）。 */
-    private fun collectFromDataSource(ds: Any, tableName: String, dasTableClass: Class<*>): Map<String, String> {
-        val out = linkedMapOf<String, String>()
+    /** 从单个数据源收集匹配表的列元数据（遍历 DasModel.traverser().toList()）。 */
+    private fun collectFromDataSource(ds: Any, tableName: String, dasTableClass: Class<*>): Map<String, ColumnMeta> {
+        val out = linkedMapOf<String, ColumnMeta>()
         runCatching {
             val dasObjClass = Class.forName(DAS_OBJECT)
             val dasColumnClass = Class.forName(DAS_COLUMN)
@@ -98,9 +111,15 @@ object DatabaseSchemaResolver {
                 for (col in columns) {
                     if (col == null || !dasColumnClass.isInstance(col)) continue
                     val cName = getNameM.invoke(col) as? String ?: continue
+                    if (cName.isBlank()) continue
                     val comment = getCommentM.invoke(col) as? String
-                    if (cName.isNotBlank() && !comment.isNullOrBlank()) {
-                        out[cName] = comment
+                    // DasTypedObject.getDataType().getSpecification()（反射；列无类型信息时为 null）
+                    val typeSpec = runCatching {
+                        val dataType = col.javaClass.getMethod("getDataType").invoke(col)
+                        dataType?.javaClass?.getMethod("getSpecification")?.invoke(dataType) as? String
+                    }.getOrNull()
+                    if (!comment.isNullOrBlank() || !typeSpec.isNullOrBlank()) {
+                        out[cName] = ColumnMeta(comment = comment?.takeIf { it.isNotBlank() }, typeSpec = typeSpec?.takeIf { it.isNotBlank() })
                     }
                 }
             }

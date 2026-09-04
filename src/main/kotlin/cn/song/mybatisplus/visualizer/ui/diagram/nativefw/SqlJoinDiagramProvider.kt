@@ -112,7 +112,9 @@ object JoinDiagramNodeContentManager : DiagramNodeContentManager {
     val KEY_COLUMNS = DiagramCategory({ "Key columns" }, AllIcons.Nodes.FieldPK, true)
     val COMMENTS = DiagramCategory({ "Comments" }, AllIcons.Nodes.Tag, true)
 
-    private val CATEGORIES = arrayOf(KEY_COLUMNS, COLUMNS, COMMENTS)
+    // 顺序即画布字段行分区顺序（框架按 enabled 分类逐组 append、组间插分隔符）：
+    // 普通列在前、主键组收尾 = 原生 Database「显示图」的「PK 底部独立分区」效果。
+    private val CATEGORIES = arrayOf(COLUMNS, KEY_COLUMNS, COMMENTS)
 
     private val enabled: MutableSet<DiagramCategory> =
         java.util.concurrent.ConcurrentHashMap.newKeySet<DiagramCategory>().apply { addAll(CATEGORIES) }
@@ -163,42 +165,19 @@ class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapsho
 
     override fun getElementTitle(e: JoinDiagramSnapshotRegistry.NativeEntity): String = e.displayName
 
-    /** T-NativeUI-03：表头 = 表名(别名) + 表注释（灰色斜体），对齐 Database 标题栏。 */
+    // T-NativeUI-03/T-Embed-07：表头 = 表名(别名) + "/* 表注释 */"（斜体），对齐 Database 标题栏。
     override fun getPresentableElementTitle(
         e: JoinDiagramSnapshotRegistry.NativeEntity,
         builder: DiagramBuilder,
-    ): SimpleColoredText {
-        val text = SimpleColoredText()
-        text.append(e.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-        e.tableComment?.takeIf { it.isNotBlank() }?.let {
-            text.append("  $it", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-        }
-        return text
-    }
+    ): SimpleColoredText = joinTitleText(e.displayName, e.tableComment)
 
-    // 框架 DiagramNodeItemComponent 调用的是 3 参重载（identifyingElement, item, builder）——
-    // 只实现 2 参会让字段文字落回空默认，只剩图标。故实现 3 参并按 Database 原生样式渲染。
     override fun getItemName(identifyingElement: JoinDiagramSnapshotRegistry.NativeEntity?, item: Any?, builder: DiagramBuilder): SimpleColoredText {
-        val text = SimpleColoredText()
         val column = item as? ColumnEntry
-        // 字段名（主键加粗）
-        text.append(
-            column?.name ?: "",
-            if (column?.isPk == true) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
-        )
-        return text
+        return joinItemNameText(column?.name, column?.isPk == true, column?.comment)
     }
 
-    override fun getItemType(identifyingElement: JoinDiagramSnapshotRegistry.NativeEntity?, item: Any?, builder: DiagramBuilder?): SimpleColoredText {
-        val text = SimpleColoredText()
-        val column = item as? ColumnEntry
-        // 类型（灰色）+ 字段注释（灰色斜体），对齐 IDEA Database 原生图
-        column?.type?.let { text.append(it, SimpleTextAttributes.GRAYED_ATTRIBUTES) }
-        column?.comment?.takeIf { it.isNotBlank() }?.let {
-            text.append("  $it", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-        }
-        return text
-    }
+    override fun getItemType(identifyingElement: JoinDiagramSnapshotRegistry.NativeEntity?, item: Any?, builder: DiagramBuilder?): SimpleColoredText =
+        joinItemTypeText((item as? ColumnEntry)?.type)
 
     override fun getItemIcon(item: Any?, state: DiagramState): Icon? =
         (item as? ColumnEntry)?.let { if (it.isPk) AllIcons.Nodes.FieldPK else AllIcons.Nodes.DataColumn }
@@ -207,6 +186,37 @@ class JoinTableElementManager : AbstractDiagramElementManager<JoinDiagramSnapsho
         val base = if (e.alias != e.tableName) "${e.tableName} AS ${e.alias}" else e.tableName
         return e.tableComment?.takeIf { it.isNotBlank() }?.let { "$base — $it" } ?: base
     }
+}
+
+// ---- 渲染文本构建（顶层纯函数，无 builder/平台状态依赖，纯 JVM 可测） ----
+// 框架 DiagramNodeItemComponent 调用 3 参重载（f92db8b 实证）；布局语义（T-Embed-07 对齐 Database）：
+// 名字列（主键加粗）+ " /* 注释 */"（灰斜体）内联；类型列（灰）由框架右对齐独立展示。
+
+internal fun joinTitleText(displayName: String, tableComment: String?): SimpleColoredText {
+    val text = SimpleColoredText()
+    text.append(displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+    tableComment?.takeIf { it.isNotBlank() }?.let {
+        text.append("  /* $it */", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+    }
+    return text
+}
+
+internal fun joinItemNameText(name: String?, isPk: Boolean, comment: String?): SimpleColoredText {
+    val text = SimpleColoredText()
+    text.append(
+        name ?: "",
+        if (isPk) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES,
+    )
+    comment?.takeIf { it.isNotBlank() }?.let {
+        text.append("  /* $it */", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+    }
+    return text
+}
+
+internal fun joinItemTypeText(type: String?): SimpleColoredText {
+    val text = SimpleColoredText()
+    type?.takeIf { it.isNotBlank() }?.let { text.append(it, SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+    return text
 }
 
 /**

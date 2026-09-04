@@ -218,10 +218,15 @@ object JoinDiagramGenerator {
      * 3. FillClause 中该 JOIN 表的 selectColumns
      *
      * 类型解析优先级：ColumnRef.type (selectAs) > tableInfo 字段推断 > null
+     *
+     * T-Embed-07（真机缺陷修复）：列引用的 tableAlias 是转换器原始别名（MPJ 类名小驼峰如
+     * `stationInfoEntity`），而 joinAlias 是 sanitize/去重后的显示别名（如 `t1`）——
+     * 二者取并集匹配，否则 JOIN 表列全部落空（ON 标签因走 aliasMap 映射而正常，更具迷惑性）。
      */
     private fun extractJoinColumns(join: JoinClause, joinAlias: String, stmt: SelectStatement): List<ColumnEntry> {
         val columns = mutableListOf<ColumnEntry>()
         val seen = mutableSetOf<String>()
+        val acceptedAliases = setOf(joinAlias, join.alias).filter { it.isNotBlank() }.toSet()
 
         // Helper: resolve SQL type from tableInfo by column name
         fun sqlTypeFromTable(colName: String): String? {
@@ -234,9 +239,13 @@ object JoinDiagramGenerator {
             return join.tableInfo?.columns?.firstOrNull { it.columnName == colName }?.comment
         }
 
+        // Helper: 列引用是否指向本 JOIN 表（原始别名或显示别名任一命中）
+        fun belongsToJoin(ref: cn.song.mybatisplus.visualizer.model.ColumnRef): Boolean =
+            ref.tableAlias != null && ref.tableAlias in acceptedAliases
+
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (col in stmt.selectColumns) {
-            if (col.tableAlias == joinAlias && !seen.contains(col.columnName)) {
+            if (belongsToJoin(col) && !seen.contains(col.columnName)) {
                 seen.add(col.columnName)
                 val sqlType = javaTypeToSqlType(col.type) ?: sqlTypeFromTable(col.columnName)
                 columns.add(ColumnEntry(name = col.columnName, type = sqlType, isPk = false, comment = commentFromTable(col.columnName)))
@@ -246,11 +255,11 @@ object JoinDiagramGenerator {
         // 2. From ON conditions (resolve type from tableInfo)
         for (cond in join.onConditions) {
             if (cond is Condition.ColumnComparison) {
-                if (cond.right.tableAlias == joinAlias && !seen.contains(cond.right.columnName)) {
+                if (belongsToJoin(cond.right) && !seen.contains(cond.right.columnName)) {
                     seen.add(cond.right.columnName)
                     columns.add(ColumnEntry(name = cond.right.columnName, type = sqlTypeFromTable(cond.right.columnName), isPk = false, comment = commentFromTable(cond.right.columnName)))
                 }
-                if (cond.left.tableAlias == joinAlias && !seen.contains(cond.left.columnName)) {
+                if (belongsToJoin(cond.left) && !seen.contains(cond.left.columnName)) {
                     seen.add(cond.left.columnName)
                     columns.add(ColumnEntry(name = cond.left.columnName, type = sqlTypeFromTable(cond.left.columnName), isPk = false, comment = commentFromTable(cond.left.columnName)))
                 }
@@ -259,7 +268,7 @@ object JoinDiagramGenerator {
 
         // 3. From FillClause selectColumns
         stmt.fillClauses?.forEach { fill ->
-            if (fill.childAlias == joinAlias) {
+            if (fill.childAlias == joinAlias || fill.childAlias == join.alias) {
                 for (col in fill.selectColumns) {
                     if (!seen.contains(col.columnName)) {
                         seen.add(col.columnName)

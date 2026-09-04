@@ -711,7 +711,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
             // 构建结构化模型并展示（原生框架优先，缺席/异常降级自绘）
-            val model = JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement)
+            // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
+            val model = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
+                project,
+                JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement),
+            )
             showJoinDiagram(model)
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
