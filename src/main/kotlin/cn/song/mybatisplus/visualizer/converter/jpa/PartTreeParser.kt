@@ -328,17 +328,37 @@ object PartTreeParser {
         }
 
         val subjectPart = methodName.substring(0, byIndex)
-        val predicatePart = methodName.substring(byIndex + 2) // skip "By"
+        var predicatePart = methodName.substring(byIndex + 2) // skip "By"
 
         val subject = parseSubject(subjectPart)
 
-        // 先剥离尾部 IgnoreCase（可能在 OrderBy 之后，如 "LastNameOrderByFirstNameAscIgnoreCase"）
-        val (predicateWithoutIgnoreCase, globalIgnoreCase) = extractIgnoreCase(predicatePart)
+        // T-J4：IgnoreCase / AllIgnoreCase 任意位置剥离（原先只认尾部，中部的会并入属性名）。
+        // 1) 尾部连续剥离（含 OrderBy 之后的形态，如 "LastNameOrderByFirstNameAscIgnoreCase"），
+        //    尾部形态沿用历史语义：视为全局忽略大小写（单条件场景与 Spring Data 等价）。
+        var globalIgnoreCase = false
+        while (true) {
+            when {
+                predicatePart.endsWith(ALL_IGNORE_CASE_KEYWORD) -> {
+                    predicatePart = predicatePart.dropLast(ALL_IGNORE_CASE_KEYWORD.length)
+                    globalIgnoreCase = true
+                }
+                predicatePart.endsWith(IGNORE_CASE_KEYWORD) -> {
+                    predicatePart = predicatePart.dropLast(IGNORE_CASE_KEYWORD.length)
+                    globalIgnoreCase = true
+                }
+                else -> break
+            }
+        }
+        // 2) 中部 AllIgnoreCase 剥离 → 全局生效（如 "FirstNameAllIgnoreCaseAndLastName"）。
+        if (predicatePart.contains(ALL_IGNORE_CASE_KEYWORD)) {
+            globalIgnoreCase = true
+            predicatePart = predicatePart.replace(ALL_IGNORE_CASE_KEYWORD, "")
+        }
 
         // 从 Predicate 尾部剥离 OrderBy 子句
-        val (predicateBody, orderByParts) = extractOrderBy(predicateWithoutIgnoreCase)
+        val (predicateBody, orderByParts) = extractOrderBy(predicatePart)
 
-        // 解析 Or/And 条件
+        // 解析 Or/And 条件（段内 IgnoreCase 在 parseCondition 中逐段剥离并记录标记）
         val predicates = parsePredicate(predicateBody, globalIgnoreCase)
 
         return PartTree(subject, predicates, orderByParts)
@@ -365,11 +385,15 @@ object PartTreeParser {
     }
 
     /**
-     * 检查 methodName 中 position 位置的 "By" 是否是 OrderBy 的一部分。
+     * 检查 methodName 中 position 位置的 "By" 是否是 "OrderBy" 的尾部。
+     *
+     * "OrderBy" = "Order" + "By"，故该 "By" 属于 OrderBy 当且仅当前 5 个字符恰为 "OrderBy"
+     * 的前段（regionMatches 从 position-5 起）。旧实现误判「By 后紧跟 OrderBy」——
+     * `findAllByOrderByXxx` 中 Subject 的 By 被跳过、OrderBy 内部的 By 反被当分隔符，
+     * 产出 `createTimeDesc = ?` 假谓词且丢失 ORDER BY（探针实证，M39 修复）。
      */
     private fun isOrderByAt(methodName: String, position: Int): Boolean {
-        val afterBy = position + 2
-        return methodName.startsWith("OrderBy", afterBy)
+        return position >= 5 && methodName.regionMatches(position - 5, "OrderBy", 0, 7)
     }
 
     /**
@@ -594,31 +618,10 @@ object PartTreeParser {
     }
 
     /**
-     * 提取并剥离 IgnoreCase / AllIgnoreCase 后缀。
-     *
-     * @return Pair(剥离后的谓词体, 全局忽略大小写标志)
-     */
-    private fun extractIgnoreCase(predicateBody: String): Pair<String, Boolean> {
-        if (predicateBody.endsWith(ALL_IGNORE_CASE_KEYWORD)) {
-            return Pair(
-                predicateBody.dropLast(ALL_IGNORE_CASE_KEYWORD.length),
-                true
-            )
-        }
-        if (predicateBody.endsWith(IGNORE_CASE_KEYWORD)) {
-            return Pair(
-                predicateBody.dropLast(IGNORE_CASE_KEYWORD.length),
-                true
-            )
-        }
-        return Pair(predicateBody, false)
-    }
-
-    /**
      * 解析 Predicate 主体为 Or/And 条件列表。
      *
-     * @param predicateBody  OrderBy 和 IgnoreCase 剥离后的谓词体
-     * @param globalIgnoreCase 全局忽略大小写标志
+     * @param predicateBody OrderBy 和 IgnoreCase 剥离后的谓词体
+     * @param globalIgnoreCase 全局忽略大小写标志（尾部 / AllIgnoreCase 剥离产物）
      */
     private fun parsePredicate(predicateBody: String, globalIgnoreCase: Boolean): List<PredicatePart> {
         if (predicateBody.isEmpty()) return emptyList()
@@ -671,28 +674,61 @@ object PartTreeParser {
      * 解析单个条件 Part。
      *
      * 按 camelCase 边界切分，从尾部匹配条件关键字。
+     *
+     * T-J4：先剥离段尾 IgnoreCase / AllIgnoreCase 并逐段记录 ignoreCase 标记——
+     * 中间位置的 IgnoreCase（如 "NameIgnoreCaseAndEmail" 的第一段）不再并入属性名。
      */
     private fun parseCondition(part: String, globalIgnoreCase: Boolean): Condition {
+        // 剥离段内 IgnoreCase（段级标记）
+        val (strippedPart, partIgnoreCase) = stripPartIgnoreCase(part)
+        val ignoreCase = globalIgnoreCase || partIgnoreCase
+
         // 查找最佳匹配的条件关键字
-        val matchResult = matchConditionKeyword(part)
+        val matchResult = matchConditionKeyword(strippedPart)
 
         if (matchResult != null) {
             val (propertyPart, partType) = matchResult
             return Condition(
                 propertyPath = decamelize(propertyPart),
                 type = partType,
-                ignoreCase = globalIgnoreCase,
+                ignoreCase = ignoreCase,
                 nestedPath = splitNestedPath(propertyPart),
             )
         }
 
         // 兜底：SIMPLE_PROPERTY
         return Condition(
-            propertyPath = decamelize(part),
+            propertyPath = decamelize(strippedPart),
             type = PartType.SIMPLE_PROPERTY,
-            ignoreCase = globalIgnoreCase,
-            nestedPath = splitNestedPath(part),
+            ignoreCase = ignoreCase,
+            nestedPath = splitNestedPath(strippedPart),
         )
+    }
+
+    /**
+     * T-J4：剥离单个条件 Part 段尾的 IgnoreCase / AllIgnoreCase，并返回段级忽略大小写标记。
+     *
+     * Spring Data 语义：紧跟属性（或条件关键字）的 `IgnoreCase` 仅对该段生效；
+     * `AllIgnoreCase` 已在 [parse] 全局剥离，这里兜底再剥一次。
+     *
+     * @return Pair(剥离后的段, 该段是否忽略大小写)
+     */
+    private fun stripPartIgnoreCase(part: String): Pair<String, Boolean> {
+        var stripped = part
+        var found = false
+        while (true) {
+            when {
+                stripped.endsWith(ALL_IGNORE_CASE_KEYWORD) -> {
+                    stripped = stripped.dropLast(ALL_IGNORE_CASE_KEYWORD.length)
+                    found = true
+                }
+                stripped.endsWith(IGNORE_CASE_KEYWORD) -> {
+                    stripped = stripped.dropLast(IGNORE_CASE_KEYWORD.length)
+                    found = true
+                }
+                else -> return Pair(stripped, found)
+            }
+        }
     }
 
     /**

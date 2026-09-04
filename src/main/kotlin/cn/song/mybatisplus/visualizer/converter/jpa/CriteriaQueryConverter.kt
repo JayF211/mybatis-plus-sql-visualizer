@@ -1,47 +1,61 @@
 package cn.song.mybatisplus.visualizer.converter.jpa
 
-import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SetClause
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.model.UpdateStatement
+import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaOperation
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryModel
+import cn.song.mybatisplus.visualizer.psi.jpa.ExpressionModel
 import cn.song.mybatisplus.visualizer.psi.jpa.GroupConnector
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.PredicateModel
+import cn.song.mybatisplus.visualizer.psi.jpa.SubqueryModel
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 
 /**
- * CriteriaQuery → SqlStatement 转换器（F-JPA-02）。
+ * CriteriaQuery → SqlStatement 转换器（F-JPA-02，T-J4/T-J6/T-J7/T-J17）。
  *
- * 将 [CriteriaQueryModel] 中间表示转换为 [SelectStatement]，供
- * [cn.song.mybatisplus.visualizer.sql.SqlGenerator] 渲染为 SQL。
+ * 将 [CriteriaQueryModel] 中间表示转换为 [SelectStatement] / [UpdateStatement] / [DeleteStatement]，
+ * 供 [cn.song.mybatisplus.visualizer.sql.SqlGenerator] 渲染为 SQL。
  *
  * CriteriaBuilder 方法 → Condition 映射：
  *  - cb.equal(a, b)              → Condition.Simple(col, "=", value)
  *  - cb.notEqual(a, b)           → Condition.Simple(col, "!=", value)
- *  - cb.greaterThan(a, b)        → Condition.Simple(col, ">", value)
- *  - cb.greaterThanOrEqualTo(a,b)→ Condition.Simple(col, ">=", value)
- *  - cb.lessThan(a, b)           → Condition.Simple(col, "<", value)
- *  - cb.lessThanOrEqualTo(a, b)  → Condition.Simple(col, "<=", value)
+ *  - cb.greaterThan/gt(a, b)     → Condition.Simple(col, ">", value)
+ *  - cb.greaterThanOrEqualTo/ge  → Condition.Simple(col, ">=", value)
+ *  - cb.lessThan/lt(a, b)        → Condition.Simple(col, "<", value)
+ *  - cb.lessThanOrEqualTo/le     → Condition.Simple(col, "<=", value)
  *  - cb.between(a, lo, hi)       → Condition.Between(col, false, lo, hi)
  *  - cb.isNull(a)                → Condition.Unary(col, "IS NULL")
  *  - cb.isNotNull(a)             → Condition.Unary(col, "IS NOT NULL")
- *  - cb.like(a, pattern)         → Condition.Like(col, false, pattern, Anywhere)
- *  - cb.notLike(a, pattern)      → Condition.Like(col, true, pattern, Anywhere)
+ *  - cb.like(a, pattern)         → Condition.Like(col, false, pattern, NONE；Criteria 模式自带 %)
+ *  - cb.like(a, p, escape)       → Condition.Raw("col LIKE p ESCAPE e")（Condition 无 escape 字段）
+ *  - cb.notLike(a, pattern)      → Condition.Like(col, true, pattern, NONE)
  *  - cb.in(a).value(b)           → Condition.In(col, false, listOf(b))
+ *  - cb.isTrue/isFalse(a)        → Condition.Simple(col, "=", TRUE/FALSE)
+ *  - cb.conjunction/disjunction  → Condition.Raw("1 = 1" / "1 = 0")
+ *  - cb.exists(sq)               → Condition.Raw("EXISTS (SELECT ...)")
+ *  - path.get("x").in(sq)        → Condition.Raw("x IN (SELECT ...)")
  *  - cb.and(p1, p2)              → Condition.Group(AND, listOf(p1, p2))
  *  - cb.or(p1, p2)               → Condition.Group(OR, listOf(p1, p2))
  *  - cb.not(p)                   → Condition.Group(AND, listOf(p), negated=true)
+ *  - 函数表达式左值（LOWER/ABS/CASE/算术等）→ ExpressionComparison → Condition.Simple 列位放表达式文本
  *
- * 无状态单例，纯函数逻辑，可独立单测。
+ * UPDATE / DELETE（T-J6）：CriteriaUpdate.set(...) → UpdateStatement.sets；
+ * CriteriaDelete → DeleteStatement。
+ *
+ * 无状态单例，纯函数逻辑，可独立单测；不支持的能力以 Raw/注释降级，绝不抛异常。
  */
 object CriteriaQueryConverter {
 
@@ -51,10 +65,22 @@ object CriteriaQueryConverter {
      * @param model CriteriaQueryLocator 输出的中间模型
      * @param overrideTable 可选的表信息覆盖（测试/外部传入预解析表信息用）；
      *                      null 时按 model.entityClass 或 model.entityClassName 解析
-     * @return SelectStatement；无法解析实体时返回全 Raw 降级的 SELECT
+     * @return 按 model.operation 返回 Select / Update / Delete 语句模型；
+     *         无法解析实体时返回全 Raw 降级的 SELECT
      */
     fun convert(model: CriteriaQueryModel, overrideTable: TableInfo? = null): SqlStatement {
         val tableInfo = overrideTable ?: resolveTableInfo(model)
+        return when (model.operation) {
+            CriteriaOperation.UPDATE -> convertUpdate(model, tableInfo)
+            CriteriaOperation.DELETE -> DeleteStatement(
+                table = tableInfo,
+                conditions = convertPredicates(model.predicates, tableInfo),
+            )
+            CriteriaOperation.SELECT -> convertSelect(model, tableInfo)
+        }
+    }
+
+    private fun convertSelect(model: CriteriaQueryModel, tableInfo: TableInfo): SelectStatement {
         val conditions = convertPredicates(model.predicates, tableInfo)
         val groupBy = convertGroupBy(model.groupBys, tableInfo)
         val having = convertHaving(model.havings, tableInfo)
@@ -70,7 +96,20 @@ object CriteriaQueryConverter {
             having = having,
             orderBy = orderBy,
             joins = joins,
+            distinct = model.distinct,
         )
+    }
+
+    /** CriteriaUpdate → UpdateStatement（T-J6）：set 子句转 SetClause，where 谓词转 conditions。 */
+    private fun convertUpdate(model: CriteriaQueryModel, tableInfo: TableInfo): UpdateStatement {
+        val conditions = convertPredicates(model.predicates, tableInfo)
+        val sets = model.setClauses.map { clause ->
+            SetClause(
+                column = ColumnRef(columnName = resolveColumnName(clause.fieldName, tableInfo)),
+                value = sqlValue(clause.valueExpression ?: "null"),
+            )
+        }
+        return UpdateStatement(table = tableInfo, sets = sets, conditions = conditions)
     }
 
     // ------------------------------------------------------------------
@@ -96,6 +135,20 @@ object CriteriaQueryConverter {
         )
     }
 
+    /** 子查询实体表信息（仅类名可推断，列映射为空，按命名策略兜底）。 */
+    private fun resolveSubTableInfo(sub: SubqueryModel): TableInfo {
+        val className = sub.entityClassName ?: return TableInfo(
+            entityClassName = "UnknownEntity",
+            tableName = "unknown_entity",
+            columns = emptyList(),
+        )
+        return TableInfo(
+            entityClassName = className,
+            tableName = JpaEntityResolver.inferDecoratedTableName(className),
+            columns = emptyList(),
+        )
+    }
+
     // ------------------------------------------------------------------
     // SELECT 列转换
     // ------------------------------------------------------------------
@@ -103,12 +156,16 @@ object CriteriaQueryConverter {
     /**
      * 转换 SELECT 列为 ColumnRef 列表。
      *
-     * 规则（增强版 P1-5 聚合函数支持）：
+     * 规则：
      *  - 空列表 → 空（converter 层全列语义，生成器展开为 SELECT *）
      *  - 普通列 → 按字段名查找实体列映射，找不到时按命名策略兜底
-     *  - 聚合列 → ColumnRef.function 设置为聚合函数名
+     *  - 聚合列 → ColumnRef.function 设置为聚合函数名：
      *    - COUNT(*) → function="COUNT", columnName="*"
      *    - SUM(field) → function="SUM", columnName=解析后列名
+     *    - countDistinct → rawExpr="COUNT(DISTINCT col)"（T-J17）
+     *    - sumAsLong/sumAsDouble → rawExpr="SUM(CAST(col AS BIGINT/DOUBLE))"（T-J17）
+     *    - 聚合内层复杂表达式 → rawExpr="AVG(COALESCE(age, 0))" 等（T-J17）
+     *  - 表达式列（CASE/COALESCE/CONCAT/算术等）→ rawExpr（T-J17）
      */
     private fun convertSelectColumns(
         columns: List<cn.song.mybatisplus.visualizer.psi.jpa.SelectColumn>,
@@ -119,6 +176,20 @@ object CriteriaQueryConverter {
             // 聚合函数处理
             if (sel.aggregate != null) {
                 val agg = sel.aggregate
+                val compositeExpr: String? = when {
+                    agg.castType != null -> {
+                        val col = agg.fieldName?.let { resolveColumnName(it, tableInfo) } ?: "*"
+                        "${agg.function}(CAST($col AS ${agg.castType}))"
+                    }
+                    agg.distinct -> {
+                        val col = agg.fieldName?.let { resolveColumnName(it, tableInfo) } ?: "*"
+                        "${agg.function}(DISTINCT $col)"
+                    }
+                    else -> agg.expression?.let { "${agg.function}(${renderExpression(it, tableInfo)})" }
+                }
+                if (compositeExpr != null) {
+                    return@map ColumnRef(columnName = compositeExpr, rawExpr = compositeExpr, alias = sel.alias)
+                }
                 val columnName = when {
                     agg.fieldName == null -> "*" // COUNT(*) 语义
                     else -> resolveColumnName(agg.fieldName, tableInfo)
@@ -128,6 +199,12 @@ object CriteriaQueryConverter {
                     function = agg.function,
                     alias = sel.alias,
                 )
+            }
+
+            // 复杂表达式列（CASE / COALESCE / CONCAT / (a + b) 等，T-J17）
+            if (sel.expression != null) {
+                val exprText = renderExpression(sel.expression, tableInfo)
+                return@map ColumnRef(columnName = exprText, rawExpr = exprText, alias = sel.alias)
             }
 
             // 普通列处理
@@ -178,12 +255,22 @@ object CriteriaQueryConverter {
 
         is PredicateModel.Like -> {
             val column = resolveColumnRef(predicate.fieldName, tableInfo)
-            Condition.Like(
-                column = column,
-                negated = predicate.negated,
-                pattern = sqlValue(predicate.patternExpression),
-                position = LikePosition.ANYWHERE,
-            )
+            val op = if (predicate.negated) "NOT LIKE" else "LIKE"
+            if (predicate.escapeChar != null) {
+                // escapeChar 重载：Condition 模型无 escape 字段，整段 Raw（T-J17）
+                Condition.Raw(
+                    "${column.qualifiedName} $op ${valueToText(predicate.patternExpression)} " +
+                        "ESCAPE ${valueToText(predicate.escapeChar)}",
+                )
+            } else {
+                // Criteria 的 LIKE 模式自带通配符，位置语义为 NONE（不二次包裹 %）
+                Condition.Like(
+                    column = column,
+                    negated = predicate.negated,
+                    pattern = sqlValue(predicate.patternExpression),
+                    position = LikePosition.NONE,
+                )
+            }
         }
 
         is PredicateModel.In -> {
@@ -214,8 +301,77 @@ object CriteriaQueryConverter {
             )
         }
 
+        // 表达式比较（T-J17）：LOWER(x) = 'a' / ABS(x) > 1 / LOWER(x) IS NULL 等
+        is PredicateModel.ExpressionComparison -> convertExpressionComparison(predicate, tableInfo)
+
+        // 表达式 BETWEEN（T-J17）：Condition 无对应节点，整段 Raw
+        is PredicateModel.ExpressionBetween -> Condition.Raw(
+            "${renderExpression(predicate.left, tableInfo)} BETWEEN " +
+                "${expressionToText(predicate.lo, tableInfo)} AND ${expressionToText(predicate.hi, tableInfo)}",
+        )
+
+        // 布尔常量（T-J17）：conjunction=恒真 / disjunction=恒假
+        is PredicateModel.BooleanConstant -> Condition.Raw(if (predicate.value) "1 = 1" else "1 = 0")
+
+        // 列对列比较（Join.on / root 与 join 列互比，T-J7）
+        is PredicateModel.ColumnEquals -> Condition.ColumnComparison(
+            left = ColumnRef(columnName = resolveColumnName(predicate.leftFieldName, tableInfo)),
+            right = ColumnRef(columnName = resolveColumnName(predicate.rightFieldName, tableInfo)),
+        )
+
+        // EXISTS 子查询（T-J17/J13）：有界渲染，降级注释
+        is PredicateModel.Exists -> {
+            val subSql = renderSubQuery(predicate.subQuery)
+            if (subSql != null) {
+                Condition.Raw((if (predicate.negated) "NOT " else "") + "EXISTS $subSql")
+            } else {
+                Condition.Raw(degradedSubqueryComment(predicate.subQuery))
+            }
+        }
+
+        // 列 IN 子查询（T-J17/J13）
+        is PredicateModel.InSubQuery -> {
+            val subSql = renderSubQuery(predicate.subQuery)
+            if (subSql != null) {
+                val col = resolveColumnName(predicate.fieldName, tableInfo)
+                val op = if (predicate.negated) "NOT IN" else "IN"
+                Condition.Raw("$col $op $subSql")
+            } else {
+                Condition.Raw(degradedSubqueryComment(predicate.subQuery))
+            }
+        }
+
         is PredicateModel.Raw -> {
             Condition.Raw(predicate.expressionText)
+        }
+    }
+
+    /** 表达式比较 → Condition（IS NULL 走 Unary；值右值走 Simple；其余整段 Raw）。 */
+    private fun convertExpressionComparison(
+        predicate: PredicateModel.ExpressionComparison,
+        tableInfo: TableInfo,
+    ): Condition {
+        val leftSql = renderExpression(predicate.left, tableInfo)
+        return when (predicate.op) {
+            "IS NULL", "IS NOT NULL" -> Condition.Unary(ColumnRef(columnName = leftSql), predicate.op)
+            "LIKE", "NOT LIKE" -> Condition.Simple(
+                column = ColumnRef(columnName = leftSql),
+                op = predicate.op,
+                value = exprToSqlValue(predicate.right),
+            )
+            else -> {
+                val right = predicate.right
+                if (right is ExpressionModel.Value) {
+                    Condition.Simple(
+                        column = ColumnRef(columnName = leftSql),
+                        op = predicate.op,
+                        value = sqlValue(right.expressionText),
+                    )
+                } else {
+                    // 右值也是表达式（列/函数/CASE）→ Condition 无对应节点，整段 Raw
+                    Condition.Raw("$leftSql ${predicate.op} ${expressionToText(right, tableInfo)}")
+                }
+            }
         }
     }
 
@@ -251,14 +407,14 @@ object CriteriaQueryConverter {
     private fun convertHaving(
         havings: List<PredicateModel>,
         tableInfo: TableInfo,
-    ): cn.song.mybatisplus.visualizer.model.Condition? {
+    ): Condition? {
         if (havings.isEmpty()) return null
         val conditions = havings.map { convertPredicate(it, tableInfo) }
         return if (conditions.size == 1) {
             conditions[0]
         } else {
-            cn.song.mybatisplus.visualizer.model.Condition.Group(
-                connector = cn.song.mybatisplus.visualizer.model.Connector.AND,
+            Condition.Group(
+                connector = Connector.AND,
                 children = conditions,
             )
         }
@@ -288,12 +444,11 @@ object CriteriaQueryConverter {
     /**
      * 转换 JoinModel 列表为 JoinClause 列表。
      *
-     * 增强版（JOIN ON 条件推断 P1-6）：
-     *  - 从 root.join("department") 的 fieldName 推断关联表名
-     *  - 读取主实体列映射推断外键列
-     *  - 生成 ON 条件: alias.id = root_fk_column
-     *
-     * @param tableInfo 主实体表信息（用于列映射和 JOIN ON 推断）
+     * 规则（T-J7）：
+     *  - 显式 ON（Join.on(...)）非空时优先渲染，跳过外键推断；
+     *    列别名归属按 get 调用接收者变量判定（join 变量 → join 别名，root/未知 → 主表）
+     *  - 无显式 ON → 既有外键推断：alias.id = root_<fk>_column
+     *  - fetch 调用与 join 同形渲染（EAGER 抓取合并入主查询的静态近似）
      */
     private fun convertJoins(
         joins: List<cn.song.mybatisplus.visualizer.psi.jpa.JoinModel>,
@@ -302,10 +457,15 @@ object CriteriaQueryConverter {
         return joins.map { join ->
             val entityClassName = join.entityClassName ?: join.fieldName
             val tableName = JpaEntityResolver.inferDecoratedTableName(entityClassName)
-            val alias = join.alias ?: join.fieldName.replaceFirstChar { it.lowercaseChar() }
+            // 别名优先级：显式别名 > join 返回值变量名 > 关联属性名首字母小写
+            val alias = join.alias ?: join.variableName
+                ?: join.fieldName.replaceFirstChar { it.lowercaseChar() }
 
-            // JOIN ON 条件推断
-            val onConditions = inferJoinOnConditions(join, tableInfo, alias)
+            val onConditions = if (join.onPredicates.isNotEmpty()) {
+                join.onPredicates.map { convertOnPredicate(it, tableInfo, join, alias) }
+            } else {
+                inferJoinOnConditions(join, tableInfo, alias)
+            }
 
             JoinClause(
                 type = join.joinType,
@@ -316,8 +476,41 @@ object CriteriaQueryConverter {
         }
     }
 
+    /** 显式 ON 谓词转换：ColumnEquals 按变量归属补表别名，其余谓词走通用转换。 */
+    private fun convertOnPredicate(
+        predicate: PredicateModel,
+        tableInfo: TableInfo,
+        join: cn.song.mybatisplus.visualizer.psi.jpa.JoinModel,
+        joinAlias: String,
+    ): Condition {
+        if (predicate is PredicateModel.ColumnEquals) {
+            return Condition.ColumnComparison(
+                left = ColumnRef(
+                    tableAlias = aliasForVariable(predicate.leftVariable, join, joinAlias),
+                    columnName = resolveColumnName(predicate.leftFieldName, tableInfo),
+                ),
+                right = ColumnRef(
+                    tableAlias = aliasForVariable(predicate.rightVariable, join, joinAlias),
+                    columnName = resolveColumnName(predicate.rightFieldName, tableInfo),
+                ),
+            )
+        }
+        return convertPredicate(predicate, tableInfo)
+    }
+
+    /** get 接收者变量 → 表别名：join 变量 → join 别名；root/未知 → 主表（无别名）。 */
+    private fun aliasForVariable(
+        variable: String?,
+        join: cn.song.mybatisplus.visualizer.psi.jpa.JoinModel,
+        joinAlias: String,
+    ): String? = when (variable) {
+        null -> null
+        join.variableName -> joinAlias
+        else -> null
+    }
+
     /**
-     * 推断 CriteriaQuery JOIN 的 ON 条件。
+     * 推断 CriteriaQuery JOIN 的 ON 条件（显式 ON 缺省时的回退）。
      *
      * 启发式规则（JPA @JoinColumn 默认命名）：
      *  - root.join("department") → 从主实体 department 属性推断外键列
@@ -354,6 +547,180 @@ object CriteriaQueryConverter {
     }
 
     // ------------------------------------------------------------------
+    // 子查询渲染（T-J17/J13 有界实现）
+    // ------------------------------------------------------------------
+
+    /**
+     * 渲染子查询为 `(SELECT col FROM t WHERE ...)` 文本。
+     *
+     * 有界：degradedReason 非空（correlate / 多层嵌套）或谓词无法全部静态渲染时返回 null，
+     * 由调用方降级注释。占位符以 `?` 文本呈现（不参与面板参数收集，属已知边界）。
+     */
+    private fun renderSubQuery(sub: SubqueryModel): String? {
+        if (sub.degradedReason != null) return null
+        val subTable = resolveSubTableInfo(sub)
+        val selectColumn = sub.selectFieldName?.let { resolveColumnName(it, subTable) } ?: "*"
+        val whereParts = sub.predicates.map { predicateToSqlText(it, subTable) }
+        // 有界：谓词无法全部渲染（嵌套子查询等）→ 整体降级
+        if (whereParts.any { it == null }) return null
+        return buildString {
+            append("(SELECT ").append(selectColumn).append(" FROM ").append(subTable.tableName)
+            val parts = whereParts.filterNotNull()
+            if (parts.isNotEmpty()) append(" WHERE ").append(parts.joinToString(" AND "))
+            append(")")
+        }
+    }
+
+    /** 不可静态渲染子查询的注释降级文本。 */
+    private fun degradedSubqueryComment(sub: SubqueryModel): String =
+        "/* 子查询暂不支持静态解析${sub.degradedReason?.let { "：$it" } ?: ""} */"
+
+    /**
+     * 谓词 → SQL 文本（子查询 WHERE 渲染用）。
+     * EXISTS / IN 子查询节点在此返回 null（子查询内不再嵌套子查询——有界边界）。
+     */
+    private fun predicateToSqlText(predicate: PredicateModel, tableInfo: TableInfo): String? = when (predicate) {
+        is PredicateModel.Simple ->
+            "${resolveColumnName(predicate.fieldName, tableInfo)} ${predicate.op} ${valueToText(predicate.valueExpression)}"
+
+        is PredicateModel.IsNull ->
+            "${resolveColumnName(predicate.fieldName, tableInfo)} ${if (predicate.negated) "IS NOT NULL" else "IS NULL"}"
+
+        is PredicateModel.Between ->
+            "${resolveColumnName(predicate.fieldName, tableInfo)} BETWEEN " +
+                "${valueToText(predicate.loExpression)} AND ${valueToText(predicate.hiExpression)}"
+
+        is PredicateModel.Like -> {
+            val op = if (predicate.negated) "NOT LIKE" else "LIKE"
+            val escape = predicate.escapeChar?.let { " ESCAPE ${valueToText(it)}" } ?: ""
+            "${resolveColumnName(predicate.fieldName, tableInfo)} $op ${valueToText(predicate.patternExpression)}$escape"
+        }
+
+        is PredicateModel.In -> {
+            val op = if (predicate.negated) "NOT IN" else "IN"
+            val values = predicate.valueExpressions.joinToString(", ") { valueToText(it) }
+            "${resolveColumnName(predicate.fieldName, tableInfo)} $op ($values)"
+        }
+
+        is PredicateModel.ColumnEquals ->
+            "${resolveColumnName(predicate.leftFieldName, tableInfo)} ${predicate.op} " +
+                resolveColumnName(predicate.rightFieldName, tableInfo)
+
+        is PredicateModel.BooleanConstant -> if (predicate.value) "1 = 1" else "1 = 0"
+
+        is PredicateModel.ExpressionComparison -> {
+            val left = renderExpression(predicate.left, tableInfo)
+            when (predicate.op) {
+                "IS NULL", "IS NOT NULL" -> "$left ${predicate.op}"
+                else -> "$left ${predicate.op} ${expressionToText(predicate.right, tableInfo)}"
+            }
+        }
+
+        is PredicateModel.ExpressionBetween ->
+            "${renderExpression(predicate.left, tableInfo)} BETWEEN " +
+                "${expressionToText(predicate.lo, tableInfo)} AND ${expressionToText(predicate.hi, tableInfo)}"
+
+        is PredicateModel.Group -> {
+            val children = predicate.children.map { predicateToSqlText(it, tableInfo) }
+            if (children.any { it == null }) return null
+            val joined = children.filterNotNull().joinToString(" ${predicate.connector.name} ")
+            if (joined.isEmpty()) null else if (predicate.negated) "NOT ($joined)" else "($joined)"
+        }
+
+        is PredicateModel.Raw -> predicate.expressionText
+
+        // 子查询内嵌子查询：有界边界，返回 null 令外层整体降级
+        is PredicateModel.Exists, is PredicateModel.InSubQuery -> null
+    }
+
+    // ------------------------------------------------------------------
+    // 表达式渲染（T-J17）
+    // ------------------------------------------------------------------
+
+    /**
+     * ExpressionModel → SQL 文本。
+     *
+     * 函数标记映射：
+     *  - ADD/SUB/MUL/DIV → (a + b) 等括号中缀；MOD → MOD(a, b)；NEG → (-a)
+     *  - CAST → CAST(a AS 类型)（modifier 携带目标类型）
+     *  - TRIM → TRIM([规格 FROM] a)（modifier 携带 Trimspec）
+     *  - COUNT → COUNT(a)，无参时 COUNT(*)
+     *  - NOT → NOT (a)
+     *  - 其余原样 NAME(a, b, ...)
+     */
+    private fun renderExpression(expr: ExpressionModel, tableInfo: TableInfo): String = when (expr) {
+        is ExpressionModel.Column -> resolveColumnName(expr.fieldName, tableInfo)
+
+        is ExpressionModel.Value -> valueToText(expr.expressionText)
+
+        is ExpressionModel.Raw -> expr.expressionText
+
+        is ExpressionModel.Function -> {
+            val args = expr.args.map { renderExpression(it, tableInfo) }
+            when (expr.function) {
+                "ADD" -> "(${args.getOrElse(0) { "" }} + ${args.getOrElse(1) { "" }})"
+                "SUB" -> "(${args.getOrElse(0) { "" }} - ${args.getOrElse(1) { "" }})"
+                "MUL" -> "(${args.getOrElse(0) { "" }} * ${args.getOrElse(1) { "" }})"
+                "DIV" -> "(${args.getOrElse(0) { "" }} / ${args.getOrElse(1) { "" }})"
+                "MOD" -> "MOD(${args.getOrElse(0) { "" }}, ${args.getOrElse(1) { "" }})"
+                "NEG" -> "(-${args.getOrElse(0) { "" }})"
+                "NOT" -> "NOT (${args.joinToString(", ")})"
+                "CAST" -> "CAST(${args.getOrElse(0) { "" }} AS ${expr.modifier ?: "VARCHAR"})"
+                "TRIM" ->
+                    if (expr.modifier != null) "TRIM(${expr.modifier} FROM ${args.getOrElse(0) { "" }})"
+                    else "TRIM(${args.getOrElse(0) { "" }})"
+                "COUNT" -> "COUNT(${args.joinToString(", ").ifEmpty { "*" }})"
+                else -> "${expr.function}(${args.joinToString(", ")})"
+            }
+        }
+
+        is ExpressionModel.Case -> renderCase(expr, tableInfo) ?: "/* CASE 表达式暂不支持静态渲染 */"
+    }
+
+    /** CASE 表达式渲染；条件/结果无法渲染时返回 null（调用方降级注释）。 */
+    private fun renderCase(expr: ExpressionModel.Case, tableInfo: TableInfo): String? {
+        val base = expr.simpleExpr?.let { renderExpression(it, tableInfo) }
+        val parts = expr.whens.map { caseWhen ->
+            val conditionSql = if (base != null) {
+                caseWhen.condition?.let { renderExpression(it, tableInfo) }
+            } else {
+                caseWhen.predicate?.let { predicateToSqlText(it, tableInfo) }
+            } ?: return null
+            val resultSql = caseWhen.result?.let { renderExpression(it, tableInfo) } ?: return null
+            "WHEN $conditionSql THEN $resultSql"
+        }
+        if (parts.isEmpty()) return null
+        return buildString {
+            append("CASE ")
+            if (base != null) append(base).append(" ")
+            append(parts.joinToString(" "))
+            expr.otherwise?.let { append(" ELSE ").append(renderExpression(it, tableInfo)) }
+            append(" END")
+        }
+    }
+
+    /** 值源码文本 → SQL 文本（字面量原样含引号；变量/占位符 → `?`）。 */
+    private fun valueToText(expression: String): String {
+        val value = sqlValue(expression)
+        return when (value) {
+            is SqlValue.Literal -> value.raw
+            is SqlValue.Placeholder -> "?"
+        }
+    }
+
+    /** 表达式 → SQL 文本（Value 走值求值，其余走表达式渲染）。 */
+    private fun expressionToText(expr: ExpressionModel, tableInfo: TableInfo): String = when (expr) {
+        is ExpressionModel.Value -> valueToText(expr.expressionText)
+        else -> renderExpression(expr, tableInfo)
+    }
+
+    /** 表达式右值 → SqlValue（Simple/Like 条件的参数面板语义保留）。 */
+    private fun exprToSqlValue(expr: ExpressionModel): SqlValue = when (expr) {
+        is ExpressionModel.Value -> sqlValue(expr.expressionText)
+        else -> SqlValue.Placeholder("expression")
+    }
+
+    // ------------------------------------------------------------------
     // 列名解析
     // ------------------------------------------------------------------
 
@@ -384,9 +751,9 @@ object CriteriaQueryConverter {
      *
      * 简单启发式：
      *  - 字符串字面量（单/双引号包裹）→ Literal（去引号，渲染时重新包裹）
-     *  - 数字字面量 → Literal
+     *  - 数字字面量 → Literal（去 L/F/D 类型后缀）
      *  - null → Literal("NULL")
-     *  - true/false → Literal
+     *  - true/false/TRUE/FALSE → Literal（统一大写布尔字面量）
      *  - 其他 → Placeholder（运行时值）
      */
     private fun sqlValue(expression: String): SqlValue {
@@ -395,8 +762,10 @@ object CriteriaQueryConverter {
         // null 字面量
         if (trimmed == "null") return SqlValue.Literal("NULL")
 
-        // 布尔
-        if (trimmed == "true" || trimmed == "false") return SqlValue.Literal(trimmed)
+        // 布尔（isTrue/isFalse 产物为 TRUE/FALSE，统一大写）
+        if (trimmed.equals("true", ignoreCase = true) || trimmed.equals("false", ignoreCase = true)) {
+            return SqlValue.Literal(trimmed.uppercase())
+        }
 
         // 字符串字面量（单引号或双引号，且不含 + 拼接）
         // 注意：含 + 的表达式（如 "%" + username + "%）是运行时拼接，应视为占位符

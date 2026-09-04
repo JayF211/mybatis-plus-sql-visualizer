@@ -1,9 +1,9 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.psi.PsiManager
-import com.intellij.psi.search.FilenameIndex
+import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
@@ -15,19 +15,23 @@ import java.util.concurrent.ConcurrentHashMap
  * 解析 `<class>`, `<id>`, `<property>`, `<many-to-one>`, `<one-to-one>` 等映射元素，
  * 提取实体类名、表名、字段列映射、关联关系等元数据。
  *
- * 查找策略：
- * 1. 在项目中搜索所有 .hbm.xml 文件
- * 2. 解析每个文件，提取 `<class>` 映射信息
- * 3. 按实体类名（简单名或全限定名）索引
+ * 查找策略（T-J11 修复）：
+ * 1. 经 [FileTypeIndex] 按文件类型扫描项目内全部 XML 文件，再按文件名 `endsWith(".hbm.xml")`
+ *    过滤——原先的 `FilenameIndex.getFilesByName(project, "*.hbm.xml", ...)` 按字面名匹配，
+ *    通配符不生效，永远查不到文件；
+ * 2. 解析每个文件中的**全部** `<class>` 元素（原先 `findFirstSubTag` 只取第一个，
+ *    多 class 映射文件会丢失其余实体）；
+ * 3. 按实体类名（简单名或全限定名）索引。
  *
- * 缓存策略：按 (project, classQualifiedName) 缓存，避免重复解析。
+ * 缓存策略：按 (project, classQualifiedName) 缓存 [resolve] 结果，避免重复解析；
+ * 项目关闭时调用 [clearCache]。
  */
 object HbmXmlEntityResolver {
 
     private val cache = ConcurrentHashMap<String, HbmXmlMapping.ClassMapping>()
 
     /**
-     * 根据实体类名查找映射信息。
+     * 根据实体类名查找映射信息（对外 API 保持不变）。
      *
      * @param entityClassName 实体类名（简单名如 "RuleTableItem" 或全限定名）
      * @param project         当前项目
@@ -37,17 +41,13 @@ object HbmXmlEntityResolver {
         val cacheKey = "${project.name}:$entityClassName"
         cache[cacheKey]?.let { return it }
 
-        // 搜索所有 .hbm.xml 文件
-        val hbmFiles = FilenameIndex.getFilesByName(project, "*.hbm.xml", GlobalSearchScope.allScope(project))
-
-        for (file in hbmFiles) {
-            val xmlFile = file as? XmlFile ?: continue
-            val mapping = parseHbmFile(xmlFile) ?: continue
-
-            // 按简单类名和全限定名索引
-            if (mapping.entityClassName == entityClassName || mapping.fullClassName == entityClassName) {
-                cache[cacheKey] = mapping
-                return mapping
+        for (file in findHbmXmlFiles(project)) {
+            for (mapping in parseHbmFile(file)) {
+                // 按简单类名和全限定名索引
+                if (mapping.entityClassName == entityClassName || mapping.fullClassName == entityClassName) {
+                    cache[cacheKey] = mapping
+                    return mapping
+                }
             }
         }
 
@@ -55,12 +55,62 @@ object HbmXmlEntityResolver {
     }
 
     /**
-     * 解析单个 .hbm.xml 文件，提取所有类映射。
+     * T-J11：解析项目内全部 .hbm.xml 并按实体名索引（多 class 文件的每个 `<class>` 都会入索引）。
+     *
+     * **SqlPreviewService 接线点**：实体无 JPA 注解时（纯 .hbm.xml 映射的项目），可经本入口
+     * 建立全量映射索引（键同时含简单名与全限定名），替代逐实体 [resolve] 反复全盘扫描。
+     *
+     * @param project 当前项目
+     * @return 键为实体简单名 / 全限定名，值为对应映射；同名字段首个命中优先。无映射文件时返回空 Map
      */
-    private fun parseHbmFile(xmlFile: XmlFile): HbmXmlMapping.ClassMapping? {
-        val rootTag = xmlFile.rootTag ?: return null
-        val classTag = rootTag.findFirstSubTag("class") ?: return null
+    fun resolveAll(project: Project): Map<String, HbmXmlMapping.ClassMapping> {
+        val index = LinkedHashMap<String, HbmXmlMapping.ClassMapping>()
+        for (file in findHbmXmlFiles(project)) {
+            for (mapping in parseHbmFile(file)) {
+                index.putIfAbsent(mapping.entityClassName, mapping)
+                index.putIfAbsent(mapping.fullClassName, mapping)
+            }
+        }
+        return index
+    }
 
+    // ------------------------------------------------------------------
+    // 文件发现（T-J11：FilenameIndex 通配符失效 → FileTypeIndex + 后缀过滤）
+    // ------------------------------------------------------------------
+
+    /**
+     * 查找项目内全部 .hbm.xml 文件。
+     *
+     * `FileTypeIndex.getFiles(XmlFileType, projectScope)` 按**文件类型**索引取全量 XML
+     * （.hbm.xml 以 `.xml` 结尾归 XML 文件类型），再按文件名后缀精确过滤。
+     * 任何索引异常按空列表处理（优雅降级，绝不抛出）。
+     */
+    private fun findHbmXmlFiles(project: Project): List<XmlFile> = runCatching {
+        // XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按项目惯例用 FileTypeManager 取标准 XML 类型
+        val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
+        FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
+            .asSequence()
+            .filter { it.name.endsWith(".hbm.xml", ignoreCase = true) }
+            .mapNotNull { virtualFile -> PsiManager.getInstance(project).findFile(virtualFile) as? XmlFile }
+            .toList()
+    }.getOrDefault(emptyList())
+
+    // ------------------------------------------------------------------
+    // 解析
+    // ------------------------------------------------------------------
+
+    /**
+     * 解析单个 .hbm.xml 文件，提取**全部**类映射（T-J11：不再只取第一个 `<class>`）。
+     *
+     * 单个 `<class>` 解析失败（缺 name/table 属性）仅跳过该类，不影响同文件其余映射。
+     */
+    private fun parseHbmFile(xmlFile: XmlFile): List<HbmXmlMapping.ClassMapping> {
+        val rootTag = xmlFile.rootTag ?: return emptyList()
+        return rootTag.findSubTags("class").mapNotNull { classTag -> parseClassTag(classTag) }
+    }
+
+    /** 解析单个 `<class>` 元素为类映射；属性缺失返回 null（调用方跳过）。 */
+    private fun parseClassTag(classTag: XmlTag): HbmXmlMapping.ClassMapping? {
         val name = classTag.getAttributeValue("name") ?: return null
         val table = classTag.getAttributeValue("table") ?: return null
         val entityClassName = name.substringAfterLast('.')
