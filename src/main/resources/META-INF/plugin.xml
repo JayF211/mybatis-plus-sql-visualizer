@@ -172,6 +172,10 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.JdbcTemplateSqlGutterLineMarkerProvider"/>
 
+        <!-- T-PreviewShortcut：实体级 @NamedQuery/@NamedQueries 预览图标（锚 @NamedQuery 注解的 @ token） -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.NamedQueryGutterLineMarkerProvider"/>
+
         <!-- M9→原生SQL：补全注册到 SQL 语言。实测全语言注册（无 language）在补全调度时不被
      CompletionContributor.forLanguage 返回（M34 补全失效根因之一），必须显式 language；
      SQL 文件（IDEA DatabaseTools：com.intellij.sql.SqlLanguage，id="SQL"）由

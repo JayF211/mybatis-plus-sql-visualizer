@@ -44,6 +44,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
 import cn.song.mybatisplus.visualizer.sql.Dialect
@@ -61,6 +62,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLiteralExpression
@@ -488,6 +490,26 @@ class SqlPreviewService(private val project: Project) {
             return previewNativeSql(info)
         }
 
+        // T-PreviewShortcut：createNamedQuery("name") 按名回查实体 @NamedQuery，解析真实 JPQL；
+        // 跨文件 / 命名不规范解析不到时优雅降级为把名字当 HQL 处理（不抛、不挂起）。
+        if (info.createQueryMethodName == "createNamedQuery") {
+            val named = runCatching { NamedQueryLocator.findByQueryName(project, info.hql) }.getOrNull()
+            if (named != null && named.query.isNotBlank()) {
+                val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
+                val table = entityClass?.let { JpaEntityResolver().resolve(it) }
+                val result = JpqlConverter.convert(named.query, table)
+                val paramNames = extractParamNamesFromHql(named.query)
+                return buildJpaPreviewResult(
+                    statement = result.statement,
+                    convertedSql = result.sql,
+                    tableName = table?.tableName ?: "",
+                    paramNames = paramNames,
+                    method = info.method,
+                    inClauseParams = result.inClauseParams,
+                )
+            }
+        }
+
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
         val result = HqlConverter.convert(info.hql, table)
         // 参数名提取：
@@ -535,6 +557,33 @@ class SqlPreviewService(private val project: Project) {
     private fun resolveHqlEntityTable(entityClass: PsiClass?): String? {
         if (entityClass == null) return null
         return JpaEntityResolver().resolve(entityClass).tableName
+    }
+
+    /**
+     * 实体级 @NamedQuery/@NamedQueries 预览（T-PreviewShortcut）：
+     * 从光标所在 @NamedQuery 注解反查实体类 → 定位对应命名查询 → JPQL 转 SQL。
+     *
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.NamedQueryGutterLineMarkerProvider] 点击与快捷键调用。
+     */
+    fun previewNamedQuery(anchor: PsiElement): PreviewResult? {
+        val annotation = PsiTreeUtil.getParentOfType(anchor, PsiAnnotation::class.java, false) ?: return null
+        val cls = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java, false) ?: return null
+        val infos = NamedQueryLocator.locate(cls)
+        if (infos.isEmpty()) return null
+        // 优先取光标所在那一条 @NamedQuery（注解引用匹配）；多选 fallback 取第一条
+        val info = infos.firstOrNull { it.annotation === annotation } ?: infos.first()
+        val jpql = info.query
+        val table = JpaEntityResolver().resolve(cls)
+        val result = JpqlConverter.convert(jpql, table)
+        val paramNames = extractParamNamesFromHql(jpql)
+        return buildJpaPreviewResult(
+            statement = result.statement,
+            convertedSql = result.sql,
+            tableName = table?.tableName ?: "",
+            paramNames = paramNames,
+            method = null,
+            inClauseParams = result.inClauseParams,
+        )
     }
 
     /**
