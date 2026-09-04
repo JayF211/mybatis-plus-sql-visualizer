@@ -188,9 +188,12 @@ object NativeDatabaseDiagramSupport {
                 dataModel.addElement(element)
             }
             // T-Embed-10.4 根因（javap initializeDataModelAsync 实证）：addElement 只登记
-            // myTablesAddedByUser（DbTable 分支才建节点但不写 myNodes），节点生成必须走
+            // myTablesAddedByUser（DbTable 分支 createDbNode 只返回不写 myNodes），节点生成必须走
             // refreshDataModel——原生 fillDataModel 后正是调 refreshDataModelAsync。
             // 此前仅 queryUpdate().withDataReload() 未触发它 → nodes 恒 0 画布空白。
+            // T-Embed-10.5：calculateEdges 开头 isCategoryEnabled(VIRTUAL_FOREIGN_KEYS) 为 false
+            // 直接不建虚拟外键边——嵌入场景 content manager 新实例该分类默认禁用，refresh 前强制开启
+            enableVirtualFkCategory(dataModel)
             dataModel.refreshDataModel()
             LOG.info(
                 "B path fillDataModel+refresh done: elements=${elements.size}, " +
@@ -221,4 +224,22 @@ object NativeDatabaseDiagramSupport {
     /** FQN：仅表名；sanitize 防 `.` 被判为 .uml 格式、`/` 破坏 URL 分段。 */
     private fun sanitizeFqn(element: DbElement): String =
         (element.name ?: "table").replace(Regex("[./\\\\]"), "_")
+
+    /**
+     * 强制启用 VIRTUAL_FOREIGN_KEYS 分类（calculateEdges 的建边开关，javap 实证）。
+     * 分类常量为 DbDiagramProvider$Holder 私有静态字段（package-private 类），反射读取；
+     * nodeContentManager 经 DiagramDataModel 接口直调（同 uml-support public API）。
+     */
+    private fun enableVirtualFkCategory(dataModel: DiagramDataModel<Any>) {
+        runCatching {
+            val holderClass = Class.forName("com.intellij.database.diagram.DbDiagramProvider\$Holder")
+            val category = holderClass.getDeclaredField("VIRTUAL_FOREIGN_KEYS")
+                .apply { isAccessible = true }
+                .get(null) as com.intellij.diagram.DiagramCategory
+            dataModel.nodeContentManager?.setCategoryEnabled(category, true)
+            LOG.info("B path VIRTUAL_FOREIGN_KEYS category enabled")
+        }.onFailure { e ->
+            LOG.warn("B path enable VIRTUAL_FOREIGN_KEYS failed (edges may be absent)", e)
+        }
+    }
 }

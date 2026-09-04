@@ -114,6 +114,10 @@ object DatabaseSchemaResolver {
     private fun collectFromDataSource(ds: Any, tableName: String, dasTableClass: Class<*>): TableMeta {
         var tableComment: String? = null
         val out = linkedMapOf<String, ColumnMeta>()
+        // T-Embed-10.5 探针：B 路径 locateDbTables 直调同模型命中而本链 not found——
+        // 分辨 elements 空遍历 / DasTable 筛不出 / 名称不匹配三种情形
+        var scannedTables = 0
+        var hit = false
         runCatching {
             val dasObjClass = Class.forName(DAS_OBJECT)
             val dasColumnClass = Class.forName(DAS_COLUMN)
@@ -149,8 +153,10 @@ object DatabaseSchemaResolver {
 
             for (element in elements) {
                 if (element == null || !dasTableClass.isInstance(element)) continue
+                scannedTables++
                 val tName = getNameM.invoke(element) as? String ?: continue
                 if (!tName.equals(tableName, ignoreCase = true)) continue
+                hit = true
                 // 表级 COMMENT 与列遍历同一元素读取（blank 视为数据库没写，保留 null 供调用方回落）
                 tableComment = (getCommentM.invoke(element) as? String)?.takeIf { it.isNotBlank() }
                 val columns = getChildrenM.invoke(element, columnKind) as? Iterable<*> ?: continue
@@ -173,6 +179,10 @@ object DatabaseSchemaResolver {
             // 升 WARN+堆栈：真机排障依赖此行（仅消息无法定位炸点，16:09 日志教训）
             LOG.warn("DatabaseSchemaResolver.collectFromDataSource failed", e)
         }
+        LOG.info(
+            "DatabaseSchemaResolver scan: table=$tableName, tablesScanned=$scannedTables, " +
+                "hit=$hit, foundColumns=${out.size}, tableComment=${tableComment != null}",
+        )
         return TableMeta(tableComment, out)
     }
 }

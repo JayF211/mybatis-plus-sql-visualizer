@@ -34,6 +34,10 @@ class JoinVirtualFkProvider : ModelRelationManager.ModelRelationProvider {
     ): JBIterable<DasForeignKey> {
         if (refTable == null) return JBIterable.empty()
         val entries = JoinFkRegistry.find(table.name, refTable.name)
+        // T-Embed-10.5 探针：EP 是否被原生建边触达 + registry 命中数（连线缺失排障）
+        LOG.info(
+            "JoinVirtualFkProvider: ${table.name} -> ${refTable.name}, hits=${entries.size}",
+        )
         if (entries.isEmpty()) return JBIterable.empty()
         val fks = entries.map { JoinVirtualFk(table, refTable, it) }
         return JBIterable.of(*fks.toTypedArray())
@@ -41,6 +45,9 @@ class JoinVirtualFkProvider : ModelRelationManager.ModelRelationProvider {
 
     companion object {
         const val PROVIDER_ID = "SqlVisualizerJoin"
+
+        private val LOG = com.intellij.openapi.diagnostic.Logger
+            .getInstance(JoinVirtualFkProvider::class.java)
     }
 }
 
