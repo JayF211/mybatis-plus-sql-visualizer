@@ -841,11 +841,18 @@ class PluginSettingsPanel @JvmOverloads constructor(
         tenantColumnNameField.text = value
     }
 
-    /** 刷新插件缓存信息（缓存大小——所有打开项目汇总；面板构造与清除按钮共用）。 */
+    /**
+     * 刷新插件缓存信息（大小 + 条目数，所有打开项目汇总——含反查/解析/Wrapper 预览三类缓存；
+     * 面板构造与清除按钮共用）。
+     */
     private fun refreshCacheInfo() {
-        val projects = ProjectManager.getInstance().openProjects
-        val total = projects.sumOf { PluginCacheManager.sizeBytes(it) }
-        cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.info", PluginCacheManager.formatSize(total))
+        val projects = ProjectManager.getInstance().openProjects.toList()
+        val total = PluginCacheManager.totalSizeBytes(projects)
+        cacheInfoLabel.text = MpSqlVisualizerBundle.message(
+            "settings.cache.info",
+            PluginCacheManager.formatSize(total),
+            PluginCacheManager.entryCount(projects),
+        )
     }
 
     /** 测试访问器：缓存信息文本（断言展示与清除后刷新）。 */

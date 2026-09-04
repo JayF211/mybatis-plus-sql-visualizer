@@ -1264,6 +1264,12 @@ class SqlPreviewService(private val project: Project) {
      */
     fun clearCache() = cache.clear()
 
+    /** Wrapper 解析缓存条目数（设置页缓存统计，PluginCacheManager 调用）。 */
+    fun wrapperCacheEntryCount(): Int = cache.size()
+
+    /** Wrapper 解析缓存大小估算（设置页缓存统计，PluginCacheManager 调用）。 */
+    fun wrapperCacheSizeBytes(): Long = cache.sizeBytes()
+
     /**
      * F-7：预览完成后自动记录历史。
      *

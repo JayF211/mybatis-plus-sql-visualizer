@@ -397,6 +397,33 @@ class EntityResolver {
         @JvmStatic
         fun cacheSize(): Int = cache.size
 
+        /**
+         * 缓存大小估算（设置页展示 KB/MB）：键/值内字符串按 UTF-16 字符 2 字节 + 每条目/每列
+         * 固定开销近似——展示用，非精确 JVM 内存（PsiFile 引用本身不计）。
+         */
+        @JvmStatic
+        internal fun cacheSizeBytes(): Long {
+            var bytes = 0L
+            for ((key, entry) in cache) {
+                bytes += (key.classQualifiedName.length + key.configSignature.length) * 2L + 64
+                val info = entry.value
+                bytes += (info.entityClassName.length + info.tableName.length) * 2L
+                info.logicDeleteColumn?.let { bytes += it.length * 2L }
+                info.versionColumn?.let { bytes += it.length * 2L }
+                info.comment?.let { bytes += it.length * 2L }
+                for (column in info.columns) {
+                    bytes += (column.fieldName.length + column.columnName.length +
+                        (column.fieldType?.length ?: 0) + (column.fill?.length ?: 0) +
+                        (column.comment?.length ?: 0)) * 2L + 48
+                }
+                for (association in info.associations) {
+                    bytes += (association.fieldName.length + association.joinColumn.length +
+                        association.targetTable.length + association.targetAlias.length) * 2L + 32
+                }
+            }
+            return bytes
+        }
+
         // ------------------------------------------------------------------
         // T-M19.4：表名推断策略 + 统一修饰链（companion 静态化——实体类不可解析的兜底路径复用，
         // 见 [inferDecoratedTableName]，保证「全局语义」在全部推断点一致生效）
