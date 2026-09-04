@@ -70,6 +70,7 @@ object NativeDatabaseDiagramSupport {
                 locateDbTables(project, tableNames)
             }
             if (located == null || located.size < tableNames.size) return null
+            LOG.info("Native Database diagram (B path) taking over: tables=${located.keys}")
             registerJoinForeignKeys(model, located)
 
             val mainTable = model.entities.first { it.isMain }.tableName
