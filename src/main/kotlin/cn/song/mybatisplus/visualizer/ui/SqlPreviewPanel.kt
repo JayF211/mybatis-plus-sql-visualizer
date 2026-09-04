@@ -736,7 +736,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun showJoinDiagram(model: DiagramModel) {
         val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
         val native = if (nativeEnabled) {
-            NativeJoinDiagramSupport.buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+            // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
+            // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
+            (project?.let {
+                cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+                    .buildTabComponent(it, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+            })
+                ?: NativeJoinDiagramSupport.buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
         } else {
             null
         }
@@ -756,7 +762,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
     private fun clearNativeDiagram() {
         currentNativeDiagram?.let {
+            // 两条原生路径的 clientProperty key 不同，各 dispose 一次（未命中为 no-op）
             NativeJoinDiagramSupport.disposeNativeEditor(it)
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.disposeNativeEditor(it)
             diagramTabHost.remove(it)
         }
         currentNativeDiagram = null

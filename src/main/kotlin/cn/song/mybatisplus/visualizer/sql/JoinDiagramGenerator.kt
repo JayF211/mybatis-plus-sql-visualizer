@@ -69,6 +69,7 @@ object JoinDiagramGenerator {
 
             val joinColumns = extractJoinColumns(join, uniqueAlias, stmt)
             val displayTableName = resolveDisplayTableName(join)
+            val onColumnPairs = extractOnColumnPairs(join, mainAlias, uniqueAlias, aliasMap)
 
             entities.add(
                 EntityNode(
@@ -87,6 +88,7 @@ object JoinDiagramGenerator {
                     toAlias = uniqueAlias,
                     joinType = join.type,
                     label = buildOnLabel(join, aliasMap),
+                    columnPairs = onColumnPairs,
                 ),
             )
         }
@@ -175,6 +177,35 @@ object JoinDiagramGenerator {
         var i = 2
         while ("${alias}_$i" in used) i++
         return "${alias}_$i"
+    }
+
+    /**
+     * 构建 ON 条件文本标签前，先提取等值列配对（T-Embed-04）：
+     * 返回 (主表侧列名, JOIN 表侧列名) 列表——JOIN 表作为虚拟外键 child、主表作为 ref。
+     * 非 ColumnComparison（Raw/Simple 等）或两侧归属不明的条件跳过。
+     */
+    private fun extractOnColumnPairs(
+        join: JoinClause,
+        mainAlias: String,
+        joinAlias: String,
+        aliasMap: Map<String, String>,
+    ): List<Pair<String, String>> {
+        val accepted = setOf(joinAlias, join.alias).filter { it.isNotBlank() }.toSet()
+        fun normalize(ref: cn.song.mybatisplus.visualizer.model.ColumnRef): String? =
+            ref.tableAlias?.let { aliasMap[it] ?: it }
+        val pairs = mutableListOf<Pair<String, String>>()
+        for (cond in join.onConditions) {
+            if (cond !is Condition.ColumnComparison) continue
+            val leftSide = normalize(cond.left)
+            val rightSide = normalize(cond.right)
+            val mainToJoin = when {
+                rightSide == mainAlias && leftSide in accepted -> Pair(cond.right.columnName, cond.left.columnName)
+                leftSide == mainAlias && rightSide in accepted -> Pair(cond.left.columnName, cond.right.columnName)
+                else -> null
+            }
+            if (mainToJoin != null && mainToJoin !in pairs) pairs.add(mainToJoin)
+        }
+        return pairs
     }
 
     /**

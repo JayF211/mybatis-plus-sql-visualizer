@@ -2,8 +2,14 @@
   M17 执行 SQL：可选依赖描述文件（官方规范：<depends optional="true" config-file="...">）。
 
   本文件仅在 com.intellij.database 插件存在（IntelliJ IDEA Ultimate / DataGrip）时加载。
-  当前「执行 SQL」功能无扩展点注册需求——database 引用经反射隔离（ExecuteSqlSupport →
-  DatabaseConsoleLauncher），按钮与提示逻辑在主描述文件（Community 下优雅降级）。
-  如后续需要注册 database 专属扩展（如控制台相关 EP），声明放在本文件。
+  声明在本文件的扩展引用的类只会在 DatabaseTools 存在时被实例化——Community 优雅降级。
 -->
-<idea-plugin></idea-plugin>
+<idea-plugin>
+    <!-- T-Embed-04：JOIN 虚拟外键——把 SQL JOIN 的 ON 等值条件以原生虚拟外键画入
+         Database「显示图」（DbDiagramDataModel 建边时经 ModelRelationManager 聚合本 Provider）。
+         EP 名 com.intellij.database.modelRelationProvider（ModelRelationManager 字节码实证）；
+         数据来自 JoinFkRegistry 进程内存（换图即清，不写持久化配置）。 -->
+    <extensions defaultExtensionNs="com.intellij.database">
+        <modelRelationProvider implementation="cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinVirtualFkProvider"/>
+    </extensions>
+</idea-plugin>

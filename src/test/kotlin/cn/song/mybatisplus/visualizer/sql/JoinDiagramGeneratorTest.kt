@@ -542,6 +542,57 @@ class JoinDiagramGeneratorTest {
         assertTrue("ON 列（原始别名）应提取，实际=$colNames", colNames.contains("station_id"))
     }
 
+    // ---- T-Embed-04 ON 等值列配对（虚拟外键数据基础） ----
+
+    @Test
+    fun `on column pairs extracted with main-to-join orientation`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "station_info", alias = "t1",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t1", columnName = "station_id"),
+                            right = ColumnRef(tableAlias = "t", columnName = "station_id"),
+                        ),
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "t", columnName = "id"),
+                            right = ColumnRef(tableAlias = "t1", columnName = "owner_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val pairs = model.relationships[0].columnPairs
+        assertEquals(2, pairs.size)
+        // 方向统一为 (主表侧列, JOIN 表侧列)
+        assertTrue("t1.station_id = t.station_id → (station_id, station_id)", Pair("station_id", "station_id") in pairs)
+        assertTrue("t.id = t1.owner_id → (id, owner_id)", Pair("id", "owner_id") in pairs)
+    }
+
+    @Test
+    fun `on column pairs skip non-comparison conditions`() {
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "t",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                            right = ColumnRef(tableAlias = "t", columnName = "id"),
+                        ),
+                        Condition.Raw("t.deleted = 0"),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(1, model.relationships[0].columnPairs.size)
+    }
+
     /** 生成带表注释的副本。 */
     private fun tableWithComment(tableName: String, comment: String?, base: TableInfo): TableInfo =
         base.copy(tableName = tableName, comment = comment)
