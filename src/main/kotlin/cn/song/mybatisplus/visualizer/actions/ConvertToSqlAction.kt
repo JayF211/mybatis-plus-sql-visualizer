@@ -239,6 +239,54 @@ class ConvertToSqlAction : AnAction() {
             }
             return true
         }
+        // 4. JPA 回落（T-J9 调用点锚点）：service/controller 中调用 Repository 派生/@Query/@Procedure 方法处
+        if (tryRepositoryCallSiteFallback(service, project, element, sourceLocation)) return true
+        return false
+    }
+
+    /**
+     * T-J9 调用点锚点（动作/快捷键路径）：光标落在 `userRepository.findByName(x)` 这类
+     * Repository 方法**调用**上时，resolve 被调方法到接口声明（`call.resolveMethod()`），
+     * 按声明形态分派既有预览管道：
+     *  - `@Query` → [SqlPreviewService.previewJpql]；
+     *  - `@Procedure` → [SqlPreviewService.previewProcedure]（T-J16）；
+     *  - 派生查询 → [SqlPreviewService.previewDerivedQuery]，并把调用点实参带上——
+     *    `PageRequest.of(0, 20)` / `Sort.by("id")` 静态求值内联（T-J10 全路径）。
+     *
+     * **边界（KDoc 文档化）**：gutter 图标不做调用点反查（声明↔调用反查需全文件扫描/索引缓存，
+     * 与 gutter 快速路径性能红线冲突）——调用点预览仅通过本动作/快捷键触发；Repository 声明处
+     * 图标仍由 [cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider] 承载。
+     */
+    private fun tryRepositoryCallSiteFallback(service: SqlPreviewService, project: Project, element: PsiElement, sourceLocation: String?): Boolean {
+        val call = PsiTreeUtil.getParentOfType(element, PsiMethodCallExpression::class.java, false) ?: return false
+        val resolved = runCatching { call.resolveMethod() }.getOrNull() ?: return false
+        val containingClass = resolved.containingClass ?: return false
+        // 只认接口声明（Repository 接口方法无方法体；实现类方法不在此回落——派生方法本就无实现）
+        if (!containingClass.isInterface) return false
+
+        // @Query 优先（与 gutter 派发一致：@Query 方法即使方法名匹配派生模式也走 JPQL 路径）
+        if (JpqlQueryLocator.hasQueryAnnotation(resolved)) {
+            SqlPreviewService.previewAsync(project, { service.previewJpql(resolved) }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return true
+        }
+        // @Procedure（T-J16）
+        if (cn.song.mybatisplus.visualizer.converter.jpa.JpaQueryEnhancer.procedureInfo(resolved) != null) {
+            SqlPreviewService.previewAsync(project, { service.previewProcedure(resolved) }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return true
+        }
+        // 派生查询（T-J10：调用点实参 PageRequest.of/Sort.by 静态求值）
+        if (DerivedMethodLocator.isDerivedQuery(resolved)) {
+            SqlPreviewService.previewAsync(project, {
+                service.previewDerivedQuery(resolved, call.argumentList.expressions.toList())
+            }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return true
+        }
         return false
     }
 
