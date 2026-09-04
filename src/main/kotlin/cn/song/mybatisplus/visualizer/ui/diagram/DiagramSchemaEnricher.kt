@@ -18,24 +18,39 @@ import com.intellij.openapi.project.Project
 object DiagramSchemaEnricher {
 
     /**
-     * 以数据源 schema 富化模型中的列类型与注释。
+     * 以数据源 schema 富化模型中的表注释、列类型与列注释。
      * 任一表匹配失败仅影响该表（保留原值），不阻断整体。
      */
     fun enrich(project: Project?, model: DiagramModel): DiagramModel {
         if (project == null || model.isEmpty) return model
-        val entities = model.entities.map { entity ->
-            val metaByColumn = DatabaseSchemaResolver.columnMeta(project, entity.tableName)
-            if (metaByColumn.isEmpty()) return@map entity
-            entity.copy(
-                columns = entity.columns.map { column ->
-                    val meta = metaByColumn[column.name] ?: return@map column
-                    column.copy(
-                        type = meta.typeSpec ?: column.type,
-                        comment = meta.comment ?: column.comment,
-                    )
-                },
-            )
-        }
-        return model.copy(entities = entities)
+        return applyTableMeta(model) { DatabaseSchemaResolver.tableMeta(project, it) }
     }
+}
+
+/**
+ * 富化纯函数（可注入 TableMeta 供单测覆盖正向路径）。
+ *
+ * 逐维度回落：表注释 DB COMMENT 优先，数据库没写（null/空白）回落实体类注释；
+ * 列类型/列注释同理。表在数据源匹配不到（comment 与 columns 双缺）时整表保留原值。
+ */
+internal fun applyTableMeta(
+    model: DiagramModel,
+    metaFor: (String) -> DatabaseSchemaResolver.TableMeta,
+): DiagramModel {
+    val entities = model.entities.map { entity ->
+        val meta = metaFor(entity.tableName)
+        if (meta.comment == null && meta.columns.isEmpty()) return@map entity
+        entity.copy(
+            // T-Embed-09：表头注释数据库 COMMENT 优先，数据库没写才回落实体类注释
+            tableComment = meta.comment ?: entity.tableComment,
+            columns = entity.columns.map { column ->
+                val columnMeta = meta.columns[column.name] ?: return@map column
+                column.copy(
+                    type = columnMeta.typeSpec ?: column.type,
+                    comment = columnMeta.comment ?: column.comment,
+                )
+            },
+        )
+    }
+    return model.copy(entities = entities)
 }

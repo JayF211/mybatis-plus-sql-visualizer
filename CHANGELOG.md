@@ -8,7 +8,7 @@
 
 - **JOIN 图换用 IDEA 原生图框架（T-Dgm 系列）**：新增 `SqlJoinDiagramProvider` 注册 `com.intellij.diagram.Provider` EP（Ultimate 捆绑 Diagrams 插件，类图同款观感），缩放/自动布局/节点折叠/导出全框架托管；快照注册表 + 图构建工厂纯函数适配 `JoinDiagramGenerator` 现有解析产物；设置页新增「使用 IDE 原生图框架渲染 JOIN 图」开关（默认开）；Diagrams 插件缺席（Community）或框架异常自动降级回自绘渲染器；13 个适配层纯单测
 - **JOIN 图渲染对齐 IDEA Database「显示图」（T-NativeUI）**：表头显示「表名 + 表注释（灰色斜体）」，字段行显示「列名 + 类型 + 字段注释」（主键加粗 + 键图标），连接线按 JOIN 类型区分箭头/线型/ON 标签（INNER/LEFT/RIGHT/FULL），工具栏原生分类切换（列/主键列/注释）
-- **JOIN 图深度对齐原生显示图（T-Embed）**：字段行改原生「列名 /* 注释 */ + 类型右对齐独立列」布局，主键沉底独立分区（对齐 Database 原生）；数据源可用时列类型/注释升级为 DB 真实值（`int(11)`/DB COMMENT，无数据源静默回落）；修复 JOIN 表节点字段行为空的缺陷（转换器原始别名匹配）
+- **JOIN 图深度对齐原生显示图（T-Embed）**：字段行改原生「列名 /* 注释 */ + 类型右对齐独立列」布局，主键沉底独立分区（对齐 Database 原生）；数据源可用时列类型/列注释/表头注释升级为 DB 真实值（`int(11)`/DB COMMENT——表头注释数据库 COMMENT 优先，数据库没写才回落实体类注释，无数据源静默回落）；修复 JOIN 表节点字段行为空的缺陷（转换器原始别名匹配）
 ## [2026.9.2] - 2026-09-02
 
 ### Changed

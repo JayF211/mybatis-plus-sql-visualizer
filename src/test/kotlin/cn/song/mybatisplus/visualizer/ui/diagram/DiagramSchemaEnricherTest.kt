@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.diagram
 
 import cn.song.mybatisplus.visualizer.model.JoinType
+import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import com.intellij.openapi.project.Project
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -67,5 +68,49 @@ class DiagramSchemaEnricherTest {
         assertEquals("主键", main.columns[0].comment)
         assertEquals("VARCHAR", main.columns[1].type)
         assertEquals(null, main.columns[1].comment)
+    }
+
+    // ---- T-Embed-09：表头注释数据库 COMMENT 优先，降级实体类注释（applyTableMeta 正向注入）----
+
+    @Test
+    fun dbTableCommentOverridesEntityComment() {
+        val model = sampleModel().copy(
+            entities = sampleModel().entities.map { it.copy(tableComment = "实体类注释(${it.tableName})") },
+        )
+        val enriched = applyTableMeta(model) { tableName ->
+            if (tableName == "car_device_info") {
+                DatabaseSchemaResolver.TableMeta("设备信息表", emptyMap())
+            } else {
+                DatabaseSchemaResolver.TableMeta(null, emptyMap())
+            }
+        }
+        assertEquals("数据库表注释应覆盖实体类注释", "设备信息表", enriched.entities[0].tableComment)
+        assertEquals("数据源缺席的表保留实体注释", "实体类注释(station_info)", enriched.entities[1].tableComment)
+    }
+
+    @Test
+    fun blankDbTableCommentFallsBackToEntityComment() {
+        val model = sampleModel().copy(
+            entities = sampleModel().entities.map { it.copy(tableComment = "实体类注释") },
+        )
+        // 数据库表存在但没写 COMMENT（comment=null），列元数据照常富化
+        val enriched = applyTableMeta(model) {
+            DatabaseSchemaResolver.TableMeta(null, mapOf("id" to DatabaseSchemaResolver.ColumnMeta("主键注释", "int(11)")))
+        }
+        assertEquals("数据库没写表注释应回落实体注释", "实体类注释", enriched.entities[0].tableComment)
+        assertEquals("int(11)", enriched.entities[0].columns[0].type)
+        assertEquals("主键注释", enriched.entities[0].columns[0].comment)
+    }
+
+    @Test
+    fun tableCommentOnlyStillEnriched() {
+        // 数据库只有表 COMMENT、列匹配不到（如视图/权限受限）——表注释仍覆盖，列保留
+        val model = sampleModel()
+        val enriched = applyTableMeta(model) {
+            DatabaseSchemaResolver.TableMeta("库表注释", emptyMap())
+        }
+        assertEquals("库表注释", enriched.entities[0].tableComment)
+        assertEquals("INT", enriched.entities[0].columns[0].type)
+        assertEquals("主键", enriched.entities[0].columns[0].comment)
     }
 }
