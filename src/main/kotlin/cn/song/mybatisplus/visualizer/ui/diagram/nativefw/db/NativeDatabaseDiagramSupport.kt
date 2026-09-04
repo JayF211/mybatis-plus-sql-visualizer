@@ -187,6 +187,10 @@ object NativeDatabaseDiagramSupport {
             for (element in elements) {
                 dataModel.addElement(element)
             }
+            LOG.info(
+                "B path fillDataModel done: elements=${elements.size}, " +
+                    "nodes=${runCatching { dataModel.nodes.size }.getOrNull()}",
+            )
             b
         }
 
@@ -200,6 +204,12 @@ object NativeDatabaseDiagramSupport {
             .withRelayout()
             .withPresentationUpdate()
             .runAsync()
+            .thenRun {
+                // T-Embed-10 探针：刷新（refreshDataModel 会重建 nodes）后节点是否幸存
+                runCatching {
+                    LOG.info("B path after queryUpdate: nodes=${builder.dataModel.nodes.size}")
+                }
+            }
         return editor
     }
 
