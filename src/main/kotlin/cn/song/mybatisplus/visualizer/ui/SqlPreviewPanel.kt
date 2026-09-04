@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -893,6 +894,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         candidateTables = current?.candidateTables.orEmpty(),
     )
 
+    /**
+     * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）按名回填。
+     *
+     * 当 [PreviewResult.namedParamHints] 非空时，把 SQL 中 `:name` 按用户输入的参数值整体替换
+     * （同名参数所有出现共用一值，对齐 NamedParameterJdbcTemplate 语义）；`?` 占位符不受影响，
+     * 由调用方继续走 [backfillParamsBySource] 按序回填。
+     * 命名参数提示为空时原样返回（兼容既有 `?` 顺序回填路径）。
+     */
+    private fun applyNamedParams(sql: String): String {
+        val result = current ?: return sql
+        if (result.namedParamHints.isEmpty()) return sql
+        return ParameterReplacer.replaceNamedParams(sql, paramValues, result.namedParamHints)
+    }
+
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
         val result = current ?: return
@@ -942,12 +957,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     dialect = model.dialect,
                     enabledConditionIds = enabledIds.toSet(),
                 )
-                showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams, generated.paramHints))
+                // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
+                showSql(backfillParamsBySource(applyNamedParams(generated.sql), generated.unresolvedParams, generated.paramHints))
             }
             else -> {
                 // 旧文本路径（无可勾选动态条件，如批量操作）
                 val base = if (compactMode) result.compactSql else result.sql
-                showSql(backfillParamsBySource(base, result.unresolvedParams, result.paramHints))
+                // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
+                showSql(backfillParamsBySource(applyNamedParams(base), result.unresolvedParams, result.paramHints))
             }
         }
     }

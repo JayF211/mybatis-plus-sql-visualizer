@@ -254,6 +254,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 启用 Spring JdbcTemplate 日志解析（默认开）。 */
         var logJdbcEnabled: Boolean = true,
 
+        // ---------- JDBC 模板 SQL 字符串预览 ----------
+
+        /** 启用 JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串预览（默认开）。 */
+        var jdbcSqlPreviewEnabled: Boolean = true,
+
         // ---------- F-6 拦截器模拟增强（TenantLine / DynamicTableName / DataPermission） ----------
 
         /**
