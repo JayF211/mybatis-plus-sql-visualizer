@@ -12,13 +12,15 @@ import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.JpqlConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.DaoQueryKind
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
-import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -298,6 +300,32 @@ class SqlPreviewService(private val project: Project) {
         val batchCall = generateSequence(anchor) { it.parent }
             .filterIsInstance<PsiMethodCallExpression>()
             .firstOrNull()
+        // T-J1/T-J6/T-J21：JPA CRUD / EntityManager 写路径 / HibernateTemplate 实体操作派发
+        // （receiver 家族感知，消歧规则见 JpaCrudOperationConverter KDoc）——receiver 判定为
+        // JPA 家族时必须走 JpaEntityResolver：MP EntityResolver 只认 @TableName，JPA 实体
+        // （@Table(name="t_user")）会被输出成 `INSERT INTO user_entity` 错表错列；
+        // 非 JPA 家族 convert 返回 null，维持下方 MP 批量路径现状（存量行为零变化）
+        val jpaCrud = batchCall?.let {
+            JpaCrudOperationConverter.convert(
+                it,
+                resolveVariables = settings?.state?.replaceParams ?: true,
+            )
+        }
+        if (jpaCrud != null) {
+            val result = PreviewResult(
+                sql = jpaCrud.sql,
+                compactSql = jpaCrud.sql,
+                unresolvedParams = jpaCrud.paramSources,
+                paramTable = jpaCrud.paramGroups,
+                wrapperType = null,
+                tableName = jpaCrud.tableName,
+                warning = jpaCrud.warning,
+                paramHints = jpaCrud.paramHints,
+                batchModel = jpaCrud.batchModel,
+            )
+            recordHistory(result, anchor)
+            return result
+        }
         // T-M23-01/02：批量路径接线——逻辑删除注入开关（settings.injectLogicDelete）与变量求值开关
         // （settings.replaceParams，实参可静态求值时内联）对齐 Wrapper 路径；参数来源/回填提示透传面板
         val batch = batchCall?.let {
@@ -353,7 +381,13 @@ class SqlPreviewService(private val project: Project) {
         }
         // DerivedQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
-        return buildJpaPreviewResult(statement, sql, table.tableName, paramNames, method)
+        // T-J4：IN/NOT IN 条件参数接线——inClauseParameterOrdinals 序号对齐方法参数名
+        // （过滤 Pageable 后的 paramNames 序），把 IN 参数挂进 buildJpaPreviewResult 的
+        // inClauseParams（面板回填按逗号分割多值，对齐 JPQL/HQL 路径的 Result.inClauseParams 惯例）
+        val inClauseParams = DerivedQueryConverter.inClauseParameterOrdinals(methodInfo.methodName)
+            .mapNotNull { paramNames.getOrNull(it) }
+            .toSet()
+        return buildJpaPreviewResult(statement, sql, table.tableName, paramNames, method, inClauseParams)
     }
 
     /**
@@ -418,7 +452,8 @@ class SqlPreviewService(private val project: Project) {
         // JPQL → JpqlConverter.convert → Result（转换后 SQL + 语句模型）
         // 关键：使用转换后的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
         // 若用 SqlGenerator 重新生成，条件树为空会丢失 WHERE 子句和 ? 占位符。
-        val result = JpqlConverter.convert(jpql, table)
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
+        val result = JpqlConverter.convert(jpql, table, project)
         return buildJpaPreviewResult(
             statement = result.statement,
             convertedSql = result.sql,
@@ -497,7 +532,7 @@ class SqlPreviewService(private val project: Project) {
             if (named != null && named.query.isNotBlank()) {
                 val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
                 val table = entityClass?.let { JpaEntityResolver().resolve(it) }
-                val result = JpqlConverter.convert(named.query, table)
+                val result = JpqlConverter.convert(named.query, table, project)
                 val paramNames = extractParamNamesFromHql(named.query)
                 return buildJpaPreviewResult(
                     statement = result.statement,
@@ -511,7 +546,8 @@ class SqlPreviewService(private val project: Project) {
         }
 
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
-        val result = HqlConverter.convert(info.hql, table)
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
+        val result = HqlConverter.convert(info.hql, table, project)
         // 参数名提取：
         // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
         // 2. 若为空（链式调用场景），直接从 HQL 提取
@@ -574,7 +610,7 @@ class SqlPreviewService(private val project: Project) {
         val info = infos.firstOrNull { it.annotation === annotation } ?: infos.first()
         val jpql = info.query
         val table = JpaEntityResolver().resolve(cls)
-        val result = JpqlConverter.convert(jpql, table)
+        val result = JpqlConverter.convert(jpql, table, project)
         val paramNames = extractParamNamesFromHql(jpql)
         return buildJpaPreviewResult(
             statement = result.statement,
@@ -589,11 +625,47 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 自定义 DAO HQL 预览（commonDao.findByQuery 等）。
      * 供 [cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider] 点击调用。
+     *
+     * T-J21：按 [CustomDaoHqlLocator] 登记的 [DaoQueryKind] 分派——
+     *  - HQL（默认）：既有 HqlConverter 管道（行为不变）；
+     *  - NAMED_QUERY（findByNamedQuery 族）：hql 字段存查询名——复用 NamedQueryLocator.findByQueryName
+     *    按名回查实体 @NamedQuery 的真实 JPQL 再走 JpqlConverter（参考 previewNamedQuery 既有做法）；
+     *    回查失败优雅降级为可读占位（不抛异常、不出错误 SQL）；
+     *  - QBC（executeFind）：可读占位「QBC/DetachedCriteria 形态暂不支持静态解析」；
+     *  - ENTITY_OP（get/load/save/delete 等）：locate 不认领（无 SQL 字符串），由 preview 批量分支
+     *    经 JpaCrudOperationConverter 派发，不经本方法。
      */
     fun previewCustomDaoHql(anchor: PsiElement): PreviewResult? {
         val info = CustomDaoHqlLocator.locate(anchor) ?: return null
+        if (info.kind == DaoQueryKind.QBC) {
+            return placeholderPreview(
+                "-- QBC/DetachedCriteria 形态暂不支持静态解析（条件树运行时构建）",
+            )
+        }
+        if (info.kind == DaoQueryKind.NAMED_QUERY) {
+            val named = runCatching { NamedQueryLocator.findByQueryName(project, info.hql) }.getOrNull()
+            if (named != null && named.query.isNotBlank()) {
+                val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
+                val table = entityClass?.let { JpaEntityResolver().resolve(it) }
+                val result = JpqlConverter.convert(named.query, table, project)
+                val paramNames = extractParamNamesFromHql(named.query)
+                return buildJpaPreviewResult(
+                    statement = result.statement,
+                    convertedSql = result.sql,
+                    tableName = table?.tableName ?: "",
+                    paramNames = paramNames,
+                    method = info.method,
+                    inClauseParams = result.inClauseParams,
+                )
+            }
+            // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
+            return placeholderPreview(
+                "-- 命名查询 \"${info.hql}\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL",
+            )
+        }
         val table = resolveHqlTable(null, info.entityClassName, info.hql)
-        val result = HqlConverter.convert(info.hql, table)
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
+        val result = HqlConverter.convert(info.hql, table, project)
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
@@ -606,6 +678,16 @@ class SqlPreviewService(private val project: Project) {
             inClauseParams = result.inClauseParams,
         )
     }
+
+    /** T-J21：可读占位预览卡（优雅降级：无 SQL 模板时给出解释性注释，不抛异常）。 */
+    private fun placeholderPreview(note: String): PreviewResult = PreviewResult(
+        sql = note,
+        compactSql = note,
+        unresolvedParams = emptyList(),
+        paramTable = null,
+        wrapperType = null,
+        tableName = null,
+    )
 
     /**
      * 从 HQL 字符串中提取参数名。
