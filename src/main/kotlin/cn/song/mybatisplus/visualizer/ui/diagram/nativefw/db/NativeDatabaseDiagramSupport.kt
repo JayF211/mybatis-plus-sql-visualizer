@@ -10,10 +10,12 @@ import com.intellij.database.psi.DataSourceManager
 import com.intellij.diagram.DiagramBuilder
 import com.intellij.diagram.DiagramBuilderFactory
 import com.intellij.diagram.DiagramDataKeys
+import com.intellij.diagram.DiagramDataModel
 import com.intellij.diagram.DiagramProvider
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.application.WriteAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -40,6 +42,8 @@ import javax.swing.JComponent
  * （含 NoClassDefFoundError——Community 下类解析失败被吞掉，与 A 路径门面同语义）。
  */
 object NativeDatabaseDiagramSupport {
+
+    private val LOG = Logger.getInstance(NativeDatabaseDiagramSupport::class.java)
 
     /** Database 图 Provider id（DbDiagramProvider.getID() 字节码实证）。 */
     private const val DATABASE_PROVIDER_ID = "DATABASE"
@@ -68,9 +72,13 @@ object NativeDatabaseDiagramSupport {
             if (located == null || located.size < tableNames.size) return null
             registerJoinForeignKeys(model, located)
 
-            val mainElement = located[model.entities.first { it.isMain }.tableName]
-                ?: located.values.first()
-            val editor = buildEmbeddableEditor(project, mainElement, title)
+            val mainTable = model.entities.first { it.isMain }.tableName
+            val mainElement = located[mainTable] ?: located.values.first()
+            // 主表排首（fillDataModel 顺序即初始画布顺序），其余表随后
+            val orderedElements = listOf(mainElement) + located.entries
+                .filter { it.key != mainTable }
+                .map { it.value }
+            val editor = buildEmbeddableEditor(project, orderedElements, title)
             JBPanel<JBPanel<*>>(BorderLayout()).apply {
                 isOpaque = false
                 add(editor.component, BorderLayout.CENTER)
@@ -78,6 +86,7 @@ object NativeDatabaseDiagramSupport {
                 putClientProperty(NATIVE_EDITOR_KEY, editor)
             }
         } catch (t: Throwable) {
+            LOG.warn("Native Database diagram (B path) unavailable, falling back to A path", t)
             JoinFkRegistry.clear()
             null
         }
@@ -143,30 +152,41 @@ object NativeDatabaseDiagramSupport {
             }
             found
         } catch (t: Throwable) {
+            LOG.warn("NativeDatabaseDiagramSupport.locateDbTables failed: ${t}")
             null
         }
     }
 
     /**
-     * 构建可嵌入的 Database 原生图编辑器——镜像 A 路径 NativeJoinDiagramOpener 的字节码实证
-     * 链路（findFileByUrl 单例 VFS → ORIGINAL_ELEMENT → WriteAction createBuilder →
-     * 反射 UmlFileEditorImpl → queryUpdate），仅 provider/元素换为 DATABASE + DbElement。
+     * 构建可嵌入的 Database 原生图编辑器——镜像 ShowDiagramBase 真实开图链：
+     * findFileByUrl 单例 VFS → ORIGINAL_ELEMENT → WriteAction createBuilder →
+     * **dataModel.addElement 逐表填充（= 原生 fillDataModel，javap 实证其就是
+     * WriteAccess 内循环 addElement；缺此步 DbDiagramDataModel 无初始节点 → 画布空白）** →
+     * queryUpdate 重排填充。
      */
-    private fun buildEmbeddableEditor(project: Project, mainElement: DbElement, title: String): FileEditor {
+    private fun buildEmbeddableEditor(project: Project, elements: List<DbElement>, title: String): FileEditor {
         val provider = DiagramProvider.findByID<DbElement>(DATABASE_PROVIDER_ID)
             ?: error("Database diagram provider not registered: $DATABASE_PROVIDER_ID")
 
-        val url = "${UmlVirtualFileSystem.PROTOCOL_PREFIX}$DATABASE_PROVIDER_ID/${sanitizeFqn(mainElement)}"
+        val url = "${UmlVirtualFileSystem.PROTOCOL_PREFIX}$DATABASE_PROVIDER_ID/${sanitizeFqn(elements.first())}"
         val umlFile = VirtualFileManager.getInstance().findFileByUrl(url) as? UmlVirtualFileSystem.UmlVirtualFile
             ?: error("VirtualFileManager returned null for $url")
 
         umlFile.setProject(project)
         umlFile.setInitialized(true)
         umlFile.setPresentableName(title)
-        umlFile.putUserData(DiagramDataKeys.ORIGINAL_ELEMENT, mainElement)
+        umlFile.putUserData(DiagramDataKeys.ORIGINAL_ELEMENT, elements.first())
 
         val builder: DiagramBuilder = WriteAction.compute<DiagramBuilder, Throwable> {
-            DiagramBuilderFactory.getInstance().createBuilder(project, provider, mainElement, umlFile)
+            val b = DiagramBuilderFactory.getInstance().createBuilder(project, provider, elements.first(), umlFile)
+            // 镜像 ShowDiagramBase.fillDataModel（WriteAccess 内逐元素 addElement）；
+            // getDataModel() 返回 DiagramDataModel<?>（star projection），Kotlin 侧需显式窄化
+            @Suppress("UNCHECKED_CAST")
+            val dataModel = b.dataModel as DiagramDataModel<Any>
+            for (element in elements) {
+                dataModel.addElement(element)
+            }
+            b
         }
 
         @Suppress("UNCHECKED_CAST")

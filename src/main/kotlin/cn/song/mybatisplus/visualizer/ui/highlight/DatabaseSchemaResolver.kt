@@ -64,13 +64,20 @@ object DatabaseSchemaResolver {
     data class ColumnMeta(val comment: String?, val typeSpec: String?)
 
     private fun tryCompute(project: Project, tableName: String): TableMeta {
-        val dataSources = dataSources(project) ?: return TableMeta(null, emptyMap())
-        if (dataSources.isEmpty()) return TableMeta(null, emptyMap())
+        val dataSources = dataSources(project) ?: return TableMeta(null, emptyMap()).also {
+            LOG.warn("DatabaseSchemaResolver: dataSources(project) reflection failed, table=$tableName")
+        }
+        if (dataSources.isEmpty()) {
+            LOG.info("DatabaseSchemaResolver: no data sources configured, table=$tableName")
+            return TableMeta(null, emptyMap())
+        }
         val dasTableClass = Class.forName(DAS_TABLE)
         for (ds in dataSources) {
             val found = collectFromDataSource(ds, tableName, dasTableClass)
             if (found.columns.isNotEmpty() || found.comment != null) return found
         }
+        // 表在所有数据源都找不到（通常=未连接/introspection 未完成/表不在当前库）
+        LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${dataSources.size} data sources")
         return TableMeta(null, emptyMap())
     }
 
@@ -101,8 +108,10 @@ object DatabaseSchemaResolver {
         runCatching {
             val dasObjClass = Class.forName(DAS_OBJECT)
             val dasColumnClass = Class.forName(DAS_COLUMN)
-            val dasObject = ds.javaClass.getMethod("getDasObject").invoke(ds) ?: return TableMeta(null, emptyMap())
-            val model = dasObject.javaClass.getMethod("getModel").invoke(dasObject) ?: return TableMeta(null, emptyMap())
+            // T-Embed-09 真机修复：243 字节码实证 RawDataSource/DbDataSource 均无 getDasObject()，
+            // getModel() 声明在父接口 DasDataSource（B 路径 locateDbTables 直调 ds.model 同源）——
+            // 旧链 getDasObject().getModel() 反射 NoSuchMethodException 被吞 → 全量静默回落
+            val model = ds.javaClass.getMethod("getModel").invoke(ds) ?: return TableMeta(null, emptyMap())
             val traverser = model.javaClass.getMethod("traverser").invoke(model) ?: return TableMeta(null, emptyMap())
             // JBIterable.toList() — 反射遍历所有 DasObject
             val toList = traverser.javaClass.getMethod("toList")
@@ -137,7 +146,8 @@ object DatabaseSchemaResolver {
                 }
             }
         }.onFailure { e ->
-            LOG.debug("DatabaseSchemaResolver.collectFromDataSource failed: ${e.message}")
+            // 升 WARN：真机排障依赖此行（debug 级在默认 idea.log 不可见，T-Embed-09 曾因此长期无观测）
+            LOG.warn("DatabaseSchemaResolver.collectFromDataSource failed: ${e}")
         }
         return TableMeta(tableComment, out)
     }
