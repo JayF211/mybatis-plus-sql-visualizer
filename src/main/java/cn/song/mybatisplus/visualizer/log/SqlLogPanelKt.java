@@ -25,6 +25,14 @@ public final class SqlLogPanelKt {
         return (sql.isEmpty() || sql.endsWith(";")) ? sql : sql + ";";
     }
 
+    // ---------- T-LogListFreeze：列表刷新分批常量 ----------
+
+    /** 首屏立即写入条数（保证快速首屏，EDT 冻结可控）。 */
+    public static final int REFRESH_FIRST_BATCH_SIZE = 30;
+
+    /** 每批异步追加条数（invokeLater 每批一次 EDT 脉冲）。 */
+    public static final int REFRESH_CHUNK_SIZE = 30;
+
     /** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */
     public static final List<StatementType> FILTERABLE_TYPES = List.of(
             StatementType.SELECT,

@@ -36,9 +36,12 @@ public class HistoryCellRenderer extends DefaultListCellRenderer {
             String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(new Date(entry.timestamp()));
             String duration = entry.executionTimeMs() != null ? entry.executionTimeMs() + "ms" : "—";
             String source;
-            if (entry.sourceFile() != null) {
+            if (SourceMarkers.isMpPaginationCount(entry.sourceFile())) {
+                source = "MP 分页计数";
+            } else if (entry.sourceFile() != null) {
+                // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
                 String file = entry.sourceFile();
-                int sep = file.lastIndexOf(File.separatorChar);
+                int sep = file.lastIndexOf('/');
                 String name = sep >= 0 ? file.substring(sep + 1) : file;
                 source = entry.sourceLine() > 0 ? name + ":" + entry.sourceLine() : name;
             } else {

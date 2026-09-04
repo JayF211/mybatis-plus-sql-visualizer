@@ -857,6 +857,20 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
+    public void testInterfaceClassRejected() {
+        // T-CallerPicker：接口拒绝（isInterface/hasModifierProperty 已收进单次 ReadAction，
+        // 拒绝矩阵仍须与修复前一致）
+        // 接口（PsiClass.isInterface 走 stub 属性读取）→ 拒绝；类名不得落入白名单（Service 结尾会被放行）
+        myFixture.configureByText("IUserAuth.java",
+                "package demo; public interface IUserAuth {}");
+        PsiClass iface = PsiTreeUtil.findChildOfType(myFixture.getFile(), PsiClass.class);
+        panel.pickPsiClassForTest(iface);
+        assertTrue("接口不应被选中", panel.callerFieldForTest().getText().isEmpty());
+        // 中英文 bundle 均含 "Mapper/Service"（语言无关断言；zh 版为「接口/抽象类」）
+        assertTrue("状态行应显示接口拒绝提示", panel.statusForTest().contains("Mapper/Service"));
+    }
+
+    @Test
     public void testMapperClassAccepted() {
         PsiClass psiClass = createPsiClassNamed("UserMapper");
         panel.pickPsiClassForTest(psiClass);

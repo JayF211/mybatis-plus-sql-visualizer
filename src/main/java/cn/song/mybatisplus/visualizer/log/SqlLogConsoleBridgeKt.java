@@ -52,6 +52,19 @@ public final class SqlLogConsoleBridgeKt {
         // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
         Long lineDuration = ExecutionTimeParser.parse(line, timePrefix);
         Pair<String, Integer> src = ctx.pendingSource;
+        if (src == null) {
+            // F-44-7：无标记时，检测是否为 MP 分页 COUNT 查询 → 标记为内部查询
+            boolean isCountQuery = false;
+            for (LogSqlEntry t : taken) {
+                if (t.restoredSql().stripLeading().toUpperCase(java.util.Locale.ROOT).startsWith("SELECT COUNT(")) {
+                    isCountQuery = true;
+                    break;
+                }
+            }
+            if (isCountQuery) {
+                src = SourceMarkers.mpPaginationCount();
+            }
+        }
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry e : taken) {
             Long duration = lineDuration != null ? lineDuration : LogDurationParser.parse(e);
@@ -66,7 +79,7 @@ public final class SqlLogConsoleBridgeKt {
                     src != null ? src.getFirst() : e.sourceFile(),
                     src != null ? src.getSecond() : e.sourceLine()));
         }
-        if (src != null) {
+        if (ctx.pendingSource != null) {
             ctx.pendingSource = null;
         }
         return result;

@@ -138,7 +138,12 @@ public final class SqlLogFileReader {
             return null;
         }
         String header = lines.get(0);
+        // 写入端 withTerminator 会补 `;`（T-SqlDuration），读回去掉还原为原始 SQL——
+        // 展示/复制路径会重新调用 withTerminator() 补回，此处只剥结尾一个
         String sql = String.join("\n", lines.subList(1, lines.size())).trim();
+        if (sql.endsWith(";")) {
+            sql = sql.substring(0, sql.length() - 1).trim();
+        }
         if (sql.isEmpty()) {
             return null;
         }

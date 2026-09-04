@@ -179,4 +179,90 @@ public class SqlLogAutoSaverTest {
         assertEquals("file2.sql", file.getName());
         saver.close();
     }
+
+    // ---------- T-AutoSaverSOE：无限递归回归（真机 2026-09-04 00:09 StackOverflowError） ----------
+
+    /** 解析本地时间字符串为 epoch 毫秒（时钟注入用）。 */
+    private static long timeOf(String dateTime) throws Exception {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(dateTime).getTime();
+    }
+
+    @Test
+    public void 跨天切换文件不再无限递归() throws Exception {
+        // 回归：旧实现在文件名变化分支递归重写，但 currentResolvedName 永不更新，
+        // 跨天后首次写入即 StackOverflowError
+        final long[] now = {timeOf("2026-09-04 23:59:50")};
+        SqlLogAutoSaver saver = new SqlLogAutoSaver(() -> now[0], 100L * 1024 * 1024);
+        String dir = tempDir();
+        saver.configure(dir, "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(entry("SELECT 1"));
+        File day1 = saver.currentFile();
+        now[0] = timeOf("2026-09-05 00:00:10");
+        saver.write(entry("SELECT 2"));
+        File day2 = saver.currentFile();
+        assertNotNull(day1);
+        assertNotNull(day2);
+        org.junit.Assert.assertNotEquals("跨天后应切换文件: " + day1 + " -> " + day2,
+                day1.getName(), day2.getName());
+        assertEquals("sql-history-2026-09-05.sql", day2.getName());
+        assertEquals(1, Files.readString(day1.toPath()).split("-- source:", -1).length - 1);
+        assertEquals(1, Files.readString(day2.toPath()).split("-- source:", -1).length - 1);
+        saver.close();
+    }
+
+    @Test
+    public void 秒级模板连续写入不再无限递归() throws Exception {
+        // 回归：模板含 $ss$ 等细粒度占位符时，旧实现第二次写入即 StackOverflowError
+        final long[] now = {timeOf("2026-09-04 10:00:00")};
+        SqlLogAutoSaver saver = new SqlLogAutoSaver(() -> now[0], 100L * 1024 * 1024);
+        String dir = tempDir();
+        saver.configure(dir, "log-$HH-mm-ss$.sql", null);
+        for (int i = 0; i < 3; i++) {
+            saver.write(entry("SELECT " + i));
+            now[0] += 2000;
+        }
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (File f : new File(dir).listFiles()) {
+            names.add(f.getName());
+        }
+        java.util.Collections.sort(names);
+        assertEquals(java.util.List.of("log-10-00-00.sql", "log-10-00-02.sql", "log-10-00-04.sql"), names);
+        saver.close();
+    }
+
+    @Test
+    public void 单文件超限滚动序号递增() throws Exception {
+        // 回归：旧实现滚动分支条件恒真且递归无出口，达阈值即 StackOverflowError
+        SqlLogAutoSaver saver = new SqlLogAutoSaver(System::currentTimeMillis, 100);
+        String dir = tempDir();
+        saver.configure(dir, "test.sql", null);
+        for (int i = 0; i < 3; i++) {
+            saver.write(entry("SELECT " + i));
+        }
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (File f : new File(dir).listFiles()) {
+            names.add(f.getName());
+        }
+        java.util.Collections.sort(names);
+        assertEquals(java.util.List.of("test.2.sql", "test.sql"), names);
+        assertEquals(2, Files.readString(new File(dir, "test.sql").toPath()).split("-- source:", -1).length - 1);
+        assertEquals(1, Files.readString(new File(dir, "test.2.sql").toPath()).split("-- source:", -1).length - 1);
+        saver.close();
+    }
+
+    @Test
+    public void 跨天后滚动序号复位() throws Exception {
+        final long[] now = {timeOf("2026-09-04 10:00:00")};
+        SqlLogAutoSaver saver = new SqlLogAutoSaver(() -> now[0], 100);
+        String dir = tempDir();
+        saver.configure(dir, "sql-history-$yyyy-MM-dd$.sql", null);
+        for (int i = 0; i < 3; i++) {
+            saver.write(entry("SELECT " + i));
+        }
+        assertTrue(new File(dir, "sql-history-2026-09-04.2.sql").exists());
+        now[0] = timeOf("2026-09-05 10:00:00");
+        saver.write(entry("SELECT 9"));
+        assertEquals("sql-history-2026-09-05.sql", saver.currentFile().getName());
+        saver.close();
+    }
 }

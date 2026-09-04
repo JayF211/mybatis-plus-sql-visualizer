@@ -89,6 +89,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -743,10 +744,43 @@ public class SqlLogPanel extends JPanel implements Disposable {
         List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(filtered, searchText);
         List<LogSqlEntry> sorted = applySort(searched);
 
+        // T-LogListFreeze-02：清空全部缓存（过滤/排序/设置变更后 HTML 需重新生成）
+        entryCellRenderer.invalidateListHtmlCache();
+
+        // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
+        list.setIgnoreRepaint(true);
         listModel.clear();
-        // 一次性替换全部内容：fireIntervalAdded 仅触发一次布局计算（M46：O(N²) → O(N)）
         if (!sorted.isEmpty()) {
-            listModel.addAll(sorted);
+            // 首屏批次（立即写入，保证快速首屏）
+            List<LogSqlEntry> firstBatch = sorted.subList(0,
+                    Math.min(SqlLogPanelKt.REFRESH_FIRST_BATCH_SIZE, sorted.size()));
+            listModel.addAll(firstBatch);
+        }
+        list.setIgnoreRepaint(false);
+        list.revalidate();
+        list.repaint();
+
+        // T-LogListFreeze-03：剩余批次通过 invokeLater 异步追加（每批一次 EDT 脉冲，避免长冻结）
+        if (sorted.size() > SqlLogPanelKt.REFRESH_FIRST_BATCH_SIZE) {
+            Iterator<LogSqlEntry> iterator = sorted
+                    .subList(SqlLogPanelKt.REFRESH_FIRST_BATCH_SIZE, sorted.size()).iterator();
+            Runnable appendNext = new Runnable() {
+                @Override
+                public void run() {
+                    if (!iterator.hasNext()) {
+                        return;
+                    }
+                    List<LogSqlEntry> chunk = new ArrayList<>();
+                    for (int i = 0; i < SqlLogPanelKt.REFRESH_CHUNK_SIZE && iterator.hasNext(); i++) {
+                        chunk.add(iterator.next());
+                    }
+                    listModel.addAll(chunk);
+                    if (iterator.hasNext()) {
+                        ApplicationManager.getApplication().invokeLater(this);
+                    }
+                }
+            };
+            ApplicationManager.getApplication().invokeLater(appendNext);
         }
         updateSortButton();
 
@@ -804,6 +838,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
     public LogJumpTarget resolveEntryJump(LogSqlEntry entry) {
         if (entry.sourceFile() != null) {
+            // F-44-7：MP 分页 COUNT 查询特殊标记 → 无源码可跳转
+            if (SourceMarkers.isMpPaginationCount(entry.sourceFile())) {
+                return LjtNoSource.INSTANCE;
+            }
             // F-44-7：标记路径相对于源码根目录（如 src/main/java），需在所有源码根目录中搜索
             VirtualFile vf = findSourceFile(entry.sourceFile());
             if (vf != null) {

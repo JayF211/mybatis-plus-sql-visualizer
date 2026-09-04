@@ -527,8 +527,9 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
          * `this`（service 内调用）与 `baseMapper`（ServiceImpl 的 baseMapper 字段）两个固定项。
          */
         private void pickClass() {
-            // T-Mxx：选择器打开前检测当前编辑器打开的类，供 this/baseMapper tooltip 使用
-            getCallerModelConcrete().setCurrentEditorClass(detectCurrentEditorClass());
+            // T-CallerPicker：PSI 读取须在 ReadAction 内（EDT 同步，语义不变）——262 断言硬抛实证
+            getCallerModelConcrete().setCurrentEditorClass(
+                    ReadAction.compute(() -> detectCurrentEditorClass()));
             // T-M44 增量：模型提为字段（测试缝 callerModelForTest 复用同一实例）
             ChooseByNamePopup popup = ChooseByNamePopup.createPopup(project, callerModel, (PsiElement) null);
             popup.invoke(new ChooseByNamePopupComponent.Callback() {
@@ -571,30 +572,35 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         }
 
         /**
-         * T-Mxx：构造 this/baseMapper 的 tooltip 文本，含当前编辑器类信息。
+         * T-CallerPicker：构造 this/baseMapper 的 tooltip 文本，含当前编辑器类信息。
          * 兼顾 PM（Plain MyBatis-Plus）与 MPJ（MyBatis-Plus-Join）两种依赖。
+         *
+         * 当前编辑器类上下文读取（name/superTypes/泛型参数）包 ReadAction——elementChosen
+         * 回调在 EDT 裸读 PSI 会触发 262 断言硬抛；无当前类或未知 special 时同步回落。
          */
         private String buildSpecialTooltip(String special) {
             String base = SPECIAL_TOOLTIPS.get(special);
             if (base == null) return special;
-            PsiClass currentCls = getCallerModelConcrete().getCurrentEditorClass();
-            if (currentCls == null) return base;
-            String clsName = currentCls.getName();
-            if (clsName == null) return base;
-            String context;
-            if (CALLER_THIS.equals(special)) {
-                context = "（当前：" + clsName + "）";
-            } else if (CALLER_BASE_MAPPER.equals(special)) {
-                context = buildBaseMapperContext(currentCls, clsName);
-            } else {
-                context = "";
-            }
+            PsiClass editorCls = getCallerModelConcrete().getCurrentEditorClass();
+            if (editorCls == null) return base;
+            String context = ReadAction.compute(() -> {
+                String clsName = editorCls.getName();
+                if (clsName == null) return null;
+                if (CALLER_THIS.equals(special)) {
+                    return "（当前：" + clsName + "）";
+                } else if (CALLER_BASE_MAPPER.equals(special)) {
+                    return buildBaseMapperContext(editorCls, clsName);
+                }
+                return "";
+            });
+            if (context == null) return base;
             return base + "\n" + context;
         }
 
         /**
-         * T-Mxx：baseMapper 选项的上下文提取——兼顾 PM 与 MPJ 两种依赖。
+         * T-CallerPicker：baseMapper 选项的上下文提取——兼顾 PM 与 MPJ 两种依赖。
          * 优先匹配 ServiceImpl<A, B>（取 B=实体），回落 BaseMapper<A>（取 A=实体）。
+         * 调用方 {@link #buildSpecialTooltip} 保证在 ReadAction 内执行（superTypes 为 PSI 访问），勿裸调。
          */
         private String buildBaseMapperContext(PsiClass currentCls, String clsName) {
             PsiClassType[] superTypes = currentCls.getSuperTypes();
@@ -628,20 +634,27 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
          * 选择器回调的 PSI 读取（name/qualifiedName/getIcon）须在 ReadAction 内（EDT 上同步执行，
          * 语义不变）。internal 供测试缝直接调用（Light 可建 PsiClass 验证选取行为）。
          *
-         * T-Mxx：入口加调用类校验——VO/DTO/Utils/Controller 等不合法类拒绝选中 + 友好提示。
+         * T-CallerPicker：入口的调用类校验（VO/DTO/Utils/Controller 等不合法类拒绝 + 友好提示）
+         * 原在校验先行、ReadAction 之前直读 PSI——与 name/qualifiedName/getIcon 合并进单次
+         * ReadAction（262 断言硬抛：isInterface/hasModifierProperty 同属 PSI 访问）。
          */
         public void pickPsiClassForTest(PsiClass cls) {
-            // T-Mxx：校验是否为合法调用类，不合法则弹友好提示并拒绝选中
-            String rejectReason = validateCallerClass(cls);
-            if (rejectReason != null) {
-                showCallerRejectMessage(rejectReason, cls.getName() != null ? cls.getName() : "");
-                return;
-            }
-            Triple<String, String, Icon> picked = ReadAction.compute(() -> {
+            Pair<String, Triple<String, String, Icon>> outcome = ReadAction.compute(() -> {
                 String name = cls.getName();
                 if (name == null) return null;
-                return new Triple<>(name, cls.getQualifiedName(), cls.getIcon(0));
+                String rejectReason = validateCallerClass(cls);
+                if (rejectReason != null) {
+                    return new Pair<>(rejectReason, null);
+                }
+                return new Pair<>(null, new Triple<>(name, cls.getQualifiedName(), cls.getIcon(0)));
             });
+            if (outcome == null) return;
+            if (outcome.getFirst() != null) {
+                showCallerRejectMessage(outcome.getFirst(),
+                        outcome.getSecond() != null ? outcome.getSecond().getFirst() : "");
+                return;
+            }
+            Triple<String, String, Icon> picked = outcome.getSecond();
             if (picked == null) return;
             setPicked(picked.getFirst(), picked.getSecond(), picked.getThird());
         }

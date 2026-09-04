@@ -10,7 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.function.LongSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,8 +27,17 @@ import java.util.regex.Pattern;
  *  - 格式：`-- 时间戳\nSQL\n\n`（纯文本，可直接在数据库工具中打开）
  *
  * 生命周期跟随 [SqlLogManager]：manager dispose 时 [close] 释放文件句柄。
+ *
+ * T-AutoSaverSOE：write 的文件切换/滚动改循环判定，不再递归自调用（跨天/模板变更 +
+ * 单文件超限叠加时旧实现递归两次以上可致 StackOverflowError）；configure/write/close 加锁，
+ * 消除并发写与滚动判定竞态。
  */
 public class SqlLogAutoSaver {
+
+    /** 时钟（测试注入用），默认系统时钟。 */
+    private final LongSupplier clock;
+    /** 单文件滚动阈值（默认 100MB），测试注入小值用。 */
+    private final long rollThresholdBytes;
 
     private BufferedWriter writer = null;
     private File currentFile = null;
@@ -34,8 +46,21 @@ public class SqlLogAutoSaver {
     private String currentResolvedName = "";
     private int currentIndex = 1;
 
-    /** 单文件滚动阈值（100MB）。 */
-    private final long rollThresholdBytes = 100L * 1024 * 1024;
+    /** 默认构造（系统时钟 + 100MB 滚动阈值）。 */
+    public SqlLogAutoSaver() {
+        this(System::currentTimeMillis, 100L * 1024 * 1024);
+    }
+
+    /** 完整构造（测试注入时钟与滚动阈值）。 */
+    public SqlLogAutoSaver(LongSupplier clock, long rollThresholdBytes) {
+        this.clock = clock;
+        this.rollThresholdBytes = rollThresholdBytes;
+    }
+
+    /** 单文件滚动阈值（测试断言默认值用）。 */
+    public long getRollThresholdBytes() {
+        return rollThresholdBytes;
+    }
 
     /**
      * 配置保存参数（设置变更时调用）。
@@ -43,7 +68,7 @@ public class SqlLogAutoSaver {
      * @param pattern 文件名模板（空串 = 默认模板）
      * @param projectBasePath 项目基路径（默认路径计算用）
      */
-    public void configure(String customPath, String pattern, String projectBasePath) {
+    public synchronized void configure(String customPath, String pattern, String projectBasePath) {
         close();
         saveDir = resolveDir(customPath, projectBasePath);
         fileNamePattern = pattern.isBlank() ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN : pattern;
@@ -63,31 +88,29 @@ public class SqlLogAutoSaver {
     }
 
     /**
-     * 写入被淘汰的条目（buffer.onEvicted 回调）。首次写入时懒打开文件。
+     * 写入被淘汰的条目（buffer.onEvicted 回调）。
+     * 懒打开文件；文件名变化（跨天/模板变更）时重开并复位滚动序号，
+     * 单文件超限时递增滚动序号（T-AutoSaverSOE：循环判定，不递归）。
      */
-    public void write(LogSqlEntry entry) {
-        BufferedWriter w = ensureWriter();
+    public synchronized void write(LogSqlEntry entry) {
+        String resolved = resolveFileName();
+        if (writer == null || !resolved.equals(currentResolvedName)) {
+            // 首次写入 / 文件名切换：重开文件，滚动序号复位
+            close();
+            currentResolvedName = resolved;
+            currentIndex = 1;
+            openWriterForCurrent();
+        } else if ((currentFile != null ? currentFile.length() : 0L) >= rollThresholdBytes) {
+            // 单文件超限：滚动（xxx.sql → xxx.2.sql）
+            close();
+            currentIndex += 1;
+            openWriterForCurrent();
+        }
+        BufferedWriter w = writer;
         if (w == null) {
             return;
         }
-        String resolved = resolveFileName();
-        if (!resolved.equals(currentResolvedName) ||
-                (currentFile != null ? currentFile.length() : 0) >= rollThresholdBytes) {
-            write(entry);
-            return;
-        }
         writeEntry(w, entry);
-    }
-
-    /** 确保 writer 就绪（首次打开 / 切换文件 / 滚动）。 */
-    private BufferedWriter ensureWriter() {
-        if (writer != null) {
-            return writer;
-        }
-        currentResolvedName = resolveFileName();
-        currentIndex = 1;
-        openWriterForCurrent();
-        return writer;
     }
 
     /** 根据 currentResolvedName + currentIndex 打开文件。 */
@@ -157,14 +180,18 @@ public class SqlLogAutoSaver {
      * Windows 文件名不允许 :，自动替换为 -。
      */
     public String resolveFileName() {
-        long now = System.currentTimeMillis();
+        return resolveFileName(clock.getAsLong());
+    }
+
+    /** 指定时刻解析文件名模板（T-AutoSaverSOE 测试注入用）。 */
+    public String resolveFileName(long now) {
         Matcher m = PLACEHOLDER_REGEX.matcher(fileNamePattern);
         StringBuffer sb = new StringBuffer();
         while (m.find()) {
             String formatStr = m.group(1);
             String formatted;
             try {
-                formatted = new SimpleDateFormat(formatStr, Locale.ENGLISH).format(new Date(now));
+                formatted = formatter(formatStr).format(new Date(now));
             } catch (Exception e) {
                 formatted = m.group(0);
             }
@@ -178,13 +205,22 @@ public class SqlLogAutoSaver {
         return sb.toString().replace(':', '-');
     }
 
+    /** SimpleDateFormat 非线程安全，按线程+模板缓存，避免每条日志重建。 */
+    private final ThreadLocal<Map<String, SimpleDateFormat>> formatterCache =
+            ThreadLocal.withInitial(HashMap::new);
+
+    private SimpleDateFormat formatter(String formatStr) {
+        return formatterCache.get().computeIfAbsent(formatStr,
+                f -> new SimpleDateFormat(f, Locale.ENGLISH));
+    }
+
     /** 当前打开的保存文件（测试访问 + 状态展示用）。 */
     public File currentFile() {
         return currentFile;
     }
 
     /** 关闭文件句柄（manager dispose 或路径变更时调用）。 */
-    public void close() {
+    public synchronized void close() {
         if (writer != null) {
             try {
                 synchronized (writer) {
