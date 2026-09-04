@@ -142,7 +142,7 @@ public class UpdateDeleteMpjConverterTest {
             UPDATE car_device_info
             SET station_id = 101
             WHERE id = 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -157,7 +157,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             UPDATE car_device_info
             SET share_scheme_id = share_scheme_id + 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -185,7 +185,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             DELETE FROM car_device_info
             WHERE id = 1001
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -220,7 +220,7 @@ public class UpdateDeleteMpjConverterTest {
             FROM car_device_info t
             LEFT JOIN station_scheme_merchant_info stationSchemeMerchantInfo ON t.share_scheme_id = stationSchemeMerchantInfo.scheme_id
             WHERE t.id = 1001
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -242,7 +242,7 @@ public class UpdateDeleteMpjConverterTest {
             FROM car_device_info t
             LEFT JOIN station_scheme_merchant_info m ON m.scheme_id = t.share_scheme_id
             WHERE t.id = 1001
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -259,7 +259,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT t.id AS deviceId, t.station_name AS stationName
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -275,7 +275,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT auditAccount.username AS auditedUsername
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -292,7 +292,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT t.id, t.station_id, t.share_scheme_id, t.id AS deviceId
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -316,7 +316,7 @@ public class UpdateDeleteMpjConverterTest {
             FROM car_device_info t
             INNER JOIN station_scheme_info_entity stationSchemeInfoEntity ON t.id = stationSchemeInfoEntity.scheme_id
             WHERE t.merchant_id = 5
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -334,7 +334,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT MAX(t.power)
             FROM car_device_info t
             WHERE t.order_id = 10
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
 
@@ -349,7 +349,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT COUNT(t.id) AS applyCount
             FROM car_device_info t
             GROUP BY t.pay_id, t.contact_name
-            """.stripIndent(),
+            """.stripTrailing(),
             countSql
         );
     }
@@ -382,7 +382,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT COUNT(t.id) AS totalCount, COUNT(CASE WHEN t.dic_audit_status = 2 AND t.dic_withdraw_status = 1 THEN 1 END) AS paymentProcessingCount, COALESCE(SUM(t.withdraw_amount), 0) AS totalWithdrawAmount
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -410,7 +410,7 @@ public class UpdateDeleteMpjConverterTest {
             FROM car_device_info t
             LEFT JOIN (SELECT id, ladder, fee FROM occupy_consumption_record_entity occupyConsumptionRecordEntity) occupyConsumptionRecordEntity
             WHERE t.id = 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -435,7 +435,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN product_info_entity productInfoEntity ON t.product_id = productInfoEntity.id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -462,7 +462,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN (SELECT id FROM station_price_task_station_rel_entity stationPriceTaskStationRelEntity LEFT JOIN (SELECT * FROM device_info_entity deviceInfoEntity) deviceInfoEntity ON deviceInfoEntity.stationPriceTaskStationRelEntity_id = stationPriceTaskStationRelEntity.id) stationPriceTaskStationRelEntity
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -483,7 +483,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN station_info_entity stationInfoEntity ON stationInfoEntity.id = t.station_id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -505,7 +505,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             INNER JOIN invoice_apply_order_rel_entity rel ON rel.apply_id = t.id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -528,7 +528,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN coupon_station_entity couponStationEntity ON couponStationEntity.coupon_id = t.id AND couponStationEntity.station_id = 5
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -545,7 +545,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT apply_info.id, apply_info.station_id, apply_info.share_scheme_id
             FROM car_device_info apply_info
             WHERE apply_info.id = 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -565,7 +565,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             ORDER BY auditAccount.create_time ASC
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -605,7 +605,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT t.id
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -625,7 +625,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT id
             FROM car_device_info
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -647,7 +647,7 @@ public class UpdateDeleteMpjConverterTest {
             FROM car_device_info
             WHERE id = 1001
             ORDER BY t.create_time ASC
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -669,7 +669,7 @@ public class UpdateDeleteMpjConverterTest {
             FROM car_device_info t
             WHERE t.id = 1001
             GROUP BY t.station_id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -729,7 +729,7 @@ public class UpdateDeleteMpjConverterTest {
             UPDATE car_device_info
             SET station_id = 101
             WHERE id = 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -755,7 +755,7 @@ public class UpdateDeleteMpjConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             WHERE (t.station_id = 1001 AND t.share_scheme_id = 5)
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -774,7 +774,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT t.id, t.station_id
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -799,7 +799,7 @@ public class UpdateDeleteMpjConverterTest {
             """
             SELECT SUM(t.id) AS totalCount, AVG(t.station_id) AS avgStation
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }

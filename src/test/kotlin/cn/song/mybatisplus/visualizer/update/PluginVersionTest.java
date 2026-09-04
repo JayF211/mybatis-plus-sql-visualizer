@@ -19,7 +19,7 @@ public class PluginVersionTest {
                     <version>2026.8.14</version>
                     <vendor>t</vendor>
                 </idea-plugin>
-                """.stripIndent();
+                """.stripTrailing();
         assertEquals("2026.8.14", PluginVersion.parseVersion(xml));
     }
 

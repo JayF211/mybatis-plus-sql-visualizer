@@ -25,8 +25,27 @@ public class LogEntryListCellRenderer extends DefaultListCellRenderer {
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     public Map<String, Integer> dedupeCounts = Map.of();
 
-    /** 列表 HTML 缓存（条目为弱键；实例级——面板与测试各自独立，refreshList 时整体清空）。 */
-    private final Map<LogSqlEntry, String> listHtmlCache = new WeakHashMap<>();
+    /** 列表 HTML 缓存（条目身份弱键；实例级——面板与测试各自独立，refreshList 时整体清空）。 */
+    private final Map<IdentityKey, String> listHtmlCache = new WeakHashMap<>();
+
+    /** record 值相等的条目须视为不同缓存键（Kotlin 侧按实例字段缓存，语义=身份）。 */
+    private static final class IdentityKey {
+        final LogSqlEntry entry;
+
+        IdentityKey(LogSqlEntry e) {
+            this.entry = e;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof IdentityKey && ((IdentityKey) o).entry == entry;
+        }
+
+        @Override
+        public int hashCode() {
+            return System.identityHashCode(entry);
+        }
+    }
 
     /** T-LogListFreeze-02：清空全部条目的列表 HTML 缓存（过滤/排序/设置变更后需重新生成）。 */
     public void invalidateListHtmlCache() {
@@ -35,7 +54,7 @@ public class LogEntryListCellRenderer extends DefaultListCellRenderer {
 
     /** 测试缝：读取条目当前缓存的列表 HTML（null = 未计算/已失效）。 */
     public String cachedListHtmlForTest(LogSqlEntry entry) {
-        return listHtmlCache.get(entry);
+        return listHtmlCache.get(new IdentityKey(entry));
     }
 
     @Override
@@ -50,7 +69,7 @@ public class LogEntryListCellRenderer extends DefaultListCellRenderer {
         LogSqlEntry entry = value instanceof LogSqlEntry ? (LogSqlEntry) value : null;
         setText(null);
         if (entry != null) {
-            String html = listHtmlCache.get(entry);
+            String html = listHtmlCache.get(new IdentityKey(entry));
             if (html == null) {
                 String timestampHtml = SqlLogPanelKt.formatTimestampHtml(entry.timestamp());
                 String durationHtml = PluginSettings.getInstance().getState().getShowDurationInLogList()
@@ -60,7 +79,7 @@ public class LogEntryListCellRenderer extends DefaultListCellRenderer {
                 Integer cnt = dedupeCounts.get(entry.restoredSql());
                 String dedupeBadge = (cnt != null && cnt > 0) ? " ⨉" + cnt + " " : "";
                 html = "<html>" + timestampHtml + durationHtml + sourceHtml + sqlHtml + dedupeBadge + "</html>";
-                listHtmlCache.put(entry, html);
+                listHtmlCache.put(new IdentityKey(entry), html);
             }
             this.setText(html);
             setToolTipText(entry.restoredSql());

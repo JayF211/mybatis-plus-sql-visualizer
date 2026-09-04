@@ -32,7 +32,7 @@
             <li>Replace <code>?</code> placeholders with actual parameter values; dynamic condition checkboxes; SQL auto formatting</li>
             <li>Console SQL log capture &amp; restore (MyBatis / Hibernate / JdbcTemplate); precise source jump via InnerInterceptor; auto-save history with two-level navigation</li>
             <li>SQL to MP Java code reverse conversion (QueryWrapper / LambdaQueryWrapper / Wrappers / MPJ, CRUD &amp; joins, compilable output)</li>
-            <li>JOIN diagram: self-drawn Swing ER diagram (PNG/SVG export); 9 database dialects; trigger via context menu / shortcut / gutter icon</li>
+            <li>JOIN diagram rendered by the IDE native Diagrams framework (class-diagram look; classic self-drawn renderer as fallback, PNG/SVG export); 9 database dialects; trigger via context menu / shortcut / gutter icon</li>
         </ul>
         <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
         <hr/>
@@ -46,11 +46,11 @@
             <li>参数替换：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；动态条件复选框</li>
             <li>控制台 SQL 日志捕获还原（MyBatis / Hibernate / JdbcTemplate）+ 精确跳转源码（InnerInterceptor）+ 自动保存历史 + 两级导航</li>
             <li>SQL 反向转 MP Java 代码：增删改查 / 多表 JOIN，QueryWrapper / Lambda / Wrappers / MPJ 四种形态，生成代码可直接编译</li>
-            <li>JOIN 关系图：自绘 Swing ER 关系图（PNG/SVG 导出）；9 种数据库方言分页差异渲染；执行 SQL（Ultimate）</li>
+            <li>JOIN 关系图：IDE 原生 Diagrams 框架渲染（类图观感：表头表注释、字段类型/注释、JOIN 连线语义、分类切换；PNG/SVG 导出；自绘渲染降级）；9 种数据库方言分页差异渲染；执行 SQL（Ultimate）</li>
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
-        <p>Screenshots are available on the <a href="https://plugins.jetbrains.com/plugin/33633-mybatis-plus-sql-visualizer">plugin Marketplace page</a>.</p>
+        <p>Screenshots are available on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">plugin Marketplace page</a>.</p>
         <!-- M18.1 问题反馈入口：跳转仓库 Issues 页（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
         <p>Found an issue? Please report it at <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues">Gitee Issues</a> / 遇到问题？请到仓库 Issues 页提交反馈</p>
         ]]></description>
@@ -74,6 +74,11 @@
          主描述文件不得直接引用可选插件类（本插件经反射隔离调用，Community 下优雅降级）；
          database-optional.xml 存放可选插件存在时才激活的声明（当前无 EP 注册，为占位） -->
     <depends optional="true" config-file="database-optional.xml">com.intellij.database</depends>
+
+    <!-- T-Dgm-01 JOIN 图原生渲染：com.intellij.diagram（Ultimate 捆绑 "Diagrams"，类图/关系图底座）——
+         与 database 同为可选依赖；diagram-optional.xml 注册 diagram.Provider（SqlJoinDiagramProvider），
+         Community / Diagrams 缺席时经 NativeJoinDiagramSupport 门面降级回自绘 DiagramPanel -->
+    <depends optional="true" config-file="diagram-optional.xml">com.intellij.diagram</depends>
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
@@ -163,6 +168,14 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider"/>
 
+        <!-- JDBC 模板 SQL 字符串预览：queryForList/update 等方法的字符串 SQL 实参行显示预览图标（O(1) 方法名判定） -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.JdbcTemplateSqlGutterLineMarkerProvider"/>
+
+        <!-- T-PreviewShortcut：实体级 @NamedQuery/@NamedQueries 预览图标（锚 @NamedQuery 注解的 @ token） -->
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.NamedQueryGutterLineMarkerProvider"/>
+
         <!-- M9→原生SQL：补全注册到 SQL 语言。实测全语言注册（无 language）在补全调度时不被
      CompletionContributor.forLanguage 返回（M34 补全失效根因之一），必须显式 language；
      SQL 文件（IDEA DatabaseTools：com.intellij.sql.SqlLanguage，id="SQL"）由
@@ -213,8 +226,13 @@
                     factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/> -->
     </extensions>
 
-    <!-- F-4：Kotlin plugin mode 声明已移除——supportsKotlinPluginMode 非当前 Kotlin 插件版本识别的扩展点；
-         可选依赖已通过上方 <depends optional="true" config-file="kotlin-optional.xml"> 声明，Marketplace 合规无影响 -->
+    <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
+         K1/K2 双模式均安全；supportsK1 默认 true，显式声明 supportsK2 消除 verifyPlugin
+         「Plugin does not declare Kotlin plugin mode」警告。须在主描述文件声明（verifier 不合并
+         可选配置文件 kotlin-optional.xml）；Kotlin 插件不存在时未知 EP 会被平台容忍跳过 -->
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK2="true"/>
+    </extensions>
 
     <!-- Action 注册（F-04 右键菜单 + F-05 快捷键）；图标复用插件图标（M13.1） -->
     <actions>

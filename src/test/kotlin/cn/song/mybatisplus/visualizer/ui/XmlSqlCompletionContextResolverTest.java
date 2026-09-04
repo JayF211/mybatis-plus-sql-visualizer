@@ -91,13 +91,13 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
                 public interface OrderMapper {
                     OrderEntity selectById(OrderEntity entity);
                 }
-                """.stripIndent()
+                """.stripTrailing()
         );
         myFixture.configureByText("OrderMapper.xml", """
                 <mapper namespace="com.example.OrderMapper">
                   <select id="selectById">SELECT * FROM t_order WHERE id = #{id}</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlTag statementTag = PsiTreeUtil.findChildrenOfType(myFixture.getFile(), XmlTag.class).stream()
                 .filter(t -> "selectById".equals(t.getAttributeValue("id")))
                 .findFirst().get();
@@ -124,13 +124,13 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
                 public interface UserMapper {
                     UserEntity selectByCondition(Long id, java.util.Map<String, Object> condition, UserEntity entity);
                 }
-                """.stripIndent()
+                """.stripTrailing()
         );
         myFixture.configureByText("UserMapper.xml", """
                 <mapper namespace="com.example.UserMapper">
                   <select id="selectByCondition">SELECT * FROM t_user</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlTag statementTag = PsiTreeUtil.findChildrenOfType(myFixture.getFile(), XmlTag.class).stream()
                 .filter(t -> "selectByCondition".equals(t.getAttributeValue("id")))
                 .findFirst().get();
@@ -238,7 +238,7 @@ public class XmlSqlCompletionContextResolverTest extends BasePlatformTestCase {
                     @Select("SELECT * FROM t_device_info WHERE id = #{id}")
                     DeviceInfoEntity selectByEntity(DeviceInfoEntity entity);
                 }
-                """.stripIndent()
+                """.stripTrailing()
         );
         PsiMethod method = PsiTreeUtil.findChildOfType(myFixture.getFile(), PsiMethod.class);
         SourceSqlContext ctx = XmlSqlCompletionContextResolver.INSTANCE.resolveAnnotation(getProject(), method);

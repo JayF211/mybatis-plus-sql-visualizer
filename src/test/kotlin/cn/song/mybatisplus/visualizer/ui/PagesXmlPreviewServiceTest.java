@@ -39,7 +39,7 @@ public class PagesXmlPreviewServiceTest {
             </columns>
         </maintainPage>
     </pages>
-    """.stripIndent();
+    """.stripTrailing();
 
     @Test
     public void 标准预览_SQL完整() throws Exception {
@@ -72,7 +72,7 @@ public class PagesXmlPreviewServiceTest {
                 <datasource><![CDATA[SELECT 2]]></datasource>
             </maintainPage>
         </pages>
-        """.stripIndent();
+        """.stripTrailing();
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(xml, "page2");
         assertTrue(result.getSql().contains("SELECT 2"));
@@ -89,7 +89,7 @@ public class PagesXmlPreviewServiceTest {
                 <datasource><![CDATA[SELECT 2]]></datasource>
             </maintainPage>
         </pages>
-        """.stripIndent();
+        """.stripTrailing();
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(xml, "missing");
         assertTrue(result.getSql().contains("SELECT 1"));
@@ -106,7 +106,7 @@ public class PagesXmlPreviewServiceTest {
                 <datasource><![CDATA[SELECT 2]]></datasource>
             </maintainPage>
         </pages>
-        """.stripIndent();
+        """.stripTrailing();
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(xml, null);
         assertTrue(result.getSql().contains("SELECT 1"));
@@ -153,7 +153,7 @@ public class PagesXmlPreviewServiceTest {
                 <datasource><![CDATA[SELECT * FROM t WHERE id = ? AND name = ?]]></datasource>
             </maintainPage>
         </pages>
-        """.stripIndent();
+        """.stripTrailing();
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(xml, "p1");
         assertEquals(List.of("param1", "param2"), result.getUnresolvedParams());
@@ -178,7 +178,7 @@ public class PagesXmlPreviewServiceTest {
                 <datasource><![CDATA[SELECT 1]]></datasource>
             </maintainPage>
         </pages>
-        """.stripIndent();
+        """.stripTrailing();
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(xml, "p1");
         assertNull(result.getPagesColumns());
@@ -197,7 +197,7 @@ public class PagesXmlPreviewServiceTest {
                 ]]></datasource>
             </maintainPage>
         </pages>
-        """.stripIndent();
+        """.stripTrailing();
         cn.song.mybatisplus.visualizer.model.PreviewResult result =
                 PagesXmlPreviewService.INSTANCE.preview(xml, "hqlPage");
         assertTrue(result.getSql().contains("User"));

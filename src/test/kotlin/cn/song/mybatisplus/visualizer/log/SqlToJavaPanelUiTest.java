@@ -100,7 +100,7 @@ public class SqlToJavaPanelUiTest extends BasePlatformTestCase {
             waitForEdt();
             SqlToJavaPanel.ClassPickerField picker = panel.callerFieldForTest();
             // 模拟用户在 ClassPicker 弹窗选中一个类（落点渲染）
-            picker.pickForTest("Order", "com.example.Order", null);
+            picker.pickForTest("Order", "com.example.Order");
             waitForEdt();
             assertNotNull("选取类后 picker 应渲染图标", picker.iconForTest());
             // 选中态：类名显示在文本标签（tooltip 为 null 不遮蔽全限定名）

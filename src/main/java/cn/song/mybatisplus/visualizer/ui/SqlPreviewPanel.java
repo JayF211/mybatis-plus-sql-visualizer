@@ -19,6 +19,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
+import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
@@ -29,6 +30,7 @@ import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter;
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.xml.ParameterMapping;
@@ -224,6 +226,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private String previousSql = null;
 
     private final DiagramPanel diagramPanel;
+    // T-Dgm-04：标签页宿主——原生图框架组件（joinDiagramNative=true 且 Diagrams 插件可用）与
+    // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
+    private final javax.swing.JPanel diagramTabHost = new javax.swing.JPanel(new java.awt.BorderLayout());
+    private javax.swing.JComponent currentNativeDiagram = null;
     private JComponent columnInfoPanel = null;
     private JBPanel<JBPanel<?>> contentPane = null;
     private JTabbedPane contentTabPane = null;
@@ -280,6 +286,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 .subscribe(LafManagerListener.TOPIC, e -> lookAndFeelChanged());
 
         Disposer.register(this, diagramPanel);
+        // T-Dgm-04：标签页实际展示 diagramTabHost（内嵌原生组件或 diagramPanel）
+        diagramTabHost.setOpaque(false);
+        diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER);
 
         if (project != null) {
             prewarmPreviewTempFile();
@@ -635,11 +644,62 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         if (hasJoins) {
             ensureTabbedContent(true);
             DiagramModel model = JoinDiagramGenerator.buildDiagramModel((SelectStatement) pm.getStatement());
-            diagramPanel.showDiagram(model);
+            // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
+            model = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(project, model);
+            showJoinDiagram(model);
         } else {
             removeDiagramTab();
             diagramPanel.clear();
+            clearNativeDiagram();
         }
+    }
+
+    /**
+     * T-Dgm-04：按设置与 Diagrams 插件可用性渲染 JOIN 图。
+     *
+     * 原生路径：快照登记 → UmlEditorProvider.createEditor → 组件嵌入 diagramTabHost
+     * （缩放/布局/折叠/导出全框架托管）；Diagrams 插件缺席或框架异常（buildTabComponent 返回 null）
+     * 自动降级自绘 DiagramPanel，与 Community 行为一致。
+     */
+    private void showJoinDiagram(DiagramModel model) {
+        boolean nativeEnabled = PluginSettings.getInstance().getState().getJoinDiagramNative();
+        JComponent nativeCmp = null;
+        if (nativeEnabled) {
+            // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
+            // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
+            if (project != null) {
+                nativeCmp = cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+                        .buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this);
+            }
+            if (nativeCmp == null) {
+                nativeCmp = cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
+                        .buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this);
+            }
+        }
+        clearNativeDiagram();
+        diagramTabHost.removeAll();
+        if (nativeCmp != null) {
+            currentNativeDiagram = nativeCmp;
+            diagramTabHost.add(nativeCmp, java.awt.BorderLayout.CENTER);
+        } else {
+            diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER);
+            diagramPanel.showDiagram(model);
+        }
+        diagramTabHost.revalidate();
+        diagramTabHost.repaint();
+    }
+
+    /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
+    private void clearNativeDiagram() {
+        if (currentNativeDiagram != null) {
+            // 两条原生路径的 clientProperty key 不同，各 dispose 一次（未命中为 no-op）
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
+                    .disposeNativeEditor(currentNativeDiagram);
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+                    .disposeNativeEditor(currentNativeDiagram);
+            diagramTabHost.remove(currentNativeDiagram);
+        }
+        currentNativeDiagram = null;
     }
 
     private void ensureTabbedContent(boolean addDiagramTab) {
@@ -650,11 +710,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         JTabbedPane pane = new JTabbedPane();
         pane.addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center);
         if (addDiagramTab) {
-            pane.addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel);
+            pane.addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramTabHost);
         }
         if (addDiagramTab) {
             pane.addChangeListener(e -> {
-                if (pane.getSelectedIndex() == 1) diagramPanel.refreshAfterVisible();
+                if (pane.getSelectedIndex() == 1 && currentNativeDiagram == null) {
+                    diagramPanel.refreshAfterVisible();
+                }
             });
         }
         add(pane, BorderLayout.CENTER);
@@ -756,6 +818,20 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 current != null ? current.getCandidateTables() : Collections.emptyList());
     }
 
+    /**
+     * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）按名回填。
+     *
+     * 当 current.namedParamHints 非空时，把 SQL 中 `:name` 按用户输入的参数值整体替换
+     * （同名参数所有出现共用输入值，对齐 NamedParameterJdbcTemplate 语义）；`?` 占位符不受影响，
+     * 由调用方继续走 backfillParamsBySource 按序回填。命名参数提示为空时原样返回（兼容既有顺序回填路径）。
+     */
+    private String applyNamedParams(String sql) {
+        PreviewResult r = current;
+        if (r == null) return sql;
+        if (r.getNamedParamHints().isEmpty()) return sql;
+        return ParameterReplacer.replaceNamedParams(sql, paramValues, r.getNamedParamHints());
+    }
+
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private void renderSql() {
         PreviewResult result = current;
@@ -805,12 +881,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             String sql = ((cn.song.mybatisplus.visualizer.sql.GeneratedSql) generated).getSql();
             List<String> up = ((cn.song.mybatisplus.visualizer.sql.GeneratedSql) generated).getUnresolvedParams();
             List<ParamHint> ph = ((cn.song.mybatisplus.visualizer.sql.GeneratedSql) generated).getParamHints();
-            showSql(backfillParamsBySource(sql,
+            // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
+            showSql(backfillParamsBySource(applyNamedParams(sql),
                     up != null ? up : Collections.emptyList(),
                     ph != null ? ph : Collections.emptyList()));
         } else {
+            // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
             String base = compactMode ? result.getCompactSql() : result.getSql();
-            showSql(backfillParamsBySource(base, result.getUnresolvedParams(), result.getParamHints()));
+            showSql(backfillParamsBySource(applyNamedParams(base), result.getUnresolvedParams(), result.getParamHints()));
         }
     }
 
@@ -954,6 +1032,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         metaLabel.setText("");
         removeDiagramTab();
         diagramPanel.clear();
+        clearNativeDiagram();
         resultPanel.clear();
         detachConsole();
         nativeEditorDoc = null;
@@ -1064,12 +1143,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         if (psiFile != null) psiFile.putUserData(SqlCompletionContext.KEY, ctx);
         SqlCompletionContributor.registerContext(created.getDocument(), ctx);
         EditorEx createdEx = (EditorEx) created;
-        if (sqlFileType != null) {
-            com.intellij.openapi.fileTypes.SyntaxHighlighter sh = SyntaxHighlighterFactory.getSyntaxHighlighter(sqlFileType, project, null);
-            if (sh != null) {
-                createdEx.setHighlighter(new LexerEditorHighlighter(sh, EditorColorsManager.getInstance().getGlobalScheme()));
-            }
-        }
+        // F-CASE：自研 SQL 高亮器（SqlLexer 将 CASE/WHEN/THEN/ELSE/END 标记为 KEYWORD，
+        // 字段名标记为 IDENTIFIER → 双击选择不会跨 token 粘连；不依赖 Database 插件）
+        createdEx.setHighlighter(new LexerEditorHighlighter(
+                new SqlSyntaxHighlighter(), EditorColorsManager.getInstance().getGlobalScheme()));
         createdEx.getSettings().setLineNumbersShown(true);
         createdEx.getSettings().setFoldingOutlineShown(true);
         createdEx.getSettings().setIndentGuidesShown(false);

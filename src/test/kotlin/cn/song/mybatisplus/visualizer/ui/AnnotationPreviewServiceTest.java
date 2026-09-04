@@ -59,7 +59,7 @@ public interface UserMapper {
         }
     }
 }
-""".stripIndent();
+""".stripTrailing();
 
     private PsiAnnotation annotationOf(String methodName) {
         for (PsiAnnotation a : PsiTreeUtil.findChildrenOfType(myFixture.getFile(), PsiAnnotation.class)) {
@@ -145,7 +145,7 @@ public interface UserMapper {
                     @Select("SELECT 1")
                     int one();
                 }
-                """.stripIndent());
+                """.stripTrailing());
         // 默认 XML 语言驱动 → 无警告
         PreviewResult result = AnnotationSqlPreviewService.INSTANCE.preview(annotationOf("one"), getProject());
         assertEquals("SELECT 1", compact(result.getSql()));
@@ -162,7 +162,7 @@ public interface UserMapper {
                     public static final String DIC_VALUE_BIKE = "1";
                     public static final String DIC_VALUE_CAR = "2";
                 }
-                """.stripIndent());
+                """.stripTrailing());
         String mapper = """
         <mapper namespace="n">
           <select id="s1">
@@ -170,7 +170,7 @@ public interface UserMapper {
             SELECT * FROM t WHERE status = #{status} AND type = #{type}
           </select>
         </mapper>
-        """.stripIndent();
+        """.stripTrailing();
         PreviewResult result = XmlPreviewService.INSTANCE.preview(mapper, "s1", getProject());
         assertNull("静态常量解析成功不应有警告", result.getWarning());
         assertEquals("SELECT * FROM t WHERE status = ? AND type = ?", compact(result.getSql()));
@@ -188,7 +188,7 @@ public interface UserMapper {
                 public class DicConstants {
                     public static final String DIC_VALUE_BIKE = "1";
                 }
-                """.stripIndent());
+                """.stripTrailing());
         String mapper = """
         <mapper namespace="n">
           <select id="s1">
@@ -196,7 +196,7 @@ public interface UserMapper {
             SELECT * FROM t WHERE status = #{status}
           </select>
         </mapper>
-        """.stripIndent();
+        """.stripTrailing();
         PreviewResult result = XmlPreviewService.INSTANCE.preview(mapper, "s1", getProject());
         assertTrue("字段不存在应提示", result.getWarning() != null && result.getWarning().contains("无法解析"));
     }
@@ -224,7 +224,7 @@ public interface UserMapper {
                     @Deprecated
                     int legacy();
                 }
-                """.stripIndent());
+                """.stripTrailing());
         List<PsiAnnotation> candidates = AnnotationSqlPreviewService.INSTANCE.annotationCandidates(myFixture.getFile());
         assertEquals(3, candidates.size());
         // 摘要：value 首个元素（数组取首元素）
@@ -262,7 +262,7 @@ public interface MultiMapper {
     @Deprecated
     int legacy();
 }
-""".stripIndent();
+""".stripTrailing();
 
     @Test
     public void testAnnotationCandidatesInRangeCollectsSelectionAnnotations() throws Exception {

@@ -58,6 +58,10 @@ import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlParameter;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver;
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService;
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator;
+import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryInfo;
+import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
@@ -222,6 +226,17 @@ public final class SqlPreviewService {
      */
     @Nullable
     public PreviewResult preview(@NotNull PsiElement anchor) {
+        // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
+        // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
+        boolean jdbcPreviewOff = settings != null && settings.getState() != null
+                && !settings.getState().getJdbcSqlPreviewEnabled();
+        if (!jdbcPreviewOff) {
+            JdbcTemplateSqlLocator.JdbcTemplateSqlCall jdbcCall = JdbcTemplateSqlLocator.INSTANCE.locate(anchor);
+            if (jdbcCall != null) {
+                return JdbcTemplateSqlPreviewService.preview(jdbcCall, anchor);
+            }
+        }
+
         PsiFile file = anchor.getContainingFile();
         if (file == null) return null;
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
@@ -529,6 +544,26 @@ public final class SqlPreviewService {
         if (info.isNativeQuery() || "createNativeQuery".equals(info.getCreateQueryMethodName())) {
             return previewNativeSql(info);
         }
+        // T-PreviewShortcut：createNamedQuery("name") 按名回查实体 @NamedQuery，解析真实 JPQL；
+        // 跨文件 / 命名不规范解析不到时优雅降级为把名字当 HQL 处理（不抛、不挂起）。
+        if ("createNamedQuery".equals(info.getCreateQueryMethodName())) {
+            NamedQueryInfo named = null;
+            try {
+                named = NamedQueryLocator.INSTANCE.findByQueryName(project, info.getHql());
+            } catch (Throwable t) {
+                named = null;
+            }
+            if (named != null && !named.getQuery().isBlank()) {
+                PsiClass entityClass = named.getAnnotation() != null
+                        ? PsiTreeUtil.getParentOfType(named.getAnnotation(), PsiClass.class, false) : null;
+                TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
+                JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable);
+                List<String> namedParams = extractParamNamesFromHql(named.getQuery());
+                return buildJpaPreviewResult(namedResult.getStatement(), namedResult.getSql(),
+                        namedTable != null ? namedTable.getTableName() : "", namedParams,
+                        info.getMethod(), namedResult.getInClauseParams());
+            }
+        }
         TableInfo table = resolveHqlTable(info.getEntityClass(), info.getEntityClassName(), info.getHql());
         HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table);
         List<String> paramNames = extractHqlParamNames(info.getParameters());
@@ -562,6 +597,38 @@ public final class SqlPreviewService {
         if (entityClass == null) return null;
         TableInfo table = new JpaEntityResolver().resolve(entityClass);
         return table != null ? table.getTableName() : null;
+    }
+
+    /**
+     * 实体级 @NamedQuery/@NamedQueries 预览（T-PreviewShortcut）：
+     * 从光标所在 @NamedQuery 注解反查实体类 → 定位对应命名查询 → JPQL 转 SQL。
+     *
+     * 供 NamedQueryGutterLineMarkerProvider 点击与快捷键调用。
+     */
+    @Nullable
+    public PreviewResult previewNamedQuery(@NotNull PsiElement anchor) {
+        PsiAnnotation annotation = PsiTreeUtil.getParentOfType(anchor, PsiAnnotation.class, false);
+        if (annotation == null) return null;
+        PsiClass cls = PsiTreeUtil.getParentOfType(annotation, PsiClass.class, false);
+        if (cls == null) return null;
+        List<NamedQueryInfo> infos = NamedQueryLocator.INSTANCE.locate(cls);
+        if (infos.isEmpty()) return null;
+        // 优先取光标所在那一条 @NamedQuery（注解引用匹配）；多选 fallback 取第一条
+        NamedQueryInfo info = null;
+        for (NamedQueryInfo it : infos) {
+            if (it.getAnnotation() == annotation) {
+                info = it;
+                break;
+            }
+        }
+        if (info == null) info = infos.get(0);
+        String jpql = info.getQuery();
+        TableInfo table = new JpaEntityResolver().resolve(cls);
+        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table);
+        List<String> paramNames = extractParamNamesFromHql(jpql);
+        return buildJpaPreviewResult(result.getStatement(), result.getSql(),
+                table != null ? table.getTableName() : "", paramNames,
+                null, result.getInClauseParams());
     }
 
     /**

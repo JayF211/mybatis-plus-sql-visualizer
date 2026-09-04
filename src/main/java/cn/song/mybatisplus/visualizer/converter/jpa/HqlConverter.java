@@ -144,7 +144,8 @@ public final class HqlConverter {
 
         // 9. SELECT 子句展开：SELECT <别名> → 列清单（T-HQL-SELECT-01）
         // 必须排在步骤 5（JOIN FETCH 改写）之后——JOIN 别名只有改写后才存在。DELETE 语句内部已短路。
-        sql = expandSelectClause(sql, table);
+        // T-HQL-SELECT-01 / T-BareFromSelect：展开逻辑见 SelectClauseExpander，与 JpqlConverter 共用
+        sql = SelectClauseExpander.INSTANCE.expand(sql, table);
 
         // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trim().toUpperCase().startsWith("DELETE")) {
@@ -422,69 +423,7 @@ public final class HqlConverter {
     // SELECT 子句展开（T-HQL-SELECT-01）
     // ------------------------------------------------------------------
 
-    /**
-     * 将 SELECT 子句中的「实体别名」展开为列清单。
-     *
-     * HQL 语义：`SELECT u` = 取整个实体，Hibernate 会展开为该实体映射的全部列。
-     * 原样输出 `SELECT u` 会被 MySQL 解析为「查询名为 u 的列」→
-     * `[1054] Unknown column 'u' in 'field list'`（2026-08-31 用户实测）。
-     *
-     * 覆盖两类形态：
-     *  1. 已有 SELECT 子句：`SELECT u FROM user u` → `SELECT u.id, u.username, ... FROM user u`
-     *  2. 无 SELECT 子句（HQL 隐式查询）：`FROM user u WHERE ...` → 补 SELECT 列清单
-     */
-    private static String expandSelectClause(@NotNull String sql, @NotNull TableInfo table) {
-        // DELETE 无 SELECT 子句，且展开语义不同，直接短路
-        if (sql.trim().toUpperCase().startsWith("DELETE")) return sql;
-
-        int selectIdx = indexOfTopLevelKeyword(sql, "SELECT");
-        int fromIdx = indexOfTopLevelKeyword(sql, "FROM");
-        if (fromIdx < 0) return sql;
-
-        boolean hasSelect = selectIdx >= 0 && selectIdx < fromIdx;
-        String selectKeyword = hasSelect ? sql.substring(selectIdx, selectIdx + "SELECT".length()) : "SELECT";
-        String selectRegion = hasSelect ? sql.substring(selectIdx + "SELECT".length(), fromIdx) : "";
-        if (hasSelect && selectRegion.isBlank()) return sql;
-
-        // 别名 → 列清单映射（LinkedHashMap 保序，首项为主表别名）；value = null 表示降级为 alias.*
-        LinkedHashMap<String, List<String>> aliasColumns = parseAliasColumns(sql, fromIdx, table);
-        if (aliasColumns.isEmpty()) return sql;
-
-        if (!hasSelect) {
-            // 无 SELECT 子句：补主表列清单
-            String rootAlias = aliasColumns.keySet().iterator().next();
-            List<String> columns = aliasColumns.get(rootAlias);
-            if (columns == null) return sql;
-            return selectKeyword + " " + renderColumns(rootAlias, columns) + " " + sql.substring(fromIdx);
-        }
-
-        String[] distinctEntry = splitDistinct(selectRegion);
-        String distinct = distinctEntry[0];
-        String itemText = distinctEntry[1];
-        List<String> items = splitTopLevelCommas(itemText);
-        if (items.isEmpty()) return sql;
-
-        boolean changed = false;
-        List<String> rendered = new ArrayList<>();
-        for (String raw : items) {
-            String item = raw.trim();
-            if (aliasColumns.containsKey(item)) {
-                changed = true;
-                rendered.add(renderColumns(item, aliasColumns.get(item)));
-            } else {
-                rendered.add(item);
-            }
-        }
-        if (!changed) return sql;
-
-        String distinctPart = distinct != null ? distinct + " " : "";
-        return sql.substring(0, selectIdx)
-                + selectKeyword + " " + distinctPart
-                + String.join(", ", rendered) + " "
-                + sql.substring(fromIdx);
-    }
-
-    /** 渲染单个别名的展开结果：`alias.col1, alias.col2` 或降级 `alias.*`。 */
+        /** 渲染单个别名的展开结果：`alias.col1, alias.col2` 或降级 `alias.*`。 */
     private static String renderColumns(@NotNull String alias, @Nullable List<String> columns) {
         if (columns == null || columns.isEmpty()) {
             return alias + ".* /* 列信息未解析，降级为 " + alias + ".* */";

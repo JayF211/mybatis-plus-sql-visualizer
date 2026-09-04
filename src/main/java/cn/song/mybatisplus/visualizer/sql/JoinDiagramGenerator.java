@@ -63,9 +63,12 @@ public final class JoinDiagramGenerator {
                         .map(col -> new ColumnEntry(
                                 col.getColumnName(),
                                 javaTypeToSqlType(col.getFieldType()),
-                                col.isId()))
+                                col.isId(),
+                                col.getComment()))
                         .collect(Collectors.toList()),
-                true));
+                true,
+                null,
+                stmt.getTable().getComment()));
 
         // JOIN 表 + 关系线
         Set<String> usedAliases = new HashSet<>();
@@ -85,19 +88,23 @@ public final class JoinDiagramGenerator {
 
             List<ColumnEntry> joinColumns = extractJoinColumns(join, uniqueAlias, stmt);
             String displayTableName = resolveDisplayTableName(join);
+            List<kotlin.Pair<String, String>> onColumnPairs =
+                    extractOnColumnPairs(join, mainAlias, uniqueAlias, aliasMap);
 
             entities.add(new EntityNode(
                     uniqueAlias,
                     displayTableName,
                     joinColumns,
                     false,
-                    join.getType()));
+                    join.getType(),
+                    join.getTableInfo() != null ? join.getTableInfo().getComment() : null));
 
             relationships.add(new RelationshipLine(
                     mainAlias,
                     uniqueAlias,
                     join.getType(),
-                    buildOnLabel(join, aliasMap)));
+                    buildOnLabel(join, aliasMap),
+                    onColumnPairs));
         }
 
         return new DiagramModel(entities, relationships);
@@ -223,6 +230,44 @@ public final class JoinDiagramGenerator {
     }
 
     /**
+     * 构建 ON 条件文本标签前，先提取等值列配对（T-Embed-04）：
+     * 返回 (主表侧列名, JOIN 表侧列名) 列表——JOIN 表作为虚拟外键 child、主表作为 ref。
+     * 非 ColumnComparison（Raw/Simple 等）或两侧归属不明的条件跳过。
+     */
+    private static List<kotlin.Pair<String, String>> extractOnColumnPairs(
+            JoinClause join, String mainAlias, String joinAlias, Map<String, String> aliasMap) {
+        Set<String> accepted = new HashSet<>();
+        if (joinAlias != null && !joinAlias.isBlank()) accepted.add(joinAlias);
+        if (join.getAlias() != null && !join.getAlias().isBlank()) accepted.add(join.getAlias());
+        List<kotlin.Pair<String, String>> pairs = new ArrayList<>();
+        for (Condition cond : join.getOnConditions()) {
+            if (!(cond instanceof Condition.ColumnComparison)) {
+                continue;
+            }
+            Condition.ColumnComparison cc = (Condition.ColumnComparison) cond;
+            String leftSide = normalizeAlias(cc.getLeft(), aliasMap);
+            String rightSide = normalizeAlias(cc.getRight(), aliasMap);
+            kotlin.Pair<String, String> mainToJoin = null;
+            if (mainAlias.equals(rightSide) && accepted.contains(leftSide)) {
+                mainToJoin = new kotlin.Pair<>(cc.getRight().getColumnName(), cc.getLeft().getColumnName());
+            } else if (mainAlias.equals(leftSide) && accepted.contains(rightSide)) {
+                mainToJoin = new kotlin.Pair<>(cc.getLeft().getColumnName(), cc.getRight().getColumnName());
+            }
+            if (mainToJoin != null && !pairs.contains(mainToJoin)) {
+                pairs.add(mainToJoin);
+            }
+        }
+        return pairs;
+    }
+
+    /** 列引用别名归一：转换器原始别名 → 图显示别名（无映射保持原值）。 */
+    private static String normalizeAlias(ColumnRef ref, Map<String, String> aliasMap) {
+        if (ref.getTableAlias() == null) return null;
+        String mapped = aliasMap.get(ref.getTableAlias());
+        return mapped != null ? mapped : ref.getTableAlias();
+    }
+
+    /**
      * 构建关系线标签（ON 条件）。
      * rawSql 非空时显示 "(rawSql)" 提示；否则拼接 ON 条件（AND 连接）。
      */
@@ -284,15 +329,21 @@ public final class JoinDiagramGenerator {
     private static List<ColumnEntry> extractJoinColumns(JoinClause join, String joinAlias, SelectStatement stmt) {
         List<ColumnEntry> columns = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+        // T-Embed-07（真机缺陷修复）：列引用的 tableAlias 是转换器原始别名（MPJ 类名小驼峰如
+        // `stationInfoEntity`），而 joinAlias 是 sanitize/去重后的显示别名（如 `t1`）——
+        // 二者取并集匹配，否则 JOIN 表列全部落空（ON 标签因走 aliasMap 映射而正常，更具迷惑性）。
+        Set<String> acceptedAliases = new HashSet<>();
+        if (joinAlias != null && !joinAlias.isBlank()) acceptedAliases.add(joinAlias);
+        if (join.getAlias() != null && !join.getAlias().isBlank()) acceptedAliases.add(join.getAlias());
 
-        // Helper: resolve SQL type from tableInfo by column name
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (ColumnRef col : stmt.getSelectColumns()) {
-            if (joinAlias.equals(col.getTableAlias()) && !seen.contains(col.getColumnName())) {
+            if (acceptedAliases.contains(col.getTableAlias()) && !seen.contains(col.getColumnName())) {
                 seen.add(col.getColumnName());
                 String sqlType = javaTypeToSqlType(col.getType());
                 if (sqlType == null) sqlType = sqlTypeFromTable(join, col.getColumnName());
-                columns.add(new ColumnEntry(col.getColumnName(), sqlType, false));
+                columns.add(new ColumnEntry(col.getColumnName(), sqlType, false,
+                        commentFromTable(join, col.getColumnName())));
             }
         }
 
@@ -300,14 +351,18 @@ public final class JoinDiagramGenerator {
         for (Condition cond : join.getOnConditions()) {
             if (cond instanceof Condition.ColumnComparison cc) {
                 ColumnRef right = cc.getRight();
-                if (joinAlias.equals(right.getTableAlias()) && !seen.contains(right.getColumnName())) {
+                if (acceptedAliases.contains(right.getTableAlias()) && !seen.contains(right.getColumnName())) {
                     seen.add(right.getColumnName());
-                    columns.add(new ColumnEntry(right.getColumnName(), sqlTypeFromTable(join, right.getColumnName()), false));
+                    columns.add(new ColumnEntry(right.getColumnName(),
+                            sqlTypeFromTable(join, right.getColumnName()), false,
+                            commentFromTable(join, right.getColumnName())));
                 }
                 ColumnRef left = cc.getLeft();
-                if (joinAlias.equals(left.getTableAlias()) && !seen.contains(left.getColumnName())) {
+                if (acceptedAliases.contains(left.getTableAlias()) && !seen.contains(left.getColumnName())) {
                     seen.add(left.getColumnName());
-                    columns.add(new ColumnEntry(left.getColumnName(), sqlTypeFromTable(join, left.getColumnName()), false));
+                    columns.add(new ColumnEntry(left.getColumnName(),
+                            sqlTypeFromTable(join, left.getColumnName()), false,
+                            commentFromTable(join, left.getColumnName())));
                 }
             }
         }
@@ -320,7 +375,9 @@ public final class JoinDiagramGenerator {
                     for (ColumnRef col : fill.getSelectColumns()) {
                         if (!seen.contains(col.getColumnName())) {
                             seen.add(col.getColumnName());
-                            columns.add(new ColumnEntry(col.getColumnName(), sqlTypeFromTable(join, col.getColumnName()), false));
+                            columns.add(new ColumnEntry(col.getColumnName(),
+                                    sqlTypeFromTable(join, col.getColumnName()), false,
+                                    commentFromTable(join, col.getColumnName())));
                         }
                     }
                 }
@@ -336,6 +393,15 @@ public final class JoinDiagramGenerator {
         if (ti == null) return null;
         for (ColumnInfo c : ti.getColumns()) {
             if (c.getColumnName().equals(colName)) return javaTypeToSqlType(c.getFieldType());
+        }
+        return null;    }
+
+    /** 按列名从 JOIN 表的 tableInfo 取注释。 */
+    private static String commentFromTable(JoinClause join, String colName) {
+        TableInfo ti = join.getTableInfo();
+        if (ti == null) return null;
+        for (ColumnInfo c : ti.getColumns()) {
+            if (c.getColumnName().equals(colName)) return c.getComment();
         }
         return null;
     }

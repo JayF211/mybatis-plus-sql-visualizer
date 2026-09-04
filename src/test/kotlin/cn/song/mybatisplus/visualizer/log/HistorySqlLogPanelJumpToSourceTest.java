@@ -112,7 +112,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
         writeRealSource("UserMapper.java", "public class UserMapper {\n  void selectById(Long id) {}\n}\n");
 
         // 模拟自动保存写入历史文件：-- source: UserMapper.java:10 | time: 3ms | ts --\nSQL
-        String dir = getProject().getBasePath() + File.separator + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "sql-history";
+        String dir = getProject().getBasePath() + File.separator + ".idea" + File.separator + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "sql-history";
         new File(dir).mkdirs();
         File histFile = new File(dir, "sql-history-2026-08-31.sql");
         Files.writeString(histFile.toPath(),

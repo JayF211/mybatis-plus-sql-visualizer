@@ -65,7 +65,7 @@ public class XmlPreviewModelTest {
                     SELECT * FROM t WHERE a = ${ew.customSqlSegment} AND b LIKE #{p}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         // _parameter 是保留键（不收集）；title 归模拟参数对象属性；list/ew 是普通根变量
         assertEquals(Set.of("title"), m.getParamProps());
         assertEquals(Set.of("list", "ew"), m.getVariables());
@@ -78,7 +78,7 @@ public class XmlPreviewModelTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t<if test="status != null and type == 1"> WHERE x = 1</if></select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         // test 表达式由开关驱动，不收集变量
         assertEquals(Set.of(), m.getVariables());
         assertEquals(List.of("status != null and type == 1"),
@@ -103,7 +103,7 @@ public class XmlPreviewModelTest {
                     </where>
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         Map<String, Boolean> defaults = m.getConditionViews().stream()
                 .collect(Collectors.toMap(XmlConditionView::id, XmlConditionView::defaultEnabled));
         assertEquals(Boolean.TRUE, defaults.get("a != null"));
@@ -125,7 +125,7 @@ public class XmlPreviewModelTest {
                     <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         assertEquals((int) XmlPreviewModel.DEFAULT_FOREACH_SIZE, (int) m.defaultState().forEachCounts().get("ids"));
         assertEquals("SELECT * FROM t WHERE id IN ( ? , ? )", compact(m.renderSql().sql()));
         XmlPreviewState state = copy(m.defaultState(), Map.of("ids", 0));
@@ -140,7 +140,7 @@ public class XmlPreviewModelTest {
                     <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlPreviewState state = copyNull(m.defaultState(), Set.of("ids"));
         RenderedXmlSql result = m.renderSql(state);
         assertEquals("SELECT * FROM t WHERE id IN", compact(result.sql()));
@@ -156,7 +156,7 @@ public class XmlPreviewModelTest {
                     SELECT * FROM t WHERE name LIKE #{pattern}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         // 默认：name 占位 "1" → '%1%'
         assertEquals("SELECT * FROM t WHERE name LIKE ?", compact(m.renderSql().sql()));
         XmlPreviewState state = copyBind(m.defaultState(), Map.of("pattern", "'%x%'"));
@@ -173,7 +173,7 @@ public class XmlPreviewModelTest {
                     <if test="b != null"> AND b = 2</if>
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         assertEquals("SELECT * FROM t WHERE a = 1 AND b = 2", compact(m.renderSql().sql()));
         XmlPreviewState state = copy(m.defaultState(), Set.of("a != null"));
         assertEquals("SELECT * FROM t WHERE a = 1", compact(m.renderSql(state).sql()));
@@ -189,7 +189,7 @@ public class XmlPreviewModelTest {
                     <if test="not valid @@ expression">WHERE a = 1</if>
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         // 解析失败 → 默认 true（预览容错）
         assertEquals("SELECT * FROM t WHERE a = 1", compact(m.renderSql().sql()));
         XmlPreviewState state = copy(m.defaultState(), Set.of());
@@ -202,7 +202,7 @@ public class XmlPreviewModelTest {
                 <mapper namespace="com.example.BizMapper">
                   <update id="updateById" parameterType="map">UPDATE t SET a = 1 WHERE id = 2</update>
                 </mapper>
-                """.stripIndent(), "updateById");
+                """.stripTrailing(), "updateById");
         assertEquals("updateById", m.getStatementId());
         assertEquals(XmlStatementKind.UPDATE, m.getKind());
         assertEquals("map", m.getParameterType());
@@ -219,7 +219,7 @@ public class XmlPreviewModelTest {
                         <mapper namespace="n">
                           <select id="s1">SELECT * FROM t WHERE a = #{p.settlementStartDate} AND b = #{p.dicCreditStatus}</select>
                         </mapper>
-                        """.stripIndent()).statements().get(0),
+                        """.stripTrailing()).statements().get(0),
                 List.of(),
                 Map.of(),
                 Map.of(),
@@ -240,7 +240,7 @@ public class XmlPreviewModelTest {
                         <mapper namespace="n">
                           <select id="s1">SELECT * FROM t WHERE a = #{p.settlementStartDate}</select>
                         </mapper>
-                        """.stripIndent()).statements().get(0),
+                        """.stripTrailing()).statements().get(0),
                 List.of(),
                 Map.of(),
                 Map.of(),
@@ -252,7 +252,7 @@ public class XmlPreviewModelTest {
                         <mapper namespace="n">
                           <select id="s1">SELECT * FROM t</select>
                         </mapper>
-                        """.stripIndent()).statements().get(0),
+                        """.stripTrailing()).statements().get(0),
                 List.of(),
                 Map.of(),
                 Map.of(),

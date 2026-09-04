@@ -1,10 +1,13 @@
 package cn.song.mybatisplus.visualizer.psi.jpa;
 
+import com.intellij.openapi.project.Project;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiLiteralExpression;
+import com.intellij.psi.search.GlobalSearchScope;
 import java.util.ArrayList;
 import java.util.List;
 import org.jetbrains.annotations.NotNull;
@@ -60,6 +63,42 @@ public final class NamedQueryLocator {
     }
 
     /**
+     * 按命名查询名查找（T-PreviewShortcut：`session.createNamedQuery("name")` 跨文件按名回查）。
+     *
+     * JPA 规范命名查询名默认即 `&lt;实体简单名&gt;.&lt;方法名&gt;`（如 `"UserEntity.findByUsernameNamed"`），
+     * 取 `.` 前缀解析实体类，再由 locate 按名字精确匹配。解析不到时返回 null（调用方优雅降级）。
+     *
+     * @param project   项目
+     * @param queryName 命名查询名
+     * @return 命中的命名查询（annotation 字段已回填，可反查实体类）；未命中返回 null
+     */
+    @Nullable
+    public static NamedQueryInfo findByQueryName(@NotNull Project project, @Nullable String queryName) {
+        if (queryName == null || queryName.isBlank()) return null;
+        int dot = queryName.indexOf('.');
+        String entitySimpleName = (dot >= 0 ? queryName.substring(0, dot) : "").trim();
+        if (entitySimpleName.isBlank()) return null;
+        PsiClass[] classes;
+        try {
+            classes = JavaPsiFacade.getInstance(project).findClasses(entitySimpleName, GlobalSearchScope.projectScope(project));
+        } catch (Throwable t) {
+            // runCatching 等价：解析失败时调用方优雅降级
+            return null;
+        }
+        for (PsiClass cls : classes) {
+            NamedQueryInfo hit = null;
+            for (NamedQueryInfo info : locate(cls)) {
+                if (info.getName().equals(queryName)) {
+                    hit = info;
+                    break;
+                }
+            }
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    /**
      * 从 @NamedQueries 容器注解中提取子 @NamedQuery 列表。
      */
     private static void extractNamedQueriesContainer(
@@ -89,7 +128,7 @@ public final class NamedQueryLocator {
         String query = extractStringAttribute(annotation, "query");
         if (query == null) return;
         if (name.isBlank() || query.isBlank()) return;
-        results.add(new NamedQueryInfo(name, query));
+        results.add(new NamedQueryInfo(name, query, annotation));
     }
 
     /**

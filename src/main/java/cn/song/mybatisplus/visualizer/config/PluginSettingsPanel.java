@@ -271,6 +271,8 @@ public class PluginSettingsPanel {
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private final JBCheckBox gutterIconCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"));
+    /** JOIN 图渲染方式（T-Dgm-04）：原生 Diagrams 框架 vs 经典自绘渲染器。 */
+    private final JBCheckBox joinDiagramNativeCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"));
 
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private final JBCheckBox injectLogicDeleteCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"));
@@ -293,6 +295,9 @@ public class PluginSettingsPanel {
 
     /** 数据权限模拟条件输入框（F-6 Phase C）：用户手动填写的 WHERE 片段。 */
     private final JBTextField dataPermissionMockConditionField = new JBTextField(20);
+
+    /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
+    private final JBCheckBox jdbcSqlPreviewCheck = new JBCheckBox();
 
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private final JBTextField tablePrefixField = new JBTextField(12);
@@ -457,6 +462,9 @@ public class PluginSettingsPanel {
                 addRow(p, g, "", dataPermissionHintCheck);
                 dataPermissionMockConditionField.setToolTipText(msg("settings.dataPermissionMockCondition.tip"));
                 addRow(p, g, msg("settings.dataPermissionMockCondition"), dataPermissionMockConditionField);
+                jdbcSqlPreviewCheck.setText(msg("settings.preview.jdbc"));
+                jdbcSqlPreviewCheck.setToolTipText(msg("settings.preview.jdbc.tip"));
+                addRow(p, g, "", jdbcSqlPreviewCheck);
             });
         }
 
@@ -625,6 +633,9 @@ public class PluginSettingsPanel {
             sectionGroup(panel, gbc, "settings.section.ui", (p, g) -> {
                 gutterIconCheck.setText(msg("settings.showGutterIcon"));
                 addRow(p, g, "", gutterIconCheck);
+                joinDiagramNativeCheck.setText(msg("settings.joinDiagramNative"));
+                joinDiagramNativeCheck.setToolTipText(msg("settings.joinDiagramNative.tip"));
+                addRow(p, g, "", joinDiagramNativeCheck);
                 languageCombo.setModel(new DefaultComboBoxModel<>(languageOptions()));
                 LanguageOption lang = languageOptionByValue(settings.getState().getLanguage());
                 languageCombo.setSelectedItem(lang != null ? lang : languageOptions()[0]);
@@ -1122,7 +1133,8 @@ public class PluginSettingsPanel {
             || !tenantColumnDefaultField.getText().trim().equals(s.getTenantColumnDefault())
             || injectTenantOnInsertCheck.isSelected() != s.getInjectTenantOnInsert()
             || dataPermissionHintCheck.isSelected() != s.getDataPermissionHint()
-            || !dataPermissionMockConditionField.getText().trim().equals(s.getDataPermissionMockCondition());
+            || !dataPermissionMockConditionField.getText().trim().equals(s.getDataPermissionMockCondition())
+            || jdbcSqlPreviewCheck.isSelected() != s.getJdbcSqlPreviewEnabled();
     }
 
     private boolean isModifiedTableMapping(PluginSettings.State s) {
@@ -1173,6 +1185,7 @@ public class PluginSettingsPanel {
     private boolean isModifiedUi(PluginSettings.State s) {
         Object lang = languageCombo.getSelectedItem();
         return gutterIconCheck.isSelected() != s.getShowGutterIcon()
+            || joinDiagramNativeCheck.isSelected() != s.getJoinDiagramNative()
             || !Objects.equals(lang instanceof LanguageOption ? ((LanguageOption) lang).value : null, s.getLanguage())
             || !Objects.equals(shortcutEditor.getShortcut(), currentShortcut(ConvertToSqlAction.ACTION_ID))
             || !Objects.equals(reverseShortcutEditor.getShortcut(), currentShortcut(ConvertSqlToJavaAction.ACTION_ID));
@@ -1204,6 +1217,7 @@ public class PluginSettingsPanel {
             s.setInjectTenantOnInsert(injectTenantOnInsertCheck.isSelected());
             s.setDataPermissionHint(dataPermissionHintCheck.isSelected());
             s.setDataPermissionMockCondition(dataPermissionMockConditionField.getText().trim());
+            s.setJdbcSqlPreviewEnabled(jdbcSqlPreviewCheck.isSelected());
         }
         if (sections.contains(SECTION_TABLE_MAPPING)) {
             s.setTablePrefix(tablePrefixField.getText().trim());
@@ -1258,6 +1272,7 @@ public class PluginSettingsPanel {
         }
         if (sections.contains(SECTION_UI)) {
             s.setShowGutterIcon(gutterIconCheck.isSelected());
+            s.setJoinDiagramNative(joinDiagramNativeCheck.isSelected());
             s.setLanguage(lang instanceof LanguageOption
                 ? ((LanguageOption) lang).value
                 : PluginSettings.DEFAULT_LANGUAGE);
@@ -1301,6 +1316,7 @@ public class PluginSettingsPanel {
             injectTenantOnInsertCheck.setSelected(s.getInjectTenantOnInsert());
             dataPermissionHintCheck.setSelected(s.getDataPermissionHint());
             dataPermissionMockConditionField.setText(s.getDataPermissionMockCondition());
+            jdbcSqlPreviewCheck.setSelected(s.getJdbcSqlPreviewEnabled());
         }
         if (sections.contains(SECTION_TABLE_MAPPING)) {
             tablePrefixField.setText(s.getTablePrefix());
@@ -1318,6 +1334,7 @@ public class PluginSettingsPanel {
         }
         if (sections.contains(SECTION_UI)) {
             gutterIconCheck.setSelected(s.getShowGutterIcon());
+            joinDiagramNativeCheck.setSelected(s.getJoinDiagramNative());
             LanguageOption lang = languageOptionByValue(s.getLanguage());
             languageCombo.setSelectedItem(lang != null ? lang : languageOptions()[0]);
             shortcutEditor.setShortcut(currentShortcut(ConvertToSqlAction.ACTION_ID));

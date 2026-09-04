@@ -52,7 +52,7 @@ public class ParamImportParserTest {
           "status": 1,
           "keyword": "hello"
         }
-        """.stripIndent());
+        """.stripTrailing());
         assertEquals(Map.of("status", "1", "keyword", "hello"), result);
     }
 
@@ -80,7 +80,7 @@ public class ParamImportParserTest {
         Map<String, String> result = ParamImportParser.INSTANCE.parse("""
         "name","full name"
         "张三","Li, Si"
-        """.stripIndent());
+        """.stripTrailing());
         assertEquals(Map.of("name", "张三", "full name", "Li, Si"), result);
     }
 

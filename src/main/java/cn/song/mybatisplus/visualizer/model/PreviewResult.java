@@ -54,6 +54,8 @@ public final class PreviewResult {
     private final List<FillClause> fillClauses;
     private final String previousSql;
     private final List<PagesColumn> pagesColumns;
+    /** JDBC 命名参数（NamedParameterJdbcTemplate `:name`）：参数名 → 引号提示；空 map = 纯 `?` 顺序回填。 */
+    private final Map<String, ParamHint> namedParamHints;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -61,6 +63,18 @@ public final class PreviewResult {
                          List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
                          XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, Map.of());
+    }
+
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -81,6 +95,7 @@ public final class PreviewResult {
         this.fillClauses = fillClauses;
         this.previousSql = previousSql;
         this.pagesColumns = pagesColumns;
+        this.namedParamHints = namedParamHints != null ? namedParamHints : Map.of();
     }
 
     public PreviewResult(String sql, String compactSql,
@@ -171,6 +186,10 @@ public final class PreviewResult {
         return pagesColumns;
     }
 
+    public Map<String, ParamHint> getNamedParamHints() {
+        return namedParamHints;
+    }
+
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                               WrapperType wrapperType, String tableName, String warning, List<String> columns,
                               Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
@@ -180,7 +199,19 @@ public final class PreviewResult {
                               List<PagesColumn> pagesColumns) {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns);
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints);
+    }
+
+    public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                              WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                              Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                              List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                              XmlPreviewModel xmlModel, Map<String, String> initialParamValues,
+                              List<PerfWarning> perfWarnings, List<FillClause> fillClauses, String previousSql,
+                              List<PagesColumn> pagesColumns, Map<String, ParamHint> namedParamHints) {
+        return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints);
     }
 
     @Override
@@ -211,14 +242,15 @@ public final class PreviewResult {
                 && Objects.equals(perfWarnings, that.perfWarnings)
                 && Objects.equals(fillClauses, that.fillClauses)
                 && Objects.equals(previousSql, that.previousSql)
-                && Objects.equals(pagesColumns, that.pagesColumns);
+                && Objects.equals(pagesColumns, that.pagesColumns)
+                && Objects.equals(namedParamHints, that.namedParamHints);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns);
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints);
     }
 
     @Override
@@ -229,6 +261,7 @@ public final class PreviewResult {
                 + ", tableComment=" + tableComment + ", previewModel=" + previewModel + ", paramHints=" + paramHints
                 + ", candidateTables=" + candidateTables + ", batchModel=" + batchModel + ", xmlModel=" + xmlModel
                 + ", initialParamValues=" + initialParamValues + ", perfWarnings=" + perfWarnings + ", fillClauses="
-                + fillClauses + ", previousSql=" + previousSql + ", pagesColumns=" + pagesColumns + ")";
+                + fillClauses + ", previousSql=" + previousSql + ", pagesColumns=" + pagesColumns
+                + ", namedParamHints=" + namedParamHints + ")";
     }
 }

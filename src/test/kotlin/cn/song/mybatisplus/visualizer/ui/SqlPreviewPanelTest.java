@@ -127,13 +127,14 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         return result(sql, compact, List.of(), List.of("id", "name"), "tbl", List.of());
     }
 
+    private PreviewResult result(String sql, String compact, List<String> params, List<String> columns) {
+        return result(sql, compact, params, columns, "tbl", List.of());
+    }
+
     private PreviewResult result(String sql, String compact, List<String> params) {
         return result(sql, compact, params, List.of("id", "name"), "tbl", List.of());
     }
 
-    private PreviewResult result(String sql, String compact, List<String> params, List<String> columns) {
-        return result(sql, compact, params, columns, "tbl", List.of());
-    }
 
     private PreviewResult result(String sql, String compact, List<String> params, List<String> columns, String tableName) {
         return result(sql, compact, params, columns, tableName, List.of());
@@ -404,7 +405,7 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
 
     public void testCompletionContextAttached() throws Exception {
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
-        panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of("id", "phone")));
+panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), List.of("id", "phone")));
         PsiFile psi = panel.psiFileForTest();
         assertNotNull("应创建预览 PSI 文件", psi);
         SqlCompletionContext ctx = psi.getUserData(SqlCompletionContext.KEY);

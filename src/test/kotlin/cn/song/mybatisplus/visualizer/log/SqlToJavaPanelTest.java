@@ -250,9 +250,14 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of(
             "t1", List.of(mockCandidate("Address")),
             "t2", List.of(mockCandidate("Order")));
-        assertTrue(
+        SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
+        try {
+            assertTrue(
             "主表 1 候选 + 所有副表各 1 候选应唯一可推断",
-            new SqlToJavaPanel(getProject()).canAutoInferEntitySelection(mainCandidates, subCandidates));
+            panel.canAutoInferEntitySelection(mainCandidates, subCandidates));
+        } finally {
+            panel.dispose();
+        }
     }
 
     @Test
@@ -260,9 +265,14 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
         // 主表多候选 → 有歧义 → 弹窗
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"), mockCandidate("UserEntity"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of("t1", List.of(mockCandidate("Address")));
-        assertTrue(
+        SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
+        try {
+            assertTrue(
             "主表多候选应有歧义（弹窗）",
-            !new SqlToJavaPanel(getProject()).canAutoInferEntitySelection(mainCandidates, subCandidates));
+            !panel.canAutoInferEntitySelection(mainCandidates, subCandidates));
+        } finally {
+            panel.dispose();
+        }
     }
 
     @Test
@@ -271,9 +281,14 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of(
             "t1", List.of(mockCandidate("Address"), mockCandidate("AddressEntity")));
-        assertTrue(
+        SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
+        try {
+            assertTrue(
             "副表多候选应有歧义（弹窗）",
-            !new SqlToJavaPanel(getProject()).canAutoInferEntitySelection(mainCandidates, subCandidates));
+            !panel.canAutoInferEntitySelection(mainCandidates, subCandidates));
+        } finally {
+            panel.dispose();
+        }
     }
 
     @Test
@@ -282,18 +297,28 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
         Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates = Map.of(
             "t1", List.<SqlToJavaConverter.EntityCandidate>of());
-        assertTrue(
+        SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
+        try {
+            assertTrue(
             "副表 0 候选应弹窗",
-            !new SqlToJavaPanel(getProject()).canAutoInferEntitySelection(mainCandidates, subCandidates));
+            !panel.canAutoInferEntitySelection(mainCandidates, subCandidates));
+        } finally {
+            panel.dispose();
+        }
     }
 
     @Test
     public void testCanAutoInferNoSubTables() throws Exception {
         // 主表 1 候选 + 无副表（空 map）→ all 对空集合返回 true → 唯一可推断
         List<SqlToJavaConverter.EntityCandidate> mainCandidates = List.of(mockCandidate("User"));
-        assertTrue(
+        SqlToJavaPanel panel = new SqlToJavaPanel(getProject());
+        try {
+            assertTrue(
             "主表 1 候选 + 无副表应唯一可推断",
-            new SqlToJavaPanel(getProject()).canAutoInferEntitySelection(mainCandidates, Map.of()));
+            panel.canAutoInferEntitySelection(mainCandidates, Map.of()));
+        } finally {
+            panel.dispose();
+        }
     }
 
     /** 构造轻量 EntityCandidate（Proxy PsiClass 仅 name 有值；判定逻辑不触 PSI）。 */
@@ -353,7 +378,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
             "占位态文本标签 tooltip 应为完整占位文案",
             MpSqlVisualizerBundle.message("reverse.panel.callerHint"),
             caller.textTooltipForTest());
-        caller.pickForTest("UserService", "com.demo.UserService", null);
+        caller.pickForTest("UserService", "com.demo.UserService");
         assertNull("选中态文本标签不应有 tooltip（字段级全限定名不遮蔽）", caller.textTooltipForTest());
     }
 
@@ -416,7 +441,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
         assertEquals("", caller.getText());
         assertNull("空值不应显示类图标", caller.iconForTest());
         // 模拟 Goto Class 选择器选中（类图标 + 简单类名 + tooltip 全限定名）
-        caller.pickForTest("UserService", "com.demo.UserService", null);
+        caller.pickForTest("UserService", "com.demo.UserService");
         assertEquals("UserService", caller.getText());
         assertEquals("com.demo.UserService", caller.getToolTipText());
         assertNotNull("选中后应显示类图标（IDEA 原生观感）", caller.iconForTest());
@@ -470,7 +495,7 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
             panel.convertForTest();
             assertTrue(panel.resultTextForTest().contains("new QueryWrapper"));
             // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）
-            panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService", null);
+            panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService");
             String result = panel.resultTextForTest();
             assertTrue(result, result.contains("userService.list"));
             // 清除 → 回到纯表达式

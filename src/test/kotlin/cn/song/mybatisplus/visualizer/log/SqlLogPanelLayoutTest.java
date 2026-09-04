@@ -42,7 +42,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void toolbarKeyComponentsPresentDefaultVisibilityCorrect() throws Exception {
+    public void testToolbarkeycomponentspresentdefaultvisibilitycorrect() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             waitForEdt();
@@ -63,7 +63,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void injectDurationInfoSortsShows() throws Exception {
+    public void testInjectdurationinfosortsshows() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             manager.getEntries().addEntry(new LogSqlEntry(
@@ -82,7 +82,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void narrowSidebarWrapLayoutTypeFilterNotClipped() throws Exception {
+    public void testNarrowsidebarwraplayouttypefilternotclipped() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             panel.applyTypeFilterForTest(Set.of(StatementType.SELECT, StatementType.UPDATE));
@@ -113,7 +113,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void switchHistoryTabHistoryPanelAssembles() throws Exception {
+    public void testSwitchhistorytabhistorypanelassembles() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             waitForEdt();

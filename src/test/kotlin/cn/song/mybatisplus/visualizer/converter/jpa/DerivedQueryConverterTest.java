@@ -105,7 +105,7 @@ public class DerivedQueryConverterTest {
             SELECT id, first_name, last_name, age, name, status, department_id, create_time
             FROM `user`
             WHERE last_name = ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -127,7 +127,7 @@ public class DerivedQueryConverterTest {
             FROM `user`
             WHERE last_name = ?
                 AND first_name = ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -146,7 +146,7 @@ public class DerivedQueryConverterTest {
             SELECT id, first_name, last_name, age, name, status, department_id, create_time
             FROM `user`
             WHERE age BETWEEN ? AND ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -166,7 +166,7 @@ public class DerivedQueryConverterTest {
             SELECT id, first_name, last_name, age, name, status, department_id, create_time
             FROM `user`
             WHERE name LIKE ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -185,7 +185,7 @@ public class DerivedQueryConverterTest {
             SELECT id, first_name, last_name, age, name, status, department_id, create_time
             FROM `user`
             WHERE status IN (?)
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     // ------------------------------------------------------------------
@@ -206,7 +206,7 @@ public class DerivedQueryConverterTest {
             SELECT COUNT(*)
             FROM `user`
             WHERE department_id = ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -222,7 +222,7 @@ public class DerivedQueryConverterTest {
             SELECT 1
             FROM `user`
             WHERE department_id = ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     // ------------------------------------------------------------------
@@ -241,7 +241,7 @@ public class DerivedQueryConverterTest {
         assertEquals("""
             DELETE FROM `user`
             WHERE status = ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     // ------------------------------------------------------------------
@@ -268,7 +268,7 @@ public class DerivedQueryConverterTest {
             FROM `user`
             ORDER BY create_time DESC
             LIMIT 10
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -283,7 +283,7 @@ public class DerivedQueryConverterTest {
             SELECT DISTINCT id, first_name, last_name, age, name, status, department_id, create_time
             FROM `user`
             WHERE status = ?
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     // ------------------------------------------------------------------
@@ -580,7 +580,7 @@ public class DerivedQueryConverterTest {
         assertEquals("""
             SELECT id, first_name, last_name, age, name, status, department_id, create_time
             FROM `user`
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     @Test
@@ -593,7 +593,7 @@ public class DerivedQueryConverterTest {
         String sql = SqlGenerator.INSTANCE.generate(statement);
         assertEquals("""
             DELETE FROM `user`
-            """.stripIndent(), sql);
+            """.stripTrailing(), sql);
     }
 
     // ------------------------------------------------------------------

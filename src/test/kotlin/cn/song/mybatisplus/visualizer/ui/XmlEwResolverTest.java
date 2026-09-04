@@ -73,7 +73,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
         SELECT * FROM t_user ${ew.customSqlSegment}
       </select>
     </mapper>
-    """.stripIndent();
+    """.stripTrailing();
 
     @Test
     public void testEwCustomSqlSegmentExpanded() throws Exception {
@@ -91,7 +91,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
                 public interface UserMapper {
                     java.util.List<Object> selectList(Wrapper ew);
                 }
-                """.stripIndent());
+                """.stripTrailing());
         myFixture.configureByText(
                 "Service.java",
                 """
@@ -103,7 +103,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
                         mapper.selectList(new QueryWrapper<com.example.User>().eq("id", 1L).eq("name", "x"));
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         // Light 测试注入轻量调用查找（生产走 ReferencesSearch，此处直接扫描调用表达式）
         PsiFile serviceFile = myFixture.getFile();
         PreviewResult result = previewWithFinder(MAPPER_XML, "selectList", getProject(), serviceFile);
@@ -125,7 +125,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
                 public interface UserMapper {
                     java.util.List<Object> selectList(Wrapper ew);
                 }
-                """.stripIndent());
+                """.stripTrailing());
         myFixture.configureByText("Unrelated.java", "public class Unrelated { int x = 1; }");
         PreviewResult result = XmlPreviewService.INSTANCE.preview(MAPPER_XML, "selectList", getProject());
         assertTrue("应提示未找到调用：" + result.getWarning(),
@@ -139,7 +139,7 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
         <mapper>
           <select id="selectList">SELECT * FROM t WHERE ${ew.customSqlSegment}</select>
         </mapper>
-        """.stripIndent();
+        """.stripTrailing();
         PreviewResult result = XmlPreviewService.INSTANCE.preview(noNsXml, "selectList", getProject());
         assertTrue("应提示缺 namespace：" + result.getWarning(),
                 result.getWarning() != null && result.getWarning().contains("namespace"));

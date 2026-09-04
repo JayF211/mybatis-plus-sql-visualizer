@@ -104,7 +104,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
                 SET t.name = '张三', t1.tel = 138, t.update_by = 'admin', t.age = t.age + 1
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 
@@ -134,7 +134,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 LEFT JOIN address addressEntity ON t.id = addressEntity.user_id
                 SET t.age = t.age - 2
                 WHERE t1.status = '1'
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 
@@ -150,7 +150,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 UPDATE `user` t
                 SET t.name = ?, t.update_by = ?, t.age = ?
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
 
         String andNull = SqlGenerator.INSTANCE.generate(UpdateJoinConverter.INSTANCE.convert(
@@ -161,7 +161,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 """
                 UPDATE `user` t
                 SET t.name = ?, t.update_by = ?, t.age = ?
-                """.stripIndent(),
+                """.stripTrailing(),
                 andNull);
     }
 
@@ -191,7 +191,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 LEFT JOIN address addressEntity ON addressEntity.user_id = u.id
                 SET u.name = 'x'
                 WHERE u.id = 1
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 
@@ -215,7 +215,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 LEFT JOIN address t1 on t1.user_id = t.id
                 SET t.name = 'x'
                 WHERE t.id = 1
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 
@@ -234,7 +234,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 DELETE t, addressEntity FROM `user` t
                 LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 
@@ -252,7 +252,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 DELETE t FROM `user` t
                 LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 SqlGenerator.INSTANCE.generate(mainStatement));
 
         WrapperChain subTarget = chain(WrapperType.DELETE_JOIN, List.of(
@@ -267,7 +267,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 DELETE addressEntity FROM `user` t
                 LEFT JOIN address addressEntity ON addressEntity.user_id = t.id
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 SqlGenerator.INSTANCE.generate(subStatement));
     }
 
@@ -297,13 +297,13 @@ public class UpdateJoinDeleteJoinConverterTest {
                 """
                 DELETE t FROM `user` t
                 WHERE t.id = 1
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
         assertEquals(
                 """
                 DELETE FROM `user`
                 WHERE id = 1
-                """.stripIndent(),
+                """.stripTrailing(),
                 SqlGenerator.INSTANCE.generate((DeleteStatement) LambdaDeleteConverter.INSTANCE.convert(
                         chain(WrapperType.LAMBDA_DELETE, List.of(eqCall("id", "1"))), table)));
     }
@@ -331,7 +331,7 @@ public class UpdateJoinDeleteJoinConverterTest {
                 UPDATE `user` t
                 SET t.`table` = t.`table` + 1
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 }

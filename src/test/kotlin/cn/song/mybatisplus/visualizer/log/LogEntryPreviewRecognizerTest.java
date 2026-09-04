@@ -63,7 +63,7 @@ public class LogEntryPreviewRecognizerTest {
         RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
                 "SELECT * FROM t WHERE a = ?",
                 List.of(new LogSqlParam("abc", null))));
-        assertEquals(List.of((Boolean) null), quotes(recognized));
+        assertEquals(java.util.Collections.singletonList((Boolean) null), quotes(recognized));
     }
 
     @Test
@@ -126,7 +126,7 @@ public class LogEntryPreviewRecognizerTest {
                 List.of(new LogSqlParam(null, null))));
         assertTrue(recognized.recognized());
         assertEquals(Map.of("param1", ""), recognized.initialValues());
-        assertEquals(List.of((Boolean) null), quotes(recognized));
+        assertEquals(java.util.Collections.singletonList((Boolean) null), quotes(recognized));
     }
 
     @Test

@@ -5,6 +5,13 @@ import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator;
+import com.intellij.psi.PsiClass;
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService;
+import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator;
+import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryInfo;
+import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator;
+import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator;
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator;
 import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.PagesXmlPreviewService;
@@ -154,8 +161,11 @@ public final class ConvertToSqlAction extends AnAction {
                 (PreviewResult result) -> {
                     if (result != null) {
                         SqlPreviewService.showResult(project, result, sourceLocation);
-                    } else if (!tryJpaFallback(service, project, element, sourceLocation)) {
-                        // JPA 均未命中 → 回落文件级 SQL 注解候选
+                    } else if (!tryHqlFallback(service, project, element, sourceLocation)
+                            && !tryNamedQueryFallback(service, project, element, sourceLocation)
+                            && !tryJdbcTemplateFallback(project, element, sourceLocation)
+                            && !tryJpaFallback(service, project, element, sourceLocation)) {
+                        // 均未命中 → 回落文件级 SQL 注解候选
                         showAnnotationCandidates(project, file, editor, sourceLocation);
                     }
                     return Unit.INSTANCE;
@@ -173,6 +183,72 @@ public final class ConvertToSqlAction extends AnAction {
             selectionStart = m.getSelectionStart();
             selectionEnd = m.getSelectionEnd();
         }
+    }
+
+    /**
+     * HQL 兜底（T-PreviewShortcut）：标准 HQL/JPQL 运行时字符串调用 + 自定义 DAO HQL。
+     * 两定位器 locate(任意 PSI 元素) 均可从光标元素定位到宿主方法体内匹配调用，命中任一即触发预览并返回 true。
+     * 与 CriteriaQuery（首参 Class/CriteriaQuery 变量）无冲突——hasStringHqlArgument 已排除。
+     */
+    private boolean tryHqlFallback(SqlPreviewService service, Project project, PsiElement element, String sourceLocation) {
+        // 1. 标准 HQL/JPQL：session/em.createQuery / createNativeQuery / createNamedQuery（字符串首参）
+        if (HqlQueryLocator.INSTANCE.locate(element) != null) {
+            SqlPreviewService.previewAsync(project,
+                    () -> service.previewHql(element),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return true;
+        }
+        // 2. 自定义 DAO HQL：commonDao.findByQuery(...) / findByQueryUniqueResult(...) 等
+        if (CustomDaoHqlLocator.INSTANCE.locate(element) != null) {
+            SqlPreviewService.previewAsync(project,
+                    () -> service.previewCustomDaoHql(element),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * @NamedQuery 实体级兜底（T-PreviewShortcut）：光标落在实体类 @NamedQuery(...) 注解内时，
+     * 反查实体类 → previewNamedQuery 转换对应命名查询的 JPQL。
+     */
+    private boolean tryNamedQueryFallback(SqlPreviewService service, Project project, PsiElement element, String sourceLocation) {
+        PsiAnnotation annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation.class, false);
+        if (annotation == null) return false;
+        String qualified = annotation.getQualifiedName();
+        String simpleName = qualified != null
+                ? qualified.substring(qualified.lastIndexOf('.') + 1)
+                : (annotation.getNameReferenceElement() != null
+                        ? annotation.getNameReferenceElement().getReferenceName() : null);
+        if (!"NamedQuery".equals(simpleName)) return false;
+        PsiClass cls = PsiTreeUtil.getParentOfType(annotation, PsiClass.class, false);
+        if (cls == null) return false;
+        boolean match = false;
+        for (NamedQueryInfo info : NamedQueryLocator.INSTANCE.locate(cls)) {
+            if (info.getAnnotation() == annotation) {
+                match = true;
+                break;
+            }
+        }
+        if (!match) return false;
+        SqlPreviewService.previewAsync(project,
+                () -> service.previewNamedQuery(annotation),
+                (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+        return true;
+    }
+
+    /**
+     * JDBC 模板兜底（T-PreviewShortcut）：jdbcTemplate.queryForList / update 等 →
+     * JdbcTemplateSqlPreviewService.preview（支持命名参数 / 字符串拼接）。
+     */
+    private boolean tryJdbcTemplateFallback(Project project, PsiElement element, String sourceLocation) {
+        if (JdbcTemplateSqlLocator.INSTANCE.locate(element) != null) {
+            SqlPreviewService.previewAsync(project,
+                    () -> JdbcTemplateSqlPreviewService.preview(element, project),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return true;
+        }
+        return false;
     }
 
     /**

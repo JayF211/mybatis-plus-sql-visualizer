@@ -85,7 +85,7 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
                         public void getById(Object id) {}
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         com.intellij.psi.PsiFile file = myFixture.getFile();
         List<PsiMethodCallExpression> candidates =
                 WrapperLocator.sqlCandidatesInRange(file, 0, file.getTextLength());
@@ -113,7 +113,7 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
                   <select id="selectList">SELECT * FROM t</select>
                   <select id="selectByName">SELECT * FROM t WHERE name = #{name}</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlFile file = (XmlFile) myFixture.getFile();
         List<XmlTag> candidates =
                 XmlSqlGutterLineMarkerProvider.statementsInRange(file, 0, file.getTextLength());

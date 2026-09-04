@@ -55,7 +55,7 @@ public class UpdateFlowHeavyTest extends HeavyPlatformTestCase {
             manifestHits.incrementAndGet();
             String body = """
                     {"version":"%s","downloadUrl":"%s","changeNotes":"e2e notes","publishDate":"2026-08-15"}
-                    """.stripIndent().formatted(version, downloadUrl);
+                    """.stripTrailing().formatted(version, downloadUrl);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, (long) body.getBytes().length);
             try (OutputStream os = exchange.getResponseBody()) {

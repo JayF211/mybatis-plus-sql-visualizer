@@ -902,6 +902,11 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         }
 
         /** 测试访问器：模拟选择器选中（类图标 + 简单类名 + 全限定名 + 变更回调）。 */
+        /** 对齐 Kotlin 默认参数 icon = AllIcons.Nodes.Class。 */
+        public void pickForTest(String simpleName, String qualifiedName) {
+            pickForTest(simpleName, qualifiedName, com.intellij.icons.AllIcons.Nodes.Class);
+        }
+
         public void pickForTest(String simpleName, String qualifiedName, Icon icon) {
             setPicked(simpleName, qualifiedName, icon);
         }

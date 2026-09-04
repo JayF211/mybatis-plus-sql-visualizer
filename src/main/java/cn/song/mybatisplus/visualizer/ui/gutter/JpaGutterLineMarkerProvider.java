@@ -47,7 +47,9 @@ public class JpaGutterLineMarkerProvider implements LineMarkerProvider {
         // 确认当前 leaf 就是方法名（而非方法体内某个变量名 / 类型名）
         if (method.getNameIdentifier() != element) return null;
         if (!gutterEnabled()) return null;
-        if (!DerivedMethodLocator.isDerivedQuery(method)) return null;
+        // 必须同时是 Repository 接口内的派生方法名——避免普通类手写方法（如业务 DAO 的
+        // `deleteByDbHelper`）被误判为 JPA 派生查询而显示错误图标（触发 previewDerivedQuery 返回 null）
+        if (!DerivedMethodLocator.isRepositoryMethod(method)) return null;
 
         return new LineMarkerInfo<PsiElement>(
                 element,

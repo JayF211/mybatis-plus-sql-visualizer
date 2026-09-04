@@ -57,7 +57,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 private Integer sort;
             }
         }
-        """.stripIndent();
+        """.stripTrailing();
 
     /** 定位锚点元素：文件内第一个方法调用（最外层链），无调用时回退到字面量。 */
     private PsiElement anchor() {
@@ -118,7 +118,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 FROM device_info_entity
                 WHERE id = 1001
                     AND station_id IS NOT NULL
-                """.stripIndent(),
+                """.stripTrailing(),
                 sql);
     }
 
@@ -140,7 +140,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Integer sort;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         WrapperChain chain = WrapperLocator.locate(anchor());
         assertNotNull(chain);
         // 分步写法应收集到变量上全部调用（eq + orderByDesc）
@@ -156,7 +156,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         String s = "hello";
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         WrapperChain chain = WrapperLocator.locate(anchor());
         assertNull("非 Wrapper 代码应返回 null", chain);
     }
@@ -183,7 +183,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Integer sort;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         WrapperChain chain = WrapperLocator.locate(anchor());
         assertNotNull("应识别 and 嵌套 lambda", chain);
         // 至少应解析出 eq、and 与 orderByAsc（or() 无参切换 M1 简化忽略）
@@ -215,7 +215,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Integer sort;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression pageCall = firstCall(myFixture.getFile(), "page");
         LocatedWrapper located = WrapperLocator.locateWithTable(pageCall);
         assertNotNull("page 消费应定位到 wrapper", located);
@@ -245,7 +245,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Integer sort;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression pageCall = firstCall(myFixture.getFile(), "page");
         LocatedWrapper located = WrapperLocator.locateWithTable(pageCall);
         assertNotNull(located);
@@ -273,7 +273,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         // 内联 new 形态：selectPage 消费 → LIMIT 20, 20
         PsiMethodCallExpression selectPageCall = firstCall(myFixture.getFile(), "selectPage");
         LocatedWrapper inlineLocated = WrapperLocator.locateWithTable(selectPageCall);
@@ -307,7 +307,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long stationId;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull(located);
         SelectStatement statement = new QueryWrapperParser(located.getTable()).parse(located.getChain());
@@ -340,7 +340,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long stationId;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor(), false);
         assertNotNull(located);
         SelectStatement statement = new QueryWrapperParser(located.getTable()).parse(located.getChain());
@@ -371,7 +371,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull(located);
         SelectStatement statement = new QueryWrapperParser(located.getTable()).parse(located.getChain());
@@ -399,7 +399,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long accountId;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("应定位到内联 MPJLambdaQueryWrapper", located);
         assertEquals(List.of("select", "eq"), methodNames(located.getChain()));
@@ -441,7 +441,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private String subAccountName;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("应定位到 Wrappers 静态工厂内联链", located);
         assertEquals(WrapperType.LAMBDA_QUERY, located.getChain().getWrapperType());
@@ -469,7 +469,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private String phone;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("应定位到变量持有的 Wrappers 工厂链", located);
         assertEquals(WrapperType.LAMBDA_QUERY, located.getChain().getWrapperType());
@@ -489,7 +489,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         MyHelper.lambdaQuery().eq("a", "b");
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("lambdaQuery 服务链应被识别（T-M15-01）", located);
         assertEquals(WrapperType.LAMBDA_QUERY, located.getChain().getWrapperType());
@@ -506,7 +506,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         MyHelper.count(wrapper);
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         for (String name : List.of("update", "count")) {
             PsiMethodCallExpression call = firstCall(myFixture.getFile(), name);
             assertNull("消费调用 " + name + " 不应被识别为链起点", WrapperLocator.locate(call));
@@ -536,7 +536,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("应定位到 JoinWrappers.lambda 工厂链", located);
         assertEquals(WrapperType.MPJ_LAMBDA, located.getChain().getWrapperType());
@@ -553,7 +553,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 SELECT t.id
                 FROM user_entity t
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 SqlGenerator.INSTANCE.generate(statement));
     }
 
@@ -574,7 +574,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression factoryCall = firstCall(myFixture.getFile(), "query");
         WrapperChain chain = WrapperLocator.locate(factoryCall);
         assertNotNull("JoinWrappers.query 应定位为工厂链", chain);
@@ -594,7 +594,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         mapper.selectList(Wrappers.query().eq("id", 1001L));
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression factoryCall = firstCall(myFixture.getFile(), "query");
         WrapperChain chain = WrapperLocator.locate(factoryCall);
         assertNotNull("Wrappers.query 应定位为工厂链", chain);
@@ -620,7 +620,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         java.util.Collection<PsiMethodCallExpression> calls =
                 PsiTreeUtil.collectElementsOfType(myFixture.getFile(), PsiMethodCallExpression.class);
         PsiMethodCallExpression lambdaJoin = calls.stream()
@@ -658,7 +658,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         java.util.Collection<PsiMethodCallExpression> calls =
                 PsiTreeUtil.collectElementsOfType(myFixture.getFile(), PsiMethodCallExpression.class);
         PsiMethodCallExpression updateCall = calls.stream()
@@ -703,7 +703,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long userId;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression factoryCall = firstCall(myFixture.getFile(), "update");
         LocatedWrapper located = WrapperLocator.locateWithTable(factoryCall);
         assertNotNull("JoinWrappers.update 应定位为 UPDATE_JOIN 工厂链", located);
@@ -720,7 +720,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 LEFT JOIN address_entity addressEntity ON addressEntity.user_id = t.id
                 SET t.name = 'x'
                 WHERE t.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 SqlGenerator.INSTANCE.generate(statement));
     }
 
@@ -743,7 +743,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private String name;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression factoryCall = firstCall(myFixture.getFile(), "update");
         LocatedWrapper located = WrapperLocator.locateWithTable(factoryCall);
         assertNotNull("JoinWrappers.update 应定位为 UPDATE_JOIN 工厂链", located);
@@ -776,7 +776,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("应定位到菱形实体变量构造链", located);
         assertEquals(WrapperType.MPJ_LAMBDA, located.getChain().getWrapperType());
@@ -805,7 +805,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         LocatedWrapper located = WrapperLocator.locateWithTable(anchor());
         assertNotNull("应定位到菱形实体变量+别名构造链", located);
         assertEquals("u", located.getChain().getConstructorAlias());
@@ -819,7 +819,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                 SELECT u.id
                 FROM user_entity u
                 WHERE u.id = 1001
-                """.stripIndent(),
+                """.stripTrailing(),
                 SqlGenerator.INSTANCE.generate(statement));
     }
 
@@ -844,7 +844,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         private Long id;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         // 光标模拟：eq 调用的实参字面量（链中任意位置）
         PsiLiteralExpression eqArg = PsiTreeUtil.collectElementsOfType(myFixture.getFile(), PsiLiteralExpression.class)
                 .stream()
@@ -874,7 +874,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         public Object list() { return null; }
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         // 光标模拟：list 调用自身（链尾）
         PsiMethodCallExpression listCall = firstCall(myFixture.getFile(), "list");
         LocatedWrapper located = WrapperLocator.locateWithTable(listCall);
@@ -892,7 +892,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         helper.applyFilter(w);
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiReferenceExpression arg = PsiTreeUtil.collectElementsOfType(myFixture.getFile(), PsiReferenceExpression.class)
                 .stream()
                 .filter(r -> "w".equals(r.getText()))
@@ -928,7 +928,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         public Object getById(Long id) { return null; }
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         List<PsiMethodCallExpression> heads =
                 WrapperLocator.sqlCandidatesInRange(myFixture.getFile(), 0, myFixture.getFile().getTextLength());
         assertEquals("选择区应收集 3 个候选（new 链 1 + 服务链 1 + getById 批量 1，普通调用不计）", 3, heads.size());
@@ -961,7 +961,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         public Object getById(Long id) { return null; }
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         List<PsiMethodCallExpression> candidates =
                 WrapperLocator.sqlCandidatesInRange(myFixture.getFile(), 0, myFixture.getFile().getTextLength());
         assertEquals(2, candidates.size());
@@ -998,7 +998,7 @@ public class WrapperLocatorTest extends BasePlatformTestCase {
                         public Object getById(Long id) { return null; }
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         PsiMethodCallExpression head =
                 WrapperLocator.sqlCandidatesInRange(myFixture.getFile(), 0, myFixture.getFile().getTextLength()).get(0);
         // 行文本：候选调用所在行完整内容（trim）

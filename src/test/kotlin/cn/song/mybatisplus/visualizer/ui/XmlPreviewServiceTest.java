@@ -28,7 +28,7 @@ public class XmlPreviewServiceTest {
         UPDATE t_biz SET a = #{a} WHERE id = #{id}
       </update>
     </mapper>
-    """.stripIndent();
+    """.stripTrailing();
 
     private static String compact(String sql) {
         return sql.replaceAll("\\s+", " ").trim();
@@ -84,7 +84,7 @@ public class XmlPreviewServiceTest {
                     <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
                   </select>
                 </mapper>
-                """.stripIndent(), "s1");
+                """.stripTrailing(), "s1");
         // foreach 默认展开 2 次（无错误）；null 集合场景由面板 state 触发——此处验证正常渲染
         assertEquals("SELECT * FROM t WHERE id IN ( ? , ? )", compact(result.getSql()));
         assertNull(result.getWarning());
@@ -97,7 +97,7 @@ public class XmlPreviewServiceTest {
                 <mapper namespace="n">
                   <resultMap id="rm" type="x"></resultMap>
                 </mapper>
-                """.stripIndent(), null);
+                """.stripTrailing(), null);
         assertTrue(result.getWarning() != null && result.getWarning().contains("未找到"));
     }
 

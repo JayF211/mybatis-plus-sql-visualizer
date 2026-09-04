@@ -81,7 +81,7 @@ public class XmlSqlRendererTest {
                 <if test="name != null">AND name LIKE #{likeName}</if>
               </select>
             </mapper>
-            """.stripIndent();
+            """.stripTrailing();
 
     // ------------------------------------------------------------------
     // 默认状态（全部条件按启发式展开）
@@ -183,7 +183,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT 1</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         RenderedXmlSql result = m.renderSql();
         assertEquals("SELECT 1", result.sql());
         assertTrue(result.mappings().isEmpty());
@@ -197,7 +197,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE a = #{a} AND b = #{b, jdbcType=VARCHAR}</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         RenderedXmlSql result = m.renderSql();
         assertEquals("SELECT * FROM t WHERE a = ? AND b = ?", result.sql());
         assertEquals("a", result.mappings().get(0).property());
@@ -211,7 +211,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT \\${col} FROM t</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         // `\$` 转义 → 文本判定为静态 → StaticTextSqlNode 原样输出（对齐 MyBatis：转义仅在动态文本生效）
         assertEquals("SELECT \\${col} FROM t", m.renderSql().sql());
     }
@@ -222,7 +222,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE ${ew.customSqlSegment}</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         RenderedXmlSql result = m.renderSql();
         // ew 无模拟值 → 空串（MP 占位等场景由面板标注）
         assertEquals("SELECT * FROM t WHERE", result.sql());
@@ -242,7 +242,7 @@ public class XmlSqlRendererTest {
                     WHERE id = #{id}
                   </update>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         assertEquals(
                 "UPDATE t_biz SET name = ?, remark = ? WHERE id = ?",
                 compact(m.renderSql().sql()));
@@ -257,7 +257,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1"><else>oops</else></select>
                 </mapper>
-                """.stripIndent()));
+                """.stripTrailing()));
     }
 
     @Test
@@ -276,7 +276,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t <include refid="missing"/></select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         assertTrue(m.getErrors().stream().anyMatch(e -> e.contains("missing")));
         assertEquals("SELECT * FROM t", compact(m.renderSql().sql()));
     }
@@ -291,7 +291,7 @@ public class XmlSqlRendererTest {
                     SELECT * FROM t WHERE status = #{idleStatus}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlPreviewModel m = XmlPreviewModel.from(parsed.statements().get(0), parsed.errors());
         RenderedXmlSql rendered = m.renderSql();
         assertEquals("1", rendered.bindValues().get("idleStatus"));
@@ -307,7 +307,7 @@ public class XmlSqlRendererTest {
                     SELECT * FROM t WHERE status = #{status}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlPreviewModel m = XmlPreviewModel.from(parsed.statements().get(0), parsed.errors());
         XmlPreviewState state = copyWithBinds(m.defaultState(), Map.of("status", "9"));
         assertEquals("9", m.renderSql(state).bindValues().get("status"));
@@ -322,7 +322,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE id = #{id}</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         assertEquals("SELECT * FROM t WHERE id = ?", compact(m.renderSql().sql()));
         assertEquals("id", m.renderSql().mappings().stream().findFirst().get().property());
     }
@@ -334,7 +334,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE status = '&status;'</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         assertEquals("SELECT * FROM t WHERE status = 'ACTIVE'", compact(m.renderSql().sql()));
     }
 
@@ -346,7 +346,7 @@ public class XmlSqlRendererTest {
                 <mapper namespace="n">
                   <select id="s1">SELECT '&xxe;' FROM t</select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         String sql = compact(m.renderSql().sql());
         assertEquals("SELECT '' FROM t", sql);
     }
@@ -361,7 +361,7 @@ public class XmlSqlRendererTest {
                     SELECT * FROM t WHERE port_status = #{portStatus}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlStatement statement = parsed.statements().get(0);
         XmlPreviewModel m = XmlPreviewModel.from(statement, parsed.errors(),
                 Map.<String, Object>of("com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE_DEVICE_PORT_STATUS_IDLE", "1"),
@@ -382,7 +382,7 @@ public class XmlSqlRendererTest {
                     SELECT * FROM t WHERE status = #{idleStatus}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlStatement statement = parsed.statements().get(0);
         XmlPreviewModel m = XmlPreviewModel.from(statement, parsed.errors(),
                 Map.<String, Object>of("com.cyzc.platform.common.constant.DicConstants@DIC_VALUE_BIKE_DEVICE_PORT_STATUS_IDLE", "1"),
@@ -401,7 +401,7 @@ public class XmlSqlRendererTest {
                     SELECT * FROM t WHERE port_status = #{portStatus}
                   </select>
                 </mapper>
-                """.stripIndent());
+                """.stripTrailing());
         XmlPreviewModel m = XmlPreviewModel.from(parsed.statements().get(0), parsed.errors());
         RenderedXmlSql rendered = m.renderSql();
         assertTrue(rendered.errors().stream().anyMatch(e -> e.contains("静态常量") && e.contains("填写覆盖值")));

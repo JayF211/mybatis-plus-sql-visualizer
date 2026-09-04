@@ -259,6 +259,16 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.4</h2>
+            <ul>
+                <li>JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览</li>
+                <li>JOIN 图换用 IDEA 原生图框架</li>
+                <li>JOIN 图渲染对齐 Database 原生显示图</li>
+                <li>JOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线</li>
+                <li>非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览</li>
+                <li>SQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复</li>
+                <li>SqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复</li>
+            </ul>
             <h2>v2026.9.2</h2>
             <ul>
                 <li>SQL 预览面板原生 Database 控制台内嵌</li>
@@ -550,11 +560,38 @@ intellijPlatformTesting {
                         srcDriverState.copyTo(dstDriverState)
                         logger.lifecycle("testDatabase: databaseDrivers.xml pre-seeded (driver ready state)")
                     }
+                    // T-Embed-08：单元测试模式下 DatabaseArtifactLoader 只认 config 根的
+                    // test-database-artifacts.xml 作为 artifact 清单（getTestArtifactLists，
+                    // 字节码实证）——缺失时 getArtifactClasspathElements 恒空 → 远程 JDBC 进程
+                    // ClassNotFound。把同一份 jdbc-drivers.xml 目录清单复制为测试清单即可。
+                    val srcArtifactList = File("build/test-sandbox/database/config_testDatabase/jdbc-drivers/jdbc-drivers.xml")
+                    val dstArtifactList = File("build/test-sandbox/database/config_testDatabase/test-database-artifacts.xml")
+                    if (srcArtifactList.isFile && !dstArtifactList.isFile) {
+                        srcArtifactList.copyTo(dstArtifactList)
+                        logger.lifecycle("testDatabase: test-database-artifacts.xml seeded (unit-test artifact list)")
+                    }
+                    // 同理：单测模式下驱动定义（含已下载版本）走 test-database-drivers.xml——
+                    // 缺失时 DatabaseDriver 的 artifact ref 无具体 version → classpath 仍为空。
+                    val dstTestDrivers = File("build/test-sandbox/database/config_testDatabase/test-database-drivers.xml")
+                    if (!dstTestDrivers.isFile) {
+                        dstTestDrivers.writeText(
+                            """
+                            <drivers>
+                              <driver id="mysql.8">
+                                <artifact id="MySQL ConnectorJ" name="MySQL Connector/J" use="true" version="9.7.0"/>
+                              </driver>
+                            </drivers>
+                            """.trimIndent(),
+                        )
+                        logger.lifecycle("testDatabase: test-database-drivers.xml seeded (driver with pinned artifact version)")
+                    }
                 }
                 filter {
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
                 // M36.5.23 续：DataSourceSelector 选择/发现层集成骨架（仅 testDatabase 跑，database jar 在 classpath）
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
+                // T-Embed-03/04/08：B 路径 Database 原生图 + 虚拟外键 JOIN 线真实链路
+                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
             }
             }
         }
@@ -579,5 +616,7 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
         // M36.5.23 续：DataSourceSelector 选择/发现层集成骨架同样依赖 database jar（默认 test 已剥离）
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
+        // T-Embed-03/04/08：B 路径 Database 原生图嵌入链路（虚拟外键注入），同上仅在 testDatabase 运行
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
     }
 }

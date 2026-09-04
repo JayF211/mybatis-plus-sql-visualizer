@@ -158,7 +158,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
                 </where>
               </select>
             </mapper>
-            """.stripIndent();
+            """.stripTrailing();
         PreviewResult result = XmlPreviewService.INSTANCE.preview(xml, "statistics", getProject());
         assertNotNull("应产出预览结果", result);
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());

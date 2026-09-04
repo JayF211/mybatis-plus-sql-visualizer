@@ -167,7 +167,7 @@ public class WrapperCompletionContributorTest extends BasePlatformTestCase {
                         private String name;
                     }
                 }
-                """.stripIndent());
+                """.stripTrailing());
         String text = myFixture.getFile().getText();
         int likeNameOffset = text.indexOf(".like(") + 2;
         PsiElement element = findAtMyFile(likeNameOffset);

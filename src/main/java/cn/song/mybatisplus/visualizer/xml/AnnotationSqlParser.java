@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.xml;
 
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,7 +37,7 @@ public class AnnotationSqlParser {
             node = new MixedSqlNode(List.of(new TextSqlNode(sqlText)));
         }
         XmlStatement statement = new XmlStatement("annotation", kind, node, null);
-        return XmlPreviewModel.from(statement, List.of(), new HashSet<>(paramNames), staticFieldValues, Map.of(), Map.of());
+        return XmlPreviewModel.from(statement, List.of(), new LinkedHashSet<>(paramNames), staticFieldValues, Map.of(), Map.of());
     }
 
     /** 注解 SQL 解析（staticFieldValues 默认空映射）。 */

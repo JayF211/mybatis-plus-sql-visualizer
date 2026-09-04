@@ -108,7 +108,7 @@ public class ForeachSqlNodeTest {
 
     @Test
     public void null集合默认报错记录() throws Exception {
-        RenderedXmlSql result = render(foreach("list"), Map.<String, Object>of("list", null));
+        RenderedXmlSql result = render(foreach("list"), java.util.Collections.<String, Object>singletonMap("list", null));
         assertEquals("", result.sql());
         assertTrue(result.errors().stream().anyMatch(e -> e.contains("evaluated to a null value")));
     }
@@ -116,7 +116,7 @@ public class ForeachSqlNodeTest {
     @Test
     public void nullable为true时null集合静默跳过() throws Exception {
         RenderedXmlSql result = render(foreach("list", "x", null, new StaticTextSqlNode("#{x}"), ",", "(", ")", true),
-                Map.<String, Object>of("list", null));
+                java.util.Collections.<String, Object>singletonMap("list", null));
         assertEquals("", result.sql());
         assertTrue(result.errors().isEmpty());
     }
@@ -132,7 +132,7 @@ public class ForeachSqlNodeTest {
         ForeachSqlNode node = foreach("list", "x", null,
                 new IfSqlNode(new StaticTextSqlNode("#{x}"), "x != null"), ",", "(", ")", false);
         // 第一项 null → if 关闭（无输出）；第二项 "v" → 输出；first 顺延 → 无 separator
-        RenderedXmlSql result = render(node, Map.<String, Object>of("list", List.of(null, "v")));
+        RenderedXmlSql result = render(node, java.util.Collections.<String, Object>singletonMap("list", java.util.Arrays.asList(null, "v")));
         assertEquals("( ? )", result.sql());
         assertEquals(List.of("__frch_x_1"), props(result));
     }

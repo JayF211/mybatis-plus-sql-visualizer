@@ -141,6 +141,10 @@ public final class JpqlConverter {
 
         // 7. 属性名 → 列名映射
         sql = mapPropertyToColumn(sql, table);
+        // 7.5 SELECT 子句展开（T-BareFromSelect）：与 HqlConverter 共用展开器，
+        // 补齐隐式查询（`from Entity` 无 SELECT）的列清单与 `SELECT u` 裸别名展开，
+        // 使 @NamedQuery 路径与 HQL 路径输出一致。DELETE 语句内部已短路。
+        sql = SelectClauseExpander.INSTANCE.expand(sql, table);
 
         // 8. 检测 DELETE JPQL → DeleteStatement
         if (sql.trim().toUpperCase().startsWith("DELETE")) {

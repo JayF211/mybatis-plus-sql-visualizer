@@ -79,6 +79,13 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean replaceParams = true;
         private boolean formatSql = true;
         private boolean showGutterIcon = true;
+
+        /**
+         * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
+         * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
+         * Community / Diagrams 插件缺席时无论此值均自动降级自绘。
+         */
+        private boolean joinDiagramNative = true;
         private String language = DEFAULT_LANGUAGE;
         private boolean injectLogicDelete = true;
         private String logicDeleteValue = DEFAULT_LOGIC_DELETE_VALUE;
@@ -125,6 +132,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private String logHibernateSqlPrefix = DEFAULT_LOG_HIBERNATE_SQL_PREFIX;
         private String logHibernateParamPrefix = DEFAULT_LOG_HIBERNATE_PARAM_PREFIX;
         private boolean logJdbcEnabled = true;
+
+        // ---------- JDBC 模板 SQL 字符串预览 ----------
+
+        /** 启用 JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串预览（默认开）。 */
+        private boolean jdbcSqlPreviewEnabled = true;
         private List<TableNameRule> dynamicTableNameRules = new ArrayList<>();
         private boolean dataPermissionHint = false;
         private String dataPermissionMockCondition = "";
@@ -145,6 +157,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getShowGutterIcon() { return showGutterIcon; }
         public void setShowGutterIcon(boolean showGutterIcon) { this.showGutterIcon = showGutterIcon; }
+        public boolean getJoinDiagramNative() { return joinDiagramNative; }
+        public void setJoinDiagramNative(boolean joinDiagramNative) { this.joinDiagramNative = joinDiagramNative; }
 
         public String getLanguage() { return language; }
         public void setLanguage(String language) { this.language = language; }
@@ -271,6 +285,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getLogJdbcEnabled() { return logJdbcEnabled; }
         public void setLogJdbcEnabled(boolean logJdbcEnabled) { this.logJdbcEnabled = logJdbcEnabled; }
+        public boolean getJdbcSqlPreviewEnabled() { return jdbcSqlPreviewEnabled; }
+        public void setJdbcSqlPreviewEnabled(boolean jdbcSqlPreviewEnabled) { this.jdbcSqlPreviewEnabled = jdbcSqlPreviewEnabled; }
 
         public List<TableNameRule> getDynamicTableNameRules() { return dynamicTableNameRules; }
         public void setDynamicTableNameRules(List<TableNameRule> dynamicTableNameRules) { this.dynamicTableNameRules = dynamicTableNameRules; }

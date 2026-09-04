@@ -148,7 +148,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN station_info st ON st.station_id = t.id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -170,7 +170,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN station_info stationInfoEntity ON stationInfoEntity.station_id = t.id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -194,7 +194,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN station_info stationInfoEntity ON stationInfoEntity.id = t.station_id AND stationInfoEntity.station_name = 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -230,7 +230,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN (SELECT tt.id, tt.device_id FROM occupy_record tt WHERE tt.device_id >= 1) tt ON tt.device_id = t.id
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
         // 子查询形态不携带逻辑删除列
@@ -254,7 +254,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN (SELECT occupyRecordEntity.id, occupyRecordEntity.device_id FROM occupy_record occupyRecordEntity WHERE occupyRecordEntity.device_id >= 1) occupyRecordEntity ON occupyRecordEntity.device_id = t.id
-            """.stripIndent(),
+            """.stripTrailing(),
             noAliasSql
         );
     }
@@ -284,7 +284,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN (SELECT id, ladder, fee FROM occupy_consumption_record_entity consumption) consumption
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -308,7 +308,7 @@ public class MpjJoinExtConverterTest {
             """
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -333,7 +333,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             LEFT JOIN (SELECT id, ladder, fee FROM occupy_consumption_record_entity occupyConsumptionRecordEntity) occupyConsumptionRecordEntity
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -475,7 +475,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM (SELECT tb.id, tb.station_id, tb.share_scheme_id FROM car_device_info tb WHERE tb.id >= 0 LIMIT 10) t
             WHERE t.id = 1001
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -500,7 +500,7 @@ public class MpjJoinExtConverterTest {
             ORDER BY t.id ASC
             AND t.id > 5
             LIMIT 10
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
         int orderIdx = sql.indexOf("ORDER BY");
@@ -524,7 +524,7 @@ public class MpjJoinExtConverterTest {
             FROM car_device_info t
             WHERE t.id = 1
             FOR UPDATE
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
     }
@@ -544,7 +544,7 @@ public class MpjJoinExtConverterTest {
             SELECT t.id, t.station_id, t.share_scheme_id
             FROM car_device_info t
             WHERE t.id = 1
-            """.stripIndent(),
+            """.stripTrailing(),
             sql
         );
         assertTrue("setTableName/pageByMain 不产生额外 SQL 片段", !sql.contains("getTableName"));

@@ -89,13 +89,13 @@ SqlReverseResult result = res("user", List.<SelectColumn>of(sc("id", null), sc("
                 .notLikeRight("nick", "张")
                 .orderByDesc("create_time", "id")
                 .last("LIMIT 10");
-            """.stripIndent(), code);}
+            """.stripTrailing(), code);}
 @Test public void 无条件_最小形态() throws Exception {
 String code = JavaCodeGenerator.generate(res("user", null, List.<Condition>of(), List.<OrderByItem>of(), null, List.<String>of(), ReverseStatementKind.SELECT, List.<ReverseSet>of(), List.<String>of(), List.<List<SqlValue>>of(), List.<ReverseJoin>of(), List.<String>of()));assertEquals("""
             // SQL → MyBatis-Plus QueryWrapper 反向生成（SQL Visualizer）
             // 实体类名 User 由表名 user 推断，请按实际类名调整
             new QueryWrapper<User>();
-            """.stripIndent(), code);}
+            """.stripTrailing(), code);}
 @Test public void 字符串值转义_双引号与反斜杠() throws Exception {
 SqlReverseResult result = res("t", null, List.<Condition>of(new Condition.Simple(col(null, "path"), "=", lit("'a\"b\\c'", "a\"b\\c"), null)), List.<OrderByItem>of(), null, List.<String>of(), ReverseStatementKind.SELECT, List.<ReverseSet>of(), List.<String>of(), List.<List<SqlValue>>of(), List.<ReverseJoin>of(), List.<String>of());String code = JavaCodeGenerator.generate(result);assertTrue(code.contains(".eq(\"path\", \"a\\\"b\\\\c\")"));}
 @Test public void LIKE降级Raw_渲染apply() {

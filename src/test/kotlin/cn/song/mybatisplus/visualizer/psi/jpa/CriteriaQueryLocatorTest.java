@@ -110,7 +110,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                     private String username;
                     private Integer status;
                 }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("query");
         assertNotNull("应识别 CriteriaQuery 调用链", model);
@@ -128,7 +128,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                         System.out.println(s);
                     }
                 }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("normalMethod");
         assertNull("非 CriteriaQuery 代码应返回 null", model);
@@ -194,7 +194,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                     private String username;
                     private Integer status;
                 }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("query");
         assertNotNull("应识别 CriteriaQuery", model);
@@ -255,7 +255,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                 }
                 enum JoinType { LEFT, INNER, RIGHT }
                 class UserEntity { private Long id; private String username; private Integer status; }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("query");
         assertNotNull(model);
@@ -319,7 +319,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                 }
                 enum JoinType { LEFT, INNER, RIGHT }
                 class UserEntity { private Long id; private String username; private Integer status; }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("query");
         assertNotNull(model);
@@ -379,7 +379,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                 }
                 enum JoinType { LEFT, INNER, RIGHT }
                 class UserEntity { private Long id; private String username; private Integer status; }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("query");
         assertNotNull(model);
@@ -444,7 +444,7 @@ public class CriteriaQueryLocatorTest extends BasePlatformTestCase {
                 }
                 enum JoinType { LEFT, INNER, RIGHT }
                 class UserEntity { private Long id; private String username; private Integer status; }
-                """.stripIndent()
+                """.stripTrailing()
         );
         CriteriaQueryModel model = locateFromMethod("query");
         assertNotNull(model);

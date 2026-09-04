@@ -76,7 +76,7 @@ public class LogListFreezeTest extends BasePlatformTestCase {
         String cached = cachedHtml(e);
         assertNotNull("重新渲染后缓存恢复", cached);
         assertEquals(text, cached);
-        assertNotEquals("清空后渲染结果应为新的 HTML 实例", (Object) text, (Object) cached);
+        assertNotSame("清空后渲染结果应为新的 HTML 实例", (Object) text, (Object) cached);
     }
 
     @Test

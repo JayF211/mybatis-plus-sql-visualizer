@@ -2,6 +2,8 @@
 <idea-plugin>
     <!-- F-4：Kotlin Wrapper 链 gutter 图标（复用 SqlGutterLineMarkerProvider，Kotlin 语言注册）——
          仅当 org.jetbrains.kotlin 插件存在时加载，语言 ID "Kotlin" 可解析 -->
+    <!-- F-4：Kotlin Wrapper 链 gutter 图标（复用 SqlGutterLineMarkerProvider，Kotlin 语言注册）——
+         仅当 org.jetbrains.kotlin 插件存在时加载，语言 ID "Kotlin" 可解析 -->
     <extensions defaultExtensionNs="com.intellij">
         <codeInsight.lineMarkerProvider language="Kotlin"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
