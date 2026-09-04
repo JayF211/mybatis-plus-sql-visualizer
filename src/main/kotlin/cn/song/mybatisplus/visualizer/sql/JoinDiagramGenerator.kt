@@ -53,6 +53,7 @@ object JoinDiagramGenerator {
                     )
                 },
                 isMain = true,
+                tableComment = stmt.table.comment,
             ),
         )
 
@@ -76,6 +77,7 @@ object JoinDiagramGenerator {
                     columns = joinColumns,
                     isMain = false,
                     joinType = join.type,
+                    tableComment = join.tableInfo?.comment,
                 ),
             )
 

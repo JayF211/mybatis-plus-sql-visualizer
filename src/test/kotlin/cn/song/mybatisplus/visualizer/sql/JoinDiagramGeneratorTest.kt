@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -431,5 +432,84 @@ class JoinDiagramGeneratorTest {
         assertEquals(JoinType.LEFT, model.entities[1].joinType)
         assertEquals(null, model.entities[0].joinType)
     }
+
+    // ---- T-NativeUI-01 表注释数据链路 ----
+
+    @Test
+    fun `main table comment flows to entity`() {
+        val commentedTable = tableWithComment("user", "用户表", userTable)
+        val stmt = SelectStatement(
+            table = commentedTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals("用户表", model.entities[0].tableComment)
+        assertNull(model.entities[1].tableComment)
+    }
+
+    @Test
+    fun `join table comment flows from join tableInfo`() {
+        val deptWithComment = tableWithComment("dept", "部门表", deptTable)
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.INNER, tableName = "dept", alias = "d", tableInfo = deptWithComment,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "dept_id"),
+                            right = ColumnRef(tableAlias = "d", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals("部门表", model.entities[1].tableComment)
+    }
+
+    @Test
+    fun `column comment flows through columns`() {
+        val commentedTable = TableInfo(
+            entityClassName = "UserEntity", tableName = "user",
+            columns = listOf(
+                ColumnInfo("id", "id", isId = true),
+                ColumnInfo("name", "name", comment = "姓名"),
+                ColumnInfo("email", "email", comment = "邮箱"),
+            ),
+        )
+        val stmt = SelectStatement(
+            table = commentedTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "order", alias = "o",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "o", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val nameCol = model.entities[0].columns.first { it.name == "name" }
+        assertEquals("姓名", nameCol.comment)
+        assertEquals("邮箱", model.entities[0].columns.first { it.name == "email" }.comment)
+    }
+
+    /** 生成带表注释的副本。 */
+    private fun tableWithComment(tableName: String, comment: String?, base: TableInfo): TableInfo =
+        base.copy(tableName = tableName, comment = comment)
 
 }

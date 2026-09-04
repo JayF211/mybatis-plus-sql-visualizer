@@ -46,7 +46,7 @@
             <li>参数替换：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；动态条件复选框</li>
             <li>控制台 SQL 日志捕获还原（MyBatis / Hibernate / JdbcTemplate）+ 精确跳转源码（InnerInterceptor）+ 自动保存历史 + 两级导航</li>
             <li>SQL 反向转 MP Java 代码：增删改查 / 多表 JOIN，QueryWrapper / Lambda / Wrappers / MPJ 四种形态，生成代码可直接编译</li>
-            <li>JOIN 关系图：自绘 Swing ER 关系图（PNG/SVG 导出）；9 种数据库方言分页差异渲染；执行 SQL（Ultimate）</li>
+            <li>JOIN 关系图：IDE 原生 Diagrams 框架渲染（类图观感：表头表注释、字段类型/注释、JOIN 连线语义、分类切换；PNG/SVG 导出；自绘渲染降级）；9 种数据库方言分页差异渲染；执行 SQL（Ultimate）</li>
             <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
         </ul>
         <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>

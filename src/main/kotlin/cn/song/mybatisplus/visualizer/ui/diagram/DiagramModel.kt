@@ -34,6 +34,7 @@ data class EntityNode(
     val columns: List<ColumnEntry>,
     val isMain: Boolean,
     val joinType: JoinType? = null,
+    val tableComment: String? = null,
 ) {
     /** 显示名：别名与表名不同时显示 "tableName (alias)"。 */
     val displayName: String

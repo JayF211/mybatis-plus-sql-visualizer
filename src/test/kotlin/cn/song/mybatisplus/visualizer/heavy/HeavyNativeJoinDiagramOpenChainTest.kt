@@ -8,6 +8,8 @@ import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
+import cn.song.mybatisplus.visualizer.ui.diagram.ColumnEntry
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.JoinDiagramNodeContentManager
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.Disposer
@@ -133,6 +135,22 @@ class HeavyNativeJoinDiagramOpenChainTest : HeavyPlatformTestCase() {
         assertNotNull(editor)
         // 组件为非空 Swing 容器（可嵌入预览面板标签页）
         assertTrue(comp.componentCount >= 1)
+        // T-NativeUI-02：真实建图链中分类管理器默认全启用，字段列不会被持久化空状态过滤
+        val contentManager = extractBuilder(editor)?.provider?.createNodeContentManager()
+        assertNotNull("建图链应持有分类管理器", contentManager)
+        assertEquals("三类内容默认全启用", 3, contentManager!!.enabledCategories.size)
+        assertTrue(JoinDiagramNodeContentManager.isCategoryEnabled(JoinDiagramNodeContentManager.COLUMNS))
+        // T-NativeUI-02（回归）：字段项须通过框架真实过滤后保留——`getNodeItemsAccordingToCurrentContentSettings`
+        // 正是此前「isInCategory 参数序/分类过滤 → 字段全部被滤掉」的路径。注意分类分组会在组间插入
+        // null 分隔符（id 与 name 分属 KEY_COLUMNS/COLUMNS 两组），故按列名断言而非硬计数。
+        val diagramBuilder = requireNotNull(extractBuilder(editor)) { "编辑器应持有 DiagramBuilder" }
+        val mainNode = diagramBuilder.dataModel.nodes
+            .first { (it.identifyingElement as? cn.song.mybatisplus.visualizer.ui.diagram.nativefw.JoinDiagramSnapshotRegistry.NativeEntity)?.isMain == true }
+        val filteredItems = com.intellij.diagram.DiagramElementManager
+            .getNodeItemsAccordingToCurrentContentSettings(mainNode, diagramBuilder)
+        val columns = filteredItems.filterIsInstance<ColumnEntry>().map { it.name }
+        assertTrue("主表字段 id 经框架分类过滤后须保留，实际=$columns", columns.contains("id"))
+        assertTrue("主表字段 name 经框架分类过滤后须保留，实际=$columns", columns.contains("name"))
         // ★ 关键断言：画布必须真正填充节点（2026-09-03 真机发现仅 createEditor 会空白，
         // 须触发 queryUpdate；此处通过等待 EDT 让异步建图完成，再断言节点数）
         assertGraphAndCanvasPopulated(editor, expectedNodes = 3)

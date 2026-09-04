@@ -23,6 +23,7 @@ object JoinDiagramSnapshotRegistry {
         val columns: List<cn.song.mybatisplus.visualizer.ui.diagram.ColumnEntry>,
         val isMain: Boolean,
         val joinType: JoinType?,
+        val tableComment: String? = null,
     ) {
         /** 显示名：别名与表名不同时显示 "tableName (alias)"，与自绘版语义一致。 */
         val displayName: String
@@ -66,6 +67,7 @@ object JoinDiagramSnapshotRegistry {
                 columns = e.columns,
                 isMain = e.isMain,
                 joinType = e.joinType,
+                tableComment = e.tableComment,
             )
         }
         val edges = model.relationships.map { r ->
