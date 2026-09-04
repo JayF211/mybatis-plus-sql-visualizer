@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateMethodDetector
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
+import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
@@ -55,8 +56,12 @@ class JdbcTemplateSqlGutterLineMarkerProvider : LineMarkerProvider {
         // 方法名 ∈ JDBC 模板方法集合（O(1) 判定）
         if (!JdbcTemplateMethodDetector.isJdbcTemplateMethodReference(element.text)) return null
 
-        // 第 1 实参存在（快速检查，避免对无参调用显示图标）
-        if (grandParent.argumentList.expressions.isEmpty()) return null
+        // T-GutterDedup：接收者必须是 JDBC 模板家族（JdbcTemplate/NamedParameter/DbHelper），
+        // 避免通用方法名 `execute` 在 commonDao / getHibernateTemplate() 上误标（重复图标）
+        if (PreviewReceiverResolver.classify(grandParent) != PreviewReceiverResolver.Family.JDBC_TEMPLATE) return null
+
+        // T-GutterDedup：第 1 实参须为字符串 SQL（杜绝 execute(callback) 非字符串实参"有图标点击无效"）
+        if (!PreviewReceiverResolver.isStringLikeFirstArg(grandParent)) return null
 
         // 开关关闭时不显示
         if (!gutterEnabled()) return null
