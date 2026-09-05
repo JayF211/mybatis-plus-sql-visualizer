@@ -55,7 +55,7 @@
 | `Wrappers` 工厂 5 方法：`query/lambdaQuery/update/lambdaUpdate/emptyWrapper`（3.5.9+ 位于 core.toolkit） | ✅ | —（既有能力） | 含 `Wrappers.<T>lambdaQuery()` 泛型形态 |
 | 链族 4 类：`QueryChainWrapper` / `LambdaQueryChainWrapper` / `UpdateChainWrapper` / `LambdaUpdateChainWrapper` | ✅ | —（既有能力） | 内部委托普通 Wrapper，SQL 生成复用 |
 | `ChainWrappers` 工厂：`queryChain/lambdaQueryChain/updateChain/lambdaUpdateChain/deleteChain/lambdaDeleteChain` | ✅ | —（P1-05，M19.5） | 6 方法 |
-| Kotlin 侧：`KtQueryWrapper` / `KtUpdateWrapper` | ⬜ | T-M22-06 | 远期：需 Kotlin PSI 基础设施 |
+| Kotlin 侧：`KtQueryWrapper` / `KtUpdateWrapper` | 🟡 | T-M22-06 | ktQuery/ktUpdate 扩展链已支持（KtWrapperDetector 文本正则 MVP）；两 Wrapper 类直接构造形态仍缺 Kotlin PSI 解析 |
 
 ### 1.3 链式调用（ChainQuery / ChainUpdate / IService 链入口）
 
@@ -64,7 +64,7 @@
 | `ChainQuery` 终结点 7 个：`list()` / `list(IPage)` / `one()` / `oneOpt()` / `count()` / `exists()` / `page(P)` | ✅ | —（既有能力） | 赋值形态锚点（结果变量）已修复（M19.5） |
 | `ChainUpdate` 终结点 3 个：`update()` / `update(T)` / `remove()` | ✅ | —（P1-04，M19.5） | 链上 `update(T)` 实体字段展开 SET |
 | IService 链入口 5 个：`query()` / `lambdaQuery()` / `lambdaQuery(T)` / `update()` / `lambdaUpdate()` | ✅ | —（T-M15-01 / P1-03，M19.5） | 字符串链与 lambda 链；`isServiceChainStart` 守卫区分消费调用 |
-| IService 链入口 2 个：`ktQuery()` / `ktUpdate()` | ⬜ | T-M22-06 | 远期（Kotlin 侧） |
+| IService 链入口 2 个：`ktQuery()` / `ktUpdate()` | ✅ | T-M22-06 | KtWrapperDetector 文本正则识别（映射 LAMBDA_QUERY/LAMBDA_UPDATE），PSI 级续链远期深化 |
 
 ### 1.4 IService / IRepository（3.5.9 重构：IRepository 承载 CRUD，IService 保留便捷方法）
 
@@ -120,6 +120,8 @@
 | `@KeySequence` | ⬜ | T-M22-02 | M22 按需：主键取序列 |
 | `@InterceptorIgnore` | ⬜ | T-M22-02 | M22 按需：跳过对应方法注入 |
 | `@EnumValue` | ✅ | —（既有能力） | 枚举字段按 DB 存储值映射展开（静态近似） |
+| `@OrderBy`（MP 注解） | ⬜ | T-M22-02 补列 | annotation jar 3.5.15 实证存在（2026-09-04 增量核验补列）；SET/查询联动 |
+| `@SqlCondition`（MP 注解） | ⬜ | T-M22-02 补列 | 同上；运行时条件拼接，静态近似或文档化边界 |
 
 ### 1.7 内置 SqlInjector（无 XML 内置 SQL 模板面）
 
@@ -144,18 +146,19 @@
 | `AlwaysUpdateSomeColumnById` | ✅ | —（静态近似） | 与 updateById 同模板，列集合语义静态近似 |
 | `LogicDeleteBatchByIds` | ✅ | —（静态近似） | 逻辑删除批量 → UPDATE SET del=1 WHERE id IN |
 | `Upsert`（3.5.13+） | ✅ | T-M20-08 | 复用 UPSERT 模板（对应 insertOrUpdate 全重载） |
+| `LogicDeleteByIdWithFill` | ⬜ | T-M22-02 补列 | ext jar 3.5.15 实证存在（2026-09-04 增量核验补列）；逻辑删除带 fill 字段 UPDATE 模板 |
 
 ### 1.8 拦截器（模拟 = 在预览 SQL 中注入拦截器的 SQL 改写效果）
 
 | 拦截器 | 目标状态 | 对应任务编号 | 是否模拟 / 备注 |
 |------|:----:|------|------|
 | `PaginationInnerInterceptor` | ✅ | —（既有能力） | **模拟**：分页 SQL 渲染（LIMIT/OFFSET 按方言）已等价实现；count 改写 / optimizeCountSql 为语义近似 |
-| `TenantLineInnerInterceptor` | ⬜ | T-M22-02 | M22 按需**模拟**：设置页开关可选注入 tenant 条件（全表追加） |
+| `TenantLineInnerInterceptor` | ✅ | T-M22-02 | **已模拟**（F-6 交付，sql/interceptor/TenantLineEnhancer.kt）：设置页开关注入 tenant 条件 |
 | `OptimisticLockerInnerInterceptor` | ✅ | T-M22-02（M22） | **模拟**：`SET version = version + 1 WHERE version = ?` 自动注入（与 @Version 注解联动） |
-| `BlockAttackInnerInterceptor` | ⬜ | T-M22-02 | M22 按需**模拟**：无 WHERE 的 update/delete 阻断提示（检测类拦截器） |
-| `IllegalSQLInnerInterceptor` | ⬜ | T-M22-02 | **不模拟**（文档化边界）：运行时 SQL 合法性校验，非 SQL 生成面；M22 评估仅提示 |
-| `DynamicTableNameInnerInterceptor` | ⬜ | T-M22-02 | M22 按需**模拟**：动态表名 → 表名占位/提示 |
-| `DataPermissionInterceptor`（3.5.9+） | ⬜ | T-M22-02 | M22 按需**模拟**：数据权限 SQL 注入近似（配置不可静态求值 → 占位提示） |
+| `BlockAttackInnerInterceptor` | 🟡 | T-M22-02 | **警示形态已落地**（无 WHERE 全表操作红色警示，[BlockAttack] 风格）；硬阻断不模拟 |
+| `IllegalSQLInnerInterceptor` | ⬜ | T-M22-02 | **不模拟**（文档化边界）：运行时 SQL 合法性校验，非 SQL 生成面 |
+| `DynamicTableNameInnerInterceptor` | ✅ | T-M22-02 | **已模拟**（F-6 交付，DynamicTableNameProcessor.kt 正则表名替换引擎） |
+| `DataPermissionInterceptor`（3.5.9+） | ✅ | T-M22-02 | **已模拟**（F-6 交付，DataPermissionPlaceholder.kt 占位提示形态） |
 
 ### 1.9 其他 SQL 生成面
 
@@ -163,9 +166,9 @@
 |------|:----:|------|------|
 | `Page` 构造（无参 / current,size / 带 OrderItem）与 `addOrder` / `optimizeCountSql` / `maxLimit` | ✅ | —（既有能力） | 分页渲染驱动；addOrder → ORDER BY；optimizeCountSql/maxLimit 语义开关近似 |
 | XML `${ew.customSqlSegment}` / `${ew.sqlSelect}` / `${ew.sqlSet}`（配套 `@Param("ew")`） | ✅ | T-M22-05（M26-B） | M26-B：Java↔XML 关联（Mapper `@Param("ew")` 解析 + WrapperLocator 展开 + 语句 id 关联） |
-| `Db` kit（`Db.getById/list/remove/update/saveBatch` 等静态 CRUD） | ⬜ | T-M22-04 | M22 远期：实体模板消费（复用 Operation.SELECT/INSERT 模板） |
-| `SimpleQuery`（`keyMap` / `map` / `group`） | ✅ | T-M22-04（M22） | wrapper 消费形态（默认 SELECT） |
-| ActiveRecord（`AbstractModel.insert()/updateById()/deleteById()/selectAll()`） | ✅ | T-M22-04（M22） | qualifier 实体类型解析（无参形态）+ 注册表（selectAll 全列无 WHERE / deleteById 主键等值） |
+| `Db` kit（`Db.getById/list/remove/update/saveBatch` 等静态 CRUD） | ✅ | T-M22-04 | 已交付：WrapperLocator.wrapperFactoryClassNames 含 "Db"，实体模板消费 |
+| `SimpleQuery`（`keyMap` / `map` / `group`） | ✅ | T-M22-04（M22） | wrapper 消费形态（默认 SELECT）；另有 list/list2List/list2Map/listGroupBy/peekStream（3.5.15 jar 增量核验补记） |
+| ActiveRecord（`AbstractModel.insert()/updateById()/deleteById()/selectAll()`） | ✅ | T-M22-04（M22） | qualifier 实体类型解析（无参形态）+ 注册表；另有 selectById/selectOne/selectPage/selectCount/selectList/delete/insertOrUpdate/update（3.5.15 jar 增量核验补记，3.5.15 无独立 Model 类） |
 
 ---
 
@@ -184,6 +187,7 @@
 | `JoinWrappers` 工厂 12 形态（1.4.4+）：lambda 族 6 形态（`lambda()/lambda(alias)/lambda(Class)/lambda(alias,Class)/lambda(entity)/lambda(alias,entity)`）+ query 族 3 形态 + delete 族 2 形态 + update 族 2 形态 | ✅ | T-M20-02 | 官方推荐工厂；lambda→MPJ_LAMBDA、query→MPJ_QUERY（按实参形态）、delete/update→DELETE_JOIN/UPDATE_JOIN |
 | 旧工厂 `MPJWrappers`（`queryJoin` / `lambdaJoin`） | ✅ | T-M20-02 | 同映射兼容 |
 | 构造 6 形态：`()` / `(Class)` / `(T entity)` / `(String alias)` / `(Class, alias)` / `(T entity, alias)`（另全限定名形态） | ✅ | T-M20-03 | entity 构造经实体解析；alias 提取复用既有逻辑；优先级：构造别名 > setAlias > 默认 t |
+| `MPJBaseJoin` 标记接口（wrapper.interfaces 包） | ✅ | — | 1.5.8 jar 增量核验补列（2026-09-04）：getDeleteSql/getDeleteLogicSql/getUnionSql，链路识别可按接口判定 |
 
 ### 2.2 列选择
 
@@ -225,6 +229,7 @@
 | `betweenIfExists` / `notBetweenIfExists`（1.5.6+） | ✅ | —（既有能力） | 归一为普通条件 |
 | `inIfNotEmpty` / `notInIfNotEmpty`（1.5.6+） | ✅ | T-M21-09 | IfNotEmpty 后缀归一 |
 | `applyFunc`（`%s` 列 + `{0}` 参数，1.4.13+） | ✅ | —（既有能力） | |
+| `allEqStr`（字符串列 allEq 变体） | ⬜ | T-M21-04 补列 | 1.5.8 jar 增量核验补列（2026-09-04）：JoinAbstractWrapper/JoinAbstractLambdaWrapper 均有；复用 MapArg 模型 |
 | `around`（1.4.11+） | ✅ | T-M21-09 | 渲染位置对照 MPJ 源码 `getSqlAround()` 确认（ORDER BY 前后） |
 | `setIfExists` | ✅ | T-M21-09 | 条件开关，值非空/非 null 策略近似 |
 
@@ -240,7 +245,7 @@
 | `logicDelToOn` / `logicDelToWhere`（副表条件位置，1.4.8 起默认 ON） | ✅ | T-M20-05 | 精确化：deleted 进 ON / 移到 WHERE 末尾 |
 | `setTableName(Function)` 动态表名（1.4.4+） | ✅ | T-M21-09 | 动态不可求值 → 表名占位/提示 |
 | `pageByMain()` 主表分页 | ✅ | T-M21-09 | 渲染同 page |
-| `fill` 6 形态（1.5.1+ 关联填充） | ⬜ | T-M22-01 | M22 远期：主查询 + 关联键 IN 附加查询两段内存回填渲染 |
+| `fill` 6 形态（1.5.1+ 关联填充） | ✅ | T-M22-01 | 已交付（MpjLambdaConverter 六形态解析 + MpjFillConverterTest）；主查询 + 关联键 IN 附加查询两段渲染 |
 | `checkSqlInjection` | ✅ | —（语义开关） | 同 MP，按开关接受 |
 
 ### 2.6 消费方法与链终结点
@@ -256,6 +261,7 @@
 | `updateJoin` / `updateJoinAndNull` | ✅ | —（M15 增补） | 实体字段展开 SET |
 | 链终结点：`count` / `one` / `one(Class)` / `first` / `list` / `page` / `mapOne` / `mapFirst` / `mapList` / `mapPage` | ✅ | T-M20-06 | 带 Class 实参形态核对（1.4.4+ / map* 1.5.0） |
 | UpdateJoin 链终结点：`update()` / `update(T)` / `updateAndNull()` / `updateAndNull(T)`（1.4.10+） | ✅ | T-M21-08 | |
+| UpdateJoin set 族：`setUpdateEntity` / `setUpdateEntityAndNull` / `setApply`；DeleteJoin `deleteAll()` | ✅ | T-M21-08 补列 | 1.5.8 jar 增量核验补列（2026-09-04）：实体 SET 展开与全表删除形态 |
 | DeleteJoin 链终结点：`deleteJoin()` | ✅ | T-M21-08 | |
 | 原生方法混用（MPJ wrapper 直接喂 `getOne/count/remove/update` 等原生消费方法） | ✅ | —（既有能力） | MPJ wrapper 继承 MP Wrapper，可喂原生消费 |
 
@@ -278,7 +284,7 @@
 | `fill` / `selectSub` 字符串别名 | 1.5.1 | |
 | 子查询条件 12 个 / `from` / join `{0}` 参数化 / selectFunc 子查询占位 | 1.5.2 | 大版本（子查询族） |
 | `betweenIfExists` / `notBetweenIfExists` / `inIfNotEmpty` / `notInIfNotEmpty` | 1.5.6 | |
-| 最新版本 | 1.5.9 | 2026-08 发布，对应 MP 3.5.17+；1.5.8 ↔ MP 3.1.2~3.5.16 |
+| 最新版本 | 1.5.9 | 2026-07-10 发布（2026-09-04 核验修正，双渠道 GitHub atom + Maven Central lastUpdated），对应 MP 3.5.17+；1.5.8 ↔ MP 3.1.2~3.5.16 |
 
 ---
 
@@ -291,11 +297,11 @@
 | 绝大多数行（计划内全部实现） | ✅ | 本矩阵即 T-M20-01 语料基座；实现一项、对应行标 ✅ 并新增 A 段 fixture 测试（断言 SQL 文本） |
 | `select(Class, Predicate)` / `selectFilter` 谓词精确求值 | 🟡 | 静态近似（T-M21-01）：psi 层识别 predicate lambda 体的字段白/黑名单，复杂谓词回退全列 |
 | `fill` 6 形态 | ⬜ | M22 远期（T-M22-01） |
-| `@Version` 乐观锁 / 拦截器模拟 | ✅ | T-M22-02（M22）——@Version 注入已交付；Tenant/DataPermission/DynamicTableName 仍 ⬜ |
+| `@Version` 乐观锁 / 拦截器模拟 | ✅ | T-M22-02（M22）——@Version 注入已交付；Tenant/DataPermission/DynamicTableName 已随 F-6 交付 ✅、BlockAttack 警示形态 🟡 |
 | 方言扩展（SQL Server / H2 / SQLite / MariaDB / 达梦 / KingBase） | ✅ | T-M22-03（M22），未知方言回退 MySQL；T-M43 补 upsert 按方言（MySQL 系 ON DUPLICATE KEY UPDATE / PG 系 ON CONFLICT / Oracle·SQLServer·DM 降级纯 INSERT）+ 达梦分页官方实证 + 反向解析分页三形态宽容（LIMIT..OFFSET / OFFSET..FETCH / FETCH FIRST） |
 | `Db` kit / `SimpleQuery` / ActiveRecord | ✅ | T-M22-04（M22）——Db.getById/类字面量/lambdaQuery 链、SimpleQuery wrapper 消费、ActiveRecord 无参形态 |
 | XML `${ew.customSqlSegment}` | ✅ | 远期（T-M22-05，M26-B 已交付） |
-| Kotlin 侧（`KtQueryWrapper` / `KtUpdateWrapper` / `ktQuery()` / `ktUpdate()` / MPJ Kotlin 扩展） | ⬜ | 远期（T-M22-06） |
+| Kotlin 侧（`KtQueryWrapper` / `KtUpdateWrapper` / `ktQuery()` / `ktUpdate()` / MPJ Kotlin 扩展） | 🟡 | ktQuery()/ktUpdate() 扩展链已支持（文本正则 MVP）；Wrapper 类构造与 PSI 级续链远期（T-M22-06） |
 | `allEq` / `selectFunc(BaseFuncEnum)` / `from` / 子表 MConsumer / rightAlias / prefix / free 等 | ✅ | 对应 T-M21-xx 任务（T-M21-04 / 06 / 07 / 02 / 03），里程碑 M21 交付 |
 
 ---
@@ -308,7 +314,7 @@
 | GitHub：baomidou/mybatis-plus | https://github.com/baomidou/mybatis-plus | 本地 **3.5.15 jar（javap 反编译）** + **v3.5.9 / v3.5.17 tag 源码**，与官方文档三方交叉核实 |
 | MPJ 官方文档 | https://mybatis-plus-join.github.io | 43 页文档（md 源） |
 | GitHub：yulichang/mybatis-plus-join | https://github.com/yulichang/mybatis-plus-join | master 分支源码（wrapper/query/base/interfaces/segments 40+ 文件逐行核对）；fullJoin 等文档/源码出入按源码为准 |
-| 版本信息 | GitHub releases/tags + Maven Central | MP 3.5.17（2026-07-08 发布）；MPJ 1.5.9（2026-08 发布）；各 API 引入版本见 §2.7 |
+| 版本信息 | GitHub releases/tags + Maven Central | MP 3.5.17（2026-07-08 发布）；MPJ 1.5.9（2026-07-10 发布）；各 API 引入版本见 §2.7 |
 
 ---
 
@@ -316,6 +322,7 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-04 | **二轮时效性核验（四智能体 jar javap + releases 双渠道）**：① 确认 MP 3.5.17 / MPJ 1.5.9 仍为最新，修正 MPJ 1.5.9 发布日期为 2026-07-10（§2.7/§4）；② 过期行回填 8 处——§1.2 Kotlin 🟡、§1.3 ktQuery/ktUpdate ✅、§1.8 Tenant/DynamicTableName/DataPermission ✅ + BlockAttack 🟡、§1.9 Db kit ✅（SimpleQuery/ActiveRecord 备注补全）、§2.5 fill ✅；③ 新增行 5 处——§1.6 MP @OrderBy/@SqlCondition、§1.7 LogicDeleteByIdWithFill、§2.1 MPJBaseJoin、§2.4 allEqStr、§2.6 UpdateJoin setUpdateEntity 族/deleteAll（均注「增量核验补列」，引入版本待考证）；④ Kotlin 侧 §3 规则表同步 🟡。同日新建姊妹文档《JPA-Hibernate官方API覆盖矩阵》 |
 | 2026-08-14 | **T-M23.7 同步（497 测试全绿）**：触发/定位能力变更（任意位置触发 + 选择区多 SQL 选择）——无 API 矩阵行影响，记录于清单 §8 与开发计划 `20260814-1115-任意位置触发与多SQL选择-开发计划.md` |
 | 2026-08-14 | **T-M23.6 同步（492 测试全绿）**：UI 行为变更（复制/执行 SQL 成功提示加「关闭 SQL 面板」按钮）——无 API 矩阵行影响，记录于清单 §8 与开发计划 `20260814-1100-弹窗提示一键关闭SQL面板-开发计划.md` |
 | 2026-08-14 | **T-M23.5 同步（490 测试全绿）**：§1.5 `selectList` 行备注——批量 SELECT/DELETE/Map 模板与 setIncrBy/selectFunc/applyFunc 解析期拼接按方言引用补齐（psi 层 `currentDialect` 共享 + `ColumnRef.qualifiedName(dialect)` 统一入口） |

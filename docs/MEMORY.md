@@ -29,6 +29,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 |-------------------------------------------------------------------------------|------|
 | [需求文档/MPJ用法收集与兼容性测试清单.md](./需求文档/MPJ用法收集与兼容性测试清单.md)    | **真实项目语料库**：MPJ 61 文件/原生 92 文件/XML 20 个；模式编号 P01~P20 / Q01~Q19 / U01~U13 / X01~X12；§5.6 官方 API 覆盖矩阵（现状）；§6 测试建议 |
 | [架构设计/MP-MPJ官方API覆盖矩阵.md](./架构设计/MP-MPJ官方API覆盖矩阵.md)                | **官方 API 全量覆盖矩阵**（224 API 行，✅/🟡/⬜ + 任务编号 + 版本引入）：MP 3.5.17 / MPJ 1.5.9 面，T-M20-01 语料基座 |
+| [架构设计/JPA-Hibernate官方API覆盖矩阵.md](./架构设计/JPA-Hibernate官方API覆盖矩阵.md)      | **JPA/Hibernate 官方 API 全量覆盖矩阵**（约 200 行挂 J1~J23 任务号，M39 交付后 83✅39🟡）：Spring Data JPA / jakarta / Hibernate / Criteria / HibernateTemplate 八分类面 |
+| [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
 | [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
@@ -65,6 +67,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 里程碑/内容 | 当前状态 |
 |------|-------------|----------|
+| [20260904-2317-设置页缓存信息恒0B-开发计划.md](./开发计划/20260904-2317-设置页缓存信息恒0B-开发计划.md) | **T-CacheInfo：设置页缓存信息恒 0 B 修复**。用户反馈设置页「插件缓存」一直显示 0 B——根因=统计口径只含 EntityClassFinder 反查**兜底**缓存，而主流命名（XxxEntity↔xxx）快路径恒命中、该缓存恒空；真正积累的 EntityResolver 解析缓存（全局静态）与 WrapperCache 预览缓存（项目服务）均未计入。实现：`PluginCacheManager.totalSizeBytes/entryCount` 三类缓存全口径（解析缓存全局只计一次），`clearAll` 补清 Wrapper 缓存（getServiceIfCreated 不触发服务实例化），文案增条目数「当前缓存：{0}（{1} 项）」 | ✅ 已实施（2026-09-04，定向 6 测试类 37 用例全绿） |
 | [20260902-1400-HQL变量引用解析修复-开发计划.md](./开发计划/20260902-1400-HQL变量引用解析修复-开发计划.md) | **HQL 变量引用解析修复**：`HqlQueryLocator.extractHqlString()` 拼接初始化器（`String hql = "select" + " ..."`）回落返回变量名导致预览显示"hql"；新增 `PsiBinaryExpression`/`PsiPolyadicExpression` 分支复用 `collectStringLiterals()` 递归展开；方法参数等不可静态解析场景优雅降级 | ✅ 已完成（2026-09-02，HqlQueryLocatorTest 17/17，全量 HQL 套件 460+ 用例 0 失败） |
 | [20260902-0106-日志捕捉性能优化-开发计划.md](./开发计划/20260902-0106-日志捕捉性能优化-开发计划.md) | **日志捕捉性能优化**（源自《性能分析 20260902-0054》P1/P2 建议）：快速轮询 500ms 起步指数退避 + 反射 Method 缓存 + descriptor 短路 + 逐行配置同步改 SETTINGS_CHANGE_TOPIC 事件驱动 | ✅ 已完成（2026-09-02，全量 2860 用例 0 失败） |
 | [20260828-2000-插件更名SQL-Visualizer-开发计划.md](./开发计划/20260828-2000-插件更名SQL-Visualizer-开发计划.md) | **插件显示名更名 SQL Visualizer**：plugin.xml name + i18n bundle 32 处 + 生成代码注释/测试断言联动 + 用户文档；id/包名/rootProject.name/仓库路径不动（升级兼容） | 🔧 开发中（2026-08-28） |
@@ -189,6 +192,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-05 | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，3321 测试绿 + buildPlugin 通过，用户明确不合并 master）；新增两份矩阵索引：JPA-Hibernate官方API覆盖矩阵（M39 勾行 83✅39🟡）与其他ORM官方API覆盖矩阵（候选框架调研：Spring Data JDBC/jOOQ/Querydsl/Easy-Query/Jimmer/xbatis/MDS/Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy，含立项决策表与任务号预分配 SD/JO/QD/EQ/JM/XB/DS/FM/DV） |
 | 2026-08-26 | 新增「记忆精简规范.md」：本地记忆文件管理标准（分类/归档/全局/流程/基线） |
 | 2026-08-26 | 记忆第二次精简（31→14）：新增 16 个归档（M30-M33/M41/F-42/F-43/F-44/IDE 冻结/M28/M47/F-45/PlantUML/plugin-xml/设置页布局/设置页配置/tooltip + 3 个踩坑）；archive 增至 70 个文件 |
 | 2026-08-22 | 记忆精简（107→12）：新增「归档记忆」分区（docs/memory-archive/，54 个文件）；全局通用记忆 41 个备份到 `~/.zcode/cli/memories/global/`；全局经验精炼入 `~/.zcode/AGENTS.md` |
