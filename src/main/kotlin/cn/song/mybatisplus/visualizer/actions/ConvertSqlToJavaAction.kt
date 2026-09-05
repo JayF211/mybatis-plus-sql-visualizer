@@ -167,19 +167,32 @@ class ConvertSqlToJavaAction : AnAction() {
                 }
             }
             EntitySelectionDialog(project, rows) { selections ->
-                val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
-                val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
-                result.joins.forEach { join ->
-                    val alias = join.alias ?: return@forEach
-                    selections[alias]?.let { psi ->
-                        toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历
+                // 继承链全部字段 + 注解 resolve，大实体耗时随字段数线性，EDT 直解析构成确认停顿；
+                // 后台 ReadAction 解析后回 EDT 展示代码预览（对齐上方 convert 的既有异步模式）。
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                    val resolved = ReadAction.compute<Pair<SqlToJavaConverter.EntityCandidate?, Map<String, JavaCodeGenerator.EntityTarget>>, Throwable> {
+                        val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
+                        val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                        result.joins.forEach { join ->
+                            val alias = join.alias ?: return@forEach
+                            selections[alias]?.let { psi ->
+                                toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                            }
+                        }
+                        main to (subEntities as Map<String, JavaCodeGenerator.EntityTarget>)
                     }
-                }
-                if (main != null) {
-                    showCodeDialog(project, result, main, format, subEntities)
-                } else {
-                    // 主表未指定实体 → 回落字符串列名形态
-                    JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, null, format)).show()
+                    ApplicationManager.getApplication().invokeLater {
+                        if (project.isDisposed) return@invokeLater
+                        val (main, subEntities) = resolved
+                        if (main != null) {
+                            showCodeDialog(project, result, main, format, subEntities)
+                        } else {
+                            // 主表未指定实体 → 回落字符串列名形态
+                            JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, null, format)).show()
+                        }
+                    }
                 }
             }.show()
             return

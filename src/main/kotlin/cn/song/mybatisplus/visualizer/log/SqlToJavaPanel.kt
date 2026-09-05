@@ -950,17 +950,29 @@ class SqlToJavaPanel(
             }
         }
         EntitySelectionDialog(project, rows) { selections ->
-            val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
-            cacheCandidates = listOfNotNull(main)
-            val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
-            result.joins.forEach { join ->
-                val alias = join.alias ?: return@forEach
-                selections[alias]?.let { psi ->
-                    toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+            // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历继承链
+            // 全部字段 + 每字段注解 resolve，大实体（50+ 字段）耗时线性，EDT 直解析构成确认停顿；
+            // 后台 ReadAction 解析后回 EDT 回填缓存并渲染（对齐 convert 的既有异步模式）。
+            ApplicationManager.getApplication().executeOnPooledThread {
+                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                val resolved = ReadAction.compute<Triple<SqlToJavaConverter.EntityCandidate?, Map<String, JavaCodeGenerator.EntityTarget>, List<SqlToJavaConverter.EntityCandidate>>, Throwable> {
+                    val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
+                    val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                    result.joins.forEach { join ->
+                        val alias = join.alias ?: return@forEach
+                        selections[alias]?.let { psi ->
+                            toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                        }
+                    }
+                    Triple(main, subEntities as Map<String, JavaCodeGenerator.EntityTarget>, listOfNotNull(main))
                 }
+                ApplicationManager.getApplication().invokeLater({
+                    if (project.isDisposed) return@invokeLater
+                    cacheCandidates = resolved.third
+                    cacheSubEntities = resolved.second
+                    render(result, resolved.third, format, resolved.second)
+                }, ModalityState.any())
             }
-            cacheSubEntities = subEntities
-            render(result, listOfNotNull(main), format, subEntities)
         }.show()
     }
 
