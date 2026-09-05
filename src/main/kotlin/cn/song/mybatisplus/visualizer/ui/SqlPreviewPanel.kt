@@ -2114,10 +2114,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         historyAlarm.restart()
     }
 
-    /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。 */
+    /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。
+     * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。 */
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
-        paramHistoryCache.save(key, paramValues.toMap())
+        val snapshot = paramValues.toMap()
+        // headless 单测：同步执行保持既有测试语义
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            paramHistoryCache.save(key, snapshot)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            paramHistoryCache.save(key, snapshot)
+        }
     }
 
     /**

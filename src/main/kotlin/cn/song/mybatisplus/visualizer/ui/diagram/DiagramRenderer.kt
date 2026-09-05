@@ -96,14 +96,36 @@ object DiagramRenderer {
     // Public API
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // T-Perf-24：paint 期 measure+layout 缓存——键 = (model 同一性, 结构计数, 字体)。
+    // 每帧 paint 多处重复 measure+layout（宽 SELECT 10 表×80 列 ≈ 1600 次字体度量/遍）
+    // 是掉帧根因；命中后滚动/重绘零度量。换模型或主题字体变化自然失效。
+    // ------------------------------------------------------------------
+    private data class LayoutCacheKey(val modelId: Int, val shape: Int, val fontHash: Int, val boldHash: Int)
+
+    @Volatile
+    private var layoutCache: Pair<LayoutCacheKey, Pair<List<Layout>, List<Pos>>>? = null
+
+    private fun cachedLayout(model: DiagramModel, font: Font, bold: Font, frc: FontRenderContext): Pair<List<Layout>, List<Pos>> {
+        val key = LayoutCacheKey(
+            System.identityHashCode(model),
+            model.entities.size * 31 + model.relationships.size,
+            font.hashCode(),
+            bold.hashCode(),
+        )
+        layoutCache?.takeIf { it.first == key }?.let { return it.second }
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
+        layoutCache = key to (layouts to positions)
+        return layouts to positions
+    }
+
     /** Measure preferred display size (at 1x zoom). */
     fun measurePreferredSize(model: DiagramModel): Size {
         if (model.entities.isEmpty()) return Size(200, 100)
         val font = UIUtil.getLabelFont()
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
         val pad = MARGIN + 16
         val totalW = contentWidth(model, layouts, positions, font, frc) + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
@@ -116,8 +138,7 @@ object DiagramRenderer {
         val font = UIUtil.getLabelFont()
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
         val pad = MARGIN + 16
         val totalW = contentWidth(model, layouts, positions, font, frc) + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
@@ -144,8 +165,7 @@ object DiagramRenderer {
         val font = UIUtil.getLabelFont()
         val bold = font.deriveFont(Font.BOLD)
         val frc = FontRenderContext(null, true, true)
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
         val pad = MARGIN + 16
         val totalW = contentWidth(model, layouts, positions, font, frc) + pad
         val totalH = positions.zip(layouts).maxOf { (p, l) -> p.y + l.height } + pad
@@ -286,8 +306,7 @@ object DiagramRenderer {
     /** Draw all entity cards. */
     fun drawCards(g2: Graphics2D, model: DiagramModel, font: Font, bold: Font) {
         val frc = g2.fontRenderContext
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
         for ((i, e) in model.entities.withIndex()) {
             drawCard(g2, e, positions[i], layouts[i], font, bold)
         }
@@ -325,8 +344,7 @@ object DiagramRenderer {
     /** Canvas 专用关系线入口，复用与导出相同的布局算法。 */
     fun drawOrthoLinesForCanvas(g2: Graphics2D, model: DiagramModel, lines: List<Line>, font: Font, bold: Font) {
         val frc = g2.fontRenderContext
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
         drawOrthoLines(g2, lines, model, layouts, positions)
     }
 
@@ -335,8 +353,7 @@ object DiagramRenderer {
         g2: Graphics2D, model: DiagramModel, lines: List<Line>,
         font: Font, frc: FontRenderContext,
     ) {
-        val layouts = measureEntities(model.entities, font, bold = font.deriveFont(Font.BOLD), frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, font.deriveFont(Font.BOLD), frc)
         drawLabelsOnPath(g2, lines, model, layouts, positions, font, frc)
     }
 
@@ -704,8 +721,7 @@ object DiagramRenderer {
         val jbbg = hexOf(JOIN_BADGE_BG)
         val jbt = hexOf(JOIN_BADGE_TEXT)
 
-        val layouts = measureEntities(model.entities, font, bold, frc)
-        val positions = computeLayout(layouts, model, font, frc)
+        val (layouts, positions) = cachedLayout(model, font, bold, frc)
 
         for ((i, e) in model.entities.withIndex()) {
             val pos = positions[i]

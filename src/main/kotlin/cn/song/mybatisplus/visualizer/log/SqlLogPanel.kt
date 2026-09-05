@@ -539,7 +539,15 @@ class SqlLogPanel(
         list.requestFocusInWindow()
     }
 
+    // T-Perf-24：搜索输入防抖——每击键一次 O(N) 刷新 → 停顿 200ms 应用一次
+    private val searchDebounceTimer =
+        javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearchText() }.apply { isRepeats = false }
+
     private fun onSearchTextChanged() {
+        searchDebounceTimer.restart()
+    }
+
+    private fun applySearchText() {
         searchText = searchField.text
         refreshList()
     }
@@ -1260,6 +1268,8 @@ class SqlLogPanel(
 
     /** 面板销毁：释放日志转 SQL 与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
+        // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
+        searchDebounceTimer.stop()
         // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
         manager.removeUiListener(uiRefreshListener)
         manager.removeCapturingListener(capturingUiListener)
@@ -1328,6 +1338,8 @@ class SqlLogPanel(
     companion object {
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
+        /** T-Perf-24：搜索输入防抖窗口（毫秒）。 */
+        private const val SEARCH_DEBOUNCE_MS = 200
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；

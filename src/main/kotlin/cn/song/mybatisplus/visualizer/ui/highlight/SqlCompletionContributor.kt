@@ -54,7 +54,7 @@ class SqlCompletionContributor : CompletionContributor() {
 
         fun registerContext(document: Document, ctx: SqlCompletionContext) {
             documentContexts[document] = ctx
-            LOG.info("[SqlCompletion] registerContext: doc=${document.hashCode()}, table=${ctx.tableName}, mapSize=${documentContexts.size}")
+            LOG.debug("[SqlCompletion] registerContext: doc=${document.hashCode()}, table=${ctx.tableName}, mapSize=${documentContexts.size}")
         }
     }
 
@@ -75,15 +75,15 @@ class SqlCompletionContributor : CompletionContributor() {
                     val editor = parameters.editor
                     val position = parameters.position
                     val containingFile = position.containingFile
-                    LOG.info("[SqlCompletion] addCompletions triggered")
-                    LOG.info("[SqlCompletion]   editor=${editor.javaClass.simpleName}, doc=${editor.document.hashCode()}")
-                    LOG.info("[SqlCompletion]   position=${position.javaClass.simpleName}, text='${position.text?.take(30)}'")
-                    LOG.info("[SqlCompletion]   containingFile=${containingFile?.name}, lang=${containingFile?.language?.id}")
-                    LOG.info("[SqlCompletion]   editorUserData=${editor.getUserData(SqlCompletionContext.KEY)?.tableName}")
-                    LOG.info("[SqlCompletion]   psiUserData=${containingFile?.getUserData(SqlCompletionContext.KEY)?.tableName}")
-                    LOG.info("[SqlCompletion]   documentContexts.size=${documentContexts.size}")
+                    LOG.debug("[SqlCompletion] addCompletions triggered")
+                    LOG.debug("[SqlCompletion]   editor=${editor.javaClass.simpleName}, doc=${editor.document.hashCode()}")
+                    LOG.debug("[SqlCompletion]   position=${position.javaClass.simpleName}, text='${position.text?.take(30)}'")
+                    LOG.debug("[SqlCompletion]   containingFile=${containingFile?.name}, lang=${containingFile?.language?.id}")
+                    LOG.debug("[SqlCompletion]   editorUserData=${editor.getUserData(SqlCompletionContext.KEY)?.tableName}")
+                    LOG.debug("[SqlCompletion]   psiUserData=${containingFile?.getUserData(SqlCompletionContext.KEY)?.tableName}")
+                    LOG.debug("[SqlCompletion]   documentContexts.size=${documentContexts.size}")
                     val docFromViewProvider = containingFile?.viewProvider?.document
-                    LOG.info("[SqlCompletion]   docFromViewProvider=${docFromViewProvider?.hashCode()}, inMap=${documentContexts.containsKey(docFromViewProvider)}")
+                    LOG.debug("[SqlCompletion]   docFromViewProvider=${docFromViewProvider?.hashCode()}, inMap=${documentContexts.containsKey(docFromViewProvider)}")
 
                     // 关键字（M16.2：不依赖上下文——ctx 缺失/丢失时关键字补全仍生效，恢复 M9 语义）
                     provider.keywords().forEach { word ->
@@ -96,7 +96,7 @@ class SqlCompletionContributor : CompletionContributor() {
                     // 与注册 document 可能因 commit 重建不同实例）
                     val ctx = resolveContext(parameters.editor.getUserData(SqlCompletionContext.KEY), parameters.position)
                         ?: documentContexts[parameters.editor.document]
-                    LOG.info("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
+                    LOG.debug("[SqlCompletion]   resolveContext result=${ctx?.tableName}")
                     if (ctx == null) return
                     // 子句判定（T-M27-01：纯函数迁入 SqlTextAnalysis，语义与 M16.2 防御行为不变；
                     // 异常/无文件回退 UNKNOWN）
@@ -178,21 +178,21 @@ class SqlCompletionContributor : CompletionContributor() {
      */
     internal fun resolveContext(editorContext: SqlCompletionContext?, position: PsiElement): SqlCompletionContext? {
         editorContext?.let {
-            LOG.info("[SqlCompletion] resolveContext: hit level 1 (editor userData), table=${it.tableName}")
+            LOG.debug("[SqlCompletion] resolveContext: hit level 1 (editor userData), table=${it.tableName}")
             return it
         }
         position.containingFile?.getUserData(SqlCompletionContext.KEY)?.let {
-            LOG.info("[SqlCompletion] resolveContext: hit level 2 (PSI userData), table=${it.tableName}")
+            LOG.debug("[SqlCompletion] resolveContext: hit level 2 (PSI userData), table=${it.tableName}")
             return it
         }
         // 最终兜底：通过 Document 映射查找
         val doc = position.containingFile?.viewProvider?.document
         if (doc == null) {
-            LOG.info("[SqlCompletion] resolveContext: miss (doc is null)")
+            LOG.debug("[SqlCompletion] resolveContext: miss (doc is null)")
             return null
         }
         val ctx = documentContexts[doc]
-        LOG.info("[SqlCompletion] resolveContext: hit level 3 (document map)=${ctx != null}, table=${ctx?.tableName}")
+        LOG.debug("[SqlCompletion] resolveContext: hit level 3 (document map)=${ctx != null}, table=${ctx?.tableName}")
         return ctx
     }
 }
