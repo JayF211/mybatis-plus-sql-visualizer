@@ -112,12 +112,24 @@ object PreviewReceiverResolver {
         return isStringLikeExpression(arg)
     }
 
-    /** 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用。 */
+    /**
+     * 判断方法调用实参列表中是否存在"字符串 SQL"形态实参（T-DaoSql-02）：
+     * String 字面量 / `+` 拼接 / `toString()` 调用链 / resolve 为 String 的变量引用。
+     *
+     * 自研框架 `(Class beanClass, String sql, Object... params)` 形态 SQL 在第 2 参，
+     * 首参守卫会漏；本守卫扫描全部实参。MP select 族（Wrapper/集合实参）无字符串形态 → 拒。
+     */
+    fun hasStringLikeArg(call: PsiMethodCallExpression): Boolean {
+        return call.argumentList.expressions.any { isStringLikeExpression(it) }
+    }
+
+    /** 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用 / `xx.toString()` 调用。 */
     private fun isStringLikeExpression(expr: PsiElement): Boolean {
         val e = expr as? PsiExpression ?: return false
         return when (e) {
             is PsiLiteralExpression -> e.value is String
             is PsiBinaryExpression, is PsiPolyadicExpression -> true
+            is PsiMethodCallExpression -> e.methodExpression.referenceName == "toString"
             is PsiReferenceExpression -> {
                 // 变量/参数引用：解析其类型是否 String（PsiVariable 覆盖 PsiParameter / PsiLocalVariable）
                 val resolved = runCatching { e.resolve() }.getOrNull() as? com.intellij.psi.PsiVariable

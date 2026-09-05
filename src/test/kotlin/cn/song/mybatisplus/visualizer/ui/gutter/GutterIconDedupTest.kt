@@ -205,4 +205,22 @@ class GutterIconDedupTest : BasePlatformTestCase() {
         val criteriaProvider = CriteriaQueryGutterLineMarkerProvider()
         assertNotNull("CriteriaQuery 应锚在方法名 findUsers 上产生 1 图标", criteriaProvider.getLineMarkerInfo(methodLeaf))
     }
+
+    fun testBeanCruderSelectList_singleIcon() {
+        // T-DaoSql-03：自研框架 `beanCruder.selectList(Class, sql, ...)`（UNKNOWN 家族 + 字符串形态实参）
+        // 由 Jdbc provider 恰 1 认领；批量锚点（场景 D）让位不参与调用行计数
+        myFixture.configureByText("Service.java", """
+            class ScheduleVO {}
+            class BeanCruder { java.util.List<?> selectList(Class c, String sql, Object... p); }
+            class MyService {
+                BeanCruder beanCruder;
+                java.util.List<?> getScheduleList(Long userId) {
+                    String sql = "SELECT wp.PROC_NAME FROM WKFL_TASK WT WHERE WT.OWNER = :CUR_USER ";
+                    return beanCruder.selectList(ScheduleVO.class, sql, "CUR_USER", userId);
+                }
+            }
+        """.trimIndent())
+        assertEquals("beanCruder.selectList(Class, sql, ...) 调用行应恰 1 图标（Jdbc provider）",
+            1, iconCountAt("selectList"))
+    }
 }

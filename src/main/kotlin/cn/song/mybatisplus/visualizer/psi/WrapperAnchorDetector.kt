@@ -107,6 +107,11 @@ object WrapperAnchorDetector {
                 // 承载，避免同一链双图标；批量形态（service.updateBatchById / Db.selectAll / entity.selectAll()）
                 // 链首非 wrapper 构造/工厂，不受影响。O(1) 语法级链首回溯，无 resolve，符合性能红线。
                 if (initializerHeadIsWrapper(call)) return null
+                // T-DaoSql-03：字符串 SQL 形态（自研框架 `beanCruder.selectList(X.class, sql, ...)`——
+                // selectList 同时收录于批量注册表与字符串 SQL 方法候选）让位给
+                // JdbcTemplateSqlGutterLineMarkerProvider（批量转换器只认 Wrapper/集合实参，
+                // 字符串 SQL 形态点击必失败；让位后字符串 SQL 路径接管，避免同行双图标）
+                if (PreviewReceiverResolver.hasStringLikeArg(call)) return null
                 // T-M23.11 分步形态（`MPJLambdaWrapper w = new ...; w.selectAll(...)`）：qualifier 是变量引用，
                 // 语法级回溯不到链首——仅对「与链方法撞名的批量方法」（目前仅 selectAll，新增撞名时扩展）做一次
                 // 变量 resolve（局部变量作用域内查找，微秒级；普通标识符负例仍零 resolve，红线语义不变）；

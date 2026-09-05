@@ -53,15 +53,23 @@ class JdbcTemplateSqlGutterLineMarkerProvider : LineMarkerProvider {
         // 确认 element 是方法名而非 qualifier
         if (grandParent.methodExpression.referenceName != element.text) return null
 
-        // 方法名 ∈ JDBC 模板方法集合（O(1) 判定）
-        if (!JdbcTemplateMethodDetector.isJdbcTemplateMethodReference(element.text)) return null
+        // 方法名 ∈ 字符串 SQL 方法候选（Spring JDBC 模板 ∪ 自研 DAO select 族，O(1) 判定，T-DaoSql-01）
+        if (!JdbcTemplateMethodDetector.isStringSqlMethodCandidate(element.text)) return null
 
-        // T-GutterDedup：接收者必须是 JDBC 模板家族（JdbcTemplate/NamedParameter/DbHelper），
-        // 避免通用方法名 `execute` 在 commonDao / getHibernateTemplate() 上误标（重复图标）
-        if (PreviewReceiverResolver.classify(grandParent) != PreviewReceiverResolver.Family.JDBC_TEMPLATE) return null
+        // T-GutterDedup + T-DaoSql-03：家族排除制守卫——CUSTOM_DAO / HIBERNATE_TEMPLATE / JPA_SESSION
+        // 各有专属 provider（防双图标），拒绝；JDBC_TEMPLATE 与 UNKNOWN（自研框架 `beanCruder` 等
+        // 无法归类接收者）通过。误标由「存在字符串形态实参」+ 点击时 isLikelySql 双层拦截。
+        when (PreviewReceiverResolver.classify(grandParent)) {
+            PreviewReceiverResolver.Family.CUSTOM_DAO,
+            PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE,
+            PreviewReceiverResolver.Family.JPA_SESSION,
+            -> return null
+            else -> {}
+        }
 
-        // T-GutterDedup：第 1 实参须为字符串 SQL（杜绝 execute(callback) 非字符串实参"有图标点击无效"）
-        if (!PreviewReceiverResolver.isStringLikeFirstArg(grandParent)) return null
+        // T-DaoSql-02：存在字符串形态实参（自研框架 (Class, sql, ...) 形态 SQL 在第 2 参），
+        // 杜绝 `execute(callback)` / MP select 族（Wrapper 实参）误标
+        if (!PreviewReceiverResolver.hasStringLikeArg(grandParent)) return null
 
         // 开关关闭时不显示
         if (!gutterEnabled()) return null
