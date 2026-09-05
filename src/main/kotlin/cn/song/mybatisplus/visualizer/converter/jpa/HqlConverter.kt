@@ -28,6 +28,13 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
  * 无状态单例，纯函数逻辑，可独立单测。
  */
 object HqlConverter {
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private val HQL_NAMED_PARAM_TO_Q = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)")
+    private val HQL_POSITIONAL_PARAM_TO_Q = Regex("\\?\\d+")
+    private val HQL_IN_SPACE_Q = Regex("(?i)\\bIN\\s+\\?")
+    private val HQL_CAMEL_SPLIT_PATTERN = Regex("([a-z])([A-Z])")
+    private val HQL_MEMBER_OF_PATTERN = Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE)
+
 
     /**
      * HQL 转换产物。
@@ -114,14 +121,14 @@ object HqlConverter {
      * 替换命名参数 `:paramName` → `?`（排除 `::` 类型转换运算符）。
      */
     private fun replaceNamedParameters(hql: String): String {
-        return hql.replace(Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)"), "?")
+        return hql.replace(HQL_NAMED_PARAM_TO_Q, "?")
     }
 
     /**
      * 替换位置参数 `?1`, `?2` 等 → `?`。
      */
     private fun replacePositionalParameters(hql: String): String {
-        return hql.replace(Regex("\\?\\d+"), "?")
+        return hql.replace(HQL_POSITIONAL_PARAM_TO_Q, "?")
     }
 
     // ------------------------------------------------------------------
@@ -140,7 +147,7 @@ object HqlConverter {
      * 处理 `IN ?` → `IN (?)`。
      */
     private fun handleInClause(hql: String): String {
-        return hql.replace(Regex("(?i)\\bIN\\s+\\?"), "IN (?)")
+        return hql.replace(HQL_IN_SPACE_Q, "IN (?)")
     }
 
     // ------------------------------------------------------------------
@@ -204,7 +211,7 @@ object HqlConverter {
                 else -> "LEFT JOIN"
             }
             // 推断表名：relationName → snake_case
-            val tableName = relationName.replace(Regex("([a-z])([A-Z])")) {
+            val tableName = relationName.replace(HQL_CAMEL_SPLIT_PATTERN) {
                 "${it.groupValues[1]}_${it.groupValues[2].lowercase()}"
             }
             // 构建 ON 条件（别名只出现一次）
@@ -228,7 +235,7 @@ object HqlConverter {
     private fun handleMemberOf(hql: String): String {
         if (hql.contains("MEMBER OF", ignoreCase = true)) {
             return hql.replace(
-                Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE),
+                HQL_MEMBER_OF_PATTERN,
                 "$1 /* MEMBER OF → 建议使用 IN/EXISTS 重写 */ $2",
             )
         }

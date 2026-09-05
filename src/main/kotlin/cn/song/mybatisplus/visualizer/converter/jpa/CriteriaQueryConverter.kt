@@ -412,7 +412,7 @@ object CriteriaQueryConverter {
         }
 
         // 数字（且不含 + 拼接）
-        if (!trimmed.contains("+") && trimmed.matches(Regex("^-?\\d+(\\.\\d+)?[LlFfDd]?$"))) {
+        if (!trimmed.contains("+") && trimmed.matches(CQC_NUMERIC_LITERAL)) {
             // 去除类型后缀 L/F/D
             val numeric = trimmed.trimEnd('L', 'l', 'F', 'f', 'D', 'd')
             return SqlValue.Literal(numeric)
@@ -421,4 +421,7 @@ object CriteriaQueryConverter {
         // 运行时值 → 占位符（含变量引用、字符串拼接、方法调用等）
         return SqlValue.Placeholder(trimmed)
     }
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private val CQC_NUMERIC_LITERAL = Regex("^-?\\d+(\\.\\d+)?[LlFfDd]?$")
+
 }

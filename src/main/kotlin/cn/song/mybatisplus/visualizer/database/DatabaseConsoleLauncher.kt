@@ -24,6 +24,8 @@ import com.intellij.openapi.vfs.VirtualFile
  */
 object DatabaseConsoleLauncher {
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DatabaseConsoleLauncher::class.java)
+
     /**
      * 执行入口（经反射调用）：创建临时 .sql 文件并打开（数据源由用户在编辑器右上角选择）。
      * 任何一步失败 → 错误提示（不抛异常到调用方）。
@@ -38,7 +40,9 @@ object DatabaseConsoleLauncher {
             FileEditorManager.getInstance(project).openFile(vf, true)
             showInfo(project, MpSqlVisualizerBundle.message("execute.done"), onClosePanel)
         }.onFailure { error ->
-            showError(project, MpSqlVisualizerBundle.message("execute.failed", error.message ?: error.toString()))
+            // T-Perf-01：临时文件/打开编辑器失败改 LOG.warn 静默降级，不再弹模态框（低频异常路径，
+            // 用户可从日志定位；原生 Database 编辑器自身的错误仍由平台提示）
+            LOG.warn("[M17] launcher execute FAILED: ${error.message}", error)
         }
     }
 
@@ -90,9 +94,5 @@ object DatabaseConsoleLauncher {
                 if (choice == 1) onClosePanel.run()
             }
         }
-    }
-
-    private fun showError(project: Project, message: String) {
-        runCatching { Messages.showErrorDialog(project, message, MpSqlVisualizerBundle.message("execute.title")) }
     }
 }

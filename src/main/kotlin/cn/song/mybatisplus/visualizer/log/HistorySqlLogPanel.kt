@@ -5,7 +5,9 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -58,6 +60,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
+    // ---------- T-Perf-05：后台任务代际 + 搜索防抖 ----------
+
+    /** 后台刷新/加载代际：新任务启动即作废旧任务的 EDT apply。 */
+    private var bgGeneration = 0
+
+    /** T-Perf-05：搜索防抖（每击键 O(N) clear+add → 停顿 200ms 应用一次）。 */
+    private val searchDebounceTimer =
+        javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
+
     private val searchField = SearchTextField()
     private val backButton = JButton().apply {
         icon = AllIcons.Actions.Back
@@ -94,14 +105,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     internal val isShowingFiles: Boolean get() = currentFile == null
 
     /** 打开指定文件进入二级（测试驱动；等价双击文件）。 */
-    internal fun openFileForTest(entry: HistoryFileEntry) = showFileContent(entry)
+    internal fun openFileForTest(entry: HistoryFileEntry) = loadFileContentSync(entry)
 
     /** 返回一级（测试驱动；等价点击返回按钮）。 */
     internal fun backToFilesForTest() = showFileList()
 
-    /** 设置搜索词（测试驱动；等价在搜索框输入，触发 DocumentListener 实时过滤）。 */
+    /** 设置搜索词（测试驱动；等价在搜索框输入，立即应用过滤——生产路径 DocumentListener 走防抖）。 */
     internal fun setSearchForTest(query: String) {
         searchField.text = query
+        applySearch()
     }
 
     init {
@@ -117,9 +129,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
         toolbar.add(searchField)
         add(toolbar, BorderLayout.NORTH)
@@ -171,34 +183,86 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileContent(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
-        currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
         backButton.isVisible = true
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
         cardLayout.show(cards, CARD_SQL)
+        // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
+        currentEntries = emptyList()
         applySqlSearch()
-        LOG.info("HistorySqlLogPanel.showFileContent: ${fileEntry.file.name} 共 ${currentEntries.size} 条 SQL")
+        val gen = ++bgGeneration
+        object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.load.progress"), true) {
+            override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                val entries = SqlLogFileReader.readFromFile(fileEntry.file)
+                ApplicationManager.getApplication().invokeLater {
+                    if (gen != bgGeneration || project.isDisposed) return@invokeLater
+                    currentEntries = entries
+                    applySqlSearch()
+                    LOG.info("HistorySqlLogPanel.showFileContent: ${fileEntry.file.name} 共 ${entries.size} 条 SQL")
+                }
+            }
+        }.queue()
+    }
+
+    /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
+    private fun loadFileContentSync(fileEntry: HistoryFileEntry) {
+        currentFile = fileEntry
+        backButton.isVisible = true
+        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
+        cardLayout.show(cards, CARD_SQL)
+        currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
+        applySqlSearch()
     }
 
     // ---------- 刷新 ----------
 
-    /** 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。 */
+    /**
+     * 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。
+     *
+     * T-Perf-05：目录扫描 + countInFile / readFromFile 全部移入 [Task.Backgroundable]
+     * （100MB 自动保存文件的逐行扫描在 EDT 直跑必然长冻结）；EDT 只做结果应用。
+     * 代际守卫：新一轮刷新/加载启动后，旧后台任务的 apply 自动作废。
+     */
     fun refresh() {
-        val dir = getHistoryDir()
+        val gen = ++bgGeneration
+        val keepFile = currentFile?.file
+        object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
+            override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                val scanned = scanHistoryFiles(getHistoryDir())
+                val keepReload = keepFile?.takeIf { it.exists() }?.let { SqlLogFileReader.readFromFile(it) }
+                ApplicationManager.getApplication().invokeLater {
+                    if (gen != bgGeneration || project.isDisposed) return@invokeLater
+                    applyRefresh(scanned, keepReload)
+                }
+            }
+        }.queue()
+    }
+
+    /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
+    internal fun refreshForTest() {
+        ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
+        val keepFile = currentFile?.file
+        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile?.takeIf { it.exists() }?.let { SqlLogFileReader.readFromFile(it) })
+    }
+
+    /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
+    private fun scanHistoryFiles(dir: String): List<HistoryFileEntry> {
         val directory = File(dir)
         val files = if (directory.isDirectory) {
             directory.listFiles { f -> f.extension == "sql" }?.sortedBy { it.name } ?: emptyList()
         } else {
             emptyList()
         }
-        allFiles = files.map { file ->
-            HistoryFileEntry(file = file, sqlCount = SqlLogFileReader.countInFile(file))
-        }
-        LOG.info("HistorySqlLogPanel.refresh: 目录 $dir 扫描到 ${allFiles.size} 个历史文件")
+        return files.map { file -> HistoryFileEntry(file, SqlLogFileReader.countInFile(file)) }
+    }
+
+    /** 应用扫描结果（EDT；仅刷新/加载代际最新者执行）。 */
+    private fun applyRefresh(scanned: List<HistoryFileEntry>, keepReload: List<LogSqlEntry>?) {
+        allFiles = scanned
+        LOG.info("HistorySqlLogPanel.refresh: 扫描到 ${allFiles.size} 个历史文件")
 
         // 保持二级视图：当前文件仍存在则重载内容
-        val keep = currentFile?.file
-        if (keep != null && keep.exists()) {
-            currentEntries = SqlLogFileReader.readFromFile(keep)
+        if (keepReload != null) {
+            currentEntries = keepReload
             applySqlSearch()
             return
         }
@@ -212,6 +276,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     // ---------- 搜索过滤 ----------
+
+    /** T-Perf-05：搜索输入防抖调度（DocumentListener 入口）。 */
+    private fun scheduleSearch() {
+        searchDebounceTimer.restart()
+    }
 
     private fun applySearch() {
         if (currentFile != null) applySqlSearch() else applyFileSearch()
@@ -346,12 +415,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    override fun dispose() {}
+    override fun dispose() {
+        // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
+        searchDebounceTimer.stop()
+    }
 
     companion object {
         private val LOG = Logger.getInstance(HistorySqlLogPanel::class.java)
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
+
+        /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
+        private const val SEARCH_DEBOUNCE_MS = 200
     }
 }
 
@@ -428,23 +503,27 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
         super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
         val entry = value as? LogSqlEntry
         if (entry != null) {
-            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
-            val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
-            val source = when {
-                SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
-                entry.sourceFile != null -> {
-                    // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
-                    val name = entry.sourceFile.substringAfterLast('/')
-                    if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+            // T-Perf-05：HTML 缓存照抄 SqlLogPanel cachedListHtml 方案——滚动时每可见行只渲染一次
+            // （此前每次滚动重跑 SqlListHtmlRenderer 词法高亮 + BasicHTML 解析，长列表持续高 CPU）。
+            // 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
+            val html = entry.cachedListHtml ?: run {
+                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
+                val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
+                val source = when {
+                    SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+                    entry.sourceFile != null -> {
+                        // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
+                        val name = entry.sourceFile.substringAfterLast('/')
+                        if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+                    }
+                    else -> "unknown"
                 }
-                else -> "unknown"
-            }
-            val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-            // 选中态用 selectionForeground；非选中走 uniform 前景色（不要按耗时变色避免与 SQL 高亮冲突）
-            val durationHtml = "<span style='color:#9E9E9E'>[$duration]</span> "
-            val timestampHtml = "<span style='color:#9E9E9E'>[$timestamp]</span> "
-            val sourceHtml = "<span style='color:#9E9E9E'>[$source]</span> "
-            this.text = "<html>${durationHtml}${timestampHtml}${sourceHtml}${sqlHtml}</html>"
+                val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+                "<html><span style='color:#9E9E9E'>[$duration]</span> " +
+                    "<span style='color:#9E9E9E'>[$timestamp]</span> " +
+                    "<span style='color:#9E9E9E'>[$source]</span> $sqlHtml</html>"
+            }.also { entry.cachedListHtml = it }
+            this.text = html
             toolTipText = entry.restoredSql
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
             else (list?.foreground ?: JBColor.foreground())

@@ -137,6 +137,19 @@ object DataSourceSelector {
     }
 
     /**
+     * T-Perf-16：面板关闭/项目关闭时释放单例滞留引用——object 单例的 prepared、shared、
+     * pendingOnConsole 槽位强引用已关闭面板（pendingOnConsole 闭包捕获 SqlPreviewPanel 整棵
+     * Swing 树）与原生控制台/编辑器/文档（持旧 Project 引用）。此前只有面板「清空」按钮走
+     * clearPrepared，弹窗关闭/项目关闭路径无清理挂点 → 堆中滞留整棵面板树。
+     */
+    @JvmStatic
+    fun releaseForPanel() {
+        clearPrepared()
+        dropSharedConsole()
+        pendingOnConsole = null
+    }
+
+    /**
      * M36.5：准备控制台（不执行）——选数据源 → 建 session → attachConsole → 拼合组件回调。
      * 面板打开时调用，原生控制台即刻可见；执行由 [executePrepared] 触发。
      *
@@ -255,7 +268,7 @@ object DataSourceSelector {
                 runners.firstOrNull { getRunnerName(it) == last }?.let { matched ->
                     LOG.info("[M36] silent reuse last runner: $last")
                     chosenRunnerName = last
-                    runRunner(matched)
+                    runRunner(matched, onError)
                     callback?.invoke(true)
                     return
                 }
@@ -273,7 +286,7 @@ object DataSourceSelector {
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
                 LOG.info("[M36] single runner, run directly")
                 chosenRunnerName = getRunnerName(runners.first())
-                runRunner(runners.first())
+                runRunner(runners.first(), onError)
                 callback?.invoke(true)
             }
             else -> {
@@ -286,7 +299,7 @@ object DataSourceSelector {
                     }
                     if (runner != null) chosenRunnerName = getRunnerName(runner)
                     callback?.invoke(runner != null)
-                    if (runner != null) runRunner(runner)
+                    if (runner != null) runRunner(runner, onError)
                 }
             }
         }
@@ -837,6 +850,9 @@ object DataSourceSelector {
         execOption: Any,
         LOG: com.intellij.openapi.diagnostic.Logger,
     ) {
+        // T-Perf-13：诊断探针降 debug——非 debug 模式零开销（此前每次执行一次 DataManager 解析
+        // + 数十条反射 + info 刷屏；需要诊断时开 debug 恢复全部输出）
+        if (!LOG.isDebugEnabled) return
         // M36.5.13：ModalityState.any()——模态弹窗期间探针照常执行（默认 modality 下 invokeLater
         // 被冻结：沙盒 12:09:55→12:10:50 延迟 55s 实证，探针日志失去诊断价值）
         ApplicationManager.getApplication().invokeLater({
@@ -1004,7 +1020,7 @@ object DataSourceSelector {
                         }.getOrElse { "clientCheck FAILED:${it.message}" }
                         "modelIsActual=$isActual stmts=$stmtsList.size modelRange=$tr lang=${lang?.id} stmtsDetail=[$stmtDetail] modelId=$modelIdentity docLen=${editor.document.textLength} caret=${editor.caretModel.offset} execSelection=${runCatching { execOption.javaClass.getField("execSelection").getInt(execOption) }.getOrNull()} $docRel $clientCheck | $subDiag"
                     }.getOrNull()
-                    LOG.info(
+                    LOG.debug(
                         "[M36] dataContext check: PROJECT=$projectOk, EDITOR=$editorOk, CLIENT_KEY=$consoleOk, PSI_FILE=$psiOk, " +
                             "isSqlAtPlace=$sqlAtPlace, statementsRange=$statementsRange, $modelDiag",
                     )
@@ -1057,19 +1073,78 @@ object DataSourceSelector {
             // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）
             val document = consoleClass.getMethod("getDocument").invoke(console)
                 as? com.intellij.openapi.editor.Document
-            var editor: com.intellij.openapi.editor.Editor? = null
-            repeat(20) {
-                if (editor != null) return@repeat
-                document?.let {
-                    editor = com.intellij.openapi.editor.EditorFactory.getInstance()
-                        .getEditors(it).firstOrNull()
+            // T-Perf-13：EDT 上不再 repeat(20){Thread.sleep(20)} 忙等编辑器实例（最多 400ms 冻结）——
+            // 首查即中（绝大多数：编辑器随 attachConsole 同步构造）或后台线程调用：同步短轮询（原语义）；
+            // EDT 首查未命中：后台轮询线程 20ms 一查，命中后回 EDT 继续余下准备链（prepareAfterEditorResolved）。
+            val editorFactory = com.intellij.openapi.editor.EditorFactory.getInstance()
+            fun findEditor(): com.intellij.openapi.editor.Editor? =
+                document?.let { editorFactory.getEditors(it).firstOrNull() }
+            val firstEditor = findEditor()
+            if (firstEditor != null || !ApplicationManager.getApplication().isDispatchThread) {
+                var editor = firstEditor
+                if (editor == null) {
+                    repeat(20) {
+                        if (editor != null) return@repeat
+                        editor = findEditor()
+                        if (editor == null) Thread.sleep(20)
+                    }
                 }
-                if (editor == null) Thread.sleep(20)
+                LOG.info("[M36] editor=$editor")
+                val ed = editor ?: return
+                // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
+                onEditor?.invoke(ed)
+                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed)
+            } else {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    var editor: com.intellij.openapi.editor.Editor? = null
+                    repeat(20) {
+                        if (editor != null) return@repeat
+                        editor = findEditor()
+                        if (editor == null) Thread.sleep(20)
+                    }
+                    val resolved = editor
+                    ApplicationManager.getApplication().invokeLater({
+                        LOG.info("[M36] editor=$resolved (async wait)")
+                        if (resolved != null) {
+                            onEditor?.invoke(resolved)
+                            runCatching {
+                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved)
+                            }.onFailure { e ->
+                                LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+                                val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+                                onError?.invoke(cause.message ?: cause.toString())
+                            }
+                        }
+                    }, com.intellij.openapi.application.ModalityState.any())
+                }
             }
-            LOG.info("[M36] editor=$editor")
-            if (editor == null) return
-            // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
-            onEditor?.invoke(editor)
+        }.onFailure { e ->
+            LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+            // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            onError?.invoke(cause.message ?: cause.toString())
+        }
+    }
+
+    /**
+     * M36.5：控制台准备链后段（T-Perf-13 从 [prepareInConsole] 抽出——编辑器实例就绪后执行：
+     * scriptModel 装配 / 执行上下文缓存 / 原生控制台 UI 拼合内嵌 / 可选立即执行）。
+     * EDT 编辑器异步等待路径会经此继续（异常处理与同步路径一致：warn + onError 面板内显示）。
+     */
+    private fun prepareAfterEditorResolved(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        executeAfterPrepare: Boolean,
+        dataSourceName: String?,
+        onConsole: ((javax.swing.JComponent) -> Unit)?,
+        onError: ((String) -> Unit)?,
+        console: Any,
+        document: com.intellij.openapi.editor.Document?,
+        editor: com.intellij.openapi.editor.Editor,
+    ) {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        runCatching {
+            val consoleClass = Class.forName(CONSOLE_CLASS)
 
             // 3. scriptModel + execOption
             val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
@@ -1721,13 +1796,13 @@ object DataSourceSelector {
         val log = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val tooAuto = force || topH < total * 0.35 || topH > total * 0.68
         if (tooAuto) {
-            log.info("[M36] divider realign(force=$force): topH=$topH total=$total → 0.6")
+            log.debug("[M36] divider realign(force=$force): topH=$topH total=$total → 0.6")
             sp.setDividerLocation(0.6)
             sp.revalidate()
             sp.repaint()
             dumpSplitBounds(sp, log)
         } else {
-            log.info("[M36] divider OK: topH=$topH total=$total (no change)")
+            log.debug("[M36] divider OK: topH=$topH total=$total (no change)")
         }
         // M36.5.75：布局级修复 Output 控制台 44px 塌缩（替代 M36.5.72/73 的 fillOutputConsole
         // 一次性 setSize——被平台 EditorMergedHorizontalScrollBarLayout 每轮 layout 压回，必然失效）
@@ -1774,7 +1849,7 @@ object DataSourceSelector {
             }
             findAll(searchRoot, 0)
             if (targets.isEmpty()) {
-                log.info("[M36][OUTFILL] no output editor (EditorImpl\$PanelWithFloatingToolbar) in result area; skip")
+                log.debug("[M36][OUTFILL] no output editor (EditorImpl\$PanelWithFloatingToolbar) in result area; skip")
                 return
             }
             var installedAny = false
@@ -1807,7 +1882,7 @@ object DataSourceSelector {
                             if (p === searchRoot) break
                             p = p.parent; lvl++
                         }
-                        log.info("[M36][OUTFILL] EMHSBL panel not found above output editor; ancestors=$chainDesc")
+                        log.debug("[M36][OUTFILL] EMHSBL panel not found above output editor; ancestors=$chainDesc")
                     }
                     continue
                 }
@@ -1815,13 +1890,13 @@ object DataSourceSelector {
                 var child: java.awt.Component = t
                 for (c in chain) {
                     if (c is javax.swing.JScrollPane) {
-                        log.info("[M36][OUTFILL] chain node is JScrollPane (${c.javaClass.name}), keep its layout")
+                        log.debug("[M36][OUTFILL] chain node is JScrollPane (${c.javaClass.name}), keep its layout")
                     } else if (c.layout !is FillTargetLayout) {
                         val oldLayout = c.layout?.javaClass?.name ?: "null"
                         val before = child.bounds
                         c.layout = FillTargetLayout(child)
                         c.revalidate()
-                        log.info("[M36][OUTFILL] installed on ${c.javaClass.name} (was $oldLayout) target=${child.javaClass.simpleName} before=$before")
+                        log.debug("[M36][OUTFILL] installed on ${c.javaClass.name} (was $oldLayout) target=${child.javaClass.simpleName} before=$before")
                         installedAny = true
                     }
                     child = c
@@ -1870,7 +1945,7 @@ object DataSourceSelector {
             if (logged < 3 && avail > 0 && target.height != avail) {
                 logged++
                 com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-                    .info("[M36][OUTFILL] layout: parent=${parent.javaClass.simpleName} h=${parent.height} target(${target.javaClass.simpleName}) → $avail")
+                    .debug("[M36][OUTFILL] layout: parent=${parent.javaClass.simpleName} h=${parent.height} target(${target.javaClass.simpleName}) → $avail")
             }
         }
     }
@@ -1879,19 +1954,21 @@ object DataSourceSelector {
      *（editor bg 43,45,48 vs panel bg 43,45,48 无差异）。直接 dump SplitPane/top/bottom 及其直接
      * 子组件的真实 bounds + size，一锤定音：topblock 是否被编辑器真的 fill，结果区是否占满 bottom。 */
     private fun dumpSplitBounds(sp: javax.swing.JSplitPane, log: com.intellij.openapi.diagnostic.Logger) {
+        // T-Perf-13：取证 dump 降 debug 门控（非 debug 模式零开销）
+        if (!log.isDebugEnabled) return
         runCatching {
             fun b(c: java.awt.Component?): String = if (c == null) "null" else
                 "${c.javaClass.simpleName}@${System.identityHashCode(c)} bounds=${c.bounds} pref=${c.preferredSize} min=${c.minimumSize} max=${c.maximumSize}"
-            log.info("[M36][BOUNDS] sp=${b(sp)} divider=${sp.dividerLocation}")
-            log.info("[M36][BOUNDS]   top=${b(sp.topComponent)}")
+            log.debug("[M36][BOUNDS] sp=${b(sp)} divider=${sp.dividerLocation}")
+            log.debug("[M36][BOUNDS]   top=${b(sp.topComponent)}")
             (sp.topComponent as? java.awt.Container)?.components?.forEachIndexed { i, c ->
-                log.info("[M36][BOUNDS]   top.child[$i]=${b(c)}")
+                log.debug("[M36][BOUNDS]   top.child[$i]=${b(c)}")
                 if (c is java.awt.Container) c.components.forEachIndexed { j, d ->
-                    log.info("[M36][BOUNDS]   top.child[$i].child[$j]=${b(d)}")
+                    log.debug("[M36][BOUNDS]   top.child[$i].child[$j]=${b(d)}")
                     // M36.5.61：编辑器视图（PanelWithFloatingToolbar）内部是否含未拉伸的 scrollpane/
                     // viewport——mask 真相在此层（编辑器 view 有 bounds 但只 paint 内容高度）
                     if (d is java.awt.Container) d.components.forEachIndexed { k, e ->
-                        log.info("[M36][BOUNDS]   top.child[$i].child[$j].child[$k]=${b(e)}")
+                        log.debug("[M36][BOUNDS]   top.child[$i].child[$j].child[$k]=${b(e)}")
                         if (e is javax.swing.JScrollPane) {
                             log.info("[M36][BOUNDS]     scrollpane viewport=${e.viewport?.let { v -> "${b(v)} vsbV=${e.verticalScrollBar?.isVisible} hsbV=${e.horizontalScrollBar?.isVisible}" } }")
                         }
@@ -2381,7 +2458,7 @@ object DataSourceSelector {
                 // 期间用户看到上一次结果 + "执行中..."——滞后一轮的另一来源）。
                 if (generation != swapGeneration) {
                     timer.stop()
-                    LOG.info("[M36] result tab retry cancelled (generation $generation != ${swapGeneration})")
+                    LOG.debug("[M36] result tab retry cancelled (generation $generation != ${swapGeneration})")
                     return
                 }
                 // M36.5.56：每拍开头统一早检错误（**不再只放 else 分支**）——DBN 查询失败写
@@ -2408,7 +2485,7 @@ object DataSourceSelector {
                 if (result != null && result.displayName in preExistingNames) {
                     LOG.info("[M36] result tab reused (name=${result.displayName}) - accepting existing tab")
                 }
-                LOG.info("[M36] retry#$attempts contents=$all, ids=$ids, select=${result?.displayName}, preExisting=$preExistingNames")
+                LOG.debug("[M36] retry#$attempts contents=$all, ids=$ids, select=${result?.displayName}, preExisting=$preExistingNames")
                 if (result != null) {
                     timer.stop()
                     // M36.5.48 勘误：此处**不**调用 extractConsoleError——结果 Tab 复用成功时
@@ -2519,8 +2596,8 @@ object DataSourceSelector {
         method.invoke(runner) as? Boolean
     }.getOrNull() ?: false
 
-    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 弹错误引导。 */
-    private fun runRunner(runner: Any) {
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板内错误回调。 */
+    private fun runRunner(runner: Any, onError: ((String) -> Unit)?) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val method = runner.javaClass.getMethod("run")
@@ -2530,13 +2607,9 @@ object DataSourceSelector {
         }.onFailure { e ->
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
             LOG.warn("[M36] runRunner FAILED: ${cause.javaClass.simpleName}: ${cause.message}", cause)
-            // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
-            val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                project,
-                MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString()),
-                MpSqlVisualizerBundle.message("execute.title"),
-            )
+            // T-Perf-01：驱动缺失/连接失败等高频失败改面板内红字（onError → SqlResultPanel.showError），
+            // 不再弹模态框（与原生 Database 插件弹窗叠加时用户需连点多个对话框）。
+            onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString()))
         }
     }
 
@@ -2600,6 +2673,9 @@ object DataSourceSelector {
             // section，AccessToken 作用域）。**不后台化**：setMapping→handleMappingChange→
             // pushAll/reparseFiles 的线程语义未验证（javap PerFileMappingsBase），方言预映射
             // （M36.5.3 关键修复，dumb 模式执行依赖）不冒重构风险。
+            // T-Perf-13 结论：此处 EDT 同步 VFS refresh 是**作者有意识权衡（注释在案）**，
+            // 保持同步语义不改后台（后台 refresh 与 setMapping 线程语义未验证，防竞态）；
+            // 已有预热线程（prewarmPreviewTempFile）覆盖首次打开的最主要耗时。
             com.intellij.util.SlowOperations.allowSlowOperations(com.intellij.util.SlowOperations.GENERIC).use {
                 val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
                     ?: return null

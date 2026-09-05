@@ -43,6 +43,9 @@ import javax.swing.SwingConstants
 import javax.swing.border.EmptyBorder
 
 /**
+ * T-Perf-24 死代码标注：本面板**未注册到任何工具窗口/弹窗**（F-7 视图由历史 tab 承接）。
+ */
+/**
  * SQL 历史记录面板（F-7）：列表渲染（摘要 + 时间戳 + 来源）+ 双击预览 + 右键菜单（收藏/复制/删除/标签）。
  *
  * <p>列表条目按时间倒序（最新在前）；收藏条目左侧显示星形图标。搜索/标签筛选由外层 [SqlHistorySearchBar] 驱动，

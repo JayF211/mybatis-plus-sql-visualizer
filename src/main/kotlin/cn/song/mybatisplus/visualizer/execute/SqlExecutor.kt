@@ -97,6 +97,11 @@ object SqlExecutor {
         DataSourceSelector.clearPrepared()
     }
 
+    /** T-Perf-16：面板 dispose 释放全部单例滞留引用（prepared/shared/pendingOnConsole）。 */
+    fun releaseForPanel() {
+        DataSourceSelector.releaseForPanel()
+    }
+
     private fun showInfo(project: Project, message: String) {
         runCatching { Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title")) }
     }

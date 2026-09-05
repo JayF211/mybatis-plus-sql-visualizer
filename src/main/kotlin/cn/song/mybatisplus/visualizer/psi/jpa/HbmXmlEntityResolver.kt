@@ -24,7 +24,18 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object HbmXmlEntityResolver {
 
+    /** T-Perf-18：负命中缓存上限（超过整体清空）。 */
+    private const val NEGATIVE_CACHE_MAX = 4096
+
     private val cache = ConcurrentHashMap<String, HbmXmlMapping.ClassMapping>()
+
+    /**
+     * T-Perf-18：负命中缓存（项目名+类名 → true 表示该实体无 hbm 映射）。
+     * 此前每个无 hbm 实体每次预览都重跑 FilenameIndex 全量索引查询（heavy 热路径）；
+     * 负命中仅在 [clearCache] / 缓存封顶清空时失效（hbm 文件增删属开发期低频事件，
+     * 设置页「清除缓存」可手动刷新）。
+     */
+    private val negativeCache: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /**
      * 根据实体类名查找映射信息。
@@ -36,6 +47,7 @@ object HbmXmlEntityResolver {
     fun resolve(entityClassName: String, project: Project): HbmXmlMapping.ClassMapping? {
         val cacheKey = "${project.name}:$entityClassName"
         cache[cacheKey]?.let { return it }
+        if (cacheKey in negativeCache) return null
 
         // 搜索所有 .hbm.xml 文件
         val hbmFiles = FilenameIndex.getFilesByName(project, "*.hbm.xml", GlobalSearchScope.allScope(project))
@@ -51,6 +63,9 @@ object HbmXmlEntityResolver {
             }
         }
 
+        // T-Perf-18：记入负命中缓存（封顶防膨胀）
+        if (negativeCache.size >= NEGATIVE_CACHE_MAX) negativeCache.clear()
+        negativeCache.add(cacheKey)
         return null
     }
 
@@ -116,9 +131,11 @@ object HbmXmlEntityResolver {
     }
 
     /**
-     * 清除缓存（项目关闭时调用）。
+     * 清除缓存（含负命中缓存；PluginCacheManager.clearAll 接线，项目关闭时调用）。
      */
     fun clearCache() {
         cache.clear()
+        negativeCache.clear()
     }
+
 }

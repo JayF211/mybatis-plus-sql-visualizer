@@ -38,6 +38,60 @@ class SqlLogAutoSaver(
     private var currentResolvedName: String = ""  // 当前解析后的文件名（不含滚动序号）
     private var currentIndex: Int = 1  // 当前滚动序号（1=无后缀）
 
+    // ---------- T-Perf-12：异步批量写（淘汰条目投递无锁队列 + 专用单线程执行器） ----------
+
+    /** 在途淘汰条目队列（控制台输出线程投递，写线程消费）。 */
+    private val pendingEntries = java.util.concurrent.ConcurrentLinkedQueue<LogSqlEntry>()
+
+    /** 本轮已调度标志（幂等调度——风暴期 N 条投递 = 1 个写任务）。 */
+    private val drainScheduled = java.util.concurrent.atomic.AtomicBoolean()
+
+    /** 专用写线程（懒创建；close 后下次 submit 重建）。 */
+    @Volatile
+    private var executor: java.util.concurrent.ExecutorService? = null
+
+    /**
+     * T-Perf-12：异步写入入口（buffer.onEvicted 回调用）——投递后由专用后台线程批量写出。
+     * 此前回调在控制台输出热路径同步执行「检查文件长度 + 写两行 + flush 磁盘」，风暴期数百次/秒，
+     * 且 EDT 刷新列表 snapshot() 抢同一把锁互相阻塞。
+     */
+    fun submit(entry: LogSqlEntry) {
+        pendingEntries.add(entry)
+        if (drainScheduled.compareAndSet(false, true)) {
+            ensureExecutor().execute { drainAndWrite() }
+        }
+    }
+
+    private fun ensureExecutor(): java.util.concurrent.ExecutorService {
+        executor?.takeIf { !it.isShutdown }?.let { return it }
+        val new = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "mpsv-sql-history-autosave").apply { isDaemon = true }
+        }
+        executor = new
+        return new
+    }
+
+    /** 写任务：整批一次 flush；写期间新到条目重新调度（不丢条）。 */
+    private fun drainAndWrite() {
+        drainScheduled.set(false)
+        val batch = mutableListOf<LogSqlEntry>()
+        while (true) {
+            val e = pendingEntries.poll() ?: break
+            batch.add(e)
+        }
+        if (batch.isNotEmpty()) writeBatch(batch)
+    }
+
+    /** close 前同步清空在途队列（不丢条；close 持有同一监视器，写任务串行）。 */
+    private fun drainPendingSync() {
+        val batch = mutableListOf<LogSqlEntry>()
+        while (true) {
+            val e = pendingEntries.poll() ?: break
+            batch.add(e)
+        }
+        if (batch.isNotEmpty()) writeBatch(batch)
+    }
+
     /**
      * 配置保存参数（设置变更时调用）。
      * @param customPath 用户自定义目录（空串 = 默认 .idea 路径）
@@ -64,27 +118,52 @@ class SqlLogAutoSaver(
     }
 
     /**
-     * 写入被淘汰的条目（buffer.onEvicted 回调）。
+     * 写入被淘汰的条目（同步 API——测试/直接调用；生产回调路径请走 [submit]）。
      * 懒打开文件；文件名变化（跨天/模板变更）时重开并复位滚动序号，
-     * 单文件超限时递增滚动序号。
+     * 单文件超限时递增滚动序号。含 flush（调用方拿到的文件内容即时可见）。
      */
     @Synchronized
     fun write(entry: LogSqlEntry) {
+        prepareForEntry(entry)
+        val w = writer ?: return
+        writeEntry(w, entry)
+        flushQuietly()
+    }
+
+    /** T-Perf-12：批量写出——滚动/重开状态机逐条应用，**整批仅一次 flush**。 */
+    @Synchronized
+    internal fun writeBatch(entries: List<LogSqlEntry>) {
+        if (entries.isEmpty()) return
+        for (entry in entries) {
+            prepareForEntry(entry)
+            val w = writer ?: continue
+            writeEntry(w, entry)
+        }
+        flushQuietly()
+    }
+
+    /** 写入前状态机：首写/文件名切换/滚动阈值检查与重开（须在 @Synchronized 内调用）。 */
+    private fun prepareForEntry(entry: LogSqlEntry) {
         val resolved = resolveFileName()
         if (writer == null || resolved != currentResolvedName) {
             // 首次写入 / 文件名切换：重开文件，滚动序号复位
-            close()
+            closeWriter()
             currentResolvedName = resolved
             currentIndex = 1
             openWriterForCurrent()
         } else if ((currentFile?.length() ?: 0L) >= rollThresholdBytes) {
             // 单文件超限：滚动（xxx.sql → xxx.2.sql）
-            close()
+            closeWriter()
             currentIndex += 1
             openWriterForCurrent()
         }
-        val w = writer ?: return
-        writeEntry(w, entry)
+    }
+
+    /** 静默 flush（写失败不阻断批次）。 */
+    private fun flushQuietly() {
+        runCatching { writer?.flush() }.onFailure {
+            LOG.warn("自动保存历史 SQL：flush 失败", it)
+        }
     }
 
     /** 根据 currentResolvedName + currentIndex 打开文件。 */
@@ -130,18 +209,19 @@ class SqlLogAutoSaver(
      */
     private fun writeEntry(w: BufferedWriter, entry: LogSqlEntry) {
         runCatching {
-            synchronized(w) {
-                // 头部：源码位置 | 耗时 | 时间戳
-                val source = entry.sourceFile?.let { file ->
-                    if (entry.sourceLine > 0) "$file:${entry.sourceLine}" else file
-                } ?: "unknown"
-                val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
-                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).format(Date(entry.timestamp))
-                w.write("-- source: $source | time: $duration | $timestamp --\n")
-                w.write(withTerminator(entry.restoredSql))
-                w.write("\n\n")
-                w.flush()
-            }
+            // 头部：源码位置 | 耗时 | 时间戳
+            val source = entry.sourceFile?.let { file ->
+                if (entry.sourceLine > 0) "$file:${entry.sourceLine}" else file
+            } ?: "unknown"
+            val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
+            // T-Perf-12：SimpleDateFormat（每条新建/线程缓存）→ DateTimeFormatter 常量（不可变线程安全）
+            val timestamp = TIMESTAMP_FORMATTER.format(
+                java.time.Instant.ofEpochMilli(entry.timestamp).atZone(java.time.ZoneId.systemDefault()),
+            )
+            w.write("-- source: $source | time: $duration | $timestamp --\n")
+            w.write(withTerminator(entry.restoredSql))
+            w.write("\n\n")
+            // T-Perf-12：flush 上移到批末（writeBatch）/同步 API（write）——写线程逐条 flush 磁盘已移除
         }.onFailure {
             LOG.warn("自动保存历史 SQL：写入失败", it)
         }
@@ -178,12 +258,26 @@ class SqlLogAutoSaver(
     /** 当前打开的保存文件（测试访问 + 状态展示用）。 */
     fun currentFile(): File? = currentFile
 
-    /** 关闭文件句柄（manager dispose 或路径变更时调用）。 */
+    /**
+     * 关闭文件句柄（manager dispose 或路径变更时调用）。
+     * T-Perf-12：先同步清空在途队列（不丢条），再停写线程、关句柄；
+     * 后续 configure/submit 可重建执行器。
+     */
     @Synchronized
     fun close() {
+        drainPendingSync()
+        executor?.shutdownNow()
+        executor = null
+        drainScheduled.set(false)
+        pendingEntries.clear()
+        closeWriter()
+    }
+
+    /** 仅关闭当前 writer（滚动/切换文件用；不动队列与执行器）。 */
+    private fun closeWriter() {
         writer?.let { w ->
             runCatching {
-                synchronized(w) { w.close() }
+                w.close()
             }.onFailure {
                 LOG.debug("自动保存历史 SQL：关闭文件异常", it)
             }
@@ -194,6 +288,10 @@ class SqlLogAutoSaver(
 
     companion object {
         private val LOG = Logger.getInstance(SqlLogAutoSaver::class.java)
+
+        /** T-Perf-12：条目时间戳格式（DateTimeFormatter 不可变线程安全，替代逐条 SimpleDateFormat）。 */
+        private val TIMESTAMP_FORMATTER: java.time.format.DateTimeFormatter =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH)
 
         /**
          * 项目内插件数据根目录名（F-44-4）：随插件更名「SQL Visualizer」由旧名

@@ -1,8 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.lang.java.JavaLanguage
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
@@ -32,10 +35,15 @@ object JavaCodeFormatter {
     private const val WRAPPER_PREFIX = "class GeneratedSnippet {\n    void m() {\n"
     private const val WRAPPER_SUFFIX = "\n    }\n}"
 
+    /** T-Perf-11：全量 reformat 输入长度上限——超过走 [lightNormalize] 轻量降级
+     *  （write action 内的全量 reformat 不可取消，冻结与代码体积成正比）。 */
+    private const val MAX_REFORMAT_LENGTH = 64_000
+
     /** 格式化代码片段；project 为空或内容为空 → 原样返回。 */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     fun format(project: Project?, code: String): String {
         if (code.isBlank() || project == null) return code
+        if (code.length > MAX_REFORMAT_LENGTH) return lightNormalize(code)
         val psiFile = ReadAction.compute<PsiFile, Throwable> {
             PsiFileFactory.getInstance(project)
                 .createFileFromText(SNIPPET_FILE_NAME, JavaLanguage.INSTANCE, WRAPPER_PREFIX + code + WRAPPER_SUFFIX)
@@ -47,6 +55,41 @@ object JavaCodeFormatter {
         }
         return result
     }
+
+    /**
+     * T-Perf-11：后台格式化（EDT 调用入口）——PSI 创建 + 全量 reformat 是平台标注的慢操作，
+     * 批量转换 20+ 条语句拼大代码块时 EDT 冻结与体积成正比；移 [Task.Backgroundable]
+     * （带后台进度指示）执行，结果回 EDT 回调。超长输入在提交后台前即走 [lightNormalize] 降级。
+     */
+    fun formatAsync(project: Project, code: String, onResult: (String) -> Unit) {
+        if (code.isBlank() || code.length > MAX_REFORMAT_LENGTH) {
+            onResult(if (code.isBlank()) code else lightNormalize(code))
+            return
+        }
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        // headless 单测：同步执行保持既有测试语义（测试环境无进度后台任务泵）
+        if (app != null && app.isUnitTestMode) {
+            onResult(format(project, code))
+            return
+        }
+        object : Task.Backgroundable(
+            project,
+            MpSqlVisualizerBundle.message("reverse.panel.formatProgress"),
+            true,
+        ) {
+            override fun run(indicator: ProgressIndicator) {
+                val formatted = format(project, code)
+                app.invokeLater {
+                    if (project.isDisposed) return@invokeLater
+                    onResult(formatted)
+                }
+            }
+        }.queue()
+    }
+
+    /** T-Perf-11：轻量缩进归一（超长输入降级路径；无 PSI、零 write action）——去行尾空白、去首尾空行。 */
+    internal fun lightNormalize(code: String): String =
+        code.lines().joinToString("\n") { it.trimEnd() }.trim('\n')
 
     /**
      * 取出合成方法体文本（代码块文本去掉两侧花括号）并去最小缩进。

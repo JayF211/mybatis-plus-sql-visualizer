@@ -865,7 +865,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // F-44-7：SqlSourceInterceptor 自动注入
     // ------------------------------------------------------------------
 
-    /** 触发拦截器注入（用户勾选开关后调用）。 */
+    /** T-Perf-10：注入执行中标志（异步化后防重入——检测期间再次勾选不重复触发）。 */
+    private var injectionInProgress = false
+
+    /**
+     * 触发拦截器注入（用户勾选开关后调用）。
+     *
+     * T-Perf-10：改走 [SqlSourceInterceptorAutoInjector.injectAsync]——检测阶段
+     * （AnnotatedElementsSearch/findClass/源码目录递归）后台 ReadAction 执行，EDT 不再长冻结；
+     * 结果弹窗在 EDT 回调展示（模态确认/结果类提示保留）。
+     */
     private fun triggerInterceptorInjection() {
         val project = ProjectManager.getInstance().openProjects.firstOrNull()
         if (project == null) {
@@ -877,39 +886,43 @@ class PluginSettingsPanel @JvmOverloads constructor(
             autoInjectInterceptorCheck.isSelected = false
             return
         }
-        val result = SqlSourceInterceptorAutoInjector.inject(project)
-        when (result) {
-            is InjectionResult.Success -> {
-                Messages.showInfoMessage(
-                    project,
-                    result.message,
-                    "源码跳转配置",
-                )
-            }
-            is InjectionResult.AlreadyExists -> {
-                Messages.showInfoMessage(
-                    project,
-                    "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
-                    "源码跳转配置",
-                )
-                autoInjectInterceptorCheck.isSelected = false
-            }
-            is InjectionResult.UnsupportedProject -> {
-                Messages.showWarningDialog(
-                    project,
-                    "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n" +
-                        "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
-                    "源码跳转配置",
-                )
-                autoInjectInterceptorCheck.isSelected = false
-            }
-            is InjectionResult.CannotDetectStructure -> {
-                Messages.showWarningDialog(
-                    project,
-                    "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
-                    "源码跳转配置",
-                )
-                autoInjectInterceptorCheck.isSelected = false
+        if (injectionInProgress) return
+        injectionInProgress = true
+        SqlSourceInterceptorAutoInjector.injectAsync(project) { result ->
+            injectionInProgress = false
+            when (result) {
+                is InjectionResult.Success -> {
+                    Messages.showInfoMessage(
+                        project,
+                        result.message,
+                        "源码跳转配置",
+                    )
+                }
+                is InjectionResult.AlreadyExists -> {
+                    Messages.showInfoMessage(
+                        project,
+                        "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
+                        "源码跳转配置",
+                    )
+                    autoInjectInterceptorCheck.isSelected = false
+                }
+                is InjectionResult.UnsupportedProject -> {
+                    Messages.showWarningDialog(
+                        project,
+                        "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n" +
+                            "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
+                        "源码跳转配置",
+                    )
+                    autoInjectInterceptorCheck.isSelected = false
+                }
+                is InjectionResult.CannotDetectStructure -> {
+                    Messages.showWarningDialog(
+                        project,
+                        "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
+                        "源码跳转配置",
+                    )
+                    autoInjectInterceptorCheck.isSelected = false
+                }
             }
         }
     }
@@ -1216,22 +1229,28 @@ class PluginSettingsPanel @JvmOverloads constructor(
             .withFileFilter { it.extension?.lowercase() == "json" }
             .withTitle(MpSqlVisualizerBundle.message("settings.import"))
         val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, null, null) ?: return
-        runCatching {
-            val text = String(file.contentsToByteArray(), Charsets.UTF_8)
-            PluginSettings.fromJson(text)
-        }.onSuccess {
-            reset()
-            com.intellij.openapi.ui.Messages.showInfoMessage(
-                rootPanel,
-                MpSqlVisualizerBundle.message("settings.import.success"),
-                MpSqlVisualizerBundle.message("settings.import"),
-            )
-        }.onFailure { e ->
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                rootPanel,
-                MpSqlVisualizerBundle.message("settings.import.failed", e.message ?: "unknown"),
-                MpSqlVisualizerBundle.message("settings.import"),
-            )
+        // T-Perf-14：文件 IO + JSON 解析移后台（EDT 不做磁盘读）；结果回 EDT 刷新表单与提示
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            val outcome = runCatching {
+                val text = String(file.contentsToByteArray(), Charsets.UTF_8)
+                PluginSettings.fromJson(text)
+            }
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                outcome.onSuccess {
+                    reset()
+                    com.intellij.openapi.ui.Messages.showInfoMessage(
+                        rootPanel,
+                        MpSqlVisualizerBundle.message("settings.import.success"),
+                        MpSqlVisualizerBundle.message("settings.import"),
+                    )
+                }.onFailure { e ->
+                    com.intellij.openapi.ui.Messages.showErrorDialog(
+                        rootPanel,
+                        MpSqlVisualizerBundle.message("settings.import.failed", e.message ?: "unknown"),
+                        MpSqlVisualizerBundle.message("settings.import"),
+                    )
+                }
+            }
         }
     }
 
@@ -1249,20 +1268,26 @@ class PluginSettingsPanel @JvmOverloads constructor(
         val wrapper = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance().createSaveFileDialog(descriptor, null)
         val saved = wrapper.save(baseDir, "mp-sql-visualizer-settings.json")
         if (saved != null) {
-            runCatching {
-                java.io.File(saved.file.absolutePath).writeText(PluginSettings.toJson(), Charsets.UTF_8)
-            }.onSuccess {
-                com.intellij.openapi.ui.Messages.showInfoMessage(
-                    rootPanel,
-                    MpSqlVisualizerBundle.message("settings.export.success"),
-                    MpSqlVisualizerBundle.message("settings.export"),
-                )
-            }.onFailure { e ->
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    rootPanel,
-                    MpSqlVisualizerBundle.message("settings.export.failed", e.message ?: "unknown"),
-                    MpSqlVisualizerBundle.message("settings.export"),
-                )
+            // T-Perf-14：文件写入移后台（EDT 不做磁盘写）；结果回 EDT 提示
+            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val outcome = runCatching {
+                    java.io.File(saved.file.absolutePath).writeText(PluginSettings.toJson(), Charsets.UTF_8)
+                }
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    outcome.onSuccess {
+                        com.intellij.openapi.ui.Messages.showInfoMessage(
+                            rootPanel,
+                            MpSqlVisualizerBundle.message("settings.export.success"),
+                            MpSqlVisualizerBundle.message("settings.export"),
+                        )
+                    }.onFailure { e ->
+                        com.intellij.openapi.ui.Messages.showErrorDialog(
+                            rootPanel,
+                            MpSqlVisualizerBundle.message("settings.export.failed", e.message ?: "unknown"),
+                            MpSqlVisualizerBundle.message("settings.export"),
+                        )
+                    }
+                }
             }
         }
     }

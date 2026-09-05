@@ -37,6 +37,11 @@ import com.intellij.psi.util.PsiTreeUtil
  */
 object CriteriaQueryLocator {
 
+    // T-Perf-23：循环内 Set 字面量提为常量
+    private val CQ_SELECT_METHODS = setOf("multiselect", "select")
+    private val CQ_LOGICAL_METHODS = setOf("and", "or", "not")
+
+
     // CriteriaQuery 方法名
     private val CRITERIA_QUERY_METHODS = setOf(
         "from", "select", "multiselect", "where", "orderBy",
@@ -156,7 +161,7 @@ object CriteriaQueryLocator {
                 }
 
                 // cq.multiselect(...) / cq.select(...)
-                methodName in setOf("multiselect", "select") && qualifierText in criteriaQueryVars -> {
+                methodName in CQ_SELECT_METHODS && qualifierText in criteriaQueryVars -> {
                     selectColumns += extractSelectColumns(call, roots)
                 }
 
@@ -258,7 +263,7 @@ object CriteriaQueryLocator {
     private fun isNestedInParentPredicate(call: PsiMethodCallExpression): Boolean {
         val parent = call.parent as? PsiMethodCallExpression ?: return false
         val parentName = parent.methodExpression.referenceName ?: return false
-        return parentName in setOf("and", "or", "not")
+        return parentName in CQ_LOGICAL_METHODS
     }
 
     // ------------------------------------------------------------------
@@ -405,7 +410,7 @@ object CriteriaQueryLocator {
         if (expr is PsiMethodCallExpression) {
             val methodName = expr.methodExpression.referenceName
             // 仅处理 CriteriaBuilder 条件方法，排除 Java 集合工具方法（toArray 等）
-            if (methodName in CB_CONDITION_METHODS || methodName in setOf("and", "or", "not")) {
+            if (methodName in CB_CONDITION_METHODS || methodName in CQ_LOGICAL_METHODS) {
                 return extractPredicateFromCall(expr)
             }
             return null

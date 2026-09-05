@@ -110,6 +110,7 @@ class ConvertToSqlAction : AnAction() {
                 }
                 val (chainHeads, displayTexts) = payload
                 ApplicationManager.getApplication().invokeLater {
+                    if (project.isDisposed) return@invokeLater
                     when (chainHeads.size) {
                         // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选（0/1/多分发）
                         0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd, sourceLocation)
@@ -266,6 +267,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
@@ -309,6 +311,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
@@ -356,6 +359,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (tags.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewXml(project, file, tags[0], sourceLocation)
@@ -386,40 +390,39 @@ class ConvertToSqlAction : AnAction() {
             return
         }
         // 光标不在语句内 → 全部语句候选（T-M25-01）
-        val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
-            .filter { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
-        when (statements.size) {
-            0 -> SqlPreviewService.showResult(project, null, sourceLocation)
-            1 -> previewXml(project, file, statements[0], sourceLocation)
-            else -> {
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    // EDT 慢操作守卫：摘要/行文本后台 ReadAction 预计算（仿 T-M23.8 Java 候选）
-                    val displayTexts = try {
-                        ReadAction.compute<List<String>, Throwable> {
-                            statements.map { tag ->
-                                val line = tag.containingFile.viewProvider.document
-                                    ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
-                                val text = tag.text?.trim().orEmpty()
-                                SqlSelectionDialog.displayText(
-                                    "${tag.name} ${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
-                                    text,
-                                )
-                            }
-                        }
-                    } catch (t: Throwable) {
-                        emptyList()
+        // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（大 XML 中 EDT 直跑
+        // findChildrenOfType 构成卡顿；0/1/多 分发在后台结果回来后进行，EDT 只做预览与弹窗）
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val payload = try {
+                ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
+                    val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
+                        .filter { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
+                    val displayTexts = statements.map { tag ->
+                        val line = tag.containingFile.viewProvider.document
+                            ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+                        val text = tag.text?.trim().orEmpty()
+                        SqlSelectionDialog.displayText(
+                            "${tag.name} ${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
+                            text,
+                        )
                     }
-                    ApplicationManager.getApplication().invokeLater {
-                        if (displayTexts.size != statements.size) {
-                            SqlPreviewService.showResult(project, null, sourceLocation)
-                            return@invokeLater
-                        }
-                        SqlSelectionDialog(project, statements, displayTexts) { selected ->
-                            // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
-                            locateEditorTo(editor, selected)
-                            previewXml(project, file, selected, sourceLocation)
-                        }.show()
-                    }
+                    statements to displayTexts
+                }
+            } catch (t: Throwable) {
+                emptyList<XmlTag>() to emptyList<String>()
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                val (statements, displayTexts) = payload
+                when {
+                    statements.isEmpty() -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    statements.size == 1 -> previewXml(project, file, statements[0], sourceLocation)
+                    displayTexts.size != statements.size -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    else -> SqlSelectionDialog(project, statements, displayTexts) { selected ->
+                        // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
+                        locateEditorTo(editor, selected)
+                        previewXml(project, file, selected, sourceLocation)
+                    }.show()
                 }
             }
         }
@@ -457,38 +460,37 @@ class ConvertToSqlAction : AnAction() {
             return
         }
         // 光标不在 maintainPage 内 → 全部候选
-        val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
-            .filter { it.name == "maintainPage" }
-        when (statements.size) {
-            0 -> SqlPreviewService.showResult(project, null)
-            1 -> previewPages(project, file, statements[0])
-            else -> {
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    val displayTexts = try {
-                        ReadAction.compute<List<String>, Throwable> {
-                            statements.map { tag ->
-                                val line = tag.containingFile.viewProvider.document
-                                    ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
-                                val text = tag.text?.trim().orEmpty()
-                                SqlSelectionDialog.displayText(
-                                    "${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
-                                    text,
-                                )
-                            }
-                        }
-                    } catch (t: Throwable) {
-                        emptyList()
+        // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（同 mapper 语句分支）
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val payload = try {
+                ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
+                    val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
+                        .filter { it.name == "maintainPage" }
+                    val displayTexts = statements.map { tag ->
+                        val line = tag.containingFile.viewProvider.document
+                            ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
+                        val text = tag.text?.trim().orEmpty()
+                        SqlSelectionDialog.displayText(
+                            "${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
+                            text,
+                        )
                     }
-                    ApplicationManager.getApplication().invokeLater {
-                        if (displayTexts.size != statements.size) {
-                            SqlPreviewService.showResult(project, null)
-                            return@invokeLater
-                        }
-                        SqlSelectionDialog(project, statements, displayTexts) { selected ->
-                            locateEditorTo(editor, selected)
-                            previewPages(project, file, selected)
-                        }.show()
-                    }
+                    statements to displayTexts
+                }
+            } catch (t: Throwable) {
+                emptyList<XmlTag>() to emptyList<String>()
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                val (statements, displayTexts) = payload
+                when {
+                    statements.isEmpty() -> SqlPreviewService.showResult(project, null)
+                    statements.size == 1 -> previewPages(project, file, statements[0])
+                    displayTexts.size != statements.size -> SqlPreviewService.showResult(project, null)
+                    else -> SqlSelectionDialog(project, statements, displayTexts) { selected ->
+                        locateEditorTo(editor, selected)
+                        previewPages(project, file, selected)
+                    }.show()
                 }
             }
         }
@@ -519,6 +521,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (tags.size) {
                     0 -> SqlPreviewService.showResult(project, null)
                     1 -> previewPages(project, file, tags[0])

@@ -5,6 +5,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiReferenceExpression
 
@@ -38,15 +39,59 @@ object PreviewReceiverResolver {
     /**
      * 按方法调用的接收者（qualifier）归类到家族。
      *
+     * T-Perf-02：daemon 热路径治理——
+     *  1. 变量型 qualifier 先走 O(1) 名字启发，**名字启发失败才** `qualifier.type`（触发引用 resolve）；
+     *  2. 结果按 per-file modificationStamp 缓存（daemon 每趟对同一文件版本的同一批调用重复
+     *     classify，缓存后类型 resolve 每文件版本至多一次）。
+     *
      * @param call 方法调用表达式
      * @return 接收者家族；无 qualifier 或无法判定时返回 [Family.UNKNOWN]
      */
     fun classify(call: PsiMethodCallExpression): Family {
         val qualifier = call.methodExpression.qualifierExpression ?: return Family.UNKNOWN
         return when (qualifier) {
-            is PsiReferenceExpression -> classifyByNameAndType(qualifier.referenceName, qualifier.type)
-            is PsiMethodCallExpression -> classifyMethodCallQualifier(qualifier)
+            is PsiReferenceExpression ->
+                cachedFamily(call)
+                    ?: classifyByNameAndType(qualifier.referenceName) { qualifier.type }
+                        .also { cacheFamily(call, it) }
+            is PsiMethodCallExpression ->
+                cachedFamily(call)
+                    ?: classifyMethodCallQualifier(qualifier).also { cacheFamily(call, it) }
             else -> Family.UNKNOWN
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-Perf-02：per-file modificationStamp 分类缓存
+    // ------------------------------------------------------------------
+
+    /**
+     * classify 结果缓存（键=PsiFile 弱引用，值=(modificationStamp, 调用起始偏移→家族)）。
+     *
+     * 文件编辑（stamp 变化）整包失效，无逐条生命周期管理；文件释放后条目随弱键回收。
+     * 同步 WeakHashMap——daemon 判定本身就是并发线程池调用。
+     */
+    private val classifyCache = java.util.Collections.synchronizedMap(
+        java.util.WeakHashMap<PsiFile, Pair<Long, MutableMap<Int, Family>>>()
+    )
+
+    /** 缓存命中：文件版本一致且该调用已分类过时返回家族，否则 null。 */
+    private fun cachedFamily(call: PsiMethodCallExpression): Family? {
+        val file = call.containingFile ?: return null
+        val entry = classifyCache[file] ?: return null
+        if (entry.first != file.modificationStamp) return null
+        return entry.second[call.textRange.startOffset]
+    }
+
+    /** 写缓存：文件版本一致时增量更新，否则整包重建。 */
+    private fun cacheFamily(call: PsiMethodCallExpression, family: Family) {
+        val file = call.containingFile ?: return
+        val stamp = file.modificationStamp
+        synchronized(classifyCache) {
+            val entry = classifyCache[file]
+            val map = if (entry != null && entry.first == stamp) entry.second else HashMap()
+            map[call.textRange.startOffset] = family
+            classifyCache[file] = stamp to map
         }
     }
 
@@ -63,14 +108,19 @@ object PreviewReceiverResolver {
         if (lower == "getsession" || lower == "getnativeentitymanager" || lower.endsWith("entitymanager")) {
             return Family.JPA_SESSION
         }
-        // 解析返回类型简单名再判
+        // 解析返回类型简单名再判（T-Perf-02：仅名字启发全部失败后到达）
         val typeName = runCatching { typeSimpleName(qualifier.type) }.getOrNull()
         classifyByType(typeName.orEmpty())?.let { return it }
         return Family.UNKNOWN
     }
 
-    /** 变量型 qualifier：先按变量名后缀启发，再按解析类型。 */
-    private fun classifyByNameAndType(name: String?, type: com.intellij.psi.PsiType?): Family {
+    /**
+     * 变量型 qualifier：先按变量名后缀启发，名字启发失败才解析类型（惰性求值）。
+     *
+     * T-Perf-02：`typeResolver` 惰性化——`qualifier.type` 会触发引用 resolve（引用目标未编译/
+     * 索引未就绪时开销显著），名字启发命中的绝大多数调用不再付出该成本。
+     */
+    private fun classifyByNameAndType(name: String?, typeResolver: () -> com.intellij.psi.PsiType?): Family {
         // 1. 变量名后缀启发（O(1)，覆盖测试与 IDE 常见命名）
         name?.let {
             DAO_NAME_SUFFIXES.firstOrNull { s -> it.endsWith(s) }?.let { return Family.CUSTOM_DAO }
@@ -79,8 +129,8 @@ object PreviewReceiverResolver {
             if (lower.contains("hibernatetemplate")) return Family.HIBERNATE_TEMPLATE
             if (lower == "em" || lower.endsWith("entitymanager") || lower == "session") return Family.JPA_SESSION
         }
-        // 2. 解析类型简单名
-        val typeSimple = runCatching { typeSimpleName(type) }.getOrNull() ?: return Family.UNKNOWN
+        // 2. 解析类型简单名（惰性：仅名字启发失败后触发 resolve）
+        val typeSimple = runCatching { typeSimpleName(typeResolver()) }.getOrNull() ?: return Family.UNKNOWN
         classifyByType(typeSimple)?.let { return it }
         // 3. 类型名后缀兜底
         DAO_NAME_SUFFIXES.firstOrNull { s -> typeSimple.endsWith(s) }?.let { return Family.CUSTOM_DAO }

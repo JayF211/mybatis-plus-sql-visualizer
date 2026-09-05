@@ -571,7 +571,7 @@ class QueryWrapperParser(
     private fun parseLimit(call: WrapperCall): LimitClause? {
         val value = argAsValue(call.args.firstOrNull()) as? SqlValue.Literal ?: return null
         val text = value.unquoted.trim()
-        val limitMatch = Regex("""(?i)limit\s+(\d+)(?:\s*,\s*(\d+))?""").find(text) ?: return null
+        val limitMatch = QWP_LIMIT_PATTERN.find(text) ?: return null
         val first = limitMatch.groupValues[1].toLongOrNull() ?: return null
         val second = limitMatch.groupValues[2].toLongOrNull()
         // "limit 5, 10" → offset=5, count=10；"limit 10" → count=10
@@ -850,10 +850,13 @@ class QueryWrapperParser(
      */
     private fun selectColumnsByPredicate(predicate: WrapperArg.PredicateArg): List<ColumnRef> {
         val allColumns = table.allColumnNames
-        val selected = if (predicate.include.isNotEmpty()) {
-            allColumns.filter { it in predicate.include }
+        // T-Perf-23：List.contains O(n^2) -> Set O(n)（列数多时显著）
+        val includeSet = predicate.include.toSet()
+        val excludeSet = predicate.exclude.toSet()
+        val selected = if (includeSet.isNotEmpty()) {
+            allColumns.filter { it in includeSet }
         } else {
-            allColumns.filterNot { it in predicate.exclude }
+            allColumns.filterNot { it in excludeSet }
         }
         return selected.map { col ->
             val ref = ColumnRef(columnName = col)
@@ -870,4 +873,7 @@ class QueryWrapperParser(
 
     /** 实参转值。 */
     private fun argAsValue(arg: WrapperArg?): SqlValue? = arg.asValue()
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private val QWP_LIMIT_PATTERN = Regex("""(?i)limit\s+(\d+)(?:\s*,\s*(\d+))?""")
+
 }

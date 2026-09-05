@@ -69,9 +69,28 @@ data class LogSqlEntry(
     @Volatile
     var cachedListHtml: String? = null
 
+    /**
+     * T-Perf-19：去重计数键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
+     * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
+     */
+    val dedupeKey: String by lazy { sqlFingerprint(restoredSql) }
+
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
     }
+}
+
+/**
+ * T-Perf-19：SQL 指纹（FNV-1a 64 位十六进制串）——去重计数键用，避免以完整 SQL 原文为键
+ * 的内存驻留。64 位散列下两条不同 SQL 撞键概率可忽略（~2^-64 量级）。
+ */
+internal fun sqlFingerprint(sql: String): String {
+    var h = -0x340d631b7bdddcdbL // FNV-1a 64-bit offset basis
+    for (i in sql.indices) {
+        h = h xor sql[i].code.toLong()
+        h *= 0x100000001b3L // FNV-1a 64-bit prime
+    }
+    return java.lang.Long.toHexString(h)
 }
 
 /**

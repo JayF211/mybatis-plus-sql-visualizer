@@ -51,7 +51,8 @@ class JpaEntityResolver {
         val qName = entityClass.qualifiedName ?: className
         val configSig = TableConfigSignature.projectSignature()
 
-        val key = JpaCacheKey(file, qName, configSig)
+        // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
+        val key = JpaCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return entry.value
@@ -433,7 +434,9 @@ class JpaEntityResolver {
          * @param configSignature   配置签名（表名推断策略 + 忽略字段 + 表前缀后缀拼接串）
          */
         private data class JpaCacheKey(
-            val file: PsiFile,
+            val fileUrl: String?,
+            /** T-Perf-18：文件实例同一性辅助键（同 EntityResolver——light/mock 文件 url 可重复）。 */
+            val fileIdentity: Int,
             val classQualifiedName: String,
             val configSignature: String,
         )

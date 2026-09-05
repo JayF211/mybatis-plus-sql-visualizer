@@ -18,6 +18,9 @@ import com.intellij.openapi.editor.HighlighterColors
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Splitter
 import com.intellij.ui.JBColor
@@ -203,6 +206,9 @@ class LogToSqlPanel(
         }
     }
 
+    /** T-Perf-14：后台转换进行中标志（防重入）。 */
+    private val converting = java.util.concurrent.atomic.AtomicBoolean(false)
+
     // ------------------------------------------------------------------
     // 转换流程
     // ------------------------------------------------------------------
@@ -212,6 +218,10 @@ class LogToSqlPanel(
      *
      * 三解析器并列：MyBatis + Hibernate + JdbcTemplate 同时喂行，各自识别匹配的格式，结果合并输出。
      * 一段混合日志（同时含多种格式）也能正确转换。
+     *
+     * T-Perf-14：大日志（超过 [HEAVY_INPUT_CHARS] / [HEAVY_INPUT_LINES] 阈值，粘贴数 MB 日志场景）
+     * 解析 + 逐条格式化移 [Task.Backgroundable] 后台 + 进度，EDT 不再全量解析冻结；
+     * 小输入保持同步（即时反馈）。防重入：后台转换进行中忽略再次触发。
      */
     private fun convert() {
         val text = inputEditor.document.text
@@ -220,23 +230,59 @@ class LogToSqlPanel(
             return
         }
         // 前缀/混合/截断与自动捕获同源（每次转换即时读取，改设置立即生效）
+        val parsers = buildParsers()
+        val heavy = text.length > HEAVY_INPUT_CHARS || text.count { it == '\n' } >= HEAVY_INPUT_LINES
+        if (!heavy) {
+            applyConversion(computeConversion(text, parsers))
+            return
+        }
+        if (!converting.compareAndSet(false, true)) return
+        status(MpSqlVisualizerBundle.message("logToSql.status.converting"), error = false)
+        object : Task.Backgroundable(
+            project,
+            MpSqlVisualizerBundle.message("logToSql.panel.convertingTask"),
+            true,
+        ) {
+            override fun run(indicator: ProgressIndicator) {
+                val out = computeConversion(text, parsers)
+                ApplicationManager.getApplication().invokeLater {
+                    converting.set(false)
+                    if (project.isDisposed) return@invokeLater
+                    applyConversion(out)
+                }
+            }
+        }.queue()
+    }
+
+    /** 三解析器装配（转换配置每次转换即时读取）。 */
+    private fun buildParsers(): Triple<MyBatisLogParser, HibernateLogParser, JdbcTemplateLogParser> {
         val state = PluginSettings.getInstance().state
-        val myBatisParser = MyBatisLogParser(
-            sqlPrefix = state.logSqlPrefix,
-            paramPrefix = state.logParamPrefix,
-            mixedPrefix = state.logMixedPrefix,
-            maxParseLength = state.logMaxParseLength,
+        return Triple(
+            MyBatisLogParser(
+                sqlPrefix = state.logSqlPrefix,
+                paramPrefix = state.logParamPrefix,
+                mixedPrefix = state.logMixedPrefix,
+                maxParseLength = state.logMaxParseLength,
+            ),
+            HibernateLogParser(
+                sqlPrefix = state.logHibernateSqlPrefix,
+                paramPrefix = state.logHibernateParamPrefix,
+                mixedPrefix = state.logMixedPrefix,
+                maxParseLength = state.logMaxParseLength,
+            ),
+            JdbcTemplateLogParser(
+                enabled = state.logJdbcEnabled,
+                maxParseLength = state.logMaxParseLength,
+            ),
         )
-        val hibernateParser = HibernateLogParser(
-            sqlPrefix = state.logHibernateSqlPrefix,
-            paramPrefix = state.logHibernateParamPrefix,
-            mixedPrefix = state.logMixedPrefix,
-            maxParseLength = state.logMaxParseLength,
-        )
-        val jdbcParser = JdbcTemplateLogParser(
-            enabled = state.logJdbcEnabled,
-            maxParseLength = state.logMaxParseLength,
-        )
+    }
+
+    /** 纯计算：逐行喂三解析器 + 逐条还原/格式化（后台线程安全——不触碰 Swing）。 */
+    private fun computeConversion(
+        text: String,
+        parsers: Triple<MyBatisLogParser, HibernateLogParser, JdbcTemplateLogParser>,
+    ): ConversionOutput {
+        val (myBatisParser, hibernateParser, jdbcParser) = parsers
         text.lineSequence().forEach { line ->
             myBatisParser.feed(line)
             hibernateParser.feed(line)
@@ -246,27 +292,36 @@ class LogToSqlPanel(
         hibernateParser.closePending()
         jdbcParser.closePending()
         val entries = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
-        if (entries.isEmpty()) {
-            status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), error = true)
-            return
-        }
+        if (entries.isEmpty()) return ConversionOutput(null, 0, 0)
         val multi = entries.size > 1
         val out = entries.mapIndexed { index, entry ->
             val base = withTerminator(entry.restoredSql)
             val body = if (formatToggled) SqlFormatter.format(base) else base
             if (multi) "-- ${MpSqlVisualizerBundle.message("logToSql.status.group", index + 1)}\n$body" else body
         }.joinToString("\n\n")
-        setDocumentText(resultEditor, out)
         val unresolved = entries.count { '?' in it.restoredSql }
+        return ConversionOutput(out, entries.size, unresolved)
+    }
+
+    /** 应用转换结果（EDT）：写结果区 + 状态行。 */
+    private fun applyConversion(out: ConversionOutput) {
+        if (out.text == null) {
+            status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), error = true)
+            return
+        }
+        setDocumentText(resultEditor, out.text)
         status(
-            if (unresolved > 0) {
-                MpSqlVisualizerBundle.message("logToSql.status.unresolved", unresolved)
+            if (out.unresolved > 0) {
+                MpSqlVisualizerBundle.message("logToSql.status.unresolved", out.unresolved)
             } else {
-                MpSqlVisualizerBundle.message("logToSql.status.converted", entries.size)
+                MpSqlVisualizerBundle.message("logToSql.status.converted", out.entriesCount)
             },
-            error = unresolved > 0,
+            error = out.unresolved > 0,
         )
     }
+
+    /** 转换结果（null text = 无条目）。 */
+    private data class ConversionOutput(val text: String?, val entriesCount: Int, val unresolved: Int)
 
     /** T-M38：列表「发送到日志转 SQL」落点——条目渲染回日志文本填入输入区并立即转换。 */
     internal fun loadFromEntry(entry: LogSqlEntry) {
@@ -370,6 +425,11 @@ class LogToSqlPanel(
     internal fun loadFromEntryForTest(entry: LogSqlEntry) = loadFromEntry(entry)
 
     companion object {
+
+        /** T-Perf-14：大日志后台转换阈值——字符数（约 1MB）。 */
+        private const val HEAVY_INPUT_CHARS = 1_000_000
+        /** T-Perf-14：大日志后台转换阈值——行数（约 1000 行）。 */
+        private const val HEAVY_INPUT_LINES = 1_000
         private const val TOOLBAR_ID_INPUT = "cn.song.mybatisplus.visualizer.logToSql.toolbar.input"
         private const val TOOLBAR_ID_RESULT = "cn.song.mybatisplus.visualizer.logToSql.toolbar.result"
     }
