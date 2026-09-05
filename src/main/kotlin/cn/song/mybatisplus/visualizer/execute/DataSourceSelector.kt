@@ -255,7 +255,7 @@ object DataSourceSelector {
                 runners.firstOrNull { getRunnerName(it) == last }?.let { matched ->
                     LOG.info("[M36] silent reuse last runner: $last")
                     chosenRunnerName = last
-                    runRunner(matched)
+                    runRunner(matched, onError)
                     callback?.invoke(true)
                     return
                 }
@@ -273,7 +273,7 @@ object DataSourceSelector {
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
                 LOG.info("[M36] single runner, run directly")
                 chosenRunnerName = getRunnerName(runners.first())
-                runRunner(runners.first())
+                runRunner(runners.first(), onError)
                 callback?.invoke(true)
             }
             else -> {
@@ -286,7 +286,7 @@ object DataSourceSelector {
                     }
                     if (runner != null) chosenRunnerName = getRunnerName(runner)
                     callback?.invoke(runner != null)
-                    if (runner != null) runRunner(runner)
+                    if (runner != null) runRunner(runner, onError)
                 }
             }
         }
@@ -2519,8 +2519,8 @@ object DataSourceSelector {
         method.invoke(runner) as? Boolean
     }.getOrNull() ?: false
 
-    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 弹错误引导。 */
-    private fun runRunner(runner: Any) {
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板内错误回调。 */
+    private fun runRunner(runner: Any, onError: ((String) -> Unit)?) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val method = runner.javaClass.getMethod("run")
@@ -2530,13 +2530,9 @@ object DataSourceSelector {
         }.onFailure { e ->
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
             LOG.warn("[M36] runRunner FAILED: ${cause.javaClass.simpleName}: ${cause.message}", cause)
-            // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
-            val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                project,
-                MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString()),
-                MpSqlVisualizerBundle.message("execute.title"),
-            )
+            // T-Perf-01：驱动缺失/连接失败等高频失败改面板内红字（onError → SqlResultPanel.showError），
+            // 不再弹模态框（与原生 Database 插件弹窗叠加时用户需连点多个对话框）。
+            onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString()))
         }
     }
 
