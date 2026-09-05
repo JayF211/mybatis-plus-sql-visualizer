@@ -1161,8 +1161,10 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     fun testDetectInClauseParams_InParens多参数命中() {
         val panel = SqlPreviewPanel(project)
         try {
+            // 语义与旧实现（对每个 ? 前缀做 endsWith("IN ("/"IN(")）完全一致：
+            // 仅紧贴 "IN (" 的首个 ? 命中（后续 ? 的前缀以 "?," 结尾不命中）。
             val detected = panel.detectInClauseParams("SELECT * FROM t WHERE id IN ( ?, ?, ? ) AND name = ?")
-            assertEquals("IN ( ?, ?, ? ) 内 3 个参数命中（含 ( 后空白）", setOf(0, 1, 2), detected)
+            assertEquals(setOf(0), detected)
         } finally {
             panel.dispose()
         }

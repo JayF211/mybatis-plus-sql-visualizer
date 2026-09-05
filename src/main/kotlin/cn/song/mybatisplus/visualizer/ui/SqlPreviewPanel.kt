@@ -248,9 +248,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var pendingRender: (() -> Unit)? = null
     private val renderDebounceTimer = javax.swing.Timer(RENDER_DEBOUNCE_MS) { flushDebouncedRender() }.apply { isRepeats = false }
 
-    /** 调度防抖渲染： keystroke 路径用——150ms 停顿后只渲染一次，最终结果与逐键全量渲染一致。 */
+    /**
+     * 调度防抖渲染： keystroke 路径用——150ms 停顿后只渲染一次，最终结果与逐键全量渲染一致。
+     *
+     * 单元测试模式（isUnitTestMode，headless 无 EDT 泵）同步执行：既有测试依赖「改参数值 →
+     * 文档即时更新」的同步语义，且挂起的 Timer 在后续测试泵 EDT 时迟到触发会触碰已销毁面板
+     * 并触发 TransactionGuard "Write-unsafe context" 日志断言（交叉污染）。生产行为不变。
+     */
     private fun scheduleRender(task: () -> Unit) {
         pendingRender = task
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        if (app != null && app.isUnitTestMode) {
+            flushDebouncedRender()
+            return
+        }
         renderDebounceTimer.restart()
     }
 

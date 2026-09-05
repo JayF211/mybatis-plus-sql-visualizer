@@ -37,10 +37,11 @@ class SqlLogStreamingDiffTest {
     @Test
     fun test头部淘汰加追加_返回HeadEvictAppend() {
         // 缓冲满后流式 steady state：头部淘汰 a、b，尾部追加 e、f
+        // （new 的 c、d 必须复用 old 的同一实例——差分按元素同一性对齐）
         val old = list("a", "b", "c", "d")
-        val new = list("c", "d", "e", "f")
+        val new = old.drop(2) + list("e", "f")
         val diff = diffVisible(old, new, evicted = 2)
-        assertEquals(VisibleDiff.HeadEvictAppend(2, listOf(new[2], new[3])), diff)
+        assertEquals(VisibleDiff.HeadEvictAppend(2, new.drop(2)), diff)
     }
 
     @Test
