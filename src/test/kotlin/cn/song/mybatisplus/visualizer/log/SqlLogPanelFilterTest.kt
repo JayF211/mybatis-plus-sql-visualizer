@@ -178,7 +178,7 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
         // 等待 EDT 刷新（面板 UI 监听器经 invokeLater）
         waitForEdt()
         val counts = manager.entries.dedupeCountsSnapshot()
-        assertEquals(2, counts["SELECT * FROM t WHERE id = 1"])
+        assertEquals(2, counts[sqlFingerprint("SELECT * FROM t WHERE id = 1")]) // T-Perf-19：键=SQL指纹
     }
 
     fun testClearResetsBadgeCounts() {

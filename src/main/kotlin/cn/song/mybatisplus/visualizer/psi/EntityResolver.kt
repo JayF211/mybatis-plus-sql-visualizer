@@ -60,7 +60,7 @@ class EntityResolver {
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识——PsiFile 随键
         // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
-        val key = EntityCacheKey(file.virtualFile?.url, qName, configSig)
+        val key = EntityCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return entry.value
@@ -381,6 +381,9 @@ class EntityResolver {
          */
         private data class EntityCacheKey(
             val fileUrl: String?,
+            /** T-Perf-18：文件实例同一性辅助键——light/mock 文件（测试 fixture）url 与 stamp 均可能相同，
+             *  仅靠 url 会跨实例误命中；生产环境同一逻辑文件恒为同一 PsiFile 实例，不受影响。 */
+            val fileIdentity: Int,
             val classQualifiedName: String,
             val configSignature: String,
         )

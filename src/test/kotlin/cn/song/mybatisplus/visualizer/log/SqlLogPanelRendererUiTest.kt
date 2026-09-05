@@ -95,12 +95,12 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
 
     fun test去重徽章随dedupeCounts渲染() {
         val sql = "SELECT * FROM repeated WHERE id = 1"
-        renderer.dedupeCounts = mapOf(sql to 4)
+        renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 4) // T-Perf-19：键=SQL指纹
         val text = render(entry(sql))
         assertTrue("去重 ⨉4 徽章应出现在渲染文本", text.contains("⨉4"))
 
         // 计数为 0 或不存在 → 不显示徽章
-        renderer.dedupeCounts = mapOf(sql to 0)
+        renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 0)
         val textZero = render(entry(sql))
         assertFalse("计数 0 不显示徽章", textZero.contains("⨉"))
 

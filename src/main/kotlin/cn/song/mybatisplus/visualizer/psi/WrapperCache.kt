@@ -25,7 +25,14 @@ class WrapperCache {
      * T-Perf-18：文件维度改 VirtualFile.url 字符串——不持 PsiFile 强引用（关闭文件的 PsiFile
      * 可回收，靠 modificationStamp 维度在 PSI 重建后自然失效重算）。
      */
-    private data class CacheKey(val fileUrl: String?, val anchorOffset: Int, val resolveVariables: Boolean, val configSignature: String)
+    private data class CacheKey(
+        val fileUrl: String?,
+        /** T-Perf-18：文件实例同一性辅助键（light/mock 文件 url 可重复，防跨实例误命中）。 */
+        val fileIdentity: Int,
+        val anchorOffset: Int,
+        val resolveVariables: Boolean,
+        val configSignature: String,
+    )
 
     /** 缓存条目：文件修改戳 + 解析结果。 */
     private data class Entry(val stamp: Long, val value: Any?)
@@ -52,7 +59,7 @@ class WrapperCache {
         configSignature: String,
         compute: () -> T?,
     ): T? {
-        val key = CacheKey(file.virtualFile?.url, anchorOffset, resolveVariables, configSignature)
+        val key = CacheKey(file.virtualFile?.url, System.identityHashCode(file), anchorOffset, resolveVariables, configSignature)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return entry.value as T?

@@ -209,7 +209,7 @@ class SqlLogEntryBufferTest {
         buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃 1 次
         buffer.addEntry(entryAt("SELECT 1", 200L)) // 丢弃 2 次
         assertEquals(2, buffer.dedupeCount("SELECT 1"))
-        assertEquals(2, buffer.dedupeCountsSnapshot()["SELECT 1"])
+        assertEquals(2, buffer.dedupeCountsSnapshot()[sqlFingerprint("SELECT 1")]) // T-Perf-19：键=SQL指纹
     }
 
     @Test
