@@ -72,4 +72,21 @@ class CustomDaoHqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
         val file = javaFile("class A { void m() { Object dao; dao.findByQuery(\"from X\"); } }")
         assertNull(CustomDaoHqlGutterLineMarkerProvider().getLineMarkerInfo(id(file, "findByQuery")))
     }
+
+    fun testGetLineMarkerInfo_TPerf02预筛不回退HibernateTemplate形态() {
+        // T-Perf-02 纯文本预筛：getHibernateTemplate().find("from X") 属 HIBERNATE_TEMPLATE 认领路径，
+        // 预筛（qualifier 名含 template + 方法名 find）必须放行——覆盖不回退。
+        val file = javaFile("class A { void m() { getHibernateTemplate().find(\"from X where id = 1\"); } }")
+        assertNotNull(
+            "HibernateTemplate HQL 查询应被识别并注册 gutter 图标",
+            CustomDaoHqlGutterLineMarkerProvider().getLineMarkerInfo(id(file, "find")),
+        )
+    }
+
+    fun testGetLineMarkerInfo_TPerf02预筛排除普通方法调用() {
+        // T-Perf-02 纯文本预筛：qualifier 名与方法名均无 DAO/HQL 特征 → 不进 locate() 直接 null
+        //（行为与旧路径一致——locate 也不会认领，但此处确保预筛不引入正向误判）。
+        val file = javaFile("class A { void m() { Object user; user.getName(); } }")
+        assertNull(CustomDaoHqlGutterLineMarkerProvider().getLineMarkerInfo(id(file, "getName")))
+    }
 }

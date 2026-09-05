@@ -204,11 +204,11 @@ object CustomDaoHqlLocator {
      * 判断方法调用是否为自定义 DAO HQL 调用。
      *
      * 判定逻辑（T-GutterDedup：按接收者归属消歧，杜绝通用方法名跨家族重复图标）：
-     *  1. 内容启发（首参须匹配 HQL 语法模式）；
-     *  2. 按接收者 [PreviewReceiverResolver.classify] 家族分派：
+     *  1. 按接收者 [PreviewReceiverResolver.classify] 家族分派：
      *     - JDBC_TEMPLATE / JPA_SESSION → 交给各自 provider（不认领）；
      *     - HIBERNATE_TEMPLATE → 仅 HQL 首参的 find/findByNamedParam/findByValueBean/iterate；
-     *     - CUSTOM_DAO / UNKNOWN → DAO qualifier 或具体查询方法名（`execute` 等通用名须 DAO qualifier）。
+     *     - CUSTOM_DAO / UNKNOWN → (DAO qualifier OR 具体查询方法名) AND HQL 内容启发
+     *       （T-Perf-02：O(1) 名字启发先行，正则内容匹配最后）。
      *
      * @param call 目标方法调用
      * @return 是否匹配自定义 DAO HQL 调用
@@ -224,11 +224,9 @@ object CustomDaoHqlLocator {
             PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE ->
                 HIBERNATE_HQL_METHODS.contains(call.methodExpression.referenceName) &&
                     PreviewReceiverResolver.isStringLikeFirstArg(call)
-            // 自定义 DAO / 无法判定：内容启发 + (DAO qualifier OR 具体查询方法名)
-            else -> {
-                if (!matchesHqlContent(call)) return false
-                matchesDaoQualifier(call) || matchesQueryMethodName(call)
-            }
+            // 自定义 DAO / 无法判定：T-Perf-02 判定顺序反转——先 O(1) 名字启发（qualifier 名 →
+            // 方法名），命中后才跑 HQL 内容正则；名字不命中零正则开销。布尔语义不变（AND 可交换）。
+            else -> (matchesDaoQualifier(call) || matchesQueryMethodName(call)) && matchesHqlContent(call)
         }
     }
 
