@@ -256,10 +256,11 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.filterKeywords = state.logFilterKeywords
             .split(';').map { it.trim() }.filter { it.isNotEmpty() }
         buffer.maxEntries = state.logMaxCount
-        // F-43：自动保存历史 SQL
+        // F-43：自动保存历史 SQL（T-Perf-12：submit 异步批量写——回调只投递无锁队列，
+        // 磁盘 IO 全部在专用写线程，控制台输出热路径不再同步 flush）
         if (state.logAutoSaveEnabled) {
             autoSaver.configure(state.logAutoSavePath, state.logAutoSaveFileNamePattern, project.basePath)
-            buffer.onEvicted = { entry -> autoSaver.write(entry) }
+            buffer.onEvicted = { entry -> autoSaver.submit(entry) }
         } else {
             buffer.onEvicted = null
         }

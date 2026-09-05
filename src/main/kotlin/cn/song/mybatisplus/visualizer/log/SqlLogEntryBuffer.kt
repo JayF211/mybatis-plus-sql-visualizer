@@ -62,15 +62,15 @@ class SqlLogEntryBuffer(
         if (paused) return false
         if (isFiltered(entry.restoredSql)) return false
         var duplicate = false
+        val evictedEntries = mutableListOf<LogSqlEntry>()
         synchronized(entries) {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true
             } else {
                 entries.addLast(entry)
                 while (entries.size > maxEntries) {
-                    val evicted = entries.removeFirst()
+                    evictedEntries.add(entries.removeFirst())
                     evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
-                    onEvicted?.invoke(evicted)
                 }
             }
         }
@@ -79,6 +79,9 @@ class SqlLogEntryBuffer(
             notifyChanged() // ← 徽章计数变了 → UI 必须即时刷新
             return false
         }
+        // T-Perf-12：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
+        // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
+        evictedEntries.forEach { onEvicted?.invoke(it) }
         notifyChanged()
         return true
     }
