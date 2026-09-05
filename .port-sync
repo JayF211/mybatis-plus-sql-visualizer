@@ -8,4 +8,4 @@ synced_master = 37027d59420acfca310cd37e09ba4a409285b3fb
 synced_master_short = 37027d5
 synced_date = 2026-09-06
 synced_by_commit = (本次收尾提交)
-note = 2026-09-06 完成 master 9bd6315..37027d5 共 4 提交的增量同步（T-SyncK2JMaster）：T-CacheInfo 设置页缓存统计修复——5 处生产代码按「100% Java」约定手工翻译（EntityResolver.cacheSizeBytes/WrapperCache.sizeBytes/SqlPreviewService 双委托/PluginCacheManager 三类全口径+clearAll 补 Wrapper 缓存/设置面板两参文案 + bundle en/zh），测试两类（7 用例）按测试源集 Kotlin 约定原样复制；三份调研矩阵与开发计划文档搬运 + MEMORY/变更记录行级并集。全量 3067/0/0/6 绿，buildPlugin+verifyPlugin 三目标通过。
+note = 2026-09-06 完成 master 9bd6315..37027d5 共 4 提交的增量同步（T-SyncK2JMaster）：T-CacheInfo 设置页缓存统计修复——5 处生产代码按「100% Java」约定手工翻译（EntityResolver.cacheSizeBytes/WrapperCache.sizeBytes/SqlPreviewService 双委托/PluginCacheManager 三类全口径+clearAll 补 Wrapper 缓存/设置面板两参文案 + bundle en/zh），测试两类（7 用例）按测试源集 Kotlin 约定原样复制；三份调研矩阵与开发计划文档搬运 + MEMORY/变更记录行级并集。同日 T-SyncK2JBackfill 补齐移植期欠账：docs 树镜像 master（51 文件直取 + 归档精简版 MEMORY/变更记录 + README FAQ + 发行说明/经验总结/记忆归档，k2j 专属 5 文件与较新旧计划保留）、主分支测试类对齐（252/254 已等价，移植 SqlLogConsoleBridgePerfTest 6 用例 + RealEnvTest 3 用例）。全量 3076/0/0/6 绿，buildPlugin+verifyPlugin 三目标通过。
