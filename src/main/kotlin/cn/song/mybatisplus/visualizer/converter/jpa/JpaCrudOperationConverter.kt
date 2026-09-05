@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.psi.currentDialect
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.DaoQueryKind
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
+import cn.song.mybatisplus.visualizer.psi.jpa.RepositoryBaseTypes
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParamQuote
@@ -103,23 +104,15 @@ object JpaCrudOperationConverter {
     private enum class Family { SPRING_DATA_REPOSITORY, JPA_ENTITY_MANAGER, HIBERNATE_TEMPLATE }
 
     /**
-     * Spring Data Repository 基类全限定名（对齐 DerivedMethodLocator 名单 + 3.0 List* 变体）。
+     * Spring Data Repository 基类全限定名（SD6 起统一走 [RepositoryBaseTypes] 名单：
+     * 含 3.0 List* 变体与 R2dbcRepository / ReactiveCrudRepository / ReactiveSortingRepository）。
      * superType 匹配用 canonicalText 前缀（真实 IDE 解析态）；未解析态（LightPlatform/跨模块）按
-     * 简名后缀兜底（[REPOSITORY_BASE_SIMPLE_NAMES]）。
+     * 简名后缀兜底（[RepositoryBaseTypes.SIMPLE_NAMES]）。
      */
-    private val REPOSITORY_BASE_TYPES: Set<String> = setOf(
-        "org.springframework.data.repository.Repository",
-        "org.springframework.data.repository.CrudRepository",
-        "org.springframework.data.repository.PagingAndSortingRepository",
-        "org.springframework.data.repository.ListCrudRepository",
-        "org.springframework.data.repository.ListPagingAndSortingRepository",
-        "org.springframework.data.jpa.repository.JpaRepository",
-        "org.springframework.data.jpa.repository.QueryExecutorAdapter",
-    )
+    private val REPOSITORY_BASE_TYPES: Set<String> = RepositoryBaseTypes.FQNS
 
     /** Spring Data 基类简单名（canonicalText 前缀匹配失败时的兜底集合）。 */
-    private val REPOSITORY_BASE_SIMPLE_NAMES: Set<String> =
-        REPOSITORY_BASE_TYPES.map { it.substringAfterLast('.') }.toSet()
+    private val REPOSITORY_BASE_SIMPLE_NAMES: Set<String> = RepositoryBaseTypes.SIMPLE_NAMES
 
     /** T-J1：Spring Data Repository CRUD 方法名单（锚点 + 转换共用）。 */
     private val REPOSITORY_METHODS: Set<String> = setOf(

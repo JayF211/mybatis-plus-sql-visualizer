@@ -126,5 +126,28 @@ enum class WrapperType {
     /** T-M21-08：DeleteJoinWrapper（MPJ 官方联表删除，1.4.5+）。 */
     DELETE_JOIN,
     NESTED,
+    /**
+     * XB（M44 其他 ORM 第一批）：xbatis（原 mybatis-mp）QueryChain/UpdateChain/DeleteChain 同构链。
+     * 条件方法名与 MP lambda 高度重合（eq/ne/gt/gte/lt/lte/like/in/orderBy…），由
+     * [cn.song.mybatisplus.visualizer.converter.XbatisConverter] 镜像 QueryWrapperParser 委派转换。
+     */
+    XBATIS,
+    /**
+     * EQ（M44）：Easy-Query proxy 风格（官方主推 sql-api-proxy APT 代理），
+     * `easyEntityQuery.queryable(Class).where(lambda)` 语句块式条件——由
+     * [cn.song.mybatisplus.visualizer.converter.EasyQueryConverter] 直解析 PSI 转换。
+     */
+    EQ_PROXY,
+    /**
+     * DS（M44）：MyBatis Dynamic SQL（org.mybatis.dynamic-sql 2.0.0 官方 DSL），
+     * `SelectDSL.select(...).from(table).where(col, isEqualTo(...))` 手写 SqlTable 常量链——
+     * 由 [cn.song.mybatisplus.visualizer.converter.MdsConverter] 直解析 PSI 转换。
+     */
+    MDS,
+    /**
+     * QD（M44）：Querydsl（JPAQueryFactory + Q 类表达式树），由
+     * [cn.song.mybatisplus.visualizer.converter.QuerydslConverter] 表达式树 walker 转换。
+     */
+    QD,
 }
 

@@ -9,6 +9,9 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder
 import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
 import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
+import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter
+import cn.song.mybatisplus.visualizer.converter.MdsConverter
+import cn.song.mybatisplus.visualizer.converter.QuerydslConverter
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
@@ -345,6 +348,14 @@ class SqlPreviewService(private val project: Project) {
                 recordHistory(result, anchor)
                 return result
             }
+            // EQ/DS/QD（M44 其他 ORM 第一批）前置派发：Easy-Query proxy 链 / MyBatis Dynamic SQL /
+            // Querydsl——三者均非 MP Wrapper 链（locateWithTable 不命中），按 entry+receiver 启发认领；
+            // 不认领返回 null 走后续 JPA CRUD / MP 批量管道（存量行为零变化）
+            val ormPreview = convertOtherOrm(batchCall, resolveVariables)
+            if (ormPreview != null) {
+                recordHistory(ormPreview, anchor)
+                return ormPreview
+            }
         }
         val jpaCrud = batchCall?.let {
             JpaCrudOperationConverter.convert(
@@ -389,6 +400,58 @@ class SqlPreviewService(private val project: Project) {
         )
         recordHistory(result, anchor)
         return result
+    }
+
+    /**
+     * 其他 ORM 第一批（M44）前置派发：Easy-Query proxy（EQ_PROXY）/ MyBatis Dynamic SQL（MDS）/
+     * Querydsl（QD）。三者按 entry + receiver 启发认领（普通类同名方法不命中，负例守卫），
+     * 不认领返回 null（交回 JPA CRUD / MP 批量管道）。
+     */
+    private fun convertOtherOrm(call: PsiMethodCallExpression, resolveVariables: Boolean): PreviewResult? {
+        val eq = EasyQueryConverter.convert(call, resolveVariables)
+        if (eq != null) {
+            return PreviewResult(
+                sql = eq.sql,
+                compactSql = eq.sql.replace(Regex("\\s+"), " ").trim(),
+                unresolvedParams = eq.paramSources,
+                paramTable = ParameterReplacer.buildParamTable(eq.paramSources),
+                paramHints = eq.paramHints,
+                wrapperType = WrapperType.EQ_PROXY,
+                tableName = eq.tableName,
+                warning = eq.warning,
+                columns = eq.columns,
+                batchModel = eq.batchModel,
+            )
+        }
+        val mds = MdsConverter.convert(call, resolveVariables)
+        if (mds != null) {
+            return PreviewResult(
+                sql = mds.sql,
+                compactSql = mds.sql.replace(Regex("\\s+"), " ").trim(),
+                unresolvedParams = mds.paramSources,
+                paramTable = ParameterReplacer.buildParamTable(mds.paramSources),
+                paramHints = mds.paramHints,
+                wrapperType = WrapperType.MDS,
+                tableName = mds.tableName,
+                warning = mds.warning,
+                columns = mds.columns,
+            )
+        }
+        val qd = QuerydslConverter.convert(call, resolveVariables)
+        if (qd != null) {
+            return PreviewResult(
+                sql = qd.sql,
+                compactSql = qd.sql.replace(Regex("\\s+"), " ").trim(),
+                unresolvedParams = qd.paramSources,
+                paramTable = ParameterReplacer.buildParamTable(qd.paramSources),
+                paramHints = qd.paramHints,
+                wrapperType = WrapperType.QD,
+                tableName = qd.tableName,
+                warning = qd.warning,
+                columns = qd.columns,
+            )
+        }
+        return null
     }
 
     /**

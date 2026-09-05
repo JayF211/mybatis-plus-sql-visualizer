@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
+import cn.song.mybatisplus.visualizer.psi.jpa.RepositoryBaseTypes
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParamQuote
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
@@ -93,20 +94,11 @@ object SpecificationQueryConverter {
     // 名单
     // ------------------------------------------------------------------
 
-    /** Spring Data Repository 基类 FQN（receiver 家族判定，与 JpaCrudOperationConverter 名单对齐）。 */
-    private val REPOSITORY_BASE_TYPES: Set<String> = setOf(
-        "org.springframework.data.repository.Repository",
-        "org.springframework.data.repository.CrudRepository",
-        "org.springframework.data.repository.PagingAndSortingRepository",
-        "org.springframework.data.repository.ListCrudRepository",
-        "org.springframework.data.repository.ListPagingAndSortingRepository",
-        "org.springframework.data.jpa.repository.JpaRepository",
-        "org.springframework.data.jpa.repository.QueryExecutorAdapter",
-    )
+    /** Spring Data Repository 基类 FQN（SD6 起统一走 [RepositoryBaseTypes] 名单，receiver 家族判定与其他三处对齐）。 */
+    private val REPOSITORY_BASE_TYPES: Set<String> = RepositoryBaseTypes.FQNS
 
     /** 基类简单名（canonicalText 不可解析时的兜底）。 */
-    private val REPOSITORY_BASE_SIMPLE_NAMES: Set<String> =
-        REPOSITORY_BASE_TYPES.map { it.substringAfterLast('.') }.toSet()
+    private val REPOSITORY_BASE_SIMPLE_NAMES: Set<String> = RepositoryBaseTypes.SIMPLE_NAMES
 
     /** JpaSpecificationExecutor 家族方法名（锚点 + 转换共用）。 */
     val EXECUTOR_METHODS: Set<String> = setOf(
