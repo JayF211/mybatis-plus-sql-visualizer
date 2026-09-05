@@ -123,9 +123,12 @@ class SqlCompletionContributor : CompletionContributor() {
                         val colComments = provider.columnsWithComments(ctx)
                         // M35 方案 B：数据源 schema 注释优先（DB COMMENT 比实体注释权威）；
                         // 按实体表名查数据源列注释，命中则覆盖同名列的实体注释。
+                        // T-Perf-09：补全改消费已缓存结果（columnCommentsCached）——autopopup
+                        // 下每标识符字符触发一次，直查 schema 会在 EDT 做数据源全量遍历；
+                        // 缓存未命中回落实体注释，缓存由 JOIN 富化后台预取填充。
                         val project = parameters.editor.project
                         val schemaComments = if (project != null && ctx.tableName != null)
-                            DatabaseSchemaResolver.columnComments(project, ctx.tableName)
+                            DatabaseSchemaResolver.columnCommentsCached(project, ctx.tableName)
                         else emptyMap()
                         val merged = if (schemaComments.isEmpty()) colComments
                         else colComments.map { (col, comment) ->

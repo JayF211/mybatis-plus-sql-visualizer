@@ -740,13 +740,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (hasJoins) {
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
-            // 构建结构化模型并展示（原生框架优先，缺席/异常降级自绘）
+            // T-Perf-09：schema 富化（数据源全量遍历）移后台预取——数千表冷缓存时 EDT 直跑冻结秒级；
+            // 富化完成回 EDT 再展示。当前 PreviewResult 被替换（新预览）时作废迟到的应用。
             // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
-            val model = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
-                project,
-                JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement),
-            )
-            showJoinDiagram(model)
+            val stmt = statement as SelectStatement
+            val proj = project
+            if (proj == null) {
+                showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
+                return
+            }
+            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val enriched = try {
+                    cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
+                        proj,
+                        JoinDiagramGenerator.buildDiagramModel(stmt),
+                    )
+                } catch (t: Throwable) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[T-Perf-09] diagram schema enrich failed, showing un-enriched model", t)
+                    JoinDiagramGenerator.buildDiagramModel(stmt)
+                }
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    if (current !== result || project?.isDisposed == true) return@invokeLater
+                    showJoinDiagram(enriched)
+                }
+            }
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
             removeDiagramTab()
