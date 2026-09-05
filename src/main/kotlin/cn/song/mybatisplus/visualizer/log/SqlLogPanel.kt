@@ -389,9 +389,7 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
         // F-44：开启自动保存、或 .idea 中已有历史文件时显示历史 tab
         if (PluginSettings.getInstance().state.logAutoSaveEnabled || hasHistoryFiles()) {
-            Disposer.register(this, historyPanel)
-            historyTabIndex = tabs.tabCount
-            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+            addHistoryTab()
         }
         add(tabs, BorderLayout.CENTER)
 
@@ -643,6 +641,22 @@ class SqlLogPanel(
             }
     }
 
+    /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
+    private var historyPanelRegistered = false
+
+    /**
+     * 添加历史 tab（T-Perf-17：Disposer 注册防重入守卫——构造期与设置页循环开关都会走到；
+     * 重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
+     */
+    private fun addHistoryTab() {
+        if (!historyPanelRegistered) {
+            Disposer.register(this, historyPanel)
+            historyPanelRegistered = true
+        }
+        historyTabIndex = tabs.tabCount
+        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+    }
+
     /**
      * F-44：根据 logAutoSaveEnabled 设置 + 历史数据存在与否同步历史 tab 的显隐。
      * 开启自动保存时显示；关闭后若 .idea 中仍有历史文件，也保留 tab（只读查看已有数据）。
@@ -652,10 +666,8 @@ class SqlLogPanel(
         val enabled = runCatching { PluginSettings.getInstance().state.logAutoSaveEnabled }.getOrDefault(false)
         val hasHistoryData = enabled || hasHistoryFiles()
         if (hasHistoryData && historyTabIndex < 0) {
-            // 添加历史 tab
-            Disposer.register(this, historyPanel)
-            historyTabIndex = tabs.tabCount
-            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+            // 添加历史 tab（T-Perf-17：Disposer 注册带防重入守卫）
+            addHistoryTab()
         } else if (!hasHistoryData && historyTabIndex >= 0) {
             // 移除历史 tab（避免选中正在移除的 tab）
             if (tabs.selectedIndex == historyTabIndex) {
@@ -663,6 +675,14 @@ class SqlLogPanel(
             }
             tabs.removeTabAt(historyTabIndex)
             historyTabIndex = -1
+            // T-Perf-17：tab 移除时从 Disposer 树摘除——否则下次重新添加时重复注册，
+            // 2026.x 平台报 "Object must not be registered twice" 错误弹窗。
+            // 243 平台 Disposer 无 unregister（javap 实证），dispose(historyPanel) 即摘除并执行
+            // 其轻量 dispose（仅停防抖 Timer，面板组件可复用）；dispose 后重新 register 合法。
+            if (historyPanelRegistered) {
+                Disposer.dispose(historyPanel)
+                historyPanelRegistered = false
+            }
         }
     }
 
