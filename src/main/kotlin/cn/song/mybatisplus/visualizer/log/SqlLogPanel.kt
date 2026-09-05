@@ -1375,9 +1375,10 @@ private fun formatTimestampHtml(timestamp: Long): String {
 }
 
 /** 耗时 HTML 片段：根据阈值套不同颜色——无耗时显示 "—" 占位。 */
-private fun formatDurationHtml(ms: Long?): String {
+private fun formatDurationHtml(ms: Long?, isSelected: Boolean): String {
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
+        isSelected -> "#FFFFFF"
         ms == null -> "#9E9E9E"            // 灰：无耗时
         ms >= threshold -> "#D32F2F"      // 红：慢查询
         ms >= threshold / 2 -> "#E67E22"  // 橙：偏慢
@@ -1401,6 +1402,17 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
 
+    /** 行 HTML 计算（缓存回填与选中态实时渲染共用；isSelected 维度不进缓存）。 */
+    private fun computeRowHtml(entry: LogSqlEntry, isSelected: Boolean): String {
+        val timestampHtml = formatTimestampHtml(entry.timestamp)
+        val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
+            formatDurationHtml(entry.executionTimeMs, isSelected) else ""
+        val sourceHtml = formatSourceHtml(entry, isSelected)
+        val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+        val dedupeBadge = dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
+        return "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
+    }
+
     override fun getListCellRendererComponent(
         list: javax.swing.JList<*>?,
         value: Any?,
@@ -1413,15 +1425,12 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
         text = null
         if (entry != null) {
             // T-LogListFreeze-02：取缓存或惰性计算；避免每次 layout pass 重复走 SqlListHtmlRenderer + BasicHTML 解析
-            val html = entry.cachedListHtml ?: run {
-                val timestampHtml = formatTimestampHtml(entry.timestamp)
-                val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
-                    formatDurationHtml(entry.executionTimeMs) else ""
-                val sourceHtml = formatSourceHtml(entry)
-                val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-                val dedupeBadge = dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-                "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
-            }.also { entry.cachedListHtml = it }
+            // T-Perf-23：选中行实时计算不读不写缓存（选中色不固化）；非选中行命中/填充缓存
+            val html = if (isSelected) {
+                computeRowHtml(entry, isSelected = true)
+            } else {
+                entry.cachedListHtml ?: computeRowHtml(entry, isSelected = false).also { entry.cachedListHtml = it }
+            }
             this.text = html
             toolTipText = entry.restoredSql
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
@@ -1435,7 +1444,7 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
     }
 
     /** F-44-7：格式化来源为 HTML 片段（用于列表渲染）。 */
-    private fun formatSourceHtml(entry: LogSqlEntry): String {
+    private fun formatSourceHtml(entry: LogSqlEntry, isSelected: Boolean): String {
         val source = when {
             SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
             entry.sourceFile != null -> {
@@ -1444,7 +1453,8 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             }
             else -> return ""
         }
-        // T-Perf-23：固定灰色（选中态对比由标签 selectionForeground 承担，不再依赖 isSelected）
-        return "<span style='color:#9E9E9E'>[$source]</span> "
+        // T-Perf-23：选中白色/非选中灰色——仅非选中结果进缓存（渲染器控制）
+        val color = if (isSelected) "color:#FFFFFF" else "color:#9E9E9E"
+        return "<span style='$color'>[$source]</span> "
     }
 }

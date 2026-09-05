@@ -95,7 +95,7 @@ class CustomDaoHqlGutterLineMarkerProvider : LineMarkerProvider {
             // DAO qualifier 后缀（镜像 DAO_QUALIFIER_SUFFIXES）
             if (DAO_QUALIFIER_SUFFIXES.any { qualifierName.endsWith(it) }) return true
             // HibernateTemplate 形态（镜像 classifyMethodCallQualifier 的名字启发）
-            if (lowerName in HIBERNATE_HQL_METHOD_NAMES && "template" in lowerQ) return true
+            if (HIBERNATE_HQL_METHOD_NAMES.any { it.lowercase() == lowerName } && "template" in lowerQ) return true
         }
         return false
     }

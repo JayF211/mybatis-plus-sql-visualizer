@@ -114,7 +114,8 @@ object DiagramRenderer {
             bold.hashCode(),
         )
         layoutCache?.takeIf { it.first == key }?.let { return it.second }
-        val (layouts, positions) = cachedLayout(model, font, bold, frc)
+        val layouts = measureEntities(model.entities, font, bold, frc)
+        val positions = computeLayout(layouts, model, font, frc)
         layoutCache = key to (layouts to positions)
         return layouts to positions
     }
