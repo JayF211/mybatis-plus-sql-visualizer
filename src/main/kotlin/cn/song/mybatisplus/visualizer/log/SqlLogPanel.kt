@@ -359,6 +359,19 @@ class SqlLogPanel(
         HelpAction(),
     )
 
+    // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
+
+    /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
+    private val uiRefreshListener: () -> Unit = { refreshList() }
+
+    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
+    private val capturingUiListener: () -> Unit = {
+        LOG.info("SqlLogPanel.capturingListener: 触发")
+        ApplicationManager.getApplication().invokeLater {
+            updateCaptureButtonIcon()
+        }
+    }
+
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
@@ -406,19 +419,16 @@ class SqlLogPanel(
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
 
-        manager.addUiListener { refreshList() }
+        // T-Perf-15：监听器改命名引用——dispose 时精确注销（此前 addUiListener/addCapturingListener
+        // 只加不减，面板随 tool window content 销毁重建逐次累积）
+        manager.addUiListener(uiRefreshListener)
         refreshList()
 
         // capturing 变化 → 刷新工具栏按钮图标/文案
         // 注意：updateActionsAsync()/updateActionsImmediately() 在组件不可见时会跳过更新
         // （ToolbarUpdater$MyUpdateRunnable 检查 isShowing，沙盒中工具栏可能不可见），
         // 故直接遍历 ActionButton 设置图标（绕过平台更新机制）
-        manager.addCapturingListener {
-            LOG.info("SqlLogPanel.capturingListener: 触发")
-            ApplicationManager.getApplication().invokeLater {
-                updateCaptureButtonIcon()
-            }
-        }
+        manager.addCapturingListener(capturingUiListener)
     }
 
     // ---------- 顶部区域（工具栏行 + 搜索条） ----------
@@ -1229,6 +1239,9 @@ class SqlLogPanel(
 
     /** 面板销毁：释放日志转 SQL 与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
+        // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
+        manager.removeUiListener(uiRefreshListener)
+        manager.removeCapturingListener(capturingUiListener)
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
     }

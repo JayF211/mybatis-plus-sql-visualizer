@@ -196,6 +196,12 @@ class SqlLogManager(private val project: Project) : Disposable {
         capturingListeners += listener
     }
 
+    /** T-Perf-15：注销 capturing 变化监听（面板 dispose 调用——防面板随 tool window content
+     *  销毁重建逐次累积，每条新 SQL 仍回调已销毁面板）。 */
+    fun removeCapturingListener(listener: () -> Unit) {
+        capturingListeners -= listener
+    }
+
     /** 强制刷新工具栏 action 状态（capturing 变化时按钮图标/文案同步）。 */
     private fun refreshToolbar() {
         LOG.info("refreshToolbar: 通知 ${capturingListeners.size} 个监听器")
