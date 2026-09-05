@@ -869,7 +869,8 @@ class SqlLogPanel(
         val newCounts = manager.entries.dedupeCountsSnapshot()
         if (newCounts != dedupeCounts) {
             snapshot.forEach { entry ->
-                if (newCounts[entry.restoredSql] != dedupeCounts[entry.restoredSql]) {
+                // T-Perf-19：徽章计数键为 SQL 指纹（非原文）
+                if (newCounts[entry.dedupeKey] != dedupeCounts[entry.dedupeKey]) {
                     entry.cachedListHtml = null
                 }
             }
@@ -1407,7 +1408,7 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
                     formatDurationHtml(entry.executionTimeMs, isSelected) else ""
                 val sourceHtml = formatSourceHtml(entry, isSelected)
                 val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-                val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
+                val dedupeBadge = dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
                 "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
             }.also { entry.cachedListHtml = it }
             this.text = html

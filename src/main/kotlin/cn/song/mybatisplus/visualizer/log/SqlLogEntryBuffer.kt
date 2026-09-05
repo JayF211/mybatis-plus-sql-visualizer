@@ -33,7 +33,8 @@ class SqlLogEntryBuffer(
     var dedupeEnabled: Boolean = true
 
     /**
-     * 去重丢弃计数（键 = restoredSql 原文，与 [isDuplicate] 匹配同源）：去重开启期间每丢弃
+     * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 [sqlFingerprint]，非 SQL 原文——
+     * 原文键在条目淘汰后文本永久驻留，长会话可达数十 MB）：去重开启期间每丢弃
      * 一条相同 SQL 计数 +1，供列表「⨉N」徽章展示该 SQL 被去掉过几次。
      * 仅在 [dedupeEnabled] 为 true 时累计；[clear] 与 [resetDedupeCounts] 归零。
      */
@@ -75,7 +76,7 @@ class SqlLogEntryBuffer(
             }
         }
         if (duplicate) {
-            dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+            dedupeCounts.merge(entry.dedupeKey, 1, Int::plus)
             notifyChanged() // ← 徽章计数变了 → UI 必须即时刷新
             return false
         }
@@ -105,7 +106,7 @@ class SqlLogEntryBuffer(
                         kotlin.math.abs(entry.timestamp - it.timestamp) < dedupeWindowMs
                 }
                 if (duplicate != null) {
-                    dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+                    dedupeCounts.merge(entry.dedupeKey, 1, Int::plus)
                     removed++
                 } else {
                     keep += entry
@@ -163,10 +164,10 @@ class SqlLogEntryBuffer(
         dedupeCounts.clear()
     }
 
-    /** 指定 SQL 的去重丢弃次数（无丢弃记录返回 0）。 */
-    fun dedupeCount(sql: String): Int = dedupeCounts[sql] ?: 0
+    /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按指纹查；无丢弃记录返回 0）。 */
+    fun dedupeCount(sql: String): Int = dedupeCounts[sqlFingerprint(sql)] ?: 0
 
-    /** 去重丢弃计数快照（键 = restoredSql，值 = 丢弃次数；供面板渲染徽章）。 */
+    /** 去重丢弃计数快照（键 = [sqlFingerprint] 指纹，值 = 丢弃次数；供面板渲染徽章）。 */
     fun dedupeCountsSnapshot(): Map<String, Int> = dedupeCounts.toMap()
 
     /** 删除单条（面板右键菜单）。 */

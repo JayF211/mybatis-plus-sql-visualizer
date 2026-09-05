@@ -55,11 +55,22 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         entry.ensureId()
         if (entry.favorite) {
             insertSorted(state.favoriteEntries, entry)
+            evictFavoritesIfNeeded()
         } else {
             insertSorted(state.entries, entry)
             evictIfNeeded()
         }
         return entry
+    }
+
+    /**
+     * T-Perf-19：收藏条目上限（[MAX_FAVORITES]）——此前 favoriteEntries 永不淘汰，
+     * 长期使用无限增长（持久化文件与内存双膨胀）。超出时淘汰最旧收藏（队尾）。
+     */
+    private fun evictFavoritesIfNeeded() {
+        while (state.favoriteEntries.size > MAX_FAVORITES) {
+            state.favoriteEntries.removeAt(state.favoriteEntries.lastIndex)
+        }
     }
 
     /**
@@ -103,6 +114,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
             val e = state.entries.removeAt(inNormal)
             e.favorite = true
             insertSorted(state.favoriteEntries, e)
+            evictFavoritesIfNeeded()
             return
         }
         val inFav = state.favoriteEntries.indexOfFirst { it.id == id }
@@ -195,6 +207,9 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     companion object {
         /** 默认历史记录上限（非收藏条目）。 */
         const val DEFAULT_MAX_SIZE = 200
+
+        /** T-Perf-19：收藏条目上限（宽松封顶防无限增长）。 */
+        const val MAX_FAVORITES = 500
 
         /** 全局实例获取。 */
         @JvmStatic
