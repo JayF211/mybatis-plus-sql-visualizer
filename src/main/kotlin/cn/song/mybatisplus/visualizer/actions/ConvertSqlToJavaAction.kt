@@ -113,8 +113,9 @@ class ConvertSqlToJavaAction : AnAction() {
             val (mainCandidates, subCandidates) = ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
                 SqlToJavaConverter.findCandidatesBatch(project, parseResults)
             }
-            // 3. EDT 生成 + 拼接 + 弹窗
+            // 3. EDT 生成 + 拼接 + 弹窗（T-Perf-21：主路径补 disposed 守卫——后台查找期间项目可能已关闭）
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 val format = reverseFormat()
                 val code = SqlToJavaConverter.generateBatchCode(
                     parseResults,

@@ -110,6 +110,7 @@ class ConvertToSqlAction : AnAction() {
                 }
                 val (chainHeads, displayTexts) = payload
                 ApplicationManager.getApplication().invokeLater {
+                    if (project.isDisposed) return@invokeLater
                     when (chainHeads.size) {
                         // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选（0/1/多分发）
                         0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd, sourceLocation)
@@ -266,6 +267,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
@@ -309,6 +311,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
@@ -356,6 +359,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (tags.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewXml(project, file, tags[0], sourceLocation)
@@ -517,6 +521,7 @@ class ConvertToSqlAction : AnAction() {
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 when (tags.size) {
                     0 -> SqlPreviewService.showResult(project, null)
                     1 -> previewPages(project, file, tags[0])

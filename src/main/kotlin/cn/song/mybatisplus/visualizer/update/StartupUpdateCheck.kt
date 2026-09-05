@@ -50,6 +50,8 @@ class StartupUpdateCheck : ProjectActivity {
                 // 忽略守卫：该版本已被用户忽略 → 静默（仅抑制自动通知，手动检查不受影响）
                 if (isVersionIgnored(result.manifest.version, ignoredVersions)) return
                 ApplicationManager.getApplication().invokeLater {
+                    // T-Perf-21：后台检查完成时项目可能已关闭——不向 disposed project 弹通知
+                    if (project.isDisposed) return@invokeLater
                     showAvailable(project, result.manifest)
                 }
             }
