@@ -285,8 +285,21 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** F-43 测试访问器：解析文件名模板。 */
     internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
 
+    /**
+     * T-Perf-03：UI 刷新合并——流式灌入时每条 SQL 一次 invokeLater 的调度风暴改为
+     * 「置脏 + 单个幂等 flush」：首个变更投递一个 invokeLater（pending 置位），后续变更
+     * 在 flush 执行前只置脏不重复投递；flush 读的是当下缓冲快照，不丢任何条目。
+     * 持续灌入期间刷新频率被 EDT 吞吐自然合并（风暴期数百条 SQL = 数十次轻量刷新）。
+     */
+    @Volatile
+    private var uiFlushPending = false
+
     private fun notifyUi() {
+        if (uiListeners.isEmpty()) return
+        if (uiFlushPending) return // 已有 flush 在途——本次变更由该 flush 的当下快照覆盖
+        uiFlushPending = true
         ApplicationManager.getApplication().invokeLater {
+            uiFlushPending = false
             uiListeners.forEach { it() }
         }
     }

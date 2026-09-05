@@ -126,6 +126,77 @@ internal fun filterBySearch(entries: List<LogSqlEntry>, query: String): List<Log
     }
 }
 
+// ---------- T-Perf-03：流式增量刷新差分（纯逻辑，可独立单测） ----------
+
+/** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
+internal const val MAX_SYNC_APPEND = 300
+
+/**
+ * 新旧可见列表差分结果（增量刷新决策；元素按同一性 `===` 比较——条目为不可变数据类，
+ * 缓冲内同一条目恒为同一实例）。
+ */
+internal sealed class VisibleDiff {
+    /** 头部淘汰 `evicted` 条 + 尾部追加 `appended`（缓冲满后的流式 steady state；appended 可为空）。 */
+    data class HeadEvictAppend(val evicted: Int, val appended: List<LogSqlEntry>) : VisibleDiff()
+    /** 从 `index` 起插入 `entries`（尾部纯追加时 index == old.size）。 */
+    data class Insert(val index: Int, val entries: List<LogSqlEntry>) : VisibleDiff()
+    /** 尾部纯移除：移除 `[from, old.size)`。 */
+    data class TailRemove(val from: Int) : VisibleDiff()
+    /** 无变化。 */
+    object Same : VisibleDiff()
+    /** 无法增量（离散增删/超大追加）——全量重建。 */
+    object FullRebuild : VisibleDiff()
+}
+
+/** 同一性公共前缀长度。 */
+internal fun commonPrefixLength(old: List<LogSqlEntry>, new: List<LogSqlEntry>): Int {
+    val n = minOf(old.size, new.size)
+    var i = 0
+    while (i < n && old[i] === new[i]) i++
+    return i
+}
+
+/** 同一性公共后缀长度（不与 prefix 重叠）。 */
+internal fun commonSuffixLength(old: List<LogSqlEntry>, new: List<LogSqlEntry>, prefix: Int): Int {
+    val n = minOf(old.size, new.size) - prefix
+    var i = 0
+    while (i < n && old[old.size - 1 - i] === new[new.size - 1 - i]) i++
+    return i
+}
+
+/** [old] 的 [aStart..] 与 [new] 的 [bStart..] 前 [length] 个元素是否同一。 */
+internal fun identityPrefix(old: List<LogSqlEntry>, aStart: Int, new: List<LogSqlEntry>, bStart: Int, length: Int): Boolean {
+    if (old.size - aStart < length || new.size - bStart < length) return false
+    for (i in 0 until length) if (old[aStart + i] !== new[bStart + i]) return false
+    return true
+}
+
+/**
+ * 可见列表差分：流式灌入时把「clear+全量重建」降阶为「尾部追加 / 头部淘汰+追加」。
+ *
+ * 判定顺序：
+ *  1. 头部淘汰对齐（evicted>0 且 old 去头后与 new 前缀同一）→ HeadEvictAppend；
+ *  2. 前缀/后缀差分 → 纯插入（含尾部追加）/ 尾部纯移除 / 无变化；
+ *  3. 其余（过滤、搜索、去重裁剪、排序导致的离散增删）→ FullRebuild。
+ */
+internal fun diffVisible(old: List<LogSqlEntry>, new: List<LogSqlEntry>, evicted: Int): VisibleDiff {
+    if (evicted > 0 && old.size >= evicted && new.size >= old.size - evicted &&
+        identityPrefix(old, evicted, new, 0, old.size - evicted)
+    ) {
+        return VisibleDiff.HeadEvictAppend(evicted, new.drop(old.size - evicted))
+    }
+    val prefix = commonPrefixLength(old, new)
+    val suffix = commonSuffixLength(old, new, prefix)
+    val removed = old.size - prefix - suffix
+    val added = new.size - prefix - suffix
+    return when {
+        removed == 0 && added == 0 -> VisibleDiff.Same
+        removed == 0 && added in 1..MAX_SYNC_APPEND -> VisibleDiff.Insert(prefix, new.subList(prefix, prefix + added))
+        added == 0 && suffix == 0 -> VisibleDiff.TailRemove(prefix)
+        else -> VisibleDiff.FullRebuild
+    }
+}
+
 /**
  * 工具窗口面板（标签页 + 工具栏；headless 测试不布局，交互断言走条目模型层）。
  *
@@ -193,6 +264,14 @@ class SqlLogPanel(
 
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private var dedupeCounts: Map<String, Int> = emptyMap()
+
+    // ---------- T-Perf-03：流式增量刷新状态 ----------
+
+    /** 刷新代际（每次 refreshList 递增；异步追加链写入前比对，不等则终止旧链——防幽灵条目）。 */
+    private var refreshGeneration = 0L
+
+    /** 最近一次渲染的可见序列（与 listModel 逻辑内容一致；增量差分基准）。 */
+    private var lastRendered: List<LogSqlEntry> = emptyList()
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -318,6 +397,11 @@ class SqlLogPanel(
         val settingsListener = SettingsChangeListener {
             ApplicationManager.getApplication().invokeLater {
                 updateHistoryTabVisibility()
+                // T-Perf-03：列表 HTML 含时间戳/耗时显示/慢查询阈值等设置态——设置变更后
+                // 清空条目 HTML 缓存并刷新，接替旧「每次 refreshList 整包清缓存」的兜底
+                // （增量刷新不再整包清除，否则设置态变化后旧行缓存永不失效）。
+                manager.entries.snapshot().forEach { it.cachedListHtml = null }
+                refreshList()
             }
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
@@ -733,31 +817,90 @@ class SqlLogPanel(
     // ---------- 刷新管线（类型过滤 → 搜索过滤 → 排序 → 渲染） ----------
 
     /**
-     * 刷新列表（过滤 → 搜索 → 排序 → 渲染）。
+     * 刷新列表（过滤 → 搜索 → 排序 → 差分渲染）。
      *
      * 执行顺序：
      * 1. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
      * 2. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
      * 3. [applySort]：按 [sortMode] 排序（降序耗时）
-     * 4. 渲染到 [listModel]
+     * 4. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     *
+     * T-Perf-03：不再每次刷新整包清 HTML 缓存——只对去重徽章计数变化的条目失效；
+     * 设置相关缓存失效由设置变更监听（见 init）兜底。
      */
     private fun refreshList() {
+        val gen = ++refreshGeneration
         val snapshot = manager.entries.snapshot()
 
         // 检测是否含耗时信息（决定是否显示排序按钮）
         hasAnyDurationInfo = snapshot.any { LogDurationParser.hasDurationInfo(it) }
 
-        // 去重丢弃计数快照（徽章渲染数据源；丢弃不触发通知，随下一次刷新呈现）
-        dedupeCounts = manager.entries.dedupeCountsSnapshot()
-        entryCellRenderer.dedupeCounts = dedupeCounts
+        // 去重丢弃计数快照（徽章渲染数据源）；HTML 缓存只对计数变化的条目失效
+        val newCounts = manager.entries.dedupeCountsSnapshot()
+        if (newCounts != dedupeCounts) {
+            snapshot.forEach { entry ->
+                if (newCounts[entry.restoredSql] != dedupeCounts[entry.restoredSql]) {
+                    entry.cachedListHtml = null
+                }
+            }
+        }
+        dedupeCounts = newCounts
+        entryCellRenderer.dedupeCounts = newCounts
 
         val filtered = filterByType(snapshot, activeFilter)
         val searched = filterBySearch(filtered, searchText)
-        val sorted = applySort(searched)
+        val newVisible = applySort(searched)
+        val evicted = manager.entries.drainEvictedCount()
 
-        // T-LogListFreeze-02：清空全部缓存（过滤/排序/设置变更后 HTML 需重新生成）
-        snapshot.forEach { it.cachedListHtml = null }
+        if (!applyIncremental(newVisible, evicted)) {
+            applyFullRebuild(newVisible, gen)
+        }
 
+        updateSortButton()
+
+        // O-1：同步慢查询阈值 + 更新计数（Phase C）
+        slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
+        slowQueryCounter.reset()
+        snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
+        updateSlowQueryLabel()
+    }
+
+    /**
+     * T-Perf-03：增量应用差分（同步完成，无异步追加链）。模型与 [lastRendered] 尺寸不一致
+     * （旧异步追加链被新刷新中断/外部改动）时拒绝增量——全量重建兜底。
+     */
+    private fun applyIncremental(newVisible: List<LogSqlEntry>, evicted: Int): Boolean {
+        if (listModel.size() != lastRendered.size) return false
+        return when (val diff = diffVisible(lastRendered, newVisible, evicted)) {
+            is VisibleDiff.Same -> { lastRendered = newVisible; true }
+            is VisibleDiff.HeadEvictAppend -> {
+                repeat(diff.evicted) { listModel.remove(0) }
+                diff.appended.forEach { listModel.addElement(it) }
+                lastRendered = newVisible
+                true
+            }
+            is VisibleDiff.Insert -> {
+                diff.entries.forEachIndexed { i, e -> listModel.add(diff.index + i, e) }
+                lastRendered = newVisible
+                true
+            }
+            is VisibleDiff.TailRemove -> {
+                for (i in lastRendered.size - 1 downTo diff.from) listModel.remove(i)
+                lastRendered = newVisible
+                true
+            }
+            is VisibleDiff.FullRebuild -> false
+        }
+    }
+
+    /**
+     * 全量重建（分批 EDT 写入 + generation 守卫）。
+     *
+     * T-Perf-03 追加链 generation 守卫：新 refreshList 启动后旧链在新 chunk 写入前检测代际
+     * 并终止——杜绝旧快照剩余条目继续追加造成的幽灵/重复条目。
+     */
+    private fun applyFullRebuild(sorted: List<LogSqlEntry>, gen: Long) {
+        lastRendered = sorted
         // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
         list.ignoreRepaint = true
         listModel.clear()
@@ -775,7 +918,7 @@ class SqlLogPanel(
             val remaining = sorted.drop(REFRESH_FIRST_BATCH_SIZE)
             val iterator = remaining.iterator()
             fun appendNext() {
-                if (!iterator.hasNext()) return
+                if (gen != refreshGeneration) return // 新一轮刷新已启动，旧链终止（T-Perf-03 代际守卫）
                 val chunk = mutableListOf<LogSqlEntry>()
                 repeat(REFRESH_CHUNK_SIZE) { if (iterator.hasNext()) chunk.add(iterator.next()) }
                 listModel.addAll(chunk)
@@ -785,14 +928,6 @@ class SqlLogPanel(
             }
             ApplicationManager.getApplication().invokeLater { appendNext() }
         }
-
-        updateSortButton()
-
-        // O-1：同步慢查询阈值 + 更新计数（Phase C）
-        slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
-        slowQueryCounter.reset()
-        snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
-        updateSlowQueryLabel()
     }
 
     /** 按当前排序模式排序条目。 */

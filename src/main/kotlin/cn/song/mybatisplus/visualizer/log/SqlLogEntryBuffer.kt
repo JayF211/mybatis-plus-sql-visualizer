@@ -21,6 +21,9 @@ class SqlLogEntryBuffer(
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val entries = ArrayDeque<LogSqlEntry>()
 
+    /** T-Perf-03：自上次 drain 以来的头部淘汰条数（面板增量刷新对齐用；drain 约定单消费方——面板 EDT 刷新）。 */
+    private val evictedSinceDrain = java.util.concurrent.atomic.AtomicInteger()
+
     @Volatile
     var paused: Boolean = false
         internal set
@@ -63,6 +66,7 @@ class SqlLogEntryBuffer(
             entries.addLast(entry)
             while (entries.size > maxEntries) {
                 val evicted = entries.removeFirst()
+                evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
                 onEvicted?.invoke(evicted)
             }
         }
@@ -126,6 +130,13 @@ class SqlLogEntryBuffer(
 
     /** 最早在前的快照（正序）。 */
     fun snapshot(): List<LogSqlEntry> = synchronized(entries) { entries.toList() }
+
+    /**
+     * T-Perf-03：取走自上次调用以来的头部淘汰条数并归零。
+     * 单消费方约定（面板 EDT 刷新）：与 [snapshot] 搭配，用于增量刷新的头部对齐；
+     * 其他调用方调用会偷走面板的对齐信息（回退全量重建，正确性不受影响）。
+     */
+    fun drainEvictedCount(): Int = evictedSinceDrain.getAndSet(0)
 
     /** 清空全部（去重计数一并归零——徽章与列表内容同生命周期）。 */
     fun clear() {
