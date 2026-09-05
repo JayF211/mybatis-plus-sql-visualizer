@@ -76,7 +76,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             // 默认一级：文件列表
             assertTrue("默认应处于一级文件列表视图", panel.isShowingFiles)
@@ -105,7 +105,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val fileEntry = panel.fileListEntries.first()
             panel.openFileForTest(fileEntry) // 等价双击文件
@@ -132,7 +132,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             panel.openFileForTest(panel.fileListEntries.first())
             assertEquals("未搜索时 2 条", 2, panel.sqlListEntries.size)
@@ -165,7 +165,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         writeHistoryFile("sql-history-2026-08-31.sql", f44FileContent(listOf(Triple("SELECT 1", "A.java:1", 1L))))
         writeHistoryFile("sql-history-2026-08-30.sql", f44FileContent(listOf(Triple("SELECT 2", "A.java:2", 1L))))
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertEquals("默认 2 个文件", 2, panel.fileListEntries.size)
 
@@ -195,19 +195,19 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             panel.openFileForTest(panel.fileListEntries.first())
             assertEquals("二级 3 条", 3, panel.sqlListEntries.size)
 
             // 文件仍存在 → 刷新保持二级并重载
-            panel.refresh()
+            panel.refreshForTest()
             assertFalse("文件仍存在时刷新保持二级", panel.isShowingFiles)
             assertEquals("重载后仍 3 条", 3, panel.sqlListEntries.size)
 
             // 文件被删除（模拟外部清理）→ 刷新回一级
             assertTrue(f.delete())
-            panel.refresh()
+            panel.refreshForTest()
             assertTrue("文件删除后刷新回一级", panel.isShowingFiles)
             assertEquals("一级列表为空", 0, panel.fileListEntries.size)
         } finally {
@@ -217,7 +217,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
 
     fun test空历史目录_一级显示空列表() {
         // 不写任何文件（setUp 已清理；F-44-4 新目录名，旧目录数据不读取）
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertTrue(panel.isShowingFiles)
             assertEquals(0, panel.fileListEntries.size)
@@ -234,7 +234,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             "-- source: Legacy.java:1 | time: 5ms | 2026-08-31 17:00:00.000 --\nSELECT legacy\n\n",
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertEquals("旧目录数据不应读取（不考虑向前兼容）", 0, panel.fileListEntries.size)
         } finally {
