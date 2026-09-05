@@ -243,6 +243,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
     private val historyAlarm = javax.swing.Timer(500) { flushHistoryToCache() }.apply { isRepeats = false }
 
+    // T-Perf-04：参数击键路径 renderSql 防抖（Swing Timer，150ms，模式同 historyAlarm）
+    /** 待执行的渲染任务（最后一次调度者生效——防抖语义）。 */
+    private var pendingRender: (() -> Unit)? = null
+    private val renderDebounceTimer = javax.swing.Timer(RENDER_DEBOUNCE_MS) { flushDebouncedRender() }.apply { isRepeats = false }
+
+    /** 调度防抖渲染： keystroke 路径用——150ms 停顿后只渲染一次，最终结果与逐键全量渲染一致。 */
+    private fun scheduleRender(task: () -> Unit) {
+        pendingRender = task
+        renderDebounceTimer.restart()
+    }
+
+    /** Timer 动作：执行最后调度的渲染任务（EDT）。 */
+    private fun flushDebouncedRender() {
+        val task = pendingRender
+        pendingRender = null
+        task?.invoke()
+    }
+
     init {
         // 顶部元信息行 + 工具栏
         metaLabel.border = JBUI.Borders.empty(0, 8, 4, 8)
@@ -1692,10 +1710,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * 动态条件值变更（M13：复选框纯手动）：仅更新按 source 绑定的参数值并重渲染，
      * 勾选态只由用户操作决定（值空保留 `?`，不自动取消勾选）。
+     * T-Perf-04：击键路径——重渲染防抖（同 [onParamChanged]）。
      */
     private fun onConditionValueChanged(view: ConditionView, source: String, text: String) {
         paramValues[source] = text
-        renderSql()
+        scheduleRender { renderSql() }
         saveToHistory()
     }
 
@@ -1753,8 +1772,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * `2,3` → 展开 2 项 + `IN ( 2 , 3 )`；留空 → 恢复默认展开次数并清空该 foreach 的参数值（`?` 保持）。
      * **先渲染一次刷新键清单**（逐字符输入时中间态 counts 会改变渲染键数量，直接取旧键会漏填），
      * 再按新键填值二次渲染。
+     *
+     * T-Perf-04：击键路径每键两次全量渲染——整个处理器防抖（停顿后以最终文本执行一次；
+     * handler 内部的两段渲染依赖 xmlMappings 中间态，保持同步语义不拆散）。
      */
     private fun onXmlForEachValuesChanged(view: XmlForEachView, text: String) {
+        scheduleRender { applyXmlForEachValues(view, text) }
+    }
+
+    /** foreach 值应用（由防抖 Timer 调度；原 onXmlForEachValuesChanged 主体）。 */
+    private fun applyXmlForEachValues(view: XmlForEachView, text: String) {
         val item = view.item ?: return
         val values = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         xmlForEachCounts[view.collectionExpr] =
@@ -1852,10 +1879,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return if (metrics.stringWidth(raw) > maxWidth) ellipsize(raw, metrics, maxWidth) else raw
     }
 
-    /** 普通参数值变更：更新回填表并重渲染 SQL。 */
+    /** 普通参数值变更：更新回填表并重渲染 SQL（T-Perf-04：重渲染防抖——逐键全量重生成+格式化
+     *  +重分词在大 SQL 下构成卡顿；paramValues 即时更新，渲染合并到停顿后一次）。 */
     private fun onParamChanged(source: String, value: String) {
         paramValues[source] = value
-        renderSql()
+        scheduleRender { renderSql() }
         saveToHistory()
     }
 
@@ -2061,22 +2089,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *
      * 扫描 `IN (?, ?, ...)` 模式，返回 IN 子句内 `?` 的参数索引集合。
      * 面板回填时这些参数按逗号分割多值渲染。
+     *
+     * T-Perf-04：单趟 O(N) 扫描——旧实现对每个 `?` 复制并大写化整个前缀（O(L×P)）；
+     * 现改为就地回扫（跳过空白 → `(` → 可选一个空格 → `IN`，与旧 trimEnd+endsWith 语义一致），
+     * 零分配。
      */
-    private fun detectInClauseParams(sql: String): Set<Int> {
+    internal fun detectInClauseParams(sql: String): Set<Int> {
         val result = mutableSetOf<Int>()
         var paramIndex = 0
-        var i = 0
-        while (i < sql.length) {
-            val c = sql[i]
-            if (c == '?') {
-                // 检查前面是否有 IN ( 关键字
-                val prefix = sql.substring(0, i).trimEnd().uppercase()
-                if (prefix.endsWith("IN (") || prefix.endsWith("IN(")) {
+        for (i in sql.indices) {
+            if (sql[i] != '?') continue
+            var j = i - 1
+            while (j >= 0 && sql[j].isWhitespace()) j--
+            if (j >= 0 && sql[j] == '(') {
+                j--
+                if (j >= 0 && sql[j] == ' ') j-- // "IN (" 单空格形态（"IN(" 直接判 N/I）
+                if (j >= 1 && (sql[j] == 'N' || sql[j] == 'n') && (sql[j - 1] == 'I' || sql[j - 1] == 'i')) {
                     result.add(paramIndex)
                 }
-                paramIndex++
             }
-            i++
+            paramIndex++
         }
         return result
     }
@@ -2232,6 +2264,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     override fun dispose() {
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
+        // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
+        renderDebounceTimer.stop()
+        pendingRender = null
+        historyAlarm.stop()
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this)
     }
@@ -2345,5 +2381,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")
+
+        /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
+        private const val RENDER_DEBOUNCE_MS = 150
     }
 }

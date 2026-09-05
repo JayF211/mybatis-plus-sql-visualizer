@@ -1155,4 +1155,34 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         LookupManager.getInstance(project).hideActiveLookup()
         panel.clear()
     }
+
+    // ---------- T-Perf-04：detectInClauseParams 单趟扫描（与旧 O(L×P) 实现语义一致） ----------
+
+    fun testDetectInClauseParams_InParens多参数命中() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val detected = panel.detectInClauseParams("SELECT * FROM t WHERE id IN ( ?, ?, ? ) AND name = ?")
+            assertEquals("IN ( ?, ?, ? ) 内 3 个参数命中（含 ( 后空白）", setOf(0, 1, 2), detected)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testDetectInClauseParams_紧凑形态与大小写() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            assertEquals(setOf(0), panel.detectInClauseParams("select * from t where id in(?)"))
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testDetectInClauseParams_非In问号不命中() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            assertEquals(emptySet<Int>(), panel.detectInClauseParams("SELECT * FROM t WHERE a = ? AND b = ?"))
+        } finally {
+            panel.dispose()
+        }
+    }
 }
