@@ -29,6 +29,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 |-------------------------------------------------------------------------------|------|
 | [需求文档/MPJ用法收集与兼容性测试清单.md](./需求文档/MPJ用法收集与兼容性测试清单.md)    | **真实项目语料库**：MPJ 61 文件/原生 92 文件/XML 20 个；模式编号 P01~P20 / Q01~Q19 / U01~U13 / X01~X12；§5.6 官方 API 覆盖矩阵（现状）；§6 测试建议 |
 | [架构设计/MP-MPJ官方API覆盖矩阵.md](./架构设计/MP-MPJ官方API覆盖矩阵.md)                | **官方 API 全量覆盖矩阵**（224 API 行，✅/🟡/⬜ + 任务编号 + 版本引入）：MP 3.5.17 / MPJ 1.5.9 面，T-M20-01 语料基座 |
+| [架构设计/JPA-Hibernate官方API覆盖矩阵.md](./架构设计/JPA-Hibernate官方API覆盖矩阵.md)      | **JPA/Hibernate 官方 API 全量覆盖矩阵**（约 200 行挂 J1~J23 任务号，M39 交付后 83✅39🟡）：Spring Data JPA / jakarta / Hibernate / Criteria / HibernateTemplate 八分类面 |
+| [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
 | [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
@@ -197,6 +199,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-05 | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，3321 测试绿 + buildPlugin 通过，用户明确不合并 master）；新增两份矩阵索引：JPA-Hibernate官方API覆盖矩阵（M39 勾行 83✅39🟡）与其他ORM官方API覆盖矩阵（候选框架调研：Spring Data JDBC/jOOQ/Querydsl/Easy-Query/Jimmer/xbatis/MDS/Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy，含立项决策表与任务号预分配 SD/JO/QD/EQ/JM/XB/DS/FM/DV） |
 | 2026-09-04 | 记忆第三次精简（76→19）：新增 35 个归档（bug-fixes +22：M36 执行/收尾、F-44 跳转、HQL 别名/关联、JdbcTemplate 预览、设置页布局/树导航、Marketplace、方言验证、JOIN 原生图 B 路径等；pitfalls +13：gutter 接收者、SqlFormatter 两坑、EDT 冻结、设置页导航等），22 个归全局（跨项目平台陷阱 + 用户偏好，含 JCEF/SlowOperations/headless 测试/Gradle 锁等）；archive 增至 110 个文件（含 README），global 增至 63 个文件 |
 | 2026-08-26 | 新增「记忆精简规范.md」：本地记忆文件管理标准（分类/归档/全局/流程/基线） |
 | 2026-08-26 | 记忆第二次精简（31→14）：新增 16 个归档（M30-M33/M41/F-42/F-43/F-44/IDE 冻结/M28/M47/F-45/PlantUML/plugin-xml/设置页布局/设置页配置/tooltip + 3 个踩坑）；archive 增至 70 个文件 |
