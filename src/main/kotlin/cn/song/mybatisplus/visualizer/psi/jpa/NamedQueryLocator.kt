@@ -40,11 +40,29 @@ data class NamedQueryInfo(
  */
 object NamedQueryLocator {
 
-    /** @NamedQuery 注解全限定名。 */
-    private const val NAMED_QUERY = "javax.persistence.NamedQuery"
+    /** @NamedQuery 注解全限定名（javax 老命名空间）。 */
+    private const val NAMED_QUERY_JAVAX = "javax.persistence.NamedQuery"
 
-    /** @NamedQueries 容器注解全限定名。 */
-    private const val NAMED_QUERIES = "javax.persistence.NamedQueries"
+    /** @NamedQuery 注解全限定名（jakarta 新命名空间，T-J12 双支持）。 */
+    private const val NAMED_QUERY_JAKARTA = "jakarta.persistence.NamedQuery"
+
+    /** @NamedQueries 容器注解全限定名（javax 老命名空间）。 */
+    private const val NAMED_QUERIES_JAVAX = "javax.persistence.NamedQueries"
+
+    /** @NamedQueries 容器注解全限定名（jakarta 新命名空间，T-J12 双支持）。 */
+    private const val NAMED_QUERIES_JAKARTA = "jakarta.persistence.NamedQueries"
+
+    /** @NamedQuery 全限定名集合（javax + jakarta）。 */
+    private val NAMED_QUERY_FQNS: Set<String> = setOf(NAMED_QUERY_JAVAX, NAMED_QUERY_JAKARTA)
+
+    /** @NamedQueries 全限定名集合（javax + jakarta）。 */
+    private val NAMED_QUERIES_FQNS: Set<String> = setOf(NAMED_QUERIES_JAVAX, NAMED_QUERIES_JAKARTA)
+
+    /** 容器注解短名（LightPlatform 测试环境 / 粘贴片段下 FQN 不可解析时兜底）。 */
+    private const val NAMED_QUERIES_SHORT_NAME = "NamedQueries"
+
+    /** 单注解短名。 */
+    private const val NAMED_QUERY_SHORT_NAME = "NamedQuery"
 
     // ------------------------------------------------------------------
     // 公开 API
@@ -61,10 +79,10 @@ object NamedQueryLocator {
     fun locate(entityClass: PsiClass): List<NamedQueryInfo> {
         val results = mutableListOf<NamedQueryInfo>()
         for (annotation in entityClass.modifierList?.annotations ?: emptyArray()) {
-            val simpleName = resolveAnnotationSimpleName(annotation) ?: continue
-            when (simpleName) {
-                "NamedQueries" -> extractNamedQueriesContainer(annotation, results)
-                "NamedQuery" -> extractNamedQuery(annotation, results)
+            when (resolveAnnotationKind(annotation)) {
+                AnnotationKind.NAMED_QUERIES -> extractNamedQueriesContainer(annotation, results)
+                AnnotationKind.NAMED_QUERY -> extractNamedQuery(annotation, results)
+                null -> {}
             }
         }
         return results
@@ -184,17 +202,32 @@ object NamedQueryLocator {
     // 注解名解析
     // ------------------------------------------------------------------
 
+    /** 识别出的命名查询注解类别。 */
+    private enum class AnnotationKind { NAMED_QUERY, NAMED_QUERIES }
+
     /**
-     * 解析注解的短名（simpleName）。
+     * 解析注解类别（T-J12：javax / jakarta 双 FQN + 短名兜底，沿用 JpaEntityResolver 惯例）。
      *
-     * 优先 qualifiedName 截取（完整 IDE）；LightPlatform 测试环境下 qualifiedName 可能为 null，
-     * 回退使用 nameReferenceElement.referenceName（如 NamedQuery / NamedQueries / NamedEntityGraph 等）。
+     * 匹配顺序：
+     *  1. qualifiedName 精确匹配 javax / jakarta 全限定名；
+     *  2. 兜底：短名匹配（LightPlatform 测试环境 / 粘贴片段下注解类不可解析，qualifiedName 为 null
+     *     或为同文件裸短名，用 nameReferenceElement.referenceName 兜底——与旧短名行为保持一致）。
      *
      * @param annotation 注解实例
-     * @return 短名；无法解析返回 null
+     * @return 注解类别；非命名查询注解返回 null
      */
-    private fun resolveAnnotationSimpleName(annotation: PsiAnnotation): String? {
-        annotation.qualifiedName?.let { return it.substringAfterLast('.') }
-        return annotation.nameReferenceElement?.referenceName
+    private fun resolveAnnotationKind(annotation: PsiAnnotation): AnnotationKind? {
+        val qualifiedName = annotation.qualifiedName
+        if (qualifiedName != null) {
+            // 优先全限定名精确匹配
+            if (qualifiedName in NAMED_QUERY_FQNS) return AnnotationKind.NAMED_QUERY
+            if (qualifiedName in NAMED_QUERIES_FQNS) return AnnotationKind.NAMED_QUERIES
+        }
+        // FQN 不匹配（不可解析 / 短名形态）→ 按短名兜底
+        return when (annotation.nameReferenceElement?.referenceName) {
+            NAMED_QUERY_SHORT_NAME -> AnnotationKind.NAMED_QUERY
+            NAMED_QUERIES_SHORT_NAME -> AnnotationKind.NAMED_QUERIES
+            else -> null
+        }
     }
 }

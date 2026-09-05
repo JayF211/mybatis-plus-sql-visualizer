@@ -12,13 +12,18 @@ import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser
 import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaQueryEnhancer
 import cn.song.mybatisplus.visualizer.converter.jpa.JpqlConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser
+import cn.song.mybatisplus.visualizer.converter.jpa.QueryByExampleConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
+import cn.song.mybatisplus.visualizer.psi.jpa.DaoQueryKind
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
-import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionView
@@ -64,6 +69,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiMethod
@@ -298,6 +304,69 @@ class SqlPreviewService(private val project: Project) {
         val batchCall = generateSequence(anchor) { it.parent }
             .filterIsInstance<PsiMethodCallExpression>()
             .firstOrNull()
+        // T-J1/T-J6/T-J21：JPA CRUD / EntityManager 写路径 / HibernateTemplate 实体操作派发
+        // （receiver 家族感知，消歧规则见 JpaCrudOperationConverter KDoc）——receiver 判定为
+        // JPA 家族时必须走 JpaEntityResolver：MP EntityResolver 只认 @TableName，JPA 实体
+        // （@Table(name="t_user")）会被输出成 `INSERT INTO user_entity` 错表错列；
+        // 非 JPA 家族 convert 返回 null，维持下方 MP 批量路径现状（存量行为零变化）
+        // T-J5/T-J20 前置分支：Specification / Query By Example executor 调用先于 JPA CRUD 家族判定——
+        // `findAll(spec)` / `findAll(example)` 的方法名同在 JpaCrudOperationConverter.REPOSITORY_METHODS
+        // 名单内，后置会被渲染成「无 WHERE 全表 SELECT」（JpaCrudOperationConverter KDoc 建议的扩面方式：
+        // 在 SqlPreviewService 侧新增前置分支，不改 Wave2 交付文件）
+        if (batchCall != null) {
+            val specPreview = SpecificationQueryConverter.convert(batchCall, resolveVariables)
+            if (specPreview != null) {
+                val result = PreviewResult(
+                    sql = specPreview.sql,
+                    compactSql = specPreview.sql.replace(Regex("\\s+"), " ").trim(),
+                    unresolvedParams = specPreview.paramSources,
+                    paramTable = ParameterReplacer.buildParamTable(specPreview.paramSources),
+                    paramHints = specPreview.paramHints,
+                    wrapperType = null,
+                    tableName = specPreview.tableName,
+                    warning = specPreview.warning,
+                    columns = specPreview.columns,
+                )
+                recordHistory(result, anchor)
+                return result
+            }
+            val examplePreview = QueryByExampleConverter.convert(batchCall, resolveVariables)
+            if (examplePreview != null) {
+                val result = PreviewResult(
+                    sql = examplePreview.sql,
+                    compactSql = examplePreview.sql.replace(Regex("\\s+"), " ").trim(),
+                    unresolvedParams = examplePreview.paramSources,
+                    paramTable = ParameterReplacer.buildParamTable(examplePreview.paramSources),
+                    paramHints = examplePreview.paramHints,
+                    wrapperType = null,
+                    tableName = examplePreview.tableName,
+                    columns = examplePreview.columns,
+                )
+                recordHistory(result, anchor)
+                return result
+            }
+        }
+        val jpaCrud = batchCall?.let {
+            JpaCrudOperationConverter.convert(
+                it,
+                resolveVariables = settings?.state?.replaceParams ?: true,
+            )
+        }
+        if (jpaCrud != null) {
+            val result = PreviewResult(
+                sql = jpaCrud.sql,
+                compactSql = jpaCrud.sql,
+                unresolvedParams = jpaCrud.paramSources,
+                paramTable = jpaCrud.paramGroups,
+                wrapperType = null,
+                tableName = jpaCrud.tableName,
+                warning = jpaCrud.warning,
+                paramHints = jpaCrud.paramHints,
+                batchModel = jpaCrud.batchModel,
+            )
+            recordHistory(result, anchor)
+            return result
+        }
         // T-M23-01/02：批量路径接线——逻辑删除注入开关（settings.injectLogicDelete）与变量求值开关
         // （settings.replaceParams，实参可静态求值时内联）对齐 Wrapper 路径；参数来源/回填提示透传面板
         val batch = batchCall?.let {
@@ -325,64 +394,183 @@ class SqlPreviewService(private val project: Project) {
     /**
      * JPA 推导查询预览（F-14 阶段四）：解析 Repository 方法名 → PartTree → SqlStatement → PreviewResult。
      *
-     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider] 点击调用。
+     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider] 点击调用与
+     * T-J9 调用点反查（ConvertToSqlAction）调用。
+     *
+     * @param method   Repository 声明方法
+     * @param callArgs T-J9 调用点实参（`userRepository.findByName(x, PageRequest.of(0, 20))` 的实参列表）；
+     *                 非 null 时对 PageRequest.of / Sort.by 做静态求值（有字面量就内联渲染，无则 ? 占位）
      */
-    fun previewDerivedQuery(method: PsiMethod): PreviewResult? {
+    fun previewDerivedQuery(method: PsiMethod, callArgs: List<PsiExpression>? = null): PreviewResult? {
         val methodInfo = DerivedMethodLocator.locate(method.containingFile ?: return null, method.textRange.startOffset)
             ?: return null
         val entityClass = methodInfo.entityClass ?: return null
         val table = JpaEntityResolver().resolve(entityClass) ?: return null
         val partTree = PartTreeParser.parse(methodInfo.methodName)
         var statement = DerivedQueryConverter.convert(partTree, table)
-        // Pageable 参数 → 添加 LIMIT 占位符（运行时由 Spring Data JPA 注入实际分页值）
-        val hasPageable = method.parameterList.parameters.any { param ->
-            val typeName = param.type.canonicalText
-            typeName == "org.springframework.data.domain.Pageable" || typeName.endsWith(".Pageable")
-        }
-        if (hasPageable) {
-            statement = applyPageableLimit(statement, method)
+        // T-J10：Pageable/Page/Sort/Limit 参数全路径——Pageable/Page → LIMIT 占位（调用点形态静态求值）、
+        // Sort → ORDER BY（Sort.by 字面量内联）、Limit（3.2） → 仅 LIMIT 无 OFFSET
+        val pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, currentDialect(), table)
+        if (pageSort != null) {
+            var select = statement as? SelectStatement
+            pageSort.limit?.let { limit -> select = select?.copy(limit = limit) }
+            if (pageSort.orderBy.isNotEmpty()) select = select?.copy(orderBy = pageSort.orderBy)
+            if (select != null) statement = select
         }
         // 使用实际方法参数名（而非通用的 param1/param2）
-        // Pageable 方法：排除 Pageable 参数本身，添加 pageSize/pageOffset 占位
-        val paramNames = if (hasPageable) {
-            method.parameterList.parameters
-                .filter { param -> param.type.canonicalText != "org.springframework.data.domain.Pageable" && !param.type.canonicalText.endsWith(".Pageable") }
-                .map { it.name } + listOf("pageSize", "pageOffset")
-        } else {
-            method.parameterList.parameters.map { it.name }
-        }
+        // 分页/排序/限流参数：排除参数本身，追加分页占位参数行（pageOffset/pageSize 等）
+        val paramNames = method.parameterList.parameters
+            .filter { param ->
+                val typeName = param.type.canonicalText.substringBefore('<')
+                !JpaQueryEnhancer.isPageableType(typeName) &&
+                    !JpaQueryEnhancer.isSortType(typeName) &&
+                    !JpaQueryEnhancer.isLimitType(typeName)
+            }
+            .map { it.name } + (pageSort?.extraParamNames ?: emptyList())
         // DerivedQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
-        return buildJpaPreviewResult(statement, sql, table.tableName, paramNames, method)
+        // T-J4：IN/NOT IN 条件参数接线——inClauseParameterOrdinals 序号对齐方法参数名
+        // （过滤 Pageable 后的 paramNames 序），把 IN 参数挂进 buildJpaPreviewResult 的
+        // inClauseParams（面板回填按逗号分割多值，对齐 JPQL/HQL 路径的 Result.inClauseParams 惯例）
+        val inClauseParams = DerivedQueryConverter.inClauseParameterOrdinals(methodInfo.methodName)
+            .mapNotNull { paramNames.getOrNull(it) }
+            .toSet()
+        // T-J15/J22：@Lock（FOR UPDATE）/ @QueryHints / @EntityGraph（LEFT JOIN）/ 返回类型 notes；
+        // pageNotes：分页/排序分析已在上方完成（含调用点实参求值），透传语义注释、跳过二次分析
+        val enhancedSql = applyJpaMethodEnhancements(
+            method, sql, table, native = false,
+            limitAppliedInModel = true,
+            pageNotes = pageSort?.notes ?: emptyList(),
+        )
+        return buildJpaPreviewResult(statement, enhancedSql, table.tableName, paramNames, method, inClauseParams)
     }
 
     /**
-     * 如果方法含 Pageable 参数，为 SELECT 语句添加 LIMIT 占位符。
-     * Spring Data JPA 在运行时根据 Pageable 注入实际分页值；静态分析阶段用 ? 占位。
+     * JPA 方法级 SQL 增强（T-J10/J15/J22，文本级后处理，previewDerivedQuery / previewJpql /
+     * previewHql / previewCriteriaQuery 各路径共用）：
+     *
+     *  - **T-J10**：宿主方法 `Pageable`/`Page`/`Limit` 参数 → LIMIT/OFFSET 占位（方言形态）；
+     *    `Sort` 参数静态求值 → ORDER BY（与查询内已有子句并存时降级注释，避免双子句）；
+     *  - **T-J15**：`@Lock(PESSIMISTIC_WRITE)` → SELECT 尾部 `FOR UPDATE`（共享锁形态注释说明方言差异）；
+     *    `@QueryHints` 逐条注释；`@EntityGraph(attributePaths)` → LEFT JOIN 注入（按关联元数据解析
+     *    真实表/列；解析失败 / 原生 SQL 路径降级注释）；
+     *  - **T-J22**：返回类型 notes（Page count 二连 / Slice 多取一条 / Stream / 接口投影）；
+     *    `Page` 返回 + `@Query.countQuery` 存在时一并展示 count SQL。
+     *
+     * 注释行以 `-- ` 前缀追加 SQL 尾部（对齐 JpaCrudOperationConverter notes 惯例）；
+     * 全程无注解/无参数时返回原文（存量字节级行为零变化）。
      */
-    private fun applyPageableLimit(statement: SqlStatement, method: PsiMethod): SqlStatement {
-        val hasPageable = method.parameterList.parameters.any { param ->
-            val typeName = param.type.canonicalText
-            typeName == "org.springframework.data.domain.Pageable" ||
-                typeName.endsWith(".Pageable")
+    private fun applyJpaMethodEnhancements(
+        method: PsiMethod?,
+        sql: String,
+        table: TableInfo?,
+        native: Boolean,
+        limitAppliedInModel: Boolean = false,
+        pageNotes: List<String>? = null,
+    ): String = runCatching {
+        if (method == null) return@runCatching sql
+        val dialect = currentDialect()
+        val notes = mutableListOf<String>()
+        var enhanced = sql
+
+        // T-J15：@EntityGraph → LEFT JOIN（JPQL/HQL 非原生路径；原生查询运行时不应用实体图）
+        var joinLines: List<String> = emptyList()
+        JpaQueryEnhancer.entityGraph(method)?.let { graph ->
+            if (native || table == null) {
+                notes += "@EntityGraph(attributePaths)：原生 SQL 查询运行时不应用实体图，预览不追加 JOIN"
+            } else {
+                val (joins, graphNotes) = JpaQueryEnhancer.resolveEntityGraphJoins(graph, table)
+                notes += graphNotes
+                val mainAlias = detectMainAlias(enhanced, table)
+                joinLines = joins.map { JpaQueryEnhancer.renderJoinLine(it, mainAlias, dialect) }
+                if (joins.isNotEmpty()) {
+                    notes += "@EntityGraph(attributePaths=${graph.paths.joinToString(", ")})：按实体图 LEFT JOIN 抓取（type=${graph.type ?: "LOAD"}）"
+                }
+            }
         }
-        if (!hasPageable) return statement
-        // 只对 SELECT 语句添加 LIMIT（COUNT/EXISTS 不分页）
-        return when (statement) {
-            is SelectStatement -> statement.copy(
-                limit = cn.song.mybatisplus.visualizer.model.LimitClause(
-                    offset = cn.song.mybatisplus.visualizer.model.SqlValue.Placeholder("pageOffset"),
-                    count = cn.song.mybatisplus.visualizer.model.SqlValue.Placeholder("pageSize"),
-                ),
-            )
-            else -> statement
+
+        // T-J10：Pageable/Limit → LIMIT；Sort → ORDER BY（查询内已有子句时降级注释）。
+        // limitAppliedInModel：派生/Criteria 路径 LIMIT 已在语句模型级挂载（传 true 跳过文本追加，
+        // 避免同语句双 LIMIT）；
+        // pageNotes 非 null：调用方已完成分页/排序分析（含调用点实参求值，T-J9/J10），notes 直接透传、
+        // 跳过本方法内的二次分析（callArgs=null 的重分析会产出与实际内联结果相悖的「静态不可解析」注释）
+        if (pageNotes != null) {
+            notes += pageNotes
+        } else {
+            JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table)?.let { pageSort ->
+                notes += pageSort.notes
+                pageSort.limit?.let { limit ->
+                    if (limitAppliedInModel ||
+                        JpaQueryEnhancer.containsTopLevelClause(enhanced, Regex("(?i)\\b(LIMIT|OFFSET|FETCH)\\b"))
+                    ) {
+                        if (!limitAppliedInModel) {
+                            notes += "查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）"
+                        }
+                    } else {
+                        enhanced += "\n" + dialect.renderLimit(limit)
+                    }
+                }
+                if (pageSort.orderBy.isNotEmpty()) {
+                    if (JpaQueryEnhancer.containsTopLevelClause(enhanced, Regex("(?i)\\bORDER\\s+BY\\b"))) {
+                        notes += "查询内已含 ORDER BY，Sort 参数运行时与其合并"
+                    } else {
+                        enhanced += "\nORDER BY " + pageSort.orderBy.joinToString(", ") {
+                            it.column.qualifiedName + if (it.asc) " ASC" else " DESC"
+                        }
+                    }
+                }
+            }
         }
-    }
+
+        // JOIN 行插入（置于 LIMIT/ORDER BY 之前的顶层位置）
+        enhanced = JpaQueryEnhancer.insertJoinLines(enhanced, joinLines)
+
+        // T-J15：@Lock → FOR UPDATE / 共享锁方言差异注释
+        JpaQueryEnhancer.lockClause(method)?.let { (clause, note) ->
+            notes += note
+            if (clause != null) enhanced += " $clause"
+        }
+        // T-J15：@QueryHints 逐条注释
+        notes += JpaQueryEnhancer.queryHintNotes(method)
+        // T-J22：返回类型 notes + Page 返回时展示 @Query.countQuery 的 count SQL
+        notes += JpaQueryEnhancer.returnTypeNotes(method)
+        notes += countQueryNotes(method, table)
+
+        if (notes.isEmpty()) return@runCatching sql
+        enhanced + notes.filter { it.isNotBlank() }.joinToString("") { "\n-- $it" }
+    }.getOrDefault(sql)
+
+    /** T-J22：@Query.countQuery → count SQL 注释行（Page 返回语义；转换失败降级原文注释）。 */
+    private fun countQueryNotes(method: PsiMethod, table: TableInfo?): List<String> = runCatching {
+        val countJpql = JpaQueryEnhancer.countQueryAttribute(method) ?: return@runCatching emptyList()
+        // 注释前缀 "-- " 由 applyJpaMethodEnhancements 统一追加，此处只给内容行
+        listOf("@Query.countQuery（Page 返回的 count 伴随查询）：") + runCatching {
+            table?.let { t -> JpqlConverter.convert(countJpql, t, project).sql } ?: countJpql
+        }.getOrDefault(countJpql).lines()
+    }.getOrDefault(emptyList())
+
+    /**
+     * 从 SQL 文本探测主表别名（EntityGraph JOIN 的 ON 左值用）：
+     * `FROM t_user u` → `u`；无别名/别名是 SQL 关键字 → 表名本名。
+     */
+    private fun detectMainAlias(sql: String, table: TableInfo): String = runCatching {
+        val regex = Regex("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)")
+        val match = regex.find(sql)
+        val alias = match?.groupValues?.get(2)
+        if (alias == null || SQL_CLAUSE_KEYWORDS.any { alias.equals(it, ignoreCase = true) }) {
+            table.tableName
+        } else {
+            alias
+        }
+    }.getOrDefault(table.tableName)
 
     /**
      * JPQL/@Query 预览（波次一）：解析 @Query 注解方法 → JPQL 字符串 → SQL → PreviewResult。
      *
      * 供 [cn.song.mybatisplus.visualizer.ui.gutter.JpqlGutterLineMarkerProvider] 点击调用。
+     * T-J10/J15/J22：方法级增强（Pageable/Limit → LIMIT 占位、@Lock → FOR UPDATE、
+     * @QueryHints 注释、@EntityGraph → LEFT JOIN、Page 返回 → count SQL 展示）见
+     * [applyJpaMethodEnhancements]。
      */
     fun previewJpql(method: PsiMethod): PreviewResult? {
         val info = method.containingFile?.let { file ->
@@ -398,17 +586,24 @@ class SqlPreviewService(private val project: Project) {
         } else {
             null
         }
+        // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
+        val extraParamNames = JpaQueryEnhancer.evaluatePageSort(method, null, currentDialect(), table)
+            ?.extraParamNames ?: emptyList()
+        val allParamNames = paramNames + extraParamNames
         // 原生 SQL：转换命名参数 :param → ? 后展示（保持可读性）
         if (info.isNative) {
             val convertedSql = convertNativeSqlParameters(jpql)
             // 检测 IN 子句参数（在命名参数替换前检测 :paramName）
             val inParams = JpqlConverter.findInClauseParams(jpql)
-            val hints = if (inParams.isNotEmpty()) paramNames.map { ParamHint(quote = true, inList = it in inParams) } else emptyList()
+            val hints = if (inParams.isNotEmpty()) allParamNames.map { ParamHint(quote = true, inList = it in inParams) } else emptyList()
+            // T-J15：@EntityGraph 对原生查询运行时不生效 → 仅注释说明；LIMIT/@Lock/notes 照常
+            val enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, native = true)
             return PreviewResult(
-                sql = convertedSql,
-                compactSql = convertedSql,
-                unresolvedParams = paramNames,
-                paramTable = ParameterReplacer.buildParamTable(paramNames),
+                sql = enhancedSql,
+                // 无增强时保持旧字节级行为（convertedSql 原样），有增强时压缩多行空白
+                compactSql = if (enhancedSql == convertedSql) convertedSql else enhancedSql.replace(Regex("\\s+"), " ").trim(),
+                unresolvedParams = allParamNames,
+                paramTable = ParameterReplacer.buildParamTable(allParamNames),
                 paramHints = hints,
                 wrapperType = null,
                 tableName = table?.tableName ?: info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
@@ -418,12 +613,15 @@ class SqlPreviewService(private val project: Project) {
         // JPQL → JpqlConverter.convert → Result（转换后 SQL + 语句模型）
         // 关键：使用转换后的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
         // 若用 SqlGenerator 重新生成，条件树为空会丢失 WHERE 子句和 ? 占位符。
-        val result = JpqlConverter.convert(jpql, table)
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
+        val result = JpqlConverter.convert(jpql, table, project)
+        // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
+        val enhancedSql = applyJpaMethodEnhancements(method, result.sql, table, native = false)
         return buildJpaPreviewResult(
             statement = result.statement,
-            convertedSql = result.sql,
+            convertedSql = enhancedSql,
             tableName = table?.tableName ?: "",
-            paramNames = paramNames,
+            paramNames = allParamNames,
             method = method,
             inClauseParams = result.inClauseParams,
         )
@@ -440,11 +638,20 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 提取 JPQL/@Query 方法的参数名。
      * 优先 @Param 注解值（@Param("foo") → "foo"），无注解时用方法参数名。
+     * T-J10：Pageable/Sort/Limit 类型参数本体不登记参数行（分页占位参数行 pageSize/pageOffset 等
+     * 由 [JpaQueryEnhancer.evaluatePageSort] 的 extraParamNames 补充，避免同一参数双行）。
      */
     private fun extractJpqlParamNames(method: PsiMethod): List<String> {
         val parameters = method.parameterList.parameters
         val paramAnnotationQName = "org.springframework.data.repository.query.Param"
-        return parameters.map { param ->
+        return parameters.mapNotNull { param ->
+            val typeName = param.type.canonicalText.substringBefore('<')
+            if (JpaQueryEnhancer.isPageableType(typeName) ||
+                JpaQueryEnhancer.isSortType(typeName) ||
+                JpaQueryEnhancer.isLimitType(typeName)
+            ) {
+                return@mapNotNull null
+            }
             val annotation = param.modifierList?.findAnnotation(paramAnnotationQName)
                 ?: param.modifierList?.annotations?.firstOrNull {
                     it.nameReferenceElement?.referenceName == "Param"
@@ -462,19 +669,36 @@ class SqlPreviewService(private val project: Project) {
      * CriteriaQuery 预览（波次一）：定位 CriteriaQueryModel → CriteriaQueryConverter → SQL → PreviewResult。
      *
      * 供 [cn.song.mybatisplus.visualizer.ui.gutter.CriteriaQueryGutterLineMarkerProvider] 点击调用。
+     * T-J10：宿主方法 Pageable/Limit 参数 → LIMIT 子句（语句模型级，进 previewModel 交互重生成）。
      */
     fun previewCriteriaQuery(anchor: PsiElement): PreviewResult? {
         // 1. 用 CriteriaQueryLocator.locate(anchor) 获取 CriteriaQueryModel
         val model = CriteriaQueryLocator.locate(anchor) ?: return null
         // 2. CriteriaQueryConverter.convert(model) → SelectStatement
-        val statement = CriteriaQueryConverter.convert(model)
+        var statement = CriteriaQueryConverter.convert(model)
+        val hostMethod = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java)
         // 3. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
-        val paramNames = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java)
-            ?.parameterList?.parameters?.map { it.name } ?: emptyList()
+        val paramNames = hostMethod?.parameterList?.parameters?.map { it.name } ?: emptyList()
+        // T-J10：宿主方法分页参数 → LIMIT 子句（criteria 路径是语句模型，直接挂 limit）
+        val pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, currentDialect(), null)
+        if (pageSort != null) {
+            val select = statement as? SelectStatement
+            val limited = pageSort.limit?.let { limit -> select?.copy(limit = limit) } ?: select
+            if (limited != null) statement = limited
+        }
         // CriteriaQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        val resolvedTable = model.entityClass?.let { JpaEntityResolver().resolve(it) }
         val tableName = model.entityClassName?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: ""
-        return buildJpaPreviewResult(statement, sql, tableName, paramNames, PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java))
+        // T-J10/J15/J22：方法级增强（Sort ORDER BY/锁/hints/返回类型 notes；LIMIT 已在语句模型级挂载，
+        // 分页/排序 notes 由上方分析透传）
+        val enhancedSql = applyJpaMethodEnhancements(
+            hostMethod, sql, resolvedTable, native = false,
+            limitAppliedInModel = true,
+            pageNotes = pageSort?.notes ?: emptyList(),
+        )
+        val allParamNames = paramNames + (pageSort?.extraParamNames ?: emptyList())
+        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod)
     }
 
     /**
@@ -497,13 +721,17 @@ class SqlPreviewService(private val project: Project) {
             if (named != null && named.query.isNotBlank()) {
                 val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
                 val table = entityClass?.let { JpaEntityResolver().resolve(it) }
-                val result = JpqlConverter.convert(named.query, table)
+                val result = JpqlConverter.convert(named.query, table, project)
                 val paramNames = extractParamNamesFromHql(named.query)
+                // T-J10/J15/J22：宿主方法级增强
+                val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false)
+                val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, currentDialect(), table)
+                    ?.extraParamNames ?: emptyList()
                 return buildJpaPreviewResult(
                     statement = result.statement,
-                    convertedSql = result.sql,
+                    convertedSql = enhancedSql,
                     tableName = table?.tableName ?: "",
-                    paramNames = paramNames,
+                    paramNames = paramNames + extraParams,
                     method = info.method,
                     inClauseParams = result.inClauseParams,
                 )
@@ -511,19 +739,24 @@ class SqlPreviewService(private val project: Project) {
         }
 
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
-        val result = HqlConverter.convert(info.hql, table)
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
+        val result = HqlConverter.convert(info.hql, table, project)
         // 参数名提取：
         // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
         // 2. 若为空（链式调用场景），直接从 HQL 提取
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
+        // T-J10/J15/J22：宿主方法级增强
+        val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false)
+        val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, currentDialect(), table)
+            ?.extraParamNames ?: emptyList()
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
         return buildJpaPreviewResult(
             statement = result.statement,
-            convertedSql = result.sql,
+            convertedSql = enhancedSql,
             tableName = table?.tableName ?: "",
-            paramNames = paramNames,
+            paramNames = paramNames + extraParams,
             method = info.method,
             inClauseParams = result.inClauseParams,
         )
@@ -532,6 +765,7 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 原生 SQL 预览（createNativeQuery）。
      * 不做实体→表名映射，仅替换 :param → ? 并解析实体表名。
+     * T-J10/J15：宿主方法级增强（Pageable/Limit → LIMIT、@Lock → FOR UPDATE、notes）。
      */
     private fun previewNativeSql(info: HqlQueryInfo): PreviewResult? {
         val sql = convertNativeSqlParameters(info.hql)
@@ -540,12 +774,17 @@ class SqlPreviewService(private val project: Project) {
         }
         // 解析实体表名（用于显示）
         val tableName = resolveHqlEntityTable(info.entityClass) ?: info.entityClassName ?: ""
+        // T-J10/J15/J22：方法级增强（native 路径：EntityGraph 仅注释说明）
+        val enhancedSql = applyJpaMethodEnhancements(info.method, sql, null, native = true)
+        val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, currentDialect(), null)
+            ?.extraParamNames ?: emptyList()
+        val allParamNames = paramNames + extraParams
         return PreviewResult(
-            sql = sql,
-            compactSql = sql.replace(Regex("\\s+"), " ").trim(),
-            unresolvedParams = paramNames,
-            paramTable = ParameterReplacer.buildParamTable(paramNames),
-            paramHints = paramNames.map { ParamHint(quote = !isNumericParam(info.method, it)) },
+            sql = enhancedSql,
+            compactSql = enhancedSql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = allParamNames,
+            paramTable = ParameterReplacer.buildParamTable(allParamNames),
+            paramHints = allParamNames.map { ParamHint(quote = !isNumericParam(info.method, it)) },
             wrapperType = null,
             tableName = tableName,
         )
@@ -574,7 +813,7 @@ class SqlPreviewService(private val project: Project) {
         val info = infos.firstOrNull { it.annotation === annotation } ?: infos.first()
         val jpql = info.query
         val table = JpaEntityResolver().resolve(cls)
-        val result = JpqlConverter.convert(jpql, table)
+        val result = JpqlConverter.convert(jpql, table, project)
         val paramNames = extractParamNamesFromHql(jpql)
         return buildJpaPreviewResult(
             statement = result.statement,
@@ -589,11 +828,47 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 自定义 DAO HQL 预览（commonDao.findByQuery 等）。
      * 供 [cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider] 点击调用。
+     *
+     * T-J21：按 [CustomDaoHqlLocator] 登记的 [DaoQueryKind] 分派——
+     *  - HQL（默认）：既有 HqlConverter 管道（行为不变）；
+     *  - NAMED_QUERY（findByNamedQuery 族）：hql 字段存查询名——复用 NamedQueryLocator.findByQueryName
+     *    按名回查实体 @NamedQuery 的真实 JPQL 再走 JpqlConverter（参考 previewNamedQuery 既有做法）；
+     *    回查失败优雅降级为可读占位（不抛异常、不出错误 SQL）；
+     *  - QBC（executeFind）：可读占位「QBC/DetachedCriteria 形态暂不支持静态解析」；
+     *  - ENTITY_OP（get/load/save/delete 等）：locate 不认领（无 SQL 字符串），由 preview 批量分支
+     *    经 JpaCrudOperationConverter 派发，不经本方法。
      */
     fun previewCustomDaoHql(anchor: PsiElement): PreviewResult? {
         val info = CustomDaoHqlLocator.locate(anchor) ?: return null
+        if (info.kind == DaoQueryKind.QBC) {
+            return placeholderPreview(
+                "-- QBC/DetachedCriteria 形态暂不支持静态解析（条件树运行时构建）",
+            )
+        }
+        if (info.kind == DaoQueryKind.NAMED_QUERY) {
+            val named = runCatching { NamedQueryLocator.findByQueryName(project, info.hql) }.getOrNull()
+            if (named != null && named.query.isNotBlank()) {
+                val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
+                val table = entityClass?.let { JpaEntityResolver().resolve(it) }
+                val result = JpqlConverter.convert(named.query, table, project)
+                val paramNames = extractParamNamesFromHql(named.query)
+                return buildJpaPreviewResult(
+                    statement = result.statement,
+                    convertedSql = result.sql,
+                    tableName = table?.tableName ?: "",
+                    paramNames = paramNames,
+                    method = info.method,
+                    inClauseParams = result.inClauseParams,
+                )
+            }
+            // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
+            return placeholderPreview(
+                "-- 命名查询 \"${info.hql}\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL",
+            )
+        }
         val table = resolveHqlTable(null, info.entityClassName, info.hql)
-        val result = HqlConverter.convert(info.hql, table)
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
+        val result = HqlConverter.convert(info.hql, table, project)
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
@@ -605,6 +880,91 @@ class SqlPreviewService(private val project: Project) {
             method = info.method,
             inClauseParams = result.inClauseParams,
         )
+    }
+
+    /** T-J21：可读占位预览卡（优雅降级：无 SQL 模板时给出解释性注释，不抛异常）。 */
+    private fun placeholderPreview(note: String): PreviewResult = PreviewResult(
+        sql = note,
+        compactSql = note,
+        unresolvedParams = emptyList(),
+        paramTable = null,
+        wrapperType = null,
+        tableName = null,
+    )
+
+    /**
+     * JpaSpecificationExecutor 调用预览（T-J5）：定位 anchor 所在方法调用 →
+     * [SpecificationQueryConverter] 解析 Specification lambda/组合器 → SELECT/COUNT/DELETE + WHERE。
+     *
+     * 供 gutter 点击与 T-J9 调用点动作路径调用；不识别（非 executor 家族/非 Specification 实参）返回 null。
+     */
+    fun previewSpecification(anchor: PsiElement): PreviewResult? {
+        val call = generateSequence(anchor) { it.parent }
+            .filterIsInstance<PsiMethodCallExpression>()
+            .firstOrNull() ?: return null
+        val preview = SpecificationQueryConverter.convert(call, settings?.state?.replaceParams ?: true) ?: return null
+        val result = PreviewResult(
+            sql = preview.sql,
+            compactSql = preview.sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = preview.paramSources,
+            paramTable = ParameterReplacer.buildParamTable(preview.paramSources),
+            paramHints = preview.paramHints,
+            wrapperType = null,
+            tableName = preview.tableName,
+            warning = preview.warning,
+            columns = preview.columns,
+        )
+        recordHistory(result, anchor)
+        return result
+    }
+
+    /**
+     * QueryByExampleExecutor 调用预览（T-J20）：定位 anchor 所在方法调用 →
+     * [QueryByExampleConverter] 解析 Example.of(probe[, matcher]) → probe 非空属性等值 WHERE。
+     */
+    fun previewQueryByExample(anchor: PsiElement): PreviewResult? {
+        val call = generateSequence(anchor) { it.parent }
+            .filterIsInstance<PsiMethodCallExpression>()
+            .firstOrNull() ?: return null
+        val preview = QueryByExampleConverter.convert(call, settings?.state?.replaceParams ?: true) ?: return null
+        val result = PreviewResult(
+            sql = preview.sql,
+            compactSql = preview.sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = preview.paramSources,
+            paramTable = ParameterReplacer.buildParamTable(preview.paramSources),
+            paramHints = preview.paramHints,
+            wrapperType = null,
+            tableName = preview.tableName,
+            columns = preview.columns,
+        )
+        recordHistory(result, anchor)
+        return result
+    }
+
+    /**
+     * @Procedure 存储过程预览（T-J16）：repository 方法注解 → CALL 渲染
+     * （procedureName/value 优先、方法名兜底）+ outputParameterName/name 引用标注。
+     *
+     * 供 gutter 点击与 T-J9 调用点动作路径调用；无 @Procedure 注解返回 null。
+     */
+    fun previewProcedure(method: PsiMethod): PreviewResult? {
+        val info = JpaQueryEnhancer.procedureInfo(method) ?: return null
+        val placeholders = (1..info.paramCount).joinToString(", ") { "?" }
+        val sql = buildString {
+            append("CALL ").append(info.procName).append('(').append(placeholders).append(')')
+            info.nameRef?.let { append("\n-- @Procedure(name=\"").append(it).append("\")：引用元数据具名存储过程查询，过程名以元数据注册为准") }
+            info.outputParameterName?.let { append("\n-- 输出参数：").append(it).append("（注册为 OUT 参数，执行后按名取值）") }
+        }
+        val result = PreviewResult(
+            sql = sql,
+            compactSql = sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = emptyList(),
+            paramTable = null,
+            wrapperType = null,
+            tableName = info.procName,
+        )
+        recordHistory(result, method)
+        return result
     }
 
     /**
@@ -1320,6 +1680,12 @@ class SqlPreviewService(private val project: Project) {
 
         /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
         private const val DEFAULT_TENANT_COLUMN = "tenant_id"
+
+        /** SQL 子句关键字（detectMainAlias 探测主表别名时排除的关键字形态）。 */
+        private val SQL_CLAUSE_KEYWORDS = setOf(
+            "WHERE", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "JOIN", "ON", "CROSS",
+            "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "FETCH", "UNION", "SET", "AS",
+        )
 
         /**
          * 统一展示入口（M10-03）：恒以弹窗（[SqlPreviewDialog]）展示预览结果，

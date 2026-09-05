@@ -23,8 +23,8 @@ class JpaGutterLineMarkerProviderTest : BasePlatformTestCase() {
             // 派生查询方法 → JPA provider 产生 marker
             UserEntity findByLastName(String lastName);
 
-            // 非派生查询方法（方法名不含 By）→ 零 marker
-            List<UserEntity> findAll();
+            // 非派生查询方法（无 By 且非 findAll/count 等全量形态）→ 零 marker
+            UserEntity getUsername(String username);
 
             // 派生查询 + @Query → JPA provider 跳过（isDerivedQuery 排除 @Query 方法）
             @Query("SELECT u FROM UserEntity u WHERE u.email = ?1")
@@ -74,11 +74,32 @@ class JpaGutterLineMarkerProviderTest : BasePlatformTestCase() {
 
     fun testNonDerivedQueryMethodZeroMarker() {
         myFixture.configureByText("UserRepository.java", repository)
-        // findAll 不是派生查询（方法名不含 By）→ 零 marker
-        val identifier = findIdentifier("findAll")
-        assertNotNull("应找到 findAll 标识符", identifier)
+        // getUsername 无 By 且非 T-J3 全量形态（findAll/count 等）→ 不是派生查询 → 零 marker
+        val identifier = findIdentifier("getUsername")
+        assertNotNull("应找到 getUsername 标识符", identifier)
         assertNull(
             "非派生查询方法名不应产生 JPA marker",
+            provider.getLineMarkerInfo(identifier!!),
+        )
+    }
+
+    fun testTJ3_findAllOnRepositoryProducesMarker() {
+        // T-J3：无 By 门控放行后，Repository 接口的 findAll() 即派生查询 → 产生 JPA marker。
+        // 独立 fixture：共享 fixture 须保持「仅 1 个派生方法」约束（全文件 marker 计数测试依赖此不变量）。
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                List<UserEntity> findAll();
+            }
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; }
+            """.trimIndent(),
+        )
+        val identifier = findIdentifier("findAll")
+        assertNotNull("应找到 findAll 标识符", identifier)
+        assertNotNull(
+            "Repository 接口 findAll() 应产生 JPA marker（T-J3）",
             provider.getLineMarkerInfo(identifier!!),
         )
     }

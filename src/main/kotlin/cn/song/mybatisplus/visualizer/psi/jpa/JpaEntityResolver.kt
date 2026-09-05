@@ -22,13 +22,22 @@ import java.util.concurrent.ConcurrentHashMap
  * 规则（对齐 JPA 规范 / Hibernate 默认行为）：
  *  - 表名：优先 `@Table(name="xxx")` 注解，否则按命名策略由类名推断（驼峰转下划线）
  *  - 列名：优先 `@Column(name="xxx")` 注解，否则按命名策略由字段名推断
- *  - 主键：`@Id` 标记
+ *  - 主键：`@Id` 标记；`@EmbeddedId` 展平内部字段并全部标记主键（T-J18）
  *  - `@Transient` 字段（非持久化）跳过
- *  - `@ManyToOne` + `@JoinColumn(name="xxx")` 解析为外键列
- *  - `@OneToMany` / `@OneToOne` / `@ManyToMany` 关联字段跳过（非简单列）
+ *  - `@ManyToOne` + `@JoinColumn(name="xxx")` 解析为外键列；`@JoinColumns` 复合外键不落单列，
+ *    完整清单记入 AssociationInfo.joinColumns（T-J7）；@OneToOne(mappedBy=...) 无外键侧不落列（T-J7）
+ *  - `@OneToMany` / `@ManyToMany` / `@ElementCollection` 集合字段跳过（非简单列），
+ *    集合关联元数据（中间表/集合表/mappedBy/OrderBy）记入 TableInfo.collectionAssociations（T-J7/T-J18）
+ *  - `@Embedded` / `@Embeddable` 嵌入对象字段展平，列名按 @AttributeOverride 覆写（T-J18）
+ *  - `@GeneratedValue(strategy)` 记入主键列（T-J14）；@SequenceGenerator/@TableGenerator 记入 TableInfo
+ *  - Hibernate `@Where`/`@SQLRestriction`/`@SoftDelete`/`@SQLDelete` 族记入 TableInfo（T-J8）；
+ *    jakarta/javax `@Version` 记入 versionColumn（与 MP @Version 同列语义）
+ *  - `@Table(schema/catalog)`、`@SecondaryTable(s)`、`@Inheritance`、`@Discriminator*`、`@IdClass` 等
+ *    映射深水区注解记入 TableInfo 对应字段（T-J18）
  *  - `@MappedSuperclass` 父类字段继承（父类字段在前，子类字段在后）
  *  - 字段按角色分组稳定排序——`@Id`(PRIMARY) 置顶、业务字段(BUSINESS) 居中、
  *    审计字段(AUDIT) 与系统字段(SYSTEM) 沉底，组内保持声明顺序
+ *  - 注解识别：jakarta / javax 双包名全限定名 + 短名兜底（三轨，见 [JpaMetadataReader]）
  *  - 解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
  *    文件修改戳（modificationStamp）+ 配置签名双维度失效
  */
@@ -68,23 +77,64 @@ class JpaEntityResolver {
      */
     private fun resolveInternal(entityClass: PsiClass): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
+        // 类级元数据：schema/catalog、限制子句、软删除、自定义脚本、生成器、副表、继承与判别、@IdClass
+        // （T-J8 / T-J14 / T-J18，读取失败整体降级为空元数据）
+        val classMeta = JpaMetadataReader.readClassMeta(entityClass)
         // 表名：优先 @Table(name="xxx")，否则按命名策略由类名推断
         val tableName = annotationAttributeValue(entityClass, TABLE_ANNOTATION, "name")
             ?: decorateTableName(inferTableName(className))
 
         // 递归父类收集字段（支持 @MappedSuperclass 继承；父类字段在前、子类字段在后）
         val fields = collectFieldsIncludingSuper(entityClass)
+        val ignoredFields = ignoredFieldNames()
+        // 类级 @AttributeOverride（嵌入列名覆写，字段级覆写优先于类级，T-J18）
+        val classOverrides = JpaMetadataReader.attributeOverrides(entityClass)
         // 按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，组内保持声明顺序）
-        val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames()) }
+        val columns = fields.flatMap { field -> resolveColumns(field, ignoredFields, classOverrides) }
             .sortedWith(compareBy { it.role })
             // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
             // 示例：departmentId(@Column) 和 department(@ManyToOne+@JoinColumn) 同映射 department_id
             .distinctBy { it.columnName }
         // 表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
-        // 收集 @ManyToOne / @OneToOne 关联元数据
+        // 收集 @ManyToOne / @OneToOne 关联元数据（T-J7：referencedColumnName/复合外键/mappedBy 侧别/@MapsId/@NotFound）
         val associations = fields.mapNotNull { field -> resolveAssociation(field) }
-        return TableInfo(className, tableName, columns, null, null, comment, associations)
+        // 集合关联元数据（T-J7/T-J18：@OneToMany/@ManyToMany/@ElementCollection → 中间表/集合表语义）
+        val collectionAssociations = fields.mapNotNull { field ->
+            JpaMetadataReader.readCollectionAssociation(field, ::resolveTargetTableName, tableName)
+        }
+        // jakarta/javax @Version → versionColumn（T-J8，与 MP @Version 同列语义；列被排除时不记）
+        val versionColumn = fields.firstOrNull { JpaMetadataReader.hasVersionAnnotation(it) }
+            ?.let { versionField -> columns.firstOrNull { it.fieldName == versionField.name }?.columnName }
+        // 复合主键列清单（T-J18：@EmbeddedId / @IdClass / 多 @Id，声明顺序；单主键为空列表）
+        val hasEmbeddedId = fields.any { JpaMetadataReader.hasEmbeddedIdAnnotation(it) }
+        val idColumns = columns.filter { it.isId }.map { it.columnName }
+        val compositeIdColumns =
+            if (hasEmbeddedId || classMeta.idClassType != null || idColumns.size > 1) idColumns else emptyList()
+        return TableInfo(
+            entityClassName = className,
+            tableName = tableName,
+            columns = columns,
+            logicDeleteColumn = null,
+            versionColumn = versionColumn,
+            comment = comment,
+            associations = associations,
+            schema = classMeta.schema,
+            catalog = classMeta.catalog,
+            restrictionClause = classMeta.restrictionClause,
+            softDelete = classMeta.softDelete,
+            customSqlScripts = classMeta.customSqlScripts,
+            sequenceGenerators = classMeta.sequenceGenerators,
+            tableGenerators = classMeta.tableGenerators,
+            collectionAssociations = collectionAssociations,
+            secondaryTables = classMeta.secondaryTables,
+            primaryKeyJoinColumns = classMeta.primaryKeyJoinColumns,
+            inheritanceStrategy = classMeta.inheritanceStrategy,
+            discriminatorColumn = classMeta.discriminatorColumn,
+            discriminatorValue = classMeta.discriminatorValue,
+            compositeIdColumns = compositeIdColumns,
+            idClassType = classMeta.idClassType,
+        )
     }
 
     /**
@@ -104,43 +154,65 @@ class JpaEntityResolver {
     }
 
     /**
-     * 解析单个字段为列信息；非持久化字段（@Transient / 关联注解 @OneToMany/@ManyToMany 等）返回 null。
+     * 解析单个字段为列信息（可能展开为多列——嵌入对象展平，T-J18）；
+     * 非持久化字段（@Transient / 集合关联注解 / mappedBy 侧 @OneToOne / 复合外键等）返回空列表。
      */
-    private fun resolveColumn(field: PsiField, ignoredFields: Set<String>): ColumnInfo? {
+    private fun resolveColumns(
+        field: PsiField,
+        ignoredFields: Set<String>,
+        classOverrides: Map<String, String>,
+    ): List<ColumnInfo> {
         val fieldName = field.name
 
         // @Transient：非持久化字段，跳过
         if (hasAnnotation(field, TRANSIENT_ANNOTATION)) {
-            return null
+            return emptyList()
         }
 
-        // 一对多 / 多对多关联字段跳过（非简单列，对应集合类型属性）
-        if (hasAnnotation(field, ONE_TO_MANY_ANNOTATION) || hasAnnotation(field, MANY_TO_MANY_ANNOTATION)) {
-            return null
+        // 一对多 / 多对多 / 元素集合关联字段跳过（非简单列，对应集合类型属性；
+        // 集合语义由 TableInfo.collectionAssociations 承载）
+        if (hasAnnotation(field, ONE_TO_MANY_ANNOTATION) || hasAnnotation(field, MANY_TO_MANY_ANNOTATION) ||
+            JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_ELEMENT_COLLECTION) != null
+        ) {
+            return emptyList()
+        }
+
+        // @OneToOne(mappedBy=...) 无外键侧：外键列在对方表，本表无列（T-J7 侧别语义——二次 SELECT 标记）
+        if (hasAnnotation(field, ONE_TO_ONE_ANNOTATION) && JpaMetadataReader.mappedByOf(field) != null) {
+            return emptyList()
         }
 
         // 忽略字段名配置（`;` 分隔，按 Java 字段名匹配）
         if (fieldName in ignoredFields) {
-            return null
+            return emptyList()
         }
 
         // serialVersionUID 默认忽略（对齐 JPA/Hibernate 不映射 static 字段语义）
         if (fieldName.lowercase().replace("_", "") == "serialversionuid") {
-            return null
+            return emptyList()
+        }
+
+        val isManyToOne = hasAnnotation(field, MANY_TO_ONE_ANNOTATION)
+        val isOneToOne = hasAnnotation(field, ONE_TO_ONE_ANNOTATION)
+        val isEmbeddedId = JpaMetadataReader.hasEmbeddedIdAnnotation(field)
+
+        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）
+        if (isEmbeddedId || JpaMetadataReader.isEmbeddedField(field)) {
+            return flattenEmbeddedColumns(field, isPrimaryKey = isEmbeddedId, classOverrides)
+        }
+
+        // @JoinColumns 复合外键：多列外键无法以单列表达，完整清单记入 AssociationInfo.joinColumns（T-J7）
+        if ((isManyToOne || isOneToOne) && JpaMetadataReader.hasCompositeJoinColumns(field)) {
+            return emptyList()
         }
 
         // 列名：优先 @Column(name="xxx") 或 @JoinColumn(name="xxx")（@ManyToOne 外键列），否则驼峰转下划线
         val isId = hasAnnotation(field, ID_ANNOTATION)
-        val isManyToOne = hasAnnotation(field, MANY_TO_ONE_ANNOTATION)
-        val isOneToOne = hasAnnotation(field, ONE_TO_ONE_ANNOTATION)
-
+        val toOneJoinColumnRefs =
+            if (isManyToOne || isOneToOne) JpaMetadataReader.readToOneJoinColumns(field, fieldName) else emptyList()
         val columnName = when {
-            // @ManyToOne + @JoinColumn：外键列名
-            isManyToOne -> annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name")
-                ?: NamingStrategy.toSnakeCase(fieldName) + "_id"
-            // @OneToOne + @JoinColumn：外键列名
-            isOneToOne -> annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name")
-                ?: NamingStrategy.toSnakeCase(fieldName) + "_id"
+            // @ManyToOne / @OneToOne + @JoinColumn：外键列名（含无注解时的推断名）
+            toOneJoinColumnRefs.isNotEmpty() -> toOneJoinColumnRefs.first().name
             // @Column：普通列名
             else -> annotationAttributeValue(field, COLUMN_ANNOTATION, "name")
                 ?: NamingStrategy.toSnakeCase(fieldName)
@@ -158,7 +230,69 @@ class JpaEntityResolver {
             else -> ColumnRole.BUSINESS
         }
 
-        return ColumnInfo(fieldName, columnName, isId, false, fieldType, null, comment, role)
+        return listOf(
+            ColumnInfo(
+                fieldName = fieldName,
+                columnName = columnName,
+                isId = isId,
+                idTypeAuto = false,
+                fieldType = fieldType,
+                fill = null,
+                comment = comment,
+                role = role,
+                insertable = toOneJoinColumnRefs.firstOrNull()?.insertable ?: JpaMetadataReader.columnInsertableOf(field),
+                updatable = toOneJoinColumnRefs.firstOrNull()?.updatable ?: JpaMetadataReader.columnUpdatableOf(field),
+                generatedValueStrategy = if (isId) JpaMetadataReader.generatedValueStrategy(field) else null,
+                converted = JpaMetadataReader.hasConvertAnnotation(field),
+            ),
+        )
+    }
+
+    /**
+     * 展平嵌入对象字段为列清单（T-J18）：@AttributeOverride 覆写 > 内部字段 @Column > 驼峰转下划线；
+     * @EmbeddedId 展平列全部标记主键。嵌入类型不可解析等异常场景降级为单列形态（字段名推断列名），不丢字段。
+     */
+    private fun flattenEmbeddedColumns(
+        field: PsiField,
+        isPrimaryKey: Boolean,
+        classOverrides: Map<String, String>,
+    ): List<ColumnInfo> {
+        val fieldName = field.name
+        // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
+        val overrides = classOverrides + JpaMetadataReader.attributeOverrides(field)
+        val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides) }
+            .getOrDefault(emptyList())
+        if (specs.isEmpty()) {
+            val fallbackType = runCatching { field.type.canonicalText }.getOrNull()
+            return listOf(
+                ColumnInfo(
+                    fieldName = fieldName,
+                    columnName = NamingStrategy.toSnakeCase(fieldName),
+                    isId = isPrimaryKey,
+                    idTypeAuto = false,
+                    fieldType = fallbackType,
+                    fill = null,
+                    comment = resolveComment(field),
+                    role = if (isPrimaryKey) ColumnRole.PRIMARY else ColumnRole.BUSINESS,
+                    embedded = true,
+                ),
+            )
+        }
+        return specs.map { spec ->
+            ColumnInfo(
+                fieldName = spec.fieldName,
+                columnName = spec.columnName,
+                isId = isPrimaryKey,
+                idTypeAuto = false,
+                fieldType = spec.fieldType,
+                fill = null,
+                comment = resolveComment(spec.field),
+                role = if (isPrimaryKey) ColumnRole.PRIMARY else ColumnRole.BUSINESS,
+                insertable = spec.insertable,
+                updatable = spec.updatable,
+                embedded = true,
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -166,10 +300,11 @@ class JpaEntityResolver {
     // ------------------------------------------------------------------
 
     /**
-     * 解析单个字段的关联信息。
+     * 解析单个字段的关联信息（T-J7 增强：referencedColumnName / 复合外键 / mappedBy 侧别 /
+     * @NotFound / @MapsId）。
      *
      * @ManyToOne + @JoinColumn → 外键列名 + 目标实体类名 → 目标表名
-     * @OneToOne + @JoinColumn  → 同上
+     * @OneToOne + @JoinColumn  → 同上；mappedBy 侧 hasForeignKey=false（无 FK，二次 SELECT 语义）
      * 其他 → null
      */
     private fun resolveAssociation(field: PsiField): AssociationInfo? {
@@ -178,9 +313,12 @@ class JpaEntityResolver {
         if (!isManyToOne && !isOneToOne) return null
 
         val fieldName = field.name
-        // 外键列名：@JoinColumn(name="xxx") 或默认 {fieldName}_id
-        val joinColumn = annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name")
-            ?: NamingStrategy.toSnakeCase(fieldName) + "_id"
+        // 外键列清单：@JoinColumn(name="xxx") / @JoinColumns 复合 / 无注解时默认 {fieldName}_id
+        val joinColumnRefs = JpaMetadataReader.readToOneJoinColumns(field, fieldName)
+        // 既有 joinColumn 字段语义不变：单列为该列名，复合外键取首列（完整清单见 joinColumns）
+        val joinColumn = joinColumnRefs.first().name
+        // mappedBy 侧别：本表无外键，查询语义为按主键二次 SELECT（T-J7）
+        val mappedBy = JpaMetadataReader.mappedByOf(field)
 
         // 目标实体类：从字段类型获取
         val targetClass = resolveTargetEntityClass(field) ?: return null
@@ -194,6 +332,12 @@ class JpaEntityResolver {
             joinColumn = joinColumn,
             targetTable = targetTableName,
             targetAlias = targetAlias,
+            referencedColumnName = joinColumnRefs.first().referencedColumnName,
+            joinColumns = joinColumnRefs,
+            mappedBy = mappedBy,
+            hasForeignKey = mappedBy == null,
+            notFoundIgnore = JpaMetadataReader.isNotFoundIgnore(field),
+            mapsId = JpaMetadataReader.hasMapsId(field),
         )
     }
 
@@ -346,11 +490,22 @@ class JpaEntityResolver {
     /** 通用注释属性（非白名单注解兜底提取，不取 value——value 常为标识符）。 */
     private val COMMENT_ATTRIBUTE_NAMES = listOf("description", "name", "comment", "desc")
 
-    /** JPA 核心映射注解（name/value 是表名/列名而非注释，不参与提取）。 */
+    /** JPA 核心映射注解（name/value 是表名/列名而非注释，不参与提取；含 M39 扩展元数据注解）。 */
     private val JPA_MAPPING_ANNOTATION_NAMES = setOf(
         "Entity", "Table", "Column", "Id", "Transient",
         "ManyToOne", "OneToMany", "OneToOne", "ManyToMany",
-        "JoinColumn", "JoinTable", "MappedSuperclass",
+        "JoinColumn", "JoinColumns", "JoinTable", "MappedSuperclass",
+        // M39 元数据扩展（T-J7/T-J8/T-J14/T-J18）：name/value 是生成器名、SQL 脚本、覆写目标等，非注释
+        "GeneratedValue", "SequenceGenerator", "SequenceGenerators",
+        "TableGenerator", "TableGenerators", "Version",
+        "Where", "SQLRestriction", "SoftDelete",
+        "SQLDelete", "SQLDeleteAll", "SQLInsert", "SQLUpdate", "NotFound",
+        "ElementCollection", "CollectionTable", "Embedded", "Embeddable", "EmbeddedId", "IdClass",
+        "AttributeOverride", "AttributeOverrides", "MapsId", "Convert",
+        "Inheritance", "DiscriminatorColumn", "DiscriminatorValue",
+        "SecondaryTable", "SecondaryTables",
+        "PrimaryKeyJoinColumn", "PrimaryKeyJoinColumns",
+        "OrderBy", "OrderColumn",
     )
 
     // ------------------------------------------------------------------

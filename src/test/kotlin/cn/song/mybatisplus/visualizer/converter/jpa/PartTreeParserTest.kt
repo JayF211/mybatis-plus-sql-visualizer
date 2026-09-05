@@ -692,6 +692,55 @@ class PartTreeParserTest {
         assertEquals(1, tree.orderBy.size)
     }
 
+    // ------------------------------------------------------------------------
+    // T-J4：IgnoreCase / AllIgnoreCase 任意位置剥离 + 逐段 ignoreCase 标记
+    // ------------------------------------------------------------------------
+
+    @Test
+    fun `TJ4_IgnoreCase_中间位置逐段剥离不并入属性名`() {
+        // 旧实现：中间位置的 IgnoreCase 会并入属性名（"nameIgnoreCase"）
+        val tree = PartTreeParser.parse("findByNameIgnoreCaseAndEmail")
+        val conditions = tree.predicates[0].conditions
+        assertEquals(2, conditions.size)
+        assertEquals("name", conditions[0].propertyPath)
+        assertTrue("IgnoreCase 紧跟的段应记录 ignoreCase 标记", conditions[0].ignoreCase)
+        assertEquals("email", conditions[1].propertyPath)
+        assertFalse("其余段不应误标 ignoreCase", conditions[1].ignoreCase)
+    }
+
+    @Test
+    fun `TJ4_IgnoreCase_条件关键字后仍生效`() {
+        val tree = PartTreeParser.parse("findByNameStartingWithIgnoreCaseAndEmail")
+        val conditions = tree.predicates[0].conditions
+        assertEquals(2, conditions.size)
+        assertEquals(PartType.STARTING_WITH, conditions[0].type)
+        assertEquals("name", conditions[0].propertyPath)
+        assertTrue(conditions[0].ignoreCase)
+        assertEquals("email", conditions[1].propertyPath)
+        assertFalse(conditions[1].ignoreCase)
+    }
+
+    @Test
+    fun `TJ4_AllIgnoreCase_中间位置全局生效`() {
+        val tree = PartTreeParser.parse("findByNameAllIgnoreCaseAndEmail")
+        val conditions = tree.predicates[0].conditions
+        assertEquals(2, conditions.size)
+        assertEquals("name", conditions[0].propertyPath)
+        assertEquals("email", conditions[1].propertyPath)
+        assertTrue("AllIgnoreCase 应全局生效", conditions[0].ignoreCase)
+        assertTrue(conditions[1].ignoreCase)
+    }
+
+    @Test
+    fun `TJ4_跨Or段_逐段标记`() {
+        val tree = PartTreeParser.parse("findByNameIgnoreCaseOrEmail")
+        assertEquals(2, tree.predicates.size)
+        assertTrue(tree.predicates[0].conditions[0].ignoreCase)
+        assertEquals("name", tree.predicates[0].conditions[0].propertyPath)
+        assertFalse(tree.predicates[1].conditions[0].ignoreCase)
+        assertEquals("email", tree.predicates[1].conditions[0].propertyPath)
+    }
+
     // ========================================================================
     // 嵌套属性路径测试
     // ========================================================================
@@ -852,5 +901,33 @@ class PartTreeParserTest {
         assertEquals("address", result.associationPath)
         assertEquals("CityStreet", result.remainingPath)
         assertTrue(result.isNested)
+    }
+
+    // ------------------------------------------------------------------
+    // T-J3/M39：By 与 OrderBy 相邻形态（isOrderByAt 修复回归）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `parse_AllByOrderBy_无谓词仅排序`() {
+        val result = PartTreeParser.parse("findAllByOrderByCreateTimeDesc")
+        assertTrue("Subject 的 By 不应被误跳过，OrderBy 应被剥离为排序", result.predicates.isEmpty())
+        assertEquals(1, result.orderBy.size)
+        assertEquals("createTime", result.orderBy[0].propertyPath)
+    }
+
+    @Test
+    fun `parse_Top10ByOrderBy_谓词为空且排序保留`() {
+        val result = PartTreeParser.parse("findTop10ByOrderByCreateTimeDesc")
+        assertTrue(result.predicates.isEmpty())
+        assertEquals(1, result.orderBy.size)
+        assertEquals("DESC", result.orderBy[0].direction.name)
+    }
+
+    @Test
+    fun `parse_XxxOrderByYyy_常规OrderBy仍正确`() {
+        val result = PartTreeParser.parse("findByStatusOrderByIdDesc")
+        assertEquals(1, result.predicates.size)
+        assertEquals(1, result.orderBy.size)
+        assertEquals("id", result.orderBy[0].propertyPath)
     }
 }

@@ -17,12 +17,15 @@ import com.intellij.psi.util.PsiTreeUtil
 /**
  * 自定义 DAO 方法的 HQL 查询信息（CustomDaoHqlLocator 产物）。
  *
- * @param hql            HQL 字符串（字面量直接取值；变量引用或拼接时为拼接结果）
+ * @param hql            HQL 字符串（字面量直接取值；变量引用或拼接时为拼接结果）。
+ *                       [kind] 为 NAMED_QUERY 时存**查询名**（如 "UserEntity.findByStatus"）而非 HQL
  * @param isLiteralHql   hql 是否为纯字面量（true=直接字面量；false=变量引用或拼接）
- * @param entityClassName 从 HQL 的 FROM 子句提取的实体类名（驼峰标识符）；null 表示未提取到
+ * @param entityClassName 从 HQL 的 FROM 子句提取的实体类名（驼峰标识符）；null 表示未提取到。
+ *                       [kind] 为 NAMED_QUERY 时恒为 null（实体须经 NamedQueryLocator.findByQueryName 按名回查）
  * @param parameters     参数列表（以 HQL 中 :paramName 为主，值从方法参数中按名匹配）
  * @param method         HQL 所在 PsiMethod
  * @param paramSource    参数传递方式（name-value 交替 / Map / 位置参数 / 无额外参数）
+ * @param kind           查询承载类别（T-J12；默认 HQL，既有调用方语义不变）
  */
 data class CustomDaoHqlInfo(
     val hql: String,
@@ -31,7 +34,41 @@ data class CustomDaoHqlInfo(
     val parameters: List<HqlParameter>,
     val method: PsiMethod,
     val paramSource: ParamSource,
+    val kind: DaoQueryKind = DaoQueryKind.HQL,
 )
+
+/**
+ * 查询承载类别（T-J12 / T-J21）。
+ *
+ * 区分 HibernateTemplate 家族不同首参形态：SqlPreviewService 按类别派发
+ * （NAMED_QUERY → NamedQueryLocator.findByQueryName 按名回查真实 JPQL；QBC / ENTITY_OP
+ * 无 SQL 字符串，由后续里程碑接线），本定位器只备好类别数据。
+ */
+enum class DaoQueryKind {
+    /** HQL/SQL 字符串承载（默认）：hql 字段即真实查询文本。 */
+    HQL,
+
+    /**
+     * 命名查询承载：首参是查询名字符串而非 HQL（如
+     * `hibernateTemplate.findByNamedQuery("UserEntity.findByStatus")`），hql 字段存查询名。
+     * SqlPreviewService 接线后续做：按名回查 [NamedQueryLocator.findByQueryName] 解析真实 JPQL。
+     */
+    NAMED_QUERY,
+
+    /**
+     * QBC 形态（`executeFind`，DetachedCriteria 实参，无 SQL 字符串）——
+     * 占位类别，本定位器不认领（locate 返回 null），后续里程碑处理；不得误抛。
+     * 注：`findByCriteria` 同属 QBC 形态，但按 T-J21 名单归入 [ENTITY_OP]。
+     */
+    QBC,
+
+    /**
+     * HibernateTemplate 实体操作（save/update/delete/get/load 等，无 SQL 字符串）——T-J21 名单。
+     * SqlPreviewService 批量派发接线由 T-J1 里程碑做；本定位器不认领（locate 返回 null），
+     * 这些方法名也不会绕过现有 HQL 内容启发（仅登记类别）。
+     */
+    ENTITY_OP,
+}
 
 /**
  * 自定义 DAO 方法调用中参数传递方式枚举。
@@ -55,12 +92,17 @@ enum class ParamSource { NAME_VALUE_PAIRS, NAME_VALUE_ARRAYS, MAP, POSITIONAL, N
  *  - `baseDao.executeHql("update Entity set ... where ...", paramMap)`
  *  - `xxxDao.findByQuery("from Entity where field = :id", "id", idValue)`
  *  - `getHibernateTemplate().find("from Entity ...")` / `.findByNamedParam(...)` / `.findByValueBean(...)`（T-GutterDedup）
+ *  - `getHibernateTemplate().bulkUpdate("update Entity set ...")`（T-J12，HibernateTemplate 唯一 DML 入口）
+ *  - `getHibernateTemplate().findByNamedQuery("Entity.method", ...)`（T-J12，kind=NAMED_QUERY，hql 存查询名）
+ *  - QBC（`executeFind`；`findByCriteria` 归 ENTITY_OP 名单）与实体操作（`save`/`update`/...）
+ *    仅登记类别名单，不认领、不产出预览（T-J12 / T-J21，SqlPreviewService 接线由后续里程碑做）
  *
  * 判定逻辑（T-GutterDedup：内容启发 + 按接收者归属分派，杜绝通用方法名跨家族重复图标）：
  *  1. **内容启发**：首参字符串匹配 HQL 语法模式（SELECT...FROM / UPDATE...SET / DELETE...FROM / FROM Entity）；
  *  2. 按 [PreviewReceiverResolver.classify] 接收者家族分派：
  *     - JDBC_TEMPLATE / JPA_SESSION → 交给各自 provider（本定位器不认领）；
- *     - HIBERNATE_TEMPLATE → 仅 HQL 字符串首参的 `find`/`findByNamedParam`/`findByValueBean`/`iterate`；
+ *     - HIBERNATE_TEMPLATE → 按类别名单分派（[classifyHibernateTemplateMethod]）：
+ *       HQL / NAMED_QUERY 承载且首参为字符串时认领，QBC / ENTITY_OP 仅登记不认领；
  *     - CUSTOM_DAO / UNKNOWN → **qualifier 启发**（*Dao / *Mapper / *Repository / *BaseDao 等）OR
  *       **方法名启发**（Query / Hql / Jpql / findByQuery / findBySql 等具体关键字；通用名 execute 须 DAO qualifier）。
  *
@@ -94,12 +136,54 @@ object CustomDaoHqlLocator {
     )
 
     /**
-     * HibernateTemplate 的 HQL 字符串查询方法名（T-GutterDedup：补齐缺失图标）。
+     * HibernateTemplate 的 HQL 字符串查询方法名（T-GutterDedup：补齐缺失图标；T-J12 补 bulkUpdate）。
      *
      * 接收者为 [PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE] 且方法名在此集合、首参为字符串时，
-     * 由本定位器认领（否则 `getHibernateTemplate().find/findByNamedParam/findByValueBean` 无预览图标）。
+     * 由本定位器认领（否则 `getHibernateTemplate().find/findByNamedParam/findByValueBean/iterate` 无预览图标）。
+     * T-J12：补 `bulkUpdate`——HibernateTemplate 唯一 DML 入口，首参为 UPDATE/DELETE HQL 字符串，
+     * 直接走现有 HQL 提取路径（语句语义交给 HqlConverter 处理）。
      */
-    private val HIBERNATE_HQL_METHODS = setOf("find", "findByNamedParam", "findByValueBean", "iterate")
+    private val HIBERNATE_HQL_METHODS = setOf(
+        "find", "findByNamedParam", "findByValueBean", "iterate", "bulkUpdate",
+    )
+
+    /**
+     * T-J12：HibernateTemplate 的命名查询方法名（首参是**查询名**字符串而非 HQL）。
+     *
+     * `findByNamedQuery` / `findByNamedQueryAndNamedParam` / `findByNamedQueryAndValueBean`。
+     * 认领后 [CustomDaoHqlInfo.kind] = [DaoQueryKind.NAMED_QUERY]、hql 字段存查询名、
+     * entityClassName 恒为 null；SqlPreviewService 按名回查 NamedQueryLocator.findByQueryName
+     * 的接线后续做（见 [DaoQueryKind.NAMED_QUERY] KDoc）。
+     */
+    private val HIBERNATE_NAMED_QUERY_METHODS = setOf(
+        "findByNamedQuery", "findByNamedQueryAndNamedParam", "findByNamedQueryAndValueBean",
+    )
+
+    /**
+     * T-J12：HibernateTemplate 的 QBC 形态方法名（**仅登记名单，不认领**）。
+     *
+     * `executeFind` 的实参是 DetachedCriteria（无 SQL 字符串），
+     * 本定位器不认领（locate 返回 null）、标记「QBC 形态」占位交给后续里程碑；不得误抛。
+     * 经 [classifyHibernateTemplateMethod] 暴露类别供查询。
+     *
+     * 注意：`findByCriteria` 同属 QBC 形态，但已按 T-J21 归入 [HIBERNATE_ENTITY_OP_METHODS]
+     * （两名单交集清干净，ENTITY_OP 优先归类）。
+     */
+    private val HIBERNATE_QBC_METHODS = setOf("executeFind")
+
+    /**
+     * T-J21：HibernateTemplate 实体操作方法名（**仅登记名单，不认领**）。
+     *
+     * save/saveOrUpdate/update/delete/deleteAll/get/load/loadAll/refresh/merge/persist/
+     * replicate/lock/findByExample/findByCriteria——均无 SQL 字符串实参。
+     * SqlPreviewService 批量派发接线由 T-J1 里程碑做；这些名字不会绕过现有 HQL 内容启发
+     * （CUSTOM_DAO/UNKNOWN 家族仍需内容匹配 + DAO qualifier/查询关键字双重门控）。
+     */
+    private val HIBERNATE_ENTITY_OP_METHODS = setOf(
+        "save", "saveOrUpdate", "update", "delete", "deleteAll",
+        "get", "load", "loadAll", "refresh", "merge", "persist", "replicate", "lock",
+        "findByExample", "findByCriteria",
+    )
 
     /**
      * HQL 内容匹配正则模式集合。
@@ -185,6 +269,13 @@ object CustomDaoHqlLocator {
         val paramSource = detectParamSource(call)
         val hqlParamNames = extractNamedParams(hql)
         val parameters = resolveParameters(call, hqlParamNames)
+        // T-J12：HibernateTemplate 家族按类别名单标记（NAMED_QUERY 时 hql 字段为查询名、
+        // entityClassName 恒为 null——FROM/UPDATE/DELETE 模式对查询名不匹配）；其余家族恒为 HQL。
+        val kind = if (PreviewReceiverResolver.classify(call) == PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE) {
+            classifyHibernateTemplateMethod(call.methodExpression.referenceName) ?: DaoQueryKind.HQL
+        } else {
+            DaoQueryKind.HQL
+        }
 
         return CustomDaoHqlInfo(
             hql = hql,
@@ -193,6 +284,7 @@ object CustomDaoHqlLocator {
             parameters = parameters,
             method = method,
             paramSource = paramSource,
+            kind = kind,
         )
     }
 
@@ -218,16 +310,41 @@ object CustomDaoHqlLocator {
             // JDBC 模板（queryForList/update/execute 等）与 JPA 原生（Session/EntityManager）交给各自 provider
             PreviewReceiverResolver.Family.JDBC_TEMPLATE,
             PreviewReceiverResolver.Family.JPA_SESSION -> false
-            // HibernateTemplate：方法名本身即 HQL 语义（find/findByNamedParam/findByValueBean/iterate 首参恒为 HQL 字符串），
-            // 故不走内容启发（HQL 可能是不可静态解析的变量/方法参数，内容看不到），仅要求首参为字符串形态
-            // （`execute(callback)` 非字符串实参不认领）。
-            PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE ->
-                HIBERNATE_HQL_METHODS.contains(call.methodExpression.referenceName) &&
+            // HibernateTemplate：按 T-J12/T-J21 类别名单分派——仅 HQL 字符串承载（find/.../bulkUpdate）
+            // 与命名查询名承载（findByNamedQuery...）认领，且要求首参为字符串形态（`execute(callback)`
+            // 非字符串实参不认领）；QBC / 实体操作无 SQL 字符串，仅登记类别、不认领。
+            PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE -> {
+                val kind = classifyHibernateTemplateMethod(call.methodExpression.referenceName)
+                (kind == DaoQueryKind.HQL || kind == DaoQueryKind.NAMED_QUERY) &&
                     PreviewReceiverResolver.isStringLikeFirstArg(call)
+            }
             // 自定义 DAO / 无法判定：T-Perf-02 判定顺序反转——先 O(1) 名字启发（qualifier 名 →
             // 方法名），命中后才跑 HQL 内容正则；名字不命中零正则开销。布尔语义不变（AND 可交换）。
             else -> (matchesDaoQualifier(call) || matchesQueryMethodName(call)) && matchesHqlContent(call)
         }
+    }
+
+    /**
+     * T-J12/T-J21：按方法名归类 HibernateTemplate 家族调用的查询承载类别。
+     *
+     * **登记名单入口**（SqlPreviewService / 后续里程碑查询用）：
+     *  - [DaoQueryKind.HQL]：find / findByNamedParam / findByValueBean / iterate / bulkUpdate（首参 HQL 字符串）；
+     *  - [DaoQueryKind.NAMED_QUERY]：findByNamedQuery / findByNamedQueryAndNamedParam /
+     *    findByNamedQueryAndValueBean（首参查询名字符串）；
+     *  - [DaoQueryKind.QBC]：executeFind（DetachedCriteria 实参，占位，后续里程碑处理；
+     *    findByCriteria 虽同属 QBC 形态，按 T-J21 名单归类 ENTITY_OP，两名单无交集）；
+     *  - [DaoQueryKind.ENTITY_OP]：save/update/delete 等实体操作（无 SQL 字符串，T-J1 批量派发接线）。
+     *
+     * @param methodName 方法调用名
+     * @return 类别；不在任何名单返回 null（调用方按未知方法处理，不认领）
+     */
+    fun classifyHibernateTemplateMethod(methodName: String?): DaoQueryKind? = when {
+        methodName == null -> null
+        methodName in HIBERNATE_HQL_METHODS -> DaoQueryKind.HQL
+        methodName in HIBERNATE_NAMED_QUERY_METHODS -> DaoQueryKind.NAMED_QUERY
+        methodName in HIBERNATE_QBC_METHODS -> DaoQueryKind.QBC
+        methodName in HIBERNATE_ENTITY_OP_METHODS -> DaoQueryKind.ENTITY_OP
+        else -> null
     }
 
     /**

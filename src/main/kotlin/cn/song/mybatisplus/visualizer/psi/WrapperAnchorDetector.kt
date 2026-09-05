@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiIdentifier
@@ -117,6 +118,18 @@ object WrapperAnchorDetector {
                     if (variable != null && WrapperLocator.isWrapperVariable(variable)) return null
                 }
                 return element
+            }
+            // 场景 E（T-J1/T-J6/T-J21）：JPA CRUD / EntityManager 写路径 / HibernateTemplate 实体操作
+            // （`userRepository.findById(id)` / `em.persist(entity)` / `getHibernateTemplate().get(X.class, id)` 等）。
+            // **与场景 D 撞名面大（save/count/delete/find 等通用名）**，必须叠加 receiver 家族判定——
+            // qualifier 变量一次 resolve + 类型父链文本匹配（BATCH_CHAIN_COLLISION_NAMES 同款微秒级先例，
+            // 非纯 O(1) 的文档化例外）；家族判定失败（普通类/无 qualifier/wrapper 链上同名终结点）不亮图标：
+            // 宁可无图标，不可误亮（`stream.count()` 等海量负例）。点击后 preview 仍以 receiver 家族派发，
+            // 非 JPA 家族返回 null 走 MP 批量路径。
+            if (ref.referenceName in JpaCrudOperationConverter.crudAnchorMethodNames) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (initializerHeadIsWrapper(call)) return null
+                return if (JpaCrudOperationConverter.hasJpaCrudReceiver(call)) element else null
             }
             return null
         }

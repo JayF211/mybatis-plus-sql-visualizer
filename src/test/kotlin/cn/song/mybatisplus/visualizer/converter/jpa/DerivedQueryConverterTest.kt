@@ -830,4 +830,95 @@ class DerivedQueryConverterTest {
         assertTrue("应包含 DISTINCT", sql.contains("DISTINCT"))
         assertTrue("应包含 status 条件", sql.contains("status = ?"))
     }
+
+    // ------------------------------------------------------------------
+    // T-J4：ignoreCase 生效（等值族 LOWER 包装）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `TJ4_ignoreCase等值_生成LOWER包裹`() {
+        val partTree = findTree(
+            PredicatePart(Connector.AND, listOf(simpleProp("lastName", ignoreCase = true)))
+        )
+        val statement = DerivedQueryConverter.convert(partTree, table) as SelectStatement
+        val sql = SqlGenerator.generate(statement)
+
+        assertTrue(
+            "等值条件应生成 LOWER(col) = LOWER(?)",
+            sql.contains("LOWER(last_name) = LOWER(?)"),
+        )
+        assertFalse("不应再出现未包装的裸等值", sql.contains("last_name = ?"))
+    }
+
+    @Test
+    fun `TJ4_ignoreCase不等_生成LOWER包裹`() {
+        val partTree = findTree(
+            PredicatePart(Connector.AND, listOf(simpleProp("status", PartType.NEGATING_SIMPLE_PROPERTY, ignoreCase = true)))
+        )
+        val statement = DerivedQueryConverter.convert(partTree, table) as SelectStatement
+        val sql = SqlGenerator.generate(statement)
+
+        assertTrue("不等条件应生成 LOWER(col) != LOWER(?)", sql.contains("LOWER(status) != LOWER(?)"))
+    }
+
+    @Test
+    fun `TJ4_ignoreCase为false_保持裸列`() {
+        val partTree = findTree(
+            PredicatePart(Connector.AND, listOf(simpleProp("lastName")))
+        )
+        val statement = DerivedQueryConverter.convert(partTree, table) as SelectStatement
+        val sql = SqlGenerator.generate(statement)
+
+        assertTrue("无 ignoreCase 不应包 LOWER", sql.contains("last_name = ?"))
+        assertFalse(sql.contains("LOWER"))
+    }
+
+    @Test
+    fun `TJ4_与PartTreeParser联动_ignoreCase全链路`() {
+        // findByNameIgnoreCase → name IGNORE CASE → LOWER(name) = LOWER(?)
+        val partTree = PartTreeParser.parse("findByNameIgnoreCase")
+        val statement = DerivedQueryConverter.convert(partTree, table) as SelectStatement
+        val sql = SqlGenerator.generate(statement)
+
+        assertTrue("端到端应生成 LOWER(name) = LOWER(?)", sql.contains("LOWER(name) = LOWER(?)"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-J4：IN 条件检测（SqlPreviewService 接线预留）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `TJ4_hasInClause_各类形态`() {
+        assertTrue("findByStatusIn 应检测到 IN", DerivedQueryConverter.hasInClause("findByStatusIn"))
+        assertTrue("findByStatusNotIn 应检测到 NOT IN", DerivedQueryConverter.hasInClause("findByStatusNotIn"))
+        assertTrue("findByStatusIsIn 应检测到 IN", DerivedQueryConverter.hasInClause("findByStatusIsIn"))
+        assertFalse("findByStatus 不应检测到 IN", DerivedQueryConverter.hasInClause("findByStatus"))
+        assertFalse("findAll 不应检测到 IN", DerivedQueryConverter.hasInClause("findAll"))
+    }
+
+    @Test
+    fun `TJ4_inClauseParameterOrdinals_跳过无参条件`() {
+        // IsNull 不消耗参数 → StatusIn 仍是第 0 个参数
+        assertEquals(
+            listOf(0),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByNameIsNullAndStatusIn"),
+        )
+        assertEquals(
+            listOf(0),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByStatusIn"),
+        )
+        // Between 消耗两个参数（age lo/hi 占 0、1）→ StatusIn 是第 3 个参数（序号 2）
+        assertEquals(
+            listOf(2),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByAgeBetweenAndStatusIn"),
+        )
+    }
+
+    @Test
+    fun `TJ4_inClauseParameterOrdinals_多In条件`() {
+        assertEquals(
+            listOf(0, 1),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByStatusInAndDeptIn"),
+        )
+    }
 }
