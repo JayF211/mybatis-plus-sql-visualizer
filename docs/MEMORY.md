@@ -167,12 +167,12 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（109 个文件，2026-09-04 第三次精简后），不再每次会话加载，按需查阅。
+> 从本地记忆系统归档的已完成/已交付内容（115 个文件，2026-09-06 第四次精简后），不再每次会话加载，按需查阅。
 > 全局通用记忆（63 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
-| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 58 个 + 已解决踩坑 49 个 + 方法论 1 个 + 用户环境 1 个） |
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 64 个 + 已解决踩坑 49 个 + 方法论 1 个 + 用户环境 1 个） |
 | [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
 | [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
 | [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
@@ -199,6 +199,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-06 | 记忆第四次精简（27→21）：新增 6 个归档（bug-fixes：dev 全量分支合并、M37 竞品融合全链、M39 ORM 补全实施、M44 其他ORM第一批实施、ORM 四框架缺口调研定稿、候选 ORM 调研定稿——均已交付并合入 dev）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-06/`；项目 memory 降至 22 个文件（含 MEMORY.md），archive 增至 116 个文件（含 README） |
 | 2026-09-05 | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，3321 测试绿 + buildPlugin 通过，用户明确不合并 master）；新增两份矩阵索引：JPA-Hibernate官方API覆盖矩阵（M39 勾行 83✅39🟡）与其他ORM官方API覆盖矩阵（候选框架调研：Spring Data JDBC/jOOQ/Querydsl/Easy-Query/Jimmer/xbatis/MDS/Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy，含立项决策表与任务号预分配 SD/JO/QD/EQ/JM/XB/DS/FM/DV） |
 | 2026-09-04 | 记忆第三次精简（76→19）：新增 35 个归档（bug-fixes +22：M36 执行/收尾、F-44 跳转、HQL 别名/关联、JdbcTemplate 预览、设置页布局/树导航、Marketplace、方言验证、JOIN 原生图 B 路径等；pitfalls +13：gutter 接收者、SqlFormatter 两坑、EDT 冻结、设置页导航等），22 个归全局（跨项目平台陷阱 + 用户偏好，含 JCEF/SlowOperations/headless 测试/Gradle 锁等）；archive 增至 110 个文件（含 README），global 增至 63 个文件 |
 | 2026-08-26 | 新增「记忆精简规范.md」：本地记忆文件管理标准（分类/归档/全局/流程/基线） |
