@@ -27,6 +27,13 @@ import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
  * 无状态单例，纯函数逻辑，可独立单测。
  */
 object JpqlConverter {
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private val JPQL_NAMED_PARAM_TO_Q = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)")
+    private val JPQL_POSITIONAL_PARAM_TO_Q = Regex("\\?\\d+")
+    private val JPQL_IN_SPACE_Q = Regex("(?i)\\bIN\\s+\\?")
+    private val JPQL_MEMBER_OF_PATTERN = Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE)
+    private val JPQL_STRING_LITERAL_EMPTY = Regex("'[^']*'")
+
 
     /**
      * JPQL 转换产物：转换后的 SQL 字符串（含 ? 占位符）+ 语句模型。
@@ -134,7 +141,7 @@ object JpqlConverter {
      */
     private fun replaceNamedParameters(jpql: String): String {
         // 匹配 :identifier（冒号后跟字母/数字/下划线），但排除 ::（类型转换）
-        return jpql.replace(Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)"), "?")
+        return jpql.replace(JPQL_NAMED_PARAM_TO_Q, "?")
     }
 
     /**
@@ -143,7 +150,7 @@ object JpqlConverter {
      * JPQL 位置参数格式为 `?数字`。
      */
     private fun replacePositionalParameters(jpql: String): String {
-        return jpql.replace(Regex("\\?\\d+"), "?")
+        return jpql.replace(JPQL_POSITIONAL_PARAM_TO_Q, "?")
     }
 
     /**
@@ -153,7 +160,7 @@ object JpqlConverter {
      * 此处在字符串层面修正，确保面板参数回填时正确展开为多占位符。
      */
     private fun handleInClause(jpql: String): String {
-        return jpql.replace(Regex("(?i)\\bIN\\s+\\?"), "IN (?)")
+        return jpql.replace(JPQL_IN_SPACE_Q, "IN (?)")
     }
 
     /**
@@ -238,7 +245,7 @@ object JpqlConverter {
     private fun handleMemberOf(jpql: String): String {
         if (jpql.contains("MEMBER OF", ignoreCase = true)) {
             return jpql.replace(
-                Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE),
+                JPQL_MEMBER_OF_PATTERN,
                 "$1 /* MEMBER OF → 建议使用 IN/EXISTS 重写 */ $2",
             )
         }
@@ -328,7 +335,7 @@ object JpqlConverter {
      * 检测 JPQL 中的子查询（增强版 P1-3）。
      */
     private fun detectSubquery(jpql: String): Boolean {
-        val cleaned = jpql.replace(Regex("'[^']*'"), "''")
+        val cleaned = jpql.replace(JPQL_STRING_LITERAL_EMPTY, "''")
         val subqueryPattern = Regex("\\(\\s*SELECT\\b", RegexOption.IGNORE_CASE)
         return subqueryPattern.containsMatchIn(cleaned)
     }

@@ -2029,8 +2029,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // paramFields 按 buildParamRow/buildBatchColumnRow/buildXmlForEachRow 追加顺序排列，
         // 与 unresolvedParams + 条件值来源的顺序一致；但 source 可能出现在多个场景，
         // 此处按 paramValues 键顺序定位（与输入框构建顺序一致）
-        val sources = paramValues.keys.toList()
-        return sources.indexOf(source)
+        // T-Perf-23：单趟遍历计数（原 toList+indexOf 每次 O(C) 拷贝 + 线性查找）
+        var index = 0
+        for (key in paramValues.keys) {
+            if (key == source) return index
+            index++
+        }
+        return -1
     }
 
     /**

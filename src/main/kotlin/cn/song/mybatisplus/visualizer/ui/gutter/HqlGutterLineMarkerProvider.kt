@@ -43,7 +43,7 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         // 确认 element 是方法名而非 qualifier
         if (grandParent.methodExpression.referenceName != element.text) return null
         // 仅处理 createQuery / createNamedQuery / createNativeQuery 调用
-        if (element.text !in setOf("createQuery", "createNamedQuery", "createNativeQuery")) return null
+        if (element.text !in STANDARD_JPA_QUERY_METHODS) return null // T-Perf-23：Set 提常量
         // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
         if (!hasStringFirstArgument(grandParent)) return null
         if (!gutterEnabled()) return null
@@ -109,6 +109,7 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
     }
 
     companion object {
+        private val STANDARD_JPA_QUERY_METHODS = setOf("createQuery", "createNamedQuery", "createNativeQuery")
         private val HQL_SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", HqlGutterLineMarkerProvider::class.java)
     }

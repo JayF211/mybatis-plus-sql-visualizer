@@ -1363,10 +1363,9 @@ private fun formatTimestampHtml(timestamp: Long): String {
 }
 
 /** 耗时 HTML 片段：根据阈值套不同颜色——无耗时显示 "—" 占位。 */
-private fun formatDurationHtml(ms: Long?, isSelected: Boolean): String {
+private fun formatDurationHtml(ms: Long?): String {
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
-        isSelected -> "#FFFFFF"
         ms == null -> "#9E9E9E"            // 灰：无耗时
         ms >= threshold -> "#D32F2F"      // 红：慢查询
         ms >= threshold / 2 -> "#E67E22"  // 橙：偏慢
@@ -1405,8 +1404,8 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             val html = entry.cachedListHtml ?: run {
                 val timestampHtml = formatTimestampHtml(entry.timestamp)
                 val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
-                    formatDurationHtml(entry.executionTimeMs, isSelected) else ""
-                val sourceHtml = formatSourceHtml(entry, isSelected)
+                    formatDurationHtml(entry.executionTimeMs) else ""
+                val sourceHtml = formatSourceHtml(entry)
                 val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
                 val dedupeBadge = dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
                 "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
@@ -1424,7 +1423,7 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
     }
 
     /** F-44-7：格式化来源为 HTML 片段（用于列表渲染）。 */
-    private fun formatSourceHtml(entry: LogSqlEntry, isSelected: Boolean): String {
+    private fun formatSourceHtml(entry: LogSqlEntry): String {
         val source = when {
             SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
             entry.sourceFile != null -> {
@@ -1433,7 +1432,7 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             }
             else -> return ""
         }
-        val color = if (isSelected) "color:#FFFFFF" else "color:#9E9E9E"
-        return "<span style='$color'>[$source]</span> "
+        // T-Perf-23：固定灰色（选中态对比由标签 selectionForeground 承担，不再依赖 isSelected）
+        return "<span style='color:#9E9E9E'>[$source]</span> "
     }
 }

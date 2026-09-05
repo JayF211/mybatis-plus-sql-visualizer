@@ -31,8 +31,9 @@ import javax.swing.Icon
 class SqlGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
-        val anchor = WrapperAnchorDetector.anchorElement(element) ?: return null
+        // T-Perf-23：开关判断前置——用户关闭图标后不再对每个 leaf 跑锚点判定
         if (!gutterEnabled()) return null
+        val anchor = WrapperAnchorDetector.anchorElement(element) ?: return null
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             anchor,

@@ -208,12 +208,29 @@ object WrapperAnchorDetector {
         if (!isChainStart && !isConstructor) return null
 
         // 检查该行是否包含 Wrapper 操作（eq/like/set 等），确认是 Wrapper 链
-        val hasWrapperOp = wrapperOperationMethodNames.any { op ->
-            lineText.contains(".$op(")
-        }
-        if (!hasWrapperOp) return null
+        // T-Perf-23：单趟扫描 ".标识符(" 形态（24 个操作名的 contains 全是它的必要子形态），
+        // 替代每叶子 24 次 contains 全行扫描
+        if (!hasDotCallPattern(lineText)) return null
 
         return element
+    }
+
+    /** 单趟扫描：行内是否存在 `.标识符(` 形态（Wrapper 操作调用的必要条件）。 */
+    private fun hasDotCallPattern(s: String): Boolean {
+        val n = s.length
+        var i = 0
+        while (i < n - 1) {
+            val c = s[i]
+            if (c == '.' && i + 1 < n) {
+                var j = i + 1
+                while (j < n && (s[j].isLetterOrDigit() || s[j] == '_')) j++
+                if (j > i + 1 && j < n && s[j] == '(') return true
+                i = j
+            } else {
+                i++
+            }
+        }
+        return false
     }
 
     /** 获取元素所在行文本（O(1) 按偏移量计算）。 */
