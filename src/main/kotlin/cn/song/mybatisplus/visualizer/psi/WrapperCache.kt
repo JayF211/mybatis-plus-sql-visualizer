@@ -20,8 +20,12 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class WrapperCache {
 
-    /** 缓存键：文件 + 锚点偏移 + 配置维度（同文件不同锚点独立缓存；解析开关/表配置变化也独立缓存）。 */
-    private data class CacheKey(val file: PsiFile, val anchorOffset: Int, val resolveVariables: Boolean, val configSignature: String)
+    /**
+     * 缓存键：文件 + 锚点偏移 + 配置维度（同文件不同锚点独立缓存；解析开关/表配置变化也独立缓存）。
+     * T-Perf-18：文件维度改 VirtualFile.url 字符串——不持 PsiFile 强引用（关闭文件的 PsiFile
+     * 可回收，靠 modificationStamp 维度在 PSI 重建后自然失效重算）。
+     */
+    private data class CacheKey(val fileUrl: String?, val anchorOffset: Int, val resolveVariables: Boolean, val configSignature: String)
 
     /** 缓存条目：文件修改戳 + 解析结果。 */
     private data class Entry(val stamp: Long, val value: Any?)
@@ -48,7 +52,7 @@ class WrapperCache {
         configSignature: String,
         compute: () -> T?,
     ): T? {
-        val key = CacheKey(file, anchorOffset, resolveVariables, configSignature)
+        val key = CacheKey(file.virtualFile?.url, anchorOffset, resolveVariables, configSignature)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return entry.value as T?

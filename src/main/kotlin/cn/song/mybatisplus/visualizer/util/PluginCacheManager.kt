@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.util
 
 import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
+import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
+import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import com.intellij.openapi.project.Project
 
@@ -23,6 +25,12 @@ object PluginCacheManager {
     fun clearAll(project: Project) {
         EntityClassFinder.clearReverseLookupCache(project)
         EntityResolver.clearCache()
+        // T-Perf-18：补齐此前漏收的缓存——Jpa/Hbm 实体解析与 SqlPerfAnalyzer/动态表名
+        // （clearAll 未收录时设置页「清除缓存」清不干净）
+        cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver.clearCache()
+        cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver.clearCache()
+        SqlPerfAnalyzer.clearCache()
+        DynamicTableNameProcessor.clearCache()
         // Wrapper 解析缓存挂在项目服务上：getServiceIfCreated 未创建则跳过（清除动作不得触发服务实例化）
         project.getServiceIfCreated(SqlPreviewService::class.java)?.clearCache()
     }
