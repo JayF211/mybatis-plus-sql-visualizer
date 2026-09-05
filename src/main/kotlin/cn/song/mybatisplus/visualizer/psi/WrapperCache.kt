@@ -63,4 +63,10 @@ class WrapperCache {
 
     /** 当前缓存条目数（测试/诊断用）。 */
     fun size(): Int = cache.size
+
+    /**
+     * 缓存大小估算（设置页展示）：值为任意解析模型对象，按每条目固定开销近似——
+     * 展示用，非精确 JVM 内存（PsiFile 引用本身不计）。
+     */
+    fun sizeBytes(): Long = cache.size * 192L
 }

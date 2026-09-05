@@ -195,6 +195,71 @@ class CustomDaoHqlLocatorTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // 拼接变量初始化式（2026-09-03 用户反馈：String hql = "select" + " ..." 无预览图标）
+    // ------------------------------------------------------------------
+
+    fun testCustomDao_variableConcatInitializer() {
+        myFixture.configureByText(
+            "WmsZoneService.java",
+            """
+            public class WmsZoneService {
+                public Long countAutoZone(CommonDao commonDao, java.util.List<Long> locIdList) {
+                    String hql = "select count(case when z.beAutoZone = true then 0 end) " +
+                            "from WmsZone z " +
+                            "where z.id in (:locIdList)";
+                    return (Long) commonDao.findByQueryUniqueResult(hql, "locIdList", locIdList);
+                }
+            }
+            interface CommonDao {
+                Object findByQueryUniqueResult(String hql, Object... params);
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("countAutoZone")
+        val info = CustomDaoHqlLocator.locate(method)
+        assertNotNull("拼接变量初始化式应被识别（内容启发须递归展开）", info)
+        assertEquals("WmsZone", info!!.entityClassName)
+        assertTrue("HQL 应展开拼接结果", info.hql.contains("from WmsZone z"))
+        assertEquals("locIdList", info.parameters[0].paramName)
+        assertEquals(ParamSource.NAME_VALUE_PAIRS, info.paramSource)
+    }
+
+    fun testCustomDao_nameValueArrays() {
+        myFixture.configureByText(
+            "BookingService.java",
+            """
+            public class BookingService {
+                public Object[] getHeadData(CommonDao commonDao, String warehouseId, java.util.Date startTime, java.util.Date endTime) {
+                    String hql = "select count(case when booking.status = 'F' then 0 end) " +
+                            "from WmsDockBooking booking " +
+                            "where booking.warehouseId = :warehouseId " +
+                            "and booking.updateInfo.createdTime >= :startTime " +
+                            "and booking.updateInfo.createdTime < :endTime";
+                    return (Object[]) commonDao.findByQueryUniqueResult(hql,
+                            new String[]{"warehouseId", "startTime", "endTime"},
+                            new Object[]{warehouseId, startTime, endTime});
+                }
+            }
+            interface CommonDao {
+                Object findByQueryUniqueResult(String hql, String[] paramNames, Object[] paramValues);
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("getHeadData")
+        val info = CustomDaoHqlLocator.locate(method)
+        assertNotNull("拼接变量 + 名字数组/值数组双数组应被识别", info)
+        assertEquals("WmsDockBooking", info!!.entityClassName)
+        assertEquals(ParamSource.NAME_VALUE_ARRAYS, info.paramSource)
+        assertEquals(3, info.parameters.size)
+        assertEquals("warehouseId", info.parameters[0].paramName)
+        assertEquals("warehouseId", info.parameters[0].valueExpr)
+        assertEquals("startTime", info.parameters[1].paramName)
+        assertEquals("startTime", info.parameters[1].valueExpr)
+        assertEquals("endTime", info.parameters[2].paramName)
+        assertEquals("endTime", info.parameters[2].valueExpr)
+    }
+
+    // ------------------------------------------------------------------
     // 负向用例：不应识别为非 HQL
     // ------------------------------------------------------------------
 
@@ -234,6 +299,26 @@ class CustomDaoHqlLocatorTest : BasePlatformTestCase() {
         val method = findMethod("doSomething")
         val info = CustomDaoHqlLocator.locate(method)
         assertNull("commonDao.execute(\"print 'hello'\") 不应被识别（内容不匹配 HQL 模式）", info)
+    }
+
+    fun testNotHql_variableConcatPlainString() {
+        myFixture.configureByText(
+            "CommonService.java",
+            """
+            public class CommonService {
+                public void doSomething(CommonDao commonDao) {
+                    String msg = "hello" + " world";
+                    commonDao.execute(msg);
+                }
+            }
+            interface CommonDao {
+                void execute(String cmd);
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("doSomething")
+        val info = CustomDaoHqlLocator.locate(method)
+        assertNull("拼接变量但内容非 HQL 不应被识别（内容启发保持守门）", info)
     }
 
     // ------------------------------------------------------------------

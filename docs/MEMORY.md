@@ -29,6 +29,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 |-------------------------------------------------------------------------------|------|
 | [需求文档/MPJ用法收集与兼容性测试清单.md](./需求文档/MPJ用法收集与兼容性测试清单.md)    | **真实项目语料库**：MPJ 61 文件/原生 92 文件/XML 20 个；模式编号 P01~P20 / Q01~Q19 / U01~U13 / X01~X12；§5.6 官方 API 覆盖矩阵（现状）；§6 测试建议 |
 | [架构设计/MP-MPJ官方API覆盖矩阵.md](./架构设计/MP-MPJ官方API覆盖矩阵.md)                | **官方 API 全量覆盖矩阵**（224 API 行，✅/🟡/⬜ + 任务编号 + 版本引入）：MP 3.5.17 / MPJ 1.5.9 面，T-M20-01 语料基座 |
+| [架构设计/JPA-Hibernate官方API覆盖矩阵.md](./架构设计/JPA-Hibernate官方API覆盖矩阵.md)      | **JPA/Hibernate 官方 API 全量覆盖矩阵**（约 200 行挂 J1~J23 任务号，M39 交付后 83✅39🟡）：Spring Data JPA / jakarta / Hibernate / Criteria / HibernateTemplate 八分类面 |
+| [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
 | [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
@@ -65,6 +67,12 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 里程碑/内容 | 当前状态 |
 |------|-------------|----------|
+| [20260904-2317-设置页缓存信息恒0B-开发计划.md](./开发计划/20260904-2317-设置页缓存信息恒0B-开发计划.md) | **T-CacheInfo：设置页缓存信息恒 0 B 修复**。用户反馈设置页「插件缓存」一直显示 0 B——根因=统计口径只含 EntityClassFinder 反查**兜底**缓存，而主流命名（XxxEntity↔xxx）快路径恒命中、该缓存恒空；真正积累的 EntityResolver 解析缓存（全局静态）与 WrapperCache 预览缓存（项目服务）均未计入。实现：`PluginCacheManager.totalSizeBytes/entryCount` 三类缓存全口径（解析缓存全局只计一次），`clearAll` 补清 Wrapper 缓存（getServiceIfCreated 不触发服务实例化），文案增条目数「当前缓存：{0}（{1} 项）」 | ✅ 已实施（2026-09-04，定向 6 测试类 37 用例全绿） |
+| [20260904-1620-T-BareFromSelect-无别名HQL预览缺SELECT列清单修复-开发计划.md](./开发计划/20260904-1620-T-BareFromSelect-无别名HQL预览缺SELECT列清单修复-开发计划.md) | **T-BareFromSelect：无别名 HQL 预览缺 SELECT 列清单修复**。用户实测 `getHibernateTemplate().find("from WmsAsn")` 只显示 `FROM wms_asn`——根因=`HqlConverter.parseAliasColumns` 只认「表名+别名」两段式，裸表名不产生别名条目导致隐式查询补列清单分支永远短路；`JpqlConverter` 则完全没有展开。实现：抽取 `SelectClauseExpander` 共享展开器（裸表名回退登记表名限定符 + JOIN 族关键字排除防 `left` 被当别名 + 无 SELECT 分支列不可得降级 `alias.*`），两转换器统一接入 | ✅ 已实施（2026-09-04，converter/jpa + integration + gutter + SqlPreviewServiceJpa 回归绿） |
+| [20260904-1326-T-GutterDedup-SQL预览图标重复与缺失修复-开发计划.md](./开发计划/20260904-1326-T-GutterDedup-SQL预览图标重复与缺失修复-开发计划.md) | **T-GutterDedup：SQL 预览图标重复与缺失修复**。根因=gutter provider 只按方法名判中、不校验接收者类型——`execute` 被 JdbcTemplate 与 CustomDaoHql 双收（`commonDao.execute` 2 图标、`getHibernateTemplate().execute` 3 图标），`HibernateTemplate.find/findByValueBean` 无 provider 覆盖（0 图标）。实现：`PreviewReceiverResolver` 按接收者归类（CUSTOM_DAO/HIBERNATE_TEMPLATE/JDBC_TEMPLATE/JPA_SESSION）；Jdbc gutter 加接收者∈JDBC+首参字符串门；CustomDaoHql 按接收者分派（拒 JDBC/JPA_SESSION、接 HIBERNATE 的 find/findByNamedParam/findByValueBean/iterate 方法名门） | ✅ 已实施（2026-09-04，DemoRecognitionTest 加载真实 demo 两文件逐处断言恰一图标 + 回归绿） |
+| [20260904-1010-T-PreviewShortcut-非Wrapper预览快捷键贯通与命名查询-开发计划.md](./开发计划/20260904-1010-T-PreviewShortcut-非Wrapper预览快捷键贯通与命名查询-开发计划.md) | **T-PreviewShortcut：非 Wrapper 预览快捷键贯通 + `@NamedQuery` 实体级预览**。① `ConvertToSqlAction` 兜底链新增 `tryHqlFallback`（HQL/JPQL 运行时+自定义 DAO HQL）/`tryNamedQueryFallback`/`tryJdbcTemplateFallback` 短路，接 `previewHql`/`previewCustomDaoHql`/`JdbcTemplateSqlPreviewService.preview`；② `NamedQueryLocator` 补 `annotation` 字段+`findByQueryName`，`SqlPreviewService.previewNamedQuery` + `previewHql` 对 `createNamedQuery` 按名解析，新增 `NamedQueryGutterLineMarkerProvider`（前情：`feature/jdbc-template-sql-preview` 已合入 master 151d56e） | ✅ 已实施（2026-09-04 提交 210c802，定向/回归测试绿） |
+| [20260904-0843-JOIN图直接内嵌Database原生显示图组件-开发计划.md](./开发计划/20260904-0843-JOIN图直接内嵌Database原生显示图组件-开发计划.md) | **JOIN 图直接内嵌 Database 原生「显示图」组件（T-Embed-01~08）**：A 侧已交付——数据源富化（DB 真实类型 int(11)/COMMENT）、原生 `/* 注释 */` 三段式字段行、PK 底部独立分区、JOIN 表字段空修复；B 侧调研实证（ShowDiagramBase.createSeed/provider id=DATABASE/虚拟外键=ModelRelationProvider EP）待带数据源真机验证轮实施 | 🔧 A 侧已交付（2026-09-04，全量回归绿），B 侧待真机轮 |
+| [20260903-1545-JOIN图全原生UI对齐Database-开发计划.md](./开发计划/20260903-1545-JOIN图全原生UI对齐Database-开发计划.md) | **JOIN 图渲染全原生对齐 Database「显示图」（T-NativeUI-01~06）**：表头表注释（灰斜体）、字段行名+类型+注释（PK 加粗+图标）、连线按 JOIN 类型分箭头/线型/ON 标签、工具栏分类切换（列/主键列/注释）；弃 NO_CATEGORIES 改为直接实现 DiagramNodeContentManager 默认全启用（根因实证 Abstract myEnabledCategories 初空 + DiagramCategory 3 参布尔= enabledByDefault） | ✅ 已完成（2026-09-04 提交 8d1e370，真机验证字段正常；遗留差距转入 T-Embed） |
 | [20260902-1400-HQL变量引用解析修复-开发计划.md](./开发计划/20260902-1400-HQL变量引用解析修复-开发计划.md) | **HQL 变量引用解析修复**：`HqlQueryLocator.extractHqlString()` 拼接初始化器（`String hql = "select" + " ..."`）回落返回变量名导致预览显示"hql"；新增 `PsiBinaryExpression`/`PsiPolyadicExpression` 分支复用 `collectStringLiterals()` 递归展开；方法参数等不可静态解析场景优雅降级 | ✅ 已完成（2026-09-02，HqlQueryLocatorTest 17/17，全量 HQL 套件 460+ 用例 0 失败） |
 | [20260902-0106-日志捕捉性能优化-开发计划.md](./开发计划/20260902-0106-日志捕捉性能优化-开发计划.md) | **日志捕捉性能优化**（源自《性能分析 20260902-0054》P1/P2 建议）：快速轮询 500ms 起步指数退避 + 反射 Method 缓存 + descriptor 短路 + 逐行配置同步改 SETTINGS_CHANGE_TOPIC 事件驱动 | ✅ 已完成（2026-09-02，全量 2860 用例 0 失败） |
 | [20260828-2000-插件更名SQL-Visualizer-开发计划.md](./开发计划/20260828-2000-插件更名SQL-Visualizer-开发计划.md) | **插件显示名更名 SQL Visualizer**：plugin.xml name + i18n bundle 32 处 + 生成代码注释/测试断言联动 + 用户文档；id/包名/rootProject.name/仓库路径不动（升级兼容） | 🔧 开发中（2026-08-28） |
@@ -142,6 +150,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20260904-1545-JdbcTemplate预览贯通与JOIN原生图对齐-发行说明.md](./发行说明/20260904-1545-JdbcTemplate预览贯通与JOIN原生图对齐-发行说明.md) | v2026.9.4 发行说明（JdbcTemplate SQL 字符串预览 psource 系列 + JOIN 图原生框架/对齐 Database 显示图/内嵌原生图 B 路径 + 非 Wrapper 快捷键贯通 + @NamedQuery 实体级预览 + 自动保存无限递归/日志 EDT 冻结/SqlFormatter 修复链） |
+| [20260902-0000-实时日志跳转可靠方案与全插件测试覆盖-发行说明.md](./发行说明/20260902-0000-实时日志跳转可靠方案与全插件测试覆盖-发行说明.md) | v2026.9.2 发行说明（SQL 预览面板原生 Database 控制台内嵌 M36 + 全插件 UI/集成测试覆盖 + SQL 日志合并主侧边栏 + 自动保存历史 + JOIN 自绘引擎 + 更名 SQL Visualizer） |
 | [20260819-1400-废弃API清理与IService实体修复-发行说明.md](./发行说明/20260819-1400-废弃API清理与IService实体修复-发行说明.md) | v2026.8.19 发行说明（废弃 API 全量清理 T-M51+T-M52 + IService 实体修复 + 截图替换 + Marketplace Custom Page，1227 全绿） |
 | [20260818-2125-SQL反向转换收尾修复与日志监听大修-发行说明.md](./发行说明/20260818-2125-SQL反向转换收尾修复与日志监听大修-发行说明.md) | v2026.8.18 发行说明（SQL→Java 反向收尾 T-M48~M50 + 日志监听生命周期大修 + UI/文档升级，链接用绝对路径） |
 | [20260816-2320-SQL-Java反向转换增强与方言全兼容-发行说明.md](./发行说明/20260816-2320-SQL-Java反向转换增强与方言全兼容-发行说明.md) | v2026.8.17 发行说明（SQL→Java 反向链路大修 + 方言 UPSERT + 日志五项修复 + 图标统一，链接用绝对路径） |
@@ -157,12 +167,12 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（54 个文件），不再每次会话加载，按需查阅。
-> 全局通用记忆（41 个）备份在 `~/.zcode/cli/memories/global/`。
+> 从本地记忆系统归档的已完成/已交付内容（109 个文件，2026-09-04 第三次精简后），不再每次会话加载，按需查阅。
+> 全局通用记忆（63 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
-| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 36 个 + 已解决踩坑 35 个 + 用户环境 1 个） |
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 58 个 + 已解决踩坑 49 个 + 方法论 1 个 + 用户环境 1 个） |
 | [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
 | [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
 | [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
@@ -182,13 +192,15 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 产品介绍 / 使用说明 | `README.md`（产品定位、功能特性、截图、已知差异） |
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
 | 已修复 Bug / 已解决踩坑（归档） | `docs/memory-archive/README.md` |
-| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（41 个文件，手动查阅） |
+| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（63 个文件，手动查阅） |
 | 记忆精简规范 | `docs/记忆精简规范.md`（分类标准、归档流程、数量基线） |
 
 ## 变更记录
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-05 | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，3321 测试绿 + buildPlugin 通过，用户明确不合并 master）；新增两份矩阵索引：JPA-Hibernate官方API覆盖矩阵（M39 勾行 83✅39🟡）与其他ORM官方API覆盖矩阵（候选框架调研：Spring Data JDBC/jOOQ/Querydsl/Easy-Query/Jimmer/xbatis/MDS/Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy，含立项决策表与任务号预分配 SD/JO/QD/EQ/JM/XB/DS/FM/DV） |
+| 2026-09-04 | 记忆第三次精简（76→19）：新增 35 个归档（bug-fixes +22：M36 执行/收尾、F-44 跳转、HQL 别名/关联、JdbcTemplate 预览、设置页布局/树导航、Marketplace、方言验证、JOIN 原生图 B 路径等；pitfalls +13：gutter 接收者、SqlFormatter 两坑、EDT 冻结、设置页导航等），22 个归全局（跨项目平台陷阱 + 用户偏好，含 JCEF/SlowOperations/headless 测试/Gradle 锁等）；archive 增至 110 个文件（含 README），global 增至 63 个文件 |
 | 2026-08-26 | 新增「记忆精简规范.md」：本地记忆文件管理标准（分类/归档/全局/流程/基线） |
 | 2026-08-26 | 记忆第二次精简（31→14）：新增 16 个归档（M30-M33/M41/F-42/F-43/F-44/IDE 冻结/M28/M47/F-45/PlantUML/plugin-xml/设置页布局/设置页配置/tooltip + 3 个踩坑）；archive 增至 70 个文件 |
 | 2026-08-22 | 记忆精简（107→12）：新增「归档记忆」分区（docs/memory-archive/，54 个文件）；全局通用记忆 41 个备份到 `~/.zcode/cli/memories/global/`；全局经验精炼入 `~/.zcode/AGENTS.md` |

@@ -13,15 +13,19 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
+import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
@@ -210,6 +214,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     // F-1：JOIN 关系图（仅 SELECT 含 JOIN 时显示标签页）
     private val diagramPanel = DiagramPanel(project)
+    // T-Dgm-04：标签页宿主——原生图框架组件（joinDiagramNative=true 且 Diagrams 插件可用）与
+    // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
+    private val diagramTabHost = javax.swing.JPanel(java.awt.BorderLayout())
+    private var currentNativeDiagram: JComponent? = null
     // F-45：maintainPage 列信息（仅 <pages> 预览非 null 时显示标签页）
     private var columnInfoPanel: JComponent? = null
     /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
@@ -275,6 +283,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
         Disposer.register(this, diagramPanel)
+        // T-Dgm-04：标签页实际展示 diagramTabHost（内嵌原生组件或 diagramPanel）
+        diagramTabHost.isOpaque = false
+        diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
 
         // T-M36.6-03：预热线程提前创建临时 SQL 文件 + VFS refresh + PSI 解析（后台线程慢操作合法），
         // createEditor（EDT）优先消费预热产物——243 平台 EDT/EDT-ReadAction 均禁止慢操作
@@ -700,14 +711,63 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (hasJoins) {
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
-            // 构建结构化模型并展示
-            val model = JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement)
-            diagramPanel.showDiagram(model)
+            // 构建结构化模型并展示（原生框架优先，缺席/异常降级自绘）
+            // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
+            val model = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
+                project,
+                JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement),
+            )
+            showJoinDiagram(model)
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
             removeDiagramTab()
             diagramPanel.clear()
+            clearNativeDiagram()
         }
+    }
+
+    /**
+     * T-Dgm-04：按设置与 Diagrams 插件可用性渲染 JOIN 图。
+     *
+     * 原生路径：快照登记 → UmlEditorProvider.createEditor → 组件嵌入 [diagramTabHost]
+     * （缩放/布局/折叠/导出全框架托管）；Diagrams 插件缺席或框架异常（buildTabComponent 返回 null）
+     * 自动降级自绘 [DiagramPanel]，与 Community 行为一致。
+     */
+    private fun showJoinDiagram(model: DiagramModel) {
+        val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
+        val native = if (nativeEnabled) {
+            // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
+            // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
+            (project?.let {
+                cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+                    .buildTabComponent(it, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+            })
+                ?: NativeJoinDiagramSupport.buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+        } else {
+            null
+        }
+        clearNativeDiagram()
+        diagramTabHost.removeAll()
+        if (native != null) {
+            currentNativeDiagram = native
+            diagramTabHost.add(native, java.awt.BorderLayout.CENTER)
+        } else {
+            diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
+            diagramPanel.showDiagram(model)
+        }
+        diagramTabHost.revalidate()
+        diagramTabHost.repaint()
+    }
+
+    /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
+    private fun clearNativeDiagram() {
+        currentNativeDiagram?.let {
+            // 两条原生路径的 clientProperty key 不同，各 dispose 一次（未命中为 no-op）
+            NativeJoinDiagramSupport.disposeNativeEditor(it)
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.disposeNativeEditor(it)
+            diagramTabHost.remove(it)
+        }
+        currentNativeDiagram = null
     }
 
     /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
@@ -721,14 +781,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val pane = JTabbedPane().apply {
             addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
             if (addDiagramTab) {
-                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramPanel)
+                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramTabHost)
             }
         }
         // F-42 修复：渲染完成时组件可能处于 hidden（标签页未被选中），swapContent/revalidate
         // 对 hidden 组件无效——切到"JOIN 图"标签页时强制刷新，使图像真正显示
         if (addDiagramTab) {
             pane.addChangeListener {
-                if (pane.selectedIndex == 1) {
+                if (pane.selectedIndex == 1 && currentNativeDiagram == null) {
                     diagramPanel.refreshAfterVisible()
                 }
             }
@@ -842,6 +902,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         candidateTables = current?.candidateTables.orEmpty(),
     )
 
+    /**
+     * JDBC 命名参数（NamedParameterJdbcTemplate `:name`）按名回填。
+     *
+     * 当 [PreviewResult.namedParamHints] 非空时，把 SQL 中 `:name` 按用户输入的参数值整体替换
+     * （同名参数所有出现共用一值，对齐 NamedParameterJdbcTemplate 语义）；`?` 占位符不受影响，
+     * 由调用方继续走 [backfillParamsBySource] 按序回填。
+     * 命名参数提示为空时原样返回（兼容既有 `?` 顺序回填路径）。
+     */
+    private fun applyNamedParams(sql: String): String {
+        val result = current ?: return sql
+        if (result.namedParamHints.isEmpty()) return sql
+        return ParameterReplacer.replaceNamedParams(sql, paramValues, result.namedParamHints)
+    }
+
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
         val result = current ?: return
@@ -891,12 +965,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     dialect = model.dialect,
                     enabledConditionIds = enabledIds.toSet(),
                 )
-                showSql(backfillParamsBySource(generated.sql, generated.unresolvedParams, generated.paramHints))
+                // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
+                showSql(backfillParamsBySource(applyNamedParams(generated.sql), generated.unresolvedParams, generated.paramHints))
             }
             else -> {
                 // 旧文本路径（无可勾选动态条件，如批量操作）
                 val base = if (compactMode) result.compactSql else result.sql
-                showSql(backfillParamsBySource(base, result.unresolvedParams, result.paramHints))
+                // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
+                showSql(backfillParamsBySource(applyNamedParams(base), result.unresolvedParams, result.paramHints))
             }
         }
     }
@@ -1082,6 +1158,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // F-1：清除图集 + 恢复纯 SQL 视图
         removeDiagramTab()
         diagramPanel.clear()
+        clearNativeDiagram()
         // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
         detachConsole()
@@ -1209,16 +1286,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
         created.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         (created as EditorEx).apply {
-            // 原生 SQL 高亮器（手动设置，因内存 PSI 文件不自动关联）
-            val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
-                .getStdFileType("SQL")
-            if (sqlFileType != null) {
-                val sqlHighlighter = com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
-                    .getSyntaxHighlighter(sqlFileType, project, null)
-                if (sqlHighlighter != null) {
-                    highlighter = LexerEditorHighlighter(sqlHighlighter, EditorColorsManager.getInstance().globalScheme)
-                }
-            }
+            // F-CASE：自研 SQL 高亮器（SqlLexer 将 CASE/WHEN/THEN/ELSE/END 标记为 KEYWORD，
+            // 字段名标记为 IDENTIFIER → 双击选择不会跨 token 粘连；不依赖 Database 插件）
+            highlighter = LexerEditorHighlighter(
+                SqlSyntaxHighlighter(), EditorColorsManager.getInstance().globalScheme
+            )
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false

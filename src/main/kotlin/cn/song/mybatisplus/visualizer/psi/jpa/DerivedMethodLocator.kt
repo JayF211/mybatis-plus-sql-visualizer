@@ -85,7 +85,6 @@ object DerivedMethodLocator {
      * @return 是否为可预览的推导查询
      */
     fun isDerivedQuery(method: PsiMethod): Boolean {
-        // 排除 @Query 注解方法（用户显式指定 JPQL/SQL，非推导）
         if (hasQueryAnnotation(method)) return false
         // 排除 default 方法（含方法体，非接口推导）
         if (method.hasModifierProperty("default")) return false
@@ -97,6 +96,25 @@ object DerivedMethodLocator {
         if (!methodName.contains("By")) return false
         // 方法名必须以 PartTree 前缀开头
         return PART_TREE_PREFIXES.any { methodName.startsWith(it) }
+    }
+
+    /**
+     * 判断方法是否为**可预览的 Repository 派生查询**（快速路径，供 gutter 图标判定）。
+     *
+     * 在 [isDerivedQuery]（纯方法名判定，不检查所在类）基础上叠加 `containing class 是
+     * Repository 接口` 校验——避免普通类方法（如业务 DAO 手写方法名 `deleteByDbHelper`）被
+     * 误判为 JPA 派生查询而显示错误的预览图标 / 触发 previewDerivedQuery 但返回 null。
+     *
+     * 语义与 [locateFromMethod] 的「Repository 接口 + 派生方法名」双重校验一致，
+     * 但只做正例判定、不解析实体，O(1) 快速路径专用；点击后仍走 [locate] 全链路。
+     *
+     * @param method 目标方法
+     * @return 是否为可预览的 Repository 派生查询
+     */
+    fun isRepositoryMethod(method: PsiMethod): Boolean {
+        if (!isDerivedQuery(method)) return false
+        val containingClass = method.containingClass ?: return false
+        return isRepositoryInterface(containingClass)
     }
 
     /**

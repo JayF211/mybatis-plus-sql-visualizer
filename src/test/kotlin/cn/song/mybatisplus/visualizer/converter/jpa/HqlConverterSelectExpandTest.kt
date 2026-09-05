@@ -194,4 +194,47 @@ class HqlConverterSelectExpandTest {
         val result = HqlConverter.convert(hql, null)
         assertTrue("应降级为 u.*", result.sql.startsWith("SELECT u.* /* 列信息未解析，降级为 u.* */ FROM unknown_table u"))
     }
+
+    // ------------------------------------------------------------------
+    // 8. 裸表名（无别名）——T-BareFromSelect
+    // ------------------------------------------------------------------
+
+    /** 裸表名形态下列限定用表名本身（SQL 允许 表名.列）。 */
+    private val qualifiedExpanded =
+        "user_entity.id, user_entity.username, user_entity.status, user_entity.age, user_entity.department_id, user_entity.create_time"
+
+    @Test
+    fun `bareFrom_noAlias_insertsQualifiedColumnList`() {
+        // 用户实测：getHibernateTemplate().find("from WmsAsn") 此前只显示 FROM wms_asn
+        val hql = "from UserEntity"
+        val result = HqlConverter.convert(hql, userTable)
+        assertEquals("SELECT $qualifiedExpanded from user_entity", result.sql)
+    }
+
+    @Test
+    fun `bareFrom_noAlias_withWhere_keepsTail`() {
+        val hql = "from UserEntity where status = :status"
+        val result = HqlConverter.convert(hql, userTable)
+        assertEquals("SELECT $qualifiedExpanded from user_entity where status = ?", result.sql)
+    }
+
+    @Test
+    fun `bareFrom_withJoinKeywords_joinKeywordNotRegisteredAsAlias`() {
+        // `from t left join ...` 无主表别名时，LEFT 不得被登记为别名（否则产出 SELECT left.id 语法错）
+        val hql = "from UserEntity left join OrderEntity o on o.id = UserEntity.departmentId where UserEntity.status = :status"
+        val result = HqlConverter.convert(hql, userTable)
+        assertTrue("应以表名限定列清单开头: ${result.sql}", result.sql.startsWith("SELECT $qualifiedExpanded "))
+        assertFalse("不得把 LEFT 当别名展开: ${result.sql}", result.sql.contains("left.id"))
+        assertTrue("FROM 子句应原样保留: ${result.sql}", result.sql.contains("from user_entity left join OrderEntity o"))
+    }
+
+    @Test
+    fun `bareFrom_nullTable_degradesToStar`() {
+        val hql = "from UserEntity"
+        val result = HqlConverter.convert(hql, null)
+        assertEquals(
+            "SELECT unknown_table.* /* 列信息未解析，降级为 unknown_table.* */ from unknown_table",
+            result.sql,
+        )
+    }
 }

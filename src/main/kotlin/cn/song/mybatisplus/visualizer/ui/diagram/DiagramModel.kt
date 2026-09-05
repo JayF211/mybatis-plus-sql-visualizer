@@ -34,6 +34,7 @@ data class EntityNode(
     val columns: List<ColumnEntry>,
     val isMain: Boolean,
     val joinType: JoinType? = null,
+    val tableComment: String? = null,
 ) {
     /** 显示名：别名与表名不同时显示 "tableName (alias)"。 */
     val displayName: String
@@ -45,12 +46,14 @@ data class EntityNode(
  *
  * @param name  列名
  * @param type  字段类型字符串（可为 null）
- * @param isPk  是否主键
+ * @param isPk     是否主键
+ * @param comment  字段注释（DB COMMENT，对齐 IDEA Database 原生图显示）
  */
 data class ColumnEntry(
     val name: String,
     val type: String?,
     val isPk: Boolean,
+    val comment: String? = null,
 )
 
 /**
@@ -60,10 +63,13 @@ data class ColumnEntry(
  * @param toAlias   目标实体 alias（JOIN 表）
  * @param joinType  JOIN 类型（决定箭头样式）
  * @param label     关系线标签（ON 条件文本）
+ * @param columnPairs T-Embed-04：ON 等值列配对（from 主表侧列名, to JOIN 表侧列名）——
+ *                    Database 原生图「虚拟外键」注入的数据基础（仅 ColumnComparison 可提取）
  */
 data class RelationshipLine(
     val fromAlias: String,
     val toAlias: String,
     val joinType: JoinType,
     val label: String,
+    val columnPairs: List<Pair<String, String>> = emptyList(),
 )

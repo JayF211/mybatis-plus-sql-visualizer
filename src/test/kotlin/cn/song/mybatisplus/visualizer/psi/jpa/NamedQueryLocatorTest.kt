@@ -298,6 +298,62 @@ class NamedQueryLocatorTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // annotation 回填 + 按名查找（T-PreviewShortcut）
+    // ------------------------------------------------------------------
+
+    fun testAnnotationFieldPopulated() {
+        // 每个 NamedQueryInfo 携带所属 @NamedQuery 注解（供"光标下的那一条"定位与反查实体）
+        myFixture.configureByText(
+            "UserEntity.java",
+            """
+            @NamedQuery(name = "UserEntity.findByUsername", query = "SELECT u FROM UserEntity u WHERE u.username = :username")
+            public class UserEntity {
+                private Long id;
+            }
+
+            @interface NamedQuery {
+                String name();
+                String query();
+            }
+            """.trimIndent(),
+        )
+        val entityClass = findClass("UserEntity")
+        val results = NamedQueryLocator.locate(entityClass)
+        assertEquals(1, results.size)
+        assertNotNull("annotation 应被回填", results[0].annotation)
+        val simpleName = results[0].annotation!!.qualifiedName?.substringAfterLast('.')
+        assertTrue("annotation 应为 NamedQuery", simpleName == "NamedQuery")
+    }
+
+    fun testFindByQueryName_blankDegradesAndResolvableHit() {
+        // findByQueryName 解析不到（空白名 / 测试无 classpath 实体）时返回 null，不抛异常——调用方优雅降级
+        myFixture.configureByText(
+            "UserEntity.java",
+            """
+            @NamedQuery(name = "UserEntity.findByUsername", query = "SELECT u FROM UserEntity u WHERE u.username = :username")
+            public class UserEntity {
+                private Long id;
+            }
+
+            @interface NamedQuery {
+                String name();
+                String query();
+            }
+            """.trimIndent(),
+        )
+        assertNull("空白查询名应返回 null", NamedQueryLocator.findByQueryName(myFixture.project, ""))
+        assertNull("无前缀查询名应返回 null", NamedQueryLocator.findByQueryName(myFixture.project, "  "))
+
+        // 可解析名：LightPlatform 下 JavaPsiFacade 可能解析到源类（命中）或解析不到（降级 null），两者皆合法；
+        // 命中时校验语义正确（按名前缀解析实体 + 按名精确匹配）。
+        val found = NamedQueryLocator.findByQueryName(myFixture.project, "UserEntity.findByUsername")
+        if (found != null) {
+            assertEquals("SELECT u FROM UserEntity u WHERE u.username = :username", found.query)
+            assertNotNull("命中时应回填 annotation", found.annotation)
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
 

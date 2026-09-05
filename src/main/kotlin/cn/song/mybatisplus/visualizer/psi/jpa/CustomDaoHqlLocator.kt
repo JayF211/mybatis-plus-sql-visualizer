@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver
 import com.intellij.psi.PsiBinaryExpression
 import com.intellij.psi.PsiCodeBlock
 import com.intellij.psi.PsiElement
@@ -8,6 +9,7 @@ import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.util.PsiTreeUtil
@@ -36,11 +38,12 @@ data class CustomDaoHqlInfo(
  *
  * 用于描述 HQL 之后的参数列表组织形式：
  *  - NAME_VALUE_PAIRS：("name1", v1, "name2", v2) 交替传递
+ *  - NAME_VALUE_ARRAYS：new String[]{"name1","name2"} + new Object[]{v1, v2} 双数组传递（老式 DAO）
  *  - MAP：单 Map 参数包含所有键值
  *  - POSITIONAL：仅传值，按位置顺序
  *  - NONE：无额外参数
  */
-enum class ParamSource { NAME_VALUE_PAIRS, MAP, POSITIONAL, NONE }
+enum class ParamSource { NAME_VALUE_PAIRS, NAME_VALUE_ARRAYS, MAP, POSITIONAL, NONE }
 
 /**
  * 自定义 DAO HQL 定位器（F-JPA-02 / Wave2 扩展）。
@@ -51,18 +54,20 @@ enum class ParamSource { NAME_VALUE_PAIRS, MAP, POSITIONAL, NONE }
  *  - `commonDao.findByQueryUniqueResult("select ... from Entity where ... :paramList", "paramList", value)`
  *  - `baseDao.executeHql("update Entity set ... where ...", paramMap)`
  *  - `xxxDao.findByQuery("from Entity where field = :id", "id", idValue)`
+ *  - `getHibernateTemplate().find("from Entity ...")` / `.findByNamedParam(...)` / `.findByValueBean(...)`（T-GutterDedup）
  *
- * 判定逻辑（三重启发取交集）：
- *  1. **qualifier 启发**：方法调用的 qualifier 变量名匹配 DAO 模式（*Dao / *DaoImpl / *Mapper / *Repository / *CommonDao 等）
- *  2. **方法名启发**：方法名含 Query / Hql / Jpql / execute 等关键字
- *  3. **内容启发**：字符串参数匹配 HQL 语法模式（SELECT...FROM / UPDATE...SET / DELETE...FROM / FROM Entity）
- *
- * 最终判定：(1 OR 2) AND 3
+ * 判定逻辑（T-GutterDedup：内容启发 + 按接收者归属分派，杜绝通用方法名跨家族重复图标）：
+ *  1. **内容启发**：首参字符串匹配 HQL 语法模式（SELECT...FROM / UPDATE...SET / DELETE...FROM / FROM Entity）；
+ *  2. 按 [PreviewReceiverResolver.classify] 接收者家族分派：
+ *     - JDBC_TEMPLATE / JPA_SESSION → 交给各自 provider（本定位器不认领）；
+ *     - HIBERNATE_TEMPLATE → 仅 HQL 字符串首参的 `find`/`findByNamedParam`/`findByValueBean`/`iterate`；
+ *     - CUSTOM_DAO / UNKNOWN → **qualifier 启发**（*Dao / *Mapper / *Repository / *BaseDao 等）OR
+ *       **方法名启发**（Query / Hql / Jpql / findByQuery / findBySql 等具体关键字；通用名 execute 须 DAO qualifier）。
  *
  * 定位策略：
  *  1. 从光标向上找到 PsiMethod；
  *  2. 扫描方法体内全部 PsiMethodCallExpression；
- *  3. 对每个方法调用依次应用三重启发检测；
+ *  3. 对每个方法调用依次应用判定逻辑；
  *  4. 匹配成功时提取 HQL 字符串（支持字面量、拼接、变量引用）和参数信息；
  *  5. 从 HQL 的 FROM 子句提取实体类名。
  */
@@ -78,13 +83,23 @@ object CustomDaoHqlLocator {
     )
 
     /**
-     * 查询方法名关键字集合。
+     * 查询方法名关键字集合（T-GutterDedup：仅"具体查询"关键字）。
      *
-     * 用于方法名启发：方法名包含任一关键字即视为潜在查询方法。
+     * 用于方法名启发：方法名包含任一关键字即视为潜在查询方法。通用名 `execute` 已移出——
+     * 它被 JdbcTemplate / HibernateTemplate 复用，单靠方法名会跨家族误标；`execute` 现在
+     * 必须由 DAO qualifier（[matchesDaoQualifier]）或 HIBERNATE_TEMPLATE 接收者门控放行。
      */
     private val QUERY_METHOD_KEYWORDS = setOf(
-        "Query", "Hql", "Jpql", "execute", "findByQuery", "findBySql"
+        "Query", "Hql", "Jpql", "findByQuery", "findBySql"
     )
+
+    /**
+     * HibernateTemplate 的 HQL 字符串查询方法名（T-GutterDedup：补齐缺失图标）。
+     *
+     * 接收者为 [PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE] 且方法名在此集合、首参为字符串时，
+     * 由本定位器认领（否则 `getHibernateTemplate().find/findByNamedParam/findByValueBean` 无预览图标）。
+     */
+    private val HIBERNATE_HQL_METHODS = setOf("find", "findByNamedParam", "findByValueBean", "iterate")
 
     /**
      * HQL 内容匹配正则模式集合。
@@ -188,19 +203,33 @@ object CustomDaoHqlLocator {
     /**
      * 判断方法调用是否为自定义 DAO HQL 调用。
      *
-     * 判定逻辑：(qualifier 启发 OR 方法名启发) AND 内容启发
+     * 判定逻辑（T-GutterDedup：按接收者归属消歧，杜绝通用方法名跨家族重复图标）：
+     *  1. 内容启发（首参须匹配 HQL 语法模式）；
+     *  2. 按接收者 [PreviewReceiverResolver.classify] 家族分派：
+     *     - JDBC_TEMPLATE / JPA_SESSION → 交给各自 provider（不认领）；
+     *     - HIBERNATE_TEMPLATE → 仅 HQL 首参的 find/findByNamedParam/findByValueBean/iterate；
+     *     - CUSTOM_DAO / UNKNOWN → DAO qualifier 或具体查询方法名（`execute` 等通用名须 DAO qualifier）。
      *
      * @param call 目标方法调用
      * @return 是否匹配自定义 DAO HQL 调用
      */
     private fun isCustomDaoHqlCall(call: PsiMethodCallExpression): Boolean {
-        val contentMatch = matchesHqlContent(call)
-        if (!contentMatch) return false
-
-        val qualifierMatch = matchesDaoQualifier(call)
-        val methodNameMatch = matchesQueryMethodName(call)
-
-        return qualifierMatch || methodNameMatch
+        return when (PreviewReceiverResolver.classify(call)) {
+            // JDBC 模板（queryForList/update/execute 等）与 JPA 原生（Session/EntityManager）交给各自 provider
+            PreviewReceiverResolver.Family.JDBC_TEMPLATE,
+            PreviewReceiverResolver.Family.JPA_SESSION -> false
+            // HibernateTemplate：方法名本身即 HQL 语义（find/findByNamedParam/findByValueBean/iterate 首参恒为 HQL 字符串），
+            // 故不走内容启发（HQL 可能是不可静态解析的变量/方法参数，内容看不到），仅要求首参为字符串形态
+            // （`execute(callback)` 非字符串实参不认领）。
+            PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE ->
+                HIBERNATE_HQL_METHODS.contains(call.methodExpression.referenceName) &&
+                    PreviewReceiverResolver.isStringLikeFirstArg(call)
+            // 自定义 DAO / 无法判定：内容启发 + (DAO qualifier OR 具体查询方法名)
+            else -> {
+                if (!matchesHqlContent(call)) return false
+                matchesDaoQualifier(call) || matchesQueryMethodName(call)
+            }
+        }
     }
 
     /**
@@ -312,33 +341,16 @@ object CustomDaoHqlLocator {
     /**
      * 从参数表达式提取文本内容（用于内容启发检测）。
      *
-     * 对于字面量直接取值；对于拼接表达式拼接所有字面量部分；其他情况返回表达式文本。
+     * 与 [extractHqlString] 共用同一提取逻辑（单一来源）：字面量直接取值；拼接表达式拼接
+     * 所有字面量部分；变量引用递归解析初始化式（含拼接初始化式）。此前的独立实现只处理
+     * 字面量初始化式，拼接变量回退为变量名导致内容启发误判（2026-09-03 用户反馈
+     * `String hql = "select" + " ..."` 后传入自定义 DAO 无预览图标，根因即两套逻辑分叉）。
      *
      * @param expression 参数表达式
      * @return 提取的文本内容；无法提取时返回 null
      */
     private fun extractArgumentText(expression: PsiExpression): String? {
-        return when (expression) {
-            is PsiLiteralExpression -> expression.value as? String ?: expression.text
-            is PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression -> {
-                val parts = collectStringLiterals(expression)
-                if (parts.isNotEmpty()) parts.joinToString("") else expression.text
-            }
-            is PsiReferenceExpression -> {
-                val resolved = expression.resolve()
-                if (resolved is PsiVariable) {
-                    val initializer = resolved.initializer
-                    if (initializer is PsiLiteralExpression) {
-                        initializer.value as? String
-                    } else {
-                        expression.referenceName
-                    }
-                } else {
-                    expression.referenceName
-                }
-            }
-            else -> expression.text
-        }
+        return extractHqlString(expression).first
     }
 
     /**
@@ -418,9 +430,28 @@ object CustomDaoHqlLocator {
         return when {
             extraParams.isEmpty() -> ParamSource.NONE
             isNameValuePairs(extraParams) -> ParamSource.NAME_VALUE_PAIRS
+            isNameValueArrays(extraParams) -> ParamSource.NAME_VALUE_ARRAYS
             extraParams.size == 1 && extraParams[0] !is PsiLiteralExpression -> ParamSource.MAP
             else -> ParamSource.POSITIONAL
         }
+    }
+
+    /**
+     * 判断额外参数是否为「名字数组 + 值数组」双数组形式（老式 DAO 常用）。
+     *
+     * 即 `findByQueryUniqueResult(hql, new String[]{"name1","name2"}, new Object[]{v1, v2})`：
+     * 第一个额外参数为字符串数组创建表达式，数组元素全部是字符串字面量（参数名）。
+     *
+     * @param extraParams HQL 参数之后的额外参数列表
+     * @return 是否为名字数组+值数组形式
+     */
+    private fun isNameValueArrays(extraParams: List<PsiExpression>): Boolean {
+        if (extraParams.size < 2) return false
+        val namesArg = extraParams[0] as? PsiNewExpression ?: return false
+        val elements = namesArg.arrayInitializer?.initializers ?: return false
+        if (elements.isEmpty()) return false
+        // 名字数组元素必须全部是字符串字面量（参数名），排除 Object[] 等值数组误判
+        return elements.all { it is PsiLiteralExpression && (it.value as? String) != null }
     }
 
     /**
@@ -448,6 +479,7 @@ object CustomDaoHqlLocator {
      *
      * 以 HQL 中提取的 :paramName 为主键，从方法参数中按名匹配值：
      *  - NAME_VALUE_PAIRS：从交替参数中提取 {paramName: valueExpr}
+     *  - NAME_VALUE_ARRAYS：名字数组 + 值数组，按名匹配、按索引取值
      *  - MAP：标注参数名，值表达式引用 Map 变量
      *  - POSITIONAL/NONE：仅标注参数名，无值信息
      *
@@ -465,6 +497,27 @@ object CustomDaoHqlLocator {
                 hqlParamNames.map { paramName ->
                     val valueExpr = nameValueMap[paramName] ?: ""
                     HqlParameter(paramName = paramName, valueExpr = valueExpr, isPositional = false)
+                }
+            }
+            ParamSource.NAME_VALUE_ARRAYS -> {
+                // 名字数组 + 值数组（老式 DAO）：如 findByQueryUniqueResult(hql,
+                // new String[]{"warehouseId","startTime"}, new Object[]{warehouseId, startTime})
+                val extraParams = call.argumentList.expressions.drop(1)
+                val names = (extraParams.getOrNull(0) as? PsiNewExpression)
+                    ?.arrayInitializer?.initializers
+                    ?.mapNotNull { (it as? PsiLiteralExpression)?.value as? String }
+                    ?: emptyList()
+                val valueTexts = (extraParams.getOrNull(1) as? PsiNewExpression)
+                    ?.arrayInitializer?.initializers
+                    ?.map { it.text }
+                    ?: emptyList()
+                hqlParamNames.map { paramName ->
+                    val index = names.indexOf(paramName)
+                    HqlParameter(
+                        paramName = paramName,
+                        valueExpr = if (index >= 0) valueTexts.getOrNull(index) ?: "" else "",
+                        isPositional = false,
+                    )
                 }
             }
             ParamSource.MAP -> {

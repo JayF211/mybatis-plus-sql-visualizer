@@ -93,4 +93,39 @@ class JpaGutterLineMarkerProviderTest : BasePlatformTestCase() {
             provider.getLineMarkerInfo(identifier!!),
         )
     }
+
+    fun testNonRepositoryMethodWithDeleteByNotMisjudged() {
+        // 回归：普通类方法名 deleteByDbHelper（前缀 delete + 含 By）不应被误判为 JPA 派生查询。
+        // 用户实测：DAO 手写 SQL 方法 `deleteByDbHelper` 曾因 isDerivedQuery 只查方法名、
+        // 不检查 containing class（Repository 接口）而在方法签名行显示错误 JPA 预览图标。
+        myFixture.configureByText("DbDemo.java", """
+            public class DbDemo {
+                // 普通 DAO 方法名以 delete 开头 + 含 By → 不应显示 JPA gutter（非 Repository 接口）
+                public int deleteByDbHelper(Integer id) { return 0; }
+            }
+        """.trimIndent())
+        val identifier = findIdentifier("deleteByDbHelper")
+        assertNotNull("应找到 deleteByDbHelper 标识符", identifier)
+        assertNull(
+            "普通类方法 deleteByDbHelper 不应产生 JPA marker",
+            provider.getLineMarkerInfo(identifier!!),
+        )
+    }
+
+    fun testRepositoryDeleteByStillProducesMarker() {
+        // 保证修复不破坏真实 Repository 派生查询：JpaRepository 接口内 deleteByXxx → 产生 marker
+        myFixture.configureByText("UserRepository.java", """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                void deleteById(Long id);
+            }
+            class JpaRepository<T, ID> {}
+            class UserEntity { private Long id; }
+        """.trimIndent())
+        val identifier = findIdentifier("deleteById")
+        assertNotNull("应找到 deleteById 标识符", identifier)
+        assertNotNull(
+            "Repository 接口内的 deleteByXxx 派生查询应产生 marker",
+            provider.getLineMarkerInfo(identifier!!),
+        )
+    }
 }

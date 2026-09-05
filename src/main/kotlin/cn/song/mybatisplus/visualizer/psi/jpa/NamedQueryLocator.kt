@@ -1,20 +1,25 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import com.intellij.openapi.project.Project
+import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiAnnotationMemberValue
 import com.intellij.psi.PsiArrayInitializerMemberValue
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
+import com.intellij.psi.search.GlobalSearchScope
 
 /**
  * JPA 命名查询信息（@NamedQuery / @NamedQueries 产物）。
  *
- * @param name   查询名（如 "UserEntity.findByUsernameNamed"）
- * @param query  JPQL 查询字符串
+ * @param name       查询名（如 "UserEntity.findByUsernameNamed"）
+ * @param query      JPQL 查询字符串
+ * @param annotation 该命名查询所在的 @NamedQuery 注解（用于"光标下的那一条"定位 / 反查实体类）
  */
 data class NamedQueryInfo(
     val name: String,
     val query: String,
+    val annotation: PsiAnnotation? = null,
 )
 
 /**
@@ -65,6 +70,30 @@ object NamedQueryLocator {
         return results
     }
 
+    /**
+     * 按命名查询名查找（T-PreviewShortcut：`session.createNamedQuery("name")` 跨文件按名回查）。
+     *
+     * JPA 规范命名查询名默认即 `<实体简单名>.<方法名>`（如 `"UserEntity.findByUsernameNamed"`），
+     * 取 `.` 前缀解析实体类，再由 [locate] 按名字精确匹配。解析不到时返回 null（调用方优雅降级）。
+     *
+     * @param project   项目
+     * @param queryName 命名查询名
+     * @return 命中的命名查询（annotation 字段已回填，可反查实体类）；未命中返回 null
+     */
+    fun findByQueryName(project: Project, queryName: String?): NamedQueryInfo? {
+        if (queryName == null || queryName.isBlank()) return null
+        val entitySimpleName = queryName.substringBefore('.', "").trim()
+        if (entitySimpleName.isBlank()) return null
+        val classes = runCatching {
+            JavaPsiFacade.getInstance(project).findClasses(entitySimpleName, GlobalSearchScope.projectScope(project))
+        }.getOrNull() ?: return null
+        for (cls in classes) {
+            val hit = locate(cls).firstOrNull { it.name == queryName }
+            if (hit != null) return hit
+        }
+        return null
+    }
+
     // ------------------------------------------------------------------
     // 容器注解解析
     // ------------------------------------------------------------------
@@ -108,7 +137,7 @@ object NamedQueryLocator {
         val name = extractStringAttribute(annotation, "name") ?: return
         val query = extractStringAttribute(annotation, "query") ?: return
         if (name.isBlank() || query.isBlank()) return
-        results += NamedQueryInfo(name = name, query = query)
+        results += NamedQueryInfo(name = name, query = query, annotation = annotation)
     }
 
     // ------------------------------------------------------------------

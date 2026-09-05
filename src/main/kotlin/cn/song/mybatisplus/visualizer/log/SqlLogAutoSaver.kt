@@ -24,7 +24,12 @@ import java.util.Date
  *
  * 生命周期跟随 [SqlLogManager]：manager dispose 时 [close] 释放文件句柄。
  */
-class SqlLogAutoSaver {
+class SqlLogAutoSaver(
+    /** 时钟（测试注入用），默认系统时钟。 */
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** 单文件滚动阈值（默认 100MB），测试注入小值用。 */
+    internal val rollThresholdBytes: Long = 100L * 1024 * 1024,
+) {
 
     private var writer: BufferedWriter? = null
     private var currentFile: File? = null
@@ -33,15 +38,13 @@ class SqlLogAutoSaver {
     private var currentResolvedName: String = ""  // 当前解析后的文件名（不含滚动序号）
     private var currentIndex: Int = 1  // 当前滚动序号（1=无后缀）
 
-    /** 单文件滚动阈值（100MB）。 */
-    private val rollThresholdBytes = 100L * 1024 * 1024
-
     /**
      * 配置保存参数（设置变更时调用）。
      * @param customPath 用户自定义目录（空串 = 默认 .idea 路径）
      * @param pattern 文件名模板（空串 = 默认模板）
      * @param projectBasePath 项目基路径（默认路径计算用）
      */
+    @Synchronized
     fun configure(customPath: String, pattern: String, projectBasePath: String?) {
         close()
         saveDir = resolveDir(customPath, projectBasePath)
@@ -62,29 +65,26 @@ class SqlLogAutoSaver {
 
     /**
      * 写入被淘汰的条目（buffer.onEvicted 回调）。
-     * 首次写入时懒打开文件。
+     * 懒打开文件；文件名变化（跨天/模板变更）时重开并复位滚动序号，
+     * 单文件超限时递增滚动序号。
      */
+    @Synchronized
     fun write(entry: LogSqlEntry) {
-        // 确保 writer 就绪，并处理文件切换/滚动
-        val w = ensureWriter() ?: return
-        // 再次检查切换/滚动（ensureWriter 可能刚切换了文件）
         val resolved = resolveFileName()
-        if (resolved != currentResolvedName || (currentFile?.length() ?: 0) >= rollThresholdBytes) {
-            // 切换后重新写入（递归一次）
-            write(entry)
-            return
+        if (writer == null || resolved != currentResolvedName) {
+            // 首次写入 / 文件名切换：重开文件，滚动序号复位
+            close()
+            currentResolvedName = resolved
+            currentIndex = 1
+            openWriterForCurrent()
+        } else if ((currentFile?.length() ?: 0L) >= rollThresholdBytes) {
+            // 单文件超限：滚动（xxx.sql → xxx.2.sql）
+            close()
+            currentIndex += 1
+            openWriterForCurrent()
         }
+        val w = writer ?: return
         writeEntry(w, entry)
-    }
-
-    /** 确保 writer 就绪（首次打开 / 切换文件 / 滚动）。 */
-    private fun ensureWriter(): BufferedWriter? {
-        if (writer != null) return writer
-        // 首次写入：打开新文件
-        currentResolvedName = resolveFileName()
-        currentIndex = 1
-        openWriterForCurrent()
-        return writer
     }
 
     /** 根据 currentResolvedName + currentIndex 打开文件。 */
@@ -152,12 +152,13 @@ class SqlLogAutoSaver {
      * 若占位符内容不含日期模式字符（如 $unknown$），则原样保留。
      * Windows 文件名不允许 :，自动替换为 -（macOS 也兼容）。
      */
-    fun resolveFileName(): String {
-        val now = System.currentTimeMillis()
+    fun resolveFileName(): String = resolveFileName(clock())
+
+    internal fun resolveFileName(now: Long): String {
         return fileNamePattern.replace(PLACEHOLDER_REGEX) { mr ->
             val formatStr = mr.groupValues[1]
             try {
-                val formatted = SimpleDateFormat(formatStr, Locale.ENGLISH).format(Date(now))
+                val formatted = formatter(formatStr).format(Date(now))
                 // 若格式化结果与输入一致（说明无日期字符），原样保留
                 if (formatted == formatStr) mr.value else formatted
             } catch (_: Exception) {
@@ -167,10 +168,18 @@ class SqlLogAutoSaver {
         }.replace(':', '-')
     }
 
+    /** SimpleDateFormat 非线程安全，按线程+模板缓存，避免每条日志重建。 */
+    private val formatterCache =
+        ThreadLocal.withInitial<HashMap<String, SimpleDateFormat>> { HashMap() }
+
+    private fun formatter(formatStr: String): SimpleDateFormat =
+        formatterCache.get().getOrPut(formatStr) { SimpleDateFormat(formatStr, Locale.ENGLISH) }
+
     /** 当前打开的保存文件（测试访问 + 状态展示用）。 */
     fun currentFile(): File? = currentFile
 
     /** 关闭文件句柄（manager dispose 或路径变更时调用）。 */
+    @Synchronized
     fun close() {
         writer?.let { w ->
             runCatching {
