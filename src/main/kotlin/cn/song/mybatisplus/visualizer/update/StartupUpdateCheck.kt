@@ -129,7 +129,9 @@ class StartupUpdateCheck : ProjectActivity {
             .createNotification(
                 MpSqlVisualizerBundle.message("update.notification.failed.title"),
                 MpSqlVisualizerBundle.message("settings.update.installFailed", message),
-                NotificationType.ERROR,
+                // T-Perf-20：ERROR 红色 balloon 降 WARNING（全项目唯一 ERROR 通知清零；
+                // 更新页 Failed 态渲染仍承载失败详情，用户主动重试入口不变）
+                NotificationType.WARNING,
             )
         runCatching { notification.notify(project) }
     }

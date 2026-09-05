@@ -65,14 +65,33 @@ class JoinVirtualFk(
     private val childColumns: List<String> = entry.columns
     private val refColumns: List<String> = entry.refColumns
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(JoinVirtualFk::class.java)
+
     override fun getProviderId(): String = JoinVirtualFkProvider.PROVIDER_ID
 
     override fun getName(): String =
         "SQLV_JOIN_${childTable.name}_${childColumns.joinToString("_")}"
 
-    override fun getColumnsRef(): MultiRef<DasTypedObject> = ColumnNamesMultiRef(childTable, childColumns)
+    override fun getColumnsRef(): MultiRef<DasTypedObject> = safeMultiRef(childTable, childColumns)
 
-    override fun getRefColumns(): MultiRef<DasTypedObject> = ColumnNamesMultiRef(refTableVal, refColumns)
+    override fun getRefColumns(): MultiRef<DasTypedObject> = safeMultiRef(refTableVal, refColumns)
+
+    /**
+     * T-Perf-20：构造时校验列可解析性——JOIN ON 引用列在表中缺失时过滤掉（全缺 = 空 MultiRef，
+     * 原生建边拿到空引用自然跳过该边）+ warn，不再让 IllegalStateException 从平台建边回调
+     * 上浮为 IDE internal error 气泡。
+     */
+    private fun safeMultiRef(table: DasTable?, names: List<String>): MultiRef<DasTypedObject> {
+        if (table == null) return ColumnNamesMultiRef(null, names)
+        val available = DasUtil.getColumns(table).toList().mapNotNull { it.name?.lowercase() }.toSet()
+        val resolvable = names.filter { it.lowercase() in available }
+        if (resolvable.size < names.size) {
+            LOG.warn(
+                "JoinVirtualFk: columns missing in ${table.name}, skip=${names.filter { it.lowercase() !in available}}",
+            )
+        }
+        return ColumnNamesMultiRef(table, resolvable)
+    }
 }
 
 /**
@@ -83,6 +102,8 @@ class ColumnNamesMultiRef(
     private val table: DasTable?,
     private val names: List<String>,
 ) : MultiRef<DasTypedObject> {
+
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ColumnNamesMultiRef::class.java)
 
     override fun iterate(): MultiRef.It<DasTypedObject> {
         val source = names.iterator()
@@ -113,5 +134,12 @@ class ColumnNamesMultiRef(
     private fun resolveByName(name: String): DasTypedObject =
         table?.let { t ->
             DasUtil.getColumns(t).firstOrNull { it.name.lowercase() == name.lowercase() }
-        } ?: error("Column not found in virtual FK resolution: ${table?.name ?: "?"}.$name")
+        } ?: run {
+            // T-Perf-20：列缺失兜底（构造期已过滤，此处仅防御建边与解析之间 schema 变化）
+            // ——不再 error() 抛 IllegalStateException 上浮 IDE internal error 气泡；
+            // 退化为首个可用列（边标签语义降级但建图不断链）。表零列的绝对退化场景仍抛。
+            LOG.warn("JoinVirtualFk: column '$name' not found in ${table?.name ?: "?"}, falling back to first column")
+            table?.let { t -> DasUtil.getColumns(t).toList().firstOrNull() }
+                ?: error("No columns available in virtual FK resolution: ${table?.name ?: "?"}.$name")
+        }
 }

@@ -59,15 +59,19 @@ class ConvertSqlToJavaAction : AnAction() {
             return
         }
 
-        // 1. SQL 解析（纯函数，EDT 安全）；失败 → 错误弹窗（含行号）
+        // 1. SQL 解析（纯函数，EDT 安全）；T-Perf-20：失败改 WARNING 通知（非模态、非红色）——
+        // 用户误选非 SQL 文本即触发，模态框过重；失败信息（含行号）仍完整可见
         val result = try {
             SqlToJavaConverter.parse(text)
         } catch (ex: SqlReverseException) {
-            Messages.showErrorDialog(
-                project,
-                MpSqlVisualizerBundle.message(ex.key, ex.detail) + "\n（第 ${SqlToJavaConverter.errorLine(text, ex.offset)} 行）",
-                MpSqlVisualizerBundle.message("reverse.error.title"),
-            )
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
+                .createNotification(
+                    MpSqlVisualizerBundle.message("reverse.error.title"),
+                    MpSqlVisualizerBundle.message(ex.key, ex.detail) + "（第 ${SqlToJavaConverter.errorLine(text, ex.offset)} 行）",
+                    com.intellij.notification.NotificationType.WARNING,
+                )
+                .notify(project)
             return
         }
 

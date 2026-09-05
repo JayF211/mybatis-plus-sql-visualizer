@@ -2047,9 +2047,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
         val proj = project ?: return
         when {
-            isEmptyClipboard -> Messages.showErrorDialog(
-                proj, MpSqlVisualizerBundle.message("panel.param.import.result.empty"), title,
-            )
+            isEmptyClipboard -> {
+                // T-Perf-20：空剪贴板属用户输入类提示——改面板内行内警示（元信息行红字），
+                // 不再弹模态错误框（toast 语义：下次 updateMeta 覆盖）
+                val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
+                currentWarning = hint
+                metaLabel.text = "⚠ $hint"
+                metaLabel.toolTipText = hint
+                metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
+                errorCopyButton?.isVisible = true
+            }
             unmatched == 0 -> Messages.showInfoMessage(
                 proj, MpSqlVisualizerBundle.message("panel.param.import.result.success", matched), title,
             )
