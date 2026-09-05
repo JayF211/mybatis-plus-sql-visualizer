@@ -47,6 +47,7 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -1028,14 +1029,17 @@ public class PluginSettingsPanel {
         tenantColumnNameField.setText(value);
     }
 
-    /** 刷新插件缓存信息（缓存大小——所有打开项目汇总；面板构造与清除按钮共用）。 */
+    /**
+     * 刷新插件缓存信息（大小 + 条目数，所有打开项目汇总——含反查/解析/Wrapper 预览三类缓存；
+     * 面板构造与清除按钮共用）。
+     */
     private void refreshCacheInfo() {
-        Project[] projects = ProjectManager.getInstance().getOpenProjects();
-        long total = 0L;
-        for (Project project : projects) {
-            total += PluginCacheManager.sizeBytes(project);
-        }
-        cacheInfoLabel.setText(MpSqlVisualizerBundle.message("settings.cache.info", PluginCacheManager.formatSize(total)));
+        List<Project> projects = Arrays.asList(ProjectManager.getInstance().getOpenProjects());
+        long total = PluginCacheManager.totalSizeBytes(projects);
+        cacheInfoLabel.setText(MpSqlVisualizerBundle.message(
+                "settings.cache.info",
+                PluginCacheManager.formatSize(total),
+                PluginCacheManager.entryCount(projects)));
     }
 
     /** 测试访问器：缓存信息文本（断言展示与清除后刷新）。 */

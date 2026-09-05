@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.model.AssociationInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
@@ -519,6 +520,34 @@ public class EntityResolver {
     /** 当前缓存条目数（测试 / 诊断用）。 */
     public static int cacheSize() {
         return cache.size();
+    }
+
+    /**
+     * 缓存大小估算（设置页展示 KB/MB）：键/值内字符串按 UTF-16 字符 2 字节 + 每条目/每列
+     * 固定开销近似——展示用，非精确 JVM 内存（PsiFile 引用本身不计）。
+     */
+    public static long cacheSizeBytes() {
+        long bytes = 0L;
+        for (Map.Entry<EntityCacheKey, Entry> e : cache.entrySet()) {
+            EntityCacheKey key = e.getKey();
+            bytes += (key.classQualifiedName.length() + key.configSignature.length()) * 2L + 64;
+            TableInfo info = e.getValue().value;
+            bytes += (info.getEntityClassName().length() + info.getTableName().length()) * 2L;
+            if (info.getLogicDeleteColumn() != null) bytes += info.getLogicDeleteColumn().length() * 2L;
+            if (info.getVersionColumn() != null) bytes += info.getVersionColumn().length() * 2L;
+            if (info.getComment() != null) bytes += info.getComment().length() * 2L;
+            for (ColumnInfo column : info.getColumns()) {
+                bytes += (column.getFieldName().length() + column.getColumnName().length()
+                        + (column.getFieldType() != null ? column.getFieldType().length() : 0)
+                        + (column.getFill() != null ? column.getFill().length() : 0)
+                        + (column.getComment() != null ? column.getComment().length() : 0)) * 2L + 48;
+            }
+            for (AssociationInfo association : info.getAssociations()) {
+                bytes += (association.getFieldName().length() + association.getJoinColumn().length()
+                        + association.getTargetTable().length() + association.getTargetAlias().length()) * 2L + 32;
+            }
+        }
+        return bytes;
     }
 
     // ------------------------------------------------------------------

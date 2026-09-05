@@ -117,4 +117,12 @@ public class WrapperCache {
     public int size() {
         return cache.size();
     }
+
+    /**
+     * 缓存大小估算（设置页展示）：值为任意解析模型对象，按每条目固定开销近似——
+     * 展示用，非精确 JVM 内存（PsiFile 引用本身不计）。
+     */
+    public long sizeBytes() {
+        return cache.size() * 192L;
+    }
 }

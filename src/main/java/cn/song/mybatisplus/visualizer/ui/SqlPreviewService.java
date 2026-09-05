@@ -1310,6 +1310,16 @@ public final class SqlPreviewService {
         cache.clear();
     }
 
+    /** Wrapper 解析缓存条目数（设置页缓存统计，PluginCacheManager 调用）。 */
+    public int wrapperCacheEntryCount() {
+        return cache.size();
+    }
+
+    /** Wrapper 解析缓存大小估算（设置页缓存统计，PluginCacheManager 调用）。 */
+    public long wrapperCacheSizeBytes() {
+        return cache.sizeBytes();
+    }
+
     /**
      * F-7：预览完成后自动记录历史。
      */
