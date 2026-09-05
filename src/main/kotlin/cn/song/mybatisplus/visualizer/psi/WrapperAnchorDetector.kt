@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter
 import cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
@@ -89,6 +90,14 @@ object WrapperAnchorDetector {
         if (element is PsiIdentifier) {
             val ref = element.parent as? PsiReferenceExpression ?: return null
             if (ref.referenceNameElement !== element) return null
+            // XB（M44）：xbatis 双坐标静态工厂（QueryChain.of(userDao, X.class) / QueryChain.create()）——
+            // 工厂方法名 + 工厂类简名双重语法门控（O(1)，Optional.of/Map.of 等通用 of 调用天然排除）
+            if (ref.referenceName in WrapperLocator.xbatisFactoryMethodNames &&
+                (ref.qualifierExpression as? PsiReferenceExpression)?.referenceName in WrapperLocator.xbatisFactoryClassNames
+            ) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                return if (isInsideWrapperVariableInitializer(call)) null else element
+            }
             if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 val qualifier = ref.qualifierExpression as? PsiReferenceExpression
@@ -130,6 +139,15 @@ object WrapperAnchorDetector {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 if (initializerHeadIsWrapper(call)) return null
                 return if (JpaCrudOperationConverter.hasJpaCrudReceiver(call)) element else null
+            }
+            // 场景 F（EQ，M44 其他 ORM 第一批）：Easy-Query proxy 链 entry
+            // （easyEntityQuery.queryable(Topic.class)/insertable/updatable/deletable）——
+            // entry 方法名 + receiver 变量名/类型启发双重门控（普通类同名方法不识别，负例守卫；
+            // qualifier 变量一次 resolve 同场景 E 的文档化例外）。
+            if (ref.referenceName in EasyQueryConverter.ENTRY_METHODS) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (initializerHeadIsWrapper(call)) return null
+                return if (EasyQueryConverter.isEasyQueryCall(call)) element else null
             }
             return null
         }

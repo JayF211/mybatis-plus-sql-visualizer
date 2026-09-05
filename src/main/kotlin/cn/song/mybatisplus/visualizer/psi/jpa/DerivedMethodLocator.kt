@@ -38,17 +38,14 @@ data class DerivedMethodInfo(
  */
 object DerivedMethodLocator {
 
-    /** Spring Data Repository 基类全限定名（superType 匹配用）。 */
-    private val REPOSITORY_BASE_TYPES: Set<String> = setOf(
-        "org.springframework.data.repository.Repository",
-        "org.springframework.data.repository.CrudRepository",
-        "org.springframework.data.repository.PagingAndSortingRepository",
-        "org.springframework.data.jpa.repository.JpaRepository",
-        "org.springframework.data.jpa.repository.QueryExecutorAdapter",
-    )
+    /** Spring Data Repository 基类全限定名（SD6 起统一走 [RepositoryBaseTypes] 名单，含 JDBC/R2DBC 侧）。 */
+    private val REPOSITORY_BASE_TYPES: Set<String> = RepositoryBaseTypes.FQNS
 
     /** Spring Data @Query 注解全限定名（排除用）。 */
     private const val QUERY_ANNOTATION = "org.springframework.data.jpa.repository.Query"
+
+    /** SD7：@Modifying 注解短名（jakarta / spring-data-jdbc / spring-data-r2dbc 三包共用短名）。 */
+    private const val MODIFYING_SHORT_NAME = "Modifying"
 
     /** PartTree 推导查询方法名前缀（Spring Data JPA 官方支持；T-J3 补 query/search/stream）。 */
     private val PART_TREE_PREFIXES: Set<String> = setOf(
@@ -104,6 +101,10 @@ object DerivedMethodLocator {
      */
     fun isDerivedQuery(method: PsiMethod): Boolean {
         if (hasQueryAnnotation(method)) return false
+        // SD7（M44）：@Modifying（jakarta / spring-data-jdbc / spring-data-r2dbc 包）标记 DML @Query，
+        // 绝非派生查询——@Query 已被上方排除，此处兜底拦截「仅 @Modifying / 注解解析不完整」的漏网形态，
+        // 防止 `updateStatusByXxx` 等 DML 方法被 PartTree 误派生成 SELECT
+        if (hasModifyingAnnotation(method)) return false
         // 排除 default 方法（含方法体，非接口推导）
         if (method.hasModifierProperty("default")) return false
         // 排除 static 方法
@@ -300,5 +301,14 @@ object DerivedMethodLocator {
             if (shortName == "Query") return true
         }
         return false
+    }
+
+    /**
+     * SD7（M44）：方法是否标注 @Modifying（jakarta.persistence / spring-data-jdbc / spring-data-r2dbc
+     * 三包短名同形）。识别用途见 [isDerivedQuery] 内注释。
+     */
+    private fun hasModifyingAnnotation(method: PsiMethod): Boolean {
+        val annotations = method.modifierList?.annotations ?: return false
+        return annotations.any { it.nameReferenceElement?.referenceName == MODIFYING_SHORT_NAME }
     }
 }

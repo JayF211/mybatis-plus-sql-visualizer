@@ -79,9 +79,9 @@ class JpaEntityResolver {
         // 类级元数据：schema/catalog、限制子句、软删除、自定义脚本、生成器、副表、继承与判别、@IdClass
         // （T-J8 / T-J14 / T-J18，读取失败整体降级为空元数据）
         val classMeta = JpaMetadataReader.readClassMeta(entityClass)
-        // 表名：优先 @Table(name="xxx")，否则按命名策略由类名推断
-        val tableName = annotationAttributeValue(entityClass, TABLE_ANNOTATION, "name")
-            ?: decorateTableName(inferTableName(className))
+        // 表名：优先 @Table 注解（SD8：name → value 双属性兜底——relational @Table("t_user") value
+        // 简写最常用），否则按命名策略由类名推断
+        val tableName = tableAnnotationValue(entityClass) ?: decorateTableName(inferTableName(className))
 
         // 递归父类收集字段（支持 @MappedSuperclass 继承；父类字段在前、子类字段在后）
         val fields = collectFieldsIncludingSuper(entityClass)
@@ -102,9 +102,13 @@ class JpaEntityResolver {
         val collectionAssociations = fields.mapNotNull { field ->
             JpaMetadataReader.readCollectionAssociation(field, ::resolveTargetTableName, tableName)
         }
-        // jakarta/javax @Version → versionColumn（T-J8，与 MP @Version 同列语义；列被排除时不记）
-        val versionColumn = fields.firstOrNull { JpaMetadataReader.hasVersionAnnotation(it) }
+        // jakarta/javax + spring-data/Easy-Query/xbatis @Version → versionColumn（T-J8/EQ9/XB）
+        val versionColumn = fields.firstOrNull { JpaMetadataReader.hasAnyVersionAnnotation(it) }
             ?.let { versionField -> columns.firstOrNull { it.fieldName == versionField.name }?.columnName }
+        // EQ9/XB：@LogicDelete 标记字段 → logicDeleteColumn（可解析时）
+        val logicDeleteColumn = fields.firstNotNullOfOrNull { field ->
+            field.name?.let { JpaMetadataReader.logicDeleteColumnOf(field, it) }
+        }
         // 复合主键列清单（T-J18：@EmbeddedId / @IdClass / 多 @Id，声明顺序；单主键为空列表）
         val hasEmbeddedId = fields.any { JpaMetadataReader.hasEmbeddedIdAnnotation(it) }
         val idColumns = columns.filter { it.isId }.map { it.columnName }
@@ -114,7 +118,7 @@ class JpaEntityResolver {
             entityClassName = className,
             tableName = tableName,
             columns = columns,
-            logicDeleteColumn = null,
+            logicDeleteColumn = logicDeleteColumn,
             versionColumn = versionColumn,
             comment = comment,
             associations = associations,
@@ -163,8 +167,9 @@ class JpaEntityResolver {
     ): List<ColumnInfo> {
         val fieldName = field.name
 
-        // @Transient：非持久化字段，跳过
-        if (hasAnnotation(field, TRANSIENT_ANNOTATION)) {
+        // @Transient / @ColumnIgnore / @Ignore：非持久化字段，跳过
+        // （SD8：spring-data @Transient；EQ8：@ColumnIgnore；XB：@Ignore——M44 统一轨）
+        if (JpaMetadataReader.hasTransientLikeAnnotation(field)) {
             return emptyList()
         }
 
@@ -173,6 +178,21 @@ class JpaEntityResolver {
         if (hasAnnotation(field, ONE_TO_MANY_ANNOTATION) || hasAnnotation(field, MANY_TO_MANY_ANNOTATION) ||
             JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_ELEMENT_COLLECTION) != null
         ) {
+            return emptyList()
+        }
+
+        // SD10（M44 止血）：@MappedCollection 集合/嵌套实体字段不落父表列（止血期不做反向列展开）
+        if (JpaMetadataReader.isMappedCollectionField(field)) {
+            return emptyList()
+        }
+        // SD10：无注解的嵌套实体引用字段 / 元素为实体的集合字段同样跳过——
+        // 否则 SELECT/INSERT 出现不存在的列（宁缺列不出错误列）
+        if (JpaMetadataReader.isNestedEntityOrEntityCollectionField(field)) {
+            return emptyList()
+        }
+
+        // M44：Easy-Query @Column(exist = false) / xbatis @TableField(exists = false) 字段跳过
+        if (JpaMetadataReader.hasExistFalse(field)) {
             return emptyList()
         }
 
@@ -205,16 +225,16 @@ class JpaEntityResolver {
             return emptyList()
         }
 
-        // 列名：优先 @Column(name="xxx") 或 @JoinColumn(name="xxx")（@ManyToOne 外键列），否则驼峰转下划线
-        val isId = hasAnnotation(field, ID_ANNOTATION)
+        // 列名：优先 @Column(name→value 兜底，SD8)/@JoinColumn（@ManyToOne 外键列）/
+        // xbatis @TableField(value)，否则驼峰转下划线
+        val isId = isIdentifierField(field)
         val toOneJoinColumnRefs =
             if (isManyToOne || isOneToOne) JpaMetadataReader.readToOneJoinColumns(field, fieldName) else emptyList()
         val columnName = when {
             // @ManyToOne / @OneToOne + @JoinColumn：外键列名（含无注解时的推断名）
             toOneJoinColumnRefs.isNotEmpty() -> toOneJoinColumnRefs.first().name
-            // @Column：普通列名
-            else -> annotationAttributeValue(field, COLUMN_ANNOTATION, "name")
-                ?: NamingStrategy.toSnakeCase(fieldName)
+            // @Column / @TableField：普通列名（SD8：name → value 双属性兜底）
+            else -> JpaMetadataReader.columnValueOrSnake(field, fieldName)
         }
 
         // 字段类型（参数回填引号推断用）；PSI 类型解析异常时兜底 null
@@ -356,10 +376,10 @@ class JpaEntityResolver {
     /**
      * 从目标实体 PsiClass 获取表名。
      *
-     * 优先 @Table(name="xxx")，否则按命名策略推断。
+     * 优先 @Table（SD8：name→value 兜底），否则按命名策略推断。
      */
     private fun resolveTargetTableName(targetClass: PsiClass): String {
-        val explicitTable = annotationAttributeValue(targetClass, TABLE_ANNOTATION, "name")
+        val explicitTable = tableAnnotationValue(targetClass)
         if (explicitTable != null) return explicitTable
         val className = targetClass.name ?: return NamingStrategy.toSnakeCase("unknown")
         return decorateTableName(inferTableName(className))
@@ -553,6 +573,35 @@ class JpaEntityResolver {
         return attributeString(annotation, attribute)
     }
 
+    /**
+     * 类级表名注解取值（SD8，M44）：@Table `name` → `value` 双属性兜底——
+     * jakarta @Table 只有 name 属性（value 兜底天然落空），relational/Easy-Query/xbatis @Table
+     * 以 value 简写为最常用形态（`@Table("t_user")`）。查找轨道：jakarta/javax FQN + relational
+     * FQN + 短名兜底（findAnnotation/FQN_XBATIS_TABLE 显式轨）。
+     */
+    private fun tableAnnotationValue(psi: PsiClass): String? =
+        annotationAttributeValue(psi, TABLE_ANNOTATION, "name")
+            ?: annotationAttributeValue(psi, TABLE_ANNOTATION, "value")
+            ?: annotationAttributeValue(psi, JpaMetadataReader.FQN_RELATIONAL_TABLE, "name")
+            ?: annotationAttributeValue(psi, JpaMetadataReader.FQN_RELATIONAL_TABLE, "value")
+            ?: annotationAttributeValue(psi, JpaMetadataReader.FQN_XBATIS_TABLE, "value")
+
+    /**
+     * 字段主键判定（M44 统一轨）：jakarta/javax @Id（既有短名兜底）+ spring-data @Id（SD8）+
+     * xbatis @TableId（XB）+ Easy-Query @Column(primaryKey = true)（EQ8）。
+     */
+    private fun isIdentifierField(field: PsiField): Boolean =
+        hasAnnotation(field, ID_ANNOTATION) ||
+            hasAnnotation(field, JpaMetadataReader.FQN_SD_ID) ||
+            hasAnnotation(field, JpaMetadataReader.FQN_XBATIS_TABLE_ID) ||
+            isEasyQueryPrimaryKey(field)
+
+    /** EQ8：@Column(primaryKey = true)（Easy-Query 以 Column 注解属性标记主键）。 */
+    private fun isEasyQueryPrimaryKey(field: PsiField): Boolean {
+        val column = JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_EASY_QUERY_COLUMN) ?: return false
+        return JpaMetadataReader.attrBoolean(column, "primaryKey") == true
+    }
+
     private fun attributeString(annotation: PsiAnnotation, attribute: String): String? {
         val memberValue = annotation.findAttributeValue(attribute) ?: return null
         val literal = memberValue as? PsiLiteralExpression ?: return null
@@ -565,9 +614,7 @@ class JpaEntityResolver {
         // JPA 注解全限定名（jakarta.persistence）
         private const val ENTITY_ANNOTATION = "jakarta.persistence.Entity"
         private const val TABLE_ANNOTATION = "jakarta.persistence.Table"
-        private const val COLUMN_ANNOTATION = "jakarta.persistence.Column"
         private const val ID_ANNOTATION = "jakarta.persistence.Id"
-        private const val TRANSIENT_ANNOTATION = "jakarta.persistence.Transient"
         private const val MANY_TO_ONE_ANNOTATION = "jakarta.persistence.ManyToOne"
         private const val ONE_TO_MANY_ANNOTATION = "jakarta.persistence.OneToMany"
         private const val ONE_TO_ONE_ANNOTATION = "jakarta.persistence.OneToOne"

@@ -54,6 +54,8 @@ object ConverterRegistry {
         // T-M21-08：MPJ 官方联表更新/删除（UpdateJoinWrapper / DeleteJoinWrapper）
         UpdateJoinConverter,
         DeleteJoinConverter,
+        // XB（M44）：xbatis（原 mybatis-mp）QueryChain/UpdateChain/DeleteChain 同构链
+        XbatisConverter,
     )
 
     /**

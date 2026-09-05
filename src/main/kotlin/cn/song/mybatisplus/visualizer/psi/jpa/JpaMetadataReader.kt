@@ -46,6 +46,7 @@ internal object JpaMetadataReader {
     const val FQN_TRANSIENT = "jakarta.persistence.Transient"
     const val FQN_ONE_TO_ONE = "jakarta.persistence.OneToOne"
     const val FQN_ONE_TO_MANY = "jakarta.persistence.OneToMany"
+    const val FQN_MANY_TO_ONE = "jakarta.persistence.ManyToOne"
     const val FQN_MANY_TO_MANY = "jakarta.persistence.ManyToMany"
     const val FQN_JOIN_COLUMNS = "jakarta.persistence.JoinColumns"
     const val FQN_JOIN_TABLE = "jakarta.persistence.JoinTable"
@@ -77,6 +78,64 @@ internal object JpaMetadataReader {
     const val FQN_HIBERNATE_SQL_INSERT = "org.hibernate.annotations.SQLInsert"
     const val FQN_HIBERNATE_SQL_UPDATE = "org.hibernate.annotations.SQLUpdate"
     const val FQN_HIBERNATE_NOT_FOUND = "org.hibernate.annotations.NotFound"
+
+    // ------------------------------------------------------------------
+    // M44 其他 ORM 第一批注解轨（SD8 / EQ8 / EQ9 / XB 实体解析；javap 实证属性面）
+    // ------------------------------------------------------------------
+
+    /** SD8：Spring Data relational @Table（value/name/schema——value 简写最常用）。 */
+    const val FQN_RELATIONAL_TABLE = "org.springframework.data.relational.core.mapping.Table"
+
+    /** SD8：Spring Data relational @Column（javap 证实**只有 value 属性**，无 name）。 */
+    const val FQN_RELATIONAL_COLUMN = "org.springframework.data.relational.core.mapping.Column"
+
+    /** SD8：Spring Data relational @Embedded。 */
+    const val FQN_RELATIONAL_EMBEDDED = "org.springframework.data.relational.core.mapping.Embedded"
+
+    /** SD10：Spring Data relational @MappedCollection（集合/嵌套实体反向映射，止血期不展开）。 */
+    const val FQN_RELATIONAL_MAPPED_COLLECTION = "org.springframework.data.relational.core.mapping.MappedCollection"
+
+    /** SD8：spring-data-commons @Id（org.springframework.data.annotation.Id，非 jakarta 包）。 */
+    const val FQN_SD_ID = "org.springframework.data.annotation.Id"
+
+    /** SD8：spring-data-commons @Transient。 */
+    const val FQN_SD_TRANSIENT = "org.springframework.data.annotation.Transient"
+
+    /** SD8：spring-data-commons @Version。 */
+    const val FQN_SD_VERSION = "org.springframework.data.annotation.Version"
+
+    /** EQ8：Easy-Query @Table（value/schema/oldName；javap 实证）。 */
+    const val FQN_EASY_QUERY_TABLE = "com.easy.query.core.annotation.Table"
+
+    /** EQ8：Easy-Query @Column（value/primaryKey/exist 等；javap 实证）。 */
+    const val FQN_EASY_QUERY_COLUMN = "com.easy.query.core.annotation.Column"
+
+    /** EQ8：Easy-Query @ColumnIgnore（字段级跳过）。 */
+    const val FQN_EASY_QUERY_COLUMN_IGNORE = "com.easy.query.core.annotation.ColumnIgnore"
+
+    /** EQ9：Easy-Query @Version（乐观锁）。 */
+    const val FQN_EASY_QUERY_VERSION = "com.easy.query.core.annotation.Version"
+
+    /** EQ9：Easy-Query @LogicDelete（逻辑删除，strategy/strategyName）。 */
+    const val FQN_EASY_QUERY_LOGIC_DELETE = "com.easy.query.core.annotation.LogicDelete"
+
+    /** XB：xbatis @Table（value/schema；javap cn.xbatis.db.annotations.Table 实证）。 */
+    const val FQN_XBATIS_TABLE = "cn.xbatis.db.annotations.Table"
+
+    /** XB：xbatis @TableId（主键）。 */
+    const val FQN_XBATIS_TABLE_ID = "cn.xbatis.db.annotations.TableId"
+
+    /** XB：xbatis @TableField（value 列名 / exists 存在性；javap 实证）。 */
+    const val FQN_XBATIS_TABLE_FIELD = "cn.xbatis.db.annotations.TableField"
+
+    /** XB：xbatis @Ignore（字段级跳过）。 */
+    const val FQN_XBATIS_IGNORE = "cn.xbatis.db.annotations.Ignore"
+
+    /** XB：xbatis @Version（乐观锁）。 */
+    const val FQN_XBATIS_VERSION = "cn.xbatis.db.annotations.Version"
+
+    /** XB：xbatis @LogicDelete（逻辑删除，beforeValue/afterValue）。 */
+    const val FQN_XBATIS_LOGIC_DELETE = "cn.xbatis.db.annotations.LogicDelete"
 
     // ------------------------------------------------------------------
     // 注解查找与属性读取（纯函数）
@@ -307,6 +366,128 @@ internal object JpaMetadataReader {
 
     /** jakarta/javax @Version（T-J8，与 MP @Version 同列语义）。 */
     fun hasVersionAnnotation(field: PsiField): Boolean = findFlex(field, FQN_VERSION) != null
+
+    /**
+     * M44 全框架 @Version（乐观锁）识别：jakarta/javax + spring-data-commons（SD8）+
+     * Easy-Query（EQ9）+ xbatis（XB）。任一命中即视为版本列。
+     */
+    fun hasAnyVersionAnnotation(field: PsiField): Boolean =
+        hasVersionAnnotation(field) ||
+            findFlex(field, FQN_SD_VERSION) != null ||
+            findFlex(field, FQN_EASY_QUERY_VERSION) != null ||
+            findFlex(field, FQN_XBATIS_VERSION) != null
+
+    /**
+     * EQ9/XB：@LogicDelete（Easy-Query / xbatis）标记字段的列名。
+     * 列名 = 字段 @Column/@TableField value（EQ 轨已由 value 兜底覆盖）或驼峰转下划线；无标记返回 null。
+     */
+    fun logicDeleteColumnOf(field: PsiField, fieldName: String): String? {
+        val marked = findFlex(field, FQN_EASY_QUERY_LOGIC_DELETE) != null ||
+            findFlex(field, FQN_XBATIS_LOGIC_DELETE) != null
+        if (!marked) return null
+        return columnValueOrSnake(field, fieldName)
+    }
+
+    /**
+     * 字段显式列名（M44 统一链）：jakarta/javax/relational/EQ @Column（name → value 兜底）→
+     * xbatis @TableField(value) → 驼峰转下划线。
+     */
+    fun columnValueOrSnake(field: PsiField, fieldName: String): String {
+        findFlex(field, FQN_COLUMN)?.let { column ->
+            attrString(column, "name", "value")?.let { return it }
+        }
+        findFlex(field, FQN_XBATIS_TABLE_FIELD)?.let { tf ->
+            attrString(tf, "value")?.let { return it }
+        }
+        return NamingStrategy.toSnakeCase(fieldName)
+    }
+
+    /**
+     * M44 字段级跳过注解全集：jakarta/javax @Transient（既有）+ spring-data @Transient（SD8）+
+     * Easy-Query @ColumnIgnore（EQ8）+ xbatis @Ignore（XB）。
+     */
+    fun hasTransientLikeAnnotation(field: PsiField): Boolean =
+        findFlex(field, FQN_TRANSIENT) != null ||
+            findFlex(field, FQN_SD_TRANSIENT) != null ||
+            findFlex(field, FQN_EASY_QUERY_COLUMN_IGNORE) != null ||
+            findFlex(field, FQN_XBATIS_IGNORE) != null
+
+    /**
+     * M44 存在性为 false 的字段（不出现在任何 SQL 列清单）：
+     * Easy-Query @Column(exist = false) / xbatis @TableField(exists = false)。
+     * 注解类不可解析时 findAttributeValue 走本地参数列表回退，显式 false 照常可读；
+     * 未指定时（解析到默认 true / 读不到）不跳过。
+     */
+    fun hasExistFalse(field: PsiField): Boolean {
+        for (fqn in listOf(FQN_EASY_QUERY_COLUMN, FQN_XBATIS_TABLE_FIELD)) {
+            val annotation = findFlex(field, fqn) ?: continue
+            if (attrBoolean(annotation, "exist") == false || attrBoolean(annotation, "exists") == false) return true
+        }
+        return false
+    }
+
+    /** SD10：字段是否标注 @MappedCollection（Spring Data relational 集合/嵌套实体反向映射）。 */
+    fun isMappedCollectionField(field: PsiField): Boolean =
+        findFlex(field, FQN_RELATIONAL_MAPPED_COLLECTION) != null
+
+    /**
+     * SD10：字段是否为**嵌套实体引用 / 实体集合字段**（无 JPA 关联注解的实体类型字段、
+     * 或元素为实体的集合字段）——不落父表列（止血期不做反向列展开，否则 SELECT/INSERT
+     * 出现不存在的列）。
+     *
+     * 实体判定（[isLikelyMappedEntityClass]）：@Entity / @Table（jakarta/javax/relational/短名）
+     * 或含 @Id 字段；@Embeddable 值对象不算（仍走 @Embedded 展平）。已有 JPA 关联注解
+     * （@ManyToOne/@OneToOne/@JoinColumn 等）的字段不在此列（走既有外键列语义）。
+     */
+    fun isNestedEntityOrEntityCollectionField(field: PsiField): Boolean = runCatching {
+        if (findFlex(field, FQN_MANY_TO_ONE) != null || findFlex(field, FQN_ONE_TO_ONE) != null ||
+            findFlex(field, FQN_ONE_TO_MANY) != null || findFlex(field, FQN_MANY_TO_MANY) != null ||
+            findFlex(field, FQN_ELEMENT_COLLECTION) != null ||
+            hasJoinColumnsAnnotation(field) || isEmbeddedField(field)
+        ) {
+            return@runCatching false
+        }
+        val type = field.type as? PsiClassType ?: return@runCatching false
+        val typeText = runCatching { field.type.canonicalText }.getOrDefault("")
+        val isCollection = COLLECTION_TYPE_PREFIXES.any { typeText.startsWith(it) }
+        val parameters = type.parameters
+        val elementType = when {
+            isCollection && typeText.startsWith("java.util.Map") -> parameters.lastOrNull() as? PsiClassType
+            isCollection -> parameters.firstOrNull() as? PsiClassType
+            else -> type
+        }
+        val elementClass = elementType?.resolve() ?: return@runCatching false
+        isLikelyMappedEntityClass(elementClass)
+    }.getOrDefault(false)
+
+    /** 集合类型前缀（canonicalText 起始匹配；Map 单列取末位泛型参数）。 */
+    private val COLLECTION_TYPE_PREFIXES = listOf(
+        "java.util.List<", "java.util.Set<", "java.util.Map<", "java.util.Collection<",
+        "java.util.SortedSet<", "java.util.LinkedHashSet<", "java.util.ArrayList<",
+    )
+
+    /**
+     * 类是否疑似 ORM 映射实体（SD10 嵌套实体跳过判定的保守守卫）：
+     * @Entity / @Table（jakarta/javax/relational 全限定名或短名）注解，或类内任一字段标注 @Id
+     * （jakarta/javax/spring-data）。@Embeddable/@MappedSuperclass 值对象不算。
+     */
+    fun isLikelyMappedEntityClass(clazz: PsiClass): Boolean = runCatching {
+        for (annotation in clazz.modifierList?.annotations ?: emptyArray()) {
+            val qName = annotation.qualifiedName ?: continue
+            if (qName in MAPPED_ENTITY_CLASS_ANNOTATIONS) return@runCatching true
+            val simple = qName.substringAfterLast('.')
+            if (simple == "Entity" || simple == "Table") return@runCatching true
+        }
+        clazz.allFields.any { field ->
+            findFlex(field, "jakarta.persistence.Id") != null || findFlex(field, FQN_SD_ID) != null
+        }
+    }.getOrDefault(false)
+
+    private val MAPPED_ENTITY_CLASS_ANNOTATIONS = setOf(
+        "jakarta.persistence.Entity", "javax.persistence.Entity",
+        "jakarta.persistence.Table", "javax.persistence.Table",
+        FQN_RELATIONAL_TABLE, FQN_EASY_QUERY_TABLE, FQN_XBATIS_TABLE,
+    )
 
     /** @Convert 标记（T-J18，仅标记不改 SQL 形态）。 */
     fun hasConvertAnnotation(field: PsiField): Boolean = findFlex(field, FQN_CONVERT) != null
