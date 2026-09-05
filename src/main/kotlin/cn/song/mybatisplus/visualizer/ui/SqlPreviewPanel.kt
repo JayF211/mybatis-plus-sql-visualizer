@@ -2297,6 +2297,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderDebounceTimer.stop()
         pendingRender = null
         historyAlarm.stop()
+        // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
+        // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
+        SqlExecutor.releaseForPanel()
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this)
     }

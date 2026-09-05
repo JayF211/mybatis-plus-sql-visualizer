@@ -137,6 +137,19 @@ object DataSourceSelector {
     }
 
     /**
+     * T-Perf-16：面板关闭/项目关闭时释放单例滞留引用——object 单例的 prepared、shared、
+     * pendingOnConsole 槽位强引用已关闭面板（pendingOnConsole 闭包捕获 SqlPreviewPanel 整棵
+     * Swing 树）与原生控制台/编辑器/文档（持旧 Project 引用）。此前只有面板「清空」按钮走
+     * clearPrepared，弹窗关闭/项目关闭路径无清理挂点 → 堆中滞留整棵面板树。
+     */
+    @JvmStatic
+    fun releaseForPanel() {
+        clearPrepared()
+        dropSharedConsole()
+        pendingOnConsole = null
+    }
+
+    /**
      * M36.5：准备控制台（不执行）——选数据源 → 建 session → attachConsole → 拼合组件回调。
      * 面板打开时调用，原生控制台即刻可见；执行由 [executePrepared] 触发。
      *
