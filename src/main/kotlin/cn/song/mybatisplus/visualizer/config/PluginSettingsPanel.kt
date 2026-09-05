@@ -1229,22 +1229,28 @@ class PluginSettingsPanel @JvmOverloads constructor(
             .withFileFilter { it.extension?.lowercase() == "json" }
             .withTitle(MpSqlVisualizerBundle.message("settings.import"))
         val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, null, null) ?: return
-        runCatching {
-            val text = String(file.contentsToByteArray(), Charsets.UTF_8)
-            PluginSettings.fromJson(text)
-        }.onSuccess {
-            reset()
-            com.intellij.openapi.ui.Messages.showInfoMessage(
-                rootPanel,
-                MpSqlVisualizerBundle.message("settings.import.success"),
-                MpSqlVisualizerBundle.message("settings.import"),
-            )
-        }.onFailure { e ->
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                rootPanel,
-                MpSqlVisualizerBundle.message("settings.import.failed", e.message ?: "unknown"),
-                MpSqlVisualizerBundle.message("settings.import"),
-            )
+        // T-Perf-14：文件 IO + JSON 解析移后台（EDT 不做磁盘读）；结果回 EDT 刷新表单与提示
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            val outcome = runCatching {
+                val text = String(file.contentsToByteArray(), Charsets.UTF_8)
+                PluginSettings.fromJson(text)
+            }
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                outcome.onSuccess {
+                    reset()
+                    com.intellij.openapi.ui.Messages.showInfoMessage(
+                        rootPanel,
+                        MpSqlVisualizerBundle.message("settings.import.success"),
+                        MpSqlVisualizerBundle.message("settings.import"),
+                    )
+                }.onFailure { e ->
+                    com.intellij.openapi.ui.Messages.showErrorDialog(
+                        rootPanel,
+                        MpSqlVisualizerBundle.message("settings.import.failed", e.message ?: "unknown"),
+                        MpSqlVisualizerBundle.message("settings.import"),
+                    )
+                }
+            }
         }
     }
 
@@ -1262,20 +1268,26 @@ class PluginSettingsPanel @JvmOverloads constructor(
         val wrapper = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance().createSaveFileDialog(descriptor, null)
         val saved = wrapper.save(baseDir, "mp-sql-visualizer-settings.json")
         if (saved != null) {
-            runCatching {
-                java.io.File(saved.file.absolutePath).writeText(PluginSettings.toJson(), Charsets.UTF_8)
-            }.onSuccess {
-                com.intellij.openapi.ui.Messages.showInfoMessage(
-                    rootPanel,
-                    MpSqlVisualizerBundle.message("settings.export.success"),
-                    MpSqlVisualizerBundle.message("settings.export"),
-                )
-            }.onFailure { e ->
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    rootPanel,
-                    MpSqlVisualizerBundle.message("settings.export.failed", e.message ?: "unknown"),
-                    MpSqlVisualizerBundle.message("settings.export"),
-                )
+            // T-Perf-14：文件写入移后台（EDT 不做磁盘写）；结果回 EDT 提示
+            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val outcome = runCatching {
+                    java.io.File(saved.file.absolutePath).writeText(PluginSettings.toJson(), Charsets.UTF_8)
+                }
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    outcome.onSuccess {
+                        com.intellij.openapi.ui.Messages.showInfoMessage(
+                            rootPanel,
+                            MpSqlVisualizerBundle.message("settings.export.success"),
+                            MpSqlVisualizerBundle.message("settings.export"),
+                        )
+                    }.onFailure { e ->
+                        com.intellij.openapi.ui.Messages.showErrorDialog(
+                            rootPanel,
+                            MpSqlVisualizerBundle.message("settings.export.failed", e.message ?: "unknown"),
+                            MpSqlVisualizerBundle.message("settings.export"),
+                        )
+                    }
+                }
             }
         }
     }

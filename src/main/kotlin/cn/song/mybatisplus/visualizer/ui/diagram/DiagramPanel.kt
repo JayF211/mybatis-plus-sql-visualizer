@@ -153,29 +153,57 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     private fun exportPng() {
         val model = currentModel ?: return
         val proj = project ?: return
-        try {
-            val image = DiagramRenderer.render(model)
-            val baos = ByteArrayOutputStream()
-            ImageIO.write(image, "png", baos)
-            if (baos.size() == 0) throw RuntimeException("PNG encode produced no output")
-            saveBytesToFile(proj, baos.toByteArray(), "join_diagram.png", "png")
-        } catch (e: Exception) {
-            Messages.showErrorDialog(proj,
-                MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
-                MpSqlVisualizerBundle.message("diagram.export.title"))
+        // T-Perf-14：渲染 + 编码移后台（宽 SELECT 大模型全量重绘/图像编码在 EDT 构成卡顿）；
+        // 保存对话框留在 EDT（用户交互），渲染/编码失败回 EDT 提示
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val bytes = runCatching {
+                val image = DiagramRenderer.render(model)
+                val baos = ByteArrayOutputStream()
+                ImageIO.write(image, "png", baos)
+                if (baos.size() == 0) throw RuntimeException("PNG encode produced no output")
+                baos.toByteArray()
+            }.getOrNull()
+            ApplicationManager.getApplication().invokeLater {
+                if (bytes == null) {
+                    Messages.showErrorDialog(proj,
+                        MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
+                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    return@invokeLater
+                }
+                runCatching {
+                    saveBytesToFile(proj, bytes, "join_diagram.png", "png")
+                }.onFailure { e ->
+                    Messages.showErrorDialog(proj,
+                        MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
+                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                }
+            }
         }
     }
 
     private fun exportSvg() {
         val model = currentModel ?: return
         val proj = project ?: return
-        try {
-            val svg = DiagramRenderer.renderToSvg(model)
-            saveBytesToFile(proj, svg.toByteArray(Charsets.UTF_8), "join_diagram.svg", "svg")
-        } catch (e: Exception) {
-            Messages.showErrorDialog(proj,
-                MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
-                MpSqlVisualizerBundle.message("diagram.export.title"))
+        // T-Perf-14：SVG 渲染/编码移后台（同 exportPng）
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val bytes = runCatching {
+                DiagramRenderer.renderToSvg(model).toByteArray(Charsets.UTF_8)
+            }.getOrNull()
+            ApplicationManager.getApplication().invokeLater {
+                if (bytes == null) {
+                    Messages.showErrorDialog(proj,
+                        MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
+                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    return@invokeLater
+                }
+                runCatching {
+                    saveBytesToFile(proj, bytes, "join_diagram.svg", "svg")
+                }.onFailure { e ->
+                    Messages.showErrorDialog(proj,
+                        MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
+                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                }
+            }
         }
     }
 
@@ -187,7 +215,14 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         val vfsFile: VirtualFileWrapper? = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
         if (vfsFile != null) {
             val file: File = vfsFile.file
-            file.writeBytes(bytes)
+            // T-Perf-14：磁盘写入移后台；成功提示保持 EDT
+            ApplicationManager.getApplication().executeOnPooledThread {
+                runCatching { file.writeBytes(bytes) }
+                    .onFailure { e ->
+                        com.intellij.openapi.diagnostic.Logger.getInstance(DiagramPanel::class.java)
+                            .warn("diagram export write failed: ${e.message}", e)
+                    }
+            }
             if (!ApplicationManager.getApplication().isUnitTestMode) {
                 ApplicationManager.getApplication().invokeLater {
                     Messages.showInfoMessage(proj,
