@@ -1098,11 +1098,17 @@ class SqlToJavaPanel(
     /** T-M45：复制文本 = 剥离注释后的结果区内容（复制按钮经此取文本）。 */
     private fun copyText(): String = JavaCommentStripper.strip(resultEditor.document.text)
 
-    /** T-M45：格式化结果区当前内容（IDE Java 格式化器，结果写回编辑器——复制基于当前内容）。 */
+    /**
+     * T-M45：格式化结果区当前内容（IDE Java 格式化器，结果写回编辑器——复制基于当前内容）。
+     * T-Perf-11：格式化（PSI 创建 + 全量 reformat）移 [Task.Backgroundable] 后台执行，
+     * 结果回 EDT 写回——批量转换 20+ 条语句拼大代码块时 EDT 不再随体积线性冻结。
+     */
     private fun formatResult() {
-        val formatted = JavaCodeFormatter.format(project, resultEditor.document.text)
-        if (formatted != resultEditor.document.text) {
-            setResultText(formatted)
+        val code = resultEditor.document.text
+        JavaCodeFormatter.formatAsync(project, code) { formatted ->
+            if (formatted != resultEditor.document.text) {
+                setResultText(formatted)
+            }
         }
     }
 
