@@ -115,7 +115,8 @@ class QueryWrapperParser(
                 "eq" -> orPending = addConditionFlagged(conditions, simple(call, "=").flagged(analysis), orPending)
                 // eqOrIsNull（MP 3.5.17 官方 API，T-M20-09）：值静态求值为 null → IS NULL，否则 = 值
                 "eqOrIsNull" -> orPending = addConditionFlagged(conditions, eqOrIsNull(call).flagged(analysis), orPending)
-                "ne" -> orPending = addConditionFlagged(conditions, simple(call, "!=").flagged(analysis), orPending)
+                // ne 渲染 <>（M38.2 语义对照矩阵实证：MP SqlKeyword.NE = "<>"，原 "!=" 与 MP 不一致）
+                "ne" -> orPending = addConditionFlagged(conditions, simple(call, "<>").flagged(analysis), orPending)
                 "gt" -> orPending = addConditionFlagged(conditions, simple(call, ">").flagged(analysis), orPending)
                 "ge" -> orPending = addConditionFlagged(conditions, simple(call, ">=").flagged(analysis), orPending)
                 "lt" -> orPending = addConditionFlagged(conditions, simple(call, "<").flagged(analysis), orPending)
@@ -200,7 +201,13 @@ class QueryWrapperParser(
                 "or" -> if (call.args.isEmpty()) {
                     orPending = true
                 } else {
-                    orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending)
+                    // M38.2：or(Consumer) = 外层 OR 连接 + 组内恒 AND（MP 语义）。强制 orPending
+                    // 让组与前一条件组成 OR 分组（addCondition 的 OR 语义），无前条件时组直接落位。
+                    // 原实现把 OR 用作组内连接词 → or(w -> w.eq(2).eq(3)) 错渲染为 `AND (2 OR 3)`（内外颠倒）。
+                    val group = parseGroupFlagged(call)
+                    if (group != null) {
+                        orPending = addConditionFlagged(conditions, group, true)
+                    }
                 }
                 "and" -> orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending)
                 // nested(consumer)：独立括号块（官方 API，语义与 and 等价——隐式 AND 连接）
@@ -479,7 +486,11 @@ class QueryWrapperParser(
 
     /** 逻辑分组：and(lambda) / or(lambda) / and(wrapper) / or(wrapper)。 */
     private fun parseGroup(call: WrapperCall): Condition? {
-        val connector = if (call.methodName == "or") Connector.OR else Connector.AND
+        // M38.2（语义对照矩阵实证）：组内连接词恒为 AND——lambda 内条件默认 AND 连接，lambda 内
+        // 显式无参 or() 由嵌套解析自身的 orPending 产生 OR 子组（下方展平保留）。组与前条件的
+        // **外层**连接词由调用方的 orPending 表达：or(Consumer) → OR，and/nested → AND。
+        // 原实现把方法名 or 用作组内连接词 → or(w -> w.eq(2).eq(3)) 错渲染为 `AND (2 OR 3)`（内外颠倒）。
+        val connector = Connector.AND
         val nested = call.args.firstOrNull() as? WrapperArg.NestedArg ?: return null
         // 递归解析嵌套链的条件列表，按连接符组装为分组（parseInternal 延续 toggle id 序列）
         val children = parseInternal(nested.chain).conditions
@@ -535,6 +546,12 @@ class QueryWrapperParser(
 
     /** HAVING：P1-06（M19.5）多条件支持——嵌套链**全部条件**组成 AND 组（M1 起仅取第一个）。 */
     private fun parseHaving(call: WrapperCall): Condition? {
+        // M38.2（语义对照矩阵实证）：字符串版 having("count(*) > 3")（MP 官方 API）——
+        // 原实现只认 lambda 嵌套形态，字符串片段被静默丢弃。按原生片段透传渲染。
+        val first = call.args.firstOrNull()
+        if (first is WrapperArg.ValueArg) {
+            (first.value as? SqlValue.Literal)?.unquoted?.takeIf { it.isNotBlank() }?.let { return Condition.Raw(it) }
+        }
         val nested = call.args.firstOrNull() as? WrapperArg.NestedArg ?: return null
         val conditions = parseInternal(nested.chain).conditions
         if (conditions.isEmpty()) return null
@@ -575,11 +592,13 @@ class QueryWrapperParser(
         val first = limitMatch.groupValues[1].toLongOrNull() ?: return null
         val second = limitMatch.groupValues[2].toLongOrNull()
         // "limit 5, 10" → offset=5, count=10；"limit 10" → count=10
-        return if (second != null) {
-            LimitClause(offset = first, count = second)
-        } else {
-            LimitClause(count = first)
-        }
+        if (second != null) return LimitClause(offset = first, count = second)
+        // M38.2（语义对照矩阵实证）：MySQL 另一形态 "limit 5 OFFSET 10"（MP last 常用）——
+        // 原正则不认 OFFSET，OFFSET 被静默丢弃
+        val offsetMatch = Regex("""(?i)offset\s+(\d+)""").find(text)
+        val offset = offsetMatch?.groupValues?.get(1)?.toLongOrNull()
+        return if (offset != null) LimitClause(offset = offset, count = first)
+        else LimitClause(count = first)
     }
 
     // ------------------------------------------------------------------

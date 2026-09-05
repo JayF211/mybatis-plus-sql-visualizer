@@ -27,15 +27,19 @@ import javax.swing.JScrollPane
  * 底部提供"复制代码 / 关闭"。由
  * [cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction] 触发。
  */
-class JavaCodePreviewDialog(
+// @JvmOverloads：保持二参构造真实存在——Kotlin 默认参数不生成桥构造，增量编译下
+// 旧调用方字节码（既有测试）会 NoSuchMethodError（M37.4 全量测试实证，新旧双名同模板策略）。
+class JavaCodePreviewDialog @JvmOverloads constructor(
     private val project: Project?,
     private val code: String,
+    /** M37.4：自定义弹窗标题（null = 默认「SQL→Java」标题，既有调用点零影响）。 */
+    private val dialogTitle: String? = null,
 ) : DialogWrapper(project, true) {
 
     private val editor: Editor = createJavaEditor(code)
 
     init {
-        title = MpSqlVisualizerBundle.message("reverse.dialog.title")
+        title = dialogTitle ?: MpSqlVisualizerBundle.message("reverse.dialog.title")
         init()
         setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"))
     }

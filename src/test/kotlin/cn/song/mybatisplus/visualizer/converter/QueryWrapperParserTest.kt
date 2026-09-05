@@ -268,10 +268,14 @@ class QueryWrapperParserTest {
             ),
         )
         val statement = parser.parse(chain)
-        assertEquals(2, statement.conditions.size)
-        val group = statement.conditions[1] as Condition.Group
-        assertEquals(Connector.OR, group.connector)
-        assertEquals(2, group.children.size)
+        // M38.2 语义修正：or(Consumer) 以 OR 连接前条件（修复前组内 OR/外层 AND 内外颠倒），
+        // 结构为 Group(OR, [前条件, Group(AND, lambda 内条件)])
+        assertEquals(1, statement.conditions.size)
+        val merge = statement.conditions[0] as Condition.Group
+        assertEquals(Connector.OR, merge.connector)
+        assertEquals(2, merge.children.size)
+        val inner = merge.children[1] as Condition.Group
+        assertEquals(Connector.AND, inner.connector)
     }
 
     // ------------------------------------------------------------------
@@ -372,11 +376,14 @@ class QueryWrapperParserTest {
             ),
         )
         val statement = parser.parse(chain)
-        assertEquals(3, statement.conditions.size)
-        val orGroup = statement.conditions[1] as Condition.Group
-        assertEquals(Connector.OR, orGroup.connector)
-        assertEquals("true", orGroup.toggle?.flagSource)
-        val nestedGroup = statement.conditions[2] as Condition.Group
+        // M38.2 语义修正：or(true, lambda) 以 OR 连接前条件（flag 保留在 lambda 组上），
+        // nested 组仍以 AND 平铺。修复前 or 组被错误地以 AND 平铺为独立条件。
+        assertEquals(2, statement.conditions.size)
+        val orMerge = statement.conditions[0] as Condition.Group
+        assertEquals(Connector.OR, orMerge.connector)
+        val flaggedGroup = orMerge.children[1] as Condition.Group
+        assertEquals("true", flaggedGroup.toggle?.flagSource)
+        val nestedGroup = statement.conditions[1] as Condition.Group
         assertEquals(Connector.AND, nestedGroup.connector)
         assertEquals("nestedFlag", nestedGroup.toggle?.flagSource)
         val sql = SqlGenerator.generate(statement)
@@ -384,8 +391,7 @@ class QueryWrapperParserTest {
             """
             SELECT id, station_id, share_scheme_id, name
             FROM car_device_info
-            WHERE id = 1
-                AND (id = 2)
+            WHERE (id = 1 OR (id = 2))
                 AND (name = 'x')
             """.trimIndent(),
             sql,

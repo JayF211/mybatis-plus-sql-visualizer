@@ -401,6 +401,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.compare")) { showSqlDiff() })
         // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
         add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
+        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })
+        // M37.4：生成测试资产（SQL 回归脚本 / JUnit 用例骨架）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.genTest")) { generateTestAsset() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
     }
 
@@ -469,6 +473,123 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             },
         )
     }
+
+    /**
+     * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
+     * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
+     * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     */
+    internal fun explainSql() {
+        val proj = project ?: return
+        val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        val explainSql = dialect.renderExplainStatement(sql.trim().trimEnd(';'))
+        if (explainSql == null) {
+            Messages.showInfoMessage(
+                proj,
+                MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                MpSqlVisualizerBundle.message("panel.explain"),
+            )
+            return
+        }
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")
+        resultPanel.showLoading()
+        SqlExecutor.execute(
+            proj, explainSql, null, true,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+            onError = { errorMsg ->
+                resultPanel.showError(errorMsg)
+            },
+        )
+    }
+
+    /**
+     * M37.4：生成测试资产（P-立项-06 N-4，对标 MybatisCodeHelperPro 的 testcase 卖点）——
+     * 两种形态单击即选（原生 BaseListPopupStep）：
+     *  1. SQL 回归脚本：落盘 `<project>/src/test/resources/sql-visualizer/`（后台写 + VFS 刷新）；
+     *  2. JUnit 用例骨架：弹窗展示 + 复制（复用 [JavaCodePreviewDialog]，只复制不落盘）。
+     */
+    internal fun generateTestAsset() {
+        val proj = project ?: return
+        val result = current ?: return
+        val dialect = result.previewModel?.dialect ?: MySqlDialect
+        val input = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.Input(
+            sql = result.sql,
+            dialectName = dialect.name,
+            tableName = result.tableName,
+            anchor = null,
+        )
+        val actions = listOf(
+            cn.song.mybatisplus.visualizer.testgen.GenAction.SqlScript,
+            cn.song.mybatisplus.visualizer.testgen.GenAction.Junit,
+        )
+        val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<cn.song.mybatisplus.visualizer.testgen.GenAction>(
+            MpSqlVisualizerBundle.message("panel.genTest"),
+            actions,
+        ) {
+            override fun getTextFor(value: cn.song.mybatisplus.visualizer.testgen.GenAction): String =
+                MpSqlVisualizerBundle.message(value.labelKey)
+
+            override fun onChosen(
+                selectedValue: cn.song.mybatisplus.visualizer.testgen.GenAction?,
+                finalChoice: Boolean,
+            ): com.intellij.openapi.ui.popup.PopupStep<*> {
+                when (selectedValue) {
+                    is cn.song.mybatisplus.visualizer.testgen.GenAction.Junit -> {
+                        val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.junit(input, timestampLabel())
+                        JavaCodePreviewDialog(
+                            proj,
+                            asset.content,
+                            MpSqlVisualizerBundle.message("genTest.dialog.title"),
+                        ).show()
+                    }
+                    else -> {
+                        val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.sqlScript(input, timestampLabel())
+                        saveSqlScriptAsset(proj, asset)
+                    }
+                }
+                return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+            }
+        }
+        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+            .createListPopup(step)
+            .showInFocusCenter()
+    }
+
+    /** M37.4：后台写 SQL 回归脚本 + VFS 刷新（新建文件非跟踪文件，无 File Cache Conflict 风险）。 */
+    private fun saveSqlScriptAsset(proj: com.intellij.openapi.project.Project, asset: cn.song.mybatisplus.visualizer.testgen.TestAsset) {
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val dir = java.io.File(proj.basePath, "src/test/resources/sql-visualizer")
+                dir.mkdirs()
+                val file = java.io.File(dir, asset.fileName)
+                file.writeText(asset.content, Charsets.UTF_8)
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    com.intellij.openapi.vfs.VfsUtil.markDirtyAndRefresh(true, true, true, dir)
+                    com.intellij.openapi.ui.Messages.showInfoMessage(
+                        proj,
+                        MpSqlVisualizerBundle.message("genTest.saved", file.absolutePath),
+                        MpSqlVisualizerBundle.message("panel.genTest"),
+                    )
+                }
+            } catch (ex: Exception) {
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    com.intellij.openapi.ui.Messages.showErrorDialog(
+                        proj,
+                        MpSqlVisualizerBundle.message("genTest.failed", ex.message ?: ex.javaClass.simpleName),
+                        MpSqlVisualizerBundle.message("panel.genTest"),
+                    )
+                }
+            }
+        }
+    }
+
+    /** M37.4：资产文件名时间戳标签（调用方注入，生成器保持纯函数）。 */
+    private fun timestampLabel(): String =
+        java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
 
     /**
      * M36.5：原生控制台编辑器就绪统一处理——注入补全上下文、记录文档引用、

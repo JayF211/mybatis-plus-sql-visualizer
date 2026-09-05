@@ -102,7 +102,11 @@ object WrapperAnchorDetector {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 val qualifier = ref.qualifierExpression as? PsiReferenceExpression
                 val isWrappersFactory = qualifier?.referenceName in WrapperLocator.wrapperFactoryClassNames
+                // M38.1（负例回归集实证）：qualifier 是 new 表达式（`new Helper().lambdaQuery()`）——
+                // 任意普通类实例的撞名调用，不是 MP 服务链（服务链 qualifier 是变量/字段/this 引用），不标
+                val qualifierIsNewExpression = ref.qualifierExpression is PsiNewExpression
                 val isServiceChain = ref.referenceName in WrapperLocator.serviceChainMethodNames &&
+                    !qualifierIsNewExpression &&
                     WrapperLocator.isServiceChainStart(call)
                 if (!isWrappersFactory && !isServiceChain) return null
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重

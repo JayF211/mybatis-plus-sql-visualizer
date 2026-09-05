@@ -1040,8 +1040,8 @@ class SqlLogPanel(
             if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
                 return LogJumpTarget.NoSource
             }
-            // F-44-7：标记路径相对于源码根目录（如 src/main/java），需在所有源码根目录中搜索
-            val vf = findSourceFile(entry.sourceFile)
+            // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+            val vf = cn.song.mybatisplus.visualizer.log.SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
             return if (vf != null) {
                 LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
             } else {
