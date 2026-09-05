@@ -53,22 +53,31 @@ class SqlLogEntryBuffer(
     /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃并计数；超过上限裁掉最旧）。
      *
      * 去重丢弃分支也调用 [notifyChanged]——徽章数据已变，UI 必须即时刷新（用户实测：
-     * 不通知则 ⨉N 徽章要等下一条 SQL 入列才更新，「不及时」）。 */
+     * 不通知则 ⨉N 徽章要等下一条 SQL 入列才更新，「不及时」）。
+     *
+     * T-Perf-06：去重判定与入队合并进同一 `synchronized(entries)` 临界区——此前 [isDuplicate]
+     * 在锁外无锁遍历 ArrayDeque，与 EDT 清空/删除（clear/removeEntry）并发修改会触发
+     * ConcurrentModificationException，经 LogFilterProxyHandler（无 catch）上浮为 IDE 红色报错弹窗。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
         if (isFiltered(entry.restoredSql)) return false
-        if (dedupeEnabled && isDuplicate(entry)) {
+        var duplicate = false
+        synchronized(entries) {
+            if (dedupeEnabled && isDuplicate(entry)) {
+                duplicate = true
+            } else {
+                entries.addLast(entry)
+                while (entries.size > maxEntries) {
+                    val evicted = entries.removeFirst()
+                    evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
+                    onEvicted?.invoke(evicted)
+                }
+            }
+        }
+        if (duplicate) {
             dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
             notifyChanged() // ← 徽章计数变了 → UI 必须即时刷新
             return false
-        }
-        synchronized(entries) {
-            entries.addLast(entry)
-            while (entries.size > maxEntries) {
-                val evicted = entries.removeFirst()
-                evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
-                onEvicted?.invoke(evicted)
-            }
         }
         notifyChanged()
         return true
@@ -123,6 +132,7 @@ class SqlLogEntryBuffer(
     private fun isFiltered(sql: String): Boolean =
         filterKeywords.isNotEmpty() && filterKeywords.any { sql.contains(it, ignoreCase = true) }
 
+    /** 去重判定（T-Perf-06：**必须在 `synchronized(entries)` 内调用**——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。 */
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
         val now = entry.timestamp
         return entries.firstOrNull { it.restoredSql == entry.restoredSql && now - it.timestamp < dedupeWindowMs } != null
