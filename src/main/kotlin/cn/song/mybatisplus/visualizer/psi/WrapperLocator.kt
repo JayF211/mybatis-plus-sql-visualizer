@@ -49,6 +49,12 @@ data class LocatedWrapper(
     val chain: WrapperChain,
     val table: TableInfo?,
     val entityFile: com.intellij.psi.PsiFile? = null,
+    /**
+     * O-8（缺陷 B）：字符串服务链实体解析失败标记——三通道（类型实参/调用返回类型/服务泛型实参）
+     * 与链内方法引用推断全失败（table=null）。preview 侧据此返回显式降级警示而非静默 null；
+     * 仅服务链形态置位（[WrapperLocator.buildChainFromFactory]），工厂/Kotlin/构造形态维持 null 语义。
+     */
+    val entityResolutionFailed: Boolean = false,
 ) {
     /** T-M19.4：解析时的实体文件修改戳——缓存命中时校验（实体文件变更即失效重算）。 */
     val entityFileStamp: Long = entityFile?.modificationStamp ?: -1L
@@ -307,15 +313,63 @@ object WrapperLocator {
      * 降级必须限定基类型（T-M15-01 回归）：`long total = service.lambdaQuery()...count()` 的 total
      * 类型不是 Wrapper 基类，若仅按 initializer 链首判断会被误判为 wrapper 变量（链被截断、table 为 null）。
      *
+     * O-8（缺陷 A）：`var` 声明（LightPlatform 下类型推断不可靠，常落 Object/未知类型）——
+     * initializer 链头为 wrapper 构造/工厂 **且链上无终结消费方法** 时接受为 wrapper 变量，
+     * 使 var 形态走变量路径（ReferencesSearch 消费检测天然生效：`service.remove(w)` 等不再整体丢失）。
+     * 终结点黑名单守卫（[initializerIsWrapperChainWithoutTerminal]，单一来源 [chainTerminalMethodNames]）
+     * 保住 T-M15-01/T-M19.5 反向语义：`var d = service.lambdaQuery()...one()` 的结果变量仍被拒绝。
+     *
      * M19.5（T-M19.5-01a）起为 internal：供 [WrapperAnchorDetector] 复用（结果变量赋值形态
      * 不应抑制服务链锚点，见 20260813-1536 开发计划）。判定为 O(1) 纯语法（文本匹配 + initializer
      * 链首回溯，无 resolve），符合 M10 性能红线。
      */
     internal fun isWrapperVariable(variable: PsiVariable): Boolean {
         if (detectWrapperType(variable.type) != null) return true
+        // var 声明的语法判定走 typeElement 文本（不依赖 getType() 推断成败，O(1) 纯文本）；
+        // var 仅限局部变量，字段/形参不可能命中
+        if ((variable as? PsiLocalVariable)?.typeElement?.text == "var") {
+            return initializerIsWrapperChainWithoutTerminal(variable.initializer)
+        }
         val typeName = (variable.type as? PsiClassType)?.className ?: return false
         if (typeName !in wrapperBaseTypeNames) return false
         return detectWrapperTypeFromInitializer(variable.initializer) != null
+    }
+
+    /**
+     * O-8（缺陷 A）：从 initializer 链头推断 Wrapper 类型（var 推断形态专用，仅 [buildChain] 的
+     * var 分支调用，不改变非 var 声明的既有判定）。
+     * 与 [detectWrapperTypeFromInitializer] 的差异：**工厂调用自身即链首**——
+     * `Wrappers.<Device>query().eq(...)` 沿 qualifier 回溯的终点是 Wrappers 引用（非调用/new），
+     * 原实现落 `else -> null` 恒不识别工厂链头；本实现取链上**最后一次调用**为链首候选
+     * （isWrapperFactoryCall 门控，与 [findWrapperFactoryCall] 同一判定），new 构造链头同 [detectWrapperTypeFromInitializer]。
+     */
+    private fun wrapperTypeFromInitializerChain(init: PsiElement?): WrapperType? {
+        var expr: PsiElement? = init ?: return null
+        var lastCall: PsiMethodCallExpression? = null
+        while (expr is PsiMethodCallExpression) {
+            lastCall = expr
+            expr = expr.methodExpression.qualifierExpression
+        }
+        return when {
+            expr is PsiNewExpression -> detectWrapperType(expr.type)
+            lastCall != null && isWrapperFactoryCall(lastCall) -> factoryWrapperType(lastCall)
+            else -> null
+        }
+    }
+
+    /**
+     * initializer 是否为「无终结消费方法」的 wrapper 构造/工厂链（O-8 缺陷 A 接受门）：
+     * 链头经 [wrapperTypeFromInitializerChain] 判为 wrapper，且链上任一调用都不在
+     * [chainTerminalMethodNames]（one/list/count/remove 等消费终结点）——
+     * 链含终结点即为消费结果赋值（`var d = service.lambdaQuery()...one()`），不是 wrapper 变量。
+     */
+    private fun initializerIsWrapperChainWithoutTerminal(init: PsiElement?): Boolean {
+        var expr: PsiElement? = init ?: return false
+        while (expr is PsiMethodCallExpression) {
+            if (expr.methodExpression.referenceName in chainTerminalMethodNames) return false
+            expr = expr.methodExpression.qualifierExpression
+        }
+        return wrapperTypeFromInitializerChain(init) != null
     }
 
     /** Wrapper 抽象基类型（基类型声明降级仅限这两类，见 [isWrapperVariable]）。 */
@@ -334,6 +388,33 @@ object WrapperLocator {
             is PsiNewExpression -> detectWrapperType(expr.type)
             is PsiMethodCallExpression -> factoryWrapperType(expr)
             else -> null
+        }
+    }
+
+    /**
+     * O-8（缺陷 A）：从 initializer 链头解析 (实体类, 类型参数类名)——var/推断形态变量声明类型
+     * 无泛型实参可取。链头是 wrapper 构造（`new QueryWrapper<Device>()`）时取构造类型泛型；
+     * 链头是工厂调用（`Wrappers.<Device>query()`）时取显式类型实参——链首候选为链上**最后一次调用**
+     * （qualifier 回溯终点是引用，工厂调用自身即链首，同 [wrapperTypeFromInitializerChain]），
+     * 解析顺位与 [buildChainFromFactory] 同源（显式类型实参 → Class 字面量实参 → 调用返回类型）。
+     */
+    private fun entityInfoFromInitializerChain(init: PsiElement?): Pair<PsiClass?, String?> {
+        var expr: PsiElement? = init ?: return null to null
+        var lastCall: PsiMethodCallExpression? = null
+        while (expr is PsiMethodCallExpression) {
+            lastCall = expr
+            expr = expr.methodExpression.qualifierExpression
+        }
+        return when {
+            expr is PsiNewExpression -> entityInfoFromType(expr.type)
+            lastCall != null -> {
+                val typeArg = lastCall.typeArguments.firstOrNull() as? PsiClassType
+                val entityClass = typeArg?.resolve()?.takeIf { it !is PsiTypeParameter }
+                    ?: entityClassFromFactoryArgs(lastCall)
+                    ?: resolveEntityClass(lastCall.type)
+                entityClass to typeArg?.className
+            }
+            else -> null to null
         }
     }
 
@@ -462,7 +543,8 @@ object WrapperLocator {
         val wrapperType = factoryWrapperType(factoryCall) ?: return null
         // 实体类优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()`），失败时用类名按命名策略兜底；
         // 服务链（`service.lambdaQuery()`，无类型实参）回退到调用表达式返回类型（LambdaQueryChainWrapper<T>），
-        // 仍失败时从链内首个「首参方法引用」推断（T-M15-01）
+        // 仍失败时从链内首个「首参方法引用」推断（T-M15-01）；
+        // O-8（缺陷 B）第三通道：服务链 qualifier 变量的服务类型泛型实参（`DeviceService extends IService<Device>`）
         val typeArg = factoryCall.typeArguments.firstOrNull() as? PsiClassType
         // XB（M44）：xbatis 工厂实体**优先取 Class 字面量实参**（`QueryChain.of(mapper, User.class)`，
         // javap 实证签名）——stub/LightPlatform 下返回类型泛型常为未推断的类型形参 T，不可作实体
@@ -473,6 +555,7 @@ object WrapperLocator {
                     ?: resolveEntityClass(factoryCall.type)
             else -> typeArg?.resolve() ?: resolveEntityClass(factoryCall.type)
                 ?: entityClassFromFactoryArgs(factoryCall)
+                ?: entityClassFromServiceQualifier(factoryCall)
         }
         val typeArgName = typeArg?.className
         // XB（M44）：xbatis 链实体解析——xbatis @Table 注解实体走 JpaEntityResolver
@@ -543,6 +626,13 @@ object WrapperLocator {
             if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageLimit(it) else null
         }
 
+        // O-8（缺陷 B）：字符串服务链实体解析失败标记（preview 侧显式降级，不再静默 null）——
+        // 仅服务链形态（接收者非静态工厂类：Wrappers/ChainWrappers/MPJ/Db 解析为 PsiClass 排除，
+        // this/无 qualifier 服务链同按服务链计），工厂形态维持既有 null 语义
+        val serviceChainEntityUnresolved = table == null &&
+            factoryCall.methodExpression.referenceName in serviceChainMethodNames &&
+            (factoryCall.methodExpression.qualifierExpression as? PsiReferenceExpression)?.resolve() !is PsiClass
+
         return LocatedWrapper(
             chain = WrapperChain(
                 wrapperType, table?.entityClassName ?: entityClass?.name, wrapperCalls, constructorAlias = null,
@@ -551,7 +641,33 @@ object WrapperLocator {
             ),
             table = table,
             entityFile = entityClass?.containingFile,
+            entityResolutionFailed = serviceChainEntityUnresolved,
         )
+    }
+
+    /**
+     * O-8（缺陷 B）第三通道：服务链 qualifier 变量的服务类型泛型实参 → 实体 PsiClass。
+     * `service.query()` 的 service 引用 resolve 到变量 → 其类型（`DeviceService`）→
+     * 父接口/父类泛型实参（`IService<Device>`）→ 实体。真实 PSI 解析，LightPlatform 可测
+     * （fixture 内声明 `interface IService<T>` 与 `interface DeviceService extends IService<Device>` 桩即可）。
+     *
+     * 实体取**末位**泛型实参：MP 惯例实体在末位（`IService<T>` 单参、`ServiceImpl<M, T>` 双参，
+     * 首参可能是 Mapper）；类型自身已有泛型实参（`IService<Device> service` 形态）时优先。
+     * PsiTypeParameter 守卫（宁可不识别不出错表），全失败返回 null 交由降级/推断链兜底。
+     */
+    private fun entityClassFromServiceQualifier(factoryCall: PsiMethodCallExpression): PsiClass? {
+        val qualifier = factoryCall.methodExpression.qualifierExpression as? PsiReferenceExpression ?: return null
+        val variable = qualifier.resolve() as? PsiVariable ?: return null
+        val serviceType = variable.type as? PsiClassType ?: return null
+        val serviceClass = serviceType.resolve() ?: return null
+        fun lastEntityOf(type: PsiClassType): PsiClass? =
+            (type.parameters.lastOrNull() as? PsiClassType)?.resolve()?.takeIf { it !is PsiTypeParameter }
+        // ① 服务类型自身泛型实参（`IService<Device> service` 参数直以接口类型声明）
+        lastEntityOf(serviceType)?.let { return it }
+        // ② 父接口/父类泛型实参（`DeviceService extends IService<Device>`，接口 extends 与类 implements 皆扫）
+        val supers = serviceClass.extendsList?.referencedTypes?.toList().orEmpty() +
+            serviceClass.implementsList?.referencedTypes?.toList().orEmpty()
+        return supers.firstNotNullOfOrNull { superType -> lastEntityOf(superType) }
     }
 
     /**
@@ -813,11 +929,22 @@ object WrapperLocator {
      *  - 变量后续引用上的方法调用（wrapper.eq(...)）
      */
     private fun buildChain(variable: PsiVariable, resolveVariables: Boolean): LocatedWrapper? {
-        // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）
+        // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）；
+        // O-8（缺陷 A）：var 推断形态（typeElement 文本 "var"）工厂链头原实现不识别，补第三顺位
+        val isVarDeclaration = (variable as? PsiLocalVariable)?.typeElement?.text == "var"
         val wrapperType = detectWrapperType(variable.type)
             ?: detectWrapperTypeFromInitializer(variable.initializer)
+            ?: (if (isVarDeclaration) wrapperTypeFromInitializerChain(variable.initializer) else null)
             ?: return null
-        val (entityClass, typeArgName) = entityInfoFromType(variable.type)
+        // O-8（缺陷 A）：var/推断形态声明类型不可识别 → 泛型实参解析不到实体，
+        // 从 initializer 链头补实体解析（`var w = Wrappers.<Device>query()` 显式类型实参 /
+        // `var w = new QueryWrapper<Device>()` 构造类型），与工厂路径实体解析同源
+        var (entityClass, typeArgName) = entityInfoFromType(variable.type)
+        if (entityClass == null && typeArgName == null && detectWrapperType(variable.type) == null) {
+            val (initEntity, initTypeArg) = entityInfoFromInitializerChain(variable.initializer)
+            entityClass = initEntity
+            typeArgName = initTypeArg
+        }
         // XB（M44）：xbatis 变量声明形态实体解析与工厂形态同轨（xbatis @Table → JpaEntityResolver）
         val table: TableInfo? = when {
             wrapperType == WrapperType.XBATIS -> resolveTableInfoForXbatis(entityClass, typeArgName)

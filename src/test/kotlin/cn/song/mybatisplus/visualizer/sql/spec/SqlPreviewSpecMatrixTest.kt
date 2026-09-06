@@ -1265,13 +1265,93 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
         )
     }
 
-/*
- * M38.2 已知缺陷记录（矩阵复现，待后续版本修复）：
- *  - 字符串版 QueryWrapper 的**消费形态**（`QueryWrapper w = new QueryWrapper<Device>().eq("id", 3L); service.remove(w);`）
- *    条件丢失——deleteConsumed/updateEntityConsumed 分支硬编码 Lambda 语义的 QueryWrapperParser，
- *    字符串列链需走 ConverterRegistry 分派（S37 已改为 Lambda 版回归；S75 Wrappers.query() 工厂 + var
- *    变量 + 字符串列同因，场景暂移除）。
- */
+    // ---- 三处缺陷修复后场景（缺陷 A var 消费语义 / 缺陷 C DELETE last 尾段 / 缺陷 B service.query 预览）----
+
+    fun `test S86 字符串 remove 消费携带 last 尾段`() {
+        spec(
+            "S86",
+            removeChain("QueryWrapper<Device> w = new QueryWrapper<Device>().eq(\"status\", 1).last(\"LIMIT 5\"); service.remove(w);"),
+            """
+            DELETE FROM device
+            WHERE status = 1
+            LIMIT 5
+            """,
+        )
+    }
+
+    fun `test S88 var 工厂形态 remove 消费`() {
+        // 缺陷 A：var 声明 + Wrappers 工厂——走变量路径后 ReferencesSearch 消费检测恢复，
+        // 删除意图渲染 DELETE（修复前整体按查询渲染）
+        spec(
+            "S88",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void remove(DeviceService service) {
+                    var w = Wrappers.<Device>query().eq("id", 3L);
+                    service.remove(w);
+                }
+
+                $entity
+            }
+            """,
+            """
+            DELETE FROM device
+            WHERE id = 3
+            """,
+        )
+    }
+
+    fun `test S89 service query 字符串服务链预览`() {
+        // 缺陷 B：实体经服务类型泛型实参第三通道解析（DeviceService extends IService<Device>）
+        spec(
+            "S89",
+            """
+            public class Demo {
+                public Device query(DeviceService service) {
+                    return service.query().eq("id", 3L).one();
+                }
+
+                $entity
+
+                interface IService<T> {
+                }
+
+                interface DeviceService extends IService<Device> {
+                }
+            }
+            """,
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE id = 3
+            """,
+        )
+    }
+
+    fun `test S90 service query 无法推断实体时显式降级警示`() {
+        // 缺陷 B 降级路径：全通道失败 → 带警示的空结果（不再静默 null）
+        val result = previewResult(
+            """
+            public class Demo {
+                public Device query(DeviceService service) {
+                    return service.query().eq("id", 3L).one();
+                }
+
+                $entity
+
+                interface DeviceService {
+                }
+            }
+            """,
+        )
+        assertNotNull("S90: 应返回降级结果而非 null", result)
+        assertEquals("S90", "", result!!.sql)
+        val warning = result.warning
+        assertNotNull("S90: 应携带降级警示", warning)
+        assertTrue("S90: 警示应说明无法推断实体表，实际：$warning", warning!!.contains("无法推断实体表"))
+    }
 
     // ========== 第八批：M38.3 apply {i} 绑定参数链路查漏（Flex toSQL「一步完整 SQL」体验对齐） ==========
 
