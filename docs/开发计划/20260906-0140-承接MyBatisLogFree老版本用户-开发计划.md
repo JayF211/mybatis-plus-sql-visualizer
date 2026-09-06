@@ -76,7 +76,7 @@ MyBatis Log Free 新版把 2025.1–2025.3 上的存量用户放生（第二轮�
 - [x] 四个痛点（面板固定/IN 引号/LocalDate/JPA）对比文案各有着落（README 迁移小节 + HTML FAQ）
 - [x] 描述文本含 "MyBatis SQL log" 等竞品搜索短语，无营销堆砌（每处短语对应真实功能）
 - [x] verifyPlugin smoke（243）通过；零生产代码改动（仅 plugin.xml CDATA 文本与文档）
-- [ ] Marketplace 后台 tags/页面描述核对动作列入下次上传清单（随 T-MktColdStart 补入发布流程的步骤执行）（待姊妹计划落地后勾选）
+- [x] Marketplace 后台 tags/页面描述核对动作列入下次上传清单（随 T-MktColdStart 补入发布流程的步骤执行）（T-MktColdStart 已落地：发布流程 §11 第 8 条含 tags、新增第 12 条上传后后台确认审核状态；页面描述以 plugin.xml 为唯一权威源，后台单独编辑仅作临时先行、下次上传对齐）
 
 ## 5. 风险
 

@@ -1,7 +1,8 @@
 # SQL Visualizer
 
 > **别的插件给你文本，我们给你可执行的 SQL。**
-> 三条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
+> 支持 IntelliJ IDEA 2024.3~2026.x 全版本（含 2025.1–2025.3）。
+> 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
 
 ## 能力全景：覆盖调试的两个阶段
 
@@ -78,6 +79,7 @@
 **检查更新（Gitee 抢先体验通道）**
 
 - 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装（重启生效）；支持「忽略此版本」
+- 内测用户若觉得好用，欢迎到 Marketplace 插件页（plugins.jetbrains.com/plugin/33633-sql-visualizer）评分留言；磁盘安装的包不会收到市场自动更新，在 Marketplace 搜索页点一次 Update 即完成迁移并交由 IDE 接管自动更新——到页面顺手评分留言即可
 
 **其他**
 
