@@ -83,6 +83,7 @@ class XmlPreviewModelTest {
 
     @Test
     fun `foreach默认展开两次_次数可调`() {
+        // T-GoldenDefense：collection="map.items" 形态锁定为金样矩阵 X5（XmlMapParamSpecMatrixTest）
         val m = model("""
             <mapper namespace="n">
               <select id="s1">SELECT * FROM t WHERE id IN
@@ -130,6 +131,7 @@ class XmlPreviewModelTest {
 
     @Test
     fun `条件开关切换分支`() {
+        // T-GoldenDefense：Map 参数条件（map.status != null）开关语义锁定为金样矩阵 X3（XmlMapParamSpecMatrixTest）
         val m = model("""
             <mapper namespace="n">
               <select id="s1">SELECT * FROM t
@@ -202,6 +204,7 @@ class XmlPreviewModelTest {
     @Test
     fun `quoteFor_Map参数前缀兜底`() {
         // Map 入参：键 = 参数名 p，任意 p.* 属性前缀命中（T-M29.4 兜底语义）
+        // T-GoldenDefense：@Param("map") 命名形态已锁定为金样矩阵 X2（XmlMapParamSpecMatrixTest）
         val m = XmlPreviewModel.from(
             XmlMapperParser().parse("""
                 <mapper namespace="n">
