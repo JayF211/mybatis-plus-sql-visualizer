@@ -268,7 +268,7 @@ ORDER BY t1.create_time DESC
 
 - JDK 17（`jvmToolchain(17)`）
 - 构建平台：IntelliJ IDEA Ultimate 2024.3.7.1（最低支持版本编译；数据源 API 在 `com.intellij.database`，仅 Ultimate 捆绑）
-- 兼容性：IDEA 2024.3+（`since-build=243`，Plugin Verifier 按目标 IDE 集合校验）
+- 兼容性：IDEA 2024.3+（`since-build=243`，Plugin Verifier 按目标 IDE 集合校验）。适配承诺：新版 IntelliJ IDEA 正式版发布后 5 个工作日内完成兼容性验证并发布适配版本（或兼容性说明）；兼容性验证由计划任务每周自动执行（verifyPlugin 三目标 243/253/262），如遇平台破坏性变更导致无法按期适配，在本节与发行说明公示原因与预计时间。
 - Gradle 9.x（Wrapper 内置）
 
 ## 常用命令
@@ -281,7 +281,7 @@ ORDER BY t1.create_time DESC
 | `./gradlew verifyPlugin` | 兼容性校验：默认全量三版本（243/253/262，发布前）；`-PverifyIdes=minimal` 边界两版本（243+262，约 10 分钟）；`-PverifyIdes=smoke` 仅构建基准 243（约 2 分钟，日常开发后冒烟） |
 | `./gradlew buildPlugin` | 生成发布 zip（`build/distributions/`） |
 
-验证节奏：日常功能提交前 `test` + `verifyPlugin -PverifyIdes=smoke`（约 3 分钟）；使用新平台 API 后 `minimal`；发布 / 里程碑交付用全量三版本。verifyPlugin 与并行测试共享默认沙盒 / `.pluginVerifier` 缓存，并行会话需错峰。
+验证节奏：日常功能提交前 `test` + `verifyPlugin -PverifyIdes=smoke`（约 3 分钟）；使用新平台 API 后 `minimal`；发布 / 里程碑交付用全量三版本。verifyPlugin 与并行测试共享默认沙盒 / `.pluginVerifier` 缓存，并行会话需错峰。每周自动验证兜底：Windows 计划任务（每周三 03:00，`StartWhenAvailable` 错过开机补跑）经 `dev-support/ci-verify.ps1` 对 dev 最新执行一次全量三目标巡检，日志与失败标记（`LAST-FAILED.txt`）落 `dev-support/verify-logs/`，注册命令见脚本头注释；发布前手工全量红线不变。
 
 ## 发布
 
