@@ -139,6 +139,7 @@ class OgnlEvaluatorTest {
         assertTrue(truth("'hello'.endsWith('lo')", bindings))
         assertTrue(truth("list.isEmpty() == false", bindings))
         assertTrue(truth("map.containsKey('k1')", bindings))
+        // T-GoldenDefense：Map 取值三形态锁定为金样矩阵 X4（XmlMapParamSpecMatrixTest）
         // 未知方法 → null（安全降级，不抛错）
         assertEquals(null, eval("_parameter.customMethod()", bindings))
     }
@@ -146,7 +147,7 @@ class OgnlEvaluatorTest {
     @Test
     fun `下标访问`() {
         assertEquals("b", eval("list[1]", bindings))
-        assertEquals("v1", eval("map['k1']", bindings))
+        assertEquals("v1", eval("map['k1']", bindings)) // T-GoldenDefense：金样矩阵 X4（XmlMapParamSpecMatrixTest）
     }
 
     // ------------------------------------------------------------------
