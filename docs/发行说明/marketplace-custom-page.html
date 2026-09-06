@@ -315,9 +315,21 @@
 <input type="checkbox" id="faq-1" class="faq-toggle">
 <label for="faq-1" class="faq-question">插件支持哪些 IDE 版本？</label>
 <div class="faq-answer">
-  IntelliJ IDEA 2024.3 及以上（<code>since-build=243</code>）。
-  兼容 2024.3 / 2025.3 / 2026.2 全系列。
+  IntelliJ IDEA 2024.3 起全版本兼容（<code>since-build=243</code>，含 2025.1–2025.3；2024.3/2025.3/2026.2 为发布前 verifyPlugin 校验目标）。
   Community 与 Ultimate 均支持，但「执行 SQL」功能需 Ultimate + Database 插件。
+</div>
+
+<input type="checkbox" id="faq-13" class="faq-toggle">
+<label for="faq-13" class="faq-question">我在用 MyBatis Log Free，可以换过来吗？</label>
+<div class="faq-answer">
+  可以。MyBatis Log Free 新版已放弃 2025.x，正换过来的用户常见几个抱怨在这里都有对应能力：
+  <ul>
+    <li>日志面板不用盯：开始调试自动捕捉、首条 SQL 自动展开；嫌占空间手动关掉后本次会话不再弹回。</li>
+    <li>字符串值按字段类型自动加引号，IN 列表逗号分隔回填——不再漏引号。</li>
+    <li>日期时间按类型正确回填，9 种方言渲染经 1538 保留字逐词引擎验证。</li>
+    <li>JPA/Hibernate 全家桶预览：findByXxx 派生、JPQL、Criteria、HQL 一键转 SQL——日志插件做不到的事，写代码时就能看到。</li>
+  </ul>
+  兼容版本范围见<a href="#faq-1">「插件支持哪些 IDE 版本？」</a>。
 </div>
 
 <input type="checkbox" id="faq-2" class="faq-toggle">
