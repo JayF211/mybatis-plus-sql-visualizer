@@ -139,6 +139,11 @@
 </head>
 <body>
 
+<!-- ========== HERO ========== -->
+<p><b>别的插件给你文本，我们给你可执行的 SQL。</b>MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate 的 SQL 调试工具——写代码时静态预览 Wrapper 链、XML、注解、JPA 的最终 SQL，跑起来后把控制台日志还原为可执行 SQL。</p>
+<p>JPA/Hibernate 全家桶预览：findByXxx 派生查询、JPQL/@Query、CriteriaBuilder、HQL、NamedQuery、Specification、QBE 一键转 SQL。</p>
+<p>IntelliJ IDEA 2024.3~2026.x 全版本兼容（含 2025.1–2025.3）。</p>
+
 <!-- ========== FEATURE MATRIX ========== -->
 <h2 id="features">Feature Matrix / 功能对照表</h2>
 <p class="section-desc">以下矩阵列出各功能的支持范围与触发方式，帮助你快速判断是否满足需求。</p>
@@ -315,9 +320,21 @@
 <input type="checkbox" id="faq-1" class="faq-toggle">
 <label for="faq-1" class="faq-question">插件支持哪些 IDE 版本？</label>
 <div class="faq-answer">
-  IntelliJ IDEA 2024.3 及以上（<code>since-build=243</code>）。
-  兼容 2024.3 / 2025.3 / 2026.2 全系列。
+  IntelliJ IDEA 2024.3 起全版本兼容（<code>since-build=243</code>，含 2025.1–2025.3；2024.3/2025.3/2026.2 为发布前 verifyPlugin 校验目标）。
   Community 与 Ultimate 均支持，但「执行 SQL」功能需 Ultimate + Database 插件。
+</div>
+
+<input type="checkbox" id="faq-13" class="faq-toggle">
+<label for="faq-13" class="faq-question">我在用 MyBatis Log Free，可以换过来吗？</label>
+<div class="faq-answer">
+  可以。MyBatis Log Free 新版已放弃 2025.x，正换过来的用户常见几个抱怨在这里都有对应能力：
+  <ul>
+    <li>日志面板不用盯：开始调试自动捕捉、首条 SQL 自动展开；嫌占空间手动关掉后本次会话不再弹回。</li>
+    <li>字符串值按字段类型自动加引号，IN 列表逗号分隔回填——不再漏引号。</li>
+    <li>日期时间按类型正确回填，9 种方言渲染经 1538 保留字逐词引擎验证。</li>
+    <li>JPA/Hibernate 全家桶预览：findByXxx 派生、JPQL、Criteria、HQL 一键转 SQL——日志插件做不到的事，写代码时就能看到。</li>
+  </ul>
+  兼容版本范围见<a href="#faq-1">「插件支持哪些 IDE 版本？」</a>。
 </div>
 
 <input type="checkbox" id="faq-2" class="faq-toggle">

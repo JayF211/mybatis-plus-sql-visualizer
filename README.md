@@ -1,7 +1,8 @@
 # SQL Visualizer
 
 > **别的插件给你文本，我们给你可执行的 SQL。**
-> 三条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
+> 支持 IntelliJ IDEA 2024.3~2026.x 全版本（含 2025.1–2025.3）。
+> 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
 
 ## 能力全景：覆盖调试的两个阶段
 
@@ -11,7 +12,7 @@
 
 **验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化。
 
-本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
+本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x）。
 
 ## 功能截图
 
@@ -78,6 +79,7 @@
 **检查更新（Gitee 抢先体验通道）**
 
 - 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装（重启生效）；支持「忽略此版本」
+- 内测用户若觉得好用，欢迎到 Marketplace 插件页（plugins.jetbrains.com/plugin/33633-sql-visualizer）评分留言；磁盘安装的包不会收到市场自动更新，在 Marketplace 搜索页点一次 Update 即完成迁移并交由 IDE 接管自动更新——到页面顺手评分留言即可
 
 **其他**
 
@@ -88,6 +90,17 @@
 - 批量操作预览：`save` / `updateBatchById` 等批量 SQL 按列展开，参数可逐列勾选；`saveOrUpdate` 冲突子句按方言渲染（MySQL `ON DUPLICATE KEY UPDATE` / PG `ON CONFLICT` 等）
 - 逻辑删除注入：实体含 `@TableLogic` 时自动追加 `AND deleted = 0`（可配置关闭）；多租户 / 数据权限拦截器模拟（占位符注入，可配置）
 - UPDATE / DELETE 无 WHERE 条件时红色警示全表操作风险
+
+## 从 MyBatis Log Free 迁移？
+
+MyBatis Log Free 新版已放弃 2025.x；如果你正从它换过来，几个常见抱怨在这里都有对应解法：
+
+- 日志面板不用盯：开始调试自动捕捉、首条 SQL 自动展开；嫌占空间手动关掉后本次会话不再弹回。
+- 字符串值按字段类型自动加引号，IN 列表逗号分隔回填——不再漏引号。
+- 日期时间按类型正确回填，9 种方言渲染经 1538 保留字逐词引擎验证。
+- JPA/Hibernate 全家桶预览：findByXxx 派生、JPQL、Criteria、HQL 一键转 SQL——日志插件做不到的事，写代码时就能看到。
+
+IntelliJ IDEA 2024.3 起全版本兼容（含 2025.1–2025.3 与 2026.x）。
 
 ## 预览 SQL 与运行时 SQL 的差异
 
