@@ -511,6 +511,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 两种形态单击即选（原生 BaseListPopupStep）：
      *  1. SQL 回归脚本：落盘 `<project>/src/test/resources/sql-visualizer/`（后台写 + VFS 刷新）；
      *  2. JUnit 用例骨架：弹窗展示 + 复制（复用 [JavaCodePreviewDialog]，只复制不落盘）。
+     *
+     * T-TestAssertReal：onChosen 选中后在后台链上经 [cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.tableMeta]
+     * 提取目标表 NOT NULL 列清单组装 Input（两形态共用一次解析，metaCache 命中零遍历）；
+     * 无数据源/Community/表查不到 → 空清单 → 生成器 A 档，自动降级无新增提示分支。
      */
     internal fun generateTestAsset() {
         val proj = project ?: return
@@ -539,16 +543,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ): com.intellij.openapi.ui.popup.PopupStep<*> {
                 when (selectedValue) {
                     is cn.song.mybatisplus.visualizer.testgen.GenAction.Junit -> {
-                        val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.junit(input, timestampLabel())
-                        JavaCodePreviewDialog(
-                            proj,
-                            asset.content,
-                            MpSqlVisualizerBundle.message("genTest.dialog.title"),
-                        ).show()
+                        // T-TestAssertReal：schema 解析（自带 ReadAction）放后台链，EDT 只收 invokeLater 结果
+                        ApplicationManager.getApplication().executeOnPooledThread {
+                            val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.junit(
+                                resolveTestAssetInput(proj, input), timestampLabel(),
+                            )
+                            ApplicationManager.getApplication().invokeLater {
+                                JavaCodePreviewDialog(
+                                    proj,
+                                    asset.content,
+                                    MpSqlVisualizerBundle.message("genTest.dialog.title"),
+                                ).show()
+                            }
+                        }
                     }
                     else -> {
-                        val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.sqlScript(input, timestampLabel())
-                        saveSqlScriptAsset(proj, asset)
+                        ApplicationManager.getApplication().executeOnPooledThread {
+                            val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.sqlScript(
+                                resolveTestAssetInput(proj, input), timestampLabel(),
+                            )
+                            saveSqlScriptAsset(proj, asset)
+                        }
                     }
                 }
                 return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
@@ -557,6 +572,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
             .createListPopup(step)
             .showInFocusCenter()
+    }
+
+    /**
+     * T-TestAssertReal：后台链上经数据源 schema 提取目标表 NOT NULL 列清单（B 档）组装生成输入。
+     * tableName 空 / Community / 表查不到 → 空清单 → 生成器自动降 A 档。
+     * [cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.tableMeta] 自带 ReadAction
+     * 与 metaCache（T-Perf-09，JOIN 富化后台预取常已填好缓存），只允许在后台线程调用。
+     */
+    private fun resolveTestAssetInput(
+        proj: com.intellij.openapi.project.Project,
+        base: cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.Input,
+    ): cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.Input {
+        val tableName = base.tableName?.takeIf { it.isNotBlank() } ?: return base
+        val notNullColumns = runCatching {
+            cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+                .tableMeta(proj, tableName)
+                .columns.filterValues { it.notNull == true }.keys.toList()
+        }.getOrDefault(emptyList())
+        return base.copy(notNullColumns = notNullColumns)
     }
 
     /** M37.4：后台写 SQL 回归脚本 + VFS 刷新（新建文件非跟踪文件，无 File Cache Conflict 风险）。 */
