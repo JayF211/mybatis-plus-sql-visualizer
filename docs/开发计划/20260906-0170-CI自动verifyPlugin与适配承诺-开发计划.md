@@ -72,12 +72,12 @@ Windows 计划任务本身是系统侧配置，不入仓库，以脚本头注释
 
 ## 4. 验收标准
 
-- [ ] `dev-support/ci-verify.ps1` 真实跑通一次 verifyFull，`dev-support/verify-logs/` 留有成功日志（三目标 Compatible、0 COMPATIBILITY_PROBLEMS）
-- [ ] Windows 计划任务注册成功，`Get-ScheduledTask` 可见且下次触发时间正确，`StartWhenAvailable` 生效
-- [ ] README 承诺上线：258 行与 271 行含「新版 IDEA 正式版发布后 5 个工作日内完成适配验证」措辞与超期公示条款
-- [ ] 两份 `marketplace-custom-page.html` FAQ 同步承诺，与 README 措辞一致
-- [ ] `docs/变更记录.md` 追加、本计划变更记录回填（三处同步完成）
-- [ ] `build.gradle.kts` 零改动（git diff 核对）
+- [x] `dev-support/ci-verify.ps1` 真实跑通一次 verifyFull，`dev-support/verify-logs/` 留有成功日志（三目标 Compatible、0 COMPATIBILITY_PROBLEMS）——已跑通：`verify-20260907-003333.log`，IU-243.28141.41 / IU-253.33514.17 / IU-262.9437.185 全 Compatible，BUILD SUCCESSFUL 7m48s，无 LAST-FAILED.txt
+- [x] Windows 计划任务注册成功，`Get-ScheduledTask` 可见且下次触发时间正确，`StartWhenAvailable` 生效——MPSqlVisualizer-WeeklyVerify，State Ready，下次触发 2026-09-09（周三）03:00，StartWhenAvailable=True，WorkingDirectory=dev 检出工作树
+- [x] README 承诺上线：258 行与 271 行含「新版 IDEA 正式版发布后 5 个工作日内完成适配验证」措辞与超期公示条款——已上线（合并后行号漂移，按「兼容性」bullet 与「验证节奏」段内容定位落笔）
+- [x] 两份 `marketplace-custom-page.html` FAQ 同步承诺，与 README 措辞一致——faq-1 答案末尾追加同一句，两份同步
+- [x] `docs/变更记录.md` 追加、本计划变更记录回填（三处同步完成）
+- [x] `build.gradle.kts` 零改动（git diff 核对）——`git diff --stat build.gradle.kts` 为空
 
 ## 5. 风险
 
@@ -88,3 +88,4 @@ Windows 计划任务本身是系统侧配置，不入仓库，以脚本头注释
 ## 变更记录
 
 - 2026-09-06 T-CiVerifyPromise 立项：CI 自动 verifyPlugin 与适配承诺（本地计划任务兜底 + README/Marketplace 页 5 个工作日适配承诺，Gitee Go 与 GitHub Actions 经探查后不选）。
+- 2026-09-06 T-CiVerifyPromise 交付：ci-verify.ps1 落地并真实跑通 verifyFull（三目标全 Compatible，日志留痕 verify-20260907-003333.log）；计划任务 MPSqlVisualizer-WeeklyVerify 注册并核对（周三 03:00、StartWhenAvailable=True、下次触发 2026-09-09）；README 与两份 Marketplace 页同步 5 个工作日适配承诺 + 超期公示条款；.gitignore 追加 verify-logs/；build.gradle.kts 零改动；实施中发现并兜底计划任务 System32 默认工作目录陷阱（脚本 Push-Location + 注册命令 -WorkingDirectory）。
