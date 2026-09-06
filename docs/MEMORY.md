@@ -33,6 +33,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
+| [设计规范-弹窗克制红线.md](./设计规范-弹窗克制红线.md)                        | **弹窗/通知设计红线**（2026-09-06 固化）：触点清单（grep 基线 17 文件 46 处，插件主动仅 2 处且列门禁代码证据）+ 允许类/禁止类/准入五问 + 复核命令与登记义务 |
 | [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
 | [记忆精简规范.md](./记忆精简规范.md)                                          | 本地记忆文件管理：分类标准（保留/归档/全局）、归档目录结构、操作流程、数量基线 |
 | [MEMORY.md](./MEMORY.md)                                                      | 本文件：docs 目录检索索引 |
@@ -190,6 +191,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 功能需求定义（F-01~F-20） | `需求文档/20260812-1058-...-需求文档.md` |
 | 任务编号 T-xx / 里程碑排期 / 实现思路 | 开发计划：总计划（M0~M19）/ 全量 API（M20~M22）/ 剩余立项（P-立项）/ M23 系列 |
 | 版本记录 / 版本号规范 | `发行说明/` |
+| 弹窗/通知触点盘点 / 新弹窗能否弹 / 准入检查 | `设计规范-弹窗克制红线.md` |
 | 文档命名 / 格式规范 | `文档命名规范-说明文档.md` |
 | 产品介绍 / 使用说明 | `README.md`（产品定位、功能特性、截图、已知差异） |
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
