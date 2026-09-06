@@ -73,7 +73,7 @@
 - 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表，双击预览、右键复制 / 跳转源码
 - 条目显示耗时（p6spy / MP TimeCount / 自定义前缀），超阈值红色标记并统计慢查询；列表支持 SQL 类型筛选、Ctrl+F 搜索、耗时排序、重复条目去重（⨉N 徽章即时同步）
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码
-- 双击/右键「跳转到源码」：应用注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）后可精确定位到触发 SQL 的代码行；未注册时按表名智能搜索实体近似跳转
+- 双击/右键「跳转到源码」：应用注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）后可精确定位到触发 SQL 的代码行；未注册时按表名智能搜索实体近似跳转（覆盖 `Wrappers.lambdaQuery()` 等静态工厂与 `service.lambdaQuery()` 等 IService 服务链写法）
 
 **检查更新（Gitee 抢先体验通道）**
 
