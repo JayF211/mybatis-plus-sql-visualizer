@@ -21,6 +21,7 @@ import cn.song.mybatisplus.visualizer.ui.XmlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver;
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext;
 import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider;
+import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
@@ -164,7 +165,8 @@ public final class ConvertToSqlAction extends AnAction {
                     } else if (!tryHqlFallback(service, project, element, sourceLocation)
                             && !tryNamedQueryFallback(service, project, element, sourceLocation)
                             && !tryJdbcTemplateFallback(project, element, sourceLocation)
-                            && !tryJpaFallback(service, project, element, sourceLocation)) {
+                            && !tryJpaFallback(service, project, element, sourceLocation)
+                            && !tryMethodBodyStringSqlFallback(project, element, sourceLocation)) {
                         // 均未命中 → 回落文件级 SQL 注解候选
                         showAnnotationCandidates(project, file, editor, sourceLocation);
                     }
@@ -249,6 +251,20 @@ public final class ConvertToSqlAction extends AnAction {
             return true;
         }
         return false;
+    }
+
+    /**
+     * 方法定义锚点兜底（T-DaoSql-05）：光标在方法定义名或方法体内任意非调用处，且方法体内
+     * 存在字符串 SQL 调用（`beanCruder.selectList(Class, sql, ...)` 等）→ 预览方法体内候选
+     * （0/1/多分发，与 {@link cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider}
+     * 点击共用 {@link cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService#collectMethodCandidates}）。
+     * 位于 JPA 回落之后、文件级注解候选之前——方法体内候选（局部）优先于文件级候选（全局）。
+     */
+    private boolean tryMethodBodyStringSqlFallback(Project project, PsiElement element, String sourceLocation) {
+        PsiMethod method = PsiTreeUtil.getParentOfType(element, PsiMethod.class, false);
+        if (method == null || method.getBody() == null) return false;
+        StringSqlMethodGutterLineMarkerProvider.previewMethodCandidates(project, method, sourceLocation);
+        return true;
     }
 
     /**

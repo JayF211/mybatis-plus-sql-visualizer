@@ -5,11 +5,15 @@ import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import com.intellij.openapi.project.Project;
+import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
+import com.intellij.psi.util.PsiTreeUtil;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -64,6 +68,37 @@ public final class JdbcTemplateSqlPreviewService {
             return null;
         }
         return preview(call, anchor);
+    }
+
+    /**
+     * 收集方法体内全部可静态定位的字符串 SQL 调用候选（T-DaoSql-04，单一来源）。
+     *
+     * <p>供方法定义 gutter 点击（{@code cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider}）
+     * 与 action 方法定义 fallback 共用；须在后台线程 ReadAction 内调用。</p>
+     *
+     * <p>候选 = 方法体内「方法名 ∈ 字符串 SQL 方法候选」且 {@link JdbcTemplateSqlLocator#locateFromCall}
+     * 聚合成功的调用（按文件偏移升序，与方法内出现顺序一致）。聚合失败的调用
+     * （SQL 为参数传递 / 运行时构造形态）不在候选内——MVP 边界，见开发计划「已知边界」。</p>
+     *
+     * @param method 目标方法
+     * @return 候选调用列表（可能为空）
+     */
+    public static List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall> collectMethodCandidates(PsiMethod method) {
+        PsiCodeBlock body = method.getBody();
+        if (body == null) {
+            return Collections.emptyList();
+        }
+        List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall> result = new ArrayList<>();
+        for (PsiMethodCallExpression call : PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression.class)) {
+            if (JdbcTemplateMethodDetector.isStringSqlMethodCandidate(call.getMethodExpression().getReferenceName())) {
+                JdbcTemplateSqlLocator.JdbcTemplateSqlCall located = JdbcTemplateSqlLocator.locateFromCall(call);
+                if (located != null) {
+                    result.add(located);
+                }
+            }
+        }
+        result.sort(Comparator.comparingInt(c -> c.callExpression().getTextRange().getStartOffset()));
+        return result;
     }
 
     /**

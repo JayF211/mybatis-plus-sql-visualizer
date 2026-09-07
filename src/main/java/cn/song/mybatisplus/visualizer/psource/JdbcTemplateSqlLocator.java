@@ -76,7 +76,7 @@ public final class JdbcTemplateSqlLocator {
         if (methodName == null) {
             return null;
         }
-        if (!JdbcTemplateMethodDetector.isJdbcTemplateMethodReference(methodName)) {
+        if (!JdbcTemplateMethodDetector.isStringSqlMethodCandidate(methodName)) {
             return null;
         }
         return locateFromCall(call);
@@ -90,7 +90,7 @@ public final class JdbcTemplateSqlLocator {
         if (methodName == null) {
             return null;
         }
-        if (!JdbcTemplateMethodDetector.isJdbcTemplateMethodReference(methodName)) {
+        if (!JdbcTemplateMethodDetector.isStringSqlMethodCandidate(methodName)) {
             return null;
         }
 
@@ -99,16 +99,25 @@ public final class JdbcTemplateSqlLocator {
             return null;
         }
 
-        PsiExpression firstArg = args[0];
-        PsiExpression paramArg = args.length > 1 ? args[1] : null;
-
-        // 分析第 1 实参：定位 SQL 字符串表达式
-        Pair<PsiExpression, String> resolved = resolveSqlExpression(firstArg);
+        // 分析第 1 个字符串形态实参：定位 SQL 字符串表达式（T-DaoSql-02——
+        // Spring JDBC 模板 SQL 即首参，行为不变；自研框架 (Class, sql, ...) 形态命中第 2 参）
+        Pair<PsiExpression, String> resolved = resolveSqlArgument(args);
         if (resolved == null) {
             return null;
         }
         PsiExpression sqlExpr = resolved.getFirst();
         String builderVar = resolved.getSecond();
+
+        // 参数实参：SQL 实参之后的一个（queryForList(sql, paramMap) → paramMap；
+        // selectList(Class, sql, params) 形态首参为 Class，参数在 sql 后——保留扩展位）
+        int sqlIndex = -1;
+        for (int i = 0; i < args.length; i++) {
+            if (args[i] == sqlExpr) {
+                sqlIndex = i;
+                break;
+            }
+        }
+        PsiExpression paramArg = sqlIndex >= 0 && sqlIndex + 1 < args.length ? args[sqlIndex + 1] : null;
 
         // 聚合为单一 SQL 文本
         SqlStringConcatenator.ConcatenationResult concatResult = SqlStringConcatenator.concat(sqlExpr);
@@ -160,30 +169,36 @@ public final class JdbcTemplateSqlLocator {
     // ------------------------------------------------------------------
 
     /**
-     * 从第 1 实参解析出 SQL 字符串表达式。
+     * 从实参列表解析出 SQL 字符串表达式（T-DaoSql-02）：取第一个字符串形态实参。
      *
      * <p>处理形态：</p>
      * <ul>
      *  <li>字面量 / 拼接表达式 → 直接作为 SQL 表达式</li>
      *  <li>{@code sql.toString()} 调用 → qualifier 解析为变量，作为 StringBuilder / 字符串变量</li>
      *  <li>变量引用 → 直接作为 SQL 表达式（concat 内部沿 initializer 追踪）</li>
+     *  <li>Class 字面量 / Map / 集合等非字符串形态（自研框架首参）→ 跳过看下一实参</li>
      * </ul>
      *
-     * @return Pair(SQL 表达式, StringBuilder 变量名)；无法解析返回 null
+     * @return Pair(SQL 表达式, StringBuilder 变量名)；无字符串形态实参返回 null
      */
-    private static Pair<PsiExpression, String> resolveSqlExpression(PsiExpression firstArg) {
-        if (firstArg instanceof PsiLiteralExpression) {
-            return new Pair<>(firstArg, null);
-        }
-        if (firstArg instanceof PsiBinaryExpression || firstArg instanceof PsiPolyadicExpression) {
-            return new Pair<>(firstArg, null);
-        }
-        if (firstArg instanceof PsiMethodCallExpression) {
-            // `sql.toString()` 等：qualifier 是变量引用
-            return resolveToStringCall((PsiMethodCallExpression) firstArg);
-        }
-        if (firstArg instanceof PsiReferenceExpression) {
-            return new Pair<>(firstArg, null);
+    private static Pair<PsiExpression, String> resolveSqlArgument(PsiExpression[] args) {
+        for (PsiExpression arg : args) {
+            if (arg instanceof PsiLiteralExpression) {
+                if (((PsiLiteralExpression) arg).getValue() instanceof String) {
+                    return new Pair<>(arg, null);
+                }
+            } else if (arg instanceof PsiBinaryExpression || arg instanceof PsiPolyadicExpression) {
+                return new Pair<>(arg, null);
+            } else if (arg instanceof PsiMethodCallExpression) {
+                // `sql.toString()` 等：qualifier 是变量引用
+                Pair<PsiExpression, String> resolved = resolveToStringCall((PsiMethodCallExpression) arg);
+                if (resolved != null) {
+                    return resolved;
+                }
+            } else if (arg instanceof PsiReferenceExpression) {
+                return new Pair<>(arg, null);
+            }
+            // 其余（Class 字面量 PsiClassObjectAccessExpression / 数组等）→ 跳过
         }
         return null;
     }

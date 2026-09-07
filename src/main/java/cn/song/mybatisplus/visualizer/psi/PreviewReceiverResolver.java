@@ -162,7 +162,25 @@ public final class PreviewReceiverResolver {
         return isStringLikeExpression(expressions[0]);
     }
 
-    /** 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用。 */
+    /**
+     * 判断方法调用实参列表中是否存在"字符串 SQL"形态实参（T-DaoSql-02）：
+     * String 字面量 / {@code +} 拼接 / {@code toString()} 调用链 / resolve 为 String 的变量引用。
+     *
+     * <p>自研框架 {@code (Class beanClass, String sql, Object... params)} 形态 SQL 在第 2 参，
+     * 首参守卫会漏；本守卫扫描全部实参。MP select 族（Wrapper/集合实参）无字符串形态 → 拒。</p>
+     */
+    public static boolean hasStringLikeArg(@NotNull PsiMethodCallExpression call) {
+        for (PsiExpression arg : call.getArgumentList().getExpressions()) {
+            if (isStringLikeExpression(arg)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用 / {@code xx.toString()} 调用。
+     */
     private static boolean isStringLikeExpression(@NotNull PsiElement expr) {
         if (!(expr instanceof PsiExpression)) return false;
         PsiExpression e = (PsiExpression) expr;
@@ -171,6 +189,9 @@ public final class PreviewReceiverResolver {
         }
         if (e instanceof PsiBinaryExpression || e instanceof PsiPolyadicExpression) {
             return true;
+        }
+        if (e instanceof PsiMethodCallExpression) {
+            return "toString".equals(((PsiMethodCallExpression) e).getMethodExpression().getReferenceName());
         }
         if (e instanceof PsiReferenceExpression) {
             // 变量/参数引用：解析其类型是否 String（PsiVariable 覆盖 PsiParameter / PsiLocalVariable）
