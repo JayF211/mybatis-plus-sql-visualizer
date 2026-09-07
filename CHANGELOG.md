@@ -7,6 +7,7 @@
 ### Added
 
 - **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
+- **主源码 Kotlin → Java 全量改写完成**：生产源码（包 `cn.song.mybatisplus.visualizer` 下 model / psi / sql / config / update 五包，共 351 个 `.java`、0 个 `.kt`）全部由 Kotlin 转写为 Java，采用「共存迁移」策略（测试源集保留 140 个 `.kt` + 93 个 `.java`，均可编译可运行）。转换覆盖 `object`→单例 `INSTANCE`、`data class`→`final class` 含值语义 `equals/hashCode`、`sealed`/接口分支 `instanceof` 化、`suspend fun`→`Continuation` 实现、`Regex`→`Pattern`、`record` 访问器 `x()` 等互操作铁律；全量测试 **1421/0/0/6 绿（139 套件）**，`buildPlugin` + `verifyPlugin` 终验通过。与 `master` 对比零功能丢失（4 个类为等价重命名：`Ognl`→`OgnlEvaluator`、`WrapperFormat`→`WrapperFormatKt`、`LogEntryPreviewRecognizer`→`LogEntryPreviewRecognizerKt`、`LogSqlModels`→`LogSqlModelsKt`）。详见 `docs/开发计划/20260901-Kotlin转Java全量改写-进度总结.md`
 
 ## [2026.9.4] - 2026-09-04
 
