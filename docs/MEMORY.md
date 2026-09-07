@@ -199,6 +199,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-07 | 记忆第五次精简（21→17）：新增 4 个归档（bug-fixes：R2 竞品响应 9 任务交付、T-DaoSql 字符串 SQL 锚点、M54 性能红线 24 任务、log-jump 跳转根因）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-07/`；项目 memory 降至 18 个文件（含 MEMORY.md），archive 增至 120 个文件（含 README） |
 | 2026-09-06 | 记忆第四次精简（27→21）：新增 6 个归档（bug-fixes：dev 全量分支合并、M37 竞品融合全链、M39 ORM 补全实施、M44 其他ORM第一批实施、ORM 四框架缺口调研定稿、候选 ORM 调研定稿——均已交付并合入 dev）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-06/`；项目 memory 降至 22 个文件（含 MEMORY.md），archive 增至 116 个文件（含 README） |
 | 2026-09-05 | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，3321 测试绿 + buildPlugin 通过，用户明确不合并 master）；新增两份矩阵索引：JPA-Hibernate官方API覆盖矩阵（M39 勾行 83✅39🟡）与其他ORM官方API覆盖矩阵（候选框架调研：Spring Data JDBC/jOOQ/Querydsl/Easy-Query/Jimmer/xbatis/MDS/Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy，含立项决策表与任务号预分配 SD/JO/QD/EQ/JM/XB/DS/FM/DV） |
 | 2026-09-04 | 记忆第三次精简（76→19）：新增 35 个归档（bug-fixes +22：M36 执行/收尾、F-44 跳转、HQL 别名/关联、JdbcTemplate 预览、设置页布局/树导航、Marketplace、方言验证、JOIN 原生图 B 路径等；pitfalls +13：gutter 接收者、SqlFormatter 两坑、EDT 冻结、设置页导航等），22 个归全局（跨项目平台陷阱 + 用户偏好，含 JCEF/SlowOperations/headless 测试/Gradle 锁等）；archive 增至 110 个文件（含 README），global 增至 63 个文件 |
