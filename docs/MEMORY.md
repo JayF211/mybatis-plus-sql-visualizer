@@ -67,8 +67,6 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 里程碑/内容 | 当前状态 |
 |------|-------------|----------|
-| [20260906-0223-master文档与测试用例补齐-开发计划.md](./开发计划/20260906-0223-master文档与测试用例补齐-开发计划.md) | **T-SyncK2JBackfill：docs 树镜像 master 37027d5 + 主分支全部 kt 测试用例补齐**。51 个移植期缺失文档直取 + MEMORY/变更记录按 master 归档精简版对齐后回补 k2j 专属行；2 个整类测试移植（SqlLogConsoleBridgePerfTest 6 用例 + RealEnvTest 3 用例），其余 252 类方法级已对齐 | ✅ 已实施（2026-09-06，全量 3076/0/0/6 绿 + verifyPlugin 三目标 Compatible） |
-| [20260906-0137-master同步至k2j分支-开发计划.md](./开发计划/20260906-0137-master同步至k2j分支-开发计划.md) | **T-SyncK2JMaster：master 9bd6315..37027d5 增量同步至 Java 端口分支**。T-CacheInfo 五处生产代码 Kotlin→Java 手工翻译 + 两测试类复制 + 三份调研矩阵/计划文档搬运 + 锚点推进 37027d5；首轮误同步 m37 分支已回退零残留 | ✅ 已实施（2026-09-06，全量 3067/0/0/6 绿 + verifyPlugin 三目标 Compatible） |
 | [20260904-2317-设置页缓存信息恒0B-开发计划.md](./开发计划/20260904-2317-设置页缓存信息恒0B-开发计划.md) | **T-CacheInfo：设置页缓存信息恒 0 B 修复**。用户反馈设置页「插件缓存」一直显示 0 B——根因=统计口径只含 EntityClassFinder 反查**兜底**缓存，而主流命名（XxxEntity↔xxx）快路径恒命中、该缓存恒空；真正积累的 EntityResolver 解析缓存（全局静态）与 WrapperCache 预览缓存（项目服务）均未计入。实现：`PluginCacheManager.totalSizeBytes/entryCount` 三类缓存全口径（解析缓存全局只计一次），`clearAll` 补清 Wrapper 缓存（getServiceIfCreated 不触发服务实例化），文案增条目数「当前缓存：{0}（{1} 项）」 | ✅ 已实施（2026-09-04，定向 6 测试类 37 用例全绿） |
 | [20260904-1620-T-BareFromSelect-无别名HQL预览缺SELECT列清单修复-开发计划.md](./开发计划/20260904-1620-T-BareFromSelect-无别名HQL预览缺SELECT列清单修复-开发计划.md) | **T-BareFromSelect：无别名 HQL 预览缺 SELECT 列清单修复**。用户实测 `getHibernateTemplate().find("from WmsAsn")` 只显示 `FROM wms_asn`——根因=`HqlConverter.parseAliasColumns` 只认「表名+别名」两段式，裸表名不产生别名条目导致隐式查询补列清单分支永远短路；`JpqlConverter` 则完全没有展开。实现：抽取 `SelectClauseExpander` 共享展开器（裸表名回退登记表名限定符 + JOIN 族关键字排除防 `left` 被当别名 + 无 SELECT 分支列不可得降级 `alias.*`），两转换器统一接入 | ✅ 已实施（2026-09-04，converter/jpa + integration + gutter + SqlPreviewServiceJpa 回归绿） |
 | [20260904-1326-T-GutterDedup-SQL预览图标重复与缺失修复-开发计划.md](./开发计划/20260904-1326-T-GutterDedup-SQL预览图标重复与缺失修复-开发计划.md) | **T-GutterDedup：SQL 预览图标重复与缺失修复**。根因=gutter provider 只按方法名判中、不校验接收者类型——`execute` 被 JdbcTemplate 与 CustomDaoHql 双收（`commonDao.execute` 2 图标、`getHibernateTemplate().execute` 3 图标），`HibernateTemplate.find/findByValueBean` 无 provider 覆盖（0 图标）。实现：`PreviewReceiverResolver` 按接收者归类（CUSTOM_DAO/HIBERNATE_TEMPLATE/JDBC_TEMPLATE/JPA_SESSION）；Jdbc gutter 加接收者∈JDBC+首参字符串门；CustomDaoHql 按接收者分派（拒 JDBC/JPA_SESSION、接 HIBERNATE 的 find/findByNamedParam/findByValueBean/iterate 方法名门） | ✅ 已实施（2026-09-04，DemoRecognitionTest 加载真实 demo 两文件逐处断言恰一图标 + 回归绿） |
@@ -169,12 +167,12 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（109 个文件，2026-09-04 第三次精简后），不再每次会话加载，按需查阅。
+> 从本地记忆系统归档的已完成/已交付内容（115 个文件，2026-09-06 第四次精简后），不再每次会话加载，按需查阅。
 > 全局通用记忆（63 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
-| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 58 个 + 已解决踩坑 49 个 + 方法论 1 个 + 用户环境 1 个） |
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 64 个 + 已解决踩坑 49 个 + 方法论 1 个 + 用户环境 1 个） |
 | [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
 | [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
 | [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
@@ -201,6 +199,9 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-07 | 03-开发与测试指南 §2 新增「runIde 沙盒版本切换（临时调试）」小节：隔离性说明 + 临时改 build.gradle.kts:64 切换版本跑 runIde + 还原步骤；注意事项（`-PplatformVersion` 未接线 / 沙盒按版本分目录互不影响 / testDatabase jdbc-drivers 耦合点） |
+| 2026-09-07 | 记忆第五次精简（21→17）：新增 4 个归档（bug-fixes：R2 竞品响应 9 任务交付、T-DaoSql 字符串 SQL 锚点、M54 性能红线 24 任务、log-jump 跳转根因）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-07/`；项目 memory 降至 18 个文件（含 MEMORY.md），archive 增至 120 个文件（含 README） |
+| 2026-09-06 | 记忆第四次精简（27→21）：新增 6 个归档（bug-fixes：dev 全量分支合并、M37 竞品融合全链、M39 ORM 补全实施、M44 其他ORM第一批实施、ORM 四框架缺口调研定稿、候选 ORM 调研定稿——均已交付并合入 dev）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-06/`；项目 memory 降至 22 个文件（含 MEMORY.md），archive 增至 116 个文件（含 README） |
 | 2026-09-05 | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，3321 测试绿 + buildPlugin 通过，用户明确不合并 master）；新增两份矩阵索引：JPA-Hibernate官方API覆盖矩阵（M39 勾行 83✅39🟡）与其他ORM官方API覆盖矩阵（候选框架调研：Spring Data JDBC/jOOQ/Querydsl/Easy-Query/Jimmer/xbatis/MDS/Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy，含立项决策表与任务号预分配 SD/JO/QD/EQ/JM/XB/DS/FM/DV） |
 | 2026-09-04 | 记忆第三次精简（76→19）：新增 35 个归档（bug-fixes +22：M36 执行/收尾、F-44 跳转、HQL 别名/关联、JdbcTemplate 预览、设置页布局/树导航、Marketplace、方言验证、JOIN 原生图 B 路径等；pitfalls +13：gutter 接收者、SqlFormatter 两坑、EDT 冻结、设置页导航等），22 个归全局（跨项目平台陷阱 + 用户偏好，含 JCEF/SlowOperations/headless 测试/Gradle 锁等）；archive 增至 110 个文件（含 README），global 增至 63 个文件 |
 | 2026-08-26 | 新增「记忆精简规范.md」：本地记忆文件管理标准（分类/归档/全局/流程/基线） |

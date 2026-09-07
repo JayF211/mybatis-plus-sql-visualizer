@@ -894,4 +894,55 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
         assertEquals("joinListEntity 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
     }
+
+    // ------------------------------------------------------------------
+    // T-DaoSql-03：字符串 SQL 形态让位（场景 D 与字符串 SQL 路径互斥）
+    // ------------------------------------------------------------------
+
+    fun testBatchOperation_stringSqlArg_yieldsToStringSqlProvider() {
+        // `beanCruder.selectList(X.class, sql, ...)`：selectList 同时收录于批量注册表与
+        // 字符串 SQL 方法候选，实参含字符串形态（sql 为 String 变量）→ 场景 D 让位（不标批量锚点）
+        configure(
+            """
+            public class Demo {
+                public void query(long userId) {
+                    String sql = "SELECT wp.PROC_NAME FROM WKFL_TASK WT WHERE WT.OWNER = :CUR_USER ";
+                    beanCruder.selectList(ScheduleVO.class, sql, "CUR_USER", userId);
+                }
+
+                static class ScheduleVO { private String taskName; }
+            }
+            """.trimIndent(),
+        )
+        val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "selectList" }
+        assertNull(
+            "字符串 SQL 形态的批量方法名调用应让位给字符串 SQL provider",
+            WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testBatchOperation_collectionArg_regression_stillAnchors() {
+        // 回归：集合/实体实参（无字符串形态）的批量调用照常标注
+        configure(
+            """
+            import java.util.List;
+
+            public class Demo {
+                public void save(List<DeviceEntity> list) {
+                    beanCruder.updateBatchById(list);
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "updateBatchById" }
+        assertSame(
+            "集合实参的批量调用不受让位守卫影响",
+            call.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+        )
+    }
 }

@@ -2,11 +2,16 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+
+- **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
+
 ## [2026.9.4] - 2026-09-04
 
 ### Changed
 
-- **主源码 Kotlin → Java 全量改写完成**：生产源码（包 `cn.song.mybatisplus.visualizer` 下 model / psi / sql / config / update 五包，共 351 个 `.java`、0 个 `.kt`）全部由 Kotlin 转写为 Java，采用「共存迁移」策略（测试源集保留 140 个 `.kt` + 93 个 `.java`，均可编译可运行）。转换覆盖 `object`→单例 `INSTANCE`、`data class`→`final class` 含值语义 `equals/hashCode`、`sealed`/接口分支 `instanceof` 化、`suspend fun`→`Continuation` 实现、`Regex`→`Pattern`、`record` 访问器 `x()` 等互操作铁律；全量测试 **1421/0/0/6 绿（139 套件）**，`buildPlugin` + `verifyPlugin` 终验通过。与 `master` 对比零功能丢失（4 个类为等价重命名：`Ognl`→`OgnlEvaluator`、`WrapperFormat`→`WrapperFormatKt`、`LogEntryPreviewRecognizer`→`LogEntryPreviewRecognizerKt`、`LogSqlModels`→`LogSqlModelsKt`）。详见 `docs/开发计划/20260901-Kotlin转Java全量改写-进度总结.md`
 - **JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览（psource 系列）**：`jdbcTemplate.queryForList("select ...")` 等调用字符串首参可预览——命名参数 `:name` 按名回填（`NamedParamParser` + `ParameterReplacerNamed`）、`StringBuilder` 链式 append 分片聚合（`SqlStringConcatenator`）、方法识别（`JdbcTemplateMethodDetector`）与定位（`JdbcTemplateSqlLocator`）独立纯函数包，gutter 图标与注解预览同款模式；收尾加固（270b8f2）：DbHelper 自研 DAO delete/insert 识别 + `isLikelySql` 形态门（防通用字符串方法误触发）+ JPA gutter 误判普通类方法修复（接收者校验 Repository 接口）
 - **T-PreviewShortcut 非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览**：`ConvertToSqlAction` 兜底链新增 `tryHqlFallback` / `tryNamedQueryFallback` / `tryJdbcTemplateFallback` 短路（接 `previewHql` / `previewCustomDaoHql` / `JdbcTemplateSqlPreviewService.preview`）；`@NamedQuery` 实体级预览——`NamedQueryLocator.findByQueryName`（按 `<实体>.<方法>` 前缀 `JavaPsiFacade.findClasses`）+ `previewNamedQuery` + `@` token gutter 图标（含 `@interface` 声明区分）
 - **JOIN 图换用 IDEA 原生图框架（T-Dgm 系列）**：新增 `SqlJoinDiagramProvider` 注册 `com.intellij.diagram.Provider` EP（Ultimate 捆绑 Diagrams 插件，类图同款观感），缩放/自动布局/节点折叠/导出全框架托管；快照注册表 + 图构建工厂纯函数适配 `JoinDiagramGenerator` 现有解析产物；设置页新增「使用 IDE 原生图框架渲染 JOIN 图」开关（默认开）；Diagrams 插件缺席（Community）或框架异常自动降级回自绘渲染器；13 个适配层纯单测
