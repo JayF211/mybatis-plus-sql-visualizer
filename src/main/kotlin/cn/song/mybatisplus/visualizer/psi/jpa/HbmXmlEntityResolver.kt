@@ -15,6 +15,11 @@ import java.util.concurrent.ConcurrentHashMap
  * 解析 `<class>`, `<id>`, `<property>`, `<many-to-one>`, `<one-to-one>` 等映射元素，
  * 提取实体类名、表名、字段列映射、关联关系等元数据。
  *
+ * T-H1（20260907-1630）：新增 `<query>`（HQL）/ `<sql-query>`（原生 SQL）命名查询解析——
+ * hbm 纯 POJO 项目（无 @NamedQuery 注解）的命名查询此前在插件视角不存在，`createNamedQuery(name)`
+ * 回查与 hbm 文件 gutter 均无法覆盖。文本只取直属 XmlText（排除 `<return-scalar>` 等子标签），
+ * CDATA 正常展开；按查询名（完整 `name` 属性）索引，负命中缓存沿用 [NEGATIVE_CACHE_MAX] 口径。
+ *
  * 查找策略（T-J11 修复）：
  * 1. 经 [FileTypeIndex] 按文件类型扫描项目内全部 XML 文件，再按文件名 `endsWith(".hbm.xml")`
  *    过滤——原先的 `FilenameIndex.getFilesByName(project, "*.hbm.xml", ...)` 按字面名匹配，
