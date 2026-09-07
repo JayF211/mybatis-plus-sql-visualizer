@@ -579,4 +579,93 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = oldAutoStart
         }
     }
+
+    // ===== 20260907-2045 第二轮修复：onProjectProcessStarted（进程级自动捕捉入口） =====
+
+    fun testT23_ProcessStarted_suppressedCleared_andCaptureArmed() {
+        // 场景：设置开 + 用户手动停止（suppressed=true 持久化）→ 再 Run 项目 →
+        // onProjectProcessStarted 清 suppressed + 重新进入捕捉链（沙盒 20:41 会话根因回归）
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            settings.state.logAutoCaptureSuppressed = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+
+            manager.onProjectProcessStarted()
+
+            assertFalse("项目启动应清除 suppressed（设置优先）", settings.state.logAutoCaptureSuppressed)
+            assertTrue("项目启动应重新进入 armed/捕捉态", manager.capturing)
+            assertTrue("armed 态等待控制台", manager.isWaitingForConsole)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
+
+    fun testT24_ProcessStarted_autoStartOff_noop() {
+        // 场景：设置关 → 进程启动回调不动作（不捕捉、不动 suppressed）
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            settings.state.logAutoCaptureOnStart = false
+            settings.state.logAutoCaptureSuppressed = false
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+
+            manager.onProjectProcessStarted()
+
+            assertFalse("设置关时进程启动不应捕捉", manager.capturing)
+            assertFalse("不应写 suppressed", settings.state.logAutoCaptureSuppressed)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
+
+    fun testT25_ProcessStarted_capturingActive_idempotent() {
+        // 场景：已处于捕捉态（armed 等待控制台）→ 进程启动回调幂等（不重复 attach、状态不变）
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            manager.startCapture()  // armed
+            val attachBefore = bridge.attachCalls
+
+            manager.onProjectProcessStarted()  // capturing=true, waiting=true → 幂等分支
+
+            assertTrue("保持 armed 捕捉态", manager.capturing)
+            assertTrue("attach 不重复", bridge.attachCalls == attachBefore)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+        }
+    }
+
+    fun testT26_ProcessStarted_withConsole_directCapture() {
+        // 场景：suppressed=true + 控制台已存在（先 Run 后点面板捕捉又停的乱序）→
+        // 进程启动回调清 suppressed 且直接进入完整捕捉态（hasMainConsole=true 分支）
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            settings.state.logAutoCaptureOnStart = true
+            settings.state.logAutoCaptureSuppressed = true
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = true)
+            val manager = managerWith(bridge)
+
+            manager.onProjectProcessStarted()
+
+            assertFalse("suppressed 已清除", settings.state.logAutoCaptureSuppressed)
+            assertTrue("直接进入捕捉态", manager.capturing)
+            assertFalse("非等待态", manager.isWaitingForConsole)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
 }

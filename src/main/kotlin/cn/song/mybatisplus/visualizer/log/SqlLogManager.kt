@@ -145,6 +145,11 @@ class SqlLogManager(private val project: Project) : Disposable {
                 }
             },
         )
+
+        // 20260907-2045：运行配置进程启动监听——autoStart=true 时项目 Run 即自动捕捉
+        // （清 suppressed + startCapture，见 onProjectProcessStarted）；execution API 缺失时
+        // 内部降级为 false，RCM 轮询兜底仍在
+        RunConfigurationProcessListener.subscribe(project, this)
     }
 
     /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启、未被用户关闭抑制、且距上次展开超过防抖窗口）。 */
@@ -303,6 +308,42 @@ class SqlLogManager(private val project: Project) : Disposable {
         // suppressed 仅阻止自动启动，不清零。清零的唯一方式是显式用户操作：手动点捕捉 / 设置里开关切换。
         // 若在此清零 → 项目停止后 suppressed=false → 重启后 armed 态复现（用户"停止"意图丢失）。
         LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=$autoStart, suppressed=$suppressed, armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
+        startCapture()
+    }
+
+    /**
+     * 项目启动（运行配置进程启动）事件——autoStart=true 时**无条件**自动捕捉。
+     *
+     * 20260907-2045 沙盒日志实证（IU-243）：手动停止置 suppressed=true 持久化后，
+     * [onConsoleAppeared] 被 `suppressed && !userArmed` 拦截、[LogStartupCapture] 只在项目打开
+     * 时触发一次——「设置开启 + 用户曾停止 → 再运行项目」从此没有任何自动重启入口，
+     * 与踩坑第十一轮「设置优先」结论冲突：用户显式"停止"只应抑制**项目未运行期间**的 armed 态，
+     * 项目真正启动时 `logAutoCaptureOnStart=true` 应优先。
+     *
+     * 接线：[cn.song.mybatisplus.visualizer.execution.RunConfigurationLifecycleListener]
+     * （ExecutionListener 反射桥，243/262 execution API 兼容）。
+     * 与 [onConsoleAppeared] 的分工：本方法在进程级事件可靠触发（不依赖 RCM tab 扫描），
+     * 清 suppressed 后走 startCapture 常规链路（armed 态下为幂等 no-op）。
+     */
+    fun onProjectProcessStarted() {
+        val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
+        if (!autoStart) return
+        val suppressed = PluginSettings.getInstance().state.logAutoCaptureSuppressed
+        if (suppressed) {
+            // 项目启动 = 用户对「自动监听」的再次确认（设置优先，对齐踩坑第十一轮）
+            PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
+            LOG.info("onProjectProcessStarted: 项目启动清除 suppressed（autoStart 优先）——project=${project.name}")
+        }
+        if (capturing && !isWaitingForConsole) {
+            LOG.debug("onProjectProcessStarted: 已在捕捉态，startCapture 幂等跳过（project=${project.name}）")
+            return
+        }
+        if (capturing && isWaitingForConsole && bridge.isPollingActive) {
+            // armed 态已在轮询等待控制台——进程级回调无需重复 attach（测试 T25 实证 attach 会重复）
+            LOG.info("onProjectProcessStarted: 已在 armed 轮询等待，无需重复挂载（project=${project.name}）")
+            return
+        }
+        LOG.info("onProjectProcessStarted: 项目启动自动捕捉（armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
         startCapture()
     }
 
