@@ -1247,14 +1247,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 val text = String(file.contentsToByteArray(), Charsets.UTF_8)
                 applyImportedText(text)
             }
-            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                 outcome.onSuccess {
                     reset()
                     showStatus(MpSqlVisualizerBundle.message("settings.import.success"), isError = false)
                 }.onFailure { e ->
                     showStatus(MpSqlVisualizerBundle.message("settings.import.failed", briefMessage(e)), isError = true, fullDetail = e.message)
                 }
-            }
+            }, com.intellij.openapi.application.ModalityState.any()) // 默认 modality 在模态 Settings 弹窗存续期不执行（真机实证反馈不出现）——对齐 M36.5.13 惯例
         }
     }
 
@@ -1283,13 +1283,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 val outcome = runCatching {
                     writeExportedFile(java.io.File(saved.file.absolutePath))
                 }
-                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                     outcome.onSuccess {
                         showStatus(MpSqlVisualizerBundle.message("settings.export.success"), isError = false)
                     }.onFailure { e ->
                         showStatus(MpSqlVisualizerBundle.message("settings.export.failed", briefMessage(e)), isError = true, fullDetail = e.message)
                     }
-                }
+                }, com.intellij.openapi.application.ModalityState.any()) // 同导入：模态 Settings 弹窗存续期照常回调
             }
         }
     }
