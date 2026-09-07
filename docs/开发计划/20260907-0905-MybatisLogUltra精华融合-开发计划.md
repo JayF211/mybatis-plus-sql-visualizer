@@ -26,7 +26,7 @@
 | 6 | SQL 与剪贴板对比（Compare with Clipboard） | 需求池（P3） | — | 本插件已有 SqlDiffer，挂右键入口成本低，待需求池排期 |
 | 7 | Fold Lines Like This 折叠同类行 | 需求池（P3） | — | dedupeKey 指纹已有底子，但 ⨉N 徽章 + 类型过滤已覆盖主要场景 |
 | 8 | Restful Api Tool 内嵌 HTTP 客户端 | 明确不吸收 | — | IDEA Ultimate 自带 HTTP Client；做请求边界靠 T-M55-04 的上下文标签 |
-| 9 | Arthas 远程 / agent 字节码增强 | 维持不吸收 | — | N-10 §3.2 结论不变：与本插件「用户项目零依赖、代码可见」产品伦理相悖 |
+| 9 | Arthas 远程 / agent 字节码增强 | 维持不吸收（Arthas 远程）；agent 通道另立 | — | N-10 §3.2 结论更新：Arthas 远程仍不吸收；agent 字节码增强经用户决策与实测调研升级立项为 [M56 agent 字节码增强捕获通道开发计划](./20260907-1013-agent字节码增强捕获通道-开发计划.md)——本表四任务消费端两通道共用，发射端按 M56 升级 |
 | 10 | 关键词过滤 / Pause Output | 已具备 | — | Ctrl+F 实时搜索 + 类型过滤；捕捉暂停态已有 |
 
 ## 2. 公共约定：执行期标记行格式演化（T-M55-01/04 共同遵守）
