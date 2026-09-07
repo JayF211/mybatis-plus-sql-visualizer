@@ -12,7 +12,7 @@ import com.intellij.util.messages.Topic
  * 插件配置状态（T-M5-01，F-16 配置项持久化）。
  *
  * application-level 轻服务（@Service(Service.Level.APP)，跨项目共享），经 XmlSerializer 持久化
- * 到 `mp-sql-visualizer.xml`。修改后由 [PluginSettingsConfigurable.apply] 写回即生效。
+ * 到 `mp-sql-visualizer.xml`。修改后由 [SectionConfigurable.apply]（设置子页基类）写回即生效。
  *
  * T-M16.3（语言切换保存失效）：
  * 官方规范（IntelliJ Platform SDK——Services）要求**应用级轻服务 + PersistentStateComponent 必须

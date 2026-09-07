@@ -97,4 +97,16 @@ Class.forName(className, true, platformClassLoader)
 - `SqlLogConsoleBridge` 新增 `onConsoleAppeared` 回调参数
 - `SqlLogManager` 新增 `onConsoleAppeared()` 方法 + `stopCapture()` 不再 detach
 
+## 第十二轮（2026-09-07）：设置页架构重构后边沿联动挂载点死亡
+
+设置「关→开」边沿联动（第九轮修复）原挂在 `PluginSettingsConfigurable.apply()`。设置页后来重构为「文件夹 + 分区子页」（plugin.xml 注册 `PluginSettingsFolderConfigurable` + 5 个 `SectionConfigurable` 子类），**`PluginSettingsConfigurable` 未注册、从未实例化，联动沦为死代码**——用户勾选实际走 `SqlLogConfigurable` → `SectionConfigurable.apply()` 基类透传，无边沿检测。
+
+沙盒日志实证（IU-243，2026-09-07）：`LogStartupCapture.execute 触发（logAutoCaptureOnStart=false）` 两次（项目打开时设置关，正确跳过）→ 15:39:29 `PluginSettingsPanel.apply`（用户勾选保存，唯一一次）→ 之后项目编译运行，**全程无任何 startCapture/onConsoleAppeared/startPolling 日志**——桥未挂载，控制台出现无人感知。
+
+**修复**：边沿联动迁入 `SectionConfigurable.apply()` 基类（apply 前读旧值 → `panel.apply()` → 关→开则清 suppressed + 遍历 openProjects 调 `startCapture()`）；删除死类 `PluginSettingsConfigurable`，4 个以其作面板工厂的测试类改用测试专用 `AllSectionsConfigurable`；`ProjectPluginSettingsConfigurable` 审计确认同样未注册（KDoc 已标注，保留待 O-5 Phase B 接线）。
+
+**Why:** 重构移动设置页挂载点时，**挂在 Configurable 上的行为逻辑（不只 UI 字段）必须随注册面同步迁移**——`panel.apply()` 只写状态，Configurable.apply 层的联动逻辑不随 Panel 走；死类编译不报错、测试直调仍绿（headless 不经 plugin.xml），只有真机走注册链路才暴露。
+
+**How to apply:** 改设置页注册结构时 grep 所有 Configurable 的 `apply()` 是否含行为联动，逐一核对 plugin.xml 注册表；新增联动一律挂「实际注册的类」。`startCapture` 幂等 + 空遍历安全，联动多入口（LogStartupCapture / 设置 apply / 手动点击）并存无害。
+
 **相关**：[[pitfall-execution-api-missing]]、[[project-log-capture-lifecycle-design]]、[[pitfall-plugin-xml-listener-unsupported]]、[[pitfall-classloader-forname-execution-api]]

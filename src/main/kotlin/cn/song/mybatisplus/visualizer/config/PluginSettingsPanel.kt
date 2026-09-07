@@ -46,7 +46,8 @@ import javax.swing.event.DocumentListener
  * 设置表单面板（T-M5-02，F-16 配置项 UI）。
  *
  * 展示并可编辑全部配置项；[apply]/[reset]/[isModified] 与 [PluginSettings] 联动，
- * 由 [PluginSettingsConfigurable] 接入 IDE Settings 框架（保存即生效）。
+ * 由 [SectionConfigurable] 子类（SQL 预览/表名映射/SQL 日志/界面与操作/关于）接入 IDE Settings
+ * 框架（保存即生效）。
  *
  * M14 增强：
  *  - 「界面语言」下拉（默认简体中文）——保存后经 [rebuild] 重建表单即时生效；
