@@ -101,3 +101,17 @@ zh bundle `panel.explain=执行计划`；en 保持 `EXPLAIN`。同步核查该�
 ## 六、回滚
 
 四组改动彼此独立提交（T-H / T-D / T-E / T-R 各一笔，T-R 含 docs），任一出问题单独 `git revert` 即可，互不牵连。
+
+## 验收记录
+
+实施日期 2026-09-07 16:40 ~ 18:55，dev worktree（ba56a41 之后），四组独立提交。
+
+### 实施差异（相对 §四 清单）
+
+- **T-H2 编译解析坑**：`HbmNamedQueryGutterLineMarkerProvider` 内经类名静态引用 `SqlPreviewService.previewHbmNamedQueryTag(...)` 编译报 Unresolved reference（同模块、类级 fun、无重复声明，全量缓存清除 + --rerun-tasks + --no-build-cache 均不消）——改为 `project.getService(SqlPreviewService::class.java)` 实例引用后通过（对齐 CustomDaoHql 等 provider 的既有调用风格），根因未深究（疑似伴随 companion 静态引用链的解析边界），以同仓惯例写法收束。测试文件同款修正。
+- 其余 T-H1/H3/H4、T-D1/D2、T-E1、T-R1~R3 均按清单落地；bundle 键 zh/en 集合对称（499=499）。
+
+### 验证
+
+- 定向：GutterIconDedupTest 14 绿 + StringSqlMethodGutterLineMarkerProviderTest 8 绿 + HbmNamedQueryResolverTest 5 绿 + HbmNamedQueryGutterLineMarkerProviderTest 5 绿。
+- 全量 clean test 与 verifyPlugin 见提交信息。

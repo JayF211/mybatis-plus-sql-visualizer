@@ -799,6 +799,11 @@ class SqlPreviewService(private val project: Project) {
                     inClauseParams = result.inClauseParams,
                 )
             }
+            // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
+            val hbm = runCatching { HbmXmlEntityResolver.findNamedQuery(info.hql, project) }.getOrNull()
+            if (hbm != null) {
+                return previewHbmNamedQuery(hbm, info.method)
+            }
         }
 
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
@@ -924,6 +929,11 @@ class SqlPreviewService(private val project: Project) {
                     inClauseParams = result.inClauseParams,
                 )
             }
+            // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（与 previewHql 同款）
+            val hbm = runCatching { HbmXmlEntityResolver.findNamedQuery(info.hql, project) }.getOrNull()
+            if (hbm != null) {
+                return previewHbmNamedQuery(hbm, info.method)
+            }
             // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
             return placeholderPreview(
                 "-- 命名查询 \"${info.hql}\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL",
@@ -954,6 +964,61 @@ class SqlPreviewService(private val project: Project) {
         wrapperType = null,
         tableName = null,
     )
+
+    /**
+     * T-H3：hbm 命名查询预览——按种类分派：
+     *  - HQL（`<query>`）→ [HqlConverter] 管道（实体表经 [resolveHqlTable] 路径 3 hbm 映射取得）；
+     *  - 原生（`<sql-query>`）→ 命名参数 `:param` → `?` 替换（与 previewNativeSql 同款）。
+     *
+     * 供 hbm 文件 gutter（[cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider]）
+     * 与 createNamedQuery / 自定义 DAO 回查 fallback 共用。
+     */
+    fun previewHbmNamedQuery(query: HbmXmlMapping.NamedQuery, hostMethod: PsiMethod? = null): PreviewResult? {
+        if (query.queryText.isBlank()) return null
+        val paramNames = extractParamNamesFromHql(query.queryText)
+        return when (query.kind) {
+            HbmXmlMapping.QueryKind.NATIVE -> {
+                val sql = convertNativeSqlParameters(query.queryText)
+                val enhancedSql = applyJpaMethodEnhancements(hostMethod, sql, null, native = true)
+                PreviewResult(
+                    sql = enhancedSql,
+                    compactSql = enhancedSql.replace(Regex("\\s+"), " ").trim(),
+                    unresolvedParams = paramNames,
+                    paramTable = ParameterReplacer.buildParamTable(paramNames),
+                    paramHints = paramNames.map { ParamHint(quote = true) },
+                    wrapperType = null,
+                    tableName = null,
+                )
+            }
+            HbmXmlMapping.QueryKind.HQL -> {
+                // 查询名前缀（LegacyItem.findLowStockHql → LegacyItem）优先，回落 FROM 子句实体
+                val entityName = query.name.substringBefore('.', "").trim()
+                    .ifBlank { null } ?: extractEntityNameFromHql(query.queryText)
+                val table = resolveHqlTable(null, entityName, query.queryText)
+                val result = HqlConverter.convert(query.queryText, table, project)
+                val enhancedSql = applyJpaMethodEnhancements(hostMethod, result.sql, table, native = false)
+                buildJpaPreviewResult(
+                    statement = result.statement,
+                    convertedSql = enhancedSql,
+                    tableName = table?.tableName ?: "",
+                    paramNames = paramNames,
+                    method = hostMethod,
+                    inClauseParams = result.inClauseParams,
+                )
+            }
+        }
+    }
+
+    /** T-H2：hbm 文件 gutter 点击入口——从 `<query>`/`<sql-query>` XmlTag 构造命名查询后预览。 */
+    fun previewHbmNamedQueryTag(project: Project, tag: com.intellij.psi.xml.XmlTag): PreviewResult? {
+        val name = tag.getAttributeValue("name") ?: return null
+        val kind = cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider.kindOf(tag.name)
+            ?: return null
+        // 文本提取复用 resolver 的解析口径（直属 XmlText、排除子标签）；tag 与 findNamedQuery 同源
+        val text = tag.children.filterIsInstance<com.intellij.psi.xml.XmlText>()
+            .joinToString("") { it.text }.trim()
+        return previewHbmNamedQuery(HbmXmlMapping.NamedQuery(name = name, kind = kind, queryText = text))
+    }
 
     /**
      * JpaSpecificationExecutor 调用预览（T-J5）：定位 anchor 所在方法调用 →

@@ -147,6 +147,9 @@
         <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>
+        <!-- T-H2 hbm 命名查询预览：<hibernate-mapping> 下 <query>/<sql-query> 行显示预览图标（O(1) 标签名判定） -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
