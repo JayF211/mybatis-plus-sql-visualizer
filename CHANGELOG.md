@@ -6,6 +6,22 @@
 
 ### Added
 
+- **hbm 命名查询预览链路贯通（T-H1~H4）**：`LegacyItem.hbm.xml` 等Hibernate XML 映射的 `<query>`（HQL）/`<sql-query>`（原生 SQL）命名查询此前无任何预览入口（XML gutter 只认 `<mapper>` 语句、`createNamedQuery` 回查只找 Java `@NamedQuery` 注解，hbm 纯 POJO 项目两头落空）——`HbmXmlEntityResolver` 新增命名查询解析（文本只取直属 XmlText、`<return-scalar>` 等子标签排除、负命中缓存沿既有口径）+ 新 gutter `HbmNamedQueryGutterLineMarkerProvider`（`<hibernate-mapping>` 父标签互斥去重，O(1) 判定）+ `previewHbmNamedQuery` 按种类分派（HQL 走 HqlConverter 实体→表 hbm 映射；原生 SQL 命名参数 `:param`→`?` 回填）+ `previewHql`/`previewCustomDaoHql` 回查未命中时 hbm fallback（`createNamedQuery("LegacyItem.findLowStockHql", …)` 不再垃圾降级）
+
+### Changed
+
+- **EXPLAIN 按钮文案汉化**：中文语言设置下按钮由 SQL 术语原样「EXPLAIN」改为「执行计划」（M37.2 落地时 zh/en 同值写死的漏网键；en 侧保留术语）
+
+### Removed
+
+- **「生成测试」按钮整体下线（M37.4）**：产物为静态 SQL 文本 + 占位断言骨架，不感知项目测试栈、断言需手工补齐，实际使用价值不足；删除 `testgen` 包、面板按钮与落盘链路、bundle 14 键与相关测试。若未来重做，方向是接入项目真实测试框架的可执行用例生成（git 历史可找回）
+
+### Fixed
+
+- **`commonDao.execute(hql,...)` 方法行与调用行双图标**：`StringSqlMethodGutterLineMarkerProvider` 方法体扫描缺家族守卫——CUSTOM_DAO/HIBERNATE_TEMPLATE/JPA_SESSION 家族调用已在调用行被专属 provider 认领，方法定义行再亮图标即重复（demo `updateStatusById`/`deleteAsnById` 实证）；补 CUSTOM_DAO/HIBERNATE_TEMPLATE/JPA_SESSION 排除（与 Jdbc provider 镜像），`GutterIconDedupTest` 补盲区纳入方法定义锚点，`beanCruder` UNKNOWN 家族方法行图标不回归
+
+### Added（前批次，2026-09-07 早间）
+
 - **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
 
 ## [2026.9.4] - 2026-09-04
