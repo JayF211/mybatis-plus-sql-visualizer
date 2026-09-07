@@ -4,8 +4,8 @@
 # 下次同步只比对增量： git diff <synced_master>..origin/master
 # 注意：本仓库坚持「生产代码 100% Java」，切勿把 master 的 .kt 直接 merge 进来。
 
-synced_master = 37027d59420acfca310cd37e09ba4a409285b3fb
-synced_master_short = 37027d5
-synced_date = 2026-09-06
+synced_master = 8716cf9f7ba439dbc2322cd7cfc0b4d48c3a1674
+synced_master_short = 8716cf9
+synced_date = 2026-09-08
 synced_by_commit = (本次收尾提交)
-note = 2026-09-06 完成 master 9bd6315..37027d5 共 4 提交的增量同步（T-SyncK2JMaster）：T-CacheInfo 设置页缓存统计修复——5 处生产代码按「100% Java」约定手工翻译（EntityResolver.cacheSizeBytes/WrapperCache.sizeBytes/SqlPreviewService 双委托/PluginCacheManager 三类全口径+clearAll 补 Wrapper 缓存/设置面板两参文案 + bundle en/zh），测试两类（7 用例）按测试源集 Kotlin 约定原样复制；三份调研矩阵与开发计划文档搬运 + MEMORY/变更记录行级并集。同日 T-SyncK2JBackfill 补齐移植期欠账：docs 树镜像 master（51 文件直取 + 归档精简版 MEMORY/变更记录 + README FAQ + 发行说明/经验总结/记忆归档，k2j 专属 5 文件与较新旧计划保留）、主分支测试类对齐（252/254 已等价，移植 SqlLogConsoleBridgePerfTest 6 用例 + RealEnvTest 3 用例）。全量 3076/0/0/6 绿，buildPlugin+verifyPlugin 三目标通过。
+note = 2026-09-08 完成 master 37027d5..8716cf9 共 4 提交的增量同步（T-SyncK2JDaoSql）：T-DaoSql 自研 DAO 字符串 SQL 预览与方法定义锚点贯通——8 处生产代码手工翻译成 Java（JdbcTemplateMethodDetector 增 DAO_STRING_SQL_METHODS+isStringSqlMethodCandidate 统一入口 / JdbcTemplateSqlLocator resolveSqlArgument 实参扫描泛化兼容 (Class, sql, ...) 形态 / JdbcTemplateSqlPreviewService 增 collectMethodCandidates / JdbcTemplateSqlGutterLineMarkerProvider 家族排除制+hasStringLikeArg / PreviewReceiverResolver 增 hasStringLikeArg+toString 分支 / WrapperAnchorDetector 场景 D 字符串 SQL 让位 / ConvertToSqlAction 方法定义 fallback / 新建 StringSqlMethodGutterLineMarkerProvider 方法定义锚点 provider），plugin.xml 注册 + bundle en/zh 两键；测试 4 改 1 增按测试源集 Kotlin 约定原样复制（同一套 kt 测试双代码库跑）；记忆精简 10 篇归档 + 03 指南 runIde 沙盒版本切换小节直取，MEMORY/CHANGELOG 行级并集回补 k2j 专属行。锚点→8716cf9。全量 3094/0/0/6 绿（基线 3076+18），buildPlugin+verifyPlugin 三目标 Compatible。未 push。
