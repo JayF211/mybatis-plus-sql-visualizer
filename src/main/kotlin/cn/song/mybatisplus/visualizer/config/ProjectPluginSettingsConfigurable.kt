@@ -21,6 +21,10 @@ import javax.swing.JComboBox
  * 展示「使用项目设置」开关 + 可覆盖项（方言/参数替换/逻辑删除/表名映射等）。
  *
  * 仅当「使用项目设置」开启时可编辑其它项；关闭时回退全局 [PluginSettings]。
+ *
+ * ⚠️ 20260907-1617 审计：本类同样未注册进 plugin.xml（当前为死类，无挂载点、无联动逻辑，
+ * apply 只写 ProjectPluginSettings 不涉自动监听）——保留代码待 O-5 Phase B 后续接线，
+ * 接线前不得在其中新增依赖挂载点的联动逻辑（教训见 pitfall-log-startup-capture-regression）。
  */
 class ProjectPluginSettingsConfigurable(private val project: Project) : Configurable {
 

@@ -26,7 +26,7 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
     }
 
     fun testSettingsPanelShowsBuildNumberRow() {
-        val configurable = PluginSettingsConfigurable()
+        val configurable = AllSectionsConfigurable()
         configurable.createComponent()
         val labels = collectLabels(configurable.panelForTest().getRoot())
 
@@ -43,7 +43,7 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
 
     /** T-M28.2：构建号行复制按钮——存在、文案走 bundle、开发态（无构建号）禁用。 */
     fun testBuildNumberRowHasCopyButton() {
-        val configurable = PluginSettingsConfigurable()
+        val configurable = AllSectionsConfigurable()
         configurable.createComponent()
         val panel = configurable.panelForTest().getRoot()
 
@@ -67,7 +67,7 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
 
     /** T-M31.8：设置页 5 个分组标题（TitledSeparator）存在且按高频→低频顺序排列。 */
     fun testSettingsPanelSectionsTitles() {
-        val configurable = PluginSettingsConfigurable()
+        val configurable = AllSectionsConfigurable()
         configurable.createComponent()
         val separators = collectSeparators(configurable.panelForTest().getRoot())
 

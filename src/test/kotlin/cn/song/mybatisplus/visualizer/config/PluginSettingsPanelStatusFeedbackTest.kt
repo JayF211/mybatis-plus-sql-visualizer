@@ -19,7 +19,7 @@ import kotlin.reflect.KFunction
  */
 class PluginSettingsPanelStatusFeedbackTest : BasePlatformTestCase() {
 
-    private fun newPanel(): PluginSettingsPanel = PluginSettingsConfigurable().let {
+    private fun newPanel(): PluginSettingsPanel = AllSectionsConfigurable().let {
         it.createComponent()
         it.panelForTest()
     }

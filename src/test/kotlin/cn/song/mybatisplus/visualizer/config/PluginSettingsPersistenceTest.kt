@@ -37,7 +37,7 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             settings.state.language = "zh"
             // 模拟用户在语言下拉选择 English 后 apply（直接改 state 等价于 combo 写回路径）
             settings.state.language = "en"
-            val configurable = PluginSettingsConfigurable()
+            val configurable = AllSectionsConfigurable()
             configurable.createComponent()
             // reset 应从 state 读取 en
             configurable.reset()

@@ -29,7 +29,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         val old = settings.state.reverseWrapperFormat
         try {
             settings.state.reverseWrapperFormat = PluginSettings.REVERSE_AUTO
-            val configurable = PluginSettingsConfigurable()
+            val configurable = AllSectionsConfigurable()
             configurable.createComponent()
             val panel = configurable.panelForTest()
 
@@ -56,7 +56,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         val old = settings.state.logAutoCaptureOnStart
         try {
             settings.state.logAutoCaptureOnStart = false
-            val configurable = PluginSettingsConfigurable()
+            val configurable = AllSectionsConfigurable()
             configurable.createComponent()
             val panel = configurable.panelForTest()
 
@@ -79,7 +79,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         val old = settings.state.reverseManualEntitySelection
         try {
             settings.state.reverseManualEntitySelection = false
-            val configurable = PluginSettingsConfigurable()
+            val configurable = AllSectionsConfigurable()
             configurable.createComponent()
             val panel = configurable.panelForTest()
 
@@ -101,7 +101,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
     }
 
     fun testCacheInfoAndClearButton() {
-        val configurable = PluginSettingsConfigurable()
+        val configurable = AllSectionsConfigurable()
         configurable.createComponent()
         val panel = configurable.panelForTest()
         // 构造时应已刷新缓存信息（非空文案；Light 环境缓存为空也显示汇总格式）
@@ -118,7 +118,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
     }
 
     fun testSqlToJavaShortcutRowExistsAndApplies() {
-        val configurable = PluginSettingsConfigurable()
+        val configurable = AllSectionsConfigurable()
         configurable.createComponent()
         val panel = configurable.panelForTest()
 
@@ -162,7 +162,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         // T-M41 回归：updateSection 为多行组件，GridBag 默认 WEST（垂直居中）会把「版本信息」
         // 标签垂直居中到整块中间（错位到「启动时自动检查更新」行——用户截图实证）→ NORTHWEST 顶部对齐。
         // headless 无 peer，需 doLayout 链后才有真实坐标（pitfall 实证）。
-        val configurable = PluginSettingsConfigurable()
+        val configurable = AllSectionsConfigurable()
         configurable.createComponent()
         val root = configurable.panelForTest().getRoot()
         root.setSize(root.preferredSize)
@@ -219,7 +219,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         val snapshot = settings.getState().copy()
         try {
             settings.state.injectTenantLine = true
-            val configurable = PluginSettingsConfigurable()
+            val configurable = AllSectionsConfigurable()
             configurable.createComponent()
             val panel = configurable.panelForTest()
 
@@ -245,7 +245,7 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         val snapshot = settings.getState().copy()
         try {
             settings.state.tenantColumnName = "tenant_id"
-            val configurable = PluginSettingsConfigurable()
+            val configurable = AllSectionsConfigurable()
             configurable.createComponent()
             val panel = configurable.panelForTest()
 
