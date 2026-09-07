@@ -55,7 +55,7 @@ object JdbcTemplateSqlLocator {
     fun locate(anchor: PsiElement): JdbcTemplateSqlCall? {
         val call = resolveCallExpression(anchor) ?: return null
         val methodName = call.methodExpression.referenceName ?: return null
-        if (!JdbcTemplateMethodDetector.isJdbcTemplateMethodReference(methodName)) return null
+        if (!JdbcTemplateMethodDetector.isStringSqlMethodCandidate(methodName)) return null
         return locateFromCall(call)
     }
 
@@ -64,16 +64,19 @@ object JdbcTemplateSqlLocator {
      */
     fun locateFromCall(call: PsiMethodCallExpression): JdbcTemplateSqlCall? {
         val methodName = call.methodExpression.referenceName ?: return null
-        if (!JdbcTemplateMethodDetector.isJdbcTemplateMethodReference(methodName)) return null
+        if (!JdbcTemplateMethodDetector.isStringSqlMethodCandidate(methodName)) return null
 
         val args = call.argumentList.expressions
         if (args.isEmpty()) return null
 
-        val firstArg = args[0]
-        val paramArg = args.getOrNull(1)
+        // 分析第 1 个字符串形态实参：定位 SQL 字符串表达式（T-DaoSql-02——
+        // Spring JDBC 模板 SQL 即首参，行为不变；自研框架 (Class, sql, ...) 形态命中第 2 参）
+        val (sqlExpr, builderVar) = resolveSqlArgument(args) ?: return null
 
-        // 分析第 1 实参：定位 SQL 字符串表达式
-        val (sqlExpr, builderVar) = resolveSqlExpression(firstArg) ?: return null
+        // 参数实参：SQL 实参之后的一个（queryForList(sql, paramMap) → paramMap；
+        // selectList(Class, sql, params) 形态首参为 Class，参数在 sql 后——保留扩展位）
+        val sqlIndex = args.indexOfFirst { it === sqlExpr }
+        val paramArg = args.getOrNull(sqlIndex + 1)
 
         // 聚合为单一 SQL 文本
         val concatResult = SqlStringConcatenator.concat(sqlExpr) ?: return null
@@ -112,32 +115,36 @@ object JdbcTemplateSqlLocator {
     // ------------------------------------------------------------------
 
     /**
-     * 从第 1 实参解析出 SQL 字符串表达式。
+     * 从实参列表解析出 SQL 字符串表达式（T-DaoSql-02）：取第一个字符串形态实参。
      *
      * 处理形态：
      *  - 字面量 / 拼接表达式 → 直接作为 SQL 表达式
      *  - `sql.toString()` 调用 → qualifier 解析为变量，作为 StringBuilder / 字符串变量
      *  - 变量引用 → 直接作为 SQL 表达式（concat 内部沿 initializer 追踪）
+     *  - Class 字面量 / Map / 集合等非字符串形态（自研框架首参）→ 跳过看下一实参
      *
-     * @return Pair(SQL 表达式, StringBuilder 变量名)；无法解析返回 null
+     * @return Pair(SQL 表达式, StringBuilder 变量名)；无字符串形态实参返回 null
      */
-    private fun resolveSqlExpression(firstArg: PsiExpression): Pair<PsiExpression, String?>? {
-        return when (firstArg) {
-            is com.intellij.psi.PsiLiteralExpression ->
-                firstArg to null
+    private fun resolveSqlArgument(args: Array<PsiExpression>): Pair<PsiExpression, String?>? {
+        for (arg in args) {
+            when (arg) {
+                is com.intellij.psi.PsiLiteralExpression ->
+                    if (arg.value is String) return arg to null
 
-            is com.intellij.psi.PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression ->
-                firstArg to null
+                is com.intellij.psi.PsiBinaryExpression, is com.intellij.psi.PsiPolyadicExpression ->
+                    return arg to null
 
-            is com.intellij.psi.PsiMethodCallExpression ->
-                // `sql.toString()` 等：qualifier 是变量引用
-                resolveToStringCall(firstArg)
+                is com.intellij.psi.PsiMethodCallExpression ->
+                    // `sql.toString()` 等：qualifier 是变量引用
+                    resolveToStringCall(arg)?.let { return it }
 
-            is PsiReferenceExpression ->
-                firstArg to null
+                is PsiReferenceExpression ->
+                    return arg to null
 
-            else -> null
+                else -> { /* Class 字面量（PsiClassObjectAccessExpression）/ 数组等 → 跳过 */ }
+            }
         }
+        return null
     }
 
     /**

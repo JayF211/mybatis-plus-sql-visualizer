@@ -49,6 +49,27 @@ object JdbcTemplateMethodDetector {
     )
 
     /**
+     * 自研 DAO / 团队框架层常见的「字符串 SQL 实参」方法名集合（T-DaoSql-01）。
+     *
+     * 对齐 MP BaseMapper/IService select 族命名与用户自研框架（`beanCruder.selectList(Class, sql, ...)`
+     * / `beanQuery.selectListPagination(Class, sql, paramMap, index, size)`）真实形态。
+     *
+     * 误标防线（三层）：① 该族方法名的 MP 形态实参是 Wrapper/实体/集合（无字符串形态实参），
+     * 被 [cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver.hasStringLikeArg] 守卫排除；
+     * ② 家族排除制守卫（CUSTOM_DAO/HIBERNATE/JPA 家族各有专属 provider）；
+     * ③ 点击时 `JdbcTemplateSqlPreviewService.isLikelySql` 拦截非 SQL 字符串。
+     */
+    val DAO_STRING_SQL_METHODS: Set<String> = setOf(
+        "selectList",
+        "selectOne",
+        "selectCount",
+        "selectPage",
+        "selectMaps",
+        "selectObjs",
+        "selectListPagination",
+    )
+
+    /**
      * 判定方法名引用是否为 JdbcTemplate 模板方法候选。
      *
      * @param referenceName 方法名（如 `queryForList`、`update`、`delete`）
@@ -57,5 +78,17 @@ object JdbcTemplateMethodDetector {
     fun isJdbcTemplateMethodReference(referenceName: String?): Boolean {
         if (referenceName == null) return false
         return referenceName in JDBC_TEMPLATE_METHODS
+    }
+
+    /**
+     * 判定方法名是否为「字符串 SQL 调用」候选（T-DaoSql-01）：Spring JDBC 模板方法名
+     * ∪ 自研 DAO select 族。gutter 快速路径 / 定位器 / action 统一入口。
+     *
+     * @param referenceName 方法名
+     * @return true = 候选；false = 非候选
+     */
+    fun isStringSqlMethodCandidate(referenceName: String?): Boolean {
+        if (referenceName == null) return false
+        return referenceName in JDBC_TEMPLATE_METHODS || referenceName in DAO_STRING_SQL_METHODS
     }
 }

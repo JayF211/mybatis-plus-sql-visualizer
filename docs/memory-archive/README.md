@@ -3,14 +3,14 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（63 个通用文件）
-> **项目记忆**：保留 19 个核心文件 + MEMORY.md 索引
+> **项目记忆**：保留 17 个核心文件 + MEMORY.md 索引
 
 ---
 
-## 已修复 Bug（58 个）
+## 已修复 Bug（68 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
@@ -159,6 +159,16 @@
 | [project-native-sql-highlighting](bug-fixes/project-native-sql-highlighting.md) | 预览面板原生 SQL 高亮 + 补全（M34）——完整根因链：no PSI file（in-memory 不追踪）/ EDT SlowOperations（SqlLanguageSubstitutor）/ language=SQL 注册（全语言不被调度） |
 | [project-preview-shortcut-bridge](bug-fixes/project-preview-shortcut-bridge.md) | T-PreviewShortcut 非 Wrapper 预览快捷键贯通（convertToSql 兜底链加 |
 | [project-settings-layout](bug-fixes/project-settings-layout.md) | 设置页布局优化 |
+| [project-dev-merge-all-branches](bug-fixes/project-dev-merge-all-branches.md) | dev 全量分支合并完成（2026-09-05，e0212d4）——除 kotlin-to-java 外六分支全入 dev，19 冲突块就地解决，3509/0/0/6 绿 + verifyPlugin 三目标过；冲突取舍明细在仓库 docs/开发计划/20260905-2306 计划验收记录节 |
+| [project-m37-competitive-fusion](bug-fixes/project-m37-competitive-fusion.md) | M37 竞品精华融合 + M38 Flex 吸收全链（2026-09-04/05）——master 48 提交反向合入 + T-AutoShowSuppress 交付（手动关窗抑制自动展开，双门禁语义）；EXPLAIN 达梦/金仓真机矩阵、81 场景金样、6 缺陷修复；已知未修=字符串版 QueryWrapper 消费形态条件丢失（矩阵尾注 M1）；runIde 视觉验证未做 |
+| [project-m39-orm-implementation](bug-fixes/project-m39-orm-implementation.md) | M39 ORM 缺口补全三波实施完成（feature/m39-orm-coverage，2026-09-05 合入 dev）——JpaCrudOperationConverter 修复 save 撞 MP 转换器、Specification/QBE/@EntityGraph/@Lock/@Procedure 等 19 任务，3321 测试绿；含多智能体分波模式与 Kotlin/JUnit3 编译踩坑全集 |
+| [project-m44-orm-batch2](bug-fixes/project-m44-orm-batch2.md) | M44 其他ORM第一批实施完成（feature/m44-orm-batch2，2026-09-05 合入 dev）——SD 止血/xbatis/EasyQuery/MDS/Querydsl 5 转换器交付，3353 测试绿；含 xbatis 真实入口 QueryChain 纠偏与 7 个 Kotlin/JUnit3 编译级踩坑 |
+| [project-orm-gap-analysis](bug-fixes/project-orm-gap-analysis.md) | 四框架功能缺口调研定稿（2026-09-04 两轮）——JPA 写路径整体为零、save 撞 MP 批量转换器根因、PartTree$Type 27 项权威清单；已由 M39 实施吸收，矩阵见 docs/架构设计/JPA-Hibernate官方API覆盖矩阵.md |
+| [project-other-orm-research](bug-fixes/project-other-orm-research.md) | 候选 ORM 调研定稿（2026-09-05 四路 jar 反编译）——xbatis/EasyQuery/Querydsl/SD 立项已由 M44 第一批交付，jOOQ 缓做 MVP、Jimmer 暂缓（>15% 门槛）；矩阵见 docs/架构设计/其他ORM官方API覆盖矩阵.md |
+| [project-r2-competition-response](bug-fixes/project-r2-competition-response.md) | 第二轮竞品调研响应 9 任务交付（2026-09-06，feature/r2-competition-response，worktree mpsv-r2）——O-8 字符串版 Wrapper DELETE 三缺陷/O-6 服务链搜索/N-9 测试断言 B 档/N-8 金样防御/O-7 弹窗克制红线/N-10 Ultra 付费墙调研/市场文档组合/O-5 CI 周验证+Windows 计划任务，3543 绿 + verifyFull 三平台过；**未合 dev 未 push**；含 docs/变更记录.md 分支必冲突脚本合并经验与 parallel_tasks done 必带 --name 新坑 |
+| [project-string-sql-method-anchor](bug-fixes/project-string-sql-method-anchor.md) | T-DaoSql 自研 DAO 字符串 SQL 预览与方法定义锚点（2026-09-06 交付，master 8ed668e）——DAO_STRING_SQL_METHODS 白名单/实参扫描取 SQL/JdbcTemplate gutter 家族守卫排除制/StringSqlMethodGutterLineMarkerProvider；已知边界=运行时构造 SQL 静态不可还原；runIde 真机截图待补 |
+| [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
+| [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
 ## 已解决踩坑（49 个）
 
@@ -231,7 +241,7 @@
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 20（含 MEMORY.md） |
+| 项目 memory（保留） | 18（含 MEMORY.md） |
 | 全局记忆 global/ | 63 |
-| 归档 archive/ | 110（bug-fixes 58 + pitfalls 49 + methodology 1 + user-context 1 + README） |
-| **合计** | **193** |
+| 归档 archive/ | 120（bug-fixes 68 + pitfalls 49 + methodology 1 + user-context 1 + README） |
+| **合计** | **205** |
