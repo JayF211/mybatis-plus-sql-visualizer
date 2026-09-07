@@ -1187,4 +1187,32 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    // 20260907-1500 T-P3：生成测试资产 popup 的 onChosen 必须走 doFinalStep
+    //（getFinalRunnable 非 null）——在选中路径同步 show dialog 会触发平台焦点告警
+    //（PopupImplUtil.prohibitFocusEventsInHandleSelect，真机 idea.log 实证）。
+    fun testTestAssetOnChosen走DoFinalStep不出同步弹窗() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(result())
+            val step = panel.testAssetStepForTest()
+            // 两个动作项均断言：走 doFinalStep 路径——doFinalStep 内部
+            //（平台反编译实证）把 runnable 挂到 step 自身后返回 FINAL_CHOICE（null 哨兵），
+            // 因此 onChosen 返回 null 且 step.finalRunnable 非 null；同步弹窗的旧写法
+            // 会先弹 dialog 再返回，挂不上 runnable（finalRunnable 为 null）。
+            // SQL 脚本分支的落盘提示走 invokeLater，headless EDT 上不执行，不产生对话框。
+            for (action in listOf(
+                cn.song.mybatisplus.visualizer.testgen.GenAction.SqlScript,
+                cn.song.mybatisplus.visualizer.testgen.GenAction.Junit,
+            )) {
+                val chosen = step.onChosen(action, true)
+                assertNull("onChosen($action) 应返回 FINAL_CHOICE（null 哨兵）", chosen)
+                assertFalse("onChosen($action) 不应有子步（单击即选）", step.hasSubstep(action))
+                assertNotNull("onChosen($action) 须挂 doFinalStep（finalRunnable 非 null）", step.finalRunnable)
+            }
+        } finally {
+            panel.clear()
+            panel.dispose()
+        }
+    }
 }

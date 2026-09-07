@@ -536,9 +536,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             override fun onChosen(
                 selectedValue: cn.song.mybatisplus.visualizer.testgen.GenAction?,
                 finalChoice: Boolean,
-            ): com.intellij.openapi.ui.popup.PopupStep<*> {
-                when (selectedValue) {
-                    is cn.song.mybatisplus.visualizer.testgen.GenAction.Junit -> {
+            ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                // 20260907-1500：onChosen 内同步 show dialog 触发平台焦点告警
+                //（PopupImplUtil.prohibitFocusEventsInHandleSelect 拦 WINDOW_ACTIVATED），
+                // 动作统一挂 doFinalStep（BaseStep 标准出口，popup 完全关闭后执行）。
+                // 返回类型必须可空：PopupStep.FINAL_CHOICE 本身是 null 哨兵（平台反编译实证），
+                // 非空声明会令 Kotlin 插入 checkNotNull 硬抛。
+                return when (selectedValue) {
+                    is cn.song.mybatisplus.visualizer.testgen.GenAction.Junit -> doFinalStep {
                         val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.junit(input, timestampLabel())
                         JavaCodePreviewDialog(
                             proj,
@@ -546,17 +551,62 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                             MpSqlVisualizerBundle.message("genTest.dialog.title"),
                         ).show()
                     }
-                    else -> {
+                    else -> doFinalStep {
                         val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.sqlScript(input, timestampLabel())
                         saveSqlScriptAsset(proj, asset)
                     }
                 }
-                return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
             }
         }
         com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
             .createListPopup(step)
             .showInFocusCenter()
+    }
+
+    /** 20260907-1500 T-P3：onChosen 必须走 doFinalStep（getFinalRunnable 非 null），不得在选中路径同步弹 dialog（平台焦点告警）。 */
+    internal fun testAssetStepForTest(): com.intellij.openapi.ui.popup.util.BaseListPopupStep<cn.song.mybatisplus.visualizer.testgen.GenAction> {
+        val proj = project
+        val input = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.Input(
+            sql = current?.sql ?: "SELECT 1",
+            dialectName = current?.previewModel?.dialect?.name ?: MySqlDialect.name,
+            tableName = current?.tableName,
+            anchor = null,
+        )
+        return object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<cn.song.mybatisplus.visualizer.testgen.GenAction>(
+            MpSqlVisualizerBundle.message("panel.genTest"),
+            listOf(
+                cn.song.mybatisplus.visualizer.testgen.GenAction.SqlScript,
+                cn.song.mybatisplus.visualizer.testgen.GenAction.Junit,
+            ),
+        ) {
+            override fun getTextFor(value: cn.song.mybatisplus.visualizer.testgen.GenAction): String =
+                MpSqlVisualizerBundle.message(value.labelKey)
+
+            override fun onChosen(
+                selectedValue: cn.song.mybatisplus.visualizer.testgen.GenAction?,
+                finalChoice: Boolean,
+            ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                // 与 generateTestAsset 内 step 同款（20260907-1500）：动作挂 doFinalStep，
+                // popup 完全关闭后再弹 dialog（JUnit 预览）或后台落盘（SQL 脚本）。
+                // 返回类型可空：FINAL_CHOICE 是 null 哨兵，非空声明触发 Kotlin checkNotNull 硬抛。
+                return when (selectedValue) {
+                    is cn.song.mybatisplus.visualizer.testgen.GenAction.Junit -> doFinalStep {
+                        val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.junit(input, timestampLabel())
+                        if (proj != null) {
+                            JavaCodePreviewDialog(
+                                proj,
+                                asset.content,
+                                MpSqlVisualizerBundle.message("genTest.dialog.title"),
+                            ).show()
+                        }
+                    }
+                    else -> doFinalStep {
+                        val asset = cn.song.mybatisplus.visualizer.testgen.TestAssetGenerator.sqlScript(input, timestampLabel())
+                        if (proj != null) saveSqlScriptAsset(proj, asset)
+                    }
+                }
+            }
+        }
     }
 
     /** M37.4：后台写 SQL 回归脚本 + VFS 刷新（新建文件非跟踪文件，无 File Cache Conflict 风险）。 */
