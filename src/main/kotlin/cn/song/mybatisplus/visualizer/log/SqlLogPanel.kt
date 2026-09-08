@@ -217,7 +217,7 @@ class SqlLogPanel(
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val clickPreview = SqlClickPreview(list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+    private val clickPreview = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
     private val tabs = JBTabbedPane()
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)

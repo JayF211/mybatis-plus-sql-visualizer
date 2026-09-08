@@ -2,7 +2,12 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupListener
@@ -11,16 +16,16 @@ import com.intellij.ui.awt.RelativePoint
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
-import java.awt.Font
 import java.awt.Point
 import java.awt.datatransfer.StringSelection
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.JScrollPane
-import javax.swing.JTextArea
 import javax.swing.Timer
+
+/** 预览内容持有者：面板组件 + 编辑器实例（测试断言与释放用）。 */
+internal class SqlClickPreviewContent(val component: JComponent, val editor: Editor)
 
 /**
  * 单击 SQL 预览（T-ClickPreview）：主日志列表 / 历史 tab 二级列表 / F-7 历史窗列表共用。
@@ -36,15 +41,18 @@ import javax.swing.Timer
  *   点其他地方后未再单击 SQL，预览又出现）；
  * - 双击：停定时器 + 关旧预览（随后面板自行 openPreview 走完整弹窗）。
  *
- * 弹窗形态：头部复制/关闭图标按钮 + 可编辑等宽 JTextArea（用户可直接选择、编辑、按钮复制）；
- * 不自动抢焦点（setRequestFocus(false)，列表键盘操作不受影响；点进文本区即可编辑），
+ * 弹窗形态：头部复制/关闭图标按钮 + **SQL 高亮可编辑编辑器**（三轮用户要求：高亮展示 +
+ * 可临时改字段值再复制；纯文档 + SQL FileType 驱动词法高亮，不走 PSI——规避 PsiFileFactory
+ * EDT 直调 262 read access 硬抛，测试环境无 Database 插件时优雅降级纯文本编辑器）。
+ * 不自动抢焦点（setRequestFocus(false)，列表键盘操作不受影响；点进编辑器即可编辑），
  * Esc / 点外 / 其他窗口打开即关，可拖角调整大小。
  *
  * headless 测试约束：show 依赖真实屏幕（RelativePoint → getLocationOnScreen），
- * 测试走 [build]（构建不显示）、[buildContent]（按钮回调直录）、[onClick]/[anchorPointFor]/
+ * 测试走 [buildContent]（构建不显示、编辑器用后释放）、[onClick]/[anchorPointFor]/
  * [isScheduled]/[currentPopup] 交互断言。
  */
 internal class SqlClickPreview(
+    private val project: Project,
     private val list: javax.swing.JList<*>,
     /** 指定行号的预览 SQL；null = 该行不可预览。点击时捕获，定时器到点直接用，不依赖当时选中态。 */
     private val sqlAt: (Int) -> String?,
@@ -86,7 +94,7 @@ internal class SqlClickPreview(
         popup = null
     }
 
-    /** 面板 dispose：停定时器 + 关弹窗。 */
+    /** 面板 dispose：停定时器 + 关弹窗（编辑器经 onClosed 一并释放）。 */
     fun dispose() {
         timer.stop()
         hide()
@@ -121,16 +129,18 @@ internal class SqlClickPreview(
         }
     }
 
-    /** 构建预览弹窗（实例路径）：复制走系统剪贴板，关闭走 [hide]。 */
+    /** 构建预览弹窗（实例路径）：复制走系统剪贴板（取编辑后当前文本），关闭走 [hide]；编辑器随弹窗关闭释放。 */
     private fun buildPopup(sql: String): JBPopup {
+        var editor: Editor? = null
         val content = buildContent(
+            project,
             sql,
             copyText = { CopyPasteManager.getInstance().setContents(StringSelection(it)) },
             close = { hide() },
-        )
+        ).also { editor = it.editor }
         return JBPopupFactory.getInstance()
-            .createComponentPopupBuilder(content, null)
-            .setRequestFocus(false) // 弹出不抢焦点（列表键盘操作不受影响）；点进文本区即可编辑
+            .createComponentPopupBuilder(content.component, null)
+            .setRequestFocus(false) // 弹出不抢焦点（列表键盘操作不受影响）；点进编辑器即可编辑
             .setFocusable(true)
             .setResizable(true)
             .setMovable(false)
@@ -139,6 +149,7 @@ internal class SqlClickPreview(
             .addListener(object : JBPopupListener {
                 override fun onClosed(event: LightweightWindowEvent) {
                     popup = null // 点外/Esc 等外部关闭后清引用，杜绝复用已关闭弹窗
+                    editor?.let { EditorFactory.getInstance().releaseEditor(it) }
                 }
             })
             .createPopup()
@@ -151,38 +162,42 @@ internal class SqlClickPreview(
         /** 弹窗锚点与被点行下缘的间距（px）。 */
         private const val ANCHOR_GAP_PX = 2
 
-        /**
-         * 构建预览弹窗（不显示，测试便捷入口）：回调为空实现。
-         */
-        internal fun build(sql: String): JBPopup {
-            val content = buildContent(sql, copyText = {}, close = {})
-            return JBPopupFactory.getInstance()
-                .createComponentPopupBuilder(content, null)
-                .setRequestFocus(false)
-                .setFocusable(true)
-                .setResizable(true)
-                .setMovable(false)
-                .setCancelOnClickOutside(true)
-                .setCancelOnOtherWindowOpen(true)
-                .createPopup()
-        }
+        private const val PREFERRED_WIDTH = 560
+        private const val PREFERRED_HEIGHT = 320
 
         /**
-         * 构建预览内容组件：头部「复制 | 关闭」图标按钮 + 可编辑等宽文本区（长 SQL 可滚动，
-         * 用户可直接选择/编辑内容后经按钮或 Ctrl+C 复制）。按钮回调由调用方注入（测试直录断言）。
+         * 构建预览内容：头部「复制 | 关闭」图标按钮 + SQL 高亮可编辑编辑器。
+         * 编辑器 = 纯文档 + SQL FileType 驱动词法高亮（无 PSI；fileType 解析不到降级纯文本），
+         * 软换行长 SQL 免横向滚动，隐藏行号/折叠/缩进导轨/页底留白的紧凑外观。
+         * 按钮回调由调用方注入（测试直录断言）；**调用方负责释放 editor**（弹窗路径经 onClosed）。
          */
-        internal fun buildContent(sql: String, copyText: (String) -> Unit, close: () -> Unit): JComponent {
-            val area = JTextArea(sql).apply {
-                isEditable = true // 可编辑：方便选择与复制（T-ClickPreview 二轮用户要求）
-                lineWrap = true
-                wrapStyleWord = true
-                font = Font(Font.MONOSPACED, Font.PLAIN, 13)
-                border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
+        internal fun buildContent(
+            project: Project,
+            sql: String,
+            copyText: (String) -> Unit,
+            close: () -> Unit,
+        ): SqlClickPreviewContent {
+            val sqlFileType = FileTypeManager.getInstance().findFileTypeByName("SQL")
+            val document = EditorFactory.getInstance().createDocument(sql)
+            val editor = if (sqlFileType != null) {
+                EditorFactory.getInstance().createEditor(document, project, sqlFileType, false)
+            } else {
+                EditorFactory.getInstance().createEditor(document)
             }
+            (editor as? EditorEx)?.settings?.apply {
+                isLineNumbersShown = false // 紧凑弹窗不留 gutter
+                isFoldingOutlineShown = false
+                isIndentGuidesShown = false
+                isAdditionalPageAtBottom = false
+                setCaretRowShown(false)
+                setUseSoftWraps(true) // 长 SQL 软换行免横向滚动
+            }
+            editor.component.preferredSize = Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT)
+
             val copyButton = JButton(AllIcons.Actions.Copy).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.copy")
                 isFocusable = false
-                addActionListener { copyText(area.text) } // 复制当前内容（含用户编辑后文本）
+                addActionListener { copyText(editor.document.text) } // 复制当前内容（含用户编辑后文本）
             }
             val closeButton = JButton(AllIcons.Actions.Close).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.close")
@@ -195,17 +210,11 @@ internal class SqlClickPreview(
                 add(copyButton)
                 add(closeButton)
             }
-            val scroll = JScrollPane(area).apply {
-                preferredSize = Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT)
-            }
-            return JPanel(BorderLayout()).apply {
-                isOpaque = true
+            val panel = JPanel(BorderLayout()).apply {
                 add(header, BorderLayout.NORTH)
-                add(scroll, BorderLayout.CENTER)
+                add(editor.component, BorderLayout.CENTER)
             }
+            return SqlClickPreviewContent(panel, editor)
         }
-
-        private const val PREFERRED_WIDTH = 520
-        private const val PREFERRED_HEIGHT = 300
     }
 }

@@ -59,7 +59,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val sqlClickPreview = SqlClickPreview(sqlList) { i -> withTerminator(sqlList.model.getElementAt(i).restoredSql) }
+    private val sqlClickPreview = SqlClickPreview(project, sqlList) { i -> withTerminator(sqlList.model.getElementAt(i).restoredSql) }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 

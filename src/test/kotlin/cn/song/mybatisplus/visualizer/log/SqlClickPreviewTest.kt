@@ -2,6 +2,9 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.history.SqlHistoryPanel
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.EditorFactory
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBList
 import com.intellij.util.ui.UIUtil
@@ -10,11 +13,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import java.awt.Font
 import java.awt.Point
 import javax.swing.DefaultListModel
 import javax.swing.JButton
-import javax.swing.JTextArea
 
 /**
  * 单击 SQL 预览接线测试（T-ClickPreview）：
@@ -24,6 +25,8 @@ import javax.swing.JTextArea
  * 二轮反馈：① 点其他地方后未再单击 SQL，预览又出现 → 排程严格绑定"点到真实行"（点击时
  * 捕获该行 SQL，空白区点击立即停表关预览，不借旧选中复活）；② 预览弹窗要可编辑、带复制/
  * 关闭按钮；③ 弹窗不得遮住被点行（锚点 = 行下缘）。
+ * 三轮反馈：预览要 SQL 高亮且可编辑（临时改字段值再复制）→ 内容升级为纯文档 + SQL FileType
+ * 驱动词法高亮的可编辑编辑器（无 PSI，规避 EDT read access 陷阱；fileType 缺席降级纯文本）。
  *
  * headless 约束：SqlClickPreview.show 依赖真实屏幕（RelativePoint → getLocationOnScreen），
  * 弹窗「构建/内容」与「交互排程/取消/锚点」分别断言；显示行为由 runIde 真机覆盖。
@@ -47,36 +50,37 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         }
     }
 
-    private fun findComponents(root: java.awt.Container, type: Class<out java.awt.Component>): List<java.awt.Component> =
+    private fun releaseEditor(editor: Editor) {
+        runCatching { EditorFactory.getInstance().releaseEditor(editor) }
+    }
+
+    private fun findButtons(root: java.awt.Container): List<JButton> =
         UIUtil.uiTraverser(root)
             .preOrderDfsTraversal()
-            .filter { type.isInstance(it) }
+            .filterIsInstance<JButton>()
             .toList()
 
-    // ---------- 弹窗构建：可编辑 + 复制/关闭按钮 ----------
+    // ---------- 弹窗构建：SQL 高亮编辑器 + 可编辑 + 复制/关闭按钮 ----------
 
-    fun test预览弹窗内容等于SQL_可编辑带复制关闭按钮() {
+    fun test预览内容为可编辑SQL编辑器_文本等于还原SQL_带复制关闭按钮() {
         val sql = "SELECT * FROM user WHERE id = 1;"
-        val popup = SqlClickPreview.build(sql)
+        val content = SqlClickPreview.buildContent(
+            project,
+            sql,
+            copyText = {},
+            close = {},
+        )
         try {
-            // popup.content 是弹窗包裹层组件（含广告区/边框等），SQL 文本区在包裹层组件树内
-            val area = UIUtil.uiTraverser(popup.content)
-                .preOrderDfsTraversal()
-                .filterIsInstance<JTextArea>()
-                .firstOrNull()
-            assertTrue("预览内容组件树内应有 SQL 文本区", area != null)
-            assertEquals("预览文本应等于传入 SQL", sql, area!!.text)
-            assertTrue("文本区应可编辑（用户可直接选择/编辑后复制）", area.isEditable)
-            assertTrue("长 SQL 应自动换行", area.lineWrap)
-            // 逻辑字体族名（MONOSPACED）按 name 断言；family 会被映射为物理字体（如 Courier New）
-            assertEquals("SQL 应等宽字体展示", Font.MONOSPACED, area.font.name)
+            assertEquals("编辑器文档应等于传入 SQL", sql, content.editor.document.text)
+            assertFalse("编辑器应可编辑（非 viewer）", content.editor.isViewer)
+            assertTrue("长 SQL 应软换行免横向滚动", content.editor.settings.isUseSoftWraps)
 
-            val buttons = findComponents(popup.content, JButton::class.java).filterIsInstance<JButton>()
+            val buttons = findButtons(content.component)
             val tooltips = buttons.map { it.toolTipText }.toSet()
             assertTrue("应含复制按钮（tooltip = i18n 文案）", tooltips.contains(MpSqlVisualizerBundle.message("log.preview.copy")))
             assertTrue("应含关闭按钮（tooltip = i18n 文案）", tooltips.contains(MpSqlVisualizerBundle.message("log.preview.close")))
         } finally {
-            popup.cancel()
+            releaseEditor(content.editor)
         }
     }
 
@@ -84,39 +88,52 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         var copied: String? = null
         var closed = false
         val content = SqlClickPreview.buildContent(
+            project,
             "SELECT 1;",
             copyText = { copied = it },
             close = { closed = true },
         )
-        val buttons = findComponents(content, JButton::class.java).filterIsInstance<JButton>()
-        val copyButton = buttons.first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
-        val closeButton = buttons.first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.close") }
-        copyButton.doClick()
-        assertEquals("复制按钮应回调当前文本", "SELECT 1;", copied)
-        closeButton.doClick()
-        assertTrue("关闭按钮应触发关闭回调", closed)
+        try {
+            findButtons(content.component)
+                .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
+                .doClick()
+            assertEquals("复制按钮应回调当前文本", "SELECT 1;", copied)
+            findButtons(content.component)
+                .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.close") }
+                .doClick()
+            assertTrue("关闭按钮应触发关闭回调", closed)
+        } finally {
+            releaseEditor(content.editor)
+        }
     }
 
     fun test复制按钮复制用户编辑后的内容() {
         var copied: String? = null
         val content = SqlClickPreview.buildContent(
+            project,
             "SELECT 1;",
             copyText = { copied = it },
             close = {},
         )
-        val area = findComponents(content, JTextArea::class.java).filterIsInstance<JTextArea>().first()
-        area.text = "SELECT edited_column FROM user;" // 模拟用户编辑
-        findComponents(content, JButton::class.java).filterIsInstance<JButton>()
-            .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
-            .doClick()
-        assertEquals("复制应取编辑后的文本", "SELECT edited_column FROM user;", copied)
+        try {
+            // 模拟用户临时改字段值（文档写入须 write action）
+            WriteCommandAction.runWriteCommandAction(project) {
+                content.editor.document.setText("SELECT edited_price FROM user;")
+            }
+            findButtons(content.component)
+                .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
+                .doClick()
+            assertEquals("复制应取编辑后的文本", "SELECT edited_price FROM user;", copied)
+        } finally {
+            releaseEditor(content.editor)
+        }
     }
 
     // ---------- 交互语义：命中行才排程，空白区不复活 ----------
 
     fun test单击行排程预览_点空白区取消并隐藏() {
         val list = fixedList("SELECT 1;")
-        val cp = SqlClickPreview(list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+        val cp = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
         cp.onClick(1, Point(5, 10)) // 落在第 0 行（行高 20）内
         assertTrue("命中行的单击应排程预览", cp.isScheduled)
         assertNull("延迟内不应立即弹窗", cp.currentPopup)
@@ -133,7 +150,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
 
     fun test锚点在被点行下缘不遮行() {
         val list = fixedList("SELECT 1;", "SELECT 2;")
-        val cp = SqlClickPreview(list) { i -> list.model.getElementAt(i).restoredSql }
+        val cp = SqlClickPreview(project, list) { i -> list.model.getElementAt(i).restoredSql }
         val anchor = cp.anchorPointFor(0)
         assertNotNull("有效行应给出锚点", anchor)
         assertTrue("锚点应在被点行下缘（不遮行）", anchor!!.y >= 20)

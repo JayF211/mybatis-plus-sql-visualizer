@@ -57,7 +57,7 @@ class SqlHistoryPanel(
     private val listModel = DefaultListModel<SqlHistoryEntry>()
     private val list = JBList<SqlHistoryEntry>(listModel)
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val clickPreview = SqlClickPreview(list) { i -> withTerminator(list.model.getElementAt(i).sql) }
+    private val clickPreview = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).sql) }
 
     /** 当前筛选模式（null = 全部）。 */
     private var tagFilter: String? = null
