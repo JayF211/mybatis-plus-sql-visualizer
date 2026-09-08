@@ -15,8 +15,9 @@ import javax.swing.JComponent
  *
  * 自动监听「关→开」边沿联动（20260907-1617 自 PluginSettingsConfigurable 迁入——
  * 该类未注册进 plugin.xml 是死类，用户实际勾选走本基类的 apply 链；踩坑第九轮修复回归）：
- * apply 前读旧值，panel.apply() 后比对——「关→开」时清 suppressed + 已打开项目立即 startCapture
- * （幂等，无主控制台进 armed 态，对齐 pitfall-log-startup-capture-regression 第十一轮语义）。
+ * apply 前读旧值，panel.apply() 后比对——「关→开」时清 suppressed + 调
+ * [SqlLogManager.onAutoStartSettingEnabled] 按模式分流（进程级监听可用=被动不预 armed，
+ * 降级才进 armed；20260907-2045 第四轮：08:33 会话反馈"开启设置未 Run 就自动监听"实证被动语义）。
  */
 abstract class SectionConfigurable(
     private val sections: Set<String>,
@@ -45,11 +46,10 @@ abstract class SectionConfigurable(
         val settings = PluginSettings.getInstance()
         LOG.info("SectionConfigurable.apply: logAutoCaptureOnStart=${settings.state.logAutoCaptureOnStart}, suppressed=${settings.state.logAutoCaptureSuppressed}")
         if (!autoCaptureBefore && settings.state.logAutoCaptureOnStart) {
-            settings.state.logAutoCaptureSuppressed = false
             ProjectManager.getInstance().openProjects.forEach { project ->
                 val manager = project.getService(SqlLogManager::class.java)
-                runCatching { manager.startCapture() }.onFailure {
-                    LOG.warn("apply: startCapture 跳过（项目关闭/服务不可用）", it)
+                runCatching { manager.onAutoStartSettingEnabled() }.onFailure {
+                    LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）", it)
                 }
             }
         }
