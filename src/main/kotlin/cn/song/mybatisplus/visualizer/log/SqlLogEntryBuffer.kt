@@ -21,6 +21,9 @@ class SqlLogEntryBuffer(
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val entries = ArrayDeque<LogSqlEntry>()
 
+    /** T-Perf-03（自 dev 移植）：自上次 drain 以来的头部淘汰条数（面板增量刷新对齐用；drain 约定单消费方——面板 EDT 刷新）。 */
+    private val evictedSinceDrain = java.util.concurrent.atomic.AtomicInteger()
+
     @Volatile
     var paused: Boolean = false
         internal set
@@ -30,7 +33,8 @@ class SqlLogEntryBuffer(
     var dedupeEnabled: Boolean = true
 
     /**
-     * 去重丢弃计数（键 = restoredSql 原文，与 [isDuplicate] 匹配同源）：去重开启期间每丢弃
+     * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 [sqlFingerprint]，非 SQL 原文——
+     * 原文键在条目淘汰后文本永久驻留，长会话可达数十 MB）：去重开启期间每丢弃
      * 一条相同 SQL 计数 +1，供列表「⨉N」徽章展示该 SQL 被去掉过几次。
      * 仅在 [dedupeEnabled] 为 true 时累计；[clear] 与 [resetDedupeCounts] 归零。
      */
@@ -50,22 +54,35 @@ class SqlLogEntryBuffer(
     /** 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃并计数；超过上限裁掉最旧）。
      *
      * 去重丢弃分支也调用 [notifyChanged]——徽章数据已变，UI 必须即时刷新（用户实测：
-     * 不通知则 ⨉N 徽章要等下一条 SQL 入列才更新，「不及时」）。 */
+     * 不通知则 ⨉N 徽章要等下一条 SQL 入列才更新，「不及时」）。
+     *
+     * T-Perf-06（自 dev 移植）：去重判定与入队合并进同一 `synchronized(entries)` 临界区——此前 [isDuplicate]
+     * 在锁外无锁遍历 ArrayDeque，与 EDT 清空/删除（clear/removeEntry）并发修改会触发
+     * ConcurrentModificationException，经 LogFilterProxyHandler（无 catch）上浮为 IDE 红色报错弹窗。 */
     fun addEntry(entry: LogSqlEntry): Boolean {
         if (paused) return false
         if (isFiltered(entry.restoredSql)) return false
-        if (dedupeEnabled && isDuplicate(entry)) {
-            dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+        var duplicate = false
+        val evictedEntries = mutableListOf<LogSqlEntry>()
+        synchronized(entries) {
+            if (dedupeEnabled && isDuplicate(entry)) {
+                duplicate = true
+            } else {
+                entries.addLast(entry)
+                while (entries.size > maxEntries) {
+                    evictedEntries.add(entries.removeFirst())
+                    evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
+                }
+            }
+        }
+        if (duplicate) {
+            dedupeCounts.merge(entry.dedupeKey, 1, Int::plus)
             notifyChanged() // ← 徽章计数变了 → UI 必须即时刷新
             return false
         }
-        synchronized(entries) {
-            entries.addLast(entry)
-            while (entries.size > maxEntries) {
-                val evicted = entries.removeFirst()
-                onEvicted?.invoke(evicted)
-            }
-        }
+        // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
+        // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
+        evictedEntries.forEach { onEvicted?.invoke(it) }
         notifyChanged()
         return true
     }
@@ -89,7 +106,7 @@ class SqlLogEntryBuffer(
                         kotlin.math.abs(entry.timestamp - it.timestamp) < dedupeWindowMs
                 }
                 if (duplicate != null) {
-                    dedupeCounts.merge(entry.restoredSql, 1, Int::plus)
+                    dedupeCounts.merge(entry.dedupeKey, 1, Int::plus)
                     removed++
                 } else {
                     keep += entry
@@ -119,6 +136,7 @@ class SqlLogEntryBuffer(
     private fun isFiltered(sql: String): Boolean =
         filterKeywords.isNotEmpty() && filterKeywords.any { sql.contains(it, ignoreCase = true) }
 
+    /** 去重判定（T-Perf-06：**必须在 `synchronized(entries)` 内调用**——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。 */
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
         val now = entry.timestamp
         return entries.firstOrNull { it.restoredSql == entry.restoredSql && now - it.timestamp < dedupeWindowMs } != null
@@ -126,6 +144,13 @@ class SqlLogEntryBuffer(
 
     /** 最早在前的快照（正序）。 */
     fun snapshot(): List<LogSqlEntry> = synchronized(entries) { entries.toList() }
+
+    /**
+     * T-Perf-03（自 dev 移植）：取走自上次调用以来的头部淘汰条数并归零。
+     * 单消费方约定（面板 EDT 刷新）：与 [snapshot] 搭配，用于增量刷新的头部对齐；
+     * 其他调用方调用会偷走面板的对齐信息（回退全量重建，正确性不受影响）。
+     */
+    fun drainEvictedCount(): Int = evictedSinceDrain.getAndSet(0)
 
     /** 清空全部（去重计数一并归零——徽章与列表内容同生命周期）。 */
     fun clear() {
@@ -139,10 +164,10 @@ class SqlLogEntryBuffer(
         dedupeCounts.clear()
     }
 
-    /** 指定 SQL 的去重丢弃次数（无丢弃记录返回 0）。 */
-    fun dedupeCount(sql: String): Int = dedupeCounts[sql] ?: 0
+    /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按指纹查；无丢弃记录返回 0）。 */
+    fun dedupeCount(sql: String): Int = dedupeCounts[sqlFingerprint(sql)] ?: 0
 
-    /** 去重丢弃计数快照（键 = restoredSql，值 = 丢弃次数；供面板渲染徽章）。 */
+    /** 去重丢弃计数快照（键 = [sqlFingerprint] 指纹，值 = 丢弃次数；供面板渲染徽章）。 */
     fun dedupeCountsSnapshot(): Map<String, Int> = dedupeCounts.toMap()
 
     /** 删除单条（面板右键菜单）。 */

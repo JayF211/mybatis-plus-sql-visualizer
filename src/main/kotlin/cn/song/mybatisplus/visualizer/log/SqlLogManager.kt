@@ -196,6 +196,12 @@ class SqlLogManager(private val project: Project) : Disposable {
         capturingListeners += listener
     }
 
+    /** T-Perf-15（自 dev 移植）：注销 capturing 变化监听（面板 dispose 调用——防面板随 tool window content
+     *  销毁重建逐次累积，每条新 SQL 仍回调已销毁面板）。 */
+    fun removeCapturingListener(listener: () -> Unit) {
+        capturingListeners -= listener
+    }
+
     /** 强制刷新工具栏 action 状态（capturing 变化时按钮图标/文案同步）。 */
     private fun refreshToolbar() {
         LOG.info("refreshToolbar: 通知 ${capturingListeners.size} 个监听器")
@@ -285,8 +291,21 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** F-43 测试访问器：解析文件名模板。 */
     internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
 
+    /**
+     * T-Perf-03（自 dev 移植）：UI 刷新合并——流式灌入时每条 SQL 一次 invokeLater 的调度风暴改为
+     * 「置脏 + 单个幂等 flush」：首个变更投递一个 invokeLater（pending 置位），后续变更
+     * 在 flush 执行前只置脏不重复投递；flush 读的是当下缓冲快照，不丢任何条目。
+     * 持续灌入期间刷新频率被 EDT 吞吐自然合并（风暴期数百条 SQL = 数十次轻量刷新）。
+     */
+    @Volatile
+    private var uiFlushPending = false
+
     private fun notifyUi() {
+        if (uiListeners.isEmpty()) return
+        if (uiFlushPending) return // 已有 flush 在途——本次变更由该 flush 的当下快照覆盖
+        uiFlushPending = true
         ApplicationManager.getApplication().invokeLater {
+            uiFlushPending = false
             uiListeners.forEach { it() }
         }
     }

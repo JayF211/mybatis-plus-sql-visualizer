@@ -31,6 +31,8 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
+import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
@@ -42,6 +44,7 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GridBagLayout
+import java.awt.GridLayout
 import java.awt.Insets
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -126,6 +129,75 @@ internal fun filterBySearch(entries: List<LogSqlEntry>, query: String): List<Log
     }
 }
 
+/** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
+internal const val MAX_SYNC_APPEND = 300
+
+/**
+ * 新旧可见列表差分结果（增量刷新决策；元素按同一性 `===` 比较——条目为不可变数据类，
+ * 缓冲内同一条目恒为同一实例）。（T-Perf-03 自 dev 移植）
+ */
+internal sealed class VisibleDiff {
+    /** 头部淘汰 `evicted` 条 + 尾部追加 `appended`（缓冲满后的流式 steady state；appended 可为空）。 */
+    data class HeadEvictAppend(val evicted: Int, val appended: List<LogSqlEntry>) : VisibleDiff()
+    /** 从 `index` 起插入 `entries`（尾部纯追加时 index == old.size）。 */
+    data class Insert(val index: Int, val entries: List<LogSqlEntry>) : VisibleDiff()
+    /** 尾部纯移除：移除 `[from, old.size)`。 */
+    data class TailRemove(val from: Int) : VisibleDiff()
+    /** 无变化。 */
+    object Same : VisibleDiff()
+    /** 无法增量（离散增删/超大追加）——全量重建。 */
+    object FullRebuild : VisibleDiff()
+}
+
+/** 同一性公共前缀长度。 */
+internal fun commonPrefixLength(old: List<LogSqlEntry>, new: List<LogSqlEntry>): Int {
+    val n = minOf(old.size, new.size)
+    var i = 0
+    while (i < n && old[i] === new[i]) i++
+    return i
+}
+
+/** 同一性公共后缀长度（不与 prefix 重叠）。 */
+internal fun commonSuffixLength(old: List<LogSqlEntry>, new: List<LogSqlEntry>, prefix: Int): Int {
+    val n = minOf(old.size, new.size) - prefix
+    var i = 0
+    while (i < n && old[old.size - 1 - i] === new[new.size - 1 - i]) i++
+    return i
+}
+
+/** [old] 的 [aStart..] 与 [new] 的 [bStart..] 前 [length] 个元素是否同一。 */
+internal fun identityPrefix(old: List<LogSqlEntry>, aStart: Int, new: List<LogSqlEntry>, bStart: Int, length: Int): Boolean {
+    if (old.size - aStart < length || new.size - bStart < length) return false
+    for (i in 0 until length) if (old[aStart + i] !== new[bStart + i]) return false
+    return true
+}
+
+/**
+ * 可见列表差分：流式灌入时把「clear+全量重建」降阶为「尾部追加 / 头部淘汰+追加」。
+ *
+ * 判定顺序：
+ *  1. 头部淘汰对齐（evicted>0 且 old 去头后与 new 前缀同一）→ HeadEvictAppend；
+ *  2. 前缀/后缀差分 → 纯插入（含尾部追加）/ 尾部纯移除 / 无变化；
+ *  3. 其余（过滤、搜索、去重裁剪、排序导致的离散增删）→ FullRebuild。
+ */
+internal fun diffVisible(old: List<LogSqlEntry>, new: List<LogSqlEntry>, evicted: Int): VisibleDiff {
+    if (evicted > 0 && old.size >= evicted && new.size >= old.size - evicted &&
+        identityPrefix(old, evicted, new, 0, old.size - evicted)
+    ) {
+        return VisibleDiff.HeadEvictAppend(evicted, new.drop(old.size - evicted))
+    }
+    val prefix = commonPrefixLength(old, new)
+    val suffix = commonSuffixLength(old, new, prefix)
+    val removed = old.size - prefix - suffix
+    val added = new.size - prefix - suffix
+    return when {
+        removed == 0 && added == 0 -> VisibleDiff.Same
+        removed == 0 && added in 1..MAX_SYNC_APPEND -> VisibleDiff.Insert(prefix, new.subList(prefix, prefix + added))
+        added == 0 && suffix == 0 -> VisibleDiff.TailRemove(prefix)
+        else -> VisibleDiff.FullRebuild
+    }
+}
+
 /**
  * 工具窗口面板（标签页 + 工具栏；headless 测试不布局，交互断言走条目模型层）。
  *
@@ -195,6 +267,27 @@ class SqlLogPanel(
 
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private var dedupeCounts: Map<String, Int> = emptyMap()
+
+    // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
+
+    /** 刷新代际：新 refreshList 启动时 +1，旧分批追加链检测到代际过期即终止。 */
+    private var refreshGeneration = 0L
+
+    /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
+    private var lastRendered: List<LogSqlEntry> = emptyList()
+
+    // ---------- T-Perf-15（自 dev 移植）：manager 监听器命名引用（init 注册 / dispose 注销） ----------
+
+    /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
+    private val uiRefreshListener: () -> Unit = { refreshList() }
+
+    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
+    private val capturingUiListener: () -> Unit = {
+        LOG.info("SqlLogPanel.capturingListener: 触发")
+        ApplicationManager.getApplication().invokeLater {
+            updateCaptureButtonIcon()
+        }
+    }
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -323,23 +416,23 @@ class SqlLogPanel(
         val settingsListener = SettingsChangeListener {
             ApplicationManager.getApplication().invokeLater {
                 updateHistoryTabVisibility()
+                // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
+                // 走 refreshList 重排重绘即生效（片段无缓存，原 HTML 通道的清缓存兜底不再需要）
+                refreshList()
             }
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
 
-        manager.addUiListener { refreshList() }
+        // T-Perf-15（自 dev 移植）：监听器改命名引用——dispose 时精确注销（此前 addUiListener/addCapturingListener
+        // 只加不减，面板随 tool window content 销毁重建逐次累积）
+        manager.addUiListener(uiRefreshListener)
         refreshList()
 
         // capturing 变化 → 刷新工具栏按钮图标/文案
         // 注意：updateActionsAsync()/updateActionsImmediately() 在组件不可见时会跳过更新
         // （ToolbarUpdater$MyUpdateRunnable 检查 isShowing，沙盒中工具栏可能不可见），
         // 故直接遍历 ActionButton 设置图标（绕过平台更新机制）
-        manager.addCapturingListener {
-            LOG.info("SqlLogPanel.capturingListener: 触发")
-            ApplicationManager.getApplication().invokeLater {
-                updateCaptureButtonIcon()
-            }
-        }
+        manager.addCapturingListener(capturingUiListener)
     }
 
     // ---------- 顶部区域（工具栏行 + 搜索条） ----------
@@ -452,7 +545,15 @@ class SqlLogPanel(
         list.requestFocusInWindow()
     }
 
+    // T-Perf-24（自 dev 移植）：搜索输入防抖——每击键一次 O(N) 刷新 → 停顿 200ms 应用一次
+    private val searchDebounceTimer =
+        javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearchText() }.apply { isRepeats = false }
+
     private fun onSearchTextChanged() {
+        searchDebounceTimer.restart()
+    }
+
+    private fun applySearchText() {
         searchText = searchField.text
         refreshList()
     }
@@ -714,9 +815,11 @@ class SqlLogPanel(
 
     private fun buildListPane(): JBScrollPane {
         list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
-        // 多行 SQL 预览：启用可变行高（条目高度按内容自适应，支持 SQL 自动换行）
-        list.fixedCellHeight = -1
         list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
+        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）。
+        // 原可变行高使每次布局状态更新逐条调渲染器取首选尺寸（叠加 HTML 排版即 16s EDT Freeze）；
+        // 固定后 WideSelectionListUI 短路逐条测量走 O(1) 快路径。全文查看由单击预览/双击弹窗承接。
+        list.fixedCellHeight = measureFixedCellHeight()
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发 clickCount（单击排程预览 / 双击停表并关旧预览），双击再开完整弹窗
@@ -737,18 +840,30 @@ class SqlLogPanel(
         return JBScrollPane(list)
     }
 
+    /** T-LogListFreeze-04：固定行高实测——样例条目渲染一次取首选高（两行文本 + 5,8 空边框 + 1px 分隔线）。 */
+    private fun measureFixedCellHeight(): Int {
+        val sample = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList())
+        val c = entryCellRenderer.getListCellRendererComponent(list, sample, 0, false, false)
+        val measured = c.preferredSize.height
+        return if (measured > 0) measured else list.getFontMetrics(list.font).height * 2 + 13
+    }
+
     // ---------- 刷新管线（类型过滤 → 搜索过滤 → 排序 → 渲染） ----------
 
     /**
-     * 刷新列表（过滤 → 搜索 → 排序 → 渲染）。
+     * 刷新列表（过滤 → 搜索 → 排序 → 差分渲染）。
      *
      * 执行顺序：
      * 1. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
      * 2. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
      * 3. [applySort]：按 [sortMode] 排序（降序耗时）
-     * 4. 渲染到 [listModel]
+     * 4. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     *
+     * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 [dedupeCounts]，
+     * 原「清缓存/选择性失效」机制一并移除。
      */
     private fun refreshList() {
+        val gen = ++refreshGeneration
         val snapshot = manager.entries.snapshot()
 
         // 检测是否含耗时信息（决定是否显示排序按钮）
@@ -760,11 +875,58 @@ class SqlLogPanel(
 
         val filtered = filterByType(snapshot, activeFilter)
         val searched = filterBySearch(filtered, searchText)
-        val sorted = applySort(searched)
+        val newVisible = applySort(searched)
+        val evicted = manager.entries.drainEvictedCount()
 
-        // T-LogListFreeze-02：清空全部缓存（过滤/排序/设置变更后 HTML 需重新生成）
-        snapshot.forEach { it.cachedListHtml = null }
+        if (!applyIncremental(newVisible, evicted)) {
+            applyFullRebuild(newVisible, gen)
+        }
 
+        updateSortButton()
+
+        // O-1：同步慢查询阈值 + 更新计数（Phase C）
+        slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
+        slowQueryCounter.reset()
+        snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
+        updateSlowQueryLabel()
+    }
+
+    /**
+     * T-Perf-03（自 dev 移植）：增量应用差分（同步完成，无异步追加链）。模型与 [lastRendered] 尺寸不一致
+     * （旧异步追加链被新刷新中断/外部改动）时拒绝增量——全量重建兜底。
+     */
+    private fun applyIncremental(newVisible: List<LogSqlEntry>, evicted: Int): Boolean {
+        if (listModel.size() != lastRendered.size) return false
+        return when (val diff = diffVisible(lastRendered, newVisible, evicted)) {
+            is VisibleDiff.Same -> { lastRendered = newVisible; true }
+            is VisibleDiff.HeadEvictAppend -> {
+                repeat(diff.evicted) { listModel.remove(0) }
+                diff.appended.forEach { listModel.addElement(it) }
+                lastRendered = newVisible
+                true
+            }
+            is VisibleDiff.Insert -> {
+                diff.entries.forEachIndexed { i, e -> listModel.add(diff.index + i, e) }
+                lastRendered = newVisible
+                true
+            }
+            is VisibleDiff.TailRemove -> {
+                for (i in lastRendered.size - 1 downTo diff.from) listModel.remove(i)
+                lastRendered = newVisible
+                true
+            }
+            is VisibleDiff.FullRebuild -> false
+        }
+    }
+
+    /**
+     * 全量重建（分批 EDT 写入 + generation 守卫）。
+     *
+     * T-Perf-03 追加链 generation 守卫（自 dev 移植）：新 refreshList 启动后旧链在新 chunk 写入前检测代际
+     * 并终止——杜绝旧快照剩余条目继续追加造成的幽灵/重复条目。
+     */
+    private fun applyFullRebuild(sorted: List<LogSqlEntry>, gen: Long) {
+        lastRendered = sorted
         // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
         list.ignoreRepaint = true
         listModel.clear()
@@ -782,7 +944,7 @@ class SqlLogPanel(
             val remaining = sorted.drop(REFRESH_FIRST_BATCH_SIZE)
             val iterator = remaining.iterator()
             fun appendNext() {
-                if (!iterator.hasNext()) return
+                if (gen != refreshGeneration) return // 新一轮刷新已启动，旧链终止（T-Perf-03 代际守卫）
                 val chunk = mutableListOf<LogSqlEntry>()
                 repeat(REFRESH_CHUNK_SIZE) { if (iterator.hasNext()) chunk.add(iterator.next()) }
                 listModel.addAll(chunk)
@@ -792,14 +954,6 @@ class SqlLogPanel(
             }
             ApplicationManager.getApplication().invokeLater { appendNext() }
         }
-
-        updateSortButton()
-
-        // O-1：同步慢查询阈值 + 更新计数（Phase C）
-        slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
-        slowQueryCounter.reset()
-        snapshot.forEach { slowQueryCounter.report(it.executionTimeMs) }
-        updateSlowQueryLabel()
     }
 
     /** 按当前排序模式排序条目。 */
@@ -829,8 +983,8 @@ class SqlLogPanel(
         refreshList()
     }
 
-    // ---------- 渲染辅助（F-44-2：HTML 通道恢复 SQL 高亮 + 耗时） ----------
-    // 注：formatTimestampHtml / formatDurationHtml / escapeHtml 已抽为文件级 private 函数（见本文件末尾），
+    // ---------- 渲染辅助（F-44-2：片段通道恢复 SQL 高亮 + 耗时） ----------
+    // 注：formatTimestampFragment / formatDurationFragment / formatSourceFragment 为文件级 internal 函数（见本文件末尾），
     // 供 LogEntryListCellRenderer 与 SqlLogPanel 共用。
 
     /**
@@ -1101,6 +1255,11 @@ class SqlLogPanel(
 
     /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
+        // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
+        searchDebounceTimer.stop()
+        // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
+        manager.removeUiListener(uiRefreshListener)
+        manager.removeCapturingListener(capturingUiListener)
         clickPreview.dispose()
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
@@ -1167,6 +1326,8 @@ class SqlLogPanel(
     companion object {
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
+        /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
+        private const val SEARCH_DEBOUNCE_MS = 200
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
@@ -1189,45 +1350,87 @@ class SqlLogPanel(
 
 // =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
 
-/** 时间戳 HTML 前缀：返回 `<span>` 片段，与 SQL 高亮共用 HTML 通道；未开启时间戳则返回空串。 */
-private fun formatTimestampHtml(timestamp: Long): String {
+/** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。 */
+private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0x9E9E9E))
+
+/** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML `<span>` 尾空格语义）。 */
+internal fun formatTimestampFragment(timestamp: Long): Pair<String, SimpleTextAttributes>? {
     val state = PluginSettings.getInstance().state
-    if (!state.logTimestampEnabled) return ""
+    if (!state.logTimestampEnabled) return null
     val formatted = try {
         SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
     } catch (_: IllegalArgumentException) {
         SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp))
     }
-    return "<span style='color:#9E9E9E'>[${escapeHtml(formatted)}]</span> "
+    return "[$formatted] " to LIST_META_GRAY
 }
 
-/** 耗时 HTML 片段：根据阈值套不同颜色——无耗时显示 "—" 占位。 */
-private fun formatDurationHtml(ms: Long?, isSelected: Boolean): String {
+/** 耗时片段：颜色分档与原 HTML 通道一致（选中白/无耗时灰/慢红/偏慢橙/正常绿）；无耗时显示 "—" 占位。 */
+internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String, SimpleTextAttributes> {
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
-        isSelected -> "#FFFFFF"
-        ms == null -> "#9E9E9E"            // 灰：无耗时
-        ms >= threshold -> "#D32F2F"      // 红：慢查询
-        ms >= threshold / 2 -> "#E67E22"  // 橙：偏慢
-        else -> "#4CAF50"                 // 绿：正常
+        isSelected -> Color(0xFFFFFF)
+        ms == null -> Color(0x9E9E9E)          // 灰：无耗时
+        ms >= threshold -> Color(0xD32F2F)     // 红：慢查询
+        ms >= threshold / 2 -> Color(0xE67E22) // 橙：偏慢
+        else -> Color(0x4CAF50)                // 绿：正常
     }
     val text = ms?.let { "${it}ms" } ?: "—"
-    return "<span style='color:${color}'>$text</span> "
+    return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
 
-/** 单行 HTML 转义（防注入日志中的特殊字符）。 */
-private fun escapeHtml(s: String): String = s
-    .replace("&", "&amp;")
-    .replace("<", "&lt;")
-    .replace(">", "&gt;")
+/** 来源片段：未知来源返回 null；选中态走组件前景（selectionForeground），非选中灰。 */
+internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    val source = when {
+        SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+        entry.sourceFile != null -> {
+            // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
+            val name = entry.sourceFile.substringAfterLast('/')
+            if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+        }
+        else -> return null
+    }
+    return "[$source] " to if (isSelected) SimpleTextAttributes.REGULAR_ATTRIBUTES else LIST_META_GRAY
+}
 
 /**
- * 日志列表条目单元格渲染器（F-44-2 重写）：HTML 通道恢复 SQL 高亮 + 耗时 + 时间戳 + 去重 ⨉N 徽章。
- * 抽为具名 internal 类（原匿名 object），便于单元测试直接渲染各种条目状态、锁定渲染崩溃/配色缺陷。
+ * 日志列表条目单元格渲染器（F-44-2 重写；T-LogListFreeze-04 弃 HTML 通道）：
+ * 双 [SimpleColoredComponent] 两行结构（T-TwoLine 语义保留：元信息行在上、SQL 高亮行在下）。
+ * 原 JLabel+HTML 通道每次 setText 都触发 BasicHTML 解析排版，叠加可变行高逐条测量——
+ * 16s EDT Freeze 报告主因；片段通道渲染只剩轻量文本测量，配合固定行高布局走 O(1) 快路径。
+ * 文本原样着色（无 HTML 转义面，注入场景不复存在）；摘要构造时已在首行截断（[LogSqlEntry.summary]），无换行处理面。
+ * 抽为具名 internal 类，便于单元测试直接渲染各种条目状态、锁定配色语义。
  */
-internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() {
+internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
+
+    /** 元信息行 / SQL 行（internal 供 UI 测试遍历片段断言文本与着色）。 */
+    internal val metaLine = SimpleColoredComponent()
+    internal val sqlLine = SimpleColoredComponent()
+
+    init {
+        layout = BorderLayout()
+        isOpaque = true
+        metaLine.isOpaque = false
+        sqlLine.isOpaque = false
+        add(JPanel(GridLayout(2, 1)).apply {
+            isOpaque = false
+            add(metaLine)
+            add(sqlLine)
+        }, BorderLayout.CENTER)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+            EmptyBorder(5, 8, 5, 8),
+        )
+    }
+
+    /** 元信息行渲染文本（测试断言用：全部片段拼接、trim 段间距）。 */
+    val metaTextForTest: String
+        get() = buildString {
+            val it = metaLine.iterator()
+            while (it.hasNext()) append(it.next())
+        }.trim()
 
     override fun getListCellRendererComponent(
         list: javax.swing.JList<*>?,
@@ -1236,43 +1439,29 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): java.awt.Component {
-        super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+        background = if (isSelected) list?.selectionBackground else list?.background
+        val fg = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
+        else (list?.foreground ?: JBColor.foreground())
+        metaLine.foreground = fg
+        sqlLine.foreground = fg
+        metaLine.clear()
+        sqlLine.clear()
         val entry = value as? LogSqlEntry
-        text = null
         if (entry != null) {
-            // T-LogListFreeze-02：取缓存或惰性计算；避免每次 layout pass 重复走 SqlListHtmlRenderer + BasicHTML 解析
-            val html = entry.cachedListHtml ?: run {
-                val timestampHtml = formatTimestampHtml(entry.timestamp)
-                val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
-                    formatDurationHtml(entry.executionTimeMs, isSelected) else ""
-                val sourceHtml = formatSourceHtml(entry, isSelected)
-                val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-                val dedupeBadge = dedupeCounts[entry.restoredSql]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-                "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
-            }.also { entry.cachedListHtml = it }
-            this.text = html
-            // T-ClickPreview：不再设 toolTipText（悬停逐行弹气泡 × 可变行高重排 = 条目多时卡顿根因），预览改单击触发
-            foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
-            else (list?.foreground ?: JBColor.foreground())
-        }
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-            EmptyBorder(5, 8, 5, 8),
-        )
-        return this
-    }
-
-    /** F-44-7：格式化来源为 HTML 片段（用于列表渲染）。 */
-    private fun formatSourceHtml(entry: LogSqlEntry, isSelected: Boolean): String {
-        val source = when {
-            SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
-            entry.sourceFile != null -> {
-                val name = entry.sourceFile.substringAfterLast('/')
-                if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
+            // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
+            formatTimestampFragment(entry.timestamp)?.let { (t, a) -> metaLine.append(t, a) }
+            if (PluginSettings.getInstance().state.showDurationInLogList) {
+                val (t, a) = formatDurationFragment(entry.executionTimeMs, isSelected)
+                metaLine.append(t, a)
             }
-            else -> return ""
+            formatSourceFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
+            // SQL 高亮行在下：选中态保留 SQL 高亮原色（与原 HTML 行为一致）
+            SqlListFragmentRenderer.renderFragments(withTerminator(entry.summary)).forEach { f ->
+                sqlLine.append(f.text, f.attributes)
+            }
         }
-        val color = if (isSelected) "color:#FFFFFF" else "color:#9E9E9E"
-        return "<span style='$color'>[$source]</span> "
+        // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
+        return this
     }
 }

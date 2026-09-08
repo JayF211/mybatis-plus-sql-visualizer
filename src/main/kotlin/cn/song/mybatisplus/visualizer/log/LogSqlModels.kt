@@ -61,17 +61,27 @@ data class LogSqlEntry(
     val sourceLine: Int = 0,
 ) {
     /**
-     * 列表渲染 HTML 缓存（T-LogListFreeze-02）：惰性计算，避免每次 layout pass 重复走 SqlListHtmlRenderer + BasicHTML 解析。
-     * null = 未计算 / 已失效；非 null = 可直接 setText 的完整 `<html>...</html>` 字符串。
-     *
-     * 失效时机：[SqlLogPanel.refreshList] 重新执行时清空全部 entry 的缓存。
+     * T-Perf-19（自 dev 移植）：去重计数键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
+     * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
      */
-    @Volatile
-    var cachedListHtml: String? = null
+    val dedupeKey: String by lazy { sqlFingerprint(restoredSql) }
 
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
     }
+}
+
+/**
+ * T-Perf-19（自 dev 移植）：SQL 指纹（FNV-1a 64 位十六进制串）——去重计数键用，避免以完整 SQL 原文为键
+ * 的内存驻留。64 位散列下两条不同 SQL 撞键概率可忽略（~2^-64 量级）。
+ */
+internal fun sqlFingerprint(sql: String): String {
+    var h = -0x340d631b7bdddcdbL // FNV-1a 64-bit offset basis
+    for (i in sql.indices) {
+        h = h xor sql[i].code.toLong()
+        h *= 0x100000001b3L // FNV-1a 64-bit prime
+    }
+    return java.lang.Long.toHexString(h)
 }
 
 /**
