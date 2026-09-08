@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- **SQL 日志去重失效与 MP 分页计数误标（T-LogDedupeMpMark）**：开启「移除重复的sql」后列表仍成对重复、且 [MP 分页计数] 标记落到全列数据 SELECT 上——根因一：JdbcTemplate 双路日志（仓储层 `sql = ...` TRACE 行与 Spring `Executing prepared SQL statement [...]` DEBUG 行）对同一语句产出两条副本，还原文本仅差首尾空白，而去重判定按原文精确相等永不命中，现按空白规范化指纹判重（trim + 连续空白折叠；大小写与分号不动，参数不同仍不合并）；根因二：MP 分页 COUNT 标记按「同一行产出的全部条目」批级判定，与 COUNT 副本同批闭合的数据查询被一并误标（且丢失源码跳转），现改逐条判定
 - **SQL 日志列表 EDT 冻结 16 秒（T-LogListFreeze-04）**：打开/刷新 SQL 日志面板 IDE 冻结 16 秒（Freeze 报告采样 11.4s 全落 Swing BasicHTML）——三层根因一次根治：① 列表渲染器弃 JLabel-HTML 通道（每次 setText 触发 BasicHTML 完整解析排版，逐 token span 着色 × 可变行高逐条测量被逐条放大），改双 SimpleColoredComponent 两行片段渲染（元信息行在上、SQL 分词高亮在下；配色体系与关键字加粗保留，T-TwoLine 结构不变；摘要文本原样绘制，原 HTML 注入转义面消失）；② 列表固定行高（原可变行高使每次布局逐条测量，WideSelectionListUI 在固定行高下短路走 O(1) 快路径）——条目不再按 SQL 内容自动折行，全文查看走单击预览/双击弹窗；③ 刷新管线增量化（同源移植 dev M54 性能治理：可见列表差分增量刷新+代际守卫替代每条日志全量重建、搜索 200ms 防抖、UI 通知置脏合并、去重计数键指纹化、dispose 精确注销监听、去重判定入临界区防 CME、onEvicted 回调移出锁）。SQL 历史面板两个渲染器同型改造
 - **SQL 日志双击预览崩溃（T-PreviewWiLock）**：双击 SQL 日志条目预览恒抛 `RuntimeExceptionWithAttachments: Access is allowed from write thread only`，弹窗打不开——`SqlPreviewPanel.createEditor` 回退分支把同步 VFS refresh（`refreshAndFindFileByIoFile`）包在 `ReadAction.compute` 内：2024.2+ 平台要求同步 VFS refresh 须持 write-intent lock（write-safe context），而 EDT 进入 ReadAction 会把隐式持有的 write-intent lock check out，262 平台（IDE 2026.2.1）该断言硬抛；且日志双击入口在弹窗构造函数内同步渲染，T-M36.6-03 预热竞态必输、每次都走 EDT 回退分支。修复：包装换 `WriteIntentReadAction.compute`（write-intent 隐含读权限，lambda 内 `PsiManager.findFile` 不受影响，`SlowOperations.allowSlowOperations` 逃生舱保持）
 
