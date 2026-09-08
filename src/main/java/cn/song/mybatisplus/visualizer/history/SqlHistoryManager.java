@@ -26,7 +26,7 @@ import java.util.Set;
         name = "MpSqlVisualizerHistory",
         storages = {@Storage(value = "mp-sql-visualizer.xml", roamingType = RoamingType.DISABLED)}
 )
-public class SqlHistoryManager implements PersistentStateComponent<SqlHistoryManager.State> {
+public final class SqlHistoryManager implements PersistentStateComponent<SqlHistoryManager.State> {
 
     /** 可持久化状态（XmlSerializer 序列化）。 */
     public static final class State {
