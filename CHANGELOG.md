@@ -8,6 +8,10 @@
 
 - **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
 
+### Fixed
+
+- **SQL 日志双击预览崩溃（T-PreviewWiLock）**：双击 SQL 日志条目预览恒抛 `RuntimeExceptionWithAttachments: Access is allowed from write thread only`，弹窗打不开——`SqlPreviewPanel.createEditor` 回退分支把同步 VFS refresh（`refreshAndFindFileByIoFile`）包在 `ReadAction.compute` 内：2024.2+ 平台要求同步 VFS refresh 须持 write-intent lock（write-safe context），而 EDT 进入 ReadAction 会把隐式持有的 write-intent lock check out，262 平台（IDE 2026.2.1）该断言硬抛；且日志双击入口在弹窗构造函数内同步渲染，T-M36.6-03 预热竞态必输、每次都走 EDT 回退分支。修复：包装换 `WriteIntentReadAction.compute`（write-intent 隐含读权限，lambda 内 `PsiManager.findFile` 不受影响，`SlowOperations.allowSlowOperations` 逃生舱保持）
+
 ## [2026.9.4] - 2026-09-04
 
 ### Changed
