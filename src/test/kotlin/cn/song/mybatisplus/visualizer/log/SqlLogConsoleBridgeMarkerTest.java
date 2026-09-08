@@ -167,7 +167,6 @@ public class SqlLogConsoleBridgeMarkerTest {
         assertEquals(SourceMarkers.MP_PAGINATION_COUNT, entries.get(0).sourceFile());
         assertNull("同批 named 数据查询不得误标 MP 分页计数", entries.get(1).sourceFile());
         assertTrue(entries.get(0).restoredSql().startsWith("SELECT COUNT(1)"));
-        assertTrue("跨行结构在还原文本中保留", entries.get(0).restoredSql().contains("
-        FROM ipm_ImplementTask t"));
+        assertTrue("跨行结构在还原文本中保留", entries.get(0).restoredSql().contains("\n        FROM ipm_ImplementTask t"));
     }
 }

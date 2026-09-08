@@ -440,7 +440,7 @@ public class JdbcTemplateLogParserTest {
         LogSqlEntry e = entries.get(0);
         assertEquals(SqlSource.JDBC, e.source());
         assertTrue("rawSql 以 SELECT COUNT(1) 开头", e.rawSql().startsWith("SELECT COUNT(1)"));
-        assertFalse("终结方括号不残留", e.rawSql().contains('[') || e.rawSql().contains(']'));
+        assertFalse("终结方括号不残留", e.rawSql().contains("[") || e.rawSql().contains("]"));
         assertTrue("跨行结构保留", e.rawSql().contains("\n        FROM ipm_ImplementTask t"));
         assertTrue("字符串字面量保留", e.rawSql().contains("'80a9971836664x3091xaa53b78ae6837'"));
         assertTrue("以 ) 收尾（削首尾空白）", e.rawSql().endsWith(")"));
@@ -525,7 +525,7 @@ public class JdbcTemplateLogParserTest {
 
     @Test
     public void 多行收集_超限强制闭合截断() throws Exception {
-        JdbcTemplateLogParser p = new JdbcTemplateLogParser(60);
+        JdbcTemplateLogParser p = new JdbcTemplateLogParser(new LogSqlRestorer(), true, 60);
         p.feed(withPrefix("Executing prepared SQL statement [SELECT aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
         p.feed("        FROM tttttttttttttttttttttttttttttttttttttttttt WHERE x = 1]");
         p.closePending();
