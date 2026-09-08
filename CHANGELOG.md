@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **SQL 列表悬停预览改单击预览、双击开完整弹窗（T-ClickPreview）**：SQL 日志列表条目多后鼠标悬停卡顿——根因=渲染器 `toolTipText` 设完整 SQL，悬停逐行弹气泡且连动可变行高重排。三个列表（SQL 日志 / 历史 tab 二级 SQL 列表 / 历史记录工具窗）统一改造：移除悬停 tooltip（悬停零成本），单击条目延迟 300ms 弹轻量预览（内容=还原 SQL，只读等宽、可滚动、可选中复制，不抢焦点，点外/Esc 关闭），双击仍开完整预览弹窗；双击第一击不闪预览（定时器区分单击/双击），面板销毁时停表关弹窗
+
 ### Added
 
 - **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
