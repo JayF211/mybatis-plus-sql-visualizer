@@ -146,11 +146,62 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             state.logTimestampEnabled = false
             state.showDurationInLogList = false
             val text = render(entry("SELECT * FROM user")) // 无来源、无徽章
-            assertFalse("元信息全空不应插 <br>（防空首行）", text.contains("<br>"))
+            // T-ListMode：SQL 行关键字换行也产生 <br>——空首行断言改为「首行非空」
+            assertFalse("元信息全空不应以 <br> 开头（防空首行）", text.startsWith("<html><br"))
             assertTrue("仍应为 HTML", text.startsWith("<html>"))
         } finally {
             state.logTimestampEnabled = savedTs
             state.showDurationInLogList = savedDur
         }
+    }
+
+    // ---------- T-ListMode：SQL 三种显示模式 ----------
+
+    /** 设置显示模式跑断言，结束后恢复原值（PluginSettings 为应用级单例，防污染其他用例）。 */
+    private fun withDisplayMode(mode: SqlListDisplayMode, block: () -> Unit) {
+        val state = PluginSettings.getInstance().state
+        val saved = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = mode.name
+        try {
+            block()
+        } finally {
+            state.logListSqlDisplayMode = saved
+        }
+    }
+
+    /** 剥掉着色 span（关键字断言需看裸文本结构——FROM/WHERE/AND 都会被 span 包裹）。 */
+    private fun stripSpans(html: String): String =
+        html.replace(Regex("<span[^>]*>"), "").replace("</span>", "")
+
+    fun test默认关键字换行_SQL行子句分行() {
+        withDisplayMode(SqlListDisplayMode.KEYWORD_WRAP) {
+            val text = stripSpans(render(entry("SELECT * FROM orders WHERE id = 1")))
+            assertTrue("FROM 应独立成行", text.contains("<br>FROM"))
+            assertTrue("WHERE 应独立成行", text.contains("<br>WHERE"))
+        }
+    }
+
+    fun test单行模式_SQL行无换行() {
+        withDisplayMode(SqlListDisplayMode.SINGLE_LINE) {
+            val text = stripSpans(render(entry("SELECT * FROM orders WHERE id = 1")))
+            assertTrue("元信息与 SQL 之间仍应有 <br>", text.contains("<br>"))
+            assertFalse("SQL 行不应有子句换行", text.contains("<br>FROM"))
+        }
+    }
+
+    fun test格式化模式_缩进nbsp保真() {
+        withDisplayMode(SqlListDisplayMode.FORMATTED) {
+            val text = stripSpans(render(entry("SELECT * FROM t WHERE a = 1 AND b = 2")))
+            assertTrue("格式化应产生子句换行", text.contains("<br>FROM"))
+            // format：AND 顶层缩进 4 空格——BasicHTML 折叠普通空格，&nbsp; 保真
+            assertTrue("缩进应以 &nbsp; 渲染", text.contains("<br>&nbsp;&nbsp;&nbsp;&nbsp;AND"))
+        }
+    }
+
+    fun testprepareSqlForList三模式映射() {
+        val sql = "SELECT * FROM t WHERE id = 1"
+        assertEquals(sql, prepareSqlForList(sql, SqlListDisplayMode.SINGLE_LINE))
+        assertTrue(prepareSqlForList(sql, SqlListDisplayMode.KEYWORD_WRAP).contains("\n"))
+        assertTrue(prepareSqlForList(sql, SqlListDisplayMode.FORMATTED).contains("\n"))
     }
 }

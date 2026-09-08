@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -237,6 +238,33 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertEquals("旧目录数据不应读取（不考虑向前兼容）", 0, panel.fileListEntries.size)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test显示模式变更_清空二级列表渲染缓存并回同步combo() {
+        writeHistoryFile(
+            "sql-history-2026-08-31.sql",
+            f44FileContent(
+                listOf(Triple("SELECT * FROM user WHERE id = 1", "UserMapper.java:10", 3L)),
+            ),
+        )
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            val entry = panel.sqlListEntries.single()
+            entry.cachedListHtml = "<html>stale</html>" // 模拟旧模式残留缓存
+
+            panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
+
+            assertNull("模式变更后渲染缓存应被清空", entry.cachedListHtml)
+            assertEquals(
+                "combo 选中态应回同步设置值",
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode().ordinal,
+                panel.displayModeComboForTest.selectedIndex,
+            )
         } finally {
             panel.dispose()
         }

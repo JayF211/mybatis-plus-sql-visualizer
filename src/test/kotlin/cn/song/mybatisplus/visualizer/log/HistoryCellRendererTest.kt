@@ -82,6 +82,26 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("SQL 应在第二行", text.substringAfter("<br>").contains("SELECT"))
     }
 
+    // ---------- T-ListMode：SQL 三种显示模式 ----------
+
+    /** 剥掉着色 span（关键字断言需看裸文本结构）。 */
+    private fun stripSpans(html: String): String =
+        html.replace(Regex("<span[^>]*>"), "").replace("</span>", "")
+
+    fun test二级条目_关键字换行模式SQL子句分行() {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val saved = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = "KEYWORD_WRAP"
+        try {
+            val text = stripSpans(renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9)))
+            assertTrue("FROM 应独立成行", text.contains("<br>FROM"))
+            assertTrue("WHERE 应独立成行", text.contains("<br>WHERE"))
+            assertTrue("元信息行仍应在 SQL 之上", text.indexOf("[OrderDao.java:9]") < text.indexOf("<br>"))
+        } finally {
+            state.logListSqlDisplayMode = saved
+        }
+    }
+
     fun test一级文件_大小为0字节显示0B() {
         val f = File.createTempFile("hist0", ".sql").apply { deleteOnExit() }
         val text = renderFile(f, 0)

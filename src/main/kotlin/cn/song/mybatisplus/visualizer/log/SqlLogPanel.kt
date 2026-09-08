@@ -58,6 +58,7 @@ import javax.swing.BoxLayout
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
@@ -303,6 +304,40 @@ class SqlLogPanel(
         addActionListener { toggleDurationSort() }
     }
 
+    // ---------- T-ListMode：SQL 显示模式下拉（单行/关键字换行/格式化） ----------
+
+    /** 显示模式下拉：变更写设置并广播 SETTINGS_CHANGE_TOPIC——既有监听统一清 HTML 缓存+刷新。 */
+    private val displayModeCombo = JComboBox(arrayOf(
+        MpSqlVisualizerBundle.message("log.list.displayMode.single"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
+    )).apply {
+        toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode")
+        isFocusable = false
+        selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        addItemListener { e ->
+            if (e.stateChange == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
+                val mode = SqlListDisplayMode.values()[selectedIndex]
+                val settings = PluginSettings.getInstance()
+                if (settings.state.logListSqlDisplayMode != mode.name) {
+                    settings.state.logListSqlDisplayMode = mode.name
+                    project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
+                        .settingsChanged()
+                }
+            }
+        }
+    }
+
+    /** combo 程序化回同步防重入守卫（防 setSelectedItem 触发监听再广播成环）。 */
+    private var syncingDisplayModeCombo = false
+
+    /** combo 选中态从设置回同步（模式被另一面板 combo 改变时；经既有 settings 监听驱动）。 */
+    private fun syncDisplayModeCombo() {
+        syncingDisplayModeCombo = true
+        displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        syncingDisplayModeCombo = false
+    }
+
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
     private val searchField = buildSearchField()
 
@@ -408,6 +443,8 @@ class SqlLogPanel(
         val settingsListener = SettingsChangeListener {
             ApplicationManager.getApplication().invokeLater {
                 updateHistoryTabVisibility()
+                // T-ListMode：模式可能被历史面板 combo 改变——回同步本面板下拉选中态
+                syncDisplayModeCombo()
                 // T-Perf-03：列表 HTML 含时间戳/耗时显示/慢查询阈值等设置态——设置变更后
                 // 清空条目 HTML 缓存并刷新，接替旧「每次 refreshList 整包清缓存」的兜底
                 // （增量刷新不再整包清除，否则设置态变化后旧行缓存永不失效）。
@@ -463,6 +500,8 @@ class SqlLogPanel(
         }
         left.add(typeFilterUnit)
         left.add(sortButton)
+        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）
+        left.add(displayModeCombo)
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
             foreground = Color(0xD32F2F) // 红色
@@ -1419,7 +1458,8 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .joinToString(" ")
-        val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+        val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        val sqlHtml = SqlListHtmlRenderer.render(prepareSqlForList(withTerminator(entry.summary), mode))
         return if (metaHtml.isEmpty()) "<html>$sqlHtml</html>"
         else "<html>$metaHtml<br>$sqlHtml</html>"
     }

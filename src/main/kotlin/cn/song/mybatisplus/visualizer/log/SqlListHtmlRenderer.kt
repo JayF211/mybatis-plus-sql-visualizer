@@ -1,11 +1,32 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlLexer
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlTokenTypes
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.colors.EditorColorsScheme
 import com.intellij.psi.tree.IElementType
+
+/**
+ * SQL 列表显示模式（T-ListMode）：SQL 日志/历史列表条目中 SQL 行的展示形态。
+ *
+ * @property SINGLE_LINE 单行原文（T-TwoLine 前的形态）
+ * @property KEYWORD_WRAP 关键字换行——子句顶格换行、同行内容压一行（默认，长 SQL 快速总览）
+ * @property FORMATTED 格式化——多行缩进全展开（阅读细节）
+ */
+enum class SqlListDisplayMode {
+    SINGLE_LINE,
+    KEYWORD_WRAP,
+    FORMATTED,
+}
+
+/** 按显示模式变换 SQL 文本（渲染前调用；变换器复用 [SqlFormatter] 既有实现，字符串原文保留）。 */
+internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = when (mode) {
+    SqlListDisplayMode.SINGLE_LINE -> sql
+    SqlListDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
+    SqlListDisplayMode.FORMATTED -> SqlFormatter.format(sql)
+}
 
 /**
  * 列表条目 SQL 着色（T-M31.13/14）：SqlLexer 分词 → 每 token 按类型包 `<span style=color>` 着色。
@@ -67,4 +88,7 @@ object SqlListHtmlRenderer {
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
         .replace("\n", "<br>")  // 换行转 <br>（multiline SQL 在列表 cell 中正确渲染）
+        // T-ListMode：空格转 &nbsp;——BasicHTML 折叠连续普通空格，格式化（AND 缩进/子查询缩进）
+        // 与关键字换行（AND 前双空格）的缩进层次会塌掉；列表 cell 无 word-wrap，&nbsp; 无副作用
+        .replace(" ", "&nbsp;")
 }

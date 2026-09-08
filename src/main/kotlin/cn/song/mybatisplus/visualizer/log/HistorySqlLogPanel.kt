@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -29,6 +30,7 @@ import java.util.Locale
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
 import javax.swing.JButton
+import javax.swing.JComboBox
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
@@ -88,6 +90,44 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         addActionListener { refresh() }
     }
 
+    /** 显示模式下拉（T-ListMode）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
+    private val displayModeCombo = JComboBox(arrayOf(
+        MpSqlVisualizerBundle.message("log.list.displayMode.single"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
+    )).apply {
+        toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode")
+        isFocusable = false
+        selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        addItemListener { e ->
+            if (e.stateChange == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
+                val mode = SqlListDisplayMode.values()[selectedIndex]
+                val settings = PluginSettings.getInstance()
+                if (settings.state.logListSqlDisplayMode != mode.name) {
+                    settings.state.logListSqlDisplayMode = mode.name
+                    project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
+                        .settingsChanged()
+                }
+            }
+        }
+    }
+
+    /** combo 程序化回同步防重入守卫。 */
+    private var syncingDisplayModeCombo = false
+
+    /** 显示模式下拉（测试断言选中态回同步用）。 */
+    internal val displayModeComboForTest: JComboBox<*> get() = displayModeCombo
+
+    /** 显示模式变更处理（topic 监听与测试共用）：清二级列表渲染缓存 + 回同步 combo +
+     * 二级可见时重绘。日志面板的缓存清理由其既有 settings 监听承担，两侧经 topic 对齐。 */
+    internal fun onDisplayModeChanged() {
+        syncingDisplayModeCombo = true
+        displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        syncingDisplayModeCombo = false
+        currentEntries.forEach { it.cachedListHtml = null }
+        if (currentFile != null) sqlList.repaint()
+    }
+
     private val cardLayout = CardLayout()
     private val cards = JPanel(cardLayout)
 
@@ -126,6 +166,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(backButton)
         toolbar.add(refreshButton)
+        // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）
+        toolbar.add(displayModeCombo)
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
@@ -135,6 +177,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         })
         toolbar.add(searchField)
         add(toolbar, BorderLayout.NORTH)
+
+        // T-ListMode：设置变更（含模式切换广播）→ 清二级列表渲染缓存并重绘；
+        // connect(this) 随面板 Disposer 树自动注销。invokeLater 显式 ModalityState.any()
+        // （设置页红线：模态弹窗存续期默认 modality 会挂起回调）
+        project.messageBus.connect(this).subscribe(
+            PluginSettings.SETTINGS_CHANGE_TOPIC,
+            cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
+                ApplicationManager.getApplication().invokeLater(
+                    { onDisplayModeChanged() },
+                    com.intellij.openapi.application.ModalityState.any(),
+                )
+            },
+        )
 
         // 一级：文件列表
         fileList.emptyText.text = MpSqlVisualizerBundle.message("log.history.files.empty")
@@ -517,7 +572,8 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
                     }
                     else -> "unknown"
                 }
-                val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+                val mode = PluginSettings.getInstance().sqlListDisplayMode()
+                val sqlHtml = SqlListHtmlRenderer.render(prepareSqlForList(withTerminator(entry.summary), mode))
                 // T-TwoLine：元信息（耗时/时间戳/来源）独立成行在上，SQL 高亮行在下
                 "<html><span style='color:#9E9E9E'>[$duration]</span> " +
                     "<span style='color:#9E9E9E'>[$timestamp]</span> " +
