@@ -173,4 +173,9 @@ runners.isEmpty() -> {
 
 ## 八、实施记录
 
-（待实施后填写）
+- **2026-09-08** 实施完成，fix `5e75c12`：
+  - `chooseAndPrepare` 无数据源分支 `openDatabaseToolWindow` 改 `if (executeAfterPrepare)` 门控（SqlPreviewPanel/DataSourceSelector 注释同步）；
+  - `runRunner` 加 `silent: Boolean = false`，预览路径三处调用点（last-used 静默复用 `silent=true`、单数据源直选 `silent=!executeAfterPrepare`、弹窗主动选中 `silent=false`）——silent 失败仅 LOG.warn + `PropertiesComponent.unsetValue(LAST_RUNNER_KEY)` 清损坏记忆，不弹模态错误框；
+  - `PropertiesComponent.unsetValue` 定位：类在 `util-8.jar`（非 app-client），`javap` 核验存在 `public abstract void unsetValue(String)`；
+  - 全量回归 3130/0/0/6 绿（基线不变，无新增测试用例——gate 逻辑属私有工具窗激活面，headless 断言成本高，留 runIde 真机验收）。
+- **runIde 真机验收**（§五.3 五项清单）留人工跟进。
