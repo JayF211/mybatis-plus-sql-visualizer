@@ -1,7 +1,7 @@
 {
-  "version": "2026.9.8",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.8/mybatis-plus-sql-visualizer-2026.9.8.zip",
-  "changeNotes": "SQL 日志列表 EDT 冻结 16 秒根治\nSQL 列表悬停卡顿改单击预览：SQL 高亮可编辑编辑器，临时改字段值再复制\n多行 JdbcTemplate 日志漏捕获修复\nSQL 日志去重失效 + MP 分页计数误标双根因修复\nSQL 日志双击预览平台断言硬抛崩溃修复\n自研 DAO 字符串 SQL 预览 + 方法定义处锚点贯通\n「项目启动时自动开始监听」联动失效与手动停止后永不自动捕捉修复\n设置页缓存信息恒 0 B 修复",
-  "publishDate": "2026-09-08",
+  "version": "2026.9.4",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.4/mybatis-plus-sql-visualizer-2026.9.4.zip",
+  "changeNotes": "JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览\nJOIN 图换用 IDEA 原生图框架\nJOIN 图渲染对齐 Database 原生显示图\nJOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线\n非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览\nSQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复\nSqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复",
+  "publishDate": "2026-09-04",
   "sinceBuild": "243"
 }
