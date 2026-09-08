@@ -6,7 +6,7 @@
 
 ### Changed
 
-- **SQL 列表悬停预览改单击预览、双击开完整弹窗（T-ClickPreview）**：SQL 日志列表条目多后鼠标悬停卡顿——根因=渲染器 `toolTipText` 设完整 SQL，悬停逐行弹气泡且连动可变行高重排。三个列表（SQL 日志 / 历史 tab 二级 SQL 列表 / 历史记录工具窗）统一改造：移除悬停 tooltip（悬停零成本），单击条目延迟 300ms 弹轻量预览，双击仍开完整预览弹窗；双击第一击不闪预览（定时器区分单击/双击），面板销毁时停表关弹窗。二轮优化：预览排程严格绑定「点到真实行」（点击时捕获该行 SQL，空白区点击立即停表关预览，杜绝点其他地方后未再单击 SQL 预览自行复活），仅左键触发（右键菜单不再连带弹预览）；弹窗锚点改被点行下缘 2px 缝（不遮被点行）。三轮优化：预览内容升级为 **SQL 高亮可编辑编辑器**（纯文档 + SQL FileType 驱动词法高亮，无 PSI；测试环境无 Database 插件时降级纯文本），可临时改字段值后点头部**复制**按钮取编辑后文本（软换行免横向滚动，编辑器随弹窗关闭自动释放），头部另有**关闭**按钮。四轮优化：编辑器高亮与列表条目**同色**（token→配色键映射收敛为 `SqlListSyntaxHighlighter.ATTR_BY_TYPE` 唯一权威，列表片段渲染与编辑器高亮共用，不再走平台 SQL 方言高亮），弹出即聚焦内容、点进编辑器可直接打字编辑（原 `setRequestFocus(false)` 致键盘焦点留在列表，「可编辑」名存实亡）
+- **SQL 列表悬停预览改单击预览、双击开完整弹窗（T-ClickPreview）**：SQL 日志列表条目多后鼠标悬停卡顿——根因=渲染器 `toolTipText` 设完整 SQL，悬停逐行弹气泡且连动可变行高重排。三个列表（SQL 日志 / 历史 tab 二级 SQL 列表 / 历史记录工具窗）统一改造：移除悬停 tooltip（悬停零成本），单击条目延迟 300ms 弹轻量预览，双击仍开完整预览弹窗；双击第一击不闪预览（定时器区分单击/双击），面板销毁时停表关弹窗。二轮优化：预览排程严格绑定「点到真实行」（点击时捕获该行 SQL，空白区点击立即停表关预览，杜绝点其他地方后未再单击 SQL 预览自行复活），仅左键触发（右键菜单不再连带弹预览）；弹窗锚点改被点行下缘 2px 缝（不遮被点行）。三轮优化：预览内容升级为 **SQL 高亮可编辑编辑器**（纯文档 + SQL FileType 驱动词法高亮，无 PSI；测试环境无 Database 插件时降级纯文本），可临时改字段值后点头部**复制**按钮取编辑后文本（软换行免横向滚动，编辑器随弹窗关闭自动释放），头部另有**关闭**按钮。四轮优化：编辑器高亮与列表条目**同色**（token→配色键映射收敛为 `SqlListSyntaxHighlighter.ATTR_BY_TYPE` 唯一权威，列表片段渲染与编辑器高亮共用，不再走平台 SQL 方言高亮），弹出即聚焦内容、点进编辑器可直接打字编辑（原 `setRequestFocus(false)` 致键盘焦点留在列表，「可编辑」名存实亡）。五轮优化：复制按钮点击后图标闪变为**对号**（`AllIcons.Actions.Checked`）1500ms 后自动恢复复制图标——复制成功即时可见反馈（此前点击无任何视觉反馈）
 
 ### Added
 
@@ -25,7 +25,7 @@
 ### Test
 
 - **日志渲染与流式管线**：新增 `SqlListFragmentRendererTest`（6）/ `SqlLogStreamingDiffTest`（10，自 dev 移植差分增量刷新）；`SqlListHtmlRenderer` 及其测试随 HTML 通道退役删除；`SqlLogPanelRendererUi` / `HistoryCellRenderer` / `LogListFreeze` / `Filter` / `Buffer` 五套件断言迁移（含 JLabel-HTML 通道不允许回潮的组件类型断言、固定行高断言）
-- **单击预览**：新增 `SqlClickPreviewTest` 10 用例（可编辑编辑器文档=还原 SQL / 双按钮 tooltip / 复制携当前文本含编辑后复制（WriteCommandAction 改文档）/ 编辑器高亮与列表片段同源同色（LexerEditorHighlighter token 覆盖全文 + 共用配色键映射）/ 排程绑定真实行 / 锚点不遮行 / 三面板接线）
+- **单击预览**：新增 `SqlClickPreviewTest` 11 用例（可编辑编辑器文档=还原 SQL / 双按钮 tooltip / 复制携当前文本含编辑后复制（WriteCommandAction 改文档）/ 编辑器高亮与列表片段同源同色（LexerEditorHighlighter token 覆盖全文 + 共用配色键映射）/ 复制后图标即时换对号反馈 / 排程绑定真实行 / 锚点不遮行 / 三面板接线）
 - **日志解析与标记**：`JdbcTemplateLogParserTest` +162 行（多行语句用户样本全回放 / 字符串内括号 / 转义引号跨行 / NamedParameter/参数行边界冲刷 / 超限截断）；`SqlLogConsoleBridgeMarkerTest` +95 行（同批两向序仅 COUNT 标记 + 纯 COUNT 批）；`SqlLogEntryBufferTest` / `SqlLogPanelDedupeToggleTest` 空白规范化判重补例
 - **自研 DAO 字符串 SQL**：新增 `StringSqlMethodGutterLineMarkerProviderTest`（177 行）；`JdbcTemplateMethodDetectorTest` / `JdbcTemplateSqlLocatorTest` / `WrapperAnchorDetectorTest` / `WrapperCacheTest` / `GutterIconDedupTest` 补例
 - **设置页缓存**：新增 `PluginCacheManagerCoverageTest`（5——快路径恒 0 B 复现 / 全口径非零 / 慢路径对照 / 清除归零 / 清除不实例化服务）

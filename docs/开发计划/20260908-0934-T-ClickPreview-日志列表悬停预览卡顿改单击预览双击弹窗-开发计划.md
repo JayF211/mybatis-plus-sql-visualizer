@@ -159,3 +159,15 @@ headless（`BasePlatformTestCase`）下 `JBPopup.showInScreenCoordinates` 依赖
 4. **②根因（键盘焦点不在弹窗）**：弹窗 `setRequestFocus(false)`（一轮遗产，当时为不抢列表焦点）——轻量弹窗不参与焦点转移，键盘输入全落在列表上；编辑器 `isViewer=false` 本就允许编辑，卡在拿不到焦点，"可编辑"名存实亡。修复改 `setRequestFocus(true)`：弹出即聚焦内容组件，焦点自然落进编辑器可直接打字；复制/关闭按钮 `isFocusable=false` 不参与焦点遍历（保持不变）。
 5. **测试**：SqlClickPreviewTest 增至 10 用例——新增「编辑器高亮与列表片段同源同色」：断言 `editor.highlighter` 为 `LexerEditorHighlighter`、`createIterator(0)` token 序列从文首覆盖到文末、非空白 token 全部在 `ATTR_BY_TYPE` 有配色键、列表片段通道文本守恒；既有 9 用例不动全绿（文档/非 viewer/软换行/按钮/编辑后复制/排程/锚点/三面板接线）。定向 10 绿 + SqlListFragmentRendererTest 6 绿 + log 包 51 文件 560 绿。
 6. **runIde 真机人工跟进**：预览弹窗高亮与列表行同色目检（亮/暗主题各一次）、点进编辑器直接打字改字段值 → 复制按钮取编辑后文本。
+
+---
+
+## 十一、五轮实施记录（2026-09-08，T-ClickPreview-05，已实施）
+
+**用户反馈**：「单击预览的 SQL 点击复制没反馈，我希望只需要改变复制按钮的样式，例如从复制图标变成对号图标代表复制成功」。
+
+1. **修复面刻意收窄**：只动按钮视觉，不碰复制语义——`buildContent` 复制按钮监听在 `copyText(editor.document.text)`（取编辑后当前文本）回调成功后调用新私有助手 `flashCopied(button)`，关闭/焦点语义零改动。
+2. **实现**：图标即时换 `AllIcons.Actions.Checked`（243 基线 javap 核验：`public static final Icon Checked` 于 AllIcons$Actions，加载 expui/actions/checked.svg），1500ms 后一次性 `javax.swing.Timer`（`isRepeats=false`，无 ActionListener 构造 + 后置 addActionListener）恢复原复制图标——无常驻定时器，按钮复用即过期。
+3. **测试**：SqlClickPreviewTest 增至 11 用例——新增「复制按钮点击后图标换对号反馈」：点击后 `icon === AllIcons.Actions.Checked` 且与初始复制图标不同（assertNotEquals 兜底 NoneIcon 等无反馈形态）。插曲：首跑假失败（断言时 icon 仍为 copy.svg）为 Kotlin 增量编译陈旧产物——javap 反汇编 build/classes 实证 `flashCopied` 字节码正确（getIcon → setIcon(Checked) → Timer），重跑即绿（对齐 T-LogDedupeMpMark / 三轮同款假失败先例）。
+4. **回归**：定向 SqlClickPreviewTest 11 绿；全量 3131/0/0/6 绿（基线 3130+1）。
+5. **runIde 真机人工跟进**：点复制后对号闪变 1500ms 目检、连续快速点击图标仍能正确复位。
