@@ -47,9 +47,9 @@ class SectionConfigurableAutoCaptureLinkageTest : BasePlatformTestCase() {
         }
     }
 
-    fun testApply_autoStart_offToOn_startCaptureDoesNotThrow() {
-        // 场景：autoStart 关→开 → apply 联动 startCapture（幂等，无主控制台进 armed 态；
-        // headless Light 环境 openProjects 不含测试项目 → 空遍历安全，验证联动路径不抛）
+    fun testApply_autoStart_offToOn_linkageDoesNotThrow() {
+        // 场景：autoStart 关→开 → apply 联动 onAutoStartSettingEnabled 分流（headless 进程级监听
+        // 订阅成功=被动模式不预 armed；降级才 armed。两种模式本用例都只验证不抛+状态正确）
         val settings = PluginSettings.getInstance()
         val snapshot = settings.getState().copy()
         try {

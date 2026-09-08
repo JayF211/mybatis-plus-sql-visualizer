@@ -668,4 +668,50 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureSuppressed = oldSuppressed
         }
     }
+
+    // ===== 20260907-2045 第四轮：被动模式（processListenerActive=true 时设置开启不预 armed） =====
+
+    fun testT27_SettingEnabled_passiveMode_doesNotArm() {
+        // 场景：进程级监听可用（被动模式）→ onAutoStartSettingEnabled 清 suppressed 但**不进 armed**——
+        // 用户 08:33 会话反馈回归：「还没启动项目却自动开启监听」
+        val settings = PluginSettings.getInstance()
+        val oldAutoStart = settings.state.logAutoCaptureOnStart
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            manager.processListenerActive = true
+            settings.state.logAutoCaptureSuppressed = true
+
+            manager.onAutoStartSettingEnabled()
+
+            assertFalse("被动模式：设置开启不应预 armed", manager.capturing)
+            assertFalse("设置开启应清 suppressed（用户重新确认）", settings.state.logAutoCaptureSuppressed)
+            assertFalse("不应挂载轮询", bridge.isPollingActive)
+        } finally {
+            settings.state.logAutoCaptureOnStart = oldAutoStart
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
+
+    fun testT28_SettingEnabled_degradedMode_armsAsBefore() {
+        // 场景：进程级监听不可用（降级模式，execution API 缺失）→ 维持原行为进 armed
+        // （RCM 轮询是唯一检测通道——第一/二轮前的既有语义防回归）
+        val settings = PluginSettings.getInstance()
+        val oldSuppressed = settings.state.logAutoCaptureSuppressed
+        try {
+            val bridge = MutableFakeBridge(attachResult = true, hasMainConsoleInitial = false)
+            val manager = managerWith(bridge)
+            manager.processListenerActive = false
+            settings.state.logAutoCaptureSuppressed = true
+
+            manager.onAutoStartSettingEnabled()
+
+            assertTrue("降级模式：进 armed 态等控制台（原第九轮语义）", manager.capturing)
+            assertTrue("降级模式：等待控制台", manager.isWaitingForConsole)
+            assertFalse("设置开启清 suppressed", settings.state.logAutoCaptureSuppressed)
+        } finally {
+            settings.state.logAutoCaptureSuppressed = oldSuppressed
+        }
+    }
 }

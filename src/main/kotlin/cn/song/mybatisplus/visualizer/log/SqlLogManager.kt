@@ -71,6 +71,17 @@ class SqlLogManager(private val project: Project) : Disposable {
     var isWaitingForConsole: Boolean = false
         private set
 
+    /**
+     * 进程级启动监听是否订阅成功（20260907-2045 第四轮）。
+     * true=被动模式：「项目启动时自动开始监听」开启后**不预 armed**——设置开启/项目打开时按钮保持
+     * 「捕捉」原状，Run 项目那一刻由 [onProjectProcessStarted] 驱动捕捉（用户语义：设置本身
+     * 不等于"监听已开启"）；false=降级模式（execution API 缺失）：维持原 armed 行为
+     * （RCM 轮询是唯一检测通道）。
+     */
+    @Volatile
+    var processListenerActive: Boolean = false
+        internal set
+
     init {
         // F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
@@ -86,7 +97,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         // 20260907-2045：运行配置进程启动监听——autoStart=true 时项目 Run 即自动捕捉
         // （清 suppressed + startCapture，见 onProjectProcessStarted）；execution API 缺失时
         // 内部降级为 false，RCM 轮询兜底仍在
-        RunConfigurationProcessListener.subscribe(project, this)
+        processListenerActive = RunConfigurationProcessListener.subscribe(project, this)
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。
@@ -265,6 +276,23 @@ class SqlLogManager(private val project: Project) : Disposable {
             return
         }
         LOG.info("onProjectProcessStarted: 项目启动自动捕捉（armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
+        startCapture()
+    }
+
+    /**
+     * 「项目启动时自动开始监听」设置开启（设置页关→开边沿）——按模式分流（20260907-2045 第四轮）：
+     *  - 进程级监听可用（[processListenerActive]=true）→ **被动模式**：清 suppressed 后不预 armed，
+     *    按钮保持「捕捉」原状；Run 项目那一刻由 [onProjectProcessStarted] 驱动捕捉
+     *    （用户语义：开启设置 ≠ 监听已开启，08:33 会话反馈"还没启动项目却自动开启"实证）；
+     *  - 降级模式（execution API 缺失，RCM 轮询是唯一检测通道）→ 维持原行为进入 armed 态。
+     */
+    fun onAutoStartSettingEnabled() {
+        PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
+        if (processListenerActive) {
+            LOG.info("onAutoStartSettingEnabled: 进程级监听已接管——被动等待项目 Run（不预 armed，project=${project.name}）")
+            return
+        }
+        LOG.info("onAutoStartSettingEnabled: 进程级监听不可用——降级 armed 模式（project=${project.name}）")
         startCapture()
     }
 
