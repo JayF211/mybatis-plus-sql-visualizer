@@ -101,8 +101,9 @@ class SqlLogEntryBuffer(
             if (entries.size < 2) return@synchronized
             val keep = mutableListOf<LogSqlEntry>()
             for (entry in entries) {
+                // T-LogDedupeMpMark：与 isDuplicate 同键（空白规范化指纹），勾选时对既有跨格式副本同样生效
                 val duplicate = keep.firstOrNull {
-                    it.restoredSql == entry.restoredSql &&
+                    it.dedupeKey == entry.dedupeKey &&
                         kotlin.math.abs(entry.timestamp - it.timestamp) < dedupeWindowMs
                 }
                 if (duplicate != null) {
@@ -136,10 +137,12 @@ class SqlLogEntryBuffer(
     private fun isFiltered(sql: String): Boolean =
         filterKeywords.isNotEmpty() && filterKeywords.any { sql.contains(it, ignoreCase = true) }
 
-    /** 去重判定（T-Perf-06：**必须在 `synchronized(entries)` 内调用**——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。 */
+    /** 去重判定（T-Perf-06：**必须在 `synchronized(entries)` 内调用**——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。
+     * T-LogDedupeMpMark：按 [LogSqlEntry.dedupeKey]（空白规范化指纹）比较——JdbcTemplate 双路日志副本仅差
+     * 首尾空白，原文精确相等永不命中；预计算指纹串比较也快于全文 ==。 */
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
         val now = entry.timestamp
-        return entries.firstOrNull { it.restoredSql == entry.restoredSql && now - it.timestamp < dedupeWindowMs } != null
+        return entries.firstOrNull { it.dedupeKey == entry.dedupeKey && now - it.timestamp < dedupeWindowMs } != null
     }
 
     /** 最早在前的快照（正序）。 */
@@ -164,8 +167,8 @@ class SqlLogEntryBuffer(
         dedupeCounts.clear()
     }
 
-    /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按指纹查；无丢弃记录返回 0）。 */
-    fun dedupeCount(sql: String): Int = dedupeCounts[sqlFingerprint(sql)] ?: 0
+    /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按规范化+指纹查，与 [LogSqlEntry.dedupeKey] 同键；无丢弃记录返回 0）。 */
+    fun dedupeCount(sql: String): Int = dedupeCounts[sqlFingerprint(normalizeSqlWhitespace(sql))] ?: 0
 
     /** 去重丢弃计数快照（键 = [sqlFingerprint] 指纹，值 = 丢弃次数；供面板渲染徽章）。 */
     fun dedupeCountsSnapshot(): Map<String, Int> = dedupeCounts.toMap()

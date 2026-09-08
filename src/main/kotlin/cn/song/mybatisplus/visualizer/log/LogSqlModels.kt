@@ -61,10 +61,12 @@ data class LogSqlEntry(
     val sourceLine: Int = 0,
 ) {
     /**
-     * T-Perf-19（自 dev 移植）：去重计数键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
+     * T-Perf-19（自 dev 移植）：去重键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
      * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
+     * T-LogDedupeMpMark：指纹前先 [normalizeSqlWhitespace]——同一语句的双路日志副本（named 行 trim 过 /
+     * prepared 行尾随空白原样保留）仅差首尾空白，原文指纹判重永不命中。
      */
-    val dedupeKey: String by lazy { sqlFingerprint(restoredSql) }
+    val dedupeKey: String by lazy { sqlFingerprint(normalizeSqlWhitespace(restoredSql)) }
 
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
@@ -83,6 +85,14 @@ internal fun sqlFingerprint(sql: String): String {
     }
     return java.lang.Long.toHexString(h)
 }
+
+/**
+ * T-LogDedupeMpMark：去重口径的空白规范化（trim + 连续空白折叠为单空格）。
+ * JdbcTemplate 双路日志对同一语句产出 named/prepared 两副本，仅差首尾空白；
+ * 大小写与分号不动——COUNT 前缀判定、达梦带引号标识符大小写均不受影响。
+ */
+internal fun normalizeSqlWhitespace(sql: String): String =
+    sql.trim().replace(Regex("""\s+"""), " ")
 
 /**
  * 单个日志参数：值 + 类型标注。

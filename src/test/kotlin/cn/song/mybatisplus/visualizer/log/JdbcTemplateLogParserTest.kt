@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -400,5 +401,33 @@ class JdbcTemplateLogParserTest {
         assertEquals(2, entries.size)
         assertTrue(entries[0].rawSql.contains("t1"))
         assertTrue(entries[1].rawSql.contains("t2"))
+    }
+
+    // ========== T-LogDedupeMpMark：双路日志同语句副本（用户控制台序列回放） ==========
+
+    @Test
+    fun `named 单行与 prepared 双路同语句_产出仅差首尾空白的副本`() {
+        val entries = feedAll(
+            parser(),
+            "2026-09-08 09:38:03.587 [TID: null] [cache-preheat-1] TRACE com.a.b.impl.dml.CCCRepositoryJdbcImpl Line:243 - sql = SELECT \"name\" FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = :param1) AND (\"runPlanId\" = :param2) )  , parameters = {param1=0, param2=cc82baedas4a41a993388a5b009f81a8}",
+            withPrefix("Executing prepared SQL query"),
+            withPrefix("""Executing prepared SQL statement [SELECT "name" FROM ipm_RunPlanProject  WHERE ( ("deleted" = ?) AND ("runPlanId" = ?) )  ]"""),
+            withTracePrefix("Setting SQL statement parameter value: column index 1, parameter value [0], value class [java.lang.Integer], SQL type unknown"),
+            withTracePrefix("Setting SQL statement parameter value: column index 2, parameter value [cc82baedas4a41a993388a5b009f81a8], value class [java.lang.String], SQL type unknown"),
+            // 下一条语句的 named 行触发 prepared 副本闭合（真实批序：一行产出两条）
+            "2026-09-08 09:38:03.600 [TID: null] [cache-preheat-1] TRACE com.a.b.impl.dml.CCCRepositoryJdbcImpl Line:243 - sql = SELECT COUNT(*) as count FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = :param1) )  , parameters = {param1=0}",
+        )
+        assertEquals(3, entries.size)
+        // entries[0] named 数据副本（trim 过）/ entries[1] prepared 数据副本（尾随空白保留）：
+        // 还原值一致、原文仅差首尾空白——正是跨格式去重失效的文本现场
+        assertTrue(entries[0].restoredSql.contains("'cc82baedas4a41a993388a5b009f81a8'"))
+        assertTrue(entries[1].restoredSql.contains("'cc82baedas4a41a993388a5b009f81a8'"))
+        assertEquals(
+            normalizeSqlWhitespace(entries[0].restoredSql),
+            normalizeSqlWhitespace(entries[1].restoredSql),
+        )
+        assertFalse("两副本原文不相等（空白差），规范化后才相等", entries[0].restoredSql == entries[1].restoredSql)
+        // 第三条为下一语句的 named COUNT
+        assertTrue(entries[2].restoredSql.trimStart().startsWith("SELECT COUNT(", ignoreCase = true))
     }
 }

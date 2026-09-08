@@ -84,4 +84,65 @@ class SqlLogConsoleBridgeMarkerTest {
         val e2 = processConsoleLine("==>  Parameters: 2(Long)", ctx, null, {})
         assertEquals("b/B.java", e2[0].sourceFile)
     }
+
+    // ---------- T-LogDedupeMpMark：MP 分页 COUNT 标记逐条判定 ----------
+
+    /** JdbcTemplate named 单行（repository 层 TRACE 直打）。 */
+    private fun namedLine(sql: String, params: String) =
+        "2026-09-08 09:38:03.587 [TID: null] [cache-preheat-1] TRACE com.a.b.impl.dml.CCCRepositoryJdbcImpl Line:243 - sql = $sql , parameters = {$params}"
+
+    @Test
+    fun `COUNT副本与数据查询同批入列_仅COUNT标记MP分页`() {
+        val ctx = newCtx()
+        // prepared COUNT 进入 pending（双路日志第二路）
+        processConsoleLine(
+            "2026-09-08 09:38:03.587 [TID: null] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(*) as count FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = ?) )  ]",
+            ctx, null, {},
+        )
+        processConsoleLine(
+            "2026-09-08 09:38:03.588 [TID: null] [cache-preheat-1] TRACE org.springframework.jdbc.core.StatementCreatorUtils Line:227 - Setting SQL statement parameter value: column index 1, parameter value [0], value class [java.lang.Integer], SQL type unknown",
+            ctx, null, {},
+        )
+        // named 数据行触发 COUNT 副本闭合 → 批内两条（COUNT prepared 副本 + named 数据副本）
+        val entries = processConsoleLine(
+            namedLine("SELECT \"owner\" FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = :param1) )  ", "param1=0"),
+            ctx, null, {},
+        )
+        assertEquals(2, entries.size)
+        assertEquals(SourceMarkers.MP_PAGINATION_COUNT, entries[0].sourceFile)
+        assertNull("与 COUNT 同批的数据查询不得误标 MP 分页计数", entries[1].sourceFile)
+    }
+
+    @Test
+    fun `数据副本与COUNT同批闭合_数据侧不误标`() {
+        val ctx = newCtx()
+        // prepared 数据查询进入 pending
+        processConsoleLine(
+            "2026-09-08 09:38:03.587 [TID: null] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT \"owner\" FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = ?) )  ]",
+            ctx, null, {},
+        )
+        processConsoleLine(
+            "2026-09-08 09:38:03.588 [TID: null] [cache-preheat-1] TRACE org.springframework.jdbc.core.StatementCreatorUtils Line:227 - Setting SQL statement parameter value: column index 1, parameter value [0], value class [java.lang.Integer], SQL type unknown",
+            ctx, null, {},
+        )
+        // named COUNT 行闭合 prepared 数据副本 → 批内 [数据副本, COUNT named]
+        val entries = processConsoleLine(
+            namedLine("SELECT COUNT(*) as count FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = :param1) )  ", "param1=0"),
+            ctx, null, {},
+        )
+        assertEquals(2, entries.size)
+        assertNull("与 COUNT 同批闭合的数据查询不得误标", entries[0].sourceFile)
+        assertEquals(SourceMarkers.MP_PAGINATION_COUNT, entries[1].sourceFile)
+    }
+
+    @Test
+    fun `纯COUNT批次照常标记MP分页`() {
+        val ctx = newCtx()
+        val entries = processConsoleLine(
+            namedLine("SELECT COUNT(*) as count FROM ipm_RunPlanProject WHERE ( (\"deleted\" = :param1) )", "param1=0"),
+            ctx, null, {},
+        )
+        assertEquals(1, entries.size)
+        assertEquals(SourceMarkers.MP_PAGINATION_COUNT, entries[0].sourceFile)
+    }
 }

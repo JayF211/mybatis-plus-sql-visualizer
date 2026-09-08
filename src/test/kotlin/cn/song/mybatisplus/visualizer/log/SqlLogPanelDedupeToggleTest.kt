@@ -148,4 +148,26 @@ class SqlLogPanelDedupeToggleTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    fun test勾选去重_跨格式空白差副本立即裁剪() {
+        // T-LogDedupeMpMark：JdbcTemplate 双路日志同一语句产出两副本（named trim / prepared 尾随空白），
+        // 原文精确相等永不命中——勾选去重须按规范化键把这类副本一并裁掉
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val base = "SELECT * FROM ipm_RunPlanProject WHERE (\"deleted\" = 0)"
+            manager.entries.addEntry(entry(base, 100L))
+            manager.entries.addEntry(entry("$base  ", 200L)) // prepared 副本：尾随空白
+            waitForEdt()
+            assertEquals("勾选前 2 条副本全部展示", 2, panel.visibleEntryCount)
+
+            panel.dedupeCheckBoxForTest.doClick()
+            waitForEdt()
+
+            assertEquals("勾选后裁剪为 1 条", 1, panel.visibleEntryCount)
+            assertEquals(base, panel.visibleEntries[0])
+            assertEquals("徽章计数 1", 1, manager.entries.dedupeCount(base))
+        } finally {
+            panel.dispose()
+        }
+    }
 }
