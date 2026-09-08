@@ -2,7 +2,7 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.9.8] - 2026-09-08
 
 ### Changed
 
@@ -18,6 +18,18 @@
 - **SQL 日志去重失效与 MP 分页计数误标（T-LogDedupeMpMark）**：开启「移除重复的sql」后列表仍成对重复、且 [MP 分页计数] 标记落到全列数据 SELECT 上——根因一：JdbcTemplate 双路日志（仓储层 `sql = ...` TRACE 行与 Spring `Executing prepared SQL statement [...]` DEBUG 行）对同一语句产出两条副本，还原文本仅差首尾空白，而去重判定按原文精确相等永不命中，现按空白规范化指纹判重（trim + 连续空白折叠；大小写与分号不动，参数不同仍不合并）；根因二：MP 分页 COUNT 标记按「同一行产出的全部条目」批级判定，与 COUNT 副本同批闭合的数据查询被一并误标（且丢失源码跳转），现改逐条判定
 - **SQL 日志列表 EDT 冻结 16 秒（T-LogListFreeze-04）**：打开/刷新 SQL 日志面板 IDE 冻结 16 秒（Freeze 报告采样 11.4s 全落 Swing BasicHTML）——三层根因一次根治：① 列表渲染器弃 JLabel-HTML 通道（每次 setText 触发 BasicHTML 完整解析排版，逐 token span 着色 × 可变行高逐条测量被逐条放大），改双 SimpleColoredComponent 两行片段渲染（元信息行在上、SQL 分词高亮在下；配色体系与关键字加粗保留，T-TwoLine 结构不变；摘要文本原样绘制，原 HTML 注入转义面消失）；② 列表固定行高（原可变行高使每次布局逐条测量，WideSelectionListUI 在固定行高下短路走 O(1) 快路径）——条目不再按 SQL 内容自动折行，全文查看走单击预览/双击弹窗；③ 刷新管线增量化（同源移植 dev M54 性能治理：可见列表差分增量刷新+代际守卫替代每条日志全量重建、搜索 200ms 防抖、UI 通知置脏合并、去重计数键指纹化、dispose 精确注销监听、去重判定入临界区防 CME、onEvicted 回调移出锁）。SQL 历史面板两个渲染器同型改造
 - **SQL 日志双击预览崩溃（T-PreviewWiLock）**：双击 SQL 日志条目预览恒抛 `RuntimeExceptionWithAttachments: Access is allowed from write thread only`，弹窗打不开——`SqlPreviewPanel.createEditor` 回退分支把同步 VFS refresh（`refreshAndFindFileByIoFile`）包在 `ReadAction.compute` 内：2024.2+ 平台要求同步 VFS refresh 须持 write-intent lock（write-safe context），而 EDT 进入 ReadAction 会把隐式持有的 write-intent lock check out，262 平台（IDE 2026.2.1）该断言硬抛；且日志双击入口在弹窗构造函数内同步渲染，T-M36.6-03 预热竞态必输、每次都走 EDT 回退分支。修复：包装换 `WriteIntentReadAction.compute`（write-intent 隐含读权限，lambda 内 `PsiManager.findFile` 不受影响，`SlowOperations.allowSlowOperations` 逃生舱保持）
+- **设置页缓存信息恒 0 B（T-CacheInfo）**：设置页「插件缓存」一直显示 0 B——统计口径只含 EntityClassFinder 反查兜底缓存（主流命名 XxxEntity↔xxx 快路径恒命中、该缓存恒空），真正积累的 EntityResolver 解析缓存与 WrapperCache 预览缓存均未计入。统计口径扩展为三类缓存全量（反查 + 解析 + Wrapper 预览；全局解析缓存只计一次），「清除缓存」补清 Wrapper 缓存（`getServiceIfCreated` 不触发服务实例化），展示文案增条目数（en/zh 同步）
+- **「自动开始监听」修复链（20260907-1617 计划）**：① 联动失效——边沿联动挂在未注册进 plugin.xml 的死类 `PluginSettingsConfigurable` 上（设置页「文件夹+分区子页」重构后实际走 `SectionConfigurable.apply()` 基类透传，无边沿检测），迁入基类：设置「关→开」清 suppressed + 遍历 openProjects 调 startCapture，删死类；② 手动停止后再 Run 永不自动捕捉——手动停止持久化 suppressed 并拆除全部检测链，Run 项目时三条自动入口全部失效，补进程级入口 `SqlLogManager.onProjectProcessStarted`（autoStart 优先清 suppressed + 幂等 startCapture）+ `RunConfigurationProcessListener` 订阅 EXECUTION_TOPIC processStarted（订阅异常静默降级 RCM 轮询兜底）；③ 被动模式——开启设置不再立即 armed（此前「还没启动项目却自动开启」），processListenerActive 分流（被动=清 suppressed 不预 armed，恢复链由 Run 事件自洽/降级=维持 armed 原语义）；④ 订阅失败修复——反射 `methods.first{name==}` 拿到泛型擦除桥方法序不定致 argument type mismatch，改编译期直调 `MessageBusConnection.subscribe(Topic,L)`，仅 execution 域保留 Class.forName 反射
+
+### Test
+
+- **日志渲染与流式管线**：新增 `SqlListFragmentRendererTest`（6）/ `SqlLogStreamingDiffTest`（10，自 dev 移植差分增量刷新）；`SqlListHtmlRenderer` 及其测试随 HTML 通道退役删除；`SqlLogPanelRendererUi` / `HistoryCellRenderer` / `LogListFreeze` / `Filter` / `Buffer` 五套件断言迁移（含 JLabel-HTML 通道不允许回潮的组件类型断言、固定行高断言）
+- **单击预览**：新增 `SqlClickPreviewTest` 9 用例（可编辑编辑器文档=还原 SQL / 双按钮 tooltip / 复制携当前文本含编辑后复制（WriteCommandAction 改文档）/ 排程绑定真实行 / 锚点不遮行 / 三面板接线）
+- **日志解析与标记**：`JdbcTemplateLogParserTest` +162 行（多行语句用户样本全回放 / 字符串内括号 / 转义引号跨行 / NamedParameter/参数行边界冲刷 / 超限截断）；`SqlLogConsoleBridgeMarkerTest` +95 行（同批两向序仅 COUNT 标记 + 纯 COUNT 批）；`SqlLogEntryBufferTest` / `SqlLogPanelDedupeToggleTest` 空白规范化判重补例
+- **自研 DAO 字符串 SQL**：新增 `StringSqlMethodGutterLineMarkerProviderTest`（177 行）；`JdbcTemplateMethodDetectorTest` / `JdbcTemplateSqlLocatorTest` / `WrapperAnchorDetectorTest` / `WrapperCacheTest` / `GutterIconDedupTest` 补例
+- **设置页缓存**：新增 `PluginCacheManagerCoverageTest`（5——快路径恒 0 B 复现 / 全口径非零 / 慢路径对照 / 清除归零 / 清除不实例化服务）
+- **自动监听联动**：新增 `SectionConfigurableAutoCaptureLinkageTest`（5——关→开清 suppressed / 联动不抛 / 保持开不清零 / 保持关不清零 / 开→关不清零）；`SqlLogManagerBehaviorTest` 增 T23~T28（进程级入口幂等 / 手动停止后再 Run 自动重启 / 被动不 armed / 降级 armed 防回归）
+- **竞品调研留档**：MyBatisCodeHelper-Pro 3.5.9 反编译对照（135 类）——其 SQL 日志仅支持 `Preparing:/Parameters:` 成对格式、用户多行样本同样不捕获；可取精华（consoleFilterProvider 稳定 EP / 尾部公共后缀降噪 / 批量写 UI）列 P2 调研，不做代码变更
 
 ## [2026.9.4] - 2026-09-04
 

@@ -150,6 +150,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20260908-1430-SQL日志链路大修与单击可编辑预览-发行说明.md](./发行说明/20260908-1430-SQL日志链路大修与单击可编辑预览-发行说明.md) | v2026.9.8 发行说明（日志列表 EDT 冻结 16 秒根治 T-LogListFreeze-04 + 单击预览三轮 T-ClickPreview（SQL 高亮可编辑编辑器）+ 多行 JdbcTemplate 捕获/去重与 MP 计数标记/双击预览硬抛修复 + 自研 DAO 字符串 SQL 预览 T-DaoSql + 设置页缓存口径 + 「自动开始监听」联动修复 + MBCHP-Pro 反编译对照） |
 | [20260904-1545-JdbcTemplate预览贯通与JOIN原生图对齐-发行说明.md](./发行说明/20260904-1545-JdbcTemplate预览贯通与JOIN原生图对齐-发行说明.md) | v2026.9.4 发行说明（JdbcTemplate SQL 字符串预览 psource 系列 + JOIN 图原生框架/对齐 Database 显示图/内嵌原生图 B 路径 + 非 Wrapper 快捷键贯通 + @NamedQuery 实体级预览 + 自动保存无限递归/日志 EDT 冻结/SqlFormatter 修复链） |
 | [20260902-0000-实时日志跳转可靠方案与全插件测试覆盖-发行说明.md](./发行说明/20260902-0000-实时日志跳转可靠方案与全插件测试覆盖-发行说明.md) | v2026.9.2 发行说明（SQL 预览面板原生 Database 控制台内嵌 M36 + 全插件 UI/集成测试覆盖 + SQL 日志合并主侧边栏 + 自动保存历史 + JOIN 自绘引擎 + 更名 SQL Visualizer） |
 | [20260819-1400-废弃API清理与IService实体修复-发行说明.md](./发行说明/20260819-1400-废弃API清理与IService实体修复-发行说明.md) | v2026.8.19 发行说明（废弃 API 全量清理 T-M51+T-M52 + IService 实体修复 + 截图替换 + Marketplace Custom Page，1227 全绿） |

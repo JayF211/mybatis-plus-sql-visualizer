@@ -237,6 +237,17 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.8</h2>
+            <ul>
+                <li>SQL 日志列表 EDT 冻结 16 秒根治</li>
+                <li>SQL 列表悬停卡顿改单击预览：SQL 高亮可编辑编辑器，临时改字段值再复制</li>
+                <li>多行 JdbcTemplate 日志漏捕获修复</li>
+                <li>SQL 日志去重失效 + MP 分页计数误标双根因修复</li>
+                <li>SQL 日志双击预览平台断言硬抛崩溃修复</li>
+                <li>自研 DAO 字符串 SQL 预览 + 方法定义处锚点贯通</li>
+                <li>「项目启动时自动开始监听」联动失效与手动停止后永不自动捕捉修复</li>
+                <li>设置页缓存信息恒 0 B 修复</li>
+            </ul>
             <h2>v2026.9.4</h2>
             <ul>
                 <li>JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览</li>
