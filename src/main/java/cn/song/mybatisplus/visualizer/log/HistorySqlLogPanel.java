@@ -76,6 +76,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private final DefaultListModel<LogSqlEntry> sqlListModel = new DefaultListModel<>();
     private final SqlEntryList sqlList = new SqlEntryList(sqlListModel);
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private final SqlClickPreview sqlClickPreview;
     private HistoryFileEntry currentFile = null;
     private List<LogSqlEntry> currentEntries = List.of();
 
@@ -91,6 +93,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     public HistorySqlLogPanel(@NotNull Project project) {
         super(new BorderLayout());
         this.project = project;
+        this.sqlClickPreview = new SqlClickPreview(project, sqlList, i -> SqlLogPanelKt.withTerminator(sqlListModel.get(i).restoredSql()));
         backButton.setIcon(AllIcons.Actions.Back);
         backButton.setFocusable(false);
         backButton.setToolTipText(MpSqlVisualizerBundle.message("log.history.back.tip"));
@@ -148,6 +151,11 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         searchField.setText(query);
     }
 
+    /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
+    public SqlClickPreview getSqlClickPreviewForTest() {
+        return sqlClickPreview;
+    }
+
     private void buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
@@ -177,8 +185,11 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         // 一级：文件列表
         fileList.getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.files.empty"));
-        fileList.setFixedCellHeight(-1);
-        fileList.setCellRenderer(new HistoryFileCellRenderer());
+        HistoryFileCellRenderer fileRenderer = new HistoryFileCellRenderer();
+        fileList.setCellRenderer(fileRenderer);
+        // T-LogListFreeze-04：固定行高（单行恒定高）——JList 布局走 O(1) 快路径，不再逐条调渲染器测量
+        fileList.setFixedCellHeight(fileRenderer.getListCellRendererComponent(
+                fileList, new HistoryFileEntry(new File("sample.sql"), 1), 0, false, false).getPreferredSize().height);
         fileList.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
@@ -194,11 +205,18 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         // 二级：SQL 列表
         sqlList.getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.entries.empty"));
-        sqlList.setFixedCellHeight(-1);
-        sqlList.setCellRenderer(new HistoryCellRenderer());
+        HistoryCellRenderer sqlRenderer = new HistoryCellRenderer();
+        sqlList.setCellRenderer(sqlRenderer);
+        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）
+        sqlList.setFixedCellHeight(sqlRenderer.getListCellRendererComponent(
+                sqlList, new LogSqlEntry("SELECT 1", "SELECT 1", List.of()), 0, false, false).getPreferredSize().height);
         sqlList.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    sqlClickPreview.onClick(e.getClickCount(), e.getPoint());
+                }
                 if (e.getClickCount() >= 2) {
                     LogSqlEntry selected = sqlList.getSelectedValue();
                     if (selected != null) {
@@ -230,6 +248,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private void showFileList() {
         currentFile = null;
         currentEntries = List.of();
+        sqlClickPreview.hide(); // 返回一级时若二级预览弹窗还开着，一并关掉
         backButton.setVisible(false);
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.files"));
         cardLayout.show(cards, CARD_FILES);
@@ -433,6 +452,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     @Override
     public void dispose() {
+        sqlClickPreview.dispose();
     }
 
     private static final Logger LOG = Logger.getInstance(HistorySqlLogPanel.class);

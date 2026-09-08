@@ -172,7 +172,11 @@ public final class DataSourceSelector {
         preparedFullComponent = null;
     }
 
-    /** M36.5：准备控制台（不执行）。 */
+    /**
+     * M36.5：准备控制台（不执行）。
+     * 数据源选择策略：唯一数据源/last-used 命中 → 静默；多数据源 → 原生弹窗（记住选择）；
+     * 无数据源 → 预览路径静默 onError（不抢侧边栏），显式执行路径打开 Database 工具窗口 + onError。
+     */
     public static void prepareConsole(
             @NotNull Project project,
             @NotNull String sql,
@@ -256,7 +260,7 @@ public final class DataSourceSelector {
                 if (matched != null) {
                     LOG.info("[M36] silent reuse last runner: " + last);
                     chosenRunnerName[0] = last;
-                    runRunner(matched);
+                    runRunner(matched, true);
                     if (callback != null) callback.accept(true);
                     return;
                 }
@@ -264,14 +268,16 @@ public final class DataSourceSelector {
         }
 
         if (runners.isEmpty()) {
-            LOG.warn("[M36] runners empty -> open Database tool window");
-            openDatabaseToolWindow(project);
+            LOG.warn("[M36] runners empty (execute=" + executeAfterPrepare + ")");
+            // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
+            // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
+            if (executeAfterPrepare) openDatabaseToolWindow(project);
             if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.datasource.empty"));
             if (callback != null) callback.accept(false);
         } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0))) {
             LOG.info("[M36] single runner, run directly");
             chosenRunnerName[0] = getRunnerName(runners.get(0));
-            runRunner(runners.get(0));
+            runRunner(runners.get(0), !executeAfterPrepare);
             if (callback != null) callback.accept(true);
         } else {
             LOG.info("[M36] show popup with " + runners.size() + " runners");
@@ -282,7 +288,8 @@ public final class DataSourceSelector {
                 }
                 if (runner != null) chosenRunnerName[0] = getRunnerName(runner);
                 if (callback != null) callback.accept(runner != null);
-                if (runner != null) runRunner(runner);
+                // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
+                if (runner != null) runRunner(runner, false);
             });
         }
     }
@@ -2166,8 +2173,8 @@ public final class DataSourceSelector {
         }
     }
 
-    /** 反射调用 Runner.run。 */
-    private static void runRunner(Object runner) {
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 弹错误引导。 */
+    private static void runRunner(Object runner, boolean silent) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Method method = runner.getClass().getMethod("run");
@@ -2177,6 +2184,19 @@ public final class DataSourceSelector {
         } catch (Throwable e) {
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
             LOG.warn("[M36] runRunner FAILED: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(), cause);
+            // T-DsCover：预览默认准备路径静默失败（被动展示不应弹模态打断）；
+            // 并清 last-used 记忆，避免驱动损坏的数据源每次预览都白失败一次。
+            if (silent) {
+                Project[] open = ProjectManager.getInstance().getOpenProjects();
+                if (open.length > 0) {
+                    try {
+                        com.intellij.ide.util.PropertiesComponent.getInstance(open[0]).unsetValue(LAST_RUNNER_KEY);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                return;
+            }
+            // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
             Project project = ProjectManager.getInstance().getOpenProjects().length > 0 ? ProjectManager.getInstance().getOpenProjects()[0] : null;
             if (project == null) return;
             Messages.showErrorDialog(project, MpSqlVisualizerBundle.message("execute.datasource.failed", cause.getMessage() != null ? cause.getMessage() : cause.toString()), MpSqlVisualizerBundle.message("execute.title"));
@@ -2364,7 +2384,7 @@ public final class DataSourceSelector {
         }
     }
 
-    /** 打开 Database 工具窗口。 */
+    /** 打开 Database 工具窗口（无配置数据源时引导用户，仅显式执行路径调用；预览路径静默）。 */
     private static void openDatabaseToolWindow(Project project) {
         try {
             ToolWindowManager.getInstance(project).getToolWindow("Database").show();

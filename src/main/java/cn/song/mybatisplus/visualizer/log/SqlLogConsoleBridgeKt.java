@@ -52,21 +52,15 @@ public final class SqlLogConsoleBridgeKt {
         // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
         Long lineDuration = ExecutionTimeParser.parse(line, timePrefix);
         Pair<String, Integer> src = ctx.pendingSource;
-        if (src == null) {
-            // F-44-7：无标记时，检测是否为 MP 分页 COUNT 查询 → 标记为内部查询
-            boolean isCountQuery = false;
-            for (LogSqlEntry t : taken) {
-                if (t.restoredSql().stripLeading().toUpperCase(java.util.Locale.ROOT).startsWith("SELECT COUNT(")) {
-                    isCountQuery = true;
-                    break;
-                }
-            }
-            if (isCountQuery) {
-                src = SourceMarkers.mpPaginationCount();
-            }
-        }
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry e : taken) {
+            // F-44-7：MP 分页 COUNT 标记逐条判定（T-LogDedupeMpMark）——批次是「同一行喂入产出的全部条目」，
+            // named 行触发 closePending 时批内常有两条（闭合的 prepared 副本 + 本条 named），批级 any 会把
+            // 与 COUNT 同批的数据查询一并误标（且连带被判 NoSource 丢失源码跳转）。源码标记优先级不变。
+            Pair<String, Integer> eSrc = src;
+            if (eSrc == null && e.restoredSql().stripLeading().toUpperCase(java.util.Locale.ROOT).startsWith("SELECT COUNT(")) {
+                eSrc = SourceMarkers.mpPaginationCount();
+            }
             Long duration = lineDuration != null ? lineDuration : LogDurationParser.parse(e);
             result.add(new LogSqlEntry(
                     e.rawSql(),
@@ -76,8 +70,8 @@ public final class SqlLogConsoleBridgeKt {
                     e.summary(),
                     e.source(),
                     duration != null ? duration : e.executionTimeMs(),
-                    src != null ? src.getFirst() : e.sourceFile(),
-                    src != null ? src.getSecond() : e.sourceLine()));
+                    eSrc != null ? eSrc.getFirst() : e.sourceFile(),
+                    eSrc != null ? eSrc.getSecond() : e.sourceLine()));
         }
         if (ctx.pendingSource != null) {
             ctx.pendingSource = null;

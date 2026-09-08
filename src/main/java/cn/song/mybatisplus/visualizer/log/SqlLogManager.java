@@ -55,6 +55,20 @@ public final class SqlLogManager implements Disposable {
     /** 是否处于「等待主控制台出现」中间态（测试断言）。 */
     private volatile boolean isWaitingForConsole;
 
+    /**
+     * 进程级启动监听是否订阅成功（20260907-2045 第四轮）。
+     * true=被动模式：「项目启动时自动开始监听」开启后不预 armed——设置开启/项目打开时按钮保持
+     * 「捕捉」原状，Run 项目那一刻由 onProjectProcessStarted 驱动捕捉（用户语义：设置本身
+     * 不等于"监听已开启"）；false=降级模式（execution API 缺失）：维持原 armed 行为
+     * （RCM 轮询是唯一检测通道）。
+     */
+    private volatile boolean processListenerActive = false;
+
+    /** 进程级启动监听是否订阅成功（被动模式判定，LogStartupCapture 读）。 */
+    public boolean isProcessListenerActive() {
+        return processListenerActive;
+    }
+
     /** capturing 变化回调（面板注册 → 刷新工具栏按钮图标/文案）。 */
     private final CopyOnWriteArrayList<Runnable> capturingListeners = new CopyOnWriteArrayList<>();
 
@@ -69,6 +83,11 @@ public final class SqlLogManager implements Disposable {
                     applySettings();
                     bridge.refreshConsoleContexts();
                 });
+
+        // 20260907-2045：运行配置进程启动监听——autoStart=true 时项目 Run 即自动捕捉
+        // （清 suppressed + startCapture，见 onProjectProcessStarted）；execution API 缺失时
+        // 内部降级为 false，RCM 轮询兜底仍在
+        processListenerActive = RunConfigurationProcessListener.subscribe(project, this);
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。 */
@@ -190,6 +209,12 @@ public final class SqlLogManager implements Disposable {
         capturingListeners.add(listener);
     }
 
+    /** T-Perf-15（自 dev 移植）：注销 capturing 变化监听（面板 dispose 调用——防面板随 tool window content
+     *  销毁重建逐次累积，每条新 SQL 仍回调已销毁面板）。 */
+    public void removeCapturingListener(Runnable listener) {
+        capturingListeners.remove(listener);
+    }
+
     /** 强制刷新工具栏 action 状态（capturing 变化时按钮图标/文案同步）。 */
     private void refreshToolbar() {
         LOG.info("refreshToolbar: 通知 " + capturingListeners.size() + " 个监听器");
@@ -215,6 +240,59 @@ public final class SqlLogManager implements Disposable {
         }
         LOG.info("onConsoleAppeared: 检测到新控制台，自动开始捕捉（autoStart=" + autoStart + ", suppressed=" + suppressed +
                 ", armed=" + userArmed + ", waiting=" + isWaitingForConsole + ", project=" + project.getName() + "）");
+        startCapture();
+    }
+
+    /**
+     * 项目启动（运行配置进程启动）事件——autoStart=true 时无条件自动捕捉。
+     *
+     * 20260907-2045 沙盒日志实证（IU-243）：手动停止置 suppressed=true 持久化后，
+     * onConsoleAppeared 被 suppressed && !userArmed 拦截、LogStartupCapture 只在项目打开
+     * 时触发一次——「设置开启 + 用户曾停止 → 再运行项目」从此没有任何自动重启入口，
+     * 与踩坑第十一轮「设置优先」结论冲突：用户显式"停止"只应抑制项目未运行期间的 armed 态，
+     * 项目真正启动时 logAutoCaptureOnStart=true 应优先。
+     *
+     * 接线：RunConfigurationProcessListener（ExecutionListener 反射桥，243/262 execution API 兼容）。
+     * 与 onConsoleAppeared 的分工：本方法在进程级事件可靠触发（不依赖 RCM tab 扫描），
+     * 清 suppressed 后走 startCapture 常规链路（armed 态下为幂等 no-op）。
+     */
+    public void onProjectProcessStarted() {
+        boolean autoStart = PluginSettings.getInstance().getState().getLogAutoCaptureOnStart();
+        if (!autoStart) return;
+        boolean suppressed = PluginSettings.getInstance().getState().getLogAutoCaptureSuppressed();
+        if (suppressed) {
+            // 项目启动 = 用户对「自动监听」的再次确认（设置优先，对齐踩坑第十一轮）
+            PluginSettings.getInstance().getState().setLogAutoCaptureSuppressed(false);
+            LOG.info("onProjectProcessStarted: 项目启动清除 suppressed（autoStart 优先）——project=" + project.getName());
+        }
+        if (capturing && !isWaitingForConsole) {
+            LOG.debug("onProjectProcessStarted: 已在捕捉态，startCapture 幂等跳过（project=" + project.getName() + "）");
+            return;
+        }
+        if (capturing && isWaitingForConsole && bridge.isPollingActive()) {
+            // armed 态已在轮询等待控制台——进程级回调无需重复 attach（测试 T25 实证 attach 会重复）
+            LOG.info("onProjectProcessStarted: 已在 armed 轮询等待，无需重复挂载（project=" + project.getName() + "）");
+            return;
+        }
+        LOG.info("onProjectProcessStarted: 项目启动自动捕捉（armed=" + userArmed + ", waiting=" + isWaitingForConsole
+                + ", project=" + project.getName() + "）");
+        startCapture();
+    }
+
+    /**
+     * 「项目启动时自动开始监听」设置开启（设置页关→开边沿）——按模式分流（20260907-2045 第四轮）：
+     *  - 进程级监听可用（processListenerActive=true）→ 被动模式：清 suppressed 后不预 armed，
+     *    按钮保持「捕捉」原状；Run 项目那一刻由 onProjectProcessStarted 驱动捕捉
+     *    （用户语义：开启设置 ≠ 监听已开启，08:33 会话反馈"还没启动项目却自动开启"实证）；
+     *  - 降级模式（execution API 缺失，RCM 轮询是唯一检测通道）→ 维持原行为进入 armed 态。
+     */
+    public void onAutoStartSettingEnabled() {
+        PluginSettings.getInstance().getState().setLogAutoCaptureSuppressed(false);
+        if (processListenerActive) {
+            LOG.info("onAutoStartSettingEnabled: 进程级监听已接管——被动等待项目 Run（不预 armed，project=" + project.getName() + "）");
+            return;
+        }
+        LOG.info("onAutoStartSettingEnabled: 进程级监听不可用——降级 armed 模式（project=" + project.getName() + "）");
         startCapture();
     }
 
@@ -307,8 +385,20 @@ public final class SqlLogManager implements Disposable {
         return isWaitingForConsole;
     }
 
+    /**
+     * T-Perf-03（自 dev 移植）：UI 刷新合并——流式灌入时每条 SQL 一次 invokeLater 的调度风暴改为
+     * 「置脏 + 单个幂等 flush」：首个变更投递一个 invokeLater（pending 置位），后续变更
+     * 在 flush 执行前只置脏不重复投递；flush 读的是当下缓冲快照，不丢任何条目。
+     * 持续灌入期间刷新频率被 EDT 吞吐自然合并（风暴期数百条 SQL = 数十次轻量刷新）。
+     */
+    private volatile boolean uiFlushPending = false;
+
     private void notifyUi() {
+        if (uiListeners.isEmpty()) return;
+        if (uiFlushPending) return; // 已有 flush 在途——本次变更由该 flush 的当下快照覆盖
+        uiFlushPending = true;
         ApplicationManager.getApplication().invokeLater(() -> {
+            uiFlushPending = false;
             for (Runnable it : uiListeners) {
                 it.run();
             }

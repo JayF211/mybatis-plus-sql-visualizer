@@ -56,6 +56,7 @@ import com.intellij.openapi.actionSystem.Shortcut;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.application.WriteIntentReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.Disposable;
@@ -70,6 +71,7 @@ import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory;
 import com.intellij.openapi.keymap.KeymapManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.LocalFileSystem;
@@ -1103,7 +1105,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 psi = prewarmed.getSecond();
             } else {
                 try (AccessToken ignored = SlowOperations.allowSlowOperations(SlowOperations.GENERIC)) {
-                    Pair<VirtualFile, PsiFile> pair = ReadAction.compute(() -> {
+                    // T-PreviewWiLock：必须 WriteIntentReadAction——refreshAndFindFileByIoFile 是同步 VFS
+                    // refresh，2024.2+ 平台要求 write-safe context（write-intent lock）；EDT 进 ReadAction
+                    // 会把 write-intent lock check out，262 平台 RefreshSessionImpl.launch 硬抛
+                    // "Access is allowed from write thread only"（日志双击预览崩溃实证）。
+                    // write-intent 隐含读权限，lambda 内 findFile 不受影响。
+                    // T-Wia262：显式选 compute(Computable) 重载——compute(ThrowableComputable)
+                    // 重载在 262 平台已移除（verifyPlugin 兼容性问题实证），compute(Computable) 为
+                    // 243~262 三版本交集；lambda 内仅不受检异常，SAM 换型语义不变。
+                    Pair<VirtualFile, PsiFile> pair = WriteIntentReadAction.compute(
+                            (Computable<Pair<VirtualFile, PsiFile>>) () -> {
                         VirtualFile vf = previewTempFile;
                         if (vf == null) {
                             try {

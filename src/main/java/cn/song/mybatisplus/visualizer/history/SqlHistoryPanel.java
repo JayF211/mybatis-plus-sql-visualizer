@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.history;
 
 import cn.song.mybatisplus.visualizer.log.SlowQueryDetector;
+import cn.song.mybatisplus.visualizer.log.SqlClickPreview;
 import cn.song.mybatisplus.visualizer.log.SqlLogPanelKt;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog;
@@ -63,11 +64,14 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
     private boolean favoritesOnly = false;
     private String searchQuery = "";
     private final SqlHistorySearchBar searchBar;
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private final SqlClickPreview clickPreview;
 
     public SqlHistoryPanel(Project project) {
         super(new BorderLayout());
         this.project = project;
         this.list = new JBList<>(listModel);
+        this.clickPreview = new SqlClickPreview(project, list, i -> SqlLogPanelKt.withTerminator(listModel.get(i).getSql()));
         this.searchBar = new SqlHistorySearchBar(this::onSearch, this::onFilterChanged);
 
         JPanel topPanel = new JPanel(new BorderLayout());
@@ -135,6 +139,10 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
         list.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    clickPreview.onClick(e.getClickCount(), e.getPoint());
+                }
                 if (e.getClickCount() >= 2) {
                     SqlHistoryEntry entry = list.getSelectedValue();
                     if (entry != null) {
@@ -191,7 +199,7 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
                 this.setText("<html>" + (entry.isFavorite() ? "&#9733; " : "") + "<b>" + escapeHtml(summary) + "</b>"
                         + durationPart
                         + "  <span style='color:#9E9E9E'>" + ts + "</span>" + sourcePart + tagPart + "</html>");
-                this.setToolTipText(entry.getSql());
+                // T-ClickPreview：不再设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
                 this.setIcon(entry.isFavorite() ? favoriteIcon : emptyIcon);
             }
             this.setBorder(BorderFactory.createCompoundBorder(
@@ -350,6 +358,7 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
 
     @Override
     public void dispose() {
+        clickPreview.dispose();
     }
 
     // ---------- 测试访问器 ----------
@@ -376,6 +385,11 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
     /** 当前是否仅显示收藏（测试断言）。 */
     boolean isFavoritesOnly() {
         return favoritesOnly;
+    }
+
+    /** 单击预览控制器（T-ClickPreview 测试断言）。 */
+    SqlClickPreview getClickPreviewForTest() {
+        return clickPreview;
     }
 
     /** 设置搜索词（测试用；等价于在搜索框输入）。 */

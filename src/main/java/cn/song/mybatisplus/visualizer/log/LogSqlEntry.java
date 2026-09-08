@@ -40,6 +40,17 @@ public record LogSqlEntry(
     /** 摘要最大长度。 */
     private static final int MAX_SUMMARY_LENGTH = 160;
 
+    /**
+     * T-Perf-19（自 dev 移植）：去重键指纹（sqlFingerprint 惰性计算一次）——dedupeCounts 不再以
+     * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
+     * T-LogDedupeMpMark：指纹前先 normalizeSqlWhitespace——同一语句的双路日志副本（named 行 trim 过 /
+     * prepared 行尾随空白原样保留）仅差首尾空白，原文指纹判重永不命中。
+     * （record 无实例字段，纯函数每次现算——FNV-1a 线性扫描，成本可忽略。）
+     */
+    public String dedupeKey() {
+        return LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace(restoredSql));
+    }
+
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(),

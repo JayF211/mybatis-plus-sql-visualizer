@@ -16,6 +16,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.xml.PagesColumn;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
+import cn.song.mybatisplus.visualizer.log.SqlLogPanelKt.VisibleDiff;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.BrowserUtil;
 import com.intellij.openapi.Disposable;
@@ -116,6 +117,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private final SqlEntryList list = new SqlEntryList(listModel);
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private LogEntryListCellRenderer entryCellRenderer;
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private SqlClickPreview clickPreview;
     private final JBTabbedPane tabs = new JBTabbedPane();
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private final LogToSqlPanel logToSqlPanel;
@@ -144,6 +147,36 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private String searchText = "";
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private Map<String, Integer> dedupeCounts = Map.of();
+
+    // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
+
+    /** 刷新代际：新 refreshList 启动时 +1，旧分批追加链检测到代际过期即终止。 */
+    private long refreshGeneration = 0L;
+
+    /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
+    private List<LogSqlEntry> lastRendered = List.of();
+
+    // ---------- T-Perf-15（自 dev 移植）：manager 监听器命名引用（init 注册 / dispose 注销） ----------
+
+    /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
+    private final Runnable uiRefreshListener = this::refreshList;
+
+    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
+    private final Runnable capturingUiListener = new Runnable() {
+        @Override
+        public void run() {
+            LOG.info("SqlLogPanel.capturingListener: 触发");
+            ApplicationManager.getApplication().invokeLater(SqlLogPanel.this::updateCaptureButtonIcon);
+        }
+    };
+
+    // ---------- T-Perf-24（自 dev 移植）：搜索输入防抖 ----------
+
+    /** 搜索输入防抖 Timer——每击键一次 O(N) 刷新 → 停顿 200ms 应用一次。 */
+    private final javax.swing.Timer searchDebounceTimer;
+
+    /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
+    private static final int SEARCH_DEBOUNCE_MS = 200;
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -205,6 +238,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         this.logToSqlPanel = new LogToSqlPanel(project);
         this.sqlToJavaPanel = new SqlToJavaPanel(project);
         this.searchField = buildSearchField();
+        this.searchDebounceTimer = new javax.swing.Timer(SEARCH_DEBOUNCE_MS, e -> applySearchText());
+        this.searchDebounceTimer.setRepeats(false);
+        this.clickPreview = new SqlClickPreview(project, list, i -> SqlLogPanelKt.withTerminator(listModel.getElementAt(i).restoredSql()));
         this.toolbarGroup = new DefaultActionGroup(
                 new CaptureAction(),
                 new ClearAction(),
@@ -247,18 +283,24 @@ public class SqlLogPanel extends JPanel implements Disposable {
         });
 
         // F-44 历史 tab 显隐跟随设置（设置页修改后即时生效，无需切 tab）
-        SettingsChangeListener settingsListener = () -> ApplicationManager.getApplication().invokeLater(
-                () -> updateHistoryTabVisibility());
+        SettingsChangeListener settingsListener = () -> ApplicationManager.getApplication().invokeLater(() -> {
+            updateHistoryTabVisibility();
+            // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
+            // 走 refreshList 重排重绘即生效（片段无缓存，原 HTML 通道的清缓存兜底不再需要）
+            refreshList();
+        });
         project.getMessageBus().connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener);
 
-        manager.addUiListener(() -> refreshList());
+        // T-Perf-15（自 dev 移植）：监听器改命名引用——dispose 时精确注销（此前 addUiListener/addCapturingListener
+        // 只加不减，面板随 tool window content 销毁重建逐次累积）
+        manager.addUiListener(uiRefreshListener);
         refreshList();
 
         // capturing 变化 → 刷新工具栏按钮图标/文案
-        manager.addCapturingListener(() -> {
-            LOG.info("SqlLogPanel.capturingListener: 触发");
-            ApplicationManager.getApplication().invokeLater(this::updateCaptureButtonIcon);
-        });
+        // 注意：updateActionsAsync()/updateActionsImmediately() 在组件不可见时会跳过更新
+        // （ToolbarUpdater$MyUpdateRunnable 检查 isShowing，沙盒中工具栏可能不可见），
+        // 故直接遍历 ActionButton 设置图标（绕过平台更新机制）
+        manager.addCapturingListener(capturingUiListener);
     }
 
     private HistorySqlLogPanel getHistoryPanel() {
@@ -394,6 +436,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     private void onSearchTextChanged() {
+        // T-Perf-24（自 dev 移植）：防抖——停顿 200ms 才应用一次过滤
+        searchDebounceTimer.restart();
+    }
+
+    private void applySearchText() {
         searchText = searchField.getText();
         refreshList();
     }
@@ -692,14 +739,20 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     private JBScrollPane buildListPane() {
         list.getEmptyText().setText(MpSqlVisualizerBundle.message("log.panel.empty"));
-        // 多行 SQL 预览：启用可变行高（条目高度按内容自适应，支持 SQL 自动换行）
-        list.setFixedCellHeight(-1);
         LogEntryListCellRenderer renderer = new LogEntryListCellRenderer();
         entryCellRenderer = renderer;
         list.setCellRenderer(renderer);
+        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）。
+        // 原可变行高使每次布局状态更新逐条调渲染器取首选尺寸（叠加 HTML 排版即 16s EDT Freeze）；
+        // 固定后 WideSelectionListUI 短路逐条测量走 O(1) 快路径。全文查看由单击预览/双击弹窗承接。
+        list.setFixedCellHeight(measureFixedCellHeight());
         list.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    clickPreview.onClick(e.getClickCount(), e.getPoint());
+                }
                 if (e.getClickCount() >= 2) {
                     LogSqlEntry selected = list.getSelectedValue();
                     if (selected != null) {
@@ -725,16 +778,37 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return new JBScrollPane(list);
     }
 
+    /** T-LogListFreeze-04：固定行高实测——样例条目渲染一次取首选高（两行文本 + 5,8 空边框 + 1px 分隔线）。 */
+    private int measureFixedCellHeight() {
+        LogSqlEntry sample = new LogSqlEntry("SELECT 1", "SELECT 1", List.of());
+        Component c = entryCellRenderer.getListCellRendererComponent(list, sample, 0, false, false);
+        int measured = c.getPreferredSize().height;
+        if (measured > 0) {
+            return measured;
+        }
+        return list.getFontMetrics(list.getFont()).getHeight() * 2 + 13;
+    }
+
     // ---------- 刷新管线（类型过滤 → 搜索过滤 → 排序 → 渲染） ----------
 
     /**
-     * 刷新列表（过滤 → 搜索 → 排序 → 渲染）。
+     * 刷新列表（过滤 → 搜索 → 排序 → 差分渲染）。
+     *
+     * 执行顺序：
+     * 1. filterByType：按 activeFilter 筛选（全选 = 全部，含 OTHER）
+     * 2. filterBySearch：按 searchText 搜索（大小写不敏感）
+     * 3. applySort：按 sortMode 排序（降序耗时）
+     * 4. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     *
+     * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 dedupeCounts，
+     * 原「清缓存/选择性失效」机制一并移除。
      */
     private void refreshList() {
+        long gen = ++refreshGeneration;
         List<LogSqlEntry> snapshot = manager.getEntries().snapshot();
 
         // 检测是否含耗时信息（决定是否显示排序按钮）
-        hasAnyDurationInfo = snapshot.stream().anyMatch(it -> LogDurationParser.hasDurationInfo(it));
+        hasAnyDurationInfo = snapshot.stream().anyMatch(LogDurationParser::hasDurationInfo);
 
         // 去重丢弃计数快照（徽章渲染数据源；丢弃不触发通知，随下一次刷新呈现）
         dedupeCounts = manager.getEntries().dedupeCountsSnapshot();
@@ -742,11 +816,69 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         List<LogSqlEntry> filtered = SqlLogPanelKt.filterByType(snapshot, activeFilter);
         List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(filtered, searchText);
-        List<LogSqlEntry> sorted = applySort(searched);
+        List<LogSqlEntry> newVisible = applySort(searched);
+        int evicted = manager.getEntries().drainEvictedCount();
 
-        // T-LogListFreeze-02：清空全部缓存（过滤/排序/设置变更后 HTML 需重新生成）
-        entryCellRenderer.invalidateListHtmlCache();
+        if (!applyIncremental(newVisible, evicted)) {
+            applyFullRebuild(newVisible, gen);
+        }
 
+        updateSortButton();
+
+        // O-1：同步慢查询阈值 + 更新计数（Phase C）
+        slowQueryCounter.setThresholdMs(PluginSettings.getInstance().getState().getSlowQueryThresholdMs());
+        slowQueryCounter.reset();
+        for (LogSqlEntry it : snapshot) {
+            slowQueryCounter.report(it.executionTimeMs());
+        }
+        updateSlowQueryLabel();
+    }
+
+    /**
+     * T-Perf-03（自 dev 移植）：增量应用差分（同步完成，无异步追加链）。模型与 lastRendered 尺寸不一致
+     * （旧异步追加链被新刷新中断/外部改动）时拒绝增量——全量重建兜底。
+     */
+    private boolean applyIncremental(List<LogSqlEntry> newVisible, int evicted) {
+        if (listModel.size() != lastRendered.size()) {
+            return false;
+        }
+        VisibleDiff diff = SqlLogPanelKt.diffVisible(lastRendered, newVisible, evicted);
+        if (diff instanceof VisibleDiff.Same) {
+            lastRendered = newVisible;
+            return true;
+        } else if (diff instanceof VisibleDiff.HeadEvictAppend hea) {
+            for (int i = 0; i < hea.evicted(); i++) {
+                listModel.remove(0);
+            }
+            for (LogSqlEntry e : hea.appended()) {
+                listModel.addElement(e);
+            }
+            lastRendered = newVisible;
+            return true;
+        } else if (diff instanceof VisibleDiff.Insert ins) {
+            for (int i = 0; i < ins.entries().size(); i++) {
+                listModel.add(ins.index() + i, ins.entries().get(i));
+            }
+            lastRendered = newVisible;
+            return true;
+        } else if (diff instanceof VisibleDiff.TailRemove tr) {
+            for (int i = lastRendered.size() - 1; i >= tr.from(); i--) {
+                listModel.remove(i);
+            }
+            lastRendered = newVisible;
+            return true;
+        }
+        return false; // FullRebuild
+    }
+
+    /**
+     * 全量重建（分批 EDT 写入 + generation 守卫）。
+     *
+     * T-Perf-03 追加链 generation 守卫（自 dev 移植）：新 refreshList 启动后旧链在新 chunk 写入前检测代际
+     * 并终止——杜绝旧快照剩余条目继续追加造成的幽灵/重复条目。
+     */
+    private void applyFullRebuild(List<LogSqlEntry> sorted, long gen) {
+        lastRendered = sorted;
         // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
         list.setIgnoreRepaint(true);
         listModel.clear();
@@ -767,8 +899,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
             Runnable appendNext = new Runnable() {
                 @Override
                 public void run() {
-                    if (!iterator.hasNext()) {
-                        return;
+                    if (gen != refreshGeneration) {
+                        return; // 新一轮刷新已启动，旧链终止（T-Perf-03 代际守卫）
                     }
                     List<LogSqlEntry> chunk = new ArrayList<>();
                     for (int i = 0; i < SqlLogPanelKt.REFRESH_CHUNK_SIZE && iterator.hasNext(); i++) {
@@ -782,15 +914,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
             };
             ApplicationManager.getApplication().invokeLater(appendNext);
         }
-        updateSortButton();
-
-        // O-1：同步慢查询阈值 + 更新计数（Phase C）
-        slowQueryCounter.setThresholdMs(PluginSettings.getInstance().getState().getSlowQueryThresholdMs());
-        slowQueryCounter.reset();
-        for (LogSqlEntry it : snapshot) {
-            slowQueryCounter.report(it.executionTimeMs());
-        }
-        updateSlowQueryLabel();
     }
 
     /** 按当前排序模式排序条目。 */
@@ -1085,9 +1208,15 @@ public class SqlLogPanel extends JPanel implements Disposable {
         menu.show(list, e.getX(), e.getY());
     }
 
-    /** 面板销毁：释放日志转 SQL 与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
+    /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     @Override
     public void dispose() {
+        // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
+        searchDebounceTimer.stop();
+        // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
+        manager.removeUiListener(uiRefreshListener);
+        manager.removeCapturingListener(capturingUiListener);
+        clickPreview.dispose();
         logToSqlPanel.dispose();
         sqlToJavaPanel.dispose();
     }
@@ -1149,6 +1278,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 搜索条（测试断言显隐/文本）。 */
     public SearchTextField getSearchFieldForTest() {
         return searchField;
+    }
+
+    /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
+    public SqlClickPreview getClickPreviewForTest() {
+        return clickPreview;
     }
 
     /** 工具栏慢查询计数标签（测试断言显隐与文案）。 */

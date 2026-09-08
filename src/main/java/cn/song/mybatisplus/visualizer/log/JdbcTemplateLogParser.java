@@ -26,6 +26,10 @@ import java.util.regex.Pattern;
  * 类型还原：`value class [java.lang.Integer]` → 去 `java.lang.` 前缀 → `Integer` → 查 {@link LogSqlRestorer#PLAIN_TYPES} 判定引号。
  * NamedParameter 格式：命名参数 `:paramName` 直接替换为 Map 中对应值（启发式判定引号）。
  *
+ * 多行语句（T-JdbcMultiline）：`[...]` 内 SQL 跨行时（开括号行无闭合），首行进入 COLLECTING 态逐行累积，
+ * string-aware 净括号计数（单引号字符串内 `[`/`]` 不计数，`''` 转义）归零即闭合；新语句行/参数行/超限
+ * 强制闭合残句，`closePending()` 同样冲刷（LogToSqlPanel 粘贴末尾零改动受益）。
+ *
  * maxParseLength 超长截断（防控制台大输出卡顿）。
  */
 public class JdbcTemplateLogParser {
@@ -33,10 +37,21 @@ public class JdbcTemplateLogParser {
     public static final int DEFAULT_MAX_PARSE_LENGTH = 20000;
 
     /**
-     * SQL 行匹配正则：提取 `[SQL]` 文本。组 1 = SQL 文本。
+     * SQL 行动作短语（T-JdbcMultiline 自旧「同行 [...] 正则」拆出）。
+     * 配合 string-aware 括号扫描判定同行闭合（快路径）或跨行收集（慢路径）——
+     * 旧式对 `[SELECT a[1] FROM t`（首个 `]` 是标识符括号、消息终结 `]` 在后续行）
+     * 会把 "SELECT a[1" 误提取为完整语句。
+     *
+     * 匹配形态：
+     * - `Executing prepared SQL statement [SQL]` / `update` / `query`
+     * - `Executing SQL statement/query/update [SQL]`
+     * - `Executing SQL batch update [SQL]`
+     * - `Calling stored procedure [SQL]`（无 Executing 前缀）
+     *
+     * 不匹配：`Executing prepared SQL query`（无 `[SQL]` 的头行）
      */
-    private static final Pattern SQL_LINE_PATTERN = Pattern.compile(
-            "(?:Executing\\s+(?:prepared\\s+SQL\\s+(?:statement|update|query)|SQL\\s+(?:statement|query|update)|SQL\\s+batch\\s+update)|Calling\\s+stored\\s+procedure)\\s*\\[(.*)\\]",
+    private static final Pattern SQL_ACTION_PATTERN = Pattern.compile(
+            "(?:Executing\\s+(?:prepared\\s+SQL\\s+(?:statement|update|query)|SQL\\s+(?:statement|query|update)|SQL\\s+batch\\s+update)|Calling\\s+stored\\s+procedure)",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -68,6 +83,16 @@ public class JdbcTemplateLogParser {
     private final List<LogSqlEntry> entries = new ArrayList<>();
     private String pendingSql = null;
     private final List<IndexedParam> pendingParams = new ArrayList<>();
+
+    // ----- 多行收集态（T-JdbcMultiline：`[...]` 跨行语句首行进入，`]` 闭合/边界行/超限/closePending 离开） -----
+    private boolean collecting = false;
+    private final StringBuilder multilineBuffer = new StringBuilder();
+
+    /** 未闭合 `[` 的净计数（`[` +1 / `]` -1，单引号字符串内不计数）。 */
+    private int multilineNet = 0;
+
+    /** 单引号字符串态（跨行延续；`''` 为字符串内转义引号）。 */
+    private boolean multilineInString = false;
 
     public JdbcTemplateLogParser() {
         this(new LogSqlRestorer());
@@ -109,6 +134,22 @@ public class JdbcTemplateLogParser {
             return;
         }
 
+        // 多行收集态：语句跨行累积中（T-JdbcMultiline）
+        if (collecting) {
+            if (looksLikeStatementBoundary(line)) {
+                // 边界行（新语句/NamedParameter/参数行）：强制闭合残句并立即产出，
+                // 防止后续行的参数误挂到残句上
+                closePending();
+                feedIdle(line);
+            } else {
+                appendCollecting(line);
+            }
+            return;
+        }
+        feedIdle(line);
+    }
+
+    private void feedIdle(String line) {
         // 分支 1：NamedParameterJdbcTemplate 单行格式（sql = ... , parameters = {...}）
         LogSqlEntry namedEntry = extractNamedParamEntry(line);
         if (namedEntry != null) {
@@ -117,13 +158,29 @@ public class JdbcTemplateLogParser {
             return;
         }
 
-        // 分支 2：SQL 行（有 [SQL] 文本）
-        String sql = extractSqlFromLine(line);
-        if (sql != null) {
-            closePending();
-            pendingSql = take(sql, maxParseLength);
-            pendingParams.clear();
-            return;
+        // 分支 2：SQL 行（动作短语 + `[` 文本）
+        Matcher action = SQL_ACTION_PATTERN.matcher(line);
+        if (action.find()) {
+            int openIdx = line.indexOf('[', action.end());
+            if (openIdx >= 0 && line.substring(action.end(), openIdx).isBlank()) {
+                // string-aware 净括号扫描（字符串内括号不计数）：同行闭合走快路径；
+                // 未闭合进入多行收集——含 `[SELECT a[1] FROM t` 这类首个 `]` 并非消息终结符的
+                // 形态（旧同行正则会把 "SELECT a[1" 误提取为完整语句）
+                BracketScan probe = scanBrackets(line, openIdx + 1, 1, false);
+                closePending();
+                pendingParams.clear();
+                if (probe.closeIdx >= 0) {
+                    pendingSql = take(line.substring(openIdx + 1, probe.closeIdx), maxParseLength);
+                } else {
+                    collecting = true;
+                    multilineBuffer.setLength(0);
+                    multilineBuffer.append(line.substring(openIdx + 1));
+                    multilineNet = probe.net;
+                    multilineInString = probe.inString;
+                }
+                return;
+            }
+            // 动作短语命中但无 `[`（如 `Executing prepared SQL query` 头行）→ 落到参数/噪声分支
         }
 
         // 分支 3：参数行
@@ -142,8 +199,20 @@ public class JdbcTemplateLogParser {
         }
     }
 
-    /** 闭合当前未完成条目（新语句到来 / 面板刷新时调用）。 */
+    /** 闭合当前未完成条目（新语句到来 / 面板刷新 / 粘贴末尾时调用）。 */
     public LogSqlEntry closePending() {
+        if (collecting) {
+            // 多行残句强制闭合（T-JdbcMultiline）——宁交未闭合残句，不整段丢弃
+            String partial = multilineBuffer.toString();
+            if (!partial.isBlank()) {
+                finishCollecting(partial);
+            } else {
+                collecting = false;
+                multilineBuffer.setLength(0);
+                multilineNet = 0;
+                multilineInString = false;
+            }
+        }
         String sql = pendingSql;
         if (sql == null) {
             return null;
@@ -254,17 +323,6 @@ public class JdbcTemplateLogParser {
     }
 
     /**
-     * 尝试从行中提取 SQL 文本（有 `[SQL]` 的语句行）。
-     */
-    private String extractSqlFromLine(String line) {
-        Matcher match = SQL_LINE_PATTERN.matcher(line);
-        if (!match.find()) {
-            return null;
-        }
-        return take(match.group(1), maxParseLength);
-    }
-
-    /**
      * 尝试从行中提取参数信息。
      * 格式：`Setting SQL statement parameter value: column index N, parameter value [VALUE], value class [CLASS], SQL type TYPE`
      */
@@ -317,6 +375,90 @@ public class JdbcTemplateLogParser {
             String value,
             String mappedType
     ) {
+    }
+
+    // ---------- 多行收集态（T-JdbcMultiline） ----------
+
+    /** COLLECTING 态边界判定：新语句行 / NamedParameter 行 / 参数行到达时强制闭合残句。 */
+    private boolean looksLikeStatementBoundary(String line) {
+        return SQL_ACTION_PATTERN.matcher(line).find()
+                || NAMED_PARAM_PATTERN.matcher(line).find()
+                || PARAM_LINE_PATTERN.matcher(line).find();
+    }
+
+    /** COLLECTING 态逐行累积；净括号计数归零即闭合（终结 `]` 前的文本即完整 SQL）。 */
+    private void appendCollecting(String line) {
+        if (multilineBuffer.length() + line.length() + 1 >= maxParseLength) {
+            // 累积超限：强制闭合（截断语义与单行快路径一致），不吞后续语句
+            closePending();
+            return;
+        }
+        int lineStart = multilineBuffer.length();
+        multilineBuffer.append('\n').append(line);
+        BracketScan probe = scanBrackets(line, 0, multilineNet, multilineInString);
+        multilineNet = probe.net;
+        multilineInString = probe.inString;
+        if (probe.closeIdx >= 0) {
+            finishCollecting(multilineBuffer.substring(0, lineStart + 1 + probe.closeIdx));
+        }
+    }
+
+    /** 闭合多行语句：保留内部换行、削首尾空白，回归与单行一致的 pendingSql 生命周期。 */
+    private void finishCollecting(String sql) {
+        collecting = false;
+        multilineBuffer.setLength(0);
+        multilineNet = 0;
+        multilineInString = false;
+        pendingSql = take(sql.trim(), maxParseLength);
+    }
+
+    /** 括号扫描结果：累计净计数、延续后的字符串态、净计数首次归零处的局部下标（未闭合为 -1）。 */
+    private static final class BracketScan {
+        final int net;
+        final boolean inString;
+        final int closeIdx;
+
+        BracketScan(int net, boolean inString, int closeIdx) {
+            this.net = net;
+            this.inString = inString;
+            this.closeIdx = closeIdx;
+        }
+    }
+
+    /**
+     * string-aware 括号扫描（T-JdbcMultiline）：`[` +1 / `]` -1，单引号字符串内的括号不计数
+     * （`''` 为字符串内转义引号，字符串态跨行延续）。消息终结 `]` 使净计数归零——
+     * SQL 正文中的平衡/字符串内括号均不构成闭合。
+     */
+    private static BracketScan scanBrackets(String text, int from, int net, boolean inString) {
+        int n = net;
+        boolean s = inString;
+        int i = from;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (s) {
+                if (c == '\'') {
+                    if (i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                        i += 2;
+                        continue;
+                    }
+                    s = false;
+                }
+            } else {
+                if (c == '\'') {
+                    s = true;
+                } else if (c == '[') {
+                    n++;
+                } else if (c == ']') {
+                    n--;
+                    if (n == 0) {
+                        return new BracketScan(n, s, i);
+                    }
+                }
+            }
+            i++;
+        }
+        return new BracketScan(n, s, -1);
     }
 
     private static String take(String s, int max) {

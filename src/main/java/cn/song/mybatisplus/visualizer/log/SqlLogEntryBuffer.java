@@ -27,6 +27,9 @@ public class SqlLogEntryBuffer {
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
     private final ArrayDeque<LogSqlEntry> entries = new ArrayDeque<>();
 
+    /** T-Perf-03（自 dev 移植）：自上次 drain 以来的头部淘汰条数（面板增量刷新对齐用；drain 约定单消费方——面板 EDT 刷新）。 */
+    private final java.util.concurrent.atomic.AtomicInteger evictedSinceDrain = new java.util.concurrent.atomic.AtomicInteger();
+
     /** 暂停态。 */
     private volatile boolean paused;
 
@@ -34,7 +37,8 @@ public class SqlLogEntryBuffer {
     private volatile boolean dedupeEnabled = true;
 
     /**
-     * 去重丢弃计数（键 = restoredSql 原文，与 {@link #isDuplicate(LogSqlEntry)} 匹配同源）：去重开启期间每丢弃
+     * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 sqlFingerprint，非 SQL 原文——
+     * 原文键在条目淘汰后文本永久驻留，长会话可达数十 MB）：去重开启期间每丢弃
      * 一条相同 SQL 计数 +1，供列表「⨉N」徽章展示该 SQL 被去掉过几次。
      */
     private final ConcurrentHashMap<String, Integer> dedupeCounts = new ConcurrentHashMap<>();
@@ -106,6 +110,10 @@ public class SqlLogEntryBuffer {
 
     /**
      * 新条目入队（最早在前，追加到队尾；暂停态丢弃；过滤关键字命中丢弃；去重窗口内相同 SQL 丢弃并计数；超过上限裁掉最旧）。
+     *
+     * T-Perf-06（自 dev 移植）：去重判定与入队合并进同一 synchronized(entries) 临界区——此前 isDuplicate
+     * 在锁外无锁遍历 ArrayDeque，与 EDT 清空/删除（clear/removeEntry）并发修改会触发
+     * ConcurrentModificationException，经 LogFilterProxyHandler（无 catch）上浮为 IDE 红色报错弹窗。
      */
     public boolean addEntry(LogSqlEntry entry) {
         if (paused) {
@@ -114,18 +122,29 @@ public class SqlLogEntryBuffer {
         if (isFiltered(entry.restoredSql())) {
             return false;
         }
-        if (dedupeEnabled && isDuplicate(entry)) {
-            dedupeCounts.merge(entry.restoredSql(), 1, Integer::sum);
+        boolean duplicate = false;
+        List<LogSqlEntry> evictedEntries = new ArrayList<>();
+        synchronized (entries) {
+            if (dedupeEnabled && isDuplicate(entry)) {
+                duplicate = true;
+            } else {
+                entries.addLast(entry);
+                while (entries.size() > maxEntries) {
+                    evictedEntries.add(entries.removeFirst());
+                    evictedSinceDrain.incrementAndGet(); // T-Perf-03：头部淘汰计数（面板增量刷新）
+                }
+            }
+        }
+        if (duplicate) {
+            dedupeCounts.merge(entry.dedupeKey(), 1, Integer::sum);
             notifyChanged(); // ← 徽章计数变了 → UI 必须即时刷新
             return false;
         }
-        synchronized (entries) {
-            entries.addLast(entry);
-            while (entries.size() > maxEntries) {
-                LogSqlEntry evicted = entries.removeFirst();
-                if (onEvicted != null) {
-                    onEvicted.accept(evicted);
-                }
+        // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
+        // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
+        for (LogSqlEntry evicted : evictedEntries) {
+            if (onEvicted != null) {
+                onEvicted.accept(evicted);
             }
         }
         notifyChanged();
@@ -150,15 +169,16 @@ public class SqlLogEntryBuffer {
             List<LogSqlEntry> keep = new ArrayList<>();
             for (LogSqlEntry entry : entries) {
                 boolean duplicate = false;
+                // T-LogDedupeMpMark：与 isDuplicate 同键（空白规范化指纹），勾选时对既有跨格式副本同样生效
                 for (LogSqlEntry k : keep) {
-                    if (k.restoredSql().equals(entry.restoredSql()) &&
+                    if (k.dedupeKey().equals(entry.dedupeKey()) &&
                             Math.abs(entry.timestamp() - k.timestamp()) < dedupeWindowMs) {
                         duplicate = true;
                         break;
                     }
                 }
                 if (duplicate) {
-                    dedupeCounts.merge(entry.restoredSql(), 1, Integer::sum);
+                    dedupeCounts.merge(entry.dedupeKey(), 1, Integer::sum);
                     removed[0]++;
                 } else {
                     keep.add(entry);
@@ -203,13 +223,16 @@ public class SqlLogEntryBuffer {
         return false;
     }
 
+    /**
+     * 去重判定（T-Perf-06：必须在 synchronized(entries) 内调用——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。
+     * T-LogDedupeMpMark：按 LogSqlEntry.dedupeKey（空白规范化指纹）比较——JdbcTemplate 双路日志副本仅差
+     * 首尾空白，原文精确相等永不命中；预计算指纹串比较也快于全文 ==。
+     */
     private boolean isDuplicate(LogSqlEntry entry) {
         long now = entry.timestamp();
-        synchronized (entries) {
-            for (LogSqlEntry it : entries) {
-                if (it.restoredSql().equals(entry.restoredSql()) && now - it.timestamp() < dedupeWindowMs) {
-                    return true;
-                }
+        for (LogSqlEntry it : entries) {
+            if (it.dedupeKey().equals(entry.dedupeKey()) && now - it.timestamp() < dedupeWindowMs) {
+                return true;
             }
         }
         return false;
@@ -220,6 +243,15 @@ public class SqlLogEntryBuffer {
         synchronized (entries) {
             return new ArrayList<>(entries);
         }
+    }
+
+    /**
+     * T-Perf-03（自 dev 移植）：取走自上次调用以来的头部淘汰条数并归零。
+     * 单消费方约定（面板 EDT 刷新）：与 snapshot() 搭配，用于增量刷新的头部对齐；
+     * 其他调用方调用会偷走面板的对齐信息（回退全量重建，正确性不受影响）。
+     */
+    public int drainEvictedCount() {
+        return evictedSinceDrain.getAndSet(0);
     }
 
     /** 清空全部（去重计数一并归零）。 */
@@ -236,12 +268,12 @@ public class SqlLogEntryBuffer {
         dedupeCounts.clear();
     }
 
-    /** 指定 SQL 的去重丢弃次数（无丢弃记录返回 0）。 */
+    /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按规范化+指纹查，与 LogSqlEntry.dedupeKey 同键；无丢弃记录返回 0）。 */
     public int dedupeCount(String sql) {
-        return dedupeCounts.getOrDefault(sql, 0);
+        return dedupeCounts.getOrDefault(LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace(sql)), 0);
     }
 
-    /** 去重丢弃计数快照（键 = restoredSql，值 = 丢弃次数；供面板渲染徽章）。 */
+    /** 去重丢弃计数快照（键 = sqlFingerprint 指纹，值 = 丢弃次数；供面板渲染徽章）。 */
     public Map<String, Integer> dedupeCountsSnapshot() {
         return new HashMap<>(dedupeCounts);
     }
