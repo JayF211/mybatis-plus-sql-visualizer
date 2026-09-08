@@ -199,6 +199,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-08 | SQL 日志双击预览崩溃修复（T-PreviewWiLock，master）：createEditor 回退分支同步 VFS refresh 被包在 EDT ReadAction 内，262 平台 write-safe 断言硬抛（日志双击入口预热竞态必输恒走回退）——包装换 WriteIntentReadAction.compute（write-intent 隐含读权限），全量 3087/0/0/6 绿；runIde 真机双击验证留人工跟进 |
 | 2026-09-07 | 03-开发与测试指南 §2 新增「runIde 沙盒版本切换（临时调试）」小节：隔离性说明 + 临时改 build.gradle.kts:64 切换版本跑 runIde + 还原步骤；注意事项（`-PplatformVersion` 未接线 / 沙盒按版本分目录互不影响 / testDatabase jdbc-drivers 耦合点） |
 | 2026-09-07 | 记忆第五次精简（21→17）：新增 4 个归档（bug-fixes：R2 竞品响应 9 任务交付、T-DaoSql 字符串 SQL 锚点、M54 性能红线 24 任务、log-jump 跳转根因）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-07/`；项目 memory 降至 18 个文件（含 MEMORY.md），archive 增至 120 个文件（含 README） |
 | 2026-09-06 | 记忆第四次精简（27→21）：新增 6 个归档（bug-fixes：dev 全量分支合并、M37 竞品融合全链、M39 ORM 补全实施、M44 其他ORM第一批实施、ORM 四框架缺口调研定稿、候选 ORM 调研定稿——均已交付并合入 dev）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-06/`；项目 memory 降至 22 个文件（含 MEMORY.md），archive 增至 116 个文件（含 README） |
