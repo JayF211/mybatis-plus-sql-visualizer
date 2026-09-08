@@ -6,6 +6,8 @@
 
 ### Added
 
+- **SQL 列表三种显示模式（T-ListMode）**：SQL 日志与 SQL 历史列表支持单行 / 关键字换行 / 格式化三种显示模式，工具栏下拉即时切换，默认关键字换行；模式跨会话保留、两列表全局共享，Ctrl+C 复制仍为纯 SQL
+
 - **hbm 命名查询预览链路贯通（T-H1~H4）**：`LegacyItem.hbm.xml` 等Hibernate XML 映射的 `<query>`（HQL）/`<sql-query>`（原生 SQL）命名查询此前无任何预览入口（XML gutter 只认 `<mapper>` 语句、`createNamedQuery` 回查只找 Java `@NamedQuery` 注解，hbm 纯 POJO 项目两头落空）——`HbmXmlEntityResolver` 新增命名查询解析（文本只取直属 XmlText、`<return-scalar>` 等子标签排除、负命中缓存沿既有口径）+ 新 gutter `HbmNamedQueryGutterLineMarkerProvider`（`<hibernate-mapping>` 父标签互斥去重，O(1) 判定）+ `previewHbmNamedQuery` 按种类分派（HQL 走 HqlConverter 实体→表 hbm 映射；原生 SQL 命名参数 `:param`→`?` 回填）+ `previewHql`/`previewCustomDaoHql` 回查未命中时 hbm fallback（`createNamedQuery("LegacyItem.findLowStockHql", …)` 不再垃圾降级）
 
 ### Changed
