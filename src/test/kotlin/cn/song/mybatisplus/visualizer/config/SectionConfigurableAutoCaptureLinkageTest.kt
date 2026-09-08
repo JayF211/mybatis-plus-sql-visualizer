@@ -1,18 +1,22 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import javax.swing.JCheckBox
 
 /**
- * PluginSettingsConfigurable 契约测试（Wave2-P5）：
- *  - apply() 关→开检测（模拟 PluginSettings 状态变化后 apply 是否正确触发变更）
+ * SectionConfigurable 自动监听「关→开」边沿联动契约测试
+ * （20260907-1617：原 PluginSettingsConfigurableTest 迁移——该类未注册进 plugin.xml 是死类，
+ * 边沿联动迁入 SectionConfigurable.apply() 基类；用户实际勾选走 SqlLogConfigurable 等子页链路）：
+ *  - apply() 关→开检测（panel.apply() 写回后比对，清 suppressed + openProjects startCapture）
  *  - suppressed 标志的清零时机（仅关→开时清零，其他情况保持）
  */
-class PluginSettingsConfigurableTest : BasePlatformTestCase() {
+class SectionConfigurableAutoCaptureLinkageTest : BasePlatformTestCase() {
+
+    /** 承载 SQL 日志分区的真实子页（与用户勾选「项目启动时自动开始监听」同一路径）。 */
+    private fun newConfigurable(): SectionConfigurable = SqlLogConfigurable()
 
     // ------------------------------------------------------------------
     // 关→开检测
@@ -26,7 +30,7 @@ class PluginSettingsConfigurableTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = false
             settings.state.logAutoCaptureSuppressed = true
 
-            val configurable = PluginSettingsConfigurable()
+            val configurable = newConfigurable()
             configurable.createComponent()
 
             // 模拟用户勾选「项目启动时自动开始监听」复选框
@@ -35,7 +39,7 @@ class PluginSettingsConfigurableTest : BasePlatformTestCase() {
             assertTrue("应找到自动监听复选框", checkBox != null)
             checkBox!!.isSelected = true
 
-            // apply：panel.apply() 写回 state → configurable 检测关→开 → 清除 suppressed
+            // apply：panel.apply() 写回 state → 基类检测关→开 → 清除 suppressed
             configurable.apply()
             assertFalse("关→开检测应清除 suppressed 标志", settings.state.logAutoCaptureSuppressed)
         } finally {
@@ -43,26 +47,24 @@ class PluginSettingsConfigurableTest : BasePlatformTestCase() {
         }
     }
 
-    fun testApply_autoStart_offToOn_triggersStartCaptureForOpenProjects() {
-        // 场景：autoStart 关→开 + 有打开项目 → apply 应调 startCapture（受 suppressed 抑制后不再抑制）
+    fun testApply_autoStart_offToOn_linkageDoesNotThrow() {
+        // 场景：autoStart 关→开 → apply 联动 onAutoStartSettingEnabled 分流（headless 进程级监听
+        // 订阅成功=被动模式不预 armed；降级才 armed。两种模式本用例都只验证不抛+状态正确）
         val settings = PluginSettings.getInstance()
         val snapshot = settings.getState().copy()
         try {
             settings.state.logAutoCaptureOnStart = false
             settings.state.logAutoCaptureSuppressed = true
 
-            val configurable = PluginSettingsConfigurable()
+            val configurable = newConfigurable()
             configurable.createComponent()
-
-            // 模拟用户勾选自动监听复选框
             val panel = configurable.panelForTest()
             val checkBox = findCheckBoxByText(panel.getRoot(), MpSqlVisualizerBundle.message("settings.log.autoCapture"))
-            assertTrue("应找到自动监听复选框", checkBox != null)
             checkBox!!.isSelected = true
 
-            // apply：panel.apply() 写回 state → configurable 检测关→开 → 清除 suppressed
             configurable.apply()
             assertFalse("关→开后 suppressed 应被清零", settings.state.logAutoCaptureSuppressed)
+            assertTrue("联动后 state.logAutoCaptureOnStart 应为 true", settings.state.logAutoCaptureOnStart)
         } finally {
             settings.loadState(snapshot)
         }
@@ -80,7 +82,7 @@ class PluginSettingsConfigurableTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = true
             settings.state.logAutoCaptureSuppressed = true
 
-            val configurable = PluginSettingsConfigurable()
+            val configurable = newConfigurable()
             configurable.createComponent()
 
             // apply：autoStart 未变（一直是开）→ 不触发关→开逻辑
@@ -99,7 +101,7 @@ class PluginSettingsConfigurableTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = false
             settings.state.logAutoCaptureSuppressed = true
 
-            val configurable = PluginSettingsConfigurable()
+            val configurable = newConfigurable()
             configurable.createComponent()
 
             // apply：autoStart 一直是关 → 不触发关→开逻辑
@@ -118,7 +120,7 @@ class PluginSettingsConfigurableTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureOnStart = true
             settings.state.logAutoCaptureSuppressed = true
 
-            val configurable = PluginSettingsConfigurable()
+            val configurable = newConfigurable()
             configurable.createComponent()
 
             // 模拟用户取消勾选自动监听复选框

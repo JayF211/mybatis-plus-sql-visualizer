@@ -160,4 +160,27 @@ public class SqlLogPanelDedupeToggleTest extends BasePlatformTestCase {
             panel.dispose();
         }
     }
+
+    @Test
+    public void test勾选去重_跨格式空白差副本立即裁剪() throws Exception {
+        // T-LogDedupeMpMark：JdbcTemplate 双路日志同一语句产出两副本（named trim / prepared 尾随空白），
+        // 原文精确相等永不命中——勾选去重须按规范化键把这类副本一并裁掉
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
+        try {
+            String base = "SELECT * FROM ipm_RunPlanProject WHERE (\"deleted\" = 0)";
+            manager.getEntries().addEntry(entry(base, 100L));
+            manager.getEntries().addEntry(entry(base + "  ", 200L)); // prepared 副本：尾随空白
+            waitForEdt();
+            assertEquals("勾选前 2 条副本全部展示", 2, panel.getVisibleEntryCount());
+
+            panel.getDedupeCheckBoxForTest().doClick();
+            waitForEdt();
+
+            assertEquals("勾选后裁剪为 1 条", 1, panel.getVisibleEntryCount());
+            assertEquals(base, panel.getVisibleEntries().get(0));
+            assertEquals("徽章计数 1", 1, manager.getEntries().dedupeCount(base));
+        } finally {
+            panel.dispose();
+        }
+    }
 }

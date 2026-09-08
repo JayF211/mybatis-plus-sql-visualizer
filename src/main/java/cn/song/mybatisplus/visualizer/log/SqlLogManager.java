@@ -69,6 +69,11 @@ public final class SqlLogManager implements Disposable {
         return processListenerActive;
     }
 
+    /** 测试缝（同包）：注入订阅状态模拟被动/降级模式（对齐 Kotlin 侧 internal set 的测试可见性）。 */
+    void setProcessListenerActiveForTest(boolean active) {
+        this.processListenerActive = active;
+    }
+
     /** capturing 变化回调（面板注册 → 刷新工具栏按钮图标/文案）。 */
     private final CopyOnWriteArrayList<Runnable> capturingListeners = new CopyOnWriteArrayList<>();
 

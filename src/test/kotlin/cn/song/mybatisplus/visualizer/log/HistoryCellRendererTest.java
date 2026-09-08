@@ -1,38 +1,50 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.ui.SimpleColoredComponent;
+import com.intellij.ui.SimpleTextAttributes;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
-import javax.swing.JLabel;
 import javax.swing.JList;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.List;
 
 /**
- * 历史面板两级导航渲染器 UI 测试（F-44-3 渲染健壮性）：
+ * 历史面板两级导航渲染器 UI 测试（F-44-3 渲染健壮性；T-LogListFreeze-04 迁移到片段通道）：
  *
- * 直接渲染 [HistoryCellRenderer]（二级 SQL 条目）与 [HistoryFileCellRenderer]（一级文件条目）覆盖：
- *  - 二级条目：空耗时 / 空源码 / 特殊字符 / 超长 SQL 渲染不崩溃（此前测试抓不到的 UI 渲染隐患）
+ * 直接渲染 {@link HistoryCellRenderer}（二级 SQL 条目）与 {@link HistoryFileCellRenderer}（一级文件条目）覆盖：
+ *  - 通道根治断言：渲染行为 SimpleColoredComponent 系（JLabel-HTML 通道不允许回潮）
+ *  - 二级条目两行结构（T-TwoLine）：元信息行 [耗时] [时间戳] [来源] 在上、SQL 高亮行在下
+ *  - 二级条目：空耗时 / 空源码 / 特殊字符 / 超长 SQL 渲染不崩溃
  *  - 一级文件：文件大小格式化边界（0 B / 1.0 KB / 1.0 MB）、条数随文件名展示
  */
 public class HistoryCellRendererTest extends BasePlatformTestCase {
 
     private final HistoryCellRenderer sqlRenderer = new HistoryCellRenderer();
     private final HistoryFileCellRenderer fileRenderer = new HistoryFileCellRenderer();
-    /** 真实（非空）列表实例；DefaultListCellRenderer 不支持 null list（生产环境 list 恒非空）。 */
+    /** 真实（非空）列表实例；渲染器取 selectionBackground 等需 list 非空（生产环境 list 恒非空）。 */
     private final JList<Object> list = new JList<>();
 
-    private String renderSql(LogSqlEntry entry) {
+    private HistoryCellRenderer renderSql(LogSqlEntry entry) {
         java.awt.Component c = sqlRenderer.getListCellRendererComponent(list, entry, 0, false, false);
-        return ((JLabel) c).getText();
+        return (HistoryCellRenderer) c;
     }
 
-    private String renderFile(File file, int sqlCount) {
+    private HistoryFileCellRenderer renderFile(File file, int sqlCount) {
         java.awt.Component c = fileRenderer.getListCellRendererComponent(list, new HistoryFileEntry(file, sqlCount), 0, false, false);
-        return ((JLabel) c).getText();
+        return (HistoryFileCellRenderer) c;
+    }
+
+    private String joinedText(SimpleColoredComponent component) {
+        StringBuilder sb = new StringBuilder();
+        java.util.Iterator<String> it = component.iterator();
+        while (it.hasNext()) {
+            sb.append(it.next());
+        }
+        return sb.toString();
     }
 
     private static LogSqlEntry sqlEntry(String sql, String sourceFile, int sourceLine, Long ms) {
@@ -40,79 +52,92 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test二级条目_空耗时空源码_渲染为HTML不崩溃() throws java.io.IOException {
-        String text = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
-        assertTrue("应渲染为 HTML", text.startsWith("<html>"));
-        assertTrue("含 SQL 关键字", text.contains("SELECT"));
-        // 无源码 → 不应出现源码灰色段；无耗时 → 不应出现 ms
-        assertFalse(text.contains("ms"));
+    public void test二级条目_片段通道_非HTML标签() throws Exception {
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
+        assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）",
+                r.metaLine instanceof SimpleColoredComponent);
+        String meta = joinedText(r.metaLine);
+        String sql = joinedText(r.sqlLine);
+        assertTrue("含 SQL 关键字", sql.contains("SELECT"));
+        assertTrue("无耗时显示占位符 —", meta.contains("[—]"));
+        assertTrue("无源码显示占位符 unknown", meta.contains("[unknown]"));
+        assertFalse("无耗时不出现 ms", meta.contains("ms]"));
+        assertFalse("渲染文本不应为 HTML 包裹", sql.startsWith("<html>"));
     }
 
     @Test
-    public void test二级条目_含源码位置_渲染源码段() throws java.io.IOException {
-        String text = renderSql(sqlEntry("SELECT 1", "UserMapper.java", 12, 3L));
-        assertTrue("应渲染耗时 3ms", text.contains("3ms"));
-        assertTrue("应渲染源码 UserMapper.java:12", text.contains("UserMapper.java:12"));
+    public void test二级条目_含源码位置_渲染元信息行() throws Exception {
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", "UserMapper.java", 12, 3L));
+        String meta = joinedText(r.metaLine);
+        assertTrue("应渲染耗时 [3ms]", meta.contains("[3ms]"));
+        assertTrue("应渲染源码 [UserMapper.java:12]", meta.contains("[UserMapper.java:12]"));
+        assertFalse("SQL 不应混入元信息行", meta.contains("SELECT"));
     }
 
     @Test
-    public void test二级条目_特殊字符SQL被转义() throws java.io.IOException {
-        String text = renderSql(sqlEntry("SELECT * FROM t WHERE a < 5 AND b > 3", null, 0, null));
-        assertTrue("小于号转义", text.contains("&lt;"));
-        assertTrue("大于号转义", text.contains("&gt;"));
-        assertFalse("不应残留裸 < 5", text.contains("< 5"));
+    public void test二级条目_特殊字符SQL原文保真() throws Exception {
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM t WHERE a < 5 AND b > 3", null, 0, null));
+        String sql = joinedText(r.sqlLine);
+        assertTrue("小于号原文保留", sql.contains("< 5"));
+        assertTrue("大于号原文保留", sql.contains("> 3"));
     }
 
     @Test
-    public void test二级条目_超长SQL渲染不异常() throws java.io.IOException {
+    public void test二级条目_超长SQL渲染不异常() throws Exception {
         StringBuilder sb = new StringBuilder();
         for (int i = 1; i <= 200; i++) {
             if (i > 1) sb.append(", ");
             sb.append("c").append(i);
         }
-        String longSql = "SELECT " + sb + " FROM t WHERE id = 1";
-        String text = renderSql(sqlEntry(longSql, null, 0, null));
-        assertTrue("超长 SQL 渲染为 HTML", text.startsWith("<html>"));
+        sb.append(" FROM t WHERE id = 1");
+        HistoryCellRenderer r = renderSql(sqlEntry(sb.toString(), null, 0, null));
+        assertTrue("超长 SQL 摘要含省略号", joinedText(r.sqlLine).contains("…"));
     }
 
     @Test
-    public void test一级文件_大小为0字节显示0B() throws java.io.IOException {
+    public void test一级文件_大小为0字节显示0B() throws Exception {
         File f = File.createTempFile("hist0", ".sql");
         f.deleteOnExit();
-        String text = renderFile(f, 0);
+        String text = joinedText(renderFile(f, 0).line);
         assertTrue("0 字节应显示 0 B", text.contains("0 B"));
         assertTrue("应显示条数 0 条 SQL", text.contains("0"));
         assertTrue("应展示文件名(加粗)", text.contains(f.getName()));
     }
 
     @Test
-    public void test一级文件_大小恰为1KB显示1点0KB() throws java.io.IOException {
+    public void test一级文件_大小恰为1KB显示1点0KB() throws Exception {
         File f = File.createTempFile("hist1k", ".sql");
         f.deleteOnExit();
         Files.write(f.toPath(), new byte[1024]);
-        String text = renderFile(f, 3);
+        String text = joinedText(renderFile(f, 3).line);
         assertTrue("1024 字节应显示 1.0 KB", text.contains("1.0 KB"));
         assertTrue("应显示 3 条 SQL", text.contains("3"));
     }
 
     @Test
-    public void test一级文件_大小恰为1MB显示1点0MB() throws java.io.IOException {
+    public void test一级文件_大小恰为1MB显示1点0MB() throws Exception {
         File f = File.createTempFile("hist1m", ".sql");
         f.deleteOnExit();
         Files.write(f.toPath(), new byte[1024 * 1024]);
-        String text = renderFile(f, 7);
+        String text = joinedText(renderFile(f, 7).line);
         assertTrue("1MB 应显示 1.0 MB", text.contains("1.0 MB"));
         assertTrue("应显示 7 条 SQL", text.contains("7"));
     }
 
     @Test
-    public void test一级文件_渲染含文件名与条数() throws java.io.IOException {
+    public void test一级文件_渲染含文件名与条数_且文件名加粗() throws Exception {
         File f = File.createTempFile("my-history-file", ".sql");
         f.deleteOnExit();
         Files.write(f.toPath(), new byte[500]);
-        String text = renderFile(f, 12);
-        assertTrue("文件名(加粗)应展示", text.contains(f.getName()));
+        HistoryFileCellRenderer r = renderFile(f, 12);
+        String text = joinedText(r.line);
+        assertTrue("文件名应展示", text.contains(f.getName()));
         // 条数文案来自 bundle：log.history.sqlCount = {0} 条 SQL
         assertTrue("应展示条数 12", text.contains("12"));
+        SimpleColoredComponent.ColoredIterator it = r.line.iterator();
+        it.next();
+        SimpleTextAttributes attrs = it.getTextAttributes();
+        assertTrue("文件名片段应加粗（原 HTML <b> 语义）",
+                (attrs.getStyle() & SimpleTextAttributes.STYLE_BOLD) != 0);
     }
 }

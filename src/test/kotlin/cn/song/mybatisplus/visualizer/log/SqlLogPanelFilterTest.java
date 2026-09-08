@@ -197,7 +197,8 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
         // 等待 EDT 刷新（面板 UI 监听器经 invokeLater）
         waitForEdt();
         java.util.Map<String, Integer> counts = manager.getEntries().dedupeCountsSnapshot();
-        assertEquals(Integer.valueOf(2), counts.get("SELECT * FROM t WHERE id = 1"));
+        // T-Perf-19：快照键为 SQL 指纹（非原文）
+        assertEquals(Integer.valueOf(2), counts.get(LogSqlModelsKt.sqlFingerprint("SELECT * FROM t WHERE id = 1")));
     }
 
     @Test

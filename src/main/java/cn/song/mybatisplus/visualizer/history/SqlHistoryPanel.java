@@ -388,7 +388,7 @@ public class SqlHistoryPanel extends JPanel implements Disposable {
     }
 
     /** 单击预览控制器（T-ClickPreview 测试断言）。 */
-    SqlClickPreview getClickPreviewForTest() {
+    public SqlClickPreview getClickPreviewForTest() {
         return clickPreview;
     }
 

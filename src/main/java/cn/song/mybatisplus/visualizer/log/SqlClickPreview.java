@@ -117,7 +117,7 @@ public class SqlClickPreview {
     }
 
     /** 当前预览弹窗（测试断言：外部关闭后不残留）。 */
-    public JBPopup currentPopup() {
+    public JBPopup getCurrentPopup() {
         return popup;
     }
 

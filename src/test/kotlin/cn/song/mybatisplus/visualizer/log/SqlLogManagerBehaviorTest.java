@@ -610,4 +610,145 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
             settings.getState().setLogAutoCaptureOnStart(oldAutoStart);
         }
     }
+
+    // ===== 20260907-2045 第二轮修复：onProjectProcessStarted（进程级自动捕捉入口） =====
+
+    @Test
+    public void testT23_ProcessStarted_suppressedCleared_andCaptureArmed() throws Exception {
+        // 场景：设置开 + 用户手动停止（suppressed=true 持久化）→ 再 Run 项目 →
+        // onProjectProcessStarted 清 suppressed + 重新进入捕捉链（沙盒 20:41 会话根因回归）
+        PluginSettings settings = PluginSettings.getInstance();
+        boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
+        boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
+        try {
+            settings.getState().setLogAutoCaptureOnStart(true);
+            settings.getState().setLogAutoCaptureSuppressed(true);
+            MutableFakeBridge bridge = new MutableFakeBridge(true, false);
+            SqlLogManager manager = managerWith(bridge);
+
+            manager.onProjectProcessStarted();
+
+            assertFalse("项目启动应清除 suppressed（设置优先）", settings.getState().getLogAutoCaptureSuppressed());
+            assertTrue("项目启动应重新进入 armed/捕捉态", manager.isCapturing());
+            assertTrue("armed 态等待控制台", manager.isWaitingForConsole());
+        } finally {
+            settings.getState().setLogAutoCaptureOnStart(oldAutoStart);
+            settings.getState().setLogAutoCaptureSuppressed(oldSuppressed);
+        }
+    }
+
+    @Test
+    public void testT24_ProcessStarted_autoStartOff_noop() throws Exception {
+        // 场景：设置关 → 进程启动回调不动作（不捕捉、不动 suppressed）
+        PluginSettings settings = PluginSettings.getInstance();
+        boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
+        boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
+        try {
+            settings.getState().setLogAutoCaptureOnStart(false);
+            settings.getState().setLogAutoCaptureSuppressed(false);
+            MutableFakeBridge bridge = new MutableFakeBridge(true, false);
+            SqlLogManager manager = managerWith(bridge);
+
+            manager.onProjectProcessStarted();
+
+            assertFalse("设置关时进程启动不应捕捉", manager.isCapturing());
+            assertFalse("不应写 suppressed", settings.getState().getLogAutoCaptureSuppressed());
+        } finally {
+            settings.getState().setLogAutoCaptureOnStart(oldAutoStart);
+            settings.getState().setLogAutoCaptureSuppressed(oldSuppressed);
+        }
+    }
+
+    @Test
+    public void testT25_ProcessStarted_capturingActive_idempotent() throws Exception {
+        // 场景：已处于捕捉态（armed 等待控制台）→ 进程启动回调幂等（不重复 attach、状态不变）
+        PluginSettings settings = PluginSettings.getInstance();
+        boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
+        try {
+            settings.getState().setLogAutoCaptureOnStart(true);
+            MutableFakeBridge bridge = new MutableFakeBridge(true, false);
+            SqlLogManager manager = managerWith(bridge);
+            manager.startCapture();  // armed
+            int attachBefore = bridge.attachCalls;
+
+            manager.onProjectProcessStarted();  // capturing=true, waiting=true → 幂等分支
+
+            assertTrue("保持 armed 捕捉态", manager.isCapturing());
+            assertTrue("attach 不重复", bridge.attachCalls == attachBefore);
+        } finally {
+            settings.getState().setLogAutoCaptureOnStart(oldAutoStart);
+        }
+    }
+
+    @Test
+    public void testT26_ProcessStarted_withConsole_directCapture() throws Exception {
+        // 场景：suppressed=true + 控制台已存在（先 Run 后点面板捕捉又停的乱序）→
+        // 进程启动回调清 suppressed 且直接进入完整捕捉态（hasMainConsole=true 分支）
+        PluginSettings settings = PluginSettings.getInstance();
+        boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
+        boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
+        try {
+            settings.getState().setLogAutoCaptureOnStart(true);
+            settings.getState().setLogAutoCaptureSuppressed(true);
+            MutableFakeBridge bridge = new MutableFakeBridge(true, true);
+            SqlLogManager manager = managerWith(bridge);
+
+            manager.onProjectProcessStarted();
+
+            assertFalse("suppressed 已清除", settings.getState().getLogAutoCaptureSuppressed());
+            assertTrue("直接进入捕捉态", manager.isCapturing());
+            assertFalse("非等待态", manager.isWaitingForConsole());
+        } finally {
+            settings.getState().setLogAutoCaptureOnStart(oldAutoStart);
+            settings.getState().setLogAutoCaptureSuppressed(oldSuppressed);
+        }
+    }
+
+    // ===== 20260907-2045 第四轮：被动模式（processListenerActive=true 时设置开启不预 armed） =====
+
+    @Test
+    public void testT27_SettingEnabled_passiveMode_doesNotArm() throws Exception {
+        // 场景：进程级监听可用（被动模式）→ onAutoStartSettingEnabled 清 suppressed 但不进 armed——
+        // 用户 08:33 会话反馈回归：「还没启动项目却自动开启监听」
+        PluginSettings settings = PluginSettings.getInstance();
+        boolean oldAutoStart = settings.getState().getLogAutoCaptureOnStart();
+        boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
+        try {
+            MutableFakeBridge bridge = new MutableFakeBridge(true, false);
+            SqlLogManager manager = managerWith(bridge);
+            manager.setProcessListenerActiveForTest(true);
+            settings.getState().setLogAutoCaptureSuppressed(true);
+
+            manager.onAutoStartSettingEnabled();
+
+            assertFalse("被动模式：设置开启不应预 armed", manager.isCapturing());
+            assertFalse("设置开启应清 suppressed（用户重新确认）", settings.getState().getLogAutoCaptureSuppressed());
+            assertFalse("不应挂载轮询", bridge.isPollingActive());
+        } finally {
+            settings.getState().setLogAutoCaptureOnStart(oldAutoStart);
+            settings.getState().setLogAutoCaptureSuppressed(oldSuppressed);
+        }
+    }
+
+    @Test
+    public void testT28_SettingEnabled_degradedMode_armsAsBefore() throws Exception {
+        // 场景：进程级监听不可用（降级模式，execution API 缺失）→ 维持原行为进 armed
+        // （RCM 轮询是唯一检测通道——第一/二轮前的既有语义防回归）
+        PluginSettings settings = PluginSettings.getInstance();
+        boolean oldSuppressed = settings.getState().getLogAutoCaptureSuppressed();
+        try {
+            MutableFakeBridge bridge = new MutableFakeBridge(true, false);
+            SqlLogManager manager = managerWith(bridge);
+            manager.setProcessListenerActiveForTest(false);
+            settings.getState().setLogAutoCaptureSuppressed(true);
+
+            manager.onAutoStartSettingEnabled();
+
+            assertTrue("降级模式：进 armed 态等控制台（原第九轮语义）", manager.isCapturing());
+            assertTrue("降级模式：等待控制台", manager.isWaitingForConsole());
+            assertFalse("设置开启清 suppressed", settings.getState().getLogAutoCaptureSuppressed());
+        } finally {
+            settings.getState().setLogAutoCaptureSuppressed(oldSuppressed);
+        }
+    }
 }
