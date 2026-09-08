@@ -58,8 +58,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
-    /** T-ClickPreview：单击出轻量预览弹窗（内容 = 还原 SQL），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val sqlClickPreview = SqlClickPreview(sqlList) { sqlList.selectedValue?.let { withTerminator(it.restoredSql) } }
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private val sqlClickPreview = SqlClickPreview(sqlList) { i -> withTerminator(sqlList.model.getElementAt(i).restoredSql) }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
@@ -157,8 +157,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             .preferredSize.height
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                // T-ClickPreview：先转发 clickCount（单击排程预览 / 双击停表并关旧预览），双击再开完整弹窗
-                sqlClickPreview.onClick(e.clickCount)
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    sqlClickPreview.onClick(e.clickCount, e.point)
+                }
                 if (e.clickCount >= 2) {
                     sqlList.selectedValue?.let { openPreview(it) }
                 }

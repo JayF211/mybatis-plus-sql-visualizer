@@ -56,8 +56,8 @@ class SqlHistoryPanel(
     private val manager = SqlHistoryManager.getInstance()
     private val listModel = DefaultListModel<SqlHistoryEntry>()
     private val list = JBList<SqlHistoryEntry>(listModel)
-    /** T-ClickPreview：单击出轻量预览弹窗（内容 = 完整 SQL），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val clickPreview = SqlClickPreview(list) { list.selectedValue?.let { withTerminator(it.sql) } }
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private val clickPreview = SqlClickPreview(list) { i -> withTerminator(list.model.getElementAt(i).sql) }
 
     /** 当前筛选模式（null = 全部）。 */
     private var tagFilter: String? = null
@@ -163,8 +163,10 @@ class SqlHistoryPanel(
         list.cellRenderer = HistoryCellRenderer()
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                // T-ClickPreview：先转发 clickCount（单击排程预览 / 双击停表并关旧预览），双击再开完整弹窗
-                clickPreview.onClick(e.clickCount)
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    clickPreview.onClick(e.clickCount, e.point)
+                }
                 if (e.clickCount >= 2) {
                     list.selectedValue?.let { openPreview(it) }
                 }
