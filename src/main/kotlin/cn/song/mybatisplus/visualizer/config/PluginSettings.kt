@@ -322,6 +322,18 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 当前折叠的设置分组 ID 集合（持久化）。展开的组不在集合中。 */
         var collapsedGroups: MutableSet<String> = mutableSetOf(),
+
+        // ---------- T-ErrReport 错误一键上报官网需求池 ----------
+
+        /**
+         * 需求池报告昵称（选填，报告对话框填写后记忆，下次带出；空 = 匿名提交）。
+         */
+        var reportSubmitterName: String = "",
+
+        /**
+         * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
+         */
+        var reportSubmitterEmail: String = "",
     )
 
     private var state = State()
