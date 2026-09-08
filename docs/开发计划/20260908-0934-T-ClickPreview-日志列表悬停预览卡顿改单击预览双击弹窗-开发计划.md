@@ -125,3 +125,14 @@ headless（`BasePlatformTestCase`）下 `JBPopup.showInScreenCoordinates` 依赖
 6. **回归**：定向 5 测试类 33 用例全绿；全量 `./gradlew test --no-build-cache --no-configuration-cache` **3094/0/0/6 绿**（基线 3087+7）。
 7. **同步情况**：CHANGELOG.md `[Unreleased]` 新增 `### Changed` 条目；`docs/变更记录.md` 顶插本条；`docs/MEMORY.md` 变更记录行。runIde 真机交互验证（悬停无气泡/单击出预览/双击弹窗/双击不闪/Esc 与点外关闭/长 SQL 滚动）留人工跟进，统一走 runide-demo-verify-workflow。
 8. **并行会话拆分提交**：实施期间并行会话 T-LogListFreeze04（default sandbox 登记 10:03~11:03）在同一检出对 SqlLogPanel.kt 渲染器管线做重写（HTML 缓存→SqlListFragmentRenderer 逐条片段渲染 + 固定行高），与本任务改动在同一文件交叠；其重写已保留本任务全部接线（clickPreview 字段/onClick 转发/clickPreviewForTest/toolTipText 移除）。拆分方式：SqlLogPanel.kt 以「HEAD + 本任务 5 处编辑」重建（=09:58 定向 33 用例绿时点状态）经 `git hash-object + update-index` 直接暂存进索引（工作树零接触），本任务 fix 提交不含对方任何文件；工作树中对方版本原样保留，其后续提交以本提交为基线只呈现其重写增量。本任务全量回归（3094/0/0/6 绿，10:04）编译时点早于对方 10:05/10:06 的 LogSqlModels/SqlLogPanel 落盘，合并树的最终验证由对方会话测试轮次覆盖。
+
+## 八、二轮实施记录（2026-09-08，T-ClickPreview-02，已实施）
+
+**用户反馈与新需求**：①「点其他地方后未再单击 SQL，鼠标放上去就出现预览」；②预览窗要有关闭按钮和复制按钮；③预览窗希望可编辑（方便复制内容）；④弹窗不得遮住被点行。
+
+1. **复活预览根因与修复**：一轮 onClick 只看 clickCount——空白区/行下留白点击同样 `timer.restart()`，300ms 后 `show()` 读**当时选中态**（点击空白不清选中）→ 借残留选中行复活预览，视觉上像悬浮触发。修复=排程严格绑定「点到真实行」：`onClick(clickCount, clickPoint)` 经 `locationToIndex + getCellBounds(index,index).contains(clickPoint)` 判命中，命中才排程且**点击时捕获该行 SQL**（构造参数改 `sqlAt: (Int) -> String?` 索引式回调，`pendingIndex/pendingSql` 点击时定死，定时器到点直接用）；未命中立即 `timer.stop() + hide()`；仅左键触发（面板侧 `SwingUtilities.isLeftMouseButton(e)` 守卫，右键菜单的 mouseClicked 不再连带排程）。
+2. **不遮被点行**：锚点由行左上角改为 `anchorPointFor(index)` = `getCellBounds` 行**下缘 +2px 缝**，弹窗在被点行下方展开（屏幕下方放不下由平台自动贴边回调）；`setLocateByContent` 移除（显式锚点定位更可预期）。
+3. **可编辑 + 复制/关闭按钮**：文本区 `isEditable = true`（点进即可选择/编辑，setRequestFocus(false) 保持不抢焦点、setFocusable(true) 支持点击获焦）；头部 `FlowLayout(RIGHT)` 放两枚图标按钮——复制（`AllIcons.Actions.Copy`，取**编辑后当前文本**写系统剪贴板 CopyPasteManager）/ 关闭（`AllIcons.Actions.Close` → `hide()`），tooltip 走新增 i18n 键 `log.preview.copy` / `log.preview.close`（en/zh 双 bundle）。
+4. **状态卫生**：`JBPopupListener.onClosed` 将 `popup` 引用清空——点外/Esc 等外部关闭后不再持有已关闭弹窗。
+5. **测试**：SqlClickPreviewTest 重写 9 用例——内容可编辑+换行+等宽、双按钮 tooltip 按 i18n 文案匹配（踩坑：popup.content 包裹层含平台内部按钮，不能按数量断言）、复制回调携当前文本/用户编辑后文本、关闭回调触发、本地定高列表（fixedCellHeight=20 + setSize，getCellBounds/locationToIndex 纯数学 headless 可用）单击命中排程+空白区取消隐藏+双击取消、anchorPointFor 行下缘断言（y=行底+2）、三面板空列表单击不排程+dispose 停表。定向 SqlClickPreviewTest 9 绿 + 受影响 5 套件（Layout/Navigation/HistoryPanel/LogListFreeze/HistoryCellRenderer）绿。
+6. **提交环境变化**：并行会话已全部收笔提交（T-LogListFreeze04/T-LogDedupeMpMark/T-JdbcMultiline 均已入库，HEAD 渲染管线即对方重写版），本轮工作树只剩本任务 7 文件，直接正常暂存提交（未再走索引级拆分）。遗留：SqlLogPanelRendererUiTest 3 用例红（对方 T-LogListFreeze04 WIP 随其提交入库，去重徽章/两行结构/耗时着色的片段渲染断言，与本任务无关）。
