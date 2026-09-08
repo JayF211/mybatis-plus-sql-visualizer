@@ -136,3 +136,13 @@ headless（`BasePlatformTestCase`）下 `JBPopup.showInScreenCoordinates` 依赖
 4. **状态卫生**：`JBPopupListener.onClosed` 将 `popup` 引用清空——点外/Esc 等外部关闭后不再持有已关闭弹窗。
 5. **测试**：SqlClickPreviewTest 重写 9 用例——内容可编辑+换行+等宽、双按钮 tooltip 按 i18n 文案匹配（踩坑：popup.content 包裹层含平台内部按钮，不能按数量断言）、复制回调携当前文本/用户编辑后文本、关闭回调触发、本地定高列表（fixedCellHeight=20 + setSize，getCellBounds/locationToIndex 纯数学 headless 可用）单击命中排程+空白区取消隐藏+双击取消、anchorPointFor 行下缘断言（y=行底+2）、三面板空列表单击不排程+dispose 停表。定向 SqlClickPreviewTest 9 绿 + 受影响 5 套件（Layout/Navigation/HistoryPanel/LogListFreeze/HistoryCellRenderer）绿。
 6. **提交环境变化**：并行会话已全部收笔提交（T-LogListFreeze04/T-LogDedupeMpMark/T-JdbcMultiline 均已入库，HEAD 渲染管线即对方重写版），本轮工作树只剩本任务 7 文件，直接正常暂存提交（未再走索引级拆分）。遗留：SqlLogPanelRendererUiTest 3 用例红（对方 T-LogListFreeze04 WIP 随其提交入库，去重徽章/两行结构/耗时着色的片段渲染断言，与本任务无关）。
+
+## 九、三轮实施记录（2026-09-08，T-ClickPreview-03，已实施）
+
+**用户需求**：单击预览也要支持 SQL 高亮与编辑——「我想临时改一个字段值再复制」。
+
+1. **内容升级**：`buildContent` 的纯文本 `JTextArea` 换为**原生编辑器**——纯文档（`EditorFactory.createDocument`）+ **SQL FileType 驱动词法高亮**（`createEditor(document, project, fileType, false)` 四参重载，javap 核实在 243 基线）。**刻意不走 PSI**（SqlInputEditor 的 PsiFileFactory 路线会踩「EDT 直调 createFileFromText → 262 read access 硬抛须包 ReadAction」陷阱，show() 由 Timer 在 EDT 触发；纯文档+fileType 词法高亮零 PSI 零风险，关键字/表名/字符串/数字着色即用户所求）。测试环境无 Database 插件时 `findFileTypeByName("SQL")` 为 null → 降级纯文本编辑器（对齐 SqlInputEditor 兜底）。
+2. **编辑体验**：`isViewer=false` 可编辑 + 软换行（`setUseSoftWraps(true)`，长 SQL 免横向滚动）+ 紧凑外观（隐藏行号/折叠/缩进导轨/页底留白）；复制按钮取**编辑后当前文档文本**（`editor.document.text`），「临时改字段值 → 点复制」即所求。constructor 增加 `project` 参数（三面板传入）。
+3. **生命周期**：编辑器随弹窗关闭释放——`JBPopupListener.onClosed` 中 `EditorFactory.releaseEditor`（点外/Esc/关闭按钮/面板 dispose 的 cancel 全走 onClosed，单一释放路径）。
+4. **测试**：SqlClickPreviewTest 9 用例适配——编辑器文档文本等于还原 SQL、`isViewer=false`、软换行、双按钮 tooltip（i18n 匹配）、复制回调携当前文本、**编辑后复制**（`WriteCommandAction.runWriteCommandAction` 改文档 → 复制取编辑值）、关闭回调；排程/锚点/面板接线用例不变。定向 9 绿 + 受影响 4 套件（Layout/Navigation/HistoryPanel/LogListCopy）绿。
+5. **插曲**：Kotlin 增量编译陈旧 ABI 假失败——主类已重编译为新签名（javap mtime 13:47 实证），测试编译仍见旧 `buildContent(String,...)` 签名报参型不匹配；重跑即绿（对齐 T-LogDedupeMpMark 同款插曲）。
