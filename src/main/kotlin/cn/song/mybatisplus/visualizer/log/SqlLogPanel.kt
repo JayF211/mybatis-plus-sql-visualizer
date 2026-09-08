@@ -1402,15 +1402,26 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
 
-    /** 行 HTML 计算（缓存回填与选中态实时渲染共用；isSelected 维度不进缓存）。 */
+    /**
+     * 行 HTML 计算（缓存回填与选中态实时渲染共用；isSelected 维度不进缓存）。
+     *
+     * T-TwoLine：元信息（时间戳/耗时/来源/去重徽章）独立成行在上，SQL 高亮行在下。
+     * 各段尾随空格 trim 后以单空格连接——元信息行尾不留空格；四段全空（时间戳关+
+     * 耗时关+无来源+无计数）不插 `<br>`，防空首行。
+     */
     private fun computeRowHtml(entry: LogSqlEntry, isSelected: Boolean): String {
         val timestampHtml = formatTimestampHtml(entry.timestamp)
         val durationHtml = if (PluginSettings.getInstance().state.showDurationInLogList)
             formatDurationHtml(entry.executionTimeMs, isSelected) else ""
         val sourceHtml = formatSourceHtml(entry, isSelected)
+        val dedupeBadge = dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { "⨉$it" } ?: ""
+        val metaHtml = listOf(timestampHtml, durationHtml, sourceHtml, dedupeBadge)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(" ")
         val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
-        val dedupeBadge = dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { " ⨉$it " } ?: ""
-        return "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
+        return if (metaHtml.isEmpty()) "<html>$sqlHtml</html>"
+        else "<html>$metaHtml<br>$sqlHtml</html>"
     }
 
     override fun getListCellRendererComponent(

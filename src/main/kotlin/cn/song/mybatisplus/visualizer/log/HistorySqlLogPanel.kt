@@ -518,9 +518,10 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
                     else -> "unknown"
                 }
                 val sqlHtml = SqlListHtmlRenderer.render(withTerminator(entry.summary))
+                // T-TwoLine：元信息（耗时/时间戳/来源）独立成行在上，SQL 高亮行在下
                 "<html><span style='color:#9E9E9E'>[$duration]</span> " +
                     "<span style='color:#9E9E9E'>[$timestamp]</span> " +
-                    "<span style='color:#9E9E9E'>[$source]</span> $sqlHtml</html>"
+                    "<span style='color:#9E9E9E'>[$source]</span><br>$sqlHtml</html>"
             }.also { entry.cachedListHtml = it }
             this.text = html
             toolTipText = entry.restoredSql

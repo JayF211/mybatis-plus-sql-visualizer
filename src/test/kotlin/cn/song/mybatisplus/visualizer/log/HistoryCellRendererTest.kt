@@ -59,6 +59,29 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("超长 SQL 渲染为 HTML", text.startsWith("<html>"))
     }
 
+    // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
+
+    fun test二级条目_元信息在上SQL在下两行显示() {
+        val text = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
+        assertTrue("元信息与 SQL 之间应有 <br> 换行", text.contains("<br>"))
+        val metaLine = text.substringBefore("<br>")
+        val sqlLine = text.substringAfter("<br>")
+        assertTrue("耗时占位应在元信息行", metaLine.contains("[30ms]"))
+        assertTrue("来源应在元信息行", metaLine.contains("[OrderDao.java:9]"))
+        assertTrue("SQL 应在第二行", sqlLine.contains("SELECT"))
+        assertFalse("来源不应混入 SQL 行", sqlLine.contains("OrderDao.java"))
+        assertTrue("元信息应在 SQL 之前", text.indexOf("OrderDao.java") < text.indexOf("SELECT"))
+    }
+
+    fun test二级条目_空耗时与未知来源占位渲染在元信息行() {
+        val text = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
+        assertTrue("应有 <br> 换行", text.contains("<br>"))
+        val metaLine = text.substringBefore("<br>")
+        assertTrue("空耗时占位 [—] 应在元信息行", metaLine.contains("[—]"))
+        assertTrue("未知来源占位 [unknown] 应在元信息行", metaLine.contains("[unknown]"))
+        assertTrue("SQL 应在第二行", text.substringAfter("<br>").contains("SELECT"))
+    }
+
     fun test一级文件_大小为0字节显示0B() {
         val f = File.createTempFile("hist0", ".sql").apply { deleteOnExit() }
         val text = renderFile(f, 0)

@@ -114,4 +114,43 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertNotNull("渲染组件不应为 null", c)
         assertTrue("渲染组件应为 JLabel", c is javax.swing.JLabel)
     }
+
+    // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
+
+    fun test元信息与SQL两行显示_元信息在上() {
+        val text = render(entry("SELECT * FROM orders WHERE id = 1", ms = 30L, sourceFile = "OrderDao.java", sourceLine = 9))
+        assertTrue("元信息与 SQL 之间应有 <br> 换行", text.contains("<br>"))
+        val metaLine = text.substringBefore("<br>")
+        val sqlLine = text.substringAfter("<br>")
+        assertTrue("耗时应在元信息行", metaLine.contains("30ms"))
+        assertTrue("来源应在元信息行", metaLine.contains("OrderDao.java:9"))
+        assertTrue("SQL 应在第二行", sqlLine.contains("SELECT"))
+        assertFalse("来源不应混入 SQL 行", sqlLine.contains("OrderDao.java"))
+        assertTrue("元信息应在 SQL 之前", text.indexOf("OrderDao.java") < text.indexOf("SELECT"))
+    }
+
+    fun test去重徽章归元信息行_位于SQL之上() {
+        val sql = "SELECT * FROM repeated WHERE id = 1"
+        renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 4)
+        val text = render(entry(sql))
+        assertTrue("徽章应渲染", text.contains("⨉4"))
+        assertTrue("徽章应在元信息行（<br> 之前）", text.indexOf("⨉4") < text.indexOf("<br>"))
+        renderer.dedupeCounts = emptyMap()
+    }
+
+    fun test元信息全空_不产生空首行() {
+        val state = PluginSettings.getInstance().state
+        val savedTs = state.logTimestampEnabled
+        val savedDur = state.showDurationInLogList
+        try {
+            state.logTimestampEnabled = false
+            state.showDurationInLogList = false
+            val text = render(entry("SELECT * FROM user")) // 无来源、无徽章
+            assertFalse("元信息全空不应插 <br>（防空首行）", text.contains("<br>"))
+            assertTrue("仍应为 HTML", text.startsWith("<html>"))
+        } finally {
+            state.logTimestampEnabled = savedTs
+            state.showDurationInLogList = savedDur
+        }
+    }
 }
