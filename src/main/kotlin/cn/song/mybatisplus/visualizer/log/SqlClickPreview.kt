@@ -212,7 +212,10 @@ internal class SqlClickPreview(
             val copyButton = JButton(AllIcons.Actions.Copy).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.copy")
                 isFocusable = false
-                addActionListener { copyText(editor.document.text) } // 复制当前内容（含用户编辑后文本）
+                addActionListener {
+                    copyText(editor.document.text) // 复制当前内容（含用户编辑后文本）
+                    flashCopied(this) // 复制成功反馈：复制图标换对号，短暂后恢复
+                }
             }
             val closeButton = JButton(AllIcons.Actions.Close).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.close")
@@ -230,6 +233,22 @@ internal class SqlClickPreview(
                 add(editor.component, BorderLayout.CENTER)
             }
             return SqlClickPreviewContent(panel, editor)
+        }
+
+        /**
+         * 复制成功反馈：复制按钮图标短暂换成对号（[AllIcons.Actions.Checked]）再恢复，
+         * 用一次性 [Timer]（1500ms）复位——不引入常驻定时器，按钮复用即过期。
+         */
+        private fun flashCopied(button: JButton) {
+            val copyIcon = button.icon
+            button.icon = AllIcons.Actions.Checked
+            Timer(1500, null).apply {
+                isRepeats = false
+                addActionListener {
+                    button.icon = copyIcon
+                }
+                start()
+            }
         }
     }
 }

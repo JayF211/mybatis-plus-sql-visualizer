@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.history.SqlHistoryPanel
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -13,6 +14,7 @@ import com.intellij.ui.components.JBList
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -172,6 +174,36 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
                 .doClick()
             assertEquals("复制应取编辑后的文本", "SELECT edited_price FROM user;", copied)
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    /** 六轮：复制按钮点击后图标即时换成对号（复制成功反馈），无 NoneIcon 或其他非对号图标。 */
+    fun test复制按钮点击后图标换对号反馈() {
+        var copied: String? = null
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT 1;",
+            copyText = { copied = it },
+            close = {},
+        )
+        try {
+            val copyButton = findButtons(content.component)
+                .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
+            val originalIcon = copyButton.icon
+            copyButton.doClick()
+            assertEquals("复制应回调当前文本", "SELECT 1;", copied)
+            assertEquals(
+                "复制后按钮图标应立即换成对号（成功反馈）",
+                AllIcons.Actions.Checked,
+                copyButton.icon,
+            )
+            assertNotEquals(
+                "对号不应与初始复制图标相同（否则无反馈变化）",
+                originalIcon,
+                copyButton.icon,
+            )
         } finally {
             releaseEditor(content.editor)
         }
