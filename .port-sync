@@ -4,8 +4,8 @@
 # 下次同步只比对增量： git diff <synced_master>..origin/master
 # 注意：本仓库坚持「生产代码 100% Java」，切勿把 master 的 .kt 直接 merge 进来。
 
-synced_master = 8716cf9f7ba439dbc2322cd7cfc0b4d48c3a1674
-synced_master_short = 8716cf9
-synced_date = 2026-09-08
+synced_master = 29fbf5562000f5086ea33752f5ea07b59de490f7
+synced_master_short = 29fbf55
+synced_date = 2026-09-09
 synced_by_commit = (本次收尾提交)
-note = 2026-09-08 完成 master 37027d5..8716cf9 共 4 提交的增量同步（T-SyncK2JDaoSql）：T-DaoSql 自研 DAO 字符串 SQL 预览与方法定义锚点贯通——8 处生产代码手工翻译成 Java（JdbcTemplateMethodDetector 增 DAO_STRING_SQL_METHODS+isStringSqlMethodCandidate 统一入口 / JdbcTemplateSqlLocator resolveSqlArgument 实参扫描泛化兼容 (Class, sql, ...) 形态 / JdbcTemplateSqlPreviewService 增 collectMethodCandidates / JdbcTemplateSqlGutterLineMarkerProvider 家族排除制+hasStringLikeArg / PreviewReceiverResolver 增 hasStringLikeArg+toString 分支 / WrapperAnchorDetector 场景 D 字符串 SQL 让位 / ConvertToSqlAction 方法定义 fallback / 新建 StringSqlMethodGutterLineMarkerProvider 方法定义锚点 provider），plugin.xml 注册 + bundle en/zh 两键；测试 4 改 1 增按测试源集 Kotlin 约定原样复制（同一套 kt 测试双代码库跑）；记忆精简 10 篇归档 + 03 指南 runIde 沙盒版本切换小节直取，MEMORY/CHANGELOG 行级并集回补 k2j 专属行。锚点→8716cf9。全量 3094/0/0/6 绿（基线 3076+18），buildPlugin+verifyPlugin 三目标 Compatible。未 push。
+note = 2026-09-09 完成 master 8716cf9..29fbf55 共 33 提交的增量同步（T-SyncK2JMaster33）：生产代码 17 文件 Kotlin→Java 手工翻译 + 6 新建（SqlClickPreview/SqlClickPreviewContent/SqlListFragmentRenderer/SqlTextFragment/SqlListSyntaxHighlighter/RunConfigurationProcessListener）+ 2 删除（PluginSettingsConfigurable 死类/SqlListHtmlRenderer）——功能线：T-LogListFreeze04 片段渲染通道与固定行高 + T-Perf-03/06/12/15/19/24 dev 管线（VisibleDiff 同一性差分/去重入临界区/onEvicted 锁外/监听器精确注销/dedupeKey 指纹/搜索防抖/notifyUi 置脏合并）+ T-ClickPreview 五轮（单击预览/可编辑高亮编辑器/ATTR_BY_TYPE 唯一配色映射/复制对号反馈）+ 自动监听四轮（onProjectProcessStarted 进程级入口/被动模式 onAutoStartSettingEnabled 分流/MessageBusConnection 编译期直调）+ T-JdbcMultiline 两态机 + T-LogDedupeMpMark 逐条判定 + T-PreviewWiLock+T-Wia262 净效果 WriteIntentReadAction.compute(Computable) + T-DsCover executeAfterPrepare 门控 + 版本 2026.9.8。测试 config 5 直取 + log 族 9 .java 增量翻译 + 3 新 .kt 互操作适配；文档 15 件直取 + MEMORY/变更记录/CHANGELOG 三方 union 合并。锚点→29fbf55。全量 3138/0/0/6 绿，buildPlugin+verifyPlugin 三目标 Compatible。未 push。
