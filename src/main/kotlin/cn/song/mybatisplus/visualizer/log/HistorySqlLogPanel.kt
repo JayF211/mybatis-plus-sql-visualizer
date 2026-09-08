@@ -55,6 +55,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
+    /** T-ClickPreview：单击出轻量预览弹窗（内容 = 还原 SQL），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private val sqlClickPreview = SqlClickPreview(sqlList) { sqlList.selectedValue?.let { withTerminator(it.restoredSql) } }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
@@ -104,6 +106,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         searchField.text = query
     }
 
+    /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
+    internal val sqlClickPreviewForTest: SqlClickPreview get() = sqlClickPreview
+
     init {
         buildUI()
         refresh()
@@ -143,6 +148,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         sqlList.cellRenderer = HistoryCellRenderer()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
+                // T-ClickPreview：先转发 clickCount（单击排程预览 / 双击停表并关旧预览），双击再开完整弹窗
+                sqlClickPreview.onClick(e.clickCount)
                 if (e.clickCount >= 2) {
                     sqlList.selectedValue?.let { openPreview(it) }
                 }
@@ -163,6 +170,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun showFileList() {
         currentFile = null
         currentEntries = emptyList()
+        sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
         backButton.isVisible = false
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
@@ -346,7 +354,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    override fun dispose() {}
+    override fun dispose() {
+        sqlClickPreview.dispose()
+    }
 
     companion object {
         private val LOG = Logger.getInstance(HistorySqlLogPanel::class.java)
@@ -445,7 +455,7 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
             val timestampHtml = "<span style='color:#9E9E9E'>[$timestamp]</span> "
             val sourceHtml = "<span style='color:#9E9E9E'>[$source]</span> "
             this.text = "<html>${durationHtml}${timestampHtml}${sourceHtml}${sqlHtml}</html>"
-            toolTipText = entry.restoredSql
+            // T-ClickPreview：不再设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
             else (list?.foreground ?: JBColor.foreground())
         }

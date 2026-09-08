@@ -144,6 +144,8 @@ class SqlLogPanel(
     private val list = SqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
+    /** T-ClickPreview：单击出轻量预览弹窗（内容 = 还原 SQL），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private val clickPreview = SqlClickPreview(list) { list.selectedValue?.let { withTerminator(it.restoredSql) } }
     private val tabs = JBTabbedPane()
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)
@@ -264,6 +266,9 @@ class SqlLogPanel(
 
     /** 搜索条（测试断言显隐/文本）。 */
     internal val searchFieldForTest: SearchTextField get() = searchField
+
+    /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
+    internal val clickPreviewForTest: SqlClickPreview get() = clickPreview
 
     /** 工具栏慢查询计数标签（测试断言显隐与文案）。 */
     internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
@@ -714,6 +719,8 @@ class SqlLogPanel(
         list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
+                // T-ClickPreview：先转发 clickCount（单击排程预览 / 双击停表并关旧预览），双击再开完整弹窗
+                clickPreview.onClick(e.clickCount)
                 if (e.clickCount >= 2) {
                     list.selectedValue?.let { openPreview(it) }
                 }
@@ -1092,8 +1099,9 @@ class SqlLogPanel(
         menu.show(list, e.x, e.y)
     }
 
-    /** 面板销毁：释放日志转 SQL 与 SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
+    /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
+        clickPreview.dispose()
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
     }
@@ -1243,7 +1251,7 @@ internal class LogEntryListCellRenderer : javax.swing.DefaultListCellRenderer() 
                 "<html>${timestampHtml}${durationHtml}${sourceHtml}${sqlHtml}${dedupeBadge}</html>"
             }.also { entry.cachedListHtml = it }
             this.text = html
-            toolTipText = entry.restoredSql
+            // T-ClickPreview：不再设 toolTipText（悬停逐行弹气泡 × 可变行高重排 = 条目多时卡顿根因），预览改单击触发
             foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
             else (list?.foreground ?: JBColor.foreground())
         }
