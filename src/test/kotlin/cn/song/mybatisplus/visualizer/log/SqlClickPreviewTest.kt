@@ -1,10 +1,13 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.history.SqlHistoryPanel
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
+import com.intellij.psi.TokenType
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBList
 import com.intellij.util.ui.UIUtil
@@ -27,6 +30,9 @@ import javax.swing.JButton
  * 关闭按钮；③ 弹窗不得遮住被点行（锚点 = 行下缘）。
  * 三轮反馈：预览要 SQL 高亮且可编辑（临时改字段值再复制）→ 内容升级为纯文档 + SQL FileType
  * 驱动词法高亮的可编辑编辑器（无 PSI，规避 EDT read access 陷阱；fileType 缺席降级纯文本）。
+ * 四轮反馈：① 预览高亮与列表条目颜色不一致（两套高亮体系并存）→ 编辑器高亮改
+ * [SqlListSyntaxHighlighter]（与列表共用 token→配色键映射）；② 编辑器打不了字 → 弹窗
+ * setRequestFocus(false) 拿不到键盘焦点，改 true 弹出即聚焦。
  *
  * headless 约束：SqlClickPreview.show 依赖真实屏幕（RelativePoint → getLocationOnScreen），
  * 弹窗「构建/内容」与「交互排程/取消/锚点」分别断言；显示行为由 runIde 真机覆盖。
@@ -79,6 +85,48 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
             val tooltips = buttons.map { it.toolTipText }.toSet()
             assertTrue("应含复制按钮（tooltip = i18n 文案）", tooltips.contains(MpSqlVisualizerBundle.message("log.preview.copy")))
             assertTrue("应含关闭按钮（tooltip = i18n 文案）", tooltips.contains(MpSqlVisualizerBundle.message("log.preview.close")))
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    /** 四轮①：编辑器高亮与列表条目同源——同一 SqlLexer 的 token 覆盖全文，配色键共用同一映射。 */
+    fun test编辑器高亮与列表片段同源同色() {
+        val sql = "SELECT * FROM user WHERE id = 1;"
+        val content = SqlClickPreview.buildContent(
+            project,
+            sql,
+            copyText = {},
+            close = {},
+        )
+        try {
+            val highlighter = content.editor.highlighter
+            assertTrue(
+                "预览编辑器应挂自建词法高亮器（与列表同色链路）",
+                highlighter is LexerEditorHighlighter,
+            )
+            val editorTokens = buildList {
+                val iterator = highlighter.createIterator(0)
+                while (!iterator.atEnd()) {
+                    add(iterator.tokenType to iterator.start..iterator.end)
+                    iterator.advance()
+                }
+            }
+            assertTrue("编辑器应产出非平凡 token 序列", editorTokens.isNotEmpty())
+            assertEquals("编辑器 token 应从文首覆盖", 0, editorTokens.first().second.first)
+            assertEquals("编辑器 token 应覆盖到文末", sql.length, editorTokens.last().second.last)
+            // 非空白 token 的配色键走 ATTR_BY_TYPE（与列表片段通道共用唯一映射 → 同色）
+            val nonWhitespace = editorTokens.map { it.first }.filter { it != TokenType.WHITE_SPACE }
+            assertTrue("应存在非空白 token", nonWhitespace.isNotEmpty())
+            nonWhitespace.forEach { type ->
+                assertNotNull("非空白 token 应有配色键（$type）", SqlListSyntaxHighlighter.ATTR_BY_TYPE[type])
+            }
+            // 列表片段通道（同一 SqlLexer）拼回文本与原文一致
+            assertEquals(
+                "列表片段通道文本应守恒",
+                sql,
+                SqlListFragmentRenderer.renderFragments(sql).joinToString("") { it.text },
+            )
         } finally {
             releaseEditor(content.editor)
         }

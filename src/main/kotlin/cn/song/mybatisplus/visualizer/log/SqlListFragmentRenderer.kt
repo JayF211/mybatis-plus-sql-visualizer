@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlLexer
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlTokenTypes
 import com.intellij.openapi.editor.colors.EditorColorsManager
@@ -31,16 +32,9 @@ object SqlListFragmentRenderer {
         sql: String,
         scheme: EditorColorsScheme = EditorColorsManager.getInstance().globalScheme,
     ): List<SqlTextFragment> {
-        val attrByType = mapOf(
-            SqlTokenTypes.KEYWORD to attrOf(scheme, SqlHighlightColors.KEYWORD),
-            SqlTokenTypes.TABLE to attrOf(scheme, SqlHighlightColors.TABLE),
-            SqlTokenTypes.IDENTIFIER to attrOf(scheme, SqlHighlightColors.IDENTIFIER),
-            SqlTokenTypes.STRING to attrOf(scheme, SqlHighlightColors.STRING),
-            SqlTokenTypes.NUMBER to attrOf(scheme, SqlHighlightColors.NUMBER),
-            SqlTokenTypes.COMMENT to attrOf(scheme, SqlHighlightColors.COMMENT),
-            SqlTokenTypes.OPERATOR to attrOf(scheme, SqlHighlightColors.OPERATOR),
-            SqlTokenTypes.PAREN to attrOf(scheme, SqlHighlightColors.PAREN),
-        )
+        // token → 配色键取自 [SqlListSyntaxHighlighter.ATTR_BY_TYPE]（与编辑器版高亮共用唯一映射，
+        // T-ClickPreview-04：列表与单击预览编辑器同一条 SQL 同色）
+        val attrByType = SqlListSyntaxHighlighter.ATTR_BY_TYPE.mapValues { (_, key) -> attrOf(scheme, key) }
         return renderFragments(sql) { type -> attrByType[type] }
     }
 

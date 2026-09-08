@@ -1,11 +1,14 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
-import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopup
@@ -42,9 +45,11 @@ internal class SqlClickPreviewContent(val component: JComponent, val editor: Edi
  * - 双击：停定时器 + 关旧预览（随后面板自行 openPreview 走完整弹窗）。
  *
  * 弹窗形态：头部复制/关闭图标按钮 + **SQL 高亮可编辑编辑器**（三轮用户要求：高亮展示 +
- * 可临时改字段值再复制；纯文档 + SQL FileType 驱动词法高亮，不走 PSI——规避 PsiFileFactory
- * EDT 直调 262 read access 硬抛，测试环境无 Database 插件时优雅降级纯文本编辑器）。
- * 不自动抢焦点（setRequestFocus(false)，列表键盘操作不受影响；点进编辑器即可编辑），
+ * 可临时改字段值再复制）。高亮走 [SqlListSyntaxHighlighter]（SqlLexer 分词 +
+ * SqlHighlightColors 配色键，与日志列表条目**共用同一 token→配色映射**——四轮用户反馈：
+ * 预览高亮须与列表同色；无 PSI、不依赖 Database 插件）。
+ * 弹出即聚焦内容（setRequestFocus(true)，四轮修复：false 时编辑器拿不到键盘焦点，
+ * "可编辑"名存实亡；复制/关闭按钮 isFocusable=false 不抢焦点），点进编辑器直接打字，
  * Esc / 点外 / 其他窗口打开即关，可拖角调整大小。
  *
  * headless 测试约束：show 依赖真实屏幕（RelativePoint → getLocationOnScreen），
@@ -140,7 +145,10 @@ internal class SqlClickPreview(
         ).also { editor = it.editor }
         return JBPopupFactory.getInstance()
             .createComponentPopupBuilder(content.component, null)
-            .setRequestFocus(false) // 弹出不抢焦点（列表键盘操作不受影响）；点进编辑器即可编辑
+            // 四轮修复：setRequestFocus(false) 导致弹窗内编辑器拿不到键盘焦点，
+            // 键盘输入全落到列表上——看似"只读"。改 true：弹出即聚焦内容，
+            // 焦点自然落进编辑器，可直接打字编辑（复制/关闭按钮 isFocusable=false 不抢焦点）
+            .setRequestFocus(true)
             .setFocusable(true)
             .setResizable(true)
             .setMovable(false)
@@ -167,7 +175,9 @@ internal class SqlClickPreview(
 
         /**
          * 构建预览内容：头部「复制 | 关闭」图标按钮 + SQL 高亮可编辑编辑器。
-         * 编辑器 = 纯文档 + SQL FileType 驱动词法高亮（无 PSI；fileType 解析不到降级纯文本），
+         * 高亮 = [SqlListSyntaxHighlighter]（SqlLexer 分词 + [SqlHighlightColors] 配色键，
+         * 与日志列表条目共用同一映射——四轮用户反馈：预览高亮须与列表同色，直接复用；
+         * 不走平台 SQL FileType 方言高亮，也不依赖 Database 插件，缺席环境同样有高亮），
          * 软换行长 SQL 免横向滚动，隐藏行号/折叠/缩进导轨/页底留白的紧凑外观。
          * 按钮回调由调用方注入（测试直录断言）；**调用方负责释放 editor**（弹窗路径经 onClosed）。
          */
@@ -177,20 +187,25 @@ internal class SqlClickPreview(
             copyText: (String) -> Unit,
             close: () -> Unit,
         ): SqlClickPreviewContent {
-            val sqlFileType = FileTypeManager.getInstance().findFileTypeByName("SQL")
             val document = EditorFactory.getInstance().createDocument(sql)
-            val editor = if (sqlFileType != null) {
-                EditorFactory.getInstance().createEditor(document, project, sqlFileType, false)
-            } else {
-                EditorFactory.getInstance().createEditor(document)
-            }
-            (editor as? EditorEx)?.settings?.apply {
-                isLineNumbersShown = false // 紧凑弹窗不留 gutter
-                isFoldingOutlineShown = false
-                isIndentGuidesShown = false
-                isAdditionalPageAtBottom = false
-                setCaretRowShown(false)
-                setUseSoftWraps(true) // 长 SQL 软换行免横向滚动
+            val editor = EditorFactory.getInstance().createEditor(document, project)
+            (editor as? EditorEx)?.apply {
+                // createEditor 静态类型为 Editor，setHighlighter 在 EditorEx（243 javap 核验）；
+                // EditorImpl 实现之，非 EditorEx 实现时跳过（降级无高亮纯文本）
+                setHighlighter(
+                    LexerEditorHighlighter(
+                        SqlListSyntaxHighlighter(),
+                        EditorColorsManager.getInstance().globalScheme,
+                    ),
+                )
+                settings.apply {
+                    isLineNumbersShown = false // 紧凑弹窗不留 gutter
+                    isFoldingOutlineShown = false
+                    isIndentGuidesShown = false
+                    isAdditionalPageAtBottom = false
+                    setCaretRowShown(false)
+                    setUseSoftWraps(true) // 长 SQL 软换行免横向滚动
+                }
             }
             editor.component.preferredSize = Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT)
 
