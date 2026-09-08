@@ -146,3 +146,16 @@ headless（`BasePlatformTestCase`）下 `JBPopup.showInScreenCoordinates` 依赖
 3. **生命周期**：编辑器随弹窗关闭释放——`JBPopupListener.onClosed` 中 `EditorFactory.releaseEditor`（点外/Esc/关闭按钮/面板 dispose 的 cancel 全走 onClosed，单一释放路径）。
 4. **测试**：SqlClickPreviewTest 9 用例适配——编辑器文档文本等于还原 SQL、`isViewer=false`、软换行、双按钮 tooltip（i18n 匹配）、复制回调携当前文本、**编辑后复制**（`WriteCommandAction.runWriteCommandAction` 改文档 → 复制取编辑值）、关闭回调；排程/锚点/面板接线用例不变。定向 9 绿 + 受影响 4 套件（Layout/Navigation/HistoryPanel/LogListCopy）绿。
 5. **插曲**：Kotlin 增量编译陈旧 ABI 假失败——主类已重编译为新签名（javap mtime 13:47 实证），测试编译仍见旧 `buildContent(String,...)` 签名报参型不匹配；重跑即绿（对齐 T-LogDedupeMpMark 同款插曲）。
+
+---
+
+## 十、四轮实施记录（2026-09-08，T-ClickPreview-04，已实施）
+
+**用户反馈**：①「点击预览的高亮应该和 sql 日志的 sql 列表保持一致的颜色，直接复用」；②「目前还是不能编辑单击预览的 sql」。
+
+1. **①根因（高亮两套体系并存）**：三轮的预览编辑器用 `createEditor(document, project, sqlFileType, false)` 挂 SQL FileType——真机上着色由 Database 插件的方言高亮器接管（关键字红/棕系等），而列表条目走插件自研 SqlLexer + SqlHighlightColors（One Dark 风格：关键字紫、表名洋红、字符串绿……）。同一条 SQL 在列表和预览里颜色不同，用户要求直接复用列表配色。
+2. **①修复（自建 SyntaxHighlighter + 共享映射）**：新增 `SqlListSyntaxHighlighter`（`ui/highlight` 包，`SyntaxHighlighter` 实现：`getHighlightingLexer` 返回 SqlLexer、`getTokenHighlights` 返回配色键）。token→配色键映射从 `SqlListFragmentRenderer` 内联 map 提为 **`SqlListSyntaxHighlighter.ATTR_BY_TYPE` 唯一权威**——列表片段渲染与编辑器高亮共用同一映射，改色只动一处（结构上保证"同色"，不靠两处对齐）。预览编辑器改 `createEditor(document, project)` 纯文档编辑器 + `EditorEx.setHighlighter(LexerEditorHighlighter(SqlListSyntaxHighlighter(), EditorColorsManager.globalScheme))`——不再依赖平台 SQL FileType / Database 插件，测试沙盒与 Community 同样有高亮（顺带消除三轮的降级分支）。
+3. **①API 核实（243 基线 javap，app-client.jar）**：`LexerEditorHighlighter` 唯一构造 `(SyntaxHighlighter, EditorColorsScheme)`（lexer 从 highlighter 取，无 (Lexer, scheme) 构造、无 setLexer）；`setHighlighter(EditorHighlighter)` 在 `EditorEx`（`createEditor` 静态类型为 `Editor`，须 `as? EditorEx` 后调用——首版直接 editor.setHighlighter 编译不过的实证）；`EditorImpl.setHighlighter` 内部完成 `highlighter.setEditor(this)` + `setText(immutableCharSequence)` + 文档监听注册，**不预调 setText/setEditor**（setEditor 二次调用触发 "Highlighters cannot be reused" 断言）。`LayeredLexerEditorHighlighter`（`ex.util` 包）方案不需要——自建高亮器就是基准层，无平台方言层需要叠加。
+4. **②根因（键盘焦点不在弹窗）**：弹窗 `setRequestFocus(false)`（一轮遗产，当时为不抢列表焦点）——轻量弹窗不参与焦点转移，键盘输入全落在列表上；编辑器 `isViewer=false` 本就允许编辑，卡在拿不到焦点，"可编辑"名存实亡。修复改 `setRequestFocus(true)`：弹出即聚焦内容组件，焦点自然落进编辑器可直接打字；复制/关闭按钮 `isFocusable=false` 不参与焦点遍历（保持不变）。
+5. **测试**：SqlClickPreviewTest 增至 10 用例——新增「编辑器高亮与列表片段同源同色」：断言 `editor.highlighter` 为 `LexerEditorHighlighter`、`createIterator(0)` token 序列从文首覆盖到文末、非空白 token 全部在 `ATTR_BY_TYPE` 有配色键、列表片段通道文本守恒；既有 9 用例不动全绿（文档/非 viewer/软换行/按钮/编辑后复制/排程/锚点/三面板接线）。定向 10 绿 + SqlListFragmentRendererTest 6 绿 + log 包 51 文件 560 绿。
+6. **runIde 真机人工跟进**：预览弹窗高亮与列表行同色目检（亮/暗主题各一次）、点进编辑器直接打字改字段值 → 复制按钮取编辑后文本。
