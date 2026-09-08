@@ -141,7 +141,7 @@ object DataSourceSelector {
      * 面板打开时调用，原生控制台即刻可见；执行由 [executePrepared] 触发。
      *
      * 数据源选择策略：唯一数据源/last-used 命中 → 静默；多数据源 → 原生弹窗（记住选择）；
-     * 无数据源 → 打开 Database 工具窗口 + onError。
+     * 无数据源 → 预览路径静默 onError（不抢侧边栏），显式执行路径打开 Database 工具窗口 + onError。
      */
     @JvmStatic
     fun prepareConsole(
@@ -255,7 +255,7 @@ object DataSourceSelector {
                 runners.firstOrNull { getRunnerName(it) == last }?.let { matched ->
                     LOG.info("[M36] silent reuse last runner: $last")
                     chosenRunnerName = last
-                    runRunner(matched)
+                    runRunner(matched, silent = true)
                     callback?.invoke(true)
                     return
                 }
@@ -264,8 +264,10 @@ object DataSourceSelector {
 
         when {
             runners.isEmpty() -> {
-                LOG.warn("[M36] runners empty -> open Database tool window")
-                openDatabaseToolWindow(project)
+                LOG.warn("[M36] runners empty (execute=$executeAfterPrepare)")
+                // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
+                // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
+                if (executeAfterPrepare) openDatabaseToolWindow(project)
                 // M36.3：无数据源时通知 UI 从「执行中」恢复
                 onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
                 callback?.invoke(false)
@@ -273,7 +275,7 @@ object DataSourceSelector {
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
                 LOG.info("[M36] single runner, run directly")
                 chosenRunnerName = getRunnerName(runners.first())
-                runRunner(runners.first())
+                runRunner(runners.first(), silent = !executeAfterPrepare)
                 callback?.invoke(true)
             }
             else -> {
@@ -286,6 +288,7 @@ object DataSourceSelector {
                     }
                     if (runner != null) chosenRunnerName = getRunnerName(runner)
                     callback?.invoke(runner != null)
+                    // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
                     if (runner != null) runRunner(runner)
                 }
             }
@@ -2520,7 +2523,7 @@ object DataSourceSelector {
     }.getOrNull() ?: false
 
     /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 弹错误引导。 */
-    private fun runRunner(runner: Any) {
+    private fun runRunner(runner: Any, silent: Boolean = false) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val method = runner.javaClass.getMethod("run")
@@ -2530,6 +2533,17 @@ object DataSourceSelector {
         }.onFailure { e ->
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
             LOG.warn("[M36] runRunner FAILED: ${cause.javaClass.simpleName}: ${cause.message}", cause)
+            // T-DsCover：预览默认准备路径静默失败（被动展示不应弹模态打断）；
+            // 并清 last-used 记忆，避免驱动损坏的数据源每次预览都白失败一次。
+            if (silent) {
+                val proj = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
+                if (proj != null) {
+                    runCatching {
+                        com.intellij.ide.util.PropertiesComponent.getInstance(proj).unsetValue(LAST_RUNNER_KEY)
+                    }
+                }
+                return
+            }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
             val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
             com.intellij.openapi.ui.Messages.showErrorDialog(
@@ -2697,7 +2711,7 @@ object DataSourceSelector {
         }
     }
 
-    /** 打开 Database 工具窗口（无配置数据源时引导用户）。 */
+    /** 打开 Database 工具窗口（无配置数据源时引导用户，仅显式执行路径调用；预览路径静默）。 */
     private fun openDatabaseToolWindow(project: Project) {
         runCatching {
             com.intellij.openapi.wm.ToolWindowManager.getInstance(project)
