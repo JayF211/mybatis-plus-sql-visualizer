@@ -169,6 +169,43 @@ class SqlLogEntryBufferTest {
         assertEquals(2, buffer.snapshot().size)
     }
 
+    // ---------- T-LogDedupeMpMark：跨格式副本（仅差首尾空白）判重 ----------
+
+    @Test
+    fun `尾随空白差异判重命中`() {
+        // JdbcTemplate 双路日志：named 副本 trim、prepared 副本尾随空白原样保留
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        assertFalse(buffer.addEntry(entryAt("SELECT 1  ", 100L)))
+        assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `首部与内部连续空白差异判重命中`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT * FROM t WHERE id = 1", 0L))
+        assertFalse(buffer.addEntry(entryAt("  SELECT *  FROM t WHERE id = 1", 100L)))
+        assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `空白差异副本丢弃计数并入同一徽章键`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("SELECT 1", 0L))
+        buffer.addEntry(entryAt("SELECT 1 ", 100L))
+        buffer.addEntry(entryAt("  SELECT 1", 200L))
+        assertEquals(2, buffer.dedupeCount("SELECT 1"))
+    }
+
+    @Test
+    fun `空白规范化不改大小写与内容_不同SQL仍不去重`() {
+        buffer.dedupeEnabled = true
+        buffer.addEntry(entryAt("select 1", 0L))
+        assertTrue(buffer.addEntry(entryAt("SELECT 1", 100L)))
+        assertTrue(buffer.addEntry(entryAt("SELECT 1 WHERE", 200L)))
+        assertEquals(3, buffer.snapshot().size)
+    }
+
     @Test
     fun `去重开关默认开启`() {
         assertTrue(buffer.dedupeEnabled) // 默认开（T-M31.13 用户实测后要求）
@@ -209,7 +246,8 @@ class SqlLogEntryBufferTest {
         buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃 1 次
         buffer.addEntry(entryAt("SELECT 1", 200L)) // 丢弃 2 次
         assertEquals(2, buffer.dedupeCount("SELECT 1"))
-        assertEquals(2, buffer.dedupeCountsSnapshot()[sqlFingerprint("SELECT 1")]) // T-Perf-19：键=SQL指纹
+        // T-Perf-19：快照键为 SQL 指纹（非原文）——经 sqlFingerprint 查键
+        assertEquals(2, buffer.dedupeCountsSnapshot()[sqlFingerprint("SELECT 1")])
     }
 
     @Test
@@ -296,6 +334,21 @@ class SqlLogEntryBufferTest {
         buf.addEntry(entryAt("SELECT 1", 100L))
         assertEquals(0, buf.dedupeExisting())
         assertEquals(2, buf.snapshot().size)
+    }
+
+    @Test
+    fun `dedupeExisting 空白差异副本按同键裁剪`() {
+        // T-LogDedupeMpMark：勾选去重对既有跨格式副本（named trim / prepared 尾随空白）同样生效
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = false
+        buf.dedupeWindowMs = 1000L
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 1  ", 200L))
+        buf.dedupeEnabled = true
+        assertEquals(1, buf.dedupeExisting())
+        assertEquals(1, buf.snapshot().size)
+        assertEquals("SELECT 1", buf.snapshot()[0].restoredSql)
+        assertEquals(1, buf.dedupeCount("SELECT 1"))
     }
 
     @Test

@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * T-Perf-03 流式增量刷新差分纯逻辑测试：
+ * T-Perf-03 流式增量刷新差分纯逻辑测试（自 dev 移植）：
  * 缓冲尾部追加 / 头部淘汰+追加 / 清空 / 过滤离散增删 各路径的差分决策。
  */
 class SqlLogStreamingDiffTest {

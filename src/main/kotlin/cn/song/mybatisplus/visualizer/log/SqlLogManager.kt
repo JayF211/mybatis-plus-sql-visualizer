@@ -435,7 +435,9 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次；与面板是否已创建无关）。 */
     /** F-43 测试访问器：当前自动保存文件。 */
-    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()    /** F-43 测试访问器：解析文件名模板。 */
+    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()
+
+    /** F-43 测试访问器：解析文件名模板。 */
     internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
 
     /**

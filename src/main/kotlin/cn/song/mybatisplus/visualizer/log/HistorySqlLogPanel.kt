@@ -13,6 +13,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
+import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.SearchTextField
@@ -21,6 +23,7 @@ import java.awt.CardLayout
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.GridLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
@@ -59,6 +62,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private val sqlClickPreview = SqlClickPreview(project, sqlList) { i -> withTerminator(sqlList.model.getElementAt(i).restoredSql) }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
@@ -118,14 +123,33 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 显示模式下拉（测试断言选中态回同步用）。 */
     internal val displayModeComboForTest: JComboBox<*> get() = displayModeCombo
 
-    /** 显示模式变更处理（topic 监听与测试共用）：清二级列表渲染缓存 + 回同步 combo +
-     * 二级可见时重绘。日志面板的缓存清理由其既有 settings 监听承担，两侧经 topic 对齐。 */
+    /** 二级列表当前行高（测试断言行高随模式重设用）。 */
+    internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
+
+    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 回同步 combo + 二级可见时重绘。
+     *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。 */
     internal fun onDisplayModeChanged() {
         syncingDisplayModeCombo = true
         displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
         syncingDisplayModeCombo = false
-        currentEntries.forEach { it.cachedListHtml = null }
+        applySqlListCellHeight()
         if (currentFile != null) sqlList.repaint()
+    }
+
+    /**
+     * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡，与日志 tab [SqlLogPanel.applyListCellHeight] 同款）：
+     * SINGLE_LINE 固定行高走 O(1) 布局快路径；KEYWORD_WRAP/FORMATTED 可变行高（条目行数不等），
+     * 多行片段有条目级缓存，逐条测量只剩轻量组件布局。
+     */
+    internal fun applySqlListCellHeight() {
+        sqlList.fixedCellHeight =
+            if (PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE) {
+                sqlList.cellRenderer
+                    .getListCellRendererComponent(sqlList, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()), 0, false, false)
+                    .preferredSize.height
+            } else {
+                -1
+            }
     }
 
     private val cardLayout = CardLayout()
@@ -155,6 +179,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         searchField.text = query
         applySearch()
     }
+
+    /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
+    internal val sqlClickPreviewForTest: SqlClickPreview get() = sqlClickPreview
 
     init {
         buildUI()
@@ -193,8 +220,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         // 一级：文件列表
         fileList.emptyText.text = MpSqlVisualizerBundle.message("log.history.files.empty")
-        fileList.fixedCellHeight = -1
         fileList.cellRenderer = HistoryFileCellRenderer()
+        // T-LogListFreeze-04：固定行高（单行恒定高）——JList 布局走 O(1) 快路径，不再逐条调渲染器测量
+        fileList.fixedCellHeight = fileList.cellRenderer
+            .getListCellRendererComponent(fileList, HistoryFileEntry(File("sample.sql"), 1), 0, false, false)
+            .preferredSize.height
         fileList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount >= 2) {
@@ -206,10 +236,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         // 二级：SQL 列表
         sqlList.emptyText.text = MpSqlVisualizerBundle.message("log.history.entries.empty")
-        sqlList.fixedCellHeight = -1
         sqlList.cellRenderer = HistoryCellRenderer()
+        applySqlListCellHeight()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    sqlClickPreview.onClick(e.clickCount, e.point)
+                }
                 if (e.clickCount >= 2) {
                     sqlList.selectedValue?.let { openPreview(it) }
                 }
@@ -230,6 +264,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun showFileList() {
         currentFile = null
         currentEntries = emptyList()
+        sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
         backButton.isVisible = false
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
@@ -472,6 +507,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     override fun dispose() {
         // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
+        sqlClickPreview.dispose()
     }
 
     companion object {
@@ -497,11 +533,29 @@ data class HistoryFileEntry(
     val sizeBytes: Long get() = file.length()
 }
 
+/** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。 */
+private val HISTORY_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, java.awt.Color(0x9E9E9E))
+
 /**
- * 一级文件列表单元格渲染器（F-44-3）：文件名（加粗）+ 文件大小 | SQL 条数（灰）。
+ * 一级文件列表单元格渲染器（F-44-3；T-LogListFreeze-04 弃 HTML 通道）：
+ * 文件名（加粗）+ 文件大小 | SQL 条数（灰），SimpleColoredComponent 片段渲染。
  * internal 供 UI 测试断言文件名/大小/条数渲染与文件大小格式化边界。
  */
-internal class HistoryFileCellRenderer : javax.swing.DefaultListCellRenderer() {
+internal class HistoryFileCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
+    /** 渲染行（internal 供 UI 测试遍历片段断言文本）。 */
+    internal val line = SimpleColoredComponent()
+
+    init {
+        layout = BorderLayout()
+        isOpaque = true
+        line.isOpaque = false
+        add(line, BorderLayout.CENTER)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+            javax.swing.BorderFactory.createEmptyBorder(5, 8, 5, 8),
+        )
+    }
+
     override fun getListCellRendererComponent(
         list: javax.swing.JList<*>?,
         value: Any?,
@@ -509,29 +563,22 @@ internal class HistoryFileCellRenderer : javax.swing.DefaultListCellRenderer() {
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): Component {
-        super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+        background = if (isSelected) list?.selectionBackground else list?.background
+        line.foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
+        else (list?.foreground ?: JBColor.foreground())
+        line.clear()
         val fe = value as? HistoryFileEntry
         if (fe != null) {
             val size = formatFileSize(fe.sizeBytes)
             val sqlCount = MpSqlVisualizerBundle.message("log.history.sqlCount", fe.sqlCount.toString())
-            this.text = "<html><b>${escapeHtml(fe.displayName)}</b>  " +
-                "<span style='color:#9E9E9E'>$size | $sqlCount</span></html>"
+            line.icon = AllIcons.FileTypes.Text
+            line.append(fe.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+            line.append("  $size | $sqlCount ", HISTORY_META_GRAY)
+            // 文件条目少、低频，tooltip（完整路径）保留；条目级 tooltip 卡顿根因在二级 SQL 列表（T-ClickPreview）
             toolTipText = fe.file.absolutePath
-            icon = AllIcons.FileTypes.Text
-            foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
-            else (list?.foreground ?: JBColor.foreground())
         }
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-            javax.swing.BorderFactory.createEmptyBorder(5, 8, 5, 8),
-        )
         return this
     }
-
-    private fun escapeHtml(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
 
     private fun formatFileSize(bytes: Long): String = when {
         bytes >= 1024L * 1024L -> String.format(Locale.ENGLISH, "%.1f MB", bytes / 1024.0 / 1024.0)
@@ -541,12 +588,41 @@ internal class HistoryFileCellRenderer : javax.swing.DefaultListCellRenderer() {
 }
 
 /**
- * 二级 SQL 列表单元格渲染器（F-44-2）：耗时 + 执行时间 + 源码位置 + SQL 摘要。
- * SQL 摘要走 [SqlListHtmlRenderer] 高亮（关键字/表名/字符串/数字分色）；
- * 耗时/时间戳/源码走灰色 `#9E9E9E` 以与 SQL 视觉分层。
+ * 二级 SQL 列表单元格渲染器（F-44-2；T-LogListFreeze-04 弃 HTML 通道）：
+ * 双 [SimpleColoredComponent] 两行结构（T-TwoLine 语义保留）：元信息行在上（[耗时] [时间戳] [来源]，
+ * 均灰 `#9E9E9E` 以与 SQL 视觉分层），SQL 高亮行在下（[SqlListFragmentRenderer] 分词着色）。
+ * 原 JLabel-HTML 通道每次 setText 触发 BasicHTML 解析排版 + 可变行高逐条测量 = 列表卡顿根因。
  * internal 供 UI 测试断言各种条目状态（空耗时/空源码/特殊字符/超长 SQL）下的渲染健壮性。
  */
-internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
+internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
+    /** 元信息行（internal 供 UI 测试遍历片段断言）。 */
+    internal val metaLine = SimpleColoredComponent()
+
+    /** SQL 行组件池（T-ListMode：单行模式恒 1 行；多行模式按变换后行数伸缩）。 */
+    private val sqlLinePool = mutableListOf(SimpleColoredComponent())
+
+    /** SQL 首行（SINGLE_LINE 恒为唯一 SQL 行；测试断言兼容单行语义）。 */
+    internal val sqlLine: SimpleColoredComponent get() = sqlLinePool[0]
+
+    /** 全部 SQL 行（internal 供 UI 测试按行断言多行模式渲染）。 */
+    internal val sqlLines: List<SimpleColoredComponent> get() = sqlLinePool
+
+    private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
+
+    init {
+        layout = BorderLayout()
+        isOpaque = true
+        metaLine.isOpaque = false
+        sqlLinePool[0].isOpaque = false
+        linesPanel.add(metaLine)
+        linesPanel.add(sqlLinePool[0])
+        add(linesPanel, BorderLayout.CENTER)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+            javax.swing.BorderFactory.createEmptyBorder(5, 8, 5, 8),
+        )
+    }
+
     override fun getListCellRendererComponent(
         list: javax.swing.JList<*>?,
         value: Any?,
@@ -554,40 +630,72 @@ internal class HistoryCellRenderer : javax.swing.DefaultListCellRenderer() {
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): Component {
-        super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+        background = if (isSelected) list?.selectionBackground else list?.background
+        val fg = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
+        else (list?.foreground ?: JBColor.foreground())
+        metaLine.foreground = fg
+        metaLine.clear()
         val entry = value as? LogSqlEntry
-        if (entry != null) {
-            // T-Perf-05：HTML 缓存照抄 SqlLogPanel cachedListHtml 方案——滚动时每可见行只渲染一次
-            // （此前每次滚动重跑 SqlListHtmlRenderer 词法高亮 + BasicHTML 解析，长列表持续高 CPU）。
-            // 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
-            val html = entry.cachedListHtml ?: run {
-                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
-                val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
-                val source = when {
-                    SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
-                    entry.sourceFile != null -> {
-                        // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
-                        val name = entry.sourceFile.substringAfterLast('/')
-                        if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
-                    }
-                    else -> "unknown"
+        val lineFragments = if (entry != null) {
+            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
+            val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
+            val source = when {
+                SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
+                entry.sourceFile != null -> {
+                    // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
+                    val name = entry.sourceFile.substringAfterLast('/')
+                    if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
                 }
-                val mode = PluginSettings.getInstance().sqlListDisplayMode()
-                val sqlHtml = SqlListHtmlRenderer.render(prepareSqlForList(withTerminator(entry.summary), mode))
-                // T-TwoLine：元信息（耗时/时间戳/来源）独立成行在上，SQL 高亮行在下
-                "<html><span style='color:#9E9E9E'>[$duration]</span> " +
-                    "<span style='color:#9E9E9E'>[$timestamp]</span> " +
-                    "<span style='color:#9E9E9E'>[$source]</span><br>$sqlHtml</html>"
-            }.also { entry.cachedListHtml = it }
-            this.text = html
-            toolTipText = entry.restoredSql
-            foreground = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
-            else (list?.foreground ?: JBColor.foreground())
+                else -> "unknown"
+            }
+            // T-TwoLine：元信息行在上（uniform 灰——不按耗时变色避免与 SQL 高亮冲突），SQL 高亮行在下
+            metaLine.append("[$duration] ", HISTORY_META_GRAY)
+            metaLine.append("[$timestamp] ", HISTORY_META_GRAY)
+            metaLine.append("[$source] ", HISTORY_META_GRAY)
+            sqlLineFragmentsFor(entry)
+        } else {
+            null
         }
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-            javax.swing.BorderFactory.createEmptyBorder(5, 8, 5, 8),
-        )
+        // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
+        ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        sqlLinePool.forEachIndexed { i, comp ->
+            comp.foreground = fg
+            comp.clear()
+            lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+        }
         return this
+    }
+
+    /** SQL 行组件池伸缩到 n 行（首位恒保留——[sqlLine] 测试缝；收缩移除末尾）。 */
+    private fun ensureSqlLineCount(n: Int) {
+        while (sqlLinePool.size < n) {
+            val comp = SimpleColoredComponent()
+            comp.isOpaque = false
+            sqlLinePool += comp
+            linesPanel.add(comp)
+        }
+        while (sqlLinePool.size > maxOf(1, n)) {
+            linesPanel.remove(sqlLinePool.removeAt(sqlLinePool.size - 1))
+        }
+    }
+
+    /**
+     * SQL 行片段（T-ListMode 模式分流，与 [LogEntryListCellRenderer] 同款）：
+     * SINGLE_LINE 直渲染不缓存；多行模式走条目级缓存（键含模式自动失效）。
+     * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
+     */
+    private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
+        val sql = withTerminator(entry.summary)
+        val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        if (mode == SqlListDisplayMode.SINGLE_LINE) {
+            return listOf(SqlListFragmentRenderer.renderFragments(sql))
+        }
+        entry.cachedListLineFragments
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.let { return it }
+        return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
+            entry.cachedListLineFragments = it
+            entry.cachedListLineFragmentsMode = mode
+        }
     }
 }

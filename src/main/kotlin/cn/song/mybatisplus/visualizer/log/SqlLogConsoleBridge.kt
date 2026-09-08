@@ -577,19 +577,20 @@ internal fun processConsoleLine(
     // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
     // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
     val lineDuration = ExecutionTimeParser.parse(line, timePrefix)
-    var src = ctx.pendingSource
-    if (src == null) {
-        // F-44-7：无标记时，检测是否为 MP 分页 COUNT 查询 → 标记为内部查询
-        val isCountQuery = taken.any { it.restoredSql.trimStart().startsWith("SELECT COUNT(", ignoreCase = true) }
-        if (isCountQuery) {
-            src = SourceMarkers.mpPaginationCount()
-        }
-    }
+    val src = ctx.pendingSource
     val result = taken.map { e ->
+        // F-44-7：MP 分页 COUNT 标记逐条判定（T-LogDedupeMpMark）——批次是「同一行喂入产出的全部条目」，
+        // named 行触发 closePending 时批内常有两条（闭合的 prepared 副本 + 本条 named），批级 any 会把
+        // 与 COUNT 同批的数据查询一并误标（且连带被判 NoSource 丢失源码跳转）。源码标记优先级不变。
+        val eSrc = src ?: if (e.restoredSql.trimStart().startsWith("SELECT COUNT(", ignoreCase = true)) {
+            SourceMarkers.mpPaginationCount()
+        } else {
+            null
+        }
         val duration = lineDuration ?: LogDurationParser.parse(e)
         e.copy(
-            sourceFile = src?.first,
-            sourceLine = src?.second ?: 0,
+            sourceFile = eSrc?.first,
+            sourceLine = eSrc?.second ?: 0,
             executionTimeMs = duration ?: e.executionTimeMs,
         )
     }

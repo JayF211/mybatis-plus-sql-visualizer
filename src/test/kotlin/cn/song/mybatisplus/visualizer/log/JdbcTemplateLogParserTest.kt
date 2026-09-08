@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -400,5 +401,166 @@ class JdbcTemplateLogParserTest {
         assertEquals(2, entries.size)
         assertTrue(entries[0].rawSql.contains("t1"))
         assertTrue(entries[1].rawSql.contains("t2"))
+    }
+
+    // ========== T-LogDedupeMpMark：双路日志同语句副本（用户控制台序列回放） ==========
+
+    @Test
+    fun `named 单行与 prepared 双路同语句_产出仅差首尾空白的副本`() {
+        val entries = feedAll(
+            parser(),
+            "2026-09-08 09:38:03.587 [TID: null] [cache-preheat-1] TRACE com.a.b.impl.dml.CCCRepositoryJdbcImpl Line:243 - sql = SELECT \"name\" FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = :param1) AND (\"runPlanId\" = :param2) )  , parameters = {param1=0, param2=cc82baedas4a41a993388a5b009f81a8}",
+            withPrefix("Executing prepared SQL query"),
+            withPrefix("""Executing prepared SQL statement [SELECT "name" FROM ipm_RunPlanProject  WHERE ( ("deleted" = ?) AND ("runPlanId" = ?) )  ]"""),
+            withTracePrefix("Setting SQL statement parameter value: column index 1, parameter value [0], value class [java.lang.Integer], SQL type unknown"),
+            withTracePrefix("Setting SQL statement parameter value: column index 2, parameter value [cc82baedas4a41a993388a5b009f81a8], value class [java.lang.String], SQL type unknown"),
+            // 下一条语句的 named 行触发 prepared 副本闭合（真实批序：一行产出两条）
+            "2026-09-08 09:38:03.600 [TID: null] [cache-preheat-1] TRACE com.a.b.impl.dml.CCCRepositoryJdbcImpl Line:243 - sql = SELECT COUNT(*) as count FROM ipm_RunPlanProject  WHERE ( (\"deleted\" = :param1) )  , parameters = {param1=0}",
+        )
+        assertEquals(3, entries.size)
+        // entries[0] named 数据副本（trim 过）/ entries[1] prepared 数据副本（尾随空白保留）：
+        // 还原值一致、原文仅差首尾空白——正是跨格式去重失效的文本现场
+        assertTrue(entries[0].restoredSql.contains("'cc82baedas4a41a993388a5b009f81a8'"))
+        assertTrue(entries[1].restoredSql.contains("'cc82baedas4a41a993388a5b009f81a8'"))
+        assertEquals(
+            normalizeSqlWhitespace(entries[0].restoredSql),
+            normalizeSqlWhitespace(entries[1].restoredSql),
+        )
+        assertFalse("两副本原文不相等（空白差），规范化后才相等", entries[0].restoredSql == entries[1].restoredSql)
+        // 第三条为下一语句的 named COUNT
+        assertTrue(entries[2].restoredSql.trimStart().startsWith("SELECT COUNT(", ignoreCase = true))
+    }
+
+    // ========== T-JdbcMultiline：多行 `[...]` 语句收集 ==========
+
+    /** 用户反馈样本（2026-09-08 原样回放）：TLog TID 前缀 + SQL 跨行 + `]` 独占末行。 */
+    private val multilineUserSample = listOf(
+        "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
+        "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
+        "        FROM ipm_ImplementTask t",
+        "        WHERE t.deleted = 0",
+        "        AND EXISTS (SELECT 1 FROM ipm_ProjectSubject p WHERE p.id = t.projectId AND p.deleted = 0)",
+        "        AND (t.subjectId IS NULL OR t.subjectId = '' OR",
+        "             EXISTS (SELECT 1 FROM ipm_ProjectSubject s WHERE s.id = t.subjectId AND s.deleted = 0))",
+        "                    AND t.projectId IN (",
+        "                SELECT pc.id FROM ipm_ProjectSubject pc",
+        "                WHERE pc.deleted = 0 AND pc.projectClassification IN (",
+        "                     '80a9971836664x3091xaa53b78ae6837'",
+        "                )",
+        "            )",
+        "]",
+    )
+
+    @Test
+    fun `多行 prepared statement 用户样本回放`() {
+        val p = parser()
+        multilineUserSample.forEach { p.feed(it) }
+        // 闭合后条目仍在 pending（与单行无参语句一致，由下一条语句/刷新冲刷）
+        assertTrue("闭合时不立即产出", p.takeEntries().isEmpty())
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        val e = entries[0]
+        assertEquals(SqlSource.JDBC, e.source)
+        assertTrue("rawSql 以 SELECT COUNT(1) 开头", e.rawSql.startsWith("SELECT COUNT(1)"))
+        assertFalse("终结方括号不残留", e.rawSql.contains('[') || e.rawSql.contains(']'))
+        assertTrue("跨行结构保留", e.rawSql.contains("\n        FROM ipm_ImplementTask t"))
+        assertTrue("字符串字面量保留", e.rawSql.contains("'80a9971836664x3091xaa53b78ae6837'"))
+        assertTrue("以 ) 收尾（削首尾空白）", e.rawSql.endsWith(")"))
+        assertEquals("无参数时还原 = 原文", e.rawSql, e.restoredSql)
+        assertTrue("无参数", e.params.isEmpty())
+    }
+
+    @Test
+    fun `多行闭合由下一条语句行冲刷`() {
+        val p = parser()
+        multilineUserSample.forEach { p.feed(it) }
+        // 无 SQL 文本的头行不冲刷（与单行语义一致）
+        p.feed(withPrefix("Executing prepared SQL query"))
+        assertTrue("头行不产出", p.takeEntries().isEmpty())
+        // 下一条 statement 行触发上一条闭合
+        p.feed(withPrefix("Executing prepared SQL statement [SELECT 1 FROM dual]"))
+        val entries = p.takeEntries()
+        assertEquals("statement 行冲刷出多行 COUNT 条目", 1, entries.size)
+        assertTrue(entries[0].rawSql.startsWith("SELECT COUNT(1)"))
+        p.closePending()
+        val all = p.takeEntries()
+        assertEquals("第二次取仅剩新语句（COUNT 已随首次 takeEntries 取走）", 1, all.size)
+        assertEquals("SELECT 1 FROM dual", all[0].rawSql)
+    }
+
+    @Test
+    fun `多行收集 字符串内闭括号不构成闭合`() {
+        val entries = feedAll(
+            parser(),
+            withPrefix("Executing prepared SQL statement [SELECT 'a]b' AS v"),
+            // 续行为控制台裸文本（同一消息的后续行，无日志前缀）
+            "FROM t WHERE x = 1]",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 'a]b' AS v\nFROM t WHERE x = 1", entries[0].rawSql)
+    }
+
+    @Test
+    fun `多行收集 转义引号与字符串态跨行延续`() {
+        val entries = feedAll(
+            parser(),
+            withPrefix("Executing prepared SQL statement [SELECT 'it''s] fine'"),
+            "FROM t WHERE y = 'z']",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 'it''s] fine'\nFROM t WHERE y = 'z'", entries[0].rawSql)
+    }
+
+    @Test
+    fun `多行收集 标识符平衡括号不构成闭合`() {
+        val entries = feedAll(
+            parser(),
+            withPrefix("Executing prepared SQL statement [SELECT arr[1] FROM"),
+            "t WHERE x = 2]",
+        )
+        assertEquals(1, entries.size)
+        assertEquals("SELECT arr[1] FROM\nt WHERE x = 2", entries[0].rawSql)
+    }
+
+    @Test
+    fun `多行收集 参数行边界强制闭合残句且不误挂参数`() {
+        val p = parser()
+        p.feed(withPrefix("Executing prepared SQL statement [SELECT a"))
+        p.feed("        FROM t")
+        // 参数行到达 → 边界：残句闭合产出，参数行因无 pending 上下文被忽略
+        p.feed(
+            withTracePrefix(
+                "Setting SQL statement parameter value: column index 1, parameter value [5], value class [java.lang.Integer], SQL type unknown",
+            ),
+        )
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT a\n        FROM t", entries[0].rawSql)
+        assertTrue("残句不得误挂参数", entries[0].params.isEmpty())
+        p.closePending()
+        assertTrue(p.takeEntries().isEmpty())
+    }
+
+    @Test
+    fun `多行收集 NamedParameter 行边界同理`() {
+        val p = parser()
+        p.feed(withPrefix("Executing prepared SQL statement [SELECT a"))
+        p.feed("2026-09-08 09:38:03.600 [TID: null] [x] TRACE c.C Repo Line:1 - sql = SELECT COUNT(*) FROM t , parameters = {p1=0}")
+        val entries = p.takeEntries()
+        assertEquals("残句 + named 各一条", 2, entries.size)
+        assertEquals("SELECT a", entries[0].rawSql)
+        assertEquals(SqlSource.JDBC, entries[1].source)
+    }
+
+    @Test
+    fun `多行收集 超限强制闭合截断`() {
+        val p = JdbcTemplateLogParser(maxParseLength = 60)
+        p.feed(withPrefix("Executing prepared SQL statement [SELECT aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        p.feed("        FROM tttttttttttttttttttttttttttttttttttttttttt WHERE x = 1]")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertTrue("截断在 maxParseLength 内", entries[0].rawSql.length <= 60)
     }
 }

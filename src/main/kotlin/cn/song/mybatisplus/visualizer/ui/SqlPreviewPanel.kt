@@ -1329,7 +1329,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 ?: com.intellij.util.SlowOperations.allowSlowOperations(
                     com.intellij.util.SlowOperations.GENERIC,
                 ).use {
-                    com.intellij.openapi.application.ReadAction.compute<Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>, Throwable> {
+                    // T-PreviewWiLock：必须 WriteIntentReadAction——refreshAndFindFileByIoFile 是同步 VFS
+                    // refresh，2024.2+ 平台要求 write-safe context（write-intent lock）；EDT 进 ReadAction
+                    // 会把 write-intent lock check out，262 平台 RefreshSessionImpl.launch 硬抛
+                    // "Access is allowed from write thread only"（日志双击预览崩溃实证）。
+                    // write-intent 隐含读权限，lambda 内 findFile 不受影响。
+                    // T-Wia262：用单类型实参选 compute(Computable) 重载——compute(ThrowableComputable)
+                    // 重载在 262 平台已移除（verifyPlugin 兼容性问题实证），compute(Computable) 为
+                    // 243~262 三版本交集；lambda 内仅不受检异常，SAM 换型语义不变。
+                    com.intellij.openapi.application.WriteIntentReadAction.compute<Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>> {
                         val vf = previewTempFile ?: run {
                             val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
                             io.writeText(sql)  // 纯 java.io，无需 EDT/write action

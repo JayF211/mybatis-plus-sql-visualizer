@@ -243,7 +243,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         }
     }
 
-    fun test显示模式变更_清空二级列表渲染缓存并回同步combo() {
+    fun test显示模式变更_行高重设_回同步combo_残留缓存按模式键失效() {
         writeHistoryFile(
             "sql-history-2026-08-31.sql",
             f44FileContent(
@@ -255,15 +255,21 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         try {
             panel.openFileForTest(panel.fileListEntries.first())
             val entry = panel.sqlListEntries.single()
-            entry.cachedListHtml = "<html>stale</html>" // 模拟旧模式残留缓存
+            // 模拟旧模式残留缓存（键=FORMATTED，与当前模式不同——渲染读取处按键比对自动失效）
+            entry.cachedListLineFragments = listOf(emptyList())
+            entry.cachedListLineFragmentsMode = SqlListDisplayMode.FORMATTED
 
             panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
 
-            assertNull("模式变更后渲染缓存应被清空", entry.cachedListHtml)
             assertEquals(
                 "combo 选中态应回同步设置值",
                 cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode().ordinal,
                 panel.displayModeComboForTest.selectedIndex,
+            )
+            assertEquals(
+                "行高应随模式重设（单行=固定高，多行=-1 可变）",
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE,
+                panel.sqlListFixedCellHeightForTest != -1,
             )
         } finally {
             panel.dispose()
