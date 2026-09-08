@@ -145,4 +145,38 @@ class SqlLogConsoleBridgeMarkerTest {
         assertEquals(1, entries.size)
         assertEquals(SourceMarkers.MP_PAGINATION_COUNT, entries[0].sourceFile)
     }
+
+    @Test
+    fun `多行JdbcTemplate语句端到端捕获并标记MP分页`() {
+        val ctx = newCtx()
+        // 用户反馈样本（2026-09-08）：TLog TID 前缀 + SQL 跨行 + `]` 独占末行
+        val sample = listOf(
+            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
+            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
+            "        FROM ipm_ImplementTask t",
+            "        WHERE t.deleted = 0",
+            "        AND EXISTS (SELECT 1 FROM ipm_ProjectSubject p WHERE p.id = t.projectId AND p.deleted = 0)",
+            "        AND (t.subjectId IS NULL OR t.subjectId = '' OR",
+            "             EXISTS (SELECT 1 FROM ipm_ProjectSubject s WHERE s.id = t.subjectId AND s.deleted = 0))",
+            "                    AND t.projectId IN (",
+            "                SELECT pc.id FROM ipm_ProjectSubject pc",
+            "                WHERE pc.deleted = 0 AND pc.projectClassification IN (",
+            "                     '80a9971836664x3091xaa53b78ae6837'",
+            "                )",
+            "            )",
+            "]",
+        )
+        // 收集期间逐行零产出
+        sample.forEach { line -> assertTrue(processConsoleLine(line, ctx, null, {}).isEmpty()) }
+        // 下一条语句行冲刷出多行 COUNT 条目；named 行自身也产出 → 批内两条（与双路日志批序一致）
+        val entries = processConsoleLine(
+            namedLine("SELECT \"owner\" FROM ipm_ProjectSubject WHERE ( (\"deleted\" = :param1) )  ", "param1=0"),
+            ctx, null, {},
+        )
+        assertEquals(2, entries.size)
+        assertEquals(SourceMarkers.MP_PAGINATION_COUNT, entries[0].sourceFile)
+        assertNull("同批 named 数据查询不得误标 MP 分页计数", entries[1].sourceFile)
+        assertTrue(entries[0].restoredSql.startsWith("SELECT COUNT(1)"))
+        assertTrue("跨行结构在还原文本中保留", entries[0].restoredSql.contains("\n        FROM ipm_ImplementTask t"))
+    }
 }
