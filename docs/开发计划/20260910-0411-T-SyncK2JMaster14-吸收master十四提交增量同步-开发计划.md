@@ -88,3 +88,14 @@
 - **.kt 新测试互操作**：Kotlin 调 Java 禁命名实参、静态成员需显式 import、Unit.INSTANCE；CopyFeedback/ConsoleReplayGuard 本轮按 Java 惯例新建（object→final class+INSTANCE）
 - **verifyPlugin 不保 toolWindow 类存在性**：补齐两文件后以 grep 审计 plugin.xml 全部活引用类落盘，作为 verifyPlugin 之外的额外门禁
 - 回滚：每波次独立提交，异常 `git reset --hard <波次前>` 即可
+
+## 6. 实施记录（2026-09-10 收官回填）
+
+提交链：2142a8f 立项 → 9ec8fdb 生产（32 文件 +1189/-163）→ 4718607 测试（16 文件 +1200）→ 16363b9 资源/构建/文档 → 本收官提交（锚点 + 交付行）。
+
+- **验证结果**：全量 3195/0/0/6 绿（基线 3138 + 本轮 57 新用例）；buildPlugin 16s 绿；verifyPlugin 三目标（IU-243.28141.41 / IU-253.33514.17 / IU-262.9437.185）全 **Compatible**，弃用计数 243:4 / 253:7 / 262:39、experimental 6（留档对比）。plugin.xml 活引用类审计：仅 history.SqlHistoryToolWindowFactory 缺失（注释块死引用，双侧对称，不补）。
+- **计划偏差 1（QueryWrapperParserTest 整替方案否决）**：master HEAD 整文件直取后 compileTestKotlin 爆约 40 处「Named arguments are prohibited for non-Kotlin functions」——master 测试全用命名实参调 Kotlin 生产类，而 k2j 生产侧同名类是 Java。回退整替，改增量翻译（2 个既有 or 语义测试断言改版 + 4 个 M38.2 新用例按 k2j 位置实参风格）。教训：该文件的「风格分叉」不是历史遗留，而是 k2j 测试适配 Java 生产侧的必然形态，后续同步该文件一律增量翻译，不再整替。
+- **计划偏差 2（union merge 用法事故，已修复零残留）**：`git merge-file --union` 无 `-p` 时就地改第一个文件，误把 stdout 重定向当产物复制，三份共享文档（CHANGELOG/MEMORY/变更记录）工作副本被清空；git 对象未损，从 HEAD/29fbf55/master 三方重新合并，逐文件验证「对 master 零删减 + k2j 专属行保留」后落盘。
+- **编译期三处移植笔误**：LogSqlEntry 的 SqlSource 重载构造器漏加 `, 0L`（replace_all 被字面量差异躲过）；直取的 SqlLogToolWindowFactory/ToolWindowVisibilityListener 调 Kotlin 属性访问器 `getCapturing()` 而 k2j SqlLogManager.java 只暴露 `isCapturing()`——补 `getCapturing()` 别名保持直取文件与 master 零分叉；SqlLogManager 字段初始化器 lambda 读未定值 final 字段 `project` 触发 javac DA 限制——改方法引用 `this::defaultAutoShowRequest`。
+- **新测试互操作适配**：SqlLogManagerAutoShowTest 的 onAutoShowRequest lambda 赋值抽入非 test 前缀私有工厂 `managerWithCounter()`（JUnit3 前缀扫描撞 testXxx$lambda$N 合成方法假失败，历轮踩坑规避）；CopyFeedbackUiTest/RefreshDbStealTest 的 PreviewResult 具名实参改位置实参（20 参全量/7 参便捷构造各一）；RefreshDbStealTest 的 showResult 补第三参 null（Java 无默认参数）。
+
