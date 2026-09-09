@@ -10,6 +10,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -750,5 +751,24 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
         } finally {
             settings.getState().setLogAutoCaptureSuppressed(oldSuppressed);
         }
+    }
+
+    // ---------- T-LogRowNumber：项目启动捕获序号清零 ----------
+
+    @Test
+    public void testT29_ResetEntrySequence_clearsCounterForNewEntries() throws Exception {
+        // 转发生效：manager.resetEntrySequence 后新条目从 #1 重新计数，旧条目行号保留
+        SqlLogManager manager = managerWith(new FakeBridge(true, false));
+        manager.getEntries().addEntry(new LogSqlEntry("SELECT 1", "SELECT 1", List.of()));
+        manager.getEntries().addEntry(new LogSqlEntry("SELECT 2", "SELECT 2", List.of()));
+        assertEquals(List.of(1L, 2L), manager.getEntries().snapshot().stream().map(LogSqlEntry::sequenceNumber).toList());
+
+        manager.resetEntrySequence();
+
+        assertEquals("旧条目行号保留", List.of(1L, 2L),
+                manager.getEntries().snapshot().stream().map(LogSqlEntry::sequenceNumber).toList());
+        manager.getEntries().addEntry(new LogSqlEntry("SELECT 3", "SELECT 3", List.of()));
+        assertEquals("新条目从 #1 起计数", 1L,
+                manager.getEntries().snapshot().get(manager.getEntries().snapshot().size() - 1).sequenceNumber());
     }
 }

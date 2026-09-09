@@ -45,7 +45,8 @@ public class SqlLogCaptureRealtimeScenarioTest {
                     e.source(),
                     time != null ? time : e.executionTimeMs(),
                     e.sourceFile(),
-                    e.sourceLine()));
+                    e.sourceLine(),
+                    0L));
         }
         return result;
     }

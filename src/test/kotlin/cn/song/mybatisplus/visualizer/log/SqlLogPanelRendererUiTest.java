@@ -157,4 +157,42 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         assertNotNull("渲染组件不应为 null", c);
         assertTrue("渲染组件应为渲染器自身（含双行组件面板）", c instanceof java.awt.Component);
     }
+
+    // ---------- T-LogRowNumber：行号片段 ----------
+
+    @Test
+    public void test行号片段在元信息行最前() throws Exception {
+        LogSqlEntry e = entry("SELECT 1").withSequenceNumber(12L);
+        LogEntryListCellRenderer r = render(e);
+        String meta = joinedText(r.metaLine);
+        assertTrue("元信息行含行号 #12", meta.contains("#12 "));
+        assertTrue("行号应在片段序列最前", meta.startsWith("#12 "));
+        assertFalse("SQL 不混入元信息行", meta.contains("SELECT"));
+    }
+
+    @Test
+    public void test无行号条目不渲染行号片段() throws Exception {
+        // sequenceNumber=0：历史文件读回 / round-trip 条目
+        LogEntryListCellRenderer r = render(entry("SELECT 1"));
+        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"));
+    }
+
+    @Test
+    public void test行号与后续片段拼接顺序正确() throws Exception {
+        // 时间戳开启时：#N 在时间戳之前（行号是最高频引用锚点，视觉最左）
+        PluginSettings.State pluginSettings = PluginSettings.getInstance().getState();
+        boolean savedTs = pluginSettings.getLogTimestampEnabled();
+        try {
+            pluginSettings.setLogTimestampEnabled(true);
+            LogSqlEntry e = entry("SELECT 1").withSequenceNumber(3L);
+            LogEntryListCellRenderer r = render(e);
+            String meta = joinedText(r.metaLine);
+            int idxRow = meta.indexOf("#3 ");
+            int idxTs = meta.indexOf("[");
+            assertTrue("应同时含行号与时间戳", idxRow >= 0 && idxTs >= 0);
+            assertTrue("行号在时间戳之前", idxRow < idxTs);
+        } finally {
+            pluginSettings.setLogTimestampEnabled(savedTs);
+        }
+    }
 }

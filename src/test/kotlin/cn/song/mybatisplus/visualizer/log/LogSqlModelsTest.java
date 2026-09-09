@@ -64,4 +64,23 @@ public class LogSqlModelsTest {
         assertEquals(entry.restoredSql(), parsed.restoredSql());
         assertNull("round-trip 后不应残留未闭合条目", parser.closePending());
     }
+
+    // ---------- T-LogRowNumber：捕获序号字段 ----------
+
+    @Test
+    public void sequenceNumber默认为0表示无行号() throws Exception {
+        LogSqlEntry entry = new LogSqlEntry("SELECT 1", "SELECT 1", List.of());
+        assertEquals(0L, entry.sequenceNumber());
+    }
+
+    @Test
+    public void sequenceNumber显式赋值与copy语义() throws Exception {
+        // Java record 无 Kotlin copy()——withSequenceNumber 即「copy 覆盖序号」的等价物
+        LogSqlEntry entry = new LogSqlEntry("SELECT 1", "SELECT 1", List.of()).withSequenceNumber(7L);
+        assertEquals(7L, entry.sequenceNumber());
+        assertEquals(8L, entry.withSequenceNumber(8L).sequenceNumber());
+        // copy 只覆盖序号，其余字段保留
+        assertEquals("SELECT 1", entry.withSequenceNumber(8L).restoredSql());
+        assertEquals(7L, entry.sequenceNumber());
+    }
 }
