@@ -168,8 +168,8 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 关闭工具窗口时自动停止监听（默认关——关闭工具窗口不影响监听状态）。 */
         var logStopOnToolWindowClose: Boolean = false,
 
-        /** 发现 SQL 时自动打开日志工具窗口（默认关）。 */
-        var logAutoOpenOnCapture: Boolean = false,
+        /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
+        var logAutoOpenOnCapture: Boolean = true,
 
         /** 列表条目显示捕获时间戳（默认开）。 */
         var logTimestampEnabled: Boolean = true,
