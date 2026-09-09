@@ -11,9 +11,12 @@ import com.intellij.codeInsight.daemon.LineMarkerProvider;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.IconLoader;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiReferenceList;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -49,6 +52,10 @@ public class JpaGutterLineMarkerProvider implements LineMarkerProvider {
         if (!gutterEnabled()) return null;
         // 必须同时是 Repository 接口内的派生方法名——避免普通类手写方法（如业务 DAO 的
         // `deleteByDbHelper`）被误判为 JPA 派生查询而显示错误图标（触发 previewDerivedQuery 返回 null）
+        // M38.1（负例回归集实证）：派生查询只存在于 Repository 接口——普通类里 PartTree 形态的
+        // 方法名（findByXxx 等）不得标锚（Flex-Helper「图标误显示」同款差评源）。文本级守卫：
+        // 所在类必须是接口，且 extends 列表类型名含 Repository（Spring Data 全家桶均以 Repository 结尾）。
+        if (!isInRepositoryInterface(method)) return null;
         if (!DerivedMethodLocator.isRepositoryMethod(method)) return null;
 
         return new LineMarkerInfo<PsiElement>(
@@ -68,6 +75,23 @@ public class JpaGutterLineMarkerProvider implements LineMarkerProvider {
         } catch (Throwable t) {
             return true;
         }
+    }
+
+    /**
+     * 方法所在类是否为 Repository 接口（M38.1，文本级 O(1)——无 resolve，符合性能红线）：
+     * 接口 + extends 类型名含 "Repository"（JpaRepository/CrudRepository/PagingAndSortingRepository 等）。
+     * fixture 中的红色声明（接口 extends 未 resolve 的类）同样按文本命中。
+     */
+    private static boolean isInRepositoryInterface(PsiMethod method) {
+        PsiClass containingClass = method.getContainingClass();
+        if (containingClass == null || !containingClass.isInterface()) return false;
+        PsiReferenceList extendsList = containingClass.getExtendsList();
+        if (extendsList == null) return false;
+        for (PsiClassType type : extendsList.getReferencedTypes()) {
+            String className = type.getClassName();
+            if (className != null && className.contains("Repository")) return true;
+        }
+        return false;
     }
 
     /**

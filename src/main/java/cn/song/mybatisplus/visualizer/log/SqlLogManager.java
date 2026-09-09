@@ -7,6 +7,11 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.wm.ToolWindow;
+import com.intellij.openapi.wm.ToolWindowManager;
+// T-AutoShowMaster：wm.ex 包的 ToolWindowManagerListener——非 ex 包在本机裁剪发行版中不存在
+// （历轮发行实证），两参 stateChanged 是公开 API，三参重载为 @Experimental 会触发 Marketplace 违规
+import com.intellij.openapi.wm.ex.ToolWindowManagerListener;
 
 import java.io.File;
 import java.util.Arrays;
@@ -77,9 +82,41 @@ public final class SqlLogManager implements Disposable {
     /** capturing 变化回调（面板注册 → 刷新工具栏按钮图标/文案）。 */
     private final CopyOnWriteArrayList<Runnable> capturingListeners = new CopyOnWriteArrayList<>();
 
+    /** M37.3：上次自动展开时间戳（防抖基准；测试缝——包内可重置）。 */
+    volatile long lastAutoShowAt = 0L;
+
+    /** T-AutoShowSuppress：用户手动关闭日志工具窗后置位——本会话内不再自动展开。
+     *  恢复途径：设置开关重新开启（显式表达诉求）或重启 IDE/重开项目（会话自然重置）。 */
+    volatile boolean autoShowSuppressedByUserClose = false;
+
+    /** T-AutoShowSuppress：日志窗可见性沿检测基准（只在 可见→不可见 沿认定手动关闭；
+     *  初值 false——启动布局恢复等中间态不误判）。 */
+    volatile boolean logWindowWasVisible = false;
+
+    /** T-AutoShowSuppress：设置开关上次取值——检测 false→true 重启用沿，清除会话抑制。 */
+    volatile boolean lastSeenAutoOpenOnCapture = PluginSettings.getInstance().getState().getLogAutoOpenOnCapture();
+
+    /** M37.3：自动展开请求处理器（测试缝——默认查 ToolWindowManager 并 show，不 activate）。 */
+    volatile Runnable onAutoShowRequest = this::defaultAutoShowRequest;
+
+    private void defaultAutoShowRequest() {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (project.isDisposed()) return;
+            ToolWindow tw = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID);
+            if (tw == null) return;
+            if (!tw.isVisible()) tw.show(); // show 不 activate——不抢编辑器焦点
+        });
+    }
+
+    private final Runnable autoShowBufferListener = this::maybeAutoShow;
+
     public SqlLogManager(Project project) {
         this.project = project;
         this.bridge.onConsoleRemoved = this::onConsoleRemoved;
+        // M37.3：恢复 logAutoOpenOnCapture 行为——F-44 移除独立窗口时一并丢了解接线（设置项
+        // 与设置页勾选保留至今，形同虚设）。挂**无条件** buffer 监听（面板未创建/未订阅时
+        // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
+        buffer.addListener(autoShowBufferListener);
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
         // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
         project.getMessageBus().connect(this).subscribe(
@@ -87,12 +124,65 @@ public final class SqlLogManager implements Disposable {
                 (SettingsChangeListener) () -> {
                     applySettings();
                     bridge.refreshConsoleContexts();
+                    // T-AutoShowSuppress：设置开关 false→true 重启用沿——用户显式重新表达诉求，解除会话抑制
+                    boolean autoOpen = PluginSettings.getInstance().getState().getLogAutoOpenOnCapture();
+                    if (autoOpen && !lastSeenAutoOpenOnCapture && autoShowSuppressedByUserClose) {
+                        autoShowSuppressedByUserClose = false;
+                        LOG.info("[T-AutoShowSuppress] logAutoOpenOnCapture 重新开启——解除本会话抑制");
+                    }
+                    lastSeenAutoOpenOnCapture = autoOpen;
+                });
+
+        // T-AutoShowSuppress：日志窗手动关闭检测——两参 stateChanged（公开 API；三参重载为
+        // @Experimental+@Internal 会触发 Marketplace 违规，且新 UI 下 ContentManagerListener
+        // 的 contentRemoved 不触发，见全局 pitfall-toolwindow-manager-listener）。任何 ToolWindow
+        // 状态变化都会回调，内部过滤目标窗口并只沿「可见→不可见」转换沿置抑制。
+        project.getMessageBus().connect(this).subscribe(
+                ToolWindowManagerListener.TOPIC,
+                new ToolWindowManagerListener() {
+                    @Override
+                    public void stateChanged(ToolWindowManager toolWindowManager) {
+                        if (project.isDisposed()) return;
+                        ToolWindow tw = toolWindowManager.getToolWindow(TOOL_WINDOW_ID);
+                        if (tw == null) return;
+                        boolean visible = tw.isVisible();
+                        if (isUserCloseTransition(logWindowWasVisible, visible)) {
+                            autoShowSuppressedByUserClose = true;
+                            LOG.info("[T-AutoShowSuppress] 日志工具窗被关闭——本会话内不再自动展开");
+                        }
+                        logWindowWasVisible = visible;
+                    }
                 });
 
         // 20260907-2045：运行配置进程启动监听——autoStart=true 时项目 Run 即自动捕捉
         // （清 suppressed + startCapture，见 onProjectProcessStarted）；execution API 缺失时
         // 内部降级为 false，RCM 轮询兜底仍在
         processListenerActive = RunConfigurationProcessListener.subscribe(project, this);
+    }
+
+    /**
+     * T-LogRowNumber：捕获序号归零（项目启动时调用，列表行号从 #1 重新计数）。
+     * 由 RunConfigurationProcessListener processStarted 分支<b>无条件</b>调用——
+     * 不接进 onProjectProcessStarted（其 {@code !autoStart} 守卫会跳过手动捕捉模式的清零，
+     * 违背「每次启动项目时清 0」的无条件语义）。
+     */
+    public void resetEntrySequence() {
+        buffer.resetEntrySequence();
+        LOG.info("resetEntrySequence: 项目启动——捕获序号归零（列表行号重新从 #1 计数，project=" + project.getName() + "）");
+    }
+
+    /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启、未被用户关闭抑制、且距上次展开超过防抖窗口）。 */
+    private void maybeAutoShow() {
+        long now = System.currentTimeMillis();
+        if (!shouldAutoShow(
+                PluginSettings.getInstance().getState().getLogAutoOpenOnCapture(),
+                now - lastAutoShowAt,
+                autoShowSuppressedByUserClose)) {
+            return;
+        }
+        lastAutoShowAt = now;
+        LOG.info("[M37.3] 首条 SQL 自动展开日志工具窗（logAutoOpenOnCapture=true）");
+        onAutoShowRequest.run();
     }
 
     /** T-xx：内部测试缝——注入受控桥（attach 恒成功/恒失败）验证 capturing 状态机；生产路径不调用。 */
@@ -270,6 +360,12 @@ public final class SqlLogManager implements Disposable {
             PluginSettings.getInstance().getState().setLogAutoCaptureSuppressed(false);
             LOG.info("onProjectProcessStarted: 项目启动清除 suppressed（autoStart 优先）——project=" + project.getName());
         }
+        // T-AutoShowSuppress：项目启动同样视为对「自动展开」的再次确认——用户真机复测实证
+        // （2026-09-09）：关窗抑制置位后启动项目仍不弹，与用户预期相悖；启动 = 本轮开发要重新看日志
+        if (autoShowSuppressedByUserClose) {
+            autoShowSuppressedByUserClose = false;
+            LOG.info("onProjectProcessStarted: 项目启动清除自动展开会话抑制——project=" + project.getName());
+        }
         if (capturing && !isWaitingForConsole) {
             LOG.debug("onProjectProcessStarted: 已在捕捉态，startCapture 幂等跳过（project=" + project.getName() + "）");
             return;
@@ -382,6 +478,11 @@ public final class SqlLogManager implements Disposable {
         return capturing;
     }
 
+    /** Kotlin 属性访问器等价物（master 侧 Kotlin `capturing` 属性编译为 getCapturing——直取的 master Java 文件按此调用）。 */
+    public boolean getCapturing() {
+        return capturing;
+    }
+
     public boolean isUserArmed() {
         return userArmed;
     }
@@ -432,12 +533,28 @@ public final class SqlLogManager implements Disposable {
         buffer.setPaused(true);
         bridge.detach();
         buffer.removeListener(uiNotifyListener);
+        // M37.3：自动展开监听同步注销（dispose 生命周期闭环）
+        buffer.removeListener(autoShowBufferListener);
         uiListeners.clear();
         autoSaver.close();
     }
 
     private static final Logger LOG = Logger.getInstance(SqlLogManager.class);
 
-    /** 原 toolWindow id（F-44 后不再注册，保留常量供其他引用）。 */
+    /** 主工具窗 id（plugin.xml toolWindow 注册；F-44 后历史 Tab 合并进本窗口）。 */
     public static final String TOOL_WINDOW_ID = "cn.song.mybatisplus.visualizer.log";
+
+    /** M37.3：自动展开防抖窗口（ms）——多条 SQL 连续到达时只展开一次。 */
+    static final long AUTO_SHOW_DEBOUNCE_MS = 60_000L;
+
+    /** M37.3：自动展开决策（纯函数，测试缝）——设置开启、未被用户关闭抑制、且距上次展开超过防抖窗口。 */
+    static boolean shouldAutoShow(boolean enabled, long elapsedMs, boolean suppressedByUserClose) {
+        return enabled && !suppressedByUserClose && elapsedMs >= AUTO_SHOW_DEBOUNCE_MS;
+    }
+
+    /** T-AutoShowSuppress：手动关闭判定（纯函数，测试缝）——只在「可见→不可见」转换沿认定。
+     *  自动展开自身只产生 不可见→可见 沿，不会误判；初值 false 时启动/布局中间态不触发。 */
+    static boolean isUserCloseTransition(boolean wasVisible, boolean isVisible) {
+        return wasVisible && !isVisible;
+    }
 }

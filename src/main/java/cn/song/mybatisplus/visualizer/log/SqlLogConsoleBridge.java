@@ -383,19 +383,40 @@ public class SqlLogConsoleBridge {
                         parserConfig,
                         cfg0.hibernateEnabled());
                 consoleContexts.put(console, ctx);
+                // T-PreviewFlash：反射缓存 console.getEditor()（ConsoleView.getEditor 为 public）。
+                // 取不到则守卫降级停用（editor 为 null → decide 恒 Process＝现状语义），绝不阻塞捕获。
+                attachReplayGuard(console, ctx);
                 // T-LogPerf-04：timePrefix 缓存化——设置变更走 refreshConsoleContexts，逐行不再读 PluginSettings
                 String rawTimePrefix = PluginSettings.getInstance().getState().getLogTimePrefix();
                 timePrefixCache = (rawTimePrefix != null && !rawTimePrefix.isBlank()) ? rawTimePrefix : null;
                 Object filter = Proxy.newProxyInstance(
                         filterIface.getClassLoader(),
                         new Class<?>[]{filterIface},
-                        new LogFilterProxyHandler(line -> {
+                        new LogFilterProxyHandler((line, endOffset) -> {
                             BridgeLineContext context = consoleContexts.get(console);
                             if (context == null) {
                                 return;
                             }
-                            SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig)
-                                    .forEach(buffer::addEntry);
+                            // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
+                            // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
+                            // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。
+                            Supplier<Long> stampReader = context.docStampReader;
+                            if (stampReader != null) {
+                                if (context.replayGuard.decide(
+                                        endOffset,
+                                        stampReader.get(),
+                                        line,
+                                        context.line0Reader != null ? context.line0Reader.get() : null)
+                                        == ConsoleReplayGuard.Decision.Replay) {
+                                    context.replayDropCount++;
+                                } else {
+                                    SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig)
+                                            .forEach(buffer::addEntry);
+                                }
+                            } else {
+                                SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig)
+                                        .forEach(buffer::addEntry);
+                            }
                         }));
                 console.getClass().getMethod("addMessageFilter", filterIface).invoke(console, filter);
                 attachedConsoles.put(console, new Pair<>(filter, filterIface));
@@ -406,6 +427,47 @@ public class SqlLogConsoleBridge {
             }
         }
         LOG.warn("attachFilter: all filter candidates failed on " + console.getClass().getName());
+    }
+
+    /**
+     * T-PreviewFlash：为重放守卫解析编辑器/文档反射句柄。全部 try/catch 包裹——
+     * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
+     * {@code getEditor} 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
+     */
+    private void attachReplayGuard(Object console, BridgeLineContext ctx) {
+        try {
+            java.lang.reflect.Method getEditor = console.getClass().getMethod("getEditor");
+            Object editor = getEditor.invoke(console);
+            if (editor == null) {
+                return;
+            }
+            ctx.replayGuardEditor = editor;
+            java.lang.reflect.Method getDoc = editor.getClass().getMethod("getDocument");
+            final Object doc = getDoc.invoke(editor);
+            if (doc == null) {
+                return;
+            }
+            ctx.docStampReader = () -> {
+                try {
+                    Object stamp = doc.getClass().getMethod("getModificationStamp").invoke(doc);
+                    return stamp instanceof Number n ? n.longValue() : Long.MIN_VALUE;
+                } catch (Throwable t) {
+                    return Long.MIN_VALUE;
+                }
+            };
+            ctx.line0Reader = () -> {
+                try {
+                    Object text = doc.getClass().getMethod("getText").invoke(doc);
+                    String s = (text instanceof String str) ? str : "";
+                    // 对齐 Kotlin lineSequence().firstOrNull()：空文档无首行返回 null；\r\n/\r/\n 任一换行
+                    return s.isEmpty() ? null : s.split("\r\n|\r|\n", 2)[0];
+                } catch (Throwable t) {
+                    return null;
+                }
+            };
+        } catch (Throwable t) {
+            // 守卫降级：句柄不可得时 docStampReader 保持 null → decide 恒 Process（现状语义）
+        }
     }
 
     /**

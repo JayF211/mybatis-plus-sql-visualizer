@@ -74,6 +74,10 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
         sqlLine.clear();
         LogSqlEntry entry = value instanceof LogSqlEntry ? (LogSqlEntry) value : null;
         if (entry != null) {
+            // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
+            if (entry.sequenceNumber() > 0) {
+                metaLine.append("#" + entry.sequenceNumber() + " ", SqlLogPanelKt.LIST_META_GRAY);
+            }
             // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
             kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry.timestamp());
             if (ts != null) {

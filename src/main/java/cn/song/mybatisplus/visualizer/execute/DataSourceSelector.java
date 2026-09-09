@@ -15,6 +15,7 @@ import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.application.TransactionGuard;
 import com.intellij.openapi.application.WriteAction;
+import com.intellij.openapi.application.WriteIntentReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
@@ -129,6 +130,19 @@ public final class DataSourceSelector {
     private static JComponent sharedFullComponent = null;
     private static String sharedDataSourceName = null;
 
+    /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。 */
+    private static TempPsiFile cachedTempPsiFile = null;
+
+    /**
+     * T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（stage 标识或异常摘要），
+     * 成功时清空——供 chooseAndPrepare 的 onError 文案携带，用户截图反馈的笼统
+     * "Failed to create temporary SQL file" 自此可归因。
+     */
+    private static volatile String lastTempFileFailure = null;
+
+    /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    private static VirtualFile dialectMappedVf = null;
+
     /** M36.5.6：结果区换入回调。 */
     private static Consumer<JComponent> pendingOnConsole = null;
 
@@ -170,6 +184,9 @@ public final class DataSourceSelector {
         preparedTopBlock = null;
         preparedResultComponent = null;
         preparedFullComponent = null;
+        // T-ExecCopyFix F2c：不清 cachedTempPsiFile——vf 失效守卫已兜底（下次命中前校验
+        // isValid），内容覆盖写走 document 驱动不破坏 vf↔psi 配对；原实现每次预览切换清
+        // 缓存，执行必落冷路径，击穿 T-PreviewFlash「跨点击吸收」的设计意图。
     }
 
     /**
@@ -232,8 +249,11 @@ public final class DataSourceSelector {
 
         TempPsiFile temp = createTempPsiFile(project, sql);
         if (temp == null) {
-            LOG.warn("[M36] createTempPsiFile failed, abort");
-            if (onError != null) onError.accept("Failed to create temporary SQL file");
+            // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
+            // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
+            LOG.warn("[M36] createTempPsiFile failed (reason=" + lastTempFileFailure + "), abort");
+            if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.tempFile.failed",
+                    lastTempFileFailure != null ? lastTempFileFailure : "unknown"));
             if (callback != null) callback.accept(false);
             return;
         }
@@ -2292,32 +2312,100 @@ public final class DataSourceSelector {
         }
     }
 
-    /** 创建临时 .sql 文件。 */
+    /**
+     * 创建临时 .sql 文件。
+     *
+     * <p>T-ExecCopyFix：失败可见化——原实现整段 runCatching{}.getOrNull() 吞异常零日志，
+     * 用户真机 "Failed to create temporary SQL file" 无法归因。现分级记录每个 return null
+     * 站点（stage 标识 + ioFile 路径/exists 状态），异常级 warn 带堆栈，并向调用方回传
+     * 阶段原因（{@link #lastTempFileFailure}）供错误文案携带。</p>
+     *
+     * <p>T-ExecCopyFix F2b：冷路径 refresh 段换 WriteIntentReadAction.compute（Computable 单类型
+     * 实参，243~262 交集——T-Wia262）——修 262 真机最可能根因：refreshAndFindFileByIoFile 同步
+     * VFS refresh 要求 write-safe 语境，262 平台 RefreshSessionImpl.launch 对 EDT-ReadAction
+     * 硬抛 "Access is allowed from write thread only"（T-PreviewWiLock 同 API 先例）。WIRA 隐含
+     * 读权限，refresh 后续链不受影响。<b>后台化经评估否决</b>：setMapping 须在 EDT（线程语义未
+     * 验证，M36.5 约束）而 refresh 适合 BGT，双向交接（BGT invokeAndWait 等 EDT 执行映射、
+     * EDT 阻塞等 BGT 产物）形成互锁死锁面——invokeAndWait 须等 EDT 回事件泵，冷路径必超时。</p>
+     */
     private static TempPsiFile createTempPsiFile(Project project, String sql) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare 错误文案）
+        lastTempFileFailure = null;
+        final File ioFile;
         try {
-            File ioFile = projectExecFile(project, sql);
-            if (ioFile == null) return null;
-            try (AccessToken ignored = SlowOperations.allowSlowOperations(SlowOperations.GENERIC)) {
-                VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
-                if (vf == null) return null;
-                mapDialectBeforePsi(project, vf, LOG);
-                PsiFile psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
-                if (psi == null) return null;
-                return new TempPsiFile(vf, psi);
-            }
-        } catch (Throwable ignored) {
-            return null;
+            ioFile = projectExecFile(project, sql);
+        } catch (Throwable e) {
+            // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
+            // runCatching 吞掉，拆除后这里必须自接，否则异常直冲 EDT
+            return failTempFile("writeFile", e.getClass().getSimpleName() + ": " + e.getMessage());
         }
+        if (ioFile == null) {
+            return failTempFile("writeFile", "projectExecFile null (basePath=" + project.getBasePath() + ")");
+        }
+        // T-PreviewFlash：EDT 同步 VFS refresh + PsiManager.findFile 已被跨点击缓存吸收——
+        // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
+        // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
+        if (cachedTempPsiFile != null) {
+            if (cachedTempPsiFile.vf.isValid()) {
+                LOG.info("[M36] exec psi cache hit (no VFS refresh): " + cachedTempPsiFile.vf.getName());
+                return cachedTempPsiFile;
+            }
+            cachedTempPsiFile = null;
+        }
+        // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 Javadoc）；
+        // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
+        // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
+        VirtualFile vf;
+        try {
+            vf = WriteIntentReadAction.compute(
+                    (com.intellij.openapi.util.Computable<VirtualFile>) () ->
+                            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
+        } catch (Throwable e) {
+            return failTempFile("refreshVfs", e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+        if (vf == null) {
+            return failTempFile("refreshVfs",
+                    "VFS not visible after refresh (" + ioFile.getPath() + ", exists=" + ioFile.exists() + ")");
+        }
+        mapDialectBeforePsi(project, vf, LOG);
+        PsiFile psi;
+        try {
+            psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
+        } catch (Throwable e) {
+            return failTempFile("findPsi", e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+        if (psi == null) {
+            return failTempFile("findPsi", "PsiManager.findFile null (" + vf.getName() + ")");
+        }
+        cachedTempPsiFile = new TempPsiFile(vf, psi);
+        return cachedTempPsiFile;
+    }
+
+    /** T-ExecCopyFix F2a：失败阶段记录与日志（stage 标识 + 详情），恒返 null 供上层透传。 */
+    private static TempPsiFile failTempFile(String stage, String detail) {
+        lastTempFileFailure = (detail == null || detail.isEmpty()) ? stage : stage + ": " + detail;
+        Logger.getInstance(DataSourceSelector.class)
+                .warn("[M36] createTempPsiFile FAILED at " + stage
+                        + ((detail == null || detail.isEmpty()) ? "" : " (" + detail + ")"));
+        return null;
     }
 
     /** M36.5.12：项目内执行文件路径。 */
     private static File projectExecFile(Project project, String sql) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         String base = project.getBasePath();
-        if (base == null) return null;
+        if (base == null) {
+            // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
+            LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=" + project.getName() + ")");
+            return null;
+        }
         File dir = new File(base, ".idea" + File.separator + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "exec");
-        if (!dir.exists()) dir.mkdirs();
+        if (!dir.exists() && !dir.mkdirs()) {
+            // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
+            LOG.warn("[M36] projectExecFile FAILED: mkdirs false (" + dir.getPath() + ")");
+            return null;
+        }
         File f = new File(dir, "mpsql-exec.sql");
         VirtualFile existing = LocalFileSystem.getInstance().findFileByIoFile(f);
         if (existing != null) {
@@ -2357,6 +2445,12 @@ public final class DataSourceSelector {
 
     /** M36.5.3：临时文件方言预映射（MySQL）。 */
     private static void mapDialectBeforePsi(Project project, VirtualFile vf, Logger LOG) {
+        // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
+        // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
+        if (dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf) {
+            LOG.debug("[M36] dialect already mapped for " + vf.getName() + ", skip setMapping");
+            return;
+        }
         try {
             Class<?> mappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings");
             Object mappings = mappingsClass.getMethod("getInstance", Project.class).invoke(null, project);
@@ -2375,6 +2469,7 @@ public final class DataSourceSelector {
             }
             if (mysql != null) {
                 mappingsClass.getMethod("setMapping", VirtualFile.class, Object.class).invoke(mappings, vf, mysql);
+                dialectMappedVf = vf;
                 LOG.info("[M36] dialect pre-mapped to MySQL for " + vf.getName());
             } else {
                 LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)");
@@ -2391,5 +2486,33 @@ public final class DataSourceSelector {
         } catch (Throwable ignored) {
             // ignore
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 测试访问（同模块测试使用）
+    // ------------------------------------------------------------------
+
+    /** T-ExecCopyFix F2c：exec 临时文件 vf+psi 缓存是否仍持有（clearPrepared 不清缓存断言用）。 */
+    public static boolean cachedTempPsiFileForTest() {
+        return cachedTempPsiFile != null;
+    }
+
+    /** T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（成功时 null）。 */
+    public static String lastTempFileFailureForTest() {
+        return lastTempFileFailure;
+    }
+
+    /** T-ExecCopyFix F2c 测试缝：等价链路置缓存槽（psi 经 PsiManager.findFile 同生产路径配对）。 */
+    public static void markCachedTempPsiFileForTest(Project project, VirtualFile vf) {
+        PsiFile psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
+        if (psi == null) {
+            throw new IllegalStateException("markCachedTempPsiFileForTest: findFile null for " + vf.getName());
+        }
+        cachedTempPsiFile = new TempPsiFile(vf, psi);
+    }
+
+    /** T-ExecCopyFix F2c 测试缝：清缓存槽（测试隔离收尾）。 */
+    public static void clearCachedTempPsiFileForTest() {
+        cachedTempPsiFile = null;
     }
 }

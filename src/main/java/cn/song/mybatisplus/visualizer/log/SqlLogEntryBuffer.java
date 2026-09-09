@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -26,6 +27,9 @@ public class SqlLogEntryBuffer {
 
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
     private final ArrayDeque<LogSqlEntry> entries = new ArrayDeque<>();
+
+    /** T-LogRowNumber：会话内捕获序号计数器（成功入队时分配；启动项目/手动清空归零。可从任意线程调用故原子）。 */
+    private final AtomicLong sequenceCounter = new AtomicLong(0);
 
     /** T-Perf-03（自 dev 移植）：自上次 drain 以来的头部淘汰条数（面板增量刷新对齐用；drain 约定单消费方——面板 EDT 刷新）。 */
     private final java.util.concurrent.atomic.AtomicInteger evictedSinceDrain = new java.util.concurrent.atomic.AtomicInteger();
@@ -128,7 +132,8 @@ public class SqlLogEntryBuffer {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true;
             } else {
-                entries.addLast(entry);
+                // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
+                entries.addLast(addNumbered(entry));
                 while (entries.size() > maxEntries) {
                     evictedEntries.add(entries.removeFirst());
                     evictedSinceDrain.incrementAndGet(); // T-Perf-03：头部淘汰计数（面板增量刷新）
@@ -254,18 +259,30 @@ public class SqlLogEntryBuffer {
         return evictedSinceDrain.getAndSet(0);
     }
 
-    /** 清空全部（去重计数一并归零）。 */
+    /**
+     * 清空全部（去重计数一并归零——徽章与列表内容同生命周期；
+     * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
+     */
     public void clear() {
         synchronized (entries) {
             entries.clear();
         }
         resetDedupeCounts();
+        sequenceCounter.set(0);
         notifyChanged();
     }
 
     /** 去重丢弃计数归零（清空列表、面板重新开启去重时调用）。 */
     public void resetDedupeCounts() {
         dedupeCounts.clear();
+    }
+
+    /**
+     * T-LogRowNumber：捕获序号归零（项目启动 processStarted 回调调用）。
+     * 不清列表——旧条目保留原行号，仅新一轮启动后的 SQL 从 #1 重新计数。
+     */
+    public void resetEntrySequence() {
+        sequenceCounter.set(0);
     }
 
     /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按规范化+指纹查，与 LogSqlEntry.dedupeKey 同键；无丢弃记录返回 0）。 */
@@ -278,10 +295,21 @@ public class SqlLogEntryBuffer {
         return new HashMap<>(dedupeCounts);
     }
 
-    /** 删除单条（面板右键菜单）。 */
+    /** T-LogRowNumber：入队时以 entry 为原型分配捕获序号（copy 出带号实例入队）。 */
+    private LogSqlEntry addNumbered(LogSqlEntry entry) {
+        return entry.withSequenceNumber(sequenceCounter.incrementAndGet());
+    }
+
+    /**
+     * 删除单条（面板右键菜单）。
+     *
+     * <p>T-LogRowNumber：buffer 入库的是带行号 copy（{@link #addNumbered}），而面板持有的引用来自
+     * 列表模型（即入库实例本身）——两者同一，按 <b>同一性</b> 删除即可；不能用 record equals：
+     * 序号字段参与 equals，外部构造/改造过的等值条目不应误删列表中的真身。
+     */
     public void removeEntry(LogSqlEntry entry) {
         synchronized (entries) {
-            entries.remove(entry);
+            entries.removeIf(it -> it == entry);
         }
         notifyChanged();
     }

@@ -14,6 +14,7 @@ import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.KeyboardShortcut;
 import com.intellij.openapi.actionSystem.Shortcut;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
@@ -29,6 +30,7 @@ import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileWrapper;
+import com.intellij.ui.JBColor;
 import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.components.JBCheckBox;
 import com.intellij.ui.components.JBLabel;
@@ -330,6 +332,9 @@ public class PluginSettingsPanel {
 
     /** 插件缓存信息（统一条目总数——所有打开项目汇总；不细分缓存类型）。 */
     private final JBLabel cacheInfoLabel = new JBLabel(" ");
+
+    /** 设置导入/导出结果反馈（20260907：行内提示替代模态弹窗——原弹窗叠在 Settings 对话框下，须关设置才可见）。 */
+    private final JBLabel statusLabel = new JBLabel(" ");
 
     /** 插件缓存统一清除按钮（清全部缓存，下次使用自动重建）。 */
     private final JButton clearCacheButton = new JButton(MpSqlVisualizerBundle.message("settings.cache.clear"));
@@ -699,7 +704,11 @@ public class PluginSettingsPanel {
                 exportButton.setToolTipText(msg("settings.export.tip"));
                 exportButton.addActionListener(e -> exportSettings());
                 ioPanel.add(exportButton);
-                addRow(p, g, msg("settings.pluginSettings"), ioPanel);
+                JPanel ioRow = new JPanel(new BorderLayout(8, 0));
+                ioRow.setOpaque(false);
+                ioRow.add(ioPanel, BorderLayout.CENTER);
+                ioRow.add(statusLabel, BorderLayout.EAST);
+                addRow(p, g, msg("settings.pluginSettings"), ioRow);
             });
         }
 
@@ -1051,6 +1060,11 @@ public class PluginSettingsPanel {
     /** 测试访问器：清除缓存按钮（断言存在与点击行为）。 */
     public JButton clearCacheButtonForTest() {
         return clearCacheButton;
+    }
+
+    /** 测试访问器：导入/导出行内反馈（20260907——文本/前景色/tooltip 三断言面）。 */
+    public JBLabel statusForTest() {
+        return statusLabel;
     }
 
     // ------------------------------------------------------------------
@@ -1433,6 +1447,7 @@ public class PluginSettingsPanel {
 
     /**
      * 从 JSON 文件导入设置（文件选择器 → 读取 → 覆盖当前全局配置 → 刷新表单）。
+     * 20260907：结果反馈改面板内行内 label（原模态弹窗 parent=rootPanel 叠在 Settings 对话框之下，须关掉设置才可见）。
      */
     private void importSettings() {
         FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
@@ -1440,24 +1455,36 @@ public class PluginSettingsPanel {
             .withTitle(MpSqlVisualizerBundle.message("settings.import"));
         VirtualFile file = FileChooser.chooseFile(descriptor, null, null);
         if (file == null) return;
-        try {
-            String text = new String(file.contentsToByteArray(), StandardCharsets.UTF_8);
-            PluginSettings.fromJson(text);
-            reset();
-            Messages.showInfoMessage(
-                rootPanel,
-                MpSqlVisualizerBundle.message("settings.import.success"),
-                MpSqlVisualizerBundle.message("settings.import"));
-        } catch (Throwable e) {
-            Messages.showErrorDialog(
-                rootPanel,
-                MpSqlVisualizerBundle.message("settings.import.failed", e.getMessage() != null ? e.getMessage() : "unknown"),
-                MpSqlVisualizerBundle.message("settings.import"));
-        }
+        // T-Perf-14：文件 IO + JSON 解析移后台（EDT 不做磁盘读）；结果回 EDT 刷新表单与行内反馈
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            Throwable failure = null;
+            try {
+                String text = new String(file.contentsToByteArray(), StandardCharsets.UTF_8);
+                applyImportedText(text);
+            } catch (Throwable e) {
+                failure = e;
+            }
+            final Throwable importFailure = failure;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (importFailure == null) {
+                    reset();
+                    showStatus(MpSqlVisualizerBundle.message("settings.import.success"), false, null);
+                } else {
+                    showStatus(MpSqlVisualizerBundle.message("settings.import.failed", briefMessage(importFailure)), true, importFailure.getMessage());
+                }
+                // 默认 modality 在模态 Settings 弹窗存续期不执行（真机实证反馈不出现）——对齐 M36.5.13 惯例
+            }, ModalityState.any());
+        });
+    }
+
+    /** 解析导入文本并覆盖当前全局配置（供测试直调——文件选择器在 headless 下不可用）。 */
+    public void applyImportedText(String text) {
+        PluginSettings.fromJson(text);
     }
 
     /**
      * 导出当前设置到 JSON 文件（文件选择器 → 写入）。
+     * 20260907：结果反馈改面板内行内 label（同导入）。
      */
     private void exportSettings() {
         FileSaverDescriptor descriptor = new FileSaverDescriptor(
@@ -1470,20 +1497,48 @@ public class PluginSettingsPanel {
             .createSaveFileDialog(descriptor, (Project) null)
             .save(baseDir, "mp-sql-visualizer-settings.json");
         if (saved != null) {
-            try {
-                Files.write(new File(saved.getFile().getAbsolutePath()).toPath(),
-                    PluginSettings.toJson().getBytes(StandardCharsets.UTF_8));
-                Messages.showInfoMessage(
-                    rootPanel,
-                    MpSqlVisualizerBundle.message("settings.export.success"),
-                    MpSqlVisualizerBundle.message("settings.export"));
-            } catch (Throwable e) {
-                Messages.showErrorDialog(
-                    rootPanel,
-                    MpSqlVisualizerBundle.message("settings.export.failed", e.getMessage() != null ? e.getMessage() : "unknown"),
-                    MpSqlVisualizerBundle.message("settings.export"));
-            }
+            // T-Perf-14：文件写入移后台（EDT 不做磁盘写）；结果回 EDT 行内反馈
+            ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                Throwable failure = null;
+                try {
+                    writeExportedFile(new File(saved.getFile().getAbsolutePath()));
+                } catch (Throwable e) {
+                    failure = e;
+                }
+                final Throwable exportFailure = failure;
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (exportFailure == null) {
+                        showStatus(MpSqlVisualizerBundle.message("settings.export.success"), false, null);
+                    } else {
+                        showStatus(MpSqlVisualizerBundle.message("settings.export.failed", briefMessage(exportFailure)), true, exportFailure.getMessage());
+                    }
+                    // 同导入：模态 Settings 弹窗存续期照常回调
+                }, ModalityState.any());
+            });
         }
+    }
+
+    /** 写出当前设置 JSON（供测试直调）。 */
+    public void writeExportedFile(File target) throws java.io.IOException {
+        Files.write(target.toPath(), PluginSettings.toJson().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 行内反馈（20260907）：成功=默认前景色，失败=ErrorForeground 红字；完整异常详情放 tooltip。
+     * 常驻可见（直到下次操作覆盖），不抢焦点、无遮挡。
+     */
+    private void showStatus(String text, boolean isError, String fullDetail) {
+        statusLabel.setText(text);
+        statusLabel.setToolTipText(fullDetail != null ? fullDetail : text);
+        statusLabel.setForeground(isError
+            ? JBColor.namedColor("ErrorForeground", JBColor.RED)
+            : JBColor.foreground());
+    }
+
+    /** 异常摘要截断（行内 label 宽度有限，全量详情走 tooltip）。 */
+    private static String briefMessage(Throwable e) {
+        String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        return msg.length() > 120 ? msg.substring(0, 120) + "…" : msg;
     }
 
     // ------------------------------------------------------------------

@@ -82,6 +82,9 @@ public final class QueryWrapperParser {
     /** LIMIT 解析正则（(?i)limit\s+(\d+)(?:\s*,\s*(\d+))?）。 */
     private static final Pattern LIMIT_PATTERN = Pattern.compile("(?i)limit\\s+(\\d+)(?:\\s*,\\s*(\\d+))?");
 
+    /** M38.2：MySQL limit 的另一形态 "limit 5 OFFSET 10"（MP last 常用）。 */
+    private static final Pattern OFFSET_PATTERN = Pattern.compile("(?i)offset\\s+(\\d+)");
+
     /**
      * 解析调用链为 SELECT 语句模型。
      *
@@ -156,7 +159,8 @@ public final class QueryWrapperParser {
                 // ---------- 二元比较 ----------
                 case "eq" -> orPending = addConditionFlagged(conditions, flagged(simple(call, "="), analysis), orPending);
                 case "eqOrIsNull" -> orPending = addConditionFlagged(conditions, flagged(eqOrIsNull(call), analysis), orPending);
-                case "ne" -> orPending = addConditionFlagged(conditions, flagged(simple(call, "!="), analysis), orPending);
+                // ne 渲染 <>（M38.2 语义对照矩阵实证：MP SqlKeyword.NE = "<>"，原 "!=" 与 MP 不一致）
+                case "ne" -> orPending = addConditionFlagged(conditions, flagged(simple(call, "<>"), analysis), orPending);
                 case "gt" -> orPending = addConditionFlagged(conditions, flagged(simple(call, ">"), analysis), orPending);
                 case "ge" -> orPending = addConditionFlagged(conditions, flagged(simple(call, ">="), analysis), orPending);
                 case "lt" -> orPending = addConditionFlagged(conditions, flagged(simple(call, "<"), analysis), orPending);
@@ -233,7 +237,13 @@ public final class QueryWrapperParser {
                     if (call.getArgs().isEmpty()) {
                         orPending = true;
                     } else {
-                        orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending);
+                        // M38.2：or(Consumer) = 外层 OR 连接 + 组内恒 AND（MP 语义）。强制 orPending
+                        // 让组与前一条件组成 OR 分组（addCondition 的 OR 语义），无前条件时组直接落位。
+                        // 原实现把 OR 用作组内连接词 → or(w -> w.eq(2).eq(3)) 错渲染为 `AND (2 OR 3)`（内外颠倒）。
+                        Condition group = parseGroupFlagged(call);
+                        if (group != null) {
+                            orPending = addConditionFlagged(conditions, group, true);
+                        }
                     }
                 }
                 case "and" -> orPending = addConditionFlagged(conditions, parseGroupFlagged(call), orPending);
@@ -530,7 +540,11 @@ public final class QueryWrapperParser {
 
     /** 逻辑分组：and(lambda) / or(lambda) / and(wrapper) / or(wrapper)。 */
     private Condition parseGroup(WrapperCall call) {
-        Connector connector = "or".equals(call.getMethodName()) ? Connector.OR : Connector.AND;
+        // M38.2（语义对照矩阵实证）：组内连接词恒为 AND——lambda 内条件默认 AND 连接，lambda 内
+        // 显式无参 or() 由嵌套解析自身的 orPending 产生 OR 子组（下方展平保留）。组与前条件的
+        // **外层**连接词由调用方的 orPending 表达：or(Consumer) → OR，and/nested → AND。
+        // 原实现把方法名 or 用作组内连接词 → or(w -> w.eq(2).eq(3)) 错渲染为 `AND (2 OR 3)`（内外颠倒）。
+        Connector connector = Connector.AND;
         WrapperArg.NestedArg nested = argAt(call.getArgs(), 0) instanceof WrapperArg.NestedArg n ? n : null;
         if (nested == null) return null;
         List<Condition> children = parseInternal(nested.getChain()).getConditions();
@@ -577,6 +591,13 @@ public final class QueryWrapperParser {
 
     /** HAVING：嵌套链全部条件组成 AND 组。 */
     private Condition parseHaving(WrapperCall call) {
+        // M38.2（语义对照矩阵实证）：字符串版 having("count(*) > 3")（MP 官方 API）——
+        // 原实现只认 lambda 嵌套形态，字符串片段被静默丢弃。按原生片段透传渲染。
+        WrapperArg firstArg = argAt(call.getArgs(), 0);
+        if (firstArg instanceof WrapperArg.ValueArg va && va.getValue() instanceof SqlValue.Literal lit
+                && lit.getUnquoted() != null && !lit.getUnquoted().isBlank()) {
+            return new Condition.Raw(lit.getUnquoted(), null);
+        }
         WrapperArg.NestedArg nested = argAt(call.getArgs(), 0) instanceof WrapperArg.NestedArg n ? n : null;
         if (nested == null) return null;
         List<Condition> conditions = parseInternal(nested.getChain()).getConditions();
@@ -623,7 +644,12 @@ public final class QueryWrapperParser {
         Long first = parseLongOrNull(m.group(1));
         if (first == null) return null;
         Long second = parseLongOrNull(m.group(2));
-        return second != null ? new LimitClause(first, second) : new LimitClause(null, first);
+        if (second != null) return new LimitClause(first, second);
+        // M38.2（语义对照矩阵实证）：MySQL 另一形态 "limit 5 OFFSET 10"（MP last 常用）——
+        // 原正则不认 OFFSET，OFFSET 被静默丢弃
+        Matcher om = OFFSET_PATTERN.matcher(text);
+        Long offset = om.find() ? parseLongOrNull(om.group(1)) : null;
+        return offset != null ? new LimitClause(offset, first) : new LimitClause(null, first);
     }
 
     /**

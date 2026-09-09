@@ -79,6 +79,9 @@ public final class LambdaUpdateConverter implements WrapperConverter {
         switch (call.getMethodName()) {
             case SET, SET_IF_EXISTS -> {
                 int startIndex = (args.size() >= 3 && isFlagArgument(args.get(0))) ? 1 : 0;
+                // M38.2（语义对照矩阵实证）：MP 运行时语义 condition=false → 该赋值整体不拼接，
+                // 原实现剥离布尔参后照常渲染（false 被当 true），静态渲染须同步忽略
+                if (isFalseFlag(args, startIndex == 1)) return null;
                 cn.song.mybatisplus.visualizer.model.ColumnRef column = WrapperConverterKt.asColumn(argAt(args, startIndex));
                 if (column == null) return null;
                 SqlValue value = WrapperConverterKt.asValue(argAt(args, startIndex + 1));
@@ -122,6 +125,13 @@ public final class LambdaUpdateConverter implements WrapperConverter {
             return "true".equals(lit.getUnquoted()) || "false".equals(lit.getUnquoted());
         }
         return value instanceof SqlValue.Placeholder;
+    }
+
+    /** M38.2：布尔前缀是否为 false 字面量（MP 运行时语义——condition=false 整个子句不拼接）。 */
+    private static boolean isFalseFlag(List<WrapperArg> args, boolean hasFlag) {
+        if (!hasFlag) return false;
+        SqlValue flag = WrapperConverterKt.asValue(args.get(0));
+        return flag instanceof SqlValue.Literal lit && "false".equals(lit.getUnquoted());
     }
 
     /** setSql 绑定参数渲染：字面量原样（raw），运行时值渲染为 ?。 */

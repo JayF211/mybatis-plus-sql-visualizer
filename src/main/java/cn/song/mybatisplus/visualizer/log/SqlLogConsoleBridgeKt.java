@@ -71,7 +71,8 @@ public final class SqlLogConsoleBridgeKt {
                     e.source(),
                     duration != null ? duration : e.executionTimeMs(),
                     eSrc != null ? eSrc.getFirst() : e.sourceFile(),
-                    eSrc != null ? eSrc.getSecond() : e.sourceLine()));
+                    eSrc != null ? eSrc.getSecond() : e.sourceLine(),
+                    0L));
         }
         if (ctx.pendingSource != null) {
             ctx.pendingSource = null;

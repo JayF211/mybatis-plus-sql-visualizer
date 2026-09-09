@@ -614,12 +614,12 @@ public final class MpjLambdaConverter implements WrapperConverter {
                         } else {
                             SqlValue value = WrapperConverterKt.asValue(right);
                             if (value == null) continue;
-                            result.add(new Condition.Simple(leftCol, "ne".equals(call.getMethodName()) ? "!=" : "=", value, null));
+                            result.add(new Condition.Simple(leftCol, "ne".equals(call.getMethodName()) ? "<>" : "=", value, null));
                         }
                     } else {
                         SqlValue value = right != null ? WrapperConverterKt.asValue(right) : null;
                         if (value == null) continue;
-                        result.add(new Condition.Simple(leftCol, "ne".equals(call.getMethodName()) ? "!=" : "=", value, null));
+                        result.add(new Condition.Simple(leftCol, "ne".equals(call.getMethodName()) ? "<>" : "=", value, null));
                     }
                 }
                 case "apply" -> {

@@ -10,10 +10,8 @@ import com.intellij.util.messages.Topic;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * 插件配置状态（T-M5-01，F-16 配置项持久化）。
@@ -109,7 +107,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean logAutoCaptureOnStart = false;
         private boolean logAutoCaptureSuppressed = false;
         private boolean logStopOnToolWindowClose = false;
-        private boolean logAutoOpenOnCapture = false;
+        /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
+        private boolean logAutoOpenOnCapture = true;
         private boolean logTimestampEnabled = true;
         private String logTimestampFormat = DEFAULT_LOG_TIMESTAMP_FORMAT;
         private boolean logFormatSql = true;
@@ -144,7 +143,6 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
         /** F-44-7：自动注入 SqlSourceInterceptor（源码位置捕获）。默认关。 */
         private boolean autoInjectSqlSourceInterceptor = false;
-        private Set<String> collapsedGroups = new HashSet<>();
 
         public String getDialect() { return dialect; }
         public void setDialect(String dialect) { this.dialect = dialect; }
@@ -303,9 +301,6 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getAutoInjectSqlSourceInterceptor() { return autoInjectSqlSourceInterceptor; }
         public void setAutoInjectSqlSourceInterceptor(boolean autoInjectSqlSourceInterceptor) { this.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor; }
 
-        public Set<String> getCollapsedGroups() { return collapsedGroups; }
-        public void setCollapsedGroups(Set<String> collapsedGroups) { this.collapsedGroups = collapsedGroups; }
-
         /** 浅拷贝（仅复制字段引用/值；供持久化 loadState 触发引用变化）。 */
         @NotNull
         public State copy() {
@@ -361,7 +356,6 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.dataPermissionMockCondition = dataPermissionMockCondition;
             c.historyMaxSize = historyMaxSize;
             c.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor;
-            c.collapsedGroups = collapsedGroups;
             return c;
         }
 
@@ -420,8 +414,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(logHibernateSqlPrefix, that.logHibernateSqlPrefix)
                     && Objects.equals(logHibernateParamPrefix, that.logHibernateParamPrefix)
                     && Objects.equals(dynamicTableNameRules, that.dynamicTableNameRules)
-                    && Objects.equals(dataPermissionMockCondition, that.dataPermissionMockCondition)
-                    && Objects.equals(collapsedGroups, that.collapsedGroups);
+                    && Objects.equals(dataPermissionMockCondition, that.dataPermissionMockCondition);
         }
 
         @Override
@@ -437,7 +430,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
-                    autoInjectSqlSourceInterceptor, collapsedGroups);
+                    autoInjectSqlSourceInterceptor);
         }
 
         @Override

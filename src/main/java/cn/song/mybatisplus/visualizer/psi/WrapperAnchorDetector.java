@@ -111,7 +111,11 @@ public final class WrapperAnchorDetector {
                     isWrappersFactory = WrapperLocator.WRAPPER_FACTORY_CLASS_NAMES
                         .contains(((PsiReferenceExpression) ref.getQualifierExpression()).getReferenceName());
                 }
+                // M38.1（负例回归集实证）：qualifier 是 new 表达式（`new Helper().lambdaQuery()`）——
+                // 任意普通类实例的撞名调用，不是 MP 服务链（服务链 qualifier 是变量/字段/this 引用），不标
+                boolean qualifierIsNewExpression = ref.getQualifierExpression() instanceof PsiNewExpression;
                 boolean isServiceChain = WrapperLocator.SERVICE_CHAIN_METHOD_NAMES.contains(referenceName)
+                    && !qualifierIsNewExpression
                     && WrapperLocator.isServiceChainStart(call);
                 if (!isWrappersFactory && !isServiceChain) return null;
                 // 该工厂/链调用位于某 Wrapper 变量初始化表达式内（`w = Wrappers.lambdaQuery()...`）→ 去重

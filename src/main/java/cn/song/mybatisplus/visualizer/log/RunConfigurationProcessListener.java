@@ -28,7 +28,9 @@ import java.lang.reflect.Proxy;
  *    MessageBusConnection/SimpleMessageBusConnection 是 util.jar 全平台稳定接口，
  *    可编译期直引，无需反射；只有 execution 域（可能被 IPGP 裁剪/移位）才反射。
  *
- * 回调分工：processStarted → SqlLogManager.onProjectProcessStarted（清 suppressed + startCapture 幂等）；
+ * 回调分工：processStarted → SqlLogManager.resetEntrySequence（T-LogRowNumber：行号清零，
+ * <b>无条件</b>执行，先于自动捕捉回调——不接进 onProjectProcessStarted 因其 {@code !autoStart} 守卫
+ * 会跳过手动捕捉模式）→ SqlLogManager.onProjectProcessStarted（清 suppressed + startCapture 幂等）；
  * processTerminated 不在此处理——项目停止语义由 SqlLogManager.onConsoleRemoved 承担，
  * 此处若停会对所有 RunProfile 触发（HTTP 请求/profiler 均是进程，踩坑第九轮 v2 误停教训）。
  *
@@ -69,6 +71,11 @@ public final class RunConfigurationProcessListener {
         }
         InvocationHandler handler = (proxy, method, args) -> {
             if (method.getName().equals("processStarted")) {
+                try {
+                    manager.resetEntrySequence(); // T-LogRowNumber：启动项目行号清零（无条件，先于自动捕捉回调）
+                } catch (Throwable t) {
+                    LOG.warn("processStarted: 行号清零回调失败（project=" + project.getName() + "）", t);
+                }
                 try {
                     manager.onProjectProcessStarted();
                 } catch (Throwable t) {

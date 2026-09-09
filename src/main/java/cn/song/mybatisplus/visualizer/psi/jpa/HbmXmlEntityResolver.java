@@ -1,12 +1,15 @@
 package cn.song.mybatisplus.visualizer.psi.jpa;
 
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiManager;
 import com.intellij.psi.search.FilenameIndex;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import org.jetbrains.annotations.NotNull;
@@ -49,13 +52,16 @@ public final class HbmXmlEntityResolver {
         HbmXmlMapping.ClassMapping cached = cache.get(cacheKey);
         if (cached != null) return cached;
 
-        // 搜索所有 .hbm.xml 文件
-        PsiFile[] hbmFiles =
-                FilenameIndex.getFilesByName(project, "*.hbm.xml", GlobalSearchScope.allScope(project));
+        // T-DepApi：getFilesByName 全平台标 deprecated——getVirtualFilesByName(name, scope)
+        // （无 project 重载）243/253/262 javap 实证均无弃用标记；返回 VirtualFile 后经
+        // PsiManager 转 XmlFile，解析语义不变。
+        Collection<VirtualFile> hbmFiles =
+                FilenameIndex.getVirtualFilesByName("*.hbm.xml", GlobalSearchScope.allScope(project));
 
-        for (PsiFile file : hbmFiles) {
-            if (!(file instanceof XmlFile)) continue;
-            XmlFile xmlFile = (XmlFile) file;
+        for (VirtualFile vf : hbmFiles) {
+            PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
+            if (!(psiFile instanceof XmlFile)) continue;
+            XmlFile xmlFile = (XmlFile) psiFile;
             HbmXmlMapping.ClassMapping mapping = parseHbmFile(xmlFile);
             if (mapping == null) continue;
 

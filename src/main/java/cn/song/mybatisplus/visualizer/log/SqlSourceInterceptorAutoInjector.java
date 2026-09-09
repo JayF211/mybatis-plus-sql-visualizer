@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import com.intellij.lang.Language;
-import com.intellij.lang.StdLanguages;
+import com.intellij.lang.java.JavaLanguage;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
@@ -138,10 +138,11 @@ public final class SqlSourceInterceptorAutoInjector {
 
     /** 创建 Java 文件（PSI）。 */
     private static void createJavaFile(Project project, PsiDirectory directory, String fileName, String content) {
-        Language javaLanguage = Language.findLanguageByID("JAVA");
-        if (javaLanguage == null) {
-            javaLanguage = StdLanguages.JAVA;
-        }
+        // T-DepApi：StdLanguages.JAVA 全平台标 deprecated——JavaLanguage.INSTANCE（java 插件，
+        // plugin.xml 已声明 com.intellij.java 依赖）是官方等价物，243/253/262 javap 实证均无弃用标记；
+        // findLanguageByID("JAVA") 找不到时（Java 插件被禁用的极端场景）原 StdLanguages 兜底也依赖
+        // 同一插件提供 Language 实现，语义不变，故直接取 INSTANCE。
+        Language javaLanguage = JavaLanguage.INSTANCE;
         PsiFile psiFile = PsiFileFactory.getInstance(project)
                 .createFileFromText(fileName, javaLanguage, content);
 

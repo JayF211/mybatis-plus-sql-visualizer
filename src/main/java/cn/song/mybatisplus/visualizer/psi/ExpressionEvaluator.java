@@ -8,6 +8,7 @@ import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiPolyadicExpression;
+import com.intellij.psi.PsiPrefixExpression;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiVariable;
 
@@ -66,7 +67,34 @@ public final class ExpressionEvaluator {
         if (expression instanceof PsiMethodCallExpression) {
             return evaluateMethodCall((PsiMethodCallExpression) expression);
         }
+        // M38.2（语义对照矩阵实证）：一元负/正号 + 数值字面量（`-1`、`-1.5`）→ 静态字面量——
+        // Java 没有负数字面量 token，`-1` 是 PsiPrefixExpression，落 else 分支会被误判为运行时占位符
+        if (expression instanceof PsiPrefixExpression) {
+            return evaluatePrefix((PsiPrefixExpression) expression);
+        }
         return new SqlValue.Placeholder(expression.getText());
+    }
+
+    /**
+     * 一元 +/- 表达式求值（M38.2）：仅当操作数是数值字面量时静态求值（{@code -1} → {@code -1}），
+     * 其余（变量/方法调用取负）降级为占位符。
+     */
+    private SqlValue evaluatePrefix(PsiPrefixExpression expr) {
+        if (expr.getOperand() == null) return new SqlValue.Placeholder(expr.getText());
+        SqlValue inner = evaluateInternal(expr.getOperand());
+        if (!(inner instanceof SqlValue.Literal)) return new SqlValue.Placeholder(expr.getText());
+        String operandText = expr.getOperand() instanceof PsiLiteralExpression lit ? lit.getText() : null;
+        if (operandText == null) return new SqlValue.Placeholder(expr.getText());
+        if (!operandText.matches("-?\\d+(\\.\\d+)?([fFlLdD])?")) return new SqlValue.Placeholder(expr.getText());
+        // SQL 数值字面量不带 Java 后缀（`5L` → `5`、`1.5f` → `1.5`），与 evaluateLiteral 数值路径一致
+        String plain = operandText.replaceAll("[fFlLdD]+$", "");
+        if (expr.getOperationTokenType() == JavaTokenType.MINUS) {
+            return new SqlValue.Literal("-" + plain, "-" + plain);
+        }
+        if (expr.getOperationTokenType() == JavaTokenType.PLUS) {
+            return new SqlValue.Literal(plain, plain);
+        }
+        return new SqlValue.Placeholder(expr.getText());
     }
 
     /**

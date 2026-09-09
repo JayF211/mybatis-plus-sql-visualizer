@@ -35,7 +35,14 @@ public record LogSqlEntry(
     /**
      * 产生该 SQL 的源码行号（0 表示未知）。
      */
-    int sourceLine
+    int sourceLine,
+    /**
+     * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 SqlLogEntryBuffer.addEntry
+     * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
+     * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
+     * （历史文件读回、日志转 SQL round-trip 产出的条目）。
+     */
+    long sequenceNumber
 ) {
     /** 摘要最大长度。 */
     private static final int MAX_SUMMARY_LENGTH = 160;
@@ -54,26 +61,32 @@ public record LogSqlEntry(
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(),
-            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0);
+            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, 0L);
     }
 
     /** 含显式时间戳。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp) {
         this(rawSql, restoredSql, params, timestamp,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0);
+            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, 0L);
     }
 
     /** 含来源。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, SqlSource source) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(),
-            computeSummary(restoredSql), source, null, null, 0);
+            computeSummary(restoredSql), source, null, null, 0, 0L);
     }
 
     /** 含时间戳 + 源码位置 + 耗时（历史文件反解析）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params,
                        long timestamp, String sourceFile, int sourceLine, Long executionTimeMs) {
         this(rawSql, restoredSql, params, timestamp,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine);
+            computeSummary(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine, 0L);
+    }
+
+    /** T-LogRowNumber：以本条为原型返回带指定捕获序号的副本（Kotlin data class copy(sequenceNumber=…) 的 Java 等价）。 */
+    public LogSqlEntry withSequenceNumber(long newSequenceNumber) {
+        return new LogSqlEntry(rawSql, restoredSql, params, timestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, newSequenceNumber);
     }
 
     /** 智能截断摘要。 */

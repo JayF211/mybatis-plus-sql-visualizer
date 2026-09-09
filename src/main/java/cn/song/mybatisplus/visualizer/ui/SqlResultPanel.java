@@ -40,7 +40,11 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         errorCopyButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.GRAY));
         errorCopyButton.setMargin(JBUI.insets(0, 6, 0, 6));
         errorCopyButton.addActionListener(e -> {
-            if (currentError != null) copyToClipboard(currentError);
+            if (currentError != null) {
+                copyToClipboard(currentError);
+                // T-ExecCopyFix：复制成功反馈（对齐 SqlClickPreview.flashCopied 对号语义）
+                CopyFeedback.flashCopied(errorCopyButton);
+            }
         });
 
         setBorder(JBUI.Borders.empty());

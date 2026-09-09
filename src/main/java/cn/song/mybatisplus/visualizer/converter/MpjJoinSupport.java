@@ -159,7 +159,7 @@ public final class MpjJoinSupport {
                     }
                     if (leftCol == null) continue;
                     WrapperArg right = argAt(call.getArgs(), 1);
-                    String op = "ne".equals(call.getMethodName()) ? "!=" : "=";
+                    String op = "ne".equals(call.getMethodName()) ? "<>" : "=";
                     if (right instanceof WrapperArg.ColumnArg ca) {
                         result.add(new Condition.ColumnComparison(leftCol, WrapperConverterKt.withTableAlias(ca.getColumn(), mainAlias), null));
                     } else if (right instanceof WrapperArg.ValueArg va) {
