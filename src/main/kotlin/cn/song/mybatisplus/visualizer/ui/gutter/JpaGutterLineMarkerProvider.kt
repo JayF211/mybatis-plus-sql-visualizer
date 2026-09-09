@@ -40,6 +40,10 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
         if (!gutterEnabled()) return null
         // 必须同时是 Repository 接口内的派生方法名——避免普通类手写方法（如业务 DAO 的
         // `deleteByDbHelper`）被误判为 JPA 派生查询而显示错误图标（触发 previewDerivedQuery 返回 null）
+        // M38.1（负例回归集实证）：派生查询只存在于 Repository 接口——普通类里 PartTree 形态的
+        // 方法名（findByXxx 等）不得标锚（Flex-Helper「图标误显示」同款差评源）。文本级守卫：
+        // 所在类必须是接口，且 extends 列表类型名含 Repository（Spring Data 全家桶均以 Repository 结尾）。
+        if (!isInRepositoryInterface(method)) return null
         if (!DerivedMethodLocator.isRepositoryMethod(method)) return null
 
         return LineMarkerInfo(
@@ -56,6 +60,20 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
     private fun gutterEnabled(): Boolean = runCatching {
         PluginSettings.getInstance().state.showGutterIcon
     }.getOrDefault(true)
+
+    /**
+     * 方法所在类是否为 Repository 接口（M38.1，文本级 O(1)——无 resolve，符合性能红线）：
+     * 接口 + extends 类型名含 "Repository"（JpaRepository/CrudRepository/PagingAndSortingRepository 等）。
+     * fixture 中的红色声明（接口 extends 未 resolve 的类）同样按文本命中。
+     */
+    private fun isInRepositoryInterface(method: com.intellij.psi.PsiMethod): Boolean {
+        val containingClass = method.containingClass ?: return false
+        if (!containingClass.isInterface) return false
+        val extendsList = containingClass.extendsList ?: return false
+        return extendsList.referencedTypes.any {
+            (it as? com.intellij.psi.PsiClassType)?.className?.contains("Repository") == true
+        }
+    }
 
     /**
      * 导航处理：@Query 方法走 JPQL 路径，纯派生查询走 PartTree 路径。

@@ -945,4 +945,31 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
         )
     }
+
+    fun testNewExpressionQualifierChainCallIsNotAnchor() {
+        // M38.1（负例回归，Flex-Helper「图标误显示」差评源）：`new Helper().lambdaQuery().eq(...)` ——
+        // 任意普通类实例的撞名调用不是 MP 服务链（服务链 qualifier 是变量/字段/this 引用），
+        // lambdaQuery 方法名不得因场景 C 服务链分支而误标锚点
+        configure(
+            """
+            public class Demo {
+                public void query() {
+                    new Helper().lambdaQuery().eq("a", 1);
+                }
+
+                static class Helper {
+                    public Helper lambdaQuery() { return this; }
+                    public Helper eq(String column, Object val) { return this; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val chainCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "lambdaQuery" }
+        assertNull(
+            "new 表达式 qualifier 的撞名工厂调用不应标服务链锚点",
+            WrapperAnchorDetector.anchorElement(chainCall.methodExpression.referenceNameElement),
+        )
+        assertEquals("普通类实例撞名链不应产生任何锚点", emptySet<String>(), collectedAnchors())
+    }
 }

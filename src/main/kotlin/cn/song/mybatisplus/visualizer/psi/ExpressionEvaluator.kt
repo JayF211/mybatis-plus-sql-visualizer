@@ -39,7 +39,29 @@ object ExpressionEvaluator {
         is PsiPolyadicExpression -> evaluatePolyadic(expression)
         // T-Mxx：getter 方法调用（`user.getId()`）→ 字段引用格式（`user.id`）
         is PsiMethodCallExpression -> evaluateMethodCall(expression)
+        // M38.2（语义对照矩阵实证）：一元负/正号 + 数值字面量（`-1`、`-1.5`）→ 静态字面量——
+        // Java 没有负数字面量 token，`-1` 是 PsiPrefixExpression，落 else 分支会被误判为运行时占位符
+        is com.intellij.psi.PsiPrefixExpression -> evaluatePrefix(expression)
         else -> SqlValue.Placeholder(expression.text)
+    }
+
+    /**
+     * 一元 +/- 表达式求值（M38.2）：仅当操作数是数值字面量时静态求值（`-1` → `-1`），
+     * 其余（变量/方法调用取负）降级为占位符。
+     */
+    private fun evaluatePrefix(expr: com.intellij.psi.PsiPrefixExpression): SqlValue {
+        val inner = evaluate(expr.operand ?: return SqlValue.Placeholder(expr.text))
+        if (inner !is SqlValue.Literal) return SqlValue.Placeholder(expr.text)
+        val operandText = (expr.operand as? com.intellij.psi.PsiLiteralExpression)?.text
+            ?: return SqlValue.Placeholder(expr.text)
+        if (!operandText.matches(Regex("-?\\d+(\\.\\d+)?([fFlLdD])?"))) return SqlValue.Placeholder(expr.text)
+        // SQL 数值字面量不带 Java 后缀（`5L` → `5`、`1.5f` → `1.5`），与 evaluateLiteral 数值路径一致
+        val plain = operandText.trimEnd('f', 'F', 'l', 'L', 'd', 'D')
+        return when (expr.operationTokenType) {
+            JavaTokenType.MINUS -> SqlValue.Literal(raw = "-$plain", unquoted = "-$plain")
+            JavaTokenType.PLUS -> SqlValue.Literal(raw = plain, unquoted = plain)
+            else -> SqlValue.Placeholder(expr.text)
+        }
     }
 
     /**
