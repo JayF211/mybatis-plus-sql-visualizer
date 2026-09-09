@@ -189,6 +189,13 @@
       <td>vTradex Forest 框架 <code>&lt;pages&gt;</code> XML 格式中 <code>&lt;datasource&gt;</code> CDATA SQL 预览</td>
     </tr>
     <tr>
+      <td>JdbcTemplate / 自研 DAO 字符串 SQL <span class="tag tag-new">New</span></td>
+      <td>调用行 gutter 图标 / 方法定义行 gutter 图标</td>
+      <td><code>jdbcTemplate.queryForList("select ...")</code> 等字符串实参直接预览；命名参数
+          <code>:name</code> 按名回填；<code>StringBuilder</code> 链式 append 聚合；
+          自研 DAO <code>beanCruder.selectList(Class, sql, ...)</code> 形态 + 方法定义处锚点</td>
+    </tr>
+    <tr>
       <td>参数替换</td>
       <td>面板左侧输入框</td>
       <td><code>?</code> 占位符替换为实际值；LIKE 自动拼百分号；按字段类型加引号</td>
@@ -227,7 +234,13 @@
     <tr>
       <td>自动捕获</td>
       <td>侧边栏「捕捉」按钮</td>
-      <td>监听运行控制台还原可执行 SQL；支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式</td>
+      <td>监听运行控制台还原可执行 SQL；支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式；
+          JdbcTemplate 跨行多行语句（含 TLog 等自定义日志前缀）完整捕获</td>
+    </tr>
+    <tr>
+      <td>单击预览 <span class="tag tag-new">New</span></td>
+      <td>单击日志列表条目</td>
+      <td>SQL 高亮可编辑编辑器轻量预览（双击仍开完整弹窗）；临时改一个字段值后点头部「复制」即可取编辑后文本</td>
     </tr>
     <tr>
       <td>日志 → SQL</td>
@@ -253,7 +266,8 @@
     <tr>
       <td>去重 / 过滤</td>
       <td>工具栏</td>
-      <td>SQL 类型多选筛选；Ctrl+F 搜索；去重 <code>⨉N</code> 徽章即时显示</td>
+      <td>SQL 类型多选筛选；Ctrl+F 搜索（200ms 防抖）；去重 <code>⨉N</code> 徽章即时显示；
+          空白差异不干扰判重（双路日志副本可合并），MP 分页计数语句单独标记</td>
     </tr>
   </tbody>
 </table>

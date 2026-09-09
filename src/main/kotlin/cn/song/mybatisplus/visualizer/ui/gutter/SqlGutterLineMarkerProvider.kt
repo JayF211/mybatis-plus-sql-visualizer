@@ -180,8 +180,12 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                         ): com.intellij.openapi.ui.popup.PopupStep<*>? {
                             // 仅 finalChoice=true 时执行；避免悬停预览分支误触发 NPE。
                             if (!finalChoice) return null
+                            // 20260907-1500：open 会同步 show SqlPreviewDialog，须挂 doFinalStep
+                            //（popup 选中路径内同步弹 dialog 触发平台焦点告警，与生成测试资产同根因）。
                             selectedValue?.let {
-                                cn.song.mybatisplus.visualizer.log.LogEntryPreviewOpener.open(project, it)
+                                return doFinalStep {
+                                    cn.song.mybatisplus.visualizer.log.LogEntryPreviewOpener.open(project, it)
+                                }
                             }
                             return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
                         }

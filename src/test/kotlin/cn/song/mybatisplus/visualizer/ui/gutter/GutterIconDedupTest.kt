@@ -15,7 +15,11 @@ import org.junit.Assert.assertNotNull
  *  - `getHibernateTemplate().find / findByValueBean` 原无图标 → 应恰 1
  *  另含 `session.createQuery` / `jdbcTemplate.queryForList` 的归属回归（各 1，不跨家族）。
  *
- * 计数口径：对同一方法名 leaf，统计方法调用类 provider（Hql / CustomDaoHql / Jdbc）中产生 LineMarkerInfo 的数量。
+ * T-GutterDedup 补盲区（20260907-1630）：方法定义锚点 [StringSqlMethodGutterLineMarkerProvider]
+ * 纳入计数——其方法体扫描带家族守卫后，CUSTOM_DAO 家族调用（commonDao.execute）方法定义行不再亮图标。
+ *
+ * 计数口径：对同一方法名 leaf，统计方法调用类 provider（Hql / CustomDaoHql / Jdbc / StringSqlMethod）
+ * 中产生 LineMarkerInfo 的数量；方法定义行单独用 [methodIconCount] 断言。
  */
 class GutterIconDedupTest : BasePlatformTestCase() {
 
@@ -23,13 +27,21 @@ class GutterIconDedupTest : BasePlatformTestCase() {
         HqlGutterLineMarkerProvider(),
         CustomDaoHqlGutterLineMarkerProvider(),
         JdbcTemplateSqlGutterLineMarkerProvider(),
+        StringSqlMethodGutterLineMarkerProvider(),
     )
 
-    /** 方法调用名 leaf（父级为 PsiReferenceExpression，排除方法声明名）上三类 provider 产生的图标总数。 */
+    /** 方法调用名 leaf（父级为 PsiReferenceExpression，排除方法声明名）上方法调用类 provider 产生的图标总数。 */
     private fun iconCountAt(methodName: String): Int {
         val leaf = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
             .first { it.text == methodName && it.parent is com.intellij.psi.PsiReferenceExpression }
         return providers.count { it.getLineMarkerInfo(leaf) != null }
+    }
+
+    /** 方法定义名 leaf（父级为 PsiMethod）上 [StringSqlMethodGutterLineMarkerProvider] 产生的图标数。 */
+    private fun methodIconCount(methodName: String): Int {
+        val leaf = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
+            .first { it.text == methodName && it.parent is com.intellij.psi.PsiMethod }
+        return StringSqlMethodGutterLineMarkerProvider().getLineMarkerInfo(leaf)?.let { 1 } ?: 0
     }
 
     fun testCommonDaoExecute_singleIcon() {
@@ -42,7 +54,40 @@ class GutterIconDedupTest : BasePlatformTestCase() {
                 }
             }
         """.trimIndent())
-        assertEquals("commonDao.execute 应恰 1 图标（CustomDaoHql；Jdbc 接收者非 JDBC 家族不认领）", 1, iconCountAt("execute"))
+        assertEquals("commonDao.execute 调用行应恰 1 图标（CustomDaoHql；Jdbc 接收者非 JDBC 家族不认领）", 1, iconCountAt("execute"))
+        // T-GutterDedup 补盲区：方法定义行不得因 StringSqlMethod 家族守卫缺失再亮一个（用户真机双图标实证）
+        assertEquals("commonDao.execute 场景方法定义行应 0 图标（CUSTOM_DAO 家族守卫）", 0, methodIconCount("updateStatusById"))
+    }
+
+    fun testCommonDaoExecuteDelete_methodRowNoIcon() {
+        // demo 形态 7：DELETE HQL 同样走 commonDao.execute，方法定义行同样不亮
+        myFixture.configureByText("Service.java", """
+            class CommonDao { int execute(String hql, Object... p); }
+            class MyService {
+                CommonDao commonDao;
+                int deleteAsnById(Long id) {
+                    return commonDao.execute("delete from WmsAsn asn where asn.id = :id", "id", id);
+                }
+            }
+        """.trimIndent())
+        assertEquals("commonDao.execute(DELETE) 调用行应恰 1 图标", 1, iconCountAt("execute"))
+        assertEquals("commonDao.execute(DELETE) 方法定义行应 0 图标", 0, methodIconCount("deleteAsnById"))
+    }
+
+    fun testBeanCruderSelectList_methodRowStillHasIcon() {
+        // UNKNOWN 家族（自研框架）方法定义行图标不回归：家族守卫只挡专属家族
+        myFixture.configureByText("Service.java", """
+            class ScheduleVO {}
+            class BeanCruder { java.util.List<?> selectList(Class c, String sql, Object... p); }
+            class MyService {
+                BeanCruder beanCruder;
+                java.util.List<?> getScheduleList(Long userId) {
+                    String sql = "SELECT wp.PROC_NAME FROM WKFL_TASK WT WHERE WT.OWNER = :CUR_USER ";
+                    return beanCruder.selectList(ScheduleVO.class, sql, "CUR_USER", userId);
+                }
+            }
+        """.trimIndent())
+        assertEquals("beanCruder.selectList UNKNOWN 家族方法定义行应仍亮 1 图标", 1, methodIconCount("getScheduleList"))
     }
 
     fun testGetHibernateTemplateExecuteCallback_icons() {
@@ -204,5 +249,23 @@ class GutterIconDedupTest : BasePlatformTestCase() {
             .first { it.text == "findUsers" && it.parent !is com.intellij.psi.PsiReferenceExpression }
         val criteriaProvider = CriteriaQueryGutterLineMarkerProvider()
         assertNotNull("CriteriaQuery 应锚在方法名 findUsers 上产生 1 图标", criteriaProvider.getLineMarkerInfo(methodLeaf))
+    }
+
+    fun testBeanCruderSelectList_singleIcon() {
+        // T-DaoSql-03：自研框架 `beanCruder.selectList(Class, sql, ...)`（UNKNOWN 家族 + 字符串形态实参）
+        // 由 Jdbc provider 恰 1 认领；批量锚点（场景 D）让位不参与调用行计数
+        myFixture.configureByText("Service.java", """
+            class ScheduleVO {}
+            class BeanCruder { java.util.List<?> selectList(Class c, String sql, Object... p); }
+            class MyService {
+                BeanCruder beanCruder;
+                java.util.List<?> getScheduleList(Long userId) {
+                    String sql = "SELECT wp.PROC_NAME FROM WKFL_TASK WT WHERE WT.OWNER = :CUR_USER ";
+                    return beanCruder.selectList(ScheduleVO.class, sql, "CUR_USER", userId);
+                }
+            }
+        """.trimIndent())
+        assertEquals("beanCruder.selectList(Class, sql, ...) 调用行应恰 1 图标（Jdbc provider）",
+            1, iconCountAt("selectList"))
     }
 }

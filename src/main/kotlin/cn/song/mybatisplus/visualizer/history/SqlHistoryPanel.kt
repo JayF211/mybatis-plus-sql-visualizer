@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.history
 
 import cn.song.mybatisplus.visualizer.log.SlowQueryDetector
+import cn.song.mybatisplus.visualizer.log.SqlClickPreview
 import cn.song.mybatisplus.visualizer.log.withTerminator
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog
@@ -58,6 +59,8 @@ class SqlHistoryPanel(
     private val manager = SqlHistoryManager.getInstance()
     private val listModel = DefaultListModel<SqlHistoryEntry>()
     private val list = JBList<SqlHistoryEntry>(listModel)
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
+    private val clickPreview = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).sql) }
 
     /** 当前筛选模式（null = 全部）。 */
     private var tagFilter: String? = null
@@ -105,6 +108,9 @@ class SqlHistoryPanel(
 
     /** 当前是否仅显示收藏（测试断言）。 */
     internal val isFavoritesOnly: Boolean get() = favoritesOnly
+
+    /** 单击预览控制器（T-ClickPreview 测试断言）。 */
+    internal val clickPreviewForTest: SqlClickPreview get() = clickPreview
 
     /** 设置搜索词（测试用；等价于在搜索框输入）。 */
     internal fun setSearchQueryForTest(query: String) {
@@ -160,6 +166,10 @@ class SqlHistoryPanel(
         list.cellRenderer = HistoryCellRenderer()
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
+                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    clickPreview.onClick(e.clickCount, e.point)
+                }
                 if (e.clickCount >= 2) {
                     list.selectedValue?.let { openPreview(it) }
                 }
@@ -213,7 +223,7 @@ class SqlHistoryPanel(
                     "  <span style='color:#9E9E9E'>$ts</span>" +
                     sourcePart + tagPart +
                     "</html>"
-                toolTipText = entry.sql
+                // T-ClickPreview：不再设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
                 icon = if (entry.favorite) favoriteIcon else emptyIcon
             }
             border = BorderFactory.createCompoundBorder(
@@ -345,7 +355,9 @@ class SqlHistoryPanel(
         refresh()
     }
 
-    override fun dispose() {}
+    override fun dispose() {
+        clickPreview.dispose()
+    }
 
     companion object {
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.history.toolbar"

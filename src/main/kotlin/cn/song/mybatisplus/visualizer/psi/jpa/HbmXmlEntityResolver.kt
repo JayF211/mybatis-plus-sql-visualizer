@@ -7,6 +7,7 @@ import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
+import com.intellij.psi.xml.XmlText
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -14,6 +15,11 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * 解析 `<class>`, `<id>`, `<property>`, `<many-to-one>`, `<one-to-one>` 等映射元素，
  * 提取实体类名、表名、字段列映射、关联关系等元数据。
+ *
+ * T-H1（20260907-1630）：新增 `<query>`（HQL）/ `<sql-query>`（原生 SQL）命名查询解析——
+ * hbm 纯 POJO 项目（无 @NamedQuery 注解）的命名查询此前在插件视角不存在，`createNamedQuery(name)`
+ * 回查与 hbm 文件 gutter 均无法覆盖。文本只取直属 XmlText（排除 `<return-scalar>` 等子标签），
+ * CDATA 正常展开；按查询名（完整 `name` 属性）索引，负命中缓存沿用 [NEGATIVE_CACHE_MAX] 口径。
  *
  * 查找策略（T-J11 修复）：
  * 1. 经 [FileTypeIndex] 按文件类型扫描项目内全部 XML 文件，再按文件名 `endsWith(".hbm.xml")`
@@ -32,6 +38,9 @@ object HbmXmlEntityResolver {
     private const val NEGATIVE_CACHE_MAX = 4096
 
     private val cache = ConcurrentHashMap<String, HbmXmlMapping.ClassMapping>()
+
+    /** T-H1：命名查询索引（键=项目名+查询名）；负命中沿用 [negativeCache]（前缀区分键）。 */
+    private val namedQueryCache = ConcurrentHashMap<String, HbmXmlMapping.NamedQuery>()
 
     /**
      * T-Perf-18：负命中缓存（项目名+类名 → true 表示该实体无 hbm 映射）。
@@ -67,6 +76,59 @@ object HbmXmlEntityResolver {
         if (negativeCache.size >= NEGATIVE_CACHE_MAX) negativeCache.clear()
         negativeCache.add(cacheKey)
         return null
+    }
+
+    /**
+     * T-H1：按查询名查找 hbm 命名查询（`<query>` HQL / `<sql-query>` 原生 SQL）。
+     *
+     * 供 `NamedQueryLocator.findByQueryName` 未命中 Java @NamedQuery 注解时 fallback
+     * （hbm 纯 POJO 项目无注解可查），以及 hbm 文件 gutter 点击预览。
+     *
+     * @param queryName 完整查询名（如 `LegacyItem.findLowStockHql`）
+     * @param project   当前项目
+     */
+    fun findNamedQuery(queryName: String, project: Project): HbmXmlMapping.NamedQuery? {
+        if (queryName.isBlank()) return null
+        val cacheKey = "nq:${project.name}:$queryName"
+        namedQueryCache[cacheKey]?.let { return it }
+        if (cacheKey in negativeCache) return null
+
+        for (file in findHbmXmlFiles(project)) {
+            val rootTag = file.rootTag ?: continue
+            if (rootTag.name != "hibernate-mapping") continue
+            for (tag in rootTag.subTags) {
+                val kind = when (tag.name) {
+                    "query" -> HbmXmlMapping.QueryKind.HQL
+                    "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
+                    else -> continue
+                }
+                val name = tag.getAttributeValue("name") ?: continue
+                if (name != queryName) continue
+                val text = extractNamedQueryText(tag)
+                if (text.isBlank()) continue
+                val query = HbmXmlMapping.NamedQuery(name = name, kind = kind, queryText = text)
+                namedQueryCache[cacheKey] = query
+                return query
+            }
+        }
+
+        if (negativeCache.size >= NEGATIVE_CACHE_MAX) negativeCache.clear()
+        negativeCache.add(cacheKey)
+        return null
+    }
+
+    /**
+     * T-H1：提取命名查询文本——直属 XmlText 拼接（CDATA 已被 PSI 展开为文本节点），
+     * 排除 `<return-scalar>`/`<return>`/`<query-param>` 等子标签的子内容。
+     */
+    private fun extractNamedQueryText(tag: XmlTag): String {
+        val sb = StringBuilder()
+        for (child in tag.children) {
+            if (child is XmlText) {
+                sb.append(child.text)
+            }
+        }
+        return sb.toString().trim()
     }
 
     /**
@@ -181,10 +243,11 @@ object HbmXmlEntityResolver {
     }
 
     /**
-     * 清除缓存（含负命中缓存；PluginCacheManager.clearAll 接线，项目关闭时调用）。
+     * 清除缓存（含负命中缓存与命名查询索引；PluginCacheManager.clearAll 接线，项目关闭时调用）。
      */
     fun clearCache() {
         cache.clear()
+        namedQueryCache.clear()
         negativeCache.clear()
     }
 

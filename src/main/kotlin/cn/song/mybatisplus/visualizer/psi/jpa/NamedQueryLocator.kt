@@ -94,6 +94,10 @@ object NamedQueryLocator {
      * JPA 规范命名查询名默认即 `<实体简单名>.<方法名>`（如 `"UserEntity.findByUsernameNamed"`），
      * 取 `.` 前缀解析实体类，再由 [locate] 按名字精确匹配。解析不到时返回 null（调用方优雅降级）。
      *
+     * T-H3（20260907-1630）：Java @NamedQuery 注解未命中时回落 hbm 命名查询
+     * （[HbmXmlEntityResolver.findNamedQuery]）——hbm 纯 POJO 项目无注解可查，命名查询全在
+     * `<hibernate-mapping>` 的 `<query>`/`<sql-query>` 元素里。
+     *
      * @param project   项目
      * @param queryName 命名查询名
      * @return 命中的命名查询（annotation 字段已回填，可反查实体类）；未命中返回 null

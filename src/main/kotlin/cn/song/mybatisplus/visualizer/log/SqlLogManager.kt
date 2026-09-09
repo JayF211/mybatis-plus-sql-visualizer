@@ -72,6 +72,17 @@ class SqlLogManager(private val project: Project) : Disposable {
     var isWaitingForConsole: Boolean = false
         private set
 
+    /**
+     * 进程级启动监听是否订阅成功（20260907-2045 第四轮）。
+     * true=被动模式：「项目启动时自动开始监听」开启后**不预 armed**——设置开启/项目打开时按钮保持
+     * 「捕捉」原状，Run 项目那一刻由 [onProjectProcessStarted] 驱动捕捉（用户语义：设置本身
+     * 不等于"监听已开启"）；false=降级模式（execution API 缺失）：维持原 armed 行为
+     * （RCM 轮询是唯一检测通道）。
+     */
+    @Volatile
+    var processListenerActive: Boolean = false
+        internal set
+
     /** M37.3：上次自动展开时间戳（防抖基准；internal 供测试重置）。 */
     @Volatile
     internal var lastAutoShowAt = 0L
@@ -145,6 +156,11 @@ class SqlLogManager(private val project: Project) : Disposable {
                 }
             },
         )
+
+        // 20260907-2045：运行配置进程启动监听——autoStart=true 时项目 Run 即自动捕捉
+        // （清 suppressed + startCapture，见 onProjectProcessStarted）；execution API 缺失时
+        // 内部降级为 false，RCM 轮询兜底仍在
+        processListenerActive = RunConfigurationProcessListener.subscribe(project, this)
     }
 
     /** 首条 SQL 自动展开（logAutoOpenOnCapture 开启、未被用户关闭抑制、且距上次展开超过防抖窗口）。 */
@@ -306,6 +322,59 @@ class SqlLogManager(private val project: Project) : Disposable {
         startCapture()
     }
 
+    /**
+     * 项目启动（运行配置进程启动）事件——autoStart=true 时**无条件**自动捕捉。
+     *
+     * 20260907-2045 沙盒日志实证（IU-243）：手动停止置 suppressed=true 持久化后，
+     * [onConsoleAppeared] 被 `suppressed && !userArmed` 拦截、[LogStartupCapture] 只在项目打开
+     * 时触发一次——「设置开启 + 用户曾停止 → 再运行项目」从此没有任何自动重启入口，
+     * 与踩坑第十一轮「设置优先」结论冲突：用户显式"停止"只应抑制**项目未运行期间**的 armed 态，
+     * 项目真正启动时 `logAutoCaptureOnStart=true` 应优先。
+     *
+     * 接线：[cn.song.mybatisplus.visualizer.execution.RunConfigurationLifecycleListener]
+     * （ExecutionListener 反射桥，243/262 execution API 兼容）。
+     * 与 [onConsoleAppeared] 的分工：本方法在进程级事件可靠触发（不依赖 RCM tab 扫描），
+     * 清 suppressed 后走 startCapture 常规链路（armed 态下为幂等 no-op）。
+     */
+    fun onProjectProcessStarted() {
+        val autoStart = PluginSettings.getInstance().state.logAutoCaptureOnStart
+        if (!autoStart) return
+        val suppressed = PluginSettings.getInstance().state.logAutoCaptureSuppressed
+        if (suppressed) {
+            // 项目启动 = 用户对「自动监听」的再次确认（设置优先，对齐踩坑第十一轮）
+            PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
+            LOG.info("onProjectProcessStarted: 项目启动清除 suppressed（autoStart 优先）——project=${project.name}")
+        }
+        if (capturing && !isWaitingForConsole) {
+            LOG.debug("onProjectProcessStarted: 已在捕捉态，startCapture 幂等跳过（project=${project.name}）")
+            return
+        }
+        if (capturing && isWaitingForConsole && bridge.isPollingActive) {
+            // armed 态已在轮询等待控制台——进程级回调无需重复 attach（测试 T25 实证 attach 会重复）
+            LOG.info("onProjectProcessStarted: 已在 armed 轮询等待，无需重复挂载（project=${project.name}）")
+            return
+        }
+        LOG.info("onProjectProcessStarted: 项目启动自动捕捉（armed=$userArmed, waiting=$isWaitingForConsole, project=${project.name}）")
+        startCapture()
+    }
+
+    /**
+     * 「项目启动时自动开始监听」设置开启（设置页关→开边沿）——按模式分流（20260907-2045 第四轮）：
+     *  - 进程级监听可用（[processListenerActive]=true）→ **被动模式**：清 suppressed 后不预 armed，
+     *    按钮保持「捕捉」原状；Run 项目那一刻由 [onProjectProcessStarted] 驱动捕捉
+     *    （用户语义：开启设置 ≠ 监听已开启，08:33 会话反馈"还没启动项目却自动开启"实证）；
+     *  - 降级模式（execution API 缺失，RCM 轮询是唯一检测通道）→ 维持原行为进入 armed 态。
+     */
+    fun onAutoStartSettingEnabled() {
+        PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
+        if (processListenerActive) {
+            LOG.info("onAutoStartSettingEnabled: 进程级监听已接管——被动等待项目 Run（不预 armed，project=${project.name}）")
+            return
+        }
+        LOG.info("onAutoStartSettingEnabled: 进程级监听不可用——降级 armed 模式（project=${project.name}）")
+        startCapture()
+    }
+
     /** 已挂载的 console 集合（bridge 访问）。 */
     val attachedConsoles: MutableMap<Any, Pair<Any, Class<*>>> get() = bridge.attachedConsoles
 
@@ -366,7 +435,9 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次；与面板是否已创建无关）。 */
     /** F-43 测试访问器：当前自动保存文件。 */
-    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()    /** F-43 测试访问器：解析文件名模板。 */
+    internal fun autoSaverCurrentFile(): File? = autoSaver.currentFile()
+
+    /** F-43 测试访问器：解析文件名模板。 */
     internal fun autoSaverResolveFileName(): String = autoSaver.resolveFileName()
 
     /**

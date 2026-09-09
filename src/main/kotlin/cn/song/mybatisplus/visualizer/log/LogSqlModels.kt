@@ -61,19 +61,24 @@ data class LogSqlEntry(
     val sourceLine: Int = 0,
 ) {
     /**
-     * 列表渲染 HTML 缓存（T-LogListFreeze-02）：惰性计算，避免每次 layout pass 重复走 SqlListHtmlRenderer + BasicHTML 解析。
-     * null = 未计算 / 已失效；非 null = 可直接 setText 的完整 `<html>...</html>` 字符串。
-     *
-     * 失效时机：[SqlLogPanel.refreshList] 重新执行时清空全部 entry 的缓存。
+     * T-Perf-19（自 dev 移植）：去重键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
+     * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
+     * T-LogDedupeMpMark：指纹前先 [normalizeSqlWhitespace]——同一语句的双路日志副本（named 行 trim 过 /
+     * prepared 行尾随空白原样保留）仅差首尾空白，原文指纹判重永不命中。
      */
-    @Volatile
-    var cachedListHtml: String? = null
+    val dedupeKey: String by lazy { sqlFingerprint(normalizeSqlWhitespace(restoredSql)) }
+
+    // ---------- T-ListMode：多行显示模式行片段缓存（体属性不入 equals/copy；仅 EDT 渲染路径读写） ----------
 
     /**
-     * T-Perf-19：去重计数键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
-     * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
+     * 多行模式（KEYWORD_WRAP/FORMATTED）的行片段缓存：可变行高下每次布局状态更新会对全部条目
+     * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
+     * 组件布局。SINGLE_LINE 不走缓存（固定行高 + 渲染直读，主题切换实时生效）。
      */
-    val dedupeKey: String by lazy { sqlFingerprint(restoredSql) }
+    var cachedListLineFragments: List<List<SqlTextFragment>>? = null
+
+    /** 缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
+    var cachedListLineFragmentsMode: SqlListDisplayMode? = null
 
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
@@ -81,7 +86,7 @@ data class LogSqlEntry(
 }
 
 /**
- * T-Perf-19：SQL 指纹（FNV-1a 64 位十六进制串）——去重计数键用，避免以完整 SQL 原文为键
+ * T-Perf-19（自 dev 移植）：SQL 指纹（FNV-1a 64 位十六进制串）——去重计数键用，避免以完整 SQL 原文为键
  * 的内存驻留。64 位散列下两条不同 SQL 撞键概率可忽略（~2^-64 量级）。
  */
 internal fun sqlFingerprint(sql: String): String {
@@ -92,6 +97,14 @@ internal fun sqlFingerprint(sql: String): String {
     }
     return java.lang.Long.toHexString(h)
 }
+
+/**
+ * T-LogDedupeMpMark：去重口径的空白规范化（trim + 连续空白折叠为单空格）。
+ * JdbcTemplate 双路日志对同一语句产出 named/prepared 两副本，仅差首尾空白；
+ * 大小写与分号不动——COUNT 前缀判定、达梦带引号标识符大小写均不受影响。
+ */
+internal fun normalizeSqlWhitespace(sql: String): String =
+    sql.trim().replace(Regex("""\s+"""), " ")
 
 /**
  * 单个日志参数：值 + 类型标注。

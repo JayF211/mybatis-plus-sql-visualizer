@@ -24,6 +24,12 @@ class LogStartupCapture : ProjectActivity {
         // 自动启动条件：设置开启 且 用户未显式停止
         if (!shouldStartCapture(settings.logAutoCaptureSuppressed, settings.logAutoCaptureOnStart, hasOpenProject = true)) return
         val manager = project.getService(SqlLogManager::class.java)
+        if (manager.processListenerActive) {
+            // 20260907-2045 第四轮：进程级监听已接管——被动模式，项目打开不预 armed，
+            // Run 项目时 onProjectProcessStarted 驱动捕捉（含 suppressed 清除，恢复链自洽）
+            LOG.info("LogStartupCapture: 进程级监听已接管——被动等待项目 Run（project=${project.name}）")
+            return
+        }
         if (settings.logAutoCaptureSuppressed) {
             // 用户已显式停止：仍挂载桥+轮询（检测项目启动），但不进入 armed 态
             LOG.info("LogStartupCapture: 用户已显式停止，仅挂载桥+轮询（project=${project.name}）")
