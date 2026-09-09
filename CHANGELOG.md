@@ -8,6 +8,13 @@
 
 - **SQL 日志列表行号（T-LogRowNumber）**：列表条目元信息行最前显示 `#N` 会话内捕获序号（第 N 条捕获的 SQL），每次启动项目从 1 重新计数（手动清空列表同样归零）；去重丢弃/暂停/过滤命中的 SQL 不占号，列表不跳号；耗时排序下行号保持可辨认原始捕获顺序
 
+### Fixed
+
+- **预览点击侧边栏闪烁根治：filter 重放守卫 + EDT 慢操作消解（T-PreviewFlash）**：点击 SQL 预览图标侧边栏「SQL 日志」列表闪一次像被刷新，且每次点击 idea.log 刷 4~5 条 "Slow operations are prohibited on EDT"——根因：预览链每次覆盖写临时 SQL 文件 + VFS refresh + 方言重映射制造索引 dumb 窗口，dumb 退出时平台对控制台全文档重跑 message filter，而插件 filter 不幂等——历史行被重放入库/刷新即「闪烁」。修复：新增 `ConsoleReplayGuard` 四态重放守卫（watermark + docStamp + 行 0 文本区分流式/重放/重置/混合，反射解析失败降级直连现状语义）；`SqlPreviewPanel.createEditor` 弃 EDT 同步 VFS/findFile 改有界等待预热产物（createTempFile+refresh+findFile 全移后台线程，消除两处慢操作 SEVERE 热点）。测试：新增 `ConsoleReplayGuardTest` 6 用例
+- **三处弃用 API 换现代等价物（T-DepApi）**：`StdLanguages.JAVA` → `JavaLanguage.INSTANCE`、`FilenameIndex.getFilesByName` → `getVirtualFilesByName(name, scope)`、`Notification.setListener(URL_OPENING_LISTENER)` → `BrowseNotificationAction`（追加「查看发布页」动作）——三平台 verifyPlugin 弃用 40→38（243 5→3 / 253 8→6 / 262 40→38）、experimental 10→8；剩余四项经 javap 三平台核实无等价交集替换保留待平台演进
+- **执行临时文件失败与复制错误反馈（T-ExecCopyFix）**：① 两处「复制错误信息」按钮静默无反馈——`CopyFeedback.flashCopied` 文本按钮适配版（图标换对号 + 文案短暂换「已复制」，一次性 Timer 恢复）；② 执行失败 Failed to create temporary SQL file 零日志无法归因——`createTempPsiFile` 每个 return null 站点分级记录阶段原因，onError 文案改本地化 `execute.tempFile.failed` 携带阶段原因；冷路径 refresh 段包 `WriteIntentReadAction`（262 平台 EDT-ReadAction 同步 VFS refresh 硬抛 write-safe）；`clearPrepared` 不再清临时文件缓存（vf.isValid 守卫已兜底，原实现每次预览切换必落冷路径）
+- **预览刷新后内嵌 Database 丢失：多弹窗僵尸 rehost 监听抢共享控制台根治（T-RefreshDbSteal）**：刷新后 DBN 工具栏消失/参数不再同步右侧 SQL/执行 SQL 跑到 IDEA 控制台三症状同根——每次预览 new 一个 MODELESS 弹窗且从不关闭，旧弹窗的 rehost HierarchyListener 残活把插件级共享控制台抢回废弃面板（真机日志 6 连抢实锤）。四组修复：弹窗单例化（项目级登记表关旧开新）；监听引用入字段 detachConsole/dispose 显式移除（僵尸监听根治），去抖 skip 改单发 800ms Timer 延迟复查幂等重挂；所有权卫队 `consoleAttachedToMe` 判定，showSql/executeSql/createEditor 三处失联先 recoverConsole 重嵌、执行侧恢复未同步落地时放弃 executePrepared 防打在别人的控制台上；createEditor/releaseEditor 带栈埋点补齐真机故障期日志空窗。测试：新增 `RefreshDbStealTest` 8 用例，全量 3188/0/6 绿；真机复验清单留人工
+
 ## [2026.9.9] - 2026-09-09
 
 ### Fixed
