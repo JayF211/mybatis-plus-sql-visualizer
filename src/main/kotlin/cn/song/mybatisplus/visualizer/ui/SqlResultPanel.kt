@@ -46,7 +46,11 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         foreground = JBColor.namedColor("Link.activeForeground", JBColor.GRAY)
         margin = JBUI.insets(0, 6, 0, 6)
         addActionListener {
-            currentError?.let { copyToClipboard(it) }
+            currentError?.let {
+                copyToClipboard(it)
+                // T-ExecCopyFix：复制成功反馈（对齐 SqlClickPreview.flashCopied 对号语义）
+                cn.song.mybatisplus.visualizer.ui.flashCopied(this)
+            }
         }
     }
 

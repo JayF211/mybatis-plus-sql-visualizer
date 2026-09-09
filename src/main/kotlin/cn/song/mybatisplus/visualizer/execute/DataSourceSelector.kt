@@ -80,6 +80,20 @@ object DataSourceSelector {
     private var sharedFullComponent: javax.swing.JComponent? = null
     private var sharedDataSourceName: String? = null
 
+    /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。 */
+    private var cachedTempPsiFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+
+    /**
+     * T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（stage 标识或异常摘要），
+     * 成功时清空——供 chooseAndPrepare 的 onError 文案携带，用户截图反馈的笼统
+     * "Failed to create temporary SQL file" 自此可归因。
+     */
+    @Volatile
+    private var lastTempFileFailure: String? = null
+
+    /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    private var dialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
+
     /** M36.5.6：结果区换入回调（准备阶段挂 ContentManager 监听，任一路径出结果即换入；复用时由新面板接管）。 */
     private var pendingOnConsole: ((javax.swing.JComponent) -> Unit)? = null
 
@@ -134,6 +148,9 @@ object DataSourceSelector {
         preparedTopBlock = null
         preparedResultComponent = null
         preparedFullComponent = null
+        // T-ExecCopyFix F2c：不清 cachedTempPsiFile——vf 失效守卫已兜底（下次命中前校验
+        // isValid），内容覆盖写走 document 驱动不破坏 vf↔psi 配对；原实现每次预览切换清
+        // 缓存，执行必落冷路径，击穿 T-PreviewFlash「跨点击吸收」的设计意图。
     }
 
     /**
@@ -231,8 +248,10 @@ object DataSourceSelector {
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
         val temp = createTempPsiFile(project, sql)
         if (temp == null) {
-            LOG.warn("[M36] createTempPsiFile failed, abort")
-            onError?.invoke("Failed to create temporary SQL file")
+            // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
+            // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
+            LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
+            onError?.invoke(MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
             callback?.invoke(false)
             return
         }
@@ -2596,34 +2615,75 @@ object DataSourceSelector {
      * ChangeDialectAction.setDialectImpl0 同路径：SqlDialectMappings.setMapping(file, dialect)），
      * 替换确定性命中映射、不再依赖 pusher/ProjectFileIndex（顺带消除映射查找途中的
      * ProjectFileIndex.isInContent 慢操作告警）。
+     *
+     * T-ExecCopyFix：失败可见化——原实现整段 runCatching{}.getOrNull() 吞异常零日志，
+     * 用户真机 "Failed to create temporary SQL file" 无法归因。现分级记录每个 return null
+     * 站点（stage 标识 + ioFile 路径/exists 状态），异常级 warn 带堆栈，并向调用方回传
+     * 阶段原因（[lastTempFileFailure]）供错误文案携带。
+     *
+     * T-ExecCopyFix F2b：冷路径 refresh 段换 WriteIntentReadAction.compute（Computable 单类型
+     * 实参，243~262 交集——T-Wia262）——修 262 真机最可能根因：refreshAndFindFileByIoFile 同步
+     * VFS refresh 要求 write-safe 语境，262 平台 RefreshSessionImpl.launch 对 EDT-ReadAction
+     * 硬抛 "Access is allowed from write thread only"（T-PreviewWiLock 同 API 先例）。WIRA 隐含
+     * 读权限，refresh 后续链不受影响。**后台化经评估否决**：setMapping 须在 EDT（线程语义未
+     * 验证，M36.5 约束）而 refresh 适合 BGT，双向交接（BGT invokeAndWait 等 EDT 执行映射、
+     * EDT 阻塞等 BGT 产物）形成互锁死锁面——invokeAndWait 须等 EDT 回事件泵，冷路径必超时。
+     * SEVERE 慢操作噪音（findFile → WorkspaceFileIndex 断言）为生产 LOG.error 不抛、且 F2c 后
+     * 冷路径每会话仅首次真实执行，不为其冒险。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun createTempPsiFile(project: Project, sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-        return runCatching {
-            // M36.5.12：临时文件改存项目内 `.idea/sql-visualizer/exec/`（F-44-4：目录随插件更名）
-            //（参考 sql-history 保存位置），不再用系统 Temp——Temp 文件不在数据源关联范围，
-            // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
-            // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
-            // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
-            val ioFile = projectExecFile(project, sql) ?: return null
-            // T-M36.6-03：EDT 同步 VFS refresh 与 PsiManager.findFile（→ WorkspaceFileIndex
-            // ensureIsUpToDate）受平台 SlowOperations 管控（243 起 EDT 与 EDT-ReadAction 均禁止
-            // 慢操作，SlowOperations.ERROR_RA 实证——M36.5.2 的 ReadAction 包装对 findFile 无效的
-            // 根因）。面板打开期一次性轻量操作，走平台官方逃生舱 allowSlowOperations（GENERIC
-            // section，AccessToken 作用域）。**不后台化**：setMapping→handleMappingChange→
-            // pushAll/reparseFiles 的线程语义未验证（javap PerFileMappingsBase），方言预映射
-            // （M36.5.3 关键修复，dumb 模式执行依赖）不冒重构风险。
-            com.intellij.util.SlowOperations.allowSlowOperations(com.intellij.util.SlowOperations.GENERIC).use {
-                val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
-                    ?: return null
-                mapDialectBeforePsi(project, vf, LOG)
-                val psi = ReadAction.compute<PsiFile, Throwable> {
-                    PsiManager.getInstance(project).findFile(vf)
-                } ?: return null
-                vf to psi
+        // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare）
+        fun fail(stage: String, detail: String = ""): Nothing? {
+            lastTempFileFailure = "$stage${if (detail.isNotEmpty()) ": $detail" else ""}"
+            LOG.warn("[M36] createTempPsiFile FAILED at $stage${if (detail.isNotEmpty()) " ($detail)" else ""}")
+            return null
+        }
+        lastTempFileFailure = null
+        // M36.5.12：临时文件改存项目内 `.idea/sql-visualizer/exec/`（F-44-4：目录随插件更名）
+        //（参考 sql-history 保存位置），不再用系统 Temp——Temp 文件不在数据源关联范围，
+        // 导致 IDE 报 "Unable to resolve table"（M36.5.11 问题一，日志实证挂载点在
+        // file:///C:/Users/USER/AppData/Local/Temp/）。项目内文件可被 VFS 追踪、可被
+        // Database 插件解析。文件名稳定 mpsql-exec.sql（每次覆盖，不膨胀）。
+        val ioFile = try {
+            projectExecFile(project, sql)
+        } catch (e: Throwable) {
+            // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
+            // runCatching 吞掉，拆除后这里必须自接，否则异常直冲 EDT
+            return fail("writeFile", "${e.javaClass.simpleName}: ${e.message}")
+        } ?: return fail("writeFile", "projectExecFile null (basePath=${project.basePath})")
+        // T-PreviewFlash：EDT 同步 VFS refresh + PsiManager.findFile 已被跨点击缓存吸收——
+        // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
+        // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
+        cachedTempPsiFile?.let { (vf, psi) ->
+            if (vf.isValid) {
+                LOG.info("[M36] exec psi cache hit (no VFS refresh): ${vf.name}")
+                return vf to psi
             }
-        }.getOrNull()
+            cachedTempPsiFile = null
+        }
+        // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 KDoc）；
+        // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
+        // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
+        val vf = try {
+            com.intellij.openapi.application.WriteIntentReadAction
+                .compute<com.intellij.openapi.vfs.VirtualFile?> {
+                    LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+                }
+        } catch (e: Throwable) {
+            return fail("refreshVfs", "${e.javaClass.simpleName}: ${e.message}")
+        } ?: return fail("refreshVfs", "VFS not visible after refresh (${ioFile.path}, exists=${ioFile.exists()})")
+        mapDialectBeforePsi(project, vf, LOG)
+        val psi = try {
+            ReadAction.compute<PsiFile?, Throwable> {
+                PsiManager.getInstance(project).findFile(vf)
+            }
+        } catch (e: Throwable) {
+            return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
+        } ?: return fail("findPsi", "PsiManager.findFile null (${vf.name})")
+        cachedTempPsiFile = vf to psi
+        return vf to psi
     }
 
     /**
@@ -2641,9 +2701,17 @@ object DataSourceSelector {
      */
     private fun projectExecFile(project: Project, sql: String): java.io.File? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-        val base = project.basePath ?: return null
+        val base = project.basePath ?: run {
+            // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
+            LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=${project.name})")
+            return null
+        }
         val dir = java.io.File(base, ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}exec")
-        if (!dir.exists()) dir.mkdirs()
+        if (!dir.exists() && !dir.mkdirs()) {
+            // T-ExecCopyFix F2a：mkdirs 返回值原来被忽略，目录建不起来后写盘抛异常再被吞
+            LOG.warn("[M36] projectExecFile FAILED: mkdirs false (${dir.path})")
+            return null
+        }
         val f = java.io.File(dir, "mpsql-exec.sql")
         val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
         if (existing != null) {
@@ -2688,6 +2756,12 @@ object DataSourceSelector {
      * 任何环节失败静默跳过（保持原行为，仅记录日志）。
      */
     private fun mapDialectBeforePsi(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, LOG: com.intellij.openapi.diagnostic.Logger) {
+        // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
+        // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
+        if (dialectMappedVf?.isValid == true && dialectMappedVf === vf) {
+            LOG.debug("[M36] dialect already mapped for ${vf.name}, skip setMapping")
+            return
+        }
         runCatching {
             val mappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
             val mappings = mappingsClass.getMethod("getInstance", Project::class.java).invoke(null, project)
@@ -2702,6 +2776,7 @@ object DataSourceSelector {
                     com.intellij.openapi.vfs.VirtualFile::class.java,
                     Any::class.java,
                 ).invoke(mappings, vf, mysql)
+                dialectMappedVf = vf
                 LOG.info("[M36] dialect pre-mapped to MySQL for ${vf.name}")
             } else {
                 LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)")
@@ -2718,5 +2793,29 @@ object DataSourceSelector {
                 .getToolWindow("Database")
                 ?.show()
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 测试访问（同模块测试使用）
+    // ------------------------------------------------------------------
+
+    /** T-ExecCopyFix F2c：exec 临时文件 vf+psi 缓存是否仍持有（clearPrepared 不清缓存断言用）。 */
+    internal fun cachedTempPsiFileForTest(): Boolean = cachedTempPsiFile != null
+
+    /** T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（成功时 null）。 */
+    internal fun lastTempFileFailureForTest(): String? = lastTempFileFailure
+
+    /** T-ExecCopyFix F2c 测试缝：等价链路置缓存槽（psi 经 PsiManager.findFile 同生产路径配对）。 */
+    internal fun markCachedTempPsiFileForTest(project: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
+        val psi = ReadAction.compute<PsiFile?, Throwable> {
+            PsiManager.getInstance(project).findFile(vf)
+        }
+        checkNotNull(psi) { "markCachedTempPsiFileForTest: findFile null for ${vf.name}" }
+        cachedTempPsiFile = vf to psi
+    }
+
+    /** T-ExecCopyFix F2c 测试缝：清缓存槽（测试隔离收尾）。 */
+    internal fun clearCachedTempPsiFileForTest() {
+        cachedTempPsiFile = null
     }
 }
