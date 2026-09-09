@@ -165,6 +165,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 用户显式停止自动启动监听（默认关）。重启后 logAutoCaptureOnStart 开启时此标志阻止自动启动；项目启动或手动点捕捉时清零。 */
         var logAutoCaptureSuppressed: Boolean = false,
 
+        /** 关闭工具窗口时自动停止监听（默认关——关闭工具窗口不影响监听状态）。 */
+        var logStopOnToolWindowClose: Boolean = false,
+
         /** 发现 SQL 时自动展开日志工具窗口（M37.3 默认开——竞品「每次手动开面板」是普遍抱怨；60s 防抖，show 不抢焦点）。 */
         var logAutoOpenOnCapture: Boolean = true,
 

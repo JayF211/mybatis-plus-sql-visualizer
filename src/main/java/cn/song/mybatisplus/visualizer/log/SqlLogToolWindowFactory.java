@@ -1,13 +1,16 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowFactory;
+import com.intellij.openapi.wm.ex.ToolWindowManagerListener;
+import com.intellij.ui.content.ContentManagerEvent;
+import com.intellij.ui.content.ContentManagerListener;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import org.jetbrains.annotations.NotNull;
-
-import cn.song.mybatisplus.visualizer.log.SqlLogPanel;
 
 /**
  * MyBatis SQL 日志工具窗口（T-M31-04）：三标签页（SQL 日志列表 / 日志转 SQL / SQL → Java），
@@ -19,6 +22,7 @@ import cn.song.mybatisplus.visualizer.log.SqlLogPanel;
  */
 public class SqlLogToolWindowFactory implements ToolWindowFactory {
 
+    private static final Logger LOG = Logger.getInstance(SqlLogToolWindowFactory.class);
     private static final String TITLE_KEY = "log.toolwindow.title";
 
     @Override
@@ -48,5 +52,29 @@ public class SqlLogToolWindowFactory implements ToolWindowFactory {
         var content = toolWindow.getContentManager().getFactory().createContent(panel, "", false);
         content.setDisposer(panel);
         toolWindow.getContentManager().addContent(content);
+
+        // 工具窗口关闭（content 移除）→ 设置开启时停止捕捉（兜底：部分平台把关闭实现为移除 content）
+        toolWindow.getContentManager().addContentManagerListener(new ContentManagerListener() {
+            @Override
+            public void contentRemoved(@NotNull ContentManagerEvent event) {
+                if (event.getContent() == content) {
+                    PluginSettings settings = PluginSettings.getInstance();
+                    if (settings.getState().getLogStopOnToolWindowClose() && manager.getCapturing()) {
+                        manager.stopCapture();
+                        LOG.info("ToolWindow 关闭（content 移除）：已停止捕捉（project=" + project.getName() + "）");
+                    }
+                }
+            }
+        });
+
+        // 关闭/折叠侧边栏面板（ToolWindow 隐藏，content 仍在）→ 设置开启时停止捕捉。
+        // contentRemoved 在新 UI 折叠/隐藏时不触发，须监听 ToolWindow 可见性——沿
+        // 「曾经可见 → 当前不可见」转换沿 stop（新建窗口/注册/布局等中间态不误停）。
+        // 该监听用 project messageBus 编程注册（plugin.xml 不支持 <listener>），
+        // connect(content.disposer) 随窗口真正销毁自动断开。
+        project.getMessageBus().connect(content.getDisposer()).subscribe(
+                ToolWindowManagerListener.TOPIC,
+                new ToolWindowVisibilityListener(project, toolWindow, manager)
+        );
     }
 }

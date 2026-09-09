@@ -345,6 +345,12 @@ class SqlLogManager(private val project: Project) : Disposable {
             PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
             LOG.info("onProjectProcessStarted: 项目启动清除 suppressed（autoStart 优先）——project=${project.name}")
         }
+        // T-AutoShowSuppress：项目启动同样视为对「自动展开」的再次确认——用户真机复测实证
+        // （2026-09-09）：关窗抑制置位后启动项目仍不弹，与用户预期相悖；启动 = 本轮开发要重新看日志
+        if (autoShowSuppressedByUserClose) {
+            autoShowSuppressedByUserClose = false
+            LOG.info("onProjectProcessStarted: 项目启动清除自动展开会话抑制——project=${project.name}")
+        }
         if (capturing && !isWaitingForConsole) {
             LOG.debug("onProjectProcessStarted: 已在捕捉态，startCapture 幂等跳过（project=${project.name}）")
             return
