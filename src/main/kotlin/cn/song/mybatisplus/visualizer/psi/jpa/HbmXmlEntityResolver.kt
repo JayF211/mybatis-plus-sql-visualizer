@@ -38,10 +38,16 @@ object HbmXmlEntityResolver {
         cache[cacheKey]?.let { return it }
 
         // 搜索所有 .hbm.xml 文件
-        val hbmFiles = FilenameIndex.getFilesByName(project, "*.hbm.xml", GlobalSearchScope.allScope(project))
+        // T-DepApi：getFilesByName 全平台标 deprecated——getVirtualFilesByName(name, scope)
+        // （无 project 重载）243/253/262 javap 实证均无弃用标记；返回 VirtualFile 后经
+        // PsiManager 转 XmlFile，解析语义不变。
+        val hbmFiles = FilenameIndex.getVirtualFilesByName(
+            "*.hbm.xml",
+            GlobalSearchScope.allScope(project),
+        )
 
-        for (file in hbmFiles) {
-            val xmlFile = file as? XmlFile ?: continue
+        for (vf in hbmFiles) {
+            val xmlFile = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
             val mapping = parseHbmFile(xmlFile) ?: continue
 
             // 按简单类名和全限定名索引

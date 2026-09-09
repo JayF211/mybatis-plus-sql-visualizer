@@ -2,9 +2,9 @@ package cn.song.mybatisplus.visualizer.update
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.BrowseNotificationAction
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationListener
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
@@ -57,7 +57,6 @@ class StartupUpdateCheck : ProjectActivity {
     }
 
     /** 「发现可用更新」通知：标题带插件名（不含版本号，版本号放正文第一行）；立即安装 / 忽略此版本 / 稍后。 */
-    @Suppress("DEPRECATION") // T-M52：setListener 在 243/262 标 deprecated，无替代 API（4 参数构造器 262 也废弃）
     private fun showAvailable(project: Project, manifest: UpdateManifest) {
         val pluginName = MpSqlVisualizerBundle.message("plugin.name")
         val notification = NotificationGroupManager.getInstance()
@@ -83,9 +82,17 @@ class StartupUpdateCheck : ProjectActivity {
         notification.addAction(
             NotificationAction.createSimpleExpiring(MpSqlVisualizerBundle.message("update.notification.later")) { }
         )
-        // T-M28.4：内容内 Gitee 链接点击跳转（URL_OPENING_LISTENER 打开浏览器）
-        // setListener 在 243 标 deprecated，262 verifyPlugin 报 deprecated；无替代 API，Suppress 保留
-        notification.setListener(NotificationListener.URL_OPENING_LISTENER)
+        // T-M28.4：内容内 Gitee 链接点击跳转。
+        // T-DepApi：setListener(URL_OPENING_LISTENER) 全平台标 deprecated——正文 <a href> 跳转
+        // 现代等价物是 BrowseNotificationAction（java.net.URL 构造，BrowsURLAction 语义封装），
+        // 243/253/262 javap 实证均无弃用标记。追加动作而非 setListener：链接点击走「查看发布页」
+        // 动作打开浏览器，正文内嵌链接点击保留通知默认行为（无监听器时高亮但不禁用）。
+        notification.addAction(
+            BrowseNotificationAction(
+                MpSqlVisualizerBundle.message("update.notification.viewGitee"),
+                UpdateSource.GITEE_RELEASES_URL,
+            ),
+        )
         runCatching { notification.notify(project) }
     }
 

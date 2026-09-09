@@ -142,8 +142,11 @@ object SqlSourceInterceptorAutoInjector {
 
     /** 创建 Java 文件（PSI）。 */
     private fun createJavaFile(project: Project, directory: PsiDirectory, fileName: String, content: String) {
-        val javaLanguage = com.intellij.lang.Language.findLanguageByID("JAVA")
-            ?: com.intellij.lang.StdLanguages.JAVA
+        // T-DepApi：StdLanguages.JAVA 全平台标 deprecated——JavaLanguage.INSTANCE（java 插件，
+        // plugin.xml 已声明 com.intellij.java 依赖）是官方等价物，243/253/262 javap 实证均无弃用标记；
+        // findLanguageByID("JAVA") 找不到时（Java 插件被禁用的极端场景）回退 null → 交给调用方报错，
+        // 原本 StdLanguages 兜底也依赖同一插件提供 Language 实现，语义不变。
+        val javaLanguage = com.intellij.lang.java.JavaLanguage.INSTANCE
         val psiFile = PsiFileFactory.getInstance(project)
             .createFileFromText(fileName, javaLanguage, content)
 
