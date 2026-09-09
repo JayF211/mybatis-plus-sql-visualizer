@@ -2,6 +2,26 @@
 
 # SQL Visualizer Changelog
 
+## [2026.9.9] - 2026-09-09
+
+### Fixed
+
+- **单击预览四轮优化：编辑器高亮与列表同色 + 可编辑修复（T-ClickPreview-04）**：预览编辑器高亮与 SQL 日志列表**同源同色**——新增 `SqlListSyntaxHighlighter`（SqlLexer 分词 + SqlHighlightColors 配色键），token→配色键映射收敛为唯一权威 `SqlListSyntaxHighlighter.ATTR_BY_TYPE`，列表片段渲染与编辑器高亮共用（改色只动一处，结构上保证同色）；预览编辑器改 `EditorFactory.createEditor(document, project)` 纯文档 + `EditorEx.setHighlighter(LexerEditorHighlighter(...))`，不再依赖平台 SQL FileType 与 Database 插件，缺席环境同样有高亮。修复「还是不能编辑」——根因=弹窗 `setRequestFocus(false)` 键盘焦点留在列表，编辑器「可编辑」名存实亡；改弹出即聚焦内容可直接打字（复制/关闭按钮 isFocusable=false 不抢焦点不变）
+- **单击预览五轮优化：复制按钮点击换对号反馈（T-ClickPreview-05）**：复制按钮回调成功后图标即时闪变为对号（`AllIcons.Actions.Checked`）1500ms 后由一次性 Swing Timer 自动恢复复制图标——复制成功即时可见反馈（此前点击无任何视觉反馈）；复制回调链路与关闭/焦点语义零改动
+- **双击预览无数据源时 Database 工具窗抢占侧边栏（T-DsCover）**：IDE 未配置数据源（或驱动未下载）时每次双击日志开预览，Database 工具窗都被拉起覆盖插件侧边栏——根因=预览总入口 `SqlPreviewPanel.showResult` 末尾无条件 `prepareDefaultConsole()`，途径 `chooseAndPrepare` 无数据源分支每次调 `openDatabaseToolWindow`（等价用户手点条带按钮，同条带插件工具窗被顶掉）。修复：`show()` 改由 `executeAfterPrepare` 门控（仅显式执行的 `selectAndExecute` 引导开窗，预览默认准备静默）；`runRunner` 加 `silent` 参数（预览路径失败不弹模态错误框、并清损坏数据源的 last-used 记忆避免每次预览白失败，显式执行/弹窗主动选中保持原弹窗引导）。成功路径（有数据源预览仍内嵌 DBN 原生工具栏，M36.5.25g）零改动
+- **IDE 2026.2.1 双击预览潜在必崩修复 + 插件市场发布受阻解除（T-Wia262）**：全量三版本官方兼容性校验（verifyPlugin）在 2026.2（262）平台报字节码级兼容问题——双击预览崩溃修复（T-PreviewWiLock）所用的 `WriteIntentReadAction.compute(ThrowableComputable)` 重载在 262 平台已被移除，而双击预览入口预热竞态必输、每次都走该回退分支，真机 2026.2.1 上会 `NoSuchMethodError` 崩溃（原 write-intent 崩溃实为换了一处崩溃）。改用三版本交集重载 `compute(Computable)`（单类型实参消歧，锁语义与执行路径零变化），复跑三版本校验 0 兼容性问题
+- **发现 SQL 自动打开日志窗口失效（T-AutoShowMaster）**：`logAutoOpenOnCapture` 写穿读断——F-44 删独立窗口时一并删除自动打开实现，设置项/勾选框/孤儿 KDoc 残留成纯假开关（生产代码零读取点）。自 dev 全量移植复活：无条件 buffer 监听（面板未创建首条捕获也触发）+ 60s 防抖 + 主工具窗 show 不 activate（不抢编辑器焦点）+ 用户手动关窗本会话抑制（`ToolWindowManagerListener` 可见→不可见转换沿）+ 设置 false→true 重启用沿解除抑制；默认值 false→true（已持久化 false 的用户不受影响）。平台实证：监听器须 `com.intellij.openapi.wm.ex` 包——非 ex 包不在本机裁剪发行版（243 平台 599 jar 全量扫描 0 命中）
+- **dev 已修转换语义缺陷/定位误报与导入导出反馈批量移植（T-PortLossBatch1 A~C 组）**：① 转换语义 6 处——`ne` 渲染 `<>` 对齐 MP `SqlKeyword.NE` 语义（QueryWrapperParser/WrapperConverter/MpjLambdaConverter 三转换器）、`or(Consumer)` 外层 OR 组内 AND 组合修正、`condition=false` 前缀子句整体跳过（LambdaUpdateConverter isFalseFlag）、having 字符串版透传 Raw、`last(...)` OFFSET 回填、负数字面量 `PsiPrefixExpression` 静态求值；② 定位误报守卫 2 处——`new Helper().lambdaQuery()` 非 MP 服务链不识别为锚点（WrapperAnchorDetector）、PartTree 方法仅 Repository 接口产出 gutter 标记（JpaGutterLineMarkerProvider）；③ 设置导入导出行内反馈——statusLabel 行内提示替代模态弹窗（原弹窗叠在 Settings 对话框下不可见），IO 移 `executeOnPooledThread` + `invokeLater` 回 EDT + `ModalityState.any()` 模态弹窗存续期照常回调
+- **假开关批量处置：INSERT 租户开关接线 + tooltip 对齐实际行为（T-PortLossBatch1 D 组）**：「INSERT 时追加租户列」子开关接线生效（injectTenantLine AND injectTenantOnInsert，对齐 MP `TenantLineInnerInterceptor` INSERT 语义；UPDATE SET 走主开关不受影响）；「自动注入 SQL 拦截器」为点击时刻触发型（勾选即 inject），tooltip 改为描述实际行为「勾选时立即生成一次（已存在则跳过）」；设置页复选框计数 22→21（PersistenceTest 随校正）
+- **启动项目清除自动展开会话抑制 + 「关闭工具窗口时停止监听」开关转正恢复（T-AutoShowRecover）**：真机复测实证「关窗抑制置位后启动项目仍不弹」与用户预期相悖——项目进程启动同样视为对自动展开的再次确认，`onProjectProcessStarted` 在清 `logAutoCaptureSuppressed` 处同步清 `autoShowSuppressedByUserClose`（autoStart 关闭时短路不动抑制）。「关闭工具窗口时自动停止监听」开关转正：该功能在 master 曾为真实现（T-M51），此前以「master 无读者」错误前提被整体下线用力过猛——按基点原文选择性恢复 7 文件（字段/工厂订阅区/监听器整文件/面板 5 行/搜索字段/双 bundle key/census），恢复面与基点零内容差异，未来 dev→master 合并本簇三方合并自动解决
+
+### Test
+
+- **单击预览**：`SqlClickPreviewTest` 增至 11 用例（新增编辑器高亮与列表片段同源同色断言：highlighter 类型 / token 序列全文覆盖 / 非空白 token 共用配色键 / 片段通道文本守恒；复制后图标即时换对号反馈断言）
+- **自动展示**：新增 `SqlLogManagerAutoShowTest` 7 用例自 dev 原样移植（决策纯函数/关闭抑制/转换沿四象限/重启用沿/入队触发/防抖/关闭态）
+- **移植修复**：转换语义 4 用例 + 定位守卫 1 用例 + 导入导出反馈 2 用例 + 租户开关 4 用例；设置页复选框计数 PersistenceTest 随 D 组校正
+- **自动监听恢复**：启动清抑制 +2 用例（autoStart 开清抑制 / autoStart 关不动抑制）
+
 ## [2026.9.8] - 2026-09-08
 
 ### Changed
