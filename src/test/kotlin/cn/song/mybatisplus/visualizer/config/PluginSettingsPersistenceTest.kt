@@ -138,7 +138,7 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
-            // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
+            // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；
             // T-TenantLine：多租户注入开关 +1；Hibernate 日志捕获开关 +1
             // F-6：INSERT 追加租户列开关 +1；数据权限占位提示开关 +1
             // M47：Spring JdbcTemplate 日志捕获开关 +1
@@ -147,7 +147,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // F-44-7：源码位置自动注入开关 +1；T-SqlDuration：耗时显示开关 +1；
             // T-Dgm-04：JOIN 图原生框架渲染开关 +1（合并双方共同确认的最终基线）
             // JdbcTemplate SQL 字符串预览开关 +1
-            assertEquals("复选框总数应为 22", 22, texts.size)
+            // T-PortLossBatch1 D1：删除「关闭工具窗口时自动停止监听」假开关 -1——master 无非配置读者，
+            // dev 侧真读者是 Java 监听器（ToolWindowVisibilityListener，未随本轮移植），开关整体下线
+            assertEquals("复选框总数应为 21", 21, texts.size)
         } finally {
             settings.state.language = old
         }

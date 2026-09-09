@@ -23,6 +23,7 @@ class SqlPreviewServiceBatchTest : BasePlatformTestCase() {
     /** T-TenantLine：每个测试结束后重置多租户配置为默认，防止状态泄漏。 */
     override fun tearDown() {
         PluginSettings.getInstance().state.injectTenantLine = false
+        PluginSettings.getInstance().state.injectTenantOnInsert = true
         PluginSettings.getInstance().state.tenantColumnName = PluginSettings.DEFAULT_TENANT_COLUMN_NAME
         super.tearDown()
     }
@@ -630,6 +631,100 @@ class SqlPreviewServiceBatchTest : BasePlatformTestCase() {
             """.trimIndent(),
             result!!.sql,
         )
+    }
+
+    fun testInsertTenantColumnAppendedWhenBothSwitchesOn() {
+        // D2（T-PortLossBatch1）：INSERT 租户列追加 = 主开关 AND 子开关——两者都开时追加 tenant_id
+        val settings = PluginSettings.getInstance()
+        try {
+            settings.state.injectTenantLine = true
+            settings.state.injectTenantOnInsert = true
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    private DeviceInfoMapper deviceInfoMapper;
+
+                    public void insert() {
+                        DeviceInfoEntity entity = new DeviceInfoEntity();
+                        deviceInfoMapper.insert(entity);
+                    }
+
+                    static class DeviceInfoEntity {
+                        @com.baomidou.mybatisplus.annotation.TableId
+                        private Long id;
+                        private String name;
+                    }
+
+                    static class BaseMapper<T> {
+                        public int insert(T entity) { return 0; }
+                    }
+
+                    static class DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())
+            assertNotNull("insert(entity) 应产出预览结果", result)
+            assertEquals(
+                "主开关+子开关均开时 INSERT 应追加租户列",
+                """
+                INSERT INTO device_info_entity (id, name, tenant_id)
+                VALUES (?, ?, ?)
+                """.trimIndent(),
+                result!!.sql,
+            )
+        } finally {
+            settings.state.injectTenantLine = false
+            settings.state.injectTenantOnInsert = true
+        }
+    }
+
+    fun testInsertTenantColumnSkippedWhenSubSwitchOff() {
+        // D2（T-PortLossBatch1）：injectTenantOnInsert=false → INSERT 不追加租户列（主开关仍开也不加）
+        val settings = PluginSettings.getInstance()
+        try {
+            settings.state.injectTenantLine = true
+            settings.state.injectTenantOnInsert = false
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    private DeviceInfoMapper deviceInfoMapper;
+
+                    public void insert() {
+                        DeviceInfoEntity entity = new DeviceInfoEntity();
+                        deviceInfoMapper.insert(entity);
+                    }
+
+                    static class DeviceInfoEntity {
+                        @com.baomidou.mybatisplus.annotation.TableId
+                        private Long id;
+                        private String name;
+                    }
+
+                    static class BaseMapper<T> {
+                        public int insert(T entity) { return 0; }
+                    }
+
+                    static class DeviceInfoMapper extends BaseMapper<DeviceInfoEntity> {}
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())
+            assertNotNull("insert(entity) 应产出预览结果", result)
+            assertEquals(
+                "子开关关闭时 INSERT 不应追加租户列",
+                """
+                INSERT INTO device_info_entity (id, name)
+                VALUES (?, ?)
+                """.trimIndent(),
+                result!!.sql,
+            )
+        } finally {
+            settings.state.injectTenantLine = false
+            settings.state.injectTenantOnInsert = true
+        }
     }
 
     fun testInsertOrUpdateRendersMysqlUpsert() {

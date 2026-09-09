@@ -209,7 +209,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logMixedPrefixCheck = JBCheckBox()
     private val logAutoCaptureCheck = JBCheckBox()
     private val logAutoOpenCheck = JBCheckBox()
-    private val logStopOnToolWindowCloseCheck = JBCheckBox()
     private val logTimestampCheck = JBCheckBox()
     private val logTimestampFormatField = JBTextField(12)
     private val logFormatSqlCheck = JBCheckBox()
@@ -441,7 +440,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 })
                 addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
                 addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
-                addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
                 addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
@@ -983,7 +981,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logMixedPrefixCheck.isSelected != s.logMixedPrefix
             || logAutoCaptureCheck.isSelected != s.logAutoCaptureOnStart
             || logAutoOpenCheck.isSelected != s.logAutoOpenOnCapture
-            || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
             || logFormatSqlCheck.isSelected != s.logFormatSql
@@ -1052,7 +1049,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logMixedPrefix = logMixedPrefixCheck.isSelected
             s.logAutoCaptureOnStart = logAutoCaptureCheck.isSelected
             s.logAutoOpenOnCapture = logAutoOpenCheck.isSelected
-            s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
             s.logFormatSql = logFormatSqlCheck.isSelected
@@ -1149,7 +1145,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logMixedPrefixCheck.isSelected = s.logMixedPrefix
             logAutoCaptureCheck.isSelected = s.logAutoCaptureOnStart
             logAutoOpenCheck.isSelected = s.logAutoOpenOnCapture
-            logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat
             logFormatSqlCheck.isSelected = s.logFormatSql

@@ -305,7 +305,10 @@ class SqlPreviewService(private val project: Project) {
                 it,
                 injectLogicDelete = settings?.state?.injectLogicDelete ?: true,
                 resolveVariables = settings?.state?.replaceParams ?: true,
-                injectTenantLine = settings?.state?.injectTenantLine ?: true,
+                // D2：INSERT 租户列追加 = 主开关 AND 子开关（injectTenantOnInsert）；UPDATE 的 SET 租户注入
+                // 走主开关（见上方 enhanceUpdateSet 链），不受本参数影响
+                injectTenantLine = (settings?.state?.injectTenantLine ?: true) &&
+                    (settings?.state?.injectTenantOnInsert ?: true),
             )
         } ?: return null
         val result = PreviewResult(
