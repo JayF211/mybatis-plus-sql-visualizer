@@ -309,14 +309,37 @@ open class SqlLogConsoleBridge(
                     hibernateEnabled = cfg0.hibernateEnabled,
                 )
                 consoleContexts[console] = ctx
+                // T-PreviewFlash：反射缓存 console.getEditor()（ConsoleView.getEditor 为 public）。
+                // 取不到则守卫降级停用（editor 为 null → decide 恒 Process＝现状语义），绝不阻塞捕获。
+                attachReplayGuard(console, ctx)
                 // T-LogPerf-04：timePrefix 缓存化——设置变更走 refreshConsoleContexts，逐行不再读 PluginSettings
                 timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
                 val filter = Proxy.newProxyInstance(
                     filterIface.classLoader,
                     arrayOf(filterIface),
-                    LogFilterProxyHandler { line ->
+                    LogFilterProxyHandler { line, endOffset ->
                         val context = consoleContexts[console] ?: return@LogFilterProxyHandler
-                        processConsoleLine(line, context, timePrefixCache, syncBufferConfig).forEach { buffer.addEntry(it) }
+                        // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
+                        // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
+                        // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。
+                        val stampReader = context.docStampReader
+                        if (stampReader != null) {
+                            when (context.replayGuard.decide(
+                                endOffset,
+                                stampReader(),
+                                line,
+                                context.line0Reader?.invoke(),
+                            )) {
+                                ConsoleReplayGuard.Decision.Replay -> {
+                                    context.replayDropCount++
+                                }
+                                else -> {
+                                    processConsoleLine(line, context, timePrefixCache, syncBufferConfig).forEach { buffer.addEntry(it) }
+                                }
+                            }
+                        } else {
+                            processConsoleLine(line, context, timePrefixCache, syncBufferConfig).forEach { buffer.addEntry(it) }
+                        }
                     },
                 )
                 console.javaClass.getMethod("addMessageFilter", filterIface).invoke(console, filter)
@@ -328,6 +351,32 @@ open class SqlLogConsoleBridge(
             }
         }
         LOG.warn("attachFilter: all filter candidates failed on ${console.javaClass.name}")
+    }
+
+    /**
+     * T-PreviewFlash：为重放守卫解析编辑器/文档反射句柄。全部 runCatching 包裹——
+     * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
+     * `getEditor` 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
+     */
+    private fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
+        runCatching {
+            val getEditor = console.javaClass.getMethod("getEditor")
+            val editor = getEditor.invoke(console) ?: return
+            ctx.replayGuardEditor = editor
+            val getDoc = editor.javaClass.getMethod("getDocument")
+            val doc = getDoc.invoke(editor) ?: return
+            ctx.docStampReader = {
+                runCatching {
+                    (doc.javaClass.getMethod("getModificationStamp").invoke(doc) as? Number)?.toLong()
+                        ?: Long.MIN_VALUE
+                }.getOrDefault(Long.MIN_VALUE)
+            }
+            ctx.line0Reader = {
+                runCatching {
+                    (doc.javaClass.getMethod("getText").invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                }.getOrNull()
+            }
+        }
     }
 
     /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
@@ -535,7 +584,22 @@ internal class BridgeLineContext(
     var pendingSource: Pair<String, Int>? = null,
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
-)
+) {
+    /** T-PreviewFlash：重放守卫（每 console 独立；editor 不可得时降级为恒 Process）。 */
+    val replayGuard: ConsoleReplayGuard = ConsoleReplayGuard()
+
+    /** 反射缓存的控制台 Editor（ConsoleView.getEditor，守护判定降级用；null = 守卫不读文档）。 */
+    var replayGuardEditor: Any? = null
+
+    /** 控制台文档 modificationStamp 读取函数（editor 不可得时为 null）。 */
+    var docStampReader: (() -> Long)? = null
+
+    /** 控制台首行文本读取函数（混合态判定用；editor 不可得时为 null）。 */
+    var line0Reader: (() -> String?)? = null
+
+    /** 重放丢弃行累计计数（debug 日志验证锚点）。 */
+    var replayDropCount: Long = 0
+}
 
 /**
  * 处理一行控制台文本（F-44-6）：

@@ -295,7 +295,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** T-M36.6-03：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
+    /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private fun prewarmPreviewTempFile() {
         ApplicationManager.getApplication().executeOnPooledThread {
             if (previewTempFile != null || previewDisposed) return@executeOnPooledThread
@@ -315,6 +315,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 } ?: return@executeOnPooledThread
                 previewTempFile = vf
                 prewarmedTempFile = vf to psi
+            }
+        }
+    }
+
+    /**
+     * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
+     * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
+     */
+    private fun awaitPrewarmedTempFile(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
+        var waited = 0L
+        while (true) {
+            val ready = prewarmedTempFile?.also { prewarmedTempFile = null }
+            if (ready != null) return ready
+            if (waited >= PREWARM_WAIT_MS) return null
+            try {
+                Thread.sleep(PREWARM_POLL_MS)
+                waited += PREWARM_POLL_MS
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return null
             }
         }
     }
@@ -354,7 +374,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.X_AXIS)
         errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
-            copyError()
+            if (copyError()) {
+                // T-ExecCopyFix：复制成功反馈（对齐 SqlClickPreview.flashCopied 对号语义）
+                cn.song.mybatisplus.visualizer.ui.flashCopied(this)
+            }
         }.apply { isVisible = false }
         add(errorCopyButton)
         modeButton = smallButton(modeButtonText()) {
@@ -1239,35 +1262,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
         val created = if (proj != null) {
-            // T-M36.6-03：优先消费后台预热产物（prewarmPreviewTempFile 已完成 VFS refresh + PSI 解析，
-            // EDT 零慢操作）；预热未就绪（竞态）回退原 EDT 同步路径，整体包 allowSlowOperations——
-            // 243 平台 EDT 与 EDT-ReadAction 均禁止慢操作（SlowOperations ERROR_EDT/ERROR_RA），
-            // M36.5.2 的 ReadAction 包装对 findFile 无效的根因；面板打开期一次性轻量操作走平台
-            // 官方逃生舱（SlowOperations.GENERIC section，AccessToken 作用域）。
-            val (vFile, psi) = prewarmedTempFile?.also { prewarmedTempFile = null }
-                ?: com.intellij.util.SlowOperations.allowSlowOperations(
-                    com.intellij.util.SlowOperations.GENERIC,
-                ).use {
-                    // T-PreviewWiLock：必须 WriteIntentReadAction——refreshAndFindFileByIoFile 是同步 VFS
-                    // refresh，2024.2+ 平台要求 write-safe context（write-intent lock）；EDT 进 ReadAction
-                    // 会把 write-intent lock check out，262 平台 RefreshSessionImpl.launch 硬抛
-                    // "Access is allowed from write thread only"（日志双击预览崩溃实证）。
-                    // write-intent 隐含读权限，lambda 内 findFile 不受影响。
-                    // T-Wia262：用单类型实参选 compute(Computable) 重载——compute(ThrowableComputable)
-                    // 重载在 262 平台已移除（verifyPlugin 兼容性问题实证），compute(Computable) 为
-                    // 243~262 三版本交集；lambda 内仅不受检异常，SAM 换型语义不变。
-                    com.intellij.openapi.application.WriteIntentReadAction.compute<Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>> {
-                        val vf = previewTempFile ?: run {
-                            val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
-                            io.writeText(sql)  // 纯 java.io，无需 EDT/write action
-                            io.deleteOnExit()
-                            com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
-                                ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
-                        }
-                        vf to (com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                            ?: throw IllegalStateException("临时 SQL 文件无 PSI"))
-                    }
-                }
+            // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
+            // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
+            // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
+            val (vFile, psi) = awaitPrewarmedTempFile()
+                ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
             previewTempFile = vFile
             psiFile = psi
             val doc = com.intellij.psi.PsiDocumentManager.getInstance(proj)
@@ -2353,5 +2352,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")
+
+        /** T-PreviewFlash：EDT 等待预热产物的轮询间隔与超时（毫秒）。 */
+        const val PREWARM_POLL_MS = 20L
+        const val PREWARM_WAIT_MS = 2000L
     }
 }
