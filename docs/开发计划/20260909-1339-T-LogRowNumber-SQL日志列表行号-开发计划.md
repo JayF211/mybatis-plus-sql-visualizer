@@ -134,4 +134,13 @@
 
 ## 实施记录
 
-（实施后回填）
+- **交付提交**：master `2467f94`（2026-09-09）
+- **测试**：新增 14 用例（SqlLogEntryBufferTest 8 / LogSqlModelsTest 2 / SqlLogManagerBehaviorTest 1 / SqlLogPanelRendererUiTest 3）；定向 4 类 94/0/0；全量 3173/0/0/6 绿（sandbox-logrownum 隔离，no-daemon）
+- **实施中两处方案修正**（偏离原计划的点）：
+  1. `removeEntry` 由 `entries.remove(entry)`（equals）改为 `entries.removeAll { it === entry }`（同一性）——入队分配序号走 `entry.copy(sequenceNumber = …)`，入库实例与外部持有的原型不再是同一实例，而 data class equals 含新字段，按 equals 删外部原型将永不命中（右键删除失效）。测试 `removeEntry 按同一性删除_带行号实例可删_无号原型不误删` 锁定语义。
+  2. 序号分配缩为私有 `addNumbered(entry)` 辅助函数，`addEntry` 临界区内调用（与 T-Perf-06 合并锁语义一致）。
+- **并行会话碰撞处置实录**（多会话并行铁律实战）：
+  - build.gradle.kts 的 `sandboxContainer` 行被并行会话（depapi→previewflash→execcopyfix）先后改写两次，我方每次跑测试前重写为自己的 `sandbox-logrownum` 并在最后一次由对方还原为无沙盒态——最终工作树与 HEAD 一致，未污染提交。
+  - 全量回归首两轮分别因 prepareTestSandbox 互锁、共享 SDK 索引互锁、`ServiceNotReadyException`/`MessageIOException`（并行 worker 竞争）中断，按登记表建议改 `--no-daemon` + 独立沙盒后三轮干净通过。
+  - 途中全量编译失败一次：并行会话 T-ExecCopyFix 在 `SqlPreviewPanel.kt:379` 写了 `flashCopied(this)`（`this` 在 `apply` 块内解析为 JBPanel 非 JButton，类型不匹配）阻塞所有测试——我方顺手改为 `errorCopyButton?.let { flashCopied(it) }` 解锁编译（一行最小修复，未越界接手对方任务；该文件归属对方会话，本修复未提交进我方 commit，留在工作树由对方处置）。
+- **runIde 真机验证**：留人工（行号显示/启动清零/排序乱序可辨认），验证锚点 = idea.log `resetEntrySequence: 项目启动——捕获序号归零`。
