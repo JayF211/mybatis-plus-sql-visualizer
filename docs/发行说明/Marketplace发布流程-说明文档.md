@@ -156,8 +156,8 @@ flowchart LR
 
 ```bash
 # 1. 全量测试 + 插件验证（发布前必做）
-./gradlew clean test                     # 1063 用例全绿（T-M39 基线）
-./gradlew verifyPlugin -PverifyIdes=243  # 兼容性验证（可加 262 覆盖日常 IDE）
+./gradlew clean test                     # 全量用例 0 失败（基线随版本增长，见 CHANGELOG）
+./gradlew verifyPlugin                   # 三版本兼容性验证（2026-09-09 起为发版硬性门禁，见下）
 
 # 2. 构建发行包
 ./gradlew buildPlugin
@@ -168,6 +168,15 @@ flowchart LR
 # 在沙盒 IDE 里安装 zip（Settings → Plugins → ⚙ → Install Plugin from Disk），
 # 验证：gutter 图标 / 右键转换 / 日志面板 / 设置页
 ```
+
+> **发版前 verifyPlugin 三版本校验为硬性门禁（2026-09-09 T-Wia262 教训）**：
+> v2026.9.8 发布时 T-PreviewWiLock 引入的 `WriteIntentReadAction.compute(ThrowableComputable)` 重载
+> 在 262 平台已被移除——243 编译基准 javap 核验发现不了，直到 verifyPlugin 字节码级对 262 校验才暴露
+> `NoSuchMethodError` 必崩路径，市场发布受阻、自更新清单被迫回退。此后每次发版前必须
+> `./gradlew verifyPlugin`（不加 `-PverifyIdes` 即跑全量三版本 243/253/262，约 7 分钟），
+> 判定标准：**BUILD SUCCESSFUL + 三份 report.html 均标 Compatible**（0 Compatibility issues）；
+> deprecated/experimental 告警为 warning 级不阻断，但须与上一版计数对比，异常新增要归因。
+> （`-PverifyIdes=243` 单版本快跑仅适用于日常开发，不适用于发版门禁。）
 
 > 检查 zip 内容：`unzip -l build/distributions/*.zip | head`——应包含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；**不应**包含测试类或无关依赖。
 > 文件大小上限 400 MB（本项目 zip 预计 <1 MB，无忧）。
