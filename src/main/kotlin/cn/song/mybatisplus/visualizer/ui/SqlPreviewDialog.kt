@@ -47,6 +47,15 @@ class SqlPreviewDialog(
 
     override fun createCenterPanel(): JComponent = panel
 
+    /**
+     * T-RefreshDbSteal F2：程序化关闭（供 [SqlPreviewService] 弹窗单例化关旧开新）。
+     * DialogWrapper.dispose 在平台侧 protected，同类内提升为 public 包装——语义与用户
+     * 点关闭一致（级联 Disposer 释放面板，rehost 监听随之移除）。
+     */
+    fun doDispose() {
+        dispose()
+    }
+
     /** T-M23.6：internal 测试访问器（面板「关闭 SQL 面板」回调链路断言，仿 SqlPreviewPanel.editorForTest）。 */
     internal fun panelForTest(): SqlPreviewPanel? = panel
 

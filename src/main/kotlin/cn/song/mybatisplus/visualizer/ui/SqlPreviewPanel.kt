@@ -202,6 +202,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M36.5.44：上次 re-host 时刻（去抖用）——DBN 结果刷新期高频 reparent，需最小间隔抑制死循环。 */
     private var lastRehostAt: Long = 0L
 
+    /** T-RefreshDbSteal：当前挂接的 rehost HierarchyListener 引用——detach/dispose 时显式移除。
+     *  旧实现「监听随组件废弃，无需显式解绑」的假设在共享控制台场景不成立：组件被新面板复用后
+     *  旧面板的监听仍存活，parent==null 时会把共享控制台抢回已废弃面板（真机日志 6 连抢实锤）。 */
+    private var rehostListener: java.awt.event.HierarchyListener? = null
+
+    /** T-RefreshDbSteal：去抖窗口内被跳过的释放事件 → 已调度延迟复查（单次标志，防重复调度）。 */
+    private var rehostRetryScheduled = false
+
     // M36.4：原生编辑器文档引用（参数回填/格式化时使用）
     /** 原生编辑器的文档引用（内嵌后参数变更同步用）。 */
     private var nativeEditorDoc: com.intellij.openapi.editor.Document? = null
@@ -376,7 +384,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
             if (copyError()) {
                 // T-ExecCopyFix：复制成功反馈（对齐 SqlClickPreview.flashCopied 对号语义）
-                cn.song.mybatisplus.visualizer.ui.flashCopied(this)
+                errorCopyButton?.let { cn.song.mybatisplus.visualizer.ui.flashCopied(it) }
             }
         }.apply { isVisible = false }
         add(errorCopyButton)
@@ -437,6 +445,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
         resultPanel.showLoading()
         if (SqlExecutor.isPrepared()) {
+            // T-RefreshDbSteal F4：isPrepared 只证明插件级共享控制台存在，不证明它还挂在本面板——
+            // 失联时 executePrepared 会把 SQL 执行到别的弹窗/Database 工具窗的控制台（症状③）。
+            // 先走恢复链把控制台重嵌（prepareConsole 复用链同步 SQL + onConsole 重嵌），
+            // 仍就绪才执行——恢复链自身失败时 isPrepared 已被全链重建路径覆盖，回退下方
+            // selectAndExecute 全链兜底
+            if (!consoleAttachedToMe()) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[M36] executeSql: prepared console detached from this panel → recover before execute")
+                recoverConsole(sql)
+                if (SqlExecutor.isPrepared() && !consoleAttachedToMe()) {
+                    // 恢复未落地（异步链未回调）：放弃 executePrepared，落全链（全链会重建/复用
+                    // 共享控制台并经 onConsole 重嵌本面板），避免打在别人的控制台上
+                    SqlExecutor.execute(
+                        proj, sql, null, isQuery,
+                        onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+                        onError = { errorMsg ->
+                            resultPanel.showError(errorMsg)
+                        },
+                    )
+                    return
+                }
+            }
             // 执行前同步当前 SQL（用户可能改过参数/手动编辑）
             nativeEditorDoc?.let { doc ->
                 if (doc.text != sql) {
@@ -487,6 +518,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * M36.5.25g 试过回退"预览即 DBN 控制台"——但用户明确要求**预览阶段也显示 DBN 工具栏**
      *（▶ 工具栏需始终可见），故恢复 prepareConsole 调用。
      */
+    /**
+     * M36.5：发起控制台默认准备（面板展示时调用，不执行）——
+     * Ultimate 下原生控制台即刻可见（▶ 工具栏/Tx Auto/Playground 等 DBN 原生元素常驻预览面板）；
+     * Community 下静默回退自研编辑器；无数据源静默引导（不弹错误打断预览）。
+     *
+     * M36.5.25g 试过回退"预览即 DBN 控制台"——但用户明确要求**预览阶段也显示 DBN 工具栏**
+     *（▶ 工具栏需始终可见），故恢复 prepareConsole 调用。
+     *
+     * T-RefreshDbSteal F4：兼作失联恢复入口 [recoverConsole]——回退编辑器在场时以回退编辑器
+     * 的文本发起准备（准备链复用共享控制台会同步该 SQL），面板无任何编辑器时静默跳过。
+     */
     private fun prepareDefaultConsole() {
         val proj = project ?: return
         val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
@@ -536,7 +578,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }
             return
         }
-        // 摘除旧控制台（旧组件的 hierarchy 监听随组件废弃，无需显式解绑）
+        // T-RefreshDbSteal F3：旧组件的 rehost 监听必须显式解绑——共享控制台场景旧监听残活
+        // 会把控制台抢回已废弃面板（真机 6 连抢实锤），detachConsole 内统一处理
         detachConsole()
         embeddedConsole = consoleComponent
         lastConsoleEmbeddedId = id
@@ -600,6 +643,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-RefreshDbSteal F4：所有权判定——本面板记录的控制台实例是否仍在自己的 consoleHost 树内。
+     * false = 控制台已被其他面板收养/或 DBN 释放后未重挂成功，此时任何"写入 nativeEditorDoc /
+     * executePrepared"都是打在别人的控制台上（三症状公共前置条件）。
+     */
+    internal fun consoleAttachedToMe(): Boolean {
+        val console = embeddedConsole ?: return false
+        return console.parent != null && consoleHost.isAncestorOf(console)
+    }
+
+    /**
+     * T-RefreshDbSteal F4：失联恢复——共享控制台已不在本面板时重新走准备链把它要回来。
+     * `prepareConsole` 的 onConsole 回调经 [embedConsole] 幂等重嵌（M36.5.5 复用链会同步 SQL
+     * 进控制台文档），准备链失败静默（与 prepareDefaultConsole 同语义），本面板此时已落在
+     * 回退编辑器上，显示不悬空。
+     */
+    private fun recoverConsole(sqlForRecovery: String) {
+        if (project == null) return
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] recoverConsole triggered: len=${sqlForRecovery.length}, embedded=${System.identityHashCode(embeddedConsole)}")
+        prepareDefaultConsole()
+    }
+
+    /**
      * M36.5.39-A3：DBN 释放监听——仅当组件被完全释放（parent==null，DBN 不再持有）且仍是当前
      * 嵌入实例时调度重挂；parent!=null 表示 DBN 临时 reparent（results refreshed 中转），不抢，
      * 避免竞争（方案 A 铁律）。
@@ -610,14 +676,28 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 毫秒级刷屏 2753 次，页面持续闪烁）。加入最小重挂间隔 [REHOST_MIN_INTERVAL_MS]：DBN 正忙于
      * reparent 时（两次释放间隔 < 门槛）跳过，待它稳定后再挂回——真正释放（DBN 不再碰）时
      * 间隔必然 > 门槛，兜底不丢。幂等重试仍由 [rehostConsoleForTest] 保证。
+     *
+     * T-RefreshDbSteal 两处修正：
+     * ① 监听器引用保存到 [rehostListener]，[detachConsole]/[dispose] 显式移除——共享控制台被
+     *   新面板接管后，旧面板的监听不再存活抢组件（真机 6 连抢根因）；
+     * ② 去抖 skip 不再静默丢弃：DBN dance 收尾恰落在窗口内时旧实现永久悬空（零日志黑洞），
+     *   现调度单次延迟复查（[REHOST_RETRY_DELAY_MS] 后仍失联且仍是当前实例 → 幂等重挂）。
      */
     private fun attachRehostListener(component: JComponent) {
-        component.addHierarchyListener { e ->
+        rehostListener?.let { old -> component.removeHierarchyListener(old) }
+        val listener = java.awt.event.HierarchyListener { e ->
             val parentChanged = (e.changeFlags and java.awt.event.HierarchyEvent.PARENT_CHANGED.toLong()) != 0L
-            if (!parentChanged || e.component.parent != null || e.component !== embeddedConsole) return@addHierarchyListener
+            if (!parentChanged || e.component.parent != null || e.component !== embeddedConsole) return@HierarchyListener
             val now = System.currentTimeMillis()
             val since = now - lastRehostAt
-            if (since in 0 until REHOST_MIN_INTERVAL_MS) return@addHierarchyListener
+            if (since in 0 until REHOST_MIN_INTERVAL_MS) {
+                // T-RefreshDbSteal：去抖 skip 有日志 + 单次延迟复查兜底（旧实现静默 return 是
+                // 控制台永久悬空的零日志黑洞——「间隔必然 > 门槛」假设被 DBN dance 收尾证伪）
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .info("[M36] re-host debounced (since=${since}ms, id=${System.identityHashCode(e.component)}) → retry scheduled")
+                scheduleRehostRetry(e.component as? JComponent ?: return@HierarchyListener)
+                return@HierarchyListener
+            }
             lastRehostAt = now
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                 .info("[M36] console component released by DBN (id=${System.identityHashCode(e.component)}) → re-host (since=${since}ms)")
@@ -625,6 +705,30 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ApplicationManager.getApplication().invokeLater({
                 rehostConsoleForTest(e.component as? JComponent ?: return@invokeLater)
             }, com.intellij.openapi.application.ModalityState.any())
+        }
+        rehostListener = listener
+        component.addHierarchyListener(listener)
+    }
+
+    /** T-RefreshDbSteal：去抖窗口内被跳过的释放 → 延迟复查一次（仍失联则幂等重挂）。
+     *  单发 Swing Timer（flashCopied 同款范式）：invokeLater 无延迟，复查会永远落在去抖
+     *  窗口内被自己的 `since` 拦截，等于从未重试。 */
+    private fun scheduleRehostRetry(component: JComponent) {
+        if (rehostRetryScheduled) return
+        rehostRetryScheduled = true
+        javax.swing.Timer(REHOST_RETRY_DELAY_MS.toInt()) {
+            rehostRetryScheduled = false
+            // 复查条件与监听器同款：仍是当前嵌入实例且仍无 parent（被别的容器收养则不抢）
+            if (component !== embeddedConsole || component.parent != null) return@Timer
+            val since = System.currentTimeMillis() - lastRehostAt
+            if (since in 0 until REHOST_MIN_INTERVAL_MS) return@Timer
+            lastRehostAt = System.currentTimeMillis()
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[M36] re-host retry fired (id=${System.identityHashCode(component)}, since=${since}ms)")
+            rehostConsoleForTest(component)
+        }.apply {
+            isRepeats = false
+            start()
         }
     }
 
@@ -644,10 +748,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * M36：摘除已内嵌的控制台组件（清空预览时调用；JdbcConsole 生命周期由 IDE 管理）。
      * M36.5.39-A2：只清空 consoleHost 子层，容器保留——再次嵌入复用同一容器。
+     * T-RefreshDbSteal：同时移除本面板挂接的 rehost 监听——共享控制台被新面板接管后，
+     * 本面板的监听必须随之失效（旧实现不移除，僵尸监听把控制台抢回废弃面板）。
      */
     private fun detachConsole() {
-        embeddedConsole?.let { consoleHost.remove(it) }
+        embeddedConsole?.let {
+            rehostListener?.let { l -> it.removeHierarchyListener(l) }
+            consoleHost.remove(it)
+        }
         embeddedConsole = null
+        rehostListener = null
     }
 
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
@@ -1006,6 +1116,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 刷新 = 回到默认状态（参数与回填保留，仅模式复位）。
      */
     fun refreshView() {
+        // T-RefreshDbSteal：刷新是唯一常规触达共享控制台文档的按钮（WriteCommandAction），
+        // 入口记 4 态快照——真机复现时对照判归属
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] refreshView entry: compactMode=$compactMode, nativeDoc=${nativeEditorDoc != null}, editor=${editor != null}, embedded=${System.identityHashCode(embeddedConsole)}, attachedToMe=${consoleAttachedToMe()}")
         compactMode = !formatSqlSetting()
         modeButton.text = modeButtonText()
         renderSql()
@@ -1203,6 +1317,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 渲染 SQL 到可编辑编辑器；已存在时更新文档（保留焦点/撤销）。 */
     private fun showSql(sql: String) {
+        // T-RefreshDbSteal：三分支走查埋点——真机故障期症状②（左参数不再同步右侧 SQL）的
+        // 丢失路径必经此方法（三个静默分支之一吞掉了渲染），带分支标签定位
+        val fLogger = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         // T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）——在主 SQL 之后渲染 fill 附加 SELECT
         val withFill = appendFillSection(sql)
         // T-M27.4：渲染自动格式化（设置开启且非压缩模式）——XML 动态标签展开残留的空行/缩进
@@ -1211,17 +1328,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(withFill) else withFill
         // M36.4：优先写入原生编辑器文档（内嵌后）
         val nativeDoc = nativeEditorDoc
-        if (nativeDoc != null && nativeDoc.text != text) {
-            suppressAutoPopup = true
-            try {
-                WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
-            } finally {
-                suppressAutoPopup = false
+        if (nativeDoc != null) {
+            // T-RefreshDbSteal F4：控制台失联时不写"别人的文档"（症状②：参数改动同步进
+            // 被抢走的控制台，本面板视觉零变化）——改走失联恢复把控制台要回来；恢复链
+            // 内部会同步 SQL 进控制台文档（reuseSharedConsole setText），本次渲染不丢
+            if (!consoleAttachedToMe()) {
+                fLogger.warn("[M36] showSql nativeDoc detached (attachedToMe=false) → recoverConsole")
+                recoverConsole(text)
+                return
+            }
+            if (nativeDoc.text != text) {
+                fLogger.info("[M36] showSql branch=nativeDoc: len=${text.length}, attachedToMe=${consoleAttachedToMe()}")
+                suppressAutoPopup = true
+                try {
+                    WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                } finally {
+                    suppressAutoPopup = false
+                }
             }
             return
         }
         val existing = editor
         if (existing != null) {
+            fLogger.info("[M36] showSql branch=editor: len=${text.length}, nativeDoc=null")
             if (existing.document.text != text) {
                 suppressAutoPopup = true
                 try {
@@ -1231,6 +1360,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
             return
+        }
+        fLogger.info("[M36] showSql branch=createEditor: len=${text.length}, attachedToMe=${consoleAttachedToMe()}")
+        // T-RefreshDbSteal F4：createEditor 是 UX 悬崖（无 DBN 工具栏、形态突变带行号）——
+        // 控制台插件级就绪但已失联时，先走恢复链重嵌，恢复链自身按回退编辑器保显示
+        if (!consoleAttachedToMe() && SqlExecutor.isPrepared()) {
+            fLogger.warn("[M36] createEditor fallback while prepared console detached → recoverConsole")
+            recoverConsole(text)
         }
         createEditor(text)
     }
@@ -1258,6 +1394,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 首次创建：原生 SQL FileType PSI → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */
     private fun createEditor(sql: String) {
+        // T-RefreshDbSteal：createEditor 是症状①的特征终点（自建编辑器带行号，DBN 控制台无），
+        // 但真机故障期它零日志（71s 空窗）——带栈埋点定调用人路径，兜底断言非用户路径
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] createEditor: len=${sql.length}, nativeDoc=${nativeEditorDoc != null}, embedded=${System.identityHashCode(embeddedConsole)}", Throwable("createEditor path"))
         val proj = project
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
@@ -1404,6 +1544,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 释放当前编辑器（幂等）。 */
     private fun releaseEditor() {
+        // T-RefreshDbSteal：createEditor 兜底断言的对称端点——谁释放了自建编辑器决定了
+        // 下一次 showSql 走哪个分支，旧实现零日志
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] releaseEditor: editor=${System.identityHashCode(editor)}, nativeDoc=${nativeEditorDoc != null}", Throwable("releaseEditor path"))
         editor?.let {
             // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener）
             autoPopupListener = null
@@ -2229,6 +2373,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     override fun removeNotify() {
         super.removeNotify()
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] panel removeNotify: embedded=${System.identityHashCode(embeddedConsole)}")
         releaseEditor()
     }
 
@@ -2237,6 +2383,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 工具窗口模式下面板可能长期存活，由 [SqlPreviewDialog] 或工具窗口工厂调用释放。
      */
     override fun dispose() {
+        // T-RefreshDbSteal：面板废弃——移除 rehost 监听（共享控制台可能已被新面板接管，
+        // 本面板的监听不得残活抢组件）；embedConsole 对 null 安全
+        runCatching { detachConsole() }
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
@@ -2259,6 +2408,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun editorHolderForTest(): JComponent = editorHolder
     /** M36.5.39-A1：最近一次嵌入 console 的身份 id（sameAsPrev 探针断言用）。 */
     internal fun lastConsoleEmbeddedIdForTest(): Int? = lastConsoleEmbeddedId
+    /** T-RefreshDbSteal F3：摘除控制台 + 移除 rehost 监听（生命周期断言用）。 */
+    internal fun detachConsoleForTest() = detachConsole()
+    /** T-RefreshDbSteal F4：所有权判定（卫队断言用，见 RefreshDbStealTest）。 */
+    internal fun consoleAttachedToMeForTest(): Boolean = consoleAttachedToMe()
+    /** T-RefreshDbSteal F3：当前挂接的 rehost 监听是否仍在组件上（解绑断言用）。 */
+    internal fun rehostListenerAttachedForTest(): Boolean {
+        val console = embeddedConsole ?: return false
+        val listener = rehostListener ?: return false
+        return console.hierarchyListeners.contains(listener)
+    }
 
     // ------------------------------------------------------------------
     // F-46：来源位置（来源列默认值）
@@ -2348,6 +2507,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         /** M36.5.44：re-host 最小重挂间隔（ms）——DBN 结果刷新期高频 reparent，低于此间隔视为"还在被 DBN 处理"，跳过不抢，防死循环刷新闪烁。 */
         private const val REHOST_MIN_INTERVAL_MS = 800L
+
+        /** T-RefreshDbSteal：去抖窗口内被跳过的释放 → 延迟复查间隔（ms）。取与去抖门槛同值：
+         *  复查时刻距最近一次重挂必然已越过门槛，`since` 复查不会误拦。 */
+        private const val REHOST_RETRY_DELAY_MS = 800L
 
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */
