@@ -56,6 +56,17 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** 条目缓冲（面板与测试访问）。 */
     val entries: SqlLogEntryBuffer get() = buffer
 
+    /**
+     * T-LogRowNumber：捕获序号归零（项目启动时调用，列表行号从 #1 重新计数）。
+     * 由 [RunConfigurationProcessListener] processStarted 分支**无条件**调用——
+     * 不接进 [onProjectProcessStarted]（其 `!autoStart` 守卫会跳过手动捕捉模式的清零，
+     * 违背「每次启动项目时清 0」的无条件语义）。
+     */
+    fun resetEntrySequence() {
+        buffer.resetEntrySequence()
+        LOG.info("resetEntrySequence: 项目启动——捕获序号归零（列表行号重新从 #1 计数，project=${project.name}）")
+    }
+
     /** 捕捉状态（默认关——用户点击「开始捕捉」后才挂载监听，对齐 MybatisCodeHelper-Pro 手动监听）。 */
     @Volatile
     var capturing: Boolean = false

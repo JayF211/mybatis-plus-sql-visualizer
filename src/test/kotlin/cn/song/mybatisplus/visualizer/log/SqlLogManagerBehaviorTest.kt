@@ -714,4 +714,20 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
             settings.state.logAutoCaptureSuppressed = oldSuppressed
         }
     }
+
+    // ---------- T-LogRowNumber：项目启动捕获序号清零 ----------
+
+    fun testT29_ResetEntrySequence_clearsCounterForNewEntries() {
+        // 转发生效：manager.resetEntrySequence 后新条目从 #1 重新计数，旧条目行号保留
+        val manager = managerWith(FakeBridge(attachResult = true))
+        manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()))
+        manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 2", restoredSql = "SELECT 2", params = emptyList()))
+        assertEquals(listOf(1L, 2L), manager.entries.snapshot().map { it.sequenceNumber })
+
+        manager.resetEntrySequence()
+
+        assertEquals("旧条目行号保留", listOf(1L, 2L), manager.entries.snapshot().map { it.sequenceNumber })
+        manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 3", restoredSql = "SELECT 3", params = emptyList()))
+        assertEquals("新条目从 #1 起计数", 1L, manager.entries.snapshot().last().sequenceNumber)
+    }
 }

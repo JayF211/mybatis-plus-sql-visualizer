@@ -54,14 +54,35 @@ class SqlLogEntryBufferTest {
 
     @Test
     fun `清空与删除单条`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 3)
+        buf.dedupeEnabled = false // 本用例验证删除语义（与去重开关态隔离）
         val e1 = entry("SELECT 1")
         val e2 = entry("SELECT 2")
-        buffer.addEntry(e1)
-        buffer.addEntry(e2)
-        buffer.removeEntry(e1)
-        assertEquals(listOf("SELECT 2"), buffer.snapshot().map { it.restoredSql })
-        buffer.clear()
-        assertTrue(buffer.snapshot().isEmpty())
+        buf.addEntry(e1)
+        buf.addEntry(e2)
+        // T-LogRowNumber：面板从列表模型拿到的是入库实例（带行号 copy），与 e1 同一
+        buf.removeEntry(buf.snapshot().first { it.restoredSql == "SELECT 1" })
+        assertEquals(listOf("SELECT 2"), buf.snapshot().map { it.restoredSql })
+        buf.clear()
+        assertTrue(buf.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `removeEntry 按同一性删除_带行号实例可删_无号原型不误删`() {
+        // T-LogRowNumber：入库为带号 copy；面板引用=入库实例（同一性成立可删）
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = false
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        val stored = buf.snapshot().single()
+        assertEquals(1L, stored.sequenceNumber)
+        buf.removeEntry(stored)
+        assertTrue(buf.snapshot().isEmpty())
+        // 无号原型（外部构造的等值条目）不应误删列表中的真身
+        val proto = entryAt("SELECT 2", 100L)
+        buf.addEntry(proto)
+        buf.removeEntry(proto)
+        assertEquals(1, buf.snapshot().size)
+        assertEquals("SELECT 2", buf.snapshot().single().restoredSql)
     }
 
     @Test
@@ -400,5 +421,94 @@ class SqlLogEntryBufferTest {
         // 二次调用不应抛异常/重置状态报错
         buf.disableDedupe()
         assertEquals(0, buf.dedupeCount("SELECT 1"))
+    }
+
+    // ---------- T-LogRowNumber：捕获序号（列表行号） ----------
+
+    @Test
+    fun `行号连续入队单调递增`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 2", 100L))
+        buf.addEntry(entryAt("SELECT 3", 200L))
+        val snap = buf.snapshot()
+        assertEquals(listOf(1L, 2L, 3L), snap.map { it.sequenceNumber })
+    }
+
+    @Test
+    fun `去重丢弃不占号`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = true
+        buf.addEntry(entryAt("SELECT 1", 0L))          // #1
+        assertFalse(buf.addEntry(entryAt("SELECT 1", 100L))) // 丢弃
+        buf.addEntry(entryAt("SELECT 2", 200L))        // 应为 #2（不跳号）
+        val snap = buf.snapshot()
+        assertEquals(listOf(1L, 2L), snap.map { it.sequenceNumber })
+    }
+
+    @Test
+    fun `暂停态与过滤关键字不占号`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = false // 本用例专验暂停/过滤分支不占号（与既有去重用例隔离）
+        buf.addEntry(entryAt("SELECT 1", 0L)) // #1
+        buf.setPaused(true)
+        assertFalse(buf.addEntry(entryAt("SELECT X", 100L)))
+        buf.setPaused(false)
+        buf.filterKeywords = listOf("TMP_")
+        assertFalse(buf.addEntry(entryAt("SELECT TMP_LOG", 200L)))
+        buf.filterKeywords = emptyList()
+        buf.addEntry(entryAt("SELECT 2", 300L)) // 应为 #2
+        assertEquals(listOf(1L, 2L), buf.snapshot().map { it.sequenceNumber })
+    }
+
+    @Test
+    fun `clear 后行号重新从 1 计数`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.addEntry(entryAt("SELECT 1", 0L))
+        buf.addEntry(entryAt("SELECT 2", 100L))
+        buf.clear()
+        buf.addEntry(entryAt("SELECT 3", 200L))
+        val snap = buf.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals(1L, snap[0].sequenceNumber)
+    }
+
+    @Test
+    fun `resetEntrySequence 后新条目从 1 起旧条目行号保留`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.addEntry(entryAt("SELECT 1", 0L)) // #1
+        buf.addEntry(entryAt("SELECT 2", 100L)) // #2
+        buf.resetEntrySequence()
+        // 旧条目不清、行号保留原值
+        assertEquals(listOf(1L, 2L), buf.snapshot().map { it.sequenceNumber })
+        buf.addEntry(entryAt("SELECT 3", 200L)) // 新一轮 #1
+        assertEquals(1L, buf.snapshot().last().sequenceNumber)
+    }
+
+    @Test
+    fun `dedupeExisting 裁剪后剩余条目行号保留原值`() {
+        // T-LogRowNumber 用户确认：裁剪只删条目不重新编号，跳号表达「重复被移除」
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeEnabled = false
+        buf.dedupeWindowMs = 1000L
+        buf.addEntry(entryAt("SELECT 1", 0L))   // #1
+        buf.addEntry(entryAt("SELECT 1", 200L)) // #2（重复副本）
+        buf.addEntry(entryAt("SELECT 2", 400L)) // #3
+        buf.dedupeEnabled = true
+        assertEquals(1, buf.dedupeExisting()) // 裁掉 #2
+        val snap = buf.snapshot()
+        assertEquals(listOf("SELECT 1", "SELECT 2"), snap.map { it.restoredSql })
+        assertEquals(listOf(1L, 3L), snap.map { it.sequenceNumber }) // 跳号：#2 不复用
+    }
+
+    @Test
+    fun `头部淘汰后剩余条目行号保留原值`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 2)
+        buf.addEntry(entryAt("SELECT 1", 0L)) // #1，后被淘汰
+        buf.addEntry(entryAt("SELECT 2", 100L)) // #2
+        buf.addEntry(entryAt("SELECT 3", 200L)) // #3，触发淘汰 #1
+        val snap = buf.snapshot()
+        assertEquals(listOf("SELECT 2", "SELECT 3"), snap.map { it.restoredSql })
+        assertEquals(listOf(2L, 3L), snap.map { it.sequenceNumber })
     }
 }

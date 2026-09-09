@@ -123,4 +123,39 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertNotNull("渲染组件不应为 null", c)
         assertTrue("渲染组件应为渲染器自身（含双行组件面板）", c is java.awt.Component)
     }
+
+    // ---------- T-LogRowNumber：行号片段 ----------
+
+    fun test行号片段在元信息行最前() {
+        val e = entry("SELECT 1").copy(sequenceNumber = 12L)
+        val r = render(e)
+        val meta = joinedText(r.metaLine)
+        assertTrue("元信息行含行号 #12", meta.contains("#12 "))
+        assertTrue("行号应在片段序列最前", meta.startsWith("#12 "))
+        assertFalse("SQL 不混入元信息行", meta.contains("SELECT"))
+    }
+
+    fun test无行号条目不渲染行号片段() {
+        // sequenceNumber=0：历史文件读回 / round-trip 条目
+        val r = render(entry("SELECT 1"))
+        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"))
+    }
+
+    fun test行号与后续片段拼接顺序正确() {
+        // 时间戳开启时：#N 在时间戳之前（行号是最高频引用锚点，视觉最左）
+        val pluginSettings = PluginSettings.getInstance().state
+        val savedTs = pluginSettings.logTimestampEnabled
+        try {
+            pluginSettings.logTimestampEnabled = true
+            val e = entry("SELECT 1").copy(sequenceNumber = 3L)
+            val r = render(e)
+            val meta = joinedText(r.metaLine)
+            val idxRow = meta.indexOf("#3 ")
+            val idxTs = meta.indexOf("[")
+            assertTrue("应同时含行号与时间戳", idxRow >= 0 && idxTs >= 0)
+            assertTrue("行号在时间戳之前", idxRow < idxTs)
+        } finally {
+            pluginSettings.logTimestampEnabled = savedTs
+        }
+    }
 }
