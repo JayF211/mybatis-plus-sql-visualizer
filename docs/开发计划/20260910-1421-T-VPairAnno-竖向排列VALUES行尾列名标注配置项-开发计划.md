@@ -1,7 +1,7 @@
 # T-VPairAnno：竖向排列 VALUES 行尾列名标注做成配置项开发计划
 
 > **创建日期**：2026-09-10
-> **状态**：立项待实施
+> **状态**：✅ 已实施、已测试、已提交（master `770313a`，2026-09-10；全量 3242/0/6 绿，sandbox-vpairanno 隔离；runIde 真机走查留人工）
 > **分支**：master（HEAD `cefc258`；工作树含 T-ExecSilentNoop 等会话在途改动，见 6.1）
 > **优先级**：P2（增强型配置项，非缺陷——现有行为默认保留，仅增加关闭通道）
 > **预估工时**：1.5~2h（F1 参数化 + F2~F4 设置四处接线 + F5 测试，单笔 feat 提交）
@@ -170,3 +170,16 @@ PluginSettingsPanelBindingTest / PluginSettingsPersistenceTest：实施时核对
 - 不做已开弹窗的设置变更即时推送（与 formatSql 同构，下一次渲染生效）；
 - 不做工具栏切换按钮（设置页一项足够；工具栏宽度预算刚被 T-PreviewTopOverlap 收紧，不再加常驻控件）；
 - 不改 KEYWORD_WRAP / NORMAL / FORMAT 模式行为（本就不产生标注）。
+
+---
+
+## 实施记录（2026-09-10 交付，master `770313a`）
+
+**与计划的偏差**：
+
+1. **方案零偏差**：F1~F5 逐项按计划落地——`formatVertical(sql, annotatePairs: Boolean = true)` 默认参数 + `collectInsertColumns` 空名单单点收口；`PluginSettings.verticalPairAnnotation` 默认 true；SettingsIO 导出/导入两行；面板 SECTION_PREVIEW formatCheck 行后复选框 + isModified/apply/reset 三处接线；双 bundle 键 `settings.verticalPairAnnotation` 与 `panel.vertical.tooltip` 双语言补「可在设置中关闭」；`verticalPairAnnotationSetting()` 对齐 `formatSqlSetting()` 的 runCatching 兜底范式接入 applyDisplayMode VERTICAL 分支。
+2. **计划外一处测试修正**：`PluginSettingsPersistenceTest.testLanguageWriteThroughRefreshesCheckboxTexts` 是复选框总数台账断言（22），新复选框使其 23——首轮全量唯一失败即此处，隔离复跑复现（非 flake），按该测试既有的逐次台账注释惯例补「T-VPairAnno +1」行并更新计数。计划 5.1 只预判了 BindingTest 的逐字段断言（核对后确认无此清单），台账断言属计划漏列，命中后按惯例处理。
+3. **测试落地计数**：SqlFormatterTest +4（关闭无标注且行尾无对齐残留 / 用户注释保留 / 关标注重跑按用户注释归位保留 / 非 INSERT 不受参数影响，另含默认重载等价显式 true 断言）；SqlPreviewPanelTest +1（设置关→竖排无标注，恢复开→标注回来，try/finally 复位）；SettingsIOTest 在三个既有用例内 +3 断言（导出含键 / 导入恢复 / 默认值 true）。
+4. **验证结果**：首轮全量 3242 跑 1 失败（上述台账），修正后全量 **3242/0/6 绿**（3237 基线 + 5 新用例）。runIde 真机走查（设置页关闭→竖排无标注、开启→恢复、参数输入/压缩切换两设置下形态保持、亮暗主题设置页文案）留人工。
+
+**并行协调实际执行**：跑 gradle 全程登记 T-VPairAnno/sandbox-vpairanno（当时另有 mp-demo-fix/kt-demo-fix/jpa-demo-fix 三个活跃任务）；build.gradle.kts 临时加 `sandboxContainer.set(layout.buildDirectory.dir("sandbox-vpairanno"))` 隔离，跑完立即还原（提交前 `git status` 核实零残留）；跑测试前清 `build/classes/java/main`+`test` 陈旧类目录（K2J 劫持预防，本次实有 817 个残留类文件）；共享三文件（SqlPreviewPanel.kt + 双 bundle，含 T-ExecSilentNoop 会话在途改动）经脚本化 hash-object + update-index 索引级拆分提交——每锚点断言 HEAD 唯一命中、产物串在工作树存在（方向自检），工作树 CRLF/HEAD LF 差异按行尾归一后比对，staged diff 仅含本任务 hunk（删行==预期核对通过），对方在途改动原样留工作树。
