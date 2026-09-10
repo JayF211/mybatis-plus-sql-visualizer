@@ -938,13 +938,16 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testVerticalNonInsertFallsBackToFormat() {
-        // T-VStack·扩面：非 INSERT 输入 = format + 横向组展开（IN 列表纵向化，与格式化按钮可区分）
+        // T-VStack·扩面 + InThreshold：非 INSERT 输入 = format + 横向组展开（长 IN 列表纵向化，
+        // 与格式化按钮可区分；阈值 5——2 元素短清单保持同行）
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "select id from tbl where id in (1, 2)", compact = "select id from tbl"))
+        panel.showResult(
+            result(sql = "select id from tbl where id in (1, 2, 3, 4, 5)", compact = "select id from tbl"),
+        )
         panel.formatVertical()
         val text = panel.editorForTest()!!.document.text
         assertTrue("SELECT 应按 format 全展开：$text", text.contains("SELECT\n") && text.contains("FROM tbl"))
-        assertTrue("IN 列表应纵向化：$text", text.contains("IN\n"))
+        assertTrue("长 IN 列表应纵向化：$text", text.contains("IN\n"))
         panel.clear()
     }
 
