@@ -128,11 +128,15 @@ def move(x, y, dur=0.32):
 
 
 def click(x=None, y=None, move_dur=0.32, pauses=(0.25, 0.30)):
-    """移动并左键单击。pauses=(移动前, 点击后) 的演示停顿。"""
+    """移动并左键单击。pauses=(移动前, 点击后) 的演示停顿。
+
+    T-GifRerecord：最终 click 传坐标给 pyautogui（moveTo+click 原子执行）——
+    贝塞尔只做演示轨迹，落点不依赖期间光标不被外部（人手）移动。
+    """
     if x is not None:
         time.sleep(pauses[0])
         move(x, y, move_dur)
-    pyautogui.click()
+    pyautogui.click(x, y)
     time.sleep(pauses[1])
 
 
@@ -165,10 +169,118 @@ def drag_select(x1, y1, x2, y2, dur=0.5):
     time.sleep(0.15)
 
 
+def find_gutter_icons(region_png=None, strip_x=(455, 530), y_range=(150, 700), gap=25):
+    """在已存的 region 截图（或现抓）里找插件 gutter 图标（绿色箭头+紫色Q）。
+
+    返回 [(y, x)]（region 相对坐标）按 y 排序。strip_x/y_range 为 region 相对坐标。
+    用法：goto_line 后 shot 存图 → find_gutter_icons → 选目标行的 y → click(x+277, y+25)。
+    """
+    import PIL.Image
+    if region_png is None:
+        import tempfile
+        region_png = tempfile.mktemp(suffix=".png")
+        shot((277, 25, 1370, 984), region_png)
+    img = np.asarray(PIL.Image.open(region_png).convert("RGB"), dtype=int)
+    x0, x1 = strip_x
+    y0, y1 = y_range
+    strip = img[y0:y1, x0:x1]
+    r, g, b = strip[:, :, 0], strip[:, :, 1], strip[:, :, 2]
+    green = (g - r > 35) & (g - b > 25)
+    purple = (b - g > 35) & (r > 90)
+    mask = green | purple
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        return []
+    # 按 y 聚类（间隔 >25px 视为不同图标）
+    order = np.argsort(ys)
+    ys, xs = ys[order], xs[order]
+    clusters = []
+    cy, cx = [ys[0]], [xs[0]]
+    for yv, xv in zip(ys[1:], xs[1:]):
+        if yv - cy[-1] > gap:
+            clusters.append((int(np.mean(cy)) + y0, int(np.mean(cx)) + x0))
+            cy, cx = [], []
+        cy.append(yv)
+        cx.append(xv)
+    clusters.append((int(np.mean(cy)) + y0, int(np.mean(cx)) + x0))
+    return clusters
+
+
+def find_blue_checkboxes(region_png, strip_x=(405, 448), y_range=(300, 720), gap=30):
+    """检测 region 截图里参数面板的蓝色复选框行，返回 [(y, x)]（region 相对，按 y 排序）。
+
+    T2 批量面板用：第 N 行复选框 = toInsert 第 N 列（id/password/age/...）。
+    """
+    import PIL.Image
+    img = np.asarray(PIL.Image.open(region_png).convert("RGB"), dtype=int)
+    x0, x1 = strip_x
+    y0, y1 = y_range
+    strip = img[y0:y1, x0:x1]
+    r, g, b = strip[:, :, 0], strip[:, :, 1], strip[:, :, 2]
+    mask = (b - r > 40) & (b - g > 25) & (b > 120)
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        return []
+    order = np.argsort(ys)
+    ys, xs = ys[order], xs[order]
+    clusters = []
+    cy, cx = [ys[0]], [xs[0]]
+    for yv, xv in zip(ys[1:], xs[1:]):
+        if yv - cy[-1] > gap:
+            clusters.append((int(np.mean(cy)) + y0, int(np.mean(cx)) + x0))
+            cy, cx = [], []
+        cy.append(yv)
+        cx.append(xv)
+    clusters.append((int(np.mean(cy)) + y0, int(np.mean(cx)) + x0))
+    return clusters
+
+
 def keys(*combo):
     """快捷键组合，如 keys('alt', 'shift', 'j')。"""
     pyautogui.hotkey(*combo)
     time.sleep(0.3)
+
+
+# ---------------------------------------------------------------------------
+# T-GifRerecord：确定性导航助手
+# 背景：系统 IME（微软拼音）在中文合成态会吞 Enter（合成提交不上抛），
+# 搜索/goto 弹窗因此卡住。以下助手要么完全绕开 Enter（弹窗首行双击），
+# 要么在 Enter 后做像素检测、弹窗未关则补一次（不会误改编辑器内容）。
+# ---------------------------------------------------------------------------
+
+def open_file(query, first_row=(917, 287), wait=2.2):
+    """Ctrl+Shift+N 搜文件并双击结果首行（不按 Enter）。调用前先用 shot 核对首行即目标。"""
+    pyautogui.hotkey('ctrl', 'shift', 'n')
+    time.sleep(1.2)
+    typewrite(query, interval=0.04)
+    time.sleep(wait)
+    pyautogui.doubleClick(*first_row)
+    time.sleep(2.0)
+
+
+def goto_line(line, strip=(792, 415, 335, 20)):
+    """Ctrl+G 跳行。Enter 后检测 goto 弹窗条带（屏幕坐标 x,y,w,h）是否仍在，
+    仍在（IME 合成吞回车）则补一次 Enter。"""
+    import numpy as np
+    pyautogui.hotkey('ctrl', 'g')
+    time.sleep(0.8)
+    typewrite(str(line), interval=0.06)
+    time.sleep(0.5)
+    before = grab(strip)
+    pyautogui.keyDown('return')
+    time.sleep(0.08)
+    pyautogui.keyUp('return')
+    time.sleep(0.7)
+    after = grab(strip)
+    d = float(np.abs(before.astype(int) - after.astype(int)).mean())
+    if d < 2.0:
+        pyautogui.keyDown('return')
+        time.sleep(0.08)
+        pyautogui.keyUp('return')
+        time.sleep(0.8)
+        print("goto_line: retry Enter (IME swallowed first)")
+    else:
+        time.sleep(0.6)
 
 
 def typewrite(text, interval=0.05):

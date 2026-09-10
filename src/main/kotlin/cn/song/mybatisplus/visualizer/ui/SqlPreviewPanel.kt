@@ -95,7 +95,7 @@ import javax.swing.event.DocumentListener
  * SQL 预览面板（M9-01/02/03 可编辑版，F-07/F-08）。
  *
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
- *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 压缩多行切换 / 刷新）
+ *  - 顶部两行：元信息行（Wrapper 类型 / 表名 / 风险警示）+ 工具栏行（复制 / 压缩多行切换 / 刷新；T-GifHeader 分行防重叠）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
  *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
@@ -167,6 +167,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+    /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
+    @Volatile
+    private var prewarmFailed = false
     /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。 */
     @Volatile
     private var previewDisposed = false
@@ -281,13 +284,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     init {
-        // 顶部元信息行 + 工具栏
-        metaLabel.border = JBUI.Borders.empty(0, 8, 4, 8)
-        val topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(metaLabel, BorderLayout.WEST)
+        // T-GifHeader：顶部拆两行——元信息行 + 工具栏行。原先 metaLabel(WEST)+toolbar(EAST) 同行
+        // BorderLayout 下 WEST/EAST 各自保首选宽、不收缩，两者首选宽之和超面板宽时直接重叠绘制
+        //（150% 缩放 + 中文按钮文案下极易触发：工具栏约 960px，元信息带警示行超 400px），
+        // 元信息文字被按钮盖住。分行后任意宽度互不遮挡；元信息超宽截断（全文在 tooltip）。
+        metaLabel.border = JBUI.Borders.empty(4, 8, 0, 8)
+        val metaRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(metaLabel, BorderLayout.NORTH)
+        }
+        val toolRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             add(toolbar(), BorderLayout.EAST)
-            // M36.5：收边距与原生工具行对齐（上 6→4，右 8→8 保留）
-            border = JBUI.Borders.empty(4, 8, 2, 8)
+            border = JBUI.Borders.empty(2, 8, 2, 8)
+        }
+        val topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(metaRow, BorderLayout.NORTH)
+            add(toolRow, BorderLayout.CENTER)
         }
         add(topRow, BorderLayout.NORTH)
 
@@ -340,8 +351,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
                 io.writeText("")
                 io.deleteOnExit()
-                val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
-                    ?: return@executeOnPooledThread
+                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒录制期实证，
+                // 00:03 SEVERE 根因）——重试一次再判失败；失败置 prewarmFailed 让 await 快速返回，不空等 2s。
+                val lfs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+                var vf = lfs.refreshAndFindFileByIoFile(io)
+                if (vf == null) {
+                    Thread.sleep(50)
+                    vf = lfs.refreshAndFindFileByIoFile(io)
+                }
+                if (vf == null) {
+                    prewarmFailed = true
+                    return@executeOnPooledThread
+                }
                 if (previewDisposed) {
                     java.io.File(vf.path).delete()
                     return@executeOnPooledThread
@@ -349,22 +370,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val proj = project ?: return@executeOnPooledThread
                 val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
                     com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                } ?: return@executeOnPooledThread
+                } ?: run {
+                    prewarmFailed = true
+                    return@executeOnPooledThread
+                }
                 previewTempFile = vf
                 prewarmedTempFile = vf to psi
-            }
+            }.onFailure { prewarmFailed = true }
         }
     }
 
     /**
      * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
      * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
+     * T-GifRerecord：预热线程已判定失败时立即返回 null（快速降级），不再空等 2s 预算。
      */
     private fun awaitPrewarmedTempFile(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         var waited = 0L
         while (true) {
             val ready = prewarmedTempFile?.also { prewarmedTempFile = null }
             if (ready != null) return ready
+            if (prewarmFailed) return null
             if (waited >= PREWARM_WAIT_MS) return null
             try {
                 Thread.sleep(PREWARM_POLL_MS)
@@ -1498,21 +1524,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
             // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
-            val (vFile, psi) = awaitPrewarmedTempFile()
-                ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
-            previewTempFile = vFile
-            psiFile = psi
-            val doc = com.intellij.psi.PsiDocumentManager.getInstance(proj)
-                .getDocument(psi) ?: throw IllegalStateException("临时 SQL 文件无关联文档")
-            // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
-            //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
-            if (doc.text != sql) {
-                com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
-                    doc.setText(sql)
-                    com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(doc)
+            // T-GifRerecord：预热产物不可用时降级为「无 PSI 文档编辑器」（自研高亮/补全上下文/参数回填
+            // 都在 common 路径，不受影响；仅失去 PSI 补全载体），不再抛 ISE——沙盒录制期实证：异常从
+            // SqlPreviewDialog.<init> 冒泡成「IDE error occurred」红条且预览弹窗整个不出现。
+            val prewarmed = awaitPrewarmedTempFile()
+            if (prewarmed == null) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[T-GifRerecord] SQL 预览预热临时文件不可用，降级为无 PSI 文档编辑器")
+                com.intellij.openapi.editor.EditorFactory.getInstance().createEditor(
+                    com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(sql), proj, sqlFileType, false
+                )
+            } else {
+                val (vFile, psi) = prewarmed
+                previewTempFile = vFile
+                psiFile = psi
+                val doc = com.intellij.psi.PsiDocumentManager.getInstance(proj)
+                    .getDocument(psi) ?: throw IllegalStateException("临时 SQL 文件无关联文档")
+                // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+                //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+                if (doc.text != sql) {
+                    com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
+                        doc.setText(sql)
+                        com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(doc)
+                    }
                 }
+                EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
             }
-            EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
         }

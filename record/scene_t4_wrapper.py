@@ -15,10 +15,10 @@ from gifkit import Recorder, click, keys, wait_stable
 REGION = (277, 25, 1370, 984)
 OUT = "perf/t4_wrapper.mp4"
 
-GUTTER = (760, 513)      # line 36 插件 gutter 图标
-SQL_AREA = (1000, 450)   # SQL 面板中部（点击聚焦）
-CANCEL = (1456, 821)     # 弹窗「取消」按钮
-CHK_STATUS = (425, 447)  # 动态条件 status=? 复选框
+GUTTER = (774, 393)      # line 36 插件 gutter 图标（T-GifHeader 两行头部后重标）
+SQL_AREA = (1050, 500)   # SQL 面板中部（点击聚焦）
+CANCEL = (1480, 822)     # 弹窗「取消」按钮
+CHK_STATUS = (424, 495)  # 动态条件 status=? 复选框
 
 
 def main():

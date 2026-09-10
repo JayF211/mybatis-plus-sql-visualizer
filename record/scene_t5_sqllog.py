@@ -15,10 +15,10 @@ from gifkit import Recorder, click, wait_stable
 REGION = (277, 25, 1370, 984)
 OUT = "perf/t5_sqllog.mp4"
 
-CAPTURE = (1184, 240)   # 工具窗口 ▶ 捕捉
-SVC_STOP = (823, 732)   # Services ■ 停止
-SVC_RUN = (744, 732)    # Services ▶ 运行
-ENTRY = (1370, 360)     # SQL 列表第一条
+CAPTURE = (1161, 302)   # 工具窗口 ▶ 捕捉（T-GifRerecord 重标）
+SVC_STOP = (838, 725)   # Services ■ 停止（重标）
+SVC_RUN = (761, 725)    # Services ▶ 运行（重标）
+ENTRY = (1367, 455)     # SQL 列表第一条（重标）
 
 
 def app_up():
