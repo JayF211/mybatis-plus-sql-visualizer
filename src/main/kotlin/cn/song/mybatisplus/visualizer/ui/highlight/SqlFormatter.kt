@@ -365,21 +365,28 @@ object SqlFormatter {
      * 竖向排列格式化（T-VStack）：INSERT 语句列清单与 VALUES 逐行竖排，VALUES 每值行尾按最宽值
      * （含行尾逗号）对齐追加 `-- 列名` 配对标注——大 INSERT 列-值对位不必数逗号。
      *
-     * 与 [format]（全展开）的分工：format 对 SELECT 列清单/UPDATE SET/DELETE WHERE 已竖排，
-     * 缺口仅在 INSERT 括号组（`INTO t (a,b) VALUES (1,2)` 同行）。规则：
-     *  - 首个主子句非 INSERT → 原样委托 [format]（SELECT/UPDATE/DELETE 已是竖排形态）
-     *  - 列清单/VALUES 组各一元素一行（缩进 2、行尾逗号紧贴、闭括号顶格；批量多组 `),` 接排）
+     * T-VStack·扩面：非 INSERT 语句 = [format] 全展开 + [expandHorizontalGroups] 后处理
+     * （IN 括号列表 / ORDER BY / GROUP BY / FROM 逗号联表纵向化），与「格式化」按钮产出可区分。
+     *
+     * 规则：
+     *  - INSERT → 专用竖排路径；非 INSERT → format + 横向组展开
+     *  - INSERT 列清单/VALUES 组各一元素一行（缩进 2、行尾逗号紧贴、闭括号顶格；批量多组 `),` 接排）
      *  - 配对标注：列清单全为单 token 元素才启用（`t.a` 等多 token 列不标注）；无列清单不标注；
      *    值按序与列取小对位，组内每行行尾注释只挂一个（用户注释优先于配对标注）
      *  - 值表达式整段保留：depth==1 逗号是唯一切分点，NOW()/CONCAT(a,b) 等嵌套括号内逗号原样
      *  - 组内注释挂行尾（本功能输出的 `-- 列名` 再输入时归位本行 → 幂等）；顶层注释自成一行
+     *  - LIMIT 分页参数逗号与子查询 IN（元素首 token SELECT/WITH）不展开
      *  - 输出不变式：剔 COMMENT 后重分词的 token 流与原文一致——只动空白与行尾注释，不改语义 token
      */
     fun formatVertical(sql: String): String {
         val tokens = lex(sql)
         if (tokens.isEmpty()) return sql.trim()
         val first = tokens.firstOrNull { it.first != SqlTokenTypes.COMMENT } ?: return format(sql)
-        if (first.first != SqlTokenTypes.KEYWORD || first.second.uppercase() != "INSERT") return format(sql)
+        if (first.first != SqlTokenTypes.KEYWORD || first.second.uppercase() != "INSERT") {
+            // T-VStack·扩面：非 INSERT = format 全展开 + 横向组展开后处理（IN 列表/ORDER BY/
+            // GROUP BY/FROM 联表纵向化），与「格式化」按钮产出可区分
+            return expandHorizontalGroups(format(sql))
+        }
 
         val columnNames = collectInsertColumns(tokens)
 
@@ -638,6 +645,167 @@ object SqlFormatter {
             }
         }
         return emptyList()
+    }
+
+    /**
+     * 横向组展开（T-VStack·扩面）：对 [format] 产物做纯文本后处理，把仍横排的组纵向化——
+     * IN 括号列表（元素非子查询）/ ORDER BY 字段清单 / GROUP BY 字段清单 / FROM 逗号联表。
+     * 只在「已被 format 排成单行」的子句段内操作，是纯增量变换 → 幂等；LIMIT 逗号（分页参数）
+     * 与子查询 IN（元素首 token 为 SELECT）不展开。
+     */
+    private fun expandHorizontalGroups(formatted: String): String {
+        val out = StringBuilder(formatted.length + 128)
+        var pos = 0
+        var changed = false
+        while (pos < formatted.length) {
+            val lineEnd = formatted.indexOf('\n', pos).let { if (it < 0) formatted.length else it }
+            val line = formatted.substring(pos, lineEnd)
+
+            /** 当前行的缩进（展开元素行沿用同一缩进 + 4）。 */
+            val indent = line.takeWhile { it == ' ' }
+            val trimmed = line.trim()
+            val expanded: String? = when {
+                trimmed.startsWith("--") || trimmed.startsWith("/*") -> null
+                else -> expandInList(line, trimmed, indent)
+                    ?: expandCommaClause(line, trimmed, indent, "ORDER BY")
+                    ?: expandCommaClause(line, trimmed, indent, "GROUP BY")
+                    ?: expandFromCommaTables(line, trimmed, indent)
+            }
+            if (expanded == null) {
+                out.append(line)
+            } else {
+                out.append(expanded)
+                changed = true
+            }
+            if (lineEnd < formatted.length) out.append('\n')
+            pos = lineEnd + 1
+        }
+        return if (changed) out.toString() else formatted
+    }
+
+    /**
+     * IN 列表展开：行含 `IN (` 且括号在本行闭合、首元素非子查询、含顶层（括号内层）逗号 → 逐元素一行
+     * （`(` 自占一行，对齐已交付 INSERT 组形态）。line=原行（保前缀缩进）、trimmed=去缩进行（定位用）。
+     */
+    private fun expandInList(line: String, trimmed: String, indent: String): String? {
+        val inIdx = findKeywordIndex(trimmed, "IN")
+        if (inIdx < 0) return null
+        val openIdx = trimmed.indexOf('(', inIdx + 2)
+        if (openIdx < 0) return null
+        val closeIdx = matchParen(trimmed, openIdx) ?: return null
+        val inner = trimmed.substring(openIdx + 1, closeIdx).trim()
+        if (inner.isEmpty()) return null
+        // 子查询形态（IN (SELECT …)）不展开
+        val innerTokens = lex(inner)
+        val first = innerTokens.firstOrNull { it.first != SqlTokenTypes.COMMENT } ?: return null
+        if (first.first == SqlTokenTypes.KEYWORD && first.second.uppercase() in setOf("SELECT", "WITH")) return null
+        // 顶层（括号内层 depth1）逗号切分；无逗号无需展开
+        val elements = splitTopLevel(inner)
+        if (elements.size < 2) return null
+        val body = StringBuilder()
+        body.append(indent).append(trimmed.substring(0, openIdx).trimEnd()).append('\n')
+        body.append(indent).append('(').append('\n')
+        elements.forEachIndexed { i, element ->
+            body.append(indent).append("    ").append(element.trim())
+            if (i < elements.size - 1) body.append(',')
+            body.append('\n')
+        }
+        body.append(indent).append(')').append(trimmed.substring(closeIdx + 1).trimEnd())
+        return body.toString()
+    }
+
+    /** ORDER BY / GROUP BY 字段展开：`ORDER BY a DESC, b ASC` → 每字段一行（修饰符紧跟字段）。 */
+    private fun expandCommaClause(line: String, trimmed: String, indent: String, keyword: String): String? {
+        val kwIdx = findKeywordIndex(trimmed, keyword)
+        if (kwIdx < 0) return null
+        val rest = trimmed.substring(kwIdx + keyword.length).trim()
+        if (rest.isEmpty() || rest.startsWith("(")) return null
+        val elements = splitTopLevel(rest)
+        if (elements.size < 2) return null
+        val body = StringBuilder()
+        body.append(indent).append(trimmed.substring(0, kwIdx)).append(keyword)
+        elements.forEachIndexed { i, element ->
+            body.append('\n').append(indent).append("    ").append(element.trim())
+            if (i < elements.size - 1) body.append(',')
+        }
+        // 行尾残余校验：切分覆盖整个 rest——tail 含括号说明形态超出单行清单（不展开，避免误伤）
+        val closeIdx = kwIdx + keyword.length + trimmed.substring(kwIdx + keyword.length).length
+        val tail = trimmed.substring(closeIdx)
+        if (tail.contains('(') || tail.contains(')')) return null
+        return body.toString()
+    }
+
+    /** FROM 逗号联表展开：`FROM a, b` → 一表一行（含别名）。 */
+    private fun expandFromCommaTables(line: String, trimmed: String, indent: String): String? {
+        val kwIdx = findKeywordIndex(trimmed, "FROM")
+        if (kwIdx < 0) return null
+        val rest = trimmed.substring(kwIdx + "FROM".length).trim()
+        if (rest.isEmpty() || rest.contains('(')) return null
+        val elements = splitTopLevel(rest)
+        if (elements.size < 2) return null
+        val body = StringBuilder()
+        body.append(indent).append(trimmed.substring(0, kwIdx)).append("FROM")
+        elements.forEachIndexed { i, element ->
+            body.append('\n').append(indent).append("    ").append(element.trim())
+            if (i < elements.size - 1) body.append(',')
+        }
+        return body.toString()
+    }
+
+    /** 关键字整词定位（大小写不敏感、两侧非标识符字符）。 */
+    private fun findKeywordIndex(line: String, keyword: String): Int {
+        var idx = 0
+        while (true) {
+            idx = line.indexOf(keyword, idx, ignoreCase = true)
+            if (idx < 0) return -1
+            val beforeOk = idx == 0 || !line[idx - 1].isLetterOrDigit() && line[idx - 1] != '_' && line[idx - 1] != '.'
+            val after = idx + keyword.length
+            val afterOk = after >= line.length || !line[after].isLetterOrDigit() && line[after] != '_'
+            if (beforeOk && afterOk) return idx
+            idx++
+        }
+    }
+
+    /** 与 openIdx 的 `(` 配对的 `)` 下标（嵌套计数；字符串字面量内的括号不计数）。 */
+    private fun matchParen(line: String, openIdx: Int): Int? {
+        var depth = 0
+        var i = openIdx
+        var inString = false
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '\'' -> inString = !inString
+                !inString && c == '(' -> depth++
+                !inString && c == ')' -> {
+                    depth--
+                    if (depth == 0) return i
+                }
+            }
+            i++
+        }
+        return null
+    }
+
+    /** 顶层逗号切分（括号深度 0 的逗号；字符串字面量内逗号不切）。 */
+    private fun splitTopLevel(text: String): List<String> {
+        val parts = ArrayList<String>()
+        var depth = 0
+        var inString = false
+        var start = 0
+        for (i in text.indices) {
+            val c = text[i]
+            when {
+                c == '\'' -> inString = !inString
+                !inString && c == '(' -> depth++
+                !inString && c == ')' -> depth--
+                !inString && c == ',' && depth == 0 -> {
+                    parts += text.substring(start, i)
+                    start = i + 1
+                }
+            }
+        }
+        parts += text.substring(start)
+        return parts
     }
 
     /** 分词（剔除空白——含 XML 动态标签展开残留空行）。 */

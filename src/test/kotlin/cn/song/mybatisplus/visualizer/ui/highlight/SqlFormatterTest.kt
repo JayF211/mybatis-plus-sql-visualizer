@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight
 
 import com.intellij.psi.TokenType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
@@ -569,17 +570,174 @@ class SqlFormatterTest {
     }
 
     @Test
-    fun testVerticalSelectFallsBackToFormat() {
-        // SELECT 已被 format 竖排 → 原样委托（输出逐字节一致）
-        val sql = "select id, name from t where id = 1 and status = 2"
+    fun testVerticalSelectExpandsHorizontalGroups() {
+        // T-VStack·扩面：SELECT 竖向排列 = format + IN 列表/ORDER BY/GROUP BY 纵向化（与 format 可区分）
+        val input = "select id, name from t where status in (1, 2, 3) group by a, b order by a desc, b asc"
+        val expected = """
+            SELECT
+                id,
+                name
+            FROM t
+            WHERE status IN
+            (
+                1,
+                2,
+                3
+            )
+            GROUP BY
+                a,
+                b
+            ORDER BY
+                a DESC,
+                b ASC
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalUpdateExpandsInList() {
+        // T-VStack·扩面：UPDATE SET 赋值清单维持 format 逐行，WHERE 侧 IN 列表纵向化
+        val input = "update t set name = 'x', age = 1 where id in (1, 2)"
+        val expected = """
+            UPDATE t
+            SET
+                name = 'x',
+                age = 1
+            WHERE id IN
+            (
+                1,
+                2
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalDeleteExpandsInList() {
+        // T-VStack·扩面：DELETE WHERE 侧 IN 列表纵向化
+        val input = "delete from t where id in (1, 2, 3)"
+        val expected = """
+            DELETE
+            FROM t
+            WHERE id IN
+            (
+                1,
+                2,
+                3
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalInSubqueryNotExpanded() {
+        // T-VStack·扩面：子查询 IN（元素首 token SELECT）不展开，保持 format 原样
+        val sql = "select id from t where id in (select user_id from orders where status = 1)"
         assertEquals(SqlFormatter.format(sql), SqlFormatter.formatVertical(sql))
     }
 
     @Test
-    fun testVerticalUpdateFallsBackToFormat() {
-        // UPDATE SET 赋值清单已被 format 竖排 → 原样委托
-        val sql = "update t set name = 'x', age = 1 where id = 1"
+    fun testVerticalInPlaceholderListExpanded() {
+        // T-VStack·扩面：占位符列表 IN (?, ?, ?) 纵向化
+        val input = "select id from t where station_id in (?, ?, ?)"
+        val expected = """
+            SELECT
+                id
+            FROM t
+            WHERE station_id IN
+            (
+                ?,
+                ?,
+                ?
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalOrderByFunctionAndQualifiedColumns() {
+        // T-VStack·扩面：ORDER BY 字段含函数/限定名——逐行且字段表达式完整
+        val input = "select id from t order by count(*), t.a"
+        val expected = """
+            SELECT
+                id
+            FROM t
+            ORDER BY
+                COUNT(*),
+                t.a
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalLimitCommaStaysInline() {
+        // T-VStack·扩面兜底：LIMIT 分页参数逗号不展开（T-M29.2 语义不碰）
+        val sql = "select id from t limit 10, 20"
         assertEquals(SqlFormatter.format(sql), SqlFormatter.formatVertical(sql))
+    }
+
+    @Test
+    fun testVerticalTwoInListsBothExpanded() {
+        // T-VStack·扩面：同一 WHERE 内双 IN 列表各自纵向化（风险①用例）
+        val input = "select id from t where a in (1, 2) and b in (3, 4)"
+        val expected = """
+            SELECT
+                id
+            FROM t
+            WHERE a IN
+            (
+                1,
+                2
+            )
+                AND b IN
+                (
+                    3,
+                    4
+                )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalExpandIdempotent() {
+        // T-VStack·扩面：展开产物再走一次竖向排列输出稳定（幂等）
+        val input = "select id, name from t where status in (1, 2) order by a desc, b asc"
+        val once = SqlFormatter.formatVertical(input)
+        assertEquals(once, SqlFormatter.formatVertical(once))
+    }
+
+    @Test
+    fun testVerticalExpandTokenFidelity() {
+        // T-VStack·扩面：展开只动空白——剔注释重分词 token 流与原文一致
+        val inputs = listOf(
+            "select id, name from t where status in (1, 2, 3) group by a, b order by a desc, b asc",
+            "update t set name = 'x' where id in (1, 2)",
+            "delete from t where id in (1, 2, 3)",
+            "select id from t where id in (select user_id from orders where status = 1)",
+            "select id from t limit 10, 20",
+        )
+        for (input in inputs) {
+            val output = SqlFormatter.formatVertical(input)
+            assertEquals(
+                "token 流应保真：$output",
+                semanticTokens(input),
+                semanticTokens(output),
+            )
+        }
+    }
+
+    @Test
+    fun testVerticalSelectFallsBackToFormat() {
+        // T-VStack·扩面：SELECT 退化断言反转——竖向排列不再等于 format（IN 列表纵向化）
+        val sql = "select id from t where id in (1, 2)"
+        assertNotEquals(SqlFormatter.format(sql), SqlFormatter.formatVertical(sql))
+    }
+
+    @Test
+    fun testVerticalUpdateFallsBackToFormat() {
+        // T-VStack·扩面：UPDATE 退化断言反转——WHERE IN 列表纵向化后有独立产出
+        val sql = "update t set name = 'x' where id in (1, 2)"
+        assertNotEquals(SqlFormatter.format(sql), SqlFormatter.formatVertical(sql))
     }
 
     @Test
