@@ -1122,13 +1122,24 @@ object DataSourceSelector {
                 com.intellij.openapi.vfs.VirtualFile::class.java,
             )
             attach.isAccessible = true
+            // T-PreviewSlow F2：不得用 ReadAction 包 attachConsole——DBN 的 attachConsole 底层要
+            // new EditorImpl，其构造里 setHighlighter 走 WriteIntentReadAction，平台锁层明文禁止
+            // 「在 read-action 内再开 write-intent-read-action」（真机日志 Caused by:
+            // IllegalStateException: WriteIntentReadAction can not be called from ReadAction
+            // ← EditorImpl.setHighlighter:1832 ← ConsoleExecutionEditor.<init>）。T-PreviewDocLock2
+            // F1 把它整段包进 ReadAction 压读权限断言，反而触发锁嵌套硬抛、被 runCatching 吞成
+            // InvocationTargetException: null → 控制台从未挂载成功。attachConsole 是平台自带读权限
+            // 与 invokeLaterIfNeeded 切 EDT 的第三方链入口，读权限由其内部自理，这里还原为直接插桩。
             val console = attach.invoke(null, project, session, vf)
             LOG.info("[M36] attachConsole -> $console")
             if (console == null) return
 
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
-            // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）
+            // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）。
+            // T-PreviewSlow F2：同样去掉 ReadAction 包裹——attachConsole 成功返回后 console 的文档
+            // 已由 DBN 正常挂载链在合法上下文构建；若真机仍刷「Read access」SEVERE，再单独为这一句
+            // 包 ReadAction（它不触发 WIRA，与 attachConsole 不同）。
             val document = consoleClass.getMethod("getDocument").invoke(console)
                 as? com.intellij.openapi.editor.Document
             // T-Perf-13：EDT 上不再 repeat(20){Thread.sleep(20)} 忙等编辑器实例（最多 400ms 冻结）——
