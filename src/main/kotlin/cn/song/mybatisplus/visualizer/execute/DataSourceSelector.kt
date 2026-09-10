@@ -47,7 +47,7 @@ object DataSourceSelector {
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
-    private const val BUILD_STAMP = "M36.7-hql-select-expand"
+    private const val BUILD_STAMP = "M36.8-exec-silent-noop"
 
     /** M36.5.76：OUTFILL 未锚定诊断日志节流（EDT 串行访问，无需同步）。 */
     private var lastOutFillDiagAt = 0L
@@ -107,6 +107,11 @@ object DataSourceSelector {
     /** M36.5.57：本次执行开始时 console history 的长度基线——早检只扫**本次执行之后**新增的
      * 文本，忽略 history 里的旧错误残留（否则正常 SQL 会把上个失败的错误"带过来"，用户实测）。 */
     private var consoleErrorBaseline: Int = 0
+
+    /** T-ExecSilentNoop：本次执行的提示已发出标记——8s 连接监控与 40 拍超时窗口共用，
+     * 保证同一次执行只报一次提示（此前二者各按同一 key 报一次，用户见两次红字）。 */
+    @Volatile
+    private var executionHintReported = false
 
     /**
      * M36.5.10：执行提交代际计数——executeQueries 提交经 DumbService.runWhenSmart 挂起期间，
@@ -496,6 +501,37 @@ object DataSourceSelector {
             val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer) ?: return 0
             (doc.javaClass.getMethod("getTextLength").invoke(doc) as? Int) ?: 0
         }.getOrDefault(0)
+    }
+
+    /**
+     * T-ExecSilentNoop F1a 探针：提交前的一次性可执行性预检 + 现场埋点。
+     *
+     * DBN 侧存在两条**全静默出口**（javap 实证，database-plugin.jar）：`chooseStatements`
+     * 空选集且 `execOutside==1` 时既不消费 model 也不提示、直接 return；`beforeExecuteQueries`
+     * 遇 `model.statements().isEmpty()` 或 `console.isValid()==false` 返回 false → 整段跳过。
+     * 两者都无输出、无结果 Tab、无异常。此探针把这两个出口对应的现场量提前照出来，
+     * 归因"查询没提交"具体撞的是哪一条，并据此决定是否走 `executeQueries(freshModel)` 兜底。
+     * 纯反射 + runCatching，任何一步失败降级为 null，绝不阻断执行。
+     *
+     * @return null 表示"DBN 侧可执行（或探不到），按 native 链走"；
+     *         非 null 表示"预检判定 DBN 侧会静默拒绝"，返回真实原因描述。
+     */
+    private fun execSilentProbe(
+        console: Any,
+        freshModel: Any?,
+        demoted: Boolean,
+        destDsName: String?,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ): String? {
+        LOG.info("[M36][EXEC] probe start (console isValid=${runCatching { console.javaClass.getMethod("isValid").invoke(console) }.getOrNull()}, " +
+            "freshModel stmts=${runCatching { freshModel?.javaClass?.getMethod("statements")?.invoke(freshModel) as? Iterable<*> }.getOrNull()?.toList()?.size}, " +
+            "ds=$destDsName)")
+        if (demoted) {
+            val reason = "freshModel demoted (vf PSI resolved 0 statements, fell back to console model)"
+            LOG.info("[M36][EXEC] probe demoted -> $reason")
+            return reason
+        }
+        return null
     }
 
     /**
@@ -1982,10 +2018,13 @@ object DataSourceSelector {
         ui: Any?,
         onResultsReady: ((javax.swing.JComponent) -> Unit)?,
         onError: ((String) -> Unit)?,
+        dsName: String? = sharedDataSourceName,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         // M36.5.52：新执行重置错误去重基线——本次执行产生的错误应上报，不与上次残留混淆。
         lastReportedError = null
+        // T-ExecSilentNoop：新执行亦重置提示去重标记——同一次执行只报一次提示。
+        executionHintReported = false
         // M36.5.57：记录本次执行开始时 console history 基线长度——早检只扫本次之后新增文本，
         // 忽略 history 残留（正常 SQL 不再"带过来"上个失败的错误）。
         consoleErrorBaseline = consoleHistoryLength(console)
@@ -2094,14 +2133,17 @@ object DataSourceSelector {
                                 }.getOrNull()
                             }
                             // 语句校验：vf PSI model 语句为空/反射异常 → 回退 console 内部 model
+                            var freshModelDemoted = false
                             if (freshModel != null && statementsInfo(freshModel).startsWith("count=0")) {
                                 LOG.warn("[M36] vf PSI model has 0 statements, fallback to console scriptModel")
                                 freshModel = null
+                                freshModelDemoted = true
                             }
                             if (freshModel == null) {
                                 freshModel = runCatching {
                                     consoleClass.getMethod("getScriptModel").invoke(console)
                                 }.getOrNull() ?: scriptModel
+                                freshModelDemoted = true
                             }
                             if (freshModel !== scriptModel) {
                                 preparedScriptModel = freshModel
@@ -2111,6 +2153,14 @@ object DataSourceSelector {
                                 "stmts=${statementsInfo(freshModel)}, vfPsiText tail=...${
                                     vfPsi?.text?.replace("\n", " ")?.takeLast(30)
                                 }")
+                            // T-ExecSilentNoop F1a：提交前预检——探测 DBN 会静默拒绝的现场。
+                            // demoted 时（vf PSI 解析 0 语句回落 console model）说明准备窗口不稳
+                            //（方言 push 未完成 / PSI 未对齐），优先走 executeQueries(freshModel) 兜底
+                            // 而非原生链，把"静默不执行"降级为"明确执行/明确报错"。
+                            // 保守起见只在 demoted 时强制降级；非 demoted 保持 native 链原行为，
+                            // 交由提交后的回执判定（afterSubmitted/startResultTabRetry）兜底。
+                            val demoteToFallback = freshModelDemoted
+                            execSilentProbe(console, freshModel, freshModelDemoted, dsName, LOG)
                             // M36.5.21c：执行链拆两段——vf PSI/model 探针在本 ReadAction 内；
                             // **原生 EDT 链挪到 ReadAction 外**（pooled 持读锁等 EDT、EDT 任务若需
                             // write 会死锁）。详见下方原生链处注释。
@@ -2118,7 +2168,7 @@ object DataSourceSelector {
                             val editorFinal = editor
                             val execOptionFinal = execOption
                             var nativeRun = false
-                            if (vfPsi != null) {
+                            if (vfPsi != null && !demoteToFallback) {
                                 val providerClass = Class.forName(CONSOLE_PROVIDER_CLASS)
                                 val findScriptModel = providerClass.getMethod(
                                     "findScriptModel",
@@ -2174,11 +2224,11 @@ object DataSourceSelector {
                                                             }, com.intellij.openapi.application.ModalityState.any())
                                                             return@submitTransactionLater
                                                         }
-                                                        LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
-                                                        doRunMethod.invoke(null, console, info)
-                                                        // 真实提交完成——此刻才启动结果监听
-                                                        LOG.info("[M36] native query SUBMITTED (starting result watch)")
-                                                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG)
+LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
+                                                    doRunMethod.invoke(null, console, info)
+                                                    // 真实提交完成——此刻才启动结果监听
+                                                    LOG.info("[M36] native query SUBMITTED (starting result watch)")
+                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false)
                                                     } catch (t: Throwable) {
                                                         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
                                                         LOG.warn(
@@ -2200,6 +2250,7 @@ object DataSourceSelector {
                                 }
                             }
                             if (!nativeRun) {
+                                LOG.info("[M36][EXEC] fallback path (native not used: ${if (demoteToFallback) "demoted" else "no vf psi or doRun missing"}), executeQueries(freshModel)")
                                 execute.invoke(console, editor, freshModel, execOption)
                                 submitted = true
                             }
@@ -2229,7 +2280,7 @@ object DataSourceSelector {
                     // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                     // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
                     if (submitted) {
-                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG)
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false)
                     }
                 }
             }
@@ -2261,6 +2312,8 @@ object DataSourceSelector {
         onResultsReady: ((javax.swing.JComponent) -> Unit)?,
         onError: ((String) -> Unit)?,
         LOG: com.intellij.openapi.diagnostic.Logger,
+        dsName: String? = null,
+        demotedOverride: Boolean = false,
     ) {
         // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
         swapGeneration++
@@ -2291,8 +2344,21 @@ object DataSourceSelector {
                         ns != null && ns.toString().isNotBlank()
                     }.getOrDefault(true)
                     if (!newTab && !namespaceOk) {
-                        LOG.info("[M36] no NEW result tab AND no namespace within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - credential/driver hint")
-                        hintOnError.invoke(MpSqlVisualizerBundle.message("execute.credential.hint"))
+                        // T-ExecSilentNoop：提交后 8s 回执——namespace 都出来了说明连接**已建立**、
+                        // 探针显示未提交（freshModel 回落）则归因"未提交"而非凭据；否则才落到
+                        // 凭据/驱动。与 40 拍窗口共用 executionHintReported 去重，同次执行只报一次。
+                        if (!executionHintReported) {
+                            executionHintReported = true
+                            val hint = if (demotedOverride) {
+                                MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
+                            } else {
+                                MpSqlVisualizerBundle.message("execute.credential.hint")
+                            }
+                            LOG.info("[M36] no NEW result tab AND no namespace within 8s (newTab=$newTab, namespaceOk=$namespaceOk, demotedOverride=$demotedOverride) - hint=${
+                                if (demotedOverride) "notSubmitted" else "credential"
+                            }")
+                            hintOnError.invoke(hint)
+                        }
                     } else {
                         LOG.info("[M36] result/layout OK within 8s (newTab=$newTab, namespaceOk=$namespaceOk) - no hint")
                     }
@@ -2321,7 +2387,7 @@ object DataSourceSelector {
             }
             // ④ 结果 Tab 监听（只认新 Tab 名）
             if (ui != null) {
-                startResultTabRetry(project, ui, onError, preExistingNames)
+                startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride)
             }
         }, com.intellij.openapi.application.ModalityState.any())
     }
@@ -2392,6 +2458,8 @@ object DataSourceSelector {
         onError: ((String) -> Unit)? = null,
         preExistingNames: Set<String> = emptySet(),
         generation: Int = swapGeneration,
+        dsName: String? = null,
+        demotedOverride: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val selectRetry = object : java.awt.event.ActionListener {
@@ -2472,13 +2540,26 @@ object DataSourceSelector {
                         // M36.5.48：优先取 console 真实错误文本（DBN 查询失败写入 history）；
                         // 读不到才 fallback 笼统 hint（超时/索引）。
                         val realError = extractConsoleError(sharedConsole ?: preparedConsole, LOG)
-                        val hint = realError
-                            ?: MpSqlVisualizerBundle.message(
-                                if (dumb) "execute.indexing.hint" else "execute.credential.hint",
-                            )
-                        ApplicationManager.getApplication().invokeLater({
-                            onError?.invoke(hint)
-                        }, com.intellij.openapi.application.ModalityState.any())
+                        // T-ExecSilentNoop：40 拍超时窗口与 8s 监控共用 executionHintReported 去重。
+                        // 真实错误优先（DBN 已把失败写进 history 才叫真失败/真超时）；无错误痕迹时
+                        // 不再一律归因凭据——先看本次是否探到"未提交"（freshModel 回落，DBN 侧静默
+                        // 拒绝），按情况给 notSubmitted / timeout / indexing 三种真实提示。
+                        if (realError == null && !executionHintReported) {
+                            executionHintReported = true
+                            val fallbackHint = when {
+                                dumb -> MpSqlVisualizerBundle.message("execute.indexing.hint")
+                                demotedOverride -> MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
+                                else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
+                            }
+                            LOG.info("[M36] result tab not appeared, no console error (dumb=$dumb, demoted=$demotedOverride) - hint via 40-tick window")
+                            ApplicationManager.getApplication().invokeLater({
+                                onError?.invoke(fallbackHint)
+                            }, com.intellij.openapi.application.ModalityState.any())
+                        } else if (realError != null) {
+                            ApplicationManager.getApplication().invokeLater({
+                                onError?.invoke(realError)
+                            }, com.intellij.openapi.application.ModalityState.any())
+                        }
                     }
                 }
             }
