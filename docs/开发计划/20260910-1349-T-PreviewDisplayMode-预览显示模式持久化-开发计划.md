@@ -1,7 +1,8 @@
 # T-PreviewDisplayMode：预览显示模式持久化（竖向排列/关键字换行输入参数后丢失）开发计划
 
 > **创建日期**：2026-09-10
-> **分支**：master（HEAD `f13dc60`；工作树含其余会话在途文档改动）
+> **状态**：✅ 已实施、已测试、已提交（master `7bf110e`，2026-09-10；SqlPreviewPanelTest 53/53 + 全量 3237/0/6 绿，sandbox-previewdm 隔离；runIde 真机走查留人工）
+> **分支**：master（HEAD `f13dc60`；`SqlPreviewPanel.kt` 含 T-PreviewTopOverlap 会话在途改动，本任务经索引级拆分提交，见 6.1）
 > **优先级**：P1（功能性缺陷——用户按主流程操作即触发，竖向排列/关键字换行两个功能实际不可用）
 > **预估工时**：3~4h（F1 模式状态 + F2 按钮接线 + F3 测试，单笔 feat 提交）
 > **来源**：用户真机反馈（2026-09-10，IDEA 2026.2.1）——点「竖向排列」后左侧参数输入框填入值，右侧竖排形态消失、退回 `format()` 形态
@@ -190,3 +191,18 @@ private fun applyDisplayMode(sql: String): String = when {
 - 竖排生效：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/assets/t-vstackpersist-vertical-ok.png`
 - 参数输入后丢失：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/assets/t-vstackpersist-after-param.png`
 - 关键证据：两图右侧同为 INSERT `user` 表，上图 VALUES 为「值 + `-- 列名`」逐行，下图退回 `VALUES ( password '123456', age 1, ?, ?, ... )` 同行——差异仅由左侧输入框填入 `user.age = 1` 引发。（临时需求图不入 `docs/images` 正式图档，按用户要求存本地记忆归档。）
+
+---
+
+## 实施记录（2026-09-10 交付，master `7bf110e`）
+
+**与计划的偏差**：
+
+1. **不引入"初值派生"这一步**：计划 F3 原写「面板初值 = 设置派生（formatSql → FORMAT / false → NORMAL）」，实施改为 `displayMode` 默认 `NORMAL`，并由 `applyDisplayMode` 的 NORMAL 分支继续交「SQL 格式化输出」设置决定——语义等价（默认观感与改动前逐字节一致）但少一处状态推导，且 FORMAT 模式因此获得"强制格式化"的独立含义（设置关闭时点格式化也能持续生效，正是缺陷的条件性分支）。`showResult` 因此完全不碰模式，"新预览保留模式"自然成立。
+2. **三个格式方法改走状态路径而非并存**：计划 F2 曾允许"按钮走状态 + 保留原方法直改文档"两条路径并存，实施后仍觉冗余——三个方法（含 `private formatClauseLine`）统一改为 `setDisplayMode(...)` 的薄封装，`toolbar()` 与 `Ctrl+Alt+L`（`reformatAction` → `formatSql()`）**一行未改**即获得持久语义；既有 `testVerticalButtonPresentAndFormatsInsert` / `testVerticalNonInsertFallsBackToFormat` / `testReformatShortcutFormatsSql` 三条用例不改自绿（它们断言的是产物形态，与新路径一致）。
+3. **压缩态切换格式族模式会一并退出压缩**：计划只写了"压缩优先"，实施补上这一条交互决策——否则压缩态点竖排会因短路而无任何可见效果（且"压缩态 + 已格式化文档"自相矛盾）。`toggleCompact()` 本身不改模式，故压缩后再切回多行时既有模式恢复。
+4. **测试 7 条**（计划列 7 条，全部落地）：竖排/关键字换行参数变更后保持、设置关闭时格式化保持、压缩优先且切回多行恢复、压缩态切换退出压缩、刷新复位模式、动态条件勾选重建后模式不丢（后者用含两字段 ORDER BY 的模型做断言物——竖排把它拆行而 format 保持同行，可真正区分模式是否生效）。
+
+**并行协调实际执行**：`SqlPreviewPanel.kt` 含 T-PreviewTopOverlap 会话在途改动（顶部元信息/更多菜单/截断），按 6.1 约定走 hash-object + update-index 索引级拆分——blob = HEAD 基底 + 本任务 8 处 hunk（逐个断言 anchor 在 HEAD 唯一命中），staged diff 仅含本任务、对方改动原样留工作树。跑 gradle 全程登记 T-PreviewDisplayMode/sandbox-previewdm 隔离，跑前按当日教训先清 `build/classes/java/main` 陈旧类目录。
+
+**验证结果**：SqlPreviewPanelTest 53/53（46 原有 + 7 新增）+ 全量 3237/0/6 绿。新增用例在旧实现下必红（参数变更后形态丢失），构成缺陷的直接锁定。runIde 真机走查（逐字段输入参数、切压缩再切回、刷新复位、复制 SQL 产物合法性、亮暗主题）留人工。
