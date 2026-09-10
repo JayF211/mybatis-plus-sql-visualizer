@@ -59,6 +59,13 @@ data class LogSqlEntry(
      * 产生该 SQL 的源码行号（0 表示未知）。
      */
     val sourceLine: Int = 0,
+    /**
+     * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
+     * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
+     * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
+     * （历史文件读回、日志转 SQL round-trip 产出的条目）。
+     */
+    val sequenceNumber: Long = 0L,
 ) {
     /**
      * T-Perf-19（自 dev 移植）：去重键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
