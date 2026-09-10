@@ -218,4 +218,21 @@ dev 侧 5 条 T-ListMode 用例（单行恒单行走不走片段缓存 / 关键�
 
 ## 九、实施记录（回填）
 
-（实施完成后回填）
+- **Wave 0**：备份分支 `dev-backup-pre-master-merge-20260910`（= `c423986`）已打；并行登记表 check 无活跃任务，本次以 `T-MergeMasterIntoDev` / `sandbox-mergedev` 登记。
+- **Wave 1**：`git merge master` 起手即复现预演的 10 文件 11 冲突块，无一例外。CHANGELOG.md 按第三节归一并集，落盘 736 行全 LF（`git cat-file blob` 复核 `crlf=0`）；变更记录并集 175 行（dev 163 ∪ master 170，双侧重复的 20260908 自动监听两行去重），日期倒序无重复行；其余 8 文件按第五节逐块解决。
+- **踩坑（本次最重要教训）**：首轮对 `PluginSettings.kt` / `JpaGutterLineMarkerProvider.kt` / `DataSourceSelector.kt` / `SqlLogManagerAutoShowTest.kt` 四文件用了 `git checkout --ours/--theirs -- <file>` 整取一边——编译立刻报 `SqlExecutor.kt:102 Unresolved reference 'releaseForPanel'`，暴露 `DataSourceSelector.kt` 的 dev 侧自动合并区成果（T-Perf-13 `prepareAfterEditorResolved` 异步准备链、T-Perf-16 `releaseForPanel`、runRunner 双参）被整取抹掉。改法：用 `git merge-file -p ours base theirs` 复现 git 的自动合并结果（已与 `merge-tree` 预演产物逐字节比对确认一致），再**只替换冲突块**重做三个文件，`SqlLogManagerAutoShowTest.kt`（add/add）以预演产物为底同法重做。修复后 `releaseForPanel`/`prepareAfterEditorResolved`/`silent = true` 全部回归。
+- **回归修复（1 处）**：首跑全量 3693 例中 `JpaGutterLineMarkerProviderTest.testInterfaceWithoutRepositoryExtendsZeroMarker` 红——初版计划判定「master 的 `isInRepositoryInterface` 被 dev 结构吸收、是冗余前置」被实测证伪：dev 的 `DerivedMethodLocator.isRepositoryInterface` 路径 2 是「接口名以 `Repository` 结尾」启发式，会放行未 extends Repository 基类的裸接口 `UserRepository`，正是 M38.1 负例回归集要拦的误报面。改为把 `isInRepositoryInterface(method)` 收窄落到派生锚点分支内（`isInRepositoryInterface(method) && DerivedMethodLocator.isRepositoryMethod(method)`）并补回该 helper，定向 JpaGutter 9/9 + GutterIconDedup 14/14 绿。
+- **Wave 2 语义清扫**：`collapsedGroups` 合并后零读零写，按 master 处置删除；`logStopOnToolWindowClose` 消费链完整（`ToolWindowVisibilityListener` 隐藏沿读 `getLogStopOnToolWindowClose()` → `stopCapture`）；bundle zh/en 548/548 键完全对称、零重复键；`sequenceNumber`×(T-Perf-19 指纹键)×(T-ListMode 片段缓存) 为干净并集，`sequenceCounter` 两处归零齐全；`isModuleBasedLaunch` 主配置门控与编译期 `subscribe` 直调并集。master 九项与 dev 七项特征逐一 grep 确认在位，无一丢失。
+- **Wave 3**：全量 `./gradlew test`（`--no-daemon`）**3693 tests / 0 failures / 0 errors / 6 skipped 绿**，286 个测试类。较 dev 合并前 3547 基线 +146（master 侧 T-LogRowNumber / T-RefreshDbSteal / T-ExecCopyFix / T-PreviewFlash / T-AutoShowRecover / T-PortLossBatch1 用例并入）。
+- **Wave 4**：`./gradlew verifyPlugin --no-daemon` **BUILD SUCCESSFUL**（7m27s），三目标报告 `verification-verdict.txt` 均 **Compatible**：
+
+  | 目标 | 结论 | scheduled-for-removal | deprecated | experimental |
+  |---|---|---|---|---|
+  | IU-243.28141.41 | Compatible | 1 | 3 | 10 |
+  | IU-253.33514.17 | Compatible | 1 | 6 | 10 |
+  | IU-262.9437.185 | Compatible | 1 | 44 | 10 |
+
+  计数说明：均为 warning 级，不阻断发布。与 dev 合并前对比用源码级 grep 代理（`JavaLanguage.INSTANCE` / `getVirtualFilesByName` / `BrowseNotificationAction` / `StdLanguages.JAVA` / `getFilesByName` / `setListener` 六项计数，dev 合并前与合并后**逐一相同**），确认本次合并没有引入新的弃用用法；262 的 44 高于 master 记录的 38，来源是 dev 侧更大的 API 面（M39 JPA / M44 ORM / T-Perf 系列），非本次合并所致（dev 合并前未跑过 verifyPlugin 留基线，此项为推断而非实测，如实标注）。
+- `buildPlugin` 出产物 `build/distributions/mybatis-plus-sql-visualizer-2026.9.9.zip`。
+- **commit**：合并提交 `d5130ab`，正文四段式列 11 冲突块逐块解决明细 + 自动合并区语义核验 + 整取踩坑留档。
+- **未做**：不主动 push（依惯例留待用户决定）；runIde 真机验证项留人工（行号显示与启动清零、预览刷新后 DBN 工具栏、单击预览闪烁、临时文件失败文案、JPA gutter 三锚点与裸接口负例）。
