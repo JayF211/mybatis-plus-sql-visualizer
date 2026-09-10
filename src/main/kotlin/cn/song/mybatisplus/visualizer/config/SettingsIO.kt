@@ -30,6 +30,7 @@ object SettingsIO {
         appendLine("  \"dialect\": ${jsonString(state.dialect)},")
         appendLine("  \"replaceParams\": ${state.replaceParams},")
         appendLine("  \"formatSql\": ${state.formatSql},")
+        appendLine("  \"verticalPairAnnotation\": ${state.verticalPairAnnotation},")
         appendLine("  \"injectLogicDelete\": ${state.injectLogicDelete},")
         appendLine("  \"logicDeleteValue\": ${jsonString(state.logicDeleteValue)},")
         appendLine("  \"injectTenantLine\": ${state.injectTenantLine},")
@@ -71,6 +72,7 @@ object SettingsIO {
         map.getString("dialect")?.let { state.dialect = it }
         map.getBoolean("replaceParams")?.let { state.replaceParams = it }
         map.getBoolean("formatSql")?.let { state.formatSql = it }
+        map.getBoolean("verticalPairAnnotation")?.let { state.verticalPairAnnotation = it }
         map.getBoolean("injectLogicDelete")?.let { state.injectLogicDelete = it }
         map.getString("logicDeleteValue")?.let { state.logicDeleteValue = it }
         map.getBoolean("injectTenantLine")?.let { state.injectTenantLine = it }

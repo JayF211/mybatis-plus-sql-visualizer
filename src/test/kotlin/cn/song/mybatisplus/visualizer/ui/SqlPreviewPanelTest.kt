@@ -952,6 +952,32 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testVerticalAnnotationFollowsSetting() {
+        // T-VPairAnno：设置关闭 → 竖排保持但行尾无配对标注；恢复开启（默认）→ 标注回来
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val sql = "insert into `user` (username, password) values ('zhangsna', '123456')"
+        try {
+            settings.verticalPairAnnotation = false
+            val panel = SqlPreviewPanel(project)
+            panel.showResult(result(sql = sql, compact = sql))
+            panel.formatVertical()
+            val off = panel.editorForTest()!!.document.text
+            assertTrue("竖排形态应保持：$off", off.contains("VALUES\n(") && off.contains("'zhangsna',"))
+            assertFalse("行尾不应有配对标注：$off", off.contains("-- username"))
+            panel.clear()
+
+            settings.verticalPairAnnotation = true
+            val panel2 = SqlPreviewPanel(project)
+            panel2.showResult(result(sql = sql, compact = sql))
+            panel2.formatVertical()
+            val on = panel2.editorForTest()!!.document.text
+            assertTrue("恢复开启后应重新标注：$on", on.contains("-- username") && on.contains("-- password"))
+            panel2.clear()
+        } finally {
+            settings.verticalPairAnnotation = true
+        }
+    }
+
     // ------------------------------------------------------------------
     // T-PreviewDisplayMode：显示模式在重渲染后保持（用户实测：输入参数后竖排消失）
     // ------------------------------------------------------------------
