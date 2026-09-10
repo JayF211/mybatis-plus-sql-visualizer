@@ -17,7 +17,7 @@ class ConsoleReplayGuardTest {
         docStamp: Long = 1L,
         lineText: String = "line",
         line0Text: String? = null,
-    ): Decision = guard.decide(endOffset, docStamp, lineText, line0Text)
+    ): Decision = guard.decide(endOffset, docStamp, lineText) { line0Text }
 
     @Test
     fun `流式递增逐行 Process 且水位前移`() {
@@ -75,5 +75,21 @@ class ConsoleReplayGuardTest {
         assertEquals(Decision.Process, decide(g, endOffset = 3, docStamp = Long.MIN_VALUE, lineText = "a"))
         // 后续正常递增
         assertEquals(Decision.Process, decide(g, endOffset = 5, docStamp = Long.MIN_VALUE, lineText = "ab"))
+    }
+
+    @Test
+    fun `行0提供者惰性求值_流式与纯重放零调用_混合态恰一次`() {
+        // T-PerfSweep F1：行 0 文本只在混合态分支才需要——提供者必须惰性求值
+        val g = ConsoleReplayGuard()
+        var calls = 0
+        val provider = { calls += 1; "X" }
+        // 流式推进（水位前移）
+        assertEquals(Decision.Process, g.decide(10, 1L, "a", provider))
+        // 纯重放（endOffset 回落、stamp 未变）
+        assertEquals(Decision.Replay, g.decide(5, 1L, "r", provider))
+        assertEquals("流式/纯重放路径不得求值行 0 文本", 0, calls)
+        // 混合态（stamp 变化）——恰求值一次
+        assertEquals(Decision.Replay, g.decide(3, 2L, "X", provider))
+        assertEquals("混合态分支恰求值一次", 1, calls)
     }
 }

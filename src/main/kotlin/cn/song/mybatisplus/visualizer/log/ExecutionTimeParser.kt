@@ -35,6 +35,13 @@ object ExecutionTimeParser {
     /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
     private val TRAILING_MS_REGEX = Regex("""[\]\s]\s*(\d+)\s*ms\s*$""", RegexOption.MULTILINE)
 
+    /** 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。 */
+    private val customPrefixRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
+    private fun customPrefixRegex(customPrefix: String): Regex = customPrefixRegexCache.computeIfAbsent(customPrefix) {
+        Regex("""(?i)${Pattern.quote(it)}\s*(\d+)\s*ms?\b""")
+    }
+
     /**
      * 从日志文本中解析执行耗时（毫秒）。
      *
@@ -71,11 +78,9 @@ object ExecutionTimeParser {
         TRAILING_MS_REGEX.find(text)?.let {
             return it.groupValues[1].toLongOrNull()
         }
-        // 7. 自定义前缀（动态构建正则）
+        // 7. 自定义前缀（T-PerfSweep F2：正则按前缀缓存，捕捉热路径不再每条动态编译）
         if (!customPrefix.isNullOrBlank()) {
-            val escaped = Pattern.quote(customPrefix)
-            val dynamicRegex = Regex("""(?i)$escaped\s*(\d+)\s*ms?\b""")
-            dynamicRegex.find(text)?.let {
+            customPrefixRegex(customPrefix).find(text)?.let {
                 return it.groupValues[1].toLongOrNull()
             }
         }
