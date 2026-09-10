@@ -117,3 +117,16 @@
 - 生产代码 100% Java，无 .kt 混入；`git diff 299607e..2543203` 的生产/测试/资源/文档四类全部落地（或明确记录豁免）。
 - 全量测试 0 失败 0 错误（预期总数 ≥3230，新增用例数以实际为准）；verifyPlugin 三目标 Compatible。
 - .port-sync 锚点 = 2543203 全 SHA；三册 union 后 k2j 专属行无损。
+
+## 8. 实施记录（2026-09-11 收官回填）
+
+按计划 W1~W5 全部落地，提交链：33d97d8 计划 → 29a1110 生产 → 225f2b0 测试 → 5a7d5bb 资源/文档 → 本收官提交。
+
+- **生产（W2，16 文件）**：§3.1 矩阵 15 文件全落地（LogSqlRestorer 拆 `LogSqlRestorer.java`（restore 按位替换）+ `LogSqlRestorerKt.java`（placeholderPositions）；SqlFormatter 局部类/局部函数按 §5 收敛为 `VerticalState`/`VerticalLine` 静态嵌套状态机；SqlPreviewPanel 嵌套 enum + MetaPerfSegment record + 更多菜单 BaseListPopupStep）。compileJava 绿后提交。
+- **测试（W3，16 文件）**：§3.2 矩阵全落地——9 修改（6 .kt 增量编辑 + DualParser/HibParser/LogEntryPreviewRecognizer/SqlLogEntryBuffer/SqlLogManagerBehavior/VersionComparator 六 .java 增量翻译）+ SqlPreviewPanelTest.java 追加 9 方法（显示模式保持性/压缩优先级/竖排按钮等）+ SqlFormatterTest.kt 追加 31 用例（`annotatePairs = false` 命名实参机械化转位置实参）+ 4 新建 .kt（ExecSilentNoopHint 纯逻辑直取 / HibDualCopy record 访问器方法调用化 / ParamField + TopRowLayout PreviewResult 20 参位置实参适配）。
+- **资源/文档（W4，24 文件）**：bundle 六键 + gradle.properties 2026.9.10 + build.gradle.kts changeNotes 9.10 段（Lombok 注释/test sourceSets/compilerArgs 等自有块保留，sandboxContainer 临时行用后已还原）+ preview.update.json 直取（无尾随换行保持一致）+ docs 16 件直取 + 三册 union。
+- **CHANGELOG union 特例（计划外）**：master 在 v2026.9.10 发行时把锚点期 Unreleased 的 T-PreviewFlash/T-DepApi/T-ExecCopyFix/T-RefreshDbSteal 四条**直接删除未搬入 9.10 段**，merge-file --union 的「删除侧胜出」吞掉 k2j 保留行（双向校验捕获 5 行丢失）——改手工方案：k2j 现有内容原样保留 + master 的 [2026.9.10] 段插入 [2026.9.9] 之前，双向零丢失复核通过。
+- **编译期三修**：LogSqlRestorerKt 缺 java.util 导入；SqlLogManagerBehaviorTest/SqlPreviewPanelTest 新增方法里 `project` 是 Kotlin 属性名，Java 侧须 `getProject()`；MpSqlVisualizerBundle 在 SqlPreviewPanelTest 无 import 改全限定名。
+- **全量（W5 门禁）**：`./gradlew test`（独立沙盒 k2jsync32）**3261/0/0/6 绿，263 套件**（较 T-SyncK2JMaster14 基线 3195 +66，套件数与 master 同为 263）。
+- **verifyPlugin 三目标**：buildPlugin + verifyPlugin（243/253/262）BUILD SUCCESSFUL，三报告均 **Compatible**，Dynamic Plugin Eligibility 通过。弃用计数 **243:4 / 253:7 / 262:41**（262 较上轮基线 39 **+2**，归因本轮新增两处 `ReadAction.compute(ThrowableComputable)` 站点：ProjectTypeDetector.detect / SqlPreviewPanel.createEditor——与 master 本轮完全同源，报告逐条核实；243/253 不变、experimental 6 不变），无 compatibility problem。
+- **锚点**：.port-sync synced_master → 254320340ecfd38443e589b6c35daba0dc859c0f（2543203）。push 留用户 GUI。
