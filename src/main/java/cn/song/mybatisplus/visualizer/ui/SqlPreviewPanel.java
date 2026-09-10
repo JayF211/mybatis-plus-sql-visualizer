@@ -71,6 +71,9 @@ import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory;
 import com.intellij.openapi.keymap.KeymapManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.ui.popup.JBPopupFactory;
+import com.intellij.openapi.ui.popup.PopupStep;
+import com.intellij.openapi.ui.popup.util.BaseListPopupStep;
 import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.TextRange;
@@ -82,6 +85,7 @@ import com.intellij.psi.PsiFileFactory;
 import com.intellij.psi.PsiManager;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.TitledSeparator;
+import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
 import com.intellij.ui.components.JBScrollPane;
@@ -107,6 +111,8 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.GridLayout;
+import java.awt.Insets;
+import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ComponentAdapter;
@@ -157,7 +163,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     /** T-PreviewFlash：EDT 等待预热产物的轮询间隔与超时（毫秒）。 */
     static final long PREWARM_POLL_MS = 20L;
-    static final long PREWARM_WAIT_MS = 2000L;
+    /** T-PreviewSlow F1：把「EDT 同步自旋等预热产物」的预算从 2000ms 砍到 60ms——
+     *  冷启动时预热线程（同步 VFS refresh + PSI findFile）常跑几百毫秒到数秒，EDT 干等
+     *  到 2000ms 会把延迟烧进 UI 线程（真机日志双击→createEditor 达 3.07s）。降到经验值
+     *  60ms：预热线程已就绪（面板再开/热态）立刻命中走 PSI 主路径，冷启动第一拍直接降级
+     *  纯内存编辑器不烧 EDT；预热完成后下次打开即自愈走回 PSI 高亮/补全路径。 */
+    static final long PREWARM_WAIT_MS = 60L;
+
+    /** T-PreviewTopOverlap F3：元信息宽度预算下限（px）——极窄时保底可读，超出仍由 ellipsize 收。 */
+    private static final int MIN_META_BUDGET_PX = 80;
 
     private static final Pattern NUMBER_REGEX = Pattern.compile("-?\\d+(\\.\\d+)?");
     private static final Pattern WHITESPACE_REGEX = Pattern.compile("\\s+");
@@ -165,6 +179,21 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private final Project project;
 
     private final JBLabel metaLabel = new JBLabel();
+
+    // T-PreviewTopOverlap F1/F3：顶部行与工具栏提升为字段——布局断言（topRowForTest/toolbarForTest）
+    // 与宽度预算计算（applyMetaTruncation 需工具栏理想宽）使用
+    private JBPanel<JBPanel<?>> topRow = null;
+    private JBPanel<JBPanel<?>> toolbarPanel = null;
+
+    // T-PreviewTopOverlap F3：元信息原文缓存——metaLineText 第一行（meta+警示，纯文本）、
+    // metaPerfSegments 第二行分段（可见文本+颜色）；tooltip 恒全文，label 文本按预算重拼
+    private String metaLineText = "";
+    private List<MetaPerfSegment> metaPerfSegments = List.of();
+    private int lastMetaBudget = -1;
+
+    /** F3：perf 建议分段（可见文本 + HTML 颜色值），截断时按预算丢尾段。 */
+    private record MetaPerfSegment(String text, String color) {
+    }
 
     private final AnAction reformatAction = new AnAction() {
         @Override
@@ -242,6 +271,23 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     private PreviewResult current = null;
     private boolean compactMode = false;
+
+    /**
+     * T-PreviewDisplayMode：编辑器显示模式。
+     *
+     * 编辑器文本是「模型派生视图」——参数输入/条件勾选/foreach 次数/压缩切换等任何变更都会
+     * renderSql 全量重建并整篇覆盖文档，因此<b>一次性文档变换必被下一次重建抹掉</b>（早期三个
+     * 格式按钮直接 setText 的写法：竖向排列/关键字换行无条件丢失，格式化仅在设置开启且非压缩
+     * 时因 showSql 里那句 format() 而"看似保留"）。模式改存状态、由 applyDisplayMode 在
+     * 渲染管线中统一套用，重建后形态保持。
+     */
+    private PreviewDisplayMode displayMode = PreviewDisplayMode.NORMAL;
+
+    /** T-PreviewDisplayMode：预览编辑器显示模式（见 displayMode 字段注释）。 */
+    public enum PreviewDisplayMode {
+        NORMAL, FORMAT, KEYWORD_WRAP, VERTICAL
+    }
+
     private String previousSql = null;
 
     private final DiagramPanel diagramPanel;
@@ -280,13 +326,28 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         this.project = project;
         this.diagramPanel = new DiagramPanel(project);
 
+        // T-PreviewTopOverlap F1：metaLabel 从 WEST 迁 CENTER——BorderLayout 的 WEST/EAST 各按
+        // 理想宽整块贴边绝不收缩，两偏好宽之和超容器宽时直接互相重叠（用户真机截图实锤：元信息
+        // 文字压进按钮行）；CENTER 只拿剩余宽度，与 EAST 结构性零重叠。宽度不足由 F3 截断兜底。
         metaLabel.setBorder(JBUI.Borders.empty(0, 8, 4, 8));
-        JBPanel<JBPanel<?>> topRow = new JBPanel<JBPanel<?>>(new BorderLayout()) {{
-            add(metaLabel, BorderLayout.WEST);
-            add(toolbar(), BorderLayout.EAST);
-            setBorder(JBUI.Borders.empty(4, 8, 2, 8));
-        }};
+        topRow = new JBPanel<JBPanel<?>>(new BorderLayout());
+        topRow.add(metaLabel, BorderLayout.CENTER);
+        toolbarPanel = toolbar();
+        topRow.add(toolbarPanel, BorderLayout.EAST);
+        topRow.setBorder(JBUI.Borders.empty(4, 8, 2, 8));
         add(topRow, BorderLayout.NORTH);
+        // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
+        topRow.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                applyMetaTruncation();
+            }
+
+            @Override
+            public void componentShown(ComponentEvent e) {
+                applyMetaTruncation();
+            }
+        });
 
         ThemedSplitPane split = new ThemedSplitPane(paramScroll, editorHolder);
         split.setResizeWeight(0.3);
@@ -408,11 +469,54 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         bar.add(modeButton);
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.format"), this::formatSql));
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap"), this::formatClauseLine));
-        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.param.import"), this::importParamsFromClipboard));
-        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.compare"), this::showSqlDiff));
-        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.share"), this::showShareDialog));
+        // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
+        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.vertical"), this::formatVertical));
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.refresh"), this::refreshView));
+        // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
+        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.more"), this::showMoreActionsPopup));
         return bar;
+    }
+
+    /** F2：「更多」折叠菜单的三项低频动作（文案键沿用原工具栏按钮，执行体一字不差）。 */
+    private List<kotlin.Pair<String, Runnable>> moreActions() {
+        List<kotlin.Pair<String, Runnable>> actions = new ArrayList<>();
+        actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.param.import"), (Runnable) this::importParamsFromClipboard));
+        actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.compare"), (Runnable) this::showSqlDiff));
+        actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.share"), (Runnable) this::showShareDialog));
+        return actions;
+    }
+
+    /**
+     * F2：弹出「更多」折叠菜单（锚定按钮下方；JBPopupFactory + BaseListPopupStep 路线为本项目
+     * 现网先例：SqlClickPreview / DataSourceSelector）。show 依赖真实屏幕，测试只构造 step 不弹层。
+     */
+    private void showMoreActionsPopup() {
+        List<kotlin.Pair<String, Runnable>> actions = moreActions();
+        JButton anchor = null;
+        for (Component c : toolbarPanel.getComponents()) {
+            if (c instanceof JButton) anchor = (JButton) c;
+        }
+        if (anchor == null) return;
+        JBPopupFactory.getInstance()
+                .createListPopup(moreActionsStep(actions))
+                .show(new RelativePoint(anchor, new Point(0, anchor.getHeight())));
+    }
+
+    /** F2：构造折叠菜单 step（独立可测——items 与 onChosen 委托可直接断言，无需真实弹层）。 */
+    private BaseListPopupStep<String> moreActionsStep(List<kotlin.Pair<String, Runnable>> actions) {
+        List<String> titles = actions.stream().map(kotlin.Pair::getFirst).collect(Collectors.toList());
+        return new BaseListPopupStep<String>(null, titles) {
+            @Override
+            public PopupStep<?> onChosen(String selectedValue, boolean finalChoice) {
+                for (kotlin.Pair<String, Runnable> action : actions) {
+                    if (action.getFirst().equals(selectedValue)) {
+                        action.getSecond().run();
+                        break;
+                    }
+                }
+                return PopupStep.FINAL_CHOICE;
+            }
+        };
     }
 
     /** 执行 SQL（M36）。 */
@@ -1040,7 +1144,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
     }
 
-    /** 刷新视图（M19.3）：模式复位为与设置「SQL 格式化输出」对齐。 */
+    /**
+     * 刷新视图（M19.3）：模式<b>复位为与设置「SQL 格式化输出」对齐</b>（默认多行）后重渲染编辑器——
+     * 用户实测：点刷新后 SQL 仍停留在压缩模式（此前手动切换/设置快照的压缩被保留）；
+     * 刷新 = 回到默认状态（参数与回填保留，仅模式复位）。
+     *
+     * T-PreviewDisplayMode：显示模式一并复位为 NORMAL（即回到设置派生形态——设置开启为格式化、
+     * 关闭为原样），与「刷新=回到默认状态」语义一致，竖排/关键字换行不跨刷新残留。
+     */
     public void refreshView() {
         // T-RefreshDbSteal：刷新是唯一常规触达共享控制台文档的按钮（WriteCommandAction），
         // 入口记 4 态快照——真机复现时对照判归属
@@ -1051,6 +1162,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                         + ", embedded=" + System.identityHashCode(embeddedConsole)
                         + ", attachedToMe=" + consoleAttachedToMe());
         compactMode = !formatSqlSetting();
+        displayMode = PreviewDisplayMode.NORMAL;
         modeButton.setText(modeButtonText());
         renderSql();
     }
@@ -1063,23 +1175,80 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
     }
 
-    /** 格式化当前编辑器 SQL。 */
-    public void formatSql() {
-        Document doc = nativeEditorDoc != null ? nativeEditorDoc : (editor != null ? editor.getDocument() : null);
-        if (doc == null) return;
-        String formatted = SqlFormatter.INSTANCE.format(doc.getText());
-        if (!formatted.equals(doc.getText())) {
-            WriteCommandAction.runWriteCommandAction(project, () -> doc.setText(formatted));
+    /**
+     * T-VPairAnno：竖向排列 VALUES 行尾配对列名标注开关；环境异常兜底 true（保持默认标注）。
+     * 与 formatSqlSetting 同构——保存后的下一次渲染生效，不做已开弹窗即时推送。
+     */
+    private boolean verticalPairAnnotationSetting() {
+        try {
+            return PluginSettings.getInstance().getState().getVerticalPairAnnotation();
+        } catch (Throwable t) {
+            return true;
         }
     }
 
-    private void formatClauseLine() {
-        Document doc = nativeEditorDoc != null ? nativeEditorDoc : (editor != null ? editor.getDocument() : null);
-        if (doc == null) return;
-        String formatted = SqlFormatter.INSTANCE.formatClauseLine(doc.getText());
-        if (!formatted.equals(doc.getText())) {
-            WriteCommandAction.runWriteCommandAction(project, () -> doc.setText(formatted));
+    /**
+     * T-PreviewDisplayMode：按当前显示模式变换渲染文本（showSql 的唯一收敛点调用）。
+     *
+     * 优先级：压缩模式最高——压缩语义是"全部挤一行"，而模式变换会引入换行，二者相抵故短路；
+     * 其余按模式分派：NORMAL 交「SQL 格式化输出」设置决定（保持设置关闭时不格式化的既有语义）、
+     * FORMAT 强制格式化、KEYWORD_WRAP / VERTICAL 走对应变换（二者对非 INSERT 已内含 format，
+     * 无需叠加）。
+     */
+    private String applyDisplayMode(String sql) {
+        if (compactMode) return sql;
+        switch (displayMode) {
+            case NORMAL:
+                return formatSqlSetting() ? SqlFormatter.INSTANCE.format(sql) : sql;
+            case FORMAT:
+                return SqlFormatter.INSTANCE.format(sql);
+            case KEYWORD_WRAP:
+                return SqlFormatter.INSTANCE.formatClauseLine(sql);
+            case VERTICAL:
+                return SqlFormatter.INSTANCE.formatVertical(sql, verticalPairAnnotationSetting());
+            default:
+                return sql;
         }
+    }
+
+    /**
+     * T-PreviewDisplayMode：切换编辑器显示模式并重渲染（格式族按钮与 Ctrl+Alt+L 快捷键的统一入口）。
+     *
+     * 与旧实现的区别：不再直接对文档做一次性变换，而是记录模式后交渲染管线产出——这样参数输入、
+     * 条件勾选、foreach 次数增减等任何重建都不会再把竖排/关键字换行形态抹掉。
+     *
+     * 压缩模式下切换格式族模式会一并退出压缩：否则模式被压缩短路、点击无可见效果（且"压缩态 +
+     * 已格式化文档"是自相矛盾的中间态）。
+     */
+    public void setDisplayMode(PreviewDisplayMode mode) {
+        displayMode = mode;
+        if (compactMode) {
+            compactMode = false;
+            if (modeButton != null) modeButton.setText(modeButtonText());
+        }
+        renderSql();
+    }
+
+    /**
+     * 格式化当前编辑器 SQL（关键字大写 / 子句换行 / 条件缩进，SqlFormatter）。
+     * T-PreviewDisplayMode：等价于「格式化」按钮——设 FORMAT 模式后由渲染管线套用（形态在参数
+     * 变更后保持）；不再需要直接改文档，故改走状态路径。
+     */
+    public void formatSql() {
+        setDisplayMode(PreviewDisplayMode.FORMAT);
+    }
+
+    /** 关键字换行格式化：子句顶格换行、同行内容压一行（SqlFormatter.formatClauseLine）。 */
+    private void formatClauseLine() {
+        setDisplayMode(PreviewDisplayMode.KEYWORD_WRAP);
+    }
+
+    /**
+     * 竖向排列格式化：INSERT 列清单/VALUES 逐行竖排、值行尾标注配对列名（SqlFormatter.formatVertical）。
+     * T-VPairAnno：标注是否追加由设置 verticalPairAnnotation 控制（默认开）。
+     */
+    public void formatVertical() {
+        setDisplayMode(PreviewDisplayMode.VERTICAL);
     }
 
     private Shortcut[] reformatShortcuts() {
@@ -1090,7 +1259,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         };
     }
 
-    /** 压缩 / 多行切换。 */
+    /** 压缩 / 多行切换。T-PreviewDisplayMode：不改显示模式——切回多行时既有模式（如竖排）恢复。 */
     public boolean toggleCompact() {
         compactMode = !compactMode;
         renderSql();
@@ -1183,9 +1352,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         batchSelectNoneButton = null;
         paramPanel.removeAll();
         previousSql = null;
+        // T-PreviewDisplayMode：显示模式随面板清空复位（与其余会话状态一致，不跨预览残留）
+        displayMode = PreviewDisplayMode.NORMAL;
         releaseEditor();
         editorHolder.removeAll();
         metaLabel.setText("");
+        // T-PreviewTopOverlap F3：元信息原文缓存随清空复位（下次 updateMeta 重建）
+        metaLineText = "";
+        metaPerfSegments = List.of();
+        lastMetaBudget = -1;
         removeDiagramTab();
         diagramPanel.clear();
         clearNativeDiagram();
@@ -1207,7 +1382,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // 丢失路径必经此方法（三个静默分支之一吞掉了渲染），带分支标签定位
         Logger fLogger = Logger.getInstance(SqlPreviewPanel.class);
         String withFill = appendFillSection(sql);
-        String text = (formatSqlSetting() && !compactMode) ? SqlFormatter.INSTANCE.format(withFill) : withFill;
+        // T-PreviewDisplayMode：显示模式在渲染管线内统一套用（唯一收敛点——XML/批量/模型/旧文本
+        // 四条重建路径都经此处，故参数输入/勾选/foreach 变更后形态保持）
+        String text = applyDisplayMode(withFill);
         // M36.4：优先写入原生编辑器文档（内嵌后）
         Document nativeDoc = nativeEditorDoc;
         if (nativeDoc != null) {
@@ -1285,19 +1462,47 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
             // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
-            Pair<VirtualFile, PsiFile> ready = awaitPrewarmedTempFile();
-            if (ready == null) throw new IllegalStateException("无法创建 SQL 预览临时文件");
-            VirtualFile vFile = ready.getFirst();
-            PsiFile psi = ready.getSecond();
-            previewTempFile = vFile;
-            psiFile = psi;
-            Document doc = PsiDocumentManager.getInstance(proj).getDocument(psi);
-            if (doc == null) throw new IllegalStateException("临时 SQL 文件无关联文档");
-            if (!doc.getText().equals(sql)) {
-                WriteCommandAction.runWriteCommandAction(proj, () -> {
-                    doc.setText(sql);
-                    PsiDocumentManager.getInstance(proj).commitDocument(doc);
-                });
+            // T-PreviewDocLock2 F3：临时文件支链从「必得」改「尽力」——awaitPrewarmedTempFile 超时/拿不到
+            // 产物、或 releaseEditor 后未经 clear() 二次 createEditor 时（prewarmedTempFile 一次性、已置 null），
+            // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
+            // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
+            // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
+            Document doc;
+            try {
+                Pair<VirtualFile, PsiFile> ready = awaitPrewarmedTempFile();
+                if (ready == null) throw new IllegalStateException("无法创建 SQL 预览临时文件");
+                VirtualFile vFile = ready.getFirst();
+                PsiFile psi = ready.getSecond();
+                previewTempFile = vFile;
+                psiFile = psi;
+                // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
+                // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
+                // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
+                //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
+                // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
+                // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
+                // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
+                // 且 UsefulTestCase 模式下直接抛 AssertionError。处置同 T-M42（同文件
+                // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
+                // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
+                // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
+                Document d = ReadAction.compute(() -> PsiDocumentManager.getInstance(proj).getDocument(psi));
+                if (d == null) throw new IllegalStateException("临时 SQL 文件无关联文档");
+                // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+                //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+                if (!d.getText().equals(sql)) {
+                    WriteCommandAction.runWriteCommandAction(proj, () -> {
+                        d.setText(sql);
+                        PsiDocumentManager.getInstance(proj).commitDocument(d);
+                    });
+                }
+                doc = d;
+            } catch (Throwable t) {
+                Logger.getInstance(SqlPreviewPanel.class)
+                        .warn("[M36] preview temp file unavailable, fall back to in-memory editor: "
+                                + (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName()));
+                psiFile = null;
+                doc = EditorFactory.getInstance().createDocument(sql);
             }
             created = EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false);
         } else {
@@ -1805,23 +2010,26 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     private JBPanel<JBPanel<?>> buildParamRow(String source, int labelWidth) {
-        JBTextField field = new JBTextField(8);
-        field.setToolTipText("#" + source);
+        // T-HibDualCapture：8 列放不下 16 字符日期值（视口滚到尾部被当成「值截断」），下限放宽到 16 列
+        JBTextField field = new JBTextField(16);
         field.setText(paramValues.getOrDefault(source, ""));
+        // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
+        if (!field.getText().isEmpty()) field.setCaretPosition(0);
+        field.setToolTipText(paramTooltip(source, field.getText()));
         field.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
-                onParamChanged(source, field.getText());
+                onParamFieldText(source, field);
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
-                onParamChanged(source, field.getText());
+                onParamFieldText(source, field);
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
-                onParamChanged(source, field.getText());
+                onParamFieldText(source, field);
             }
         });
         paramFields.add(field);
@@ -1894,6 +2102,20 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         paramValues.put(source, value);
         renderSql();
         saveToHistory();
+    }
+
+    /**
+     * T-HibDualCapture：参数框文本变更（含导入回填等程序化 setText 触发的文档事件）——
+     * tooltip 随值同步，其余走既有回填链路。
+     */
+    private void onParamFieldText(String source, JBTextField field) {
+        field.setToolTipText(paramTooltip(source, field.getText()));
+        onParamChanged(source, field.getText());
+    }
+
+    /** T-HibDualCapture：参数框 tooltip——`#source = 完整值`，框宽放不下的长值以此兜底可见。 */
+    private static String paramTooltip(String source, String value) {
+        return "#" + source + (value == null || value.isEmpty() ? "" : " = " + value);
     }
 
     private static int clamp(int v, int lo, int hi) {
@@ -2158,35 +2380,108 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
         currentWarning = xmlWarning != null ? xmlWarning : result.getWarning();
         String warningLine = currentWarning != null ? "   ⚠ " + currentWarning : "";
-        String perfLine = buildPerfLine(result);
-        String displayText;
-        if (!perfLine.isEmpty()) {
-            displayText = "<html>" + meta + warningLine + "<br>" + perfLine + "</html>";
-        } else {
-            displayText = meta + warningLine;
-        }
-        metaLabel.setText(displayText);
-        metaLabel.setToolTipText(meta + warningLine + perfLine);
+        // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
+        // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
+        metaLineText = meta + warningLine;
+        metaPerfSegments = buildPerfSegments(result);
+        metaLabel.setToolTipText(meta + warningLine
+                + metaPerfSegments.stream().map(MetaPerfSegment::text).collect(java.util.stream.Collectors.joining("；")));
         metaLabel.setForeground(currentWarning != null
                 ? JBColor.namedColor("ErrorForeground", JBColor.RED)
                 : JBUI.CurrentTheme.Label.foreground());
         if (errorCopyButton != null) errorCopyButton.setVisible(currentWarning != null);
+        // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
+        lastMetaBudget = -1;
+        applyMetaTruncation();
     }
 
-    private String buildPerfLine(PreviewResult result) {
+    /**
+     * T-PreviewTopOverlap F3：元信息宽度预算截断。
+     *
+     * 预算 = topRow 宽 − 工具栏理想宽 − topRow 边距 − metaLabel 左右边距；未布局（width<=0）跳过，
+     * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize），
+     * perf 行丢尾段加省略号（HTML 标签外截断）；tooltip 恒全文。宽度未变短路防重算抖动。
+     */
+    private void applyMetaTruncation() {
+        if (metaLineText.isEmpty() && metaPerfSegments.isEmpty()) return;
+        int width = topRow.getWidth();
+        if (width <= 0) {
+            // 未布局（showResult 先于首帧布局 / headless 测试）：先展示全文，布局后由 ComponentListener 按预算重截
+            metaLabel.setText(fullDisplayText());
+            return;
+        }
+        Insets insets = topRow.getInsets();
+        int side = insets != null ? insets.left + insets.right : 0;
+        int budget = Math.max(width - toolbarPanel.getPreferredSize().width - side - 16, MIN_META_BUDGET_PX);
+        if (budget == lastMetaBudget) return;
+        lastMetaBudget = budget;
+        FontMetrics metrics = metaLabel.getFontMetrics(metaLabel.getFont());
+        if (metaPerfSegments.isEmpty()) {
+            metaLabel.setText(metrics.stringWidth(metaLineText) <= budget
+                    ? metaLineText
+                    : ellipsize(metaLineText, metrics, budget));
+        } else {
+            String line1 = metrics.stringWidth(metaLineText) <= budget
+                    ? metaLineText
+                    : ellipsize(metaLineText, metrics, budget);
+            metaLabel.setText("<html>" + line1 + "<br>" + perfLineHtml(budget, metrics) + "</html>");
+        }
+    }
+
+    /** F3：全文展示文本（未布局/预算充裕时）——meta 行 + perf 行原着色 markup，与 T-SqlPerf 原渲染一致。 */
+    private String fullDisplayText() {
+        if (metaPerfSegments.isEmpty()) return metaLineText;
+        StringBuilder markup = new StringBuilder();
+        for (MetaPerfSegment segment : metaPerfSegments) {
+            if (markup.length() > 0) markup.append("；");
+            markup.append("<font color=\"").append(segment.color()).append("\">").append(segment.text()).append("</font>");
+        }
+        return "<html>" + metaLineText + "<br>   " + markup + "</html>";
+    }
+
+    /** F3：perf 行预算内重拼——逐段（含「；」分隔宽）按像素累计，放得下保留原着色；放不下丢尾段并加省略号。 */
+    private String perfLineHtml(int budget, FontMetrics metrics) {
+        List<MetaPerfSegment> segments = metaPerfSegments;
+        if (segments.isEmpty()) return "";
+        String indent = "   ";
+        int used = metrics.stringWidth(indent);
+        StringBuilder rendered = new StringBuilder(indent);
+        int kept = 0;
+        for (int index = 0; index < segments.size(); index++) {
+            MetaPerfSegment segment = segments.get(index);
+            String piece = (index > 0 ? "；" : "") + segment.text();
+            int pieceWidth = metrics.stringWidth(piece);
+            if (kept > 0 && used + pieceWidth > budget) continue;
+            if (kept == 0 && used + pieceWidth > budget) {
+                // 首段放不下：首段文本尾部省略至预算，后续段全弃（HTML 标签外截断，tooltip 恒全文）
+                String text = ellipsize(segment.text(), metrics, Math.max(budget - used, MIN_META_BUDGET_PX / 2));
+                rendered.append("<font color=\"").append(segment.color()).append("\">").append(text).append("</font>");
+                return rendered.toString();
+            }
+            if (index > 0) rendered.append("；");
+            rendered.append("<font color=\"").append(segment.color()).append("\">").append(segment.text()).append("</font>");
+            used += pieceWidth;
+            kept++;
+        }
+        if (kept < segments.size()) {
+            rendered.append("<font color=\"").append(segments.get(kept - 1).color()).append("\">…</font>");
+        }
+        return rendered.toString();
+    }
+
+    /**
+     * F2/T-SqlPerf：构建性能建议分段（可见文本 + 颜色）。ERROR/WARN 红前缀 ⚠，INFO 蓝前缀 ℹ。
+     */
+    private List<MetaPerfSegment> buildPerfSegments(PreviewResult result) {
         List<PerfWarning> warnings = result.getPerfWarnings();
-        if (warnings == null || warnings.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder();
-        for (int idx = 0; idx < warnings.size(); idx++) {
-            PerfWarning warning = warnings.get(idx);
+        if (warnings == null || warnings.isEmpty()) return List.of();
+        List<MetaPerfSegment> segments = new ArrayList<>();
+        for (PerfWarning warning : warnings) {
             boolean isError = warning.getSeverity() == PerfSeverity.ERROR || warning.getSeverity() == PerfSeverity.WARN;
             String prefix = isError ? "⚠ " : "ℹ ";
-            String localized = localizeWarning(warning);
-            String color = isError ? "#E05555" : "#3B82F6";
-            sb.append("   <font color=\"").append(color).append("\">").append(prefix).append(localized).append("</font>");
-            if (idx != warnings.size() - 1) sb.append("；");
+            segments.add(new MetaPerfSegment(prefix + localizeWarning(warning), isError ? "#E05555" : "#3B82F6"));
         }
-        return sb.toString();
+        return segments;
     }
 
     private String localizeWarning(PerfWarning warning) {
@@ -2323,6 +2618,52 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     JButton errorCopyButtonForTest() {
         return errorCopyButton;
+    }
+
+    /** T-PreviewDisplayMode：当前显示模式（参数变更后保持性断言用）。 */
+    PreviewDisplayMode displayModeForTest() {
+        return displayMode;
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewTopOverlap F4：顶部行布局 / 折叠菜单测试访问
+    // ------------------------------------------------------------------
+
+    /** 顶部行（metaLabel + 工具栏宿主，布局断言用）。 */
+    JBPanel<JBPanel<?>> topRowForTest() {
+        return topRow;
+    }
+
+    /** 工具栏（直显按钮集合断言用）。 */
+    JBPanel<JBPanel<?>> toolbarForTest() {
+        return toolbarPanel;
+    }
+
+    /** 「更多」折叠菜单项文案（顺序与弹层一致，断言用；show 依赖真实屏幕故只暴露文案与 step）。 */
+    List<String> moreActionsForTest() {
+        List<String> titles = new ArrayList<>();
+        for (kotlin.Pair<String, Runnable> action : moreActions()) titles.add(action.getFirst());
+        return titles;
+    }
+
+    /** 「更多」折叠菜单 step（onChosen 委托断言用，无需真实弹层）。 */
+    BaseListPopupStep<String> moreActionsStepForTest() {
+        return moreActionsStep(moreActions());
+    }
+
+    /** F3：宽度预算截断手动触发（headless 无 componentResized，测试直调）。 */
+    void applyMetaTruncationForTest() {
+        applyMetaTruncation();
+    }
+
+    /** T-HibDualCapture：第 index 个普通参数框的 tooltip（`#source = 值`），供长值兜底断言。 */
+    String paramFieldTooltipForTest(int index) {
+        return index >= 0 && index < paramFields.size() ? paramFields.get(index).getToolTipText() : null;
+    }
+
+    /** T-HibDualCapture：第 index 个普通参数框的光标位置（应钉 0，视口停在值头部）。 */
+    int paramFieldCaretForTest(int index) {
+        return index >= 0 && index < paramFields.size() ? paramFields.get(index).getCaretPosition() : -1;
     }
 
     JBLabel paramRowLabelForTest(int index) {

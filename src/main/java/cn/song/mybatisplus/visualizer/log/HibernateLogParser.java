@@ -69,6 +69,21 @@ public class HibernateLogParser {
     private String pendingSql = null;
     private final List<LogSqlParam> pendingParams = new ArrayList<>();
 
+    /**
+     * T-HibDualCapture：零参数闭合条目隔离槽。
+     *
+     * {@code show-sql: true} 与 {@code org.hibernate.SQL: debug} 双路打印时，同一条 SQL 在控制台出现两份
+     * （logger 副本多行块 + {@code Hibernate: } stdout 副本），参数绑定行只出现在两份之后——
+     * logger 副本被 {@code Hibernate: } 行提前闭合时产出零参数影子条目，参数全部挂到 stdout 副本上，
+     * 面板层去重拦不住（restoredSql 指纹不同）。零参数条目先进本槽：同一 rawSql 的后继条目
+     * 到达即取代之（参数版上岗、影子丢弃）；不同 SQL 到达时影子照常入列保持产出顺序。
+     *
+     * 槽内条目刻意不随 {@link #takeEntries()} 冲刷（桥接逐行取件，冲刷会让影子在 stdout 副本到达前
+     * 就可见、合并失效）；出口只有 {@link #closePending()}（LogToSqlPanel 收尾先 closePending 再
+     * takeEntries，与既有「末条目滞后一条」契约一致）。
+     */
+    private LogSqlEntry quarantined = null;
+
     // ----- multiline 累积状态 -----
     private boolean collecting = false;
     private boolean inComment = false;
@@ -305,13 +320,34 @@ public class HibernateLogParser {
                 restorer.restore(sql, pendingParams),
                 new ArrayList<>(pendingParams),
                 SqlSource.HIBERNATE);
-        entries.add(entry);
         pendingParams.clear();
+
+        // T-HibDualCapture：隔离槽合并——同 SQL 后继条目取代零参影子；不同语句影子先入列保序
+        LogSqlEntry shadow = quarantined;
+        quarantined = null;
+        if (shadow != null) {
+            if (shadow.rawSql().equals(entry.rawSql())) {
+                entries.add(entry);
+                return entry;
+            }
+            entries.add(shadow);
+        }
+        if (entry.params().isEmpty()) {
+            quarantined = entry; // 可能是被 stdout 副本覆盖的零参影子，先隔离待并
+            return null;
+        }
+        entries.add(entry);
         return entry;
     }
 
     /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
     public List<LogSqlEntry> takeEntries() {
+        // T-HibDualCapture：隔离槽仅在无语句收集中时冲刷——收集中冲刷会让零参影子在
+        // stdout 副本到达前就可见、合并失效；收集中说明当前语句尚未闭合（末条目本就滞后一条）
+        if (!collecting && quarantined != null) {
+            entries.add(quarantined);
+            quarantined = null;
+        }
         List<LogSqlEntry> result = new ArrayList<>(entries);
         entries.clear();
         return result;

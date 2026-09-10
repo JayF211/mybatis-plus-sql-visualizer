@@ -21,7 +21,7 @@ public final class LogEntryPreviewRecognizerKt {
      * 值预填 {@link LogSqlParam#value()}（null → 空串，回填显示 {@code ?}——与还原 {@code NULL} 不一致的边界见开发计划 §7）。
      */
     public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
-        long placeholderCount = entry.rawSql().chars().filter(c -> c == '?').count();
+        long placeholderCount = countPlaceholders(entry.rawSql());
         boolean recognized = placeholderCount > 0 && placeholderCount == entry.params().size();
         if (!recognized) {
             return new RecognizedLogPreview(
@@ -49,5 +49,13 @@ public final class LogEntryPreviewRecognizerKt {
                 initialValues,
                 paramHints,
                 true);
+    }
+
+    /**
+     * T-HibDualCapture：string-aware `?` 占位符计数——口径与 {@link LogSqlRestorerKt#placeholderPositions}
+     * （还原回填）完全一致，字符串字面量与注释内的 {@code ?} 不计数，识别数量与回填位置不再错位。
+     */
+    public static long countPlaceholders(String sql) {
+        return LogSqlRestorerKt.placeholderPositions(sql).size();
     }
 }

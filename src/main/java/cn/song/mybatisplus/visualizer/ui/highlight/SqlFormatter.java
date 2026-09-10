@@ -5,7 +5,9 @@ import com.intellij.psi.tree.IElementType;
 import kotlin.Pair;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -36,6 +38,9 @@ public final class SqlFormatter {
 
     /** 紧跟 JOIN 的修饰关键字（`LEFT JOIN` 保持同行）。 */
     private static final Set<String> JOIN_QUALIFIERS = Set.copyOf(Arrays.asList("LEFT", "RIGHT", "INNER", "FULL", "CROSS"));
+
+    /** T-VStack·InThreshold：IN 列表逐行展开的最小元素数（<5 保持同行——短清单竖排纯花行高）。 */
+    private static final int IN_EXPAND_MIN_ELEMENTS = 5;
 
     /** 函数名（括号前不空格：`COUNT(`）。T-M29.3：补 CONCAT（MP LIKE 常用）/TRIM_SCALE（项目自定义）及常见函数。 */
     private static final Set<String> FUNCTION_NAMES = Set.copyOf(Arrays.asList(
@@ -277,6 +282,524 @@ public final class SqlFormatter {
             st.prevText = text;
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * 竖向排列格式化（T-VStack）：INSERT 语句列清单与 VALUES 逐行竖排，VALUES 每值行尾按最宽值
+     * （含行尾逗号）对齐追加 `-- 列名` 配对标注——大 INSERT 列-值对位不必数逗号。
+     *
+     * T-VStack·扩面：非 INSERT 语句 = {@link #format} 全展开 + expandHorizontalGroups 后处理
+     * （IN 括号列表 / ORDER BY / GROUP BY / FROM 逗号联表纵向化），与「格式化」按钮产出可区分。
+     *
+     * 规则：
+     *  - INSERT → 专用竖排路径；非 INSERT → format + 横向组展开
+     *  - INSERT 列清单/VALUES 组各一元素一行（缩进 2、行尾逗号紧贴、闭括号顶格；批量多组 `),` 接排）
+     *  - 配对标注：列清单全为单 token 元素才启用（`t.a` 等多 token 列不标注）；无列清单不标注；
+     *    值按序与列取小对位，组内每行行尾注释只挂一个（用户注释优先于配对标注）；
+     *    annotatePairs=false 时整项关闭（T-VPairAnno）——仅竖排不追加标注，用户自带注释不受影响
+     *  - 值表达式整段保留：depth==1 逗号是唯一切分点，NOW()/CONCAT(a,b) 等嵌套括号内逗号原样
+     *  - 组内注释挂行尾（本功能输出的 `-- 列名` 再输入时归位本行 → 幂等）；顶层注释自成一行；
+     *    关闭标注后再输入已带标注文本，既有 `-- 列名` 按"用户行尾注释"规则归位保留（不剥离）
+     *  - LIMIT 分页参数逗号与子查询 IN（元素首 token SELECT/WITH）不展开
+     *  - 输出不变式：剔 COMMENT 后重分词的 token 流与原文一致——只动空白与行尾注释，不改语义 token
+     */
+    public static String formatVertical(String sql) {
+        return formatVertical(sql, true);
+    }
+
+    /** 竖向排列格式化（annotatePairs=false 时仅竖排不追加配对标注，T-VPairAnno）。 */
+    public static String formatVertical(String sql, boolean annotatePairs) {
+        List<Pair<IElementType, String>> tokens = lex(sql);
+        if (tokens.isEmpty()) {
+            return sql.trim();
+        }
+        Pair<IElementType, String> first = null;
+        for (Pair<IElementType, String> token : tokens) {
+            if (token.getFirst() != SqlTokenTypes.COMMENT) {
+                first = token;
+                break;
+            }
+        }
+        if (first == null) {
+            return format(sql);
+        }
+        if (first.getFirst() != SqlTokenTypes.KEYWORD || !first.getSecond().toUpperCase().equals("INSERT")) {
+            // T-VStack·扩面：非 INSERT = format 全展开 + 横向组展开后处理（IN 列表/ORDER BY/
+            // GROUP BY/FROM 联表纵向化），与「格式化」按钮产出可区分
+            return expandHorizontalGroups(format(sql));
+        }
+
+        // T-VPairAnno：关闭标注即空名单——renderGroup 的 elemIndex in columnNames.indices 恒假，
+        // 标注追加与无注释行的对齐补齐同源归零（对齐只为标注竖向对齐服务），渲染主体零改动
+        List<String> columnNames = annotatePairs ? collectInsertColumns(tokens) : Collections.emptyList();
+
+        StringBuilder sb = new StringBuilder(sql.length() + 128);
+        VerticalState st = new VerticalState(sb, columnNames);
+        for (Pair<IElementType, String> entry : tokens) {
+            IElementType type = entry.getFirst();
+            String text = entry.getSecond();
+            String upper = text.toUpperCase();
+            if (type == SqlTokenTypes.COMMENT) {
+                // 注释：组内挂当前行尾（本功能输出的 `-- 列名` 重输入归位）；顶层自成一行
+                if (st.depth > 0) {
+                    st.elemTrailing.add(text);
+                } else {
+                    if (!st.atLineStart) st.newline(0);
+                    sb.append(text);
+                    st.newline(0);
+                }
+            } else if (st.depth == 1 && type == SqlTokenTypes.OPERATOR && text.equals(",")) {
+                // depth-1 逗号：元素边界（行尾逗号标记；后续注释仍归本行）
+                st.elemHadComma = true;
+            } else if (st.depth == 1 && type == SqlTokenTypes.PAREN && text.equals(")")) {
+                // depth-1 闭括号：收行 + 整组渲染
+                if (!st.elemTokens.isEmpty() || st.elemHadComma || !st.elemTrailing.isEmpty()) st.closeLine();
+                st.renderGroup();
+                st.depth = 0;
+            } else if (st.depth > 0) {
+                // 组内内容：depth-1 逗号后的首个语义 token 收行开新行；其余入元素（括号调 depth）
+                if (st.elemHadComma) st.closeLine();
+                st.elemTokens.add(new Pair<>(type, text));
+                if (type == SqlTokenTypes.PAREN && text.equals("(")) st.depth++;
+                if (type == SqlTokenTypes.PAREN && text.equals(")")) st.depth--;
+            } else if (type == SqlTokenTypes.PAREN && text.equals("(")) {
+                // 顶层左括号：组开括号自占一行（列清单/VALUES 组）
+                if (!st.atLineStart) st.newline(0);
+                sb.append('(');
+                st.atLineStart = false;
+                st.pendingSpace = false;
+                st.depth = 1;
+                st.groupValues = st.seenValues;
+                st.groupLines.clear();
+                st.elemCounter = 0;
+            } else if (type == SqlTokenTypes.KEYWORD && NEW_LINE_KEYWORDS.contains(upper)) {
+                // 主子句关键字 → 顶格新行（首 token INSERT 顶格起）
+                if (!st.atLineStart) st.newline(0);
+                st.pendingSpace = false;
+                sb.append(upper);
+                st.atLineStart = false;
+                st.pendingSpace = true;
+                if (upper.equals("VALUES")) st.seenValues = true;
+            } else if (type == SqlTokenTypes.KEYWORD && (upper.equals("AND") || upper.equals("OR"))) {
+                // AND/OR：顶层缩进换行（ON DUPLICATE KEY UPDATE 等尾缀条件）
+                if (!st.atLineStart) st.newline(4);
+                sb.append(upper);
+                st.atLineStart = false;
+                st.pendingSpace = true;
+            } else if (type == SqlTokenTypes.KEYWORD) {
+                st.flushSpace();
+                sb.append(upper);
+                st.atLineStart = false;
+                st.pendingSpace = true;
+            } else if (type == SqlTokenTypes.OPERATOR && text.equals(",")) {
+                // 顶层逗号：批量 VALUES 组间分隔（`),` 后随组开括号换行）
+                sb.append(',');
+                st.atLineStart = false;
+                st.pendingSpace = false;
+            } else if (type == SqlTokenTypes.OPERATOR && text.equals(".")) {
+                // 点号：无空格
+                sb.append('.');
+                st.pendingSpace = false;
+                st.atLineStart = false;
+            } else {
+                // 其他运算符 / 标识符 / 字符串 / 数字 / 表名
+                st.flushSpace();
+                sb.append(text);
+                st.atLineStart = false;
+                st.pendingSpace = true;
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    /**
+     * INSERT 列清单收集（配对名单）：VALUES 前首个 depth-0 括号组。
+     * 元素恰为单 token（反引号列名是单 IDENTIFIER）才返回名单；多 token（`t.a`）/空组/括号不闭合 → 空（不标注）。
+     */
+    private static List<String> collectInsertColumns(List<Pair<IElementType, String>> tokens) {
+        int depth = 0;
+        boolean seenValues = false;
+        for (int i = 0; i < tokens.size(); i++) {
+            IElementType type = tokens.get(i).getFirst();
+            String text = tokens.get(i).getSecond();
+            if (type == SqlTokenTypes.COMMENT) continue;
+            if (type == SqlTokenTypes.PAREN && text.equals("(") && depth == 0 && !seenValues) {
+                List<List<Pair<IElementType, String>>> elements = new ArrayList<>();
+                List<Pair<IElementType, String>> cur = new ArrayList<>();
+                int d = 1;
+                int j = i + 1;
+                while (j < tokens.size() && d > 0) {
+                    IElementType t2 = tokens.get(j).getFirst();
+                    String x2 = tokens.get(j).getSecond();
+                    if (t2 == SqlTokenTypes.COMMENT) {
+                        // 注释不参与配对名单
+                    } else if (t2 == SqlTokenTypes.PAREN && x2.equals("(")) {
+                        d++;
+                        cur.add(tokens.get(j));
+                    } else if (t2 == SqlTokenTypes.PAREN && x2.equals(")")) {
+                        d--;
+                        if (d > 0) cur.add(tokens.get(j));
+                    } else if (t2 == SqlTokenTypes.OPERATOR && x2.equals(",") && d == 1) {
+                        elements.add(cur);
+                        cur = new ArrayList<>();
+                    } else {
+                        cur.add(tokens.get(j));
+                    }
+                    j++;
+                }
+                boolean closed = d == 0;
+                if (!cur.isEmpty()) elements.add(cur);
+                boolean valid = closed && !elements.isEmpty();
+                if (valid) {
+                    for (List<Pair<IElementType, String>> element : elements) {
+                        if (element.size() != 1) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+                if (!valid) return Collections.emptyList();
+                List<String> names = new ArrayList<>();
+                for (List<Pair<IElementType, String>> element : elements) {
+                    names.add(element.get(0).getSecond());
+                }
+                return names;
+            } else if (type == SqlTokenTypes.PAREN && text.equals("(")) {
+                depth++;
+            } else if (type == SqlTokenTypes.PAREN && text.equals(")")) {
+                depth--;
+            } else if (type == SqlTokenTypes.KEYWORD && text.toUpperCase().equals("VALUES") && depth == 0) {
+                seenValues = true;
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * 横向组展开（T-VStack·扩面）：对 {@link #format} 产物做纯文本后处理，把仍横排的组纵向化——
+     * IN 括号列表（元素非子查询）/ ORDER BY 字段清单 / GROUP BY 字段清单 / FROM 逗号联表。
+     * 只在「已被 format 排成单行」的子句段内操作，是纯增量变换 → 幂等；LIMIT 逗号（分页参数）
+     * 与子查询 IN（元素首 token 为 SELECT）不展开。
+     */
+    private static String expandHorizontalGroups(String formatted) {
+        StringBuilder out = new StringBuilder(formatted.length() + 128);
+        int pos = 0;
+        boolean changed = false;
+        while (pos < formatted.length()) {
+            int nl = formatted.indexOf('\n', pos);
+            int lineEnd = nl < 0 ? formatted.length() : nl;
+            String line = formatted.substring(pos, lineEnd);
+
+            // 当前行缩进（展开元素行沿用同一缩进 + 4）
+            StringBuilder indentBuilder = new StringBuilder();
+            for (int i = 0; i < line.length() && line.charAt(i) == ' '; i++) {
+                indentBuilder.append(' ');
+            }
+            String indent = indentBuilder.toString();
+            String trimmed = line.trim();
+            String expanded;
+            if (trimmed.startsWith("--") || trimmed.startsWith("/*")) {
+                expanded = null;
+            } else {
+                expanded = expandInList(line, trimmed, indent);
+                if (expanded == null) expanded = expandCommaClause(line, trimmed, indent, "ORDER BY");
+                if (expanded == null) expanded = expandCommaClause(line, trimmed, indent, "GROUP BY");
+                if (expanded == null) expanded = expandFromCommaTables(line, trimmed, indent);
+            }
+            if (expanded == null) {
+                out.append(line);
+            } else {
+                out.append(expanded);
+                changed = true;
+            }
+            if (lineEnd < formatted.length()) out.append('\n');
+            pos = lineEnd + 1;
+        }
+        return changed ? out.toString() : formatted;
+    }
+
+    /**
+     * IN 列表展开：行含 `IN (` 且括号在本行闭合、首元素非子查询、含顶层（括号内层）逗号 → 逐元素一行
+     * （`(` 自占一行，对齐已交付 INSERT 组形态）。line=原行（保前缀缩进）、trimmed=去缩进行（定位用）。
+     */
+    private static String expandInList(String line, String trimmed, String indent) {
+        int inIdx = findKeywordIndex(trimmed, "IN");
+        if (inIdx < 0) return null;
+        int openIdx = trimmed.indexOf('(', inIdx + 2);
+        if (openIdx < 0) return null;
+        Integer closeBoxed = matchParen(trimmed, openIdx);
+        if (closeBoxed == null) return null;
+        int closeIdx = closeBoxed;
+        String inner = trimmed.substring(openIdx + 1, closeIdx).trim();
+        if (inner.isEmpty()) return null;
+        // 子查询形态（IN (SELECT …)）不展开
+        List<Pair<IElementType, String>> innerTokens = lex(inner);
+        Pair<IElementType, String> first = null;
+        for (Pair<IElementType, String> token : innerTokens) {
+            if (token.getFirst() != SqlTokenTypes.COMMENT) {
+                first = token;
+                break;
+            }
+        }
+        if (first == null) return null;
+        if (first.getFirst() == SqlTokenTypes.KEYWORD
+                && (first.getSecond().toUpperCase().equals("SELECT") || first.getSecond().toUpperCase().equals("WITH"))) {
+            return null;
+        }
+        // 顶层（括号内层 depth1）逗号切分；无逗号无需展开
+        List<String> elements = splitTopLevel(inner);
+        // T-VStack·InThreshold：短清单（<5 元素）保持同行——竖排不产生增量信息（占位符 ? 的对应
+        // 关系靠左侧参数面板顺序对照），纯花行高把相邻条件推出视口；长清单（≥5）才逐行
+        if (elements.size() < IN_EXPAND_MIN_ELEMENTS) return null;
+        StringBuilder body = new StringBuilder();
+        body.append(indent).append(trimmed.substring(0, openIdx).stripTrailing()).append('\n');
+        body.append(indent).append('(').append('\n');
+        for (int i = 0; i < elements.size(); i++) {
+            body.append(indent).append("    ").append(elements.get(i).trim());
+            if (i < elements.size() - 1) body.append(',');
+            body.append('\n');
+        }
+        body.append(indent).append(')').append(trimmed.substring(closeIdx + 1).stripTrailing());
+        return body.toString();
+    }
+
+    /** ORDER BY / GROUP BY 字段展开：`ORDER BY a DESC, b ASC` → 每字段一行（修饰符紧跟字段）。 */
+    private static String expandCommaClause(String line, String trimmed, String indent, String keyword) {
+        int kwIdx = findKeywordIndex(trimmed, keyword);
+        if (kwIdx < 0) return null;
+        String rest = trimmed.substring(kwIdx + keyword.length()).trim();
+        if (rest.isEmpty() || rest.startsWith("(")) return null;
+        List<String> elements = splitTopLevel(rest);
+        if (elements.size() < 2) return null;
+        StringBuilder body = new StringBuilder();
+        body.append(indent).append(trimmed.substring(0, kwIdx)).append(keyword);
+        for (int i = 0; i < elements.size(); i++) {
+            body.append('\n').append(indent).append("    ").append(elements.get(i).trim());
+            if (i < elements.size() - 1) body.append(',');
+        }
+        // 行尾残余校验：切分覆盖整个 rest——tail 含括号说明形态超出单行清单（不展开，避免误伤）
+        int closeIdx = kwIdx + keyword.length() + trimmed.substring(kwIdx + keyword.length()).length();
+        String tail = trimmed.substring(closeIdx);
+        if (tail.contains("(") || tail.contains(")")) return null;
+        return body.toString();
+    }
+
+    /** FROM 逗号联表展开：`FROM a, b` → 一表一行（含别名）。 */
+    private static String expandFromCommaTables(String line, String trimmed, String indent) {
+        int kwIdx = findKeywordIndex(trimmed, "FROM");
+        if (kwIdx < 0) return null;
+        String rest = trimmed.substring(kwIdx + "FROM".length()).trim();
+        if (rest.isEmpty() || rest.contains("(")) return null;
+        List<String> elements = splitTopLevel(rest);
+        if (elements.size() < 2) return null;
+        StringBuilder body = new StringBuilder();
+        body.append(indent).append(trimmed.substring(0, kwIdx)).append("FROM");
+        for (int i = 0; i < elements.size(); i++) {
+            body.append('\n').append(indent).append("    ").append(elements.get(i).trim());
+            if (i < elements.size() - 1) body.append(',');
+        }
+        return body.toString();
+    }
+
+    /** 关键字整词定位（大小写不敏感、两侧非标识符字符）。 */
+    private static int findKeywordIndex(String line, String keyword) {
+        int idx = 0;
+        while (true) {
+            idx = indexOfIgnoreCase(line, keyword, idx);
+            if (idx < 0) return -1;
+            boolean beforeOk = idx == 0
+                    || (!Character.isLetterOrDigit(line.charAt(idx - 1)) && line.charAt(idx - 1) != '_' && line.charAt(idx - 1) != '.');
+            int after = idx + keyword.length();
+            boolean afterOk = after >= line.length()
+                    || (!Character.isLetterOrDigit(line.charAt(after)) && line.charAt(after) != '_');
+            if (beforeOk && afterOk) return idx;
+            idx++;
+        }
+    }
+
+    /** 忽略大小写的 indexOf（Kotlin {@code indexOf(string, startIndex, ignoreCase=true)} 等价）。 */
+    private static int indexOfIgnoreCase(String line, String keyword, int fromIndex) {
+        int limit = line.length() - keyword.length();
+        for (int i = Math.max(fromIndex, 0); i <= limit; i++) {
+            if (line.regionMatches(true, i, keyword, 0, keyword.length())) return i;
+        }
+        return -1;
+    }
+
+    /** 与 openIdx 的 `(` 配对的 `)` 下标（嵌套计数；字符串字面量内的括号不计数）。 */
+    private static Integer matchParen(String line, int openIdx) {
+        int depth = 0;
+        int i = openIdx;
+        boolean inString = false;
+        while (i < line.length()) {
+            char c = line.charAt(i);
+            if (c == '\'') {
+                inString = !inString;
+            } else if (!inString && c == '(') {
+                depth++;
+            } else if (!inString && c == ')') {
+                depth--;
+                if (depth == 0) return i;
+            }
+            i++;
+        }
+        return null;
+    }
+
+    /** 顶层逗号切分（括号深度 0 的逗号；字符串字面量内逗号不切）。 */
+    private static List<String> splitTopLevel(String text) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        boolean inString = false;
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\'') {
+                inString = !inString;
+            } else if (!inString && c == '(') {
+                depth++;
+            } else if (!inString && c == ')') {
+                depth--;
+            } else if (!inString && c == ',' && depth == 0) {
+                parts.add(text.substring(start, i));
+                start = i + 1;
+            }
+        }
+        parts.add(text.substring(start));
+        return parts;
+    }
+
+    /** {@link #formatVertical} 的局部可变状态（等价 Kotlin 局部函数 + 闭包捕获）。 */
+    private static final class VerticalState {
+        final StringBuilder sb;
+        final List<String> columnNames;
+        int depth = 0;
+        boolean pendingSpace = false;
+        boolean atLineStart = true;
+        boolean seenValues = false;
+        /** 当前括号组是否 VALUES 组（配对标注只在 VALUES 组）。 */
+        boolean groupValues = false;
+        List<Pair<IElementType, String>> elemTokens = new ArrayList<>();
+        boolean elemHadComma = false;
+        final List<String> elemTrailing = new ArrayList<>();
+        /** 组内元素序号（配对列名下标；纯注释行不占号）。 */
+        int elemCounter = 0;
+        final List<VerticalLine> groupLines = new ArrayList<>();
+
+        VerticalState(StringBuilder sb, List<String> columnNames) {
+            this.sb = sb;
+            this.columnNames = columnNames;
+        }
+
+        void flushSpace() {
+            if (pendingSpace && !atLineStart && sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ') {
+                sb.append(' ');
+            }
+            pendingSpace = false;
+        }
+
+        void newline(int indent) {
+            sb.append('\n');
+            for (int i = 0; i < indent; i++) {
+                sb.append(' ');
+            }
+            atLineStart = true;
+            pendingSpace = false;
+        }
+
+        /** 元素 token 渲染（format 局部空格规则：运算符两侧空格、点号紧贴、函数名后括号紧贴）。 */
+        static String renderElem(List<Pair<IElementType, String>> elem) {
+            if (elem.isEmpty()) return "";
+            StringBuilder out = new StringBuilder();
+            boolean space = false;
+            String prev = "";
+            for (Pair<IElementType, String> entry : elem) {
+                String text = entry.getSecond();
+                if (text.equals("(")) {
+                    if (!FUNCTION_NAMES.contains(prev.toUpperCase()) && space && out.length() > 0) out.append(' ');
+                    out.append('(');
+                    space = false;
+                } else if (text.equals(")")) {
+                    out.append(')');
+                    space = true;
+                } else if (text.equals(".")) {
+                    out.append('.');
+                    space = false;
+                } else if (text.equals(",")) {
+                    out.append(',');
+                    space = true;
+                } else {
+                    if (space && out.length() > 0) out.append(' ');
+                    out.append(text);
+                    space = true;
+                }
+                prev = text;
+            }
+            return out.toString();
+        }
+
+        /** 收行入组缓冲（对齐宽依赖全组文本，闭组时才渲染）。 */
+        void closeLine() {
+            VerticalLine line = new VerticalLine();
+            line.tokens.addAll(elemTokens);
+            line.hadComma = elemHadComma;
+            line.trailing.addAll(elemTrailing);
+            if (!elemTokens.isEmpty()) {
+                line.elemIndex = elemCounter;
+                elemCounter++;
+            }
+            groupLines.add(line);
+            elemTokens = new ArrayList<>();
+            elemHadComma = false;
+            elemTrailing.clear();
+        }
+
+        /** 闭组渲染：缩进 2 逐行 + 行尾逗号；VALUES 组可配对行按最宽前缀对齐追加 `-- 列名`（行尾注释优先）。 */
+        void renderGroup() {
+            List<String> rendered = new ArrayList<>();
+            for (VerticalLine line : groupLines) {
+                rendered.add(renderElem(line.tokens));
+            }
+            int alignWidth = 0;
+            for (int i = 0; i < rendered.size(); i++) {
+                String text = rendered.get(i);
+                if (text.isEmpty()) continue;
+                alignWidth = Math.max(alignWidth, text.length() + (groupLines.get(i).hadComma ? 1 : 0));
+            }
+            for (int i = 0; i < rendered.size(); i++) {
+                String text = rendered.get(i);
+                VerticalLine line = groupLines.get(i);
+                sb.append('\n').append("  ").append(text);
+                if (line.hadComma) sb.append(',');
+                String trailingText = String.join(" ", line.trailing);
+                // 配对标注只在 VALUES 组（列清单组不自我标注）；用户注释跨组通用且优先于配对标注
+                if (!trailingText.isEmpty() || (groupValues && line.elemIndex >= 0 && line.elemIndex < columnNames.size())) {
+                    // 补齐到最宽前缀（含行尾逗号）即可——分隔空格由 ` -- ` 前导空格保证，不再设下限
+                    // （下限会把零补齐行整体推歪一格）
+                    int prefixWidth = text.length() + (line.hadComma ? 1 : 0);
+                    for (int pad = alignWidth - prefixWidth; pad > 0; pad--) {
+                        sb.append(' ');
+                    }
+                    if (!trailingText.isEmpty()) {
+                        sb.append(' ').append(trailingText);
+                    } else {
+                        sb.append(" -- ").append(columnNames.get(line.elemIndex));
+                    }
+                }
+            }
+            sb.append('\n').append(')');
+            groupLines.clear();
+            atLineStart = false;
+            pendingSpace = true;
+        }
+    }
+
+    /** 组内一行：元素 token（闭组时统一渲染）+ 行尾逗号标记 + 行尾注释；elemIndex 为配对下标。 */
+    private static final class VerticalLine {
+        final List<Pair<IElementType, String>> tokens = new ArrayList<>();
+        boolean hadComma = false;
+        final List<String> trailing = new ArrayList<>();
+        int elemIndex = -1;
     }
 
     /** 分词（剔除空白——含 XML 动态标签展开残留空行）。 */

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleManager;
@@ -66,8 +67,23 @@ final class ProjectTypeDetector {
     private ProjectTypeDetector() {
     }
 
-    /** 检测项目类型和结构。 */
+    /**
+     * 检测项目类型和结构。
+     *
+     * T-PreviewDocLock2 F2：检测体全量 PSI 探测（ModuleManager/ModuleRootManager 源根、
+     * JavaPsiFacade.findClass、AnnotatedElementsSearch、PsiManager.findDirectory、file.text）
+     * 均在 262 平台要求读权限；其中 JavaPsiFacade.findClass 是 assertReadAccess <b>硬抛</b>（非软
+     * 断言），在 EDT 上裸调会直接 RuntimeException——调用方（设置页勾选回调）先前靠 catch(Exception)
+     * 吞掉表现为「注入静默失败」。这里把探测纯函数包 ReadAction（纯读、无写操作，EDT 上同步语义
+     * 不变）；调用方 SqlSourceInterceptorAutoInjector.inject 的文件创建段仍走 WriteCommandAction，
+     * 与探测分开。
+     */
     public static ProjectStructure detect(Project project) {
+        return ReadAction.compute(() -> detectSync(project));
+    }
+
+    /** 检测主体（ReadAction 内执行）。 */
+    private static ProjectStructure detectSync(Project project) {
         Module[] modules = ModuleManager.getInstance(project).getModules();
         if (modules.length == 0) {
             return null;

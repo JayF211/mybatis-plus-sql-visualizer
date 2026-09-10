@@ -269,7 +269,8 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             out.append(piece);
         }
         setDocumentText(resultEditor, out.toString());
-        long unresolved = entries.stream().filter(e -> e.restoredSql().contains("?")).count();
+        // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
+        long unresolved = entries.stream().filter(e -> LogEntryPreviewRecognizerKt.countPlaceholders(e.restoredSql()) > 0).count();
         if (unresolved > 0) {
             status(MpSqlVisualizerBundle.message("logToSql.status.unresolved", unresolved), true);
         } else {

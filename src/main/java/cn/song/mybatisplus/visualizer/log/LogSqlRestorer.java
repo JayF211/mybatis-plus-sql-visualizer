@@ -22,19 +22,22 @@ public class LogSqlRestorer {
         if (params.isEmpty() || sql.isEmpty()) {
             return sql;
         }
-        StringBuilder sb = new StringBuilder(sql);
-        int searchFrom = 0;
+        List<Integer> positions = LogSqlRestorerKt.placeholderPositions(sql);
+        if (positions.isEmpty()) {
+            return sql;
+        }
+        StringBuilder sb = new StringBuilder(sql.length() + params.size() * 8);
+        int prev = 0;
         int paramIdx = 0;
-        while (paramIdx < params.size()) {
-            int placeholder = sb.indexOf("?", searchFrom);
-            if (placeholder < 0) {
+        for (int pos : positions) {
+            if (paramIdx >= params.size()) {
                 break; // 参数多于占位符：忽略剩余
             }
-            String rendered = renderParam(params.get(paramIdx));
-            sb.replace(placeholder, placeholder + 1, rendered);
-            searchFrom = placeholder + rendered.length();
+            sb.append(sql, prev, pos).append(renderParam(params.get(paramIdx)));
+            prev = pos + 1;
             paramIdx++;
         }
+        sb.append(sql, prev, sql.length());
         return sb.toString();
     }
 

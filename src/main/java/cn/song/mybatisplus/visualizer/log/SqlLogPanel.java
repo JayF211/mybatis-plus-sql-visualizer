@@ -1113,8 +1113,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
             // 回退现状：restoredSql + 未解析警告（参数缺失/数量不匹配/纯静态 SQL）
             String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
             String sql = state.getLogFormatSql() ? SqlFormatter.format(base) : base;
-            String warning = entry.restoredSql().contains("?")
-                    ? MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
+            // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
+            // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
+            String warning = LogEntryPreviewRecognizerKt.countPlaceholders(entry.restoredSql()) > 0
+                    ? MpSqlVisualizerBundle.message(entry.params().isEmpty()
+                            ? "log.preview.unresolvedNoBinding"
+                            : "log.preview.unresolvedWarning")
                     : null;
             SqlPreviewService.showResult(project, buildPreviewResult(
                     sql, entry.restoredSql(), List.of(), null, null, null, warning), null);

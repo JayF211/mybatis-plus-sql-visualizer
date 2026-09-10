@@ -76,6 +76,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private String dialect = DEFAULT_DIALECT;
         private boolean replaceParams = true;
         private boolean formatSql = true;
+        /**
+         * 竖向排列 VALUES 行尾配对列名标注（T-VPairAnno）：true=显示（默认，T-VStack 以来行为不变），
+         * false=仅竖排不追加标注注释（用户自带注释不受影响）。
+         * 仅作用于预览面板竖向排列显示模式（SqlFormatter.formatVertical 的唯一生产调用点 applyDisplayMode）。
+         */
+        private boolean verticalPairAnnotation = true;
         private boolean showGutterIcon = true;
 
         /**
@@ -152,6 +158,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getFormatSql() { return formatSql; }
         public void setFormatSql(boolean formatSql) { this.formatSql = formatSql; }
+
+        public boolean getVerticalPairAnnotation() { return verticalPairAnnotation; }
+        public void setVerticalPairAnnotation(boolean verticalPairAnnotation) { this.verticalPairAnnotation = verticalPairAnnotation; }
 
         public boolean getShowGutterIcon() { return showGutterIcon; }
         public void setShowGutterIcon(boolean showGutterIcon) { this.showGutterIcon = showGutterIcon; }
@@ -308,6 +317,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.dialect = dialect;
             c.replaceParams = replaceParams;
             c.formatSql = formatSql;
+            c.verticalPairAnnotation = verticalPairAnnotation;
             c.showGutterIcon = showGutterIcon;
             c.language = language;
             c.injectLogicDelete = injectLogicDelete;
@@ -366,6 +376,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             State that = (State) o;
             return replaceParams == that.replaceParams
                     && formatSql == that.formatSql
+                    && verticalPairAnnotation == that.verticalPairAnnotation
                     && showGutterIcon == that.showGutterIcon
                     && injectLogicDelete == that.injectLogicDelete
                     && injectTenantLine == that.injectTenantLine
@@ -420,7 +431,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         @Override
         public int hashCode() {
             return Objects.hash(
-                    dialect, replaceParams, formatSql, showGutterIcon, language, injectLogicDelete,
+                    dialect, replaceParams, formatSql, verticalPairAnnotation, showGutterIcon, language, injectLogicDelete,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,

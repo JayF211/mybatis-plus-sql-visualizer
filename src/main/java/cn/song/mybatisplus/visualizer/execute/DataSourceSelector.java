@@ -106,7 +106,7 @@ public final class DataSourceSelector {
     private static final String LAST_RUNNER_KEY = "mpsql.visualizer.last.runner";
 
     /** 构建版本戳。 */
-    private static final String BUILD_STAMP = "M36.7-hql-select-expand";
+    private static final String BUILD_STAMP = "M36.8-exec-silent-noop";
 
     /** M36.5.76：OUTFILL 未锚定诊断日志节流（EDT 串行访问，无需同步）。 */
     private static long lastOutFillDiagAt = 0L;
@@ -154,6 +154,10 @@ public final class DataSourceSelector {
 
     /** M36.5.57：本次执行开始时 console history 的长度基线。 */
     private static int consoleErrorBaseline = 0;
+
+    /** T-ExecSilentNoop：本次执行的提示已发出标记——8s 连接监控与 40 拍超时窗口共用，
+     * 保证同一次执行只报一次提示（此前二者各按同一 key 报一次，用户见两次红字）。 */
+    private static volatile boolean executionHintReported = false;
 
     /** M36.5.10：执行提交代际计数。 */
     @SuppressWarnings("VolatileArrayField")
@@ -496,6 +500,46 @@ public final class DataSourceSelector {
         } catch (Throwable ignored) {
             return 0;
         }
+    }
+
+    /**
+     * T-ExecSilentNoop F1a 探针：提交前的一次性可执行性预检 + 现场埋点。
+     *
+     * DBN 侧存在两条<b>全静默出口</b>（javap 实证，database-plugin.jar）：{@code chooseStatements}
+     * 空选集且 {@code execOutside==1} 时既不消费 model 也不提示、直接 return；{@code beforeExecuteQueries}
+     * 遇 {@code model.statements().isEmpty()} 或 {@code console.isValid()==false} 返回 false → 整段跳过。
+     * 两者都无输出、无结果 Tab、无异常。此探针把这两个出口对应的现场量提前照出来，
+     * 归因"查询没提交"具体撞的是哪一条，并据此决定是否走 {@code executeQueries(freshModel)} 兜底。
+     * 纯反射 + try/catch，任何一步失败降级为 null，绝不阻断执行。
+     *
+     * @return null 表示"DBN 侧可执行（或探不到），按 native 链走"；
+     *         非 null 表示"预检判定 DBN 侧会静默拒绝"，返回真实原因描述。
+     */
+    private static String execSilentProbe(Object console, Object freshModel, boolean demoted, String destDsName, Logger LOG) {
+        Object isValid = null;
+        try {
+            isValid = console.getClass().getMethod("isValid").invoke(console);
+        } catch (Throwable ignored) {
+            // 探不到按 null 呈现
+        }
+        String stmts = "null";
+        try {
+            Object result = freshModel != null ? freshModel.getClass().getMethod("statements").invoke(freshModel) : null;
+            if (result instanceof Iterable) {
+                int n = 0;
+                for (Object ignored : (Iterable<?>) result) n++;
+                stmts = String.valueOf(n);
+            }
+        } catch (Throwable ignored) {
+            // 探不到按 null 呈现
+        }
+        LOG.info("[M36][EXEC] probe start (console isValid=" + isValid + ", freshModel stmts=" + stmts + ", ds=" + destDsName + ")");
+        if (demoted) {
+            String reason = "freshModel demoted (vf PSI resolved 0 statements, fell back to console model)";
+            LOG.info("[M36][EXEC] probe demoted -> " + reason);
+            return reason;
+        }
+        return null;
     }
 
     /** M36.5.48：从 console 历史文档提取真实错误文本。 */
@@ -1041,6 +1085,14 @@ public final class DataSourceSelector {
 
             Method attach = providerClass.getMethod("attachConsole", Project.class, sessionClass, VirtualFile.class);
             attach.setAccessible(true);
+            // T-PreviewSlow F2：不得用 ReadAction 包 attachConsole——DBN 的 attachConsole 底层要
+            // new EditorImpl，其构造里 setHighlighter 走 WriteIntentReadAction，平台锁层明文禁止
+            // 「在 read-action 内再开 write-intent-read-action」（真机日志 Caused by:
+            // IllegalStateException: WriteIntentReadAction can not be called from ReadAction
+            // <- EditorImpl.setHighlighter <- ConsoleExecutionEditor.<init>）。T-PreviewDocLock2
+            // F1 把它整段包进 ReadAction 压读权限断言，反而触发锁嵌套硬抛、被 runCatching 吞成
+            // InvocationTargetException: null -> 控制台从未挂载成功。attachConsole 是平台自带读权限
+            // 与 invokeLaterIfNeeded 切 EDT 的第三方链入口，读权限由其内部自理，这里保持直接插桩。
             Object console = attach.invoke(null, project, session, vf);
             LOG.info("[M36] attachConsole -> " + console);
             if (console == null) return;
@@ -1749,6 +1801,10 @@ public final class DataSourceSelector {
             @Nullable Consumer<String> onError) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         lastReportedError = null;
+        // T-ExecSilentNoop：新执行亦重置提示去重标记——同一次执行只报一次提示。
+        executionHintReported = false;
+        // T-ExecSilentNoop：notSubmitted 提示携带本次目标数据源名（Kotlin 侧默认参 dsName = sharedDataSourceName）
+        final String dsName = sharedDataSourceName;
         consoleErrorBaseline = consoleHistoryLength(console);
         try {
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
@@ -1824,9 +1880,11 @@ public final class DataSourceSelector {
                                     // ignore
                                 }
                             }
+                            boolean freshModelDemoted = false;
                             if (freshModel != null && statementsInfo.apply(freshModel).startsWith("count=0")) {
                                 LOG.warn("[M36] vf PSI model has 0 statements, fallback to console scriptModel");
                                 freshModel = null;
+                                freshModelDemoted = true;
                             }
                             if (freshModel == null) {
                                 try {
@@ -1835,6 +1893,7 @@ public final class DataSourceSelector {
                                     // ignore
                                 }
                                 if (freshModel == null) freshModel = scriptModel;
+                                freshModelDemoted = true;
                             }
                             if (freshModel != scriptModel) {
                                 preparedScriptModel = freshModel;
@@ -1845,11 +1904,19 @@ public final class DataSourceSelector {
                                     + ", vfPsiText tail=..." + (vfPsi != null && vfPsi.getText() != null
                                     ? (vfPsi.getText().replace("\n", " ").length() > 30 ? vfPsi.getText().replace("\n", " ").substring(vfPsi.getText().replace("\n", " ").length() - 30) : vfPsi.getText().replace("\n", " "))
                                     : ""));
+                            // T-ExecSilentNoop F1a：提交前预检——探测 DBN 会静默拒绝的现场。
+                            // demoted 时（vf PSI 解析 0 语句回落 console model）说明准备窗口不稳
+                            //（方言 push 未完成 / PSI 未对齐），优先走 executeQueries(freshModel) 兜底
+                            // 而非原生链，把"静默不执行"降级为"明确执行/明确报错"。
+                            // 保守起见只在 demoted 时强制降级；非 demoted 保持 native 链原行为，
+                            // 交由提交后的回执判定（afterSubmitted/startResultTabRetry）兜底。
+                            boolean demoteToFallback = freshModelDemoted;
+                            execSilentProbe(console, freshModel, freshModelDemoted, dsName, LOG);
                             final PsiFile vfPsiFinal = vfPsi;
                             final Editor editorFinal = editor;
                             final Object execOptionFinal = execOption;
                             final boolean[] nativeRunRef = {false};
-                            if (vfPsi != null) {
+                            if (vfPsi != null && !demoteToFallback) {
                                 Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
                                 Method findScriptModel = providerClass.getMethod("findScriptModel", PsiFile.class, com.intellij.psi.PsiElement.class, Editor.class, execOption.getClass());
                                 final Method[] doRunMethodRef = {null};
@@ -1882,7 +1949,7 @@ public final class DataSourceSelector {
                                                     LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole");
                                                     doRunMethodRef[0].invoke(null, console, info);
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)");
-                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG);
+                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false);
                                                 } catch (Throwable t) {
                                                     Throwable cause = (t instanceof InvocationTargetException) ? ((InvocationTargetException) t).getTargetException() : t;
                                                     LOG.warn("[M36] native run chain FAILED: " + cause.getClass().getName() + ": " + cause.getMessage()
@@ -1900,6 +1967,7 @@ public final class DataSourceSelector {
                                 }
                             }
                             if (!nativeRunRef[0]) {
+                                LOG.info("[M36][EXEC] fallback path (native not used: " + (demoteToFallback ? "demoted" : "no vf psi or doRun missing") + "), executeQueries(freshModel)");
                                 execute.invoke(console, editor, freshModel, execOption);
                                 submittedRef[0] = true;
                             }
@@ -1921,7 +1989,7 @@ public final class DataSourceSelector {
                         return;
                     }
                     if (submittedRef[0]) {
-                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG);
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false);
                     }
                 });
             });
@@ -1940,14 +2008,16 @@ public final class DataSourceSelector {
         return sb.toString();
     }
 
-    /** M36.5.22：真实提交后的统一收尾。 */
+    /** M36.5.22：真实提交后的统一收尾。（T-ExecSilentNoop：dsName/demotedOverride 供提示三分流与去重） */
     private static void afterSubmitted(
             @NotNull Project project,
             Object ui,
             Object console,
             @Nullable Consumer<JComponent> onResultsReady,
             @Nullable Consumer<String> onError,
-            Logger LOG) {
+            Logger LOG,
+            String dsName,
+            boolean demotedOverride) {
         swapGeneration++;
         ApplicationManager.getApplication().invokeLater(() -> {
             List<Content> pre = resultContents(ui);
@@ -1969,9 +2039,18 @@ public final class DataSourceSelector {
                         namespaceOk = true;
                     }
                     if (!newTab && !namespaceOk) {
-                        LOG.info("[M36] no NEW result tab AND no namespace within 8s - credential/driver hint");
-                        final String hint = MpSqlVisualizerBundle.message("execute.credential.hint");
-                        hintOnError.accept(hint);
+                        // T-ExecSilentNoop：提交后 8s 回执——namespace 都出来了说明连接<b>已建立</b>、
+                        // 探针显示未提交（freshModel 回落）则归因"未提交"而非凭据；否则才落到
+                        // 凭据/驱动。与 40 拍窗口共用 executionHintReported 去重，同次执行只报一次。
+                        if (!executionHintReported) {
+                            executionHintReported = true;
+                            String hint = demotedOverride
+                                    ? MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "")
+                                    : MpSqlVisualizerBundle.message("execute.credential.hint");
+                            LOG.info("[M36] no NEW result tab AND no namespace within 8s (newTab=" + newTab + ", namespaceOk=" + namespaceOk
+                                    + ", demotedOverride=" + demotedOverride + ") - hint=" + (demotedOverride ? "notSubmitted" : "credential"));
+                            hintOnError.accept(hint);
+                        }
                     } else {
                         LOG.info("[M36] result/layout OK within 8s (newTab=" + newTab + ", namespaceOk=" + namespaceOk + ") - no hint");
                     }
@@ -1997,7 +2076,7 @@ public final class DataSourceSelector {
             }
             if (ui != null) {
                 Set<String> names = preExistingNames;
-                startResultTabRetry(project, ui, onError, names);
+                startResultTabRetry(project, ui, onError, names, dsName, demotedOverride);
             }
         }, ModalityState.any());
     }
@@ -2039,13 +2118,15 @@ public final class DataSourceSelector {
     /** M36.5.44：旧 Tab 复用接受的 tick 数。 */
     public static final int REUSE_ACCEPT_TICKS = 4;
 
-    /** 结果 Tab 激活重试。 */
+    /** 结果 Tab 激活重试。（T-ExecSilentNoop：dsName/demotedOverride 供 40 拍超时窗口提示三分流） */
     private static void startResultTabRetry(
             @NotNull Project project,
             Object ui,
             @Nullable Consumer<String> onError,
             Set<String> preExistingNames,
-            int generation) {
+            int generation,
+            String dsName,
+            boolean demotedOverride) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         final javax.swing.Timer[] timerHolder = {null};
         final int[] attempts = {0};
@@ -2098,11 +2179,28 @@ public final class DataSourceSelector {
                     timerHolder[0].stop();
                     LOG.info("[M36] result tab not appeared after " + attempts[0] + " attempts (dumb=" + dumb + ")");
                     String realError = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
-                    String hint = realError != null ? realError : MpSqlVisualizerBundle.message(dumb ? "execute.indexing.hint" : "execute.credential.hint");
-                    final String fHint = hint;
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        if (onError != null) onError.accept(fHint);
-                    }, ModalityState.any());
+                    // T-ExecSilentNoop：40 拍超时窗口与 8s 监控共用 executionHintReported 去重。
+                    // 真实错误优先（DBN 已把失败写进 history 才叫真失败/真超时）；无错误痕迹时
+                    // 不再一律归因凭据——先看本次是否探到"未提交"（freshModel 回落，DBN 侧静默
+                    // 拒绝），按情况给 notSubmitted / timeout / indexing 三种真实提示。
+                    if (realError == null && !executionHintReported) {
+                        executionHintReported = true;
+                        String fallbackHint = dumb
+                                ? MpSqlVisualizerBundle.message("execute.indexing.hint")
+                                : (demotedOverride
+                                        ? MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "")
+                                        : MpSqlVisualizerBundle.message("execute.timeout.hint"));
+                        LOG.info("[M36] result tab not appeared, no console error (dumb=" + dumb + ", demoted=" + demotedOverride + ") - hint via 40-tick window");
+                        final String fHint = fallbackHint;
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            if (onError != null) onError.accept(fHint);
+                        }, ModalityState.any());
+                    } else if (realError != null) {
+                        final String fErr = realError;
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            if (onError != null) onError.accept(fErr);
+                        }, ModalityState.any());
+                    }
                 }
             }
         };
@@ -2116,8 +2214,10 @@ public final class DataSourceSelector {
             @NotNull Project project,
             Object ui,
             @Nullable Consumer<String> onError,
-            Set<String> preExistingNames) {
-        startResultTabRetry(project, ui, onError, preExistingNames, swapGeneration);
+            Set<String> preExistingNames,
+            String dsName,
+            boolean demotedOverride) {
+        startResultTabRetry(project, ui, onError, preExistingNames, swapGeneration, dsName, demotedOverride);
     }
 
     /** M36.5：读取 last-used 数据源名。 */

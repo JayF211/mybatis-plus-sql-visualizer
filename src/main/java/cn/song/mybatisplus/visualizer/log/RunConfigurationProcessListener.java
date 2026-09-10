@@ -28,9 +28,10 @@ import java.lang.reflect.Proxy;
  *    MessageBusConnection/SimpleMessageBusConnection 是 util.jar 全平台稳定接口，
  *    可编译期直引，无需反射；只有 execution 域（可能被 IPGP 裁剪/移位）才反射。
  *
- * 回调分工：processStarted → SqlLogManager.resetEntrySequence（T-LogRowNumber：行号清零，
- * <b>无条件</b>执行，先于自动捕捉回调——不接进 onProjectProcessStarted 因其 {@code !autoStart} 守卫
- * 会跳过手动捕捉模式）→ SqlLogManager.onProjectProcessStarted（清 suppressed + startCapture 幂等）；
+ * 回调分工：processStarted → 先判定是否主配置（isModuleBasedLaunch，主业务 Java 应用才清行号——
+ * HTTP 请求/profiler/远程调试等非模块型 RunProfile 跳过清零，防项目运行期间反复发请求把行号错误归零；
+ * 用户反馈「项目启动中多次发送请求都从头计数」的根因）→ SqlLogManager.resetEntrySequence（T-LogRowNumber：
+ * 行号清零）→ SqlLogManager.onProjectProcessStarted（清 suppressed + startCapture 幂等）；
  * processTerminated 不在此处理——项目停止语义由 SqlLogManager.onConsoleRemoved 承担，
  * 此处若停会对所有 RunProfile 触发（HTTP 请求/profiler 均是进程，踩坑第九轮 v2 误停教训）。
  *
@@ -48,9 +49,45 @@ public final class RunConfigurationProcessListener {
     }
 
     /**
+     * T-LogRowNumber：判定一次 processStarted 是否「主业务 Java 应用」启动。
+     * 243 反编译实证 processStarted 签名为 {@code (String executorId, ExecutionEnvironment env, ProcessHandler)}，
+     * {@code env.getRunProfile()} 返回 RunProfile；仅当其实现 ModuleBasedConfiguration（Application/JUnit/SpringBoot
+     * 等主 run 配置的共同父类）才视为主进程。HTTP 请求脚本、profiler、远程调试等非模块型 RunProfile 被排除，
+     * 避免项目运行期间的附带进程启动把行号错误清零。反射读取——execution 域 API 不在编译 classpath。
+     */
+    private static boolean isModuleBasedLaunch(Object[] args) {
+        Object profile = null;
+        if (args != null && args.length > 1 && args[1] != null) {
+            Object env = args[1];
+            try {
+                profile = env.getClass().getMethod("getRunProfile").invoke(env);
+            } catch (Throwable t) {
+                profile = null;
+            }
+        }
+        if (profile == null) {
+            return false;
+        }
+        return isModuleBasedProfile(profile);
+    }
+
+    /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */
+    static boolean isModuleBasedProfile(Object profile) {
+        try {
+            Class<?> clazz = Class.forName(
+                    "com.intellij.execution.configurations.ModuleBasedConfiguration",
+                    true,
+                    PLATFORM_CLASS_LOADER);
+            return clazz.isInstance(profile);
+        } catch (Throwable t) {
+            LOG.warn("isModuleBasedProfile: 判定失败，按主进程处理（" + t.getMessage() + "）", t);
+            return true;
+        }
+    }
+
+    /**
      * 订阅项目级 EXECUTION_TOPIC；成功返回 true，execution API 缺失返回 false（降级）。
-     * handler 只处理 processStarted（243：两参环境版/三参 ProcessHandler 版均在，
-     * 任意重载触发一次即幂等），其余方法忽略。
+     * handler 只处理 processStarted（243：三参 {@code (String, ExecutionEnvironment, ProcessHandler)} 单重载）。
      */
     public static boolean subscribe(Project project, SqlLogManager manager) {
         Class<?> listenerClass;
@@ -71,10 +108,19 @@ public final class RunConfigurationProcessListener {
         }
         InvocationHandler handler = (proxy, method, args) -> {
             if (method.getName().equals("processStarted")) {
-                try {
-                    manager.resetEntrySequence(); // T-LogRowNumber：启动项目行号清零（无条件，先于自动捕捉回调）
-                } catch (Throwable t) {
-                    LOG.warn("processStarted: 行号清零回调失败（project=" + project.getName() + "）", t);
+                // T-LogRowNumber：行号清零须识别「主配置启动」——processStarted 对<b>任意</b>运行配置进程
+                // （HTTP 请求脚本/profiler/重复 Run 的测试等都走 EXECUTION_TOPIC）都会触发。无条件清零会让
+                // 项目运行期间每次发请求都从 #1 重新计数（用户反馈）。仅当该 RunProfile 是主业务 Java 应用
+                // （ModuleBasedConfiguration 子类）时清零，对齐「重新 Run 主配置」语义。
+                boolean isMainLaunch = isModuleBasedLaunch(args);
+                if (isMainLaunch) {
+                    try {
+                        manager.resetEntrySequence();
+                    } catch (Throwable t) {
+                        LOG.warn("processStarted: 行号清零回调失败（project=" + project.getName() + "）", t);
+                    }
+                } else {
+                    LOG.info("processStarted: 非主配置进程启动（HTTP/脚本/profiler 等），行号不清零（project=" + project.getName() + "）");
                 }
                 try {
                     manager.onProjectProcessStarted();
