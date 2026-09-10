@@ -64,6 +64,7 @@
 4. **纯新增取并集**，无争议。
 5. **注释差异**：同一句话两侧措辞不同时，取信息更全的一侧（通常带任务号与结论）。
 6. 疑难块先做**语义实证**再动手（读两侧 helper 实现、`javap`/源码核实），不以「哪边行数多」定胜负。
+7. **严禁按文件整取一边**（`git checkout --ours/--theirs -- <file>`）。冲突块只占文件的一部分，整取会把另一侧的**自动合并区成果**一并抹掉。唯一正确姿势：以 git 自动合并结果为底，逐个替换冲突块。本次在 `DataSourceSelector.kt` 上踩实此坑（§5.4 / §九）。
 
 ## 五、逐块解决方案
 
@@ -86,26 +87,30 @@
 
 注意：**2026-09-08 的自动监听第四轮与 RunConfigurationProcessListener 订阅修复两行，两侧都有**（同内容经 cherry-pick 落在两边），并集时去重，不留重复行。最终按日期倒序。
 
-### 5.3 config/PluginSettings.kt —— 取 dev
+### 5.3 config/PluginSettings.kt —— dev 新增字段保留 + 采纳 master 对 `collapsedGroups` 的删除
 
-master 侧该块为空（master 从未有这三行），dev 侧为 `collapsedGroups` / `reportSubmitterName` / `reportSubmitterEmail` 三个字段及其 KDoc。取 dev，无争议。
+master 侧该块为空（master 从未有这三行），dev 侧为 `reportSubmitterName` / `reportSubmitterEmail` 字段及其 KDoc，另有 `collapsedGroups`。
 
-附注：`logStopOnToolWindowClose` 两侧**都在**（master 第 169 行 / dev 第 169 行），T-AutoShowRecover 的恢复面与 dev 现状一致，不构成缺口；`collapsedGroups` 只在 dev 有，保留（T-PortLossBatch1 D3 在 master 侧的删除是「两侧零读者」判断，与 dev 侧保留其持久化读写不矛盾）。
+**定案**：保留 dev 的两个新字段；`collapsedGroups` 按 master 的处置删除。三方语义上这是「master 删除 / dev 未改」，git 只因 dev 在旁边新增了两行而判冲突——冲突块内取 dev 会把 master 的删除一并回滚。实测 `collapsedGroups` 在合并后的全树**零读者零写者**（`grep -rn collapsedGroups src/` 仅命中声明本身），与 T-PortLossBatch1 D3 的「两侧零读者」结论一致，删除它既忠于合并语义，也避免留下新假开关。
 
-### 5.4 execute/DataSourceSelector.kt —— 取 master 版 `createTempPsiFile`
+附注：`logStopOnToolWindowClose` 两侧都在（master/dev 均为第 169 行），消费链完整（`SqlLogToolWindowFactory` 注册 `ToolWindowVisibilityListener`，隐藏沿读 `getLogStopOnToolWindowClose()` 调 `stopCapture`），T-AutoShowRecover 的恢复面与 dev 现状一致，不构成缺口。
+
+### 5.4 execute/DataSourceSelector.kt —— 冲突块取 master，块外保留 dev（**必须走自动合并，不可整文件取边**）
 
 这是本次最有技术含量的块。两侧函数体是同一段代码的两代形态：
 
 - dev 侧（旧）：`runCatching { … }.getOrNull()` 整段吞异常 + `SlowOperations.allowSlowOperations(GENERIC)` 包 refresh/findFile，注释记录 T-Perf-13「EDT 同步 refresh 是作者有意识权衡」。
 - master 侧（新）：拆掉 `runCatching`，改为 `fail(stage, detail)` 分级记录失败阶段到 `lastTempFileFailure`（T-ExecCopyFix F2a，onError 文案携带）；`projectExecFile` 自接 IOException；**T-PreviewFlash 的 `cachedTempPsiFile` 配对缓存提前返回**；refresh 段换 `WriteIntentReadAction.compute`（T-ExecCopyFix F2b / T-PreviewWiLock 先例）；findFile 保持 `ReadAction.compute`；成功后写缓存。
 
-**定案：取 master 侧全文。** 理由是 dev 侧属于「修复前」形态，而 master 侧是同一问题的正确解法：
+**定案：`createTempPsiFile` 函数体取 master 侧**，理由是 dev 侧属于该问题的「修复前」形态：
 
 - dev 的 `allowSlowOperations(GENERIC)` 逃生舱在 EDT 上是**空壳**——T-PreviewFlash 反编译结论已记录在案（`SlowOperations.startSection` 首行 `if (!EDT.isCurrentThreadEdt()) return EMPTY` 直接返回不压栈），EDT 上压不住慢操作断言；master 换的 `WriteIntentReadAction` 才是 262 平台的正解。dev 侧此处保留的只是「未被证伪前的权衡注释」，其技术前提已被后续实证推翻。
 - dev 的 `runCatching` 吞异常正是 T-ExecCopyFix 要根治的「失败零日志无法归因」。
-- 缓存提前返回（`cachedTempPsiFile`）把 `WorkspaceFileIndex.ensureIsUpToDate` 断言移出每次预览热路径，是 dev 侧完全没有的净收益；冷路径每会话仅首次执行，T-Perf-13 担心的 EDT 耗时面被缓存与后台预热共同覆盖。
+- 缓存提前返回把 `WorkspaceFileIndex.ensureIsUpToDate` 断言移出每次预览热路径，是 dev 侧没有的净收益；冷路径每会话仅首次执行。
 
-配套成员（`cachedTempPsiFile` 字段、`lastTempFileFailure`、`cachedTempPsiFileForTest()` / `lastTempFileFailureForTest()` 测试缝、`clearPrepared` 的 F2c 不清缓存）在自动合并区已按 master 侧落入，无需手工搬运。调用点 `val temp = createTempPsiFile(...)` 与 `onError?.invoke(...)` 亦为 master 侧自动合并结果。
+**但「取 master 侧」只适用于该冲突块，绝不适用于整个文件**（实施阶段踩坑实录见 §九）：dev 在该文件另有 T-Perf-13 的 `prepareAfterEditorResolved` 异步准备链重构、T-Perf-16 的 `releaseForPanel()`（`SqlExecutor.releaseForPanel` 的调用目标）、runRunner 双参（`silent` × `onError`）等自动合并区成果，整文件 `checkout --theirs` 会把它们一并抹掉。正确做法：**以 git 自动合并结果为底，只把冲突块替换为 master 侧**。
+
+配套成员（`cachedTempPsiFile` 字段、`lastTempFileFailure`、`cachedTempPsiFileForTest()` / `lastTempFileFailureForTest()` 测试缝、`clearPrepared` 的 F2c 不清缓存）在自动合并区已按 master 侧落入。调用点 `val temp = createTempPsiFile(...)` 与 `onError?.invoke(...)` 亦为 master 侧自动合并结果。
 
 ### 5.5 log/SqlLogPanel.kt —— dev 结构 + master 行号片段
 
@@ -131,7 +136,7 @@ dev 侧 `RENDER_DEBOUNCE_MS = 150`（T-Perf-04 参数击键防抖）与 master �
 
 附核实：该文件 `createEditor` 已在自动合并区解析为 master 的「`awaitPrewarmedTempFile()` 有界等待」版本，dev 侧的 EDT 同步兜底分支（`allowSlowOperations` + `createTempFile`）随之退役——这是 T-PreviewFlash 的既定方向（预热竞态必输的回退路径本就该删），`prewarmPreviewTempFile()` 本体两侧一致，`prewarmedTempFile` 字段与 `awaitPrewarmedTempFile()` 均已在位，无悬空引用。
 
-### 5.8 ui/gutter/JpaGutterLineMarkerProvider.kt —— 取 dev 全文，弃 master 前置守卫
+### 5.8 ui/gutter/JpaGutterLineMarkerProvider.kt —— dev 三锚点结构 + master 守卫**收窄后**回归
 
 块一：master 在 `if (!gutterEnabled()) return null` 之后插入了两条全锚点前置守卫
 
@@ -142,12 +147,13 @@ if (!DerivedMethodLocator.isRepositoryMethod(method)) return null
 
 块二：master 的 `isInRepositoryInterface(method)` 私有 helper 与其 KDoc，与 dev 侧同一处 KDoc 的旧措辞相撞。
 
-**定案：取 dev 全文**（165 行三锚点结构：@Procedure / 派生方法 / executor·QBE 调用点），理由有二，均已实证：
+**定案：结构取 dev（三锚点：@Procedure / 派生方法 / executor·QBE 调用点），守卫收窄后移植。**
 
-1. **语义已被 dev 结构吸收**。dev 的派生方法锚点由 `DerivedMethodLocator.isRepositoryMethod(method)` 门控，而该方法实现（`DerivedMethodLocator.kt:153-157`）为 `isDerivedQuery(method) && isRepositoryInterface(method.containingClass)`——master 的 `isInRepositoryInterface` 判定已被包含，重复前置是冗余。这与上一次 dev 合并的既定结论一致（「JpaGutter 保 dev 三锚点结构，弃 m37 前置守卫」）。
-2. **前置守卫会误杀 dev 锚点**。master 的守卫作用于**所有**锚点；而 dev 的 T-J5/T-J20 executor/QBE 锚点锚在 **service 层调用处**（`userRepository.findAll(spec)` 的方法名），其所在类不是 Repository 接口，被前置守卫一律打成 null。这正是记忆里记下的「防杀 T-J5/J20 调用处锚点」。
+- **master 的前置守卫不能原样保留**：它作用于**所有**锚点，而 dev 的 T-J5/T-J20 executor/QBE 锚点锚在 **service 层调用处**（`userRepository.findAll(spec)` 的方法名），宿主类本就不是 Repository 接口，全锚点前置守卫会把它们一律打成 null。这正是记忆里记下的「防杀 T-J5/J20 调用处锚点」。
+- **master 的守卫也不能丢**（初版计划的判断在此被实测推翻）：dev 的 `DerivedMethodLocator.isRepositoryMethod` 走 `isRepositoryInterface(containingClass)`，而后者有**两条路径**——路径 1 superType 精确匹配 Spring Data 基类，路径 2 启发式「接口名以 `Repository` 结尾」。路径 2 会放行一个只叫 `UserRepository`、却未 extends 任何 Repository 基类型的裸接口，正是 M38.1 负例回归集要拦的误报面（`JpaGutterLineMarkerProviderTest.testInterfaceWithoutRepositoryExtendsNotResolvedZeroMarker`，首跑全量即在此红）。
+- **落点：把 `isInRepositoryInterface(method)` 作为派生方法锚点分支内的附加条件**（`isInRepositoryInterface(method) && DerivedMethodLocator.isRepositoryMethod(method)`），并补回 master 的 private helper。executor/QBE 锚点与 @Procedure 锚点不受影响。
 
-master 侧维持 99 行旧版式的原因是其 JPA 深化（M39 Wave3）只在 dev 一条线上；master 对同一问题的贡献（M38.1「PartTree 只认 Repository 接口」）语义在 dev 侧完整保留。
+master 侧维持 99 行旧版式的原因是其 JPA 深化（M39 Wave3）只在 dev 一条线上；master 对同一问题的贡献（M38.1「PartTree 只认 Repository 接口」）以收窄守卫的形式保留。
 
 ### 5.9 test/.../SqlLogManagerAutoShowTest.kt —— 取 master 的两条新用例
 

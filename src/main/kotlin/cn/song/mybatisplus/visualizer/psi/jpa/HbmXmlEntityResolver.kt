@@ -62,6 +62,8 @@ object HbmXmlEntityResolver {
         cache[cacheKey]?.let { return it }
         if (cacheKey in negativeCache) return null
 
+        // 搜索所有 .hbm.xml 文件（T-DepApi 无需介入：本路径走 FileTypeIndex + projectScope，
+        // 未使用全平台标 deprecated 的 FilenameIndex.getFilesByName）
         for (file in findHbmXmlFiles(project)) {
             for (mapping in parseHbmFile(file)) {
                 // 按简单类名和全限定名索引

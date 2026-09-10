@@ -81,6 +81,31 @@ class SqlLogManagerAutoShowTest : BasePlatformTestCase() {
         assertTrue("开关未经历重启用沿时抑制保持", manager.autoShowSuppressedByUserClose)
     }
 
+    fun testProjectProcessStartClearsSuppression() {
+        PluginSettings.getInstance().state.logAutoOpenOnCapture = true
+        PluginSettings.getInstance().state.logAutoCaptureOnStart = true
+        val manager = manager()
+        manager.autoShowSuppressedByUserClose = true
+        manager.lastAutoShowAt = 0L
+        // 项目进程启动 = 对自动展开的再次确认（真机复测：关窗抑制置位后启动项目仍不弹，与预期相悖）
+        manager.onProjectProcessStarted()
+        assertFalse("项目启动应清除自动展开会话抑制", manager.autoShowSuppressedByUserClose)
+        // 抑制清除后，本会话内首条 SQL 恢复自动展开能力
+        var calls = 0
+        manager.onAutoShowRequest = { calls++ }
+        manager.entries.addEntry(entry())
+        assertEquals("启动清除抑制后首条 SQL 恢复展开", 1, calls)
+    }
+
+    fun testProjectProcessStartSkippedWhenAutoStartOff() {
+        // logAutoCaptureOnStart 关闭时进程启动回调直接短路——不动抑制（用户没开启自动链路）
+        PluginSettings.getInstance().state.logAutoCaptureOnStart = false
+        val manager = manager()
+        manager.autoShowSuppressedByUserClose = true
+        manager.onProjectProcessStarted()
+        assertTrue("autoStart 关闭时启动不清抑制", manager.autoShowSuppressedByUserClose)
+    }
+
     fun testBufferEntryTriggersAutoShow() {
         PluginSettings.getInstance().state.logAutoOpenOnCapture = true
         val manager = manager()

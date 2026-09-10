@@ -70,7 +70,14 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
 
         // 既有：Repository 接口内的派生方法名锚点——避免普通类手写方法（如业务 DAO 的
         // `deleteByDbHelper`）被误判为 JPA 派生查询而显示错误图标（触发 previewDerivedQuery 返回 null）
+        // M38.1（负例回归集实证）：派生查询只存在于 Repository 接口——[DerivedMethodLocator.isRepositoryMethod]
+        // 的宿主判定含「接口名以 Repository 结尾」启发式路径，未 extends 任何 Repository 基类型的同名接口
+        // 会被放行，故此处再加一层文本级守卫 [isInRepositoryInterface] 收紧（普通类里 PartTree 形态的方法名
+        // `findByXxx` 与 `UserRepository` 裸接口均不得标锚——Flex-Helper「图标误显示」同款差评源）。
+        // **不做全锚点前置守卫**：T-J5/T-J20 executor/QBE 锚点锚在 service 层调用处，宿主类本就不是
+        // Repository 接口，前置守卫会把它们一并打死。
         if (method != null && method.nameIdentifier === element &&
+            isInRepositoryInterface(method) &&
             DerivedMethodLocator.isRepositoryMethod(method)
         ) {
             return LineMarkerInfo(
@@ -119,6 +126,20 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
     private fun gutterEnabled(): Boolean = runCatching {
         PluginSettings.getInstance().state.showGutterIcon
     }.getOrDefault(true)
+
+    /**
+     * 方法所在类是否为 Repository 接口（M38.1，文本级 O(1)——无 resolve，符合性能红线）：
+     * 接口 + extends 类型名含 "Repository"（JpaRepository/CrudRepository/PagingAndSortingRepository 等）。
+     * fixture 中的红色声明（接口 extends 未 resolve 的类）同样按文本命中。
+     */
+    private fun isInRepositoryInterface(method: PsiMethod): Boolean {
+        val containingClass = method.containingClass ?: return false
+        if (!containingClass.isInterface) return false
+        val extendsList = containingClass.extendsList ?: return false
+        return extendsList.referencedTypes.any {
+            (it as? com.intellij.psi.PsiClassType)?.className?.contains("Repository") == true
+        }
+    }
 
     /**
      * 导航处理：@Query 方法走 JPQL 路径，纯派生查询走 PartTree 路径；

@@ -385,7 +385,10 @@ class SqlPreviewService(private val project: Project) {
                 it,
                 injectLogicDelete = settings?.state?.injectLogicDelete ?: true,
                 resolveVariables = settings?.state?.replaceParams ?: true,
-                injectTenantLine = settings?.state?.injectTenantLine ?: true,
+                // D2：INSERT 租户列追加 = 主开关 AND 子开关（injectTenantOnInsert）；UPDATE 的 SET 租户注入
+                // 走主开关（见上方 enhanceUpdateSet 链），不受本参数影响
+                injectTenantLine = (settings?.state?.injectTenantLine ?: true) &&
+                    (settings?.state?.injectTenantOnInsert ?: true),
             )
         } ?: return null
         val result = PreviewResult(
@@ -1819,6 +1822,12 @@ class SqlPreviewService(private val project: Project) {
          * 统一展示入口（M10-03）：恒以弹窗（[SqlPreviewDialog]）展示预览结果，
          * 供 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 与 gutter 图标点击共用（M11 起收敛为弹窗）。
          *
+         * T-RefreshDbSteal F2：弹窗单例化——同项目已有预览弹窗时先 dispose 旧弹窗再开新。
+         * 旧实现每次调用都 new 一个 MODELESS 弹窗且从不关闭，多弹窗各自持有 rehost 监听，
+         * 互相抢占插件级共享控制台（真机 6 连抢根因）；单例化后同一时刻每个项目至多一个
+         * 预览弹窗存活，旧面板的监听随 dispose 显式移除（F3），僵尸源头消灭。
+         * 代价：旧弹窗的滚动/尺寸状态不保留（新弹窗重新初始化，尺寸走 DimensionService 记忆）。
+         *
          * @param result null 表示未找到可转换的 Wrapper → 弹友好提示（不抛异常）
          * @param sourceLocation 当前代码位置（文件名:行号），来源列默认值；null 表示未知
          */
@@ -1831,8 +1840,27 @@ class SqlPreviewService(private val project: Project) {
                 )
                 return
             }
-            SqlPreviewDialog(project, result, sourceLocation).show()
+            // 关旧开新：旧弹窗 dispose 级联释放面板（rehost 监听随之移除），再开新弹窗
+            val previous = activePreviewDialogs[project]?.get()
+            if (previous != null) {
+                if (previous.isDisposed) {
+                    LOG.info("[M36] preview dialog singleton: previous dialog already disposed")
+                } else {
+                    LOG.info("[M36] preview dialog singleton: closing previous dialog (id=${System.identityHashCode(previous)})")
+                    runCatching { previous.doDispose() }
+                }
+            }
+            val dialog = SqlPreviewDialog(project, result, sourceLocation)
+            activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
+            dialog.show()
         }
+
+        /** T-RefreshDbSteal F2：项目 → 当前存活的预览弹窗（弱引用——弹窗被用户关闭后不阻回收）。 */
+        private val activePreviewDialogs = java.util.concurrent.ConcurrentHashMap<Project, java.lang.ref.WeakReference<SqlPreviewDialog>>()
+
+        /** T-RefreshDbSteal F2：测试访问器——当前项目登记的存活预览弹窗（单例化断言用）。 */
+        internal fun activePreviewDialogForTest(project: Project): SqlPreviewDialog? =
+            activePreviewDialogs[project]?.get()
 
         /**
          * 后台线程 + 读操作执行转换，EDT 回调结果。

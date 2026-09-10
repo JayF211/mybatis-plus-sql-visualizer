@@ -10,6 +10,7 @@
 - **SQL 列表三种显示模式（T-ListMode）**：SQL 日志与 SQL 历史列表支持单行 / 关键字换行 / 格式化三种显示模式，工具栏下拉即时切换，默认关键字换行；模式跨会话保留、两列表全局共享，Ctrl+C 复制仍为纯 SQL
 - **hbm 命名查询预览链路贯通（T-H1~H4）**：`LegacyItem.hbm.xml` 等Hibernate XML 映射的 `<query>`（HQL）/`<sql-query>`（原生 SQL）命名查询此前无任何预览入口（XML gutter 只认 `<mapper>` 语句、`createNamedQuery` 回查只找 Java `@NamedQuery` 注解，hbm 纯 POJO 项目两头落空）——`HbmXmlEntityResolver` 新增命名查询解析（文本只取直属 XmlText、`<return-scalar>` 等子标签排除、负命中缓存沿既有口径）+ 新 gutter `HbmNamedQueryGutterLineMarkerProvider`（`<hibernate-mapping>` 父标签互斥去重，O(1) 判定）+ `previewHbmNamedQuery` 按种类分派（HQL 走 HqlConverter 实体→表 hbm 映射；原生 SQL 命名参数 `:param`→`?` 回填）+ `previewHql`/`previewCustomDaoHql` 回查未命中时 hbm fallback（`createNamedQuery("LegacyItem.findLowStockHql", …)` 不再垃圾降级）
 - **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
+- **SQL 日志列表行号（T-LogRowNumber）**：列表条目元信息行最前显示 `#N` 会话内捕获序号（第 N 条捕获的 SQL），每次启动项目从 1 重新计数（手动清空列表同样归零）；去重丢弃/暂停/过滤命中的 SQL 不占号，列表不跳号；耗时排序下行号保持可辨认原始捕获顺序
 
 ### Changed
 
@@ -23,6 +24,30 @@
 ### Fixed
 
 - **`commonDao.execute(hql,...)` 方法行与调用行双图标**：`StringSqlMethodGutterLineMarkerProvider` 方法体扫描缺家族守卫——CUSTOM_DAO/HIBERNATE_TEMPLATE/JPA_SESSION 家族调用已在调用行被专属 provider 认领，方法定义行再亮图标即重复（demo `updateStatusById`/`deleteAsnById` 实证）；补 CUSTOM_DAO/HIBERNATE_TEMPLATE/JPA_SESSION 排除（与 Jdbc provider 镜像），`GutterIconDedupTest` 补盲区纳入方法定义锚点，`beanCruder` UNKNOWN 家族方法行图标不回归
+- **预览点击侧边栏闪烁根治：filter 重放守卫 + EDT 慢操作消解（T-PreviewFlash）**：点击 SQL 预览图标侧边栏「SQL 日志」列表闪一次像被刷新，且每次点击 idea.log 刷 4~5 条 "Slow operations are prohibited on EDT"——根因：预览链每次覆盖写临时 SQL 文件 + VFS refresh + 方言重映射制造索引 dumb 窗口，dumb 退出时平台对控制台全文档重跑 message filter，而插件 filter 不幂等——历史行被重放入库/刷新即「闪烁」。修复：新增 `ConsoleReplayGuard` 四态重放守卫（watermark + docStamp + 行 0 文本区分流式/重放/重置/混合，反射解析失败降级直连现状语义）；`SqlPreviewPanel.createEditor` 弃 EDT 同步 VFS/findFile 改有界等待预热产物（createTempFile+refresh+findFile 全移后台线程，消除两处慢操作 SEVERE 热点）。测试：新增 `ConsoleReplayGuardTest` 6 用例
+- **三处弃用 API 换现代等价物（T-DepApi）**：`StdLanguages.JAVA` → `JavaLanguage.INSTANCE`、`FilenameIndex.getFilesByName` → `getVirtualFilesByName(name, scope)`、`Notification.setListener(URL_OPENING_LISTENER)` → `BrowseNotificationAction`（追加「查看发布页」动作）——三平台 verifyPlugin 弃用 40→38（243 5→3 / 253 8→6 / 262 40→38）、experimental 10→8；剩余四项经 javap 三平台核实无等价交集替换保留待平台演进
+- **执行临时文件失败与复制错误反馈（T-ExecCopyFix）**：① 两处「复制错误信息」按钮静默无反馈——`CopyFeedback.flashCopied` 文本按钮适配版（图标换对号 + 文案短暂换「已复制」，一次性 Timer 恢复）；② 执行失败 Failed to create temporary SQL file 零日志无法归因——`createTempPsiFile` 每个 return null 站点分级记录阶段原因，onError 文案改本地化 `execute.tempFile.failed` 携带阶段原因；冷路径 refresh 段包 `WriteIntentReadAction`（262 平台 EDT-ReadAction 同步 VFS refresh 硬抛 write-safe）；`clearPrepared` 不再清临时文件缓存（vf.isValid 守卫已兜底，原实现每次预览切换必落冷路径）
+- **预览刷新后内嵌 Database 丢失：多弹窗僵尸 rehost 监听抢共享控制台根治（T-RefreshDbSteal）**：刷新后 DBN 工具栏消失/参数不再同步右侧 SQL/执行 SQL 跑到 IDEA 控制台三症状同根——每次预览 new 一个 MODELESS 弹窗且从不关闭，旧弹窗的 rehost HierarchyListener 残活把插件级共享控制台抢回废弃面板（真机日志 6 连抢实锤）。四组修复：弹窗单例化（项目级登记表关旧开新）；监听引用入字段 detachConsole/dispose 显式移除（僵尸监听根治），去抖 skip 改单发 800ms Timer 延迟复查幂等重挂；所有权卫队 `consoleAttachedToMe` 判定，showSql/executeSql/createEditor 三处失联先 recoverConsole 重嵌、执行侧恢复未同步落地时放弃 executePrepared 防打在别人的控制台上；createEditor/releaseEditor 带栈埋点补齐真机故障期日志空窗。测试：新增 `RefreshDbStealTest` 8 用例，全量 3188/0/6 绿；真机复验清单留人工
+
+## [2026.9.9] - 2026-09-09
+
+### Fixed
+
+- **单击预览四轮优化：编辑器高亮与列表同色 + 可编辑修复（T-ClickPreview-04）**：预览编辑器高亮与 SQL 日志列表**同源同色**——新增 `SqlListSyntaxHighlighter`（SqlLexer 分词 + SqlHighlightColors 配色键），token→配色键映射收敛为唯一权威 `SqlListSyntaxHighlighter.ATTR_BY_TYPE`，列表片段渲染与编辑器高亮共用（改色只动一处，结构上保证同色）；预览编辑器改 `EditorFactory.createEditor(document, project)` 纯文档 + `EditorEx.setHighlighter(LexerEditorHighlighter(...))`，不再依赖平台 SQL FileType 与 Database 插件，缺席环境同样有高亮。修复「还是不能编辑」——根因=弹窗 `setRequestFocus(false)` 键盘焦点留在列表，编辑器「可编辑」名存实亡；改弹出即聚焦内容可直接打字（复制/关闭按钮 isFocusable=false 不抢焦点不变）
+- **单击预览五轮优化：复制按钮点击换对号反馈（T-ClickPreview-05）**：复制按钮回调成功后图标即时闪变为对号（`AllIcons.Actions.Checked`）1500ms 后由一次性 Swing Timer 自动恢复复制图标——复制成功即时可见反馈（此前点击无任何视觉反馈）；复制回调链路与关闭/焦点语义零改动
+- **双击预览无数据源时 Database 工具窗抢占侧边栏（T-DsCover）**：IDE 未配置数据源（或驱动未下载）时每次双击日志开预览，Database 工具窗都被拉起覆盖插件侧边栏——根因=预览总入口 `SqlPreviewPanel.showResult` 末尾无条件 `prepareDefaultConsole()`，途径 `chooseAndPrepare` 无数据源分支每次调 `openDatabaseToolWindow`（等价用户手点条带按钮，同条带插件工具窗被顶掉）。修复：`show()` 改由 `executeAfterPrepare` 门控（仅显式执行的 `selectAndExecute` 引导开窗，预览默认准备静默）；`runRunner` 加 `silent` 参数（预览路径失败不弹模态错误框、并清损坏数据源的 last-used 记忆避免每次预览白失败，显式执行/弹窗主动选中保持原弹窗引导）。成功路径（有数据源预览仍内嵌 DBN 原生工具栏，M36.5.25g）零改动
+- **IDE 2026.2.1 双击预览潜在必崩修复 + 插件市场发布受阻解除（T-Wia262）**：全量三版本官方兼容性校验（verifyPlugin）在 2026.2（262）平台报字节码级兼容问题——双击预览崩溃修复（T-PreviewWiLock）所用的 `WriteIntentReadAction.compute(ThrowableComputable)` 重载在 262 平台已被移除，而双击预览入口预热竞态必输、每次都走该回退分支，真机 2026.2.1 上会 `NoSuchMethodError` 崩溃（原 write-intent 崩溃实为换了一处崩溃）。改用三版本交集重载 `compute(Computable)`（单类型实参消歧，锁语义与执行路径零变化），复跑三版本校验 0 兼容性问题
+- **发现 SQL 自动打开日志窗口失效（T-AutoShowMaster）**：`logAutoOpenOnCapture` 写穿读断——F-44 删独立窗口时一并删除自动打开实现，设置项/勾选框/孤儿 KDoc 残留成纯假开关（生产代码零读取点）。自 dev 全量移植复活：无条件 buffer 监听（面板未创建首条捕获也触发）+ 60s 防抖 + 主工具窗 show 不 activate（不抢编辑器焦点）+ 用户手动关窗本会话抑制（`ToolWindowManagerListener` 可见→不可见转换沿）+ 设置 false→true 重启用沿解除抑制；默认值 false→true（已持久化 false 的用户不受影响）。平台实证：监听器须 `com.intellij.openapi.wm.ex` 包——非 ex 包不在本机裁剪发行版（243 平台 599 jar 全量扫描 0 命中）
+- **dev 已修转换语义缺陷/定位误报与导入导出反馈批量移植（T-PortLossBatch1 A~C 组）**：① 转换语义 6 处——`ne` 渲染 `<>` 对齐 MP `SqlKeyword.NE` 语义（QueryWrapperParser/WrapperConverter/MpjLambdaConverter 三转换器）、`or(Consumer)` 外层 OR 组内 AND 组合修正、`condition=false` 前缀子句整体跳过（LambdaUpdateConverter isFalseFlag）、having 字符串版透传 Raw、`last(...)` OFFSET 回填、负数字面量 `PsiPrefixExpression` 静态求值；② 定位误报守卫 2 处——`new Helper().lambdaQuery()` 非 MP 服务链不识别为锚点（WrapperAnchorDetector）、PartTree 方法仅 Repository 接口产出 gutter 标记（JpaGutterLineMarkerProvider）；③ 设置导入导出行内反馈——statusLabel 行内提示替代模态弹窗（原弹窗叠在 Settings 对话框下不可见），IO 移 `executeOnPooledThread` + `invokeLater` 回 EDT + `ModalityState.any()` 模态弹窗存续期照常回调
+- **假开关批量处置：INSERT 租户开关接线 + tooltip 对齐实际行为（T-PortLossBatch1 D 组）**：「INSERT 时追加租户列」子开关接线生效（injectTenantLine AND injectTenantOnInsert，对齐 MP `TenantLineInnerInterceptor` INSERT 语义；UPDATE SET 走主开关不受影响）；「自动注入 SQL 拦截器」为点击时刻触发型（勾选即 inject），tooltip 改为描述实际行为「勾选时立即生成一次（已存在则跳过）」；设置页复选框计数 22→21（PersistenceTest 随校正）
+- **启动项目清除自动展开会话抑制 + 「关闭工具窗口时停止监听」开关转正恢复（T-AutoShowRecover）**：真机复测实证「关窗抑制置位后启动项目仍不弹」与用户预期相悖——项目进程启动同样视为对自动展开的再次确认，`onProjectProcessStarted` 在清 `logAutoCaptureSuppressed` 处同步清 `autoShowSuppressedByUserClose`（autoStart 关闭时短路不动抑制）。「关闭工具窗口时自动停止监听」开关转正：该功能在 master 曾为真实现（T-M51），此前以「master 无读者」错误前提被整体下线用力过猛——按基点原文选择性恢复 7 文件（字段/工厂订阅区/监听器整文件/面板 5 行/搜索字段/双 bundle key/census），恢复面与基点零内容差异，未来 dev→master 合并本簇三方合并自动解决
+
+### Test
+
+- **单击预览**：`SqlClickPreviewTest` 增至 11 用例（新增编辑器高亮与列表片段同源同色断言：highlighter 类型 / token 序列全文覆盖 / 非空白 token 共用配色键 / 片段通道文本守恒；复制后图标即时换对号反馈断言）
+- **自动展示**：新增 `SqlLogManagerAutoShowTest` 7 用例自 dev 原样移植（决策纯函数/关闭抑制/转换沿四象限/重启用沿/入队触发/防抖/关闭态）
+- **移植修复**：转换语义 4 用例 + 定位守卫 1 用例 + 导入导出反馈 2 用例 + 租户开关 4 用例；设置页复选框计数 PersistenceTest 随 D 组校正
+- **自动监听恢复**：启动清抑制 +2 用例（autoStart 开清抑制 / autoStart 关不动抑制）
 
 ## [2026.9.8] - 2026-09-08
 
@@ -30,11 +55,15 @@
 
 - **SQL 列表悬停预览改单击预览、双击开完整弹窗（T-ClickPreview）**：SQL 日志列表条目多后鼠标悬停卡顿——根因=渲染器 `toolTipText` 设完整 SQL，悬停逐行弹气泡且连动可变行高重排。三个列表（SQL 日志 / 历史 tab 二级 SQL 列表 / 历史记录工具窗）统一改造：移除悬停 tooltip（悬停零成本），单击条目延迟 300ms 弹轻量预览，双击仍开完整预览弹窗；双击第一击不闪预览（定时器区分单击/双击），面板销毁时停表关弹窗。二轮优化：预览排程严格绑定「点到真实行」（点击时捕获该行 SQL，空白区点击立即停表关预览，杜绝点其他地方后未再单击 SQL 预览自行复活），仅左键触发（右键菜单不再连带弹预览）；弹窗锚点改被点行下缘 2px 缝（不遮被点行）。三轮优化：预览内容升级为 **SQL 高亮可编辑编辑器**（纯文档 + SQL FileType 驱动词法高亮，无 PSI；测试环境无 Database 插件时降级纯文本），可临时改字段值后点头部**复制**按钮取编辑后文本（软换行免横向滚动，编辑器随弹窗关闭自动释放），头部另有**关闭**按钮。四轮优化：编辑器高亮与列表条目**同色**（token→配色键映射收敛为 `SqlListSyntaxHighlighter.ATTR_BY_TYPE` 唯一权威，列表片段渲染与编辑器高亮共用，不再走平台 SQL 方言高亮），弹出即聚焦内容、点进编辑器可直接打字编辑（原 `setRequestFocus(false)` 致键盘焦点留在列表，「可编辑」名存实亡）。五轮优化：复制按钮点击后图标闪变为**对号**（`AllIcons.Actions.Checked`）1500ms 后自动恢复复制图标——复制成功即时可见反馈（此前点击无任何视觉反馈）
 
-### Fixed
+### Added
 
+- **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
+
+### Fixed
 - **IDE 2026.2.1 双击预览潜在必崩修复 + 插件市场发布受阻解除（T-Wia262）**：全量三版本官方兼容性校验（verifyPlugin）在 2026.2（262）平台报字节码级兼容问题——上述双击预览崩溃修复所用的 `WriteIntentReadAction.compute(ThrowableComputable)` 重载在 262 平台已被移除，而双击预览入口预热竞态必输、每次都走该回退分支，真机 2026.2.1 上会 `NoSuchMethodError` 崩溃（原 write-intent 崩溃实为换了一处崩溃）。改用三版本交集重载 `compute(Computable)`（单类型实参消歧，锁语义与执行路径零变化），复跑三版本校验 0 兼容性问题
 - **双击预览无数据源时 Database 工具窗抢占侧边栏（T-DsCover）**：IDE 未配置数据源（或驱动未下载）时每次双击日志开预览，Database 工具窗都被拉起覆盖插件侧边栏——根因=预览总入口 `SqlPreviewPanel.showResult` 末尾无条件 `prepareDefaultConsole()`，途径 `chooseAndPrepare` 无数据源分支每次调 `openDatabaseToolWindow`（`ToolWindowManager.getToolWindow("Database")?.show()`，等价用户手点条带按钮，同条带插件工具窗被顶掉）。修复：`show()` 改由 `executeAfterPrepare` 门控（仅显式执行的 `selectAndExecute` 引导开窗，预览默认准备静默）；`runRunner` 加 `silent` 参数（预览路径失败不弹模态错误框、并清损坏数据源的 last-used 记忆避免每次预览白失败，显式执行/弹窗主动选中保持原弹窗引导）。成功路径（有数据源预览仍内嵌 DBN 原生工具栏，M36.5.25g）零改动
 - **多行 JdbcTemplate 日志漏捕获（T-JdbcMultiline）**：SQL 跨行的 `Executing prepared SQL statement [...]` 控制台日志（含 TLog 等自定义日志前缀）此前一条不进 SQL 日志列表，现按 string-aware 括号配对跨行收集完整语句（字符串内方括号、标识符 `[列]` 不误判闭合，参数还原与 MP 分页计数标记链路不受影响），「日志转 SQL」手动粘贴面板同步受益
+
 - **SQL 日志去重失效与 MP 分页计数误标（T-LogDedupeMpMark）**：开启「移除重复的sql」后列表仍成对重复、且 [MP 分页计数] 标记落到全列数据 SELECT 上——根因一：JdbcTemplate 双路日志（仓储层 `sql = ...` TRACE 行与 Spring `Executing prepared SQL statement [...]` DEBUG 行）对同一语句产出两条副本，还原文本仅差首尾空白，而去重判定按原文精确相等永不命中，现按空白规范化指纹判重（trim + 连续空白折叠；大小写与分号不动，参数不同仍不合并）；根因二：MP 分页 COUNT 标记按「同一行产出的全部条目」批级判定，与 COUNT 副本同批闭合的数据查询被一并误标（且丢失源码跳转），现改逐条判定
 - **SQL 日志列表 EDT 冻结 16 秒（T-LogListFreeze-04）**：打开/刷新 SQL 日志面板 IDE 冻结 16 秒（Freeze 报告采样 11.4s 全落 Swing BasicHTML）——三层根因一次根治：① 列表渲染器弃 JLabel-HTML 通道（每次 setText 触发 BasicHTML 完整解析排版，逐 token span 着色 × 可变行高逐条测量被逐条放大），改双 SimpleColoredComponent 两行片段渲染（元信息行在上、SQL 分词高亮在下；配色体系与关键字加粗保留，T-TwoLine 结构不变；摘要文本原样绘制，原 HTML 注入转义面消失）；② 列表固定行高（原可变行高使每次布局逐条测量，WideSelectionListUI 在固定行高下短路走 O(1) 快路径）——条目不再按 SQL 内容自动折行，全文查看走单击预览/双击弹窗；③ 刷新管线增量化（同源移植 dev M54 性能治理：可见列表差分增量刷新+代际守卫替代每条日志全量重建、搜索 200ms 防抖、UI 通知置脏合并、去重计数键指纹化、dispose 精确注销监听、去重判定入临界区防 CME、onEvicted 回调移出锁）。SQL 历史面板两个渲染器同型改造
 - **SQL 日志双击预览崩溃（T-PreviewWiLock）**：双击 SQL 日志条目预览恒抛 `RuntimeExceptionWithAttachments: Access is allowed from write thread only`，弹窗打不开——`SqlPreviewPanel.createEditor` 回退分支把同步 VFS refresh（`refreshAndFindFileByIoFile`）包在 `ReadAction.compute` 内：2024.2+ 平台要求同步 VFS refresh 须持 write-intent lock（write-safe context），而 EDT 进入 ReadAction 会把隐式持有的 write-intent lock check out，262 平台（IDE 2026.2.1）该断言硬抛；且日志双击入口在弹窗构造函数内同步渲染，T-M36.6-03 预热竞态必输、每次都走 EDT 回退分支。修复：包装换 `WriteIntentReadAction.compute`（write-intent 隐含读权限，lambda 内 `PsiManager.findFile` 不受影响，`SlowOperations.allowSlowOperations` 逃生舱保持）
@@ -705,4 +734,3 @@
 - 字符串参数引号污染 SQL 片段（last/setSql/selectAs）：SqlValue.Literal 增加 `unquoted` 字段
 - MPJ `on(col1, col2)` PSI 解析：新增 OnConditionArg 类型
 - Kotlin 增量编译缓存导致 NoSuchMethodError：clean 重编译解决
-

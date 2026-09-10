@@ -149,4 +149,41 @@ class JpaGutterLineMarkerProviderTest : BasePlatformTestCase() {
             provider.getLineMarkerInfo(identifier!!),
         )
     }
+
+    fun testPlainClassPartTreeMethodZeroMarker() {
+        // M38.1（负例回归，Flex-Helper「图标误显示」差评源）：普通类（非接口）里 PartTree 形态的
+        // 方法名 findByXxx 不应标 JPA gutter——派生查询只存在于 Repository 接口。
+        // 守卫 isInRepositoryInterface（文本级 O(1)：接口 + extends 类型名含 Repository）拦截。
+        myFixture.configureByText("PlainDemo.java", """
+            public class PlainDemo {
+                // 普通类方法名 PartTree 形态（find 前缀 + 含 By）→ 不应显示 JPA gutter
+                public UserEntity findByLastName(String lastName) { return null; }
+            }
+            class UserEntity { private String lastName; }
+        """.trimIndent())
+        val identifier = findIdentifier("findByLastName")
+        assertNotNull("应找到 findByLastName 标识符", identifier)
+        assertNull(
+            "普通类的 findByXxx 方法名不应产生 JPA marker",
+            provider.getLineMarkerInfo(identifier!!),
+        )
+    }
+
+    fun testInterfaceWithoutRepositoryExtendsZeroMarker() {
+        // M38.1 负例变体（守卫独有拦截面）：接口名以 Repository 结尾会被 DerivedMethodLocator
+        // 的启发式路径 2（类名后缀）放行，但该接口未 extends 任何 Repository 基类型——
+        // isInRepositoryInterface 文本守卫（extends 列表类型名含 Repository）拦截，不标 JPA gutter
+        myFixture.configureByText("UserRepository.java", """
+            public interface UserRepository {
+                UserEntity findByLastName(String lastName);
+            }
+            class UserEntity { private String lastName; }
+        """.trimIndent())
+        val identifier = findIdentifier("findByLastName")
+        assertNotNull("应找到 findByLastName 标识符", identifier)
+        assertNull(
+            "未 extends Repository 基类型的接口 findByXxx 不应产生 JPA marker",
+            provider.getLineMarkerInfo(identifier!!),
+        )
+    }
 }

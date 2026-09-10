@@ -56,6 +56,17 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** 条目缓冲（面板与测试访问）。 */
     val entries: SqlLogEntryBuffer get() = buffer
 
+    /**
+     * T-LogRowNumber：捕获序号归零（项目启动时调用，列表行号从 #1 重新计数）。
+     * 由 [RunConfigurationProcessListener] processStarted 分支**无条件**调用——
+     * 不接进 [onProjectProcessStarted]（其 `!autoStart` 守卫会跳过手动捕捉模式的清零，
+     * 违背「每次启动项目时清 0」的无条件语义）。
+     */
+    fun resetEntrySequence() {
+        buffer.resetEntrySequence()
+        LOG.info("resetEntrySequence: 项目启动——捕获序号归零（列表行号重新从 #1 计数，project=${project.name}）")
+    }
+
     /** 捕捉状态（默认关——用户点击「开始捕捉」后才挂载监听，对齐 MybatisCodeHelper-Pro 手动监听）。 */
     @Volatile
     var capturing: Boolean = false
@@ -344,6 +355,12 @@ class SqlLogManager(private val project: Project) : Disposable {
             // 项目启动 = 用户对「自动监听」的再次确认（设置优先，对齐踩坑第十一轮）
             PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
             LOG.info("onProjectProcessStarted: 项目启动清除 suppressed（autoStart 优先）——project=${project.name}")
+        }
+        // T-AutoShowSuppress：项目启动同样视为对「自动展开」的再次确认——用户真机复测实证
+        // （2026-09-09）：关窗抑制置位后启动项目仍不弹，与用户预期相悖；启动 = 本轮开发要重新看日志
+        if (autoShowSuppressedByUserClose) {
+            autoShowSuppressedByUserClose = false
+            LOG.info("onProjectProcessStarted: 项目启动清除自动展开会话抑制——project=${project.name}")
         }
         if (capturing && !isWaitingForConsole) {
             LOG.debug("onProjectProcessStarted: 已在捕捉态，startCapture 幂等跳过（project=${project.name}）")

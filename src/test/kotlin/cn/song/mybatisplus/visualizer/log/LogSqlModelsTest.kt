@@ -65,4 +65,27 @@ class LogSqlModelsTest {
         assertEquals(entry.restoredSql, parsed.restoredSql)
         assertNull("round-trip 后不应残留未闭合条目", parser.closePending())
     }
+
+    // ---------- T-LogRowNumber：捕获序号字段 ----------
+
+    @Test
+    fun `sequenceNumber 默认为 0 表示无行号`() {
+        val entry = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList())
+        assertEquals(0L, entry.sequenceNumber)
+    }
+
+    @Test
+    fun `sequenceNumber 显式赋值与 copy 语义`() {
+        val entry = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            sequenceNumber = 7L,
+        )
+        assertEquals(7L, entry.sequenceNumber)
+        // copy 不带参保留序号；显式覆盖生效（buffer 入队分配即走 copy）
+        assertEquals(7L, entry.copy().sequenceNumber)
+        assertEquals(8L, entry.copy(sequenceNumber = 8L).sequenceNumber)
+        assertEquals("SELECT 1", entry.copy(sequenceNumber = 8L).restoredSql)
+    }
 }

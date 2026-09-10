@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.log
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 日志条目缓冲（T-M31-03，纯逻辑，不依赖平台）：条目列表（最早在前、上限裁剪）、
@@ -20,6 +22,9 @@ class SqlLogEntryBuffer(
 
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val entries = ArrayDeque<LogSqlEntry>()
+
+    /** T-LogRowNumber：会话内捕获序号计数器（成功入队时分配；启动项目/手动清空归零。可从任意线程调用故原子）。 */
+    private val sequenceCounter = AtomicLong(0)
 
     /** T-Perf-03（自 dev 移植）：自上次 drain 以来的头部淘汰条数（面板增量刷新对齐用；drain 约定单消费方——面板 EDT 刷新）。 */
     private val evictedSinceDrain = java.util.concurrent.atomic.AtomicInteger()
@@ -68,7 +73,8 @@ class SqlLogEntryBuffer(
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true
             } else {
-                entries.addLast(entry)
+                // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
+                entries.addLast(addNumbered(entry))
                 while (entries.size > maxEntries) {
                     evictedEntries.add(entries.removeFirst())
                     evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
@@ -155,10 +161,14 @@ class SqlLogEntryBuffer(
      */
     fun drainEvictedCount(): Int = evictedSinceDrain.getAndSet(0)
 
-    /** 清空全部（去重计数一并归零——徽章与列表内容同生命周期）。 */
+    /**
+     * 清空全部（去重计数一并归零——徽章与列表内容同生命周期；
+     * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
+     */
     fun clear() {
         synchronized(entries) { entries.clear() }
         resetDedupeCounts()
+        sequenceCounter.set(0)
         notifyChanged()
     }
 
@@ -167,15 +177,35 @@ class SqlLogEntryBuffer(
         dedupeCounts.clear()
     }
 
+    /**
+     * T-LogRowNumber：捕获序号归零（项目启动 processStarted 回调调用）。
+     * 不清列表——旧条目保留原行号，仅新一轮启动后的 SQL 从 #1 重新计数。
+     */
+    fun resetEntrySequence() {
+        sequenceCounter.set(0)
+    }
+
     /** 指定 SQL 的去重丢弃次数（参数为还原 SQL 原文，内部按规范化+指纹查，与 [LogSqlEntry.dedupeKey] 同键；无丢弃记录返回 0）。 */
     fun dedupeCount(sql: String): Int = dedupeCounts[sqlFingerprint(normalizeSqlWhitespace(sql))] ?: 0
 
     /** 去重丢弃计数快照（键 = [sqlFingerprint] 指纹，值 = 丢弃次数；供面板渲染徽章）。 */
     fun dedupeCountsSnapshot(): Map<String, Int> = dedupeCounts.toMap()
 
-    /** 删除单条（面板右键菜单）。 */
+    /**
+     * T-LogRowNumber：入队时以 [entry] 为原型分配捕获序号（copy 出带号实例入队）。
+     */
+    private fun addNumbered(entry: LogSqlEntry): LogSqlEntry =
+        entry.copy(sequenceNumber = sequenceCounter.incrementAndGet())
+
+    /**
+     * 删除单条（面板右键菜单）。
+     *
+     * T-LogRowNumber：buffer 入库的是带行号 copy（[addNumbered]），而面板持有的引用来自
+     * 列表模型（即入库实例本身）——两者同一，按 **同一性** 删除即可；不能用 data class equals：
+     * 序号字段参与 equals，外部构造/改造过的等值条目不应误删列表中的真身。
+     */
     fun removeEntry(entry: LogSqlEntry) {
-        synchronized(entries) { entries.remove(entry) }
+        synchronized(entries) { entries.removeAll { it === entry } }
         notifyChanged()
     }
 

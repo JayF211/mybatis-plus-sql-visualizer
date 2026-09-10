@@ -531,6 +531,84 @@ class QueryWrapperParserTest {
         assertEquals(1, statement.conditions.size)
     }
 
+    @Test
+    fun `ne渲染与MP语义一致用尖括号等号`() {
+        // M38.2（语义对照矩阵实证）：MP SqlKeyword.NE = "<>"，原 "!=" 与 MP 不一致
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("ne", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("2")),
+                )),
+            ),
+        )
+        val statement = parser.parse(chain)
+        val cond = statement.conditions[0] as Condition.Simple
+        assertEquals("station_id", cond.column.columnName)
+        assertEquals("<>", cond.op)
+        assertEquals("2", (cond.value as SqlValue.Literal).raw)
+        val sql = SqlGenerator.generate(statement)
+        assertTrue(
+            "ne 应渲染 <>：$sql",
+            sql.contains("station_id <> 2") && !sql.contains("!="),
+        )
+    }
+
+    @Test
+    fun `orConsumer外层OR组内AND`() {
+        // M38.2：or(w -> w.eq(2).eq(3)) = 外层 OR 连接 + 组内恒 AND（MP 语义）。
+        // 修复前组内连接词误用 OR → 渲染 `AND (2 OR 3)`（内外颠倒）
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "E",
+            listOf(
+                eqCall("id", "1"),
+                WrapperCall("or", listOf(
+                    nested(listOf(eqCall("id", "2"), eqCall("id", "3"))),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(parser.parse(chain))
+        assertEquals(
+            """
+            SELECT id, station_id, share_scheme_id, name
+            FROM car_device_info
+            WHERE (id = 1 OR (id = 2 AND id = 3))
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `having字符串版透传Raw条件`() {
+        // M38.2：字符串版 having("count(*) > 3")（MP 官方 API）——修复前字符串片段被静默丢弃
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("groupBy", listOf(WrapperArg.ValueArg(SqlValue.Literal("status")))),
+                WrapperCall("having", listOf(WrapperArg.ValueArg(SqlValue.Literal("count(*) > 3")))),
+            ),
+        )
+        val statement = parser.parse(chain)
+        val cond = statement.having as Condition.Raw
+        assertEquals("count(*) > 3", cond.sqlText)
+        val sql = SqlGenerator.generate(statement)
+        assertTrue("having 字符串应透传：$sql", sql.contains("HAVING count(*) > 3"))
+    }
+
+    @Test
+    fun `lastLimitOffset形态OFFSET回填`() {
+        // M38.2：last("limit 5 OFFSET 10")（MySQL 另一形态，MP last 常用）——修复前 OFFSET 被静默丢弃
+        val chain = WrapperChain(
+            WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("last", listOf(WrapperArg.ValueArg(SqlValue.Literal("limit 5 OFFSET 10")))),
+            ),
+        )
+        val statement = parser.parse(chain)
+        assertEquals(LimitClause(offset = 10, count = 5), statement.limit)
+    }
+
     // ------------------------------------------------------------------
     // M12：动态条件（布尔重载 → toggle 元数据 + 判空语义 + 静态求值 + 启用过滤）
     // ------------------------------------------------------------------

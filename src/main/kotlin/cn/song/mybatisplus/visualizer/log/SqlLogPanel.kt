@@ -1533,6 +1533,10 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         metaLine.clear()
         val entry = value as? LogSqlEntry
         val lineFragments = if (entry != null) {
+            // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
+            if (entry.sequenceNumber > 0) {
+                metaLine.append("#${entry.sequenceNumber} ", LIST_META_GRAY)
+            }
             // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
             formatTimestampFragment(entry.timestamp)?.let { (t, a) -> metaLine.append(t, a) }
             if (PluginSettings.getInstance().state.showDurationInLogList) {
