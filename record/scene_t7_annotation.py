@@ -13,10 +13,10 @@ from gifkit import Recorder, click, keys, typewrite, wait_stable
 REGION = (277, 25, 1370, 984)
 OUT = "perf/t7_annotation.mp4"
 
-GUTTER = (744, 439)      # line 33 @Select gutter 图标
-IN_USERNAME = (582, 521) # 参数 #username 输入框
-IN_STATUS = (582, 588)   # 参数 #status 输入框
-CANCEL = (1478, 824)     # 弹窗「取消」
+GUTTER = (764, 360)      # line 33 @Select gutter 图标（T-GifHeader 两行头部后重标）
+IN_USERNAME = (584, 548) # 参数 #username 输入框
+IN_STATUS = (584, 613)   # 参数 #status 输入框
+CANCEL = (1480, 822)     # 弹窗「取消」
 
 
 def main():

@@ -9,15 +9,18 @@
 import sys
 import time
 
-from gifkit import Recorder, click, pyautogui
+from gifkit import Recorder, click, goto_line, open_file, pyautogui
 
 REGION = (277, 25, 1370, 984)
 OUT = "perf/t3_completion.mp4"
 
-FROM_LINE_END = (700, 494)  # line 78 "from user" 行尾
+FROM_LINE_END = (1027, 419)  # line 77 "from user" 行中（点击后 End 键到位）
 
 
 def main():
+    # 文件已在前一 take 打开（tab 活跃），跳过 open_file 以免 ctrl+shift+n 翻转 IME
+    goto_line(77)
+
     r = Recorder(REGION, OUT)
     time.sleep(1.2)
     r.start()
