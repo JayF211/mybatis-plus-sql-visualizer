@@ -220,6 +220,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var current: PreviewResult? = null
     private var compactMode = false
 
+    /**
+     * T-PreviewDisplayMode：编辑器显示模式。
+     *
+     * 编辑器文本是「模型派生视图」——参数输入/条件勾选/foreach 次数/压缩切换等任何变更都会
+     * [renderSql] 全量重建并整篇覆盖文档，因此**一次性文档变换必被下一次重建抹掉**（早期三个
+     * 格式按钮直接 setText 的写法：竖向排列/关键字换行无条件丢失，格式化仅在设置开启且非压缩
+     * 时因 [showSql] 里那句 format() 而"看似保留"）。模式改存状态、由 [applyDisplayMode] 在
+     * 渲染管线中统一套用，重建后形态保持。
+     */
+    private var displayMode = PreviewDisplayMode.NORMAL
+
+    /** T-PreviewDisplayMode：预览编辑器显示模式（见 [displayMode] 的 KDoc）。 */
+    enum class PreviewDisplayMode { NORMAL, FORMAT, KEYWORD_WRAP, VERTICAL }
+
     // O-4：上一次预览的 SQL（会话缓存，供 Compare 并排对比用）
     private var previousSql: String? = null
 
@@ -1223,6 +1237,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 刷新视图（M19.3）：模式**复位为与设置「SQL 格式化输出」对齐**（默认多行）后重渲染编辑器——
      * 用户实测：点刷新后 SQL 仍停留在压缩模式（此前手动切换/设置快照的压缩被保留）；
      * 刷新 = 回到默认状态（参数与回填保留，仅模式复位）。
+     *
+     * T-PreviewDisplayMode：显示模式一并复位为 NORMAL（即回到设置派生形态——设置开启为格式化、
+     * 关闭为原样），与「刷新=回到默认状态」语义一致，竖排/关键字换行不跨刷新残留。
      */
     fun refreshView() {
         // T-RefreshDbSteal：刷新是唯一常规触达共享控制台文档的按钮（WriteCommandAction），
@@ -1230,6 +1247,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M36] refreshView entry: compactMode=$compactMode, nativeDoc=${nativeEditorDoc != null}, editor=${editor != null}, embedded=${System.identityHashCode(embeddedConsole)}, attachedToMe=${consoleAttachedToMe()}")
         compactMode = !formatSqlSetting()
+        displayMode = PreviewDisplayMode.NORMAL
         modeButton.text = modeButtonText()
         renderSql()
     }
@@ -1239,34 +1257,59 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         PluginSettings.getInstance().state.formatSql
     }.getOrDefault(true)
 
-    /** 格式化当前编辑器 SQL（关键字大写 / 子句换行 / 条件缩进，[SqlFormatter]）。 */
-    fun formatSql() {
-        // M36.4：优先取原生编辑器文档，兜底自研编辑器
-        val doc = nativeEditorDoc ?: editor?.document ?: return
-        val formatted = SqlFormatter.format(doc.text)
-        if (formatted != doc.text) {
-            WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
+    /**
+     * T-PreviewDisplayMode：按当前显示模式变换渲染文本（[showSql] 的唯一收敛点调用）。
+     *
+     * 优先级：压缩模式最高——压缩语义是"全部挤一行"，而模式变换会引入换行，二者相抵故短路；
+     * 其余按模式分派：NORMAL 交「SQL 格式化输出」设置决定（保持设置关闭时不格式化的既有语义）、
+     * FORMAT 强制格式化、KEYWORD_WRAP / VERTICAL 走对应变换（二者对非 INSERT 已内含 format，
+     * 无需叠加）。
+     */
+    private fun applyDisplayMode(sql: String): String {
+        if (compactMode) return sql
+        return when (displayMode) {
+            PreviewDisplayMode.NORMAL -> if (formatSqlSetting()) SqlFormatter.format(sql) else sql
+            PreviewDisplayMode.FORMAT -> SqlFormatter.format(sql)
+            PreviewDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
+            PreviewDisplayMode.VERTICAL -> SqlFormatter.formatVertical(sql)
         }
+    }
+
+    /**
+     * T-PreviewDisplayMode：切换编辑器显示模式并重渲染（格式族按钮与 Ctrl+Alt+L 快捷键的统一入口）。
+     *
+     * 与旧实现的区别：不再直接对文档做一次性变换，而是记录模式后交渲染管线产出——这样参数输入、
+     * 条件勾选、foreach 次数增减等任何重建都不会再把竖排/关键字换行形态抹掉。
+     *
+     * 压缩模式下切换格式族模式会一并退出压缩：否则模式被压缩短路、点击无可见效果（且"压缩态 +
+     * 已格式化文档"是自相矛盾的中间态）。
+     */
+    fun setDisplayMode(mode: PreviewDisplayMode) {
+        displayMode = mode
+        if (compactMode) {
+            compactMode = false
+            if (::modeButton.isInitialized) modeButton.text = modeButtonText()
+        }
+        renderSql()
+    }
+
+    /**
+     * 格式化当前编辑器 SQL（关键字大写 / 子句换行 / 条件缩进，[SqlFormatter]）。
+     * T-PreviewDisplayMode：等价于「格式化」按钮——设 FORMAT 模式后由渲染管线套用（形态在参数
+     * 变更后保持）；不再需要直接改文档，故改走状态路径。
+     */
+    fun formatSql() {
+        setDisplayMode(PreviewDisplayMode.FORMAT)
     }
 
     /** 关键字换行格式化：子句顶格换行、同行内容压一行（[SqlFormatter.formatClauseLine]）。 */
     private fun formatClauseLine() {
-        // M36.4：优先取原生编辑器文档，兜底自研编辑器
-        val doc = nativeEditorDoc ?: editor?.document ?: return
-        val formatted = SqlFormatter.formatClauseLine(doc.text)
-        if (formatted != doc.text) {
-            WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
-        }
+        setDisplayMode(PreviewDisplayMode.KEYWORD_WRAP)
     }
 
     /** 竖向排列格式化：INSERT 列清单/VALUES 逐行竖排、值行尾标注配对列名（[SqlFormatter.formatVertical]）。 */
     fun formatVertical() {
-        // M36.4：优先取原生编辑器文档，兜底自研编辑器
-        val doc = nativeEditorDoc ?: editor?.document ?: return
-        val formatted = SqlFormatter.formatVertical(doc.text)
-        if (formatted != doc.text) {
-            WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
-        }
+        setDisplayMode(PreviewDisplayMode.VERTICAL)
     }
 
     /**
@@ -1285,7 +1328,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         )
     }
 
-    /** 压缩 / 多行切换。 */
+    /** 压缩 / 多行切换。T-PreviewDisplayMode：不改显示模式——切回多行时既有模式（如竖排）恢复。 */
     fun toggleCompact(): Boolean {
         compactMode = !compactMode
         renderSql()
@@ -1408,6 +1451,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramPanel.removeAll()
         // O-4：重置会话缓存
         previousSql = null
+        // T-PreviewDisplayMode：显示模式随面板清空复位（与其余会话状态一致，不跨预览残留）
+        displayMode = PreviewDisplayMode.NORMAL
         releaseEditor()
         editorHolder.removeAll()
         metaLabel.text = ""
@@ -1441,10 +1486,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val fLogger = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         // T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）——在主 SQL 之后渲染 fill 附加 SELECT
         val withFill = appendFillSection(sql)
-        // T-M27.4：渲染自动格式化（设置开启且非压缩模式）——XML 动态标签展开残留的空行/缩进
-        // 由格式化器归一（关键字大写、主子句顶格、列清单换行缩进、AND 缩进、子查询缩进）；
-        // 压缩模式保持紧凑（格式化会引入换行）
-        val text = if (formatSqlSetting() && !compactMode) SqlFormatter.format(withFill) else withFill
+        // T-PreviewDisplayMode：显示模式在渲染管线内统一套用（唯一收敛点——XML/批量/模型/旧文本
+        // 四条重建路径都经此处，故参数输入/勾选/foreach 变更后形态保持）
+        val text = applyDisplayMode(withFill)
         // M36.4：优先写入原生编辑器文档（内嵌后）
         val nativeDoc = nativeEditorDoc
         if (nativeDoc != null) {
@@ -2572,6 +2616,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun psiFileForTest(): PsiFile? = psiFile
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
+    /** T-PreviewDisplayMode：当前显示模式（参数变更后保持性断言用）。 */
+    internal fun displayModeForTest(): PreviewDisplayMode = displayMode
     /** M36.5.2：内嵌控制台组件（同实例防抖/替换断言用）。 */
     internal fun embedConsoleForTest(component: JComponent) = embedConsole(component)
     internal fun embeddedConsoleForTest(): JComponent? = embeddedConsole
