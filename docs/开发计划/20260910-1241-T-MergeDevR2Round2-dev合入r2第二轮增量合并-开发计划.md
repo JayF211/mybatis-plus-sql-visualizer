@@ -112,4 +112,22 @@ dev 侧 14 行：`2026-09-10` 四条（含本次 T-MergeMasterIntoDev 合并行�
 
 ## 九、实施记录（回填）
 
-（实施完成后回填）
+- **Wave 0**：备份分支 `r2-backup-pre-dev-merge-20260910`（= `b2fc4ea`）已打；并行登记表由任务一的 `T-MergeMasterIntoDev` 注销后换 `T-MergeDevR2Round2` / `sandbox-r2merge` 登记。
+- **Wave 1**：`git merge dev` 起手即复现预演的 **2 文件 2 冲突块**，与预判完全一致，源码零冲突。
+  - `docs/变更记录.md`：并集 189 行（r2 176 ∪ dev 独有 13），去重、日期倒序、无丢行。该文件两侧非表格行内容**逐字相同**（实测），故可直接按「表头 + 并集行 + 表尾」重写。
+  - `docs/MEMORY.md`：该文件非表格区域两侧**各有改动**（不是纯表格文件），因此不能沿用上一条的整表重写法——首次用「表头取 r2 侧」的脚本会把 dev 对非表格区的改动抹掉，遂改用 `git checkout -m` 恢复真实自动合并结果、只替换冲突块，并集后块内 6 行（r2 2 ∪ dev 4）。
+  - 两文件最终与预演产物逐行比对：行数相同且工作树为预演的超集，确认自动合并区内容零丢失。
+- **Wave 2 语义清扫**：bundle zh/en **548/548** 键完全对称、零重复键；`testgen` / `TestAssetGenerator` 全树零残留（双线下线彻底）；r2 竞品应答资产在位（`supportsDeleteLimit`、`entityResolutionFailed`、`isWrapperVariable`；`docs/设计规范-弹窗克制红线.md`、`SqlPreviewSpecMatrixTest`、marketplace 自定义页）；dev 上游能力在位（`sequenceNumber`、`isModuleBasedLaunch`、`consoleAttachedToMe`、`ConsoleReplayGuard`、`awaitPrewarmedTempFile`）；`plugin.xml` 合并结果与 r2 逐字节相同。
+- **Wave 3**：全量 `./gradlew test --no-daemon` **3720 tests / 0 failures / 0 errors / 6 skipped 绿**，289 个测试类（无 `tests="0"` 陈旧结果文件）。较 dev 侧多 3 类 / 27 例，为 r2 竞品应答独有测试。
+- **Wave 4**：`./gradlew verifyPlugin --no-daemon` **BUILD SUCCESSFUL**（9m22s），三目标报告 `verification-verdict.txt` 均 **Compatible**，计数与 dev 侧合并后完全一致（同源代码面）：
+
+  | 目标 | 结论 | scheduled-for-removal | deprecated | experimental |
+  |---|---|---|---|---|
+  | IU-243.28141.41 | Compatible | 1 | 3 | 10 |
+  | IU-253.33514.17 | Compatible | 1 | 6 | 10 |
+  | IU-262.9437.185 | Compatible | 1 | 44 | 10 |
+
+  均为 warning 级，不阻断发布。`buildPlugin` 出产物 `build/distributions/mybatis-plus-sql-visualizer-2026.9.9.zip`。
+- **commit**：合并提交 `e72dd57`。
+- **未做**：不主动 push；runIde 真机抽验留人工（r2 面：冷启动首屏 / 承接老用户文案 / 弹窗克制；dev 面：行号 / 竖向排列 / 预览闪烁）。
+- **版本号说明**：合并后 r2 版本由 2026.9.8 变为 2026.9.9（随 dev 的 v2026.9.9 发行面）。r2 若另有独立发版计划，发版时需重新定版本号，本次不做额外处理。
