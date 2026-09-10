@@ -95,7 +95,8 @@ import javax.swing.event.DocumentListener
  * SQL 预览面板（M9-01/02/03 可编辑版，F-07/F-08）。
  *
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
- *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 压缩多行切换 / 刷新）
+ *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示，T-PreviewTopOverlap F3 按宽度预算截断）
+ *    + 工具栏（压缩切换 / 格式化 / 关键字换行 / 刷新 + 「更多」折叠低频动作；复制错误仅警示时可见）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
  *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
@@ -107,6 +108,20 @@ import javax.swing.event.DocumentListener
 class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreviewPanel>(BorderLayout()), Disposable {
 
     private val metaLabel = JBLabel()
+
+    // T-PreviewTopOverlap F1/F3：顶部行与工具栏提升为字段——布局断言（topRowForTest/toolbarForTest）
+    // 与宽度预算计算（applyMetaTruncation 需工具栏理想宽）使用
+    private lateinit var topRow: JBPanel<JBPanel<*>>
+    private lateinit var toolbarPanel: JBPanel<JBPanel<*>>
+
+    // T-PreviewTopOverlap F3：元信息原文缓存——metaLineText 第一行（meta+警示，纯文本）、
+    // metaPerfSegments 第二行分段（可见文本+颜色）；tooltip 恒全文，label 文本按预算重拼
+    private var metaLineText: String = ""
+    private var metaPerfSegments: List<MetaPerfSegment> = emptyList()
+    private var lastMetaBudget: Int = -1
+
+    /** F3：perf 建议分段（可见文本 + HTML 颜色值），截断时按预算丢尾段。 */
+    private data class MetaPerfSegment(val text: String, val color: String)
 
     // T-M26.6：格式化快捷键动作（跟随 IDE keymap 的 Reformat Code，兜底 Ctrl+Alt+L）——
     // 注册到面板整体，焦点在 SQL 编辑器或参数输入框时均可触发；每次触发取当前 editor 格式化
@@ -267,14 +282,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     init {
         // 顶部元信息行 + 工具栏
+        // T-PreviewTopOverlap F1：metaLabel 从 WEST 迁 CENTER——BorderLayout 的 WEST/EAST 各按
+        // 理想宽整块贴边绝不收缩，两偏好宽之和超容器宽时直接互相重叠（用户真机截图实锤：元信息
+        // 文字压进按钮行）；CENTER 只拿剩余宽度，与 EAST 结构性零重叠。宽度不足由 F3 截断兜底。
         metaLabel.border = JBUI.Borders.empty(0, 8, 4, 8)
-        val topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(metaLabel, BorderLayout.WEST)
-            add(toolbar(), BorderLayout.EAST)
+        topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(metaLabel, BorderLayout.CENTER)
+            toolbarPanel = toolbar()
+            add(toolbarPanel, BorderLayout.EAST)
             // M36.5：收边距与原生工具行对齐（上 6→4，右 8→8 保留）
             border = JBUI.Borders.empty(4, 8, 2, 8)
         }
         add(topRow, BorderLayout.NORTH)
+        // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
+        topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
+            override fun componentShown(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
+        })
 
         // 中部左右分栏：参数输入 | SQL 编辑器/原生控制台
         // T-M26.3：按钮回挂分区标题行右侧（conditionSectionHeader/batchSectionHeader），
@@ -392,7 +416,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
     }
 
-    /** 顶部工具栏：复制错误（有警示时可见）/ 压缩多行切换 / 格式化 / 导入（P-05）/ 刷新（执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。 */
+    /**
+     * 顶部工具栏：复制错误（有警示时可见，永不折叠——错误反馈链路一环）/ 压缩多行切换 / 格式化 /
+     * 关键字换行 / 刷新 / 更多（T-PreviewTopOverlap F2：导入参数/差异对比/分享三个低频动作折叠进
+     * 「更多」JBPopup 菜单；执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4）。
+     */
     private fun toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>>().apply {
         layout = BoxLayout(this, BoxLayout.X_AXIS)
         errorCopyButton = smallButton(MpSqlVisualizerBundle.message("panel.copyError")) {
@@ -412,15 +440,41 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
         // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
         add(smallButton(MpSqlVisualizerBundle.message("panel.vertical")) { formatVertical() })
-        // P-05：导入按钮（默认点击 = 从剪贴板导入）
-        add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
-        // O-4：差异高亮开关（本次 vs 上次预览）
-        // O-4：SQL 并排对比（IDEA 原生 Diff，SQL 语法高亮）
-        add(smallButton(MpSqlVisualizerBundle.message("panel.compare")) { showSqlDiff() })
-        // F-8：分享按钮（Markdown / HTML / 可执行 SQL）
-        add(smallButton(MpSqlVisualizerBundle.message("panel.share")) { showShareDialog() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
+        // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.more")) { showMoreActionsPopup() })
     }
+
+    /** F2：「更多」折叠菜单的三项低频动作（文案键沿用原工具栏按钮，执行体一字不差）。 */
+    private fun moreActions(): List<Pair<String, () -> Unit>> = listOf(
+        MpSqlVisualizerBundle.message("panel.param.import") to { importParamsFromClipboard() },
+        MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
+        MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },
+    )
+
+    /**
+     * F2：弹出「更多」折叠菜单（锚定按钮下方；JBPopupFactory + BaseListPopupStep 路线为本项目
+     * 现网先例：SqlClickPreview / DataSourceSelector）。show 依赖真实屏幕，测试只构造 step 不弹层。
+     */
+    private fun showMoreActionsPopup() {
+        val actions = moreActions()
+        val anchor = toolbarPanel.components.filterIsInstance<JButton>().lastOrNull() ?: return
+        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+            .createListPopup(moreActionsStep(actions))
+            .show(com.intellij.ui.awt.RelativePoint(anchor, java.awt.Point(0, anchor.height)))
+    }
+
+    /** F2：构造折叠菜单 step（独立可测——items 与 onChosen 委托可直接断言，无需真实弹层）。 */
+    private fun moreActionsStep(actions: List<Pair<String, () -> Unit>>): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
+        object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<String>(null, actions.map { it.first }) {
+            override fun onChosen(
+                selectedValue: String?,
+                finalChoice: Boolean,
+            ): com.intellij.openapi.ui.popup.PopupStep<*>? {
+                actions.firstOrNull { it.first == selectedValue }?.let { it.second() }
+                return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+            }
+        }
 
     /**
      * 执行 SQL（M36）：
@@ -1360,6 +1414,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         releaseEditor()
         editorHolder.removeAll()
         metaLabel.text = ""
+        // T-PreviewTopOverlap F3：元信息原文缓存随清空复位（下次 updateMeta 重建）
+        metaLineText = ""
+        metaPerfSegments = emptyList()
+        lastMetaBudget = -1
         // F-1：清除图集 + 恢复纯 SQL 视图
         removeDiagramTab()
         diagramPanel.clear()
@@ -2077,6 +2135,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         saveToHistory()
     }
 
+
     // ------------------------------------------------------------------
     // P-05：参数批量导入 / 历史召回
     // ------------------------------------------------------------------
@@ -2375,16 +2434,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        // T-SqlPerf：性能建议文案单独一行（HTML 换行，避免与右侧工具栏重叠）
-        val perfLine = buildPerfLine(result)
-        val displayText = if (perfLine.isNotEmpty()) {
-            // HTML 渲染：meta+warning 第一行，perf 第二行
-            "<html>$meta$warningLine<br>$perfLine</html>"
-        } else {
-            meta + warningLine
-        }
-        metaLabel.text = displayText
-        metaLabel.toolTipText = meta + warningLine + perfLine
+        // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
+        // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
+        metaLineText = meta + warningLine
+        metaPerfSegments = buildPerfSegments(result)
+        metaLabel.toolTipText = meta + warningLine + metaPerfSegments.joinToString("；") { it.text }
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -2393,26 +2447,90 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-M25.3：错误复制按钮随警示可见
         errorCopyButton?.isVisible = currentWarning != null
+        // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
+        lastMetaBudget = -1
+        applyMetaTruncation()
     }
 
     /**
-     * F-2：构建性能警告展示文本（拼接为单行摘要，供元信息标签展示）。
-     * ERROR/WARN 标红前缀 ⚠，INFO 前缀 ℹ；多条警告以分号分隔。
+     * T-PreviewTopOverlap F3：元信息宽度预算截断。
+     *
+     * 预算 = topRow 宽 − 工具栏理想宽 − topRow 边距 − metaLabel 左右边距；未布局（width<=0）跳过，
+     * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize），
+     * perf 行丢尾段加省略号（HTML 标签外截断）；tooltip 恒全文。宽度未变短路防重算抖动。
      */
-    private fun buildPerfLine(result: PreviewResult): String {
-        val warnings = result.perfWarnings ?: return ""
-        if (warnings.isEmpty()) return ""
-        val sb = StringBuilder()
-        warnings.forEach { warning ->
+    private fun applyMetaTruncation() {
+        if (metaLineText.isEmpty() && metaPerfSegments.isEmpty()) return
+        val width = topRow.width
+        if (width <= 0) {
+            // 未布局（showResult 先于首帧布局 / headless 测试）：先展示全文，布局后由 ComponentListener 按预算重截
+            metaLabel.text = fullDisplayText()
+            return
+        }
+        val budget = (width - toolbarPanel.preferredSize.width - topRow.insets.let { it.left + it.right } - 16)
+            .coerceAtLeast(MIN_META_BUDGET_PX)
+        if (budget == lastMetaBudget) return
+        lastMetaBudget = budget
+        val metrics = metaLabel.getFontMetrics(metaLabel.font)
+        metaLabel.text = if (metaPerfSegments.isEmpty()) {
+            if (metrics.stringWidth(metaLineText) <= budget) metaLineText
+            else ellipsize(metaLineText, metrics, budget)
+        } else {
+            val line1 = if (metrics.stringWidth(metaLineText) <= budget) metaLineText else ellipsize(metaLineText, metrics, budget)
+            "<html>$line1<br>${perfLineHtml(budget, metrics)}</html>"
+        }
+    }
+
+    /** F3：全文展示文本（未布局/预算充裕时）——meta 行 + perf 行原着色 markup，与 T-SqlPerf 原渲染一致。 */
+    private fun fullDisplayText(): String {
+        if (metaPerfSegments.isEmpty()) return metaLineText
+        val markup = metaPerfSegments.joinToString("；") { "<font color=\"${it.color}\">${it.text}</font>" }
+        return "<html>$metaLineText<br>   $markup</html>"
+    }
+
+    /** F3：perf 行预算内重拼——逐段（含「；」分隔宽）按像素累计，放得下保留原着色；放不下丢尾段并加省略号。 */
+    private fun perfLineHtml(budget: Int, metrics: FontMetrics): String {
+        val segments = metaPerfSegments
+        if (segments.isEmpty()) return ""
+        val indent = "   "
+        var used = metrics.stringWidth(indent)
+        val rendered = StringBuilder(indent)
+        var kept = 0
+        segments.forEachIndexed { index, segment ->
+            val piece = (if (index > 0) "；" else "") + segment.text
+            val pieceWidth = metrics.stringWidth(piece)
+            if (kept > 0 && used + pieceWidth > budget) return@forEachIndexed
+            if (kept == 0 && used + pieceWidth > budget) {
+                // 首段放不下：首段文本尾部省略至预算，后续段全弃（HTML 标签外截断，tooltip 恒全文）
+                val text = ellipsize(segment.text, metrics, (budget - used).coerceAtLeast(MIN_META_BUDGET_PX / 2))
+                rendered.append("<font color=\"").append(segment.color).append("\">").append(text).append("</font>")
+                return rendered.toString()
+            }
+            rendered.append(if (index > 0) "；" else "")
+                .append("<font color=\"").append(segment.color).append("\">").append(segment.text).append("</font>")
+            used += pieceWidth
+            kept++
+        }
+        if (kept < segments.size) {
+            rendered.append("<font color=\"").append(segments[kept - 1].color).append("\">…</font>")
+        }
+        return rendered.toString()
+    }
+
+    /**
+     * F2/T-SqlPerf：构建性能建议分段（可见文本 + 颜色）。ERROR/WARN 红前缀 ⚠，INFO 蓝前缀 ℹ。
+     */
+    private fun buildPerfSegments(result: PreviewResult): List<MetaPerfSegment> {
+        val warnings = result.perfWarnings ?: return emptyList()
+        if (warnings.isEmpty()) return emptyList()
+        return warnings.map { warning ->
             val isError = warning.severity == PerfSeverity.ERROR || warning.severity == PerfSeverity.WARN
             val prefix = if (isError) "⚠ " else "ℹ "
-            val localized = localizeWarning(warning)
-            // HTML 颜色区分：ERROR/WARN 红色，INFO 蓝色
-            val color = if (isError) "#E05555" else "#3B82F6"
-            sb.append("   <font color=\"").append(color).append("\">").append(prefix).append(localized).append("</font>")
-            if (warning != warnings.last()) sb.append("；")
+            MetaPerfSegment(
+                text = prefix + localizeWarning(warning),
+                color = if (isError) "#E05555" else "#3B82F6",
+            )
         }
-        return sb.toString()
     }
 
     /**
@@ -2522,6 +2640,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 
+    // ------------------------------------------------------------------
+    // T-PreviewTopOverlap F4：顶部行布局 / 折叠菜单测试访问
+    // ------------------------------------------------------------------
+
+    /** 顶部行（metaLabel + 工具栏宿主，布局断言用）。 */
+    internal fun topRowForTest(): JBPanel<JBPanel<*>> = topRow
+
+    /** 工具栏（直显按钮集合断言用）。 */
+    internal fun toolbarForTest(): JBPanel<JBPanel<*>> = toolbarPanel
+
+    /** 「更多」折叠菜单项文案（顺序与弹层一致，断言用；show 依赖真实屏幕故只暴露文案与 step）。 */
+    internal fun moreActionsForTest(): List<String> = moreActions().map { it.first }
+
+    /** 「更多」折叠菜单 step（onChosen 委托断言用，无需真实弹层）。 */
+    internal fun moreActionsStepForTest(): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
+        moreActionsStep(moreActions())
+
+    /** F3：宽度预算截断手动触发（headless 无 componentResized，测试直调）。 */
+    internal fun applyMetaTruncationForTest() = applyMetaTruncation()
+
     /**
      * T-M19.4-01：第 index 个普通参数行的标签（JBLabel）——布局断言用
      * （宽度自适应/tooltip 全名）。按 paramPanel 中「含 JBLabel 的 JBPanel 行」定位，
@@ -2573,6 +2711,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** F-45：列信息标签页标题。 */
         private const val COLUMN_INFO_TAB_TITLE = "列信息"
+
+        /** T-PreviewTopOverlap F3：元信息宽度预算下限（px）——极窄时保底可读，超出仍由 ellipsize 收。 */
+        private const val MIN_META_BUDGET_PX = 80
 
         /** M36.5.44：re-host 最小重挂间隔（ms）——DBN 结果刷新期高频 reparent，低于此间隔视为"还在被 DBN 处理"，跳过不抢，防死循环刷新闪烁。 */
         private const val REHOST_MIN_INTERVAL_MS = 800L
