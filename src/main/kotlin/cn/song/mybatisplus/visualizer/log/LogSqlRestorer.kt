@@ -18,17 +18,18 @@ class LogSqlRestorer {
     /** 按序替换 SQL 中 `?` 占位符；无参数时原样返回。 */
     fun restore(sql: String, params: List<LogSqlParam>): String {
         if (params.isEmpty() || sql.isEmpty()) return sql
-        val sb = StringBuilder(sql)
-        var searchFrom = 0
+        val positions = placeholderPositions(sql)
+        if (positions.isEmpty()) return sql
+        val sb = StringBuilder(sql.length + params.size * 8)
+        var prev = 0
         var paramIdx = 0
-        while (paramIdx < params.size) {
-            val placeholder = sb.indexOf('?', searchFrom)
-            if (placeholder < 0) break // 参数多于占位符：忽略剩余
-            val rendered = renderParam(params[paramIdx])
-            sb.replace(placeholder, placeholder + 1, rendered)
-            searchFrom = placeholder + rendered.length
+        for (pos in positions) {
+            if (paramIdx >= params.size) break // 参数多于占位符：忽略剩余
+            sb.append(sql, prev, pos).append(renderParam(params[paramIdx]))
+            prev = pos + 1
             paramIdx++
         }
+        sb.append(sql, prev, sql.length)
         return sb.toString()
     }
 
@@ -85,4 +86,43 @@ internal fun LogSqlParam.toHint(): ParamHint = when {
     type == null -> ParamHint()
     type in LogSqlRestorer.PLAIN_TYPES -> ParamHint(quote = false)
     else -> ParamHint(quote = true)
+}
+
+/**
+ * string-aware `?` 占位符定位（T-HibDualCapture）：单引号字符串字面量（`''` 转义）与
+ * `--` 行注释、块注释内的 `?` 不算占位符——中文问句、PG `?|` 操作符不再被
+ * 误计数/误回填。还原（[LogSqlRestorer.restore]）与预览识别计数共用同一口径，避免错位。
+ * 双引号标识符内的 `?` 不在保护范围（标准 SQL 标识符不含 `?`，误伤面可忽略）。
+ */
+internal fun placeholderPositions(sql: String): List<Int> {
+    val positions = mutableListOf<Int>()
+    var inString = false
+    var i = 0
+    while (i < sql.length) {
+        val c = sql[i]
+        if (inString) {
+            if (c == '\'') {
+                if (i + 1 < sql.length && sql[i + 1] == '\'') {
+                    i += 2
+                    continue
+                }
+                inString = false
+            }
+        } else {
+            when {
+                c == '\'' -> inString = true
+                c == '-' && i + 1 < sql.length && sql[i + 1] == '-' -> {
+                    while (i < sql.length && sql[i] != '\n') i++
+                }
+                c == '/' && i + 1 < sql.length && sql[i + 1] == '*' -> {
+                    i += 2
+                    while (i + 1 < sql.length && !(sql[i] == '*' && sql[i + 1] == '/')) i++
+                    i++
+                }
+                c == '?' -> positions += i
+            }
+        }
+        i++
+    }
+    return positions
 }
