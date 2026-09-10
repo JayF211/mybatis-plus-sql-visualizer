@@ -140,3 +140,10 @@ scheduleAtFixedRate(每 1s) → c()
 3. 各自补即时性单测（首条开窗、徽章即时、低流量等价即时），再跑全量。
 
 本计划价值在于**把「吸收批量异步写 UI」从一个直觉上的补丁，收敛成了明确的「监听器分层 + 列表通知节流」两步重构**；consoleFilterProvider EP 双轨另立计划（见独立计划文档）。
+
+**第二轮交付（2026-09-11，与 T-PerfSweep 同会话）**：按 §七 步骤 1~3 落地，全量 3696/0/6 绿（基线 3693 + 净增 3）。
+
+1. **监听器分层**（`SqlLogEntryBuffer`）：拆三出口——`onEntryAccepted`（每次成功入队，自动展开语义）、`onDedupeCountsChanged`（徽章计数，即时）、内容监听器（仅列表内容变更，节流）；五个通知点重新归位：去重丢弃分支走徽章通道（不再触发内容/自动展开——重复 SQL 不是新 SQL 且空缓冲不可能产生重复，自动展开零可观测变化），`disableDedupe` 只走徽章通道，`clear`/`dedupeExisting` 内容即时 + 徽章通道，`removeEntry` 不变。`SqlLogManager` 同一 `uiNotifyListener` 挂三出口 + `onEntryAccepted = autoShowBufferListener`，dispose 三回调全置 null。
+2. **列表通知节流**：`notifyContentChangedThrottled`——「数量 20 + 时间 200ms」双阈值（`pendingContentNotify`/`lastContentNotifyNanos` 原子量，无 Timer）；**未达阈值条目由 `onContentNotifySuppressed` 兜底接 `notifyUi` 幂等 flush**（flush 读当下快照不丢条目）。计划原文的「面板尾批 Timer 300ms」未实现——invokeLater flush 本身就是 EDT 语义的最终一致兜底，Swing Timer 同样排队 EDT 无额外收益，多第三条刷新路径反增复杂度（对计划的有意偏离，在此留档）。低流量（两条间隔超窗）每条即时，与节流前等价。
+3. **自动展开语义钉死**：`testDebounceSuppressesRepeat` 末步实证「clear 后非空状态下 reset 防抖仍需再触发」——故自动展开必须挂**每次成功入队**（`onEntryAccepted`）而非「空→非空」沿，与 §七 步骤 1 的两种备选方案中后者吻合。
+4. **测试契约改写**（有意变更，非回归）：`SqlLogEntryBufferTest.监听器在条目变更时通知`/`去重窗口内相同 SQL 丢弃且通知徽章`/`去重丢弃触发监听器` 与 `SqlLogCaptureRealtimeScenarioTest.真实场景_分页查询连续5次` 断言的旧「逐条单通道通知计数」改为分层契约断言（首条即时 + 徽章通道即时 + 抑制兜底计数）；新增分层用例 2 个。面板即时性由 `SqlLogPanelDedupeToggleTest` 等既有面板测试（pump EDT 走 flush）守卫，零改动全绿。
