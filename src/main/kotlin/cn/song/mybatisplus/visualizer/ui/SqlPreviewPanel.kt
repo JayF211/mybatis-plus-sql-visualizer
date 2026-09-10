@@ -2049,13 +2049,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 普通参数行：`#<source>` 标签 + 值输入框。 */
     private fun buildParamRow(source: String, labelWidth: Int): JBPanel<JBPanel<*>> {
-        val field = JBTextField(8).apply {
-            toolTipText = "#$source"
+        // T-HibDualCapture：8 列放不下 16 字符日期值（视口滚到尾部被当成「值截断」），下限放宽到 16 列
+        val field = JBTextField(16).apply {
             text = paramValues[source] ?: ""
+            // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
+            if (text.isNotEmpty()) caretPosition = 0
+            toolTipText = paramTooltip(source, text)
             document.addDocumentListener(object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
-                override fun removeUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
-                override fun changedUpdate(e: DocumentEvent?) = onParamChanged(source, this@apply.text)
+                override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
+                override fun removeUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
+                override fun changedUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
             })
         }
         paramFields += field
@@ -2134,6 +2137,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderSql()
         saveToHistory()
     }
+
+    /**
+     * T-HibDualCapture：参数框文本变更（含导入回填等程序化 setText 触发的文档事件）——
+     * tooltip 随值同步，其余走既有回填链路。
+     */
+    private fun onParamFieldText(source: String, field: JBTextField) {
+        field.toolTipText = paramTooltip(source, field.text)
+        onParamChanged(source, field.text)
+    }
+
+    /** T-HibDualCapture：参数框 tooltip——`#source = 完整值`，框宽放不下的长值以此兜底可见。 */
+    private fun paramTooltip(source: String, value: String?): String =
+        "#$source" + if (value.isNullOrEmpty()) "" else " = $value"
 
 
     // ------------------------------------------------------------------
@@ -2670,6 +2686,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         .filter { row -> row.components.any { it is JBLabel } }
         .getOrNull(index)
         ?.components?.filterIsInstance<JBLabel>()?.firstOrNull()
+
+    /** T-HibDualCapture：第 index 个普通参数框的 tooltip（`#source = 值`），供长值兜底断言。 */
+    internal fun paramFieldTooltipForTest(index: Int): String? = paramFields.getOrNull(index)?.toolTipText
+    /** T-HibDualCapture：第 index 个普通参数框的光标位置（应钉 0，视口停在值头部）。 */
+    internal fun paramFieldCaretForTest(index: Int): Int = paramFields.getOrNull(index)?.caretPosition ?: -1
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
