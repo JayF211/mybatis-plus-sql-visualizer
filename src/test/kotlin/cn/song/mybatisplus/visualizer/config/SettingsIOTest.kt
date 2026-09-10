@@ -23,6 +23,7 @@ class SettingsIOTest {
             dialect = "PostgreSQL"
             replaceParams = false
             formatSql = false
+            verticalPairAnnotation = false
             injectLogicDelete = false
             logicDeleteValue = "1"
             tablePrefix = "sys_"
@@ -35,6 +36,7 @@ class SettingsIOTest {
         assertTrue("JSON 应含 dialect", json.contains("\"dialect\": \"PostgreSQL\""))
         assertTrue("JSON 应含 replaceParams", json.contains("\"replaceParams\": false"))
         assertTrue("JSON 应含 formatSql", json.contains("\"formatSql\": false"))
+        assertTrue("JSON 应含 verticalPairAnnotation", json.contains("\"verticalPairAnnotation\": false"))
         assertTrue("JSON 应含 injectLogicDelete", json.contains("\"injectLogicDelete\": false"))
         assertTrue("JSON 应含 logicDeleteValue", json.contains("\"logicDeleteValue\": \"1\""))
         assertTrue("JSON 应含 tablePrefix", json.contains("\"tablePrefix\": \"sys_\""))
@@ -51,6 +53,7 @@ class SettingsIOTest {
               "dialect": "PostgreSQL",
               "replaceParams": false,
               "formatSql": false,
+              "verticalPairAnnotation": false,
               "injectLogicDelete": false,
               "logicDeleteValue": "1",
               "tablePrefix": "sys_",
@@ -63,6 +66,7 @@ class SettingsIOTest {
         assertEquals("dialect 应恢复", "PostgreSQL", state.dialect)
         assertEquals("replaceParams 应恢复", false, state.replaceParams)
         assertEquals("formatSql 应恢复", false, state.formatSql)
+        assertEquals("verticalPairAnnotation 应恢复", false, state.verticalPairAnnotation)
         assertEquals("injectLogicDelete 应恢复", false, state.injectLogicDelete)
         assertEquals("logicDeleteValue 应恢复", "1", state.logicDeleteValue)
         assertEquals("tablePrefix 应恢复", "sys_", state.tablePrefix)
@@ -117,6 +121,7 @@ class SettingsIOTest {
         // 未提供的字段使用默认值
         assertEquals("replaceParams 默认值", true, state.replaceParams)
         assertEquals("formatSql 默认值", true, state.formatSql)
+        assertEquals("verticalPairAnnotation 默认值", true, state.verticalPairAnnotation)
         assertEquals("injectLogicDelete 默认值", true, state.injectLogicDelete)
         assertEquals("logicDeleteValue 默认值", "0", state.logicDeleteValue)
         assertEquals("tablePrefix 默认值", "", state.tablePrefix)

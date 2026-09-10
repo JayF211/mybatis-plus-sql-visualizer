@@ -381,18 +381,19 @@ public class SqlLogEntryBufferTest {
     }
 
     @Test
-    public void dedupeExisting_超窗口保留所有() throws Exception {
+    public void dedupeExisting_跨窗口重复也裁剪() throws Exception {
+        // T-LogRowNumber 追加：手动全量裁剪不看时间窗口——跨窗口（>dedupeWindowMs）的重复也必须裁掉，
+        // 否则用户点击「移除重复」后重复项仍在列表（用户反馈「显示不正确」根因）。
         SqlLogEntryBuffer buf = new SqlLogEntryBuffer(10);
-        // 同上：先关闭以让多条重复都入列
         buf.setDedupeEnabled(false);
         buf.setDedupeWindowMs(1000L);
         buf.addEntry(entry("SELECT 1", 0L));
         buf.addEntry(entry("SELECT 1", 2000L)); // 超 1s 窗口
         assertEquals(2, buf.snapshot().size());
-        // 再开启 dedupeEnabled 后调用 dedupeExisting，验证窗口判定
         buf.setDedupeEnabled(true);
-        assertEquals(0, buf.dedupeExisting());
-        assertEquals(2, buf.snapshot().size());
+        assertEquals(1, buf.dedupeExisting()); // 跨窗口仍裁 1 条
+        assertEquals(1, buf.snapshot().size());
+        assertEquals(1, buf.dedupeCount("SELECT 1"));
     }
 
     @Test

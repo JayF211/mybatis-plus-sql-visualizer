@@ -153,8 +153,9 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
         // bind 名在参数区有输入行（求值结果回显：'%' + name + '%'，mock name="1" → "%1%"）
+        // T-HibDualCapture：tooltip 现为 `#source = 值`，按前缀匹配定位 bind 行（值随回填动态变化）
         val bindRow = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
-            .firstOrNull { it.toolTipText == "#likeName" }
+            .firstOrNull { it.toolTipText?.startsWith("#likeName") == true }
         assertNotNull("bind 变量应在参数区有输入行", bindRow)
         assertEquals("bind 求值结果应回显到参数行", "%1%", bindRow!!.text)
         // 参数输入覆盖 bind 值 → SQL 回填覆盖值（等价于原 bind 覆盖输入框）

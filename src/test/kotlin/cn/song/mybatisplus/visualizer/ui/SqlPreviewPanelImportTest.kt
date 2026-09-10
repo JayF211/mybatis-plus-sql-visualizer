@@ -9,6 +9,8 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.datatransfer.Transferable
@@ -49,11 +51,12 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testImportButtonExists() {
-        // P-05：工具栏含「导入」按钮（位于「格式化」与「刷新」之间）
+        // P-05 + T-PreviewTopOverlap F2：导入按钮折叠进「更多」菜单（不再是工具栏直显按钮）
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())
-        val importButton = findToolbarButton(panel, "panel.param.import")
-        assertNotNull("工具栏应含导入按钮", importButton)
+        assertNull("导入按钮不应再直显于工具栏", findToolbarButton(panel, "panel.param.import"))
+        val moreItems = panel.moreActionsForTest()
+        assertTrue("「更多」菜单应含导入参数项", moreItems.contains(MpSqlVisualizerBundle.message("panel.param.import")))
         panel.clear()
     }
 

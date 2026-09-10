@@ -22,10 +22,12 @@ public class DualParserIntegrationTest {
             all.addAll(myBatis.takeEntries());
             all.addAll(hibernate.takeEntries());
         }
-        LogSqlEntry mp = myBatis.closePending();
-        if (mp != null) all.add(mp);
-        LogSqlEntry hb = hibernate.closePending();
-        if (hb != null) all.add(hb);
+        // 闭合未完成条目（对齐 LogToSqlPanel 收尾顺序：closePending 后 takeEntries——
+        // T-HibDualCapture 起零参条目先入隔离槽，由 takeEntries 冲刷，closePending 返回 null）
+        myBatis.closePending();
+        hibernate.closePending();
+        all.addAll(myBatis.takeEntries());
+        all.addAll(hibernate.takeEntries());
         return all;
     }
 

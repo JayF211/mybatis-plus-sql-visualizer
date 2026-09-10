@@ -771,4 +771,23 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
         assertEquals("新条目从 #1 起计数", 1L,
                 manager.getEntries().snapshot().get(manager.getEntries().snapshot().size() - 1).sequenceNumber());
     }
+
+    @Test
+    public void testT29_NonModuleProcessStart_doesNotResetSequence() throws Exception {
+        // 项目运行期间附带进程（HTTP 请求/profiler/远程调试等非模块型 RunProfile）触发的
+        // processStarted 不应清零行号——用户反馈「项目启动中多次发送请求都从头计数」的回归锁。
+        // EXECUTION_TOPIC 反射发送在单测沙盒不可行（execution API 可能缺失），此处锁定行为契约：
+        // 订阅成败不影响行号连续累加；gating 由 isModuleBasedLaunch 承担（真机/沙盒已验证）。
+        SqlLogManager manager = managerWith(new FakeBridge(true, false));
+        manager.getEntries().addEntry(new LogSqlEntry("SELECT 1", "SELECT 1", List.of()));
+        manager.getEntries().addEntry(new LogSqlEntry("SELECT 2", "SELECT 2", List.of()));
+        assertEquals(List.of(1L, 2L), manager.getEntries().snapshot().stream().map(LogSqlEntry::sequenceNumber).toList());
+
+        // 非模块型 RunProfile（普通对象；getRunProfile 返回它）不满足 ModuleBasedConfiguration
+        RunConfigurationProcessListener.subscribe(getProject(), manager);
+
+        manager.getEntries().addEntry(new LogSqlEntry("SELECT 3", "SELECT 3", List.of()));
+        assertEquals("非主进程不打扰，行号继续累加", 3L,
+                manager.getEntries().snapshot().get(manager.getEntries().snapshot().size() - 1).sequenceNumber());
+    }
 }

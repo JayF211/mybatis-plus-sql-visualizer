@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.Condition;
 import cn.song.mybatisplus.visualizer.model.ConditionToggle;
 import cn.song.mybatisplus.visualizer.model.ConditionView;
 import cn.song.mybatisplus.visualizer.model.LikePosition;
+import cn.song.mybatisplus.visualizer.model.OrderByItem;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel;
@@ -941,6 +942,273 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         assertTrue("格式化后关键字应大写：" + text, text.contains("SELECT"));
         assertTrue("格式化后应含换行：" + text, text.contains("\n"));
         panel.clear();
+    }
+
+    // ------------------------------------------------------------------
+    // T-VStack：竖向排列按钮 + T-VPairAnno 标注开关
+    // ------------------------------------------------------------------
+
+    public void testVerticalButtonPresentAndFormatsInsert() throws Exception {
+        // T-VStack：竖向排列按钮在位（文案取 panel.vertical），formatVertical 对 INSERT 竖排 + 配对标注
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String expectedText = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.vertical");
+        javax.swing.JButton button = findButtonByText(panel, expectedText);
+        assertNotNull("工具栏应存在竖向排列按钮", button);
+        panel.showResult(result(
+                "insert into `user` (username, password) values ('zhangsna', '123456')",
+                "insert into `user` (username, password) values ('zhangsna', '123456')"));
+        panel.formatVertical();
+        String text = panel.editorForTest().getDocument().getText();
+        assertEquals(
+                "INSERT 应竖排且值行尾标注列名：" + text,
+                """
+                INSERT
+                INTO `user`
+                (
+                  username,
+                  password
+                )
+                VALUES
+                (
+                  'zhangsna', -- username
+                  '123456'    -- password
+                )
+                """.stripTrailing(),
+                text);
+        panel.clear();
+    }
+
+    public void testVerticalNonInsertFallsBackToFormat() throws Exception {
+        // T-VStack·扩面 + InThreshold：非 INSERT 输入 = format + 横向组展开（长 IN 列表纵向化，
+        // 与格式化按钮可区分；阈值 5——2 元素短清单保持同行）
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(result(
+                "select id from tbl where id in (1, 2, 3, 4, 5)",
+                "select id from tbl"));
+        panel.formatVertical();
+        String text = panel.editorForTest().getDocument().getText();
+        assertTrue("SELECT 应按 format 全展开：" + text, text.contains("SELECT\n") && text.contains("FROM tbl"));
+        assertTrue("长 IN 列表应纵向化：" + text, text.contains("IN\n"));
+        panel.clear();
+    }
+
+    public void testVerticalAnnotationFollowsSetting() throws Exception {
+        // T-VPairAnno：设置关闭 → 竖排保持但行尾无配对标注；恢复开启（默认）→ 标注回来
+        cn.song.mybatisplus.visualizer.config.PluginSettings.State settings =
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
+        String sql = "insert into `user` (username, password) values ('zhangsna', '123456')";
+        try {
+            settings.setVerticalPairAnnotation(false);
+            SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+            panel.showResult(result(sql, sql));
+            panel.formatVertical();
+            String off = panel.editorForTest().getDocument().getText();
+            assertTrue("竖排形态应保持：" + off, off.contains("VALUES\n(") && off.contains("'zhangsna',"));
+            assertFalse("行尾不应有配对标注：" + off, off.contains("-- username"));
+            panel.clear();
+
+            settings.setVerticalPairAnnotation(true);
+            SqlPreviewPanel panel2 = new SqlPreviewPanel(getProject());
+            panel2.showResult(result(sql, sql));
+            panel2.formatVertical();
+            String on = panel2.editorForTest().getDocument().getText();
+            assertTrue("恢复开启后应重新标注：" + on, on.contains("-- username") && on.contains("-- password"));
+            panel2.clear();
+        } finally {
+            settings.setVerticalPairAnnotation(true);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewDisplayMode：显示模式在重渲染后保持（用户实测：输入参数后竖排消失）
+    // ------------------------------------------------------------------
+
+    public void testVerticalModeSurvivesParamChange() throws Exception {
+        // 用户复现路径：点竖向排列 → 左侧填参数 → 形态必须保持（旧实现：文档被重建抹平）
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "insert into `user` (username, password, age) values ('zhangsna', '123456', ?)";
+        panel.showResult(result(sql, sql, List.of("age")));
+        panel.formatVertical();
+        assertEquals(SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest());
+        String vertical = panel.editorForTest().getDocument().getText();
+        assertTrue("竖排应先生效：" + vertical, vertical.contains("-- username") && vertical.contains("VALUES\n("));
+
+        // 模拟用户在参数行输入（DocumentListener → onParamChanged → renderSql 全量重建）
+        panel.paramFieldForTest(0).setText("1");
+
+        String after = panel.editorForTest().getDocument().getText();
+        assertTrue("参数变更后应仍为竖排：" + after, after.contains("-- username") && after.contains("VALUES\n("));
+        assertTrue("参数应已回填：" + after, after.contains("1"));
+        panel.clear();
+    }
+
+    public void testKeywordWrapModeSurvivesParamChange() throws Exception {
+        // 关键字换行同缺陷同修复：参数变更后仍为「子句顶格 + 内容同行」形态（非 format 全展开）
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?";
+        panel.showResult(result(sql, sql, List.of("phone", "type")));
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.KEYWORD_WRAP);
+        assertEquals(
+                "SELECT id\nFROM tbl\nWHERE phone = ?  AND type = ?",
+                panel.editorForTest().getDocument().getText());
+
+        panel.paramFieldForTest(0).setText("abc");
+
+        assertEquals(
+                "参数变更后应仍为关键字换行形态",
+                "SELECT id\nFROM tbl\nWHERE phone = 'abc'  AND type = ?",
+                panel.editorForTest().getDocument().getText());
+        panel.clear();
+    }
+
+    public void testFormatModeSurvivesParamChangeWhenSettingOff() throws Exception {
+        // 条件性丢失分支：设置「SQL 格式化输出」关闭时，点格式化后的形态此前会被参数变更抹平
+        cn.song.mybatisplus.visualizer.config.PluginSettings.State state =
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
+        boolean backup = state.getFormatSql();
+        try {
+            state.setFormatSql(false);
+            SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+            String sql = "SELECT id FROM tbl WHERE phone = ?";
+            panel.showResult(result(sql, sql, List.of("phone")));
+            panel.formatSql();
+            assertEquals(SqlPreviewPanel.PreviewDisplayMode.FORMAT, panel.displayModeForTest());
+            String formatted = panel.editorForTest().getDocument().getText();
+            assertTrue("FORMAT 模式应强制格式化：" + formatted, formatted.contains("SELECT\n"));
+
+            panel.paramFieldForTest(0).setText("abc");
+
+            String after = panel.editorForTest().getDocument().getText();
+            assertTrue("设置关闭时格式化形态也应保持：" + after, after.contains("SELECT\n"));
+            assertTrue("参数应已回填：" + after, after.contains("'abc'"));
+            panel.clear();
+        } finally {
+            try {
+                state.setFormatSql(backup);
+            } catch (Throwable ignored) {
+                // 沙盒拆卸期设置服务可能已注销
+            }
+        }
+    }
+
+    public void testCompactTakesPrecedenceOverDisplayMode() throws Exception {
+        // 压缩优先级最高：压缩态下模式不套用（保持单行）；切回多行后既有模式恢复
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "insert into `user` (username, age) values ('zhangsna', ?)";
+        panel.showResult(result(sql, sql, List.of("age")));
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL);
+
+        panel.toggleCompact();
+        String compact = panel.editorForTest().getDocument().getText();
+        assertFalse("压缩态应为单行：" + compact, compact.contains("\n"));
+        assertEquals("压缩不应改变模式状态", SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest());
+
+        panel.toggleCompact();
+        assertTrue("切回多行后竖排应恢复", panel.editorForTest().getDocument().getText().contains("-- username"));
+        panel.clear();
+    }
+
+    public void testSetDisplayModeExitsCompact() throws Exception {
+        // 压缩态点格式族按钮：一并退出压缩（否则模式被短路、点击无可见效果）
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "insert into `user` (username, age) values ('zhangsna', ?)";
+        panel.showResult(result(sql, sql, List.of("age")));
+        panel.toggleCompact();
+        assertTrue("前置：应处于压缩态", panel.compactForTest());
+
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL);
+
+        assertFalse("格式族模式切换应退出压缩", panel.compactForTest());
+        assertTrue("应显示竖排形态", panel.editorForTest().getDocument().getText().contains("-- username"));
+        panel.clear();
+    }
+
+    public void testRefreshResetsDisplayMode() throws Exception {
+        // 刷新 = 回到默认状态（M19.3）：显示模式一并复位为 NORMAL（设置派生形态）
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(result(
+                "select id from tbl where id in (1, 2, 3, 4, 5)",
+                "select id from tbl"));
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL);
+        assertTrue("前置：应已竖排", panel.editorForTest().getDocument().getText().contains("IN\n"));
+
+        panel.refreshView();
+
+        assertEquals(SqlPreviewPanel.PreviewDisplayMode.NORMAL, panel.displayModeForTest());
+        panel.clear();
+    }
+
+    public void testDisplayModeSurvivesConditionToggle() throws Exception {
+        // 另一重建入口：动态条件勾选（renderSql 直调）同样不应抹掉竖排。
+        // 断言物用 ORDER BY 多字段——竖排把它拆成逐行（format 保持同行），可区分模式是否真在生效
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        TableInfo table = tableInfo();
+        SelectStatement statement = new SelectStatement(
+                table,
+                List.of(),
+                null,
+                List.of(),
+                false,
+                List.of(new Condition.Simple(new ColumnRef(null, "id", null, null, null, null, null), "=",
+                        new SqlValue.Literal("1"),
+                        new ConditionToggle("c0", "true", true, "id = 1", null, List.of()))),
+                List.of(),
+                null,
+                List.of(new OrderByItem(new ColumnRef(null, "id", null, null, null, null, null), true),
+                        new OrderByItem(new ColumnRef(null, "name", null, null, null, null, null), false)),
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                null,
+                List.of());
+        SqlPreviewModel model = new SqlPreviewModel(statement, MySqlDialect.INSTANCE, true,
+                List.of(new ConditionView("c0", "id = 1", "true", true, null, List.of())));
+        panel.showResult(new PreviewResult(
+                "SELECT id, name\nFROM car_device_info",
+                "SELECT id, name FROM car_device_info",
+                List.of(),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "car_device_info",
+                null,
+                List.of("id", "name"),
+                java.util.Map.of(),
+                null,
+                model,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                java.util.Map.of(),
+                null,
+                null,
+                null,
+                null));
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL);
+        assertTrue("前置：ORDER BY 应已逐行", panel.editorForTest().getDocument().getText().contains("ORDER BY\n"));
+
+        panel.conditionCheckboxForTest(0).doClick();
+
+        String after = panel.editorForTest().getDocument().getText();
+        assertEquals("勾选重建后模式不应丢失", SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest());
+        assertTrue("勾选重建后 ORDER BY 应仍逐行：" + after, after.contains("ORDER BY\n"));
+        panel.clear();
+    }
+
+    /** 工具栏按钮按文案查找（组件树递归；master 侧 UIUtil.uiTraverser 的等价 Java 写法）。 */
+    private static javax.swing.JButton findButtonByText(java.awt.Container root, String text) {
+        for (java.awt.Component c : root.getComponents()) {
+            if (c instanceof javax.swing.JButton) {
+                javax.swing.JButton button = (javax.swing.JButton) c;
+                if (text.equals(button.getText())) return button;
+            } else if (c instanceof java.awt.Container) {
+                javax.swing.JButton found = findButtonByText((java.awt.Container) c, text);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     public void testActionButtonGroupsSwitchByScene() throws Exception {
