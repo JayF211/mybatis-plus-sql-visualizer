@@ -763,7 +763,10 @@ class HibernateLogParserTest {
 
     @Test
     fun `Hibernate 独占一行出现在 COLLECTING 态中应闭合前条目开启新条目`() {
-        // 复现真实场景：org.hibernate.SQL 输出 comment+SQL 后，Hibernate: 独占一行再输出第二份
+        // 复现真实场景：org.hibernate.SQL 输出 comment+SQL 后，Hibernate: 独占一行再输出第二份。
+        // T-HibDualCapture：这正是「双副本」病例——logger 副本被 `Hibernate: ` 行提前闭合的
+        // 零参影子进隔离槽，第二份（带绑定行）同 rawSql 到达即取代之，合并为一条全参条目
+        // （旧口径产出 2 条：零参条目 `?` 残留 + 全参条目）
         val entries = feedAll(
             parser(),
             // 第一份（来自 org.hibernate.SQL logger，无 Hibernate: 前缀）
@@ -796,15 +799,12 @@ class HibernateLogParserTest {
             "            userentity0_.username=?",
             "binding parameter [1] as [VARCHAR] - [1]",
         )
-        // 应产出 2 条，且都不含 "Hibernate:" 文本
-        assertEquals(2, entries.size)
+        // 双副本合并为一条，且带参数
+        assertEquals(1, entries.size)
         assertFalse(entries[0].rawSql.contains("Hibernate"))
-        assertFalse(entries[1].rawSql.contains("Hibernate"))
         assertTrue(entries[0].rawSql.contains("userentity0_"))
-        assertTrue(entries[1].rawSql.contains("userentity0_"))
-        // 第二条有参数
-        assertEquals(1, entries[1].params.size)
-        assertEquals("1", entries[1].params[0].value)
-        assertEquals("VARCHAR", entries[1].params[0].type)
+        assertEquals(1, entries[0].params.size)
+        assertEquals("1", entries[0].params[0].value)
+        assertEquals("VARCHAR", entries[0].params[0].type)
     }
 }

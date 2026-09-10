@@ -257,7 +257,8 @@ class LogToSqlPanel(
             if (multi) "-- ${MpSqlVisualizerBundle.message("logToSql.status.group", index + 1)}\n$body" else body
         }.joinToString("\n\n")
         setDocumentText(resultEditor, out)
-        val unresolved = entries.count { '?' in it.restoredSql }
+        // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
+        val unresolved = entries.count { countPlaceholders(it.restoredSql) > 0 }
         status(
             if (unresolved > 0) {
                 MpSqlVisualizerBundle.message("logToSql.status.unresolved", unresolved)
