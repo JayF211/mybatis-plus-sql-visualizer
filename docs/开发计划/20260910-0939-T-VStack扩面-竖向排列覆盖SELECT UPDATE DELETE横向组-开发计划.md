@@ -177,3 +177,19 @@ return if (expanded != sql) expanded else format(sql)
 - 三代码文件（SqlFormatter.kt/SqlFormatterTest.kt/SqlPreviewPanelTest.kt）本会话独占（删行均为本会话断言反转），直接 git add；docs 两册仍索引级拆分行（对方在途）。
 
 **验证结果**：SqlFormatterTest 50/50（含 testVerticalExpand* 10 + 反转 2）+ SqlPreviewPanelTest 46/46 + 全量 2555/0/6 绿。runIde 真机走查（SELECT/UPDATE/DELETE 各形态点按钮、IN 子查询保持同行、LIMIT 同行、亮暗主题）留人工。
+
+---
+
+## 追加交付：IN 展开阈值（T-VStack·InThreshold，master `dc308fc`，2026-09-10）
+
+**用户复议**：扩面交付后用户指出「IN 的参数单独一行是否合适」——裁定短清单竖排是负收益（占位符 `IN (?, ?, ?)` 是本插件 inList 特性主力形态，`?` 对应关系靠左侧参数面板顺序对照，竖排零增量信息、纯花行高把相邻条件推出视口）。
+
+**修复**：`expandInList` 加 `IN_EXPAND_MIN_ELEMENTS = 5` 阈值——元素 <5 保持 `IN (1, 2, 3)` 同行，≥5 才 `(` 自占一行逐元素展开（长清单痛点保留）；ORDER BY/GROUP BY/FROM 字段行有语义信息不受影响。
+
+**测试**：新增 3 条（长清单展开 / 恰 4 同行恰 5 展开边界 / 占位符短清单同行），回调 5 条短 IN 用例预期 + 2 条退化断言改长清单输入 + 双 IN 用例改双长清单；SqlFormatterTest 52/52、SqlPreviewPanelTest 46/46、全量 3230/0/6 绿（sandbox-vstack-in 隔离）。
+
+**插曲（K2J 陈旧输出劫持再犯）**：阈值编译进 kotlin/main 新类后 5 用例假红——`build/classes/java/main` 残留 783 旧类（SqlFormatter.class 停在扩面前版本）排前于新类，jar 与测试运行时均吃旧类；字节码反汇编证实实现正确后按记忆既定方案清目录复绿。同环境并行会话活跃时该目录会被再次写入，全量绿后立即提交。
+
+**新基线效果**：
+- 短清单（本插件主力 `IN (?, ?, ?)`）：`WHERE station_id IN (?, ?, ?)` 一行不动；
+- 长清单：`WHERE org_id IN` 换行 + `(` 自占一行 + 逐元素 + `)` 收行。
