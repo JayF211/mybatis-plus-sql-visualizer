@@ -15,6 +15,33 @@
 - **执行临时文件失败与复制错误反馈（T-ExecCopyFix）**：① 两处「复制错误信息」按钮静默无反馈——`CopyFeedback.flashCopied` 文本按钮适配版（图标换对号 + 文案短暂换「已复制」，一次性 Timer 恢复）；② 执行失败 Failed to create temporary SQL file 零日志无法归因——`createTempPsiFile` 每个 return null 站点分级记录阶段原因，onError 文案改本地化 `execute.tempFile.failed` 携带阶段原因；冷路径 refresh 段包 `WriteIntentReadAction`（262 平台 EDT-ReadAction 同步 VFS refresh 硬抛 write-safe）；`clearPrepared` 不再清临时文件缓存（vf.isValid 守卫已兜底，原实现每次预览切换必落冷路径）
 - **预览刷新后内嵌 Database 丢失：多弹窗僵尸 rehost 监听抢共享控制台根治（T-RefreshDbSteal）**：刷新后 DBN 工具栏消失/参数不再同步右侧 SQL/执行 SQL 跑到 IDEA 控制台三症状同根——每次预览 new 一个 MODELESS 弹窗且从不关闭，旧弹窗的 rehost HierarchyListener 残活把插件级共享控制台抢回废弃面板（真机日志 6 连抢实锤）。四组修复：弹窗单例化（项目级登记表关旧开新）；监听引用入字段 detachConsole/dispose 显式移除（僵尸监听根治），去抖 skip 改单发 800ms Timer 延迟复查幂等重挂；所有权卫队 `consoleAttachedToMe` 判定，showSql/executeSql/createEditor 三处失联先 recoverConsole 重嵌、执行侧恢复未同步落地时放弃 executePrepared 防打在别人的控制台上；createEditor/releaseEditor 带栈埋点补齐真机故障期日志空窗。测试：新增 `RefreshDbStealTest` 8 用例，全量 3188/0/6 绿；真机复验清单留人工
 
+## [2026.9.10] - 2026-09-10
+
+### Added
+
+- **竖向排列 VALUES 行尾列名标注配置项（T-VPairAnno）**：竖排展示下 INSERT 每个值行尾的 `-- 列名` 配对标注做成配置项——新增 `PluginSettings.verticalPairAnnotation`（默认开启），`SqlFormatter.formatVertical` 加 `annotatePairs` 默认参数单点收口（关闭时列名单收空名单，渲染主体零改动），设置页 SQL 预览区新增复选框 + 导入导出接线 + 竖排按钮 tooltip 补「可在设置中关闭」；默认 true 使既有用例与调用零改动
+- **IN 列表竖向排列展开阈值（T-VStack·InThreshold）**：`IN` 列表按元素数量分流——元素 < 5 保持同行、≥ 5 才逐行展开，避免短 IN 列表展开的负收益（此前选竖排即全部展开）
+- **SQL 日志列表行号（T-LogRowNumber）**：列表条目元信息行最前显示 `#N` 会话内捕获序号（第 N 条捕获的 SQL），每次启动项目从 1 重新计数（手动清空列表同样归零）；去重丢弃/暂停/过滤命中的 SQL 不占号，列表不跳号；耗时排序下行号保持可辨认原始捕获顺序
+
+### Fixed
+
+- **双击日志预览弹窗加载卡顿根治（T-PreviewSlow）**：双击 SQL 日志开预览耗时偏长——根因一：`SqlPreviewPanel.awaitPrewarmedTempFile` 在 EDT 上 `Thread.sleep` 自旋轮询预热线程产物（同步 VFS refresh + PSI findFile 冷态常跑数百 ms~数 s，全烧进 UI 线程），预热等待上界 2000ms → 60ms——热态/二次打开预热已就绪立刻命中走 PSI 主路径，冷启动首拍直接降级纯内存编辑器不烧 EDT，预热完成后下次打开自愈回高亮/补全路径；伴随修复：`DataSourceSelector.prepareInConsole` 的 `attachConsole` 与 `console.getDocument` 去 `ReadAction` 还原直接插桩——DBN 的 `attachConsole` 底层 new `EditorImpl` 构造里 `setHighlighter` 走 WriteIntentReadAction，平台锁层禁止「read-action 内再开 write-intent-read-action」（真机 `IllegalStateException` 被 runCatching 吞成原生控制台从未挂载成功），第三方链入口自带读权限与切 EDT 语义
+- **预览打开时 EDT 读权限断言刷屏全库排雷（T-PreviewDocLock + T-PreviewDocLock2）**：262 平台每次双击预览固定刷 4 条 `Read access is allowed from inside read-action only` SEVERE（`Plugin to blame: SQL Visualizer`）——根因=平台加固型契约违约：262 的 `FileDocumentManager.getDocument` 加了 `softAssertReadAccess` 而 EDT 鼠标事件无读权限，单次 `PsiDocumentManager.getDocument(psi)` 即踩 4 条（243 仅 `@RequiresReadLock` 注解、`EditorLockFreeTyping` 类尚不存在）。F1=`prepareInConsole` 的 attachConsole/getDocument 两处按需包 `ReadAction`（纯读模型构建、无同步 refresh）；全库排雷 62 处 PSI/Document/VFS 访问点（按「第一个 cn.song 业务帧」计数避免 grep 假阳性，其余断言类型插件帧零命中、不修未复现路径）。F2=项目类型检测 `ProjectTypeDetector.detect` 探测纯函数移入 `ReadAction.compute`（`JavaPsiFacade.findClass` 是 `assertReadAccess` 硬抛、被设置页 `catch(Exception)` 吞成「注入静默失败」）。F3=预览临时文件从「必得」改「尽力」——`awaitPrewarmedTempFile` 超时/拿不到时 `runCatching{}.getOrElse{ 纯内存文档兜底 }` 降级可编辑编辑器（原 `IllegalStateException` 直接打不开预览），主路径行为逐字节不变
+- **Hibernate 日志同语句双条目参数分裂根治（T-HibDualCapture）**：`show-sql` 与 `org.hibernate.SQL: debug` 双路打印时同一条 SQL 被切成两条（logger 副本被 `Hibernate: ` 行提前闭合产出零参 `?` 残留 + 误报「参数数量不匹配」，参数全挂 stdout 副本，去重指纹拦不住）。F1 零参闭合条目入隔离槽 `quarantined`（同 rawSql 后继抵达取代、不同 SQL 先入列保序、`takeEntries` 仅无语句收集中冲刷）；F3 `placeholderPositions`（单引号字面量 `''` 转义/行注释/块注释内 `?` 不计）落 `LogSqlRestorer.kt` 单点、`restore` 按位替换与计数同口径；`SqlLogPanel.openPreview` 警示分流：零参=「未捕获到参数绑定日志」新键引导开 TRACE，有参不齐才报数量不匹配。F2 参数框加宽 16 列 + caret 钉首 + tooltip `#source = 全值`
+- **预览顶部元信息压按钮行（T-PreviewTopOverlap）**：预览面板顶部元信息在窄窗下压到按钮行重叠（BorderLayout WEST/EAST 偏好宽超宽直接重叠，AWT 契约非 bug）——WEST→CENTER + 低频按钮（导入/对比/分享）折叠「更多」JBPopup 菜单（关键字换行直显、复制错误永不折叠）+ 宽度预算截断 + 布局断言测试
+- **执行 SQL 首次静默不执行 + 误报凭据提示（T-ExecSilentNoop）**：预览首次「执行 SQL」静默不执行/误报凭据提示——执行模型回落强制走 `executeQueries` 兜底，提示分流去重
+- **预览显示模式持久化（T-PreviewDisplayMode）**：输入参数后竖向排列/关键字换行形态消失——编辑器是模型派生视图，按钮里直改文档是一次性变换必被全量 `setText` 重建抹掉（format() 恰在 showSql 管线里故「看似保留」）；`applyDisplayMode` 接入 showSql 唯一收敛点 + 压缩短路优先 + 三格式方法改走 `setDisplayMode`（toolbar/Ctrl+Alt+L 零改动）；压缩态切换一并退出压缩，刷新复位 NORMAL，新预览保留，不持久化设置，手改仍被覆盖（既有语义）
+- **更新检查版本比较改用 IDEA 内置比较器（T-VersionUtil）**：Gitee 内测通道的 `VersionComparator.compare` 由插件自研点分算法改为委托平台 `com.intellij.util.text.VersionComparatorUtil`（`util_rt.jar`，243/253/262 三平台 javap 签名一致），与 IDE/Marketplace 判定「发现新版」同口径。旧自研算法把 `2026.9.10-beta.1` 第三段切成 `10-beta` 走字符串兜底、判其大于 `2026.9.10`，「同日先 beta 后转正」时内测通道提示倒挂；内置比较器识别 `-beta` 预发布标记正确判小。包装层保留 null 语义与异常降级；`VersionComparatorTest` 补 beta 预发布/同日序号用例
+- **SQL 日志列表行号两处续修（T-LogRowNumber）**：① 行号被非主进程启动重置（HTTP 请求脚本/profiler/重复 Run 的测试都会触发 EXECUTION_TOPIC processStarted）——`isModuleBasedLaunch` 从 `args[1]` 取 getRunProfile，仅 ModuleBasedConfiguration 子类（Application/JUnit/SpringBoot 共同父类）才清行号，判定失败保守按主进程处理（宁清零勿永不归零）；② 点击「移除重复的sql」漏裁跨窗口（>60s）重复——`dedupeExisting` 去时间窗口条件纯按 dedupeKey 判重（运行时 addEntry 的 isDuplicate 窗口语义不变）
+
+### Test
+
+- **预览加载**：`SqlPreviewPanelTest` +237 行、新增 `ExecSilentNoopHintTest`（99）、`SqlPreviewTopRowLayoutTest`（215）——顶部元信息折叠/布局断言 + 静默执行提示分流
+- **Hibernate 双副本**：新增 `HibernateLogParserDualCopyTest`（168）、`SqlPreviewPanelParamFieldTest`（61）；`HibernateLogParserTest`/`LogEntryPreviewRecognizerTest`/`DualParserIntegrationTest` 改判合并语义与 string-aware 口径；`SqlLogManagerBehaviorTest` +23（非主进程不清零）
+- **竖向排列**：`SqlFormatterTest` +484（IN 阈值/列名标注开关/横向组展开）、`SettingsIOTest` +配置项持久化断言
+- **版本比较**：`VersionComparatorTest` 补 beta 预发布/同日序号用例
+- 本版全量 **3254/0/0/6 绿**（263 套件，与基线一致零回归）
+
 ## [2026.9.9] - 2026-09-09
 
 ### Fixed
