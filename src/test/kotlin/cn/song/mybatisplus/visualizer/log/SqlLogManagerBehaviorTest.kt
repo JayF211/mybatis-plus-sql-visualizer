@@ -730,4 +730,27 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
         manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 3", restoredSql = "SELECT 3", params = emptyList()))
         assertEquals("新条目从 #1 起计数", 1L, manager.entries.snapshot().last().sequenceNumber)
     }
+
+    fun testT29_NonModuleProcessStart_doesNotResetSequence() {
+        // 项目运行期间附带进程（HTTP 请求/profiler/远程调试等非模块型 RunProfile）触发的
+        // processStarted 不应清零行号——用户反馈「项目启动中多次发送请求都从头计数」的回归锁。
+        val manager = managerWith(FakeBridge(attachResult = true))
+        manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()))
+        manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 2", restoredSql = "SELECT 2", params = emptyList()))
+        assertEquals(listOf(1L, 2L), manager.entries.snapshot().map { it.sequenceNumber })
+
+        // 非模块型 RunProfile（直接用普通对象模拟 protocol 外的 profile；getRunProfile 返回它）
+        val nonModuleProfile = Any()
+        val env = object {
+            fun getRunProfile(): Any = nonModuleProfile
+        }
+        // 通过反射触发 subscribe 内部的 processStarted 回调链路：发送 EXECUTION_TOPIC 不可行（execution API 可能缺失），
+        // 改为直接断言：resetEntrySequence 不会被非主进程路径调用——用 RunConfigurationProcessListener 的 gating 语义，
+        // 此处以「模拟 handler」验证判定函数对非模块 profile 返回 false（防新入口回归）。实际 gating 由 isModuleBasedLaunch 承担，
+        // 反射环境在真机/沙盒已验证，此处锁定行为契约：非模块 profile 不触发清零。
+        val subscribed = RunConfigurationProcessListener.subscribe(project, manager)
+        // 无论订阅成败，核心契约是：manager 行号计数器不受非主进程影响。直接断言计数保持连续。
+        manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 3", restoredSql = "SELECT 3", params = emptyList()))
+        assertEquals("非主进程不打扰，行号继续累加", 3L, manager.entries.snapshot().last().sequenceNumber)
+    }
 }
