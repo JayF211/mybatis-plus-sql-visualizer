@@ -197,6 +197,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（63 个文件，手动查阅） |
 | 记忆精简规范 | `docs/记忆精简规范.md`（分类标准、归档流程、数量基线） |
 
+| 2026-09-10 | 预览面板「竖向排列」按钮——INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注（T-VStack，master a86c615）：SqlFormatter.formatVertical 首主子句 INSERT 专用路径（depth==1 逗号唯一切分点、嵌套表达式整段保留；VALUES 每值行尾按最宽前缀含逗号对齐 `-- 列名`；多 token 列/无列清单不标注；组内注释挂行尾 → 幂等；非 INSERT 委托 format()），配对取合法 SQL 注释路线否决截图原样「列名 值」直排（活文档复制/执行/分享非法外流风险）。新增 15 用例，全量 3212/0/6 绿（sandbox-vstack 隔离）；runIde 真机走查留人工。计划文档：docs/开发计划/20260910-0832-T-VStack-预览面板竖向排列按钮-开发计划.md |
 ## 变更记录
 
 | 日期 | 变更 |
