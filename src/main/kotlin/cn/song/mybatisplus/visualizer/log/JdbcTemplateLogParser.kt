@@ -188,8 +188,8 @@ class JdbcTemplateLogParser(
     private fun parseNamedParamsMap(paramsText: String): Map<String, String> {
         if (paramsText.isEmpty()) return emptyMap()
         val params = mutableMapOf<String, String>()
-        // 按 `, key=` 边界切分（lookahead 保留 key）
-        val entries = paramsText.split(Regex("""\s*,\s*(?=\w+\s*=)"""))
+        // 按 `, key=` 边界切分（lookahead 保留 key）；T-PerfSweep F2：正则提常量（此前每条 named 参数条目内联新建）
+        val entries = paramsText.split(NAMED_PARAMS_MAP_SPLIT)
         for (entry in entries) {
             val eqIdx = entry.indexOf('=')
             if (eqIdx <= 0) continue
@@ -392,5 +392,11 @@ class JdbcTemplateLogParser(
 
         /** 数值字面量（含小数与科学计数）。 */
         private val NUMERIC_REGEX = Regex("""-?\d+(\.\d+)?([eE][+-]?\d+)?""")
+
+        /**
+         * T-PerfSweep F2：NamedParameter 参数 Map 的 `, key=` 边界切分正则（lookahead 保留 key）。
+         * 捕捉热路径上每条 named 参数条目都要切分——原内联新建 Regex 提为常量。
+         */
+        private val NAMED_PARAMS_MAP_SPLIT = Regex("""\s*,\s*(?=\w+\s*=)""")
     }
 }

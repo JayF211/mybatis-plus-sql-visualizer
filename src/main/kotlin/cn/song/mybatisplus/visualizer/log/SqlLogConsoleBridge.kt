@@ -334,7 +334,9 @@ open class SqlLogConsoleBridge(
                                 endOffset,
                                 stampReader(),
                                 line,
-                                context.line0Reader?.invoke(),
+                                // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
+                                // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
+                                context.line0Reader,
                             )) {
                                 ConsoleReplayGuard.Decision.Replay -> {
                                     context.replayDropCount++
@@ -363,6 +365,9 @@ open class SqlLogConsoleBridge(
      * T-PreviewFlash：为重放守卫解析编辑器/文档反射句柄。全部 runCatching 包裹——
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * `getEditor` 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
+     * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次 O(文档大小) 拷贝（缓存为
+     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次拷贝，无正确性影响）。
      */
     private fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
         runCatching {
@@ -371,15 +376,23 @@ open class SqlLogConsoleBridge(
             ctx.replayGuardEditor = editor
             val getDoc = editor.javaClass.getMethod("getDocument")
             val doc = getDoc.invoke(editor) ?: return
+            val getStamp = doc.javaClass.getMethod("getModificationStamp")
+            val getText = doc.javaClass.getMethod("getText")
             ctx.docStampReader = {
                 runCatching {
-                    (doc.javaClass.getMethod("getModificationStamp").invoke(doc) as? Number)?.toLong()
-                        ?: Long.MIN_VALUE
+                    (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
                 }.getOrDefault(Long.MIN_VALUE)
             }
+            var cachedStamp = Long.MIN_VALUE
+            var cachedLine0: String? = null
             ctx.line0Reader = {
                 runCatching {
-                    (doc.javaClass.getMethod("getText").invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                    val stamp = (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
+                    if (stamp != cachedStamp) {
+                        cachedLine0 = (getText.invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                        cachedStamp = stamp
+                    }
+                    cachedLine0
                 }.getOrNull()
             }
         }

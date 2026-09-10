@@ -100,8 +100,11 @@ class SqlLogCaptureRealtimeScenarioTest {
         val buffer = SqlLogEntryBuffer(maxEntries = 200)
         buffer.dedupeEnabled = true
         buffer.dedupeWindowMs = 60000L
-        var notified = 0
-        buffer.addListener { notified++ }
+        // T-PerfBatch 分层契约：内容通知与徽章通知拆通道——去重丢弃只即时刷新徽章
+        var contentNotified = 0
+        var badgeNotified = 0
+        buffer.addListener { contentNotified++ }
+        buffer.onDedupeCountsChanged = { badgeNotified++ }
 
         // 真实分页：同一页 SQL 因不同页码参数不同 → 不同 SQL；模拟「同一查询重复执行 5 次」
         val sql = "SELECT id,username FROM user WHERE status = 'ACTIVE' ORDER BY id LIMIT 10"
@@ -117,7 +120,8 @@ class SqlLogCaptureRealtimeScenarioTest {
 
         assertEquals("窗口内 5 次执行只留 1 条", 1, buffer.snapshot().size)
         assertEquals("徽章 ⨉4", 4, buffer.dedupeCount(sql))
-        assertEquals("5 次入列 + 4 次丢弃共通知 5 次", 5, notified)
+        assertEquals("4 次丢弃即时走徽章通道", 4, badgeNotified)
+        assertEquals("内容通道时间窗内只通知首条", 1, contentNotified)
     }
 
     @Test

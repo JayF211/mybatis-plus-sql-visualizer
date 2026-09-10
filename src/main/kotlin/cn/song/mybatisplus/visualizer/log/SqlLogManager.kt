@@ -127,9 +127,11 @@ class SqlLogManager(private val project: Project) : Disposable {
     init {
         // F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）
         // M37.3：恢复 logAutoOpenOnCapture 行为——F-44 移除独立窗口时一并丢了解接线（设置项
-        // 与设置页勾选保留至今，形同虚设）。挂**无条件** buffer 监听（面板未创建/未订阅时
+        // 与设置页勾选保留至今，形同虚设）。挂**无条件**回调（面板未创建/未订阅时
         // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
-        buffer.addListener(autoShowBufferListener)
+        // T-PerfBatch：自动展开挂 onEntryAccepted（每次成功入队即时回调，与列表内容节流解耦——
+        // 既有语义「每条都判 maybeAutoShow、60s 防抖收敛」不变）。
+        buffer.onEntryAccepted = autoShowBufferListener
 
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
         // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
@@ -437,17 +439,25 @@ class SqlLogManager(private val project: Project) : Disposable {
         }
     }
 
-    /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */
+    /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。
+     * T-PerfBatch：同一回调挂三个出口——内容监听器（节流后的正式通知）、徽章变更、
+     * 内容节流抑制兜底——全部汇入 notifyUi 的置脏+幂等 flush，面板读当下快照不丢条目。 */
     fun addUiListener(listener: () -> Unit) {
         if (uiListeners.isEmpty()) {
             buffer.addListener(uiNotifyListener)
+            buffer.onDedupeCountsChanged = uiNotifyListener
+            buffer.onContentNotifySuppressed = uiNotifyListener
         }
         uiListeners += listener
     }
 
     fun removeUiListener(listener: () -> Unit) {
         uiListeners -= listener
-        if (uiListeners.isEmpty()) buffer.removeListener(uiNotifyListener)
+        if (uiListeners.isEmpty()) {
+            buffer.removeListener(uiNotifyListener)
+            buffer.onDedupeCountsChanged = null
+            buffer.onContentNotifySuppressed = null
+        }
     }
 
     /** 发现 SQL 且设置开启时自动打开日志工具窗口（仅首次捕获触发一次；与面板是否已创建无关）。 */
@@ -498,7 +508,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.paused = true
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
-        buffer.removeListener(autoShowBufferListener)
+        buffer.onEntryAccepted = null
+        buffer.onDedupeCountsChanged = null
+        buffer.onContentNotifySuppressed = null
         uiListeners.clear()
         autoSaver.close()
     }
