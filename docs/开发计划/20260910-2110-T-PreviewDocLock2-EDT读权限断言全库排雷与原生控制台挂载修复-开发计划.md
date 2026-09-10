@@ -182,14 +182,14 @@ val doc: Document = runCatching {
 
 ## 八、后续项
 
-1. **F2 立项**：`SqlSourceInterceptorAutoInjector`/`ProjectTypeDetector` 的 EDT PSI 探测线程模型（F-44-7 功能正确性，非刷屏）。
-2. 若 F3 本次未落地：预览临时文件降级（本计划 §四设计已就绪）。
+1. ~~**F2 立项**~~：已实施（§九 第 2 行）。
+2. ~~**F3 预览临时文件降级**~~：已实施（§九 第 2 行）。
 3. 提炼全局 pitfall（候选）：`softAssert*` 生产不抛但强度=SEVERE+FUS 上报；`JavaPsiFacade.findClass` 是 `assertReadAccess` 硬抛易被 catch 吞成静默失败；`getStdFileType` 用 java ReadWriteLock 永远安全（反编译证据链已在本计划 §1.5）。
 
 ## 九、实施记录
 
 | 项 | 结果 |
 |----|------|
-| 代码改动 | F1：`DataSourceSelector.prepareInConsole` 两处反射（`attachConsole` + `console.getDocument`）各包 `ReadAction.compute`，附注释记录 262 饱和栈证据链与「lambda 内勿塞同步 refresh」约束（fix 提交）；F2/F3 仅落档设计（决策见 §三/§四/§七） |
-| 全量回归 | `./gradlew test --no-build-cache --no-configuration-cache` BUILD SUCCESSFUL in 3m56s；解析 `build/test-results/test/*.xml` 共 263 套件、**3252/0/0/6**，与基线一致零回归 |
+| 代码改动 | F1：`DataSourceSelector.prepareInConsole` 两处反射（`attachConsole` + `console.getDocument`）各包 `ReadAction.compute`，附注释记录 262 饱和栈证据链与「lambda 内勿塞同步 refresh」约束（fix 提交 7bf5860）；F2：`ProjectTypeDetector.detect` 包 `ReadAction.compute`（探测主体拆 `detectSync` 私有方法，`inject` 的文件创建段仍 `WriteCommandAction` 与探测分离——方案 B，fix 提交）；F3：`SqlPreviewPanel.createEditor` 临时文件支链 `runCatching{...}.getOrElse{ 纯内存文档兜底 }` 降级（主路径不变、降级态无 PSI/高亮/补全，fix 提交） |
+| 全量回归 | F1 轮：`./gradlew test` BUILD SUCCESSFUL in 3m56s，3252/0/0/6；F2+F3 轮：见本次补充（同基线零回归） |
 | 证据留存 | 真机日志 `idea.log`~`idea.5.log` 业务帧归一化统计（createEditor 32 / prepareInConsole:1109 16 / :1116 4，其余断言类型插件帧零命中）；262 反编译 `FileTypeManagerImpl`（`getStdFileType` 用 java ReadWriteLock）/`FileDocumentManagerBase`/`IdeaLogger`/`Logger.shouldRethrow`/`ThreadingAssertions`，及真机栈 `LanguageConsoleImpl$Helper.getDocument(kt:406)`/`JdbcConsole.getDocument(Java:371)`；243 sources jar 对照 |
