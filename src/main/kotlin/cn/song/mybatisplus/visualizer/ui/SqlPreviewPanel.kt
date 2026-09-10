@@ -1151,6 +1151,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }.getOrDefault(true)
 
     /**
+     * T-VPairAnno：竖向排列 VALUES 行尾配对列名标注开关；环境异常兜底 true（保持默认标注）。
+     * 与 [formatSqlSetting] 同构——保存后的下一次渲染生效，不做已开弹窗即时推送。
+     */
+    private fun verticalPairAnnotationSetting(): Boolean = runCatching {
+        PluginSettings.getInstance().state.verticalPairAnnotation
+    }.getOrDefault(true)
+
+    /**
      * T-PreviewDisplayMode：按当前显示模式变换渲染文本（[showSql] 的唯一收敛点调用）。
      *
      * 优先级：压缩模式最高——压缩语义是"全部挤一行"，而模式变换会引入换行，二者相抵故短路；
@@ -1164,7 +1172,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             PreviewDisplayMode.NORMAL -> if (formatSqlSetting()) SqlFormatter.format(sql) else sql
             PreviewDisplayMode.FORMAT -> SqlFormatter.format(sql)
             PreviewDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
-            PreviewDisplayMode.VERTICAL -> SqlFormatter.formatVertical(sql)
+            PreviewDisplayMode.VERTICAL -> SqlFormatter.formatVertical(sql, verticalPairAnnotationSetting())
         }
     }
 
@@ -1200,7 +1208,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         setDisplayMode(PreviewDisplayMode.KEYWORD_WRAP)
     }
 
-    /** 竖向排列格式化：INSERT 列清单/VALUES 逐行竖排、值行尾标注配对列名（[SqlFormatter.formatVertical]）。 */
+    /**
+     * 竖向排列格式化：INSERT 列清单/VALUES 逐行竖排、值行尾标注配对列名（[SqlFormatter.formatVertical]）。
+     * T-VPairAnno：标注是否追加由设置 verticalPairAnnotation 控制（默认开）。
+     */
     fun formatVertical() {
         setDisplayMode(PreviewDisplayMode.VERTICAL)
     }

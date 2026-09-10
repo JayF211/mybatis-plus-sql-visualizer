@@ -375,13 +375,15 @@ object SqlFormatter {
      *  - INSERT → 专用竖排路径；非 INSERT → format + 横向组展开
      *  - INSERT 列清单/VALUES 组各一元素一行（缩进 2、行尾逗号紧贴、闭括号顶格；批量多组 `),` 接排）
      *  - 配对标注：列清单全为单 token 元素才启用（`t.a` 等多 token 列不标注）；无列清单不标注；
-     *    值按序与列取小对位，组内每行行尾注释只挂一个（用户注释优先于配对标注）
+     *    值按序与列取小对位，组内每行行尾注释只挂一个（用户注释优先于配对标注）；
+     *    [annotatePairs]=false 时整项关闭（T-VPairAnno）——仅竖排不追加标注，用户自带注释不受影响
      *  - 值表达式整段保留：depth==1 逗号是唯一切分点，NOW()/CONCAT(a,b) 等嵌套括号内逗号原样
-     *  - 组内注释挂行尾（本功能输出的 `-- 列名` 再输入时归位本行 → 幂等）；顶层注释自成一行
+     *  - 组内注释挂行尾（本功能输出的 `-- 列名` 再输入时归位本行 → 幂等）；顶层注释自成一行；
+     *    关闭标注后再输入已带标注文本，既有 `-- 列名` 按"用户行尾注释"规则归位保留（不剥离）
      *  - LIMIT 分页参数逗号与子查询 IN（元素首 token SELECT/WITH）不展开
      *  - 输出不变式：剔 COMMENT 后重分词的 token 流与原文一致——只动空白与行尾注释，不改语义 token
      */
-    fun formatVertical(sql: String): String {
+    fun formatVertical(sql: String, annotatePairs: Boolean = true): String {
         val tokens = lex(sql)
         if (tokens.isEmpty()) return sql.trim()
         val first = tokens.firstOrNull { it.first != SqlTokenTypes.COMMENT } ?: return format(sql)
@@ -391,7 +393,9 @@ object SqlFormatter {
             return expandHorizontalGroups(format(sql))
         }
 
-        val columnNames = collectInsertColumns(tokens)
+        // T-VPairAnno：关闭标注即空名单——renderGroup 的 `elemIndex in columnNames.indices` 恒假，
+        // 标注追加与无注释行的对齐补齐同源归零（对齐只为标注竖向对齐服务），渲染主体零改动
+        val columnNames = if (annotatePairs) collectInsertColumns(tokens) else emptyList()
 
         /** 组内一行：元素 token（闭组时统一渲染）+ 行尾逗号标记 + 行尾注释；elemIndex 为配对下标。 */
         class Line {

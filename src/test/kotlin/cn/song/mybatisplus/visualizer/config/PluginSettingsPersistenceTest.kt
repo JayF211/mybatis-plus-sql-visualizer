@@ -147,7 +147,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // F-44-7：源码位置自动注入开关 +1；T-SqlDuration：耗时显示开关 +1；
             // T-Dgm-04：JOIN 图原生框架渲染开关 +1（合并双方共同确认的最终基线）
             // JdbcTemplate SQL 字符串预览开关 +1
-            assertEquals("复选框总数应为 22", 22, texts.size)
+            // T-VPairAnno：竖向排列值行尾列名标注开关 +1
+            assertEquals("复选框总数应为 23", 23, texts.size)
         } finally {
             settings.state.language = old
         }

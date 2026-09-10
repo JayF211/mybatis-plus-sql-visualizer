@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.highlight
 
 import com.intellij.psi.TokenType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -842,6 +843,70 @@ class SqlFormatterTest {
         // 空输入 → 原样返回（trim）
         assertEquals("", SqlFormatter.formatVertical(""))
         assertEquals("", SqlFormatter.formatVertical("   "))
+    }
+
+    // ------------------------------------------------------------------
+    // T-VPairAnno：竖向排列配对标注配置项（annotatePairs，默认 true 行为不变）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testVerticalInsertNoAnnotationWhenDisabled() {
+        // T-VPairAnno：annotatePairs=false 仅竖排不追加标注，行尾无对齐残留空格；
+        // 默认重载与显式 true 产物一致（既有调用零改动）
+        val input = "insert into `user` (username, password) values ('zhangsna', '123456')"
+        val expected = """
+            INSERT
+            INTO `user`
+            (
+              username,
+              password
+            )
+            VALUES
+            (
+              'zhangsna',
+              '123456'
+            )
+        """.trimIndent()
+        val disabled = SqlFormatter.formatVertical(input, annotatePairs = false)
+        assertEquals("关闭标注应仅竖排：$disabled", expected, disabled)
+        assertFalse("行尾不得残留对齐空格：$disabled", disabled.lines().any { it.endsWith(" ") })
+        assertEquals("默认重载应等价显式 true", SqlFormatter.formatVertical(input), SqlFormatter.formatVertical(input, true))
+    }
+
+    @Test
+    fun testVerticalUserCommentKeptWhenAnnotationDisabled() {
+        // T-VPairAnno：关闭标注后用户自带注释仍挂行尾（对齐补齐照旧），其余行干净无标注
+        val input = "insert into t (a, b) values (1 /* one */, 2)"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              a,
+              b
+            )
+            VALUES
+            (
+              1, /* one */
+              2
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input, annotatePairs = false))
+    }
+
+    @Test
+    fun testVerticalDisabledRerunKeepsPriorAnnotationAsUserComment() {
+        // T-VPairAnno 边界（KDoc 幂等语义推论）：关闭后对已带标注文本再跑（仅直调可发生，
+        // 面板恒从模型重建）——既有 `-- 列名` 按"用户行尾注释"规则归位保留而非剥离
+        val annotated = SqlFormatter.formatVertical("insert into t (a, b) values (1, 2)")
+        val rerun = SqlFormatter.formatVertical(annotated, annotatePairs = false)
+        assertEquals("既有标注应作为用户注释归位保留：$rerun", annotated, rerun)
+    }
+
+    @Test
+    fun testVerticalNonInsertIgnoresAnnotatePairs() {
+        // T-VPairAnno：非 INSERT 路径本无标注，参数取值不影响产物
+        val sql = "select id from t where org_id in (1, 2, 3, 4, 5)"
+        assertEquals(SqlFormatter.formatVertical(sql, true), SqlFormatter.formatVertical(sql, false))
     }
 
     /** 剔注释重分词（token 流保真断言辅助；与 SqlFormatter.lex 同过滤口径，关键字大小写归一）。 */
