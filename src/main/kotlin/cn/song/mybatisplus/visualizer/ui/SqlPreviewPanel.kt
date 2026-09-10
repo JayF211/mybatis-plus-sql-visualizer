@@ -1530,33 +1530,47 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
             // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
-            val (vFile, psi) = awaitPrewarmedTempFile()
-                ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
-            previewTempFile = vFile
-            psiFile = psi
-            // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
-            // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
-            // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
-            //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
-            // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
-            // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
-            // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
-            // 且 UsefulTestCase 模式下直接抛 AssertionError（平台抬版跑测试即红）。处置同 T-M42（同文件
-            // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
-            // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
-            // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
-            @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-            val doc = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
-                com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
-            } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
-            // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
-            //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
-            if (doc.text != sql) {
-                com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
-                    doc.setText(sql)
-                    com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(doc)
-                }
+            // T-PreviewDocLock2 F3：临时文件支链从「必得」改「尽力」——awaitPrewarmedTempFile 超时/拿不到
+            // 产物、或 releaseEditor 后未经 clear() 二次 createEditor 时（prewarmedTempFile 一次性、已置 null），
+            // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
+            // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
+            // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
+            val fallbackDoc = { msg: String ->
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[M36] preview temp file unavailable, fall back to in-memory editor: $msg")
+                psiFile = null
+                EditorFactory.getInstance().createDocument(sql)
             }
+            val doc = runCatching {
+                val (vFile, psi) = awaitPrewarmedTempFile()
+                    ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+                previewTempFile = vFile
+                psiFile = psi
+                // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
+                // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
+                // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
+                //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
+                // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
+                // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
+                // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
+                // 且 UsefulTestCase 模式下直接抛 AssertionError（平台抬版跑测试即红）。处置同 T-M42（同文件
+                // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
+                // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
+                // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
+                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                val d = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
+                    com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
+                } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
+                // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+                //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+                if (d.text != sql) {
+                    com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
+                        d.setText(sql)
+                        com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(d)
+                    }
+                }
+                d
+            }.getOrElse { fallbackDoc(it.message ?: it.javaClass.simpleName) }
             EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
