@@ -1106,32 +1106,26 @@ object DataSourceSelector {
                 com.intellij.openapi.vfs.VirtualFile::class.java,
             )
             attach.isAccessible = true
-            // T-PreviewDocLock2 F1：attachConsole 与紧随其后的 console.getDocument 反射，内部都会在
-            // EDT 上触碰 FileDocumentManager.getDocument（真机日志 262 业务帧实锤两条饱和栈：
-            // LanguageConsoleImpl$Helper.getDocument(kt:406) ← ConsoleExecutionEditor.<init> ←
-            // LanguageConsoleImpl.<init>，以及 JdbcConsole.getDocument(Java:371) ← Method.invoke）。
-            // 262 平台给 FileDocumentManager 一族加了运行期 softAssertReadAccess（243 仅 @RequiresReadLock
-            // 注解），EDT 鼠标事件里裸调即刷 SEVERE「Plugin to blame: SQL Visualizer」。这里包 ReadAction
-            // 同步执行（语义不变）——纯读模型构建、无同步 VFS refresh（refresh 已在 createTempPsiFile
-            // 由 WriteIntentReadAction 处理），故用 ReadAction 而非 WriteIntentReadAction；lambda 内勿塞
-            // 同步 refresh，否则复现 T-PreviewWiLock 的 write-safe 硬抛。
-            @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-            val console = ReadAction.compute<Any?, Throwable> {
-                attach.invoke(null, project, session, vf)
-            }
+            // T-PreviewSlow F2：不得用 ReadAction 包 attachConsole——DBN 的 attachConsole 底层要
+            // new EditorImpl，其构造里 setHighlighter 走 WriteIntentReadAction，平台锁层明文禁止
+            // 「在 read-action 内再开 write-intent-read-action」（真机日志 Caused by:
+            // IllegalStateException: WriteIntentReadAction can not be called from ReadAction
+            // ← EditorImpl.setHighlighter:1832 ← ConsoleExecutionEditor.<init>）。T-PreviewDocLock2
+            // F1 把它整段包进 ReadAction 压读权限断言，反而触发锁嵌套硬抛、被 runCatching 吞成
+            // InvocationTargetException: null → 控制台从未挂载成功。attachConsole 是平台自带读权限
+            // 与 invokeLaterIfNeeded 切 EDT 的第三方链入口，读权限由其内部自理，这里还原为直接插桩。
+            val console = attach.invoke(null, project, session, vf)
             LOG.info("[M36] attachConsole -> $console")
             if (console == null) return
 
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
-            // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）
-            // 注：getDocument 已在上面 attachConsole 的 ReadAction 内踩过一次文档断言，这里再取一次
-            // 同样需读权限（JdbcConsole.getDocument → FileDocumentManagerBase.getDocument:54），同包。
-            @Suppress("DEPRECATION")
-            val document = ReadAction.compute<com.intellij.openapi.editor.Document?, Throwable> {
-                consoleClass.getMethod("getDocument").invoke(console)
-                    as? com.intellij.openapi.editor.Document
-            }
+            // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）。
+            // T-PreviewSlow F2：同样去掉 ReadAction 包裹——attachConsole 成功返回后 console 的文档
+            // 已由 DBN 正常挂载链在合法上下文构建；若真机仍刷「Read access」SEVERE，再单独为这一句
+            // 包 ReadAction（它不触发 WIRA，与 attachConsole 不同）。
+            val document = consoleClass.getMethod("getDocument").invoke(console)
+                as? com.intellij.openapi.editor.Document
             var editor: com.intellij.openapi.editor.Editor? = null
             repeat(20) {
                 if (editor != null) return@repeat
