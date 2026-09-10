@@ -396,6 +396,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.format")) { formatSql() })
         // M-KeywordWrap：关键字换行（子句顶格换行、同行内容压一行）
         add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
+        // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.vertical")) { formatVertical() })
         // P-05：导入按钮（默认点击 = 从剪贴板导入）
         add(smallButton(MpSqlVisualizerBundle.message("panel.param.import")) { importParamsFromClipboard() })
         // O-4：差异高亮开关（本次 vs 上次预览）
@@ -1145,6 +1147,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M36.4：优先取原生编辑器文档，兜底自研编辑器
         val doc = nativeEditorDoc ?: editor?.document ?: return
         val formatted = SqlFormatter.formatClauseLine(doc.text)
+        if (formatted != doc.text) {
+            WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
+        }
+    }
+
+    /** 竖向排列格式化：INSERT 列清单/VALUES 逐行竖排、值行尾标注配对列名（[SqlFormatter.formatVertical]）。 */
+    fun formatVertical() {
+        // M36.4：优先取原生编辑器文档，兜底自研编辑器
+        val doc = nativeEditorDoc ?: editor?.document ?: return
+        val formatted = SqlFormatter.formatVertical(doc.text)
         if (formatted != doc.text) {
             WriteCommandAction.runWriteCommandAction(project) { doc.setText(formatted) }
         }

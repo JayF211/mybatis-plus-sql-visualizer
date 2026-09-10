@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import com.intellij.psi.TokenType
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -439,5 +440,250 @@ class SqlFormatterTest {
         // 空输入 → 原样返回（trim）
         assertEquals("", SqlFormatter.formatClauseLine(""))
         assertEquals("", SqlFormatter.formatClauseLine("   "))
+    }
+
+    // ------------------------------------------------------------------
+    // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾 `-- 列名` 配对标注）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testVerticalInsertPairedComments() {
+        // 需求截图场景：列清单逐行 + VALUES 逐行配对标注（对齐宽 = 最宽值含行尾逗号）
+        val input = "insert into `user` (username, password) values ('zhangsna', '123456')"
+        val expected = """
+            INSERT
+            INTO `user`
+            (
+              username,
+              password
+            )
+            VALUES
+            (
+              'zhangsna', -- username
+              '123456'    -- password
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalInsertMultiRowGroups() {
+        // 批量多行 INSERT：组间 `),` 接排，各组独立配对标注
+        val input = "insert into t (a, b) values (1, 2), (3, 4)"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              a,
+              b
+            )
+            VALUES
+            (
+              1, -- a
+              2  -- b
+            ),
+            (
+              3, -- a
+              4  -- b
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalExpressionValuesPreserved() {
+        // 表达式值整段保留：CONCAT/NOW 嵌套括号内逗号不是切分点，函数名后括号紧贴
+        val input = "insert into t (name, ts) values (CONCAT('a', 'b'), NOW())"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              name,
+              ts
+            )
+            VALUES
+            (
+              CONCAT('a', 'b'), -- name
+              NOW()             -- ts
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalPartialValuesFewerThanColumns() {
+        // 值少于列：按实际个数取小对位，多余列不标注不抛错
+        val input = "insert into t (a, b, c) values (1, 2)"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              a,
+              b,
+              c
+            )
+            VALUES
+            (
+              1, -- a
+              2  -- b
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalNoColumnListNoAnnotation() {
+        // 无列清单（INSERT INTO t VALUES ...）：仅竖排，无配对标注
+        val input = "insert into t values (1, 2, 3)"
+        val expected = """
+            INSERT
+            INTO t
+            VALUES
+            (
+              1,
+              2,
+              3
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalMultiTokenColumnNoAnnotation() {
+        // 列元素多 token（t.a 限定名）：仍竖排但不标注（无法可靠配对）
+        val input = "insert into t (t.a, b) values (1, 2)"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              t.a,
+              b
+            )
+            VALUES
+            (
+              1,
+              2
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalSelectFallsBackToFormat() {
+        // SELECT 已被 format 竖排 → 原样委托（输出逐字节一致）
+        val sql = "select id, name from t where id = 1 and status = 2"
+        assertEquals(SqlFormatter.format(sql), SqlFormatter.formatVertical(sql))
+    }
+
+    @Test
+    fun testVerticalUpdateFallsBackToFormat() {
+        // UPDATE SET 赋值清单已被 format 竖排 → 原样委托
+        val sql = "update t set name = 'x', age = 1 where id = 1"
+        assertEquals(SqlFormatter.format(sql), SqlFormatter.formatVertical(sql))
+    }
+
+    @Test
+    fun testVerticalTokenFidelity() {
+        // 输出不变式：剔 COMMENT 后重分词的 token 流与原文一致（只动空白与行尾注释）
+        val inputs = listOf(
+            "insert into `user` (username, password) values ('zhangsna', '123456')",
+            "insert into t (a, b) values (1, 2), (3, 4)",
+            "insert into t (name, ts) values (CONCAT('a', 'b'), NOW())",
+            "insert into t (a) values (1) on duplicate key update a = 2",
+        )
+        for (input in inputs) {
+            val output = SqlFormatter.formatVertical(input)
+            assertEquals(
+                "token 流应保真：$output",
+                semanticTokens(input),
+                semanticTokens(output),
+            )
+        }
+    }
+
+    @Test
+    fun testVerticalIdempotent() {
+        // 幂等：对本功能输出（含行尾标注注释）再次竖向排列，输出稳定
+        val input = "insert into `user` (username, password) values ('zhangsna', '123456')"
+        val once = SqlFormatter.formatVertical(input)
+        assertEquals(once, SqlFormatter.formatVertical(once))
+    }
+
+    @Test
+    fun testVerticalUserCommentRidesValueLine() {
+        // 用户既有注释挂值行尾，且占据标注位（配对标注让位，不双注释）
+        val input = "insert into t (a, b) values (1 /* one */, 2)"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              a,
+              b
+            )
+            VALUES
+            (
+              1, /* one */
+              2  -- b
+            )
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalOnDuplicateTail() {
+        // ON DUPLICATE KEY UPDATE 尾缀：组后内容按 format 同款主子句排布
+        val input = "insert into t (a) values (1) on duplicate key update a = 2"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              a
+            )
+            VALUES
+            (
+              1 -- a
+            ) ON duplicate KEY
+            UPDATE a = 2
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalInsertSelectTail() {
+        // INSERT ... SELECT：列清单竖排，SELECT 尾缀沿用主子句换行
+        val input = "insert into t (a) select x from y"
+        val expected = """
+            INSERT
+            INTO t
+            (
+              a
+            )
+            SELECT x
+            FROM y
+        """.trimIndent()
+        assertEquals(expected, SqlFormatter.formatVertical(input))
+    }
+
+    @Test
+    fun testVerticalEmptyInput() {
+        // 空输入 → 原样返回（trim）
+        assertEquals("", SqlFormatter.formatVertical(""))
+        assertEquals("", SqlFormatter.formatVertical("   "))
+    }
+
+    /** 剔注释重分词（token 流保真断言辅助；与 SqlFormatter.lex 同过滤口径，关键字大小写归一）。 */
+    private fun semanticTokens(sql: String): List<Pair<String, String>> {
+        val lexer = SqlLexer()
+        lexer.start(sql, 0, sql.length, 0)
+        val out = ArrayList<Pair<String, String>>()
+        while (true) {
+            val type = lexer.tokenType ?: break
+            if (type != TokenType.WHITE_SPACE && type != SqlTokenTypes.COMMENT) {
+                val text = if (type == SqlTokenTypes.KEYWORD) lexer.tokenText.uppercase() else lexer.tokenText
+                out += type.toString() to text
+            }
+            lexer.advance()
+        }
+        return out
     }
 }

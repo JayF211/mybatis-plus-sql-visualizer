@@ -42,6 +42,7 @@ import java.awt.Color
 import java.awt.Toolkit
 import java.awt.datatransfer.Transferable
 import java.awt.image.BufferedImage
+import javax.swing.JButton
 import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicSplitPaneUI
 
@@ -896,6 +897,53 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val text = panel.editorForTest()!!.document.text
         assertTrue("格式化后关键字应大写：" + text, text.contains("SELECT"))
         assertTrue("格式化后应含换行：" + text, text.contains("\n"))
+        panel.clear()
+    }
+
+    fun testVerticalButtonPresentAndFormatsInsert() {
+        // T-VStack：竖向排列按钮在位（文案取 panel.vertical），formatVertical 对 INSERT 竖排 + 配对标注
+        val panel = SqlPreviewPanel(project)
+        val expectedText = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.vertical")
+        val button = com.intellij.util.ui.UIUtil.uiTraverser(panel)
+            .preOrderDfsTraversal()
+            .filterIsInstance<JButton>()
+            .firstOrNull { it.text == expectedText }
+        assertNotNull("工具栏应存在竖向排列按钮", button)
+        panel.showResult(
+            result(
+                sql = "insert into `user` (username, password) values ('zhangsna', '123456')",
+                compact = "insert into `user` (username, password) values ('zhangsna', '123456')",
+            ),
+        )
+        panel.formatVertical()
+        val text = panel.editorForTest()!!.document.text
+        assertEquals(
+            "INSERT 应竖排且值行尾标注列名：$text",
+            """
+            INSERT
+            INTO `user`
+            (
+              username,
+              password
+            )
+            VALUES
+            (
+              'zhangsna', -- username
+              '123456'    -- password
+            )
+            """.trimIndent(),
+            text,
+        )
+        panel.clear()
+    }
+
+    fun testVerticalNonInsertFallsBackToFormat() {
+        // T-VStack：非 INSERT 输入委托 format（与格式化按钮同输出）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result(sql = "select id from tbl", compact = "select id from tbl"))
+        panel.formatVertical()
+        val text = panel.editorForTest()!!.document.text
+        assertTrue("SELECT 应按 format 全展开：$text", text.contains("SELECT\n") && text.contains("FROM tbl"))
         panel.clear()
     }
 

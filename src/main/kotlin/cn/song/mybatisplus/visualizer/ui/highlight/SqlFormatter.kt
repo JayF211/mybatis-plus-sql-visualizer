@@ -361,6 +361,285 @@ object SqlFormatter {
         return sb.toString().trim()
     }
 
+    /**
+     * 竖向排列格式化（T-VStack）：INSERT 语句列清单与 VALUES 逐行竖排，VALUES 每值行尾按最宽值
+     * （含行尾逗号）对齐追加 `-- 列名` 配对标注——大 INSERT 列-值对位不必数逗号。
+     *
+     * 与 [format]（全展开）的分工：format 对 SELECT 列清单/UPDATE SET/DELETE WHERE 已竖排，
+     * 缺口仅在 INSERT 括号组（`INTO t (a,b) VALUES (1,2)` 同行）。规则：
+     *  - 首个主子句非 INSERT → 原样委托 [format]（SELECT/UPDATE/DELETE 已是竖排形态）
+     *  - 列清单/VALUES 组各一元素一行（缩进 2、行尾逗号紧贴、闭括号顶格；批量多组 `),` 接排）
+     *  - 配对标注：列清单全为单 token 元素才启用（`t.a` 等多 token 列不标注）；无列清单不标注；
+     *    值按序与列取小对位，组内每行行尾注释只挂一个（用户注释优先于配对标注）
+     *  - 值表达式整段保留：depth==1 逗号是唯一切分点，NOW()/CONCAT(a,b) 等嵌套括号内逗号原样
+     *  - 组内注释挂行尾（本功能输出的 `-- 列名` 再输入时归位本行 → 幂等）；顶层注释自成一行
+     *  - 输出不变式：剔 COMMENT 后重分词的 token 流与原文一致——只动空白与行尾注释，不改语义 token
+     */
+    fun formatVertical(sql: String): String {
+        val tokens = lex(sql)
+        if (tokens.isEmpty()) return sql.trim()
+        val first = tokens.firstOrNull { it.first != SqlTokenTypes.COMMENT } ?: return format(sql)
+        if (first.first != SqlTokenTypes.KEYWORD || first.second.uppercase() != "INSERT") return format(sql)
+
+        val columnNames = collectInsertColumns(tokens)
+
+        /** 组内一行：元素 token（闭组时统一渲染）+ 行尾逗号标记 + 行尾注释；elemIndex 为配对下标。 */
+        class Line {
+            val tokens = ArrayList<Pair<IElementType, String>>()
+            var hadComma = false
+            val trailing = ArrayList<String>()
+            var elemIndex = -1
+        }
+
+        val sb = StringBuilder(sql.length + 128)
+        var depth = 0
+        var pendingSpace = false
+        var atLineStart = true
+        var seenValues = false
+        var groupValues = false   // 当前括号组是否 VALUES 组（配对标注只在 VALUES 组）
+        var elemTokens = ArrayList<Pair<IElementType, String>>()
+        var elemHadComma = false
+        val elemTrailing = ArrayList<String>()
+        var elemCounter = 0       // 组内元素序号（配对列名下标；纯注释行不占号）
+        val groupLines = ArrayList<Line>()
+
+        fun flushSpace() {
+            if (pendingSpace && !atLineStart && sb.isNotEmpty() && sb.last() != ' ') sb.append(' ')
+            pendingSpace = false
+        }
+
+        fun newline(indent: Int) {
+            sb.append('\n')
+            repeat(indent) { sb.append(' ') }
+            atLineStart = true
+            pendingSpace = false
+        }
+
+        /** 元素 token 渲染（format 局部空格规则：运算符两侧空格、点号紧贴、函数名后括号紧贴）。 */
+        fun renderElem(elem: List<Pair<IElementType, String>>): String {
+            if (elem.isEmpty()) return ""
+            val s = StringBuilder()
+            var space = false
+            var prev = ""
+            for ((type, text) in elem) {
+                when {
+                    text == "(" -> {
+                        if (prev.uppercase() !in FUNCTION_NAMES && space && s.isNotEmpty()) s.append(' ')
+                        s.append('(')
+                        space = false
+                    }
+                    text == ")" -> {
+                        s.append(')')
+                        space = true
+                    }
+                    text == "." -> {
+                        s.append('.')
+                        space = false
+                    }
+                    text == "," -> {
+                        s.append(',')
+                        space = true
+                    }
+                    else -> {
+                        if (space && s.isNotEmpty()) s.append(' ')
+                        s.append(text)
+                        space = true
+                    }
+                }
+                prev = text
+            }
+            return s.toString()
+        }
+
+        /** 收行入组缓冲（对齐宽依赖全组文本，闭组时才渲染）。 */
+        fun closeLine() {
+            val line = Line()
+            line.tokens.addAll(elemTokens)
+            line.hadComma = elemHadComma
+            line.trailing.addAll(elemTrailing)
+            if (elemTokens.isNotEmpty()) {
+                line.elemIndex = elemCounter
+                elemCounter++
+            }
+            groupLines += line
+            elemTokens = ArrayList()
+            elemHadComma = false
+            elemTrailing.clear()
+        }
+
+        /** 闭组渲染：缩进 2 逐行 + 行尾逗号；VALUES 组可配对行按最宽前缀对齐追加 `-- 列名`（行尾注释优先）。 */
+        fun renderGroup() {
+            val rendered = groupLines.map { renderElem(it.tokens) to it }
+            val alignWidth = rendered
+                .filter { (text, _) -> text.isNotEmpty() }
+                .maxOfOrNull { (text, line) -> text.length + if (line.hadComma) 1 else 0 } ?: 0
+            for ((text, line) in rendered) {
+                sb.append('\n').append("  ").append(text)
+                if (line.hadComma) sb.append(',')
+                val trailingText = line.trailing.joinToString(" ")
+                // 配对标注只在 VALUES 组（列清单组不自我标注）；用户注释跨组通用且优先于配对标注
+                if (trailingText.isNotEmpty() || (groupValues && line.elemIndex in columnNames.indices)) {
+                    // 补齐到最宽前缀（含行尾逗号）即可——分隔空格由 ` -- ` 前导空格保证，不再设下限
+                    // （下限会把零补齐行整体推歪一格）
+                    val prefixWidth = text.length + if (line.hadComma) 1 else 0
+                    repeat((alignWidth - prefixWidth).coerceAtLeast(0)) { sb.append(' ') }
+                    when {
+                        trailingText.isNotEmpty() -> sb.append(' ').append(trailingText)
+                        else -> sb.append(" -- ").append(columnNames[line.elemIndex])
+                    }
+                }
+            }
+            sb.append('\n').append(')')
+            groupLines.clear()
+            atLineStart = false
+            pendingSpace = true
+        }
+
+        for ((type, text) in tokens) {
+            val upper = text.uppercase()
+            when {
+                // 注释：组内挂当前行尾（本功能输出的 `-- 列名` 重输入归位）；顶层自成一行
+                type == SqlTokenTypes.COMMENT -> {
+                    if (depth > 0) {
+                        elemTrailing += text
+                    } else {
+                        if (!atLineStart) newline(0)
+                        sb.append(text)
+                        newline(0)
+                    }
+                }
+
+                // depth-1 逗号：元素边界（行尾逗号标记；后续注释仍归本行）
+                depth == 1 && type == SqlTokenTypes.OPERATOR && text == "," -> elemHadComma = true
+
+                // depth-1 闭括号：收行 + 整组渲染
+                depth == 1 && type == SqlTokenTypes.PAREN && text == ")" -> {
+                    if (elemTokens.isNotEmpty() || elemHadComma || elemTrailing.isNotEmpty()) closeLine()
+                    renderGroup()
+                    depth = 0
+                }
+
+                // 组内内容：depth-1 逗号后的首个语义 token 收行开新行；其余入元素（括号调 depth）
+                depth > 0 -> {
+                    if (elemHadComma) closeLine()
+                    elemTokens += type to text
+                    if (type == SqlTokenTypes.PAREN && text == "(") depth++
+                    if (type == SqlTokenTypes.PAREN && text == ")") depth--
+                }
+
+                // 顶层左括号：组开括号自占一行（列清单/VALUES 组）
+                type == SqlTokenTypes.PAREN && text == "(" -> {
+                    if (!atLineStart) newline(0)
+                    sb.append('(')
+                    atLineStart = false
+                    pendingSpace = false
+                    depth = 1
+                    groupValues = seenValues
+                    groupLines.clear()
+                    elemCounter = 0
+                }
+
+                // 主子句关键字 → 顶格新行（首 token INSERT 顶格起）
+                type == SqlTokenTypes.KEYWORD && upper in NEW_LINE_KEYWORDS -> {
+                    if (!atLineStart) newline(0)
+                    pendingSpace = false
+                    sb.append(upper)
+                    atLineStart = false
+                    pendingSpace = true
+                    if (upper == "VALUES") seenValues = true
+                }
+
+                // AND/OR：顶层缩进换行（ON DUPLICATE KEY UPDATE 等尾缀条件）
+                type == SqlTokenTypes.KEYWORD && (upper == "AND" || upper == "OR") -> {
+                    if (!atLineStart) newline(4)
+                    sb.append(upper)
+                    atLineStart = false
+                    pendingSpace = true
+                }
+
+                // 其余关键字
+                type == SqlTokenTypes.KEYWORD -> {
+                    flushSpace()
+                    sb.append(upper)
+                    atLineStart = false
+                    pendingSpace = true
+                }
+
+                // 顶层逗号：批量 VALUES 组间分隔（`),` 后随组开括号换行）
+                type == SqlTokenTypes.OPERATOR && text == "," -> {
+                    sb.append(',')
+                    atLineStart = false
+                    pendingSpace = false
+                }
+
+                // 点号：无空格
+                type == SqlTokenTypes.OPERATOR && text == "." -> {
+                    sb.append('.')
+                    pendingSpace = false
+                    atLineStart = false
+                }
+
+                // 其他运算符 / 标识符 / 字符串 / 数字 / 表名
+                else -> {
+                    flushSpace()
+                    sb.append(text)
+                    atLineStart = false
+                    pendingSpace = true
+                }
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    /**
+     * INSERT 列清单收集（配对名单）：VALUES 前首个 depth-0 括号组。
+     * 元素恰为单 token（反引号列名是单 IDENTIFIER）才返回名单；多 token（`t.a`）/空组/括号不闭合 → 空（不标注）。
+     */
+    private fun collectInsertColumns(tokens: List<Pair<IElementType, String>>): List<String> {
+        var depth = 0
+        var seenValues = false
+        for (i in tokens.indices) {
+            val (type, text) = tokens[i]
+            if (type == SqlTokenTypes.COMMENT) continue
+            when {
+                type == SqlTokenTypes.PAREN && text == "(" && depth == 0 && !seenValues -> {
+                    val elements = ArrayList<ArrayList<Pair<IElementType, String>>>()
+                    var cur = ArrayList<Pair<IElementType, String>>()
+                    var d = 1
+                    var j = i + 1
+                    while (j < tokens.size && d > 0) {
+                        val (t2, x2) = tokens[j]
+                        when {
+                            t2 == SqlTokenTypes.COMMENT -> {}  // 注释不参与配对名单
+                            t2 == SqlTokenTypes.PAREN && x2 == "(" -> {
+                                d++
+                                cur += tokens[j]
+                            }
+                            t2 == SqlTokenTypes.PAREN && x2 == ")" -> {
+                                d--
+                                if (d > 0) cur += tokens[j]
+                            }
+                            t2 == SqlTokenTypes.OPERATOR && x2 == "," && d == 1 -> {
+                                elements += cur
+                                cur = ArrayList()
+                            }
+                            else -> cur += tokens[j]
+                        }
+                        j++
+                    }
+                    val closed = d == 0
+                    if (cur.isNotEmpty()) elements += cur
+                    val valid = closed && elements.isNotEmpty() && elements.all { it.size == 1 }
+                    return if (valid) elements.map { it[0].second } else emptyList()
+                }
+                type == SqlTokenTypes.PAREN && text == "(" -> depth++
+                type == SqlTokenTypes.PAREN && text == ")" -> depth--
+                type == SqlTokenTypes.KEYWORD && text.uppercase() == "VALUES" && depth == 0 -> seenValues = true
+            }
+        }
+        return emptyList()
+    }
+
     /** 分词（剔除空白——含 XML 动态标签展开残留空行）。 */
     private fun lex(sql: String): List<Pair<IElementType, String>> {
         val lexer = SqlLexer()
