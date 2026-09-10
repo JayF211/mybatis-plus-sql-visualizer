@@ -1,6 +1,7 @@
 # T-VStack·扩面：竖向排列覆盖 SELECT/UPDATE/DELETE 横向组开发计划
 
 > **创建日期**：2026-09-10
+> **状态**：✅ 已实施、已测试、已提交（master `b14173f`，2026-09-10；SqlFormatterTest 50/50 + SqlPreviewPanelTest 46/46 + 全量 2555/0/6 绿；runIde 真机走查留人工）
 > **分支**：master（HEAD `0a5417f`；工作树仍含 T-PreviewTopOverlap 与 T-ExecSilentNoop 两会话在途，共享文件面不变，见「五、并行协调」）
 > **优先级**：P2（延续 T-VStack 交付 `a86c615`，把「竖向排列」从 INSERT 专用扩为全语句的「逐行展开」开关）
 > **预估工时**：4~5h（F1 通用组展开器 + F2 逐语句语境规则 + F3 测试 + F4 文档）
@@ -155,3 +156,24 @@ return if (expanded != sql) expanded else format(sql)
 - **风险①**：纯文本后处理的子句边界启发式对复杂一节（`WHERE a IN (…) AND b IN (…)` 双 IN）需逐字段定位——用例钉死，失败即裁界到单 IN；
 - **风险②**：`CASE WHEN … THEN … ELSE … END` 出现在 ORDER BY 内的逗号会被误切——若遇此类，ORDER BY 展开规则加「CASE…END 整原子」守卫，或该类字段不展开；
 - **备选**：重写 format 成带 extra 参的第二递归（`format(sql, expandLists=true)`）——语义更稳但侵入 format 主路径、INSERT 路径与退化路径行为差异面变大，先做后处理（D5），后处理兜不住再降级重写。
+
+---
+
+## 实施记录（2026-09-10 交付，master `b14173f`）
+
+**与计划的偏差**：
+
+1. **IN 展开形态**：`(` 自占一行（`IN` 后换行出括号），元素行 = 原行缩进 + 4，`)` 收行后接行尾残余——首版把 `(` 留在 `IN ` 同行，5 用例逮住后统一为与 INSERT 组一致的形态，观感与首交付统一。
+2. **双 IN 期望修正**：第二个 `AND b IN` 行缩进 = format 的 AND 缩进（4），非 0——期望块 trimIndent 前缀写错，实现本身正确。
+3. **line/trimmed 双参**：展开函数收原行 + 去缩进行两参——首版在 trimmed 上取前缀把 `AND`/`OR` 前导缩进丢了（双 IN 用例逮住真 bug），改为原行保前缀、trimmed 供定位。
+4. **风险①②均未触雷**：单行含双 IN 场景按行独立展开天然成立；CASE…END 未入用例（现网 ORDER BY 语料无此形态，展开守卫「行尾残余含括号即放弃」已兜一层）。
+5. **测试 12 条落点**：新增 10 条 + 反转 2 条 + 面板 1 条反转（计划估 10+3 反转，量级一致）。
+
+**并行协调实际执行**（第五章约定落地 + 新增两条实录）：
+
+- 全程登记 T-VStackExpand/sandbox-vstack-expand；gradle 全在我沙盒跑（10:07 全量 2555/0/6 绿）。
+- **共享文件被对方覆盖实录**：本会话的 build.gradle.kts 临时沙盒行被 T-ExecSilentNoop 会话整文件覆盖为其沙盒行（10:0x），我的「还原」义务天然完成（无残留）；其后两次全量跑分别撞上共享 build 目录编译写入竞态（worker ClassNotFoundException 中断）与对方沙盒「用户映射区域」锁（prepareTestSandbox FAILED）——均为登记表预告的环境坑，非语义失败，1467/0 零失败佐证。
+- **计数口径修正**：历史「全量 3212」为跨任务累积目录计数；单次 `./gradlew test` 权威口径 ~2555（196 类）——下不为例，记录以单次跑为准。
+- 三代码文件（SqlFormatter.kt/SqlFormatterTest.kt/SqlPreviewPanelTest.kt）本会话独占（删行均为本会话断言反转），直接 git add；docs 两册仍索引级拆分行（对方在途）。
+
+**验证结果**：SqlFormatterTest 50/50（含 testVerticalExpand* 10 + 反转 2）+ SqlPreviewPanelTest 46/46 + 全量 2555/0/6 绿。runIde 真机走查（SELECT/UPDATE/DELETE 各形态点按钮、IN 子查询保持同行、LIMIT 同行、亮暗主题）留人工。
