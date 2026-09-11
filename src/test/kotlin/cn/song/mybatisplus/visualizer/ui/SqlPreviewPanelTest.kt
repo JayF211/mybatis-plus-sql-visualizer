@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionToggle
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.LikePosition
+import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel
@@ -948,6 +949,190 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val text = panel.editorForTest()!!.document.text
         assertTrue("SELECT 应按 format 全展开：$text", text.contains("SELECT\n") && text.contains("FROM tbl"))
         assertTrue("长 IN 列表应纵向化：$text", text.contains("IN\n"))
+        panel.clear()
+    }
+
+    fun testVerticalAnnotationFollowsSetting() {
+        // T-VPairAnno：设置关闭 → 竖排保持但行尾无配对标注；恢复开启（默认）→ 标注回来
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val sql = "insert into `user` (username, password) values ('zhangsna', '123456')"
+        try {
+            settings.verticalPairAnnotation = false
+            val panel = SqlPreviewPanel(project)
+            panel.showResult(result(sql = sql, compact = sql))
+            panel.formatVertical()
+            val off = panel.editorForTest()!!.document.text
+            assertTrue("竖排形态应保持：$off", off.contains("VALUES\n(") && off.contains("'zhangsna',"))
+            assertFalse("行尾不应有配对标注：$off", off.contains("-- username"))
+            panel.clear()
+
+            settings.verticalPairAnnotation = true
+            val panel2 = SqlPreviewPanel(project)
+            panel2.showResult(result(sql = sql, compact = sql))
+            panel2.formatVertical()
+            val on = panel2.editorForTest()!!.document.text
+            assertTrue("恢复开启后应重新标注：$on", on.contains("-- username") && on.contains("-- password"))
+            panel2.clear()
+        } finally {
+            settings.verticalPairAnnotation = true
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewDisplayMode：显示模式在重渲染后保持（用户实测：输入参数后竖排消失）
+    // ------------------------------------------------------------------
+
+    fun testVerticalModeSurvivesParamChange() {
+        // 用户复现路径：点竖向排列 → 左侧填参数 → 形态必须保持（旧实现：文档被重建抹平）
+        val panel = SqlPreviewPanel(project)
+        val sql = "insert into `user` (username, password, age) values ('zhangsna', '123456', ?)"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("age")))
+        panel.formatVertical()
+        assertEquals(SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest())
+        val vertical = panel.editorForTest()!!.document.text
+        assertTrue("竖排应先生效：$vertical", vertical.contains("-- username") && vertical.contains("VALUES\n("))
+
+        // 模拟用户在参数行输入（DocumentListener → onParamChanged → renderSql 全量重建）
+        panel.paramFieldForTest(0)!!.text = "1"
+
+        val after = panel.editorForTest()!!.document.text
+        assertTrue("参数变更后应仍为竖排：$after", after.contains("-- username") && after.contains("VALUES\n("))
+        assertTrue("参数应已回填：$after", after.contains("1"))
+        panel.clear()
+    }
+
+    fun testKeywordWrapModeSurvivesParamChange() {
+        // 关键字换行同缺陷同修复：参数变更后仍为「子句顶格 + 内容同行」形态（非 format 全展开）
+        val panel = SqlPreviewPanel(project)
+        val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone", "type")))
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.KEYWORD_WRAP)
+        assertEquals(
+            "SELECT id\nFROM tbl\nWHERE phone = ?  AND type = ?",
+            panel.editorForTest()!!.document.text,
+        )
+
+        panel.paramFieldForTest(0)!!.text = "abc"
+
+        assertEquals(
+            "参数变更后应仍为关键字换行形态",
+            "SELECT id\nFROM tbl\nWHERE phone = 'abc'  AND type = ?",
+            panel.editorForTest()!!.document.text,
+        )
+        panel.clear()
+    }
+
+    fun testFormatModeSurvivesParamChangeWhenSettingOff() {
+        // 条件性丢失分支：设置「SQL 格式化输出」关闭时，点格式化后的形态此前会被参数变更抹平
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val backup = state.formatSql
+        try {
+            state.formatSql = false
+            val panel = SqlPreviewPanel(project)
+            val sql = "SELECT id FROM tbl WHERE phone = ?"
+            panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
+            panel.formatSql()
+            assertEquals(SqlPreviewPanel.PreviewDisplayMode.FORMAT, panel.displayModeForTest())
+            val formatted = panel.editorForTest()!!.document.text
+            assertTrue("FORMAT 模式应强制格式化：$formatted", formatted.contains("SELECT\n"))
+
+            panel.paramFieldForTest(0)!!.text = "abc"
+
+            val after = panel.editorForTest()!!.document.text
+            assertTrue("设置关闭时格式化形态也应保持：$after", after.contains("SELECT\n"))
+            assertTrue("参数应已回填：$after", after.contains("'abc'"))
+            panel.clear()
+        } finally {
+            runCatching { state.formatSql = backup }
+        }
+    }
+
+    fun testCompactTakesPrecedenceOverDisplayMode() {
+        // 压缩优先级最高：压缩态下模式不套用（保持单行）；切回多行后既有模式恢复
+        val panel = SqlPreviewPanel(project)
+        val sql = "insert into `user` (username, age) values ('zhangsna', ?)"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("age")))
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
+
+        panel.toggleCompact()
+        val compact = panel.editorForTest()!!.document.text
+        assertFalse("压缩态应为单行：$compact", compact.contains("\n"))
+        assertEquals("压缩不应改变模式状态", SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest())
+
+        panel.toggleCompact()
+        assertTrue("切回多行后竖排应恢复", panel.editorForTest()!!.document.text.contains("-- username"))
+        panel.clear()
+    }
+
+    fun testSetDisplayModeExitsCompact() {
+        // 压缩态点格式族按钮：一并退出压缩（否则模式被短路、点击无可见效果）
+        val panel = SqlPreviewPanel(project)
+        val sql = "insert into `user` (username, age) values ('zhangsna', ?)"
+        panel.showResult(result(sql = sql, compact = sql, params = listOf("age")))
+        panel.toggleCompact()
+        assertTrue("前置：应处于压缩态", panel.compactForTest())
+
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
+
+        assertFalse("格式族模式切换应退出压缩", panel.compactForTest())
+        assertTrue("应显示竖排形态", panel.editorForTest()!!.document.text.contains("-- username"))
+        panel.clear()
+    }
+
+    fun testRefreshResetsDisplayMode() {
+        // 刷新 = 回到默认状态（M19.3）：显示模式一并复位为 NORMAL（设置派生形态）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(sql = "select id from tbl where id in (1, 2, 3, 4, 5)", compact = "select id from tbl"),
+        )
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
+        assertTrue("前置：应已竖排", panel.editorForTest()!!.document.text.contains("IN\n"))
+
+        panel.refreshView()
+
+        assertEquals(SqlPreviewPanel.PreviewDisplayMode.NORMAL, panel.displayModeForTest())
+        panel.clear()
+    }
+
+    fun testDisplayModeSurvivesConditionToggle() {
+        // 另一重建入口：动态条件勾选（renderSql 直调）同样不应抹掉竖排。
+        // 断言物用 ORDER BY 多字段——竖排把它拆成逐行（format 保持同行），可区分模式是否真在生效
+        val panel = SqlPreviewPanel(project)
+        val statement = SelectStatement(
+            table = tableInfo(),
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                    toggle = ConditionToggle("c0", "true", true, "id = 1")),
+            ),
+            orderBy = listOf(
+                OrderByItem(ColumnRef(columnName = "id"), asc = true),
+                OrderByItem(ColumnRef(columnName = "name"), asc = false),
+            ),
+        )
+        val model = SqlPreviewModel(
+            statement, MySqlDialect, formatSql = true,
+            conditionViews = listOf(ConditionView("c0", "id = 1", "true", true, null)),
+        )
+        panel.showResult(
+            PreviewResult(
+                sql = "SELECT id, name\nFROM car_device_info",
+                compactSql = "SELECT id, name FROM car_device_info",
+                unresolvedParams = emptyList(),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "car_device_info",
+                columns = listOf("id", "name"),
+                previewModel = model,
+            ),
+        )
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
+        assertTrue("前置：ORDER BY 应已逐行", panel.editorForTest()!!.document.text.contains("ORDER BY\n"))
+
+        panel.conditionCheckboxForTest(0)!!.doClick()
+
+        val after = panel.editorForTest()!!.document.text
+        assertEquals("勾选重建后模式不应丢失", SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest())
+        assertTrue("勾选重建后 ORDER BY 应仍逐行：$after", after.contains("ORDER BY\n"))
         panel.clear()
     }
 

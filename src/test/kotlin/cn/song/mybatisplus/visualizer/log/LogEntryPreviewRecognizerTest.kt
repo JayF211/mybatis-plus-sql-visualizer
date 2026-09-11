@@ -131,19 +131,33 @@ class LogEntryPreviewRecognizerTest {
     }
 
     @Test
-    fun `字符串字面量内问号计数与还原语义一致`() {
-        // rawSql 中 `'what?'` 的 `?` 同语义计数（LogSqlRestorer 裸 indexOf 替换）——
-        // 3 个 `?` 配 3 个参数 ⇔ 还原无残留，识别成功
+    fun `字符串字面量内问号不计数不回填`() {
+        // T-HibDualCapture：`'what?'` 的 `?` 不是占位符（旧口径会计入，与回填错位一格）——
+        // 计数与还原共用 placeholderPositions 口径，2 个 `?` 配 2 个参数 ⇔ 识别成功
         val recognized = entry(
             rawSql = "SELECT * FROM t WHERE note = 'what?' AND a = ? AND b = ?",
-            params = listOf(LogSqlParam("x?", "String"), LogSqlParam("1", "Long"), LogSqlParam("2", "Long")),
+            params = listOf(LogSqlParam("1", "Long"), LogSqlParam("2", "Long")),
         ).toRecognizedPreview()
-        assertTrue("字面量内 ? 与占位符同语义计数", recognized.recognized)
-        assertEquals(listOf("param1", "param2", "param3"), recognized.unresolvedParams)
+        assertTrue("字面量内 ? 不计入占位符", recognized.recognized)
+        assertEquals(listOf("param1", "param2"), recognized.unresolvedParams)
         assertEquals(
-            mapOf("param1" to "x?", "param2" to "1", "param3" to "2"),
+            mapOf("param1" to "1", "param2" to "2"),
             recognized.initialValues,
         )
+        // 还原同口径：字面量保持原样，仅真实占位符被替换
+        val restored = LogSqlRestorer().restore(
+            "SELECT * FROM t WHERE note = 'what?' AND a = ? AND b = ?",
+            listOf(LogSqlParam("1", "Long"), LogSqlParam("2", "Long")),
+        )
+        assertEquals("'what?' 原样保留", "SELECT * FROM t WHERE note = 'what?' AND a = 1 AND b = 2", restored)
+    }
+
+    @Test
+    fun `注释与转义引号内的问号不计数`() {
+        // `--` 行注释 / 块注释 / `''` 转义内的 ? 均非占位符；PG `?|` 与 WHERE 条件算两个
+        assertEquals(2, countPlaceholders("-- 问?号\nSELECT a ?| b /* 占?位 */ FROM t WHERE note = '它''?' AND c = ?"))
+        assertEquals(0, countPlaceholders("SELECT 'a?b'"))
+        assertEquals(2, countPlaceholders("SELECT ? WHERE x = ?"))
     }
 
     @Test

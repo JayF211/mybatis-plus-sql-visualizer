@@ -1259,8 +1259,13 @@ class SqlLogPanel(
                     paramTable = null,
                     wrapperType = null,
                     tableName = null,
-                    warning = if ('?' in entry.restoredSql) {
-                        MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
+                    // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
+                    // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
+                    warning = if (countPlaceholders(entry.restoredSql) > 0) {
+                        MpSqlVisualizerBundle.message(
+                            if (entry.params.isEmpty()) "log.preview.unresolvedNoBinding"
+                            else "log.preview.unresolvedWarning",
+                        )
                     } else {
                         null
                     },

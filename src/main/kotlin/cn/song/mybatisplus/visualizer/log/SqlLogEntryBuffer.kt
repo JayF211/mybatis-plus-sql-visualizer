@@ -136,8 +136,13 @@ class SqlLogEntryBuffer(
 
     /**
      * 手动触发去重裁剪（用户勾选「移除重复的sql」时）：扫描现有 entries，
-     * 时间窗内相同 SQL 保留最早一条、丢弃后续；丢弃数累加到 [dedupeCounts]
+     * 相同 SQL（按 [LogSqlEntry.dedupeKey] 空白规范化指纹）保留最早一条、丢弃后续；丢弃数累加到 [dedupeCounts]
      * （与运行时去重共享计数——徽章反映「本次去重开启以来的总丢弃量」，含开启前已存在的重复）。
+     *
+     * T-LogRowNumber 追加（2026-09-10）：手动全量裁剪**不看时间窗口**——去重窗口
+     * （[dedupeWindowMs]，默认 60s）是运行时的「相同 SQL 短时间内重复打印」语义，而「点击移除重复」
+     * 是用户显式的一次性全量去重，跨窗口的重复（用户不勾选去重运行很久后累积的同文本 SQL）也必须裁掉，
+     * 否则点击后重复项仍在列表（用户反馈「显示不正确」）。仅按键判重，不比较时间戳。
      *
      * @return 本次裁剪移除的条目数（面板日志/测试断言）。
      */
@@ -148,11 +153,9 @@ class SqlLogEntryBuffer(
             if (entries.size < 2) return@synchronized
             val keep = mutableListOf<LogSqlEntry>()
             for (entry in entries) {
-                // T-LogDedupeMpMark：与 isDuplicate 同键（空白规范化指纹），勾选时对既有跨格式副本同样生效
-                val duplicate = keep.firstOrNull {
-                    it.dedupeKey == entry.dedupeKey &&
-                        kotlin.math.abs(entry.timestamp - it.timestamp) < dedupeWindowMs
-                }
+                // T-LogDedupeMpMark：与 isDuplicate 同键（空白规范化指纹），勾选时对既有跨格式副本同样生效；
+                // T-LogRowNumber 追加：手动全量裁剪不比较时间窗口（见 KDoc），纯按指纹判重。
+                val duplicate = keep.firstOrNull { it.dedupeKey == entry.dedupeKey }
                 if (duplicate != null) {
                     recordDedupeDrop(entry.dedupeKey)
                     removed++

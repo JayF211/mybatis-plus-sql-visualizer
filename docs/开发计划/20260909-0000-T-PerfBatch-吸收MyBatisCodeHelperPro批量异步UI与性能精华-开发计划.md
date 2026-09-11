@@ -1,0 +1,129 @@
+# T-PerfBatch：吸收 MyBatisCodeHelper-Pro 批量异步 UI 与性能精华 开发计划
+
+> **创建日期**：2026-09-09
+> **分支**：master（当前 HEAD `4340ade`）
+> **优先级**：P1（性能是红线——日志捕捉链路是插件唯一常驻开销来源，用户在日志洪峰下会直接感受到）
+> **预估工时**：4~6h（含全量回归；runIde 真机洪峰压测人工跟进）
+> **来源**：用户明确指示「吸收他的批量异步写 UI 精华，和其他性能相关优势」「性能问题是红线」。反编译产物基于 IDEA 2026.2 主安装 MyBatisCodeHelper-Pro 3.5.9+2321（`%TEMP%\mbchp\src2`，135 类，fernflower/JBR25 反编译），性能相关类集中在 `com.ccnode.codegenerator.P.b`（Filter+batch processor）与 `cn.com.pism.batslog.e/f/g`（UI/格式化）。
+
+---
+
+## 一、结论先行
+
+对照结论一句话：**MyBatisCodeHelper-Pro 的批量异步写 UI 在架构上确实优于我们当前的逐条链路，但我们已有的 T-Perf-03/04/06/12/15/19 六个增量优化在多数维度上已持平甚至反超它**。真正值得吸收的是三块：
+
+1. **独立批量处理线程**（`SQL-Batch-Processor`，1s 定时排空队列）——我们当前「逐条入队、逐条 notify」在洪峰下仍有可量化的 EDT 风暴与锁竞争；
+2. **两个我们尚未覆盖的性能点**，对照其实现可明确补齐：捕获线程上的「入队 + 去重 + 通知」整段仍在 `synchronized(entries)` 外有一次无锁遍历热路径（T-Perf-06 只把 `isDuplicate` 移进锁内，`snapshot` 的 `entries.toList()` 仍在锁内整段复制），以及逐行 Filter 里仍有遗留的逐行设置读取；
+3. 它用**稳定 EP + 平台原生 ConsoleView 输出**绕开了我们反射桥的轮询负担——但这是架构替换（P2 调研），非本轮。
+
+下方按「吸收清单 / 对照已持平不吸收 / 不采纳」三档给出，每项都落到具体 file:line 与可验证的改法。
+
+---
+
+## 二、MyBatisCodeHelper-Pro 性能实现反编译精读
+
+### 2.1 批量异步写 UI（核心精华，`P.b`）
+
+捕获链路（`Filter.applyFilter`，P/b.java:55~167）：识别到 `sqlPrefix` 行缓存 `lastPrepareLine`，`paramsPrefix` 行到来时配对产出 SQL，随后 **不分发 UI**，而是 `a.offer(new a(project, panel, ...))` 入队（:312，`ConcurrentLinkedQueue`）。真正写 UI 的是一个**独立后台守护线程**：
+
+```
+ScheduledExecutorService（单线程，thread name "SQL-Batch-Processor"）
+scheduleAtFixedRate(每 1s) → c()
+```
+
+`c()`（:331~357）每拍：`while((v = queue.poll()) != null)` 排空队列，按 `Project` 分组（`HashMap<Project,List>`），丢弃已 disposed 项目；然后每组只投**一次** `ApplicationManager.getApplication().invokeLater(..., ModalityState.NON_MODAL)`，把该组全部条目一次性 `Document.insertString`（一次 `WriteCommandAction`，:385~410）。自清理：输出文档超 200k 字符删头部 50k（:398）。
+
+**三点要义**：① 捕获（任意线程）与 UI 写入（EDT）之间隔着队列 + 后台线程两级，**EDT 写次数与 SQL 条数解耦**；② 队列排空时按 Project 归组合并，一次 invokeLater 一批；③ 后台线程 `isDaemon` + `Throwable` 兜底 catch，崩了不影响 IDE。
+
+### 2.2 输入侧无任何常驻成本
+
+它用 `consoleFilterProvider` **稳定 EP** 注册 Filter（plugin.xml `<consoleFilterProvider implementation="com.ccnode.codegenerator.P.c"/>`），没有轮询、没有反射挂载、没有组件树遍历——Filter 由平台在控制台创建时自动装配，运行期零额外挂载负担。这正是我们反射桥 + 轮询兜底的对照面。
+
+### 2.3 解析与格式化（`f.g`，631 行）
+
+- 参数还原：MyBatis `(value(Type))` 从尾向头扫描，`null(Null)` 特判，类型表 8+23 驱动 `Class.forName` 真实转换（与我们的 PLAIN_TYPES 同型，性能等价）。
+- 格式化：druid `SQLUtils.format`（我们自研 formatter 替代，不引入 33MB 依赖）。
+- 彩色回显：`ConsoleViewImpl.print` 逐 token 分词着色——**这条恰恰是它最大的 UI 性能隐患**（见 §4「不采纳」）。
+
+### 2.4 配置面（`BatsLogConfig`，22 项）
+
+`maxPrepareAndParameterLength` 超长防护、`removeDuplicateSql`+时间窗、`ignoreSqlContains` 黑名单等——均已被我们等价或更强覆盖（详见下节对照表）。
+
+---
+
+## 三、对照盘点：现状（本项目）vs 它，逐项结论
+
+> 现状基线：本项目已有 T-Perf-03（差分增量刷新+代际守卫）、T-Perf-04（设置事件驱动、去逐行配置同步）、T-Perf-06（去重判入临界区防 CME）、T-Perf-12（onEvicted 移出锁）、T-Perf-15（dispose 精确注销）、T-Perf-19（指纹去重键）、T-Perf-24（搜索防抖）、T-LogPerf-01（轮询 100ms→500ms+指数退避）、T-LogListFreeze-04（片段渲染+固定行高）。
+
+| 维度 | MBCHP-Pro | 本项目现状 | 结论 |
+|------|-----------|-----------|------|
+| 捕获→UI 解耦 | 后台守护线程 + 队列 + 1s 排空归组 | `LogFilterProxyHandler` 逐行 → `buffer.addEntry`（SqlLogConsoleBridge.kt:319），入队+去重+通知在捕获线程同步做 | **对方优，本轮吸收**（§4.1） |
+| EDT 写次数 | 每 Project 每批次 1 次 invokeLater | T-Perf-03 `notifyUi` 置脏+幂等 flush（SqlLogManager.kt:457），已把「每条一次 invokeLater」合并 | 已持平 |
+| 列表刷新 | 一次性 insertString | 差分增量刷新+代际守卫+分批全量重建（SqlLogPanel.kt:900/930） | 本项目更优（增量免全量） |
+| 文档自清理 | 200k 删头部 50k | buffer maxEntries 淘汰 + onEvicted（SqlLogEntryBuffer.kt） | 已等价 |
+| 去重键 | 原文拼接（漏判） | 指纹键 + 60s 窗口（T-Perf-19） | 本项目更优 |
+| 去重线程安全 | combine 到队列处理器 | T-Perf-06 判入锁防 CME | 已持平 |
+| 捕获侧配置同步 | Filter 每次读 settings（其实逐行读） | T-Perf-04 已去逐行、事件驱动 | 本项目更优 |
+| 挂载方式 | 稳定 EP，零轮询 | 反射桥 + 轮询兜底（2s/500ms 退避） | 对方优，但**架构替换 P2**（§4.3） |
+| onEvicted 盘 IO | 无（写 UI 文档） | T-Perf-12 已移出锁，但磁盘写仍在捕获线程同步 flush | 部分持平，微调（§4.2） |
+| 反例：彩色回显 | 逐 token print | 无（侧边面板不写运行控制台） | 我们无此负担 |
+
+**关键判断**：它唯一在架构上稳压我们的，是「捕获线程零 UI 语义、后台线程归组、EDT 只做一次批写」这条独立管线；我们的逐条链路在一般场景已够快，但在**日志洪峰**（用户循环打 SQL、数千行/秒）下，`addEntry` 的 `synchronized(entries)` 与 `snapshot` 的 `entries.toList()` 每拍抢同一把锁、且 `notifyChanged` 的 `CopyOnWriteArrayList.forEach` 在捕获线程逐条调用，仍会与 EDT 侧 `snapshot` 竞争——这是本轮要补的。
+
+---
+
+## 四、技术方案
+
+### 4.1 改动点一（核心）：捕获线程与 UI 之间加队列化批写层（吸收对方精华）
+
+目标：把「控制台逐行 → 解析 → 入队」这条**任意线程**链路上的 EDT 调度与锁竞争降到 O(批) 而非 O(条)。
+
+**现状链路**：`LogFilterProxyHandler.onLine`（反射，控制台 flush 线程，通常 EDT 或后台）→ `processConsoleLine` → `buffer.addEntry`（含 `synchronized(entries)` + `notifyChanged()` → `uiNotifyListener` + `autoShowBufferListener`，SqlLogEntryBuffer.kt:62~86/194）。
+
+**方案（最小侵入，不推翻 T-Perf-03 的 flush 合并）**：在 `SqlLogEntryBuffer.addEntry` 与监听器通知之间插入一个**有界批量 drain**，替代当前「每次 addEntry 都 notifyChanged」：
+
+- 新增 `SqlLogEntryBatch`（或复用现有 drain 语义）：`addEntry` 仍线程安全入队（锁内只做 append + 淘汰，O(1)），但 **`notifyChanged()` 不再在每条 addEntry 后调用**——改为记录 `dirty`，只有当①积累条目数 ≥ 阈值（如 20 条）或②距上次通知 ≥ 时间阈值（如 200ms，用 `System.nanoTime` 比较，无 Timer）时才触发一次通知。控制台停止输出后的「尾批」由既有的面板 `refreshList` 兜底（面板已有 `invokeLater` flush 链），或在 `LogFilterProxyHandler` 增加一个低频 `invokeLater` 冲刷尾批次。
+- 参考对方的「1s 一次」但**不引入后台线程**（我们捕获侧本就多线程，加后台线程反而叠一层）：用「数量 + 时间」双阈值在捕获线程就地节流，把通知频率从 O(条) 压到 O(批)。
+- `autoShowBufferListener`（首次捕获自动开窗）是低频率语义（只在乎首条），不受影响——它挂在同一条 `listeners` 上，可与 UI 通知分离：dirty 通知走 `uiNotifyListener`，`autoShowBufferListener` 保留逐条（或只对首条，`maybeAutoShow` 本身有 latch 幂等）。
+
+**验证点**：日志洪峰（1000 条/秒）下，`invokeLater` 投递次数从 ~1000 张到 ~50 张/秒；`synchronized(entries)` 竞争窗口不变（仍逐条 append），但对 EDT `snapshot` 的干扰从「每次 append 都可能触发一次快照」降到「每批一次」。
+
+### 4.2 改动点二：onEvicted 磁盘写移出捕获线程（补齐 T-Perf-12 遗留）
+
+T-Perf-12 已把 `onEvicted` 移出 `synchronized(entries)`（SqlLogEntryBuffer.kt:83~85），但 `SqlLogAutoSaver.write`（SqlLogAutoSaver.kt:71）仍 `@Synchronized` + 每条 `flush()`（:143），在**捕获线程**上同步执行磁盘 IO。开自动保存 + 日志洪峰时，淘汰触发的高频 `flush` 会直接卡捕获热路径。
+
+**方案**：给 `SqlLogAutoSaver` 加一个单元素/批量写线程池（`Executors.newSingleThreadExecutor`，daemon + 命名 `SQL-History-Writer`，`close()` 时 `shutdown` + drain），`write` 改为 `submit` 到该线程；或维持同步但把 `flush` 的调用从「每条」改为「批量 flush」（攒 N 条或定时 flush）。优先后者（改动更小、保留 `@Synchronized` 顺序语义不丢）。参考对方 `SQL-Batch-Processor` 的 daemon + Throwable 兜底。
+
+### 4.3 改动点三（P2 调研，本轮只立项不实施）：consoleFilterProvider EP 双轨
+
+对方的稳定 EP 方案可彻底消灭我们反射桥的轮询 + 组件树遍历负担（性能分析 T-LogPerf-01 仅优化到 500ms 退避，每拍仍有 `hasMainConsole` 反射 + `findConsoleView` 递归遍历）。但涉及 T-M31-03 链路改造与双挂载去重，需 runIde 真机验证 EP 的 Filter 是否与运行控制台自身 Filter 链路兼容。**单独立项**，见性能分析 §3.1 优化方向第 2 条。
+
+### 4.4 不采纳项与理由
+
+- **druid SQLUtils 格式化**：33MB 依赖 + 与自研 formatter 争抢格式化语义，不引入；
+- **逐 token 彩色回显进运行控制台**（`f.g.print` 系列）：这是它在 UI 侧最大的性能隐患，每 token 一次 `ConsoleViewImpl.print`；我们侧边面板零负担，反向不吸收；
+- **原文拼接去重键**：已实证漏判（T-LogDedupeMpMark），不回退；
+- **新增独立后台线程做 UI 写**：我们捕获侧已多线程，加一层反而导入跨线程协调与 EDT 竞态；用 §4.1 的数量+时间节流达到等价效果（做到「EDT 写次数与 SQL 条数解耦」这一核心目标即可，不必照搬线程模型）。
+
+---
+
+## 五、测试计划
+
+- `SqlLogEntryBufferTest` 新增：
+  1. 批量通知节流：连续 addEntry N 条，验证 `notifyChanged`/listener 回调次数 ≤ ceil(N/阈值)，且尾批（停止输入后）能被 flush 兜底一次；
+  2. 去重废弃分支的徽章通知不走批量节流（徽章需即时，T-Perf 已有语义），或明确其与批量语义的交互；
+  3. `autoShowBufferListener` 首条仍即时触发（首条捕获自动开窗语义不回退）。
+- `SqlLogAutoSaverTest`（若有）：批量 flush——连续 write M 条只落盘 flush 1 次（或 ≤ 阈值），`close()` 尾排空不丢数据。
+- 洪水模拟：新增/扩展 `SqlLogStreamingDiffTest`，模拟 1000 条/秒连灌，断言 EDT invokeLater 投递次数与锁竞争不随条目数线性增长（可用静态计数器 hook）。
+- 全量基线：当前 3121 通过为基线；跑 `./gradlew` 前按铁律先 `python C:\Users\USER\.zcode\cli\parallel_tasks.py check`。
+
+## 六、风险与边界
+
+- **节流阈值选取**：数量/时间双阈值需在「及时性」（用户看到新 SQL 的延迟）与「吞吐」（EDT 调度次数）间权衡；默认建议 20 条 / 200ms，过大则日志洪峰下有肉眼可见的刷屏延迟，过小则节流无效。作为可调设置或常量，暂停时强制 flush 尾批。
+- **notifyChanged 语义回归**：当前每条 addEntry 都 notify 是「徽章即时」的保证（T-Perf 注释已记「用户实测不通知则徽章延迟」）——去重废弃分支的 notify 必须保留即时，不可并入批量节流，否则回退 T-LogDedupeMpMark 的徽章即时性。
+- **锁竞争残留**：§4.1 不改 `snapshot` 的 `entries.toList()`（锁内整段复制），洪峰下 EDT snapshot 仍与逐条 append 抢锁；这是 ArrayDeque 的固有代价，若实测仍热，后续可换「双缓冲交换」或 `append 到本地批、定期合并」，列 P2。
+- **runIde 真机**：洪峰压测（循环打 SQL 的 Spring Boot）留人工跟进，对比开关捕捉两种状态的 IDE 响应（统一走 runide-demo-verify-workflow）。
+
+## 七、实施记录
+
+（实施后回填：提交号、测试结果、压测数据、与并行任务的影响核查、踩坑记录。）

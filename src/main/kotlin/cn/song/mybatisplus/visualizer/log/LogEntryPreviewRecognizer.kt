@@ -34,7 +34,7 @@ data class RecognizedLogPreview(
  * 值预填 `LogSqlParam.value`（null → 空串，回填显示 `?`——与还原 `NULL` 不一致的边界见开发计划 §7）。
  */
 fun LogSqlEntry.toRecognizedPreview(): RecognizedLogPreview {
-    val placeholderCount = rawSql.count { it == '?' }
+    val placeholderCount = countPlaceholders(rawSql)
     val recognized = placeholderCount > 0 && placeholderCount == params.size
     if (!recognized) {
         return RecognizedLogPreview(
@@ -58,3 +58,9 @@ fun LogSqlEntry.toRecognizedPreview(): RecognizedLogPreview {
         recognized = true,
     )
 }
+
+/**
+ * T-HibDualCapture：string-aware `?` 占位符计数——口径与 [placeholderPositions]（还原回填）
+ * 完全一致，字符串字面量与注释内的 `?` 不计数，识别数量与回填位置不再错位。
+ */
+internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).size

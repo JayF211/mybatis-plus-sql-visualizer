@@ -40,6 +40,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 是否格式化输出（true=多行缩进，false=压缩）。 */
         var formatSql: Boolean = true,
 
+        /**
+         * 竖向排列 VALUES 行尾配对列名标注（T-VPairAnno）：true=显示（默认，T-VStack 以来行为不变），
+         * false=仅竖排不追加标注注释（用户自带注释不受影响）。
+         * 仅作用于预览面板竖向排列显示模式（[cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter.formatVertical]
+         * 的唯一生产调用点 applyDisplayMode）。
+         */
+        var verticalPairAnnotation: Boolean = true,
+
         /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */
         var showGutterIcon: Boolean = true,
 

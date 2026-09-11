@@ -27,9 +27,12 @@ class DualParserIntegrationTest {
             all += myBatis.takeEntries()
             all += hibernate.takeEntries()
         }
-        // 闭合未完成条目
-        myBatis.closePending()?.let { all += it }
-        hibernate.closePending()?.let { all += it }
+        // 闭合未完成条目（对齐 LogToSqlPanel 收尾顺序：closePending 后 takeEntries——
+        // T-HibDualCapture 起零参条目先入隔离槽，由 takeEntries 冲刷，closePending 返回 null）
+        myBatis.closePending()
+        hibernate.closePending()
+        all += myBatis.takeEntries()
+        all += hibernate.takeEntries()
         return all
     }
 
