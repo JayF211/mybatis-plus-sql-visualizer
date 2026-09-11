@@ -19,7 +19,8 @@ import com.intellij.util.ui.RestartDialogImpl
  *
  * 开关开（[PluginSettings.state.autoCheckUpdate]，默认关——稳定版由 Marketplace 推送）时**静默**
  * 后台检查 Gitee 更新通道：网络失败/清单异常/已是最新/已忽略版本一律不打扰，
- * 仅发现未忽略的可用更新弹通知——`[立即安装]` 后台下载安装（状态栏进度），成功后通知
+ * 仅发现未忽略的可用更新弹通知——`[立即安装]` 后台下载安装（状态栏进度），结果分叉
+ * （T-DynUpdate）：动态热替换成功通知「已更新并立即生效」（免重启）；回退脚本路径通知
  * 「重启 IDE 生效」（`[重启 IDE]` 动作 → [RestartDialogImpl.restartWithConfirmation]）；
  * `[忽略此版本]` 写入配置（仅抑制自动通知，手动检查不受影响）；`[稍后]` 关闭通知。
  *
@@ -96,7 +97,7 @@ class StartupUpdateCheck : ProjectActivity {
         runCatching { notification.notify(project) }
     }
 
-    /** 后台下载安装（状态栏进度）；成功 → 重启通知，失败 → 错误通知。 */
+    /** 后台下载安装（状态栏进度）；热生效 → 免重启通知，回退 → 重启通知，失败 → 错误通知。 */
     private fun installNow(project: Project, manifest: UpdateManifest) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             null,
@@ -107,7 +108,9 @@ class StartupUpdateCheck : ProjectActivity {
                 val result = PluginUpdateRunner.downloadAndInstall(manifest, indicator)
                 ApplicationManager.getApplication().invokeLater {
                     when (result) {
-                        PluginUpdateRunner.InstallResult.Installed -> showInstalled(project)
+                        is PluginUpdateRunner.InstallResult.InstalledDynamic ->
+                            showInstalledLive(project, result.version)
+                        is PluginUpdateRunner.InstallResult.InstalledRestartRequired -> showInstalled(project)
                         is PluginUpdateRunner.InstallResult.Failed -> showInstallFailed(project, result.message)
                     }
                 }
@@ -115,7 +118,20 @@ class StartupUpdateCheck : ProjectActivity {
         })
     }
 
-    /** 「更新完成，重启生效」通知：重启 IDE 动作（IDE 原生确认框，可选稍后）。 */
+    /** 「已更新并立即生效」通知（T-DynUpdate：动态热替换成功，无需重启）。 */
+    private fun showInstalledLive(project: Project, version: String) {
+        val pluginName = MpSqlVisualizerBundle.message("plugin.name")
+        val notification = NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP_ID)
+            .createNotification(
+                MpSqlVisualizerBundle.message("update.notification.installedLive.title", pluginName),
+                MpSqlVisualizerBundle.message("update.notification.installedLive.content", version),
+                NotificationType.INFORMATION,
+            )
+        runCatching { notification.notify(project) }
+    }
+
+    /** 「更新完成，重启生效」通知（动态链回退脚本路径时）：重启 IDE 动作（IDE 原生确认框，可选稍后）。 */
     private fun showInstalled(project: Project) {
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)
