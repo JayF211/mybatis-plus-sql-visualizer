@@ -239,11 +239,54 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
-        // 本地清单测试：-Dmpvs.update.manifest.url=... 转发到沙盒 IDE 的 systemProperty（不影响 Gitee 用户）
-        val manifestUrl = System.getProperty("mpvs.update.manifest.url")
-        if (!manifestUrl.isNullOrBlank()) {
-            systemProperty("mpvs.update.manifest.url", manifestUrl)
+        // T-DynUpdate：本地清单服务自动起停与 runIdeHotSwap 同款——IDE 内存里可能残留指向
+        // 本任务的旧运行配置（实证 12:48 用户点到旧配置跑 :runIde），两任务都挂保证点哪个都通。
+        // autoReload 保留开发热重载语义：热替换后平台自动重载器可能把新版再重载一次，无害。
+        // 配置缓存约束：路径配置期解析为 File，doFirst 不引用脚本对象。
+        val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
+        val logFile = layout.buildDirectory.file("hotswap-server.log").get().asFile
+        val scriptFile = rootProject.file("dev-support/hotswap-local-server.py")
+        doFirst {
+            // 端口须与 .run/runIdeLocalManifest.run.xml 清单 URL 及脚本默认值一致
+            val port = 8919
+            fun listening() = runCatching {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("localhost", port), 500)
+                    true
+                }
+            }.getOrDefault(false)
+            if (listening()) {
+                logger.lifecycle("hotswap local server already listening on $port — reusing (not owned, left running at exit)")
+                pidFile.writeText("")
+                return@doFirst
+            }
+            if (!scriptFile.isFile) throw GradleException("hotswap-local-server.py not found: $scriptFile")
+            val proc = ProcessBuilder("python", scriptFile.absolutePath)
+                .redirectOutput(logFile)
+                .redirectErrorStream(true)
+                .start()
+            pidFile.writeText(proc.pid().toString())
+            val deadline = System.currentTimeMillis() + 20_000
+            while (System.currentTimeMillis() < deadline) {
+                if (listening()) {
+                    logger.lifecycle("hotswap local server started (pid=${proc.pid()}, log=$logFile)")
+                    return@doFirst
+                }
+                if (!proc.isAlive) throw GradleException("hotswap server exited during startup — see $logFile")
+                Thread.sleep(300)
+            }
+            runCatching { proc.destroy() }
+            throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
         }
+        finalizedBy("hotswapServerStop")
+        // 清单 URL 转发必须在执行期读——配置期 System.getProperty 被配置缓存冻结
+        //（runIdeHotSwap 同款修复，见该任务注释）
+        jvmArgumentProviders.add(CommandLineArgumentProvider {
+            System.getProperty("mpvs.update.manifest.url")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { listOf("-Dmpvs.update.manifest.url=$it") }
+                ?: emptyList<String>()
+        })
     }
 
     // 本地清单测试集成见 dev-support/run-ide-local-manifest.sh（自动起/停 Python 服务器）
