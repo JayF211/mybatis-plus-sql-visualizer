@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -57,5 +60,72 @@ public final class LogEntryPreviewRecognizerKt {
      */
     public static long countPlaceholders(String sql) {
         return LogSqlRestorerKt.placeholderPositions(sql).size();
+    }
+
+    /**
+     * 日志条目 → 预览结果（T-HistParam F3：SQL 日志 tab 与 SQL 历史 tab 的统一识别通道）。
+     *
+     * 三级分流：
+     * 1. 占位符匹配识别（toRecognizedPreview，`?` 数 == 参数数）→ 参数行预填日志值；
+     * 2. 字面量参数恢复（recoverLiteralParams，rawSql 零 `?` 且 literalRecovery 开启，
+     *    运行期逐字符一致性熔断 verifyLiteralRoundTrip）→ 字面量改写为 `?` 复用参数管线；
+     * 3. 回退现状（restoredSql + 零参数/数量不匹配警告分流，零 `?` 无警告）。
+     *
+     * 纯函数无平台依赖（开关由调用方读设置传入）：SqlLogPanel 传 formatSql=设置值；
+     * HistorySqlLogPanel 传 formatSql=false（历史页现状不格式化）。
+     */
+    public static PreviewResult toPreviewResult(LogSqlEntry entry, boolean formatSql, boolean literalRecovery) {
+        RecognizedLogPreview recognized = toRecognizedPreview(entry);
+        if (recognized.recognized()) {
+            return new PreviewResult(
+                formatIfNeeded(SqlLogPanelKt.withTerminator(recognized.sql()), formatSql),
+                SqlLogPanelKt.withTerminator(recognized.compactSql()),
+                recognized.unresolvedParams(),
+                null,
+                null,
+                null,
+                null,
+                recognized.paramHints(),
+                recognized.initialValues());
+        }
+        // 字面量恢复只接「零占位符」分支（裸 SQL / ${} / 上游日志已内联值）；数量不匹配
+        // （残留 `?`）维持现状警告，不做两套占位符的混合恢复
+        if (literalRecovery && countPlaceholders(entry.rawSql()) == 0) {
+            LiteralParamRecovery recovery = LiteralParamRecoveryKt.recoverLiteralParams(entry.rawSql());
+            if (recovery != null && LiteralParamRecoveryKt.verifyLiteralRoundTrip(entry.rawSql(), recovery)) {
+                return new PreviewResult(
+                    formatIfNeeded(SqlLogPanelKt.withTerminator(recovery.placeholderSql()), formatSql),
+                    SqlLogPanelKt.withTerminator(recovery.placeholderSql()),
+                    recovery.unresolvedParams(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    recovery.paramHints(),
+                    recovery.initialValues());
+            }
+        }
+        String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
+        // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
+        // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
+        String warning = countPlaceholders(entry.restoredSql()) > 0
+            ? MpSqlVisualizerBundle.message(entry.params().isEmpty()
+                ? "log.preview.unresolvedNoBinding"
+                : "log.preview.unresolvedWarning")
+            : null;
+        return new PreviewResult(
+            formatIfNeeded(base, formatSql),
+            entry.restoredSql(),
+            List.of(),
+            null,
+            null,
+            null,
+            warning,
+            List.of(),
+            Map.of());
+    }
+
+    private static String formatIfNeeded(String sql, boolean formatSql) {
+        return formatSql ? SqlFormatter.format(sql) : sql;
     }
 }

@@ -46,7 +46,7 @@ public class UpdateSection extends JPanel {
     /** 分区状态（internal 供测试断言；状态渲染集中 {@link #renderState}）。 */
     private State state = State.Idle;
 
-    public enum State { Idle, Checking, UpToDate, Available, Downloading, Installed, Failed }
+    public enum State { Idle, Checking, UpToDate, Available, Downloading, Installed, InstalledLive, Failed }
 
     private UpdateManifest pendingManifest = null;
 
@@ -213,18 +213,23 @@ public class UpdateSection extends JPanel {
         return null;
     }
 
-    /** 安装结果渲染（EDT；测试直接调用）。安装失败保留 pendingManifest 以区分失败文案。 */
+    /** 安装结果渲染（EDT；测试直接调用）。三分支：热生效 / 回退重启 / 失败（保留 pendingManifest 区分文案）。 */
     public void renderInstall(PluginUpdateRunner.InstallResult result) {
-        state = result instanceof PluginUpdateRunner.InstallResult.Installed ? State.Installed : State.Failed;
-        if (result instanceof PluginUpdateRunner.InstallResult.Failed f) {
-            failureReason = f.message();
+        failureReason = result instanceof PluginUpdateRunner.InstallResult.Failed f ? f.message() : null;
+        if (result instanceof PluginUpdateRunner.InstallResult.InstalledDynamic) {
+            state = State.InstalledLive;
+        } else if (result instanceof PluginUpdateRunner.InstallResult.InstalledRestartRequired) {
+            state = State.Installed;
+        } else {
+            state = State.Failed;
         }
         renderState();
     }
 
     private void renderState() {
         State s = state;
-        checkButton.setEnabled(s != State.Checking && s != State.Downloading && s != State.Installed);
+        boolean done = s == State.Installed || s == State.InstalledLive;
+        checkButton.setEnabled(!done && s != State.Checking && s != State.Downloading);
         installButton.setVisible(s == State.Available || s == State.Downloading);
         installButton.setEnabled(s == State.Available);
         restartButton.setVisible(s == State.Installed);
@@ -240,6 +245,7 @@ public class UpdateSection extends JPanel {
                 MpSqlVisualizerBundle.message("settings.update.available", pendingManifest != null ? pendingManifest.version() : "?"));
             case Downloading -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.downloading"));
             case Installed -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installed"));
+            case InstalledLive -> statusLabel.setText(MpSqlVisualizerBundle.message("settings.update.installedLive"));
             case Failed -> statusLabel.setText(MpSqlVisualizerBundle.message(
                 "settings.update." + (pendingManifest == null ? "checkFailed" : "installFailed"),
                 failureReason != null ? failureReason : "?"));

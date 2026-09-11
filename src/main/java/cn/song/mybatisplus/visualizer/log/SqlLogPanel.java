@@ -681,10 +681,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
         public void actionPerformed(AnActionEvent e) {
             if (!JBCefApp.isSupported()) {
                 LOG.info("[HelpAction] JCEF not supported, falling back to system browser");
-                BrowserUtil.browse(HELP_DOCUMENTATION_URL);
+                browseOnlineDoc();
                 return;
             }
             openLocalHtml();
+        }
+
+        /** 降级：系统浏览器打开在线文档。
+         *  单元测试模式必须短路——BrowserUtil.browse 不走沙盒隔离，直接 ShellExecute
+         *  拉起宿主机默认浏览器（HelpUiTest 真实触发 actionPerformed，定时回归任务期间
+         *  周期性弹出用户 Edge，2026-09-11 真机实证）。 */
+        private void browseOnlineDoc() {
+            if (ApplicationManager.getApplication().isUnitTestMode()) {
+                LOG.info("[HelpAction] Unit test mode, skipping system browser fallback");
+                return;
+            }
+            BrowserUtil.browse(HELP_DOCUMENTATION_URL);
         }
 
         /** 内嵌浏览器打开本地 HTML 帮助页。 */
@@ -692,7 +704,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
             String htmlContent = loadText("html", "marketplace-custom-page.html");
             if (htmlContent.isBlank()) {
                 LOG.warn("[HelpAction] Help HTML resource is empty, falling back to online doc");
-                BrowserUtil.browse(HELP_DOCUMENTATION_URL);
+                browseOnlineDoc();
                 return;
             }
             try {
@@ -705,7 +717,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 HTMLEditorProvider.openEditor(project, HELP_TAB_TITLE, htmlContent);
             } catch (Throwable ex) {
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex);
-                BrowserUtil.browse(HELP_DOCUMENTATION_URL);
+                browseOnlineDoc();
             }
         }
 
@@ -1107,36 +1119,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private void openPreview(LogSqlEntry entry) {
         // T-M31.14：设置开启时预览展示格式化版（多行缩进），否则原样
         PluginSettings.State state = PluginSettings.getInstance().getState();
-        // T-M42：双击弹窗自动识别参数——`?` 数 == 参数数 ⇔ 匹配识别（值预填日志参数值，初始显示与现状一致）
-        RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry);
-        if (!recognized.recognized()) {
-            // 回退现状：restoredSql + 未解析警告（参数缺失/数量不匹配/纯静态 SQL）
-            String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
-            String sql = state.getLogFormatSql() ? SqlFormatter.format(base) : base;
-            // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
-            // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
-            String warning = LogEntryPreviewRecognizerKt.countPlaceholders(entry.restoredSql()) > 0
-                    ? MpSqlVisualizerBundle.message(entry.params().isEmpty()
-                            ? "log.preview.unresolvedNoBinding"
-                            : "log.preview.unresolvedWarning")
-                    : null;
-            SqlPreviewService.showResult(project, buildPreviewResult(
-                    sql, entry.restoredSql(), List.of(), null, null, null, warning), null);
-            return;
-        }
-        // 识别成功：rawSql 回填参数行（param1..N + 日志值预填 + 类型引号提示），全识别无警告
-        String base = SqlLogPanelKt.withTerminator(recognized.sql());
-        String sql = state.getLogFormatSql() ? SqlFormatter.format(base) : base;
-        SqlPreviewService.showResult(project, buildPreviewResult(
-                sql,
-                SqlLogPanelKt.withTerminator(recognized.compactSql()),
-                recognized.unresolvedParams(),
-                null,
-                null,
-                null,
-                null,
-                recognized.paramHints(),
-                recognized.initialValues()), null);
+        // T-HistParam F3：识别通道统一——与历史 tab 共用 toPreviewResult
+        // （占位符识别 / 字面量参数恢复 F4 / 回退警告分流，行为与原 openPreview 双分支逐字段一致）
+        SqlPreviewService.showResult(project, LogEntryPreviewRecognizerKt.toPreviewResult(
+                entry, state.getLogFormatSql(), state.getLiteralParamRecovery()), null);
     }
 
     private PreviewResult buildPreviewResult(

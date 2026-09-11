@@ -42,6 +42,15 @@ public final class SqlLogFileReader {
             "^-- (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?)$");
 
     /**
+     * 参数持久化行前缀/结尾（T-HistParam F1 格式 v2）：头部注释行之下的独立注释行，
+     * 载荷为 Base64 编码的 rawSql + params（编解码见 SqlLogParamCodec）。
+     * 前缀固定 `-- pd: ` 且以 ` --` 结尾——旧版头部判据（`-- ` 起始无 `source:`）会把
+     * pd 行误判为 F-43 头部导致块被劈开，块切分与计数必须显式排除。
+     */
+    private static final String PD_PREFIX = "-- pd: ";
+    private static final String PD_SUFFIX = " --";
+
+    /**
      * 读取目录下所有 .sql 文件，返回按时间戳排序的 LogSqlEntry 列表。
      */
     public List<LogSqlEntry> readAll(String dir) {
@@ -87,7 +96,7 @@ public final class SqlLogFileReader {
                 String trimmed = line.stripLeading();
                 if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
                     count++;
-                } else if (line.startsWith("-- ") && !line.contains("source:")) {
+                } else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
                     count++;
                 }
             }
@@ -109,7 +118,9 @@ public final class SqlLogFileReader {
                 flushBlock(currentLines, entries);
                 currentLines.clear();
                 currentLines.add(line);
-            } else if (line.startsWith("-- ") && !line.contains("source:")) {
+            } else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
+                // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
+                // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
                 flushBlock(currentLines, entries);
                 currentLines.clear();
                 currentLines.add(line);
@@ -138,9 +149,28 @@ public final class SqlLogFileReader {
             return null;
         }
         String header = lines.get(0);
+        // T-HistParam F2：v2 头部下探测参数持久化行（`-- pd: <base64> --`），解码失败按普通
+        // 正文注释行降级（SQL 多一行注释无害）；解码成功则 rawSql 与 params 从载荷还原
+        List<String> contentLines = lines.subList(1, lines.size());
+        List<String> bodyLines = contentLines;
+        String rawSqlOverride = null;
+        List<LogSqlParam> params = List.of();
+        if (!contentLines.isEmpty()) {
+            String first = contentLines.get(0);
+            String trimmedFirst = first.trim();
+            if (trimmedFirst.startsWith(PD_PREFIX) && trimmedFirst.endsWith(PD_SUFFIX)) {
+                kotlin.Pair<String, java.util.List<LogSqlParam>> decoded = SqlLogParamCodec.decode(
+                    trimmedFirst.substring(PD_PREFIX.length(), trimmedFirst.length() - PD_SUFFIX.length()));
+                if (decoded != null) {
+                    rawSqlOverride = decoded.getFirst();
+                    params = decoded.getSecond();
+                    bodyLines = contentLines.subList(1, contentLines.size());
+                }
+            }
+        }
         // 写入端 withTerminator 会补 `;`（T-SqlDuration），读回去掉还原为原始 SQL——
         // 展示/复制路径会重新调用 withTerminator() 补回，此处只剥结尾一个
-        String sql = String.join("\n", lines.size() > 1 ? lines.subList(1, lines.size()) : java.util.List.of()).trim();
+        String sql = String.join("\n", bodyLines).trim();
         if (sql.endsWith(";")) {
             sql = sql.substring(0, sql.length() - 1).trim();
         }
@@ -159,7 +189,7 @@ public final class SqlLogFileReader {
             }
             Pair<String, Integer> src = parseSource(sourceStr);
             Long executionTimeMs = parseDuration(timeStr);
-            return new LogSqlEntry(sql, sql, List.of(), timestamp,
+            return new LogSqlEntry(rawSqlOverride != null ? rawSqlOverride : sql, sql, params, timestamp,
                     src.getFirst(), src.getSecond(), executionTimeMs);
         }
 
@@ -170,7 +200,7 @@ public final class SqlLogFileReader {
             if (timestamp == null) {
                 return null;
             }
-            return new LogSqlEntry(sql, sql, List.of(), timestamp);
+            return new LogSqlEntry(rawSqlOverride != null ? rawSqlOverride : sql, sql, params, timestamp);
         }
 
         return null;

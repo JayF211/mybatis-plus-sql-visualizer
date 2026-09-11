@@ -276,6 +276,9 @@ public class PluginSettingsPanel {
     /** 竖向排列 VALUES 行尾配对列名标注开关（T-VPairAnno，默认开）。 */
     private final JBCheckBox verticalPairAnnotationCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.verticalPairAnnotation"));
 
+    /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
+    private final JBCheckBox literalParamRecoveryCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"));
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private final JBCheckBox gutterIconCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"));
     /** JOIN 图渲染方式（T-Dgm-04）：原生 Diagrams 框架 vs 经典自绘渲染器。 */
@@ -456,6 +459,8 @@ public class PluginSettingsPanel {
                 addRow(p, g, "", formatCheck);
                 verticalPairAnnotationCheck.setText(msg("settings.verticalPairAnnotation"));
                 addRow(p, g, "", verticalPairAnnotationCheck);
+                literalParamRecoveryCheck.setText(msg("settings.literalParamRecovery"));
+                addRow(p, g, "", literalParamRecoveryCheck);
                 injectLogicDeleteCheck.setText(msg("settings.injectLogicDelete"));
                 addRow(p, g, "", injectLogicDeleteCheck);
                 logicDeleteValueField.setToolTipText(msg("settings.logicDeleteValue.tip"));
@@ -1151,6 +1156,7 @@ public class PluginSettingsPanel {
             || replaceParamsCheck.isSelected() != s.getReplaceParams()
             || formatCheck.isSelected() != s.getFormatSql()
             || verticalPairAnnotationCheck.isSelected() != s.getVerticalPairAnnotation()
+            || literalParamRecoveryCheck.isSelected() != s.getLiteralParamRecovery()
             || injectLogicDeleteCheck.isSelected() != s.getInjectLogicDelete()
             || !logicDeleteValueField.getText().trim().equals(s.getLogicDeleteValue())
             || injectTenantLineCheck.isSelected() != s.getInjectTenantLine()
@@ -1235,6 +1241,7 @@ public class PluginSettingsPanel {
             s.setReplaceParams(replaceParamsCheck.isSelected());
             s.setFormatSql(formatCheck.isSelected());
             s.setVerticalPairAnnotation(verticalPairAnnotationCheck.isSelected());
+            s.setLiteralParamRecovery(literalParamRecoveryCheck.isSelected());
             s.setInjectLogicDelete(injectLogicDeleteCheck.isSelected());
             s.setLogicDeleteValue(logicDeleteValueField.getText().trim());
             s.setInjectTenantLine(injectTenantLineCheck.isSelected());
@@ -1335,6 +1342,7 @@ public class PluginSettingsPanel {
             replaceParamsCheck.setSelected(s.getReplaceParams());
             formatCheck.setSelected(s.getFormatSql());
             verticalPairAnnotationCheck.setSelected(s.getVerticalPairAnnotation());
+            literalParamRecoveryCheck.setSelected(s.getLiteralParamRecovery());
             injectLogicDeleteCheck.setSelected(s.getInjectLogicDelete());
             logicDeleteValueField.setText(s.getLogicDeleteValue());
             injectTenantLineCheck.setSelected(s.getInjectTenantLine());

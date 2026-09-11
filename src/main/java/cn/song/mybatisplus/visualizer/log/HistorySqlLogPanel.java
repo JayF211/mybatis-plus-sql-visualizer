@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.model.BatchModel;
 import cn.song.mybatisplus.visualizer.model.FillClause;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
@@ -347,29 +348,17 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     }
 
     private void openPreview(LogSqlEntry entry) {
-        String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
-        SqlPreviewService.showResult(project, new PreviewResult(
-                base,                                  // sql
-                entry.restoredSql(),                   // compactSql
-                List.of(),                             // unresolvedParams
-                null,                                 // paramTable
-                null,                                 // wrapperType
-                null,                                 // tableName
-                null,                                 // warning
-                List.of(),                            // columns
-                Map.of(),                             // columnComments
-                null,                                 // tableComment
-                null,                                 // previewModel
-                List.of(),                            // paramHints
-                List.of(),                            // candidateTables
-                null,                                 // batchModel
-                null,                                 // xmlModel
-                Map.of(),                             // initialParamValues
-                null,                                 // perfWarnings
-                null,                                 // fillClauses
-                null,                                 // previousSql
-                null                                  // pagesColumns
-        ), null);
+        SqlPreviewService.showResult(project, buildPreviewResult(entry), null);
+    }
+
+    /**
+     * 双击预览的 PreviewResult 构建（T-HistParam F3，internal 供 UI 测试不弹窗断言识别结果）：
+     * 与日志 tab 共用 toPreviewResult 统一识别通道——v2 历史条目（rawSql/params 齐全）参数行
+     * 与日志页一致，字面量条目走 F4 恢复；formatSql=false 保持历史页现状不格式化。
+     */
+    public PreviewResult buildPreviewResult(LogSqlEntry entry) {
+        return LogEntryPreviewRecognizerKt.toPreviewResult(entry, false,
+                PluginSettings.getInstance().getState().getLiteralParamRecovery());
     }
 
     // ---------- 二级右键菜单 ----------

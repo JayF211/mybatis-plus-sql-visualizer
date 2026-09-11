@@ -106,6 +106,15 @@ public final class PreviewResult {
                 Map.of(), null, null, List.of(), List.of(), null, null, Map.of(), null, null, null, null);
     }
 
+    /** 日志识别通道便捷构造（T-HistParam F3 toPreviewResult：非默认字段显式传参，其余同 Kotlin data class 默认值）。 */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams,
+                         String paramTable, WrapperType wrapperType, String tableName, String warning,
+                         List<ParamHint> paramHints, Map<String, String> initialParamValues) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning,
+                List.of(), Map.of(), null, null, paramHints, List.of(), null, null,
+                initialParamValues, null, null, null, null);
+    }
+
     public String getSql() {
         return sql;
     }

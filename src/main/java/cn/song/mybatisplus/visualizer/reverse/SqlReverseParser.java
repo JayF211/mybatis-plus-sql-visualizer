@@ -681,7 +681,15 @@ public final class SqlReverseParser {
         throw new SqlReverseException(t.offset(), KEY_PARSE, "无法识别的条件操作符：" + t.text());
     }
 
-    /** 括号组解析。 */
+    /**
+     * 括号组解析（T-M36.1）：当前位于 `(` 之后；组内递归走 parseConditionList（OR 分段语义一致），
+     * 直到 `)`。组内为单个 Group（如 `(a = 1 OR b = 2)`）时直接复用该组（避免双重括号）；
+     * 组内仅 1 个非 Group 条件且非取反（T-ReverseParenWira：MPJ 渲染 ON/WHERE 自带括号，
+     * `(st.station_id = t.id)`/`(t.id = 1)` 单条件括号无语义增量）时直接解包返回该条件——
+     * 否则下游 extractJoinKey 认不出 ColumnComparison 致 MPJ lambda 形态退化、
+     * WHERE 多渲染一层 nested；`NOT (a = 1)` 取反组仍保留 Group 承载 negated 标记。
+     * 其余多条件情况包 `Group(AND, ...)`（保留括号，round-trip 等价）。空组报语法错误。
+     */
     private Condition parseGroup(Cursor cursor, List<String> warnings, boolean negated) {
         List<Condition> inner = parseConditionList(cursor, warnings);
         expectSymbol(cursor, ")");
@@ -691,6 +699,9 @@ public final class SqlReverseParser {
         Condition single = inner.size() == 1 ? inner.get(0) : null;
         if (single instanceof Condition.Group g) {
             return negated ? new Condition.Group(g.getConnector(), g.getChildren(), g.getToggle(), true) : single;
+        }
+        if (single != null && !negated) {
+            return single;
         }
         return new Condition.Group(Connector.AND, inner, null, negated);
     }

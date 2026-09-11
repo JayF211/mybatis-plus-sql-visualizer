@@ -118,6 +118,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean logTimestampEnabled = true;
         private String logTimestampFormat = DEFAULT_LOG_TIMESTAMP_FORMAT;
         private boolean logFormatSql = true;
+        /**
+         * 字面量参数恢复（T-HistParam F4，默认开）：日志 SQL 无 `?` 占位符（裸 SQL 捕获 /
+         * MyBatis `${}` / 上游日志已内联参数值）时，把单引号字符串字面量识别为可编辑参数行。
+         * 作用于 toPreviewResult 的统一识别通道。
+         */
+        private boolean literalParamRecovery = true;
         private String logFilterKeywords = "";
         private long logDedupeWindowMs = DEFAULT_LOG_DEDUPE_WINDOW_MS;
         private int logMaxParseLength = DEFAULT_LOG_MAX_PARSE_LENGTH;
@@ -248,6 +254,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getLogFormatSql() { return logFormatSql; }
         public void setLogFormatSql(boolean logFormatSql) { this.logFormatSql = logFormatSql; }
 
+        public boolean getLiteralParamRecovery() { return literalParamRecovery; }
+        public void setLiteralParamRecovery(boolean literalParamRecovery) { this.literalParamRecovery = literalParamRecovery; }
+
         public String getLogFilterKeywords() { return logFilterKeywords; }
         public void setLogFilterKeywords(String logFilterKeywords) { this.logFilterKeywords = logFilterKeywords; }
 
@@ -346,6 +355,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logTimestampEnabled = logTimestampEnabled;
             c.logTimestampFormat = logTimestampFormat;
             c.logFormatSql = logFormatSql;
+            c.literalParamRecovery = literalParamRecovery;
             c.logFilterKeywords = logFilterKeywords;
             c.logDedupeWindowMs = logDedupeWindowMs;
             c.logMaxParseLength = logMaxParseLength;
@@ -389,6 +399,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && logAutoOpenOnCapture == that.logAutoOpenOnCapture
                     && logTimestampEnabled == that.logTimestampEnabled
                     && logFormatSql == that.logFormatSql
+                    && literalParamRecovery == that.literalParamRecovery
                     && logAutoSaveEnabled == that.logAutoSaveEnabled
                     && logHibernateEnabled == that.logHibernateEnabled
                     && logJdbcEnabled == that.logJdbcEnabled
@@ -437,7 +448,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat,
-                    logFormatSql, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
+                    logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,

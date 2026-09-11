@@ -12,10 +12,14 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 平台安装封装（M28）：调度「下次启动替换插件」——删除旧版（[StartupActionScriptManager.DeleteCommand]）
- * + 解压新版（[StartupActionScriptManager.UnzipCommand]），随后由调用方提示重启
- * （[com.intellij.util.ui.RestartDialogImpl.restartWithConfirmation]，环境否决动态卸载，
- * 覆盖更新必重启——T-M23.10 定论，不做动态加载）。
+ * 平台安装封装（M28 → T-DynUpdate 降级通道）：调度「下次启动替换插件」——删除旧版
+ * （[StartupActionScriptManager.DeleteCommand]）+ 解压新版（[StartupActionScriptManager.UnzipCommand]），
+ * 随后由调用方提示重启（[com.intellij.util.ui.RestartDialogImpl.restartWithConfirmation]）。
+ *
+ * T-DynUpdate 起本路径降级为兜底：默认主路径是 [DynamicInstallSupport] 平台动态热替换
+ * （卸载旧版 → 装载新版，无需重启）；仅当平台否决/反射入口缺失/动态链失败时走本类。
+ * 原注释「环境否决动态卸载，覆盖更新必重启——T-M23.10 定论」已证伪：performanceTesting
+ * vetoer 只否决其自身且仅回放执行期间（262 反编译实证，见 T-DynUpdate 开发计划 §2.3）。
  *
  * T-M51-01-ALT：使用 [ProtectionDomain] 获取当前插件 jar/目录路径 +
  * [StartupActionScriptManager.DeleteCommand] 删除旧版，避免 PluginManager.getPlugin()
@@ -37,40 +41,20 @@ public final class PlatformPluginInstaller {
     private static final Set<String> DEV_PATH_MARKERS = Set.of("build", "classes", "out", "target", ".gradle");
 
     /**
-     * 调度安装：校验旧版安装位置（防开发态误删 build 产物）→ 持久化下载包 →
-     * 卸载旧版 + 解压新版（脚本按序执行：先删后装）。
+     * 兜底安装（T-DynUpdate 改名自 install，语义不变）：调度启动脚本替换，重启生效。
+     * 开发态安装拒绝（返回 Failed）；脚本调度成功返回 InstalledRestartRequired。
      */
-    public static PluginUpdateRunner.InstallResult install(Path zip) {
+    public static PluginUpdateRunner.InstallResult installRestartScript(Path zip) {
         try {
-            // 插件目录定位：优先用 ProtectionDomain 获取精确 JAR 路径；
-            // 262 平台 codeSource.location 实证返回 null（日志实证），此时回退到
-            // PathManager.getPluginsDir() + PLUGIN_ID 定位插件目录根。
-            // 删除整个目录（DeleteCommand 递归删除）——比删单个 JAR 更可靠，
-            // 不依赖 classloader 实现细节，三平台（Win/Mac/Linux）通用。
-            Path jarPath = getPluginJarPath();
-            Path pluginDir = pluginDirPath();
-            LOG.info("install: jarPath=" + jarPath + " | pluginDir=" + pluginDir + " | zip=" + zip);
-
-            // 开发态守卫：任一可用路径命中构建特征段即拒绝
-            List<String> pathStrs = new ArrayList<>();
-            if (jarPath != null) pathStrs.add(jarPath.toString().replace('\\', '/'));
-            pathStrs.add(pluginDir.toString().replace('\\', '/'));
-            for (String pathStr : pathStrs) {
-                if (isDevInstallation(pathStr)) {
-                    LOG.warn("plugin update rejected: dev-mode installation (path=" + pathStr + ")");
-                    return new PluginUpdateRunner.InstallResult.Failed(
-                        "updates are not supported for a development-mode installation (path: " +
-                            pathStr + "); install from the plugin zip first"
-                    );
-                }
-            }
+            PluginUpdateRunner.InstallResult.Failed guard = devGuardOrFailure();
+            if (guard != null) return guard;
 
             Path persistent = persistZip(zip);
-            LOG.info("install: persistent=" + persistent);
+            LOG.info("installRestartScript: persistent=" + persistent);
 
             // 删除旧版：优先精确删除 JAR，回退删除整个目录
-            Path deleteTarget = jarPath != null ? jarPath : pluginDir;
-            LOG.info("install: scheduling DeleteCommand for " + deleteTarget);
+            Path deleteTarget = getPluginJarPath() != null ? getPluginJarPath() : pluginDirPath();
+            LOG.info("installRestartScript: scheduling DeleteCommand for " + deleteTarget);
             StartupActionScriptManager.addActionCommand(
                 new StartupActionScriptManager.DeleteCommand(deleteTarget)
             );
@@ -80,17 +64,46 @@ public final class PlatformPluginInstaller {
             // 纯解压不剥顶层；解压到 `<plugins>/<pluginId>/` 会多嵌套一层（用户实测：重启后插件
             // 列表消失——平台扫描不到嵌套 jar 内的 plugin.xml）。解压到根后 zip 顶层目录名
             // 与旧安装目录名一致，删旧解新即正确替换。
-            LOG.info("install: scheduling UnzipCommand (target=" + unzipTargetDir() + ")");
+            LOG.info("installRestartScript: scheduling UnzipCommand (target=" + unzipTargetDir() + ")");
             StartupActionScriptManager.addActionCommand(
                 new StartupActionScriptManager.UnzipCommand(persistent, unzipTargetDir())
             );
-            LOG.info("install: commands scheduled successfully — Installed");
-            return PluginUpdateRunner.InstallResult.Installed.INSTANCE;
+            LOG.info("installRestartScript: commands scheduled successfully — InstalledRestartRequired");
+            return PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE;
         } catch (Exception error) {
             LOG.warn("plugin update install failed — " + error.getMessage(), error);
             String msg = error.getMessage() != null ? error.getMessage() : error.toString();
             return new PluginUpdateRunner.InstallResult.Failed(msg);
         }
+    }
+
+    /**
+     * 开发态守卫（T-DynUpdate 抽出共用，脚本路径与动态路径同源）：
+     * 任一可用路径命中构建特征段即拒绝更新（runIde/测试从 build/classes 加载，
+     * 卸载调度会误删构建产物），返回 Failed；正常安装返回 null。
+     */
+    public static PluginUpdateRunner.InstallResult.Failed devGuardOrFailure() {
+        // 插件目录定位：优先用 ProtectionDomain 获取精确 JAR 路径；
+        // 262 平台 codeSource.location 实证返回 null（日志实证），此时回退到
+        // PathManager.getPluginsDir() + PLUGIN_ID 定位插件目录根。
+        // 删除整个目录（DeleteCommand 递归删除）——比删单个 JAR 更可靠，
+        // 不依赖 classloader 实现细节，三平台（Win/Mac/Linux）通用。
+        Path jarPath = getPluginJarPath();
+        Path pluginDir = pluginDirPath();
+        LOG.info("dev guard: jarPath=" + jarPath + " | pluginDir=" + pluginDir);
+        List<String> pathStrs = new ArrayList<>();
+        if (jarPath != null) pathStrs.add(jarPath.toString().replace('\\', '/'));
+        pathStrs.add(pluginDir.toString().replace('\\', '/'));
+        for (String pathStr : pathStrs) {
+            if (isDevInstallation(pathStr)) {
+                LOG.warn("plugin update rejected: dev-mode installation (path=" + pathStr + ")");
+                return new PluginUpdateRunner.InstallResult.Failed(
+                    "updates are not supported for a development-mode installation (path: " +
+                        pathStr + "); install from the plugin zip first"
+                );
+            }
+        }
+        return null;
     }
 
     /**

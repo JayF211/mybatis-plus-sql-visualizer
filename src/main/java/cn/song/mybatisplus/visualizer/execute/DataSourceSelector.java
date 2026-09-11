@@ -1085,22 +1085,43 @@ public final class DataSourceSelector {
 
             Method attach = providerClass.getMethod("attachConsole", Project.class, sessionClass, VirtualFile.class);
             attach.setAccessible(true);
-            // T-PreviewSlow F2：不得用 ReadAction 包 attachConsole——DBN 的 attachConsole 底层要
-            // new EditorImpl，其构造里 setHighlighter 走 WriteIntentReadAction，平台锁层明文禁止
-            // 「在 read-action 内再开 write-intent-read-action」（真机日志 Caused by:
-            // IllegalStateException: WriteIntentReadAction can not be called from ReadAction
-            // <- EditorImpl.setHighlighter <- ConsoleExecutionEditor.<init>）。T-PreviewDocLock2
-            // F1 把它整段包进 ReadAction 压读权限断言，反而触发锁嵌套硬抛、被 runCatching 吞成
-            // InvocationTargetException: null -> 控制台从未挂载成功。attachConsole 是平台自带读权限
-            // 与 invokeLaterIfNeeded 切 EDT 的第三方链入口，读权限由其内部自理，这里保持直接插桩。
-            Object console = attach.invoke(null, project, session, vf);
+            // T-ReverseParenWira：attachConsole 包 WriteIntentReadAction（既非 plain ReadAction，
+            // 亦非裸 EDT）——三轮踩坑收口：
+            //   · T-PreviewDocLock2 F1 包 plain ReadAction 压读权限断言 → DBN attachConsole 底层
+            //     new EditorImpl 的 setHighlighter 走 WriteIntentReadAction，平台锁层明文禁
+            //     「plain ReadAction 内再开 WIRA」硬抛（IllegalStateException <- setHighlighter:1832
+            //     <- ConsoleExecutionEditor.<init>），被 runCatching 吞成 InvocationTargetException:null
+            //     -> 控制台从未挂载。
+            //   · T-PreviewSlow F2 整段拆包还原裸 EDT → 修了 setHighlighter 嵌套，但 262 同一条构造链
+            //     上 ConsoleExecutionEditor.<init>:54 → FileDocumentManager.getDocument 要求调用方已
+            //     持读权限，裸 EDT 直调硬抛 RuntimeExceptionWithAttachments「Read access is allowed
+            //     from inside read-action only」（真机堆栈实证），又被外层 runCatching 吞掉静默降级。
+            //   · 本轮包 WIRA：隐含读权限满足 getDocument 断言；内部 setHighlighter 的 WIRA 属
+            //     WIRA-in-WIRA 重入——平台只禁 plain ReadAction→WIRA，重入合法。同文件
+            //     T-ExecCopyFix F2b createTempPsiFile 冷路径同款先例（Computable 单类型实参，
+            //     243~262 交集——T-Wia262）。V-2 留 262 真机 idea.log 验证无新嵌套硬抛。
+            Object console = WriteIntentReadAction.compute(
+                (com.intellij.openapi.util.Computable<Object>) () -> {
+                    try {
+                        return attach.invoke(null, project, session, vf);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
             LOG.info("[M36] attachConsole -> " + console);
             if (console == null) return;
 
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
 
-            Object documentObj = consoleClass.getMethod("getDocument").invoke(console);
-            Document document = documentObj instanceof Document ? (Document) documentObj : null;
+            // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）。
+            // T-ReverseParenWira：单独为 getDocument 包 plain ReadAction（T-PreviewSlow F2 注释
+            // 预先授权方案）——此句只取 attachConsole 已构建好的 console 文档，不 new EditorImpl、
+            // 不触发 WIRA，plain ReadAction 即满足 262 读权限断言，无嵌套风险。
+            Document document = ReadAction.compute(
+                (com.intellij.openapi.util.ThrowableComputable<Document, Exception>) () -> {
+                    Object documentObj = consoleClass.getMethod("getDocument").invoke(console);
+                    return documentObj instanceof Document ? (Document) documentObj : null;
+                });
             Editor editor = null;
             for (int i = 0; i < 20; i++) {
                 if (editor != null) break;

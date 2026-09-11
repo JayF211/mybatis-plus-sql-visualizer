@@ -25,7 +25,8 @@ import kotlin.coroutines.Continuation;
  *
  * 开关开（{@link PluginSettings.State#getAutoCheckUpdate()}，默认关——稳定版由 Marketplace 推送）时**静默**
  * 后台检查 Gitee 更新通道：网络失败/清单异常/已是最新/已忽略版本一律不打扰，
- * 仅发现未忽略的可用更新弹通知——`[立即安装]` 后台下载安装（状态栏进度），成功后通知
+ * 仅发现未忽略的可用更新弹通知——`[立即安装]` 后台下载安装（状态栏进度），结果分叉
+ * （T-DynUpdate）：动态热替换成功通知「已更新并立即生效」（免重启）；回退脚本路径通知
  * 「重启 IDE 生效」（`[重启 IDE]` 动作 → {@link RestartDialogImpl#restartWithConfirmation()}）；
  * `[忽略此版本]` 写入配置（仅抑制自动通知，手动检查不受影响）；`[稍后]` 关闭通知。
  *
@@ -85,9 +86,15 @@ public class StartupUpdateCheck implements ProjectActivity {
                 MpSqlVisualizerBundle.message("update.notification.title", pluginName),
                 notificationContent(manifest),
                 NotificationType.INFORMATION);
+        // T-DynUpdate：点击先过期本通知——动作闭包持有本类实例（旧 classloader），且通知在事件
+        // 日志常驻；动态热替换后平台 GCWatcher 观察旧类加载器是否释放，这条强引用不摘，
+        // 「插件未完全卸载」警告大概率被触发（实测）
         notification.addAction(NotificationAction.createSimple(
             MpSqlVisualizerBundle.message("update.notification.installNow"),
-            () -> installNow(project, manifest)));
+            () -> {
+                notification.expire();
+                installNow(project, manifest);
+            }));
         notification.addAction(NotificationAction.createSimple(
             MpSqlVisualizerBundle.message("update.notification.ignore"),
             () -> {
@@ -103,11 +110,10 @@ public class StartupUpdateCheck implements ProjectActivity {
             MpSqlVisualizerBundle.message("update.notification.later"),
             () -> {
             }));
-        // T-M28.4：内容内 Gitee 链接点击跳转。
-        // T-DepApi：setListener(URL_OPENING_LISTENER) 全平台标 deprecated——现代等价物是
-        // BrowseNotificationAction（java.net.URL 构造，BrowserUrlAction 语义封装），
-        // 243/253/262 javap 实证均无弃用标记。追加动作而非 setListener：链接点击走
-        // 「查看发布页」动作打开浏览器，正文内嵌链接点击保留通知默认行为。
+        // T-M28.4 → T-DynUpdate：Gitee 入口收敛为动作行「查看发布页」一个——正文末尾原内嵌
+        // 同名链接与动作行重复（用户实测），正文链接已移除。
+        // T-DepApi：setListener(URL_OPENING_LISTENER) 全平台标 deprecated——BrowseNotificationAction
+        // （java.net.URL 构造，BrowsURLAction 语义封装）为现代等价物，243/253/262 javap 实证无弃用标记。
         notification.addAction(new BrowseNotificationAction(
             MpSqlVisualizerBundle.message("update.notification.viewGitee"),
             UpdateSource.GITEE_RELEASES_URL));
@@ -118,7 +124,7 @@ public class StartupUpdateCheck implements ProjectActivity {
         }
     }
 
-    /** 后台下载安装（状态栏进度）；成功 → 重启通知，失败 → 错误通知。 */
+    /** 后台下载安装（状态栏进度）；热生效 → 免重启通知，回退 → 重启通知，失败 → 错误通知。 */
     private static void installNow(Project project, UpdateManifest manifest) {
         ProgressManager.getInstance().run(new Task.Backgroundable(
             null,
@@ -128,7 +134,9 @@ public class StartupUpdateCheck implements ProjectActivity {
             public void run(ProgressIndicator indicator) {
                 PluginUpdateRunner.InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, indicator);
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    if (result instanceof PluginUpdateRunner.InstallResult.Installed) {
+                    if (result instanceof PluginUpdateRunner.InstallResult.InstalledDynamic dynamic) {
+                        showInstalledLive(project, dynamic.version());
+                    } else if (result instanceof PluginUpdateRunner.InstallResult.InstalledRestartRequired) {
                         showInstalled(project);
                     } else if (result instanceof PluginUpdateRunner.InstallResult.Failed failed) {
                         showInstallFailed(project, failed.message());
@@ -138,7 +146,23 @@ public class StartupUpdateCheck implements ProjectActivity {
         });
     }
 
-    /** 「更新完成，重启生效」通知：重启 IDE 动作（IDE 原生确认框，可选稍后）。 */
+    /** 「已更新并立即生效」通知（T-DynUpdate：动态热替换成功，无需重启）。 */
+    private static void showInstalledLive(Project project, String version) {
+        String pluginName = MpSqlVisualizerBundle.message("plugin.name");
+        Notification notification = NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP_ID)
+            .createNotification(
+                MpSqlVisualizerBundle.message("update.notification.installedLive.title", pluginName),
+                MpSqlVisualizerBundle.message("update.notification.installedLive.content", version),
+                NotificationType.INFORMATION);
+        try {
+            notification.notify(project);
+        } catch (Throwable ignored) {
+            // 通知失败不打扰用户
+        }
+    }
+
+    /** 「更新完成，重启生效」通知（动态链回退脚本路径时）：重启 IDE 动作（IDE 原生确认框，可选稍后）。 */
     private static void showInstalled(Project project) {
         Notification notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)
@@ -177,7 +201,8 @@ public class StartupUpdateCheck implements ProjectActivity {
 
     /**
      * 通知内容：第一行版本号（`版本 2026.8.22-beta.1（Gitee 通道）`），
-     * 随后变更日志有序列表、末尾 Gitee 发布页链接。纯函数（单测直接覆盖）。
+     * 随后变更日志有序列表。T-DynUpdate：Gitee 入口收敛为动作行按钮，
+     * 正文末尾原内嵌「查看 Gitee 发布页」链接与动作行重复已移除。纯函数（单测直接覆盖）。
      *
      * @param manifest 可用更新的清单（版本号 + 变更日志）。
      */
@@ -206,9 +231,7 @@ public class StartupUpdateCheck implements ProjectActivity {
             }
             changeNotesHtml = sb.append("</ol>").toString();
         }
-        String giteeLink = "<br>\n<a href=\"" + UpdateSource.GITEE_RELEASES_URL + "\">"
-            + MpSqlVisualizerBundle.message("update.notification.viewGitee") + "</a>";
-        return versionLine + "<br>" + changeNotesHtml + giteeLink;
+        return versionLine + "<br>" + changeNotesHtml;
     }
 
     /** 剥离行首版本号前缀（`v2026.8.15：` / `2026.8.15:`，容忍有无 v 与中英文冒号）。 */

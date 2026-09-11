@@ -165,6 +165,11 @@ public class SqlLogAutoSaver {
                 String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH)
                         .format(new Date(entry.timestamp()));
                 w.write("-- source: " + source + " | time: " + duration + " | " + timestamp + " --\n");
+                // T-HistParam F1：参数持久化——params 非空或 rawSql 含 `?`（绑定行缺失未识别条目）时，
+                // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）
+                if (!entry.params().isEmpty() || LogEntryPreviewRecognizerKt.countPlaceholders(entry.rawSql()) > 0) {
+                    w.write("-- pd: " + SqlLogParamCodec.encode(entry.rawSql(), entry.params()) + " --\n");
+                }
                 w.write(SqlLogPanelKt.withTerminator(entry.restoredSql()));
                 w.write("\n\n");
                 w.flush();
