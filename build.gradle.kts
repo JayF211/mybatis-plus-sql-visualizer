@@ -1,4 +1,6 @@
 import java.time.LocalDate
+import java.net.InetSocketAddress
+import java.net.Socket
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.jvm.tasks.Jar
 import org.gradle.process.CommandLineArgumentProvider
@@ -189,6 +191,7 @@ tasks.withType<Jar>().configureEach {
     }
     outputs.upToDateWhen { false }
 }
+
 tasks {
     // T-M31.9：消除 runIde 启动日志的 RegionUrlMapper SecurityException: setContextClassLoader 噪音。
     // 根因：发行版 vmoptions 的 -Djava.security.manager=CoreBootstrapSecurityManager 使 JDK 21 common
@@ -208,6 +211,23 @@ tasks {
         from(compilePlainFjpf.map { it.destinationDirectory })
         destinationDirectory.set(layout.buildDirectory.dir("plain-fjpf"))
         archiveFileName.set("plain-fjpf.jar")
+    }
+    // 热替换本地服务清理（runIdeHotSwap 的 finalizedBy——IDE 关闭/崩溃/任务失败都执行；
+    // 只杀 pid 文件记录的自有进程，用户手动起的服务不接管、不误杀）。也可手动单独执行。
+    register("hotswapServerStop") {
+        // 配置缓存约束：任务动作内不得引用脚本对象——pid 路径在配置期解析为 File
+        val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
+        doLast {
+            val pid = pidFile.takeIf { it.isFile }?.readText()?.trim().orEmpty()
+            if (pid.isNotEmpty()) {
+                val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+                val cmd = if (isWindows) listOf("taskkill", "/F", "/T", "/PID", pid) else listOf("kill", pid)
+                runCatching { ProcessBuilder(cmd).start().waitFor() }
+                    .onFailure { logger.warn("hotswap server stop failed: ${it.message}") }
+                logger.lifecycle("hotswap local server (pid=$pid) stopped")
+            }
+            runCatching { pidFile.delete() }
+        }
     }
     runIde {
         autoReload = true
@@ -426,6 +446,9 @@ intellijPlatformTesting {
     //「解包中途」触发并发重载，与 EDT 卸载/装载序列竞态（卸载失败 → 测试假阴性）。
     // 沙盒插件是 jar-copy 安装（非 build/classes 直载），dev 守卫正常放行；
     // 验证后重置：删 .intellijPlatform/hotswap-sandbox 或重跑本任务（prepareSandbox 覆盖插件目录）。
+    // 本地服务随任务生命周期自动起停：doFirst 起 hotswap-local-server.py（端口 8919 被占则
+    // 复用不接管——pid 文件留空，清理任务即无害空转）；finalizedBy 清理保证 IDE 正常关闭、
+    // 崩溃、任务失败三条出口都停服务，且只杀自己起的进程（按 pid 文件）。
     runIde {
         register("runIdeHotSwap") {
             sandboxDirectory.set(layout.projectDirectory.dir(".intellijPlatform/hotswap-sandbox"))
@@ -444,6 +467,46 @@ intellijPlatformTesting {
                 if (!manifestUrl.isNullOrBlank()) {
                     systemProperty("mpvs.update.manifest.url", manifestUrl)
                 }
+                // 本地服务随任务生命周期自动起停：doFirst 起 hotswap-local-server.py（端口被占
+                // 则复用不接管——pid 文件留空，清理任务即无害空转）；finalizedBy 清理保证 IDE
+                // 正常关闭、崩溃、任务失败三条出口都停服务，且只杀自己起的进程（按 pid 文件）。
+                // 配置缓存约束：路径在配置期解析为 File，doFirst 不引用脚本对象/布局访问器。
+                val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
+                val logFile = layout.buildDirectory.file("hotswap-server.log").get().asFile
+                val scriptFile = rootProject.file("dev-support/hotswap-local-server.py")
+                doFirst {
+                    // 端口须与 .run/runIdeLocalManifest.run.xml 清单 URL 及脚本默认值一致
+                    val port = 8919
+                    fun listening() = runCatching {
+                        Socket().use { socket ->
+                            socket.connect(InetSocketAddress("localhost", port), 500)
+                            true
+                        }
+                    }.getOrDefault(false)
+                    if (listening()) {
+                        logger.lifecycle("hotswap local server already listening on $port — reusing (not owned, left running at exit)")
+                        pidFile.writeText("")
+                        return@doFirst
+                    }
+                    if (!scriptFile.isFile) throw GradleException("hotswap-local-server.py not found: $scriptFile")
+                    val proc = ProcessBuilder("python", scriptFile.absolutePath)
+                        .redirectOutput(logFile)
+                        .redirectErrorStream(true)
+                        .start()
+                    pidFile.writeText(proc.pid().toString())
+                    val deadline = System.currentTimeMillis() + 20_000
+                    while (System.currentTimeMillis() < deadline) {
+                        if (listening()) {
+                            logger.lifecycle("hotswap local server started (pid=${proc.pid()}, log=$logFile)")
+                            return@doFirst
+                        }
+                        if (!proc.isAlive) throw GradleException("hotswap server exited during startup — see $logFile")
+                        Thread.sleep(300)
+                    }
+                    runCatching { proc.destroy() }
+                    throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
+                }
+                finalizedBy("hotswapServerStop")
             }
         }
     }
