@@ -122,4 +122,63 @@ class DynamicInstallSupportTest {
         val result = DynamicInstallSupport.validateArtifact(zip)
         assertEquals("2026.9.11-beta.2", (result as DynamicInstallSupport.ArtifactCheck.Ok).version)
     }
+
+    // ---------------- 平台签名漂移弹性匹配（262 实测修复） ----------------
+
+    /** 模拟 243 形态：单参取基类。 */
+    @Suppress("unused")
+    private class FakePluginsBase {
+        fun unloadPlugin(p: BaseDescriptor): Boolean = true
+        fun unloadPlugin(p: BaseDescriptor, o: Options): Boolean = true
+    }
+
+    /** 模拟 262 形态：单参取子类（IdeaPluginDescriptorImpl → PluginMainDescriptor 漂移）。 */
+    @Suppress("unused")
+    private class FakePluginsSub {
+        fun unloadPlugin(p: SubDescriptor): Boolean = true
+        fun unloadPlugin(p: SubDescriptor, o: Options): Boolean = true
+    }
+
+    /** 模拟未来形态：仅剩双参。 */
+    @Suppress("unused")
+    private class FakePluginsTwoOnly {
+        fun unloadPlugin(p: SubDescriptor, o: Options): Boolean = true
+    }
+
+    private open class BaseDescriptor
+    private class SubDescriptor : BaseDescriptor()
+    private class Options
+
+    @Test
+    fun resolveMethodAcceptsBaseFirstParam() {
+        val m = DynamicInstallSupport.resolveMethodByFirstParam(
+            FakePluginsBase::class.java, "unloadPlugin", BaseDescriptor::class.java,
+        )
+        assertEquals(1, m?.parameterTypes?.size)
+    }
+
+    @Test
+    fun resolveMethodAcceptsSubFirstParam() {
+        // 262 漂移：首参为描述类的子类——可赋值任一方向即命中
+        val m = DynamicInstallSupport.resolveMethodByFirstParam(
+            FakePluginsSub::class.java, "unloadPlugin", BaseDescriptor::class.java,
+        )
+        assertEquals(1, m?.parameterTypes?.size)
+    }
+
+    @Test
+    fun resolveMethodPrefersFewestParams() {
+        val m = DynamicInstallSupport.resolveMethodByFirstParam(
+            FakePluginsTwoOnly::class.java, "unloadPlugin", BaseDescriptor::class.java,
+        )
+        assertEquals(2, m?.parameterTypes?.size)
+    }
+
+    @Test
+    fun resolveMethodReturnsNullWhenAbsent() {
+        val m = DynamicInstallSupport.resolveMethodByFirstParam(
+            FakePluginsTwoOnly::class.java, "unloadPlugin", String::class.java,
+        )
+        assertEquals(null, m)
+    }
 }

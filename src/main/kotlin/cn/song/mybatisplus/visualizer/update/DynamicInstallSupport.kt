@@ -163,6 +163,8 @@ object DynamicInstallSupport {
         private val dynamicPlugins: Any,
         private val allowLoadUnloadMethod: Method,
         private val unloadPluginMethod: Method,
+        /** 双参 unloadPlugin 形态时的默认 UnloadPluginOptions 实例（单参形态为 null）。 */
+        private val unloadPluginOptions: Any?,
         private val installAndLoadMethod: Method,
         private val loadFromArtifactMethod: Method,
         private val findPluginMethod: Method,
@@ -200,7 +202,12 @@ object DynamicInstallSupport {
             var installed = false
             ApplicationManager.getApplication().invokeAndWait({
                 unloaded = runCatching {
-                    invoke(unloadPluginMethod, dynamicPlugins, currentDescriptor) as Boolean
+                    val args = if (unloadPluginOptions != null) {
+                        arrayOf(currentDescriptor, unloadPluginOptions)
+                    } else {
+                        arrayOf(currentDescriptor)
+                    }
+                    invoke(unloadPluginMethod, dynamicPlugins, *args) as Boolean
                 }.getOrElse {
                     LOG.warn("unloadPlugin reflective call failed: ${it.message}")
                     false
@@ -265,10 +272,24 @@ object DynamicInstallSupport {
                     ?.also { it.isAccessible = true }
                     ?: error("$name(${params.joinToString { it.simpleName }}) not found on ${clazz.name}")
 
+            // unloadPlugin 首参类型跨版本漂移：243=IdeaPluginDescriptorImpl、262=其子类
+            // PluginMainDescriptor（262 反编译实证）——精确匹配会探测失败回退重启（实测）。
+            // 弹性匹配：首参与描述类互为可赋值即可，优先最少参数；双参形态构造 options 无参实例。
+            val unload = resolveMethodByFirstParam(dpClass, "unloadPlugin", descriptorClass)
+                ?: error("unloadPlugin(<descriptor>) not found on ${dpClass.name}")
+            val unloadOptions = if (unload.parameterTypes.size >= 2) {
+                runCatching {
+                    unload.parameterTypes[1].getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+                }.getOrElse { error("unloadPlugin options no-arg constructor unavailable: ${it.message}") }
+            } else {
+                null
+            }
+
             return PlatformApi(
                 dynamicPlugins = dynamicPlugins,
                 allowLoadUnloadMethod = method(dpClass, "allowLoadUnloadWithoutRestart", descriptorClass),
-                unloadPluginMethod = method(dpClass, "unloadPlugin", descriptorClass),
+                unloadPluginMethod = unload.also { it.isAccessible = true },
+                unloadPluginOptions = unloadOptions,
                 installAndLoadMethod = method(
                     installerClass,
                     "installAndLoadDynamicPlugin",
@@ -286,4 +307,19 @@ object DynamicInstallSupport {
             )
         }
     }
+
+    /**
+     * 按方法名 + 首参兼容性解析（纯函数，单测直接覆盖）：首参与 [firstParamBase]
+     * 互为可赋值（任一方向）即命中，优先参数最少者。unloadPlugin 的参数类型在
+     * 243/262 间漂移（IdeaPluginDescriptorImpl → PluginMainDescriptor 子类），
+     * 精确签名匹配在 262 实测探测失败。
+     */
+    internal fun resolveMethodByFirstParam(clazz: Class<*>, name: String, firstParamBase: Class<*>): Method? =
+        clazz.methods
+            .filter {
+                it.name == name && it.parameterTypes.isNotEmpty() &&
+                    (firstParamBase.isAssignableFrom(it.parameterTypes[0]) ||
+                        it.parameterTypes[0].isAssignableFrom(firstParamBase))
+            }
+            .minByOrNull { it.parameterTypes.size }
 }
