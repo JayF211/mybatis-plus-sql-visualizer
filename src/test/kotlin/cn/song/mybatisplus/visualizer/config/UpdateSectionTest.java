@@ -96,12 +96,25 @@ public class UpdateSectionTest extends BasePlatformTestCase {
     public void testRenderInstalled() throws Exception {
         UpdateManifest manifest = new UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null);
         section.renderCheck(new PluginUpdateRunner.CheckResult.Available(manifest));
-        section.renderInstall(PluginUpdateRunner.InstallResult.Installed.INSTANCE);
+        section.renderInstall(PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE);
 
         assertEquals(UpdateSection.State.Installed, section.getState());
         assertEquals(MpSqlVisualizerBundle.message("settings.update.installed"), section.getStatusLabel().getText());
         // 重启提示与重启按钮可见；安装/检查按钮不可再操作
         assertTrue(section.getRestartButton().isVisible());
+        assertFalse(section.getInstallButton().isVisible());
+        assertFalse(section.getCheckButton().isEnabled());
+    }
+
+    public void testRenderInstalledLive() throws Exception {
+        // T-DynUpdate：动态热替换成功 → InstalledLive 态——免重启文案，无重启按钮
+        UpdateManifest manifest = new UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null);
+        section.renderCheck(new PluginUpdateRunner.CheckResult.Available(manifest));
+        section.renderInstall(new PluginUpdateRunner.InstallResult.InstalledDynamic("2026.9.11-beta.1"));
+
+        assertEquals(UpdateSection.State.InstalledLive, section.getState());
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.installedLive"), section.getStatusLabel().getText());
+        assertFalse(section.getRestartButton().isVisible());
         assertFalse(section.getInstallButton().isVisible());
         assertFalse(section.getCheckButton().isEnabled());
     }
@@ -162,7 +175,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         final int[] calls = {0};
         section.setInstallRunner((manifest, indicator) -> {
             calls[0]++;
-            return PluginUpdateRunner.InstallResult.Installed.INSTANCE;
+            return PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE;
         });
         section.renderCheck(new PluginUpdateRunner.CheckResult.Available(
                 new UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)));
@@ -181,7 +194,7 @@ public class UpdateSectionTest extends BasePlatformTestCase {
         });
         section.renderCheck(new PluginUpdateRunner.CheckResult.Available(
                 new UpdateManifest("1.0", "https://x/p.zip", null, null, null)));
-        section.renderInstall(PluginUpdateRunner.InstallResult.Installed.INSTANCE);
+        section.renderInstall(PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE);
         section.getRestartButton().doClick();
         assertEquals(1, restarts[0]);
     }

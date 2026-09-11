@@ -162,4 +162,39 @@ public class SqlLogHistoryRoundTripTest {
         assertEquals(0, SqlLogFileReader.INSTANCE.readAll(dir.getAbsolutePath()).size());
         assertEquals(0, SqlLogFileReader.INSTANCE.countInFile(new File(dir, "not-exists.sql")));
     }
+
+    @Test
+    public void 真实链路_带参数条目写读回环_历史页参数识别与日志页一致() throws Exception {
+        // T-HistParam：捕获条目（rawSql + params）→ 自动落盘 → 历史面板读回 →
+        // 统一识别通道（toPreviewResult）产出与日志页相同的参数形态
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(new LogSqlEntry(
+                "SELECT * FROM user WHERE id = ? AND name = ?",
+                "SELECT * FROM user WHERE id = 42 AND name = 'neo'",
+                List.of(new LogSqlParam("42", "Long"), new LogSqlParam("neo", "String")),
+                1724567890000L,
+                "src/main/java/com/example/mapper/UserMapper.java",
+                42,
+                5L));
+        saver.close();
+
+        File[] files = dir.listFiles(f -> f.getName().endsWith("sql"));
+        assertEquals(1, files.length);
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(files[0]).get(0);
+        assertEquals("rawSql 回环", "SELECT * FROM user WHERE id = ? AND name = ?", read.rawSql());
+        assertEquals("restoredSql 回环", "SELECT * FROM user WHERE id = 42 AND name = 'neo'", read.restoredSql());
+        assertEquals(2, read.params().size());
+
+        // 历史页预览构建（formatSql=false 现状）与日志页识别通道同源
+        cn.song.mybatisplus.visualizer.model.PreviewResult result =
+                LogEntryPreviewRecognizerKt.toPreviewResult(read, false, true);
+        assertEquals(List.of("param1", "param2"), result.getUnresolvedParams());
+        assertEquals(java.util.Map.of("param1", "42", "param2", "neo"), result.getInitialParamValues());
+        assertEquals(
+                List.of(Boolean.FALSE, Boolean.TRUE),
+                result.getParamHints().stream().map(h -> h.getQuote()).collect(Collectors.toList()));
+        assertNull(result.getWarning());
+    }
 }

@@ -239,4 +239,68 @@ public class SqlLogFileReaderTest {
         assertEquals(0, SqlLogFileReader.INSTANCE.countInFile(file));
         assertEquals(0, SqlLogFileReader.INSTANCE.countInFile(new File(dir, "missing.sql")));
     }
+
+    // ------------------------------------------------------------------
+    // 格式 v2：参数持久化行（T-HistParam）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void v2带参数行读回_rawSql与params还原_restoredSql为正文() throws Exception {
+        String payload = SqlLogParamCodec.encode(
+                "SELECT * FROM t WHERE a = ? AND b = ?",
+                java.util.List.of(new LogSqlParam("x", "String"), new LogSqlParam(null, "BIGINT")));
+        File dir = Files.createTempDirectory("histparam-v2-").toFile();
+        dir.deleteOnExit();
+        File file = new File(dir, "v2.sql");
+        Files.writeString(file.toPath(),
+                "-- source: A.java:1 | time: 1ms | 2026-09-11 09:00:00.000 --\n" +
+                        "-- pd: " + payload + " --\n" +
+                        "SELECT * FROM t WHERE a = 'x' AND b = NULL\n\n");
+        java.util.List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(file);
+        assertEquals(1, entries.size());
+        assertEquals("rawSql 从载荷还原（含 ?）", "SELECT * FROM t WHERE a = ? AND b = ?", entries.get(0).rawSql());
+        assertEquals("restoredSql 为正文（剥结尾分号）", "SELECT * FROM t WHERE a = 'x' AND b = NULL", entries.get(0).restoredSql());
+        assertEquals("params 从载荷还原",
+                java.util.List.of(new LogSqlParam("x", "String"), new LogSqlParam(null, "BIGINT")),
+                entries.get(0).params());
+        // 读回条目可直接走统一识别通道（与日志 tab 同参）
+        assertTrue(LogEntryPreviewRecognizerKt.toRecognizedPreview(entries.get(0)).recognized());
+    }
+
+    @Test
+    public void v2损坏参数行降级为正文注释行() throws Exception {
+        File dir = Files.createTempDirectory("histparam-bad-").toFile();
+        dir.deleteOnExit();
+        File file = new File(dir, "bad.sql");
+        Files.writeString(file.toPath(),
+                "-- source: A.java:1 | time: 1ms | 2026-09-11 09:00:00.000 --\n" +
+                        "-- pd: !!!not-base64!!! --\n" +
+                        "SELECT 1\n\n");
+        java.util.List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(file);
+        assertEquals(1, entries.size());
+        assertEquals("解码失败 pd 行留在正文（多一行注释无害）",
+                "-- pd: !!!not-base64!!! --\nSELECT 1", entries.get(0).restoredSql());
+        assertEquals("-- pd: !!!not-base64!!! --\nSELECT 1", entries.get(0).rawSql());
+        assertTrue(entries.get(0).params().isEmpty());
+    }
+
+    @Test
+    public void v2参数行不参与头部计数与块切分() throws Exception {
+        String payload = SqlLogParamCodec.encode("SELECT ?", java.util.List.of(new LogSqlParam("1", "Long")));
+        File dir = Files.createTempDirectory("histparam-count-").toFile();
+        dir.deleteOnExit();
+        File file = new File(dir, "mixed.sql");
+        Files.writeString(file.toPath(),
+                "-- source: A.java:1 | time: 1ms | 2026-09-11 09:00:00.000 --\n" +
+                        "-- pd: " + payload + " --\n" +
+                        "SELECT '1'\n\n" +
+                        "-- 2026-09-11 08:00:00\n" +
+                        "SELECT 2\n\n");
+        // pd 行以 `-- ` 起始且无 `source:`——不排除会被旧头部判据误判，计数翻倍且块被劈开
+        assertEquals("countInFile 不计 pd 行", 2, SqlLogFileReader.INSTANCE.countInFile(file));
+        java.util.List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(file);
+        assertEquals("pd 行不劈块：v2 条目 + F-43 条目", 2, entries.size());
+        assertEquals("SELECT '1'", entries.get(0).restoredSql());
+        assertEquals("SELECT 2", entries.get(1).restoredSql());
+    }
 }

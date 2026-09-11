@@ -51,14 +51,15 @@ class StartupUpdateCheckTest {
     }
 
     @Test
-    fun notificationContentWithNoChangeNotesShowsVersionLineAndGiteeLink() {
-        // 无变更日志时：只显示版本号行 + Gitee 链接（无空 <ol>）
+    fun notificationContentWithNoChangeNotesShowsVersionLineWithoutLink() {
+        // 无变更日志时：只显示版本号行（无空 <ol>）；T-DynUpdate：正文不再内嵌 Gitee 链接——
+        // Gitee 入口收敛为动作行「查看 Gitee 发布页」按钮，正文内嵌链接与动作行重复（用户实测）
         val manifest = UpdateManifest("2026.8.22", "https://example.com/p.zip", null, null, null)
         val content = StartupUpdateCheck.notificationContent(manifest)
         val expectedVersionLine = MpSqlVisualizerBundle.message("update.notification.versionLine", "2026.8.22")
         assertTrue("应以版本号行开头", content.startsWith(expectedVersionLine))
         assertFalse("无变更日志时不应渲染空列表", content.contains("<ol>"))
-        assertTrue("应包含 Gitee 链接", content.contains("href="))
+        assertFalse("正文不应再内嵌 Gitee 链接（动作行已有）", content.contains("href="))
     }
 
     @Test

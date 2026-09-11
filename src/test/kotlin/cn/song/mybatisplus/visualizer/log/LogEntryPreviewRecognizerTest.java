@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.log;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
@@ -168,5 +170,34 @@ public class LogEntryPreviewRecognizerTest {
                 Map.of("param1", "1", "param2", "2", "param3", "3"),
                 recognized.initialValues());
         assertTrue(recognized.paramHints().stream().allMatch(p -> p.getQuote() == Boolean.FALSE));
+    }
+
+    // ------------------------------------------------------------------
+    // toPreviewResult 统一识别通道（T-HistParam F3）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void toPreviewResult三级分流语义() throws Exception {
+        // 1. 占位符匹配识别：参数行 + 预填 + 无警告
+        cn.song.mybatisplus.visualizer.model.PreviewResult recognized =
+                LogEntryPreviewRecognizerKt.toPreviewResult(
+                        entry("SELECT * FROM t WHERE username = ?", List.of(new LogSqlParam("admin", "String"))),
+                        false, true);
+        assertEquals(List.of("param1"), recognized.getUnresolvedParams());
+        assertEquals(Map.of("param1", "admin"), recognized.getInitialParamValues());
+        assertNull("识别成功无警告", recognized.getWarning());
+
+        // 2. 零占位符零字面量：回退现状、无警告（纯静态 SQL）
+        cn.song.mybatisplus.visualizer.model.PreviewResult staticResult =
+                LogEntryPreviewRecognizerKt.toPreviewResult(entry("SELECT 1 FROM t", List.of()), false, true);
+        assertTrue(staticResult.getUnresolvedParams().isEmpty());
+        assertNull("零 ? 回退无警告", staticResult.getWarning());
+
+        // 3. 有占位符但缺绑定行：现状警告分流保留（不进字面量恢复）
+        cn.song.mybatisplus.visualizer.model.PreviewResult noBinding =
+                LogEntryPreviewRecognizerKt.toPreviewResult(
+                        entry("SELECT * FROM t WHERE a = ?", List.of()), false, true);
+        assertTrue(noBinding.getUnresolvedParams().isEmpty());
+        assertNotNull("缺绑定行应有引导警告", noBinding.getWarning());
     }
 }

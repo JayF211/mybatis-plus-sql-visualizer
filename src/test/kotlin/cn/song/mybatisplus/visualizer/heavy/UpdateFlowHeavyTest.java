@@ -117,10 +117,10 @@ public class UpdateFlowHeavyTest extends HeavyPlatformTestCase {
                 },
                 (Path path) -> {
                     installCalled[0] = true;
-                    return PluginUpdateRunner.InstallResult.Installed.INSTANCE;
+                    return PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE;
                 });
         assertTrue("下载与校验通过后应触达安装入口（守卫不再误拒 null descriptorPath）", installCalled[0]);
-        assertEquals(PluginUpdateRunner.InstallResult.Installed.INSTANCE, install);
+        assertEquals(PluginUpdateRunner.InstallResult.InstalledRestartRequired.INSTANCE, install);
 
         assertEquals("清单应被拉取 1 次", 1, manifestHits.get());
         assertEquals("插件包应被下载 1 次", 1, zipHits.get());

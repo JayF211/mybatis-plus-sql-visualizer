@@ -78,9 +78,9 @@ public class PluginUpdateRunnerTest {
                         (url, target) -> { try { copyTo(zip, target); } catch (java.io.IOException e) { throw new RuntimeException(e); } },
                         path -> {
                             installCalled[0] = true;
-                            return InstallResult.Installed.INSTANCE;
+                            return InstallResult.InstalledRestartRequired.INSTANCE;
                         }));
-        assertEquals(InstallResult.Installed.INSTANCE, result);
+        assertEquals(InstallResult.InstalledRestartRequired.INSTANCE, result);
         assertTrue(installCalled[0]);
     }
 
@@ -98,7 +98,7 @@ public class PluginUpdateRunnerTest {
                         }
                         tempFiles.add(target.toFile());
                     },
-                    path -> InstallResult.Installed.INSTANCE);
+                    path -> InstallResult.InstalledRestartRequired.INSTANCE);
             assertTrue(tempFiles.stream().allMatch(f -> !f.exists()));
         } finally {
             FileUtil.delete(tempDir);
@@ -131,7 +131,7 @@ public class PluginUpdateRunnerTest {
                 },
                 path -> {
                     installCalled[0] = true;
-                    return InstallResult.Installed.INSTANCE;
+                    return InstallResult.InstalledRestartRequired.INSTANCE;
                 });
         assertTrue(result instanceof InstallResult.Failed);
         assertFalse(installCalled[0]);
@@ -142,7 +142,7 @@ public class PluginUpdateRunnerTest {
         InstallResult result = PluginUpdateRunner.downloadAndInstall(manifest, null,
                 (url, target) -> {
                 },
-                path -> InstallResult.Installed.INSTANCE);
+                path -> InstallResult.InstalledRestartRequired.INSTANCE);
         assertTrue(result instanceof InstallResult.Failed);
     }
 

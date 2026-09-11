@@ -265,4 +265,57 @@ public class SqlLogAutoSaverTest {
         assertEquals("sql-history-2026-09-05.sql", saver.currentFile().getName());
         saver.close();
     }
+
+    // ------------------------------------------------------------------
+    // 格式 v2：参数持久化行（T-HistParam）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void 带参数条目写参数行_纯静态不写() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "test.sql", null);
+        saver.write(new LogSqlEntry(
+                "SELECT * FROM t WHERE a = ?",
+                "SELECT * FROM t WHERE a = 'x'",
+                List.of(new LogSqlParam("x", "String")),
+                1724567890000L));
+        saver.write(entry("SELECT 1"));
+        saver.close();
+        String content = Files.readString(new File(dir, "test.sql").toPath());
+        java.util.List<String> blocks = java.util.Arrays.stream(content.split("-- source:")).skip(1).collect(java.util.stream.Collectors.toList());
+        assertEquals(2, blocks.size());
+        String withParams = blocks.get(0);
+        String staticBlock = blocks.get(1);
+        assertTrue("带参条目应有 pd 行: " + withParams, withParams.contains("\n-- pd: "));
+        assertFalse("纯静态条目不应有 pd 行: " + staticBlock, staticBlock.contains("-- pd: "));
+        // 正文仍是可执行 SQL（restoredSql）
+        assertTrue(withParams.contains("SELECT * FROM t WHERE a = 'x'"));
+
+        // 读回 round-trip：rawSql/params 还原，识别通道可用
+        java.util.List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(new File(dir, "test.sql"));
+        assertEquals(2, entries.size());
+        assertEquals("SELECT * FROM t WHERE a = ?", entries.get(0).rawSql());
+        assertEquals(List.of(new LogSqlParam("x", "String")), entries.get(0).params());
+        assertEquals("SELECT * FROM t WHERE a = 'x'", entries.get(0).restoredSql());
+        assertTrue(LogEntryPreviewRecognizerKt.toRecognizedPreview(entries.get(0)).recognized());
+        assertEquals("SELECT 1", entries.get(1).rawSql());
+        assertTrue(entries.get(1).params().isEmpty());
+    }
+
+    @Test
+    public void 绑定行缺失的占位符条目也写参数行() throws Exception {
+        // params 空但 rawSql 含 ?：历史页重试识别需要 rawSql 的占位符形态
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "test.sql", null);
+        saver.write(new LogSqlEntry(
+                "SELECT * FROM t WHERE a = ?",
+                "SELECT * FROM t WHERE a = ?",
+                List.<LogSqlParam>of(),
+                1724567890000L));
+        saver.close();
+        String content = Files.readString(new File(dir, "test.sql").toPath());
+        assertTrue("应写 pd 行: " + content, content.contains("\n-- pd: "));
+    }
 }

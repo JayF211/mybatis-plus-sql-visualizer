@@ -391,6 +391,30 @@ public class SqlReverseParserTest {
     }
 
     @Test
+    public void 括号组内单条件_解包不产生Group() throws Exception {
+        // T-ReverseParenWira：MPJ 渲染自带括号（ON (x=y)、WHERE (x=1)），单条件括号
+        // 无语义增量 → 解包。否则 ON 侧 extractJoinKey 认不出列对致 MPJ lambda 退化，
+        // WHERE 侧多渲染一层 nested
+        SqlReverseResult result = parse("SELECT * FROM t WHERE (t.id = 1)");
+        assertEquals(1, result.conditions().size());
+        assertTrue(result.conditions().get(0) instanceof Condition.Simple);
+
+        SqlReverseResult on = parse("SELECT * FROM a t LEFT JOIN b st ON (st.station_id = t.id)");
+        java.util.List<Condition> onConditions = on.joins().get(0).onConditions();
+        assertEquals(1, onConditions.size());
+        assertTrue(onConditions.get(0) instanceof Condition.ColumnComparison);
+    }
+
+    @Test
+    public void NOT单条件括号_保留negated组() throws Exception {
+        // 解包例外：NOT (a = 1) 的 negated 标记须由 Group 承载
+        SqlReverseResult result = parse("SELECT * FROM t WHERE NOT (a = 1)");
+        Condition.Group group = (Condition.Group) result.conditions().get(0);
+        assertTrue(group.getNegated());
+        assertEquals(1, group.getChildren().size());
+    }
+
+    @Test
     public void NOT括号组_negated标记() throws Exception {
         SqlReverseResult result = parse("SELECT * FROM t WHERE NOT (a = 1 OR b = 2)");
         Condition.Group group = (Condition.Group) result.conditions().get(0);
