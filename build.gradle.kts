@@ -1,4 +1,6 @@
 import java.time.LocalDate
+import java.net.InetSocketAddress
+import java.net.Socket
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.jvm.tasks.Jar
 import org.gradle.process.CommandLineArgumentProvider
@@ -229,6 +231,23 @@ tasks {
         destinationDirectory.set(layout.buildDirectory.dir("plain-fjpf"))
         archiveFileName.set("plain-fjpf.jar")
     }
+    // 热替换本地服务清理（runIdeHotSwap 的 finalizedBy——IDE 关闭/崩溃/任务失败都执行；
+    // 只杀 pid 文件记录的自有进程，用户手动起的服务不接管、不误杀）。也可手动单独执行。
+    register("hotswapServerStop") {
+        // 配置缓存约束：任务动作内不得引用脚本对象——pid 路径在配置期解析为 File
+        val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
+        doLast {
+            val pid = pidFile.takeIf { it.isFile }?.readText()?.trim().orEmpty()
+            if (pid.isNotEmpty()) {
+                val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+                val cmd = if (isWindows) listOf("taskkill", "/F", "/T", "/PID", pid) else listOf("kill", pid)
+                runCatching { ProcessBuilder(cmd).start().waitFor() }
+                    .onFailure { logger.warn("hotswap server stop failed: ${it.message}") }
+                logger.lifecycle("hotswap local server (pid=$pid) stopped")
+            }
+            runCatching { pidFile.delete() }
+        }
+    }
     runIde {
         autoReload = true
         dependsOn(plainFjpfJar)
@@ -239,11 +258,54 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
-        // 本地清单测试：-Dmpvs.update.manifest.url=... 转发到沙盒 IDE 的 systemProperty（不影响 Gitee 用户）
-        val manifestUrl = System.getProperty("mpvs.update.manifest.url")
-        if (!manifestUrl.isNullOrBlank()) {
-            systemProperty("mpvs.update.manifest.url", manifestUrl)
+        // T-DynUpdate：本地清单服务自动起停与 runIdeHotSwap 同款——IDE 内存里可能残留指向
+        // 本任务的旧运行配置（实证 12:48 用户点到旧配置跑 :runIde），两任务都挂保证点哪个都通。
+        // autoReload 保留开发热重载语义：热替换后平台自动重载器可能把新版再重载一次，无害。
+        // 配置缓存约束：路径配置期解析为 File，doFirst 不引用脚本对象。
+        val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
+        val logFile = layout.buildDirectory.file("hotswap-server.log").get().asFile
+        val scriptFile = rootProject.file("dev-support/hotswap-local-server.py")
+        doFirst {
+            // 端口须与 .run/runIdeLocalManifest.run.xml 清单 URL 及脚本默认值一致
+            val port = 8919
+            fun listening() = runCatching {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("localhost", port), 500)
+                    true
+                }
+            }.getOrDefault(false)
+            if (listening()) {
+                logger.lifecycle("hotswap local server already listening on $port — reusing (not owned, left running at exit)")
+                pidFile.writeText("")
+                return@doFirst
+            }
+            if (!scriptFile.isFile) throw GradleException("hotswap-local-server.py not found: $scriptFile")
+            val proc = ProcessBuilder("python", scriptFile.absolutePath)
+                .redirectOutput(logFile)
+                .redirectErrorStream(true)
+                .start()
+            pidFile.writeText(proc.pid().toString())
+            val deadline = System.currentTimeMillis() + 20_000
+            while (System.currentTimeMillis() < deadline) {
+                if (listening()) {
+                    logger.lifecycle("hotswap local server started (pid=${proc.pid()}, log=$logFile)")
+                    return@doFirst
+                }
+                if (!proc.isAlive) throw GradleException("hotswap server exited during startup — see $logFile")
+                Thread.sleep(300)
+            }
+            runCatching { proc.destroy() }
+            throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
         }
+        finalizedBy("hotswapServerStop")
+        // 清单 URL 转发必须在执行期读——配置期 System.getProperty 被配置缓存冻结
+        //（runIdeHotSwap 同款修复，见该任务注释）
+        jvmArgumentProviders.add(CommandLineArgumentProvider {
+            System.getProperty("mpvs.update.manifest.url")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { listOf("-Dmpvs.update.manifest.url=$it") }
+                ?: emptyList<String>()
+        })
     }
 
     // 本地清单测试集成见 dev-support/run-ide-local-manifest.sh（自动起/停 Python 服务器）
@@ -257,6 +319,14 @@ tasks {
     // 保留全部版本标题，按时间倒序排列（最新在前）。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.11</h2>
+            <ul>
+                <li>自更新免重启热替换</li>
+                <li>SQL 历史页参数识别丢失根治</li>
+                <li>无占位符 SQL 字面量参数恢复</li>
+                <li>262 平台热替换探测失败回退修复</li>
+                <li>更新通知入口去重与卸载警告缓解</li>
+            </ul>
             <h2>v2026.9.10</h2>
             <ul>
                 <li>双击日志预览弹窗加载卡顿根治</li>
@@ -440,6 +510,80 @@ val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
 
 intellijPlatformTesting {
+    // T-DynUpdate 热替换本地验证沙盒（配套 dev-support/hotswap-local-server.py 与
+    // .run/runIdeLocalManifest.run.xml）：与开发 runIde 沙盒隔离，验证自更新免重启全链
+    //（本地清单 → 下载 → DynamicInstallSupport 卸载旧版+装载新版）。
+    // autoReload 必须关闭——插件自动重载器监听 plugins 目录文件变化，会在热替换的
+    //「解包中途」触发并发重载，与 EDT 卸载/装载序列竞态（卸载失败 → 测试假阴性）。
+    // 沙盒插件是 jar-copy 安装（非 build/classes 直载），dev 守卫正常放行；
+    // 验证后重置：删 .intellijPlatform/hotswap-sandbox 或重跑本任务（prepareSandbox 覆盖插件目录）。
+    // 本地服务随任务生命周期自动起停：doFirst 起 hotswap-local-server.py（端口 8919 被占则
+    // 复用不接管——pid 文件留空，清理任务即无害空转）；finalizedBy 清理保证 IDE 正常关闭、
+    // 崩溃、任务失败三条出口都停服务，且只杀自己起的进程（按 pid 文件）。
+    runIde {
+        register("runIdeHotSwap") {
+            task {
+                autoReload.set(false)
+                dependsOn(tasks.named("plainFjpfJar"))
+                classpath += files(layout.buildDirectory.file("plain-fjpf/plain-fjpf.jar"))
+                jvmArgumentProviders.add(CommandLineArgumentProvider {
+                    listOf(
+                        "-Djava.util.concurrent.ForkJoinPool.common.threadFactory=" +
+                            "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
+                    )
+                })
+                // 清单 URL 转发必须在执行期读（jvmArgumentProviders 每次执行求值）——配置期
+                // System.getProperty 会被配置缓存冻结：首次无 -D 的运行存下空配置，后续带
+                // -D 的运行不再转发（实证：11:21 会话 URL 已转发系旧路径，CC 风险仍在）
+                jvmArgumentProviders.add(CommandLineArgumentProvider {
+                    System.getProperty("mpvs.update.manifest.url")
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { listOf("-Dmpvs.update.manifest.url=$it") }
+                        ?: emptyList<String>()
+                })
+                // 本地服务随任务生命周期自动起停：doFirst 起 hotswap-local-server.py（端口被占
+                // 则复用不接管——pid 文件留空，清理任务即无害空转）；finalizedBy 清理保证 IDE
+                // 正常关闭、崩溃、任务失败三条出口都停服务，且只杀自己起的进程（按 pid 文件）。
+                // 配置缓存约束：路径在配置期解析为 File，doFirst 不引用脚本对象/布局访问器。
+                val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
+                val logFile = layout.buildDirectory.file("hotswap-server.log").get().asFile
+                val scriptFile = rootProject.file("dev-support/hotswap-local-server.py")
+                doFirst {
+                    // 端口须与 .run/runIdeLocalManifest.run.xml 清单 URL 及脚本默认值一致
+                    val port = 8919
+                    fun listening() = runCatching {
+                        Socket().use { socket ->
+                            socket.connect(InetSocketAddress("localhost", port), 500)
+                            true
+                        }
+                    }.getOrDefault(false)
+                    if (listening()) {
+                        logger.lifecycle("hotswap local server already listening on $port — reusing (not owned, left running at exit)")
+                        pidFile.writeText("")
+                        return@doFirst
+                    }
+                    if (!scriptFile.isFile) throw GradleException("hotswap-local-server.py not found: $scriptFile")
+                    val proc = ProcessBuilder("python", scriptFile.absolutePath)
+                        .redirectOutput(logFile)
+                        .redirectErrorStream(true)
+                        .start()
+                    pidFile.writeText(proc.pid().toString())
+                    val deadline = System.currentTimeMillis() + 20_000
+                    while (System.currentTimeMillis() < deadline) {
+                        if (listening()) {
+                            logger.lifecycle("hotswap local server started (pid=${proc.pid()}, log=$logFile)")
+                            return@doFirst
+                        }
+                        if (!proc.isAlive) throw GradleException("hotswap server exited during startup — see $logFile")
+                        Thread.sleep(300)
+                    }
+                    runCatching { proc.destroy() }
+                    throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
+                }
+                finalizedBy("hotswapServerStop")
+            }
+        }
+    }
     testIde {
         register("testShard1") {
             testFramework(TestFrameworkType.Platform)

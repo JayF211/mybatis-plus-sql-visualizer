@@ -10,10 +10,33 @@
 
 ### Fixed
 
+- **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：自动化任务跑全量测试期间宿主机默认浏览器每隔一段时间被自动拉起打开帮助在线文档——`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用/`openEditor` 抛异常走降级分支 `BrowserUtil.browse`，该 API 不经沙盒隔离直接 ShellExecute 拉起真机浏览器（沙盒 idea.log 与浏览器历史双侧实证）。修复=三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式（`isUnitTestMode`）短路只记日志
+
 - **预览点击侧边栏闪烁根治：filter 重放守卫 + EDT 慢操作消解（T-PreviewFlash）**：点击 SQL 预览图标侧边栏「SQL 日志」列表闪一次像被刷新，且每次点击 idea.log 刷 4~5 条 "Slow operations are prohibited on EDT"——根因：预览链每次覆盖写临时 SQL 文件 + VFS refresh + 方言重映射制造索引 dumb 窗口，dumb 退出时平台对控制台全文档重跑 message filter，而插件 filter 不幂等——历史行被重放入库/刷新即「闪烁」。修复：新增 `ConsoleReplayGuard` 四态重放守卫（watermark + docStamp + 行 0 文本区分流式/重放/重置/混合，反射解析失败降级直连现状语义）；`SqlPreviewPanel.createEditor` 弃 EDT 同步 VFS/findFile 改有界等待预热产物（createTempFile+refresh+findFile 全移后台线程，消除两处慢操作 SEVERE 热点）。测试：新增 `ConsoleReplayGuardTest` 6 用例
 - **三处弃用 API 换现代等价物（T-DepApi）**：`StdLanguages.JAVA` → `JavaLanguage.INSTANCE`、`FilenameIndex.getFilesByName` → `getVirtualFilesByName(name, scope)`、`Notification.setListener(URL_OPENING_LISTENER)` → `BrowseNotificationAction`（追加「查看发布页」动作）——三平台 verifyPlugin 弃用 40→38（243 5→3 / 253 8→6 / 262 40→38）、experimental 10→8；剩余四项经 javap 三平台核实无等价交集替换保留待平台演进
 - **执行临时文件失败与复制错误反馈（T-ExecCopyFix）**：① 两处「复制错误信息」按钮静默无反馈——`CopyFeedback.flashCopied` 文本按钮适配版（图标换对号 + 文案短暂换「已复制」，一次性 Timer 恢复）；② 执行失败 Failed to create temporary SQL file 零日志无法归因——`createTempPsiFile` 每个 return null 站点分级记录阶段原因，onError 文案改本地化 `execute.tempFile.failed` 携带阶段原因；冷路径 refresh 段包 `WriteIntentReadAction`（262 平台 EDT-ReadAction 同步 VFS refresh 硬抛 write-safe）；`clearPrepared` 不再清临时文件缓存（vf.isValid 守卫已兜底，原实现每次预览切换必落冷路径）
 - **预览刷新后内嵌 Database 丢失：多弹窗僵尸 rehost 监听抢共享控制台根治（T-RefreshDbSteal）**：刷新后 DBN 工具栏消失/参数不再同步右侧 SQL/执行 SQL 跑到 IDEA 控制台三症状同根——每次预览 new 一个 MODELESS 弹窗且从不关闭，旧弹窗的 rehost HierarchyListener 残活把插件级共享控制台抢回废弃面板（真机日志 6 连抢实锤）。四组修复：弹窗单例化（项目级登记表关旧开新）；监听引用入字段 detachConsole/dispose 显式移除（僵尸监听根治），去抖 skip 改单发 800ms Timer 延迟复查幂等重挂；所有权卫队 `consoleAttachedToMe` 判定，showSql/executeSql/createEditor 三处失联先 recoverConsole 重嵌、执行侧恢复未同步落地时放弃 executePrepared 防打在别人的控制台上；createEditor/releaseEditor 带栈埋点补齐真机故障期日志空窗。测试：新增 `RefreshDbStealTest` 8 用例，全量 3188/0/6 绿；真机复验清单留人工
+
+## [2026.9.11] - 2026-09-11
+
+### Added
+
+- **自更新免重启动态安装（T-DynUpdate）**：检查更新「立即安装」后新版在运行中的 IDE 内**热替换即时生效**，不再要求重启——三重交叉核实定性：插件 9/9 扩展点早已 `dynamic="true"`（262 逐条实证），旧版 M28 安装器走 `StartupActionScriptManager` 脚本路径从未尝试平台动态安装；当年「Performance Testing 插件否决动态卸载」论断经 262 反编译证伪（vetoer 只护自身且仅回放期）。定稿五入口手工编排（`loadDescriptorFromArtifact`/`findPlugin`/`allowLoadUnloadWithoutRestart`/`unloadPlugin`/`installAndLoadDynamicPlugin`），`installFromDisk` 复用路线否决（243 包私有 File 6 参 vs 262 public Path 7 参且不卸载已加载旧版）。新增 `DynamicInstallSupport` 反射门面：zip 前置校验（纯函数）→ 开发守卫 → 能力探测 → 卸载预检 → EDT 卸载旧版+装载新版，任一环节失败回退 `installRestartScript`（原 install 改名降级兜底，无中间态）；`InstallResult` 三分支 `InstalledDynamic/InstalledRestartRequired/Failed`，启动通知与设置页 `UpdateSection` 分叉 UX（热生效免重启提示），bundle 双语三键；平台侧注册审计通过零改动（父less connect 零命中、Timer 经服务 Disposable 治理、静态缓存随 classloader 同亡）
+- **零占位符 SQL 字面量参数恢复（T-HistParam 二轮）**：无 `?` 占位符的字面量 SQL 也识别出参数行——`LiteralParamRecovery` 字符串字面量全量识别；数值常量限定比较运算符/`IN`/`BETWEEN`/`VALUES` 谓词语境才识别（`LIMIT` 与投影列常量不识别，防分页 LIMIT 数字误认成参数）；反斜杠歧义片段识别器跳过熔断
+
+### Fixed
+
+- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动
+- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`（T-PreviewSlow 拆包后该断言真机兑现），被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入——262 锁实现反编译实证仅持锁为纯 Read 才抛禁嵌套异常）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）；262 真机 idea.log 复验留人工
+- **SQL 历史页参数识别丢失根治（T-HistParam）**：「SQL 历史」页打开历史条目参数识别丢失——历史文件此前不持久化参数，升级 v2 格式在语句旁以 `-- pd:` 注释行保存参数（读取自动剥离展示行、旧版插件忽略该行照常打开、新版可读全部旧文件，`SqlLogParamCodec` 编解码单点）；实时日志面板与历史面板参数识别统一走 `LogEntryPreviewRecognizer` 同一通道消除双面板分叉；pd 行排除出旧头部判据防误解析
+- **262 平台热替换探测失败回退重启（T-DynUpdate 续）**：用户日常 IDE 262 Gitee 通道实测报重启提示，日志一击定位 `unloadPlugin(IdeaPluginDescriptorImpl) not found`——**262 平台 `unloadPlugin` 首参类型从 `IdeaPluginDescriptorImpl` 漂移为其子类 `PluginMainDescriptor`**（243 仍为基类；反编译实证两形态并存，双参形态 options 有公开无参构造），精确签名匹配 262 扑空整体回退脚本路径。修复=首参弹性匹配（名称+首参互为可赋值、优先最少参数；双参形态自动构造无参 options），解析逻辑抽纯函数 `resolveMethodByFirstParam`。教训：跨平台反射入口须逐方法 javap 实际签名，反编译元数据不体现重载参数类型漂移
+- **热替换后「插件未完全卸载」警告缓解 + 更新通知入口去重**：① 动态重配置后平台 GCWatcher 观察旧类加载器数秒，仍被强引用即弹信息级警告——持有链主要是更新流程自身调用链与事件日志常驻的「立即安装」通知动作闭包；新版实例完整接管（扩展点/服务平台已清理重建），旧类加载器仅一过性内存驻留（重启即清）无功能影响。缓解=点击「立即安装」先 expire 源通知摘除最强引用（不硬屏蔽平台诊断通道）；后经用户 1GB hprof 堆转储双重核实归因收口=结构性互引非泄漏（GC 时机问题，可调 Registry `ide.plugins.unload.timeout` 放宽窗口），零代码改动。② 更新通知「查看 Gitee 发布页」正文内嵌链接与动作行按钮重复，收敛为按钮一个，测试改断言防回归
+
+### Test
+
+- **动态安装**：新增 `DynamicInstallSupportTest`（184——zip 校验/弹性首参匹配四态：基类/子类/仅双参/未命中/探测降级）、`PlatformSignatureCrossVersionTest`（97——243/253/262 三平台签名回归护栏：自动发现本机已解压发行版+各发行版自带 JBR 跑纯 Java 检查器按生产同款弹性逻辑核验动态安装五入口，任一版本任一入口漂移本地即炸；缺失版本 Assume 跳过不阻塞 CI）——反射入口绕过编译期检查与 verifyPlugin 的验证盲区制度化；`PluginUpdateRunnerTest`/`StartupUpdateCheckTest`/`UpdateSectionTest` 改判三分支安装结果
+- **历史参数**：新增 `LiteralParamRecoveryTest`（264）、`SqlLogParamCodecTest`（77）；`SqlLogFileReaderTest`（+69）/`SqlLogAutoSaverTest`（+59）/`SqlLogHistoryRoundTripTest`（+35）/`HistorySqlLogPanelPreviewTest`（+91）/`LogEntryPreviewRecognizerTest`（+30）补 v2 格式往返与统一识别通道用例
+- 本版全量 **3305/0/0/6 绿**，与基线一致零回归；免重启热替换经 runIdeHotSwap 本地离线全链沙盒实测通过（本地清单 → 下载 → zip 校验 → 卸载旧版 → 动态装载新版）
 
 ## [2026.9.10] - 2026-09-10
 
