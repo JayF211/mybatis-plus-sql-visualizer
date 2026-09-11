@@ -169,10 +169,11 @@ def drag_select(x1, y1, x2, y2, dur=0.5):
     time.sleep(0.15)
 
 
-def find_gutter_icons(region_png=None, strip_x=(455, 530), y_range=(150, 700), gap=25):
+def find_gutter_icons(region_png=None, strip_x=(95, 130), y_range=(150, 700), gap=25):
     """在已存的 region 截图（或现抓）里找插件 gutter 图标（绿色箭头+紫色Q）。
 
     返回 [(y, x)]（region 相对坐标）按 y 排序。strip_x/y_range 为 region 相对坐标。
+    修订九构图（120% 缩放+目录树关闭）下 gutter 条带位于 region 相对 x≈95~130。
     用法：goto_line 后 shot 存图 → find_gutter_icons → 选目标行的 y → click(x+277, y+25)。
     """
     import PIL.Image
@@ -248,8 +249,11 @@ def keys(*combo):
 # 要么在 Enter 后做像素检测、弹窗未关则补一次（不会误改编辑器内容）。
 # ---------------------------------------------------------------------------
 
-def open_file(query, first_row=(917, 287), wait=2.2):
-    """Ctrl+Shift+N 搜文件并双击结果首行（不按 Enter）。调用前先用 shot 核对首行即目标。"""
+def open_file(query, first_row=(930, 342), wait=2.2):
+    """Ctrl+Shift+N 搜文件并双击结果首行（不按 Enter）。调用前先用 shot 核对首行即目标。
+
+    first_row 为屏幕坐标：修订九构图（120% 缩放）下搜索弹窗首行位于 (930,342)。
+    """
     pyautogui.hotkey('ctrl', 'shift', 'n')
     time.sleep(1.2)
     typewrite(query, interval=0.04)

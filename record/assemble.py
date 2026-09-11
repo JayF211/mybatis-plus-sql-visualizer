@@ -30,6 +30,10 @@ def run(cmd):
 
 def decode_frames(mp4, workdir, fps):
     os.makedirs(workdir, exist_ok=True)
+    # 残留帧必须清掉：上次解码帧数多于本次时，旧尾帧会混入新 GIF（T4 实证）
+    for stale in os.listdir(workdir):
+        if stale.endswith(".png"):
+            os.remove(os.path.join(workdir, stale))
     run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp4,
          "-vf", f"fps={fps}", "-start_number", "0",
          os.path.join(workdir, "f%05d.png")])
