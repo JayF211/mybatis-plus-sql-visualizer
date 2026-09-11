@@ -61,12 +61,13 @@ dependencies {
         // Kotlin 规则（T-M30）：多版本支持须以最低捆绑 stdlib 为编译目标——2024.3 捆绑 stdlib 2.0.21，
         // 平台 distro 进编译 classpath 后自动满足（kotlin.stdlib.default.dependency=false 不打包 stdlib）。
         // 注：本机日常 IDE 为 Ultimate 2026.2.1，243 平台需下载（gradle.properties 已配代理）。
-        intellijIdeaUltimate("2024.3.7.1")
+        intellijIdeaUltimate("2026.2.1") // T-GifFullscreen 录制用
         testFramework(TestFrameworkType.Platform)
 
         // Add plugin dependencies for compilation here:
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
+        bundledPlugin("com.intellij.modules.jcef") // T-GifFullscreen 262 JCEF 独立插件
         // T-M24-04：XML 平台模块（XML PSI 定位语句 + XML gutter；平台 bundled，IDE 恒启用）。
         // T-M30：构建基准降至 2024.3 后 XML PSI 类在平台核心（app.jar，lib/modules 无独立模块），
         // bundledModule("intellij.xml.psi") 在 2024.3 distro 中不存在（253+ 才拆分为该模块）——移除声明，
@@ -99,6 +100,7 @@ intellijPlatform {
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索
     // 索引（其余功能不受影响）；在非中文 locale 环境可改回 true 以获得设置搜索支持。
     buildSearchableOptions = false
+    sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh") // T-GifFullscreen 独立沙盒
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
@@ -145,7 +147,7 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(24) // T-GifFullscreen // T-GifFullscreen 262 平台需 24
 }
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
