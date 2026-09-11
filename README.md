@@ -271,6 +271,17 @@ M28 起发布流程新增一步（插件设置页「检查更新」的数据源�
 
 见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 参考与致谢
+
+本插件开发过程中调研参考了以下同类插件的设计与思路（以公开资料与开源源码阅读为主，代码为自主实现），向各位作者致谢：
+
+- [MyBatisX](https://plugins.jetbrains.com/plugin/10119)（[源码](https://github.com/baomidou/MybatisX)）——Mapper/XML 导航与 SQL 补全交互范式
+- [MyBatisCodeHelperPro](https://plugins.jetbrains.com/plugin/9837)——日志转 SQL 体验与参数还原边界
+- [MyBatis Log Free](https://plugins.jetbrains.com/plugin/17898)（[源码](https://github.com/starxg/mybatis-log-plugin-free)）——控制台日志还原基础形态
+- [Mybatis Log Ultra](https://plugins.jetbrains.com/plugin/26550)——方法级分组与捕获通道工程化
+- [JTracker](https://plugins.jetbrains.com/plugin/24694)——日志调用链定位方向
+- [Cool Request](https://www.coolrequest.dev)（[源码](https://github.com/houxinlin/cool-request)，GPL-3.0）——Java agent 字节码增强的开源先例与工程化手法
+
 ## 友情插件推荐
 
 如果你也在做后端 API 开发，推荐试试 [Cool Request](https://www.coolrequest.dev)——一款 IDEA 内置的 HTTP 客户端插件，类似 Postman 但直接嵌在 IDE 里。支持 Spring Boot、Spring MVC、JAX-RS 等框架，一键发送请求、调用任意对象方法、统计 API 耗时、生成在线文档，总下载量已超百万次。
