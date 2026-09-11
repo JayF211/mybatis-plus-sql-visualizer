@@ -141,6 +141,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 竖向排列 VALUES 行尾配对列名标注开关（T-VPairAnno，默认开）。 */
     private val verticalPairAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.verticalPairAnnotation"))
 
+    /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
+    private val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
@@ -355,6 +358,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
                 addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
                 addRow(p, g, "", verticalPairAnnotationCheck.apply { text = MpSqlVisualizerBundle.message("settings.verticalPairAnnotation") })
+                addRow(p, g, "", literalParamRecoveryCheck.apply { text = MpSqlVisualizerBundle.message("settings.literalParamRecovery") })
                 addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
@@ -960,6 +964,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
             || verticalPairAnnotationCheck.isSelected != s.verticalPairAnnotation
+            || literalParamRecoveryCheck.isSelected != s.literalParamRecovery
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
             || injectTenantLineCheck.isSelected != s.injectTenantLine
@@ -1030,6 +1035,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.replaceParams = replaceParamsCheck.isSelected
             s.formatSql = formatCheck.isSelected
             s.verticalPairAnnotation = verticalPairAnnotationCheck.isSelected
+            s.literalParamRecovery = literalParamRecoveryCheck.isSelected
             s.injectLogicDelete = injectLogicDeleteCheck.isSelected
             s.logicDeleteValue = logicDeleteValueField.text.trim()
             s.injectTenantLine = injectTenantLineCheck.isSelected
@@ -1116,6 +1122,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             replaceParamsCheck.isSelected = s.replaceParams
             formatCheck.isSelected = s.formatSql
             verticalPairAnnotationCheck.isSelected = s.verticalPairAnnotation
+            literalParamRecoveryCheck.isSelected = s.literalParamRecovery
             injectLogicDeleteCheck.isSelected = s.injectLogicDelete
             logicDeleteValueField.text = s.logicDeleteValue
             injectTenantLineCheck.isSelected = s.injectTenantLine

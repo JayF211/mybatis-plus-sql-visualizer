@@ -5,7 +5,6 @@ import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -1167,52 +1166,9 @@ class SqlLogPanel(
     private fun openPreview(entry: LogSqlEntry) {
         // T-M31.14：设置开启时预览展示格式化版（多行缩进），否则原样
         val state = PluginSettings.getInstance().state
-        // T-M42：双击弹窗自动识别参数——`?` 数 == 参数数 ⇔ 匹配识别（值预填日志参数值，初始显示与现状一致）
-        val recognized = entry.toRecognizedPreview()
-        if (!recognized.recognized) {
-            // 回退现状：restoredSql + 未解析警告（参数缺失/数量不匹配/纯静态 SQL）
-            val base = withTerminator(entry.restoredSql)
-            val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
-            SqlPreviewService.showResult(
-                project,
-                PreviewResult(
-                    sql = sql,
-                    compactSql = entry.restoredSql,
-                    unresolvedParams = emptyList(),
-                    paramTable = null,
-                    wrapperType = null,
-                    tableName = null,
-                    // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
-                    // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
-                    warning = if (countPlaceholders(entry.restoredSql) > 0) {
-                        MpSqlVisualizerBundle.message(
-                            if (entry.params.isEmpty()) "log.preview.unresolvedNoBinding"
-                            else "log.preview.unresolvedWarning",
-                        )
-                    } else {
-                        null
-                    },
-                ),
-            )
-            return
-        }
-        // 识别成功：rawSql 回填参数行（param1..N + 日志值预填 + 类型引号提示），全识别无警告
-        val base = withTerminator(recognized.sql)
-        val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
-        SqlPreviewService.showResult(
-            project,
-            PreviewResult(
-                sql = sql,
-                compactSql = withTerminator(recognized.compactSql),
-                unresolvedParams = recognized.unresolvedParams,
-                paramTable = null,
-                wrapperType = null,
-                tableName = null,
-                warning = null,
-                paramHints = recognized.paramHints,
-                initialParamValues = recognized.initialValues,
-            ),
-        )
+        // T-HistParam F3：识别通道统一——与历史 tab 共用 toPreviewResult
+        // （占位符识别 / 字面量参数恢复 F4 / 回退警告分流，行为与原 openPreview 双分支逐字段一致）
+        SqlPreviewService.showResult(project, entry.toPreviewResult(formatSql = state.logFormatSql, literalRecovery = state.literalParamRecovery))
     }
 
     private fun showContextMenu(e: MouseEvent) {

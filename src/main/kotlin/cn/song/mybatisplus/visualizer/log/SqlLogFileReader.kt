@@ -32,6 +32,15 @@ object SqlLogFileReader {
     )
 
     /**
+     * 参数持久化行前缀/结尾（T-HistParam F1 格式 v2）：头部注释行之下的独立注释行，
+     * 载荷为 Base64 编码的 rawSql + params（编解码见 [SqlLogParamCodec]）。
+     * 前缀固定 `-- pd: ` 且以 ` --` 结尾——旧版头部判据（`-- ` 起始无 `source:`）会把
+     * pd 行误判为 F-43 头部导致块被劈开，块切分与计数必须显式排除。
+     */
+    private const val PD_PREFIX = "-- pd: "
+    private const val PD_SUFFIX = " --"
+
+    /**
      * 读取目录下所有 .sql 文件，返回按时间戳排序的 LogSqlEntry 列表。
      */
     fun readAll(dir: String): List<LogSqlEntry> {
@@ -63,7 +72,7 @@ object SqlLogFileReader {
                 val trimmed = line.trimStart()
                 if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
                     count++
-                } else if (line.startsWith("-- ") && !line.contains("source:")) {
+                } else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
                     count++
                 }
             }
@@ -96,8 +105,9 @@ object SqlLogFileReader {
                 flushBlock()
                 currentLines.add(line)
             }
-            // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）
-            else if (line.startsWith("-- ") && !line.contains("source:")) {
+            // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
+            // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
+            else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
                 flushBlock()
                 currentLines.add(line)
             }
@@ -114,9 +124,26 @@ object SqlLogFileReader {
         val lines = block.lines()
         if (lines.isEmpty()) return null
         val header = lines.first()
+        // T-HistParam F2：v2 头部下探测参数持久化行（`-- pd: <base64> --`），解码失败按普通
+        // 正文注释行降级（SQL 多一行注释无害）；解码成功则 rawSql 与 params 从载荷还原
+        val contentLines = lines.drop(1)
+        var bodyLines = contentLines
+        var rawSqlOverride: String? = null
+        var params: List<LogSqlParam> = emptyList()
+        contentLines.firstOrNull()?.let { first ->
+            val trimmedFirst = first.trim()
+            if (trimmedFirst.startsWith(PD_PREFIX) && trimmedFirst.endsWith(PD_SUFFIX)) {
+                SqlLogParamCodec.decode(trimmedFirst.removePrefix(PD_PREFIX).removeSuffix(PD_SUFFIX))
+                    ?.let { (raw, decodedParams) ->
+                        rawSqlOverride = raw
+                        params = decodedParams
+                        bodyLines = contentLines.drop(1)
+                    }
+            }
+        }
         // 写入端 withTerminator 会补 `;`（T-SqlDuration），读回去掉还原为原始 SQL——
         // 展示/复制路径会重新调用 withTerminator() 补回，此处只剥结尾一个
-        val sql = lines.drop(1).joinToString("\n").trim().removeSuffix(";").trim()
+        val sql = bodyLines.joinToString("\n").trim().removeSuffix(";").trim()
         if (sql.isEmpty()) return null
 
         // 尝试新版格式
@@ -128,9 +155,9 @@ object SqlLogFileReader {
             val (sourceFile, sourceLine) = parseSource(sourceStr)
             val executionTimeMs = parseDuration(timeStr)
             return LogSqlEntry(
-                rawSql = sql,
+                rawSql = rawSqlOverride ?: sql,
                 restoredSql = sql,
-                params = emptyList(),
+                params = params,
                 timestamp = timestamp,
                 sourceFile = sourceFile,
                 sourceLine = sourceLine,
@@ -143,9 +170,9 @@ object SqlLogFileReader {
             val timestampStr = mr.groupValues[1]
             val timestamp = parseTimestampOld(timestampStr) ?: return null
             return LogSqlEntry(
-                rawSql = sql,
+                rawSql = rawSqlOverride ?: sql,
                 restoredSql = sql,
-                params = emptyList(),
+                params = params,
                 timestamp = timestamp,
             )
         }

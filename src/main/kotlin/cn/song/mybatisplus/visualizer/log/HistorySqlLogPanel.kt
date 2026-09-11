@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -269,20 +271,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     private fun openPreview(entry: LogSqlEntry) {
-        val base = withTerminator(entry.restoredSql)
-        SqlPreviewService.showResult(
-            project,
-            cn.song.mybatisplus.visualizer.model.PreviewResult(
-                sql = base,
-                compactSql = entry.restoredSql,
-                unresolvedParams = emptyList(),
-                paramTable = null,
-                wrapperType = null,
-                tableName = null,
-                warning = null,
-            ),
-        )
+        SqlPreviewService.showResult(project, buildPreviewResult(entry))
     }
+
+    /**
+     * 双击预览的 PreviewResult 构建（T-HistParam F3，internal 供 UI 测试不弹窗断言识别结果）：
+     * 与日志 tab 共用 [toPreviewResult] 统一识别通道——v2 历史条目（rawSql/params 齐全）参数行
+     * 与日志页一致，字面量条目走 F4 恢复；formatSql=false 保持历史页现状不格式化。
+     */
+    internal fun buildPreviewResult(entry: LogSqlEntry): PreviewResult =
+        entry.toPreviewResult(
+            formatSql = false,
+            literalRecovery = PluginSettings.getInstance().state.literalParamRecovery,
+        )
 
     // ---------- 二级右键菜单 ----------
 
