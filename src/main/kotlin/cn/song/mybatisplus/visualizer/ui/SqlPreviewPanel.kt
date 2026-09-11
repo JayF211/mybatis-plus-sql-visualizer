@@ -95,9 +95,9 @@ import javax.swing.event.DocumentListener
  * SQL 预览面板（M9-01/02/03 可编辑版，F-07/F-08）。
  *
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
- *  - 顶部两行：元信息行（Wrapper 类型 / 表名 / 风险警示，T-PreviewTopOverlap F3 按宽度预算截断）
- *    + 工具栏行（压缩切换 / 格式化 / 关键字换行 / 执行计划 / 刷新；T-GifHeader 分行防重叠 +
- *    T-PreviewTopOverlap F2 导入/对比/分享折叠进「更多」；复制错误仅警示时可见）
+ *  - 顶部单行：元信息（Wrapper 类型 / 表名 / 风险警示，T-PreviewTopOverlap F3 按宽度预算截断）
+ *    + 工具栏（压缩切换 / 格式化 / 关键字换行 / 竖向排列 / 执行计划 / 刷新 + 「更多」折叠低频动作；
+ *    复制错误仅警示时可见）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
  *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
@@ -314,23 +314,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     init {
-        // T-GifHeader：顶部拆两行——元信息行 + 工具栏行。原先同行 WEST/EAST 各自保首选宽不收缩，
-        // 两者首选宽之和超面板宽时直接重叠绘制（150% 缩放 + 中文按钮文案下极易触发），元信息被
-        // 按钮盖住。分行后任意宽度互不遮挡；元信息超宽由 T-PreviewTopOverlap F3 宽度预算截断兜底
-        //（全文在 tooltip）。master 同因修复（F1 WEST→CENTER 同行零重叠）被分行根治版吸收：
-        // 字段化（topRow/toolbarPanel）与 F2 折叠菜单、F3 截断机制全数保留。
-        metaLabel.border = JBUI.Borders.empty(4, 8, 0, 8)
-        val metaRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(metaLabel, BorderLayout.NORTH)
-        }
-        toolbarPanel = toolbar()
-        val toolRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(toolbarPanel, BorderLayout.EAST)
-            border = JBUI.Borders.empty(2, 8, 2, 8)
-        }
+        // 顶部元信息行 + 工具栏
+        // T-PreviewTopOverlap F1：metaLabel 从 WEST 迁 CENTER——BorderLayout 的 WEST/EAST 各按
+        // 理想宽整块贴边绝不收缩，两偏好宽之和超容器宽时直接互相重叠（用户真机截图实锤：元信息
+        // 文字压进按钮行）；CENTER 只拿剩余宽度，与 EAST 结构性零重叠。宽度不足由 F3 截断兜底。
+        // （合并曾取 dev T-GifHeader 两行布局为基底，用户定案「更多」折叠菜单模式——单行方案转正。）
+        metaLabel.border = JBUI.Borders.empty(0, 8, 4, 8)
         topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(metaRow, BorderLayout.NORTH)
-            add(toolRow, BorderLayout.CENTER)
+            add(metaLabel, BorderLayout.CENTER)
+            toolbarPanel = toolbar()
+            add(toolbarPanel, BorderLayout.EAST)
+            // M36.5：收边距与原生工具行对齐（上 6→4，右 8→8 保留）
+            border = JBUI.Borders.empty(4, 8, 2, 8)
         }
         add(topRow, BorderLayout.NORTH)
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
@@ -2640,10 +2635,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * T-PreviewTopOverlap F3：元信息宽度预算截断。
      *
-     * 预算 = topRow 宽 − topRow 边距 − metaLabel 左右边距 − 余量；未布局（width<=0）跳过，
+     * 预算 = topRow 宽 − 工具栏理想宽 − topRow 边距 − metaLabel 左右边距；未布局（width<=0）跳过，
      * 等组件首显/拉伸时由 ComponentListener 触发。超预算时 meta 行中段省略（复用 T-M26.3 ellipsize），
      * perf 行丢尾段加省略号（HTML 标签外截断）；tooltip 恒全文。宽度未变短路防重算抖动。
-     * （T-GifHeader 两行布局合并适配：元信息独占整行，不再扣工具栏理想宽。）
      */
     private fun applyMetaTruncation() {
         if (metaLineText.isEmpty() && metaPerfSegments.isEmpty()) return
@@ -2653,7 +2647,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             metaLabel.text = fullDisplayText()
             return
         }
-        val budget = (width - topRow.insets.let { it.left + it.right } - 32)
+        val budget = (width - toolbarPanel.preferredSize.width - topRow.insets.let { it.left + it.right } - 16)
             .coerceAtLeast(MIN_META_BUDGET_PX)
         if (budget == lastMetaBudget) return
         lastMetaBudget = budget

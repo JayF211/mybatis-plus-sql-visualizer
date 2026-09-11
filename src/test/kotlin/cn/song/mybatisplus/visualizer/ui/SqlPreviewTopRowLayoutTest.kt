@@ -18,11 +18,8 @@ import javax.swing.JButton
  * T-PreviewTopOverlap：预览面板顶部行布局 / 折叠菜单回归测试。
  *
  * 缺陷背景：topRow 曾用 BorderLayout WEST(metaLabel)+EAST(工具栏)，两偏好宽之和超容器宽时
- * 直接互相重叠（用户真机截图：性能建议文字压进按钮行）。master 侧修复=metaLabel 居 CENTER
- * （结构性零重叠）+ 宽度预算截断 + 低频按钮（导入参数/差异对比/分享）折叠进「更多」JBPopup 菜单；
- * dev 侧 T-GifHeader 同因修复=顶部拆两行（元信息行 + 工具栏行），合并取两行根治版并保留
- * master 的截断与折叠机制——零重叠语义由「同行横向不越界」改为「两行纵向分带不交叠」，
- * 截断预算改为元信息独占整行（不再扣工具栏理想宽）。
+ * 直接互相重叠（用户真机截图：性能建议文字压进按钮行）。修复后 metaLabel 居 CENTER（结构性
+ * 零重叠）+ 宽度预算截断 + 低频按钮（导入参数/差异对比/分享）折叠进「更多」JBPopup 菜单。
  *
  * headless 约束：截断依赖布局宽度的部分经 applyMetaTruncationForTest 直调；
  * 「更多」弹层 show 依赖真实屏幕，仅断言菜单项与 step 委托，不真实弹层。
@@ -62,13 +59,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     private fun layoutAt(panel: SqlPreviewPanel, width: Int, height: Int = 420) {
         panel.setSize(width, height)
         panel.doLayout()
-        // T-GifHeader 两行布局：metaLabel 是 topRow 的孙子节点，Container.doLayout 只排直接子层，
-        // 须逐层下探才能拿到真实 bounds（生产环境由 validate 级联，无此问题）
-        fun deepLayout(c: java.awt.Container) {
-            c.doLayout()
-            for (child in c.components) if (child is java.awt.Container) deepLayout(child)
-        }
-        deepLayout(panel.topRowForTest())
+        panel.topRowForTest().doLayout()
         panel.applyMetaTruncationForTest()
         waitForEdt()
     }
@@ -83,16 +74,10 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             layoutAt(panel, 640)
             val label = metaLabelOf(panel)
             val toolbar = panel.toolbarForTest()
-            val topRow = panel.topRowForTest()
-            // T-GifHeader 两行布局：元信息行（上带）与工具栏行（下带）纵向分带。两组件分属
-            // metaRow/toolRow 不同父容器，bounds 各自相对父级，须统一换算到 topRow 坐标系再比较
-            val labelRect = javax.swing.SwingUtilities.convertRectangle(label.parent, label.bounds, topRow)
-            val toolbarRect = javax.swing.SwingUtilities.convertRectangle(toolbar.parent, toolbar.bounds, topRow)
             assertTrue(
-                "元信息行底界(${labelRect.y + labelRect.height})不得越过工具栏行顶界(${toolbarRect.y})",
-                labelRect.y + labelRect.height <= toolbarRect.y + 1,
+                "CENTER 标签右界(${label.x + label.width})不得越过工具栏左界(${toolbar.x})",
+                label.x + label.width <= toolbar.x + 1,
             )
-            assertTrue("两行布局下应有正尺寸", labelRect.width > 0 && toolbarRect.width > 0)
         } finally {
             panel.clear()
             panel.dispose()
@@ -118,11 +103,10 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     fun test窄宽截断生效_性能建议行被省略() {
         val panel = newPanel()
         try {
-            // 两行布局元信息独占整行：预算 = 面板宽 − 32 边距，300 宽 → 约 268px，
-            // 长 perf 行必然放不下 → 丢尾段加省略号
-            layoutAt(panel, 300)
+            layoutAt(panel, 640)
             val text = panel.metaLabelForTest()
             assertTrue("窄宽下应走 HTML 两行渲染", text.startsWith("<html>"))
+            // 预算约 640-工具栏(~330)-32 边距 ≈ 270px，长 perf 行必然放不下 → 丢尾段加省略号
             assertTrue("放不下的 perf 行应加省略号", text.contains("\u2026"))
             assertFalse("截断后不得再含完整 perf 文案", text.contains(fullPerfText()))
         } finally {
@@ -134,7 +118,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     fun test宽幅还原_全文无省略号() {
         val panel = newPanel()
         try {
-            layoutAt(panel, 300)
+            layoutAt(panel, 640)
             layoutAt(panel, 1600)
             val text = panel.metaLabelForTest()
             assertTrue("宽幅应还原全文 perf 文案", text.contains(fullPerfText()))
@@ -224,14 +208,8 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     // helpers
     // ------------------------------------------------------------------
 
-    private fun metaLabelOf(panel: SqlPreviewPanel): com.intellij.ui.components.JBLabel {
-        // T-GifHeader 两行布局：metaLabel 嵌在 topRow→metaRow 内，需递归下探（单行版只查直接子组件）
-        fun find(container: java.awt.Container): com.intellij.ui.components.JBLabel? =
-            container.components.filterIsInstance<com.intellij.ui.components.JBLabel>().firstOrNull()
-                ?: container.components.filterIsInstance<java.awt.Container>().firstNotNullOfOrNull { find(it) }
-        return find(panel.topRowForTest())
-            ?: error("topRow 下未找到元信息 JBLabel")
-    }
+    private fun metaLabelOf(panel: SqlPreviewPanel) =
+        panel.topRowForTest().components.filterIsInstance<com.intellij.ui.components.JBLabel>().first()
 
     private fun fullPerfText(): String = "⚠ " + MpSqlVisualizerBundle.message("perf.order_by_without_limit")
 }
