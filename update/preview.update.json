@@ -1,7 +1,7 @@
 {
-  "version": "2026.9.10",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.10/mybatis-plus-sql-visualizer-2026.9.10.zip",
-  "changeNotes": "双击日志预览弹窗加载卡顿根治\n预览打开 EDT 读权限断言刷屏全库排雷\nHibernate 双份日志参数分裂根治\n竖向排列 VALUES 行尾列名标注配置项 + IN 列表展开阈值\n预览顶部元信息压按钮行修复\n执行 SQL 首次静默不执行修复 + 预览显示模式持久化\n更新检查版本比较改用 IDEA 内置比较器\nSQL 日志列表行号两处续修",
-  "publishDate": "2026-09-10",
+  "version": "2026.9.11",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.11/mybatis-plus-sql-visualizer-2026.9.11.zip",
+  "changeNotes": "自更新免重启热替换\nSQL 历史页参数识别丢失根治\n无占位符 SQL 字面量参数恢复\n262 平台热替换探测失败回退修复\n更新通知入口去重与卸载警告缓解",
+  "publishDate": "2026-09-11",
   "sinceBuild": "243"
 }
