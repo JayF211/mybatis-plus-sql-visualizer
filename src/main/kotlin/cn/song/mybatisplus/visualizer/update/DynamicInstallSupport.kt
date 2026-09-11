@@ -287,7 +287,11 @@ object DynamicInstallSupport {
 
             return PlatformApi(
                 dynamicPlugins = dynamicPlugins,
-                allowLoadUnloadMethod = method(dpClass, "allowLoadUnloadWithoutRestart", descriptorClass),
+                // allowLoadUnload 与 unloadPlugin 同样存在首参漂移风险（262 实证），一并弹性匹配；
+                // 最少参数优先自动命中 1 参重载（262/243 均为 1/2/3 参并存）
+                allowLoadUnloadMethod = resolveMethodByFirstParam(dpClass, "allowLoadUnloadWithoutRestart", descriptorClass)
+                    ?.also { it.isAccessible = true }
+                    ?: error("allowLoadUnloadWithoutRestart(<descriptor>) not found on ${dpClass.name}"),
                 unloadPluginMethod = unload.also { it.isAccessible = true },
                 unloadPluginOptions = unloadOptions,
                 installAndLoadMethod = method(
