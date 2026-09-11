@@ -90,8 +90,10 @@ class LiteralParamRecoveryTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `无字面量返回 null`() {
-        assertNull(recoverLiteralParams("SELECT 1 FROM t WHERE id = 7"))
+    fun `无数值语境字面量返回null`() {
+        // 投影常量与 LIMIT/OFFSET 不识别（防 MP 分页查询噪音参数行）
+        assertNull(recoverLiteralParams("SELECT 1 FROM t LIMIT 10 OFFSET 5"))
+        assertNull(recoverLiteralParams("SELECT ROUND(x, 2) FROM t"))
         assertNull(recoverLiteralParams(""))
     }
 
@@ -129,6 +131,89 @@ class LiteralParamRecoveryTest {
             assertFalse("歧义片段不得成为参数", recovery.initialValues.values.any { it.endsWith("\\") })
             assertTrue("逐字符往返必须一致", verifyLiteralRoundTrip(sql, recovery))
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 数值字面量（谓词语境限定，T-HistParam 二轮扩面）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `数值谓词恢复_用户反馈形态`() {
+        val sql = """
+            SELECT t.id, t.device_name, st.station_name
+            FROM car_device_info t
+            LEFT JOIN station_info st ON (st.station_id = t.id)
+            WHERE (t.id = 1) ;
+        """.trimIndent()
+        val recovery = recoverLiteralParams(sql)!!
+        assertTrue("ON 条件列引用不受影响", recovery.placeholderSql.endsWith("WHERE (t.id = ?) ;"))
+        assertEquals(mapOf("param1" to "1"), recovery.initialValues)
+        assertEquals(listOf(false), recovery.paramHints.map { it.quote })
+        assertTrue(verifyLiteralRoundTrip(sql, recovery))
+    }
+
+    @Test
+    fun `IN数值列表按序恢复`() {
+        val recovery = recoverLiteralParams("SELECT * FROM t WHERE id IN (1, 2, 3)")!!
+        assertEquals("SELECT * FROM t WHERE id IN (?, ?, ?)", recovery.placeholderSql)
+        assertEquals(
+            mapOf("param1" to "1", "param2" to "2", "param3" to "3"),
+            recovery.initialValues,
+        )
+        assertTrue(recovery.paramHints.all { it.quote == false })
+        assertTrue(verifyLiteralRoundTrip("SELECT * FROM t WHERE id IN (1, 2, 3)", recovery))
+    }
+
+    @Test
+    fun `BETWEEN双界恢复`() {
+        val recovery = recoverLiteralParams("SELECT * FROM t WHERE age BETWEEN 18 AND 65")!!
+        assertEquals("SELECT * FROM t WHERE age BETWEEN ? AND ?", recovery.placeholderSql)
+        assertEquals(mapOf("param1" to "18", "param2" to "65"), recovery.initialValues)
+        assertTrue(verifyLiteralRoundTrip("SELECT * FROM t WHERE age BETWEEN 18 AND 65", recovery))
+    }
+
+    @Test
+    fun `VALUES数值列表恢复_多行第二行不识别`() {
+        val recovery = recoverLiteralParams("INSERT INTO t (a, b) VALUES (1, 'x'), (2, 'y')")!!
+        // 字符串全量识别，数值仅首行 VALUES 列表（保守：列表闭合不重臂）
+        assertEquals("INSERT INTO t (a, b) VALUES (?, ?), (2, ?)", recovery.placeholderSql)
+        assertEquals(mapOf("param1" to "1", "param2" to "x", "param3" to "y"), recovery.initialValues)
+        assertTrue(verifyLiteralRoundTrip("INSERT INTO t (a, b) VALUES (1, 'x'), (2, 'y')", recovery))
+    }
+
+    @Test
+    fun `负号数值往返无损`() {
+        val recovery = recoverLiteralParams("SELECT * FROM t WHERE x = -1")!!
+        assertEquals("负号留在原文，仅数值改写", "SELECT * FROM t WHERE x = -?", recovery.placeholderSql)
+        assertEquals("1", recovery.initialValues["param1"])
+        assertTrue(verifyLiteralRoundTrip("SELECT * FROM t WHERE x = -1", recovery))
+    }
+
+    @Test
+    fun `非纯数字token不识别`() {
+        assertNull("十六进制量随词字符尾随被拒", recoverLiteralParams("SELECT * FROM t WHERE h = 0x1F"))
+        assertNull(recoverLiteralParams("SELECT * FROM t WHERE a = 1abc"))
+    }
+
+    @Test
+    fun `字符串与数值混合按序恢复`() {
+        val sql = "UPDATE t SET note = 'ok' WHERE price = 12.5 AND flag = 1"
+        val recovery = recoverLiteralParams(sql)!!
+        assertEquals("UPDATE t SET note = ? WHERE price = ? AND flag = ?", recovery.placeholderSql)
+        assertEquals(mapOf("param1" to "ok", "param2" to "12.5", "param3" to "1"), recovery.initialValues)
+        assertEquals(listOf(true, false, false), recovery.paramHints.map { it.quote })
+        assertTrue(verifyLiteralRoundTrip(sql, recovery))
+    }
+
+    @Test
+    fun `toPreviewResult 数值条目走恢复通道`() {
+        val sql = "SELECT * FROM tableA WHERE (\"t_id\" = 1) ;"
+        val result = LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList())
+            .toPreviewResult(formatSql = false, literalRecovery = true)
+        assertEquals("SELECT * FROM tableA WHERE (\"t_id\" = ?) ;", result.sql)
+        assertEquals(mapOf("param1" to "1"), result.initialParamValues)
+        assertEquals(listOf(false), result.paramHints.map { it.quote })
+        assertNull(result.warning)
     }
 
     // ------------------------------------------------------------------
