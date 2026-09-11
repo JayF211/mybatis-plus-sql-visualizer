@@ -756,10 +756,22 @@ class SqlLogPanel(
         override fun actionPerformed(e: AnActionEvent) {
             if (!com.intellij.ui.jcef.JBCefApp.isSupported()) {
                 LOG.info("[HelpAction] JCEF not supported, falling back to system browser")
-                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
+                browseOnlineDoc()
                 return
             }
             openLocalHtml()
+        }
+
+        /** 降级：系统浏览器打开在线文档。
+         *  单元测试模式必须短路——BrowserUtil.browse 不走沙盒隔离，直接 ShellExecute
+         *  拉起宿主机默认浏览器（HelpUiTest 真实触发 actionPerformed，定时回归任务期间
+         *  周期性弹出用户 Edge，2026-09-11 真机实证）。 */
+        private fun browseOnlineDoc() {
+            if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
+                LOG.info("[HelpAction] Unit test mode, skipping system browser fallback")
+                return
+            }
+            com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
         }
 
         /** 内嵌浏览器打开本地 HTML 帮助页。
@@ -771,7 +783,7 @@ class SqlLogPanel(
             var htmlContent = loadText("html", "marketplace-custom-page.html")
             if (htmlContent.isBlank()) {
                 LOG.warn("[HelpAction] Help HTML resource is empty, falling back to online doc")
-                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
+                browseOnlineDoc()
                 return
             }
             try {
@@ -790,7 +802,7 @@ class SqlLogPanel(
                 )
             } catch (ex: Throwable) {
                 LOG.warn("[HelpAction] Failed to open local help HTML, falling back to online doc", ex)
-                com.intellij.ide.BrowserUtil.browse(HELP_DOCUMENTATION_URL)
+                browseOnlineDoc()
             }
         }
 
