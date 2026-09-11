@@ -1,25 +1,28 @@
 <component name="ProjectRunConfigurationManager">
-    <configuration default="false" name="Run IDE (Local Manifest)" type="GradleRunConfiguration" factoryName="Gradle">
-        <log_file alias="idea.log" path="$PROJECT_DIR$/.intellijPlatform/hotswap-sandbox/*/*/log/idea.log" show_all="true"/>
-        <ExternalSystemSettings>
-            <option name="executionName"/>
-            <option name="externalProjectPath" value="$PROJECT_DIR$"/>
-            <option name="externalSystemIdString" value="GRADLE"/>
-            <option name="scriptParameters" value=""/>
-            <option name="taskDescriptions">
-                <list/>
-            </option>
-            <option name="taskNames">
-                <list>
-                    <option value="runIdeHotSwap"/>
-                </list>
-            </option>
-            <option name="vmOptions" value="-Dmpvs.update.manifest.url=http://localhost:8919/update.json"/>
-        </ExternalSystemSettings>
-        <ExternalSystemDebugServerProcess>false</ExternalSystemDebugServerProcess>
-        <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
-        <DebugAllEnabled>false</DebugAllEnabled>
-        <RunAsTest>false</RunAsTest>
-        <method v="2"/>
-    </configuration>
+  <configuration default="false" name="Run IDE (Local Manifest)" type="GradleRunConfiguration" factoryName="Gradle">
+    <log_file alias="idea.log" path="$PROJECT_DIR$/.intellijPlatform/sandbox/*/*/log/idea.log" show_all="true" />
+    <ExternalSystemSettings>
+      <option name="executionName" />
+      <option name="externalProjectPath" value="$PROJECT_DIR$" />
+      <option name="externalSystemIdString" value="GRADLE" />
+      <option name="scriptParameters" value="" />
+      <option name="taskDescriptions">
+        <list />
+      </option>
+      <option name="taskNames">
+        <list>
+          <option value="runIdeHotSwap" />
+        </list>
+      </option>
+      <option name="vmOptions" value="-Dmpvs.update.manifest.url=http://localhost:8919/update.json" />
+    </ExternalSystemSettings>
+    <ExternalSystemDebugServerProcess>false</ExternalSystemDebugServerProcess>
+    <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+    <ExternalSystemDebugDisabled>false</ExternalSystemDebugDisabled>
+    <DebugAllEnabled>false</DebugAllEnabled>
+    <RunAsTest>false</RunAsTest>
+    <GradleProfilingDisabled>false</GradleProfilingDisabled>
+    <GradleCoverageDisabled>false</GradleCoverageDisabled>
+    <method v="2" />
+  </configuration>
 </component>

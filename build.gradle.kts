@@ -451,7 +451,6 @@ intellijPlatformTesting {
     // 崩溃、任务失败三条出口都停服务，且只杀自己起的进程（按 pid 文件）。
     runIde {
         register("runIdeHotSwap") {
-            sandboxDirectory.set(layout.projectDirectory.dir(".intellijPlatform/hotswap-sandbox"))
             task {
                 autoReload.set(false)
                 dependsOn(tasks.named("plainFjpfJar"))
@@ -462,11 +461,15 @@ intellijPlatformTesting {
                             "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
                     )
                 })
-                // 与全局 runIde 同款：-Dmpvs.update.manifest.url 经 gradle JVM 转发沙盒 IDE
-                val manifestUrl = System.getProperty("mpvs.update.manifest.url")
-                if (!manifestUrl.isNullOrBlank()) {
-                    systemProperty("mpvs.update.manifest.url", manifestUrl)
-                }
+                // 清单 URL 转发必须在执行期读（jvmArgumentProviders 每次执行求值）——配置期
+                // System.getProperty 会被配置缓存冻结：首次无 -D 的运行存下空配置，后续带
+                // -D 的运行不再转发（实证：11:21 会话 URL 已转发系旧路径，CC 风险仍在）
+                jvmArgumentProviders.add(CommandLineArgumentProvider {
+                    System.getProperty("mpvs.update.manifest.url")
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { listOf("-Dmpvs.update.manifest.url=$it") }
+                        ?: emptyList<String>()
+                })
                 // 本地服务随任务生命周期自动起停：doFirst 起 hotswap-local-server.py（端口被占
                 // 则复用不接管——pid 文件留空，清理任务即无害空转）；finalizedBy 清理保证 IDE
                 // 正常关闭、崩溃、任务失败三条出口都停服务，且只杀自己起的进程（按 pid 文件）。
