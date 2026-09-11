@@ -68,7 +68,11 @@ class StartupUpdateCheck : ProjectActivity {
                 notificationContent(manifest),
                 NotificationType.INFORMATION,
             )
+        // T-DynUpdate：点击先过期本通知——动作闭包持有本类实例（旧 classloader），且通知在事件
+        // 日志常驻；动态热替换后平台 GCWatcher 观察旧类加载器是否释放，这条强引用不摘，
+        // 「插件未完全卸载」警告大概率被触发（实测）
         notification.addAction(NotificationAction.createSimple(MpSqlVisualizerBundle.message("update.notification.installNow")) {
+            notification.expire()
             installNow(project, manifest)
         })
         notification.addAction(NotificationAction.createSimple(MpSqlVisualizerBundle.message("update.notification.ignore")) {
@@ -83,11 +87,10 @@ class StartupUpdateCheck : ProjectActivity {
         notification.addAction(
             NotificationAction.createSimpleExpiring(MpSqlVisualizerBundle.message("update.notification.later")) { }
         )
-        // T-M28.4：内容内 Gitee 链接点击跳转。
-        // T-DepApi：setListener(URL_OPENING_LISTENER) 全平台标 deprecated——正文 <a href> 跳转
-        // 现代等价物是 BrowseNotificationAction（java.net.URL 构造，BrowsURLAction 语义封装），
-        // 243/253/262 javap 实证均无弃用标记。追加动作而非 setListener：链接点击走「查看发布页」
-        // 动作打开浏览器，正文内嵌链接点击保留通知默认行为（无监听器时高亮但不禁用）。
+        // T-M28.4 → T-DynUpdate：Gitee 入口收敛为动作行「查看发布页」一个——正文末尾原内嵌
+        // 同名链接与动作行重复（用户实测），正文链接已移除。
+        // T-DepApi：setListener(URL_OPENING_LISTENER) 全平台标 deprecated——BrowseNotificationAction
+        // （java.net.URL 构造，BrowsURLAction 语义封装）为现代等价物，243/253/262 javap 实证无弃用标记。
         notification.addAction(
             BrowseNotificationAction(
                 MpSqlVisualizerBundle.message("update.notification.viewGitee"),
@@ -174,7 +177,8 @@ class StartupUpdateCheck : ProjectActivity {
 
         /**
          * 通知内容：第一行版本号（`版本 2026.8.22-beta.1（Gitee 通道）`），
-         * 随后变更日志有序列表、末尾 Gitee 发布页链接。纯函数（单测直接覆盖）。
+         * 随后变更日志有序列表。T-DynUpdate：Gitee 入口收敛为动作行按钮，
+         * 正文末尾原内嵌「查看 Gitee 发布页」链接与动作行重复已移除。纯函数（单测直接覆盖）。
          *
          * @param manifest 可用更新的清单（版本号 + 变更日志）。
          */
@@ -193,9 +197,7 @@ class StartupUpdateCheck : ProjectActivity {
                     "<li>" + title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</li>"
                 } + "</ol>"
             }
-            val giteeLink = "<br>\n<a href=\"" + UpdateSource.GITEE_RELEASES_URL + "\">" +
-                MpSqlVisualizerBundle.message("update.notification.viewGitee") + "</a>"
-            return versionLine + "<br>" + changeNotesHtml + giteeLink
+            return versionLine + "<br>" + changeNotesHtml
         }
 
         /** 剥离行首版本号前缀（`v2026.8.15：` / `2026.8.15:`，容忍有无 v 与中英文冒号）。 */
