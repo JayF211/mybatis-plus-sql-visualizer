@@ -166,18 +166,94 @@ Automatic merge failed; fix conflicts and then commit the result.
 
 ## 八、验收标准
 
-- [ ] 第一段快进成功，`HEAD` == `4ca52e0`
-- [ ] 第二段 2 处文档冲突并集完成：无丢行、无重复行、日期倒序、无冲突标记残留
-- [ ] r2 竞品应答资产在位：`plugin.xml` 文案与 r2 逐字节一致、`docs/设计规范-弹窗克制红线.md`、金样矩阵测试、`supportsDeleteLimit`/`entityResolutionFailed`/`isWrapperVariable` 计数 8/4/13
-- [ ] dev 上游能力在位：`sequenceNumber`/`isModuleBasedLaunch`/`awaitPrewarmedTempFile`/`lineFragments`、`record/` 12 文件、bundle 553×2 键对称
-- [ ] `testgen` 零残留；版本号 `2026.9.10`；CHANGELOG 含 `[2026.9.10]` 与 `[2026.9.9]`
-- [ ] 全量测试 0 失败
-- [ ] verifyPlugin 243/253/262 三目标 Compatible，`buildPlugin` 出包
-- [ ] 变更记录 / MEMORY / 本计划三处同步；回滚 tag 已打
+- [x] 第一段合入 r2 零冲突（**偏差**：因 Wave 0 先提交计划文档，HEAD 离开 `b2fc4ea`，故为真实合并 `3ae4d1b` 而非快进；与 r2 的树差异仅计划文档本身，等价于快进效果）
+- [x] 第二段 2 处文档冲突并集完成：无丢行、无重复行、无冲突标记残留（日期倒序在冲突块内成立；表格第 30–31 行处 dev 侧**固有**倒序见 §九）
+- [x] r2 竞品应答资产在位：`plugin.xml` blob `d58ae1b` 与 r2 逐字节一致、`docs/设计规范-弹窗克制红线.md`、金样矩阵测试、`supportsDeleteLimit`/`entityResolutionFailed`/`isWrapperVariable` 计数 8/4/13
+- [x] dev 上游能力在位：`sequenceNumber` 4 / `isModuleBasedLaunch` 3 / `awaitPrewarmedTempFile` 3 / `lineFragments` 6、`record/` 12 文件、bundle 553×2 键对称
+- [x] `testgen` 零残留；版本号 `2026.9.10`；CHANGELOG 含 `[2026.9.10]` 与 `[2026.9.9]`
+- [x] 全量测试 0 失败（3760/0/0/6，见 §九）
+- [x] verifyPlugin 243/253/262 三目标 Compatible，`buildPlugin` 出包
+- [x] 变更记录 / MEMORY / 本计划三处同步；回滚 tag `backup/pre-r2dev-merge-20260911` 已打
 
 ## 九、实施记录（回填）
 
-- 待实施后回填（Wave 0–5 逐段记录实际数据与与预判的偏差）。
+### 执行偏差（两处，均已处置）
+
+1. **第一段非快进**。计划设想的「Wave 0 提交计划文档 → Wave 1 快进」在时序上互斥：提交计划文档必然使 HEAD 离开 `b2fc4ea`。实际按「先立项提交、后合并」执行，第一段为真实合并 `3ae4d1b`（零冲突，`git diff feature/r2-competition-response HEAD` 仅计划文档 203 行新增），语义与快进等价且多一条可追溯的合并点。
+2. **dev 侧固有阻塞（非合并引入）**。dev tip `9173e3c` 的 `c91aa6d`「T-GifFullscreen 修订九录制环境——262 平台/JCEF/toolchain24/独立沙盒 MPSV-GifFresh（**录制期配置**）」把构建平台由 `2024.3.7.1` 切到 `2026.2.1`，导致 **dev 自身的 test 源码无法编译**：`com.intellij.diagram.DiagramRelationshipInfo.label` 6 处 Unresolved reference、`String.toLowerCase()` 硬弃用报错 1 处、`runCatching` 类型推断连带 1 处，共 8 条。**取证**：在 dev worktree（`9173e3c`）执行同一 `compileTestKotlin` 复现完全相同的 8 条错误；且 4 个报错测试文件与 `build.gradle.kts`、`gradle/` 与 dev **逐字节一致**，排除了合并因素。**决策**：用户选定「还原为 243 常规态」，以 commit `3b7b5af` 回退该 4 处录制期改动（平台回 `2024.3.7.1`、toolchain 回 `17`、移除 `bundledPlugin(jcef)` 与 `sandboxContainer` 覆盖）；还原后 `compileTestKotlin` BUILD SUCCESSFUL。**遗留**：dev 分支本身仍带该阻塞，后续需在 dev 侧自行处置（否则再合并会重复带入）。
+
+### Wave 0 前置
+
+- 计划文档提交 `f651015`（203 行）。
+- 回滚锚点 tag **`backup/pre-r2dev-merge-20260911`** → `b2fc4ea`（已核 `git rev-parse`）；本 worktree 检出分支 `workbuddy/r2-backup-pre-dev-merge-20260910-346f4bf8` 同指 `b2fc4ea` 为第二锚点。
+- 三处 worktree（目标 / r2 / dev）合并前均无未提交改动；`.workbuddy/` 已在 `.gitignore`，不污染提交。
+
+### Wave 1 合入 r2
+
+- `git merge feature/r2-competition-response --no-ff` → 合并提交 **`3ae4d1b`**，**零冲突**。
+- 校验：`git diff --stat feature/r2-competition-response HEAD` = 仅计划文档 `1 file changed, 203 insertions(+)`，与预期完全一致。
+
+### Wave 2 合入 dev
+
+- `git merge dev` → **起手即复现预判的 2 文件 2 冲突块**（`docs/MEMORY.md`、`docs/变更记录.md`），源码与 bundle 侧全部自动合并成功。
+- 处置：`git checkout -m` 两文件取回三方自动合并真实结果，再用脚本**只替换冲突块**（`theirs`（dev 的 `2026-09-11` 行）→ `ours`（r2 的 `2026-09-10` 两行）），未整表重写、未碰自动合并区。文件行数 214→211、273→270（各减 3 个标记行），冲突标记残留 0。
+- 合并提交 **`7072028`**。
+- **行级实证（整行全文口径，非截断比对）**：
+
+  | 文件 | r2 行 | dev 行 | 结果行 | 并集 | 丢行 | 重复 | 超并集 |
+  |---|---|---|---|---|---|---|---|
+  | `docs/变更记录.md` | 190 | 185 | 199 | 199 | 0 | 0 | 0 |
+  | `docs/MEMORY.md` | 47 | 47 | 50 | 50 | 0 | 0 | 0 |
+
+  两文件「结果 == 并集」均成立，即**零丢行、零重复、零多余**。
+- **留档（未处置）**：`docs/变更记录.md` 第 30–31 行存在日期倒序（`2026-09-09` 行后接 `2026-09-10` 行）。经比对，该倒序**在 dev 侧同样存在**（dev 版第 27–28 行），属 dev 固有状态，合并结果逐字继承。按 §四「自动合并区只做语义核验、不重写」原则未改动，以免造成与 dev 的永久内容分叉。
+
+### Wave 3 语义清扫
+
+| 核验项 | 期望 | 实测 | 结论 |
+|---|---|---|---|
+| bundle en / zh 键 | 对称 | 553 / 553，双向差集 0 | OK |
+| `plugin.xml` | 与 r2 逐字节同 | blob `d58ae1bb430ca39058c20a10a3c606cef2acade2` 两侧相同 | OK |
+| r2 资产计数 | 8 / 4 / 13 | `supportsDeleteLimit` 8、`entityResolutionFailed` 4、`isWrapperVariable` 13 | OK（与 r2 基线逐项相等）|
+| dev 资产计数 | 4 / 3 / 3 / 6 | `sequenceNumber` 4、`isModuleBasedLaunch` 3、`awaitPrewarmedTempFile` 3、`lineFragments` 6 | OK |
+| `testgen` 残留 | 0 | 0 | OK |
+| 版本号 | `2026.9.10` | `2026.9.10` | OK |
+| CHANGELOG 段 | 含 9.10 / 9.9 | `## [2026.9.10]`、`## [2026.9.9]` 均在 | OK |
+| r2 文档/测试资产 | 在位 | 弹窗克制红线、`SqlPreviewSpecMatrixTest`、`XmlMapParamSpecMatrixTest` 均在位 | OK |
+
+- 补充：bundle 键计数需用**宽口径**（键名允许含连字符）——`feedback.category.sql-to-java`、`feedback.category.sql-log` 两个键不匹配 `[A-Za-z0-9_.]+`，窄口径会误报「551 vs 553」的假不对称。
+
+### Wave 4 全量测试与构建
+
+- `./gradlew test --no-daemon` → **BUILD SUCCESSFUL**，**293 测试类 / 3760 用例 / 0 失败 / 0 错误 / 6 跳过**（跳过为 Docker 条件测试），`tests=0` 陈旧结果文件 0 个。
+- **首次全量 4 失败的真实归因（已排除合并因素）**：`DataSourceJdbcSmokeTest`（2）与 `DemoRecognitionTest`（2）均因缺少**同级 demo 工程**而失败，报错原文即 `demo 文件应存在: ..\mybatis-plus-sql-visualizer-demo\...` / `demo 项目 dataSources.xml 未找到任何数据源`。该工程在本机位于 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo`（dev worktree 的同级），而 WorkBuddy worktree 的上级目录下不存在。**处置**：在 `C:/Users/USER/WorkBuddy/Worktrees/mybatis-plus-sql-visualizer/` 建 junction 指向该工程后复跑该 2 类（`tests=2/2`、`skipped=0/failures=0/errors=0` 全过），随后带 junction 重跑完整全量取得上述单一权威绿灯数。
+- **踩坑沉淀**：WorkBuddy worktree 下跑全量测试前需确认同级 `mybatis-plus-sql-visualizer-demo` 可用（junction 即可），否则恒有 4 个环境性失败。
+- `./gradlew verifyPlugin --no-daemon` → **BUILD SUCCESSFUL**（12m50s，纯验证 10m44s），三目标均 **Compatible**：
+
+  | 目标 | 结论 | scheduled-for-removal | deprecated | experimental |
+  |---|---|---|---|---|
+  | IU-243.28141.41 | Compatible | 1 | 3 | 10 |
+  | IU-253.33514.17 | Compatible | 1 | 6 | 10 |
+  | IU-262.9437.185 | Compatible | 1 | **46** | 10 |
+
+  262 deprecated 由上一轮记录的 44 增至 46：明细为 `ReadAction.compute(ThrowableComputable)` 40 处 + 其他 6 处（`FileSaverDescriptor` ×3、`Messages.showChooseDialog`、`TextAttributesKey` 相关、`TransactionGuard.submitTransactionLater`、`DbPsiFacade.findElement`），增量归因于两侧后续提交新增的 `ReadAction.compute` 站点（r2 tip 66 → 合并后 69）。全部 warning 级，不阻断发布。
+- 注：以上 verifyPlugin 计数是在「还原 243 常规态」后（构建基准 `2024.3.7.1`、toolchain 17）取得，与前几轮口径一致、可直接对比；若在 dev 的 262 录制配置下构建，计数口径不同，不可直接比对。
+- `buildPlugin` 出产物：`build/distributions/mybatis-plus-sql-visualizer-2026.9.10.zip`（6.26 MB）。
+
+### Wave 5 定稿与同步
+
+- 提交序列：
+
+  | 提交 | 内容 |
+  |---|---|
+  | `f651015` | 立项：本计划文档 |
+  | `3ae4d1b` | merge `feature/r2-competition-response`（零冲突）|
+  | `7072028` | merge `dev`（2 文档冲突并集）|
+  | `3b7b5af` | 还原 243 常规开发态（回退 dev 录制期配置）|
+  | 交付同步提交 | `docs/变更记录.md` 顶插交付行 + `docs/MEMORY.md` 变更记录行 + 本 §九 回填 |
+
+- **不主动 push**（沿用前两轮约定）。
+- runIde 真机抽验留人工：dev 面（日志行号 / 竖向排列 VALUES 行尾列名标注 / 预览加载速度）+ r2 面（冷启动首屏 / 承接 MyBatis Log Free 老用户文案 / 弹窗克制）。
 
 ## 附：预演命令与实测输出（可复现）
 
