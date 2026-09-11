@@ -419,6 +419,34 @@ val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
 
 intellijPlatformTesting {
+    // T-DynUpdate 热替换本地验证沙盒（配套 dev-support/hotswap-local-server.py 与
+    // .run/runIdeLocalManifest.run.xml）：与开发 runIde 沙盒隔离，验证自更新免重启全链
+    //（本地清单 → 下载 → DynamicInstallSupport 卸载旧版+装载新版）。
+    // autoReload 必须关闭——插件自动重载器监听 plugins 目录文件变化，会在热替换的
+    //「解包中途」触发并发重载，与 EDT 卸载/装载序列竞态（卸载失败 → 测试假阴性）。
+    // 沙盒插件是 jar-copy 安装（非 build/classes 直载），dev 守卫正常放行；
+    // 验证后重置：删 .intellijPlatform/hotswap-sandbox 或重跑本任务（prepareSandbox 覆盖插件目录）。
+    runIde {
+        register("runIdeHotSwap") {
+            sandboxDirectory.set(layout.projectDirectory.dir(".intellijPlatform/hotswap-sandbox"))
+            task {
+                autoReload.set(false)
+                dependsOn(tasks.named("plainFjpfJar"))
+                classpath += files(layout.buildDirectory.file("plain-fjpf/plain-fjpf.jar"))
+                jvmArgumentProviders.add(CommandLineArgumentProvider {
+                    listOf(
+                        "-Djava.util.concurrent.ForkJoinPool.common.threadFactory=" +
+                            "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
+                    )
+                })
+                // 与全局 runIde 同款：-Dmpvs.update.manifest.url 经 gradle JVM 转发沙盒 IDE
+                val manifestUrl = System.getProperty("mpvs.update.manifest.url")
+                if (!manifestUrl.isNullOrBlank()) {
+                    systemProperty("mpvs.update.manifest.url", manifestUrl)
+                }
+            }
+        }
+    }
     testIde {
         register("testShard1") {
             testFramework(TestFrameworkType.Platform)

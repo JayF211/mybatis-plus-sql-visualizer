@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
     <configuration default="false" name="Run IDE (Local Manifest)" type="GradleRunConfiguration" factoryName="Gradle">
-        <log_file alias="idea.log" path="$PROJECT_DIR$/.intellijPlatform/sandbox/*/*/log/idea.log" show_all="true"/>
+        <log_file alias="idea.log" path="$PROJECT_DIR$/.intellijPlatform/hotswap-sandbox/*/*/log/idea.log" show_all="true"/>
         <ExternalSystemSettings>
             <option name="executionName"/>
             <option name="externalProjectPath" value="$PROJECT_DIR$"/>
@@ -11,7 +11,7 @@
             </option>
             <option name="taskNames">
                 <list>
-                    <option value="runIde"/>
+                    <option value="runIdeHotSwap"/>
                 </list>
             </option>
             <option name="vmOptions" value="-Dmpvs.update.manifest.url=http://localhost:8919/update.json"/>
