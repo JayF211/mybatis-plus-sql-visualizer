@@ -1013,6 +1013,43 @@ class JavaCodeGeneratorTest {
     }
 
     @Test
+    fun `MPJ括号ON与WHERE括号_全链还原lambda形态平铺条件`() {
+        // T-ReverseParenWira 用户实录：MPJ 渲染 ON/WHERE 自带括号
+        // `ON (st.station_id = t.id)` / `WHERE (t.id = 1)`，反向必须还原
+        // MPJLambdaWrapper + 三参 lambda leftJoin + 平铺 eq（单条件括号已在解析器解包）
+        val result = SqlReverseParser.parse(
+            "SELECT t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name " +
+                "FROM car_device_info t LEFT JOIN station_info st ON (st.station_id = t.id) WHERE (t.id = 1)",
+        )
+        val main = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf(
+                "id" to "id",
+                "station_id" to "stationId",
+                "share_scheme_id" to "shareSchemeId",
+                "device_name" to "deviceName",
+            ),
+            subEntities = mapOf(
+                "st" to JavaCodeGenerator.EntityTarget(
+                    className = "StationInfoEntity",
+                    columnToField = mapOf("station_id" to "stationId", "station_name" to "stationName"),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result, main, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(code, code.contains("new MPJLambdaWrapper<DeviceInfoEntity>()"))
+        assertTrue(
+            code,
+            code.contains(".leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getId)"),
+        )
+        assertTrue(code, code.contains(".eq(DeviceInfoEntity::getId, 1)"))
+        assertTrue(code, code.contains(".select(DeviceInfoEntity::getId)"))
+        assertTrue(code, code.contains(".select(StationInfoEntity::getStationName)"))
+        assertTrue(code, !code.contains("nested("))
+        assertTrue(code, !code.contains("MPJQueryWrapper"))
+    }
+
+    @Test
     fun `多表JOIN_ON多条件_回落raw join字符串`() {
         val result = SqlReverseResult(
             tableName = "a",

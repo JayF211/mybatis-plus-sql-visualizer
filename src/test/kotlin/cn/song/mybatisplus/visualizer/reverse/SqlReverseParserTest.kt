@@ -359,6 +359,30 @@ class SqlReverseParserTest {
     }
 
     @Test
+    fun `括号组内单条件_解包不产生Group`() {
+        // T-ReverseParenWira：MPJ 渲染自带括号（ON (x=y)、WHERE (x=1)），单条件括号
+        // 无语义增量 → 解包。否则 ON 侧 extractJoinKey 认不出列对致 MPJ lambda 退化，
+        // WHERE 侧多渲染一层 nested
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE (t.id = 1)")
+        assertEquals(1, result.conditions.size)
+        assertTrue(result.conditions[0] is Condition.Simple)
+
+        val on = SqlReverseParser.parse("SELECT * FROM a t LEFT JOIN b st ON (st.station_id = t.id)")
+        val onConditions = on.joins.single().onConditions
+        assertEquals(1, onConditions.size)
+        assertTrue(onConditions[0] is Condition.ColumnComparison)
+    }
+
+    @Test
+    fun `NOT单条件括号_保留negated组`() {
+        // 解包例外：NOT (a = 1) 的 negated 标记须由 Group 承载
+        val result = SqlReverseParser.parse("SELECT * FROM t WHERE NOT (a = 1)")
+        val group = result.conditions.single() as Condition.Group
+        assertTrue(group.negated)
+        assertEquals(1, group.children.size)
+    }
+
+    @Test
     fun `NOT括号组_negated标记`() {
         val result = SqlReverseParser.parse("SELECT * FROM t WHERE NOT (a = 1 OR b = 2)")
         val group = result.conditions.single() as Condition.Group
