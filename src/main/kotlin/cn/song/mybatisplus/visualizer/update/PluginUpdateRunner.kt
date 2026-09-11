@@ -8,9 +8,10 @@ import java.nio.file.Path
 import java.util.zip.ZipFile
 
 /**
- * 更新编排（M28）：检查（fetch seam）与下载安装（download/install seam）的编排层。
+ * 更新编排（M28 → T-DynUpdate）：检查（fetch seam）与下载安装（download/install seam）的编排层。
  *
- * 网络（[UpdateApi]）与平台安装（[PlatformPluginInstaller]）不在此类——所有外部动作
+ * 网络（[UpdateApi]）与平台安装（[DynamicInstallSupport] 动态热替换优先、
+ * [PlatformPluginInstaller] 脚本兜底）不在此类——所有外部动作
  * 经**函数参数注入**，单测以 fake seam 全分支覆盖；UI 层（设置页/启动通知）只与
  * 本类交互，不在 UI 类里写网络/文件逻辑。
  */
@@ -30,10 +31,13 @@ object PluginUpdateRunner {
         data class Failure(val message: String) : CheckResult
     }
 
-    /** 安装结果。 */
+    /** 安装结果（T-DynUpdate 扩容：热生效 / 回退重启 / 失败三分支）。 */
     sealed interface InstallResult {
-        /** 安装已调度（下次重启生效——环境否决动态卸载，T-M23.10 定论）。 */
-        data object Installed : InstallResult
+        /** 已动态热生效：旧版已卸载、新版已装载，无需重启（T-DynUpdate 主路径成功）。 */
+        data class InstalledDynamic(val version: String) : InstallResult
+
+        /** 已调度启动脚本替换（平台否决/动态链失败回退——重启生效，M28 原行为）。 */
+        data object InstalledRestartRequired : InstallResult
 
         data class Failed(val message: String) : InstallResult
     }
@@ -62,17 +66,18 @@ object PluginUpdateRunner {
 
     /**
      * 下载并安装：下载到临时目录 → zip 校验（存在/非空/可打开）→ install seam →
-     * 无论成败清理临时下载文件（安装已调度时由 [PlatformPluginInstaller] 先持久化副本）。
+     * 无论成败清理临时下载文件（动态热替换或脚本调度均由安装层自行持久化/解压）。
      *
      * @param indicator 进度（下载 fraction）；可 null。
      * @param download 下载 seam（默认 [UpdateApi.download]）。
-     * @param install 安装 seam（默认 [PlatformPluginInstaller.install]；**单测不触达**）。
+     * @param install 安装 seam（默认 [DynamicInstallSupport.install]——动态热替换优先、
+     *   脚本兜底；**单测不触达**，注入 fake 全分支覆盖）。
      */
     fun downloadAndInstall(
         manifest: UpdateManifest,
         indicator: ProgressIndicator?,
         download: (String, Path) -> Unit = { url, target -> UpdateApi.download(url, target, indicator) },
-        install: (Path) -> InstallResult = { PlatformPluginInstaller.install(it) },
+        install: (Path) -> InstallResult = { DynamicInstallSupport.install(it) },
     ): InstallResult {
         val temp: File = try {
             FileUtil.createTempFile("mpvs-update-", ".zip", false)

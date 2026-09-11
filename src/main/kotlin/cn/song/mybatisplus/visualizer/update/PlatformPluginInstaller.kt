@@ -9,10 +9,14 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
- * 平台安装封装（M28）：调度「下次启动替换插件」——删除旧版（[StartupActionScriptManager.DeleteCommand]）
- * + 解压新版（[StartupActionScriptManager.UnzipCommand]），随后由调用方提示重启
- * （[com.intellij.util.ui.RestartDialogImpl.restartWithConfirmation]，环境否决动态卸载，
- * 覆盖更新必重启——T-M23.10 定论，不做动态加载）。
+ * 平台安装封装（M28 → T-DynUpdate 降级通道）：调度「下次启动替换插件」——删除旧版
+ * （[StartupActionScriptManager.DeleteCommand]）+ 解压新版（[StartupActionScriptManager.UnzipCommand]），
+ * 随后由调用方提示重启（[com.intellij.util.ui.RestartDialogImpl.restartWithConfirmation]）。
+ *
+ * T-DynUpdate 起本路径降级为兜底：默认主路径是 [DynamicInstallSupport] 平台动态热替换
+ * （卸载旧版 → 装载新版，无需重启）；仅当平台否决/反射入口缺失/动态链失败时走本类。
+ * 原注释「环境否决动态卸载，覆盖更新必重启——T-M23.10 定论」已证伪：performanceTesting
+ * vetoer 只否决其自身且仅回放执行期间（262 反编译实证，见 T-DynUpdate 开发计划 §2.3）。
  *
  * T-M51-01-ALT：使用 [ProtectionDomain] 获取当前插件 jar/目录路径 +
  * [StartupActionScriptManager.DeleteCommand] 删除旧版，避免 PluginManager.getPlugin()
@@ -28,10 +32,44 @@ object PlatformPluginInstaller {
     private const val PENDING_DIR = "mpvs-update"
 
     /**
-     * 调度安装：校验旧版安装位置（防开发态误删 build 产物）→ 持久化下载包 →
-     * 卸载旧版 + 解压新版（脚本按序执行：先删后装）。
+     * 兜底安装（T-DynUpdate 改名自 install，语义不变）：调度启动脚本替换，重启生效。
+     * 开发态安装拒绝（返回 Failed）；脚本调度成功返回 [PluginUpdateRunner.InstallResult.InstalledRestartRequired]。
      */
-    fun install(zip: Path): PluginUpdateRunner.InstallResult = runCatching {
+    fun installRestartScript(zip: Path): PluginUpdateRunner.InstallResult = runCatching {
+        devGuardOrFailure()?.let { return it }
+
+        val persistent = persistZip(zip)
+        LOG.info("installRestartScript: persistent=$persistent")
+
+        // 删除旧版：优先精确删除 JAR，回退删除整个目录
+        val deleteTarget = getPluginJarPath() ?: pluginDirPath()
+        LOG.info("installRestartScript: scheduling DeleteCommand for $deleteTarget")
+        StartupActionScriptManager.addActionCommand(
+            StartupActionScriptManager.DeleteCommand(deleteTarget)
+        )
+
+        // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
+        // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand
+        // 纯解压不剥顶层；解压到 `<plugins>/<pluginId>/` 会多嵌套一层（用户实测：重启后插件
+        // 列表消失——平台扫描不到嵌套 jar 内的 plugin.xml）。解压到根后 zip 顶层目录名
+        // 与旧安装目录名一致，删旧解新即正确替换。
+        LOG.info("installRestartScript: scheduling UnzipCommand (target=${unzipTargetDir()})")
+        StartupActionScriptManager.addActionCommand(
+            StartupActionScriptManager.UnzipCommand(persistent, unzipTargetDir())
+        )
+        LOG.info("installRestartScript: commands scheduled successfully — InstalledRestartRequired")
+        PluginUpdateRunner.InstallResult.InstalledRestartRequired
+    }.getOrElse { error ->
+        LOG.warn("plugin update install failed — ${error.message}", error)
+        PluginUpdateRunner.InstallResult.Failed(error.message ?: error.toString())
+    }
+
+    /**
+     * 开发态守卫（T-DynUpdate 抽出共用，脚本路径与动态路径同源）：
+     * 任一可用路径命中构建特征段即拒绝更新（runIde/测试从 build/classes 加载，
+     * 卸载调度会误删构建产物），返回 Failed；正常安装返回 null。
+     */
+    internal fun devGuardOrFailure(): PluginUpdateRunner.InstallResult.Failed? {
         // 插件目录定位：优先用 ProtectionDomain 获取精确 JAR 路径；
         // 262 平台 codeSource.location 实证返回 null（日志实证），此时回退到
         // PathManager.getPluginsDir() + PLUGIN_ID 定位插件目录根。
@@ -39,9 +77,7 @@ object PlatformPluginInstaller {
         // 不依赖 classloader 实现细节，三平台（Win/Mac/Linux）通用。
         val jarPath = getPluginJarPath()
         val pluginDir = pluginDirPath()
-        LOG.info("install: jarPath=$jarPath | pluginDir=$pluginDir | zip=$zip")
-
-        // 开发态守卫：任一可用路径命中构建特征段即拒绝
+        LOG.info("dev guard: jarPath=$jarPath | pluginDir=$pluginDir")
         listOfNotNull(jarPath?.toString()?.replace('\\', '/'), pluginDir.toString().replace('\\', '/'))
             .forEach { pathStr ->
                 if (isDevInstallation(pathStr)) {
@@ -52,31 +88,7 @@ object PlatformPluginInstaller {
                     )
                 }
             }
-
-        val persistent = persistZip(zip)
-        LOG.info("install: persistent=$persistent")
-
-        // 删除旧版：优先精确删除 JAR，回退删除整个目录
-        val deleteTarget = jarPath ?: pluginDir
-        LOG.info("install: scheduling DeleteCommand for $deleteTarget")
-        StartupActionScriptManager.addActionCommand(
-            StartupActionScriptManager.DeleteCommand(deleteTarget)
-        )
-
-        // T-M28.5：解压目标 = 插件目录**根**——发布 zip 顶层自带插件名目录（IPGP buildPlugin
-        // 布局 `mybatis-plus-sql-visualizer/lib/…`，Install from Disk 会剥顶层），UnzipCommand
-        // 纯解压不剥顶层；解压到 `<plugins>/<pluginId>/` 会多嵌套一层（用户实测：重启后插件
-        // 列表消失——平台扫描不到嵌套 jar 内的 plugin.xml）。解压到根后 zip 顶层目录名
-        // 与旧安装目录名一致，删旧解新即正确替换。
-        LOG.info("install: scheduling UnzipCommand (target=${unzipTargetDir()})")
-        StartupActionScriptManager.addActionCommand(
-            StartupActionScriptManager.UnzipCommand(persistent, unzipTargetDir())
-        )
-        LOG.info("install: commands scheduled successfully — Installed")
-        PluginUpdateRunner.InstallResult.Installed
-    }.getOrElse { error ->
-        LOG.warn("plugin update install failed — ${error.message}", error)
-        PluginUpdateRunner.InstallResult.Failed(error.message ?: error.toString())
+        return null
     }
 
     /**
