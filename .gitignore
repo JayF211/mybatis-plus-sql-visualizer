@@ -70,6 +70,6 @@ verification-*/
 *.hprof
 
 ### 本地凭据（严禁提交） ###
-gitee-token.txt
+gitee-token.*
 *.token
 .secrets/

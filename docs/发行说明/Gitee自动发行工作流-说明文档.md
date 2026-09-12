@@ -79,8 +79,9 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 ## 三、Gitee API 发布（本次实证端点与参数）
 
 鉴权一律 `access_token` 参数（Personal Access Token，需 projects 权限）。
-令牌存仓库根 `gitee-token.txt`（已进 .gitignore，严禁提交/外传），脚本读取：
-`TOKEN = open('gitee-token.txt').read().strip()`。
+令牌存仓库根 `gitee-token.json`（字段 `gitee_personal_access_token`/`owner`/`repo`；已进 .gitignore，
+严禁提交/外传），脚本读取：
+`TOKEN = json.load(open('gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']`。
 以下 `{owner}/{repo}` = `songrenshuo/mybatis-plus-sql-visualizer`。
 
 ### 1. 建发行版
@@ -137,7 +138,7 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 ```python
 import json, os, urllib.request, urllib.parse
 
-TOKEN = '<PAT>'
+TOKEN = json.load(open('gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']
 BASE = 'https://gitee.com/api/v5/repos/songrenshuo/mybatis-plus-sql-visualizer/releases'
 
 # 1) 建发行版（body 参数名！）
