@@ -80,7 +80,8 @@
     <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
          官方规范（Plugin Dependencies）：可选依赖须声明 optional="true" + config-file，
          主描述文件不得直接引用可选插件类（本插件经反射隔离调用，Community 下优雅降级）；
-         database-optional.xml 存放可选插件存在时才激活的声明（当前无 EP 注册，为占位） -->
+         database-optional.xml 存放可选插件存在时才激活的声明（modelRelationProvider EP +
+         T-CrudSql 数据库表右键 action——Community 下整文件不加载，实体类入口不受影响） -->
     <depends optional="true" config-file="database-optional.xml">com.intellij.database</depends>
 
     <!-- T-Dgm-01 JOIN 图原生渲染：com.intellij.diagram（Ultimate 捆绑 "Diagrams"，类图/关系图底座）——
@@ -276,6 +277,18 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift J"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift J"/>
+        </action>
+
+        <!-- T-CrudSql：实体类右键生成 CRUD SQL（编辑器 + 项目视图；update 判定 MP 实体注解；
+             展示复用现有 SqlSelectionDialog + SqlPreviewService.showResult，零新弹窗；
+             数据库表节点入口在 database-optional.xml——com.intellij.database 在场时才加载） -->
+        <action id="cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity"
+                class="cn.song.mybatisplus.visualizer.actions.GenerateCrudSqlFromEntityAction"
+                text="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity.text"
+                description="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

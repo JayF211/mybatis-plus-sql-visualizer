@@ -141,4 +141,12 @@
 
 ## 八、实施记录
 
-（交付时回填：各任务完成情况、偏离计划项、真机走查结果、提交号。）
+2026-09-12 交付（worktree mpsv-crudsql，分支 feature/t-crudsql）：
+
+- T-CrudSql-01：`generator/CrudTableSpec.kt`（CrudColumn/CrudTableSpec/CrudKind/CrudStatement）+ `generator/CrudSqlGenerator.kt`（SELECT/DELETE 纯文本 + INSERT/UPDATE 组装 BatchModel，renderSql 唯一渲染源）。@Version 语义与 `BatchOperationConverter.buildUpdateBatch` 逐一对齐（version 不进实体 SET、SET 尾 `= version + 1`、WHERE 追加 `AND version = ?`）；无主键降级 `WHERE 1 = 0 /* */` 且降级 UPDATE 不挂 batchModel。
+- T-CrudSql-02：`actions/GenerateCrudSqlFromEntityAction.kt`（BGT update + 后台 ReadAction 解析 + EDT showCandidates；MP 注解短名判定；PSI_ELEMENT/PSI_ELEMENT_ARRAY/caret 上溯三路收集）。Kotlin KtClass 留后续迭代（文档化边界）。
+- T-CrudSql-03：`database/DbTableSpecAdapter.kt`（getDbChildren(DasColumn, COLUMN) / DasTableKey.isPrimary+getColumnsRef / Attribute.AUTO_GENERATED，全部直引编译期类型零反射）+ `generator/DbTypeQuoteHint.kt`。database-optional.xml 注册 DatabaseViewPopupMenu anchor=last。
+- T-CrudSql-04：`actions/CrudSqlPreviewFlow.kt`（SqlSelectionDialog 候选选择 → SqlPreviewService.showResult；候选标签 `表名 · 语句种类`，无主键追加标注；0/1 条不弹选择框）。
+- 实施 vs 计划偏差：① `PSI_ELEMENT_ARRAY` 实际在 `PlatformCoreDataKeys`（计划误写 CommonDataKeys，javap 实证 243 布局）；② 候选选择复用 SqlSelectionDialog 时 displayTexts 无 PSI 读取（纯 bundle + 已算 SQL 首行），不触发后台预计算要求；③ 逻辑删除变体值固化为 1（@TableLogic delval 自定义形态文档化边界，面板可编辑）。
+- 测试：CrudSqlGeneratorTest 11 例 + DbTypeQuoteHintTest 3 例 + CrudSqlPreviewFlowTest 3 例（纯 JUnit），clean 全量 3339/0/6 绿（沙盒 MPSV-CrudSql 隔离，基线 3322 + 17）。
+- 验证：编译 243 目标通过；verifyPlugin 三版本与 runIde 真机走查（实体右键 + MySQL 表右键）待合并前执行，留人工。
