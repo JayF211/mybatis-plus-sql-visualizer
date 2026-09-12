@@ -1,6 +1,8 @@
 # SQL Visualizer
 
-本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
+> **服务未启，SQL 先知**
+
+MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
 
 ## 功能截图
 
@@ -34,7 +36,7 @@
 
 **Wrapper 转 SQL 预览**
 
-- 支持 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`、字符串版 `QueryWrapper` / `UpdateWrapper`、`MPJLambdaWrapper` / `MPJQueryWrapper` 联表查询，以及 `service.lambdaQuery()` 等服务链
+- 支持 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`、字符串版 `QueryWrapper` / `UpdateWrapper`、`MPJLambdaWrapper` / `MPJQueryWrapper` 联表查询，以及 `service.lambdaQuery()` 等服务链；Java 与 Kotlin 文件均支持
 - 左侧面板可勾选动态条件（`.eq(true, ...)` 布尔重载）、回填 `?` 参数（LIKE 自动拼百分号、按字段类型决定是否加引号）、调整 foreach / bind 值
 - SQL 自动格式化（多行 / 单行），分页子句按 9 种方言差异渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase）
 
@@ -59,19 +61,19 @@
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表，双击预览、右键复制 / 跳转源码
+- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码
 - 条目显示耗时（p6spy / MP TimeCount / 自定义前缀），超阈值红色标记并统计慢查询；列表支持 SQL 类型筛选、Ctrl+F 搜索、耗时排序、重复条目去重（⨉N 徽章即时同步）
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码
 - 双击/右键「跳转到源码」：应用注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）后可精确定位到触发 SQL 的代码行；未注册时按表名智能搜索实体近似跳转
 
 **检查更新（Gitee 抢先体验通道）**
 
-- 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装（重启生效）；支持「忽略此版本」
+- 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装，下载后热替换即时生效免重启（环境不支持时自动回退重启安装）；支持「忽略此版本」
 
 **其他**
 
 - SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示
-- JOIN 关系图：联表查询在预览面板「关系图」tab 自绘渲染表间 JOIN 关系
+- JOIN 关系图：联表查询在预览面板「关系图」tab 由 IDE 原生 Diagrams 框架渲染（Community 降级自绘渲染），支持 PNG / SVG 导出
 - 性能建议与复杂度：预览时按规则集给出 `SELECT *`、无索引列等性能提示与 SQL 复杂度评分
 - 对比与分享：当前 SQL 与上次预览并排 Diff（IDEA 原生 Diff）；一键复制可执行 SQL；分享为 Markdown / HTML 报告
 - 批量操作预览：`save` / `updateBatchById` 等批量 SQL 按列展开，参数可逐列勾选；`saveOrUpdate` 冲突子句按方言渲染（MySQL `ON DUPLICATE KEY UPDATE` / PG `ON CONFLICT` 等）
@@ -157,6 +159,7 @@ ORDER BY t1.create_time DESC
 | 格式化输出 | 开 | 多行缩进（关 = 单行） |
 | 逻辑删除注入 | 开 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值` |
 | 逻辑删除值 | 0 | 逻辑删除条件的值（对齐 MP `logic-delete-value`） |
+| 字段列表自动折叠 | 关 | SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开（阈值可配，默认 10） |
 
 **表名映射**
 
@@ -201,7 +204,7 @@ ORDER BY t1.create_time DESC
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
 | 启动时自动检查更新 | 关 | 勾选后进入 Gitee 抢先体验通道，启动静默检查（检查源为仓库 `update/update.json`），发现新版弹通知（可一键后台下载安装，支持「忽略此版本」）；稳定版由 JetBrains Marketplace 推送 |
-| 检查更新 / 下载并安装 | - | 手动检查更新、查看变更日志、一键下载安装（重启生效） |
+| 检查更新 / 下载并安装 | - | 手动检查更新、查看变更日志、一键下载安装（热替换免重启生效，环境不支持时回退重启安装） |
 | 插件缓存 | - | 显示反查缓存占用大小，可一键清除 |
 | 内部构建号 | - | 每次构建唯一（MPV-Build），反馈问题时一键复制粘贴 |
 
@@ -298,4 +301,4 @@ M28 起发布流程新增一步（插件设置页「检查更新」的数据源�
 |----------|--------|
 | ![微信](docs/images/wechat-qr.png) | ![交流群](docs/images/group-qr.png) |
 
-遇到问题或有建议？请在 [Issues](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues) 提交反馈。
+遇到问题或有建议？请在 [官网需求池](https://sql-visualizer.jvtools.cn/about/feedback) 提交反馈。
