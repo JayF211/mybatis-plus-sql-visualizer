@@ -239,46 +239,11 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
-        // T-DynUpdate：本地清单服务自动起停与 runIdeHotSwap 同款——IDE 内存里可能残留指向
-        // 本任务的旧运行配置（实证 12:48 用户点到旧配置跑 :runIde），两任务都挂保证点哪个都通。
-        // autoReload 保留开发热重载语义：热替换后平台自动重载器可能把新版再重载一次，无害。
-        // 配置缓存约束：路径配置期解析为 File，doFirst 不引用脚本对象。
-        val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
-        val logFile = layout.buildDirectory.file("hotswap-server.log").get().asFile
-        val scriptFile = rootProject.file("dev-support/hotswap-local-server.py")
-        doFirst {
-            // 端口须与 .run/runIdeLocalManifest.run.xml 清单 URL 及脚本默认值一致
-            val port = 8919
-            fun listening() = runCatching {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("localhost", port), 500)
-                    true
-                }
-            }.getOrDefault(false)
-            if (listening()) {
-                logger.lifecycle("hotswap local server already listening on $port — reusing (not owned, left running at exit)")
-                pidFile.writeText("")
-                return@doFirst
-            }
-            if (!scriptFile.isFile) throw GradleException("hotswap-local-server.py not found: $scriptFile")
-            val proc = ProcessBuilder("python", scriptFile.absolutePath)
-                .redirectOutput(logFile)
-                .redirectErrorStream(true)
-                .start()
-            pidFile.writeText(proc.pid().toString())
-            val deadline = System.currentTimeMillis() + 20_000
-            while (System.currentTimeMillis() < deadline) {
-                if (listening()) {
-                    logger.lifecycle("hotswap local server started (pid=${proc.pid()}, log=$logFile)")
-                    return@doFirst
-                }
-                if (!proc.isAlive) throw GradleException("hotswap server exited during startup — see $logFile")
-                Thread.sleep(300)
-            }
-            runCatching { proc.destroy() }
-            throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
-        }
-        finalizedBy("hotswapServerStop")
+        // T-DynUpdate 职责分离（用户定案）：hotswap 本地服务起停只挂 runIdeHotSwap
+        //（Run IDE (Local Manifest) 链路专属）——本任务（Run IDE with Plugin）是纯开发沙盒，
+        // 不依赖更新清单服务，曾因无条件起服务 + build/distributions 缺 zip（clean 后）导致
+        // 启动即挂（hotswap server exited during startup）。旧 .run 同名配置已删除，无误触入口。
+        // -Dmpvs.update.manifest.url 转发保留：显式传参时仍可用（属性缺席为空，无副作用）。
         // 清单 URL 转发必须在执行期读——配置期 System.getProperty 被配置缓存冻结
         //（runIdeHotSwap 同款修复，见该任务注释）
         jvmArgumentProviders.add(CommandLineArgumentProvider {
