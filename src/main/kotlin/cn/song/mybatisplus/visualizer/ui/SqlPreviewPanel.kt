@@ -492,6 +492,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照；dev 侧功能保留内联，
         // 导入/对比/分享已按 T-PreviewTopOverlap F2 折叠进「更多」菜单）
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
+        // T-RollbackSql：回滚 SQL（预览窗口直达按钮——计划 F3 定案「分享之前」的原直达锚点
+        // 已随 T-PreviewTopOverlap F2 折叠进「更多」，按计划意图保持一键直达形态）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.rollbackSql")) { showRollbackSql() })
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         add(smallButton(MpSqlVisualizerBundle.message("panel.more")) { showMoreActionsPopup() })
     }
@@ -528,6 +531,137 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
 
     /**
+     * T-RollbackSql：回滚 SQL 视图入口（面板【回滚SQL】按钮）。
+     *
+     * 生成结果分层（计划 §2.2）：Complete/Partial 打开 [RollbackSqlDialog]；可解析的
+     * UPDATE/DELETE（Unable 但有快照工作流）同样进视图——人工恢复指引 + 粘贴快照生成回滚；
+     * 完全不可推导（解析失败/MERGE/DDL/SELECT）不弹视图，仅消息框说明原因与人工恢复路径。
+     */
+    internal fun showRollbackSql() {
+        val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+        val kind = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+        val result = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(sql)
+        val entry = project?.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
+            ?.findBySql(sql)
+        if (result.rating == cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.Rating.UNABLE &&
+            result.snapshotSelectSql == null
+        ) {
+            val proj = project ?: return
+            val reasons = result.warnings.joinToString("\n") { warning ->
+                if (warning.messageArgs.isEmpty()) MpSqlVisualizerBundle.message(warning.messageKey)
+                else MpSqlVisualizerBundle.message(warning.messageKey, *warning.messageArgs.toTypedArray())
+            }
+            Messages.showInfoMessage(
+                proj,
+                reasons,
+                MpSqlVisualizerBundle.message("rollback.dialog.title"),
+            )
+            return
+        }
+        RollbackSqlDialog(project, this, result, kind, entry).show()
+    }
+
+    /**
+     * T-RollbackSql F4：临时 SQL 执行（回滚弹窗专用）——复用 [executeSql] 的既有管线
+     * （分类 → DML 二次确认 → isPrepared 快路径/全链），T-RefreshDbSteal F4 所有权卫队
+     * 对这条路径天然生效；执行完毕结果反馈走既有 [resultPanel]。
+     *
+     * 刻意不走 [cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute] 从弹窗直调全链：
+     * 全链建临时 .sql 并 attachConsole，可能把正嵌在预览面板里的共享控制台偷走。
+     *
+     * @param dmlConfirmed    DML 二次确认豁免（回滚弹窗「执行回滚」已过用户显式确认链）
+     * @param rollbackOfEntry 本次执行本身是回滚语句时指向被回滚的原快照条目（F6 留痕链）
+     */
+    internal fun executeAdhocSql(
+        sql: String,
+        dmlConfirmed: Boolean = false,
+        rollbackOfEntry: cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry? = null,
+    ) {
+        val proj = project ?: return
+        if (sql.isBlank()) return
+        val isQuery = SqlTypeClassifier.isQuery(sql)
+        if (!isQuery && !dmlConfirmed) {
+            val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+            val confirm = Messages.showYesNoDialog(
+                proj,
+                MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                Messages.getWarningIcon(),
+            )
+            if (confirm != Messages.YES) return
+        }
+        // P2-F5/F6：经执行按钮执行的 UPDATE/DELETE 执行前登记快照条目（回滚语句登记留痕链）
+        registerRollbackSnapshotIfNeeded(sql, rollbackOfEntry)
+
+        resultPanel.showLoading()
+        if (SqlExecutor.isPrepared()) {
+            if (!consoleAttachedToMe()) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[TRollbackSql] executeAdhocSql: prepared console detached → recover before execute")
+                recoverConsole(sql)
+                if (SqlExecutor.isPrepared() && !consoleAttachedToMe()) {
+                    SqlExecutor.execute(
+                        proj, sql, null, isQuery,
+                        onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+                        onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    )
+                    return
+                }
+            }
+            // 快路径同步执行 SQL 进控制台文档（executePrepared 执行的就是控制台文档；
+            // 回滚执行后下一次 renderSql 会按预览 SQL 同步回来）
+            nativeEditorDoc?.let { doc ->
+                if (doc.text != sql) {
+                    WriteCommandAction.runWriteCommandAction(proj) { doc.setText(sql) }
+                }
+            }
+            val executed = SqlExecutor.executePrepared(
+                proj,
+                onResultsReady = { fullConsole -> embedConsole(fullConsole) },
+                onError = { errorMsg -> resultPanel.showError(errorMsg) },
+            )
+            if (executed) return
+        }
+        SqlExecutor.execute(
+            proj, sql, null, isQuery,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+            onError = { errorMsg -> resultPanel.showError(errorMsg) },
+        )
+    }
+
+    /**
+     * T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（内存 store，LogSqlEntry 不动字段）。
+     * 回滚语句（rollbackOfEntry 非 null）也登记——parentExecutionId 指向被回滚的原执行，
+     * 形成 dbx `rollback_of` 语义的留痕链；仅登记可解析到目标表的语句（解析失败登记无意义）。
+     */
+    private fun registerRollbackSnapshotIfNeeded(
+        sql: String,
+        rollbackOfEntry: cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry?,
+    ) {
+        val proj = project ?: return
+        val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: return
+        if (keyword != "UPDATE" && keyword != "DELETE") return
+        val store = proj.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
+        if (rollbackOfEntry != null) {
+            store.register(
+                sql, rollbackOfEntry.targetTable, null,
+                parentExecutionId = rollbackOfEntry.executionId,
+            )
+            return
+        }
+        val analyzed = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))
+        val table = analyzed.targetTable ?: return
+        store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns)
+    }
+
+    /** 当前编辑器 SQL 文本（原生编辑器文档优先，兜底自研编辑器；两处皆空 null）。 */
+    private fun currentEditorSql(): String? =
+        nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+
+    /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
      *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
@@ -561,6 +695,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             )
             if (confirm != Messages.YES) return
         }
+        // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
+        registerRollbackSnapshotIfNeeded(sql, null)
 
         // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
         //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
@@ -2786,6 +2922,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun detachConsoleForTest() = detachConsole()
     /** T-RefreshDbSteal F4：所有权判定（卫队断言用，见 RefreshDbStealTest）。 */
     internal fun consoleAttachedToMeForTest(): Boolean = consoleAttachedToMe()
+    /** T-RollbackSql：执行状态面板（executeAdhocSql 结果反馈断言用）。 */
+    internal fun resultPanelForTest(): SqlResultPanel = resultPanel
     /** T-RefreshDbSteal F3：当前挂接的 rehost 监听是否仍在组件上（解绑断言用）。 */
     internal fun rehostListenerAttachedForTest(): Boolean {
         val console = embeddedConsole ?: return false
