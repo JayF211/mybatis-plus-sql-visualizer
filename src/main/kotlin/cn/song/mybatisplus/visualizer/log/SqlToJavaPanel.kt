@@ -1117,11 +1117,14 @@ class SqlToJavaPanel(
     ) {
         when (candidates.size) {
             0 -> {
-                setResultText(generateCode(result, null, format))
+                // T-PickMpjErr：生成期业务拒绝（如无 MPJ 能力）走状态栏提示，结果区保留上次内容
+                val code = generateCodeOrReport(result, null, format) ?: return
+                setResultText(code)
                 status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), error = false)
             }
             1 -> {
-                setResultText(generateCode(result, candidates[0], format, subEntities))
+                val code = generateCodeOrReport(result, candidates[0], format, subEntities) ?: return
+                setResultText(code)
                 status(
                     joinStatus(
                         result,
@@ -1133,7 +1136,8 @@ class SqlToJavaPanel(
             else -> {
                 // 开关关闭 → 不弹任何选择框，取第一个（纯自动推断）
                 if (!manualEntitySelectionEnabled()) {
-                    setResultText(generateCode(result, candidates[0], format, subEntities))
+                    val code = generateCodeOrReport(result, candidates[0], format, subEntities) ?: return
+                    setResultText(code)
                     status(
                         joinStatus(
                             result,
@@ -1153,7 +1157,8 @@ class SqlToJavaPanel(
                     }
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->
-                    setResultText(generateCode(result, selected, format, subEntities))
+                    val code = generateCodeOrReport(result, selected, format, subEntities) ?: return@SqlSelectionDialog
+                    setResultText(code)
                     status(
                         MpSqlVisualizerBundle.message("reverse.panel.status.entity", selected.psiClass.name ?: ""),
                         error = false,
@@ -1176,6 +1181,25 @@ class SqlToJavaPanel(
         buildInvocation(),
         subEntities,
     )
+
+    /**
+     * T-PickMpjErr：生成期业务拒绝（SqlReverseException，如多表 JOIN 需 MPJ 依赖而调用类无 MPJ 能力）
+     * 转状态栏错误提示，结果区保留上次内容；返回 null = 已报错。generateCode 在 EDT 鼠标回调
+     * （选类 elementChosen / 形态切换 / 弹窗回调）内同步执行，不接住会逃逸成平台 UnhandledException
+     * 红叹号（真机实证）。口径对齐 convert() 的解析期 catch（不带行号——errorLine 需原始输入文本，
+     * 生成期错误均为结构性拒绝）。报错时机与 joinStatus 成功提示互斥，调用点据 null 短路。
+     */
+    private fun generateCodeOrReport(
+        result: SqlReverseResult,
+        candidate: SqlToJavaConverter.EntityCandidate?,
+        format: ReverseWrapperFormat,
+        subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
+    ): String? = try {
+        generateCode(result, candidate, format, subEntities)
+    } catch (ex: SqlReverseException) {
+        status(MpSqlVisualizerBundle.message(ex.key, ex.detail), error = true)
+        null
+    }
 
     /** 反向转换配置形态（测试环境 settings 未注册时默认 AUTO）。 */
     private fun reverseFormat(): ReverseWrapperFormat = runCatching {
