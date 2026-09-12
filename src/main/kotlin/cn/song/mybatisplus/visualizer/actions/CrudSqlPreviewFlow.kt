@@ -6,14 +6,25 @@ import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
+import java.awt.BorderLayout
+import java.awt.Component
+import java.awt.Font
+import javax.swing.JLabel
+import javax.swing.JList
+import javax.swing.JPanel
+import javax.swing.ListCellRenderer
 
 /**
  * CRUD 生成结果 → 现有预览窗口的展示流（T-CrudSql-04，展示层零新弹窗）。
  *
- * 定案（2026-09-12 用户确认）：候选语句经现有 [SqlSelectionDialog] 选择，选中后走
- * [SqlPreviewService.showResult] 打开既有 SqlPreviewDialog——渲染/格式化/执行/复制按钮
- * 全部复用，INSERT/UPDATE 的列勾选重建由 PreviewResult.batchModel 承载。
- * 候选 0/1 条时不弹选择框（0 条由调用方兜底提示）。
+ * 候选选择用 **JBPopup 浮层**（T-CrudSql 样式反馈二次定案：模态对话框带 OK/Cancel 与
+ * 底部留白不符合 IDEA 原生风格；Recent Files/搜索式浮层才是原生态——无按钮、Enter/双击
+ * 选择、ESC 关闭、打字过滤定位），选中后走 [SqlPreviewService.showResult] 打开既有
+ * SqlPreviewDialog——渲染/格式化/执行/复制按钮全部复用，INSERT/UPDATE 的列勾选重建由
+ * PreviewResult.batchModel 承载。候选 0/1 条时不弹选择（0 条由调用方兜底提示）。
  */
 object CrudSqlPreviewFlow {
 
@@ -33,19 +44,20 @@ object CrudSqlPreviewFlow {
             0 -> return
             // 调用方（action invokeLater）已在 EDT 非模态上下文——直接开预览
             1 -> SqlPreviewService.showResult(project, candidates[0].statement.result, null)
-            else -> SqlSelectionDialog(
-                project,
-                candidates,
-                candidates.map { SqlSelectionDialog.Row.of(summary(it), lineText(it)) },
-            ) { selected ->
-                // T-CrudSql 真机修复（262 实测 OK 无响应）：不在模态弹窗 doOKAction 栈内同步
-                // 开 modeless 预览弹窗——被仍存活的模态上下文吞掉且零异常零日志；既有
-                // ConvertToSqlAction 同点位经 previewAsync 异步跳板，从不在此栈内同步 show。
-                // invokeLater 让预览等选择弹窗 dispose 后再开（默认模态态随当前事件派发走）。
-                ApplicationManager.getApplication().invokeLater {
-                    SqlPreviewService.showResult(project, selected.statement.result, null)
+            else -> JBPopupFactory.getInstance()
+                .createPopupChooserBuilder(candidates)
+                .setTitle(MpSqlVisualizerBundle.message("dialog.selectSql.title"))
+                .setRenderer(CandidateCellRenderer())
+                .setNamerForFiltering { summary(it) }
+                .setItemChosenCallback { selected ->
+                    // 预览打开延后到选择浮层关闭之后（T-CrudSql 真机修复：不在选择 UI 的
+                    // 事件栈内同步开 modeless 预览弹窗，262 实测会被吞且零异常零日志）
+                    ApplicationManager.getApplication().invokeLater {
+                        SqlPreviewService.showResult(project, selected.statement.result, null)
+                    }
                 }
-            }.show()
+                .createPopup()
+                .showInFocusCenter()
         }
     }
 
@@ -69,7 +81,43 @@ object CrudSqlPreviewFlow {
         }
     }
 
-    /** 候选第二行：SQL 首行预览（displayText 内部截断 80 字符并 HTML 转义）。 */
+    /** 候选第二行：SQL 首行预览（渲染时截断 80 字符）。 */
     internal fun lineText(candidate: Candidate): String =
         candidate.statement.result.sql.lineSequence().firstOrNull().orEmpty()
+
+    /**
+     * 候选行渲染器：主题色双行（加粗摘要 + 次要色详情，选中态随平台列表配色），
+     * 与 [SqlSelectionDialog] 行渲染同款范式；详情行禁 HTML 解析（代码行可能以 `<` 开头）。
+     */
+    internal class CandidateCellRenderer : JPanel(BorderLayout()), ListCellRenderer<Candidate> {
+        private val summaryLabel = JLabel()
+        private val detailLabel = JLabel()
+
+        init {
+            isOpaque = true
+            border = JBUI.Borders.empty(6, 12)
+            summaryLabel.font = summaryLabel.font.deriveFont(Font.BOLD)
+            detailLabel.putClientProperty("html.disable", true)
+            detailLabel.foreground = UIUtil.getContextHelpForeground()
+            add(summaryLabel, BorderLayout.NORTH)
+            add(detailLabel, BorderLayout.CENTER)
+        }
+
+        override fun getListCellRendererComponent(
+            list: JList<out Candidate>,
+            value: Candidate,
+            index: Int,
+            selected: Boolean,
+            focused: Boolean,
+        ): Component {
+            summaryLabel.text = summary(value)
+            val line = lineText(value)
+            detailLabel.text =
+                if (line.length > SqlSelectionDialog.MAX_LINE_LENGTH) line.take(SqlSelectionDialog.MAX_LINE_LENGTH) + "…" else line
+            background = if (selected) UIUtil.getListSelectionBackground(true) else UIUtil.getListBackground()
+            summaryLabel.foreground = UIUtil.getListForeground()
+            detailLabel.foreground = if (selected) UIUtil.getListForeground() else UIUtil.getContextHelpForeground()
+            return this
+        }
+    }
 }
