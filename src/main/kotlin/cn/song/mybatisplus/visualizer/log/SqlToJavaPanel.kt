@@ -1001,9 +1001,9 @@ class SqlToJavaPanel(
                         }
                         // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
                         // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
-                        val displayTexts = ReadAction.compute<List<String>, Throwable> {
+                        val displayTexts = ReadAction.compute<List<SqlSelectionDialog.Row>, Throwable> {
                             candidates.map { c ->
-                                SqlSelectionDialog.displayText(
+                                SqlSelectionDialog.Row.of(
                                     "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
                                     c.psiClass.containingFile?.name ?: "",
                                 )
@@ -1148,9 +1148,9 @@ class SqlToJavaPanel(
                     return
                 }
                 // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
-                val displayTexts = ReadAction.compute<List<String>, Throwable> {
+                val displayTexts = ReadAction.compute<List<SqlSelectionDialog.Row>, Throwable> {
                     candidates.map { c ->
-                        SqlSelectionDialog.displayText(
+                        SqlSelectionDialog.Row.of(
                             "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
                             c.psiClass.containingFile?.name ?: "",
                         )

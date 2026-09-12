@@ -37,26 +37,18 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         dialog.panelForTest()!!.clear()
     }
 
-    fun testDisplayTextTwoLineWithTruncationAndEscape() {
-        // T-M23.8：列表项显示文本纯函数——两行布局（加粗摘要 + 缩进代码行）、
-        // 超长行截断 80 字符 + 省略号、& < > HTML 转义防破坏布局；
-        // T-CrudSql 样式反馈：摘要加粗 + 代码行灰色等宽（视觉分层）
-        val short = SqlSelectionDialog.displayText("L3 LAMBDA_QUERY  tbl", "service.getById(id);")
-        assertTrue(
-            "两行布局应以 HTML 形式组合加粗摘要与缩进代码行",
-            short.startsWith(
-                "<html><b>L3 LAMBDA_QUERY  tbl</b><br>&nbsp;&nbsp;&nbsp;<font color=#808080 face=monospace>service.getById(id);</font></html>",
-            ),
-        )
+    fun testRowOfContentFidelityAndTruncation() {
+        // T-M23.8：列表行纯函数；T-CrudSql 原生化改造：Row.of 纯文本行（截断 80 字符加省略号；
+        // HTML 转义由渲染器 html.disable 承担，摘要/详情原样保留）
+        val short = SqlSelectionDialog.Row.of("L3 LAMBDA_QUERY  tbl", "service.getById(id);")
+        assertEquals("摘要原样保留", "L3 LAMBDA_QUERY  tbl", short.summary)
+        assertEquals("详情原样保留", "service.getById(id);", short.detail)
         val longLine = "x".repeat(100)
-        val truncated = SqlSelectionDialog.displayText("L1 BATCH", longLine)
-        assertTrue("超长行应截断加省略号", truncated.contains("…"))
-        assertFalse("截断后不应保留完整长行", truncated.contains("x".repeat(81)))
-        val escaped = SqlSelectionDialog.displayText("L1 BATCH", "w.eq(\"a<b&c>d\");")
-        assertTrue("& 应转义为 &amp;", escaped.contains("&amp;"))
-        assertTrue("< 应转义为 &lt;", escaped.contains("&lt;"))
-        assertTrue("> 应转义为 &gt;", escaped.contains("&gt;"))
-        assertFalse("原始 < 不应直接出现在 HTML 中", escaped.contains("a<b"))
+        val truncated = SqlSelectionDialog.Row.of("L1 BATCH", longLine)
+        assertTrue("超长行应截断加省略号", truncated.detail.endsWith("…"))
+        assertFalse("截断后不应保留完整长行", truncated.detail.contains("x".repeat(81)))
+        val special = SqlSelectionDialog.Row.of("L1 BATCH", "w.eq(\"a<b&c>d\");")
+        assertEquals("特殊字符原样保留（渲染层禁 HTML 解析）", "w.eq(\"a<b&c>d\");", special.detail)
     }
 
     fun testDoOkActionInvokesCallbackWithSelectedCandidate() {
@@ -64,7 +56,7 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         // 真机曾因回调内同步开 modeless 预览被模态上下文吞掉而表现"OK 无响应"
         val candidates = listOf("A", "B")
         val selected = mutableListOf<String>()
-        val dialog = SqlSelectionDialog(project, candidates, listOf("PA", "PB")) { selected += it }
+        val dialog = SqlSelectionDialog(project, candidates, listOf(SqlSelectionDialog.Row("PA", ""), SqlSelectionDialog.Row("PB", ""))) { selected += it }
         dialog.listForTest().selectedIndex = 1
         dialog.doOKAction()
         assertEquals("doOKAction 应把选中候选交给回调", listOf("B"), selected)
@@ -74,7 +66,7 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         // T-CrudSql 用户反馈：双击候选直接确认预览（对齐 IDEA 原生弹窗交互）
         val candidates = listOf("A", "B")
         val selected = mutableListOf<String>()
-        val dialog = SqlSelectionDialog(project, candidates, listOf("PA", "PB")) { selected += it }
+        val dialog = SqlSelectionDialog(project, candidates, listOf(SqlSelectionDialog.Row("PA", ""), SqlSelectionDialog.Row("PB", ""))) { selected += it }
         val list = dialog.listForTest()
         assertTrue("列表应注册鼠标监听（双击确认）", list.mouseListeners.isNotEmpty())
         list.dispatchEvent(
@@ -113,12 +105,12 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         val file = myFixture.file
         val candidates = WrapperLocator.sqlCandidatesInRange(file, 0, file.textLength)
         assertTrue("fixture 应含多个候选（触发多选弹窗分支）", candidates.size >= 2)
-        val displayTexts = candidates.mapIndexed { i, _ -> "PRE-$i" }
-        val dialog = SqlSelectionDialog(project, candidates, displayTexts) {}
+        val rows = candidates.mapIndexed { i, _ -> SqlSelectionDialog.Row.of("PRE-$i", "") }
+        val dialog = SqlSelectionDialog(project, candidates, rows) {}
         val model = dialog.listForTest().model
-        assertEquals("列表项数应与预计算文本数一致", displayTexts.size, model.size)
-        for (i in displayTexts.indices) {
-            assertEquals("列表第 $i 项应原样渲染预计算文本（不重新解析 PSI）", displayTexts[i], model.getElementAt(i))
+        assertEquals("列表项数应与预计算行数一致", rows.size, model.size)
+        for (i in rows.indices) {
+            assertEquals("列表第 $i 项应原样渲染预计算行（不重新解析 PSI）", rows[i], model.getElementAt(i))
         }
     }
 
@@ -137,12 +129,12 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         val file = myFixture.file as XmlFile
         val candidates = XmlSqlGutterLineMarkerProvider.statementsInRange(file, 0, file.textLength)
         assertTrue("fixture 应含多条语句（触发多选弹窗分支）", candidates.size >= 2)
-        val displayTexts = candidates.mapIndexed { i, _ -> "PRE-$i" }
-        val dialog = SqlSelectionDialog(project, candidates, displayTexts) {}
+        val rows = candidates.mapIndexed { i, _ -> SqlSelectionDialog.Row.of("PRE-$i", "") }
+        val dialog = SqlSelectionDialog(project, candidates, rows) {}
         val model = dialog.listForTest().model
-        assertEquals("列表项数应与预计算文本数一致", displayTexts.size, model.size)
-        for (i in displayTexts.indices) {
-            assertEquals("列表第 $i 项应原样渲染预计算文本（不重新解析 PSI）", displayTexts[i], model.getElementAt(i))
+        assertEquals("列表项数应与预计算行数一致", rows.size, model.size)
+        for (i in rows.indices) {
+            assertEquals("列表第 $i 项应原样渲染预计算行（不重新解析 PSI）", rows[i], model.getElementAt(i))
         }
     }
 }

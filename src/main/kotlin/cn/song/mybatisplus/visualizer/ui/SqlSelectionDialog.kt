@@ -5,10 +5,22 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.ui.TreeUIHelper
+import com.intellij.ui.components.JBList
+import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
+import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.Dimension
+import java.awt.Font
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.JComponent
+import javax.swing.JLabel
 import javax.swing.JList
+import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.ListCellRenderer
 import javax.swing.ListSelectionModel
 
 /**
@@ -17,31 +29,43 @@ import javax.swing.ListSelectionModel
  * 选择代码块后右键、选择区内含**多个** SQL 候选时，弹出列表让用户选择要预览哪一个。
  * 泛型 [T]：Wrapper 链首（[PsiMethodCallExpression]）与 XML mapper 语句（XmlTag）均可用。
  *
- * T-M23.8（用户反馈：摘要不够明细、不能定位代码位置）：列表每项**两行**展示——
- * 第一行摘要（`行号 + Wrapper 类型/方法名 + 表名`），第二行**代码行内容**（缩进 + 截断 80 字符 +
- * HTML 转义），对齐 IDEA 原生搜索的代码预览体验；选中确定 → [onSelect] 回调
- * （调用方负责编辑器定位跳转 + 预览 SQL）。
+ * 列表每项两行展示——第一行摘要（`行号 + Wrapper 类型/方法名 + 表名`），第二行代码行内容；
+ * 选中确定 → [onSelect] 回调（调用方负责编辑器定位跳转 + 预览 SQL）。
  *
- * T-M23.8 增量修复（EDT 慢操作）：[displayTexts] 由调用方在**后台 ReadAction** 中预计算
- * （摘要/行文本含 PSI 解析，EDT 上会被 2025.3+ SlowOperations 守卫禁止）——
- * 构造只做纯 UI 渲染，不再触碰 PSI。
+ * T-CrudSql 原生化改造（用户反馈"样式丑"）：弃用 HTML 字符串渲染，改为 [RowRenderer]
+ * 主题色原生双行渲染（JBList + 加粗摘要 + 次要色详情 + 行内边距，明暗主题自适应）+
+ * IDEA 原生速度搜索（弹窗内直接打字过滤定位）；双击候选直接确认。
+ *
+ * [rows] 由调用方在**后台 ReadAction** 中预计算（摘要/行文本含 PSI 解析，EDT 上会被
+ * 2025.3+ SlowOperations 守卫禁止）——构造只做纯 UI 渲染，不再触碰 PSI。
  */
 class SqlSelectionDialog<T>(
     private val project: Project,
     candidates: List<T>,
-    displayTexts: List<String>,
+    rows: List<Row>,
     private val onSelect: (T) -> Unit,
 ) : DialogWrapper(project, true) {
 
-    /** 候选 SQL（显示文本列表索引序与之一一对应）。 */
+    /** 列表行（纯数据，可后台预计算与单测）：加粗摘要行 + 次要色详情行。 */
+    data class Row(val summary: String, val detail: String) {
+        companion object {
+            /** 工厂：详情超 [SqlSelectionDialog.MAX_LINE_LENGTH] 截断加省略号（纯文本渲染，无需 HTML 转义）。 */
+            fun of(summary: String, detail: String): Row =
+                Row(summary, if (detail.length > MAX_LINE_LENGTH) detail.take(MAX_LINE_LENGTH) + "…" else detail)
+        }
+    }
+
+    /** 候选 SQL（与 [rows] 索引序一一对应）。 */
     private val candidates: List<T> = candidates
 
-    /** 列表项显示文本（后台预计算；此处仅渲染，不做 PSI 解析）。 */
-    private val list = JList(displayTexts.toTypedArray()).apply {
+    private val list = JBList(rows).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
-        // T-CrudSql 用户反馈：双击候选直接确认（对齐 IDEA 原生弹窗交互），不必移步 OK
-        addMouseListener(object : java.awt.event.MouseAdapter() {
-            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+        cellRenderer = RowRenderer()
+        // IDEA 原生速度搜索：弹窗内直接打字按摘要/详情过滤定位（Recent Files 同款体验）
+        TreeUIHelper.getInstance().installListSpeedSearch(this)
+        // 双击候选直接确认（对齐 IDEA 原生弹窗交互），不必移步 OK
+        addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) {
                     val idx = locationToIndex(e.point)
                     if (idx >= 0) {
@@ -60,6 +84,7 @@ class SqlSelectionDialog<T>(
     }
 
     override fun createCenterPanel(): JComponent = JScrollPane(list).apply {
+        border = JBUI.Borders.empty()
         preferredSize = Dimension(DIALOG_WIDTH, DIALOG_HEIGHT)
         minimumSize = Dimension(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
     }
@@ -72,32 +97,53 @@ class SqlSelectionDialog<T>(
         super.doOKAction()
     }
 
-    /** T-M23.8 增量修复：internal 测试访问器（断言渲染文本与预计算一致，仿 panelForTest）。 */
-    internal fun listForTest(): JList<String> = list
+    /** 测试访问器（断言渲染模型与预计算行一致，仿 panelForTest）。 */
+    internal fun listForTest(): JList<Row> = list
+
+    /**
+     * 列表行渲染器：原生主题色双行（选中态随平台列表配色，明暗主题自适应）。
+     * 详情行禁用 HTML 解析（[BasicHTML.propertyKey]）——代码行可能以 `<` 开头（如 XML 片段）。
+     */
+    private class RowRenderer : JPanel(BorderLayout()), ListCellRenderer<Row> {
+        private val summaryLabel = JLabel()
+        private val detailLabel = JLabel()
+
+        init {
+            isOpaque = true
+            border = JBUI.Borders.empty(6, 12)
+            summaryLabel.font = summaryLabel.font.deriveFont(Font.BOLD)
+            // 详情行禁用 HTML 解析（Swing 约定键 "html.disable"，BasicHTML.propertyKey 是 View 缓存键勿用）——
+            // 代码行可能以 `<` 开头（如 XML 片段），纯文本渲染
+            detailLabel.putClientProperty("html.disable", true)
+            detailLabel.foreground = UIUtil.getContextHelpForeground()
+            add(summaryLabel, BorderLayout.NORTH)
+            add(detailLabel, BorderLayout.CENTER)
+        }
+
+        override fun getListCellRendererComponent(
+            list: JList<out Row>,
+            value: Row,
+            index: Int,
+            selected: Boolean,
+            focused: Boolean,
+        ): Component {
+            summaryLabel.text = value.summary
+            detailLabel.text = value.detail
+            background = if (selected) UIUtil.getListSelectionBackground(true) else UIUtil.getListBackground()
+            summaryLabel.foreground = UIUtil.getListForeground()
+            detailLabel.foreground = if (selected) UIUtil.getListForeground() else UIUtil.getContextHelpForeground()
+            return this
+        }
+    }
 
     companion object {
         /** 弹窗默认尺寸。 */
         const val DIALOG_WIDTH = 560
-        const val DIALOG_HEIGHT = 220
+        const val DIALOG_HEIGHT = 280
         const val DIALOG_MIN_WIDTH = 420
-        const val DIALOG_MIN_HEIGHT = 120
+        const val DIALOG_MIN_HEIGHT = 160
 
         /** 代码行预览最大长度（字符；超出截断加省略号，防撑爆弹窗宽度）。 */
         const val MAX_LINE_LENGTH = 80
-
-        /**
-         * T-M23.8：列表项显示文本（纯函数，可单测）——两行 HTML：
-         * 第一行摘要（行号 + 类型/方法名 + 表名，加粗），第二行代码行内容（缩进两空格、
-         * 灰色等宽字体；**先截断再转义**——`&`/`<`/`>` 转义防破坏 HTML 布局）。
-         * T-CrudSql 样式反馈：加粗摘要 + 灰色等宽代码行，视觉分层（摘要扫读、SQL 细读）。
-         */
-        internal fun displayText(summary: String, lineText: String): String {
-            val core = if (lineText.length > MAX_LINE_LENGTH) lineText.take(MAX_LINE_LENGTH) + "…" else lineText
-            val escaped = core
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            return "<html><b>$summary</b><br>&nbsp;&nbsp;&nbsp;<font color=#808080 face=monospace>$escaped</font></html>"
-        }
     }
 }

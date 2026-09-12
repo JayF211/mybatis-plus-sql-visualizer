@@ -193,7 +193,7 @@ class ConvertSqlToJavaAction : AnAction() {
             else -> {
                 // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
                 val displayTexts = candidates.map { c ->
-                    SqlSelectionDialog.displayText(
+                    SqlSelectionDialog.Row.of(
                         "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
                         c.psiClass.containingFile?.name ?: "",
                     )
