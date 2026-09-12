@@ -97,17 +97,17 @@ class ConvertToSqlAction : AnAction() {
                 // 一并后台 ReadAction 预计算——SqlSelectionDialog 构造只做纯 UI 渲染（EDT 上 PSI 解析
                 // 会被 2025.3+ SlowOperations 守卫禁止，实测 SEVERE "Slow operations are prohibited on EDT"）
                 val payload = try {
-                    ReadAction.compute<Pair<List<PsiMethodCallExpression>, List<String>>, Throwable> {
+                    ReadAction.compute<Pair<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>>, Throwable> {
                         val heads = WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
                         heads to heads.map { head ->
-                            SqlSelectionDialog.displayText(
+                            SqlSelectionDialog.Row.of(
                                 WrapperLocator.sqlCandidateSummary(head),
                                 WrapperLocator.sqlCandidateLineText(head),
                             )
                         }
                     }
                 } catch (t: Throwable) {
-                    emptyList<PsiMethodCallExpression>() to emptyList<String>()
+                    emptyList<PsiMethodCallExpression>() to emptyList<SqlSelectionDialog.Row>()
                 }
                 val (chainHeads, displayTexts) = payload
                 ApplicationManager.getApplication().invokeLater {
@@ -267,18 +267,18 @@ class ConvertToSqlAction : AnAction() {
     private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor, sourceLocation: String?) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Pair<List<PsiAnnotation>, List<String>>, Throwable> {
+                ReadAction.compute<Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val annotations = AnnotationSqlPreviewService.annotationCandidates(file)
                     annotations to annotations.map { anno ->
                         val method = PsiTreeUtil.getParentOfType(anno, PsiMethod::class.java)
-                        SqlSelectionDialog.displayText(
+                        SqlSelectionDialog.Row.of(
                             "${method?.name ?: "?"}（${anno.qualifiedName?.substringAfterLast('.')}）",
                             AnnotationSqlPreviewService.sqlSnippet(anno),
                         )
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<PsiAnnotation>() to emptyList<String>()
+                emptyList<PsiAnnotation>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -310,18 +310,18 @@ class ConvertToSqlAction : AnAction() {
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Pair<List<PsiAnnotation>, List<String>>, Throwable> {
+                ReadAction.compute<Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val annotations = AnnotationSqlPreviewService.annotationCandidatesInRange(file, selStart, selEnd)
                     annotations to annotations.map { anno ->
                         val method = PsiTreeUtil.getParentOfType(anno, PsiMethod::class.java)
-                        SqlSelectionDialog.displayText(
+                        SqlSelectionDialog.Row.of(
                             "${method?.name ?: "?"}（${anno.qualifiedName?.substringAfterLast('.')}）",
                             AnnotationSqlPreviewService.sqlSnippet(anno),
                         )
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<PsiAnnotation>() to emptyList<String>()
+                emptyList<PsiAnnotation>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (annotations, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -355,20 +355,20 @@ class ConvertToSqlAction : AnAction() {
     private fun previewXmlSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int, sourceLocation: String?) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
+                ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val tags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
                     tags to tags.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
                         val text = tag.text?.trim().orEmpty()
-                        SqlSelectionDialog.displayText(
+                        SqlSelectionDialog.Row.of(
                             "${tag.name} ${tag.getAttributeValue("id").orEmpty()}（第 $line 行）",
                             text,
                         )
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList<String>()
+                emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
@@ -411,12 +411,12 @@ class ConvertToSqlAction : AnAction() {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     // EDT 慢操作守卫：摘要/行文本后台 ReadAction 预计算（仿 T-M23.8 Java 候选）
                     val displayTexts = try {
-                        ReadAction.compute<List<String>, Throwable> {
+                        ReadAction.compute<List<SqlSelectionDialog.Row>, Throwable> {
                             statements.map { tag ->
                                 val line = tag.containingFile.viewProvider.document
                                     ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
                                 val text = tag.text?.trim().orEmpty()
-                                SqlSelectionDialog.displayText(
+                                SqlSelectionDialog.Row.of(
                                     "${tag.name} ${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
                                     text,
                                 )
@@ -481,12 +481,12 @@ class ConvertToSqlAction : AnAction() {
             else -> {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     val displayTexts = try {
-                        ReadAction.compute<List<String>, Throwable> {
+                        ReadAction.compute<List<SqlSelectionDialog.Row>, Throwable> {
                             statements.map { tag ->
                                 val line = tag.containingFile.viewProvider.document
                                     ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
                                 val text = tag.text?.trim().orEmpty()
-                                SqlSelectionDialog.displayText(
+                                SqlSelectionDialog.Row.of(
                                     "${tag.getAttributeValue("id").orEmpty()}（第 ${line} 行）",
                                     text,
                                 )
@@ -518,20 +518,20 @@ class ConvertToSqlAction : AnAction() {
     private fun previewPagesSelection(project: Project, file: XmlFile, editor: Editor, selStart: Int, selEnd: Int) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
-                ReadAction.compute<Pair<List<XmlTag>, List<String>>, Throwable> {
+                ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val tags = PagesXmlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
                     tags to tags.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
                         val text = tag.text?.trim().orEmpty()
-                        SqlSelectionDialog.displayText(
+                        SqlSelectionDialog.Row.of(
                             "${tag.getAttributeValue("id").orEmpty()}（第 $line 行）",
                             text,
                         )
                     }
                 }
             } catch (t: Throwable) {
-                emptyList<XmlTag>() to emptyList<String>()
+                emptyList<XmlTag>() to emptyList<SqlSelectionDialog.Row>()
             }
             val (tags, displayTexts) = payload
             ApplicationManager.getApplication().invokeLater {
