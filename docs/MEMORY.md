@@ -193,6 +193,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [20260814-1538-官方API全覆盖与批量增强-发行说明.md](./发行说明/20260814-1538-官方API全覆盖与批量增强-发行说明.md) | v2026.8.14 发行说明（官方 API 全覆盖 + 批量增强，链接用绝对路径） |
 | [20260813-1511-首发-发行说明.md](./发行说明/20260813-1511-首发-发行说明.md) | 首发版本发行说明（链接用绝对路径） |
 | [版本号规范-说明文档.md](./发行说明/版本号规范-说明文档.md) | 版本号规范（YYYY.M.D 一日一版） |
+| [Gitee自动发行工作流-说明文档.md](./发行说明/Gitee自动发行工作流-说明文档.md) | **门禁→八处同步→发行提交→buildPlugin→标签→Gitee API 发行→回读校验全链路**（沉淀自 v2026.9.14-beta.1，2026-09-12）：建发行版描述参数是 `body` 非 `description`；附件上传端点 `POST /releases/{id}/attach_files`（multipart `file`+`access_token`，`upload_files`/GitHub 式 `assets` 均 404 勿再试）；`prerelease='true'` 即预览版本；附件名=下载 URL 尾段须与清单 downloadUrl 逐字一致；含 Python 无依赖参考实现 |
 
 ## 图片（docs/images/）
 
