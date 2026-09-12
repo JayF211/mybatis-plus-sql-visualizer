@@ -10,6 +10,8 @@ enum class SqlSource {
     HIBERNATE,
     /** Spring JdbcTemplate 控制台日志（`Executing prepared SQL statement [SQL]` / `Setting SQL statement parameter value: ...` 格式）。 */
     JDBC,
+    /** agent 字节码通道（M56 增强捕获）：应用 JVM 内 JDBC 执行点 hook 直取的结构化事件。 */
+    AGENT,
     /** 未知来源（兼容旧版本条目）。 */
     UNKNOWN,
 }
@@ -66,6 +68,27 @@ data class LogSqlEntry(
      * （历史文件读回、日志转 SQL round-trip 产出的条目）。
      */
     val sequenceNumber: Long = 0L,
+    // ---------- M56 T-M56-00：agent 通道结构化字段（桥通道经标记行第 4/5 段与 pd 载荷扩展部分承接） ----------
+    /**
+     * mapper 语句 id（如 `com.example.mapper.UserMapper.selectById`）。
+     * agent 通道从 MyBatis Executor 直取；桥通道来自源码标记第 4 段（拦截器 `ms.getId()`）。
+     * null 表示未知（旧条目 / 非 MyBatis 来源）。
+     */
+    val mapperStatement: String? = null,
+    /**
+     * 执行报错（结构化直取：异常类名 + 消息，堆栈截断）；null 表示执行成功。
+     * agent 通道在执行点直捕；桥通道暂无对应日志形态（T-M56-05 前保持 null）。
+     */
+    val errorText: String? = null,
+    /**
+     * 请求级聚合标签（T-M56-07 请求聚合预留）：同一次请求的多条 SQL 共享同值，
+     * 聚焦页签据此分组。桥通道来自源码标记第 5 段（拦截器 MDC 兜底）；null 表示无标签。
+     */
+    val requestTag: String? = null,
+    /**
+     * 影响行数（agent 通道 `getUpdateCount` 直取，DML 语义）；null 表示未知（查询 / 旧条目）。
+     */
+    val updateCount: Long? = null,
 ) {
     /**
      * T-Perf-19（自 dev 移植）：去重键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以

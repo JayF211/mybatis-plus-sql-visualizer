@@ -139,9 +139,14 @@ class SqlLogAutoSaver(
                 val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).format(Date(entry.timestamp))
                 w.write("-- source: $source | time: $duration | $timestamp --\n")
                 // T-HistParam F1：参数持久化——params 非空或 rawSql 含 `?`（绑定行缺失未识别条目）时，
-                // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）
-                if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0) {
-                    w.write("-- pd: ${SqlLogParamCodec.encode(entry.rawSql, entry.params)} --\n")
+                // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）。
+                // M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）任一在场也写
+                // pd 行（载荷扩展键，仅非默认落键）——否则 agent 通道结构化信息在历史文件丢失。
+                if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0 ||
+                    entry.mapperStatement != null || entry.errorText != null ||
+                    entry.requestTag != null || entry.updateCount != null
+                ) {
+                    w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
                 }
                 w.write(withTerminator(entry.restoredSql))
                 w.write("\n\n")

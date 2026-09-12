@@ -200,6 +200,78 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
         assertFalse("历史自动保存默认关闭", state.logAutoSaveEnabled)
     }
 
+    // ---------- M56 T-M56-00：聚焦过滤层（filterByFocus 纯函数，插 filterByType→filterBySearch 之间） ----------
+
+    /** 构造带扩展字段的条目。 */
+    private fun focusedEntry(
+        sql: String,
+        mapperStatement: String? = null,
+        requestTag: String? = null,
+    ) = LogSqlEntry(
+        rawSql = sql,
+        restoredSql = sql,
+        params = emptyList(),
+        mapperStatement = mapperStatement,
+        requestTag = requestTag,
+    )
+
+    fun testFocusNullPassthrough() {
+        val entries = listOf(focusedEntry("SELECT 1"), focusedEntry("SELECT 2"))
+        assertEquals(entries, filterByFocus(entries, null))
+        // 全空维度等价不过滤
+        assertEquals(entries, filterByFocus(entries, FocusFilter()))
+    }
+
+    fun testFocusByMapperStatement() {
+        val entries = listOf(
+            focusedEntry("SELECT 1", mapperStatement = "com.x.UserMapper.selectById"),
+            focusedEntry("SELECT 2", mapperStatement = "com.x.OrderMapper.list"),
+            focusedEntry("SELECT 3"),
+        )
+        val filtered = filterByFocus(entries, FocusFilter(method = "com.x.UserMapper.selectById"))
+        assertEquals(listOf("SELECT 1"), filtered.map { it.restoredSql })
+    }
+
+    fun testFocusMethodIgnoreCase() {
+        val entries = listOf(focusedEntry("SELECT 1", mapperStatement = "com.x.UserMapper.selectById"))
+        assertEquals(
+            entries,
+            filterByFocus(entries, FocusFilter(method = "COM.X.USERMAPPER.SELECTBYID")),
+        )
+    }
+
+    fun testFocusByRequestTag() {
+        val entries = listOf(
+            focusedEntry("SELECT 1", requestTag = "req-A"),
+            focusedEntry("SELECT 2", requestTag = "req-B"),
+            focusedEntry("SELECT 3", requestTag = "req-A"),
+        )
+        val filtered = filterByFocus(entries, FocusFilter(requestTag = "req-A"))
+        assertEquals(listOf("SELECT 1", "SELECT 3"), filtered.map { it.restoredSql })
+    }
+
+    fun testFocusMethodAndTagConjunctive() {
+        val entries = listOf(
+            focusedEntry("SELECT 1", mapperStatement = "com.x.A.get", requestTag = "req-A"),
+            focusedEntry("SELECT 2", mapperStatement = "com.x.B.get", requestTag = "req-A"),
+            focusedEntry("SELECT 3", mapperStatement = "com.x.A.get", requestTag = "req-B"),
+        )
+        val filtered = filterByFocus(entries, FocusFilter(method = "com.x.A.get", requestTag = "req-A"))
+        assertEquals(listOf("SELECT 1"), filtered.map { it.restoredSql })
+    }
+
+    fun testFocusFilterPipelineOrderWithTypeAndSearch() {
+        // 管线叠加：filterByType → filterByFocus → filterBySearch 与 refreshList 一致
+        val entries = listOf(
+            focusedEntry("SELECT alpha", mapperStatement = "com.x.A.get"),
+            focusedEntry("SELECT alpha2", mapperStatement = "com.x.B.get"),
+            focusedEntry("UPDATE alpha3", mapperStatement = "com.x.A.get"),
+        )
+        val filtered = filterByFocus(filterByType(entries, setOf(StatementType.SELECT)), FocusFilter(method = "com.x.A.get"))
+        val searched = filterBySearch(filtered, "alpha")
+        assertEquals(listOf("SELECT alpha"), searched.map { it.restoredSql })
+    }
+
     /** 等待 EDT 调度完成。 */
     private fun waitForEdt() {
         ApplicationManager.getApplication().invokeAndWait { java.lang.Runnable { } }

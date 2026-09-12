@@ -128,6 +128,35 @@ internal fun filterBySearch(entries: List<LogSqlEntry>, query: String): List<Log
     }
 }
 
+/**
+ * M56 T-M56-00：动态聚焦页签过滤层（纯逻辑，插在 [filterByType] 与 [filterBySearch] 之间）。
+ * [FocusFilter.method] 匹配 [LogSqlEntry.mapperStatement]（agent 通道直取 / 桥通道标记第 4 段，
+ * 忽略大小写）；[FocusFilter.requestTag] 精确匹配 [LogSqlEntry.requestTag]。
+ * 双条件为「且」；null 维度透传；全 null 等价不过滤。T-M56-06 起 method 扩展真实方法边界
+ * `{Class}#{method}` 形态（届时在 [focusMethodKey] 统一登记来源）。
+ */
+internal data class FocusFilter(
+    val method: String? = null,
+    val requestTag: String? = null,
+) {
+    /** 是否为空过滤（全维度 null = 透传）。 */
+    val isPassthrough: Boolean get() = method == null && requestTag == null
+}
+
+/** 条目的聚焦 method 键（当前 = mapper 语句 id；T-M56-06 扩展真实方法边界）。 */
+internal fun focusMethodKey(entry: LogSqlEntry): String? = entry.mapperStatement
+
+internal fun filterByFocus(entries: List<LogSqlEntry>, focus: FocusFilter?): List<LogSqlEntry> {
+    if (focus == null || focus.isPassthrough) return entries
+    return entries.filter { e ->
+        val methodOk = focus.method?.let { f ->
+            focusMethodKey(e)?.equals(f, ignoreCase = true) == true
+        } ?: true
+        val tagOk = focus.requestTag?.let { f -> f == e.requestTag } ?: true
+        methodOk && tagOk
+    }
+}
+
 /** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
 internal const val MAX_SYNC_APPEND = 300
 
@@ -264,6 +293,13 @@ class SqlLogPanel(
     /** 当前搜索词（搜索条实时同步；空串 = 不过滤）。 */
     private var searchText = ""
 
+    /**
+     * M56 T-M56-00：动态聚焦过滤状态（基础设施；null = 不过滤）。
+     * T-M56-02/06/07 起 agent 通道接管后由页签/请求聚合驱动写入；桥通道恒 null 与现状逐字一致。
+     */
+    @Volatile
+    private var activeFocus: FocusFilter? = null
+
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private var dedupeCounts: Map<String, Int> = emptyMap()
 
@@ -353,6 +389,18 @@ class SqlLogPanel(
         activeFilter.clear()
         activeFilter.addAll(types)
         updateTypeFilterButton()
+        refreshList()
+    }
+
+    /**
+     * M56 T-M56-00：设置动态聚焦过滤（页签/请求聚合驱动；null 或全空维度 = 取消聚焦）。
+     * 桥通道不写此状态，行为与现状逐字一致。过滤值变化经 refreshList 全量差分呈现
+     * （离散增删走 FullRebuild，无需特殊增量分支）。
+     */
+    internal fun setFocusFilter(focus: FocusFilter?) {
+        val next = focus?.takeUnless { it.isPassthrough }
+        if (next == activeFocus) return
+        activeFocus = next
         refreshList()
     }
 
@@ -868,9 +916,10 @@ class SqlLogPanel(
      *
      * 执行顺序：
      * 1. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
-     * 2. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
-     * 3. [applySort]：按 [sortMode] 排序（降序耗时）
-     * 4. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     * 2. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
+     * 3. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
+     * 4. [applySort]：按 [sortMode] 排序（降序耗时）
+     * 5. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
      *
      * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 [dedupeCounts]，
      * 原「清缓存/选择性失效」机制一并移除。
@@ -886,7 +935,7 @@ class SqlLogPanel(
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
         entryCellRenderer.dedupeCounts = dedupeCounts
 
-        val filtered = filterByType(snapshot, activeFilter)
+        val filtered = filterByFocus(filterByType(snapshot, activeFilter), activeFocus)
         val searched = filterBySearch(filtered, searchText)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()

@@ -581,7 +581,7 @@ internal class BridgeLineContext(
     val hibernateParser: HibernateLogParser,
     val jdbcParser: JdbcTemplateLogParser,
     val configProvider: () -> ParserConfig,
-    var pendingSource: Pair<String, Int>? = null,
+    var pendingSource: SourceMarkerData? = null,
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
 ) {
@@ -642,8 +642,10 @@ internal fun processConsoleLine(
         }
         val duration = lineDuration ?: LogDurationParser.parse(e)
         e.copy(
-            sourceFile = eSrc?.first,
-            sourceLine = eSrc?.second ?: 0,
+            sourceFile = eSrc?.file,
+            sourceLine = eSrc?.line ?: 0,
+            mapperStatement = eSrc?.mapperStatement,
+            requestTag = eSrc?.requestTag,
             executionTimeMs = duration ?: e.executionTimeMs,
         )
     }

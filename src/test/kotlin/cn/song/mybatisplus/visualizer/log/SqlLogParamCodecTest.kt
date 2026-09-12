@@ -74,4 +74,57 @@ class SqlLogParamCodecTest {
         assertTrue("载荷应匹配 Base64 字符集: $payload", payload.matches(Regex("[A-Za-z0-9+/=]+")))
         assertNotNull(SqlLogParamCodec.decode(payload))
     }
+
+    // ---------- M56 T-M56-00：扩展字段（m/e/q/u） ----------
+
+    @Test
+    fun `encodeEntry 扩展字段 round-trip 不丢`() {
+        val entry = LogSqlEntry(
+            rawSql = "UPDATE t SET a = ?",
+            restoredSql = "UPDATE t SET a = 1",
+            params = emptyList(),
+            mapperStatement = "com.x.mapper.TMapper.updateA",
+            errorText = "SQLException: Data too long",
+            requestTag = "req-9",
+            updateCount = 3L,
+        )
+        val decoded = SqlLogParamCodec.decode(SqlLogParamCodec.encodeEntry(entry))!!
+        assertEquals("UPDATE t SET a = ?", decoded.rawSql)
+        assertTrue(decoded.params.isEmpty())
+        assertEquals("com.x.mapper.TMapper.updateA", decoded.mapperStatement)
+        assertEquals("SQLException: Data too long", decoded.errorText)
+        assertEquals("req-9", decoded.requestTag)
+        assertEquals(3L, decoded.updateCount)
+    }
+
+    @Test
+    fun `无扩展字段载荷_解码扩展字段为null`() {
+        // 旧 payload（仅 r/p 键）与旧历史文件兼容：扩展字段解码 null 不报错
+        val legacy = java.util.Base64.getEncoder()
+            .encodeToString("""{"r":"SELECT 1","p":[]}""".toByteArray(Charsets.UTF_8))
+        val decoded = SqlLogParamCodec.decode(legacy)!!
+        assertEquals("SELECT 1", decoded.rawSql)
+        assertNull(decoded.mapperStatement)
+        assertNull(decoded.errorText)
+        assertNull(decoded.requestTag)
+        assertNull(decoded.updateCount)
+    }
+
+    @Test
+    fun `扩展字段仅非默认落键`() {
+        // 无扩展字段的条目：JSON 不得出现 m/e/q/u 键（payload 精简，旧版本插件兼容面最小）
+        val payload = SqlLogParamCodec.encode("SELECT 1", emptyList())
+        val json = String(java.util.Base64.getDecoder().decode(payload), Charsets.UTF_8)
+        assertTrue("不应含扩展键: $json", !json.contains("\"m\"") && !json.contains("\"e\"") &&
+            !json.contains("\"q\"") && !json.contains("\"u\""))
+    }
+
+    @Test
+    fun `扩展键形态异常_降级null不丢条目`() {
+        val legacy = java.util.Base64.getEncoder()
+            .encodeToString("""{"r":"SELECT 1","p":[],"u":"not-a-number"}""".toByteArray(Charsets.UTF_8))
+        val decoded = SqlLogParamCodec.decode(legacy)!!
+        assertEquals("SELECT 1", decoded.rawSql)
+        assertNull(decoded.updateCount)
+    }
 }

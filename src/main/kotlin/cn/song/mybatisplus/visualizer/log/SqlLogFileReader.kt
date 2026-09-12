@@ -130,13 +130,15 @@ object SqlLogFileReader {
         var bodyLines = contentLines
         var rawSqlOverride: String? = null
         var params: List<LogSqlParam> = emptyList()
+        var decodedExt: SqlLogParamCodec.DecodedPayload? = null
         contentLines.firstOrNull()?.let { first ->
             val trimmedFirst = first.trim()
             if (trimmedFirst.startsWith(PD_PREFIX) && trimmedFirst.endsWith(PD_SUFFIX)) {
                 SqlLogParamCodec.decode(trimmedFirst.removePrefix(PD_PREFIX).removeSuffix(PD_SUFFIX))
-                    ?.let { (raw, decodedParams) ->
-                        rawSqlOverride = raw
-                        params = decodedParams
+                    ?.let { payload ->
+                        rawSqlOverride = payload.rawSql
+                        params = payload.params
+                        decodedExt = payload
                         bodyLines = contentLines.drop(1)
                     }
             }
@@ -162,6 +164,10 @@ object SqlLogFileReader {
                 sourceFile = sourceFile,
                 sourceLine = sourceLine,
                 executionTimeMs = executionTimeMs,
+                mapperStatement = decodedExt?.mapperStatement,
+                errorText = decodedExt?.errorText,
+                requestTag = decodedExt?.requestTag,
+                updateCount = decodedExt?.updateCount,
             )
         }
 
@@ -174,6 +180,10 @@ object SqlLogFileReader {
                 restoredSql = sql,
                 params = params,
                 timestamp = timestamp,
+                mapperStatement = decodedExt?.mapperStatement,
+                errorText = decodedExt?.errorText,
+                requestTag = decodedExt?.requestTag,
+                updateCount = decodedExt?.updateCount,
             )
         }
 

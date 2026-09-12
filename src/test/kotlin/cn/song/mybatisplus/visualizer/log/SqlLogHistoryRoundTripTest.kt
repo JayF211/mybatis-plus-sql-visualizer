@@ -195,4 +195,59 @@ class SqlLogHistoryRoundTripTest {
         assertEquals(listOf(false, true), result.paramHints.map { it.quote })
         assertNull(result.warning)
     }
+
+    // ---------- M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）回环 ----------
+
+    @Test
+    fun `真实链路_扩展字段条目写读回环_四字段不丢`() {
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        // agent 通道形态：无参数、无占位符，但扩展字段齐备——pd 行须因扩展字段在场而写入
+        val captured = LogSqlEntry(
+            rawSql = "UPDATE user SET name = 'x' WHERE id = 7",
+            restoredSql = "UPDATE user SET name = 'x' WHERE id = 7",
+            params = emptyList(),
+            timestamp = 1724567890000L,
+            executionTimeMs = 2L,
+            mapperStatement = "com.example.mapper.UserMapper.updateName",
+            errorText = null,
+            requestTag = "req-88",
+            updateCount = 1L,
+        )
+        saver.write(captured)
+        saver.close()
+
+        val files = dir.listFiles { f -> f.extension == "sql" }!!
+        assertEquals(1, files.size)
+        val read = SqlLogFileReader.readFromFile(files[0]).single()
+        assertEquals("mapperStatement 回环", captured.mapperStatement, read.mapperStatement)
+        assertEquals("requestTag 回环", captured.requestTag, read.requestTag)
+        assertEquals("updateCount 回环", captured.updateCount, read.updateCount)
+        assertNull("无报错条目回环 null", read.errorText)
+    }
+
+    @Test
+    fun `真实链路_报错条目写读回环_errorText不丢`() {
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        saver.write(
+            LogSqlEntry(
+                rawSql = "SELECT * FROM no_such_table",
+                restoredSql = "SELECT * FROM no_such_table",
+                params = emptyList(),
+                timestamp = 1724567890001L,
+                errorText = "BadSqlGrammarException: Table 'no_such_table' doesn't exist",
+            ),
+        )
+        saver.close()
+        val read = SqlLogFileReader.readFromFile(dir.listFiles { f -> f.extension == "sql" }!![0]).single()
+        assertEquals(
+            "errorText 回环",
+            "BadSqlGrammarException: Table 'no_such_table' doesn't exist",
+            read.errorText,
+        )
+        assertNull(read.mapperStatement)
+    }
 }
