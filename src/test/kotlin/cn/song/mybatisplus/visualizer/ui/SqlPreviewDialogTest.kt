@@ -38,12 +38,15 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
     }
 
     fun testDisplayTextTwoLineWithTruncationAndEscape() {
-        // T-M23.8：列表项显示文本纯函数——两行布局（摘要 + 代码行缩进）、
-        // 超长行截断 80 字符 + 省略号、& < > HTML 转义防破坏布局
+        // T-M23.8：列表项显示文本纯函数——两行布局（加粗摘要 + 缩进代码行）、
+        // 超长行截断 80 字符 + 省略号、& < > HTML 转义防破坏布局；
+        // T-CrudSql 样式反馈：摘要加粗 + 代码行灰色等宽（视觉分层）
         val short = SqlSelectionDialog.displayText("L3 LAMBDA_QUERY  tbl", "service.getById(id);")
         assertTrue(
-            "两行布局应以 HTML 形式组合摘要与缩进代码行",
-            short.startsWith("<html>L3 LAMBDA_QUERY  tbl<br>&nbsp;&nbsp;&nbsp;service.getById(id);</html>"),
+            "两行布局应以 HTML 形式组合加粗摘要与缩进代码行",
+            short.startsWith(
+                "<html><b>L3 LAMBDA_QUERY  tbl</b><br>&nbsp;&nbsp;&nbsp;<font color=#808080 face=monospace>service.getById(id);</font></html>",
+            ),
         )
         val longLine = "x".repeat(100)
         val truncated = SqlSelectionDialog.displayText("L1 BATCH", longLine)
@@ -54,6 +57,34 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         assertTrue("< 应转义为 &lt;", escaped.contains("&lt;"))
         assertTrue("> 应转义为 &gt;", escaped.contains("&gt;"))
         assertFalse("原始 < 不应直接出现在 HTML 中", escaped.contains("a<b"))
+    }
+
+    fun testDoOkActionInvokesCallbackWithSelectedCandidate() {
+        // T-CrudSql 回归防护：OK（doOKAction）必须把选中候选交给 onSelect 回调——
+        // 真机曾因回调内同步开 modeless 预览被模态上下文吞掉而表现"OK 无响应"
+        val candidates = listOf("A", "B")
+        val selected = mutableListOf<String>()
+        val dialog = SqlSelectionDialog(project, candidates, listOf("PA", "PB")) { selected += it }
+        dialog.listForTest().selectedIndex = 1
+        dialog.doOKAction()
+        assertEquals("doOKAction 应把选中候选交给回调", listOf("B"), selected)
+    }
+
+    fun testDoubleClickOnCandidateConfirmsSelection() {
+        // T-CrudSql 用户反馈：双击候选直接确认预览（对齐 IDEA 原生弹窗交互）
+        val candidates = listOf("A", "B")
+        val selected = mutableListOf<String>()
+        val dialog = SqlSelectionDialog(project, candidates, listOf("PA", "PB")) { selected += it }
+        val list = dialog.listForTest()
+        assertTrue("列表应注册鼠标监听（双击确认）", list.mouseListeners.isNotEmpty())
+        list.dispatchEvent(
+            java.awt.event.MouseEvent(
+                list, java.awt.event.MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), 0,
+                10, 10, 2, false, java.awt.event.MouseEvent.BUTTON1,
+            ),
+        )
+        assertEquals("双击第一项应触发回调并选中该项", listOf("A"), selected)
+        assertEquals("双击后选中索引应落在双击项上", 0, list.selectedIndex)
     }
 
     fun testDialogRendersPrecomputedTextsWithoutPsiResolve() {
