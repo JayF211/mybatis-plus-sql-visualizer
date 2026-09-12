@@ -42,7 +42,7 @@
         <!-- M18.1 问题反馈入口：跳转官网需求池（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
         <p>Found an issue? Please report it at the <a href="https://sql-visualizer.jvtools.cn/about/feedback">Feedback Pool</a>.</p>
         <hr/>
-        <p><b>服务未启，SQL 先知。</b>SQL Visualizer 在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填。</p>
+        <p><b>服务未启，SQL 先知</b>——SQL Visualizer 在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填。</p>
         <h3>核心能力</h3>
         <ul>
             <li><b>SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose 等）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>

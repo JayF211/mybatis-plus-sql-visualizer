@@ -147,7 +147,7 @@
 
 <!-- ========== HERO ========== -->
 <h1>SQL Visualizer</h1>
-<p class="tagline">服务未启，SQL 先知。</p>
+<p class="tagline">服务未启，SQL 先知</p>
 <p class="section-desc">在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与
 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；控制台日志一键还原，SQL 一键反向转 Java。</p>
 
@@ -158,7 +158,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、精确跳转源码</li>
   <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码</li>
   <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL（Ultimate）</li>
-  <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
+  <li><b>触发零门槛</b>：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
 </ul>
 
 <ul class="news">
@@ -180,7 +180,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>Wrapper → SQL</td>
       <td>gutter 图标 / 右键 / <code>Alt+Shift+Q</code></td>
-      <td><code>LambdaQueryWrapper</code> 等全系 Wrapper 与服务链；<code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表</td>
+      <td><code>LambdaQueryWrapper</code> 等全系 Wrapper 与服务链；<code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表；Java 与 Kotlin 文件均支持</td>
     </tr>
     <tr>
       <td>XML / 注解 SQL</td>
@@ -210,6 +210,17 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>多行缩进 / 单行；分页子句按 9 种方言差异渲染</td>
     </tr>
     <tr>
+      <td>多租户 / 数据权限模拟 <span class="tag tag-new">New</span></td>
+      <td>设置页配置</td>
+      <td>对齐 MP <code>TenantLineInnerInterceptor</code>：自动注入 <code>AND tenant_id = ?</code>（列名 / 默认值 / INSERT 注入可配）；
+          数据权限运行时差异提示 + 手动模拟 WHERE 片段</td>
+    </tr>
+    <tr>
+      <td>字段列表自动折叠 <span class="tag tag-new">New</span></td>
+      <td>设置页配置（默认关）</td>
+      <td>SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开；阈值可配</td>
+    </tr>
+    <tr>
       <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
       <td>弹窗内「执行」按钮</td>
       <td>原生 Database 控制台内嵌，数据源/Tx/会话工具栏全保留</td>
@@ -231,7 +242,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>自动捕获</td>
       <td>侧边栏「捕捉」按钮</td>
-      <td>监听运行控制台还原可执行 SQL；支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式；可配置项目启动即自动监听</td>
+      <td>监听运行控制台还原可执行 SQL；支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式；耗时展示与慢查询标记；可配置项目启动即自动监听</td>
     </tr>
     <tr>
       <td>单击预览 <span class="tag tag-new">New</span></td>
