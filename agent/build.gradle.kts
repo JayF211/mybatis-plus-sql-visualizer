@@ -43,6 +43,11 @@ val asmFat by configurations.creating {
     isCanBeResolved = true
 }
 
+val h2jdk8 by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
 dependencies {
     // 织入工具（§4.2 #2：ASM AdviceAdapter 手织；被打进 fat jar 前由 relocate 任务改名）
     compileOnly("org.ow2.asm:asm:$asmVersion")
@@ -59,6 +64,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // attach 门禁测试的「用户应用」驱动：H2（与根项目方言验证同版本）
     testImplementation("com.h2database:h2:2.3.232")
+
+    // JDK8 目标门禁专用：H2 1.4.200（2.x 是 Java 11 字节码，JDK8 加载不了）——
+    // 以独立配置解析出 jar 绝对路径，经系统属性下发给测试
+    "h2jdk8"("com.h2database:h2:1.4.200")
     // 织入产物校验测试需要 ASM 明文命名空间（仅测试 classpath）
     testImplementation("org.ow2.asm:asm:$asmVersion")
     testImplementation("org.ow2.asm:asm-commons:$asmVersion")
@@ -73,10 +82,16 @@ tasks.compileJava {
     options.release = 8
 }
 
+tasks.named<JavaCompile>("compileChildappJava") {
+    // 「用户应用」子进程同样按 Java 8 字节码编译——JDK8 attach 门禁的前置（目标 JVM 须能加载）
+    options.release = 8
+}
+
 tasks.test {
     // attach 集成测试起子 JVM 并 attach——同机回环，无需 IDE 环境；依赖 agentFatJar 产物
     dependsOn(agentFatJar)
     dependsOn(tasks.named("childappClasses"))
+    systemProperty("sqlvis.h2jdk8", h2jdk8.singleFile.absolutePath)
     useJUnit()
     // 根项目 `test --tests <IDE 测试>` 触发本任务时无匹配用例——不视为失败
     filter {

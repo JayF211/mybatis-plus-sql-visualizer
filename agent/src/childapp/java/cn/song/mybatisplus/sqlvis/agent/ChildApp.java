@@ -23,7 +23,9 @@ public class ChildApp {
             }
         }
 
-        long pid = ProcessHandle.current().pid();
+        // JDK8 兼容：ProcessHandle 是 Java 9+，门禁目标 JVM 可能是 8
+        String mx = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
+        long pid = Long.parseLong(mx.substring(0, mx.indexOf('@')));
         System.out.println("CP=" + System.getProperty("java.class.path"));
         try {
             Class.forName("cn.song.mybatisplus.sqlvis.agent.DriverRegistry", false, ClassLoader.getSystemClassLoader());

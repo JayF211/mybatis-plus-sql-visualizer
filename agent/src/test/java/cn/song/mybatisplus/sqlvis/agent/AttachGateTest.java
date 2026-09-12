@@ -37,11 +37,30 @@ public class AttachGateTest {
 
     @org.junit.Test
     public void attach全链_事件到达_二次挂载幂等() throws Exception {
-        File agentJar = locateAgentJar();
-        Path h2Jar = locateH2Jar();
         String javaBin = Paths.get(System.getProperty("java.home"), "bin", "java.exe").toFile().exists()
                 ? Paths.get(System.getProperty("java.home"), "bin", "java.exe").toString()
                 : Paths.get(System.getProperty("java.home"), "bin", "java").toString();
+        runAttachGate(javaBin, locateH2Jar(), "JDK17");
+    }
+
+    /**
+     * 门禁①JDK8 目标补位（计划 §4.2 #3：JDK8 与 JDK17 各实证一次）：
+     * 目标 JVM = JDK8（sqlvis.jdk8home 指定，缺省探测常见路径），attach 客户端仍为工具链 17——
+     * 跨版本 attach（17 客户端 → 8 目标）+ Java 8 字节码 agent jar 加载 + retransform 全链。
+     * JDK8 缺席时 Assume 跳过（不阻塞其他环境）。
+     */
+    @org.junit.Test
+    public void attach门禁_JDK8目标() throws Exception {
+        String jdk8 = System.getProperty("sqlvis.jdk8home", "D:/HuanJing/Java/jdk1.8.0_181");
+        File java8 = Paths.get(jdk8, "bin", "java.exe").toFile();
+        org.junit.Assume.assumeTrue("JDK8 不在位，跳过（-Psqlvis.jdk8home 可指定）", java8.isFile());
+        Path h2Jar = Paths.get(System.getProperty("sqlvis.h2jdk8", ""));
+        org.junit.Assume.assumeTrue("h2 1.4.200 jar 未解析", Files.isRegularFile(h2Jar));
+        runAttachGate(java8.getAbsolutePath(), h2Jar, "JDK8");
+    }
+
+    private void runAttachGate(String javaBin, Path h2Jar, String label) throws Exception {
+        File agentJar = locateAgentJar();
 
         // 1) IDE 角色的 loopback server
         java.net.ServerSocket server = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress());
@@ -72,8 +91,11 @@ public class AttachGateTest {
         try {
             vm.loadAgent(agentJar.getAbsolutePath(), "port=" + server.getLocalPort() + ";logLevel=info");
         } catch (com.sun.tools.attach.AgentLoadException e) {
-            // 门禁③容错面：JDK8 二次挂载形态
-            org.junit.Assert.fail("首次 loadAgent 不应失败: " + e);
+            // §4.5 容错：JDK8 目标已知形态 AgentLoadException("0")（agent 可能已加载并运行）——
+            // 与生产 AgentManager 同款容忍，继续 accept 握手验证真实结果
+            if (!"0".equals(e.getMessage())) {
+                org.junit.Assert.fail("loadAgent 失败且非 JDK8 已知形态: " + e);
+            }
         }
 
         // 5) accept 会话，收 HELLO + EVENT（agentmain 挂 transformer + retransform 的硬验收）
@@ -85,7 +107,7 @@ public class AttachGateTest {
         // 门禁①核心断言：attach 后 SQL 事件到达（retransform 已加载的 org.h2.Driver 生效）
         boolean gotSqlEvent = waitForEvent(events, "INSERT", WAIT_SECONDS * 1000L);
         org.junit.Assert.assertTrue("attach 后未收到 SQL 事件（agentmain 门禁失败）\n" + tail(childOut), gotSqlEvent);
-        org.junit.Assert.assertEquals("应恰好一个 HELLO（单会话）", 1, hellos.size());
+        org.junit.Assert.assertEquals("[" + label + "] 应恰好一个 HELLO（单会话）", 1, hellos.size());
 
         // 6) 门禁③：二次 loadAgent 幂等（AgentLoadException("0") 容忍；不产生第二会话）
         try {
@@ -98,8 +120,8 @@ public class AttachGateTest {
         // 可能收到 agent 主动重连的第二连接（不同实现形态）；本实现以 system property 幂等早退，
         // 事件仍应持续到达且无新 HELLO 接入本 server（agent 不会重连——首连未断）
         int helloCount = hellos.size();
-        org.junit.Assert.assertTrue("二次挂载后事件仍应到达", waitForEvent(events, "INSERT", 10_000L));
-        org.junit.Assert.assertEquals("二次挂载不得产生第二会话", helloCount, hellos.size());
+        org.junit.Assert.assertTrue("[" + label + "] 二次挂载后事件仍应到达", waitForEvent(events, "INSERT", 10_000L));
+        org.junit.Assert.assertEquals("[" + label + "] 二次挂载不得产生第二会话", helloCount, hellos.size());
 
         // 7) 清理
         vm.detach();
