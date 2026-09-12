@@ -416,6 +416,65 @@ internal class SqlListSelectionOutline(
 
 ---
 
+## 七、性能分析（实施后复核，2026-09-12）
+
+> **结论：无实质性能风险；但复核中发现并修复了一处「逐格 Swing 属性赋值触发 repaint」的隐患——若不修，默认样式下每格会多一次重绘调度，属 T-LogListFreeze 同类成因。**
+
+### 7.1 热路径界定
+
+`getListCellRendererComponent` 是渲染热路径：**每个可见行 × 每次重绘**调用一次（滚动、悬停、选中、resize、数据刷新均触发）。本项目此前的 16s EDT 冻结（T-LogListFreeze）就出在这条路径上（逐格 HTML 解析 + 变高测量），故新增开销一律按该标准核算，而非按「刷新一次」核算。
+
+### 7.2 逐项开销核算（默认「色条」样式，每格）
+
+| 新增操作 | 堆分配 | 复杂度 | 说明 |
+|---|---|---|---|
+| `styleOf()` 读设置 | 0 | O(1) | `PluginSettings.getInstance()` 服务查找；**既有范式本就逐格调用**（`formatTimestampFragment` / `showDurationInLogList` 同） |
+| `colorOf(type)` | **0（加缓存后）** | O(1) | 首次解析后按 hex 复用同一 `Color` 实例 |
+| `colorBar.background` | 0 | O(1) | 变化才写（守卫，见 7.4） |
+| `colorBar.isOpaque` | 0 | O(1) | 变化才写 |
+| `cell.border` | 0 | O(1) | 预建两实例 + **同一性**比较（不走 `CompoundBorder.equals` 深比较） |
+| `cell.background` | 0 | O(1) | 既有逻辑，实例取自 `list` |
+| `entry.statementType` | **0** | O(1) | 惰性、每条目仅算一次（见 7.3） |
+
+「整行淡背景」样式额外每格 1 个 `Color` 分配（`blend` 结果未缓存），但**赋值被守卫拦下**（同值不写）→ 不产生 repaint；量级可忽略。
+
+### 7.3 净收益：`statementType` 反而降低了既有开销
+
+原 `filterByType` 每次刷新对每条目调用 `LogStatementClassifier.classify`，其内部 `Regex("\\s+")` **每次调用都重新编译 Pattern**；若渲染期现算还会按格放大。改为条目级 `by lazy` 后：分类**每条目只算一次**，刷新与渲染共用同一结果。**属净收益，不是新增负担。**
+
+### 7.4 发现并修复的隐患：逐格 Swing 属性赋值 → repaint
+
+**实测证据**（JBR 21，最小用例，`JComponent` 子类统计 `revalidate`/`repaint` 调用次数）：
+
+| 操作 | revalidate | repaint |
+|---|---|---|
+| `setBorder(新实例·值相同)` | +0 | **+1** |
+| `setBorder(同一实例)` | 0 | 0 |
+| `setBackground(新 Color·值相同)` | 0 | **+1** |
+| `setBackground(同一 Color 实例)` | 0 | 0 |
+| `setOpaque(同值)` | 0 | 0 |
+
+**初版实现的问题**：`colorBar.background = tint` 中的 `tint` 由 `parseHex` **每格新建 `Color` 实例**（`trim()` + `removePrefix` 还各分配一个 String）→ 默认样式下**每格触发一次 `repaint()` 调度**。渲染器组件在绘制期被临时挂入 `CellRendererPane`（在可视树内），这类调度并非无成本空转。这与 T-LogListFreeze 的成因同类：**渲染热路径上的副作用累积**。
+
+**修复两条**：
+1. `SqlListTypeColor.colorOf` 加**实例缓存**（同 hex 复用同一 `Color`，每类型至多 1 条，共 ≤ 4 条）；
+2. `applyCrudColorMark` 内所有 Swing 属性赋值改为**变化才写**——`setBorderIfChanged`（同一性比较）/ `setBackgroundIfChanged` / `setOpaqueIfChanged`。
+
+**修复后**：同类型连续行**零属性变更、零 repaint**；仅在与上一格「类型或选中态不同」时才赋值——即赋值次数 ≈ 相邻行的类型变化次数（远小于行数）。
+
+### 7.5 回归锁定
+
+新增 4 条**实例同一性**用例（`SqlLogPanelRendererUiTest` ×3：色条样式重复渲染 / 背景样式重复渲染 / 选中↔未选中必须换实例；`HistoryCellRendererTest` ×1）。直接断言「决定 Swing 是否 repaint 的那个条件」，比断言常量更能防回退——第三例专门防「守卫写过头把该换的边框也拦掉」。
+
+### 7.6 遗留与边界（不优化的理由）
+
+- **混色结果未做实例缓存**：每格 1 个小 `Color` 分配；因赋值守卫已消除 repaint 副作用，量级可忽略，不值得引入第二层缓存。
+- **`ensureOutlineContrast` 提亮循环**：仅选中行（1 格）触发，最多约 8 次乘法，可忽略。
+- **`PluginSettings.getInstance()` 逐格多次查找**：既有范式已如此（时间戳/耗时/来源片段各一次），本次未新增量级；若要抠需在渲染器内做「每轮绘制缓存」并处理设置变更失效，收益与复杂度不成比例。
+- **未做基准测量**：本次以「分配计数 + 副作用实证」定性核算，未跑 JMH/EDT 采样；真机滚动流畅度由 §4.3 第 8 项走查确认（对比改前无卡顿回潮）。
+
+---
+
 ## 实施记录
 
 - **交付分支/提交**：worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-crudcolor`，分支 `t-crudcolor`（基线 master `e190a60`）。

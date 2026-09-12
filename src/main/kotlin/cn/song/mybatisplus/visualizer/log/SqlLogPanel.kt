@@ -1389,43 +1389,75 @@ internal fun applyCrudColorMark(
     when (SqlListTypeColor.styleOf()) {
         SqlListTypeColor.STYLE_BAR -> {
             if (tint == null) {
-                colorBar.isOpaque = false
+                setOpaqueIfChanged(colorBar, false)
             } else {
-                colorBar.background = tint
-                colorBar.isOpaque = true
+                setBackgroundIfChanged(colorBar, tint)
+                setOpaqueIfChanged(colorBar, true)
             }
-            cell.border = normalBorder
-            cell.background = if (isSelected) selectionBg else listBg
+            setBorderIfChanged(cell, normalBorder)
+            setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
         }
         SqlListTypeColor.STYLE_BACKGROUND -> {
-            colorBar.isOpaque = false
+            setOpaqueIfChanged(colorBar, false)
             if (tint == null) {
-                cell.border = normalBorder
-                cell.background = if (isSelected) selectionBg else listBg
+                setBorderIfChanged(cell, normalBorder)
+                setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
             } else {
-                cell.background = SqlListTypeColor.blend(
-                    listBg,
-                    tint,
-                    if (isSelected) SqlListTypeColor.MIX_SELECTED else SqlListTypeColor.MIX_NORMAL,
+                setBackgroundIfChanged(
+                    cell,
+                    SqlListTypeColor.blend(
+                        listBg,
+                        tint,
+                        if (isSelected) SqlListTypeColor.MIX_SELECTED else SqlListTypeColor.MIX_NORMAL,
+                    ),
                 )
                 if (isSelected) {
                     val raw = if (cellHasFocus) selectionBg
                     else javax.swing.UIManager.getColor("List.selectionInactiveBackground") ?: selectionBg
+                    // setColor 只改字段、不触发 Swing 属性变更（无 repaint 副作用），故无需守卫
                     selectedBorder.setColor(
                         SqlListTypeColor.ensureOutlineContrast(raw, SqlListTypeColor.brightnessOf(listBg) < 0.5)
                     )
-                    cell.border = selectedBorder
+                    setBorderIfChanged(cell, selectedBorder)
                 } else {
-                    cell.border = normalBorder
+                    setBorderIfChanged(cell, normalBorder)
                 }
             }
         }
         else -> { // STYLE_OFF
-            colorBar.isOpaque = false
-            cell.border = normalBorder
-            cell.background = if (isSelected) selectionBg else listBg
+            setOpaqueIfChanged(colorBar, false)
+            setBorderIfChanged(cell, normalBorder)
+            setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
         }
     }
+}
+
+/**
+ * 仅在变化时设置边框（T-CrudColor 性能守卫）。
+ *
+ * 实测（JBR 21）：`JComponent.setBorder(新实例)` **即使值与旧值相同也会触发 `repaint() +1`**，
+ * 而传入**同一实例**则 revalidate/repaint 均为 0。渲染器逐格调用，若每格无脑赋值就会把
+ * 渲染热路径变成「每格一次重绘调度」——正是 T-LogListFreeze 那类副作用累积问题的成因。
+ * 用**同一性**（`!==`）比较：本函数只会在预建的两个 Border 实例间切换，身份比较即可，
+ * 且避免 `CompoundBorder.equals` 的深度比较开销。
+ */
+private fun setBorderIfChanged(cell: JPanel, border: Border) {
+    if (cell.border !== border) cell.border = border
+}
+
+/**
+ * 仅在变化时设置背景（T-CrudColor 性能守卫）。
+ *
+ * 实测（JBR 21）：`setBackground(新 Color 实例)` 即使 RGB 相同也会触发 `repaint() +1`；
+ * 传入同一实例则为 0。配合 [SqlListTypeColor.colorOf] 的实例缓存，同色格不再产生任何 repaint。
+ */
+private fun setBackgroundIfChanged(target: JPanel, color: Color) {
+    if (target.background != color) target.background = color
+}
+
+/** 仅在变化时设置不透明（`setOpaque` 同值本身零副作用，此处为语义显式化）。 */
+private fun setOpaqueIfChanged(target: JPanel, opaque: Boolean) {
+    if (target.isOpaque != opaque) target.isOpaque = opaque
 }
 
 

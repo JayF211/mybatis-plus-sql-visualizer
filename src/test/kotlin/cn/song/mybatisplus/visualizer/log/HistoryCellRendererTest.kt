@@ -7,6 +7,7 @@ import com.intellij.ui.SimpleTextAttributes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -183,6 +184,18 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             assertEquals("左", normal.left, selected.left)
             assertEquals("下", normal.bottom, selected.bottom)
             assertEquals("右", normal.right, selected.right)
+        }
+    }
+
+    fun test二级条目_重复渲染不产生属性实例变更() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            renderSql(sqlEntry("SELECT 1"))
+            val barBg = sqlRenderer.colorBar.background
+            val border = sqlRenderer.border
+            renderSql(sqlEntry("SELECT 2"))
+            assertSame("同色格应复用同一 Color 实例（否则每格一次 repaint）",
+                barBg, sqlRenderer.colorBar.background)
+            assertSame("同状态应复用同一 Border 实例", border, sqlRenderer.border)
         }
     }
 

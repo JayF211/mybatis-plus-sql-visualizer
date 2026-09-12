@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.awt.Color
 
@@ -240,6 +242,52 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             render(entry("SELECT 1", ms = 5L), true)
             assertEquals("色条样式走平台填充，前景仍为 selectionForeground（现状不变）",
                 list.selectionForeground, renderer.metaLine.foreground)
+        }
+    }
+
+    // ---------- T-CrudColor：渲染热路径无副作用（性能守卫） ----------
+
+    /**
+     * 同状态连续渲染不得产生 Swing 属性实例变更。
+     *
+     * 依据（JBR 21 实测）：`setBorder(新实例)` 即使同值也 `repaint() +1`、`setBackground(新 Color 同值)`
+     * 同样 `+1`；传**同一实例**则零副作用。逐格无脑赋值 = 每格一次重绘调度，
+     * 与 T-LogListFreeze 的成因同类，故用**实例同一性**锁定。
+     */
+    fun test色条样式_重复渲染同类型条目不产生属性实例变更() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            render(entry("SELECT 1"))
+            val barBg = renderer.colorBar.background
+            val border = renderer.border
+            val cellBg = renderer.background
+            render(entry("SELECT 2"))
+            assertSame("同色格应复用同一 Color 实例", barBg, renderer.colorBar.background)
+            assertSame("同状态应复用同一 Border 实例", border, renderer.border)
+            assertSame("同状态单元格背景不应换实例", cellBg, renderer.background)
+        }
+    }
+
+    fun test背景样式_重复渲染不替换背景与边框实例() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            render(entry("UPDATE t SET a = 1"))
+            val bg = renderer.background
+            val border = renderer.border
+            // 混色每次都会算出「新 Color 实例但同值」——守卫必须拦下它，否则每格一次 repaint
+            render(entry("UPDATE t SET a = 1"))
+            assertSame("同值混色结果不应重新赋值背景", bg, renderer.background)
+            assertSame("同状态不应换边框实例", border, renderer.border)
+        }
+    }
+
+    fun test背景样式_选中与未选中之间切换会换边框实例() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            render(entry("UPDATE t SET a = 1"))
+            val normal = renderer.border
+            render(entry("UPDATE t SET a = 1"), true)
+            val selected = renderer.border
+            assertNotSame("选中态必须换成描边边框（守卫不能把该变更也拦掉）", normal, selected)
+            render(entry("UPDATE t SET a = 1"))
+            assertSame("回到未选中应换回原 Border 实例", normal, renderer.border)
         }
     }
 

@@ -65,17 +65,30 @@ object SqlListTypeColor {
     /** 提亮的最大倍率（防止低饱和色被拉爆成白）。 */
     private const val MAX_BRIGHTEN_FACTOR = 2.4
 
+    // 默认色实例（预建，避免 defaultOf 每次解析/分配）
+    private val COLOR_SELECT: Color = Color(0x4A86E8)
+    private val COLOR_INSERT: Color = Color(0x4CAF50)
+    private val COLOR_UPDATE: Color = Color(0xE67E22)
+    private val COLOR_DELETE: Color = Color(0xD32F2F)
+
+    /**
+     * 解析结果缓存（每类型至多 1 条，共 ≤ 4 条）。
+     *
+     * **存在的理由不是省那一次字符串解析，而是省掉 Swing 的重绘副作用**：实测（JBR21）
+     * `JComponent.setBackground(new Color(同值))` 会触发 `repaint() +1`，而传入**同一实例**则是 0。
+     * 渲染器每格都要给色条/单元格设背景，若每次现解析就会每格多一次 repaint —— 这正是
+     * T-LogListFreeze 那类「渲染热路径逐格副作用累积」问题的成因。缓存后同色格复用同一实例。
+     */
+    private val parsedCache = java.util.concurrent.ConcurrentHashMap<StatementType, Pair<String, Color>>()
+
     /** 类型 → 默认色（用户未配置 / 配置非法时的兜底）。 */
-    fun defaultOf(type: StatementType): Color = parseHex(
-        when (type) {
-            StatementType.SELECT -> DEFAULT_SELECT
-            StatementType.INSERT -> DEFAULT_INSERT
-            StatementType.UPDATE -> DEFAULT_UPDATE
-            StatementType.DELETE -> DEFAULT_DELETE
-            StatementType.OTHER -> DEFAULT_SELECT
-        },
-        Color(0x4A86E8),
-    )
+    fun defaultOf(type: StatementType): Color = when (type) {
+        StatementType.SELECT -> COLOR_SELECT
+        StatementType.INSERT -> COLOR_INSERT
+        StatementType.UPDATE -> COLOR_UPDATE
+        StatementType.DELETE -> COLOR_DELETE
+        StatementType.OTHER -> COLOR_SELECT
+    }
 
     /** 当前样式（读设置薄壳）。 */
     fun styleOf(): String = styleOf(PluginSettings.getInstance().state.crudColorStyle)
@@ -109,7 +122,12 @@ object SqlListTypeColor {
     fun colorOf(type: StatementType, style: String, hex: String): Color? {
         if (style == STYLE_OFF) return null
         if (type == StatementType.OTHER) return null
-        return parseHex(hex, defaultOf(type))
+        // 同色复用同一 Color 实例：既省分配，也避免 Swing setBackground 因「新实例同值」触发 repaint
+        val cached = parsedCache[type]
+        if (cached != null && cached.first == hex) return cached.second
+        val color = parseHex(hex, defaultOf(type))
+        parsedCache[type] = hex to color
+        return color
     }
 
     /** 类型 → 设置中的色值（OTHER → 空串，走 [defaultOf] 兜底）。 */
