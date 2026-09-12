@@ -42,6 +42,7 @@ class PluginVersionTest {
         val version = PluginVersion.current()
         // 测试 classpath 含 src/main/resources 处理后的 META-INF/plugin.xml（patchPluginXml 注入版本）
         assertTrue("expect recognizable version, got: $version", VersionComparator.isRecognizable(version))
-        assertTrue(version!!.matches(Regex("""\d{4}\.\d{1,2}\.\d{1,2}""")))
+        // 三段日期基号 + 可选内测后缀（Gitee 抢先体验通道 -beta.N，见版本号规范）
+        assertTrue(version!!.matches(Regex("""\d{4}\.\d{1,2}\.\d{1,2}(-beta\.\d+)?""")))
     }
 }

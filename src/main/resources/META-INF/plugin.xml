@@ -29,14 +29,8 @@
             <li><b>Live SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering and precise jump-to-source</li>
             <li><b>SQL → Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD &amp; joins)</li>
             <li><b>JOIN diagram &amp; execution</b>: native IDE ER diagram with PNG / SVG export; execute SQL in an embedded native Database console (Ultimate)</li>
+            <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
             <li>One keystroke away: gutter icon / context menu / <code>Alt+Shift+Q</code></li>
-        </ul>
-        <h3>Recent additions</h3>
-        <ul>
-            <li><b>Hot-update without restart</b> — new versions apply instantly in a running IDE</li>
-            <li><b>Single-click log preview</b> — editable highlighted editor: tweak a value, hit copy</li>
-            <li><b>Auto-saved SQL history</b> — two-level navigation, jump to the source line that fired the SQL</li>
-            <li><b>SQL completion</b> — table / column / parameter names, data-source schema comments first</li>
         </ul>
         <p>Feature matrix &amp; docs: <a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · Screenshots on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace page</a></p>
         <!-- M18.1 问题反馈入口：跳转官网需求池（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
@@ -50,14 +44,8 @@
             <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、精确跳转源码</li>
             <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL（Ultimate）</li>
+            <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
             <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
-        </ul>
-        <h3>最近更新</h3>
-        <ul>
-            <li><b>自更新免重启</b>——新版本热替换即时生效，无需重启 IDE</li>
-            <li><b>日志单击预览</b>——高亮可编辑轻量预览，改个值直接复制</li>
-            <li><b>SQL 历史自动保存</b>——两级导航，直达触发 SQL 的源码行</li>
-            <li><b>SQL 代码补全</b>——表名 / 列名 / 参数名，数据源字段注释优先</li>
         </ul>
         <p>功能矩阵与文档：<a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · 截图见 <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace 页面</a></p>
         <p>遇到问题？请到<a href="https://sql-visualizer.jvtools.cn/about/feedback">官网需求池</a>提交反馈。</p>

@@ -136,11 +136,11 @@
   body.dark .tag-new { background: #1a3a1a; color: #7ee787; }
   body.dark .tag-ultimate { background: #1a1a3a; color: #79c0ff; }
 
-  /* === 首屏：定位语 + 亮点 + 最近更新 === */
+  /* === 首屏：定位语 + 亮点 === */
   h1 { font-size: 26px; margin: 12px 0 4px; }
   .tagline { font-size: 17px; font-weight: 600; color: #1a6fd4; margin: 0 0 10px; }
   body.dark .tagline { color: #79c0ff; }
-  .hl li, .news li { margin-bottom: 6px; }
+  .hl li { margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -158,14 +158,8 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、精确跳转源码</li>
   <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码</li>
   <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL（Ultimate）</li>
+  <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE，列勾选、乐观锁与逻辑删除自动适配</li>
   <li><b>触发零门槛</b>：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
-</ul>
-
-<ul class="news">
-  <li><b>自更新免重启</b>：新版本热替换即时生效，无需重启 IDE</li>
-  <li><b>日志单击预览</b>：高亮可编辑轻量预览，改个值直接复制</li>
-  <li><b>SQL 历史自动保存</b>：两级导航，直达触发 SQL 的源码行</li>
-  <li><b>SQL 代码补全</b>：表名 / 列名 / 参数名，数据源字段注释优先</li>
 </ul>
 
 <!-- ========== FEATURE MATRIX ========== -->
@@ -268,6 +262,11 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr><th style="width:180px">功能</th><th>说明</th></tr>
   </thead>
   <tbody>
+    <tr>
+      <td>CRUD SQL 生成 <span class="tag tag-new">New</span></td>
+      <td>实体类 / Database 工具窗表节点右键一步生成 INSERT / UPDATE / SELECT / DELETE；
+          列勾选重建、自增主键默认不勾、乐观锁与逻辑删除自动适配</td>
+    </tr>
     <tr>
       <td>SQL → Java <span style="font-weight:normal">（<code>Alt+Shift+J</code> / 右键）</span></td>
       <td>QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态输出；

@@ -4,9 +4,32 @@
 
 ## [Unreleased]
 
+## [2026.9.14-beta.1] - 2026-09-12
+
+> Gitee 抢先体验通道的首个内测版（`-beta.N` 后缀仅内测通道；正式版 `2026.9.14` 发行时本系列全部内测版的条目统一并入正式版本号）。
+
+### Added
+
+- **实体类与数据库表右键生成 CRUD SQL（T-CrudSql）**：双入口 action——实体类（EditorPopupMenu + ProjectViewPopupMenu，判定 MP 注解实体，后台 ReadAction 内 EntityResolver→CrudTableSpec）+ Database 工具窗表节点（DatabaseViewPopupMenu，可选依赖 database-optional.xml，Community 版仅实体侧入口）；一键产出 INSERT / UPDATE / SELECT / DELETE。展示层零新弹窗：候选选择为原生 `JBPopup` 浮层（Recent Files 式——打字按摘要过滤、Enter/双击选定、ESC 关闭、主题色双行渲染器加粗摘要+等宽代码行详情），选中进既有 SqlPreviewService 预览窗口；INSERT/UPDATE 复用 BatchModel 列勾选重建（自增主键默认不勾、`@Version` 列 SET 尾 `= version + 1` + WHERE 追加、逻辑删除变体仅实体侧）；无主键降级 `WHERE 1 = 0` 占位提示。真机反馈三轮：OK/双击进预览（回调 invokeLater 出模态上下文，原同步 show 被模态吞）、候选样式分层、模态对话框整体退出 CRUD 流程
+- **SQL 预览字段列表自动折叠（T-AutoFold）**：宽表 SQL 列清单逐行展开定位困难（官网需求池 FR-0017），新增「SQL 预览字段较多时自动折叠」配置项（默认关，关闭时行为逐字节不变）。程序化 FoldingModel 路线：`SqlAutoFoldPlanner` 纯逻辑规划器（SqlLexer token 流单遍状态机，识别 SELECT/INSERT 列清单、VALUES 每组、UPDATE SET 四类顶层列表，元素数 ≥ 阈值且跨 ≥ 2 行才折叠）+ `SqlAutoFolding.applyTo` 公共应用器唯一收口（UserData 挂本方区域清单，只摘自己的，绝不越权碰平台 ConsoleFolding 区域）。六点位接入：主预览三分支 + 原生 Database 控制台 + 单击预览弹窗 + LogToSqlPanel 结果区 + SqlInputEditor 输入区；阈值默认 10 可配，设置页复选框总数台账 24→25
+
+### Changed
+
+- **全选/全不选双按钮合一为状态切换按钮（T-SelToggle）**：预览「动态条件」「批量列」两分区与日志「类型过滤」弹窗三处并排的「全选」「全不选」按钮各合并为一个随勾选态切换文案的单按钮——全勾显示「全不选」点击清空，其余（空集/部分勾选）显示「全选」点击补满；点击行为与 SQL 产物零变更。预览侧文案收口 `renderSql()` 单点，弹窗侧三处显式同步；i18n 零新键。含前置改动：两分区「清除」按钮移至行末位
+
 ### Fixed
 
+- **SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT（T-PickMpjErr）**：SQL→Java 弹窗选定目标类后重渲染时，设计内的 `SqlReverseException`（MPJ 业务异常）从 elementChosen 鼠标回调裸调 `generateCode` 逃逸为未处理异常——新增 `generateCodeOrReport` 单点收口四分支，业务异常转状态栏提示并保留上次渲染结果
+- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动。注：本修复与下一条交付于 v2026.9.11 打标签之后，未入该版发行包，随本内测版发出
+- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`（T-PreviewSlow 拆包后该断言真机兑现），被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入——262 锁实现反编译实证仅持锁为纯 Read 才抛禁嵌套异常）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）；262 真机 idea.log 复验留人工
 - **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：自动化任务跑全量测试期间宿主机默认浏览器每隔一段时间被自动拉起打开帮助在线文档——`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用/`openEditor` 抛异常走降级分支 `BrowserUtil.browse`，该 API 不经沙盒隔离直接 ShellExecute 拉起真机浏览器（沙盒 idea.log 与浏览器历史双侧实证）。修复=三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式（`isUnitTestMode`）短路只记日志
+
+### Test
+
+- **CRUD SQL**：`CrudSqlGeneratorTest` 11 例 + `DbTypeQuoteHintTest` 3 例 + `CrudSqlPreviewFlowTest` 3 例；真机反馈轮补 `CrudSqlPreviewPanelRenderTest` 3 例（六种语句逐一喂真实面板）+ doOKAction 回调/双击直开 2 例 + 浮层渲染器冒烟 1 例
+- **自动折叠**：`SqlAutoFoldPlannerTest` 12 例（纯 JUnit 零平台依赖）+ `SqlAutoFoldingTest` 5 例（含只摘本方清单守卫）+ 各点位行为 5 例 + 设置台账/导入导出断言
+- **按钮合一**：新建 `SqlLogPanelTypePopupToggleTest` 6 例（初始文案/清空回填/逐勾选翻转/部分态回填/未构建 null/重建初始化）；`XmlPreviewPanelTest` 历史错位用法统一 `deselectAllConditions`
+- 本版全量 **3353/0/0/6 绿**，与基线一致零回归
 
 ## [2026.9.11] - 2026-09-11
 
@@ -17,8 +40,6 @@
 
 ### Fixed
 
-- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动
-- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`（T-PreviewSlow 拆包后该断言真机兑现），被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入——262 锁实现反编译实证仅持锁为纯 Read 才抛禁嵌套异常）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）；262 真机 idea.log 复验留人工
 - **SQL 历史页参数识别丢失根治（T-HistParam）**：「SQL 历史」页打开历史条目参数识别丢失——历史文件此前不持久化参数，升级 v2 格式在语句旁以 `-- pd:` 注释行保存参数（读取自动剥离展示行、旧版插件忽略该行照常打开、新版可读全部旧文件，`SqlLogParamCodec` 编解码单点）；实时日志面板与历史面板参数识别统一走 `LogEntryPreviewRecognizer` 同一通道消除双面板分叉；pd 行排除出旧头部判据防误解析
 - **262 平台热替换探测失败回退重启（T-DynUpdate 续）**：用户日常 IDE 262 Gitee 通道实测报重启提示，日志一击定位 `unloadPlugin(IdeaPluginDescriptorImpl) not found`——**262 平台 `unloadPlugin` 首参类型从 `IdeaPluginDescriptorImpl` 漂移为其子类 `PluginMainDescriptor`**（243 仍为基类；反编译实证两形态并存，双参形态 options 有公开无参构造），精确签名匹配 262 扑空整体回退脚本路径。修复=首参弹性匹配（名称+首参互为可赋值、优先最少参数；双参形态自动构造无参 options），解析逻辑抽纯函数 `resolveMethodByFirstParam`。教训：跨平台反射入口须逐方法 javap 实际签名，反编译元数据不体现重载参数类型漂移
 - **热替换后「插件未完全卸载」警告缓解 + 更新通知入口去重**：① 动态重配置后平台 GCWatcher 观察旧类加载器数秒，仍被强引用即弹信息级警告——持有链主要是更新流程自身调用链与事件日志常驻的「立即安装」通知动作闭包；新版实例完整接管（扩展点/服务平台已清理重建），旧类加载器仅一过性内存驻留（重启即清）无功能影响。缓解=点击「立即安装」先 expire 源通知摘除最强引用（不硬屏蔽平台诊断通道）；后经用户 1GB hprof 堆转储双重核实归因收口=结构性互引非泄漏（GC 时机问题，可调 Registry `ide.plugins.unload.timeout` 放宽窗口），零代码改动。② 更新通知「查看 Gitee 发布页」正文内嵌链接与动作行按钮重复，收敛为按钮一个，测试改断言防回归
