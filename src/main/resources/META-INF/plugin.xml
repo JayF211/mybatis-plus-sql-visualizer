@@ -72,7 +72,8 @@
     <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
          官方规范（Plugin Dependencies）：可选依赖须声明 optional="true" + config-file，
          主描述文件不得直接引用可选插件类（本插件经反射隔离调用，Community 下优雅降级）；
-         database-optional.xml 存放可选插件存在时才激活的声明（当前无 EP 注册，为占位） -->
+         database-optional.xml 存放可选插件存在时才激活的声明（modelRelationProvider EP +
+         T-CrudSql 数据库表右键 action——Community 下整文件不加载，实体类入口不受影响） -->
     <depends optional="true" config-file="database-optional.xml">com.intellij.database</depends>
 
     <!-- T-Dgm-01 JOIN 图原生渲染：com.intellij.diagram（Ultimate 捆绑 "Diagrams"，类图/关系图底座）——
