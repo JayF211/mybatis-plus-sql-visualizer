@@ -33,7 +33,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
-| [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/调研报告/发行说明/SQL 文件的命名与格式规范 |
+| [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/调研报告/发行说明/SQL 文件/**图片设计稿**的命名与格式规范（2026-09-12 增 §图片/设计稿：设计稿归 `docs/images/design/`，对外素材留 `docs/images/` 根） |
 | [记忆精简规范.md](./记忆精简规范.md)                                          | 本地记忆文件管理：分类标准（保留/归档/全局）、归档目录结构、操作流程、数量基线 |
 | [MEMORY.md](./MEMORY.md)                                                      | 本文件：docs 目录检索索引 |
 
