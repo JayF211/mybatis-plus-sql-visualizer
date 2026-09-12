@@ -320,9 +320,12 @@ internal class SqlListSelectionOutline(
    `settings.log.tab.crudColor`、`settings.log.crudColor.style`、`settings.log.crudColor.style.tip`、`settings.log.crudColor.select` / `.insert` / `.update` / `.delete`、`settings.log.crudColor.reset`、`settings.log.crudColor.reset.tip`、样式三项文案（`settings.log.crudColor.style.bar` / `.background` / `.off`）。
    - 英文侧文案为**必须**：`PluginSettingsPersistenceTest.kt:138` 断言切换英文后控件文本不得残留中文（若新增复选框还需计入 25 台账——本方案不新增复选框，故仅需保证下拉项与标签走 bundle）。
 
-### 3.5 可选增强（P1，可延后）
+### 3.5 类型过滤弹窗色块图例（原「可选 P1」，**已一并实施**）
 
-9. **类型过滤弹窗色块图例**（`SqlLogPanel.kt:586-599`）：每个类型复选框前加 12×12 颜色方块（自绘 `Icon`），让用户在筛选处即知配色；样式为 `off` 时不显示色块。理由=颜色若无图例，用户需去设置页才能对上号。实现需把每个 `JCheckBox` 包一层 `JPanel`（保持 `typePopupCheckBoxes` 的 `List<Pair<StatementType, JCheckBox>>` 结构不变，避免影响 `applyAllTypes`）。
+9. **类型过滤弹窗色块图例**（`SqlLogPanel.showTypeFilterPopup`）：每个类型复选框前加 12×12 实心色块（自绘 `Icon`），让用户在筛选处即知配色。
+   - 色块取 `SqlListTypeColor.colorOf(type)`；`off` 样式下该函数返回 null → **不加色块**（避免出现「有图例却无标记」的错位）。
+   - 每个 `JCheckBox` 包一层 `FlowLayout(LEFT)` 行面板承载色块；`typePopupCheckBoxes` 仍是 `List<Pair<StatementType, JCheckBox>>`，`applyAllTypes` 语义不受影响（已确认无测试依赖弹窗内部结构）。
+   - **无单测**：`showTypeFilterPopup` 为私有方法且弹窗需真实 UI 上下文，改由 §4.3 真机走查第 9 项覆盖。
 
 ---
 
@@ -380,7 +383,8 @@ internal class SqlListSelectionOutline(
   5. **选中感主观验收**：`background` 样式下"选中够不够明显"（描边 vs 平台填充的观感差距）——§1.2.1 唯一的主观待确认项。反馈偏弱**优先加粗描边**（`OUTLINE_WIDTH` 2→3→4，上限 4），而非加深底色（加深会压 SQL 高亮，与选型初衷相悖）；
   6. 设置改色（如 DELETE 改紫）→ 日志页与历史页均生效；
   7. 历史页切 tab / 打开历史文件 → 二级列表色条正常；
-  8. 200 条满列表滚动 → 无卡顿回潮（对比改前，EDT 无长冻结）。
+  8. 200 条满列表滚动 → 无卡顿回潮（对比改前，EDT 无长冻结）；
+  9. **类型过滤弹窗色块图例**（§3.5）：打开类型多选弹窗 → 四类前各显示与标记同色的 12×12 色块；切到「关闭」样式后**弹窗内不应再出现色块**。
 
 ---
 
@@ -415,8 +419,11 @@ internal class SqlListSelectionOutline(
 ## 实施记录
 
 - **交付分支/提交**：worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-crudcolor`，分支 `t-crudcolor`（基线 master `e190a60`）。
+  实施提交 `641c815`；为消除与 master 的分叉，合并 master（`b468b46`）并解 `docs/变更记录.md` 冲突 → 合并提交 `7dae84a`；§3.5 色块图例追加提交。
 - **测试**：新增 44 用例——`SqlListTypeColorTest` 18（新增）+ `SqlListSelectionOutlineTest` 10（新增）+ `LogStatementClassifierTest` +3 + `SqlLogPanelRendererUiTest` +6 + `HistoryCellRendererTest` +5 + `PluginSettingsPanelBindingTest` +2。
-  定向 7 类 98/0/0；clean 全量 **3383/0/0/6 绿**（基线 3339，净增 44，零回归）。
+  - 分支内自测（基线 3339）：定向 7 类 98/0/0；clean 全量 **3383/0/0/6 绿**。
+  - 合并 master 后（基线 3344）：clean 全量 **3388/0/0/6 绿**（3344 + 44，与预期完全吻合，零回归）。
+  - 追加 §3.5 后复跑：clean 全量 **3388/0/0/6 绿**。
 - **实施中对计划的四处修正/补充**（偏离点如实记录）：
   1. **`SqlListTypeColor` 拆纯/壳双层**：原计划写「纯 JUnit 零平台依赖」，但 `colorOf`/`styleOf` 需读 `PluginSettings`（平台服务），纯类测不了。改为纯函数重载 `colorOf(type, style, hex)` / `styleOf(raw)` + 读设置薄壳，纯逻辑可测、语义不变。
   2. **混色改显式 half-up**：Kotlin `round(Double)` 实为 ties-to-even（`round(76.5)=76`），与手算直觉相反，会让设计稿色值表出现 1/255 偏移。改为 `floor(v + 0.5).toInt()`，与 §1.2.1 色值表完全一致（暗色选中行底色由 `#5A3B22` 更正为 `#5A3C22`，设计稿已按新值重出）。

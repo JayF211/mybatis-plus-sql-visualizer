@@ -42,6 +42,7 @@ import java.awt.Container
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Graphics
 import java.awt.GridBagLayout
 import java.awt.GridLayout
 import java.awt.Insets
@@ -58,6 +59,7 @@ import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.DefaultListModel
+import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JLabel
@@ -603,7 +605,17 @@ class SqlLogPanel(
                 }
             }
             checkBoxes += type to cb
-            content.add(cb)
+            // T-CrudColor：复选框前置色块图例——否则用户得去设置页才能把颜色和类型对上号。
+            // 样式为 off（或该类型无标记色）时不加色块，避免出现「有图例却无标记」的错位。
+            // 包一层行面板保持 checkBoxes 结构与 applyAllTypes 语义不变。
+            val tint = SqlListTypeColor.colorOf(type)
+            content.add(JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+                isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
+                maximumSize = Dimension(Int.MAX_VALUE, cb.preferredSize.height + 2)
+                if (tint != null) add(JLabel(colorSwatchIcon(tint)))
+                add(cb)
+            })
         }
         typePopupCheckBoxes = checkBoxes
         content.add(Box.createVerticalStrut(6))
@@ -624,6 +636,19 @@ class SqlLogPanel(
         content.add(row)
         popup.add(content)
         popup.show(typeFilterButton, 0, typeFilterButton.height + 2)
+    }
+
+    /**
+     * T-CrudColor：类型色块图例图标（12×12 实心方块）。
+     * 用于类型过滤弹窗——纯色块、无边框，与列表中的标记同色，起对照作用。
+     */
+    private fun colorSwatchIcon(color: Color): Icon = object : Icon {
+        override fun getIconWidth(): Int = 12
+        override fun getIconHeight(): Int = 12
+        override fun paintIcon(c: Component?, g: Graphics, x: Int, y: Int) {
+            g.color = color
+            g.fillRect(x, y, iconWidth, iconHeight)
+        }
     }
 
     /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）：同步弹窗内勾选框 + 按钮文案 + 列表。 */
