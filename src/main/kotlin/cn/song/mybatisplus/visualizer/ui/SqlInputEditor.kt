@@ -89,6 +89,8 @@ class SqlInputEditor(
             BorderLayout.CENTER,
         )
         bindAutoPopup(created)
+        // T-AutoFold F4-d：构造初始内容按当前设置应用折叠（仅程序性写入重算，用户打字不触发）
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
         return created
     }
 
@@ -109,6 +111,8 @@ class SqlInputEditor(
         } finally {
             suppress = false
         }
+        // T-AutoFold F4-d：程序性写入后按当前设置重建折叠（用户逐字打字不经过此处，不重算）
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(editor, sql)
     }
 
     /** 自建 autopopup（T-M27.2 实证接线，逻辑照抄 SqlPreviewPanel.bindAutoPopup）。 */

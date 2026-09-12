@@ -48,6 +48,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var verticalPairAnnotation: Boolean = true,
 
+        /**
+         * 字段较多时自动折叠（T-AutoFold）：true = 各处 SQL 预览编辑器渲染后自动折叠超长字段列表
+         * （SELECT/INSERT 列清单、VALUES 组、UPDATE SET），默认关——关闭时写入管线零折叠操作、
+         * 行为逐字节不变；开启后的下一次程序性写入生效（与 formatSql 同构，不即时刷新已开窗体）。
+         */
+        var autoFoldEnabled: Boolean = false,
+
+        /**
+         * 自动折叠触发的顶层字段数阈值（T-AutoFold）：字段列表元素数 >= 该值且区域跨多行才折叠，
+         * 默认 10。
+         */
+        var autoFoldFieldThreshold: Int = DEFAULT_AUTO_FOLD_FIELD_THRESHOLD,
+
         /** 代码左侧 gutter 预览 SQL 图标开关（M10；性能/视觉兜底，关闭后不再生成图标）。 */
         var showGutterIcon: Boolean = true,
 
@@ -397,6 +410,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 默认 SQL 历史记录上限（F-7，非收藏条目）。 */
         const val DEFAULT_HISTORY_MAX_SIZE = 200
+
+        /** 自动折叠触发的顶层字段数阈值（T-AutoFold）。 */
+        const val DEFAULT_AUTO_FOLD_FIELD_THRESHOLD = 10
 
         /**
          * 获取全局配置实例。

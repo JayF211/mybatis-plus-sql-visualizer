@@ -209,6 +209,10 @@ internal class SqlClickPreview(
             }
             editor.component.preferredSize = Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT)
 
+            // T-AutoFold F4-b：弹窗编辑器程序性折叠（关闭态 applyTo 内部即清除短路，零外观变更；
+            // 开启态由 applyTo 补设 isFoldingOutlineShown=true——上面紧凑外观的 false 被覆盖）
+            cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(editor, sql)
+
             val copyButton = JButton(AllIcons.Actions.Copy).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.copy")
                 isFocusable = false

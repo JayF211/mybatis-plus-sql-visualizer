@@ -252,4 +252,34 @@ class LogToSqlPanelTest : BasePlatformTestCase() {
         panel.setInputForTest("")
         assertTrue("清空输入 → 提示恢复可见", panel.inputHintLabelForTest().isVisible)
     }
+
+    // ---------- T-AutoFold F4-c：转换产出后结果区程序性折叠 ----------
+
+    private fun withAutoFold(enabled: Boolean, block: () -> Unit) {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val oldEnabled = state.autoFoldEnabled
+        val oldThreshold = state.autoFoldFieldThreshold
+        try {
+            state.autoFoldEnabled = enabled
+            state.autoFoldFieldThreshold = 3
+            block()
+        } finally {
+            state.autoFoldEnabled = oldEnabled
+            state.autoFoldFieldThreshold = oldThreshold
+        }
+    }
+
+    fun test开启自动折叠后转换产出含折叠区域() {
+        withAutoFold(enabled = true) {
+            panel.setInputForTest(
+                "==>  Preparing: SELECT a1, a2, a3, a4 FROM user WHERE id = ?\n" +
+                    "==> Parameters: 1(Long)",
+            )
+            panel.convertForTest()
+            // 结果经 SqlFormatter.format 多行缩进 → 列清单跨多行，达阈值折叠
+            val regions = panel.resultEditorForTest().foldingModel.allFoldRegions
+                .filter { it.placeholderText.startsWith("…") }
+            assertTrue("转换产出后结果区应有折叠区域", regions.isNotEmpty())
+        }
+    }
 }

@@ -31,6 +31,8 @@ object SettingsIO {
         appendLine("  \"replaceParams\": ${state.replaceParams},")
         appendLine("  \"formatSql\": ${state.formatSql},")
         appendLine("  \"verticalPairAnnotation\": ${state.verticalPairAnnotation},")
+        appendLine("  \"autoFoldEnabled\": ${state.autoFoldEnabled},")
+        appendLine("  \"autoFoldFieldThreshold\": ${state.autoFoldFieldThreshold},")
         appendLine("  \"injectLogicDelete\": ${state.injectLogicDelete},")
         appendLine("  \"logicDeleteValue\": ${jsonString(state.logicDeleteValue)},")
         appendLine("  \"injectTenantLine\": ${state.injectTenantLine},")
@@ -73,6 +75,8 @@ object SettingsIO {
         map.getBoolean("replaceParams")?.let { state.replaceParams = it }
         map.getBoolean("formatSql")?.let { state.formatSql = it }
         map.getBoolean("verticalPairAnnotation")?.let { state.verticalPairAnnotation = it }
+        map.getBoolean("autoFoldEnabled")?.let { state.autoFoldEnabled = it }
+        map.getInt("autoFoldFieldThreshold")?.let { state.autoFoldFieldThreshold = it }
         map.getBoolean("injectLogicDelete")?.let { state.injectLogicDelete = it }
         map.getString("logicDeleteValue")?.let { state.logicDeleteValue = it }
         map.getBoolean("injectTenantLine")?.let { state.injectTenantLine = it }
@@ -307,6 +311,7 @@ object SettingsIO {
 
     private fun Map<String, Any?>.getString(key: String): String? = this[key] as? String
     private fun Map<String, Any?>.getBoolean(key: String): Boolean? = this[key] as? Boolean
+    private fun Map<String, Any?>.getInt(key: String): Int? = (this[key] as? Number)?.toInt()
     private fun Map<String, Any?>.getArray(key: String): List<Any?>? = this[key] as? List<*>
 
     /** 解析动态表名规则数组。 */

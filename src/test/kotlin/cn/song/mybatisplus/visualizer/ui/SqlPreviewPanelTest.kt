@@ -1392,4 +1392,54 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         LookupManager.getInstance(project).hideActiveLookup()
         panel.clear()
     }
+
+    // ---------- T-AutoFold F4-a：showSql 程序性折叠 ----------
+
+    private fun withAutoFold(enabled: Boolean, block: () -> Unit) {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val oldEnabled = state.autoFoldEnabled
+        val oldThreshold = state.autoFoldFieldThreshold
+        try {
+            state.autoFoldEnabled = enabled
+            state.autoFoldFieldThreshold = 3
+            block()
+        } finally {
+            state.autoFoldEnabled = oldEnabled
+            state.autoFoldFieldThreshold = oldThreshold
+        }
+    }
+
+    private fun ownFoldRegions(editor: com.intellij.openapi.editor.Editor) =
+        editor.foldingModel.allFoldRegions.filter { it.placeholderText.startsWith("…") }
+
+    fun test开启自动折叠后showResult产生折叠区域() {
+        withAutoFold(enabled = true) {
+            val panel = SqlPreviewPanel(project)
+            panel.showResult(
+                result(
+                    sql = "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+                    compact = "SELECT a1, a2, a3, a4 FROM t",
+                ),
+            )
+            val editor = panel.editorForTest()!!
+            val regions = ownFoldRegions(editor)
+            assertEquals("showSql 后应有本方折叠区域", 1, regions.size)
+            assertFalse("区域应收起", regions[0].isExpanded)
+            panel.clear()
+        }
+    }
+
+    fun test关闭自动折叠后showResult零区域() {
+        withAutoFold(enabled = false) {
+            val panel = SqlPreviewPanel(project)
+            panel.showResult(
+                result(
+                    sql = "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+                    compact = "SELECT a1, a2, a3, a4 FROM t",
+                ),
+            )
+            assertEquals("关闭态零折叠区域（逐字节不变）", 0, ownFoldRegions(panel.editorForTest()!!).size)
+            panel.clear()
+        }
+    }
 }

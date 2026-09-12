@@ -141,6 +141,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 竖向排列 VALUES 行尾配对列名标注开关（T-VPairAnno，默认开）。 */
     private val verticalPairAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.verticalPairAnnotation"))
 
+    /** SQL 预览字段较多时自动折叠开关（T-AutoFold，默认关）。 */
+    private val autoFoldCheck = JBCheckBox()
+
+    /** 自动折叠字段数阈值输入框（T-AutoFold）：开关勾选才启用编辑（对齐自动保存联动范式）。 */
+    private val autoFoldThresholdField = JBTextField(6)
+
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
     private val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
 
@@ -358,6 +364,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
                 addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
                 addRow(p, g, "", verticalPairAnnotationCheck.apply { text = MpSqlVisualizerBundle.message("settings.verticalPairAnnotation") })
+                addRow(p, g, "", autoFoldCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.autoFold.enabled")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.autoFold.enabled.tip")
+                    addActionListener { autoFoldThresholdField.isEnabled = isSelected }
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.autoFold.threshold"), autoFoldThresholdField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.autoFold.threshold.tip")
+                })
                 addRow(p, g, "", literalParamRecoveryCheck.apply { text = MpSqlVisualizerBundle.message("settings.literalParamRecovery") })
                 addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
@@ -964,6 +978,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
             || verticalPairAnnotationCheck.isSelected != s.verticalPairAnnotation
+            || autoFoldCheck.isSelected != s.autoFoldEnabled
+            || autoFoldThresholdField.text.trim().toIntOrNull() != s.autoFoldFieldThreshold
             || literalParamRecoveryCheck.isSelected != s.literalParamRecovery
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
@@ -1035,6 +1051,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.replaceParams = replaceParamsCheck.isSelected
             s.formatSql = formatCheck.isSelected
             s.verticalPairAnnotation = verticalPairAnnotationCheck.isSelected
+            s.autoFoldEnabled = autoFoldCheck.isSelected
+            s.autoFoldFieldThreshold = autoFoldThresholdField.text.trim().toIntOrNull()
+                ?: PluginSettings.DEFAULT_AUTO_FOLD_FIELD_THRESHOLD
             s.literalParamRecovery = literalParamRecoveryCheck.isSelected
             s.injectLogicDelete = injectLogicDeleteCheck.isSelected
             s.logicDeleteValue = logicDeleteValueField.text.trim()
@@ -1122,6 +1141,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             replaceParamsCheck.isSelected = s.replaceParams
             formatCheck.isSelected = s.formatSql
             verticalPairAnnotationCheck.isSelected = s.verticalPairAnnotation
+            autoFoldCheck.isSelected = s.autoFoldEnabled
+            autoFoldThresholdField.text = s.autoFoldFieldThreshold.toString()
+            autoFoldThresholdField.isEnabled = s.autoFoldEnabled
             literalParamRecoveryCheck.isSelected = s.literalParamRecovery
             injectLogicDeleteCheck.isSelected = s.injectLogicDelete
             logicDeleteValueField.text = s.logicDeleteValue

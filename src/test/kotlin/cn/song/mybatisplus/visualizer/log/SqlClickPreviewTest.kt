@@ -296,4 +296,59 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    // ---------- T-AutoFold F4-b：buildContent 程序性折叠 ----------
+
+    private fun withAutoFold(enabled: Boolean, block: () -> Unit) {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val oldEnabled = state.autoFoldEnabled
+        val oldThreshold = state.autoFoldFieldThreshold
+        try {
+            state.autoFoldEnabled = enabled
+            state.autoFoldFieldThreshold = 3
+            block()
+        } finally {
+            state.autoFoldEnabled = oldEnabled
+            state.autoFoldFieldThreshold = oldThreshold
+        }
+    }
+
+    private fun ownFoldRegions(editor: Editor) =
+        editor.foldingModel.allFoldRegions.filter { it.placeholderText.startsWith("…") }
+
+    fun test开启自动折叠后弹窗内容含折叠区域() {
+        withAutoFold(enabled = true) {
+            val content = SqlClickPreview.buildContent(
+                project,
+                "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+                copyText = {},
+                close = {},
+            )
+            try {
+                val regions = ownFoldRegions(content.editor)
+                assertEquals("开启态应有一个折叠区域", 1, regions.size)
+                assertFalse("区域应收起", regions[0].isExpanded)
+                assertTrue("开启态应补设折叠轮廓", content.editor.settings.isFoldingOutlineShown)
+            } finally {
+                releaseEditor(content.editor)
+            }
+        }
+    }
+
+    fun test关闭自动折叠后弹窗内容零区域且无轮廓() {
+        withAutoFold(enabled = false) {
+            val content = SqlClickPreview.buildContent(
+                project,
+                "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+                copyText = {},
+                close = {},
+            )
+            try {
+                assertEquals("关闭态零折叠区域（紧凑外观逐字节不变）", 0, ownFoldRegions(content.editor).size)
+                assertFalse("关闭态不补设折叠轮廓", content.editor.settings.isFoldingOutlineShown)
+            } finally {
+                releaseEditor(content.editor)
+            }
+        }
+    }
 }

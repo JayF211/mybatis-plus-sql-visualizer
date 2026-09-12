@@ -229,6 +229,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 原生编辑器的文档引用（内嵌后参数变更同步用）。 */
     private var nativeEditorDoc: com.intellij.openapi.editor.Document? = null
 
+    /**
+     * T-AutoFold F5：原生控制台编辑器引用（onNativeEditorReady 时登记）——
+     * showSql nativeDoc 支链的程序性折叠应用目标；detachConsole/clear/dispose 时清空，
+     * 防止 EditorFactory 泄漏告警。recoverConsole 失联路径经 embedConsole 换新组件后
+     * 由下一次 onNativeEditorReady 重新登记。
+     */
+    private var nativeConsoleEditor: com.intellij.openapi.editor.Editor? = null
+
     private var current: PreviewResult? = null
     private var compactMode = false
 
@@ -574,6 +582,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
         consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         nativeEditorDoc = consoleEditor.document
+        // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
+        //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
+        nativeConsoleEditor = consoleEditor
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(
+            consoleEditor,
+            consoleEditor.document.text,
+        )
         if (editor != null) {
             releaseEditor()
             editorHolder.removeAll()
@@ -826,6 +841,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             rehostListener?.let { l -> it.removeHierarchyListener(l) }
             consoleHost.remove(it)
         }
+        // T-AutoFold F5：控制台组件摘除即清编辑器引用（防 EditorFactory 泄漏；新组件就绪时经
+        // onNativeEditorReady 重新登记）
+        nativeConsoleEditor = null
         embeddedConsole = null
         rehostListener = null
     }
@@ -1427,6 +1445,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         detachConsole()
         // M36.4：重置原生编辑器文档引用
         nativeEditorDoc = null
+        // T-AutoFold F5：控制台编辑器引用随清空复位
+        nativeConsoleEditor = null
         // M36.5：释放已准备控制台引用（下次预览重新准备）
         SqlExecutor.clearPrepared()
         // T-M36.6-03：clear 释放了临时文件/预热产物——面板重用时重新预热（幂等，保持零慢操作路径）
@@ -1471,6 +1491,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     suppressAutoPopup = false
                 }
             }
+            // T-AutoFold F4-a：nativeDoc 支链的程序性折叠（关闭态 applyTo 内部即清除短路）
+            nativeConsoleEditor?.let { foldTarget ->
+                if (!foldTarget.isDisposed) {
+                    cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(foldTarget, text)
+                }
+            }
             return
         }
         val existing = editor
@@ -1484,6 +1510,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     suppressAutoPopup = false
                 }
             }
+            // T-AutoFold F4-a：自建编辑器支链
+            cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(existing, text)
             return
         }
         fLogger.info("[M36] showSql branch=createEditor: len=${text.length}, attachedToMe=${consoleAttachedToMe()}")
@@ -1612,6 +1640,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editorHolder.repaint()
         editor = created
         bindAutoPopup(created)
+        // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
     }
 
     /**
@@ -2614,6 +2644,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-RefreshDbSteal：面板废弃——移除 rehost 监听（共享控制台可能已被新面板接管，
         // 本面板的监听不得残活抢组件）；embedConsole 对 null 安全
         runCatching { detachConsole() }
+        // T-AutoFold F5：面板废弃——控制台编辑器引用一并清空（防 EditorFactory 泄漏告警）
+        nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
@@ -2625,6 +2657,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     internal fun editorForTest(): Editor? = editor
+    /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
+    internal fun nativeConsoleEditorForTest(): Editor? = nativeConsoleEditor
     internal fun psiFileForTest(): PsiFile? = psiFile
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode

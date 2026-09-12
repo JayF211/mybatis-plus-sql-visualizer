@@ -199,6 +199,8 @@ class LogToSqlPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             setDocumentText(resultEditor, "")
+            // T-AutoFold F4-c：清空后同步清除折叠区域
+            cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(resultEditor, "")
             status(" ", error = false)
         }
     }
@@ -257,6 +259,8 @@ class LogToSqlPanel(
             if (multi) "-- ${MpSqlVisualizerBundle.message("logToSql.status.group", index + 1)}\n$body" else body
         }.joinToString("\n\n")
         setDocumentText(resultEditor, out)
+        // T-AutoFold F4-c：转换产出后按当前设置重建结果区折叠（关闭态零操作）
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(resultEditor, out)
         // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
         val unresolved = entries.count { countPlaceholders(it.restoredSql) > 0 }
         status(
@@ -365,6 +369,9 @@ class LogToSqlPanel(
     }
 
     internal fun resultTextForTest(): String = resultEditor.document.text
+
+    /** T-AutoFold F4-c：结果区编辑器（折叠区域断言用）。 */
+    internal fun resultEditorForTest(): Editor = resultEditor
 
     internal fun statusForTest(): String = statusLabel.text
 

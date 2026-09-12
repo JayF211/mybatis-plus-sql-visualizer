@@ -149,7 +149,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // JdbcTemplate SQL 字符串预览开关 +1
             // T-VPairAnno：竖向排列值行尾列名标注开关 +1
             // T-HistParam：字面量参数恢复开关 +1
-            assertEquals("复选框总数应为 24", 24, texts.size)
+            // T-AutoFold：SQL 预览字段较多时自动折叠开关 +1
+            assertEquals("复选框总数应为 25", 25, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -192,6 +193,32 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         } finally {
             settings.state.tablePrefix = oldPrefix
             settings.state.tableSuffix = oldSuffix
+        }
+    }
+
+    fun testAutoFoldStateRoundTripKeepsDefaults() {
+        // T-AutoFold：自动折叠两字段随 State 持久化往返保留；默认值 = 关 / 阈值 10（关闭时零行为变更）
+        val settings = PluginSettings.getInstance()
+        val oldEnabled = settings.state.autoFoldEnabled
+        val oldThreshold = settings.state.autoFoldFieldThreshold
+        try {
+            settings.state.autoFoldEnabled = true
+            settings.state.autoFoldFieldThreshold = 7
+            val snapshot = settings.getState()
+            assertEquals("getState 应反映最新 autoFoldEnabled", true, snapshot.autoFoldEnabled)
+            assertEquals("getState 应反映最新 autoFoldFieldThreshold", 7, snapshot.autoFoldFieldThreshold)
+            // 模拟重启：新实例 loadState（IDE 从磁盘反序列化后调用）
+            val fresh = PluginSettings()
+            fresh.loadState(snapshot)
+            assertEquals("loadState 后 autoFoldEnabled 保留", true, fresh.state.autoFoldEnabled)
+            assertEquals("loadState 后 autoFoldFieldThreshold 保留", 7, fresh.state.autoFoldFieldThreshold)
+            // 出厂默认：关 / 10（测试 JVM 内 State() 新实例即出厂配置）
+            val defaults = PluginSettings.State()
+            assertFalse("自动折叠默认应关闭", defaults.autoFoldEnabled)
+            assertEquals("自动折叠阈值默认应为 10", 10, defaults.autoFoldFieldThreshold)
+        } finally {
+            settings.state.autoFoldEnabled = oldEnabled
+            settings.state.autoFoldFieldThreshold = oldThreshold
         }
     }
 
