@@ -36,7 +36,7 @@ object CrudSqlPreviewFlow {
             else -> SqlSelectionDialog(
                 project,
                 candidates,
-                candidates.map { SqlSelectionDialog.displayText(summary(it), lineText(it)) },
+                candidates.map { SqlSelectionDialog.Row.of(summary(it), lineText(it)) },
             ) { selected ->
                 // T-CrudSql 真机修复（262 实测 OK 无响应）：不在模态弹窗 doOKAction 栈内同步
                 // 开 modeless 预览弹窗——被仍存活的模态上下文吞掉且零异常零日志；既有

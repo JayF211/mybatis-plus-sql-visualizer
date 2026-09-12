@@ -123,12 +123,12 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
             ApplicationManager.getApplication().executeOnPooledThread {
                 // T-M23.8 模式：候选 + 显示文本一并后台 ReadAction 预计算（弹窗只渲染）
                 val payload = runCatching {
-                    ReadAction.compute<Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<String>>, Throwable> {
+                    ReadAction.compute<Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<SqlSelectionDialog.Row>>, Throwable> {
                         val calls = JdbcTemplateSqlPreviewService.collectMethodCandidates(method)
                         calls to calls.map { call ->
                             val line = call.callExpression.containingFile.viewProvider.document
                                 ?.getLineNumber(call.callExpression.textRange.startOffset)?.plus(1) ?: 0
-                            SqlSelectionDialog.displayText(
+                            SqlSelectionDialog.Row.of(
                                 "${call.methodName}（第 $line 行）",
                                 call.sqlString,
                             )
