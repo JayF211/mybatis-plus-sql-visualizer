@@ -133,6 +133,28 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 是 Gitee 自带的，不算）；**附件 `browser_download_url` 与 `preview.update.json` 的
 `downloadUrl` 逐字一致**——这是自更新通道能否命中包体的唯一保证。
 
+### 4. 发行版补建与列表排序（2026-09-12 补建 2026.9.11 实证）
+
+- **列表页排序 = 发行版创建时间倒序**（非标签名、非提交日期）。所以「补建的历史版本」
+  一定排在既有版本之下——若要让某个后建的发行版仍显示在上，只能**删除后重建**该发行版
+  （`DELETE /releases/{id}` 只删发行版，标签保留），再按第三节重新 POST + 传附件；
+  重建后附件文件名不变即下载 URL 不变，update 清单无需改动。
+- **`PUT /releases/{id}` 不支持**（405 Method Not Allowed），无法靠「编辑」刷新排序位置。
+- 补建 zip 若与当前 master 内容有差（如历史版本落后若干提交），在 `gradle.properties`
+  临时改版本号 `./gradlew buildPlugin -x test`，产物内层 jar 的 plugin.xml `<version>`
+  由 patchPluginXml 注入，须回读 zip 确认；打完包把版本号改回，工作树不留痕。
+
+### 5. 常见坑速查
+
+| 症状 | 原因 / 处置 |
+|------|-------------|
+| 400 `{"messages":["body is missing"]}` | 描述参数用了 `description` → 改 `body` |
+| 404 `upload_files` / `assets` | 端点不存在 → 用 `attach_files` |
+| 405 `PUT /releases/{id}` | Gitee 不支持编辑发行版 → 删除重建 |
+| 补建版本显示在列表下方 | 列表按创建时间倒序 → 见 §4 删除重建 |
+| 自更新收不到通知 | downloadUrl 与附件 URL 尾段不一致 |
+
+
 ### 附：Python 无依赖参考实现
 
 ```python
