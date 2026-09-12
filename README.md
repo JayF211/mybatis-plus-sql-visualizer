@@ -298,4 +298,4 @@ M28 起发布流程新增一步（插件设置页「检查更新」的数据源�
 |----------|--------|
 | ![微信](docs/images/wechat-qr.png) | ![交流群](docs/images/group-qr.png) |
 
-遇到问题或有建议？请在 [Issues](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues) 提交反馈。
+遇到问题或有建议？请在 [官网需求池](https://sql-visualizer.jvtools.cn/about/feedback) 提交反馈。
