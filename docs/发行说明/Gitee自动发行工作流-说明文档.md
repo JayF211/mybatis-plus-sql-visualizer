@@ -79,6 +79,8 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 ## 三、Gitee API 发布（本次实证端点与参数）
 
 鉴权一律 `access_token` 参数（Personal Access Token，需 projects 权限）。
+令牌存仓库根 `gitee-token.txt`（已进 .gitignore，严禁提交/外传），脚本读取：
+`TOKEN = open('gitee-token.txt').read().strip()`。
 以下 `{owner}/{repo}` = `songrenshuo/mybatis-plus-sql-visualizer`。
 
 ### 1. 建发行版

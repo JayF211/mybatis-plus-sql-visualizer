@@ -68,3 +68,8 @@ out/
 dev-support/verify-target/
 verification-*/
 *.hprof
+
+### 本地凭据（严禁提交） ###
+gitee-token.txt
+*.token
+.secrets/
