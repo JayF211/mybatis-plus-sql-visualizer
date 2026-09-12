@@ -49,6 +49,7 @@ AGENTS
 .reasonix/
 reasonix.toml
 .workbuddy/
+.workbuddy-ai/
 
 ### Mac OS ###
 .DS_Store
