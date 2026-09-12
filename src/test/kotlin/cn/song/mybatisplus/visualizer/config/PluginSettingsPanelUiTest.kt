@@ -88,7 +88,9 @@ class PluginSettingsPanelUiTest : BasePlatformTestCase() {
             val sqlLogCombos = allComponents(sqlLogOnly.getRoot()).count { it is JComboBox<*> }
 
             assertTrue("全量面板应含多个下拉（方言/语言/反向形态/表名推断等）", fullCombos >= 3)
-            assertEquals("仅 SQL 日志段不应含任何下拉控件（其余 section 被隐藏）", 0, sqlLogCombos)
+            // T-CrudColor：SQL 日志段新增「CRUD 标记样式」下拉，故由 0 → 1
+            // （断言本意是「其余 section 的下拉未被构建」，绝对数随该 section 内控件变化）
+            assertEquals("仅 SQL 日志段应只含 CRUD 标记样式一个下拉（其余 section 被隐藏）", 1, sqlLogCombos)
 
             val fullSeparators = allComponents(full.getRoot()).count { it is TitledSeparator }
             val sqlLogSeparators = allComponents(sqlLogOnly.getRoot()).count { it is TitledSeparator }

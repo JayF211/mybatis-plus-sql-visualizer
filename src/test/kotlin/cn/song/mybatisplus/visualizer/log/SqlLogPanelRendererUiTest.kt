@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.ui.SimpleColoredComponent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import java.awt.Color
@@ -139,6 +140,107 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         // sequenceNumber=0：历史文件读回 / round-trip 条目
         val r = render(entry("SELECT 1"))
         assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"))
+    }
+
+    // ---------- T-CrudColor：CRUD 类型颜色标记 ----------
+
+    /** 在给定标记样式 + 固定四色下执行断言（其余状态原样恢复）。 */
+    private fun withCrudColors(style: String, block: () -> Unit) {
+        val s = PluginSettings.getInstance().state
+        val savedStyle = s.crudColorStyle
+        val saved = listOf(s.crudColorSelect, s.crudColorInsert, s.crudColorUpdate, s.crudColorDelete)
+        try {
+            s.crudColorStyle = style
+            s.crudColorSelect = "#4A86E8"
+            s.crudColorInsert = "#4CAF50"
+            s.crudColorUpdate = "#E67E22"
+            s.crudColorDelete = "#D32F2F"
+            block()
+        } finally {
+            s.crudColorStyle = savedStyle
+            s.crudColorSelect = saved[0]
+            s.crudColorInsert = saved[1]
+            s.crudColorUpdate = saved[2]
+            s.crudColorDelete = saved[3]
+        }
+    }
+
+    /** 渲染后取色条色（未着色 → null）。 */
+    private fun barColorAfterRender(sql: String, selected: Boolean = false): Color? {
+        render(entry(sql), selected)
+        return renderer.colorBar.takeIf { it.isOpaque }?.background
+    }
+
+    fun test色条样式_四类型着色且OTHER不标记() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            assertEquals(Color(0x4A86E8), barColorAfterRender("SELECT * FROM user"))
+            assertEquals(Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"))
+            assertEquals(Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"))
+            assertEquals(Color(0xD32F2F), barColorAfterRender("DELETE FROM user"))
+            assertEquals("OTHER 不应着色（避免满屏色条稀释信号）",
+                null, barColorAfterRender("MERGE INTO t USING s ON (1=1)"))
+        }
+    }
+
+    fun test色条样式_选中态色条不丢色() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            // 选型核心依据：选中行仍保留类型色（平台填充只覆盖单元格背景，色条是独立子组件）
+            assertEquals("选中态色条应仍为类型色", Color(0x4A86E8), barColorAfterRender("SELECT * FROM user", true))
+        }
+    }
+
+    fun test关闭样式_色条不可见且背景走原逻辑() {
+        withCrudColors(SqlListTypeColor.STYLE_OFF) {
+            assertEquals(null, barColorAfterRender("SELECT * FROM user"))
+            assertEquals("关闭态应与改造前一致（非选中取列表背景）", list.background, renderer.background)
+            render(entry("SELECT * FROM user"), true)
+            assertEquals("关闭态选中仍走平台填充", list.selectionBackground, renderer.background)
+        }
+    }
+
+    fun test背景样式_未选中与选中混色比例不同且不铺平台填充() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            val bg = list.background
+            val update = Color(0xE67E22)
+            render(entry("UPDATE user SET a = 1"))
+            assertEquals("未选中应为 14% 混色",
+                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_NORMAL), renderer.background)
+            render(entry("UPDATE user SET a = 1"), true)
+            assertEquals("选中应为 30% 混色",
+                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_SELECTED), renderer.background)
+            assertNotEquals("选中态**不铺**平台选中填充（否则类型色被覆盖丢失）",
+                list.selectionBackground, renderer.background)
+        }
+    }
+
+    fun test背景样式_选中态描边且两状态insets逐边相等() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            render(entry("UPDATE user SET a = 1"))
+            assertEquals("未选中应为普通边框", renderer.normalBorder, renderer.border)
+            render(entry("UPDATE user SET a = 1"), true)
+            assertEquals("选中应为描边边框（同一实例，锁零分配引用切换）",
+                renderer.selectedBorder, renderer.border)
+
+            val normal = renderer.normalBorder.getBorderInsets(renderer)
+            val selected = renderer.selectedBorder.getBorderInsets(renderer)
+            assertEquals("上", normal.top, selected.top)
+            assertEquals("左", normal.left, selected.left)
+            assertEquals("下", normal.bottom, selected.bottom)
+            assertEquals("右", normal.right, selected.right)
+        }
+    }
+
+    fun test背景样式_选中态前景不转白_色条样式仍转白() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            render(entry("SELECT 1", ms = 5L), true)
+            assertEquals("淡底上白字不可见 → 背景样式不取 selectionForeground",
+                list.foreground, renderer.metaLine.foreground)
+        }
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            render(entry("SELECT 1", ms = 5L), true)
+            assertEquals("色条样式走平台填充，前景仍为 selectionForeground（现状不变）",
+                list.selectionForeground, renderer.metaLine.foreground)
+        }
     }
 
     fun test行号与后续片段拼接顺序正确() {

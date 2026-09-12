@@ -68,6 +68,7 @@ import javax.swing.JSeparator
 import javax.swing.JToggleButton
 import javax.swing.ListModel
 import javax.swing.SwingConstants
+import javax.swing.border.Border
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -113,7 +114,9 @@ internal val FILTERABLE_TYPES: List<StatementType> = listOf(
  */
 internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<StatementType>): List<LogSqlEntry> {
     if (activeTypes.containsAll(FILTERABLE_TYPES)) return entries
-    return entries.filter { LogStatementClassifier.classify(it) in activeTypes }
+    // T-CrudColor：改用条目级缓存属性（行为等价）——避免每次刷新都重跑分类
+    // （classify 内 Regex 每次编译 Pattern），与渲染器共用同一份结果。
+    return entries.filter { it.statementType in activeTypes }
 }
 
 /**
@@ -418,6 +421,11 @@ class SqlLogPanel(
                 // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
                 // 走 refreshList 重排重绘即生效（片段无缓存，原 HTML 通道的清缓存兜底不再需要）
                 refreshList()
+                // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
+                // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 是 lazy）
+                if (tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0) {
+                    historyPanel.repaintSqlList()
+                }
             }
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
@@ -1328,6 +1336,74 @@ class SqlLogPanel(
 /** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。 */
 private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0x9E9E9E))
 
+/**
+ * T-CrudColor：按标记形态应用「色条 / 整行淡背景 + 选中描边」——**两个列表渲染器共用**（§1.2.1）。
+ *
+ * 三分支：
+ *  - 关闭 / OTHER（[tint] = null）→ 与改造前逐字节一致；
+ *  - [SqlListTypeColor.STYLE_BAR] → 色条着色，单元格背景仍走平台选中填充（色条不受影响，选中不丢色）；
+ *  - [SqlListTypeColor.STYLE_BACKGROUND] → 底色与列表背景混色（选中时提高比例），**不铺**平台选中填充，
+ *    选中由「描边 + 色调加深」共同表达。
+ *
+ * [selectedBorder] 预建后此处只切引用 + 改色（[SqlListSelectionOutline.setColor]），热路径零分配；
+ * 描边色经 [SqlListTypeColor.ensureOutlineContrast]——暗色主题下 `selectionBackground`
+ * （`#2E436E`）压在加深后的行底色上几乎不可见，必须提亮。
+ */
+internal fun applyCrudColorMark(
+    cell: JPanel,
+    colorBar: JPanel,
+    normalBorder: Border,
+    selectedBorder: SqlListSelectionOutline,
+    tint: Color?,
+    isSelected: Boolean,
+    cellHasFocus: Boolean,
+    list: javax.swing.JList<*>?,
+) {
+    val listBg = list?.background ?: cell.background
+    val selectionBg = list?.selectionBackground ?: listBg
+    when (SqlListTypeColor.styleOf()) {
+        SqlListTypeColor.STYLE_BAR -> {
+            if (tint == null) {
+                colorBar.isOpaque = false
+            } else {
+                colorBar.background = tint
+                colorBar.isOpaque = true
+            }
+            cell.border = normalBorder
+            cell.background = if (isSelected) selectionBg else listBg
+        }
+        SqlListTypeColor.STYLE_BACKGROUND -> {
+            colorBar.isOpaque = false
+            if (tint == null) {
+                cell.border = normalBorder
+                cell.background = if (isSelected) selectionBg else listBg
+            } else {
+                cell.background = SqlListTypeColor.blend(
+                    listBg,
+                    tint,
+                    if (isSelected) SqlListTypeColor.MIX_SELECTED else SqlListTypeColor.MIX_NORMAL,
+                )
+                if (isSelected) {
+                    val raw = if (cellHasFocus) selectionBg
+                    else javax.swing.UIManager.getColor("List.selectionInactiveBackground") ?: selectionBg
+                    selectedBorder.setColor(
+                        SqlListTypeColor.ensureOutlineContrast(raw, SqlListTypeColor.brightnessOf(listBg) < 0.5)
+                    )
+                    cell.border = selectedBorder
+                } else {
+                    cell.border = normalBorder
+                }
+            }
+        }
+        else -> { // STYLE_OFF
+            colorBar.isOpaque = false
+            cell.border = normalBorder
+            cell.background = if (isSelected) selectionBg else listBg
+        }
+    }
+}
+
+
 /** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML `<span>` 尾空格语义）。 */
 internal fun formatTimestampFragment(timestamp: Long): Pair<String, SimpleTextAttributes>? {
     val state = PluginSettings.getInstance().state
@@ -1384,20 +1460,54 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
     internal val metaLine = SimpleColoredComponent()
     internal val sqlLine = SimpleColoredComponent()
 
+    /**
+     * T-CrudColor：左侧类型色条（[SqlListTypeColor.STYLE_BAR] 下着色可见；
+     * 其他样式 `isOpaque=false` 但仍**占位**——占位是刻意的：切换样式时文本左缘不位移，
+     * 且左内边距 5 + 色条 3 = 原 8px，文本左缘像素位置与改造前一致。
+     */
+    internal val colorBar = JPanel().apply {
+        preferredSize = Dimension(SqlListTypeColor.BAR_WIDTH, 1)
+        isOpaque = false
+    }
+
+    /** 未选中态 Border（分隔线 + 内边距）。 */
+    internal val normalBorder: Border = BorderFactory.createCompoundBorder(
+        BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+        EmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
+    )
+
+    /**
+     * T-CrudColor：选中态描边 Border（[SqlListTypeColor.STYLE_BACKGROUND] 专用）。
+     * 预建一次、渲染时只切引用 + 改色（[SqlListSelectionOutline.setColor]），热路径零分配。
+     * 内层分隔线为**透明占位**：仅占 1px inset，不绘制——否则灰线会画在蓝框内部把底边割断。
+     */
+    internal val selectedBorder: SqlListSelectionOutline = SqlListSelectionOutline(
+        SqlListTypeColor.OUTLINE_WIDTH,
+        JBColor.foreground(),
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
+            EmptyBorder(
+                5 - SqlListTypeColor.OUTLINE_WIDTH,
+                5 - SqlListTypeColor.OUTLINE_WIDTH,
+                5 - SqlListTypeColor.OUTLINE_WIDTH,
+                8 - SqlListTypeColor.OUTLINE_WIDTH,
+            ),
+        ),
+    )
+
     init {
         layout = BorderLayout()
         isOpaque = true
         metaLine.isOpaque = false
         sqlLine.isOpaque = false
+        // T-CrudColor：色条挂 WEST——CENTER 已被 GridLayout 双行面板占用，WEST 空闲且零结构冲突
+        add(colorBar, BorderLayout.WEST)
         add(JPanel(GridLayout(2, 1)).apply {
             isOpaque = false
             add(metaLine)
             add(sqlLine)
         }, BorderLayout.CENTER)
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-            EmptyBorder(5, 8, 5, 8),
-        )
+        border = normalBorder
     }
 
     /** 元信息行渲染文本（测试断言用：全部片段拼接、trim 段间距）。 */
@@ -1414,14 +1524,24 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): java.awt.Component {
-        background = if (isSelected) list?.selectionBackground else list?.background
-        val fg = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
+        val listBg = list?.background ?: background
+        val selectionBg = list?.selectionBackground ?: listBg
+        val entry = value as? LogSqlEntry
+
+        // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
+        val style = SqlListTypeColor.styleOf()
+        val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
+        // 背景色样式下底色是淡色调而非饱和选中填充：若按选中态取白字，亮色主题下不可见；
+        // 且耗时着色会被抹成白色、丢失快/慢信号。故仅在色条样式（走平台填充）时按选中态取前景。
+        val useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(style)
+        applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list)
+
+        val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
         metaLine.foreground = fg
         sqlLine.foreground = fg
         metaLine.clear()
         sqlLine.clear()
-        val entry = value as? LogSqlEntry
         if (entry != null) {
             // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
             if (entry.sequenceNumber > 0) {
@@ -1430,10 +1550,10 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
             // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
             formatTimestampFragment(entry.timestamp)?.let { (t, a) -> metaLine.append(t, a) }
             if (PluginSettings.getInstance().state.showDurationInLogList) {
-                val (t, a) = formatDurationFragment(entry.executionTimeMs, isSelected)
+                val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
                 metaLine.append(t, a)
             }
-            formatSourceFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
             // SQL 高亮行在下：选中态保留 SQL 高亮原色（与原 HTML 行为一致）
             SqlListFragmentRenderer.renderFragments(withTerminator(entry.summary)).forEach { f ->
@@ -1443,4 +1563,5 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
         return this
     }
+
 }

@@ -73,4 +73,45 @@ class LogStatementClassifierTest {
         )
         assertEquals(StatementType.SELECT, LogStatementClassifier.classify(entry))
     }
+
+    // ---------- T-CrudColor：条目级缓存属性 statementType ----------
+
+    @Test
+    fun `条目缓存属性与按串分类全类型等价`() {
+        listOf(
+            "SELECT * FROM user" to StatementType.SELECT,
+            "select * from user" to StatementType.SELECT,
+            "  \n SELECT 1" to StatementType.SELECT,
+            "WITH cte AS (SELECT 1) SELECT * FROM cte" to StatementType.SELECT,
+            "INSERT INTO user VALUES (1)" to StatementType.INSERT,
+            "UPDATE user SET a = 1" to StatementType.UPDATE,
+            "DELETE FROM user WHERE id = 1" to StatementType.DELETE,
+            "MERGE INTO t USING s ON (1=1)" to StatementType.OTHER,
+            "TRUNCATE TABLE user" to StatementType.OTHER,
+            "" to StatementType.OTHER,
+            "   " to StatementType.OTHER,
+        ).forEach { (sql, expected) ->
+            val entry = LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList())
+            assertEquals("statementType 应与 classify(sql) 一致：$sql", expected, entry.statementType)
+            assertEquals("应与 classify(sql) 完全等价：${LogStatementClassifier.classify(sql)}",
+                LogStatementClassifier.classify(sql), entry.statementType)
+        }
+    }
+
+    @Test
+    fun `条目缓存属性_copy后按新SQL重算`() {
+        val entry = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList())
+        assertEquals(StatementType.SELECT, entry.statementType)
+        val copied = entry.copy(restoredSql = "DELETE FROM t WHERE id = 1")
+        assertEquals("copy 产生的实例应持有独立缓存（按新 SQL 重算）",
+            StatementType.DELETE, copied.statementType)
+        assertEquals("原实例缓存不受影响", StatementType.SELECT, entry.statementType)
+    }
+
+    @Test
+    fun `条目缓存属性_不参与equals`() {
+        val a = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList())
+        assertEquals("两个同内容条目应相等：statementType 是 body 内属性，不进 equals",
+            a, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()))
+    }
 }

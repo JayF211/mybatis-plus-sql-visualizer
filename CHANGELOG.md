@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **SQL 列表 CRUD 类型颜色标记（T-CrudColor）**：SQL 日志页与「SQL 历史」页二级列表支持按语句类型着色标记，颜色与标记形态均可自定义——默认「左侧 3px 色条」（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红，OTHER 不标记）；可选「整行淡背景」（底色与列表背景混色 14%，天然适配亮/暗主题），其**选中态为「保留类型色调（30% 混色）+ 2px 选中描边」而非平台填充**，保证上下键浏览时颜色不丢失、且耗时快/慢着色不再被选中态抹白；样式三选一（色条 / 淡背景 / 关闭，关闭与改造前逐字节一致）。类型判定复用 `LogStatementClassifier`（与类型过滤弹窗同源，故筛出的 SELECT 行绝不会被标成红色）。新增 `SqlListTypeColor`（配色/混色/对比度纯逻辑）与 `SqlListSelectionOutline`（描边 Border，预建复用、热路径零分配）；设置项 5 个（样式 + 四色），不新增复选框
+- **图片素材按用途分层（docs/images）**：新增 `docs/images/design/` 存放开发过程设计稿，与根目录的对外素材（README/插件介绍页/Marketplace 引用的截图与二维码）分离；《文档命名规范-说明文档.md》新增 §图片/设计稿 八条（位置/命名 `{任务号}-{说明}.png`/格式/引用基准=文件相对路径/嵌入语法/禁止内嵌外链（Gitee raw 对 Marketplace 302 防盗链）/分层理由/设计稿须标注非实现截图）
+
 ### Fixed
 
 - **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：自动化任务跑全量测试期间宿主机默认浏览器每隔一段时间被自动拉起打开帮助在线文档——`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用/`openEditor` 抛异常走降级分支 `BrowserUtil.browse`，该 API 不经沙盒隔离直接 ShellExecute 拉起真机浏览器（沙盒 idea.log 与浏览器历史双侧实证）。修复=三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式（`isUnitTestMode`）短路只记日志

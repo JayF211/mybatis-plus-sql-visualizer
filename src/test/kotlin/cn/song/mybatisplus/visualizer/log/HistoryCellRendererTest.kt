@@ -1,9 +1,12 @@
 package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -107,5 +110,86 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("应展示条数 12", text.contains("12"))
         val nameFragment = r.line.iterator().let { it.next() to it.textAttributes }.second
         assertTrue("文件名片段应加粗（原 HTML <b> 语义）", nameFragment.style and SimpleTextAttributes.STYLE_BOLD != 0)
+    }
+
+    // ---------- T-CrudColor：二级 SQL 列表 CRUD 类型颜色标记（与日志页同构） ----------
+
+    private fun withCrudColors(style: String, block: () -> Unit) {
+        val s = PluginSettings.getInstance().state
+        val savedStyle = s.crudColorStyle
+        val saved = listOf(s.crudColorSelect, s.crudColorInsert, s.crudColorUpdate, s.crudColorDelete)
+        try {
+            s.crudColorStyle = style
+            s.crudColorSelect = "#4A86E8"
+            s.crudColorInsert = "#4CAF50"
+            s.crudColorUpdate = "#E67E22"
+            s.crudColorDelete = "#D32F2F"
+            block()
+        } finally {
+            s.crudColorStyle = savedStyle
+            s.crudColorSelect = saved[0]
+            s.crudColorInsert = saved[1]
+            s.crudColorUpdate = saved[2]
+            s.crudColorDelete = saved[3]
+        }
+    }
+
+    private fun barColorAfterRender(sql: String, selected: Boolean = false): java.awt.Color? {
+        renderSql(sqlEntry(sql), selected)
+        return sqlRenderer.colorBar.takeIf { it.isOpaque }?.background
+    }
+
+    fun test二级条目_色条样式_四类型着色且OTHER不标记() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            assertEquals(java.awt.Color(0x4A86E8), barColorAfterRender("SELECT * FROM user"))
+            assertEquals(java.awt.Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"))
+            assertEquals(java.awt.Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"))
+            assertEquals(java.awt.Color(0xD32F2F), barColorAfterRender("DELETE FROM user"))
+            assertEquals("OTHER 不应着色", null, barColorAfterRender("TRUNCATE TABLE user"))
+        }
+    }
+
+    fun test二级条目_色条样式_选中态色条不丢色() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            assertEquals(java.awt.Color(0x4A86E8), barColorAfterRender("SELECT * FROM user", true))
+        }
+    }
+
+    fun test二级条目_背景样式_未选中与选中混色比例不同且不铺平台填充() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            val bg = list.background
+            renderSql(sqlEntry("UPDATE user SET a = 1"))
+            assertEquals("未选中 14% 混色",
+                SqlListTypeColor.blend(bg, java.awt.Color(0xE67E22), SqlListTypeColor.MIX_NORMAL),
+                sqlRenderer.background)
+            renderSql(sqlEntry("UPDATE user SET a = 1"), true)
+            assertEquals("选中 30% 混色",
+                SqlListTypeColor.blend(bg, java.awt.Color(0xE67E22), SqlListTypeColor.MIX_SELECTED),
+                sqlRenderer.background)
+            assertNotEquals("选中态不铺平台填充", list.selectionBackground, sqlRenderer.background)
+        }
+    }
+
+    fun test二级条目_背景样式_选中态描边且两状态insets逐边相等() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            renderSql(sqlEntry("UPDATE user SET a = 1"))
+            assertEquals(sqlRenderer.normalBorder, sqlRenderer.border)
+            renderSql(sqlEntry("UPDATE user SET a = 1"), true)
+            assertEquals(sqlRenderer.selectedBorder, sqlRenderer.border)
+
+            val normal = sqlRenderer.normalBorder.getBorderInsets(sqlRenderer)
+            val selected = sqlRenderer.selectedBorder.getBorderInsets(sqlRenderer)
+            assertEquals("上", normal.top, selected.top)
+            assertEquals("左", normal.left, selected.left)
+            assertEquals("下", normal.bottom, selected.bottom)
+            assertEquals("右", normal.right, selected.right)
+        }
+    }
+
+    fun test二级条目_关闭样式_色条不可见且背景走原逻辑() {
+        withCrudColors(SqlListTypeColor.STYLE_OFF) {
+            assertEquals(null, barColorAfterRender("SELECT * FROM user"))
+            assertEquals(list.background, sqlRenderer.background)
+        }
     }
 }

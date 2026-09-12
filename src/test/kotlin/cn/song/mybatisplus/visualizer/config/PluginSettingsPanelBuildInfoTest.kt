@@ -77,6 +77,8 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.section.codeGen",
             // SQL 日志组拆 3 子组（MyBatis 核心 / ORM 框架 / 自动保存）
             "settings.log.tab.mybatis",
+            // T-CrudColor：CRUD 颜色标记子组（紧随 MyBatis 核心——同属日志列表展示设置）
+            "settings.log.tab.crudColor",
             "settings.log.tab.orm",
             "settings.log.tab.autoSave",
             // F-44-7：源码位置捕获子组（T-SqlDuration 会话同步 + joinfw 分支合并共同确认）
@@ -85,7 +87,7 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             "settings.section.updateDiagnostics",
         ).map { MpSqlVisualizerBundle.message(it) }
         assertEquals(
-            "9 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/ORM 框架/自动保存/源码位置捕获 4 子组）",
+            "10 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/CRUD 颜色标记/ORM 框架/自动保存/源码位置捕获 5 子组）",
             expected, separators,
         )
     }

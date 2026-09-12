@@ -19,12 +19,14 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.SearchTextField
 import java.awt.BorderLayout
 import java.awt.CardLayout
+import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.GridLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.border.Border
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -201,6 +203,16 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     // ---------- 刷新 ----------
+
+    /**
+     * T-CrudColor：仅重绘二级 SQL 列表（不重扫文件、不重载列表）。
+     *
+     * 设置页改了配色/标记样式后由 [SqlLogPanel] 的设置变更监听调用——渲染器直读设置，
+     * 重绘即生效；走 repaint 而非 [refresh] 是为了不打断用户当前浏览位置、不触发磁盘扫描。
+     */
+    internal fun repaintSqlList() {
+        sqlList.repaint()
+    }
 
     /** 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。 */
     fun refresh() {
@@ -456,20 +468,52 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
     internal val metaLine = SimpleColoredComponent()
     internal val sqlLine = SimpleColoredComponent()
 
+    /**
+     * T-CrudColor：左侧类型色条（色条样式下着色可见；其他样式 `isOpaque=false` 但仍占位——
+     * 占位是刻意的：切换样式时文本左缘不位移，且左内边距 5 + 色条 3 = 原 8）。
+     */
+    internal val colorBar = JPanel().apply {
+        preferredSize = Dimension(SqlListTypeColor.BAR_WIDTH, 1)
+        isOpaque = false
+    }
+
+    /** 未选中态 Border（分隔线 + 内边距）。 */
+    internal val normalBorder: Border = BorderFactory.createCompoundBorder(
+        BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+        javax.swing.BorderFactory.createEmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
+    )
+
+    /**
+     * T-CrudColor：选中态描边 Border（整行淡背景样式专用）。
+     * 预建一次、渲染时只切引用 + 改色，热路径零分配；内层分隔线为透明占位（底边为纯描边）。
+     */
+    internal val selectedBorder: SqlListSelectionOutline = SqlListSelectionOutline(
+        SqlListTypeColor.OUTLINE_WIDTH,
+        JBColor.foreground(),
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
+            javax.swing.BorderFactory.createEmptyBorder(
+                5 - SqlListTypeColor.OUTLINE_WIDTH,
+                5 - SqlListTypeColor.OUTLINE_WIDTH,
+                5 - SqlListTypeColor.OUTLINE_WIDTH,
+                8 - SqlListTypeColor.OUTLINE_WIDTH,
+            ),
+        ),
+    )
+
     init {
         layout = BorderLayout()
         isOpaque = true
         metaLine.isOpaque = false
         sqlLine.isOpaque = false
+        // T-CrudColor：色条挂 WEST（CENTER 已被双行面板占用）
+        add(colorBar, BorderLayout.WEST)
         add(JPanel(GridLayout(2, 1)).apply {
             isOpaque = false
             add(metaLine)
             add(sqlLine)
         }, BorderLayout.CENTER)
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-            javax.swing.BorderFactory.createEmptyBorder(5, 8, 5, 8),
-        )
+        border = normalBorder
     }
 
     override fun getListCellRendererComponent(
@@ -479,14 +523,18 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): Component {
-        background = if (isSelected) list?.selectionBackground else list?.background
-        val fg = if (isSelected) (list?.selectionForeground ?: JBColor.foreground())
+        val entry = value as? LogSqlEntry
+        // T-CrudColor：标记形态分派（与日志页共用 applyCrudColorMark，语义完全一致）
+        val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
+        val useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(SqlListTypeColor.styleOf())
+        applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list)
+
+        val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
         metaLine.foreground = fg
         sqlLine.foreground = fg
         metaLine.clear()
         sqlLine.clear()
-        val entry = value as? LogSqlEntry
         if (entry != null) {
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
