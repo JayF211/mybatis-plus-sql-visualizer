@@ -5,7 +5,7 @@
 - **调研动机**：为本插件 M56「增强捕获（agent 字节码通道）」立项吸收竞品精华——DebugTools 是「IDEA 插件内嵌 agent + **支持动态挂载（agentmain）** + SQL 语句/耗时捕获」的成熟开源先例，与本插件规划路线**高度同构**（这是继 Cool Request 之后第二个、也是更贴合的 agent 竞品）
 - **调研方式**：只读源码分析（四路并行子智能体：动态挂载链路 / SQL 捕获实现 / 通信 server + 热重载 / 打包工程化），全部结论带 文件:行号 证据
 - **关键背景**：本项目是「插件 + agent 分离」的**双仓库结构**——本仓库是 agent + server + attach 命令行（Maven 多模块），IDEA 主插件在独立仓库 `debug-tools-idea`（`debug-tools-attach/pom.xml:242,256-258` 硬编码了作者本机绝对路径 `/Users/weilai/Documents/debug-tools-idea`）。故「插件侧 AnAction 触发 attach」的代码本仓库看不到，但 attach 客户端逻辑（`debug-tools-core` 的 `DebugTools`）与 boot 引导（`debug-tools-boot`）已完整覆盖「拿 pid → attach → loadAgent」全链。
-- **关联**：本插件 M56 计划 [20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md](./20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md)；上一位竞品 Cool Request 调研 [20260911-1617-CoolRequest-agent字节码增强-调研报告.md](./20260911-1617-CoolRequest-agent字节码增强-调研报告.md)
+- **关联**：本插件 M56 计划 [20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md](../开发计划/20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md)；上一位竞品 Cool Request 调研 [20260911-1617-CoolRequest-agent字节码增强-调研报告.md](./20260911-1617-CoolRequest-agent字节码增强-调研报告.md)
 
 ## 0. 一句话结论
 

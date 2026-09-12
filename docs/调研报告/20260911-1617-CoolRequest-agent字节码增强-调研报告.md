@@ -4,7 +4,7 @@
 - **调研对象**：Cool Request（作者 houxinlin，仓库 `F:/code/Java/Github/other/houxinlin/coolrequest-vip`，HEAD `9dd3ce95`），GPL-3.0 开源 IDEA 插件
 - **调研动机**：为本插件 M56「增强捕获（agent 字节码通道）」立项吸收竞品精华——Cool Request 是「IDEA 插件内嵌 Java agent + 字节码增强 + 插件↔被调试应用通信」的成熟开源先例，与本插件规划路线高度同构
 - **调研方式**：只读源码分析（四路并行子智能体：attach 挂载链路 / 字节码增强核心 / 通信与 native JVMTI / 打包工程化），全部结论带 文件:行号 证据
-- **关联**：本插件 M56 计划 [20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md](./20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md)
+- **关联**：本插件 M56 计划 [20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md](../开发计划/20260911-0710-M56-增强捕获agent字节码通道master落地与竞品精华吸收-开发计划.md)
 
 ## 0. 一句话结论
 

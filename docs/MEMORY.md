@@ -33,7 +33,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
-| [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
+| [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/调研报告/发行说明/SQL 文件的命名与格式规范 |
 | [记忆精简规范.md](./记忆精简规范.md)                                          | 本地记忆文件管理：分类标准（保留/归档/全局）、归档目录结构、操作流程、数量基线 |
 | [MEMORY.md](./MEMORY.md)                                                      | 本文件：docs 目录检索索引 |
 
@@ -62,7 +62,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 |------|------|
 | [20260812-1058-MP-SQL可视化-需求文档.md](./需求文档/20260812-1058-MP-SQL可视化-需求文档.md) | **功能需求源**：功能编号 F-01~F-20 定义（Wrapper 转换/参数替换/格式化/展示/配置/批量等） |
 
-## 开发计划（docs/开发计划/，时间倒序）
+## 开发计划（docs/开发计划/，时间倒序；调研性质报告已于 2026-09-12 拆分至独立目录 docs/调研报告/，见下方「调研报告」节）
 
 > 开发计划文档 = **任务编号源**（T-Mxx-xx）+ 实现思路（定位到 文件:行号）+ 变更记录。
 
@@ -150,6 +150,20 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [20260812-1844-代码左侧预览SQL图标-开发计划.md](./开发计划/20260812-1844-代码左侧预览SQL图标-开发计划.md) | M10：代码左侧预览 SQL 图标（gutter 入口 + 性能红线） | 已交付 |
 | [20260812-1058-MP-SQL可视化-开发计划.md](./开发计划/20260812-1058-MP-SQL可视化-开发计划.md) | **总开发计划**（M0~M19，T-Mx 任务编号源）：核心引擎/展示交互/配置/发布路线图 | 已交付 |
 
+## 调研报告（docs/调研报告/，2026-09-12 新建）
+
+> 竞品分析、可行性分析、技术验证等调研性质文档，自 开发计划/ 拆分独立管理；命名规范与范围界定见 [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)。
+
+| 文档 | 用途 |
+|------|------|
+| [20260911-1700-DebugTools-agent字节码增强-调研报告.md](./调研报告/20260911-1700-DebugTools-agent字节码增强-调研报告.md) | 首个真落地 attach+agentmain 竞品源码分析；agentmain 只起 server 不注册 SQL transformer 是反面教材（M56 须 addTransformer+retransform）；动态代理包装 Driver.connect + 9 类驱动分库适配等四手法可照搬（M56 输入） |
+| [20260911-1617-CoolRequest-agent字节码增强-调研报告.md](./调研报告/20260911-1617-CoolRequest-agent字节码增强-调研报告.md) | 竞品实为 premain 非 attach（agentmain 声明缺失是坑）；SQL 用「驱动自拼 SQL」绕 setXxx 还原；ByteBuddy RETRANSFORMATION 实证已加载驱动可插桩；relocate/多 JDK 三件套/端口自报/异步上报四工程化手法（M56 输入） |
+| [20260902-1700-SqlSourceInterceptor自动注入可行性分析.md](./调研报告/20260902-1700-SqlSourceInterceptor自动注入可行性分析.md) | SqlSourceInterceptor 设置开关化（免手动配置）可行性分析，方案 A 确认可行（后续 1710 开发计划实施） |
+| [20260830-0002-竞品横向对比与功能建议-调研报告.md](./调研报告/20260830-0002-竞品横向对比与功能建议-调研报告.md) | 子智能体并行调研（功能梳理 + Marketplace 实时数据抓取）横向对比同类产品，输出新一轮功能与优化建议——P-立项-06 竞品精华融合的触发源 |
+| [20260828-2000-P-立项-05-方言输出真实验证-报告.md](./调研报告/20260828-2000-P-立项-05-方言输出真实验证-报告.md) | 方言输出真机验证报告（DBX MCP 通道七数据库家族零缺陷 + 测试环境清单与工作流陷阱） |
+| [20260822-1800-官网设计借鉴与实现参考.md](./调研报告/20260822-1800-官网设计借鉴与实现参考.md) | 官网开发过程中借鉴的各大官网设计模式与实现方案记录 |
+| [20260822-1500-竞品分析与优化建议.md](./调研报告/20260822-1500-竞品分析与优化建议.md) | 插件定位、已有功能、竞品格局全面分析 + 优化建议与新功能方向，M30+ 立项依据 |
+
 ## 发行说明（docs/发行说明/）
 
 | 文档 | 用途 |
@@ -207,6 +221,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-12 | 调研报告独立成目录：`docs/开发计划/` 中 7 个调研性质文档（竞品分析与优化建议、官网设计借鉴、P-立项-05 验证报告、竞品横向对比调研报告、SqlSourceInterceptor 可行性分析、CoolRequest/DebugTools agent 调研报告）迁至 `docs/调研报告/`，9 处站内引用同步改链无死链；文档命名规范新增「调研报告」类型（含范围界定：调研立项计划仍归开发计划）；M37.5 调研计划经核实为立项计划留原处 |
 | 2026-09-12 | 记忆第六次精简（79→27）：新增 40 个归档（bug-fixes +37：T-DynUpdate/T-HistParam/T-PerfSweep/DocLock 系列等已交付任务、分支合并与审计记录、JOIN 图自绘引擎旧档、竞品链接定稿；pitfalls +3：Swing HTML 列表渲染/VFS refresh 锁/测试沙盒弹浏览器）；8 个通用经验升级 global（hprof 快照工作流/并行索引级拆提交/合并冲突三规则/工具转义坑/TPS 装机/文档清单定例/API 代理/fernflower）；5 个小记忆收编进 doc-conventions 与 release-workflow（产品命名/临时截图/verifyPlugin 门禁/update 清单/Gitee 计数）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-12/`；项目 memory 降至 28 个文件（含 MEMORY.md），archive 增至 160 个文件，global 增至 75 个文件 |
 | 2026-09-11 | MPJ 括号条件反向转换退化 + 262 预览 attachConsole 读权限硬抛双修（T-ReverseParenWira，master dab3d3b）：详见 docs/变更记录.md 同日行。要点=parseGroup 单条件非取反括号组解包（MPJLambdaWrapper 形态恢复 + nested 去除）；attachConsole 包 WIRA（WIRA-in-WIRA 重入经 262 锁实现反编译实证合法）+ getDocument 包 ReadAction。全量 3308/0/0/6 绿；262 真机留人工 |
 | 2026-09-10 | 预览打开时 EDT 内文档解析踩 262 读权限硬断言刷屏修复（T-PreviewDocLock）：真机日志每次双击预览刷 4 条 SEVERE `Read access is allowed from inside read-action only` + `Plugin to blame: SQL Visualizer`，同源 `createEditor:1538` 的单次 `PsiDocumentManager.getDocument(psi)`。根因=平台加固——243 `FileDocumentManagerBase.getDocument` 只有 `@RequiresReadLock` 注解、`EditorLockFreeTyping` 类不存在，262 改为首行 `softAssertReadAccess()` + `FileDocumentManager.getDocument` 顶部 `EditorLockFreeTyping.assertReadAccess`；`Logger.shouldRethrow` 只认控制流异常故生产不抛（仅刷屏 + FUS 上报），UsefulTestCase 模式抛 AssertionError。修复=该处包 `ReadAction.compute`（同文件 T-M42 先例，注释写明 lambda 内勿塞同步 refresh 边界）；全库排雷 DataSourceSelector（WriteAction 内）/WrapperLocator（ReadAction 内）/SqlInputEditor（日志零命中）三族不改。全量 3252/0/0/6 绿；262 真机日志零增量留人工。计划文档：docs/开发计划/20260910-1745-T-PreviewDocLock |
