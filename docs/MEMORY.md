@@ -230,7 +230,6 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 日期 | 变更 |
 |------|------|
 | 2026-09-12 | T-M56-00 消费端先导（M56 agent 增强捕获）：LogSqlEntry 四新字段 + SqlSource.AGENT + 标记行宽松化 3~5 段（旧拦截器幂等）+ pd 载荷扩展 m/e/q/u + filterByFocus 聚焦过滤层。全量 269 类 / 3343 用例 / 0 失败 / 6 跳过；verifyPlugin 三目标 Compatible。详见 docs/变更记录.md 同日行 |
-| 2026-09-12 | M56 T-M56-00 消费端先导交付：LogSqlEntry 四字段 + SqlSource.AGENT + 标记行宽松化 3~5 段（旧拦截器幂等）+ pd 载荷扩展键回环 + 聚焦过滤层；全量 269 类/3343 用例一次过。详见 docs/变更记录.md 同日行 |
 | 2026-09-12 | 调研报告独立成目录：`docs/开发计划/` 中 7 个调研性质文档（竞品分析与优化建议、官网设计借鉴、P-立项-05 验证报告、竞品横向对比调研报告、SqlSourceInterceptor 可行性分析、CoolRequest/DebugTools agent 调研报告）迁至 `docs/调研报告/`，9 处站内引用同步改链无死链；文档命名规范新增「调研报告」类型（含范围界定：调研立项计划仍归开发计划）；M37.5 调研计划经核实为立项计划留原处 |
 | 2026-09-12 | 记忆第六次精简（79→27）：新增 40 个归档（bug-fixes +37：T-DynUpdate/T-HistParam/T-PerfSweep/DocLock 系列等已交付任务、分支合并与审计记录、JOIN 图自绘引擎旧档、竞品链接定稿；pitfalls +3：Swing HTML 列表渲染/VFS refresh 锁/测试沙盒弹浏览器）；8 个通用经验升级 global（hprof 快照工作流/并行索引级拆提交/合并冲突三规则/工具转义坑/TPS 装机/文档清单定例/API 代理/fernflower）；5 个小记忆收编进 doc-conventions 与 release-workflow（产品命名/临时截图/verifyPlugin 门禁/update 清单/Gitee 计数）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-12/`；项目 memory 降至 28 个文件（含 MEMORY.md），archive 增至 160 个文件，global 增至 75 个文件 |
 | 2026-09-11 | MPJ 括号条件反向转换退化 + 262 预览 attachConsole 读权限硬抛双修（T-ReverseParenWira，master dab3d3b）：详见 docs/变更记录.md 同日行。要点=parseGroup 单条件非取反括号组解包（MPJLambdaWrapper 形态恢复 + nested 去除）；attachConsole 包 WIRA（WIRA-in-WIRA 重入经 262 锁实现反编译实证合法）+ getDocument 包 ReadAction。全量 3308/0/0/6 绿；262 真机留人工 |
