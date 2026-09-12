@@ -269,5 +269,17 @@
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift J"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift J"/>
         </action>
+
+        <!-- T-CrudSql：实体类右键生成 CRUD SQL（编辑器 + 项目视图；update 判定 MP 实体注解；
+             展示复用现有 SqlSelectionDialog + SqlPreviewService.showResult，零新弹窗；
+             数据库表节点入口在 database-optional.xml——com.intellij.database 在场时才加载） -->
+        <action id="cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity"
+                class="cn.song.mybatisplus.visualizer.actions.GenerateCrudSqlFromEntityAction"
+                text="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity.text"
+                description="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>
