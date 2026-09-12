@@ -39,6 +39,18 @@ class SqlSelectionDialog<T>(
     /** 列表项显示文本（后台预计算；此处仅渲染，不做 PSI 解析）。 */
     private val list = JList(displayTexts.toTypedArray()).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
+        // T-CrudSql 用户反馈：双击候选直接确认（对齐 IDEA 原生弹窗交互），不必移步 OK
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                if (e.clickCount == 2) {
+                    val idx = locationToIndex(e.point)
+                    if (idx >= 0) {
+                        selectedIndex = idx
+                        doOKAction()
+                    }
+                }
+            }
+        })
     }
 
     init {
@@ -75,8 +87,9 @@ class SqlSelectionDialog<T>(
 
         /**
          * T-M23.8：列表项显示文本（纯函数，可单测）——两行 HTML：
-         * 第一行摘要（行号 + 类型/方法名 + 表名），第二行代码行内容（缩进两空格；
-         * **先截断再转义**——`&`/`<`/`>` 转义防破坏 HTML 布局）。
+         * 第一行摘要（行号 + 类型/方法名 + 表名，加粗），第二行代码行内容（缩进两空格、
+         * 灰色等宽字体；**先截断再转义**——`&`/`<`/`>` 转义防破坏 HTML 布局）。
+         * T-CrudSql 样式反馈：加粗摘要 + 灰色等宽代码行，视觉分层（摘要扫读、SQL 细读）。
          */
         internal fun displayText(summary: String, lineText: String): String {
             val core = if (lineText.length > MAX_LINE_LENGTH) lineText.take(MAX_LINE_LENGTH) + "…" else lineText
@@ -84,7 +97,7 @@ class SqlSelectionDialog<T>(
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
-            return "<html>$summary<br>&nbsp;&nbsp;&nbsp;$escaped</html>"
+            return "<html><b>$summary</b><br>&nbsp;&nbsp;&nbsp;<font color=#808080 face=monospace>$escaped</font></html>"
         }
     }
 }
