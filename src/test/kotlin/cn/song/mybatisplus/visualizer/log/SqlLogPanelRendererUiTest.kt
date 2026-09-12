@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.SqlSource
 import com.intellij.ui.SimpleColoredComponent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -157,5 +158,29 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         } finally {
             pluginSettings.logTimestampEnabled = savedTs
         }
+    }
+
+    // ---------- M56 T-M56-02/05：增强角标 / 影响行数 / 报错同列 ----------
+
+    fun test增强来源角标仅AGENT来源显示() {
+        val agent = entry("SELECT 1").copy(source = SqlSource.AGENT)
+        assertTrue("AGENT 来源应有增强角标", joinedText(render(agent).metaLine).contains("[⚡增强]"))
+        val bridge = entry("SELECT 1")
+        assertFalse("桥来源不应有增强角标", joinedText(render(bridge).metaLine).contains("[⚡增强]"))
+    }
+
+    fun test影响行数与报错片段同列() {
+        val err = entry("UPDATE t SET a = 1").copy(
+            source = SqlSource.AGENT,
+            updateCount = 3L,
+            errorText = "SQLException: Data too long for column 'a'",
+        )
+        val meta = joinedText(render(err).metaLine)
+        assertTrue("应含影响行数片段", meta.contains("(3 rows)"))
+        assertTrue("应含报错片段（单行截断）", meta.contains("⛔ SQLException: Data too long"))
+        // 无报错无行数的普通条目不显示
+        val ok = joinedText(render(entry("SELECT 1")).metaLine)
+        assertFalse("普通条目不应有行数片段", ok.contains("rows)"))
+        assertFalse("普通条目不应有报错片段", ok.contains("⛔"))
     }
 }

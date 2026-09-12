@@ -258,6 +258,11 @@ open class SqlLogConsoleBridge(
     }
 
     private fun attachFilter(console: Any) {
+        // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
+        if (SqlCaptureGate.epActive) {
+            LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 ${console.javaClass.name}")
+            return
+        }
         // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
         if (!isCapturing()) {
             LOG.debug("attachFilter: 非捕捉态，跳过挂载 ${console.javaClass.name}")
@@ -608,12 +613,33 @@ internal class BridgeLineContext(
  *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
  * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（[SqlLogConsoleBridgeMarkerTest]）。
  */
+
+/**
+ * M56 T-M56-02：增强捕获接管闸门——agent 在线时置 true，控制台桥的解析入口短路（空转），
+ * 面板只呈现 agent 通道条目；连接丢失/开关关闭回落时置 false 恢复。桥链路本身零改动。
+ * AtomicBoolean：读侧（逐行热路径）单次 volatile 读，写侧（会话状态切换）罕见。
+ */
+object SqlCaptureGate {
+    @JvmField
+    val paused = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 首次处理控制台行时
+     * 置 true（会话内粘滞）。桥的轮询据此跳过 addMessageFilter 挂载（EP 已覆盖全部控制台，
+     * 双挂载会双路解析）；定时器本身保留（控制台摘除检测等职责）。
+     */
+    @Volatile
+    var epActive: Boolean = false
+}
+
 internal fun processConsoleLine(
     line: String,
     ctx: BridgeLineContext,
     timePrefix: String?,
     syncBufferConfig: () -> Unit,
 ): List<LogSqlEntry> {
+    // M56 T-M56-02：增强接管闸门——agent 在线时桥空转（零条目产出），回落即恢复
+    if (SqlCaptureGate.paused.get()) return emptyList()
     // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
     val marker = SqlSourceMarker.parse(line)
     if (marker != null) {

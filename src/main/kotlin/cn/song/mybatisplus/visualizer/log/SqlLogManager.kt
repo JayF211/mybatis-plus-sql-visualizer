@@ -72,6 +72,11 @@ class SqlLogManager(private val project: Project) : Disposable {
     var capturing: Boolean = false
         private set
 
+    /** M56 T-M56-09：EP 双轨单测缝——直设捕捉态（生产路径经 startCapture 状态机）。 */
+    internal fun setCapturingForTest(value: Boolean) {
+        capturing = value
+    }
+
     /** 用户主动开启 SQL 监听标志——点击「捕捉」后置 true，点击「停止」或 dispose 时清零。
      *  跨控制台生命周期持久：项目停止后回到 armed 态，下次启动时自动恢复捕捉。 */
     @Volatile

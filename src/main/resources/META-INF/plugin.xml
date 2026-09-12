@@ -82,6 +82,8 @@
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
+        <!-- M56 T-M56-09：EP 双轨主通道——控制台行捕获（首行标志生效后桥轮询挂载停转） -->
+        <consoleFilterProvider implementation="cn.song.mybatisplus.visualizer.log.SqlConsoleBridgeFilterProvider"/>
         <!-- 全局配置（application-level，F-16）——@Service(Service.Level.APP) 注解式注册（M16.1 移除 XML
              双注册：官方规范禁止 plugin.xml 与 @Service 并存，双注册导致持久化绑定错实例、语言切换保存失效） -->
 

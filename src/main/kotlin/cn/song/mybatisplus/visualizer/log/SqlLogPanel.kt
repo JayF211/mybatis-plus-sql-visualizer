@@ -1403,6 +1403,28 @@ internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String
     return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
 
+/** M56 T-M56-02：增强捕获角标（AGENT 来源专属）；非 AGENT 来源返回 null。 */
+internal fun formatAgentBadgeFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    if (entry.source != SqlSource.AGENT) return null
+    val color = if (isSelected) Color(0xFFFFFF) else Color(0x7B1FA2)
+    return "[⚡增强] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
+}
+
+/** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
+internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    val u = entry.updateCount ?: return null
+    val color = if (isSelected) Color(0xFFFFFF) else Color(0x607D8B)
+    return "(${u} rows) " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
+}
+
+/** M56 T-M56-05：报错片段（errorText 同列展示；红字截断首段，悬停完整文本在预览窗）。 */
+internal fun formatErrorFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
+    val err = entry.errorText ?: return null
+    val oneLine = err.replace(Regex("\\s+"), " ")
+    val text = if (oneLine.length > 80) oneLine.substring(0, 80) + "…" else oneLine
+    return "⛔ $text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0xD32F2F))
+}
+
 /** 来源片段：未知来源返回 null；选中态走组件前景（selectionForeground），非选中灰。 */
 internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
     val source = when {
@@ -1483,6 +1505,10 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
                 metaLine.append(t, a)
             }
             formatSourceFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            // M56 T-M56-02：增强捕获角标（AGENT 来源）；T-M56-05：影响行数与报错同列
+            formatAgentBadgeFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            formatErrorFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
             // SQL 高亮行在下：选中态保留 SQL 高亮原色（与原 HTML 行为一致）
             SqlListFragmentRenderer.renderFragments(withTerminator(entry.summary)).forEach { f ->

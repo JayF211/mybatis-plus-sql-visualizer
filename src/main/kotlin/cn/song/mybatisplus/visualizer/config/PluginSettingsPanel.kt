@@ -150,6 +150,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
     private val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
 
+    // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
+
+    /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
+    private val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
+
+    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    private val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
+
+    /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
+    private val enhancedStatusLabel = JBLabel(" ")
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
@@ -373,6 +384,21 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     toolTipText = MpSqlVisualizerBundle.message("settings.autoFold.threshold.tip")
                 })
                 addRow(p, g, "", literalParamRecoveryCheck.apply { text = MpSqlVisualizerBundle.message("settings.literalParamRecovery") })
+                addRow(p, g, "", enhancedCaptureCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                    addActionListener {
+                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
+                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
+                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
+                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                            } else {
+                                isSelected = false
+                            }
+                        }
+                    }
+                })
+                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.status"), enhancedStatusLabel)
                 addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
@@ -981,6 +1007,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || autoFoldCheck.isSelected != s.autoFoldEnabled
             || autoFoldThresholdField.text.trim().toIntOrNull() != s.autoFoldFieldThreshold
             || literalParamRecoveryCheck.isSelected != s.literalParamRecovery
+            || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
+            || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
             || injectTenantLineCheck.isSelected != s.injectTenantLine
@@ -1055,6 +1083,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.autoFoldFieldThreshold = autoFoldThresholdField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_AUTO_FOLD_FIELD_THRESHOLD
             s.literalParamRecovery = literalParamRecoveryCheck.isSelected
+            s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
+            s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.injectLogicDelete = injectLogicDeleteCheck.isSelected
             s.logicDeleteValue = logicDeleteValueField.text.trim()
             s.injectTenantLine = injectTenantLineCheck.isSelected
@@ -1145,6 +1175,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             autoFoldThresholdField.text = s.autoFoldFieldThreshold.toString()
             autoFoldThresholdField.isEnabled = s.autoFoldEnabled
             literalParamRecoveryCheck.isSelected = s.literalParamRecovery
+            enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
+            enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             injectLogicDeleteCheck.isSelected = s.injectLogicDelete
             logicDeleteValueField.text = s.logicDeleteValue
             injectTenantLineCheck.isSelected = s.injectTenantLine
