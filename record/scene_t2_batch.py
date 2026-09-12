@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""T2 batch-operation：saveBatch 调用行 gutter 点击 → 批量参数面板 →
-取消勾选 age 列 → INSERT SQL 实时收缩 → 关闭。
+"""T2 batch-operation（修订九构图 120%+13pt+树关）：saveBatch 调用行 gutter →
+批量参数面板 → 取消勾选 age 列 → INSERT SQL 实时收缩 → 关闭。
 
-T-GifRerecord 重构（同 scene_t8）：现场就位 + 复选框标定全部在录制前动态执行——
-先开一次弹窗用 find_blue_checkboxes 定位 toInsert.age 行，关掉后再开录。
+前置：mybatis-plus-demo/UserServiceImpl.java 打开并滚动到 line 211（saveBatch），
+无弹窗。gutter 检测限 y_range=(350,650)：只含 211/212 两簇，避开上方 205 行的
+执行图标（修订九 13pt 下更多行进入视口）；蓝色复选框第 2 行 = toInsert.age。
 """
 import sys
 import time
@@ -16,22 +17,22 @@ from gifkit import (
 REGION = (277, 25, 1370, 984)
 OUT = "perf/t2_batch.mp4"
 
-CANCEL = (1480, 822)     # 弹窗「取消」
+CANCEL = (1485, 827)     # 弹窗「取消」
 
 
 def locate_gutter():
     path = "perf/_pre_t2.png"
     shot(REGION, path)
-    icons = find_gutter_icons(path, y_range=(150, 700), gap=12)
+    icons = find_gutter_icons(path, y_range=(350, 650), gap=12)
     if not icons:
         raise RuntimeError("gutter icon not found")
-    y, x = icons[0]  # 上方簇 = line 211 saveBatch（212 行还有另一个图标，勿选）
+    y, x = icons[0]  # 上簇 = line 211 saveBatch（下簇是 212 updateBatchById）
     print("gutter icons:", icons, "-> picked", (y, x))
     return x + 277, y + 25
 
 
 def calibrate_age_checkbox(gutter):
-    """开一次弹窗，检测第3行复选框（toInsert.id/password/age/...），关掉。"""
+    """开一次弹窗，检测第2个蓝色复选框行（toInsert.age），关掉。"""
     click(*gutter, move_dur=0.35)
     w = wait_stable(REGION)
     print("calib popup stable:", w)
@@ -42,8 +43,8 @@ def calibrate_age_checkbox(gutter):
     print("checkbox rows:", rows, "-> screen:", [(y + 25, x + 277) for y, x in rows])
     if len(rows) < 3:
         click(*CANCEL, move_dur=0.3)
-        raise RuntimeError("less than 3 checkbox rows (expect id/password/age/...)")
-    ay, ax = rows[1]  # id 列灰勾（不计数），蓝色第2行 = toInsert.age
+        raise RuntimeError("less than 3 checkbox rows (expect password/age/...)")
+    ay, ax = rows[1]  # 蓝色第2行 = toInsert.age（第1行 password）
     click(*CANCEL, move_dur=0.3)
     time.sleep(1.0)
     return ax + 277, ay + 25

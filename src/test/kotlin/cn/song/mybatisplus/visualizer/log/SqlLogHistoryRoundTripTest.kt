@@ -178,4 +178,39 @@ class SqlLogHistoryRoundTripTest {
         assertEquals(0, SqlLogFileReader.readAll(dir.absolutePath).size)
         assertEquals(0, SqlLogFileReader.countInFile(File(dir, "not-exists.sql")))
     }
+
+    @Test
+    fun `真实链路_带参数条目写读回环_历史页参数识别与日志页一致`() {
+        // T-HistParam：捕获条目（rawSql + params）→ 自动落盘 → 历史面板读回 →
+        // 统一识别通道（toPreviewResult）产出与日志页相同的参数形态
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        saver.write(
+            LogSqlEntry(
+                rawSql = "SELECT * FROM user WHERE id = ? AND name = ?",
+                restoredSql = "SELECT * FROM user WHERE id = 42 AND name = 'neo'",
+                params = listOf(LogSqlParam("42", "Long"), LogSqlParam("neo", "String")),
+                timestamp = 1724567890000L,
+                executionTimeMs = 5L,
+                sourceFile = "src/main/java/com/example/mapper/UserMapper.java",
+                sourceLine = 42,
+            ),
+        )
+        saver.close()
+
+        val files = dir.listFiles { f -> f.extension == "sql" }!!
+        assertEquals(1, files.size)
+        val read = SqlLogFileReader.readFromFile(files[0]).single()
+        assertEquals("rawSql 回环", "SELECT * FROM user WHERE id = ? AND name = ?", read.rawSql)
+        assertEquals("restoredSql 回环", "SELECT * FROM user WHERE id = 42 AND name = 'neo'", read.restoredSql)
+        assertEquals(2, read.params.size)
+
+        // 历史页预览构建（formatSql=false 现状）与日志页识别通道同源
+        val result = read.toPreviewResult(formatSql = false, literalRecovery = true)
+        assertEquals(listOf("param1", "param2"), result.unresolvedParams)
+        assertEquals(mapOf("param1" to "42", "param2" to "neo"), result.initialParamValues)
+        assertEquals(listOf(false, true), result.paramHints.map { it.quote })
+        assertNull(result.warning)
+    }
 }

@@ -64,8 +64,9 @@ class HelpUiTest : BasePlatformTestCase() {
             }
             children.forEachIndexed { i, a -> a.update(events[i]) }
             val helpAction = children[events.indexOfFirst { it.presentation.icon === AllIcons.Actions.Help }]
-            // headless 下 JBCefApp.isSupported() 通常为 false → 走 BrowserUtil.browse 回退；
-            // 断言本插件代码不因此崩溃（环境性 BrowserUtil 异常不视为本插件缺陷）
+            // headless 下 JBCefApp.isSupported() 通常为 false → 走回退分支；
+            // 回退分支在单测模式短路（不真调 BrowserUtil——曾致定时回归任务弹用户系统浏览器，2026-09-11 修复），
+            // 断言本插件代码不因此崩溃
             try {
                 helpAction.actionPerformed(
                     AnActionEvent.createFromAnAction(helpAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT),

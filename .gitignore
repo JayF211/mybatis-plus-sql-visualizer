@@ -71,3 +71,4 @@ record/**/__pycache__/
 dev-support/verify-target/
 dev-support/verify-logs/
 verification-*/
+*.hprof

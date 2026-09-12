@@ -219,6 +219,11 @@ class SqlLogAutoSaver(
                 java.time.Instant.ofEpochMilli(entry.timestamp).atZone(java.time.ZoneId.systemDefault()),
             )
             w.write("-- source: $source | time: $duration | $timestamp --\n")
+            // T-HistParam F1：参数持久化——params 非空或 rawSql 含 `?`（绑定行缺失未识别条目）时，
+            // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）
+            if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0) {
+                w.write("-- pd: ${SqlLogParamCodec.encode(entry.rawSql, entry.params)} --\n")
+            }
             w.write(withTerminator(entry.restoredSql))
             w.write("\n\n")
             // T-Perf-12：flush 上移到批末（writeBatch）/同步 API（write）——写线程逐条 flush 磁盘已移除

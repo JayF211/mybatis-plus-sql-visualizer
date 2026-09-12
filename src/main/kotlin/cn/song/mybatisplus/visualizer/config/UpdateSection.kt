@@ -44,7 +44,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
     internal var state: State = State.Idle
         private set
 
-    internal enum class State { Idle, Checking, UpToDate, Available, Downloading, Installed, Failed }
+    internal enum class State { Idle, Checking, UpToDate, Available, Downloading, Installed, InstalledLive, Failed }
 
     private var pendingManifest: UpdateManifest? = null
 
@@ -211,16 +211,21 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         Regex("^\\d+").find(ApplicationInfo.getInstance().build.asStringWithoutProductCode())
             ?.value?.toIntOrNull()
 
-    /** 安装结果渲染（EDT；测试直接调用）。安装失败保留 pendingManifest 以区分失败文案。 */
+    /** 安装结果渲染（EDT；测试直接调用）。三分支：热生效 / 回退重启 / 失败（保留 pendingManifest 区分文案）。 */
     internal fun renderInstall(result: InstallResult) {
-        state = if (result is InstallResult.Installed) State.Installed else State.Failed
-        if (result is InstallResult.Failed) failureReason = result.message
+        failureReason = (result as? InstallResult.Failed)?.message
+        state = when (result) {
+            is InstallResult.InstalledDynamic -> State.InstalledLive
+            is InstallResult.InstalledRestartRequired -> State.Installed
+            is InstallResult.Failed -> State.Failed
+        }
         renderState()
     }
 
     private fun renderState() {
         val s = state
-        checkButton.isEnabled = s != State.Checking && s != State.Downloading && s != State.Installed
+        val done = s == State.Installed || s == State.InstalledLive
+        checkButton.isEnabled = !done && s != State.Checking && s != State.Downloading
         installButton.isVisible = s == State.Available || s == State.Downloading
         installButton.isEnabled = s == State.Available
         restartButton.isVisible = s == State.Installed
@@ -236,6 +241,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
                 MpSqlVisualizerBundle.message("settings.update.available", pendingManifest?.version ?: "?")
             State.Downloading -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.downloading")
             State.Installed -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installed")
+            State.InstalledLive -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installedLive")
             State.Failed -> statusLabel.text = MpSqlVisualizerBundle.message(
                 "settings.update.${if (pendingManifest == null) "checkFailed" else "installFailed"}",
                 failureReason ?: "?",

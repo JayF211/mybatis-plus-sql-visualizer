@@ -148,7 +148,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-Dgm-04：JOIN 图原生框架渲染开关 +1（合并双方共同确认的最终基线）
             // JdbcTemplate SQL 字符串预览开关 +1
             // T-VPairAnno：竖向排列值行尾列名标注开关 +1
-            assertEquals("复选框总数应为 23", 23, texts.size)
+            // T-HistParam：字面量参数恢复开关 +1
+            assertEquals("复选框总数应为 24", 24, texts.size)
         } finally {
             settings.state.language = old
         }

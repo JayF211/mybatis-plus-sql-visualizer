@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""T1 jpa-preview：派生方法 findByUsernameOrEmail gutter → SQL 弹窗定格 →
-关闭 → Ctrl+G 跳 @Query 行 → gutter → JPQL 转换定格 → 关闭 → 回跳 42 行（循环无缝）。
+"""T1 jpa-preview（修订九构图 120%+13pt+树关）：派生方法 findByUsernameOrEmail
+gutter → SQL 弹窗定格 → 关闭 → goto @Query 行 → gutter → JPQL 转换定格 → 关闭 →
+回跳 42 行（循环无缝）。
 
-T-GifRerecord 重构（同 scene_t8/t2）：现场就位与图标定位全部动态执行；
-拍摄中途的 goto/图标检测对录屏不可见（mss 只抓屏不打扰），只留自然停顿。
+修订九改动：CANCEL 重标 (1485,827)；42 行图标改窄窗 y_range=(350,500) 直取
+（13pt 视口内图标密度翻倍，旧「取最低簇」会误选下方方法）。
 """
 import sys
 import time
@@ -16,17 +17,18 @@ from gifkit import (
 REGION = (277, 25, 1370, 984)
 OUT = "perf/t1_jpa.mp4"
 
-CANCEL = (1480, 822)     # 弹窗「取消」
+CANCEL = (1485, 827)     # 弹窗「取消」
 
 
-def locate_gutter(pick="lower"):
+def locate_gutter_derived():
+    """42 行派生方法：goto 居中后窄窗直取（修订九）。"""
     path = "perf/_pre_t1.png"
     shot(REGION, path)
-    icons = find_gutter_icons(path, y_range=(150, 700), gap=12)
+    icons = find_gutter_icons(path, y_range=(350, 500), gap=12)
     if not icons:
-        raise RuntimeError("gutter icon not found")
-    y, x = max(icons) if pick == "lower" else min(icons)
-    print("icons:", icons, "-> picked", (y, x))
+        raise RuntimeError("gutter icon not found (derived)")
+    y, x = icons[0]
+    print("derived icons:", icons, "-> picked", (y, x))
     return x + 277, y + 25
 
 
@@ -46,7 +48,7 @@ def locate_gutter_center():
 def main():
     open_file("jpa-hibernate-demo/UserRepository")
     goto_line(42)
-    gutter1 = locate_gutter(pick="lower")   # line 42 派生方法（比 line 37 低）
+    gutter1 = locate_gutter_derived()
 
     r = Recorder(REGION, OUT)
     time.sleep(1.0)

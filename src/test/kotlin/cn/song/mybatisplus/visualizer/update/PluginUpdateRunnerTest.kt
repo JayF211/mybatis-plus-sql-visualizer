@@ -71,10 +71,10 @@ class PluginUpdateRunnerTest {
         val result = runWithTempZip { zip ->
             PluginUpdateRunner.downloadAndInstall(manifest, null,
                 download = { _, target -> copyTo(zip, target) },
-                install = { installCalled = true; PluginUpdateRunner.InstallResult.Installed },
+                install = { installCalled = true; PluginUpdateRunner.InstallResult.InstalledRestartRequired },
             )
         }
-        assertEquals(PluginUpdateRunner.InstallResult.Installed, result)
+        assertEquals(PluginUpdateRunner.InstallResult.InstalledRestartRequired, result)
         assertTrue(installCalled)
     }
 
@@ -88,7 +88,7 @@ class PluginUpdateRunnerTest {
                     writeZip(target.toFile())
                     tempFiles += target.toFile()
                 },
-                install = { PluginUpdateRunner.InstallResult.Installed },
+                install = { PluginUpdateRunner.InstallResult.InstalledRestartRequired },
             )
             // 下载/安装成功后临时文件已清理
             assertTrue(tempFiles.all { !it.exists() })
@@ -112,7 +112,7 @@ class PluginUpdateRunnerTest {
         var installCalled = false
         val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
             download = { _, target -> target.toFile().writeText("<html>error page</html>") },
-            install = { installCalled = true; PluginUpdateRunner.InstallResult.Installed },
+            install = { installCalled = true; PluginUpdateRunner.InstallResult.InstalledRestartRequired },
         )
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
         assertFalse(installCalled)
@@ -122,7 +122,7 @@ class PluginUpdateRunnerTest {
     fun downloadAndInstallEmptyFileIsFailed() {
         val result = PluginUpdateRunner.downloadAndInstall(manifest, null,
             download = { _, _ -> /* 不写任何内容 */ },
-            install = { PluginUpdateRunner.InstallResult.Installed },
+            install = { PluginUpdateRunner.InstallResult.InstalledRestartRequired },
         )
         assertTrue(result is PluginUpdateRunner.InstallResult.Failed)
     }

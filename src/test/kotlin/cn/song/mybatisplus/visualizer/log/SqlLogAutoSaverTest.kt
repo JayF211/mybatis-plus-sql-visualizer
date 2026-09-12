@@ -244,4 +244,63 @@ class SqlLogAutoSaverTest {
         assertEquals("sql-history-2026-09-05.sql", saver.currentFile()!!.name)
         saver.close()
     }
+
+    // ------------------------------------------------------------------
+    // 格式 v2：参数持久化行（T-HistParam）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `带参数条目写参数行_纯静态不写`() {
+        val saver = SqlLogAutoSaver()
+        val dir = tempDir()
+        saver.configure(dir, "test.sql", null)
+        saver.write(
+            LogSqlEntry(
+                rawSql = "SELECT * FROM t WHERE a = ?",
+                restoredSql = "SELECT * FROM t WHERE a = 'x'",
+                params = listOf(LogSqlParam("x", "String")),
+                timestamp = 1724567890000L,
+            ),
+        )
+        saver.write(entry("SELECT 1"))
+        saver.close()
+        val content = File(dir, "test.sql").readText()
+        val blocks = content.split("-- source:").drop(1)
+        assertEquals(2, blocks.size)
+        val withParams = blocks[0]
+        val static = blocks[1]
+        assertTrue("带参条目应有 pd 行: $withParams", withParams.contains("\n-- pd: "))
+        assertFalse("纯静态条目不应有 pd 行: $static", static.contains("-- pd: "))
+        // 正文仍是可执行 SQL（restoredSql）
+        assertTrue(withParams.contains("SELECT * FROM t WHERE a = 'x'"))
+
+        // 读回 round-trip：rawSql/params 还原，识别通道可用
+        val entries = SqlLogFileReader.readFromFile(File(dir, "test.sql"))
+        assertEquals(2, entries.size)
+        assertEquals("SELECT * FROM t WHERE a = ?", entries[0].rawSql)
+        assertEquals(listOf(LogSqlParam("x", "String")), entries[0].params)
+        assertEquals("SELECT * FROM t WHERE a = 'x'", entries[0].restoredSql)
+        assertTrue(entries[0].toRecognizedPreview().recognized)
+        assertEquals("SELECT 1", entries[1].rawSql)
+        assertTrue(entries[1].params.isEmpty())
+    }
+
+    @Test
+    fun `绑定行缺失的占位符条目也写参数行`() {
+        // params 空但 rawSql 含 ?：历史页重试识别需要 rawSql 的占位符形态
+        val saver = SqlLogAutoSaver()
+        val dir = tempDir()
+        saver.configure(dir, "test.sql", null)
+        saver.write(
+            LogSqlEntry(
+                rawSql = "SELECT * FROM t WHERE a = ?",
+                restoredSql = "SELECT * FROM t WHERE a = ?",
+                params = emptyList(),
+                timestamp = 1724567890000L,
+            ),
+        )
+        saver.close()
+        val content = File(dir, "test.sql").readText()
+        assertTrue("应写 pd 行: $content", content.contains("\n-- pd: "))
+    }
 }

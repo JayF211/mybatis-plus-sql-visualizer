@@ -188,6 +188,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 日志还原 SQL 格式化（多行缩进；预览编辑器展示用）。 */
         var logFormatSql: Boolean = true,
 
+        /**
+         * 字面量参数恢复（T-HistParam F4，默认开）：日志 SQL 无 `?` 占位符（裸 SQL 捕获 /
+         * MyBatis `${}` / 上游日志已内联参数值）时，把单引号字符串字面量识别为可编辑参数行。
+         * 作用于 [cn.song.mybatisplus.visualizer.log.toPreviewResult] 的统一识别通道。
+         */
+        var literalParamRecovery: Boolean = true,
+
         /** 过滤：还原 SQL 包含任一关键字（`;` 分隔）则丢弃。 */
         var logFilterKeywords: String = "",
 
