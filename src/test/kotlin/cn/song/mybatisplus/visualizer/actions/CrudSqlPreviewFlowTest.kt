@@ -41,4 +41,19 @@ class CrudSqlPreviewFlowTest {
         // 六个候选标签键全部可达（bundle 缺键时 message 回落 key 本身，据此防键名漂移）
         assertTrue(CrudKind.entries.all { MpSqlVisualizerBundle.message(it.labelKey) != it.labelKey })
     }
+
+    @Test
+    fun popupRendererProducesComponentWithoutException() {
+        // T-CrudSql 原生化：JBPopup 候选行渲染器冒烟——选中/非选中两态均产出组件不抛异常
+        val renderer = CrudSqlPreviewFlow.CandidateCellRenderer()
+        val list = javax.swing.JList<Candidate>()
+        for (selected in booleanArrayOf(false, true)) {
+            val c = renderer.getListCellRendererComponent(
+                list,
+                Candidate("biz_order", stmts.first { it.kind == CrudKind.SELECT_ALL }),
+                0, selected, false,
+            )
+            assertTrue("渲染应返回组件", c != null)
+        }
+    }
 }
