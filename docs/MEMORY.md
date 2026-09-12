@@ -33,7 +33,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [架构设计/其他ORM官方API覆盖矩阵.md](./架构设计/其他ORM官方API覆盖矩阵.md)                | **候选 ORM 框架调研矩阵**（2026-09-05 四路调研，SD/JO/QD/EQ/JM/XB/DS/FM/DV 任务号预分配）：Spring Data JDBC/R2DBC、jOOQ、Querydsl、Easy-Query、Jimmer、xbatis、MyBatis Dynamic SQL、Fluent MyBatis、dbVisitor、BeetlSQL/sqltoy/lazy——含立项决策表（成本门槛 15% 判例） |
 | [变更记录.md](./变更记录.md)                                                  | **全量变更记录总册**（M23.9 起唯一权威位置；历史迁移自清单 §8；单文件变更记录仍留各自文档） |
 | [Marketplace发布流程-说明文档.md](./发行说明/Marketplace发布流程-说明文档.md) | **首次发布 JetBrains Marketplace 全流程**（官方文档查证 2026-08-16）：账号/Vendor 验证 → 双仓库（Gitee 主+GitHub 镜像）→ 构建/签名 → 手动上传表单逐字段 → 审核 4 步 → 日常更新联动（update.json 同版本）；§10.3 内测包用户 Installed 列表看不到市场新版，但 Marketplace 搜索页按 pluginId 匹配可点 Update 手动更新并完成迁移 |
-| [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/发行说明/SQL 文件的命名与格式规范 |
+| [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)                        | 需求文档/开发计划/调研报告/发行说明/SQL 文件的命名与格式规范 |
 | [记忆精简规范.md](./记忆精简规范.md)                                          | 本地记忆文件管理：分类标准（保留/归档/全局）、归档目录结构、操作流程、数量基线 |
 | [MEMORY.md](./MEMORY.md)                                                      | 本文件：docs 目录检索索引 |
 
@@ -73,12 +73,13 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 |------|------|
 | [20260812-1058-MP-SQL可视化-需求文档.md](./需求文档/20260812-1058-MP-SQL可视化-需求文档.md) | **功能需求源**：功能编号 F-01~F-20 定义（Wrapper 转换/参数替换/格式化/展示/配置/批量等） |
 
-## 开发计划（docs/开发计划/，时间倒序）
+## 开发计划（docs/开发计划/，时间倒序；调研性质报告已于 2026-09-12 拆分至独立目录 docs/调研报告/，见下方「调研报告」节）
 
 > 开发计划文档 = **任务编号源**（T-Mxx-xx）+ 实现思路（定位到 文件:行号）+ 变更记录。
 
 | 文档 | 里程碑/内容 | 当前状态 |
 |------|-------------|----------|
+| [20260911-1656-T-ReverseParenWira-括号组退化与attachConsole读权限-开发计划.md](./开发计划/20260911-1656-T-ReverseParenWira-括号组退化与attachConsole读权限-开发计划.md) | **T-ReverseParenWira：MPJ 括号条件反向退化 + 262 预览 attachConsole 读权限硬抛**。① MPJ 渲染 ON/WHERE 自带括号，`parseGroup` 把单条件括号包成单子条件 Group → ON 侧 `extractJoinKey` 失配 MPJLambdaWrapper 退化 MPJQueryWrapper 字符串形态 + WHERE 多渲染 `nested()`；修复=单条件非取反括号组解析器解包（`NOT (a=1)` 保留 negated 组），生成器零改动。② 262 真机 attachConsole 裸 EDT → DBN `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 读权限硬抛被吞（T-PreviewSlow F2 拆包兑现）；修复=attachConsole 包 WriteIntentReadAction（262 `runWriteIntentReadAction` 反编译实证仅持纯 Read 锁抛嵌套禁，WIRA 重入合法）+ getDocument 包 ReadAction | ✅ 已实施（2026-09-11，master dab3d3b，全量 3308/0/0/6 绿，262 真机 idea.log 复验留人工） |
 | [20260910-1421-T-VPairAnno-竖向排列VALUES行尾列名标注配置项-开发计划.md](./开发计划/20260910-1421-T-VPairAnno-竖向排列VALUES行尾列名标注配置项-开发计划.md) | **T-VPairAnno：竖向排列 VALUES 行尾列名标注做成配置项**。用户需求——竖排下 INSERT 每值行尾的 `-- 列名` 配对标注默认开启、可自行关闭。实现：`SqlFormatter.formatVertical` 加 `annotatePairs` 默认参数（单点收口=关闭时 `collectInsertColumns` 收空名单使 renderGroup 标注追加与对齐补齐条件恒假，渲染主体零改动，默认参数使既有用例零改动）；`PluginSettings.verticalPairAnnotation` 默认 true（数据类默认值兜旧 xml 无字段升级）+ SettingsIO 导出/导入两行 + 设置面板 SQL 预览区 formatSql 行后复选框（isModified/apply/reset 三处接线，复选框总数台账 22→23）+ 双 bundle 新键与竖排按钮 tooltip 补「可在设置中关闭」；面板 `verticalPairAnnotationSetting()` 对齐 `formatSqlSetting()` 的 runCatching 兜底范式，applyDisplayMode VERTICAL 分支传入，不订阅 SETTINGS_CHANGE_TOPIC（下一次渲染生效，与 formatSql 同构）；边界=用户自带注释不受开关控制、关闭后重跑已带标注文本按用户注释归位保留 | ✅ 已实施（2026-09-10，master 770313a，SqlFormatterTest +4 / SqlPreviewPanelTest +1 / SettingsIOTest +3 断言，全量 3242/0/6 绿，runIde 留人工） |
 | [20260910-0920-T-ExecSilentNoop-预览首次执行静默不执行与误报凭据提示-开发计划.md](./开发计划/20260910-0920-T-ExecSilentNoop-预览首次执行静默不执行与误报凭据提示-开发计划.md) | **T-ExecSilentNoop：预览首次执行 SQL 静默不执行 + 误报凭据提示**。沙盒日志实证两次执行差别（首次绑错数据源 mpj_demo + dumb 中 runners 退化为 4，全程无 `Connecting to:` 行=查询从未到连接阶段）；javap 实证 DBN 两条全静默出口（`chooseStatements` 空选集 `execOutside==1` 直接 return；`beforeExecuteQueries` 遇 `statements()` 空或 `isValid()==false` 返回 false），且执行 model 是光标派生的 `subModel(PositionRange)` 而非我们构建的 freshModel。方案：埋点分辨静默出口 + 提交后回执三分类 + 兜底走 `executeQueries(freshModel)` + 提示分流去重 + 数据源可见性 | 🔧 立项（2026-09-10，未实施） |
 | [20260904-2317-设置页缓存信息恒0B-开发计划.md](./开发计划/20260904-2317-设置页缓存信息恒0B-开发计划.md) | **T-CacheInfo：设置页缓存信息恒 0 B 修复**。用户反馈设置页「插件缓存」一直显示 0 B——根因=统计口径只含 EntityClassFinder 反查**兜底**缓存，而主流命名（XxxEntity↔xxx）快路径恒命中、该缓存恒空；真正积累的 EntityResolver 解析缓存（全局静态）与 WrapperCache 预览缓存（项目服务）均未计入。实现：`PluginCacheManager.totalSizeBytes/entryCount` 三类缓存全口径（解析缓存全局只计一次），`clearAll` 补清 Wrapper 缓存（getServiceIfCreated 不触发服务实例化），文案增条目数「当前缓存：{0}（{1} 项）」 | ✅ 已实施（2026-09-04，定向 6 测试类 37 用例全绿） |
@@ -160,10 +161,25 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | [20260812-1844-代码左侧预览SQL图标-开发计划.md](./开发计划/20260812-1844-代码左侧预览SQL图标-开发计划.md) | M10：代码左侧预览 SQL 图标（gutter 入口 + 性能红线） | 已交付 |
 | [20260812-1058-MP-SQL可视化-开发计划.md](./开发计划/20260812-1058-MP-SQL可视化-开发计划.md) | **总开发计划**（M0~M19，T-Mx 任务编号源）：核心引擎/展示交互/配置/发布路线图 | 已交付 |
 
+## 调研报告（docs/调研报告/，2026-09-12 新建）
+
+> 竞品分析、可行性分析、技术验证等调研性质文档，自 开发计划/ 拆分独立管理；命名规范与范围界定见 [文档命名规范-说明文档.md](./文档命名规范-说明文档.md)。
+
+| 文档 | 用途 |
+|------|------|
+| [20260911-1700-DebugTools-agent字节码增强-调研报告.md](./调研报告/20260911-1700-DebugTools-agent字节码增强-调研报告.md) | 首个真落地 attach+agentmain 竞品源码分析；agentmain 只起 server 不注册 SQL transformer 是反面教材（M56 须 addTransformer+retransform）；动态代理包装 Driver.connect + 9 类驱动分库适配等四手法可照搬（M56 输入） |
+| [20260911-1617-CoolRequest-agent字节码增强-调研报告.md](./调研报告/20260911-1617-CoolRequest-agent字节码增强-调研报告.md) | 竞品实为 premain 非 attach（agentmain 声明缺失是坑）；SQL 用「驱动自拼 SQL」绕 setXxx 还原；ByteBuddy RETRANSFORMATION 实证已加载驱动可插桩；relocate/多 JDK 三件套/端口自报/异步上报四工程化手法（M56 输入） |
+| [20260902-1700-SqlSourceInterceptor自动注入可行性分析.md](./调研报告/20260902-1700-SqlSourceInterceptor自动注入可行性分析.md) | SqlSourceInterceptor 设置开关化（免手动配置）可行性分析，方案 A 确认可行（后续 1710 开发计划实施） |
+| [20260830-0002-竞品横向对比与功能建议-调研报告.md](./调研报告/20260830-0002-竞品横向对比与功能建议-调研报告.md) | 子智能体并行调研（功能梳理 + Marketplace 实时数据抓取）横向对比同类产品，输出新一轮功能与优化建议——P-立项-06 竞品精华融合的触发源 |
+| [20260828-2000-P-立项-05-方言输出真实验证-报告.md](./调研报告/20260828-2000-P-立项-05-方言输出真实验证-报告.md) | 方言输出真机验证报告（DBX MCP 通道七数据库家族零缺陷 + 测试环境清单与工作流陷阱） |
+| [20260822-1800-官网设计借鉴与实现参考.md](./调研报告/20260822-1800-官网设计借鉴与实现参考.md) | 官网开发过程中借鉴的各大官网设计模式与实现方案记录 |
+| [20260822-1500-竞品分析与优化建议.md](./调研报告/20260822-1500-竞品分析与优化建议.md) | 插件定位、已有功能、竞品格局全面分析 + 优化建议与新功能方向，M30+ 立项依据 |
+
 ## 发行说明（docs/发行说明/）
 
 | 文档 | 用途 |
 |------|------|
+| [20260911-1552-自更新免重启与历史参数恢复-发行说明.md](./发行说明/20260911-1552-自更新免重启与历史参数恢复-发行说明.md) | v2026.9.11 发行说明（自更新免重启动态安装 T-DynUpdate（五入口热替换+脚本兜底+262 首参漂移弹性修复+跨版本签名护栏+卸载警告归因）+ SQL 历史页参数识别根治与字面量参数恢复 T-HistParam（历史文件 v2 pd 行+双面板识别通道统一+谓词语境数值识别）；全量 3305/0/0/6 绿） |
 | [20260910-2240-预览加载与Hibernate捕获打磨-发行说明.md](./发行说明/20260910-2240-预览加载与Hibernate捕获打磨-发行说明.md) | v2026.9.10 发行说明（双击预览加载卡顿根治 T-PreviewSlow + 预览 EDT 读权限断言全库排雷 T-PreviewDocLock/2 + Hibernate 双份日志参数分裂根治 T-HibDualCapture + 竖向排列列名标注配置项 T-VPairAnno + IN 阈值 T-VStack·InThreshold + 顶部元信息压按钮行 T-PreviewTopOverlap + 执行静默不执行 T-ExecSilentNoop + 显示模式持久化 T-PreviewDisplayMode + 版本比较改内置比较器 T-VersionUtil + 行号两处续修 T-LogRowNumber；全量 3254/0/0/6 绿） |
 | [20260909-1235-单击预览打磨与自动监听开关转正-发行说明.md](./发行说明/20260909-1235-单击预览打磨与自动监听开关转正-发行说明.md) | v2026.9.9 发行说明（单击预览四轮同色同源高亮/五轮复制对号反馈 T-ClickPreview-04/05 + 双击预览无数据源不抢占 T-DsCover + 262 verifyPlugin 字节码级兼容修复 T-Wia262 + 发现 SQL 自动开窗假开关复活 T-AutoShowMaster + dev 缺陷批量移植与假开关处置 T-PortLossBatch1 + 关窗停止监听开关转正 T-AutoShowRecover + 发行当日追补：行号 T-LogRowNumber/僵尸监听 T-RefreshDbSteal/执行失败可见化 T-ExecCopyFix/闪烁根治 T-PreviewFlash/弃用 API T-DepApi；发版前 verifyPlugin 三版本校验通过） |
 | [20260908-1430-SQL日志链路大修与单击可编辑预览-发行说明.md](./发行说明/20260908-1430-SQL日志链路大修与单击可编辑预览-发行说明.md) | v2026.9.8 发行说明（日志列表 EDT 冻结 16 秒根治 T-LogListFreeze-04 + 单击预览三轮 T-ClickPreview（SQL 高亮可编辑编辑器）+ 多行 JdbcTemplate 捕获/去重与 MP 计数标记/双击预览硬抛修复 + 自研 DAO 字符串 SQL 预览 T-DaoSql + 设置页缓存口径 + 「自动开始监听」联动修复 + MBCHP-Pro 反编译对照） |
@@ -216,6 +232,9 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-12 | 调研报告独立成目录：`docs/开发计划/` 中 7 个调研性质文档（竞品分析与优化建议、官网设计借鉴、P-立项-05 验证报告、竞品横向对比调研报告、SqlSourceInterceptor 可行性分析、CoolRequest/DebugTools agent 调研报告）迁至 `docs/调研报告/`，9 处站内引用同步改链无死链；文档命名规范新增「调研报告」类型（含范围界定：调研立项计划仍归开发计划）；M37.5 调研计划经核实为立项计划留原处 |
+| 2026-09-12 | 记忆第六次精简（79→27）：新增 40 个归档（bug-fixes +37：T-DynUpdate/T-HistParam/T-PerfSweep/DocLock 系列等已交付任务、分支合并与审计记录、JOIN 图自绘引擎旧档、竞品链接定稿；pitfalls +3：Swing HTML 列表渲染/VFS refresh 锁/测试沙盒弹浏览器）；8 个通用经验升级 global（hprof 快照工作流/并行索引级拆提交/合并冲突三规则/工具转义坑/TPS 装机/文档清单定例/API 代理/fernflower）；5 个小记忆收编进 doc-conventions 与 release-workflow（产品命名/临时截图/verifyPlugin 门禁/update 清单/Gitee 计数）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-12/`；项目 memory 降至 28 个文件（含 MEMORY.md），archive 增至 160 个文件，global 增至 75 个文件 |
+| 2026-09-11 | MPJ 括号条件反向转换退化 + 262 预览 attachConsole 读权限硬抛双修（T-ReverseParenWira，master dab3d3b）：详见 docs/变更记录.md 同日行。要点=parseGroup 单条件非取反括号组解包（MPJLambdaWrapper 形态恢复 + nested 去除）；attachConsole 包 WIRA（WIRA-in-WIRA 重入经 262 锁实现反编译实证合法）+ getDocument 包 ReadAction。全量 3308/0/0/6 绿；262 真机留人工 |
 | 2026-09-11 | dev 录制期配置治理：`c91aa6d` 把构建基准常驻切到 262，致 dev 自身 test 编译失败 8 条（`DiagramRelationshipInfo.label` 移入 Database 插件 + `toLowerCase()` 硬弃用 + 1 处连带）→ `bc8069d` 显式 revert，`f73df8c` 收敛为 `-PgifRecord` 属性开关（默认 243 / true 则 262 + jcef + toolchain24 + 沙盒 MPSV-GifFresh；**四项须整体切换**）。另加误开闸门：`gifRecord=true` 与 buildPlugin/publishPlugin/publish 同用即配置期失败（写法同 `verifyIdes`，兼容 configuration-cache）。验证：默认态全量 290 类 / 3733 用例 / 0 失败 / 6 跳过；两态对照平台 243↔262、jcef 无↔有、字节码 61↔68。同步修订录制经验总结 §三.1/§五/§六/§八。 |
 | 2026-09-11 | T-PerfBatch 第二轮交付（监听器分层+列表通知节流，`SqlLogEntryBuffer` 三出口拆分）+ T-PerfSweep 四项遗留热点清扫（重放守卫惰性化/热路径 Regex/dedupeCounts 4096 上限/CriteriaQuery 文件级门控），全量 3696/0/6 绿；性能分析 20260910-0345 复制进 dev 并附 dev 适用性补注，T-PerfSweep 计划立项（20260911-0617） |
 | 2026-09-10 | master 合入 dev 增量合并（T-MergeMasterIntoDev，merge d5130ab）：merge-base 29fbf556 后 master 独有 22 提交 / dev 独有 98 提交，10 文件 11 冲突块全解决。**CHANGELOG.md 整文件伪冲突根因=dev 侧 blob 全 CRLF 而 master 与 merge-base 全 LF**（全库扫行尾仅 LICENSE 与 dev/r2 的 CHANGELOG 为 CRLF），处置=Unreleased 段并集 + 归一 LF（736 行 crlf=0）。逐块定案：DataSourceSelector 的 createTempPsiFile 取 master（T-ExecCopyFix + T-PreviewFlash 缓存 + WIRA，换掉 dev 的 EDT 空壳 allowSlowOperations），块外保留 dev 的 T-Perf-13 异步准备链与 T-Perf-16 releaseForPanel；SqlLogPanel 取 dev 片段管线 + 插 master 行号片段；HbmXmlEntityResolver 取 dev 结构；JpaGutter 取 dev 三锚点 + master 守卫收窄落派生分支（全锚点前置会误杀 T-J5/J20 调用处锚点；dev 的「接口名以 Repository 结尾」启发式是 M38.1 误报面，首跑全量即红）；collapsedGroups 按 master 删除。**踩坑：按文件整取一边会抹掉另一侧自动合并区成果**（releaseForPanel 悬空致编译失败），正解=merge-file 复现自动合并结果后只替换冲突块。全量 3693/0/0/6 绿、verifyPlugin 三目标 Compatible。计划文档 docs/开发计划/20260910-1211-T-MergeMasterIntoDev-master合入dev增量合并-开发计划.md |

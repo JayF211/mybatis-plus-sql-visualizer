@@ -89,12 +89,25 @@ class UpdateSectionTest : BasePlatformTestCase() {
     fun testRenderInstalled() {
         val manifest = UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)
         section.renderCheck(CheckResult.Available(manifest))
-        section.renderInstall(InstallResult.Installed)
+        section.renderInstall(InstallResult.InstalledRestartRequired)
 
         assertEquals(UpdateSection.State.Installed, section.state)
         assertEquals(MpSqlVisualizerBundle.message("settings.update.installed"), section.statusLabel.text)
         // 重启提示与重启按钮可见；安装/检查按钮不可再操作
         assertTrue(section.restartButton.isVisible)
+        assertFalse(section.installButton.isVisible)
+        assertFalse(section.checkButton.isEnabled)
+    }
+
+    fun testRenderInstalledLive() {
+        // T-DynUpdate：动态热替换成功 → InstalledLive 态——免重启文案，无重启按钮
+        val manifest = UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)
+        section.renderCheck(CheckResult.Available(manifest))
+        section.renderInstall(InstallResult.InstalledDynamic("2026.9.11-beta.1"))
+
+        assertEquals(UpdateSection.State.InstalledLive, section.state)
+        assertEquals(MpSqlVisualizerBundle.message("settings.update.installedLive"), section.statusLabel.text)
+        assertFalse(section.restartButton.isVisible)
         assertFalse(section.installButton.isVisible)
         assertFalse(section.checkButton.isEnabled)
     }
@@ -151,7 +164,7 @@ class UpdateSectionTest : BasePlatformTestCase() {
 
     fun testInstallButtonClickDownloadsAndInstalls() {
         var calls = 0
-        section.installRunner = { _, _ -> calls++; InstallResult.Installed }
+        section.installRunner = { _, _ -> calls++; InstallResult.InstalledRestartRequired }
         section.renderCheck(CheckResult.Available(UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)))
         section.installButton.doClick()
         assertEquals(UpdateSection.State.Downloading, section.state)
@@ -164,7 +177,7 @@ class UpdateSectionTest : BasePlatformTestCase() {
         var restarts = 0
         section.restartAction = { restarts++ }
         section.renderCheck(CheckResult.Available(UpdateManifest("1.0", "https://x/p.zip", null, null, null)))
-        section.renderInstall(InstallResult.Installed)
+        section.renderInstall(InstallResult.InstalledRestartRequired)
         section.restartButton.doClick()
         assertEquals(1, restarts)
     }

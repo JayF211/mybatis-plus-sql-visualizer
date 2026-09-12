@@ -251,4 +251,73 @@ class SqlLogFileReaderTest {
         assertEquals(0, SqlLogFileReader.countInFile(file))
         assertEquals(0, SqlLogFileReader.countInFile(File(dir, "missing.sql")))
     }
+
+    // ------------------------------------------------------------------
+    // 格式 v2：参数持久化行（T-HistParam）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `v2带参数行读回_rawSql与params还原_restoredSql为正文`() {
+        val payload = SqlLogParamCodec.encode(
+            "SELECT * FROM t WHERE a = ? AND b = ?",
+            listOf(LogSqlParam("x", "String"), LogSqlParam(null, "BIGINT")),
+        )
+        val dir = Files.createTempDirectory("histparam-v2-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "v2.sql")
+        file.writeText(
+            "-- source: A.java:1 | time: 1ms | 2026-09-11 09:00:00.000 --\n" +
+                "-- pd: $payload --\n" +
+                "SELECT * FROM t WHERE a = 'x' AND b = NULL\n\n",
+        )
+        val entries = SqlLogFileReader.readFromFile(file)
+        assertEquals(1, entries.size)
+        assertEquals("rawSql 从载荷还原（含 ?）", "SELECT * FROM t WHERE a = ? AND b = ?", entries[0].rawSql)
+        assertEquals("restoredSql 为正文（剥结尾分号）", "SELECT * FROM t WHERE a = 'x' AND b = NULL", entries[0].restoredSql)
+        assertEquals(
+            "params 从载荷还原",
+            listOf(LogSqlParam("x", "String"), LogSqlParam(null, "BIGINT")),
+            entries[0].params,
+        )
+        // 读回条目可直接走统一识别通道（与日志 tab 同参）
+        assertTrue(entries[0].toRecognizedPreview().recognized)
+    }
+
+    @Test
+    fun `v2损坏参数行降级为正文注释行`() {
+        val dir = Files.createTempDirectory("histparam-bad-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "bad.sql")
+        file.writeText(
+            "-- source: A.java:1 | time: 1ms | 2026-09-11 09:00:00.000 --\n" +
+                "-- pd: !!!not-base64!!! --\n" +
+                "SELECT 1\n\n",
+        )
+        val entries = SqlLogFileReader.readFromFile(file)
+        assertEquals(1, entries.size)
+        assertEquals("解码失败 pd 行留在正文（多一行注释无害）", "-- pd: !!!not-base64!!! --\nSELECT 1", entries[0].restoredSql)
+        assertEquals("-- pd: !!!not-base64!!! --\nSELECT 1", entries[0].rawSql)
+        assertTrue(entries[0].params.isEmpty())
+    }
+
+    @Test
+    fun `v2参数行不参与头部计数与块切分`() {
+        val payload = SqlLogParamCodec.encode("SELECT ?", listOf(LogSqlParam("1", "Long")))
+        val dir = Files.createTempDirectory("histparam-count-").toFile()
+        dir.deleteOnExit()
+        val file = File(dir, "mixed.sql")
+        file.writeText(
+            "-- source: A.java:1 | time: 1ms | 2026-09-11 09:00:00.000 --\n" +
+                "-- pd: $payload --\n" +
+                "SELECT '1'\n\n" +
+                "-- 2026-09-11 08:00:00\n" +
+                "SELECT 2\n\n",
+        )
+        // pd 行以 `-- ` 起始且无 `source:`——不排除会被旧头部判据误判，计数翻倍且块被劈开
+        assertEquals("countInFile 不计 pd 行", 2, SqlLogFileReader.countInFile(file))
+        val entries = SqlLogFileReader.readFromFile(file)
+        assertEquals("pd 行不劈块：v2 条目 + F-43 条目", 2, entries.size)
+        assertEquals("SELECT '1'", entries[0].restoredSql)
+        assertEquals("SELECT 2", entries[1].restoredSql)
+    }
 }

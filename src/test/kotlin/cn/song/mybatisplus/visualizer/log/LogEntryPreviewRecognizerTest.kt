@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -173,5 +175,33 @@ class LogEntryPreviewRecognizerTest {
             recognized.initialValues,
         )
         assertTrue(recognized.paramHints.all { it.quote == false })
+    }
+
+    // ------------------------------------------------------------------
+    // toPreviewResult 统一识别通道（T-HistParam F3）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `toPreviewResult 三级分流语义`() {
+        // 1. 占位符匹配识别：参数行 + 预填 + 无警告
+        val recognized = entry(
+            rawSql = "SELECT * FROM t WHERE username = ?",
+            params = listOf(LogSqlParam("admin", "String")),
+        ).toPreviewResult(formatSql = false, literalRecovery = true)
+        assertEquals(listOf("param1"), recognized.unresolvedParams)
+        assertEquals(mapOf("param1" to "admin"), recognized.initialParamValues)
+        assertNull("识别成功无警告", recognized.warning)
+
+        // 2. 零占位符零字面量：回退现状、无警告（纯静态 SQL）
+        val static = entry(rawSql = "SELECT 1 FROM t", params = emptyList())
+            .toPreviewResult(formatSql = false, literalRecovery = true)
+        assertTrue(static.unresolvedParams.isEmpty())
+        assertNull("零 ? 回退无警告", static.warning)
+
+        // 3. 有占位符但缺绑定行：现状警告分流保留（不进字面量恢复）
+        val noBinding = entry(rawSql = "SELECT * FROM t WHERE a = ?", params = emptyList())
+            .toPreviewResult(formatSql = false, literalRecovery = true)
+        assertTrue(noBinding.unresolvedParams.isEmpty())
+        assertNotNull("缺绑定行应有引导警告", noBinding.warning)
     }
 }
