@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.generator.CrudStatement
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 
 /**
@@ -30,13 +31,20 @@ object CrudSqlPreviewFlow {
         }
         when (candidates.size) {
             0 -> return
+            // 调用方（action invokeLater）已在 EDT 非模态上下文——直接开预览
             1 -> SqlPreviewService.showResult(project, candidates[0].statement.result, null)
             else -> SqlSelectionDialog(
                 project,
                 candidates,
                 candidates.map { SqlSelectionDialog.displayText(summary(it), lineText(it)) },
             ) { selected ->
-                SqlPreviewService.showResult(project, selected.statement.result, null)
+                // T-CrudSql 真机修复（262 实测 OK 无响应）：不在模态弹窗 doOKAction 栈内同步
+                // 开 modeless 预览弹窗——被仍存活的模态上下文吞掉且零异常零日志；既有
+                // ConvertToSqlAction 同点位经 previewAsync 异步跳板，从不在此栈内同步 show。
+                // invokeLater 让预览等选择弹窗 dispose 后再开（默认模态态随当前事件派发走）。
+                ApplicationManager.getApplication().invokeLater {
+                    SqlPreviewService.showResult(project, selected.statement.result, null)
+                }
             }.show()
         }
     }
