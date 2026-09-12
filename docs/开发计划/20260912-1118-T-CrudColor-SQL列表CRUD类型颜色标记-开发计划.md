@@ -483,6 +483,16 @@ internal class SqlListSelectionOutline(
   - 分支内自测（基线 3339）：定向 7 类 98/0/0；clean 全量 **3383/0/0/6 绿**。
   - 合并 master 后（基线 3344）：clean 全量 **3388/0/0/6 绿**（3344 + 44，与预期完全吻合，零回归）。
   - 追加 §3.5 后复跑：clean 全量 **3388/0/0/6 绿**。
+  - **性能修复（§七）后**：新增 4 条实例同一性用例 → **clean 全量 `3393/0/0/6` 绿（本任务最终验证结果）**。
+    - **验证过程有波折**：该提交后连续 15 次尝试均被外部 Gradle 守护（PID 25856 / 63484）持有的
+      `journal-1.lock` / `javaCompile.lock` 挡住（「拒绝访问」）。经 Python 只读探测确认为**真独占锁**
+      （占用期间连 `open(r+b)` 都 Permission denied，与早期"可打开"的瞬时争用不同）。
+      经用户授权后以 `./gradlew --stop` **优雅停止**两个守护（输出 `2 Daemons stopped`）——
+      **未使用强杀、未删除任何文件**；锁随即释放，clean 全量一次通过。
+    - **排查插曲（教训，已记入项目记忆）**：我曾据「文件名与类名不匹配」判定 `DbTypeQuoteHintTest`
+      的 XML 为陈旧残留、并据此报出 3390 —— **该判断是错的**：该类真实声明在
+      `CrudPreviewFlowAndTypesTest.kt` 内（一个文件多个测试类），按**文件名**反推类是否存在会漏判。
+      **统计用例数应以 clean 运行的 XML 为准，不要靠文件名反推。**
 - **实施中对计划的四处修正/补充**（偏离点如实记录）：
   1. **`SqlListTypeColor` 拆纯/壳双层**：原计划写「纯 JUnit 零平台依赖」，但 `colorOf`/`styleOf` 需读 `PluginSettings`（平台服务），纯类测不了。改为纯函数重载 `colorOf(type, style, hex)` / `styleOf(raw)` + 读设置薄壳，纯逻辑可测、语义不变。
   2. **混色改显式 half-up**：Kotlin `round(Double)` 实为 ties-to-even（`round(76.5)=76`），与手算直觉相反，会让设计稿色值表出现 1/255 偏移。改为 `floor(v + 0.5).toInt()`，与 §1.2.1 色值表完全一致（暗色选中行底色由 `#5A3B22` 更正为 `#5A3C22`，设计稿已按新值重出）。
