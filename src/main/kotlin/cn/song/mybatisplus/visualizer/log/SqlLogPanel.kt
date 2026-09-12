@@ -345,6 +345,15 @@ class SqlLogPanel(
     /** SQL类型多选按钮（测试断言文案）。 */
     internal val typeFilterButtonForTest: JButton get() = typeFilterButton
 
+    /** T-SelToggle：类型弹窗底部全选/全不选切换按钮（未打开弹窗时为 null）。 */
+    internal val typePopupToggleButtonForTest: JButton? get() = typePopupToggleButton
+
+    /**
+     * T-SelToggle：headless 测试直接构建弹窗内容（不经 `popup.show`——无显示设备时
+     * lightweight popup 不可靠），返回后 [typePopupToggleButtonForTest] 即非 null 可驱动。
+     */
+    internal fun buildTypeFilterContentForTest(): JPanel = buildTypeFilterContent()
+
     /** SQL类型标签（测试断言存在性与文案）。 */
     internal val typeFilterLabelForTest: JLabel get() = typeFilterLabel
 
@@ -571,13 +580,46 @@ class SqlLogPanel(
     /** 当前打开的类型弹窗内勾选框（全选/全不选即时同步用；弹窗每次打开重建）。 */
     private var typePopupCheckBoxes: List<Pair<StatementType, JCheckBox>> = emptyList()
 
+    /** T-SelToggle：弹窗底部全选/全不选切换按钮（T-SelToggle 双按钮合一；弹窗每次打开重建，与 [typePopupCheckBoxes] 同生命周期约定）。 */
+    private var typePopupToggleButton: JButton? = null
+
+    /**
+     * T-SelToggle：弹窗切换按钮文案——activeFilter 全勾 → 「全不选」（点击清空），
+     * 其余态（含空集）→ 「全选」（点击填满）。判定与外层「全部」文案（updateTypeFilterButton）同口径。
+     */
+    private fun typePopupToggleLabel(): String = MpSqlVisualizerBundle.message(
+        if (activeFilter.containsAll(FILTERABLE_TYPES)) "log.filter.selectNone" else "log.filter.selectAll",
+    )
+
+    /**
+     * T-SelToggle：弹窗切换按钮文案随勾选态刷新。弹窗无公共渲染下游可收口
+     * （updateTypeFilterButton/refreshList 还被搜索等非弹窗链路调用），三个勾选态变更入口
+     * （弹窗构建末尾、applyAllTypes 末尾、单类型复选框 listener）显式调用本函数。
+     */
+    private fun syncTypePopupToggleLabel() {
+        typePopupToggleButton?.let {
+            val label = typePopupToggleLabel()
+            if (it.text != label) it.text = label
+        }
+    }
+
     /**
      * 弹出类型多选弹窗：勾选即时生效且弹窗不关闭（JCheckBox 非 menu item，
-     * 点击不触发 popup 收起，支持连续勾选组合）；底部全选/全不选一键设置——
-     * 同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
+     * 点击不触发 popup 收起，支持连续勾选组合）；底部单个全选/全不选切换按钮（T-SelToggle）
+     * 一键设置——同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
      */
     private fun showTypeFilterPopup() {
         val popup = JPopupMenu()
+        popup.add(buildTypeFilterContent())
+        popup.show(typeFilterButton, 0, typeFilterButton.height + 2)
+    }
+
+    /**
+     * T-SelToggle：构建弹窗内容（勾选框区 + 分隔线 + 底部切换按钮），赋值 [typePopupCheckBoxes]
+     * 与 [typePopupToggleButton]。与 [showTypeFilterPopup] 拆分是纯提取（行为零变更），
+     * 使测试可脱离 `popup.show` 直接驱动勾选框/切换按钮（headless 下 JPopupMenu.show 不可靠）。
+     */
+    private fun buildTypeFilterContent(): JPanel {
         val content = JPanel()
         content.layout = BoxLayout(content, BoxLayout.Y_AXIS)
         content.isOpaque = false
@@ -592,6 +634,8 @@ class SqlLogPanel(
                     if (isSelected) activeFilter.add(type) else activeFilter.remove(type)
                     updateTypeFilterButton()
                     refreshList()
+                    // T-SelToggle：单类型勾选即时同步切换按钮文案
+                    syncTypePopupToggleLabel()
                 }
             }
             checkBoxes += type to cb
@@ -601,21 +645,18 @@ class SqlLogPanel(
         content.add(Box.createVerticalStrut(6))
         content.add(JSeparator().apply { alignmentX = Component.LEFT_ALIGNMENT })
         content.add(Box.createVerticalStrut(6))
+        val toggleButton = JButton(typePopupToggleLabel()).apply {
+            isFocusable = false
+            addActionListener { applyAllTypes(!activeFilter.containsAll(FILTERABLE_TYPES)) }
+        }
+        typePopupToggleButton = toggleButton
         val row = JPanel(GridBagLayout()).apply {
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
-            add(JButton(MpSqlVisualizerBundle.message("log.filter.selectAll")).apply {
-                isFocusable = false
-                addActionListener { applyAllTypes(true) }
-            })
-            add(JButton(MpSqlVisualizerBundle.message("log.filter.selectNone")).apply {
-                isFocusable = false
-                addActionListener { applyAllTypes(false) }
-            })
+            add(toggleButton)
         }
         content.add(row)
-        popup.add(content)
-        popup.show(typeFilterButton, 0, typeFilterButton.height + 2)
+        return content
     }
 
     /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）：同步弹窗内勾选框 + 按钮文案 + 列表。 */
@@ -625,6 +666,8 @@ class SqlLogPanel(
         typePopupCheckBoxes.forEach { (type, cb) -> cb.isSelected = type in activeFilter }
         updateTypeFilterButton()
         refreshList()
+        // T-SelToggle：切换按钮点击后文案翻转（此时 activeFilter 已是新态）
+        syncTypePopupToggleLabel()
     }
 
     // ---------- 工具栏动作 ----------

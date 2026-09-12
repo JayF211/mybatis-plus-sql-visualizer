@@ -158,13 +158,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
     // T-M26.3：全选/全不选按钮回挂分区标题行右侧（IDEA 组操作惯例，T-M23.2 原生形态；
     // T-M26.2 曾固定面板右上角，长文本截断后按钮不再被推出视口）。
-    private var selectAllButton: JButton? = null
-    private var selectNoneButton: JButton? = null
+    // T-SelToggle：全选/全不选合并为单个状态切换按钮——全勾时文案「全不选」点击清空，
+    // 其余态文案「全选」点击填满；文案随勾选态翻转（renderSql 末尾单点同步）。
+    private var toggleSelectButton: JButton? = null
     private var clearButton: JButton? = null        // 动态条件分区清除按钮
     private var batchClearButton: JButton? = null    // 批量参数列分区清除按钮
-    // T-M23.2：批量「参数列」区全选/全不选按钮
-    private var batchSelectAllButton: JButton? = null
-    private var batchSelectNoneButton: JButton? = null
+    // T-M23.2：批量「参数列」区全选/全不选切换按钮（T-SelToggle 合并单按钮）
+    private var batchToggleSelectButton: JButton? = null
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -1196,6 +1196,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 showSql(backfillParamsBySource(applyNamedParams(base), result.unresolvedParams, result.paramHints))
             }
         }
+        // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
+        syncToggleSelectLabels()
     }
 
     /**
@@ -1420,10 +1422,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         xmlErrors = emptyList()
         currentWarning = null
         errorCopyButton?.isVisible = false
-        selectAllButton = null
-        selectNoneButton = null
-        batchSelectAllButton = null
-        batchSelectNoneButton = null
+        toggleSelectButton = null
+        batchToggleSelectButton = null
         paramPanel.removeAll()
         // O-4：重置会话缓存
         previousSql = null
@@ -1758,11 +1758,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionValueFields.clear()
         batchCheckBoxes.clear()
         // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
-        selectAllButton = null
-        selectNoneButton = null
+        toggleSelectButton = null
         clearButton = null
-        batchSelectAllButton = null
-        batchSelectNoneButton = null
+        batchToggleSelectButton = null
         batchClearButton = null
         val views = result.previewModel?.conditionViews.orEmpty()
         val batchModel = result.batchModel
@@ -1898,21 +1896,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * 批量「参数列」分区标题行（T-M23.2 回归，T-M26.3 TitledSeparator 化）：左侧分区标题 +
-     * 右侧全选/全不选按钮（操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
+     * 右侧单个全选/全不选切换按钮（T-SelToggle；操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
      */
     private fun batchSectionHeader(): JBPanel<JBPanel<*>> {
-        batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
-        batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
+        batchToggleSelectButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) {
+            setAllBatchColumns(!batchCheckBoxes.all { it.isSelected })
+        }
         batchClearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear")) { clearBatchValues() }
         return sectionHeaderRow(
             MpSqlVisualizerBundle.message("panel.batch.columns"),
-            listOf( batchClearButton!!,batchSelectAllButton!!, batchSelectNoneButton!!),
+            listOf(batchToggleSelectButton!!, batchClearButton!!),
         )
     }
 
     /**
      * 批量列全选/全不选（T-M23.2）：操作 [batchCheckBoxes] 与 [enabledIds]（列名作 id），
      * 同步复选框 UI 与 SQL 重渲染（全不选 → 空列清单形态，文档化边界）。
+     * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
      */
     private fun setAllBatchColumns(enabled: Boolean) {
         val model = current?.batchModel ?: return
@@ -1924,16 +1924,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * 动态条件分区标题行（T-M26.3）：TitledSeparator「动态条件」+ 右侧全选/全不选按钮
-     * （T-M23.2 形态回归，IDEA 组操作惯例；XML 条件开关同样复用，见 T-M24-04）。
+     * 动态条件分区标题行（T-M26.3）：TitledSeparator「动态条件」+ 右侧单个全选/全不选切换按钮
+     * （T-M23.2 形态回归，IDEA 组操作惯例，T-SelToggle 双按钮合一；XML 条件开关同样复用，见 T-M24-04）。
      */
     private fun conditionSectionHeader(): JBPanel<JBPanel<*>> {
-        selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
-        selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+        toggleSelectButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) {
+            setAllConditions(!conditionCheckBoxes.all { it.isSelected })
+        }
         clearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear")) { clearConditionValues() }
         return sectionHeaderRow(
             MpSqlVisualizerBundle.message("panel.condition.section"),
-            listOf(clearButton!!,selectAllButton!!, selectNoneButton!!),
+            listOf(toggleSelectButton!!, clearButton!!),
         )
     }
 
@@ -1945,8 +1946,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-SelToggle：切换按钮文案判定——复选框非空且全部勾选 → 「全不选」（点击清空），
+     * 其余一切态（空集/部分勾选）→ 「全选」（点击填满）。以复选框 UI 态为基准
+     * （enabledIds 跨场景共享可能残留本场景外 id，与用户所见不一致）。
+     */
+    private fun toggleLabel(boxes: List<JCheckBox>): String =
+        MpSqlVisualizerBundle.message(
+            if (boxes.isNotEmpty() && boxes.all { it.isSelected }) "panel.condition.selectNone"
+            else "panel.condition.selectAll",
+        )
+
+    /**
+     * T-SelToggle：切换按钮文案随勾选态刷新——挂在 [renderSql] 末尾单点收口
+     * （三个勾选入口——切换按钮自身、批量列行/动态条件行/XML 条件行 listener——均以 renderSql 收尾）。
+     * 文案未变化不 setText，避免每次重渲染触发标题行 FlowLayout 无谓重排。
+     */
+    private fun syncToggleSelectLabels() {
+        toggleSelectButton?.let {
+            val label = toggleLabel(conditionCheckBoxes)
+            if (it.text != label) it.text = label
+        }
+        batchToggleSelectButton?.let {
+            val label = toggleLabel(batchCheckBoxes)
+            if (it.text != label) it.text = label
+        }
+    }
+
+    /**
      * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
      * 同步复选框 UI 与 SQL 重渲染。T-M24-04：XML 预览的条件开关（id = test 表达式）一并处理。
+     * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
      */
     private fun setAllConditions(enabled: Boolean) {
         val views = current?.previewModel?.conditionViews.orEmpty()
@@ -2756,12 +2785,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
     internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
-    /** T-M23.2：批量「参数列」区全选/全不选按钮。 */
-    internal fun batchSelectAllButtonForTest(): JButton? = batchSelectAllButton
-    internal fun batchSelectNoneButtonForTest(): JButton? = batchSelectNoneButton
+    /** T-M23.2 / T-SelToggle：批量「参数列」区全选/全不选切换按钮。 */
+    internal fun batchToggleSelectButtonForTest(): JButton? = batchToggleSelectButton
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
-    internal fun selectAllButtonForTest(): JButton? = selectAllButton
-    internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
+    internal fun toggleSelectButtonForTest(): JButton? = toggleSelectButton
     internal fun clearButtonForTest(): JButton? = clearButton
     internal fun batchClearButtonForTest(): JButton? = batchClearButton
     /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。M36 垂直结果分栏加入后，须按方向取水平分栏（垂直分栏的左组件即水平分栏）。 */
