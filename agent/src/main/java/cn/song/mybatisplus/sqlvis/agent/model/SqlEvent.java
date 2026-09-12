@@ -1,0 +1,35 @@
+package cn.song.mybatisplus.sqlvis.agent.model;
+
+import java.util.List;
+
+/**
+ * SQL 事件（agent → IDE 单向流）：字段名与传输 JSON 键一一对应（Jsons.writeEvent）。
+ * 全部 JDK 结构，无外部依赖——事件对象在采集线程构造，发送线程序列化。
+ */
+public final class SqlEvent {
+
+    /** SQL 文本（PreparedStatement 为 prepare 时的 SQL，Statement 为 execute 参数，批为拼接）。 */
+    public String sql;
+    /** 采集时间戳（毫秒）。 */
+    public long timestamp;
+    /** 精确耗时（nanoTime，§4.2 #5——毫秒级 currentTimeMillis 是两竞品共同坑）。 */
+    public long durationNanos;
+    /** 影响行数（DML/batch 语义；查询 null）。 */
+    public Long updateCount;
+    /** 执行报错（类名: 消息；成功 null）。 */
+    public String errorText;
+    /** 调用栈过滤后的源文件（相对路径，正斜杠）。 */
+    public String sourceFile;
+    /** 行号（0 未知）。 */
+    public int sourceLine;
+    /** 方法聚焦键 {SimpleClass}#{method}（T-M56-06）。 */
+    public String methodKey;
+    /** 请求聚合标签（MDC 兜底，T-M56-07）。 */
+    public String requestTag;
+    /** 参数快照 [index, valueText|null, type|null]（已过脱敏层）。 */
+    public List<String[]> params;
+    /** connect 时的 URL（一期不透传，预留）。 */
+    public String url;
+    /** 执行线程名。 */
+    public String threadName;
+}

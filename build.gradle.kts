@@ -745,3 +745,20 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
     }
 }
+
+// ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
+// 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
+// 落盘失败显式上报（禁静默吞）。跨项目任务经路径引用，配置缓存兼容。
+evaluationDependsOn(":agent")
+val agentEmbedDir = layout.buildDirectory.dir("agent-embed")
+val embedAgentJar = tasks.register<Copy>("embedAgentJar") {
+    from(tasks.getByPath(":agent:agentFatJar"))
+    into(agentEmbedDir.map { it.dir("agent") })
+    rename { "mps-sql-agent.jar" }
+}
+sourceSets.named("main") {
+    resources.srcDir(agentEmbedDir)
+}
+tasks.named("processResources") {
+    dependsOn(embedAgentJar)
+}

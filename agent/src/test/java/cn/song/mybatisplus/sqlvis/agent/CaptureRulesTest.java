@@ -1,0 +1,125 @@
+package cn.song.mybatisplus.sqlvis.agent;
+
+import cn.song.mybatisplus.sqlvis.agent.hook.ParamCapture;
+import cn.song.mybatisplus.sqlvis.agent.util.Desensitizer;
+import cn.song.mybatisplus.sqlvis.agent.util.StackLocator;
+import org.junit.Test;
+
+import java.util.List;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * 采集红线单测（§4.2 #4/#5 + §4.5）：
+ * setXxx 显式枚举白名单（setFetchSize 等不误记）、列名提示解析、脱敏双条件、栈帧过滤规则。
+ */
+public class CaptureRulesTest {
+
+    // ---------- ParamCapture：显式白名单 ----------
+
+    @Test
+    public void 白名单方法捕获_非白名单拒绝() {
+        ParamCapture pc = new ParamCapture();
+        assertTrue(pc.tryCapture("setString", new Object[]{1, "x"}));
+        assertTrue(pc.tryCapture("setInt", new Object[]{2, 5}));
+        assertTrue(pc.tryCapture("setNull", new Object[]{3, 92}));
+        // DebugTools 误记坑：setFetchSize/setMaxRows/setQueryTimeout/setEscapeProcessing 不得捕获
+        assertFalse(pc.tryCapture("setFetchSize", new Object[]{1, 100}));
+        assertFalse(pc.tryCapture("setMaxRows", new Object[]{2, 10}));
+        assertFalse(pc.tryCapture("setQueryTimeout", new Object[]{3, 5}));
+        assertFalse(pc.tryCapture("setEscapeProcessing", new Object[]{true}));
+        // setBoolean 白名单但首参不是 Integer（Statement.setEscapeProcessing(boolean) 形态冲突面）
+        assertFalse(pc.tryCapture("setBoolean", new Object[]{Boolean.TRUE}));
+    }
+
+    @Test
+    public void 快照按序排列_含类型与空值() {
+        ParamCapture pc = new ParamCapture();
+        pc.tryCapture("setString", new Object[]{2, "b"});
+        pc.tryCapture("setInt", new Object[]{1, 7});
+        pc.tryCapture("setNull", new Object[]{3, 92});
+        List<String[]> snap = pc.snapshot(null, false);
+        assertEquals(3, snap.size());
+        assertEquals("1", snap.get(0)[0]);
+        assertEquals("7", snap.get(0)[1]);
+        assertEquals("Integer", snap.get(0)[2]);
+        assertEquals("2", snap.get(1)[0]);
+        assertEquals("b", snap.get(1)[1]);
+        assertEquals("String", snap.get(1)[2]);
+        assertEquals("3", snap.get(2)[0]);
+        assertNull(snap.get(2)[1]);
+        assertEquals("NULL", snap.get(2)[2]);
+    }
+
+    // ---------- columnHint：第 n 个 `?` 前置标识符 ----------
+
+    @Test
+    public void 列名提示解析_跳过字面量内问号() {
+        assertEquals("password", ParamCapture.columnHint("UPDATE u SET password = ? WHERE id = ?", 1));
+        assertEquals("id", ParamCapture.columnHint("UPDATE u SET password = ? WHERE id = ?", 2));
+        assertEquals("name", ParamCapture.columnHint("SELECT * FROM t WHERE name = 'a?b' AND name = ?", 1));
+        // 字面量内的 ? 不占位：第 1 个真实占位符的提示是 name
+        assertNull(ParamCapture.columnHint(null, 1));
+    }
+
+    // ---------- Desensitizer：双条件打码 ----------
+
+    @Test
+    public void 列名关键词打码() {
+        assertEquals("***", Desensitizer.mask("password", "p@ss"));
+        assertEquals("***", Desensitizer.mask("user_token", "abc"));
+        assertEquals("***", Desensitizer.mask("mobile_no", "13800138000"));
+        // 值形态兜底：11 位 1 开头数字即便列提示无关也打码（行为固化断言）
+        assertEquals("***", Desensitizer.mask("age", "13800138000"));
+    }
+
+    @Test
+    public void 值形态打码_列提示缺失兜底() {
+        assertEquals("***", Desensitizer.mask(null, "110101199003077758"));
+        assertEquals("***", Desensitizer.mask(null, "13800138000"));
+        assertEquals("12345", Desensitizer.mask(null, "12345"));
+    }
+
+    // ---------- StackLocator：帧过滤与相对路径 ----------
+
+    @Test
+    public void 框架帧过滤规则() {
+        assertTrue(StackLocator.isFrameworkFrame("java.sql.DriverManager"));
+        assertTrue(StackLocator.isFrameworkFrame("com.mysql.cj.jdbc.ClientPreparedStatement"));
+        assertTrue(StackLocator.isFrameworkFrame("com.zaxxer.hikari.pool.HikariProxyPreparedStatement"));
+        assertTrue(StackLocator.isFrameworkFrame("org.springframework.jdbc.core.JdbcTemplate"));
+        assertTrue(StackLocator.isFrameworkFrame("com.sun.proxy.$Proxy12"));
+        assertFalse(StackLocator.isFrameworkFrame("com.example.service.UserService"));
+        assertFalse(StackLocator.isFrameworkFrame("cn.example.app.dao.UserDao"));
+    }
+
+    @Test
+    public void 相对路径与聚焦键() {
+        assertEquals("com/example/service/UserService.java",
+                StackLocator.toRelativePath("com.example.service.UserService", "UserService.java"));
+        assertEquals("App.java", StackLocator.toRelativePath("App", "App.java"));
+        assertNull(StackLocator.toRelativePath("com.example.Foo", null));
+    }
+
+    @Test
+    public void locate_从当前栈返回聚焦键形态() {
+        StackLocator.Frame f = StackLocator.locate();
+        // 测试栈内必有用户帧（本测试类）——methodKey 形如 SimpleClass#method
+        org.junit.Assert.assertNotNull(f);
+        org.junit.Assert.assertTrue(f.methodKey.contains("#"));
+    }
+
+    @Test
+    public void 驱动登记表覆盖矩阵() {
+        for (String cn : new String[]{
+                "com.mysql.cj.jdbc.NonRegisteringDriver", "org.postgresql.Driver", "org.h2.Driver",
+                "org.sqlite.JDBC", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+                "dm.jdbc.driver.DmDriver", "com.kingbase8.Driver", "com.gbasedbt.jdbc.Driver"}) {
+            assertTrue("应命中登记表: " + cn, DriverRegistry.isWeavable(cn));
+        }
+        assertFalse(DriverRegistry.isWeavable("com.example.NotADriver"));
+    }
+}

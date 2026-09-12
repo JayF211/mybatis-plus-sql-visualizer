@@ -2,6 +2,11 @@ import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 
 rootProject.name = "mybatis-plus-sql-visualizer"
 
+// M56 T-M56-01：agent 字节码增强子项目（Java 8 字节码 fat jar，ASM shade relocate 自包含）。
+// 产物 mps-sql-agent.jar 经根项目 embedAgentJar 任务拷入主插件资源 resources/agent/，
+// 运行时解压落盘后经 attach loadAgent 挂载——不进插件 classloader，避免污染插件依赖面。
+include(":agent")
+
 pluginManagement {
     plugins {
         id("org.jetbrains.kotlin.jvm") version "2.3.20"

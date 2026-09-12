@@ -1,0 +1,131 @@
+// M56 T-M56-01：agent 字节码增强子项目。
+// 产物 mps-sql-agent.jar：Java 8 字节码（--release 8，覆盖 JDK8~26 目标应用）、ASM shade
+// relocate 到私有命名空间（RelocateAsmMain 用 ASM 自身重写 ASM——不引入 shadow 插件）、
+// manifest Premain-Class/Agent-Class 同类双入口 + Can-Redefine/Can-Retransform。
+// 测试（JUnit 4）跑在工具链 JDK 上，产线类纯 Java 8 API。
+
+plugins {
+    id("java")
+}
+
+java {
+    toolchain {
+        languageVersion = org.gradle.jvm.toolchain.JavaLanguageVersion.of(17)
+    }
+}
+
+val asmVersion = "9.4"
+
+// childapp 源集（PoC 门禁的「用户应用」子进程）：仅 h2 依赖——刻意与 agent 主类隔离，
+// 子 JVM classpath 不含 agent 类，模拟真实用户应用（避免重复定义 LinkageError 假象）
+sourceSets {
+    create("childapp") {
+        java {
+            srcDir("src/childapp/java")
+        }
+    }
+}
+dependencies {
+    "childappImplementation"("com.h2database:h2:2.3.232")
+}
+
+// reloc 源集（构建期工具：fat jar 打包 + ASM 自 relocate）
+sourceSets {
+    create("reloc") {
+        java {
+            srcDir("src/reloc/java")
+        }
+    }
+}
+
+val asmFat by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+dependencies {
+    // 织入工具（§4.2 #2：ASM AdviceAdapter 手织；被打进 fat jar 前由 relocate 任务改名）
+    compileOnly("org.ow2.asm:asm:$asmVersion")
+    compileOnly("org.ow2.asm:asm-commons:$asmVersion")
+
+    // relocate 工具源集（跑在构建 JVM 上，ASM 明文命名空间）
+    "relocImplementation"("org.ow2.asm:asm:$asmVersion")
+    "relocImplementation"("org.ow2.asm:asm-commons:$asmVersion")
+
+    // fat jar 的 ASM 输入（打包时 relocate）——具名可解析配置（配置缓存兼容，detached 不兼容）
+    "asmFat"("org.ow2.asm:asm:$asmVersion")
+    "asmFat"("org.ow2.asm:asm-commons:$asmVersion")
+
+    testImplementation("junit:junit:4.13.2")
+    // attach 门禁测试的「用户应用」驱动：H2（与根项目方言验证同版本）
+    testImplementation("com.h2database:h2:2.3.232")
+    // 织入产物校验测试需要 ASM 明文命名空间（仅测试 classpath）
+    testImplementation("org.ow2.asm:asm:$asmVersion")
+    testImplementation("org.ow2.asm:asm-commons:$asmVersion")
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+}
+
+tasks.compileJava {
+    // Java 8 字节码（major 52）：JDK8 目标应用可直接加载；ASM 9.10.1 自身 Java 8 兼容
+    options.release = 8
+}
+
+tasks.test {
+    // attach 集成测试起子 JVM 并 attach——同机回环，无需 IDE 环境；依赖 agentFatJar 产物
+    dependsOn(agentFatJar)
+    dependsOn(tasks.named("childappClasses"))
+    useJUnit()
+    // 根项目 `test --tests <IDE 测试>` 触发本任务时无匹配用例——不视为失败
+    filter {
+        setFailOnNoMatchingTests(false)
+    }
+    testLogging {
+        events("failed")
+        setExceptionFormat("full")
+    }
+}
+
+/** 主源集产物（未打包 ASM）。 */
+val plainAgentJar = tasks.jar
+
+/**
+ * fat jar：agent 类 + relocate 后的 ASM + attach manifest。
+ * RelocateAsmMain 在 reloc 源集（构建 JVM 17）执行。
+ * 注意：argumentProvider 闭包只捕获本地可序列化值（TaskProvider/Set/Provider）——
+ * 捕获脚本作用域会破坏配置缓存。
+ */
+val agentFatJar = tasks.register<JavaExec>("agentFatJar") {
+    group = "build"
+    description = "打 mps-sql-agent.jar：agent 类 + relocate 后的 ASM，attach/premain 双入口 manifest"
+    dependsOn(tasks.named("relocClasses"))
+    mainClass = "cn.song.mybatisplus.sqlvis.agent.build.RelocateAsmMain"
+    classpath(
+        files(
+            sourceSets.getByName("reloc").output,
+            configurations.getByName("relocRuntimeClasspath"),
+        ),
+    )
+    jvmArgs("-Dfile.encoding=UTF-8")
+
+    val agentJarFile = plainAgentJar.flatMap { it.archiveFile }
+    val asmResolved = asmFat.files
+    val outProvider = layout.buildDirectory.file("dist/mps-sql-agent.jar")
+    outputs.file(outProvider)
+    inputs.files(agentJarFile)
+    inputs.files(asmFat)
+
+    argumentProviders.add {
+        listOf(
+            "--asm", asmResolved.joinToString(";") { it.absolutePath },
+            "--agent", agentJarFile.get().asFile.absolutePath,
+            "--out", outProvider.get().asFile.absolutePath,
+        )
+    }
+}
+
+artifacts {
+    add("archives", agentFatJar)
+}
