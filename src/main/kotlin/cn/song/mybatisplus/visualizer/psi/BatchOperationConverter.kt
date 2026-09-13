@@ -181,14 +181,15 @@ object BatchOperationConverter {
     ): BatchPreview? {
         val methodName = call.methodExpression.referenceName ?: return null
         val operation = BATCH_OPERATIONS[methodName] ?: return null
-        val table = resolveEntityTable(call) ?: return null
-        // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 模板）
+        val target = resolveEntityTable(call) ?: return null
+        val table = target.table
+        // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 分支）
         val build = if (methodName in MAP_CONDITION_METHODS) {
             buildMapConditionBatch(methodName, table, injectLogicDelete)
         } else {
             when (operation) {
                 Operation.UPDATE -> buildUpdateBatch(call, methodName, table)
-                Operation.INSERT -> buildInsertBatch(call, methodName, table, injectTenantLine)
+                Operation.INSERT -> buildInsertBatch(call, methodName, table, target.entityClass, injectTenantLine)
                 Operation.DELETE -> buildDeleteBatch(call, methodName, table, injectLogicDelete, resolveVariables)
                 Operation.UPSERT -> buildUpsertBatch(call, methodName, table)
                 Operation.SELECT -> buildSelectBatch(call, methodName, table, injectLogicDelete, resolveVariables)
@@ -206,6 +207,12 @@ object BatchOperationConverter {
     }
 
     /**
+     * 批量操作方法调用解析结果（T-M2）：表信息 + 实体 PsiClass（@KeySequence 等类级注解读取用；
+     * 实体来自泛型推断等无具体 PsiClass 的路径为 null）。
+     */
+    private data class ResolvedTarget(val table: TableInfo, val entityClass: PsiClass? = null)
+
+    /**
      * 解析目标实体表信息（T-M15-08 起支持三种来源，T-M22-04 增补第四种）：
      *  1. 集合参数泛型（`List<Entity>`，批量形态）
      *  2. 实体参数类型（`save(entity)` / `updateById(entity)` 单实体形态）
@@ -220,8 +227,10 @@ object BatchOperationConverter {
      * 常见方法名防误伤——`List<String> list.selectAll()` 的 String 不得解析为实体）；
      * 步骤 4 置于步骤 3 之后：`service.getById(id)` 的 qualifier 是 service 变量（非实体），
      * 由 [isLikelyEntity] 限定保证不误判，实体变量仅在 service 泛型解析失败时兜底。
+     *
+     * T-M2：同时携带解析出的实体 PsiClass（INSERT 模板 @KeySequence 序列提示读取用）。
      */
-    private fun resolveEntityTable(call: PsiMethodCallExpression): TableInfo? {
+    private fun resolveEntityTable(call: PsiMethodCallExpression): ResolvedTarget? {
         val firstArg = call.argumentList.expressions.firstOrNull()
         // 1. 集合参数泛型（List<Entity>）；2. 实体参数类型（save(entity) / updateById(entity)）——
         // 无实参调用（ActiveRecord 无参形态）跳过，走步骤 3/4
@@ -229,7 +238,9 @@ object BatchOperationConverter {
             val listType = firstArg.type as? PsiClassType
             val entityType = listType?.parameters?.firstOrNull() as? PsiClassType
             val entityFromList = entityType?.resolve()
-            if (entityFromList != null && isLikelyEntity(entityFromList)) return EntityResolver().resolve(entityFromList)
+            if (entityFromList != null && isLikelyEntity(entityFromList)) {
+                return ResolvedTarget(EntityResolver().resolve(entityFromList), entityFromList)
+            }
             // 类字面量实参（Db.getById(User.class, id) / Db.list(User.class, wrapper)，T-M22-04）显式处理：
             // LightPlatform 下 `User.class` 表达式的 type（Class<User>）可能不可解析，
             // operand 类型（User 本身）更可靠；`save(entity)` 等普通实体实参走 .type 原路径
@@ -237,24 +248,30 @@ object BatchOperationConverter {
                 is PsiClassObjectAccessExpression -> (firstArg.operand.type as? PsiClassType)?.resolve()
                 else -> (firstArg.type as? PsiClassType)?.resolve()
             }
-            if (entityFromArg != null && isLikelyEntity(entityFromArg)) return EntityResolver().resolve(entityFromArg)
+            if (entityFromArg != null && isLikelyEntity(entityFromArg)) {
+                return ResolvedTarget(EntityResolver().resolve(entityFromArg), entityFromArg)
+            }
         }
         // 3. service qualifier 泛型（getById(id) 等单参非实体场景）——
         // 含 Entity 后缀 / @TableName 的实体走 isLikelyEntity 快速路径；
         // 不含后缀的实体（如 User）由 resolveServiceEntityClass 步骤 3b 兜底（仅排除 JDK 包）
         val entityFromService = resolveServiceEntityClass(call)
-        if (entityFromService != null) return EntityResolver().resolve(entityFromService)
+        if (entityFromService != null) return ResolvedTarget(EntityResolver().resolve(entityFromService), entityFromService)
         // 3b. 隐式 this 回退（this.getById(id) —— qualifierExpression 为 null）：
         // 从 containing class 的父类/接口泛型参数解析实体（ServiceImpl<M, User> → User）
         val entityFromImplicitThis = resolveEntityFromImplicitThis(call)
-        if (entityFromImplicitThis != null) return EntityResolver().resolve(entityFromImplicitThis)
+        if (entityFromImplicitThis != null) {
+            return ResolvedTarget(EntityResolver().resolve(entityFromImplicitThis), entityFromImplicitThis)
+        }
         // 3c. 方法调用 qualifier 回退（getBaseMapper().selectById(id) —— qualifier 是 PsiMethodCallExpression）：
         // 从 qualifier 方法的返回类型泛型参数解析实体（BaseMapper<User> → User）
         val entityFromMethodQualifier = resolveEntityFromMethodQualifier(call)
-        if (entityFromMethodQualifier != null) return EntityResolver().resolve(entityFromMethodQualifier)
+        if (entityFromMethodQualifier != null) {
+            return ResolvedTarget(EntityResolver().resolve(entityFromMethodQualifier), entityFromMethodQualifier)
+        }
         // 4. qualifier 实体类型（T-M22-04，ActiveRecord 无参形态）
         val entityFromQualifier = resolveQualifierEntityClass(call) ?: return null
-        return EntityResolver().resolve(entityFromQualifier)
+        return ResolvedTarget(EntityResolver().resolve(entityFromQualifier), entityFromQualifier)
     }
 
     /**
@@ -397,11 +414,18 @@ object BatchOperationConverter {
      * `save(entity)` 单实体同模板（F-15 语义一致）。
      * T-M23-04：全列可勾选，**主键默认不勾选**（`@TableId(type = IdType.AUTO)` 自增场景，对齐 MP INSERT 不含主键列）；
      * 初始 SQL 与参数登记出自 [BatchModel.renderSql]/ordered*。
+     *
+     * T-M2（@KeySequence）：实体类标注 `@KeySequence(value = "seq")`（主键取序列，Oracle/PG/DM/KingBase
+     * 方言常见）且当前方言为 [KEY_SEQUENCE_DIALECT_NAMES] 时——主键列保持 `?` 占位 + SQL 尾部追加
+     * 「主键取序列」注释提示。**边界（文档化，不做真实渲染）**：不渲染 `seq.nextval` 真实取值表达式
+     * （MP KeyGenerator 运行时行为，静态按占位呈现）；序列名来自 [EntityResolver.keySequenceValue]；
+     * 面板勾选重建 SQL 时注释行不保留（BatchModel 纯渲染无注释通道，参数占位不受影响）。
      */
     private fun buildInsertBatch(
         call: PsiMethodCallExpression,
         methodName: String,
         table: TableInfo,
+        entityClass: PsiClass? = null,
         injectTenantLine: Boolean = true,
     ): BatchBuild {
         val columns = if (methodName == "insertBatchSomeColumn") {
@@ -433,7 +457,15 @@ object BatchOperationConverter {
             }
         }
         val paramGroups = buildParamGroups(columns.map { it.columnName })
-        return modelBuild(BatchModel(BatchKind.INSERT, table.tableName, toggleColumns)).copy(paramGroups = paramGroups)
+        val build = modelBuild(BatchModel(BatchKind.INSERT, table.tableName, toggleColumns)).copy(paramGroups = paramGroups)
+        // T-M2：@KeySequence 序列方言注释提示（主键列占位不变，仅追加提示行）
+        val keySequence = entityClass?.let { EntityResolver.keySequenceValue(it) }
+            ?: return build
+        val dialect = currentDialect()
+        if (dialect.name !in KEY_SEQUENCE_DIALECT_NAMES) return build
+        return build.copy(
+            sql = build.sql + "\n-- @KeySequence: 主键取序列 $keySequence（${dialect.name} 方言，运行时由 MP KeyGenerator 取 nextval）",
+        )
     }
 
     /**
@@ -617,6 +649,12 @@ object BatchOperationConverter {
 
     /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
     private const val DEFAULT_TENANT_COLUMN = "tenant_id"
+
+    /**
+     * T-M2：@KeySequence 序列提示生效的方言名集合（Oracle/DM/KingBase——序列取主键的常见国产/PL 方言；
+     * PG 常用 serial/identity 序列形态不在本提示范围，MySQL/SQL Server 无序列语义）。
+     */
+    private val KEY_SEQUENCE_DIALECT_NAMES = setOf("Oracle", "DM（达梦）", "KingBase（人大金仓）")
 
     /** T-TenantLine 诊断日志：INSERT 列清单追加租户列决策。 */
     private val LOG = Logger.getInstance(BatchOperationConverter::class.java)

@@ -47,6 +47,22 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     private fun sqlEntry(sql: String, sourceFile: String? = null, sourceLine: Int = 0, ms: Long? = null) =
         LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = 1_700_000_000_000L, sourceFile = sourceFile, sourceLine = sourceLine, executionTimeMs = ms)
 
+    /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
+    private var savedDisplayMode: String? = null
+
+    override fun setUp() {
+        super.setUp()
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        savedDisplayMode = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = "SINGLE_LINE"
+    }
+
+    override fun tearDown() {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logListSqlDisplayMode =
+            savedDisplayMode ?: cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
+        super.tearDown()
+    }
+
     fun test二级条目_片段通道_非HTML标签() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）", r.metaLine is SimpleColoredComponent)
@@ -78,6 +94,42 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val longSql = "SELECT " + (1..200).joinToString(", ") { "c$it" } + " FROM t WHERE id = 1"
         val r = renderSql(sqlEntry(longSql))
         assertTrue("超长 SQL 摘要含省略号", joinedText(r.sqlLine).contains("…"))
+    }
+
+    // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
+
+    fun test二级条目_元信息在上SQL在下两行显示() {
+        val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
+        val meta = joinedText(r.metaLine)
+        assertTrue("耗时占位应在元信息行", meta.contains("[30ms]"))
+        assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"))
+        assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
+        assertFalse("来源不应混入 SQL 行", joinedText(r.sqlLine).contains("OrderDao.java"))
+        assertTrue("元信息行恒存在（T-TwoLine 两行结构，占位符归元信息行）", meta.contains("[") && meta.contains("]"))
+    }
+
+    fun test二级条目_空耗时与未知来源占位渲染在元信息行() {
+        val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
+        val meta = joinedText(r.metaLine)
+        assertTrue("空耗时占位 [—] 应在元信息行", meta.contains("[—]"))
+        assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"))
+        assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
+    }
+
+    // ---------- T-ListMode：SQL 三种显示模式 ----------
+
+    fun test二级条目_关键字换行模式SQL子句分行() {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val saved = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = "KEYWORD_WRAP"
+        try {
+            val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9))
+            assertTrue("FROM 应独立成行", r.sqlLines.any { joinedText(it).startsWith("FROM") })
+            assertTrue("WHERE 应独立成行", r.sqlLines.any { joinedText(it).startsWith("WHERE") })
+            assertFalse("元信息行不混入 SQL", joinedText(r.metaLine).contains("SELECT"))
+        } finally {
+            state.logListSqlDisplayMode = saved
+        }
     }
 
     fun test一级文件_大小为0字节显示0B() {

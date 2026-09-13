@@ -42,9 +42,14 @@ open class SqlLogConsoleBridge(
      * 已挂载的控制台 → Filter 代理映射。
      * 值从 Boolean 改为 Pair<filter, ifaceClass>，供 [detachAllFilters] 移除 Filter 使用。
      */
-    val attachedConsoles = IdentityHashMap<Any, Pair<Any, Class<*>>>()
+    // T-Perf-22：synchronized 包装保留 IdentityHashMap 的同一性语义——EDT 轮询/事件写
+    // （scanComponent/contentAdded）与 Filter 回调读（任意控制台出线程）并发访问普通
+    // IdentityHashMap 构成并发修改（死循环/异常风险，窗口窄但真实）。
+    val attachedConsoles: MutableMap<Any, Pair<Any, Class<*>>> =
+        java.util.Collections.synchronizedMap(IdentityHashMap<Any, Pair<Any, Class<*>>>())
     /** 每个已挂载控制台 → 解析器上下文（含暂存源码位置，F-44-6）。 */
-    private val consoleContexts = IdentityHashMap<Any, BridgeLineContext>()
+    private val consoleContexts: MutableMap<Any, BridgeLineContext> =
+        java.util.Collections.synchronizedMap(IdentityHashMap<Any, BridgeLineContext>())
     private val contentListener = object : ContentManagerListener {
         override fun contentAdded(event: ContentManagerEvent) {
             val component = event.content.component
@@ -238,7 +243,8 @@ open class SqlLogConsoleBridge(
         for (descriptor in descriptors) {
             if (descriptor == null) continue
             val cachedConsole = descriptorConsoleCache[descriptor]
-            if (shouldSkipRescan(cachedConsole, attachedConsoles.keys)) continue
+            // T-Perf-22：keys 视图遍历须持 map 监视器——快照后判定
+            if (shouldSkipRescan(cachedConsole, synchronized(attachedConsoles) { attachedConsoles.keys.toList() })) continue
             val component = componentOf(descriptor) ?: continue
             scanComponent(component)
             descriptorConsoleCache[descriptor] = findConsoleView(component)
@@ -328,7 +334,9 @@ open class SqlLogConsoleBridge(
                                 endOffset,
                                 stampReader(),
                                 line,
-                                context.line0Reader?.invoke(),
+                                // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
+                                // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
+                                context.line0Reader,
                             )) {
                                 ConsoleReplayGuard.Decision.Replay -> {
                                     context.replayDropCount++
@@ -357,6 +365,9 @@ open class SqlLogConsoleBridge(
      * T-PreviewFlash：为重放守卫解析编辑器/文档反射句柄。全部 runCatching 包裹——
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * `getEditor` 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
+     * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次 O(文档大小) 拷贝（缓存为
+     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次拷贝，无正确性影响）。
      */
     private fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
         runCatching {
@@ -365,15 +376,23 @@ open class SqlLogConsoleBridge(
             ctx.replayGuardEditor = editor
             val getDoc = editor.javaClass.getMethod("getDocument")
             val doc = getDoc.invoke(editor) ?: return
+            val getStamp = doc.javaClass.getMethod("getModificationStamp")
+            val getText = doc.javaClass.getMethod("getText")
             ctx.docStampReader = {
                 runCatching {
-                    (doc.javaClass.getMethod("getModificationStamp").invoke(doc) as? Number)?.toLong()
-                        ?: Long.MIN_VALUE
+                    (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
                 }.getOrDefault(Long.MIN_VALUE)
             }
+            var cachedStamp = Long.MIN_VALUE
+            var cachedLine0: String? = null
             ctx.line0Reader = {
                 runCatching {
-                    (doc.javaClass.getMethod("getText").invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                    val stamp = (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
+                    if (stamp != cachedStamp) {
+                        cachedLine0 = (getText.invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                        cachedStamp = stamp
+                    }
+                    cachedLine0
                 }.getOrNull()
             }
         }
@@ -390,7 +409,9 @@ open class SqlLogConsoleBridge(
      */
     fun refreshConsoleContexts() {
         val cfg = parserConfig()
-        for (ctx in consoleContexts.values) applyConfig(ctx, cfg)
+        // T-Perf-22：values 遍历持监视器（快照后应用，避免与 Filter 回调并发修改）
+        val snapshot = synchronized(consoleContexts) { consoleContexts.values.toList() }
+        for (ctx in snapshot) applyConfig(ctx, cfg)
         timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
     }
 
@@ -418,7 +439,10 @@ open class SqlLogConsoleBridge(
      * 失败时输出 WARN 日志（非 DEBUG），便于用户/开发者诊断。
      */
     open fun detachAllFilters() {
-        for ((console, filterPair) in attachedConsoles) {
+        // T-Perf-22：entries 遍历持监视器快照（迭代体内 remove consoleContexts，不能在遍历
+        // 同一 map 时持锁直改——快照后操作）
+        val entriesSnapshot = synchronized(attachedConsoles) { attachedConsoles.entries.toList() }
+        for ((console, filterPair) in entriesSnapshot) {
             consoleContexts.remove(console)
             val (filter, filterIface) = filterPair
             var removed = false

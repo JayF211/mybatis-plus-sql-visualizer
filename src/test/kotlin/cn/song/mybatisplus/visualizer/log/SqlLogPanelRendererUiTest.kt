@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.awt.Color
@@ -28,10 +29,32 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
     /** 真实（非空）列表实例；渲染器取 selectionBackground 等需 list 非空（生产环境 list 恒非空）。 */
     private val list = javax.swing.JList<Any>()
 
+    /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
+    private var savedDisplayMode: String? = null
+
+    override fun setUp() {
+        super.setUp()
+        val state = PluginSettings.getInstance().state
+        savedDisplayMode = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = "SINGLE_LINE"
+    }
+
+    override fun tearDown() {
+        PluginSettings.getInstance().state.logListSqlDisplayMode =
+            savedDisplayMode ?: PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
+        super.tearDown()
+    }
+
     /** 触发渲染并返回渲染组件（片段通道：元信息行/SQL 行经 [LogEntryListCellRenderer.metaLine]/[LogEntryListCellRenderer.sqlLine] 断言）。 */
     private fun render(entry: LogSqlEntry, selected: Boolean = false): LogEntryListCellRenderer {
         val c = renderer.getListCellRendererComponent(list, entry, 0, selected, false)
         return c as LogEntryListCellRenderer
+    }
+
+    /** 切显示模式渲染（T-ListMode 专区用例；自动随测试收尾还原）。 */
+    private fun renderInMode(mode: String, entry: LogSqlEntry): LogEntryListCellRenderer {
+        PluginSettings.getInstance().state.logListSqlDisplayMode = mode
+        return render(entry)
     }
 
     private fun joinedText(component: SimpleColoredComponent): String {
@@ -125,6 +148,60 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         val c = renderer.getListCellRendererComponent(list, entry("SELECT 1"), 0, false, false)
         assertNotNull("渲染组件不应为 null", c)
         assertTrue("渲染组件应为渲染器自身（含双行组件面板）", c is java.awt.Component)
+    }
+
+    // ---------- T-ListMode：三种显示模式（嫁接片段管线） ----------
+
+    fun test单行模式_恒单行_完整SQL含结束符() {
+        val r = renderInMode("SINGLE_LINE", entry("SELECT * FROM user WHERE id = 1"))
+        assertEquals("单行模式 SQL 行组件恒 1 个", 1, r.sqlLines.size)
+        assertTrue("完整 SQL 保留（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM user WHERE id = 1;"))
+        val e2 = entry("SELECT 1")
+        renderInMode("SINGLE_LINE", e2)
+        assertNull("单行模式不走条目级片段缓存", e2.cachedListLineFragments)
+    }
+
+    fun test关键字换行模式_多子句分行且缓存生效() {
+        val e = entry("SELECT * FROM orders WHERE id = 1")
+        val r = renderInMode("KEYWORD_WRAP", e)
+        assertTrue("关键字换行应多行（实际 ${r.sqlLines.size} 行）", r.sqlLines.size >= 3)
+        assertTrue("首行 SELECT 开头", joinedText(r.sqlLines[0]).startsWith("SELECT"))
+        assertTrue("FROM 独立成行", r.sqlLines.any { joinedText(it).startsWith("FROM") })
+        assertTrue("WHERE 独立成行", r.sqlLines.any { joinedText(it).startsWith("WHERE") })
+        assertNotNull("多行模式应写条目级片段缓存", e.cachedListLineFragments)
+        assertEquals("缓存键记录当前模式", "KEYWORD_WRAP", e.cachedListLineFragmentsMode?.name)
+    }
+
+    fun test格式化模式_缩进行保真() {
+        val r = renderInMode("FORMATTED", entry("SELECT * FROM t WHERE a = 1 AND b = 2"))
+        assertTrue("格式化应多行", r.sqlLines.size >= 3)
+        assertTrue(
+            "AND 应独立成行且顶层缩进 4 空格（片段文本不折叠空格）",
+            r.sqlLines.any { joinedText(it).startsWith("    AND") },
+        )
+    }
+
+    fun test模式切换_缓存按模式键自动失效() {
+        val e = entry("SELECT * FROM orders WHERE id = 1")
+        val kw = renderInMode("KEYWORD_WRAP", e)
+        val kwLines = kw.sqlLines.size
+        val fm = renderInMode("FORMATTED", e)
+        assertEquals("模式键已更新", "FORMATTED", e.cachedListLineFragmentsMode?.name)
+        assertTrue(
+            "格式化与关键字换行行数不同（缓存重算而非复用）",
+            fm.sqlLines.size != kwLines,
+        )
+    }
+
+    fun test元信息行不受显示模式影响() {
+        val sql = "SELECT * FROM user WHERE id = 1"
+        for (mode in listOf("SINGLE_LINE", "KEYWORD_WRAP", "FORMATTED")) {
+            renderer.dedupeCounts = mapOf(sqlFingerprint(sql) to 2)
+            val r = renderInMode(mode, entry(sql, sourceFile = "src/main/java/A.java", sourceLine = 42))
+            val meta = joinedText(r.metaLine)
+            assertTrue("[$mode] 元信息行含来源与徽章", meta.contains("[A.java:42]") && meta.contains("⨉2"))
+            assertFalse("[$mode] 元信息行不混入 SQL", meta.contains("SELECT"))
+        }
     }
 
     // ---------- T-LogRowNumber：行号片段 ----------

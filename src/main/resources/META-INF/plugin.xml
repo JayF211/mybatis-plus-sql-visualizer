@@ -144,6 +144,9 @@
         <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>
+        <!-- T-H2 hbm 命名查询预览：<hibernate-mapping> 下 <query>/<sql-query> 行显示预览图标（O(1) 标签名判定） -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
@@ -208,6 +211,16 @@
         <notificationGroup id="cn.song.mybatisplus.visualizer.preview"
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.preview"
+                           displayType="BALLOON"/>
+        <!-- T-ErrReport 错误一键上报：注册后 IDE Internal Errors 对话框对本插件错误出现
+             「报告到 SQL Visualizer 需求池」按钮——平台按错误归属插件解析（IdeErrorsDialog
+             getSubmitter(Throwable, PluginId)，com.intellij.errorHandler EP dynamic，
+             243 平台 jar javap 实证，见开发计划 20260908-1259 §四） -->
+        <errorHandler implementation="cn.song.mybatisplus.visualizer.feedback.IdeErrorReportSubmitter"/>
+        <!-- T-ErrReport：提交结果 toast（成功 FR 编号 + 查看详情 / 失败原因） -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.feedback"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.feedback"
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
@@ -277,6 +290,15 @@
                 icon="/icons/sqlGutter.svg">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+
+        <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
+             对话框底部提供带 source/ideVersion/pluginVersion 参数的浏览器兜底链接） -->
+        <action id="cn.song.mybatisplus.visualizer.Feedback"
+                class="cn.song.mybatisplus.visualizer.feedback.FeedbackAction"
+                text="action.cn.song.mybatisplus.visualizer.Feedback.text"
+                description="action.cn.song.mybatisplus.visualizer.Feedback.description">
+            <add-to-group group-id="HelpMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

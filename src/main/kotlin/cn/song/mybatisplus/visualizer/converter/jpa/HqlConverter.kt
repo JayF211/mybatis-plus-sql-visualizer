@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.model.DeleteStatement
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.model.UpdateStatement
+import com.intellij.openapi.project.Project
 
 /**
  * HQL → SQL 转换器（F-JPA-02 / Wave2-P1）。
@@ -13,14 +15,25 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
  *  2. 位置参数 `?1` → `?`
  *  3. IN 子句修正：`IN ?` → `IN (?)`
  *  4. NEW DTO(...) 表达式 → 提取构造参数
- *  5. JOIN FETCH → LEFT JOIN（保留别名，推断 ON 条件）
+ *  5. JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件经 [JpaJoinOnResolver]
+ *     按「PSI 注解 > 关联元数据 > 猜测降级」三级优先真实化）
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
  *  7. 关联字段路径映射：`alias.field.id` → 外键列名（仅当有有效 TableInfo 时）
  *  8. 属性名 → 列名映射（仅当有有效 TableInfo 时）
+ *  8.5 子查询 FROM/JOIN 中的其他实体名 → 表名（J13，需 Project；无 Project 跳过）
  *  9. SELECT 子句展开：`SELECT <别名>` → 列清单（T-HQL-SELECT-01）
  *     HQL 语义 `SELECT u` = 取整个实体，须展开为全部映射列，否则 MySQL 报 1054；
  *     无 SELECT 子句（裸 `from 实体`）补 SELECT 列清单（T-BareFromSelect）
  *     ——展开逻辑见 [SelectClauseExpander]，与 JpqlConverter 共用
+ * 10. UPDATE 语句（J2）：`UPDATE 实体 [别名] SET 列 = 值[, ...] [WHERE ...]` →
+ *     [UpdateStatement]（SET 对 / WHERE 解析见 [JpaUpdateParser]，不可精细解析的
+ *     WHERE 整体作 Raw 条件透传）
+ * 11. DELETE 语句 → [DeleteStatement]（既有行为不变）
+ *
+ * J19 边界（「识别 + 不破坏」）：HQL 高级特性——`INSERT INTO ... SELECT`、`WITH ... SELECT`
+ * （CTE）、UNION/INTERSECT/EXCEPT、窗口函数 `OVER (...)`——在字符串管道中天然透传
+ * （参数替换/实体替换按文本命中，SELECT 展开器对上述形态已短路不误改，见
+ * [SelectClauseExpander]），检测到时仅在 statement 上附降级注释，不新增完整建模。
  *
  * 关键：返回的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
  * 转换器不解析条件树（conditions 为空），因此必须使用转换后的 SQL 字符串。
@@ -28,12 +41,19 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
  * 无状态单例，纯函数逻辑，可独立单测。
  */
 object HqlConverter {
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private val HQL_NAMED_PARAM_TO_Q = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)")
+    private val HQL_POSITIONAL_PARAM_TO_Q = Regex("\\?\\d+")
+    private val HQL_IN_SPACE_Q = Regex("(?i)\\bIN\\s+\\?")
+    private val HQL_CAMEL_SPLIT_PATTERN = Regex("([a-z])([A-Z])")
+    private val HQL_MEMBER_OF_PATTERN = Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE)
+
 
     /**
      * HQL 转换产物。
      *
      * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?）
-     * @param statement  语句模型（SelectStatement 或 DeleteStatement）
+     * @param statement  语句模型（SelectStatement / UpdateStatement / DeleteStatement）
      * @param inClauseParams 使用 IN 子句的参数名集合
      */
     data class Result(
@@ -47,9 +67,11 @@ object HqlConverter {
      *
      * @param hql       HQL 查询字符串
      * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
+     * @param project   项目（J7 JOIN ON 注解级解析 / J13 子查询实体映射用）；
+     *                  null 时两处降级为关联元数据 / 跳过，行为与历史版本一致
      * @return Result（转换后 SQL + 语句模型）
      */
-    fun convert(hql: String, tableInfo: TableInfo? = null): Result {
+    fun convert(hql: String, tableInfo: TableInfo? = null, project: Project? = null): Result {
         val table = tableInfo ?: createFallbackTable()
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
@@ -67,8 +89,8 @@ object HqlConverter {
         // 4. 处理 NEW DTO(...) 表达式
         sql = handleNewExpression(sql)
 
-        // 5. 处理 JOIN FETCH → LEFT JOIN
-        sql = handleJoinFetch(sql)
+        // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
+        sql = JpaJoinRewriter.rewrite(sql, table, project)
 
         // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql)
@@ -85,9 +107,12 @@ object HqlConverter {
             sql = mapFallbackEntityToTable(sql, table.tableName)
         }
 
+        // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project)
+
         // 9. SELECT 子句展开（T-HQL-SELECT-01 / T-BareFromSelect）
-        // 必须排在步骤 5（JOIN FETCH 改写）之后——JOIN 别名只有改写后才存在，
-        // 早于该步解析会取不到副表别名。DELETE 语句内部已短路。
+        // 必须排在步骤 5（JOIN 改写）之后——JOIN 别名只有改写后才存在，
+        // 早于该步解析会取不到副表别名。DELETE/UPDATE/INSERT/CTE/UNION 内部已短路。
         sql = SelectClauseExpander.expand(sql, table)
 
         // 10. 检测 DELETE HQL → DeleteStatement
@@ -99,9 +124,27 @@ object HqlConverter {
             )
         }
 
+        // 10.5 检测 UPDATE HQL → UpdateStatement（J2）
+        if (sql.trimStart().uppercase().startsWith("UPDATE")) {
+            val parsed = JpaUpdateParser.parse(sql)
+            if (parsed != null) {
+                return Result(
+                    sql = sql,
+                    statement = UpdateStatement(
+                        table = table,
+                        sets = parsed.sets,
+                        conditions = parsed.conditions,
+                        tableAlias = parsed.tableAlias,
+                    ),
+                    inClauseParams = inClauseParams,
+                )
+            }
+            // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
+        }
+
         return Result(
             sql = sql,
-            statement = SelectStatement(table = table),
+            statement = SelectStatement(table = table, comment = advancedConstructComment(sql)),
             inClauseParams = inClauseParams,
         )
     }
@@ -114,14 +157,14 @@ object HqlConverter {
      * 替换命名参数 `:paramName` → `?`（排除 `::` 类型转换运算符）。
      */
     private fun replaceNamedParameters(hql: String): String {
-        return hql.replace(Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)"), "?")
+        return hql.replace(HQL_NAMED_PARAM_TO_Q, "?")
     }
 
     /**
      * 替换位置参数 `?1`, `?2` 等 → `?`。
      */
     private fun replacePositionalParameters(hql: String): String {
-        return hql.replace(Regex("\\?\\d+"), "?")
+        return hql.replace(HQL_POSITIONAL_PARAM_TO_Q, "?")
     }
 
     // ------------------------------------------------------------------
@@ -140,7 +183,7 @@ object HqlConverter {
      * 处理 `IN ?` → `IN (?)`。
      */
     private fun handleInClause(hql: String): String {
-        return hql.replace(Regex("(?i)\\bIN\\s+\\?"), "IN (?)")
+        return hql.replace(HQL_IN_SPACE_Q, "IN (?)")
     }
 
     // ------------------------------------------------------------------
@@ -178,43 +221,25 @@ object HqlConverter {
     }
 
     // ------------------------------------------------------------------
-    // JOIN FETCH
+    // JOIN FETCH / 关联 JOIN（J7：改写逻辑统一在 JpaJoinRewriter，ON 条件真实化）
     // ------------------------------------------------------------------
 
     /**
-     * 处理 `JOIN FETCH alias.relation [alias2]` → `LEFT JOIN relation_table alias2 ON ...`。
-     *
-     * 示例：`JOIN FETCH u.department d` → `LEFT JOIN department d ON d.id = u.department_id`
+     * J19 高级特性降级注释：检测 HQL `WITH ... SELECT`（CTE）、UNION/INTERSECT/EXCEPT、
+     * `INSERT INTO ... SELECT`。这些形态在字符串管道中透传（参数替换/实体替换仍生效，
+     * SELECT 展开器已短路不误改），不新增完整建模，仅附注释说明边界。
      */
-    private fun handleJoinFetch(hql: String): String {
-        // 捕获前导空白（组1），避免替换后丢失空格（如 uLEFT JOIN → u LEFT JOIN）
-        val joinFetchPattern = Regex(
-            "(\\s+)(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)(\\s+[a-zA-Z_][a-zA-Z0-9_]*)?",
-            RegexOption.IGNORE_CASE,
-        )
-        return joinFetchPattern.replace(hql) { matchResult ->
-            val leadingWhitespace = matchResult.groupValues[1]
-            val joinType = matchResult.groupValues[2].uppercase()
-            val rootAlias = matchResult.groupValues[3]
-            val relationName = matchResult.groupValues[4]
-            val alias = matchResult.groupValues[5].trim()
-            val keyword = when (joinType) {
-                "INNER" -> "INNER JOIN"
-                "LEFT" -> "LEFT JOIN"
-                else -> "LEFT JOIN"
-            }
-            // 推断表名：relationName → snake_case
-            val tableName = relationName.replace(Regex("([a-z])([A-Z])")) {
-                "${it.groupValues[1]}_${it.groupValues[2].lowercase()}"
-            }
-            // 构建 ON 条件（别名只出现一次）
-            val onCondition = if (alias.isNotEmpty()) {
-                "$alias.id = $rootAlias.${relationName}_id /* 推断的ON条件，请验证 */"
-            } else {
-                "${relationName}_id = $rootAlias.${relationName}_id /* 推断的ON条件，请验证 */"
-            }
-            val aliasPart = if (alias.isNotEmpty()) " $alias" else ""
-            "$leadingWhitespace$keyword $tableName$aliasPart ON $onCondition"
+    private fun advancedConstructComment(sql: String): String? {
+        val head = sql.trimStart().uppercase()
+        val isInsertSelect = head.startsWith("INSERT")
+        val hasCte = SelectClauseExpander.hasTopLevelKeyword(sql, "WITH")
+        val hasSetOp = SelectClauseExpander.hasTopLevelKeyword(sql, "UNION") ||
+            SelectClauseExpander.hasTopLevelKeyword(sql, "INTERSECT") ||
+            SelectClauseExpander.hasTopLevelKeyword(sql, "EXCEPT")
+        return if (isInsertSelect || hasCte || hasSetOp) {
+            "/* HQL 高级特性（INSERT-SELECT / CTE / UNION 等），仅做参数与实体替换透传 */"
+        } else {
+            null
         }
     }
 
@@ -228,7 +253,7 @@ object HqlConverter {
     private fun handleMemberOf(hql: String): String {
         if (hql.contains("MEMBER OF", ignoreCase = true)) {
             return hql.replace(
-                Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE),
+                HQL_MEMBER_OF_PATTERN,
                 "$1 /* MEMBER OF → 建议使用 IN/EXISTS 重写 */ $2",
             )
         }

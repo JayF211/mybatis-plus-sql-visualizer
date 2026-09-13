@@ -15,6 +15,34 @@ plugins {
     id("org.jetbrains.intellij.platform")
 }
 
+// T-GifRecordSwitch（2026-09-11）：演示 GIF 录制环境开关。录制需在 2026.2 沙盒运行（官方同款
+// 暗色基准 + record/ 脚本管线），但 262 下 test 源码编译不过——com.intellij.diagram.* 于 262 移入
+// Database 插件（测试 classpath 未含），且新版 Kotlin 把 String.toLowerCase() 升为硬错误，导致
+// 分支自身无法跑 ./gradlew test。故把录制所需四项配置整体收敛为本开关：
+//   默认            -> 243 常规开发态（平台 2024.3.7.1 / toolchain 17 / 无 jcef / 默认沙盒）
+//   -PgifRecord=true -> 262 录制态（平台 2026.2.1 / toolchain 24 / jcef / 独立沙盒 MPSV-GifFresh）
+// 四项必须整体切换、不可拆：jcef 自 262 起才从平台核心拆为独立模块（243 distro 无此模块，
+// 单独声明会导致依赖解析失败）；jvmToolchain(24) 用于读 262 平台 v69 类文件（javac 17/21 报
+// 「错误的版本 69.0」）；独立沙盒避免与并行任务互锁。
+// 录制用法：./gradlew runIde -PgifRecord=true
+val gifRecord = providers.gradleProperty("gifRecord").orNull?.toBoolean() ?: false
+
+// 闸门：录制开关若与发布/打包任务同用，配置期直接失败——防止 262 录制态流入发行产物。
+// 与既有 verifyIdes 同款写法（读 startParameter.taskNames），兼容 configuration-cache。
+// 局限：仅拦截「命令行直接点名」的发布任务（./gradlew buildPlugin 等）；经依赖间接触达的不拦。
+if (gifRecord) {
+    val releaseTasks = setOf("buildPlugin", "publishPlugin", "publish")
+    val invoked = gradle.startParameter.taskNames
+        .map { it.substringAfterLast(':') }
+        .filter { it in releaseTasks }
+    if (invoked.isNotEmpty()) {
+        throw GradleException(
+            "gifRecord=true 是演示录制专用（构建基准 2026.2.1），禁止用于发布/打包任务 $invoked。" +
+                "请去掉 -PgifRecord=true 后重试。"
+        )
+    }
+}
+
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     testImplementation(libs.junit)
@@ -63,12 +91,17 @@ dependencies {
         // Kotlin 规则（T-M30）：多版本支持须以最低捆绑 stdlib 为编译目标——2024.3 捆绑 stdlib 2.0.21，
         // 平台 distro 进编译 classpath 后自动满足（kotlin.stdlib.default.dependency=false 不打包 stdlib）。
         // 注：本机日常 IDE 为 Ultimate 2026.2.1，243 平台需下载（gradle.properties 已配代理）。
-        intellijIdeaUltimate("2024.3.7.1")
+        intellijIdeaUltimate(if (gifRecord) "2026.2.1" else "2024.3.7.1")
         testFramework(TestFrameworkType.Platform)
 
         // Add plugin dependencies for compilation here:
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
+        // T-GifRecordSwitch：JCEF 自 262 起才从平台核心拆为独立模块（243 distro 无此模块），
+        // 故仅录制态声明；常规态声明会导致依赖解析失败。
+        if (gifRecord) {
+            bundledPlugin("com.intellij.modules.jcef")
+        }
         // T-M24-04：XML 平台模块（XML PSI 定位语句 + XML gutter；平台 bundled，IDE 恒启用）。
         // T-M30：构建基准降至 2024.3 后 XML PSI 类在平台核心（app.jar，lib/modules 无独立模块），
         // bundledModule("intellij.xml.psi") 在 2024.3 distro 中不存在（253+ 才拆分为该模块）——移除声明，
@@ -101,6 +134,12 @@ intellijPlatform {
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索
     // 索引（其余功能不受影响）；在非中文 locale 环境可改回 true 以获得设置搜索支持。
     buildSearchableOptions = false
+
+    // T-GifRecordSwitch：录制态用独立沙盒，避免与并行任务（record/ 脚本、其他会话）
+    // 的沙盒/索引互锁；常规态用默认沙盒。
+    if (gifRecord) {
+        sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
+    }
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
@@ -147,7 +186,9 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
 }
 
 kotlin {
-    jvmToolchain(17)
+    // T-GifRecordSwitch：常规态 243 平台用 17；录制态 262 平台类文件为 v69，
+    // 须 javac 24 才能读（javac 17/21 报「错误的版本 69.0」）。
+    jvmToolchain(if (gifRecord) 24 else 17)
 }
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败

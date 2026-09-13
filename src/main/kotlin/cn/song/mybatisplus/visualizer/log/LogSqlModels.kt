@@ -91,6 +91,18 @@ data class LogSqlEntry(
      */
     val dedupeKey: String by lazy { sqlFingerprint(normalizeSqlWhitespace(restoredSql)) }
 
+    // ---------- T-ListMode：多行显示模式行片段缓存（体属性不入 equals/copy；仅 EDT 渲染路径读写） ----------
+
+    /**
+     * 多行模式（KEYWORD_WRAP/FORMATTED）的行片段缓存：可变行高下每次布局状态更新会对全部条目
+     * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
+     * 组件布局。SINGLE_LINE 不走缓存（固定行高 + 渲染直读，主题切换实时生效）。
+     */
+    var cachedListLineFragments: List<List<SqlTextFragment>>? = null
+
+    /** 缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
+    var cachedListLineFragmentsMode: SqlListDisplayMode? = null
+
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
     }

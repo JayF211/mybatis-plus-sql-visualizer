@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlLexer
@@ -9,6 +10,26 @@ import com.intellij.openapi.editor.colors.EditorColorsScheme
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.psi.tree.IElementType
 import com.intellij.ui.SimpleTextAttributes
+
+/**
+ * SQL 列表显示模式（T-ListMode）：SQL 日志/历史列表条目中 SQL 行的展示形态。
+ *
+ * @property SINGLE_LINE 单行原文（T-TwoLine 双行结构下的形态，列表固定行高走 O(1) 布局快路径）
+ * @property KEYWORD_WRAP 关键字换行——子句顶格换行、同行内容压一行（默认，长 SQL 快速总览）
+ * @property FORMATTED 格式化——多行缩进全展开（阅读细节）
+ */
+enum class SqlListDisplayMode {
+    SINGLE_LINE,
+    KEYWORD_WRAP,
+    FORMATTED,
+}
+
+/** 按显示模式变换 SQL 文本（渲染前调用；变换器复用 [SqlFormatter] 既有实现，字符串原文保留）。 */
+internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = when (mode) {
+    SqlListDisplayMode.SINGLE_LINE -> sql
+    SqlListDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
+    SqlListDisplayMode.FORMATTED -> SqlFormatter.format(sql)
+}
 
 /**
  * 着色文本片段（T-LogListFreeze-04）：列表条目渲染数据单元——文本 + 属性，供
@@ -53,6 +74,48 @@ object SqlListFragmentRenderer {
             lexer.advance()
         }
         return fragments
+    }
+
+    /**
+     * 变换 + 分词着色 + 按行拆分（T-ListMode 多行模式）：[prepareSqlForList] 变换后的文本含换行，
+     * 按行拆为独立片段序列（每行一个 [SimpleColoredComponent] 承载）。整段只跑一次词法，
+     * 行拆分在片段文本内做——含换行的 token（空白）按行切开，属性原样继承。
+     */
+    fun renderLineFragments(
+        sql: String,
+        mode: SqlListDisplayMode,
+        scheme: EditorColorsScheme = EditorColorsManager.getInstance().globalScheme,
+    ): List<List<SqlTextFragment>> {
+        val attrByType = SqlListSyntaxHighlighter.ATTR_BY_TYPE.mapValues { (_, key) -> attrOf(scheme, key) }
+        return renderLineFragments(sql, mode) { type -> attrByType[type] }
+    }
+
+    /** 产多行着色片段（attrOf 注入——纯逻辑可单测，与 [renderFragments] 单行版同一测试缝）。 */
+    fun renderLineFragments(
+        sql: String,
+        mode: SqlListDisplayMode,
+        attrOf: (IElementType) -> SimpleTextAttributes?,
+    ): List<List<SqlTextFragment>> {
+        val all = renderFragments(prepareSqlForList(sql, mode), attrOf)
+        val lines = mutableListOf<MutableList<SqlTextFragment>>()
+        var current = mutableListOf<SqlTextFragment>()
+        lines += current
+        for (f in all) {
+            if (!f.text.contains('\n')) {
+                current += f
+                continue
+            }
+            // 片段文本内嵌换行：按 \n 切开，非末段留在当前行，末段开新行
+            val parts = f.text.split('\n')
+            parts.forEachIndexed { i, part ->
+                if (i > 0) {
+                    current = mutableListOf<SqlTextFragment>()
+                    lines += current
+                }
+                if (part.isNotEmpty()) current += SqlTextFragment(part, f.attributes)
+            }
+        }
+        return lines
     }
 
     private fun attrOf(scheme: EditorColorsScheme, key: TextAttributesKey): SimpleTextAttributes? {

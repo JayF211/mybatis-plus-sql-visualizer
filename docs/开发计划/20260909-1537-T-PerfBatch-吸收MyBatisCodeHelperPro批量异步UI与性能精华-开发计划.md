@@ -1,0 +1,149 @@
+# T-PerfBatch：吸收 MyBatisCodeHelper-Pro 批量异步 UI 与性能精华 开发计划
+
+> **创建日期**：2026-09-09
+> **分支**：dev（当前 HEAD `a6570ce`；初稿基于 master `4340ade`，切 dev 后按实况收回两处已落地改动点，见 §4）
+> **状态**：计划文档已定稿；改动点一初版实现后因单通道耦合回退（见 §七），待「监听器分层」前置重构后重做
+> **优先级**：P1（性能是红线——日志捕捉链路是插件唯一常驻开销来源，用户在日志洪峰下会直接感受到）
+> **预估工时**：3~4h（含监听器分层前置重构；dev 已含 T-Perf-12/22，含全量回归，runIde 真机洪峰压测人工跟进）
+> **来源**：用户明确指示「吸收他的批量异步写 UI 精华，和其他性能相关优势」「性能问题是红线」。反编译产物基于 IDEA 2026.2 主安装 MyBatisCodeHelper-Pro 3.5.9+2321（`%TEMP%\mbchp\src2`，135 类，fernflower/JBR25 反编译），性能相关类集中在 `com.ccnode.codegenerator.P.b`（Filter+batch processor）与 `cn.com.pism.batslog.e/f/g`（UI/格式化）。
+
+---
+
+## 一、结论先行
+
+对照结论一句话：**MyBatisCodeHelper-Pro 的批量异步写 UI 在架构上确实优于我们当前的逐条链路，但我们已有的 T-Perf-03/04/06/12/15/19 六个增量优化在多数维度上已持平甚至反超它**。真正值得吸收的是三块：
+
+1. **独立批量处理线程**（`SQL-Batch-Processor`，1s 定时排空队列）——我们当前「逐条入队、逐条 notify」在洪峰下仍有可量化的 EDT 风暴与锁竞争；
+2. **两个我们尚未覆盖的性能点**，对照其实现可明确补齐：捕获线程上的「入队 + 去重 + 通知」整段仍在 `synchronized(entries)` 外有一次无锁遍历热路径（T-Perf-06 只把 `isDuplicate` 移进锁内，`snapshot` 的 `entries.toList()` 仍在锁内整段复制），以及逐行 Filter 里仍有遗留的逐行设置读取；
+3. 它用**稳定 EP + 平台原生 ConsoleView 输出**绕开了我们反射桥的轮询负担——但这是架构替换（P2 调研），非本轮。
+
+下方按「吸收清单 / 对照已持平不吸收 / 不采纳」三档给出，每项都落到具体 file:line 与可验证的改法。
+
+---
+
+## 二、MyBatisCodeHelper-Pro 性能实现反编译精读
+
+### 2.1 批量异步写 UI（核心精华，`P.b`）
+
+捕获链路（`Filter.applyFilter`，P/b.java:55~167）：识别到 `sqlPrefix` 行缓存 `lastPrepareLine`，`paramsPrefix` 行到来时配对产出 SQL，随后 **不分发 UI**，而是 `a.offer(new a(project, panel, ...))` 入队（:312，`ConcurrentLinkedQueue`）。真正写 UI 的是一个**独立后台守护线程**：
+
+```
+ScheduledExecutorService（单线程，thread name "SQL-Batch-Processor"）
+scheduleAtFixedRate(每 1s) → c()
+```
+
+`c()`（:331~357）每拍：`while((v = queue.poll()) != null)` 排空队列，按 `Project` 分组（`HashMap<Project,List>`），丢弃已 disposed 项目；然后每组只投**一次** `ApplicationManager.getApplication().invokeLater(..., ModalityState.NON_MODAL)`，把该组全部条目一次性 `Document.insertString`（一次 `WriteCommandAction`，:385~410）。自清理：输出文档超 200k 字符删头部 50k（:398）。
+
+**三点要义**：① 捕获（任意线程）与 UI 写入（EDT）之间隔着队列 + 后台线程两级，**EDT 写次数与 SQL 条数解耦**；② 队列排空时按 Project 归组合并，一次 invokeLater 一批；③ 后台线程 `isDaemon` + `Throwable` 兜底 catch，崩了不影响 IDE。
+
+### 2.2 输入侧无任何常驻成本
+
+对方用 `consoleFilterProvider` **稳定 EP** 注册 Filter（`com.ccnode.codegenerator.P.c`，反编译仅 13 行），无轮询、无反射挂载、无组件树遍历；另配独立后台线程 `SQL-Batch-Processor` 把捕获与 UI 写入彻底解耦——这都是我们反射桥 + 轮询兜底的对照面（详见独立计划《consoleFilterProvider EP 双轨捕获调研》）。
+
+### 2.3 解析与格式化（`f.g`，631 行）
+
+- 参数还原：MyBatis `(value(Type))` 从尾向头扫描，`null(Null)` 特判，类型表 8+23 驱动 `Class.forName` 真实转换（与我们的 PLAIN_TYPES 同型，性能等价）。
+- 格式化：druid `SQLUtils.format`（我们自研 formatter 替代，不引入 33MB 依赖）。
+- 彩色回显：`ConsoleViewImpl.print` 逐 token 分词着色——**这条恰恰是它最大的 UI 性能隐患**（见 §4「不采纳」）。
+
+### 2.4 配置面（`BatsLogConfig`，22 项）
+
+`maxPrepareAndParameterLength` 超长防护、`removeDuplicateSql`+时间窗、`ignoreSqlContains` 黑名单等——均已被我们等价或更强覆盖（详见下节对照表）。
+
+---
+
+## 三、对照盘点：现状（本项目）vs 它，逐项结论
+
+> 现状基线（dev，切分支后修正）：dev 在 master 之上**额外**已落地 T-Perf-08/10/11/12/14/15/17/19/21/22/23/24 及 T-LogPerf-01/02/03/04、T-ListMode、T-TwoLine 等一批 perf 提交（`git log 4340ade..HEAD -- log/`），远超 master 初稿基线。下表按 dev 实况标注。
+
+| 维度 | MBCHP-Pro | 本项目现状（dev） | 结论 |
+|------|-----------|-----------|------|
+| 捕获→UI 解耦 | 后台守护线程 + 队列 + 1s 排空归组 | `LogFilterProxyHandler` 逐行 → `buffer.addEntry`（SqlLogConsoleBridge.kt:325），入队+去重+通知在捕获线程逐条同步做 | **对方优，本轮吸收**（§4.1） |
+| EDT 写次数 | 每 Project 每批次 1 次 invokeLater | T-Perf-03 `notifyUi` 置脏+幂等 flush（SqlLogManager.kt:452），已把「每条一次 invokeLater」合并 | 已持平 |
+| 列表刷新 | 一次性 insertString | 差分增量刷新+代际守卫+分批全量重建（SqlLogPanel.kt:900/930） | 本项目更优（增量免全量） |
+| 文档自清理 | 200k 删头部 50k | buffer maxEntries 淘汰 + onEvicted（SqlLogEntryBuffer.kt） | 已等价 |
+| 去重键 | 原文拼接（漏判） | 指纹键 + 60s 窗口（T-Perf-19） | 本项目更优 |
+| 去重线程安全 | combine 到队列处理器 | T-Perf-06 判入锁防 CME | 已持平 |
+| 捕获侧配置同步 | Filter 每次读 settings（其实逐行读） | T-LogPerf-04 已去逐行、事件驱动（`applySettings`/messageBus） | 本项目更优 |
+| 挂载方式 | 稳定 EP，零轮询 | 反射桥 + 轮询兜底（2s/500ms 退避；已加 `cachedMethod` 反射缓存 + `shouldSkipRescan` 短路，但每拍仍有 descriptor/进程反射） | 对方优，但**架构替换 P2**（§4.3） |
+| onEvicted 盘 IO | 无（写 UI 文档） | **T-Perf-12 已彻底落地**：submit 无锁队列 + 专用写线程整批 flush | 已持平（§4.2 撤销） |
+| 挂载集合并发安全 | 无独立 map（队列线程模型） | **T-Perf-22 已落地**：attachedConsoles/consoleContexts 换 synchronizedMap 包装 | 本项目更优 |
+| 反例：彩色回显 | 逐 token print | 无（侧边面板不写运行控制台） | 我们无此负担 |
+
+**关键判断**：它唯一在架构上稳压我们的，是「捕获线程零 UI 语义、后台线程归组、EDT 只做一次批写」这条独立管线；我们的逐条链路在一般场景已够快，但在**日志洪峰**（用户循环打 SQL、数千行/秒）下，`addEntry` 的 `synchronized(entries)` 与 `snapshot` 的 `entries.toList()` 每拍抢同一把锁、且 `notifyChanged` 的 `CopyOnWriteArrayList.forEach` 在捕获线程逐条调用，仍会与 EDT 侧 `snapshot` 竞争——这是本轮要补的。
+
+---
+
+## 四、技术方案（dev 调整后：仅改动点一需实施）
+
+### 4.1 改动点一（核心）：捕获线程与 UI 之间加队列化批写层（吸收对方精华）
+
+目标：把「控制台逐行 → 解析 → 入队」这条**任意线程**链路上的 EDT 调度与锁竞争降到 O(批) 而非 O(条)。
+
+**现状链路**：`LogFilterProxyHandler.onLine`（反射，控制台 flush 线程，通常 EDT 或后台）→ `processConsoleLine` → `buffer.addEntry`（含 `synchronized(entries)` + `notifyChanged()` → `uiNotifyListener` + `autoShowBufferListener`，SqlLogEntryBuffer.kt:62~86/194）。
+
+**方案（最小侵入，不推翻 T-Perf-03 的 flush 合并）**：在 `SqlLogEntryBuffer.addEntry` 与监听器通知之间插入一个**有界批量 drain**，替代当前「每次 addEntry 都 notifyChanged」：
+
+- 新增 `SqlLogEntryBatch`（或复用现有 drain 语义）：`addEntry` 仍线程安全入队（锁内只做 append + 淘汰，O(1)），但 **`notifyChanged()` 不再在每条 addEntry 后调用**——改为记录 `dirty`，只有当①积累条目数 ≥ 阈值（如 20 条）或②距上次通知 ≥ 时间阈值（如 200ms，用 `System.nanoTime` 比较，无 Timer）时才触发一次通知。控制台停止输出后的「尾批」由既有的面板 `refreshList` 兜底（面板已有 `invokeLater` flush 链），或在 `LogFilterProxyHandler` 增加一个低频 `invokeLater` 冲刷尾批次。
+- 参考对方的「1s 一次」但**不引入后台线程**（我们捕获侧本就多线程，加后台线程反而叠一层）：用「数量 + 时间」双阈值在捕获线程就地节流，把通知频率从 O(条) 压到 O(批)。
+- `autoShowBufferListener`（首次捕获自动开窗）是低频率语义（只在乎首条），不受影响——它挂在同一条 `listeners` 上，可与 UI 通知分离：dirty 通知走 `uiNotifyListener`，`autoShowBufferListener` 保留逐条（或只对首条，`maybeAutoShow` 本身有 latch 幂等）。
+
+**验证点**：日志洪峰（1000 条/秒）下，`invokeLater` 投递次数从 ~1000 张到 ~50 张/秒；`synchronized(entries)` 竞争窗口不变（仍逐条 append），但对 EDT `snapshot` 的干扰从「每次 append 都可能触发一次快照」降到「每批一次」。
+
+### 4.2 改动点二：onEvicted 磁盘写移出捕获线程 —— **dev 已落地（T-Perf-12，撤销）**
+
+> **切 dev 核实（2026-09-09）**：此改动点在 dev 已交付。`SqlLogAutoSaver` 已含 `submit`（无锁 `ConcurrentLinkedQueue` + `drainScheduled` 幂等调度的专用写线程 `mpsv-sql-history-autosave`，daemon）、`writeBatch`（整批一次 `flush`）、`drainAndWrite`/`drainPendingSync`（close 尾排空不丢条）、`TIMESTAMP_FORMATTER`（DateTimeFormatter 常量替代逐条 SimpleDateFormat）——见 `98acc97 fix(perf): T-Perf-12 自动保存异步批量写`。`SqlLogManager.applySettings` 的 `buffer.onEvicted` 已改投 `autoSaver.submit`（SqlLogManager.kt:410~414）。**本轮无代码，撤销本改动点。**
+
+### 4.3 改动点三（P2 调研，本轮只立项不实施）：consoleFilterProvider EP 双轨
+
+对方的稳定 EP 方案可彻底消灭我们反射桥的轮询 + 组件树遍历负担（性能分析 T-LogPerf-01 仅优化到 500ms 退避，每拍仍有 `hasMainConsole` 反射 + `findConsoleView` 递归遍历）。但涉及 T-M31-03 链路改造与双挂载去重，需 runIde 真机验证 EP 的 Filter 是否与运行控制台自身 Filter 链路兼容。**单独立项**，见性能分析 §3.1 优化方向第 2 条。dev 现状核实：plugin.xml 无 `consoleFilterProvider` 注册，桥仍纯反射 + 轮询（`cachedMethod` 已缓存反射、`shouldSkipRescan` 已加短路，但每拍 `hasMainConsole` 仍走 descriptor 反射 + 进程存活反射），EP 双轨确有独立立项价值。详见独立计划《consoleFilterProvider EP 双轨捕获调研》。
+
+### 4.4 不采纳项与理由
+
+- **druid SQLUtils 格式化**：33MB 依赖 + 与自研 formatter 争抢格式化语义，不引入；
+- **逐 token 彩色回显进运行控制台**（`f.g.print` 系列）：这是它在 UI 侧最大的性能隐患，每 token 一次 `ConsoleViewImpl.print`；我们侧边面板零负担，反向不吸收；
+- **原文拼接去重键**：已实证漏判（T-LogDedupeMpMark），不回退；
+- **新增独立后台线程做 UI 写**：我们捕获侧已多线程，加一层反而导入跨线程协调与 EDT 竞态；用 §4.1 的数量+时间节流达到等价效果（做到「EDT 写次数与 SQL 条数解耦」这一核心目标即可，不必照搬线程模型）。
+
+---
+
+## 五、测试计划（dev 调整）
+
+- `SqlLogEntryBufferTest` 新增（改动点一）：
+  1. 批量通知节流：连续 addEntry N 条，验证 `notifyChanged`/listener 回调次数 ≤ ceil(N/阈值)，且尾批（停止输入后）能被 flush 兜底一次；
+  2. 去重废弃分支的徽章通知不走批量节流（徽章需即时，T-Perf 已有语义），或明确其与批量语义的交互；
+  3. `autoShowBufferListener` 首条仍即时触发（首条捕获自动开窗语义不回退）。
+- 洪水模拟：新增/扩展 `SqlLogStreamingDiffTest`，模拟 1000 条/秒连灌，断言 EDT invokeLater 投递次数与锁竞争不随条目数线性增长（可用静态计数器 hook）。
+- `SqlLogAutoSaverTest`（改动点二已落地，不新增；仅回归确认 T-Perf-12 既有用例不破）。
+- 全量基线：dev 当前 3547 通过为基线；跑 `./gradlew` 前按铁律先 `python C:\Users\USER\.zcode\cli\parallel_tasks.py check`（本轮已有两个活跃并行任务 depapi/logrownum，须先 `register` 独立沙盒隔离）。
+
+## 六、风险与边界
+
+> **实施回退（2026-09-09）**：改动点一（批量通知节流）初始实现「addEntry 成功路径改有限批量通知、去重废弃分支保留即时」经全量回归发现会外溢破坏多处既有语义，已回退代码、dev 工作树回归基线绿。**批量通知节流的根本障碍是 `notifyChanged()` 的单一监听器通道承载了三种不同及时性语义**，见下，需在实施前先做「监听器分层」重构。
+
+- **节流阈值选取**：数量/时间双阈值需在「及时性」（用户看到新 SQL 的延迟）与「吞吐」（EDT 调度次数）间权衡；默认建议 20 条 / 200ms，过大则日志洪峰下有肉眼可见的刷屏延迟，过小则节流无效。作为可调设置或常量，暂停时强制 flush 尾批。
+- **⚠️ notifyChanged 单一通道耦合三语义（本轮回退根因，实施前必先解决）**：`SqlLogEntryBuffer.notifyChanged()` 只走一条 `CopyOnWriteArrayList<() -> Unit>`，同时背负（a）`autoShowBufferListener` 首条自动开窗——必须**每首条即时**（受 `AUTO_SHOW_DEBOUNCE_MS` 防抖保护）、（b）`uiNotifyListener` 列表刷新——**可批量**、但依赖 `manager.notifyUi` 的幂等 flush 读「当下快照」，（c）去重/徽章计数变更——**必须即时**（用户实测「不及时」是缺陷，T-LogDedupeMpMark 语义）。任何「取消逐条 notify」都同时切断了（a）与（c）。正解是**三监听器分层**：把 `autoShowBufferListener` 从 buffer 通知中抽离（改在 `addEntry` 成功首条路径显式回调，或用独立「首条」事件），把「徽章变更」与「列表变更」拆成两个不同的通知点，之后再对「列表变更」单独做批量节流。当前 `autoShowBufferListener` 挂在 `buffer.addListener`（SqlLogManager.kt:121）且 `maybeAutoShow` 只在前 0~1 条有意义，批量节流会吞掉首条触发（`SqlLogManagerAutoShowTest` 11 例挂：`testBufferEntryTriggersAutoShow`/`testDebounceSuppressesRepeat`/`testUserCloseSuppressesUntilFlagCleared`）。
+- **⚠️ 面板依赖逐条 notify 做「即时重绘 + 计数同步」**：`SqlLogPanelDedupeToggleTest`（4 例）断言 `addEntry` 后 `visibleEntryCount` 立即反映（配合 `dispatchAllInvocationEvents` 泵 EDT），`SqlLogPanelSortAndSlowQueryTest`/`SqlLogPanelLayoutTest`（3 例）断言注入耗时/慢查询后排序按钮/标签立即可见。批量节流下未达阈值条目不刷、这些即时可见性断言全挂。需在计划里明确「面板即时可见性」与「批量吞吐」的取舍边界——低流量下应等价即时。
+- **锁竞争残留**：§4.1 不改 `snapshot` 的 `entries.toList()`（锁内整段复制），洪峰下 EDT snapshot 仍与逐条 append 抢锁；这是 ArrayDeque 的固有代价，若实测仍热，后续可换「双缓冲交换」或 `append 到本地批、定期合并」，列 P2。
+- **build.gradle.kts 基线还原**：dev 工作树的 build.gradle.kts 初始有「GIF 录制任务」的临时改动（切 2026.2 沙盒 + jcef + JBR25 fork javac）。实施测试前曾临时还原到 2024.3 基线跑测试，完毕后已一并复位——**勿把该临时还原提交**，它不属于本任务。
+- **runIde 真机**：洪峰压测（循环打 SQL 的 Spring Boot）留人工跟进，对比开关捕捉两种状态的 IDE 响应（统一走 runide-demo-verify-workflow）。
+
+## 七、实施记录
+
+**实施日期**：2026-09-09（切 dev 后实施，改动点一初版实现后回退，见下）
+
+**结论**：本计划在 dev 上「改动点一（批量通知节流）」的实现**需要先做监听器分层重构**，不能直接叠加在现有 `notifyChanged` 单通道上。初版实现的 11 个全量回归失败（`SqlLogManagerAutoShowTest` 3 + `SqlLogPanelDedupeToggleTest` 4 + `SqlLogPanelSortAndSlowQueryTest` 2 + `SqlLogPanelLayoutTest` 1 + 尺寸断言 1）已逐一定位到「单通道耦合三语义」这一根本结构问题，非实现笔误。代码已回退、构建脚本复位、并行任务注销，dev 工作树回归基线绿（此前 11 个失败类单独重跑全绿确认）。
+
+**调整后的正确实施步骤（留给下一轮，或按此重做）**：
+1. 先在 `SqlLogEntryBuffer` 拆监听器：新增独立「首条」事件（供 `autoShowBufferListener`）与「徽章变更」事件，`notifyChanged` 收敛为仅列表内容变更；
+2. 再对列表内容变更通知做「数量 + 时间」批量节流（`pendingNotifyCount` / `lastNotifyNanos` 原子量，无 Timer），`manager.notifyUi` 的幂等 flush 与面板尾批定时器兜底未达阈值条目；
+3. 各自补即时性单测（首条开窗、徽章即时、低流量等价即时），再跑全量。
+
+本计划价值在于**把「吸收批量异步写 UI」从一个直觉上的补丁，收敛成了明确的「监听器分层 + 列表通知节流」两步重构**；consoleFilterProvider EP 双轨另立计划（见独立计划文档）。
+
+**第二轮交付（2026-09-11，与 T-PerfSweep 同会话）**：按 §七 步骤 1~3 落地，全量 3696/0/6 绿（基线 3693 + 净增 3）。
+
+1. **监听器分层**（`SqlLogEntryBuffer`）：拆三出口——`onEntryAccepted`（每次成功入队，自动展开语义）、`onDedupeCountsChanged`（徽章计数，即时）、内容监听器（仅列表内容变更，节流）；五个通知点重新归位：去重丢弃分支走徽章通道（不再触发内容/自动展开——重复 SQL 不是新 SQL 且空缓冲不可能产生重复，自动展开零可观测变化），`disableDedupe` 只走徽章通道，`clear`/`dedupeExisting` 内容即时 + 徽章通道，`removeEntry` 不变。`SqlLogManager` 同一 `uiNotifyListener` 挂三出口 + `onEntryAccepted = autoShowBufferListener`，dispose 三回调全置 null。
+2. **列表通知节流**：`notifyContentChangedThrottled`——「数量 20 + 时间 200ms」双阈值（`pendingContentNotify`/`lastContentNotifyNanos` 原子量，无 Timer）；**未达阈值条目由 `onContentNotifySuppressed` 兜底接 `notifyUi` 幂等 flush**（flush 读当下快照不丢条目）。计划原文的「面板尾批 Timer 300ms」未实现——invokeLater flush 本身就是 EDT 语义的最终一致兜底，Swing Timer 同样排队 EDT 无额外收益，多第三条刷新路径反增复杂度（对计划的有意偏离，在此留档）。低流量（两条间隔超窗）每条即时，与节流前等价。
+3. **自动展开语义钉死**：`testDebounceSuppressesRepeat` 末步实证「clear 后非空状态下 reset 防抖仍需再触发」——故自动展开必须挂**每次成功入队**（`onEntryAccepted`）而非「空→非空」沿，与 §七 步骤 1 的两种备选方案中后者吻合。
+4. **测试契约改写**（有意变更，非回归）：`SqlLogEntryBufferTest.监听器在条目变更时通知`/`去重窗口内相同 SQL 丢弃且通知徽章`/`去重丢弃触发监听器` 与 `SqlLogCaptureRealtimeScenarioTest.真实场景_分页查询连续5次` 断言的旧「逐条单通道通知计数」改为分层契约断言（首条即时 + 徽章通道即时 + 抑制兜底计数）；新增分层用例 2 个。面板即时性由 `SqlLogPanelDedupeToggleTest` 等既有面板测试（pump EDT 走 flush）守卫，零改动全绿。

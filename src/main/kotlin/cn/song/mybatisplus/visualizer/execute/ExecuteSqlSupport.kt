@@ -18,6 +18,8 @@ import com.intellij.openapi.ui.Messages
  */
 object ExecuteSqlSupport {
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ExecuteSqlSupport::class.java)
+
     /** Database 插件标记类（插件加载时必在 classpath；探测用，版本无关——绕开 PluginId API 迁移）。 */
     private const val DATABASE_MARKER_CLASS = "com.intellij.database.dataSource.LocalDataSourceManager"
 
@@ -57,15 +59,12 @@ object ExecuteSqlSupport {
                 .getMethod("execute", Project::class.java, String::class.java, Runnable::class.java)
             method.invoke(null, project, sql, closeRunnable)
         }.onFailure { error ->
-            showError(project, MpSqlVisualizerBundle.message("execute.failed", error.message ?: error.toString()))
+            // T-Perf-01：反射加载失败静默降级（LOG.warn 记录详情，不弹模态框——调用方 onError 已在面板内显示错误）
+            LOG.warn("[M36] launcher execute reflection FAILED: ${error.message}", error)
         }
     }
 
     private fun showInfo(project: Project, message: String) {
         runCatching { Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title")) }
-    }
-
-    private fun showError(project: Project, message: String) {
-        runCatching { Messages.showErrorDialog(project, message, MpSqlVisualizerBundle.message("execute.title")) }
     }
 }

@@ -1,0 +1,95 @@
+package cn.song.mybatisplus.visualizer.converter.jpa
+
+import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
+import com.intellij.openapi.project.Project
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiShortNamesCache
+
+/**
+ * FROM/JOIN 子句实体名 → 表名扫描器（J13，覆盖矩阵 §3「标量子查询 / IN(子查询) / EXISTS」行）。
+ *
+ * 背景：既有 [cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter.mapEntityToTable] 与
+ * JpqlConverter 同名方法只替换 **主实体类名**（全局正则）——主实体在子查询 FROM 中复现
+ * （`EXISTS (SELECT 1 FROM UserEntity u2 ...)`）天然覆盖；但子查询引用 **其他实体**
+ * （`... EXISTS (SELECT o FROM OrderEntity o WHERE o.userId = u.id)`）时，主实体的
+ * TableInfo 不携带 OrderEntity 的表名映射，字符串管道无从替换。
+ *
+ * 本扫描器在调用方提供 Project 时，扫描 SQL 全文所有 `FROM <标识符>` / `JOIN <标识符>`
+ * 出现点（含括号内的子查询——正则全文匹配），对「大写字母开头的实体形态标识符」
+ * 经 PSI 按短名查找实体类，用 [JpaEntityResolver] 解析真实表名后替换。
+ * 只做**有元数据依据**的替换：查不到实体类的标识符原样保留（不做命名策略盲猜——
+ * 猜错表名比保留实体名更误导），因此无 Project 时调用方应跳过本扫描，行为与既有管道一致。
+ *
+ * 边界（刻意不做）：
+ *  - 不解析子查询结构（EXISTS/IN 子查询按「识别 + 透传」处理，见 SelectClauseExpander）
+ *  - 不为小写标识符（已映射表名/原生 SQL 表名）做任何替换
+ *  - 重复出现不重复替换：正则 `\b类名\b` 全局替换一次收敛，且替换产物（snake_case 表名）
+ *    不再命中大写实体形态，天然幂等
+ *
+ * PSI 读取只封装在本文件内，只读不修改 psi/jpa/ 下任何文件。
+ * 无状态单例，解析失败静默跳过，绝不抛异常。
+ */
+internal object JpaFromEntityMapper {
+
+    /**
+     * FROM / JOIN 后的大写开头标识符（HQL/JPQL 实体名约定形态）。
+     * 大小写不敏感仅作用于 FROM/JOIN 关键字（`(?i:...)` 局部作用域），
+     * 实体名组保持大小写敏感——已映射表名（小写）不得再被命中。
+     */
+    private val ENTITY_REFERENCE = Regex(
+        "(?i:\\b(?:FROM|JOIN)\\s+)([A-Z][a-zA-Z0-9_]*)\\b",
+    )
+
+    /**
+     * 扫描并替换子查询内的其他实体名为表名（Project 形态——生产入口）。
+     *
+     * @param sql    管道中的 SQL 文本（主实体名已被既有 mapEntityToTable 替换）
+     * @param table  主表信息（其 entityClassName 已处理，跳过）
+     * @param project 项目（PSI 按名查找实体类；null 时原样返回——无元数据不做盲猜）
+     * @return 替换后的 SQL；无可替换实体时原样返回（幂等）
+     */
+    fun mapSubqueryEntities(sql: String, table: TableInfo, project: Project?): String {
+        if (project == null) return sql
+        return mapSubqueryEntities(sql, table) { entityName ->
+            runCatching {
+                val cache = PsiShortNamesCache.getInstance(project)
+                val clazz = cache.getClassesByName(entityName, GlobalSearchScope.projectScope(project)).firstOrNull()
+                    ?: cache.getClassesByName(entityName, GlobalSearchScope.allScope(project)).firstOrNull()
+                clazz?.let {
+                    JpaEntityResolver().resolve(it).tableName
+                        .takeIf { name -> name.isNotBlank() && name != "unknown_table" }
+                }
+            }.getOrNull()
+        }
+    }
+
+    /**
+     * 扫描并替换子查询内的其他实体名（表名解析函数注入形态——核心实现）。
+     *
+     * [resolveTableName] 收到实体类名，返回真实表名；返回 null 表示无元数据（跳过不改）。
+     * 调用方已有 PsiClass / 解析缓存时用本形态，免按名检索
+     * （LightPlatform 测试环境无需依赖索引）。
+     */
+    internal fun mapSubqueryEntities(
+        sql: String,
+        table: TableInfo,
+        resolveTableName: (String) -> String?,
+    ): String {
+        val entityNames = ENTITY_REFERENCE.findAll(sql)
+            .map { it.groupValues[1] }
+            .filter { it != table.entityClassName }
+            .distinct()
+            .toList()
+        if (entityNames.isEmpty()) return sql
+
+        var result = sql
+        for (entityName in entityNames) {
+            // 已无该实体名残留（如实体名与表名同形被主映射替换）时跳过，保证幂等
+            if (!Regex("\\b${Regex.escape(entityName)}\\b").containsMatchIn(result)) continue
+            val tableName = resolveTableName(entityName) ?: continue
+            result = Regex("\\b${Regex.escape(entityName)}\\b").replace(result, tableName)
+        }
+        return result
+    }
+}

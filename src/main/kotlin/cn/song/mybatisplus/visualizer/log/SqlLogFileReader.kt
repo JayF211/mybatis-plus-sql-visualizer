@@ -18,6 +18,9 @@ import java.util.Locale
  */
 object SqlLogFileReader {
 
+    /** T-Perf-05：countInFile 缓存上限（超过整体清空——路径多样性有限，简单封顶防膨胀）。 */
+    private const val COUNT_CACHE_MAX = 256
+
     /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
      * 捕获组：1=source 2=time 3=timestamp
@@ -58,6 +61,14 @@ object SqlLogFileReader {
     }
 
     /**
+     * T-Perf-05：countInFile 结果缓存（键=绝对路径，值=(lastModified, length, 计数)）。
+     * 自动保存单文件滚动阈值 100MB（SqlLogAutoSaver），长期开启必然长出大文件——
+     * 每次 refresh 逐行全量扫描是历史 tab 打开冻结的主要来源；lastModified+length 未变即命中
+     * （length 一并校验，规避同毫秒重写导致 lastModified 不变而内容已变的误命中）。
+     */
+    private val countCache = java.util.concurrent.ConcurrentHashMap<String, kotlin.Triple<Long, Long, Int>>()
+
+    /**
      * 快速统计文件中的 SQL 条目数（F-44-3 两级导航一级列表用）：
      * 只数头部行（`-- source: ...` / `--- source: ...` / `-- yyyy-MM-dd ...`），
      * 不构建 [LogSqlEntry]——大文件文件列表加载时避免无谓的对象分配。
@@ -66,6 +77,10 @@ object SqlLogFileReader {
      */
     fun countInFile(file: File): Int {
         if (!file.exists()) return 0
+        val key = file.absolutePath
+        val lastModified = file.lastModified()
+        val length = file.length()
+        countCache[key]?.takeIf { it.first == lastModified && it.second == length }?.let { return it.third }
         var count = 0
         file.bufferedReader().useLines { lines ->
             for (line in lines) {
@@ -77,6 +92,8 @@ object SqlLogFileReader {
                 }
             }
         }
+        if (countCache.size >= COUNT_CACHE_MAX) countCache.clear()
+        countCache[key] = kotlin.Triple(lastModified, length, count)
         return count
     }
 

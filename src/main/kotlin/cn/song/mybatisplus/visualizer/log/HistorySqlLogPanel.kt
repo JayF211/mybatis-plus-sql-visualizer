@@ -7,7 +7,9 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -34,6 +36,7 @@ import java.util.Locale
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
 import javax.swing.JButton
+import javax.swing.JComboBox
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
@@ -67,6 +70,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
+    // ---------- T-Perf-05：后台任务代际 + 搜索防抖 ----------
+
+    /** 后台刷新/加载代际：新任务启动即作废旧任务的 EDT apply。 */
+    private var bgGeneration = 0
+
+    /** T-Perf-05：搜索防抖（每击键 O(N) clear+add → 停顿 200ms 应用一次）。 */
+    private val searchDebounceTimer =
+        javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
+
     private val searchField = SearchTextField()
     private val backButton = JButton().apply {
         icon = AllIcons.Actions.Back
@@ -86,6 +98,63 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         addActionListener { refresh() }
     }
 
+    /** 显示模式下拉（T-ListMode）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
+    private val displayModeCombo = JComboBox(arrayOf(
+        MpSqlVisualizerBundle.message("log.list.displayMode.single"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
+    )).apply {
+        toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode")
+        isFocusable = false
+        selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        addItemListener { e ->
+            if (e.stateChange == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
+                val mode = SqlListDisplayMode.values()[selectedIndex]
+                val settings = PluginSettings.getInstance()
+                if (settings.state.logListSqlDisplayMode != mode.name) {
+                    settings.state.logListSqlDisplayMode = mode.name
+                    project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
+                        .settingsChanged()
+                }
+            }
+        }
+    }
+
+    /** combo 程序化回同步防重入守卫。 */
+    private var syncingDisplayModeCombo = false
+
+    /** 显示模式下拉（测试断言选中态回同步用）。 */
+    internal val displayModeComboForTest: JComboBox<*> get() = displayModeCombo
+
+    /** 二级列表当前行高（测试断言行高随模式重设用）。 */
+    internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
+
+    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 回同步 combo + 二级可见时重绘。
+     *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。 */
+    internal fun onDisplayModeChanged() {
+        syncingDisplayModeCombo = true
+        displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        syncingDisplayModeCombo = false
+        applySqlListCellHeight()
+        if (currentFile != null) sqlList.repaint()
+    }
+
+    /**
+     * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡，与日志 tab [SqlLogPanel.applyListCellHeight] 同款）：
+     * SINGLE_LINE 固定行高走 O(1) 布局快路径；KEYWORD_WRAP/FORMATTED 可变行高（条目行数不等），
+     * 多行片段有条目级缓存，逐条测量只剩轻量组件布局。
+     */
+    internal fun applySqlListCellHeight() {
+        sqlList.fixedCellHeight =
+            if (PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE) {
+                sqlList.cellRenderer
+                    .getListCellRendererComponent(sqlList, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()), 0, false, false)
+                    .preferredSize.height
+            } else {
+                -1
+            }
+    }
+
     private val cardLayout = CardLayout()
     private val cards = JPanel(cardLayout)
 
@@ -103,14 +172,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     internal val isShowingFiles: Boolean get() = currentFile == null
 
     /** 打开指定文件进入二级（测试驱动；等价双击文件）。 */
-    internal fun openFileForTest(entry: HistoryFileEntry) = showFileContent(entry)
+    internal fun openFileForTest(entry: HistoryFileEntry) = loadFileContentSync(entry)
 
     /** 返回一级（测试驱动；等价点击返回按钮）。 */
     internal fun backToFilesForTest() = showFileList()
 
-    /** 设置搜索词（测试驱动；等价在搜索框输入，触发 DocumentListener 实时过滤）。 */
+    /** 设置搜索词（测试驱动；等价在搜索框输入，立即应用过滤——生产路径 DocumentListener 走防抖）。 */
     internal fun setSearchForTest(query: String) {
         searchField.text = query
+        applySearch()
     }
 
     /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
@@ -126,15 +196,30 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(backButton)
         toolbar.add(refreshButton)
+        // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）
+        toolbar.add(displayModeCombo)
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
-            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
-            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
-            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = applySearch()
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
         toolbar.add(searchField)
         add(toolbar, BorderLayout.NORTH)
+
+        // T-ListMode：设置变更（含模式切换广播）→ 清二级列表渲染缓存并重绘；
+        // connect(this) 随面板 Disposer 树自动注销。invokeLater 显式 ModalityState.any()
+        // （设置页红线：模态弹窗存续期默认 modality 会挂起回调）
+        project.messageBus.connect(this).subscribe(
+            PluginSettings.SETTINGS_CHANGE_TOPIC,
+            cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
+                ApplicationManager.getApplication().invokeLater(
+                    { onDisplayModeChanged() },
+                    com.intellij.openapi.application.ModalityState.any(),
+                )
+            },
+        )
 
         // 一级：文件列表
         fileList.emptyText.text = MpSqlVisualizerBundle.message("log.history.files.empty")
@@ -155,10 +240,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 二级：SQL 列表
         sqlList.emptyText.text = MpSqlVisualizerBundle.message("log.history.entries.empty")
         sqlList.cellRenderer = HistoryCellRenderer()
-        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）
-        sqlList.fixedCellHeight = sqlList.cellRenderer
-            .getListCellRendererComponent(sqlList, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()), 0, false, false)
-            .preferredSize.height
+        applySqlListCellHeight()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
@@ -194,12 +276,34 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileContent(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
-        currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
         backButton.isVisible = true
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
         cardLayout.show(cards, CARD_SQL)
+        // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
+        currentEntries = emptyList()
         applySqlSearch()
-        LOG.info("HistorySqlLogPanel.showFileContent: ${fileEntry.file.name} 共 ${currentEntries.size} 条 SQL")
+        val gen = ++bgGeneration
+        object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.load.progress"), true) {
+            override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                val entries = SqlLogFileReader.readFromFile(fileEntry.file)
+                ApplicationManager.getApplication().invokeLater {
+                    if (gen != bgGeneration || project.isDisposed) return@invokeLater
+                    currentEntries = entries
+                    applySqlSearch()
+                    LOG.info("HistorySqlLogPanel.showFileContent: ${fileEntry.file.name} 共 ${entries.size} 条 SQL")
+                }
+            }
+        }.queue()
+    }
+
+    /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
+    private fun loadFileContentSync(fileEntry: HistoryFileEntry) {
+        currentFile = fileEntry
+        backButton.isVisible = true
+        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
+        cardLayout.show(cards, CARD_SQL)
+        currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
+        applySqlSearch()
     }
 
     // ---------- 刷新 ----------
@@ -214,24 +318,54 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         sqlList.repaint()
     }
 
-    /** 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。 */
+    /**
+     * 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。
+     *
+     * T-Perf-05：目录扫描 + countInFile / readFromFile 全部移入 [Task.Backgroundable]
+     * （100MB 自动保存文件的逐行扫描在 EDT 直跑必然长冻结）；EDT 只做结果应用。
+     * 代际守卫：新一轮刷新/加载启动后，旧后台任务的 apply 自动作废。
+     */
     fun refresh() {
-        val dir = getHistoryDir()
+        val gen = ++bgGeneration
+        val keepFile = currentFile?.file
+        object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
+            override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                val scanned = scanHistoryFiles(getHistoryDir())
+                val keepReload = keepFile?.takeIf { it.exists() }?.let { SqlLogFileReader.readFromFile(it) }
+                ApplicationManager.getApplication().invokeLater {
+                    if (gen != bgGeneration || project.isDisposed) return@invokeLater
+                    applyRefresh(scanned, keepReload)
+                }
+            }
+        }.queue()
+    }
+
+    /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
+    internal fun refreshForTest() {
+        ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
+        val keepFile = currentFile?.file
+        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile?.takeIf { it.exists() }?.let { SqlLogFileReader.readFromFile(it) })
+    }
+
+    /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
+    private fun scanHistoryFiles(dir: String): List<HistoryFileEntry> {
         val directory = File(dir)
         val files = if (directory.isDirectory) {
             directory.listFiles { f -> f.extension == "sql" }?.sortedBy { it.name } ?: emptyList()
         } else {
             emptyList()
         }
-        allFiles = files.map { file ->
-            HistoryFileEntry(file = file, sqlCount = SqlLogFileReader.countInFile(file))
-        }
-        LOG.info("HistorySqlLogPanel.refresh: 目录 $dir 扫描到 ${allFiles.size} 个历史文件")
+        return files.map { file -> HistoryFileEntry(file, SqlLogFileReader.countInFile(file)) }
+    }
+
+    /** 应用扫描结果（EDT；仅刷新/加载代际最新者执行）。 */
+    private fun applyRefresh(scanned: List<HistoryFileEntry>, keepReload: List<LogSqlEntry>?) {
+        allFiles = scanned
+        LOG.info("HistorySqlLogPanel.refresh: 扫描到 ${allFiles.size} 个历史文件")
 
         // 保持二级视图：当前文件仍存在则重载内容
-        val keep = currentFile?.file
-        if (keep != null && keep.exists()) {
-            currentEntries = SqlLogFileReader.readFromFile(keep)
+        if (keepReload != null) {
+            currentEntries = keepReload
             applySqlSearch()
             return
         }
@@ -245,6 +379,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     // ---------- 搜索过滤 ----------
+
+    /** T-Perf-05：搜索输入防抖调度（DocumentListener 入口）。 */
+    private fun scheduleSearch() {
+        searchDebounceTimer.restart()
+    }
 
     private fun applySearch() {
         if (currentFile != null) applySqlSearch() else applyFileSearch()
@@ -335,9 +474,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。 */
     internal fun resolveJumpTarget(entry: LogSqlEntry): HistoryJumpTarget {
         if (entry.sourceFile == null) return HistoryJumpTarget.NoSource
-        val basePath = project.basePath ?: return HistoryJumpTarget.NoSource
-        val fullPath = "$basePath/${entry.sourceFile}"
-        val virtualFile = LocalFileSystem.getInstance().findFileByPath(fullPath)
+        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+        val virtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
         if (virtualFile != null) {
             return HistoryJumpTarget.Navigate(virtualFile, maxOf(0, entry.sourceLine - 1))
         }
@@ -379,6 +517,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     override fun dispose() {
+        // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
+        searchDebounceTimer.stop()
         sqlClickPreview.dispose()
     }
 
@@ -386,6 +526,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private val LOG = Logger.getInstance(HistorySqlLogPanel::class.java)
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
+
+        /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
+        private const val SEARCH_DEBOUNCE_MS = 200
     }
 }
 
@@ -464,9 +607,19 @@ internal class HistoryFileCellRenderer : JPanel(BorderLayout()), javax.swing.Lis
  * internal 供 UI 测试断言各种条目状态（空耗时/空源码/特殊字符/超长 SQL）下的渲染健壮性。
  */
 internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
-    /** 元信息行 / SQL 行（internal 供 UI 测试遍历片段断言）。 */
+    /** 元信息行（internal 供 UI 测试遍历片段断言）。 */
     internal val metaLine = SimpleColoredComponent()
-    internal val sqlLine = SimpleColoredComponent()
+
+    /** SQL 行组件池（T-ListMode：单行模式恒 1 行；多行模式按变换后行数伸缩）。 */
+    private val sqlLinePool = mutableListOf(SimpleColoredComponent())
+
+    /** SQL 首行（SINGLE_LINE 恒为唯一 SQL 行；测试断言兼容单行语义）。 */
+    internal val sqlLine: SimpleColoredComponent get() = sqlLinePool[0]
+
+    /** 全部 SQL 行（internal 供 UI 测试按行断言多行模式渲染）。 */
+    internal val sqlLines: List<SimpleColoredComponent> get() = sqlLinePool
+
+    private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
 
     /**
      * T-CrudColor：左侧类型色条（色条样式下着色可见；其他样式 `isOpaque=false` 但仍占位——
@@ -505,14 +658,12 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         layout = BorderLayout()
         isOpaque = true
         metaLine.isOpaque = false
-        sqlLine.isOpaque = false
-        // T-CrudColor：色条挂 WEST（CENTER 已被双行面板占用）
+        sqlLinePool[0].isOpaque = false
+        linesPanel.add(metaLine)
+        linesPanel.add(sqlLinePool[0])
+        // T-CrudColor：色条挂 WEST（CENTER 已被组件池面板占用）
         add(colorBar, BorderLayout.WEST)
-        add(JPanel(GridLayout(2, 1)).apply {
-            isOpaque = false
-            add(metaLine)
-            add(sqlLine)
-        }, BorderLayout.CENTER)
+        add(linesPanel, BorderLayout.CENTER)
         border = normalBorder
     }
 
@@ -532,10 +683,8 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
         metaLine.foreground = fg
-        sqlLine.foreground = fg
         metaLine.clear()
-        sqlLine.clear()
-        if (entry != null) {
+        val lineFragments = if (entry != null) {
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = when {
@@ -551,11 +700,50 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
             metaLine.append("[$duration] ", HISTORY_META_GRAY)
             metaLine.append("[$timestamp] ", HISTORY_META_GRAY)
             metaLine.append("[$source] ", HISTORY_META_GRAY)
-            SqlListFragmentRenderer.renderFragments(withTerminator(entry.summary)).forEach { f ->
-                sqlLine.append(f.text, f.attributes)
-            }
+            sqlLineFragmentsFor(entry)
+        } else {
+            null
         }
-        // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
+        // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
+        ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        sqlLinePool.forEachIndexed { i, comp ->
+            comp.foreground = fg
+            comp.clear()
+            lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+        }
         return this
+    }
+
+    /** SQL 行组件池伸缩到 n 行（首位恒保留——[sqlLine] 测试缝；收缩移除末尾）。 */
+    private fun ensureSqlLineCount(n: Int) {
+        while (sqlLinePool.size < n) {
+            val comp = SimpleColoredComponent()
+            comp.isOpaque = false
+            sqlLinePool += comp
+            linesPanel.add(comp)
+        }
+        while (sqlLinePool.size > maxOf(1, n)) {
+            linesPanel.remove(sqlLinePool.removeAt(sqlLinePool.size - 1))
+        }
+    }
+
+    /**
+     * SQL 行片段（T-ListMode 模式分流，与 [LogEntryListCellRenderer] 同款）：
+     * SINGLE_LINE 直渲染不缓存；多行模式走条目级缓存（键含模式自动失效）。
+     * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
+     */
+    private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
+        val sql = withTerminator(entry.summary)
+        val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        if (mode == SqlListDisplayMode.SINGLE_LINE) {
+            return listOf(SqlListFragmentRenderer.renderFragments(sql))
+        }
+        entry.cachedListLineFragments
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.let { return it }
+        return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
+            entry.cachedListLineFragments = it
+            entry.cachedListLineFragmentsMode = mode
+        }
     }
 }

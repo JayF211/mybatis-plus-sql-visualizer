@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.psi.PsiAnnotation
+import com.intellij.psi.PsiAnnotationMemberValue
+import com.intellij.psi.PsiArrayInitializerMemberValue
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
@@ -58,7 +60,9 @@ class EntityResolver {
         val qName = entityClass.qualifiedName ?: className
         val configSig = TableConfigSignature.projectSignature()
 
-        val key = EntityCacheKey(file, qName, configSig)
+        // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识——PsiFile 随键
+        // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
+        val key = EntityCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
             if (entry.stamp == stamp) return entry.value
@@ -366,6 +370,50 @@ class EntityResolver {
         // 与 TABLE_LOGIC 同模式走 findAnnotation 短名兜底）
         private const val VERSION = "com.baomidou.mybatisplus.annotation.Version"
 
+        /**
+         * T-M2：主键序列注解（Oracle/PG/DM 等序列方言实体的主键取值声明）。
+         * 常量全限定名 com.baomidou.mybatisplus.annotation.KeySequence。
+         */
+        private const val KEY_SEQUENCE = "com.baomidou.mybatisplus.annotation.KeySequence"
+
+        // ------------------------------------------------------------------
+        // T-M2：@KeySequence 主键序列读取
+        // ------------------------------------------------------------------
+
+        /**
+         * 读取实体类级 [KEY_SEQUENCE] 注解的序列名（value 属性，`String[]` 取首元素）。
+         *
+         * 消费方：[BatchOperationConverter] INSERT 模板——实体含 @KeySequence 且当前方言为
+         * Oracle/DM/KingBase 时，追加「主键取序列 {seq}」注释提示 + 主键列保持 `?` 占位
+         * （不做真实 nextval 渲染，边界文档化见 buildInsertBatch KDoc）。
+         *
+         * 解析容错（不抛异常）：注解缺失返回 null；value 支持单值字面量与数组Initializer
+         * （`@KeySequence("seq")` / `@KeySequence(value = ["seq1", "seq2"])` 取首个）；
+         * 非字符串字面量（常量引用等静态不可得）返回 null。
+         * 注解类不可解析的环境按短名 "KeySequence" 兜底（与 findAnnotation 同模式）。
+         *
+         * 注意：MP `@KeySequence` 的 `value()` 声明为 `String[]`；历史版本亦接受单值。
+         */
+        @JvmStatic
+        fun keySequenceValue(entityClass: PsiClass): String? = runCatching {
+            val annotation = entityClass.modifierList?.findAnnotation(KEY_SEQUENCE)
+                ?: entityClass.modifierList?.annotations?.firstOrNull {
+                    it.nameReferenceElement?.referenceName == "KeySequence"
+                }
+                ?: return null
+            val memberValue = annotation.findAttributeValue("value") ?: return null
+            when (memberValue) {
+                is PsiLiteralExpression -> memberValue.value as? String
+                is PsiArrayInitializerMemberValue ->
+                    (memberValue.initializers.firstOrNull() as? PsiLiteralExpression)?.value as? String
+                else -> literalString(memberValue)
+            }?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+
+        /** 非标准容器形态兜底：直接按字符串字面量读取。 */
+        private fun literalString(memberValue: PsiAnnotationMemberValue): String? =
+            (memberValue as? PsiLiteralExpression)?.value as? String
+
         // ------------------------------------------------------------------
         // T-EntityCache：实体解析缓存（三维键 + 双维度失效）
         // ------------------------------------------------------------------
@@ -378,7 +426,10 @@ class EntityResolver {
          * @param configSignature   配置签名（表名推断策略 + 忽略字段 + 表前缀后缀拼接串）
          */
         private data class EntityCacheKey(
-            val file: PsiFile,
+            val fileUrl: String?,
+            /** T-Perf-18：文件实例同一性辅助键——light/mock 文件（测试 fixture）url 与 stamp 均可能相同，
+             *  仅靠 url 会跨实例误命中；生产环境同一逻辑文件恒为同一 PsiFile 实例，不受影响。 */
+            val fileIdentity: Int,
             val classQualifiedName: String,
             val configSignature: String,
         )

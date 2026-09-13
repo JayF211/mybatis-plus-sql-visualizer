@@ -568,6 +568,62 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         assertTrue("应标记为字面量（部分展开）", info.isLiteralHql)
     }
 
+    // ------------------------------------------------------------------
+    // T-J12：createSQLQuery（老 Hibernate3，native SQL 语义）
+    // ------------------------------------------------------------------
+
+    fun testTJ12_createSQLQuery_nativeSemantics() {
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public List findByNative(Session session, String status) {
+                    Query q = session.createSQLQuery("select * from t_user where status = :status");
+                    q.setParameter("status", status);
+                    return q.list();
+                }
+            }
+            interface Session {
+                Query createSQLQuery(String sql);
+            }
+            interface Query {
+                Query setParameter(String name, Object value);
+                List list();
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("findByNative")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("createSQLQuery 应被识别（T-J12）", info)
+        assertEquals("createSQLQuery", info!!.createQueryMethodName)
+        assertTrue("createSQLQuery 应按 native SQL 语义归类", info.isNativeQuery)
+        assertEquals("select * from t_user where status = :status", info.hql)
+        assertEquals("status", info.parameters[0].paramName)
+    }
+
+    fun testTJ12_createSQLQuery_nativeSemanticsnegative_nonStringArgExcluded() {
+        // 负例：createSQLQuery 非字符串首参（如 Criteria 形态）不识别
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public void byCriteria(Session session, DetachedCriteria criteria) {
+                    session.createSQLQuery(criteria);
+                }
+            }
+            interface Session {
+                Query createSQLQuery(Object criteria);
+            }
+            interface Query {}
+            class DetachedCriteria {}
+            """.trimIndent(),
+        )
+        val method = findMethod("byCriteria")
+        val info = HqlQueryLocator.locate(method)
+        assertNull("非字符串首参的 createSQLQuery 不应识别（T-J12 守卫）", info)
+    }
+
     private fun findMethod(methodName: String): PsiMethod {
         val methods = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethod::class.java)
         return methods.firstOrNull { it.name == methodName }

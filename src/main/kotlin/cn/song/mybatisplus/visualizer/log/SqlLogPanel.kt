@@ -62,6 +62,7 @@ import javax.swing.DefaultListModel
 import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
@@ -132,6 +133,8 @@ internal fun filterBySearch(entries: List<LogSqlEntry>, query: String): List<Log
         it.restoredSql.contains(q, ignoreCase = true) || it.summary.contains(q, ignoreCase = true)
     }
 }
+
+// ---------- T-Perf-03：流式增量刷新差分（纯逻辑，可独立单测） ----------
 
 /** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
 internal const val MAX_SYNC_APPEND = 300
@@ -280,18 +283,7 @@ class SqlLogPanel(
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
     private var lastRendered: List<LogSqlEntry> = emptyList()
 
-    // ---------- T-Perf-15（自 dev 移植）：manager 监听器命名引用（init 注册 / dispose 注销） ----------
-
-    /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
-    private val uiRefreshListener: () -> Unit = { refreshList() }
-
-    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
-    private val capturingUiListener: () -> Unit = {
-        LOG.info("SqlLogPanel.capturingListener: 触发")
-        ApplicationManager.getApplication().invokeLater {
-            updateCaptureButtonIcon()
-        }
-    }
+    // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -321,6 +313,40 @@ class SqlLogPanel(
     private val sortButton = JToggleButton(MpSqlVisualizerBundle.message("log.sort.duration")).apply {
         isFocusable = false
         addActionListener { toggleDurationSort() }
+    }
+
+    // ---------- T-ListMode：SQL 显示模式下拉（单行/关键字换行/格式化） ----------
+
+    /** 显示模式下拉：变更写设置并广播 SETTINGS_CHANGE_TOPIC——既有监听统一回同步 combo + 行高重设 + 刷新。 */
+    private val displayModeCombo = JComboBox(arrayOf(
+        MpSqlVisualizerBundle.message("log.list.displayMode.single"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
+        MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
+    )).apply {
+        toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode")
+        isFocusable = false
+        selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        addItemListener { e ->
+            if (e.stateChange == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
+                val mode = SqlListDisplayMode.values()[selectedIndex]
+                val settings = PluginSettings.getInstance()
+                if (settings.state.logListSqlDisplayMode != mode.name) {
+                    settings.state.logListSqlDisplayMode = mode.name
+                    project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
+                        .settingsChanged()
+                }
+            }
+        }
+    }
+
+    /** combo 程序化回同步防重入守卫（防 setSelectedItem 触发监听再广播成环）。 */
+    private var syncingDisplayModeCombo = false
+
+    /** combo 选中态从设置回同步（模式被另一面板 combo 改变时；经既有 settings 监听驱动）。 */
+    private fun syncDisplayModeCombo() {
+        syncingDisplayModeCombo = true
+        displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
+        syncingDisplayModeCombo = false
     }
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
@@ -391,6 +417,19 @@ class SqlLogPanel(
         HelpAction(),
     )
 
+    // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
+
+    /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
+    private val uiRefreshListener: () -> Unit = { refreshList() }
+
+    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
+    private val capturingUiListener: () -> Unit = {
+        LOG.info("SqlLogPanel.capturingListener: 触发")
+        ApplicationManager.getApplication().invokeLater {
+            updateCaptureButtonIcon()
+        }
+    }
+
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
@@ -408,9 +447,7 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
         // F-44：开启自动保存、或 .idea 中已有历史文件时显示历史 tab
         if (PluginSettings.getInstance().state.logAutoSaveEnabled || hasHistoryFiles()) {
-            Disposer.register(this, historyPanel)
-            historyTabIndex = tabs.tabCount
-            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+            addHistoryTab()
         }
         add(tabs, BorderLayout.CENTER)
 
@@ -430,7 +467,10 @@ class SqlLogPanel(
             ApplicationManager.getApplication().invokeLater {
                 updateHistoryTabVisibility()
                 // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
-                // 走 refreshList 重排重绘即生效（片段无缓存，原 HTML 通道的清缓存兜底不再需要）
+                // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
+                // T-ListMode：模式可能被历史面板 combo 改变——回同步本面板下拉选中态 + 行高随模式重设
+                syncDisplayModeCombo()
+                applyListCellHeight()
                 refreshList()
                 // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
                 // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 是 lazy）
@@ -487,6 +527,8 @@ class SqlLogPanel(
         }
         left.add(typeFilterUnit)
         left.add(sortButton)
+        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）
+        left.add(displayModeCombo)
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
             foreground = Color(0xD32F2F) // 红色
@@ -730,6 +772,22 @@ class SqlLogPanel(
             }
     }
 
+    /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
+    private var historyPanelRegistered = false
+
+    /**
+     * 添加历史 tab（T-Perf-17：Disposer 注册防重入守卫——构造期与设置页循环开关都会走到；
+     * 重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
+     */
+    private fun addHistoryTab() {
+        if (!historyPanelRegistered) {
+            Disposer.register(this, historyPanel)
+            historyPanelRegistered = true
+        }
+        historyTabIndex = tabs.tabCount
+        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+    }
+
     /**
      * F-44：根据 logAutoSaveEnabled 设置 + 历史数据存在与否同步历史 tab 的显隐。
      * 开启自动保存时显示；关闭后若 .idea 中仍有历史文件，也保留 tab（只读查看已有数据）。
@@ -739,10 +797,8 @@ class SqlLogPanel(
         val enabled = runCatching { PluginSettings.getInstance().state.logAutoSaveEnabled }.getOrDefault(false)
         val hasHistoryData = enabled || hasHistoryFiles()
         if (hasHistoryData && historyTabIndex < 0) {
-            // 添加历史 tab
-            Disposer.register(this, historyPanel)
-            historyTabIndex = tabs.tabCount
-            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+            // 添加历史 tab（T-Perf-17：Disposer 注册带防重入守卫）
+            addHistoryTab()
         } else if (!hasHistoryData && historyTabIndex >= 0) {
             // 移除历史 tab（避免选中正在移除的 tab）
             if (tabs.selectedIndex == historyTabIndex) {
@@ -750,6 +806,14 @@ class SqlLogPanel(
             }
             tabs.removeTabAt(historyTabIndex)
             historyTabIndex = -1
+            // T-Perf-17：tab 移除时从 Disposer 树摘除——否则下次重新添加时重复注册，
+            // 2026.x 平台报 "Object must not be registered twice" 错误弹窗。
+            // 243 平台 Disposer 无 unregister（javap 实证），dispose(historyPanel) 即摘除并执行
+            // 其轻量 dispose（仅停防抖 Timer，面板组件可复用）；dispose 后重新 register 合法。
+            if (historyPanelRegistered) {
+                Disposer.dispose(historyPanel)
+                historyPanelRegistered = false
+            }
         }
     }
 
@@ -903,10 +967,7 @@ class SqlLogPanel(
     private fun buildListPane(): JBScrollPane {
         list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
         list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
-        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）。
-        // 原可变行高使每次布局状态更新逐条调渲染器取首选尺寸（叠加 HTML 排版即 16s EDT Freeze）；
-        // 固定后 WideSelectionListUI 短路逐条测量走 O(1) 快路径。全文查看由单击预览/双击弹窗承接。
-        list.fixedCellHeight = measureFixedCellHeight()
+        applyListCellHeight()
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
@@ -927,6 +988,22 @@ class SqlLogPanel(
             }
         })
         return JBScrollPane(list)
+    }
+
+    /**
+     * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡）：
+     * SINGLE_LINE 固定行高——WideSelectionListUI 短路逐条测量走 O(1) 快路径
+     * （原可变行高 × HTML 排版 = 16s EDT Freeze；片段通道后固定行高仍是流式灌入的最优路径）；
+     * KEYWORD_WRAP/FORMATTED 可变行高——条目行数不等，固定高会裁行；多行片段有条目级缓存，
+     * 逐条测量只剩轻量组件布局（无 HTML 解析，冻结量级不复现；真机大日志表现见计划文档）。
+     * 全文查看由单击预览/双击弹窗承接。
+     */
+    internal fun applyListCellHeight() {
+        list.fixedCellHeight = if (PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE) {
+            measureFixedCellHeight()
+        } else {
+            -1
+        }
     }
 
     /** T-LogListFreeze-04：固定行高实测——样例条目渲染一次取首选高（两行文本 + 5,8 空边框 + 1px 分隔线）。 */
@@ -958,7 +1035,7 @@ class SqlLogPanel(
         // 检测是否含耗时信息（决定是否显示排序按钮）
         hasAnyDurationInfo = snapshot.any { LogDurationParser.hasDurationInfo(it) }
 
-        // 去重丢弃计数快照（徽章渲染数据源；丢弃不触发通知，随下一次刷新呈现）
+        // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
         entryCellRenderer.dedupeCounts = dedupeCounts
 
@@ -1116,8 +1193,8 @@ class SqlLogPanel(
             if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
                 return LogJumpTarget.NoSource
             }
-            // F-44-7：标记路径相对于源码根目录（如 src/main/java），需在所有源码根目录中搜索
-            val vf = findSourceFile(entry.sourceFile)
+            // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+            val vf = cn.song.mybatisplus.visualizer.log.SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
             return if (vf != null) {
                 LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
             } else {
@@ -1556,9 +1633,19 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
 
-    /** 元信息行 / SQL 行（internal 供 UI 测试遍历片段断言文本与着色）。 */
+    /** 元信息行（internal 供 UI 测试遍历片段断言文本与着色）。 */
     internal val metaLine = SimpleColoredComponent()
-    internal val sqlLine = SimpleColoredComponent()
+
+    /** SQL 行组件池（T-ListMode：单行模式恒 1 行；多行模式按变换后行数伸缩）。 */
+    private val sqlLinePool = mutableListOf(SimpleColoredComponent())
+
+    /** SQL 首行（SINGLE_LINE 恒为唯一 SQL 行；测试断言兼容 T-LogListFreeze-04 单行语义）。 */
+    internal val sqlLine: SimpleColoredComponent get() = sqlLinePool[0]
+
+    /** 全部 SQL 行（internal 供 UI 测试按行断言多行模式渲染）。 */
+    internal val sqlLines: List<SimpleColoredComponent> get() = sqlLinePool
+
+    private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
 
     /**
      * T-CrudColor：左侧类型色条（[SqlListTypeColor.STYLE_BAR] 下着色可见；
@@ -1599,14 +1686,12 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         layout = BorderLayout()
         isOpaque = true
         metaLine.isOpaque = false
-        sqlLine.isOpaque = false
-        // T-CrudColor：色条挂 WEST——CENTER 已被 GridLayout 双行面板占用，WEST 空闲且零结构冲突
+        sqlLinePool[0].isOpaque = false
+        linesPanel.add(metaLine)
+        linesPanel.add(sqlLinePool[0])
+        // T-CrudColor：色条挂 WEST——CENTER 已被组件池面板占用，WEST 空闲且零结构冲突
         add(colorBar, BorderLayout.WEST)
-        add(JPanel(GridLayout(2, 1)).apply {
-            isOpaque = false
-            add(metaLine)
-            add(sqlLine)
-        }, BorderLayout.CENTER)
+        add(linesPanel, BorderLayout.CENTER)
         border = normalBorder
     }
 
@@ -1639,10 +1724,8 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
         metaLine.foreground = fg
-        sqlLine.foreground = fg
         metaLine.clear()
-        sqlLine.clear()
-        if (entry != null) {
+        val lineFragments = if (entry != null) {
             // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
             if (entry.sequenceNumber > 0) {
                 metaLine.append("#${entry.sequenceNumber} ", LIST_META_GRAY)
@@ -1655,13 +1738,50 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
             }
             formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
-            // SQL 高亮行在下：选中态保留 SQL 高亮原色（与原 HTML 行为一致）
-            SqlListFragmentRenderer.renderFragments(withTerminator(entry.summary)).forEach { f ->
-                sqlLine.append(f.text, f.attributes)
-            }
+            sqlLineFragmentsFor(entry)
+        } else {
+            null
+        }
+        // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
+        ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        sqlLinePool.forEachIndexed { i, comp ->
+            comp.foreground = fg
+            comp.clear()
+            lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
         }
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
         return this
     }
 
+    /** SQL 行组件池伸缩到 n 行（首位恒保留——[sqlLine] 测试缝；收缩移除末尾）。 */
+    private fun ensureSqlLineCount(n: Int) {
+        while (sqlLinePool.size < n) {
+            val comp = SimpleColoredComponent()
+            comp.isOpaque = false
+            sqlLinePool += comp
+            linesPanel.add(comp)
+        }
+        while (sqlLinePool.size > maxOf(1, n)) {
+            linesPanel.remove(sqlLinePool.removeAt(sqlLinePool.size - 1))
+        }
+    }
+
+    /**
+     * SQL 行片段（T-ListMode 模式分流）：SINGLE_LINE 直渲染不缓存（固定行高 + 主题切换实时生效）；
+     * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
+     */
+    private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
+        val sql = withTerminator(entry.summary)
+        val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        if (mode == SqlListDisplayMode.SINGLE_LINE) {
+            return listOf(SqlListFragmentRenderer.renderFragments(sql))
+        }
+        entry.cachedListLineFragments
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.let { return it }
+        return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
+            entry.cachedListLineFragments = it
+            entry.cachedListLineFragmentsMode = mode
+        }
+    }
 }

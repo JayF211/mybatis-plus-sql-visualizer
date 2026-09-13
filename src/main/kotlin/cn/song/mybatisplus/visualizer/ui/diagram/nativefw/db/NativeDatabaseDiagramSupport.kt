@@ -140,8 +140,13 @@ object NativeDatabaseDiagramSupport {
                     if (found.size == wanted.size) break
                     // RawDataSource → DasDataSource.getModel()（DasModel），编译期直调
                     val model = runCatching { ds.model }.getOrNull() ?: continue
-                    val elements = runCatching { model.traverser().toList() }.getOrNull() ?: continue
+                    // T-Perf-09：惰性迭代 + 命中即停（此前 toList() 全量物化再筛——数千表 schema
+                    // 下即使全部命中也遍历完整棵模型）；model 为 null（未内省）已在上行跳过
+                    val elements = runCatching { model.traverser() }.getOrNull()
+                        ?.let { it as? Iterable<*> }
+                        ?: continue
                     for (element in elements) {
+                        if (found.size == wanted.size) break
                         if (element !is DasTable) continue
                         val name = element.name?.lowercase() ?: continue
                         if (name in wanted && name !in found) {

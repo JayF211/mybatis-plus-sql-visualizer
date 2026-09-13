@@ -47,9 +47,10 @@ internal class ConsoleReplayGuard {
      * @param endOffset 行在整篇文档中的行尾偏移（`applyFilter` 的 entireLength 参数）。
      * @param docStamp  控制台文档当前 modificationStamp（守卫不可得时传 Long.MIN_VALUE → 按未初始化处理）。
      * @param lineText  当前行文本。
-     * @param line0Text 控制台首行文本（`endOffset ≤ watermark` 且 stamp 变时才参与判定；混合态区分用）。
+     * @param line0TextProvider 控制台首行文本提供者（惰性：仅 `endOffset ≤ watermark` 且 stamp 变的
+     *   混合态分支才求值一次——T-PerfSweep F1，流式/纯重放热路径零全文档拷贝成本）。
      */
-    fun decide(endOffset: Int, docStamp: Long, lineText: String, line0Text: String?): Decision {
+    fun decide(endOffset: Int, docStamp: Long, lineText: String, line0TextProvider: (() -> String?)?): Decision {
         if (endOffset > watermark) {
             watermark = endOffset
             lastDocStamp = docStamp
@@ -62,6 +63,7 @@ internal class ConsoleReplayGuard {
         }
         // stamp 变了：控制台可能被 clear/截断。用首行文本比对区分「重置」与「重放叠加新增的混合态」。
         lastDocStamp = docStamp
+        val line0Text = line0TextProvider?.invoke()
         return if (line0Text == null || lineText != line0Text) {
             watermark = endOffset
             Decision.Reset

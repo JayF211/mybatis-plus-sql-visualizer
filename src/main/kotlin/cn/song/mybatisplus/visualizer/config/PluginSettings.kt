@@ -281,6 +281,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var crudColorDelete: String = CRUD_COLOR_DEFAULT_DELETE,
 
         /**
+         * SQL 列表显示模式（T-ListMode）：SQL 日志与 SQL 历史列表条目中 SQL 行的展示形态
+         * （枚举 [cn.song.mybatisplus.visualizer.log.SqlListDisplayMode] 的 name，读取走
+         * [sqlListDisplayMode] 容错）。默认关键字换行。
+         */
+        var logListSqlDisplayMode: String = DEFAULT_LOG_LIST_DISPLAY_MODE,
+
+        /**
          * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
          * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
          * 空字符串表示无历史。
@@ -359,6 +366,18 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 默认关——用户需主动开启并按提示确认生成。
          */
         var autoInjectSqlSourceInterceptor: Boolean = false,
+
+        // ---------- T-ErrReport 错误一键上报官网需求池 ----------
+
+        /**
+         * 需求池报告昵称（选填，报告对话框填写后记忆，下次带出；空 = 匿名提交）。
+         */
+        var reportSubmitterName: String = "",
+
+        /**
+         * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
+         */
+        var reportSubmitterEmail: String = "",
     )
 
     private var state = State()
@@ -369,8 +388,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         this.state = state
     }
 
+    /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
+    fun sqlListDisplayMode(): cn.song.mybatisplus.visualizer.log.SqlListDisplayMode =
+        runCatching { cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.valueOf(state.logListSqlDisplayMode) }
+            .getOrDefault(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP)
+
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
+
+        /** SQL 列表显示模式默认值（T-ListMode，关键字换行）。 */
+        const val DEFAULT_LOG_LIST_DISPLAY_MODE = "KEYWORD_WRAP"
 
         /** 设置变更通知 Topic（订阅方据此即时刷新 UI）。 */
         @JvmField

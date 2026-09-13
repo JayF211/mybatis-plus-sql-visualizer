@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui.diff
 
 /**
+ * T-Perf-24 死代码标注：本对象当前**无任何调用方**（diff 入口未接线）。
+ */
+/**
  * SQL 行级 diff 引擎（O-4 Phase B）。
  *
  * 对比两次预览的 SQL 文本，输出行级差异列表（新增 / 删除 / 变更 / 相同）。

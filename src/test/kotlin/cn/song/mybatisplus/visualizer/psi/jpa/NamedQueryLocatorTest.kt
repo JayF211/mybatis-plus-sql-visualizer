@@ -354,6 +354,66 @@ class NamedQueryLocatorTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-J12：javax / jakarta 双全限定名
+    // ------------------------------------------------------------------
+
+    fun testTJ12_jakartaFqnNamedQueryRecognized() {
+        // jakarta 新命名空间：以全限定名书写注解（测试环境无 classpath，按书写 FQN 匹配）
+        myFixture.configureByText(
+            "UserEntity.java",
+            """
+            @jakarta.persistence.NamedQuery(name = "UserEntity.findByUsername", query = "SELECT u FROM UserEntity u WHERE u.username = :username")
+            public class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val entityClass = findClass("UserEntity")
+        val results = NamedQueryLocator.locate(entityClass)
+        assertEquals("jakarta.persistence.NamedQuery 应被识别（T-J12）", 1, results.size)
+        assertEquals("UserEntity.findByUsername", results[0].name)
+        assertEquals("SELECT u FROM UserEntity u WHERE u.username = :username", results[0].query)
+    }
+
+    fun testTJ12_javaxFqnNamedQueryRecognized() {
+        // javax 老命名空间保持兼容
+        myFixture.configureByText(
+            "UserEntity.java",
+            """
+            @javax.persistence.NamedQuery(name = "UserEntity.findByEmail", query = "SELECT u FROM UserEntity u WHERE u.email = :email")
+            public class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val entityClass = findClass("UserEntity")
+        val results = NamedQueryLocator.locate(entityClass)
+        assertEquals("javax.persistence.NamedQuery 应被识别（T-J12）", 1, results.size)
+        assertEquals("UserEntity.findByEmail", results[0].name)
+    }
+
+    fun testTJ12_jakartaFqnContainerRecognized() {
+        // jakarta @NamedQueries 容器注解
+        myFixture.configureByText(
+            "ProductEntity.java",
+            """
+            @jakarta.persistence.NamedQueries({
+                @jakarta.persistence.NamedQuery(name = "ProductEntity.findByName", query = "SELECT p FROM ProductEntity p WHERE p.name = :name"),
+                @jakarta.persistence.NamedQuery(name = "ProductEntity.findByPrice", query = "SELECT p FROM ProductEntity p WHERE p.price > :price")
+            })
+            public class ProductEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val entityClass = findClass("ProductEntity")
+        val results = NamedQueryLocator.locate(entityClass)
+        assertEquals("jakarta @NamedQueries 容器应提取 2 条（T-J12）", 2, results.size)
+        assertEquals("ProductEntity.findByName", results[0].name)
+        assertEquals("ProductEntity.findByPrice", results[1].name)
+    }
+
+    // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
 

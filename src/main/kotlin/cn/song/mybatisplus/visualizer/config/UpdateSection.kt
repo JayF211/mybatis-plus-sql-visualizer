@@ -98,6 +98,20 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         add(restartButton, BorderLayout.EAST)
     }
 
+    /** T-ErrReport：需求池报告入口（手动形态对话框 + 需求池网页链接）。 */
+    internal val reportProblemButton = JButton()
+
+    /** 需求池网页直达链接（浏览反馈/投票/进度）。 */
+    internal val feedbackPoolLink = LinkLabel<Any>("", null) { _, _ ->
+        BrowserUtil.browse(cn.song.mybatisplus.visualizer.feedback.FeedbackApi.SITE_BASE + "/about/feedback")
+    }
+
+    private val feedbackContainer = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+        isOpaque = false
+        add(reportProblemButton)
+        add(feedbackPoolLink)
+    }
+
     init {
         notesArea.isEditable = false
         notesArea.lineWrap = true
@@ -106,6 +120,10 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         checkButton.addActionListener { runCheck() }
         installButton.addActionListener { runInstall() }
         restartButton.addActionListener { restartIde() }
+        // T-ErrReport：报告问题（手动形态，无异常预填）
+        reportProblemButton.addActionListener {
+            cn.song.mybatisplus.visualizer.feedback.FeedbackReporting.openManualDialog()
+        }
         buildLayout()
         resetState()
         updateTexts()
@@ -143,6 +161,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         row(progressBar)
         row(notesContainer)
         row(doneContainer)
+        // T-ErrReport：需求池报告入口（报告问题按钮 + 需求池网页链接）
+        row(feedbackContainer)
         // 底部占位（与设置页整体一致：内容顶置）
         gbc.gridy++
         gbc.weighty = 1.0
@@ -242,6 +262,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         restartButton.text = MpSqlVisualizerBundle.message("settings.update.restartNow")
         notesTitleLabel.text = MpSqlVisualizerBundle.message("settings.update.changelog")
         giteeLink.text = MpSqlVisualizerBundle.message("settings.update.viewOnGitee")
+        reportProblemButton.text = MpSqlVisualizerBundle.message("settings.update.reportProblem")
+        feedbackPoolLink.text = MpSqlVisualizerBundle.message("settings.update.feedbackPool")
         renderState()
     }
 

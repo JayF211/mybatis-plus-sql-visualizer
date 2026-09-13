@@ -452,4 +452,328 @@ class JpaEntityResolverJoinTest : BasePlatformTestCase() {
             assertTrue("@OneToMany 不应生成 AssociationInfo", table.associations.isEmpty())
         }
     }
+
+    // ------------------------------------------------------------------
+    // M39 / T-J7 关联元数据增强
+    // ------------------------------------------------------------------
+
+    fun testJoinColumn_referencedColumnName记入关联_T_J7() {
+        // @JoinColumn(name, referencedColumnName) → 关联信息记录被引用列（JOIN ON 优先用它）
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "EmployeeEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_employee")
+                public class EmployeeEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.ManyToOne
+                    @jakarta.persistence.JoinColumn(name = "dept_id", referencedColumnName = "dept_no")
+                    private DepartmentEntity department;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_department")
+                public class DepartmentEntity {
+                    @jakarta.persistence.Id
+                    private Long deptNo;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals(1, table.associations.size)
+            val assoc = table.associations[0]
+            assertEquals("dept_id", assoc.joinColumn)
+            assertEquals("被引用列应记入 referencedColumnName", "dept_no", assoc.referencedColumnName)
+            assertEquals("单外键 joinColumns 应为单元素清单", 1, assoc.joinColumns.size)
+            assertEquals("dept_id", assoc.joinColumns[0].name)
+            assertEquals("dept_no", assoc.joinColumns[0].referencedColumnName)
+        }
+    }
+
+    fun testJoinColumns_复合外键完整记入_T_J7() {
+        // @JoinColumns 复合外键：多列外键不落单列，完整清单记入 AssociationInfo.joinColumns
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "EmployeeEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_employee")
+                public class EmployeeEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.ManyToOne
+                    @jakarta.persistence.JoinColumns({
+                        @jakarta.persistence.JoinColumn(name = "dept_country", referencedColumnName = "country"),
+                        @jakarta.persistence.JoinColumn(name = "dept_no", referencedColumnName = "dept_no")
+                    })
+                    private DepartmentEntity department;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_department")
+                public class DepartmentEntity {
+                    @jakarta.persistence.Id
+                    private String country;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            // 复合外键不产生单列（多列外键无法以单列表达）
+            assertTrue(
+                "复合外键字段不应落单列",
+                table.columns.none { it.fieldName == "department" },
+            )
+            assertEquals(listOf("id"), table.allColumnNames)
+            assertEquals(1, table.associations.size)
+            val assoc = table.associations[0]
+            assertEquals("复合外键应解析出 2 列", 2, assoc.joinColumns.size)
+            assertEquals("joinColumn 字段取首列", "dept_country", assoc.joinColumn)
+            assertEquals(listOf("dept_country", "dept_no"), assoc.joinColumns.map { it.name })
+            assertEquals(listOf("country", "dept_no"), assoc.joinColumns.map { it.referencedColumnName })
+        }
+    }
+
+    fun testOneToOneMappedBy_无外键侧标记_T_J7() {
+        // @OneToOne(mappedBy=...) 侧无外键：不落列 + hasForeignKey=false（按主键二次 SELECT 语义标记）
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "UserProfileEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_user_profile")
+                public class UserProfileEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.OneToOne(mappedBy = "profile")
+                    private UserEntity user;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_user")
+                public class UserEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.OneToOne
+                    @jakarta.persistence.JoinColumn(name = "profile_id")
+                    private UserProfileEntity profile;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            // mappedBy 侧不产生外键列
+            assertNull("mappedBy 侧不应产生外键列", table.columnByField("user"))
+            assertEquals(listOf("id"), table.allColumnNames)
+            assertEquals(1, table.associations.size)
+            val assoc = table.associations[0]
+            assertEquals("user", assoc.fieldName)
+            assertEquals("mappedBy 应记录对方持有字段名", "profile", assoc.mappedBy)
+            assertTrue("mappedBy 侧应标记 hasForeignKey=false", !assoc.hasForeignKey)
+        }
+    }
+
+    fun testNotFoundIgnore标记_T_J7() {
+        // Hibernate @NotFound(action = IGNORE) → notFoundIgnore=true；默认 action(EXCEPTION) → false
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "EmployeeEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_employee")
+                public class EmployeeEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.ManyToOne
+                    @org.hibernate.annotations.NotFound(action = org.hibernate.annotations.NotFoundAction.IGNORE)
+                    private DepartmentEntity department;
+
+                    @jakarta.persistence.ManyToOne
+                    private OfficeEntity office;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_department")
+                public class DepartmentEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_office")
+                public class OfficeEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertTrue(
+                "@NotFound(IGNORE) 应标记 notFoundIgnore",
+                table.associationByField("department")?.notFoundIgnore == true,
+            )
+            assertTrue(
+                "未标注 @NotFound 应为 false",
+                table.associationByField("office")?.notFoundIgnore == false,
+            )
+        }
+    }
+
+    fun testManyToMany_JoinTable中间表记入_T_J7() {
+        // @ManyToMany + @JoinTable → 中间表完整信息记入 collectionAssociations（不落主表列、不进 associations）
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "UserEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_user")
+                public class UserEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.ManyToMany
+                    @jakarta.persistence.JoinTable(
+                        name = "t_user_role",
+                        joinColumns = @jakarta.persistence.JoinColumn(name = "user_id"),
+                        inverseJoinColumns = @jakarta.persistence.JoinColumn(name = "role_id")
+                    )
+                    private java.util.List<RoleEntity> roles;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_role")
+                public class RoleEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertNull("@ManyToMany 字段不应落主表列", table.columnByField("roles"))
+            assertTrue("@ManyToMany 不应进 associations", table.associations.isEmpty())
+            assertEquals("应解析出 1 个集合关联", 1, table.collectionAssociations.size)
+            val assoc = table.collectionAssociations[0]
+            assertEquals("roles", assoc.fieldName)
+            assertEquals("t_role", assoc.targetTable)
+            val joinTable = assoc.joinTable
+            assertNotNull("中间表信息应非空", joinTable)
+            assertEquals("t_user_role", joinTable?.tableName)
+            assertEquals("user_id", joinTable?.joinColumns?.firstOrNull()?.name)
+            assertEquals("role_id", joinTable?.inverseJoinColumns?.firstOrNull()?.name)
+        }
+    }
+
+    fun testOneToMany_mappedBy与目标表记入_T_J7() {
+        // @OneToMany(mappedBy) → 集合关联元数据：mappedBy + 目标实体表名
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "DepartmentEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_department")
+                public class DepartmentEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.OneToMany(mappedBy = "department")
+                    private java.util.List<EmployeeEntity> employees;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_employee")
+                public class EmployeeEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals(1, table.collectionAssociations.size)
+            val assoc = table.collectionAssociations[0]
+            assertEquals("employees", assoc.fieldName)
+            assertEquals("t_employee", assoc.targetTable)
+            assertEquals("department", assoc.mappedBy)
+        }
+    }
+
+    fun testMapsId标记_T_J7() {
+        // @MapsId → AssociationInfo.mapsId 标记（外键列与引用实体主键共享）
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "EmployeeEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_employee")
+                public class EmployeeEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.ManyToOne
+                    @jakarta.persistence.MapsId
+                    @jakarta.persistence.JoinColumn(name = "dept_id")
+                    private DepartmentEntity department;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_department")
+                public class DepartmentEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertTrue("@MapsId 应标记 mapsId", table.associationByField("department")?.mapsId == true)
+            // @MapsId 不影响外键列本身
+            assertEquals("dept_id", table.columnByField("department")?.columnName)
+        }
+    }
+
+    fun testJavax包名注解关联识别_T_J7() {
+        // 双包名：javax.persistence 全限定名注解同样识别（老工程 Spring Boot 2 / Hibernate 5）
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "UserEntity",
+                """
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_user")
+                public class UserEntity {
+                    @javax.persistence.Id
+                    private Long id;
+
+                    @javax.persistence.ManyToOne
+                    @javax.persistence.JoinColumn(name = "addr_id", referencedColumnName = "addr_no")
+                    private AddressEntity address;
+                }
+
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_address")
+                public class AddressEntity {
+                    @javax.persistence.Id
+                    private Long addrNo;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals(1, table.associations.size)
+            val assoc = table.associations[0]
+            assertEquals("address", assoc.fieldName)
+            assertEquals("addr_id", assoc.joinColumn)
+            assertEquals("javax 包名 referencedColumnName 应识别", "addr_no", assoc.referencedColumnName)
+            assertEquals("t_address", assoc.targetTable)
+        }
+    }
 }
