@@ -29,13 +29,21 @@ public final class CustomDaoHqlInfo {
     /** 参数传递方式（name-value 交替 / Map / 位置参数 / 无额外参数）。 */
     private final @NotNull ParamSource paramSource;
 
+    private final @Nullable DaoQueryKind kind;
+
     public CustomDaoHqlInfo(@NotNull String hql, boolean isLiteralHql, @Nullable String entityClassName, @NotNull List<HqlParameter> parameters, @NotNull PsiMethod method, @NotNull ParamSource paramSource) {
+        this(hql, isLiteralHql, entityClassName, parameters, method, paramSource, DaoQueryKind.HQL);
+    }
+
+    public CustomDaoHqlInfo(@NotNull String hql, boolean isLiteralHql, @Nullable String entityClassName, @NotNull List<HqlParameter> parameters, @NotNull PsiMethod method, @NotNull ParamSource paramSource, @Nullable DaoQueryKind kind) {
+
         this.hql = hql;
         this.literalHql = isLiteralHql;
         this.entityClassName = entityClassName;
         this.parameters = parameters;
         this.method = method;
         this.paramSource = paramSource;
+        this.kind = kind;
     }
 
     public @NotNull String getHql() { return hql; }
@@ -48,6 +56,8 @@ public final class CustomDaoHqlInfo {
     public @NotNull PsiMethod getMethod() { return method; }
     public @NotNull PsiMethod method() { return method; }
     public @NotNull ParamSource getParamSource() { return paramSource; }
+    public @Nullable DaoQueryKind getKind() { return kind; }
+    public @Nullable DaoQueryKind kind() { return kind; }
     public @NotNull ParamSource paramSource() { return paramSource; }
 
     @Override

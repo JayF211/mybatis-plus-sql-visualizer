@@ -148,4 +148,53 @@ public final class HbmXmlMapping {
         return "AssociationMapping[" + "fieldName=" + fieldName + ", " + "targetClassName=" + targetClassName + ", " + "joinColumn=" + joinColumn + "]";
     }
 }
+
+    /**
+     * hbm 命名查询（T-H1）：对应 {@code <hibernate-mapping>} 下的 {@code <query>} / {@code <sql-query>} 元素。
+     */
+    public static final class NamedQuery {
+    /** 完整查询名（`name` 属性，惯例 `<实体简单名>.<查询名>`）。 */
+    private final @NotNull String name;
+    /** HQL（{@code <query>}）或原生 SQL（{@code <sql-query>}）。 */
+    private final @NotNull QueryKind kind;
+    /**
+     * 查询文本（直属 XmlText，CDATA 展开；{@code <sql-query>} 内
+     * {@code <return-scalar>}/{@code <return>} 等子标签内容排除）。
+     */
+    private final @NotNull String queryText;
+
+    public NamedQuery(@NotNull String name, @NotNull QueryKind kind, @NotNull String queryText) {
+        this.name = name;
+        this.kind = kind;
+        this.queryText = queryText;
+    }
+
+    public @NotNull String getName() { return name; }
+    public @NotNull String name() { return name; }
+    public @NotNull QueryKind getKind() { return kind; }
+    public @NotNull QueryKind kind() { return kind; }
+    public @NotNull String getQueryText() { return queryText; }
+    public @NotNull String queryText() { return queryText; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof NamedQuery)) return false;
+        NamedQuery that = (NamedQuery) o;
+        return java.util.Objects.equals(this.name, that.name) && java.util.Objects.equals(this.kind, that.kind) && java.util.Objects.equals(this.queryText, that.queryText);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(name, kind, queryText);
+    }
+
+    @Override
+    public String toString() {
+        return "NamedQuery[" + "name=" + name + ", " + "kind=" + kind + ", " + "queryText=" + queryText + "]";
+    }
+}
+
+    /** hbm 命名查询种类。 */
+    public enum QueryKind { HQL, NATIVE }
 }
