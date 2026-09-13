@@ -369,16 +369,19 @@ public final class PerfRulesBatch3 {
 
     private static List<String> findTypeMismatches(Expression expr) {
         List<String> result = new ArrayList<>();
-        Pattern mismatchPattern = Pattern.compile("(`?\\w+`?)\\s*=\\s*'([^']*)'");
-        Matcher matches = mismatchPattern.matcher(expr.toString());
+        Matcher matches = PRB3_MISMATCH_PATTERN.matcher(expr.toString());
         while (matches.find()) {
             String col = matches.group(1);
-            if (col.toLowerCase().matches(".*(id|num|count|age|qty|price|amount|code|status).*")) {
+            if (col.toLowerCase().matches(PRB3_NUMERIC_LIKE_COLUMN)) {
                 result.add(col);
             }
         }
         return result.stream().distinct().toList();
     }
+
+    // T-Perf-23：函数体内 Pattern.compile(...) 提为常量（热路径免重复编译）
+    private static final Pattern PRB3_MISMATCH_PATTERN = Pattern.compile("(`?\\w+`?)\\s*=\\s*'([^']*)'");
+    private static final String PRB3_NUMERIC_LIKE_COLUMN = ".*(id|num|count|age|qty|price|amount|code|status).*";
 
     private static int countBetweenExpressions(Expression expr) {
         if (expr instanceof Between) {

@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.model;
 
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -18,6 +17,16 @@ import java.util.Objects;
  * @param comment    字段注释（M16：注解 &gt; javadoc &gt; 行注释，四级优先级含 schema 预留）
  * @param role       T-M23.3：字段角色（角色分组排序键，默认 ColumnRole.BUSINESS——
  *                   存量构造零影响；排序由 EntityResolver 计算并稳定排序）
+ * @param insertable 是否参与 INSERT（T-J18 @Column(insertable)/@JoinColumn(insertable)，默认 true——
+ *                   =false 时该列从 INSERT 列清单消失）
+ * @param updatable  是否参与 UPDATE（T-J18 @Column(updatable)/@JoinColumn(updatable)，默认 true——
+ *                   =false 时该列不出现在 UPDATE SET 子句）
+ * @param generatedValueStrategy 主键生成策略文本（T-J14 @GeneratedValue(strategy)：IDENTITY/SEQUENCE/TABLE/UUID/AUTO，
+ *                   未指定 strategy 时为规范默认 AUTO）；非主键列或无 @GeneratedValue 时为 null。
+ *                   存 String 而非枚举——对未知/未来策略值容错降级
+ * @param embedded   列是否展平自 @Embedded/@Embeddable/@EmbeddedId 嵌入对象字段（T-J18）；
+ *                   fieldName 为嵌入对象内部字段名
+ * @param converted  @Convert 标记（T-J18）：字段经 AttributeConverter 转换绑定值（不改 SQL 形态，仅标记）
  */
 public final class ColumnInfo {
     private final String fieldName;
@@ -28,9 +37,16 @@ public final class ColumnInfo {
     private final String fill;
     private final String comment;
     private final ColumnRole role;
+    private final boolean insertable;
+    private final boolean updatable;
+    private final String generatedValueStrategy;
+    private final boolean embedded;
+    private final boolean converted;
 
     public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
-                      String fieldType, String fill, String comment, ColumnRole role) {
+                      String fieldType, String fill, String comment, ColumnRole role,
+                      boolean insertable, boolean updatable, String generatedValueStrategy,
+                      boolean embedded, boolean converted) {
         this.fieldName = fieldName;
         this.columnName = columnName;
         this.isId = isId;
@@ -39,6 +55,17 @@ public final class ColumnInfo {
         this.fill = fill;
         this.comment = comment;
         this.role = role;
+        this.insertable = insertable;
+        this.updatable = updatable;
+        this.generatedValueStrategy = generatedValueStrategy;
+        this.embedded = embedded;
+        this.converted = converted;
+    }
+
+    public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
+                      String fieldType, String fill, String comment, ColumnRole role) {
+        this(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
+                true, true, null, false, false);
     }
 
     public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
@@ -100,9 +127,38 @@ public final class ColumnInfo {
         return role;
     }
 
+    public boolean isInsertable() {
+        return insertable;
+    }
+
+    public boolean isUpdatable() {
+        return updatable;
+    }
+
+    public String getGeneratedValueStrategy() {
+        return generatedValueStrategy;
+    }
+
+    public boolean isEmbedded() {
+        return embedded;
+    }
+
+    public boolean isConverted() {
+        return converted;
+    }
+
+    public ColumnInfo copy(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
+                           String fieldType, String fill, String comment, ColumnRole role,
+                           boolean insertable, boolean updatable, String generatedValueStrategy,
+                           boolean embedded, boolean converted) {
+        return new ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
+                insertable, updatable, generatedValueStrategy, embedded, converted);
+    }
+
     public ColumnInfo copy(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
                            String fieldType, String fill, String comment, ColumnRole role) {
-        return new ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role);
+        return new ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
+                insertable, updatable, generatedValueStrategy, embedded, converted);
     }
 
     @Override
@@ -116,23 +172,31 @@ public final class ColumnInfo {
         ColumnInfo that = (ColumnInfo) o;
         return isId == that.isId
                 && idTypeAuto == that.idTypeAuto
+                && insertable == that.insertable
+                && updatable == that.updatable
+                && embedded == that.embedded
+                && converted == that.converted
                 && Objects.equals(fieldName, that.fieldName)
                 && Objects.equals(columnName, that.columnName)
                 && Objects.equals(fieldType, that.fieldType)
                 && Objects.equals(fill, that.fill)
                 && Objects.equals(comment, that.comment)
+                && Objects.equals(generatedValueStrategy, that.generatedValueStrategy)
                 && role == that.role;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role);
+        return Objects.hash(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
+                insertable, updatable, generatedValueStrategy, embedded, converted);
     }
 
     @Override
     public String toString() {
         return "ColumnInfo(fieldName=" + fieldName + ", columnName=" + columnName + ", isId=" + isId
                 + ", idTypeAuto=" + idTypeAuto + ", fieldType=" + fieldType + ", fill=" + fill
-                + ", comment=" + comment + ", role=" + role + ")";
+                + ", comment=" + comment + ", role=" + role + ", insertable=" + insertable
+                + ", updatable=" + updatable + ", generatedValueStrategy=" + generatedValueStrategy
+                + ", embedded=" + embedded + ", converted=" + converted + ")";
     }
 }

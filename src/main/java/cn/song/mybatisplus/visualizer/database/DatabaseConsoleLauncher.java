@@ -32,6 +32,9 @@ import java.io.IOException;
  */
 public final class DatabaseConsoleLauncher {
 
+    private static final com.intellij.openapi.diagnostic.Logger LOG =
+            com.intellij.openapi.diagnostic.Logger.getInstance(DatabaseConsoleLauncher.class);
+
     /** Kotlin object 单例等价（保留 INSTANCE 以支持反射按对象表达式访问）。 */
     public static final DatabaseConsoleLauncher INSTANCE = new DatabaseConsoleLauncher();
 
@@ -56,8 +59,9 @@ public final class DatabaseConsoleLauncher {
             FileEditorManager.getInstance(project).openFile(vf, true);
             showInfo(project, MpSqlVisualizerBundle.message("execute.done"), onClosePanel);
         } catch (Throwable error) {
-            showError(project, MpSqlVisualizerBundle.message("execute.failed",
-                    error.getMessage() != null ? error.getMessage() : error.toString()));
+            // T-Perf-01：临时文件/打开编辑器失败改 LOG.warn 静默降级，不再弹模态框（低频异常路径，
+            // 用户可从日志定位；原生 Database 编辑器自身的错误仍由平台提示）
+            LOG.warn("[M17] launcher execute FAILED: " + error.getMessage(), error);
         }
     }
 
@@ -119,14 +123,6 @@ public final class DatabaseConsoleLauncher {
             }
         } catch (Throwable ignored) {
             // 与原 runCatching 等价：弹框异常不影响主流程
-        }
-    }
-
-    private static void showError(@NotNull Project project, @NotNull String message) {
-        try {
-            Messages.showErrorDialog(project, message, MpSqlVisualizerBundle.message("execute.title"));
-        } catch (Throwable ignored) {
-            // 与原 runCatching 等价
         }
     }
 }

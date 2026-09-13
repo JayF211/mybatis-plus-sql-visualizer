@@ -75,6 +75,26 @@ public interface Dialect {
         return null;
     }
 
+    /**
+     * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
+     *
+     * <p>返回 null → 本方言不支持（调用方按钮降级提示）。支持矩阵真机实证（DBX 通道 2026-09-02）：
+     * <ul>
+     *   <li>MySQL 5.7/8.4、MariaDB：{@code EXPLAIN FORMAT=JSON}（MySQL 8.4/5.7 实测，MariaDB 同语法族）；</li>
+     *   <li>PostgreSQL：{@code EXPLAIN (FORMAT JSON, VERBOSE)}（PG 16 实测）；</li>
+     *   <li>KingBase：{@code EXPLAIN (FORMAT JSON)}（KingbaseES V8 实测，PG 兼容完整）；</li>
+     *   <li>DM：{@code EXPLAIN &lt;sql&gt;}（DM8 实测，返回 #NSET2 计划文本）；</li>
+     *   <li>H2：{@code EXPLAIN PLAN FOR}；SQLite：{@code EXPLAIN QUERY PLAN}（引擎级单测覆盖）；</li>
+     *   <li>Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 SET SHOWPLAN_XML）不接入。</li>
+     * </ul>
+     *
+     * @param sql 不含结尾分号的查询语句
+     * @return 可直接提交执行的 EXPLAIN 语句，null = 不支持
+     */
+    default String renderExplainStatement(String sql) {
+        return null;
+    }
+
     /** 共享渲染辅助：MySQL 形态 {@code LIMIT [offset,] count}。 */
     static String renderMySqlStyleLimit(LimitClause limit) {
         String offsetPart = limit.getOffset() != null ? renderLimitValue(limit.getOffset()) + ", " : "";

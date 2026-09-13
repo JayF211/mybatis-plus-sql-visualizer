@@ -28,22 +28,33 @@ public final class DerivedMethodLocator {
     private DerivedMethodLocator() {
     }
 
-    /** Spring Data Repository 基类全限定名（superType 匹配用）。 */
-    private static final Set<String> REPOSITORY_BASE_TYPES = Set.of(
-            "org.springframework.data.repository.Repository",
-            "org.springframework.data.repository.CrudRepository",
-            "org.springframework.data.repository.PagingAndSortingRepository",
-            "org.springframework.data.jpa.repository.JpaRepository",
-            "org.springframework.data.jpa.repository.QueryExecutorAdapter"
-    );
+    /** Spring Data Repository 基类全限定名（SD6 起统一走 RepositoryBaseTypes 名单，含 JDBC/R2DBC 侧）。 */
+    private static final Set<String> REPOSITORY_BASE_TYPES = RepositoryBaseTypes.FQNS;
 
     /** Spring Data @Query 注解全限定名（排除用）。 */
     private static final String QUERY_ANNOTATION = "org.springframework.data.jpa.repository.Query";
 
-    /** PartTree 推导查询方法名前缀（Spring Data JPA 官方支持）。 */
+    /** SD7：@Modifying 注解短名（jakarta / spring-data-jdbc / spring-data-r2dbc 三包共用短名）。 */
+    private static final String MODIFYING_SHORT_NAME = "Modifying";
+
+    /** PartTree 推导查询方法名前缀（Spring Data JPA 官方支持；T-J3 补 query/search/stream）。 */
     private static final Set<String> PART_TREE_PREFIXES = Set.of(
-            "find", "findAll", "read", "get", "count", "exists", "delete", "remove"
+            "find", "findAll", "read", "get", "count", "exists", "delete", "remove",
+            "query", "search", "stream"
     );
+
+    /**
+     * T-J3：无 {@code By} 形态允许的 Subject 关键字（{@code findAll()} / {@code readAll()} / {@code getAll()} /
+     * {@code queryAll()} / {@code searchAll()} / {@code streamAll()} / {@code countAll()} 的词干 + 裸 {@code count()}）。
+     *
+     * <p>仅这些形态可放行「无 By」门控；其余无 By 方法名（getUsername/getOne 等）仍不识别。
+     */
+    private static final Set<String> NO_BY_SUBJECT_KEYWORDS = Set.of(
+            "find", "read", "get", "query", "search", "stream", "count"
+    );
+
+    /** T-J3：无 {@code By} 形态的统一 {@code All} 后缀。 */
+    private static final String ALL_SUFFIX = "All";
 
     /**
      * 从光标位置定位推导方法。
@@ -71,6 +82,10 @@ public final class DerivedMethodLocator {
      */
     public static boolean isDerivedQuery(@NotNull PsiMethod method) {
         if (hasQueryAnnotation(method)) return false;
+        // SD7（M44）：@Modifying（jakarta / spring-data-jdbc / spring-data-r2dbc 包）标记 DML @Query，
+        // 绝非派生查询——@Query 已被上方排除，此处兜底拦截「仅 @Modifying / 注解解析不完整」的漏网形态，
+        // 防止 `updateStatusByXxx` 等 DML 方法被 PartTree 误派生成 SELECT
+        if (hasModifyingAnnotation(method)) return false;
         // 排除 default 方法（含方法体，非接口推导）
         if (method.hasModifierProperty("default")) return false;
         // 排除 static 方法
@@ -78,9 +93,31 @@ public final class DerivedMethodLocator {
 
         String methodName = method.getName();
         // 方法名必须包含 By 关键字（PartTree 分隔符）
-        if (!methodName.contains("By")) return false;
+        if (!methodName.contains("By")) {
+            // T-J3：无 By 形态放行（findAll/count 等），但强制宿主为 Repository 接口——
+            // 普通类的 findAll()/count() 不识别（isDerivedQuery 也做类校验，仅此形态）。
+            if (!isNoBySubjectForm(methodName)) return false;
+            PsiClass containingClass = method.getContainingClass();
+            return containingClass != null && isRepositoryInterface(containingClass);
+        }
         // 方法名必须以 PartTree 前缀开头
         return PART_TREE_PREFIXES.stream().anyMatch(methodName::startsWith);
+    }
+
+    /**
+     * T-J3：判断方法名是否为无 {@code By} 的合法 Subject 形态。
+     *
+     * <p>合法形态：
+     * <ul>
+     *   <li>{@code <queryKeyword>All}：findAll / readAll / getAll / queryAll / searchAll / streamAll / countAll</li>
+     *   <li>裸 {@code count}</li>
+     * </ul>
+     */
+    private static boolean isNoBySubjectForm(@NotNull String methodName) {
+        if (methodName.equals("count")) return true;
+        if (!methodName.endsWith(ALL_SUFFIX)) return false;
+        String stem = methodName.substring(0, methodName.length() - ALL_SUFFIX.length());
+        return NO_BY_SUBJECT_KEYWORDS.contains(stem);
     }
 
     /**
@@ -217,6 +254,20 @@ public final class DerivedMethodLocator {
             String shortName = annotation.getNameReferenceElement() != null
                     ? annotation.getNameReferenceElement().getReferenceName() : null;
             if ("Query".equals(shortName)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * SD7（M44）：方法是否标注 @Modifying（jakarta.persistence / spring-data-jdbc / spring-data-r2dbc
+     * 三包短名同形）。识别用途见 isDerivedQuery 内注释。
+     */
+    private static boolean hasModifyingAnnotation(@NotNull PsiMethod method) {
+        if (method.getModifierList() == null) return false;
+        for (com.intellij.psi.PsiAnnotation annotation : method.getModifierList().getAnnotations()) {
+            String shortName = annotation.getNameReferenceElement() != null
+                    ? annotation.getNameReferenceElement().getReferenceName() : null;
+            if (MODIFYING_SHORT_NAME.equals(shortName)) return true;
         }
         return false;
     }

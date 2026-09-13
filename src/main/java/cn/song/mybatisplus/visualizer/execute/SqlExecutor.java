@@ -77,6 +77,11 @@ public final class SqlExecutor {
         DataSourceSelector.clearPrepared();
     }
 
+    /** T-Perf-16：面板 dispose 释放全部单例滞留引用（prepared/shared/pendingOnConsole）。 */
+    public static void releaseForPanel() {
+        DataSourceSelector.releaseForPanel();
+    }
+
     private static void showInfo(@NotNull Project project, @NotNull String message) {
         try {
             Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title"));

@@ -8,7 +8,8 @@ import org.jetbrains.annotations.Nullable;
 /**
  * JPA CriteriaQuery 中间表示（CriteriaQueryLocator 产物，CriteriaQueryConverter 输入）。
  *
- * 从 PSI 调用链中提取的结构化查询模型，涵盖 FROM / SELECT / WHERE / GROUP BY / HAVING / ORDER BY / JOIN。
+ * 从 PSI 调用链中提取的结构化查询模型，涵盖 FROM / SELECT / WHERE / GROUP BY / HAVING / ORDER BY / JOIN，
+ * 以及 SELECT DISTINCT、CriteriaUpdate / CriteriaDelete（T-J4 / T-J6 / T-J7 / T-J17）。
  */
 public final class CriteriaQueryModel {
     /** 实体类全限定名（from 的实体类）。 */
@@ -29,8 +30,18 @@ public final class CriteriaQueryModel {
     private final @NotNull List<JoinModel> joins;
     /** createQuery 的结果类型全限定名（与 entityClassName 通常一致；多态投影时可能不同）。 */
     private final @Nullable String resultClassName;
+    /** 是否 SELECT DISTINCT（T-J4：cq.distinct(true)）。 */
+    private final boolean distinct;
+    /** 操作类型（T-J6）：createQuery / createCriteriaUpdate / createCriteriaDelete 识别产物。 */
+    private final @NotNull CriteriaOperation operation;
+    /** UPDATE SET 赋值列表（T-J6，仅 operation=UPDATE 时非空）。 */
+    private final @NotNull List<CriteriaSetClause> setClauses;
 
     public CriteriaQueryModel(@Nullable String entityClassName, @Nullable PsiClass entityClass, @NotNull List<SelectColumn> selectColumns, @NotNull List<PredicateModel> predicates, @NotNull List<GroupByModel> groupBys, @NotNull List<PredicateModel> havings, @NotNull List<OrderByModel> orderBys, @NotNull List<JoinModel> joins, @Nullable String resultClassName) {
+        this(entityClassName, entityClass, selectColumns, predicates, groupBys, havings, orderBys, joins, resultClassName, false, CriteriaOperation.SELECT, java.util.List.of());
+    }
+
+    public CriteriaQueryModel(@Nullable String entityClassName, @Nullable PsiClass entityClass, @NotNull List<SelectColumn> selectColumns, @NotNull List<PredicateModel> predicates, @NotNull List<GroupByModel> groupBys, @NotNull List<PredicateModel> havings, @NotNull List<OrderByModel> orderBys, @NotNull List<JoinModel> joins, @Nullable String resultClassName, boolean distinct, @NotNull CriteriaOperation operation, @NotNull List<CriteriaSetClause> setClauses) {
         this.entityClassName = entityClassName;
         this.entityClass = entityClass;
         this.selectColumns = selectColumns;
@@ -40,6 +51,9 @@ public final class CriteriaQueryModel {
         this.orderBys = orderBys;
         this.joins = joins;
         this.resultClassName = resultClassName;
+        this.distinct = distinct;
+        this.operation = operation;
+        this.setClauses = setClauses;
     }
 
     public @Nullable String getEntityClassName() { return entityClassName; }
@@ -60,6 +74,12 @@ public final class CriteriaQueryModel {
     public @NotNull List<JoinModel> joins() { return joins; }
     public @Nullable String getResultClassName() { return resultClassName; }
     public @Nullable String resultClassName() { return resultClassName; }
+    public boolean isDistinct() { return distinct; }
+    public boolean distinct() { return distinct; }
+    public @NotNull CriteriaOperation getOperation() { return operation; }
+    public @NotNull CriteriaOperation operation() { return operation; }
+    public @NotNull List<CriteriaSetClause> getSetClauses() { return setClauses; }
+    public @NotNull List<CriteriaSetClause> setClauses() { return setClauses; }
 
     @Override
     public boolean equals(Object o) {

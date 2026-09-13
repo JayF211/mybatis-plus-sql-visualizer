@@ -29,6 +29,12 @@ public final class PluginCacheManager {
     public static void clearAll(@NotNull Project project) {
         EntityClassFinder.Companion.clearReverseLookupCache(project);
         EntityResolver.Companion.clearCache();
+        // T-Perf-18：补齐此前漏收的缓存——Jpa/Hbm 实体解析与 SqlPerfAnalyzer/动态表名
+        // （clearAll 未收录时设置页「清除缓存」清不干净）
+        cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver.clearCache();
+        cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver.clearCache();
+        cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer.clearCache();
+        cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor.clearCache();
         // Wrapper 解析缓存挂在项目服务上：getServiceIfCreated 未创建则跳过（清除动作不得触发服务实例化）
         SqlPreviewService previewService = project.getServiceIfCreated(SqlPreviewService.class);
         if (previewService != null) {

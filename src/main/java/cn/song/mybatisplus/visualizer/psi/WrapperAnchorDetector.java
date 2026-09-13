@@ -103,6 +103,18 @@ public final class WrapperAnchorDetector {
             PsiReferenceExpression ref = (PsiReferenceExpression) element.getParent();
             if (ref.getReferenceNameElement() != element) return null;
             String referenceName = ref.getReferenceName();
+            // XB（M44）：xbatis 双坐标静态工厂（QueryChain.of(userDao, X.class) / QueryChain.create()）——
+            // 工厂方法名 + 工厂类简名双重语法门控（O(1)，Optional.of/Map.of 等通用 of 调用天然排除）
+            if (WrapperLocator.xbatisFactoryMethodNames.contains(referenceName)) {
+                PsiExpression qualifierExpr = ref.getQualifierExpression();
+                String qualifierName = qualifierExpr instanceof PsiReferenceExpression
+                        ? ((PsiReferenceExpression) qualifierExpr).getReferenceName() : null;
+                if (WrapperLocator.xbatisFactoryClassNames.contains(qualifierName)) {
+                    if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
+                    PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
+                    return isInsideWrapperVariableInitializer(call) ? null : element;
+                }
+            }
             if (WrapperLocator.WRAPPER_FACTORY_METHOD_NAMES.contains(referenceName)) {
                 if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
                 PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
@@ -151,6 +163,32 @@ public final class WrapperAnchorDetector {
                     }
                 }
                 return element;
+            }
+            // 场景 E（T-J1/T-J6/T-J21）：JPA CRUD / EntityManager 写路径 / HibernateTemplate 实体操作
+            // （`userRepository.findById(id)` / `em.persist(entity)` / `getHibernateTemplate().get(X.class, id)` 等）。
+            // **与场景 D 撞名面大（save/count/delete/find 等通用名）**，必须叠加 receiver 家族判定——
+            // qualifier 变量一次 resolve + 类型父链文本匹配（BATCH_CHAIN_COLLISION_NAMES 同款微秒级先例，
+            // 非纯 O(1) 的文档化例外）；家族判定失败（普通类/无 qualifier/wrapper 链上同名终结点）不亮图标：
+            // 宁可无图标，不可误亮（`stream.count()` 等海量负例）。点击后 preview 仍以 receiver 家族派发，
+            // 非 JPA 家族返回 null 走 MP 批量路径。
+            if (cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter.crudAnchorMethodNames
+                    .contains(referenceName)) {
+                if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
+                PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
+                if (initializerHeadIsWrapper(call)) return null;
+                return cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
+                        .hasJpaCrudReceiver(call) ? element : null;
+            }
+            // 场景 F（EQ，M44 其他 ORM 第一批）：Easy-Query proxy 链 entry
+            // （easyEntityQuery.queryable(Topic.class)/insertable/updatable/deletable）——
+            // entry 方法名 + receiver 变量名/类型启发双重门控（普通类同名方法不识别，负例守卫；
+            // qualifier 变量一次 resolve 同场景 E 的文档化例外）。
+            if (cn.song.mybatisplus.visualizer.converter.EasyQueryConverter.ENTRY_METHODS.contains(referenceName)) {
+                if (!(ref.getParent() instanceof PsiMethodCallExpression)) return null;
+                PsiMethodCallExpression call = (PsiMethodCallExpression) ref.getParent();
+                if (initializerHeadIsWrapper(call)) return null;
+                return cn.song.mybatisplus.visualizer.converter.EasyQueryConverter.isEasyQueryCall(call)
+                        ? element : null;
             }
             return null;
         }
@@ -258,16 +296,29 @@ public final class WrapperAnchorDetector {
         if (!isChainStart && !isConstructor) return null;
 
         // 检查该行是否包含 Wrapper 操作（eq/like/set 等），确认是 Wrapper 链
-        boolean hasWrapperOp = false;
-        for (String op : wrapperOperationMethodNames) {
-            if (lineText.contains("." + op + "(")) {
-                hasWrapperOp = true;
-                break;
-            }
-        }
-        if (!hasWrapperOp) return null;
+        // T-Perf-23：单趟扫描 ".标识符(" 形态（24 个操作名的 contains 全是它的必要子形态），
+        // 替代每叶子 24 次 contains 全行扫描
+        if (!hasDotCallPattern(lineText)) return null;
 
         return element;
+    }
+
+    /** 单趟扫描：行内是否存在 `.标识符(` 形态（Wrapper 操作调用的必要条件）。 */
+    private static boolean hasDotCallPattern(String s) {
+        int n = s.length();
+        int i = 0;
+        while (i < n - 1) {
+            char c = s.charAt(i);
+            if (c == '.' && i + 1 < n) {
+                int j = i + 1;
+                while (j < n && (Character.isLetterOrDigit(s.charAt(j)) || s.charAt(j) == '_')) j++;
+                if (j > i + 1 && j < n && s.charAt(j) == '(') return true;
+                i = j;
+            } else {
+                i++;
+            }
+        }
+        return false;
     }
 
     /** 获取元素所在行文本（O(1) 按偏移量计算）。 */

@@ -550,9 +550,33 @@ public final class WrapperLocator {
         PsiType[] typeArguments = factoryCall.getTypeArguments();
         PsiClassType typeArg = typeArguments.length > 0 && typeArguments[0] instanceof PsiClassType
             ? (PsiClassType) typeArguments[0] : null;
-        PsiClass entityClass = typeArg != null ? typeArg.resolve() : resolveEntityClass(factoryCall.getType());
+        // XB（M44）：xbatis 工厂实体**优先取 Class 字面量实参**（`QueryChain.of(mapper, User.class)`，
+        // javap 实证签名）——stub/LightPlatform 下返回类型泛型常为未推断的类型形参 T，不可作实体
+        PsiClass entityClass;
+        if (wrapperType == WrapperType.XBATIS) {
+            entityClass = entityClassFromFactoryArgs(factoryCall);
+            if (entityClass == null && typeArg != null && typeArg.resolve() != null
+                    && !(typeArg.resolve() instanceof com.intellij.psi.PsiTypeParameter)) {
+                entityClass = typeArg.resolve();
+            }
+            if (entityClass == null) {
+                entityClass = resolveEntityClass(factoryCall.getType());
+            }
+        } else {
+            entityClass = typeArg != null ? typeArg.resolve() : null;
+            if (entityClass == null) {
+                entityClass = resolveEntityClass(factoryCall.getType());
+                if (entityClass == null) {
+                    entityClass = entityClassFromFactoryArgs(factoryCall);
+                }
+            }
+        }
         String typeArgName = typeArg != null ? typeArg.getClassName() : null;
-        TableInfo table = resolveTableInfo(entityClass, typeArgName);
+        // XB（M44）：xbatis 链实体解析——xbatis @Table 注解实体走 JpaEntityResolver
+        // （@Table value / @TableField / @TableId / @Ignore 轨），MP 兼容注解实体走既有 MP EntityResolver
+        TableInfo table = wrapperType == WrapperType.XBATIS
+                ? resolveTableInfoForXbatis(entityClass, typeArgName)
+                : resolveTableInfo(entityClass, typeArgName);
         if (table == null) {
             table = inferEntityFromChain(factoryCall);
         }
@@ -595,7 +619,9 @@ public final class WrapperLocator {
         List<PsiMethodCallExpression> nonTerminalCalls = new ArrayList<>(clearedCalls);
         if (terminal != null) nonTerminalCalls.remove(terminal);
         String terminalName = terminal != null ? terminal.getMethodExpression().getReferenceName() : null;
-        boolean chainDeleteConsumed = REMOVE_TERMINAL.equals(terminalName);
+        // XB（M44）：DeleteChain 条件链转 DELETE 语义（无 set 调用，终结点 execute 已入终结名单剔除）
+        boolean chainDeleteConsumed = REMOVE_TERMINAL.equals(terminalName)
+                || XBATIS_DELETE_CHAIN.equals(xbatisChainFamilyOf(factoryCall));
         boolean chainCountConsumed = COUNT_TERMINAL.equals(terminalName);
         boolean chainExistsConsumed = EXISTS_TERMINAL.equals(terminalName);
         // P1-04（M19.5）：链上 `update(entity)` 终结点（带实参）——实体字段展开 SET
@@ -729,6 +755,8 @@ public final class WrapperLocator {
      * </ul>
      */
     private static boolean isWrapperFactoryCall(PsiMethodCallExpression call) {
+        // XB（M44）：xbatis 双坐标静态工厂（QueryChain.of/create 等）优先识别
+        if (isXbatisFactoryCall(call)) return true;
         String methodName = call.getMethodExpression().getReferenceName();
         if (methodName == null || !WRAPPER_FACTORY_METHOD_NAMES.contains(methodName)) return false;
         PsiExpression qualifierExpr = call.getMethodExpression().getQualifierExpression();
@@ -766,6 +794,66 @@ public final class WrapperLocator {
      *  query/update/lambda 的映射语义与 Wrappers/ChainWrappers 不同，需按 qualifier 区分。 */
     private static final Set<String> MPJ_FACTORY_CLASS_NAMES = Set.of("JoinWrappers", "MPJWrappers");
 
+    // ------------------------------------------------------------------
+    // XB（M44 其他 ORM 第一批）：xbatis（原 mybatis-mp）双坐标链识别
+    // ------------------------------------------------------------------
+
+    /**
+     * xbatis 链类 FQN 前缀（双坐标）：新版 {@code cn.xbatis.}（1.10.8）与旧版 {@code cn.mybatis.mp.}
+     * （坐标 cn.mybatis-mp，冻结 1.8.1-RC3——javap 实证 Java 包名为 cn.mybatis.mp）。
+     * 变量/工厂类型的 canonicalText 前缀匹配即可区分，
+     * 防与 MP {@code QueryWrapper} 等同名类混淆（按 FQN 前缀而非短名）。
+     */
+    private static final List<String> XBATIS_FQN_PREFIXES = List.of("cn.xbatis.", "cn.mybatis.mp.");
+
+    /**
+     * xbatis 工厂/链类简单名（javap cn.xbatis.core.sql.executor.chain 实证：QueryChain/UpdateChain/
+     * DeleteChain/InsertChain；1.x 系无 QueryWrapper 类，QueryWrapper/UpdateWrapper 为防御性超集，
+     * 仅在静态工厂形态 {@code Xxx.of(...)} 下生效——MP 的 QueryWrapper 无静态 of/create，不产生误判）。
+     */
+    private static final Set<String> XBATIS_FACTORY_CLASS_NAMES = Set.of(
+            "QueryChain", "UpdateChain", "DeleteChain", "InsertChain", "QueryWrapper", "UpdateWrapper");
+
+    /** xbatis 工厂/链类简单名（锚点快速路径 O(1) 文本匹配用；语义见上）。 */
+    static final Set<String> xbatisFactoryClassNames = XBATIS_FACTORY_CLASS_NAMES;
+
+    /** xbatis 静态工厂方法名（javap 实证：`QueryChain.of(mapper, Class)` / `QueryChain.create()`）。 */
+    private static final Set<String> XBATIS_FACTORY_METHOD_NAMES = Set.of("of", "create");
+
+    /** xbatis 静态工厂方法名（锚点快速路径 O(1) 文本匹配用）。 */
+    static final Set<String> xbatisFactoryMethodNames = XBATIS_FACTORY_METHOD_NAMES;
+
+    /** xbatis 链家族（XbatisConverter UPDATE/DELETE 语义分派用）。 */
+    private static final String XBATIS_DELETE_CHAIN = "DeleteChain";
+
+    /**
+     * XB：调用是否为 xbatis 静态工厂（`QueryChain.of(userDao, UserEntity.class)` /
+     * `QueryChain.create()`，双坐标同形）。qualifier 简名 + 工厂方法名双重门控——
+     * `Optional.of` / `Map.of` 等通用 `of` 调用因 qualifier 不在 XBATIS_FACTORY_CLASS_NAMES 而天然排除。
+     */
+    static boolean isXbatisFactoryCall(PsiMethodCallExpression call) {
+        String methodName = call.getMethodExpression().getReferenceName();
+        if (methodName == null || !XBATIS_FACTORY_METHOD_NAMES.contains(methodName)) return false;
+        PsiExpression qualifierExpr = call.getMethodExpression().getQualifierExpression();
+        String qualifierName = qualifierExpr instanceof PsiReferenceExpression
+                ? ((PsiReferenceExpression) qualifierExpr).getReferenceName() : null;
+        return qualifierName != null && XBATIS_FACTORY_CLASS_NAMES.contains(qualifierName);
+    }
+
+    /** XB：类型是否为 xbatis 链类（canonicalText 按双坐标 FQN 前缀判定，不 resolve）。 */
+    private static boolean isXbatisType(PsiType type) {
+        if (type == null) return false;
+        try {
+            String canonical = type.getCanonicalText();
+            for (String prefix : XBATIS_FQN_PREFIXES) {
+                if (canonical.startsWith(prefix)) return true;
+            }
+            return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     /**
      * 工厂/链起点调用 → Wrapper 类型映射（T-M20-02 起按 (qualifier 类名, 方法名) 映射，
      * 不能只按方法名——{@code Wrappers.query()} → QUERY 而 {@code JoinWrappers.query()} → MPJ_QUERY）：
@@ -783,6 +871,12 @@ public final class WrapperLocator {
         PsiExpression qualifierExpr = call.getMethodExpression().getQualifierExpression();
         String qualifierName = qualifierExpr instanceof PsiReferenceExpression
             ? ((PsiReferenceExpression) qualifierExpr).getReferenceName() : null;
+        // XB（M44）：xbatis 双坐标工厂（QueryChain/UpdateChain/DeleteChain/InsertChain 的 of/create）→ XBATIS，
+        // 先于 MP 分支——"of"/"create" 不在 MP 工厂映射内，避免落到服务链兜底返回 null
+        if (qualifierName != null && XBATIS_FACTORY_CLASS_NAMES.contains(qualifierName)
+                && methodName != null && XBATIS_FACTORY_METHOD_NAMES.contains(methodName)) {
+            return WrapperType.XBATIS;
+        }
         if (qualifierName != null && WRAPPER_FACTORY_CLASS_NAMES.contains(qualifierName)) {
             if (methodName == null) return null;
             switch (methodName) {
@@ -886,12 +980,18 @@ public final class WrapperLocator {
         if (wrapperType == null) wrapperType = detectWrapperTypeFromInitializer(variable.getInitializer());
         if (wrapperType == null) return null;
         EntityInfo info = entityInfoFromType(variable.getType());
-        TableInfo table = resolveTableInfo(info.entityClass, info.typeArgName);
+        // XB（M44）：xbatis 变量声明形态实体解析与工厂形态同轨（xbatis @Table → JpaEntityResolver）
+        TableInfo table = wrapperType == WrapperType.XBATIS
+                ? resolveTableInfoForXbatis(info.entityClass, info.typeArgName)
+                : resolveTableInfo(info.entityClass, info.typeArgName);
         String constructorAlias = extractConstructorAlias(variable.getInitializer());
 
         // (调用, 逻辑顺序锚点) 对；锚点=所属主链调用的 endOffset
         List<Object[]> callElements = new ArrayList<>();
-        boolean deleteConsumed = false;
+        // XB（M44）：DeleteChain 变量分步形态（`DeleteChain c = DeleteChain.of(mapper, X.class); c.eq(...)`)
+        // → DELETE 语义（XbatisConverter 按 deleteConsumed 分派）
+        boolean deleteConsumed = variable.getType() instanceof PsiClassType
+                && "DeleteChain".equals(((PsiClassType) variable.getType()).getClassName());
         boolean countConsumed = false;
         boolean existsConsumed = false;
         boolean updateEntityConsumed = false;
@@ -1250,6 +1350,58 @@ public final class WrapperLocator {
         return firstArg.getType() instanceof PsiClassType ? ((PsiClassType) firstArg.getType()).resolve() : null;
     }
 
+    /**
+     * XB（M44）：从工厂调用实参解析实体类——扫描全部实参取首个 Class 字面量
+     * （`QueryChain.of(userDao, UserEntity.class)` 的第二参，javap 实证签名）。
+     * 与 {@link #entityClassFromConstructorArg} 相反：Class 字面量即目标，其余实参跳过。
+     */
+    private static PsiClass entityClassFromFactoryArgs(PsiMethodCallExpression call) {
+        for (PsiExpression arg : call.getArgumentList().getExpressions()) {
+            if (arg instanceof PsiClassObjectAccessExpression classArg
+                    && classArg.getOperand() != null
+                    && classArg.getOperand().getType() instanceof PsiClassType classType) {
+                PsiClass resolved = classType.resolve();
+                if (resolved != null) return resolved;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * XB（M44）：xbatis 链家族语义分派——qualifier 类名 → "delete"（DeleteChain 条件链转 DELETE）；
+     * QueryChain/UpdateChain 返回 null（SELECT 由 XbatisConverter 默认、UPDATE 由 set 家族调用判定）。
+     */
+    private static String xbatisChainFamilyOf(PsiMethodCallExpression call) {
+        PsiExpression qualifierExpr = call.getMethodExpression().getQualifierExpression();
+        String qualifierName = qualifierExpr instanceof PsiReferenceExpression
+                ? ((PsiReferenceExpression) qualifierExpr).getReferenceName() : null;
+        if (XBATIS_DELETE_CHAIN.equals(qualifierName) || "UpdateChain".equals(qualifierName)) {
+            return qualifierName;
+        }
+        return null;
+    }
+
+    /**
+     * XB（M44）：xbatis 链实体表解析。实体类标注 xbatis @Table → JpaEntityResolver
+     * （@Table value / @TableField / @TableId / @Ignore 轨）；MP 兼容注解（@TableName）实体
+     * → 既有 MP EntityResolver。实体类缺失时类型参数类名按命名策略兜底（与 resolveTableInfo 一致）。
+     */
+    private static TableInfo resolveTableInfoForXbatis(PsiClass entityClass, String typeArgName) {
+        // PsiTypeParameter 守卫：变量声明 `QueryChain<T>` 等未推断泛型场景下实体解析到类型形参，
+        // 不可作实体（推断表名 "t"、列清单空——宁缺不可错）
+        if (entityClass == null || entityClass instanceof com.intellij.psi.PsiTypeParameter) {
+            String name = typeArgName;
+            if (name == null || (entityClass != null && name.equals(entityClass.getName()))) return null;
+            return new TableInfo(name, cn.song.mybatisplus.visualizer.psi.EntityResolver.inferDecoratedTableName(name),
+                    List.of());
+        }
+        if (cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.findFlex(entityClass,
+                cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.FQN_XBATIS_TABLE) != null) {
+            return new cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver().resolve(entityClass);
+        }
+        return new EntityResolver().resolve(entityClass);
+    }
+
     // ------------------------------------------------------------------
     // 跨方法工厂链（清单 P03/P16）：baseJoinWrapper() 返回 wrapper，调用方继续续链
     // ------------------------------------------------------------------
@@ -1376,7 +1528,11 @@ public final class WrapperLocator {
         "one", "oneOpt", "list", "count", "exists", "page",
         "getOne", "getMap", "listMaps", "listObjs", "getObj", "map",
         "first", "mapOne", "mapFirst", "mapList", "mapPage",
-        "update", "updateAndNull", "remove"
+        "update", "updateAndNull", "remove",
+        // XB（M44）：xbatis 链终结点（javap QueryChain/UpdateChain/DeleteChain 实证）——
+        // get/getOptional/list/cursor/count/exists/paging（查询）、execute（更新/删除）。
+        // 仅在已识别的 wrapper 链内参与终结判定，普通 Stream/map 调用不受影响
+        "get", "getOptional", "paging", "cursor", "execute"
     );
 
     private static final String REMOVE_TERMINAL = "remove";
@@ -1425,6 +1581,12 @@ public final class WrapperLocator {
         if (!(type instanceof PsiClassType)) return null;
         String simpleName = ((PsiClassType) type).getClassName();
         if (simpleName == null) return null;
+        // XB（M44）：双坐标 FQN 前缀识别（cn.xbatis. / cn.mybatis-mp.）——QueryChain/UpdateChain/
+        // DeleteChain/InsertChain 变量声明；防与 MP QueryWrapper 撞类名（canonicalText 文本匹配，不 resolve）。
+        // 前缀命中后须叠加链类简单名白名单：用户工程 cn.xbatis.* 包下的任意类（实体/DAO/枚举等）
+        // 均命中前缀，若仅凭前缀会把「like(LikeMode.LEFT, ...) 实参解析到的字段变量」等非链类型
+        // 误判为链变量（实证：字段类型 cn.xbatis.core.LikeMode → 变量路径抢跑 → table=null）
+        if (isXbatisType(type) && XBATIS_FACTORY_CLASS_NAMES.contains(simpleName)) return WrapperType.XBATIS;
         switch (simpleName) {
             case "LambdaQueryWrapper": return WrapperType.LAMBDA_QUERY;
             case "LambdaUpdateWrapper": return WrapperType.LAMBDA_UPDATE;
@@ -1453,7 +1615,11 @@ public final class WrapperLocator {
         PsiType[] parameters = classType.getParameters();
         if (parameters.length == 0) return null;
         if (!(parameters[0] instanceof PsiClassType)) return null;
-        return ((PsiClassType) parameters[0]).resolve();
+        // PsiTypeParameter 守卫（XB/M44）：LightPlatform/stub 下 `QueryChain<T>` 的泛型参数可能
+        // 仍为类型形参 T（未被推断替换），resolve() 返回 PsiTypeParameter（PsiClass 子类）——
+        // 若当实体解析，表名推断成 "t"、列清单为空（宁可不识别不可出错误 SQL）
+        PsiClass resolved = ((PsiClassType) parameters[0]).resolve();
+        return resolved instanceof com.intellij.psi.PsiTypeParameter ? null : resolved;
     }
 
     /**

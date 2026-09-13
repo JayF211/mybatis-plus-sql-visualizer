@@ -10,6 +10,7 @@ import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.search.GlobalSearchScope;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -30,11 +31,32 @@ public final class NamedQueryLocator {
     private NamedQueryLocator() {
     }
 
-    /** @NamedQuery 注解全限定名。 */
-    private static final String NAMED_QUERY = "javax.persistence.NamedQuery";
+    /** @NamedQuery 注解全限定名（javax 老命名空间）。 */
+    private static final String NAMED_QUERY_JAVAX = "javax.persistence.NamedQuery";
 
-    /** @NamedQueries 容器注解全限定名。 */
-    private static final String NAMED_QUERIES = "javax.persistence.NamedQueries";
+    /** @NamedQuery 注解全限定名（jakarta 新命名空间，T-J12 双支持）。 */
+    private static final String NAMED_QUERY_JAKARTA = "jakarta.persistence.NamedQuery";
+
+    /** @NamedQueries 容器注解全限定名（javax 老命名空间）。 */
+    private static final String NAMED_QUERIES_JAVAX = "javax.persistence.NamedQueries";
+
+    /** @NamedQueries 容器注解全限定名（jakarta 新命名空间，T-J12 双支持）。 */
+    private static final String NAMED_QUERIES_JAKARTA = "jakarta.persistence.NamedQueries";
+
+    /** @NamedQuery 全限定名集合（javax + jakarta）。 */
+    private static final Set<String> NAMED_QUERY_FQNS = Set.of(NAMED_QUERY_JAVAX, NAMED_QUERY_JAKARTA);
+
+    /** @NamedQueries 全限定名集合（javax + jakarta）。 */
+    private static final Set<String> NAMED_QUERIES_FQNS = Set.of(NAMED_QUERIES_JAVAX, NAMED_QUERIES_JAKARTA);
+
+    /** 容器注解短名（LightPlatform 测试环境 / 粘贴片段下 FQN 不可解析时兜底）。 */
+    private static final String NAMED_QUERIES_SHORT_NAME = "NamedQueries";
+
+    /** 单注解短名。 */
+    private static final String NAMED_QUERY_SHORT_NAME = "NamedQuery";
+
+    /** 识别出的命名查询注解类别。 */
+    private enum AnnotationKind { NAMED_QUERY, NAMED_QUERIES }
 
     /**
      * 从实体类提取全部 @NamedQuery / @NamedQueries 命名查询。
@@ -49,14 +71,11 @@ public final class NamedQueryLocator {
         List<NamedQueryInfo> results = new ArrayList<>();
         if (entityClass.getModifierList() == null) return results;
         for (PsiAnnotation annotation : entityClass.getModifierList().getAnnotations()) {
-            String simpleName = resolveAnnotationSimpleName(annotation);
-            if (simpleName == null) continue;
-            switch (simpleName) {
-                case "NamedQueries" -> extractNamedQueriesContainer(annotation, results);
-                case "NamedQuery" -> extractNamedQuery(annotation, results);
-                default -> {
-                    // 其它注解忽略
-                }
+            AnnotationKind kind = resolveAnnotationKind(annotation);
+            if (kind == AnnotationKind.NAMED_QUERIES) {
+                extractNamedQueriesContainer(annotation, results);
+            } else if (kind == AnnotationKind.NAMED_QUERY) {
+                extractNamedQuery(annotation, results);
             }
         }
         return results;
@@ -164,21 +183,31 @@ public final class NamedQueryLocator {
     }
 
     /**
-     * 解析注解的短名（simpleName）。
+     * 解析注解类别（T-J12：javax / jakarta 双 FQN + 短名兜底，沿用 JpaEntityResolver 惯例）。
      *
-     * 优先 qualifiedName 截取（完整 IDE）；LightPlatform 测试环境下 qualifiedName 可能为 null，
-     * 回退使用 nameReferenceElement.referenceName。
+     * <p>匹配顺序：
+     * <ol>
+     *   <li>qualifiedName 精确匹配 javax / jakarta 全限定名；</li>
+     *   <li>兜底：短名匹配（LightPlatform 测试环境 / 粘贴片段下注解类不可解析，qualifiedName 为 null
+     *       或为同文件裸短名，用 nameReferenceElement.referenceName 兜底——与旧短名行为保持一致）。</li>
+     * </ol>
      *
-     * @return 短名；无法解析返回 null
+     * @param annotation 注解实例
+     * @return 注解类别；非命名查询注解返回 null
      */
     @Nullable
-    private static String resolveAnnotationSimpleName(@NotNull PsiAnnotation annotation) {
-        if (annotation.getQualifiedName() != null) {
-            String qn = annotation.getQualifiedName();
-            return qn.substring(qn.lastIndexOf('.') + 1);
+    private static AnnotationKind resolveAnnotationKind(@NotNull PsiAnnotation annotation) {
+        String qualifiedName = annotation.getQualifiedName();
+        if (qualifiedName != null) {
+            // 优先全限定名精确匹配
+            if (NAMED_QUERY_FQNS.contains(qualifiedName)) return AnnotationKind.NAMED_QUERY;
+            if (NAMED_QUERIES_FQNS.contains(qualifiedName)) return AnnotationKind.NAMED_QUERIES;
         }
-        return annotation.getNameReferenceElement() != null
-                ? annotation.getNameReferenceElement().getReferenceName()
-                : null;
+        // FQN 不匹配（不可解析 / 短名形态）→ 按短名兜底
+        String shortName = annotation.getNameReferenceElement() != null
+                ? annotation.getNameReferenceElement().getReferenceName() : null;
+        if (NAMED_QUERY_SHORT_NAME.equals(shortName)) return AnnotationKind.NAMED_QUERY;
+        if (NAMED_QUERIES_SHORT_NAME.equals(shortName)) return AnnotationKind.NAMED_QUERIES;
+        return null;
     }
 }

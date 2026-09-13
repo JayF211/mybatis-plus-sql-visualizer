@@ -27,16 +27,23 @@ import java.util.function.Supplier;
  */
 public class WrapperCache {
 
-    /** 缓存键：文件 + 锚点偏移 + 配置维度（同文件不同锚点独立缓存；解析开关/表配置变化也独立缓存）。 */
+    /**
+     * 缓存键：文件 + 锚点偏移 + 配置维度（同文件不同锚点独立缓存；解析开关/表配置变化也独立缓存）。
+     * T-Perf-18：文件维度改 VirtualFile.url 字符串——不持 PsiFile 强引用（关闭文件的 PsiFile
+     * 可回收，靠 modificationStamp 维度在 PSI 重建后自然失效重算）。
+     */
     private static final class CacheKey {
 
-        private final PsiFile file;
+        private final String fileUrl;
+        /** T-Perf-18：文件实例同一性辅助键（light/mock 文件 url 可重复，防跨实例误命中）。 */
+        private final int fileIdentity;
         private final int anchorOffset;
         private final boolean resolveVariables;
         private final String configSignature;
 
-        private CacheKey(PsiFile file, int anchorOffset, boolean resolveVariables, String configSignature) {
-            this.file = file;
+        private CacheKey(String fileUrl, int fileIdentity, int anchorOffset, boolean resolveVariables, String configSignature) {
+            this.fileUrl = fileUrl;
+            this.fileIdentity = fileIdentity;
             this.anchorOffset = anchorOffset;
             this.resolveVariables = resolveVariables;
             this.configSignature = configSignature;
@@ -53,13 +60,14 @@ public class WrapperCache {
             CacheKey that = (CacheKey) o;
             return anchorOffset == that.anchorOffset
                     && resolveVariables == that.resolveVariables
-                    && Objects.equals(file, that.file)
+                    && fileIdentity == that.fileIdentity
+                    && Objects.equals(fileUrl, that.fileUrl)
                     && Objects.equals(configSignature, that.configSignature);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(file, anchorOffset, resolveVariables, configSignature);
+            return Objects.hash(fileUrl, fileIdentity, anchorOffset, resolveVariables, configSignature);
         }
     }
 
@@ -97,7 +105,9 @@ public class WrapperCache {
             boolean resolveVariables,
             String configSignature,
             Supplier<T> compute) {
-        CacheKey key = new CacheKey(file, anchorOffset, resolveVariables, configSignature);
+        CacheKey key = new CacheKey(
+                file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null,
+                System.identityHashCode(file), anchorOffset, resolveVariables, configSignature);
         long stamp = file.getModificationStamp();
         Entry entry = cache.get(key);
         if (entry != null && entry.stamp == stamp) {

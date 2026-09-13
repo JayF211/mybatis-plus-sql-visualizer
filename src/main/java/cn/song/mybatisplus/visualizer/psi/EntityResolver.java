@@ -67,7 +67,11 @@ public class EntityResolver {
         String qName = entityClass.getQualifiedName() != null ? entityClass.getQualifiedName() : className;
         String configSig = TableConfigSignature.projectSignature();
 
-        EntityCacheKey key = new EntityCacheKey(file, qName, configSig);
+        // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识——PsiFile 随键
+        // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
+        EntityCacheKey key = new EntityCacheKey(
+                file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null,
+                System.identityHashCode(file), qName, configSig);
         long stamp = file.getModificationStamp();
         Entry entry = cache.get(key);
         if (entry != null && entry.stamp == stamp) {
@@ -452,6 +456,70 @@ public class EntityResolver {
     // 与 TABLE_LOGIC 同模式走 findAnnotation 短名兜底）
     private static final String VERSION = "com.baomidou.mybatisplus.annotation.Version";
 
+    /**
+     * T-M2：主键序列注解（Oracle/PG/DM 等序列方言实体的主键取值声明）。
+     * 常量全限定名 com.baomidou.mybatisplus.annotation.KeySequence。
+     */
+    private static final String KEY_SEQUENCE = "com.baomidou.mybatisplus.annotation.KeySequence";
+
+    // ------------------------------------------------------------------
+    // T-M2：@KeySequence 主键序列读取
+    // ------------------------------------------------------------------
+
+    /**
+     * 读取实体类级 KEY_SEQUENCE 注解的序列名（value 属性，String[] 取首元素）。
+     *
+     * <p>消费方：BatchOperationConverter INSERT 模板——实体含 @KeySequence 且当前方言为
+     * Oracle/DM/KingBase 时，追加「主键取序列 {seq}」注释提示 + 主键列保持 {@code ?} 占位
+     * （不做真实 nextval 渲染，边界文档化见 buildInsertBatch KDoc）。
+     *
+     * <p>解析容错（不抛异常）：注解缺失返回 null；value 支持单值字面量与数组Initializer
+     * （{@code @KeySequence("seq")} / {@code @KeySequence(value = ["seq1", "seq2"])} 取首个）；
+     * 非字符串字面量（常量引用等静态不可得）返回 null。
+     * 注解类不可解析的环境按短名 "KeySequence" 兜底（与 findAnnotation 同模式）。
+     *
+     * <p>注意：MP {@code @KeySequence} 的 {@code value()} 声明为 {@code String[]}；历史版本亦接受单值。
+     */
+    public static String keySequenceValue(@NotNull PsiClass entityClass) {
+        try {
+            com.intellij.psi.PsiAnnotationList modifierList = entityClass.getModifierList();
+            com.intellij.psi.PsiAnnotation annotation = modifierList != null
+                    ? modifierList.findAnnotation(KEY_SEQUENCE) : null;
+            if (annotation == null && modifierList != null) {
+                for (com.intellij.psi.PsiAnnotation a : modifierList.getAnnotations()) {
+                    String shortName = a.getNameReferenceElement() != null
+                            ? a.getNameReferenceElement().getReferenceName() : null;
+                    if ("KeySequence".equals(shortName)) {
+                        annotation = a;
+                        break;
+                    }
+                }
+            }
+            if (annotation == null) return null;
+            com.intellij.psi.PsiAnnotationMemberValue memberValue = annotation.findAttributeValue("value");
+            if (memberValue == null) return null;
+            String value;
+            if (memberValue instanceof com.intellij.psi.PsiLiteralExpression literal) {
+                value = literal.getValue() instanceof String s ? s : null;
+            } else if (memberValue instanceof com.intellij.psi.PsiArrayInitializerMemberValue arrayValue) {
+                value = arrayValue.getInitializers().length > 0
+                        && arrayValue.getInitializers()[0] instanceof com.intellij.psi.PsiLiteralExpression first
+                        ? first.getValue() instanceof String s ? s : null : null;
+            } else {
+                value = literalString(memberValue);
+            }
+            return value != null && !value.isBlank() ? value : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 非标准容器形态兜底：直接按字符串字面量读取。 */
+    private static String literalString(@NotNull com.intellij.psi.PsiAnnotationMemberValue memberValue) {
+        return memberValue instanceof com.intellij.psi.PsiLiteralExpression literal
+                && literal.getValue() instanceof String s ? s : null;
+    }
+
     /** 注解 → 注释属性白名单（swagger/easyexcel 等业务注解的注释属性）。 */
     private static final Map<String, List<String>> COMMENT_ANNOTATION_ATTRIBUTES = Map.of(
         "Schema", List.of("description"),
@@ -470,14 +538,18 @@ public class EntityResolver {
     // T-EntityCache：实体解析缓存（三维键 + 双维度失效）
     // ------------------------------------------------------------------
 
-    /** 实体解析缓存键（file + classQualifiedName + configSignature；PsiFile 引用相等语义）。 */
+    /** 实体解析缓存键（fileUrl/fileIdentity + classQualifiedName + configSignature；T-Perf-18 不持 PsiFile 强引用）。 */
     private static final class EntityCacheKey {
-        final PsiFile file;
+        final String fileUrl;
+        /** T-Perf-18：文件实例同一性辅助键——light/mock 文件（测试 fixture）url 与 stamp 均可能相同，
+         *  仅靠 url 会跨实例误命中；生产环境同一逻辑文件恒为同一 PsiFile 实例，不受影响。 */
+        final int fileIdentity;
         final String classQualifiedName;
         final String configSignature;
 
-        EntityCacheKey(PsiFile file, String classQualifiedName, String configSignature) {
-            this.file = file;
+        EntityCacheKey(String fileUrl, int fileIdentity, String classQualifiedName, String configSignature) {
+            this.fileUrl = fileUrl;
+            this.fileIdentity = fileIdentity;
             this.classQualifiedName = classQualifiedName;
             this.configSignature = configSignature;
         }
@@ -487,14 +559,15 @@ public class EntityResolver {
             if (this == o) return true;
             if (!(o instanceof EntityCacheKey)) return false;
             EntityCacheKey that = (EntityCacheKey) o;
-            return Objects.equals(file, that.file)
+            return fileIdentity == that.fileIdentity
+                && Objects.equals(fileUrl, that.fileUrl)
                 && Objects.equals(classQualifiedName, that.classQualifiedName)
                 && Objects.equals(configSignature, that.configSignature);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(file, classQualifiedName, configSignature);
+            return Objects.hash(fileUrl, fileIdentity, classQualifiedName, configSignature);
         }
     }
 

@@ -43,4 +43,9 @@ public final class H2Dialect implements Dialect {
         return "MERGE INTO " + quoteIfKeyword(tableName) + " (" + cols + ") KEY (" +
                 quoteIfKeyword(conflictKey) + ") VALUES (" + placeholders + ")";
     }
+
+    @Override
+    public String renderExplainStatement(String sql) {
+        return "EXPLAIN PLAN FOR " + sql;
+    }
 }

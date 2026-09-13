@@ -21,6 +21,9 @@ import java.lang.reflect.Method;
  */
 public final class ExecuteSqlSupport {
 
+    private static final com.intellij.openapi.diagnostic.Logger LOG =
+            com.intellij.openapi.diagnostic.Logger.getInstance(ExecuteSqlSupport.class);
+
     /** Database 插件标记类（插件加载时必在 classpath；探测用，版本无关）。 */
     private static final String DATABASE_MARKER_CLASS = "com.intellij.database.dataSource.LocalDataSourceManager";
 
@@ -66,21 +69,14 @@ public final class ExecuteSqlSupport {
                     .getMethod("execute", Project.class, String.class, Runnable.class);
             method.invoke(null, project, sql, closeRunnable);
         } catch (Throwable error) {
-            showError(project, MpSqlVisualizerBundle.message("execute.failed", error.getMessage() != null ? error.getMessage() : error.toString()));
+            // T-Perf-01：反射加载失败静默降级（LOG.warn 记录详情，不弹模态框——调用方 onError 已在面板内显示错误）
+            LOG.warn("[M36] launcher execute reflection FAILED: " + error.getMessage(), error);
         }
     }
 
     private static void showInfo(@NotNull Project project, @NotNull String message) {
         try {
             Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title"));
-        } catch (Throwable ignored) {
-            // 测试/headless 环境不抛异常
-        }
-    }
-
-    private static void showError(@NotNull Project project, @NotNull String message) {
-        try {
-            Messages.showErrorDialog(project, message, MpSqlVisualizerBundle.message("execute.title"));
         } catch (Throwable ignored) {
             // 测试/headless 环境不抛异常
         }

@@ -38,4 +38,9 @@ public final class MySqlDialect implements Dialect {
     public String renderUpsert(String conflictKey, List<String> updateColumns) {
         return Dialect.renderMySqlStyleUpsert(this, updateColumns);
     }
+
+    @Override
+    public String renderExplainStatement(String sql) {
+        return "EXPLAIN FORMAT=JSON " + sql;
+    }
 }

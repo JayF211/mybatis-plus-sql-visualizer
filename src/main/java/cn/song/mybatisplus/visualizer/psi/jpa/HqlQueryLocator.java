@@ -39,8 +39,12 @@ public final class HqlQueryLocator {
     }
 
     // Hibernate Session.createQuery / createNamedQuery / createNativeQuery 方法名
+    // T-J12：补 createSQLQuery（老 Hibernate3 Session API，按 native SQL 语义归类）
     private static final Set<String> CREATE_QUERY_METHODS = Set.of(
-            "createQuery", "createNamedQuery", "createNativeQuery");
+            "createQuery", "createNamedQuery", "createNativeQuery", "createSQLQuery");
+
+    /** native SQL 语义的创建方法名（不做实体→表名映射，仅参数替换）。 */
+    private static final Set<String> NATIVE_QUERY_METHODS = Set.of("createNativeQuery", "createSQLQuery");
 
     // Query 接口参数设置方法名
     private static final Set<String> SET_PARAM_METHODS = Set.of(
@@ -263,7 +267,8 @@ public final class HqlQueryLocator {
 
         String createQueryMethodName = call.getMethodExpression().getReferenceName() != null
                 ? call.getMethodExpression().getReferenceName() : "";
-        boolean isNativeQuery = "createNativeQuery".equals(createQueryMethodName);
+        // T-J12：createSQLQuery（Hibernate3）与 createNativeQuery 同为 native SQL 语义
+        boolean isNativeQuery = NATIVE_QUERY_METHODS.contains(createQueryMethodName);
 
         return new HqlQueryInfo(method.getName(), hqlResult.hql(), hqlResult.isLiteral(),
                 entityInfo.entityClass(), entityInfo.entityClassName(), parameters, method,

@@ -33,4 +33,9 @@ public final class DmDialect implements Dialect {
     public Set<String> getReservedWords() {
         return SqlKeywords.DM_RESERVED;
     }
+
+    @Override
+    public String renderExplainStatement(String sql) {
+        return "EXPLAIN " + sql;
+    }
 }

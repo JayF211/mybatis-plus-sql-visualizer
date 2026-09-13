@@ -29,6 +29,17 @@ import java.util.Set;
  */
 public final class OgnlEvaluator {
 
+    /**
+     * T-Perf-04：表达式解析缓存——同一表达式（test/bind/`${}` 在每次 renderSql 重求值）
+     * 只 parse 一次。解析是表达式的纯函数（与 bindings 无关），缓存安全；
+     * 键为表达式原文，超上限整体清空（表达式多样性有限，简单封顶防膨胀）。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, ParseResult> PARSE_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** T-Perf-04：表达式解析缓存上限（超过整体清空——防一次性生成海量动态表达式的膨胀）。 */
+    private static final int PARSE_CACHE_MAX = 1024;
+
     public static final OgnlEvaluator INSTANCE = new OgnlEvaluator();
 
     private OgnlEvaluator() {
@@ -36,6 +47,19 @@ public final class OgnlEvaluator {
 
     /** 解析表达式（T-M25.2：||X|| 剥壳兼容——社区非标准写法，真实 OGNL 会报 Malformed；预览宽容按 X 解析）。 */
     public static ParseResult parse(String text) {
+        ParseResult cached = PARSE_CACHE.get(text);
+        if (cached != null) {
+            return cached;
+        }
+        ParseResult fresh = parseUncached(text);
+        if (PARSE_CACHE.size() >= PARSE_CACHE_MAX) {
+            PARSE_CACHE.clear();
+        }
+        PARSE_CACHE.put(text, fresh);
+        return fresh;
+    }
+
+    private static ParseResult parseUncached(String text) {
         try {
             return new Parser(new Lexer(unwrapOrBars(text))).parseExpression();
         } catch (OgnlParseException e) {

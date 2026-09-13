@@ -10,6 +10,7 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiTreeUtil;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -28,6 +29,24 @@ public final class JpqlQueryLocator {
 
     /** Spring Data @Query 注解全限定名。 */
     private static final String QUERY_ANNOTATION = "org.springframework.data.jpa.repository.Query";
+
+    /**
+     * SD7（M44 止血）：Spring Data JDBC / R2DBC 的 @Query 全限定名。
+     *
+     * <p>javap 实证（spring-data-jdbc 4.1.1 / spring-data-r2dbc 4.1.1）：两者均<b>无 nativeQuery 属性</b>
+     * （jdbc 版属性 = value/name/rowMapper 族，r2dbc 版仅 value），查询体本就是原生 SQL——
+     * 此前短名 "Query" 兜底命中后被当 JPQL 喂 JpqlConverter，{@code SELECT * FROM ...} 等非 JPQL 语法
+     * 产出错误结果（矩阵 §1.3 最危险假阳性链路）。识别后 isNative 置 true，
+     * 使 previewJpql 走<b>原生透传分支</b>（convertNativeSqlParameters 命名参数替换），不做 JPQL 转换。
+     */
+    private static final Set<String> NATIVE_QUERY_ANNOTATIONS = Set.of(
+            "org.springframework.data.jdbc.repository.query.Query",
+            "org.springframework.data.r2dbc.repository.Query");
+
+    /** SD7：JDBC/R2DBC @Query 的 FQN 前缀（qualifiedName 仅在注解类可解析时可靠，前缀兜底 import 场景）。 */
+    private static final List<String> NATIVE_QUERY_FQN_PREFIXES = List.of(
+            "org.springframework.data.jdbc.repository.query.Query",
+            "org.springframework.data.r2dbc.repository.Query");
 
     /**
      * 从光标位置定位 @Query 注解方法。
@@ -77,7 +96,7 @@ public final class JpqlQueryLocator {
 
         String jpql = extractJpql(queryAnnotation);
         if (jpql == null) return null;
-        boolean isNative = isNativeQuery(queryAnnotation);
+        boolean isNative = isNativeQueryAnnotation(queryAnnotation) || isNativeQuery(queryAnnotation);
         String queryName = extractQueryName(queryAnnotation);
         PsiClass entityClass = DerivedMethodLocator.resolveEntityClass(containingClass);
 
@@ -120,6 +139,44 @@ public final class JpqlQueryLocator {
         Object value = literal.getValue();
         if (!(value instanceof Boolean b)) return false;
         return b;
+    }
+
+    /**
+     * SD7（M44）：注解是否为 Spring Data JDBC / R2DBC @Query（原生 SQL 语义）。
+     *
+     * <p>判定路径：
+     * <ol>
+     *   <li>qualifiedName 精确 / 前缀匹配（注解类可解析或注解以全限定名书写时可靠）；</li>
+     *   <li>兜底：宿主文件的 import 语句含 JDBC/R2DBC Query FQN（{@code @Query} 短名书写 +
+     *       注解类不可解析的测试/跨模块场景——qualifiedName 退化为短名文本，只能靠 import 定包）。</li>
+     * </ol>
+     */
+    private static boolean isNativeQueryAnnotation(@NotNull PsiAnnotation annotation) {
+        String qualifiedName = annotation.getQualifiedName();
+        if (qualifiedName == null) return hasNativeQueryImport(annotation);
+        if (NATIVE_QUERY_ANNOTATIONS.contains(qualifiedName)) return true;
+        for (String prefix : NATIVE_QUERY_FQN_PREFIXES) {
+            if (qualifiedName.startsWith(prefix)) return true;
+        }
+        // 短名兜底场景（qualifiedName 无包名或与 JPA Query 不匹配时按 import 判定）
+        int dot = qualifiedName.lastIndexOf('.');
+        String shortName = dot >= 0 ? qualifiedName.substring(dot + 1) : qualifiedName;
+        if (!"Query".equals(shortName)) return false;
+        return hasNativeQueryImport(annotation);
+    }
+
+    /** 宿主文件 import 列表是否引入 JDBC/R2DBC @Query（短名兜底场景的包归属判定）。 */
+    private static boolean hasNativeQueryImport(@NotNull PsiAnnotation annotation) {
+        if (!(annotation.getContainingFile() instanceof com.intellij.psi.PsiJavaFile javaFile)) return false;
+        if (javaFile.getImportList() == null) return false;
+        for (com.intellij.psi.PsiImportStatementBase stmt : javaFile.getImportList().getAllImportStatements()) {
+            if (stmt instanceof com.intellij.psi.PsiImportStatement imp
+                    && imp.getQualifiedName() != null
+                    && NATIVE_QUERY_ANNOTATIONS.contains(imp.getQualifiedName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
