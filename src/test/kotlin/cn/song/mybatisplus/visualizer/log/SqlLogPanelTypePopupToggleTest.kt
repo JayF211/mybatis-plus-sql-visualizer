@@ -31,6 +31,16 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
 
     private fun waitForEdt() = com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
+    /** 递归收集弹窗内勾选框——T-CrudColor 图例把每个复选框包进行面板（色块 + 复选框），顶层直查取不到。 */
+    private fun collectCheckBoxes(container: java.awt.Container): List<javax.swing.JCheckBox> =
+        container.components.flatMap { comp ->
+            when (comp) {
+                is javax.swing.JCheckBox -> listOf(comp)
+                is java.awt.Container -> collectCheckBoxes(comp)
+                else -> emptyList()
+            }
+        }
+
     private fun label(key: String) = MpSqlVisualizerBundle.message(key)
 
     private fun allTypes() = FILTERABLE_TYPES.toSet()
@@ -73,7 +83,7 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
         try {
             val content = panel.buildTypeFilterContentForTest()
             val toggle = panel.typePopupToggleButtonForTest!!
-            val checkBoxes = content.components.filterIsInstance<javax.swing.JCheckBox>()
+            val checkBoxes = collectCheckBoxes(content)
             assertEquals("弹窗内应构建全部可筛选类型勾选框", FILTERABLE_TYPES.size, checkBoxes.size)
 
             // 取消一个类型 → 非全勾 → 文案翻「全选」
@@ -103,8 +113,7 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
             assertEquals(label("log.filter.all"), panel.typeFilterButtonForTest.text)
             assertEquals(label("log.filter.selectNone"), toggle.text)
             // 弹窗内勾选框同步填满（activeFilter 回写的镜像）
-            val checkBoxes = panel.buildTypeFilterContentForTest().components
-                .filterIsInstance<javax.swing.JCheckBox>()
+            val checkBoxes = collectCheckBoxes(panel.buildTypeFilterContentForTest())
             assertTrue("填满后弹窗勾选框应全部选中", checkBoxes.all { it.isSelected })
         } finally {
             panel.dispose()
