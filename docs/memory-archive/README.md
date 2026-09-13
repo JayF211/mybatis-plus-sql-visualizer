@@ -3,17 +3,29 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（63 个通用文件）
-> **项目记忆**：保留 27 个核心文件 + MEMORY.md 索引（第六次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（76 个通用文件）
+> **项目记忆**：保留 28 个核心文件 + MEMORY.md 索引（第七次精简后）
 
 ---
 
-## 已修复 Bug（105 个）
+## 已修复 Bug（117 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-dynupdate-hotswap.md](bug-fixes/project-dynupdate-hotswap.md) | 自更新免重启热替换交付（master 0fbd13b）：五入口反射+跨版本签名护栏；「未完全卸载」警告=GC 时机非泄漏 |
+| [t-pickmpjerr-delivery.md](bug-fixes/t-pickmpjerr-delivery.md) | SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT 根治（master 7218078）：generateCodeOrReport 单点收口 |
+| [t-sql2java-regenerate-uncaught.md](bug-fixes/t-sql2java-regenerate-uncaught.md) | 同一笔修复的过程记忆（预览读断言连刷=旧构建，堆栈无 WIRA lambda 帧=判据） |
+| [t-mergedevr2round3-delivery.md](bug-fixes/t-mergedevr2round3-delivery.md) | dev→r2 第三轮合并（e4d7857）：21 文件 40 冲突块取 dev 超集侧，3815 用例一次过 |
+| [t-mergemasterintodev2-delivery.md](bug-fixes/t-mergemasterintodev2-delivery.md) | master→dev 第二轮合并（613eae6）：5 冲突块语义融合，dev 与 master 完全同步 |
+| [t-autofold-plan.md](bug-fixes/t-autofold-plan.md) | SQL 预览字段列表自动折叠（master 4a754ba，随 v2026.9.14-beta.1 发行）：程序化 FoldingModel |
+| [t-crudsql-plan.md](bug-fixes/t-crudsql-plan.md) | 实体类+数据库表右键生成 CRUD SQL（master bf303aa 起，三轮弹窗原生化已合入） |
+| [project-tagline.md](bug-fixes/project-tagline.md) | 产品标语「服务未启，SQL 先知」五处统一（master 37fafcb）+ 反馈入口切官网需求池 |
+| [project-idea-diagram-framework.md](bug-fixes/project-idea-diagram-framework.md) | JOIN 图 IDEA 原生框架接入全集（已发行；dev 已随 master 合入，2026-09-13 实证） |
+| [reference-coolrequest-agent-analysis.md](bug-fixes/reference-coolrequest-agent-analysis.md) | M56 输入调研：CoolRequest premain 实态/驱动自拼 SQL/ByteBuddy retransform/relocate |
+| [reference-debugtools-agent-analysis.md](bug-fixes/reference-debugtools-agent-analysis.md) | M56 输入调研：DebugTools 真 attach+agentmain 反面教材与可照搬四手法 |
+| [t-archdocs-sync-dev.md](bug-fixes/t-archdocs-sync-dev.md) | docs/架构设计 五文件同步 dev 基线（dev 6f9bd5e）；分支同步范围定案已收编 project-doc-conventions |
 | [t-histparam-plan.md](bug-fixes/t-histparam-plan.md) | 历史页参数识别丢失根治 + 字面量恢复两轮（v2 pd 行 + LiteralParamRecovery，cef6081/f5983b8） |
 | [t-perfsweep-delivery.md](bug-fixes/t-perfsweep-delivery.md) | dev 遗留四热点清扫（重放守卫惰性化/热路径 Regex/dedupeCounts 4096 上限） |
 | [t-perfbatch-plan.md](bug-fixes/t-perfbatch-plan.md) | 监听器三出口分层 + 内容通知「20条/200ms」节流（dev fb73825） |
@@ -265,7 +277,7 @@
 
 ---
 
-## 全局通用记忆（75 个）
+## 全局通用记忆（76 个）
 
 > 已复制到 `~/.zcode/cli/memories/global/`，跨项目复用。
 
@@ -277,13 +289,15 @@
 
 **第六次精简升级（2026-09-12，8 个）**：hprof-idea-snapshot-analysis / parallel-session-index-commit-split / pitfall-merge-whole-side-take / pitfall-toolcall-newline-escaping / zcode-tps-footer-windows-install / feedback-doc-lists-keep-main-only / reference-api-proxies / reference-fernflower-decompile
 
+**第七次精简升级（2026-09-13，1 个）**：pitfall-subagent-claims-verify（子代理断言先证伪）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 28（含 MEMORY.md） |
-| 全局记忆 global/ | 75 |
-| 归档 archive/ | 160（bug-fixes 105 + pitfalls 52 + methodology 1 + user-context 1 + README） |
-| **合计** | **263** |
+| 项目 memory（保留） | 29（含 MEMORY.md） |
+| 全局记忆 global/ | 76 |
+| 归档 archive/ | 172（bug-fixes 117 + pitfalls 52 + methodology 1 + user-context 1 + README） |
+| **合计** | **277** |

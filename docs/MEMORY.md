@@ -201,12 +201,12 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（115 个文件，2026-09-06 第四次精简后），不再每次会话加载，按需查阅。
-> 全局通用记忆（63 个）备份在 `~/.zcode/cli/memories/global/`。
+> 从本地记忆系统归档的已完成/已交付内容（172 个文件，2026-09-13 第七次精简后），不再每次会话加载，按需查阅。
+> 全局通用记忆（76 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
-| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 64 个 + 已解决踩坑 49 个 + 方法论 1 个 + 用户环境 1 个） |
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 117 个 + 已解决踩坑 52 个 + 方法论 1 个 + 用户环境 1 个） |
 | [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
 | [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
 | [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
@@ -226,13 +226,14 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 产品介绍 / 使用说明 | `README.md`（产品定位、功能特性、截图、已知差异） |
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
 | 已修复 Bug / 已解决踩坑（归档） | `docs/memory-archive/README.md` |
-| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（63 个文件，手动查阅） |
+| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（76 个文件，手动查阅） |
 | 记忆精简规范 | `docs/记忆精简规范.md`（分类标准、归档流程、数量基线） |
 
 ## 变更记录
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-13 | 记忆第七次精简（43→29）：新增 12 个归档（bug-fixes：T-DynUpdate 免重启热替换、T-PickMpjErr 与 T-SQL2Java 同笔双档、dev→r2 与 master→dev 两轮合并交付、T-AutoFold、T-CrudSql、产品标语定稿、JOIN 图原生框架历程、CoolRequest/DebugTools agent 调研、架构文档 dev 同步）；1 个通用方法论升级 global（pitfall-subagent-claims-verify 子代理断言先证伪）；2 个收编合并（分支目录抹除事故并入 WorkBuddy 事故记忆、架构文档分支同步定案并入 project-doc-conventions）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-13/`；项目 memory 降至 29 个文件（含 MEMORY.md），archive 增至 172 个文件，global 增至 76 个文件 |
 | 2026-09-12 | 预览/日志全选全不选合并单按钮（T-SelToggle）：预览两分区 + SqlLogPanel 类型弹窗「全选/全不选」双按钮合一为状态切换单按钮（全勾→「全不选」清空，否则「全选」补满），预览侧 renderSql 末尾单点文案收口、弹窗侧三处显式同步 + buildTypeFilterContent 纯提取，i18n 零新键；含前置清除按钮末位调整。全量 3353/0/6 绿；详见 docs/变更记录.md 同日行 |
 | 2026-09-12 | 调研报告独立成目录：`docs/开发计划/` 中 7 个调研性质文档（竞品分析与优化建议、官网设计借鉴、P-立项-05 验证报告、竞品横向对比调研报告、SqlSourceInterceptor 可行性分析、CoolRequest/DebugTools agent 调研报告）迁至 `docs/调研报告/`，9 处站内引用同步改链无死链；文档命名规范新增「调研报告」类型（含范围界定：调研立项计划仍归开发计划）；M37.5 调研计划经核实为立项计划留原处 |
 | 2026-09-12 | 记忆第六次精简（79→27）：新增 40 个归档（bug-fixes +37：T-DynUpdate/T-HistParam/T-PerfSweep/DocLock 系列等已交付任务、分支合并与审计记录、JOIN 图自绘引擎旧档、竞品链接定稿；pitfalls +3：Swing HTML 列表渲染/VFS refresh 锁/测试沙盒弹浏览器）；8 个通用经验升级 global（hprof 快照工作流/并行索引级拆提交/合并冲突三规则/工具转义坑/TPS 装机/文档清单定例/API 代理/fernflower）；5 个小记忆收编进 doc-conventions 与 release-workflow（产品命名/临时截图/verifyPlugin 门禁/update 清单/Gitee 计数）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-12/`；项目 memory 降至 28 个文件（含 MEMORY.md），archive 增至 160 个文件，global 增至 75 个文件 |
