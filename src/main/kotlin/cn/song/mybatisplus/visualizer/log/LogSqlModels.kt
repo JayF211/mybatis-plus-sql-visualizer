@@ -68,6 +68,22 @@ data class LogSqlEntry(
     val sequenceNumber: Long = 0L,
 ) {
     /**
+     * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
+     *
+     * 由 [LogStatementClassifier.classify] 得出——与类型过滤弹窗**同一口径**，
+     * 因此「筛出来的 SELECT 行不会被标成红色」这一自洽性天然成立。
+     *
+     * 之所以缓存而非每次现算：[LogStatementClassifier.classify] 内部 `Regex("\\s+")`
+     * **每次调用都重新编译 Pattern**，渲染路径按 cell 调用会把该开销放大到
+     * 「每次重绘 × 可见行数」（滚动/悬停/选中/resize 均触发重绘）。
+     *
+     * 与 [dedupeKey] 同属 body 内属性——**不参与 data class 的 equals / hashCode / copy**，
+     * 故新增该字段不影响既有去重与集合语义（T-LogRowNumber 的 `sequenceNumber` 教训：
+     * 构造函数内新增字段会改变 equals，此处不会）。
+     */
+    val statementType: StatementType by lazy { LogStatementClassifier.classify(restoredSql) }
+
+    /**
      * T-Perf-19（自 dev 移植）：去重键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
      * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
      * T-LogDedupeMpMark：指纹前先 [normalizeSqlWhitespace]——同一语句的双路日志副本（named 行 trim 过 /

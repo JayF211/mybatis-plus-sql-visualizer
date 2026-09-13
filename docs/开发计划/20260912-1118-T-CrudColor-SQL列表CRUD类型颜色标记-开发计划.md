@@ -85,7 +85,7 @@
 | 选中行底部分隔线 | **抑制**（透明占位，底边为纯描边） | **抑制**（同左） |
 | 选中描边 | `#3574F0` | `#548AF7`（提亮档，非 `#2E436E` 原色） |
 | 未选中行底色（14%） | SELECT `#E6EEFC` / INSERT `#E6F4E7` / DELETE `#F9E2E2` | SELECT `#242D3E` / INSERT `#243328` / DELETE `#372124` |
-| 选中行底色（30%） | UPDATE `#F8D8BD` | UPDATE `#5A3B22` |
+| 选中行底色（30%） | UPDATE `#F8D8BD` | UPDATE `#5A3C22` |
 | 元信息灰 | `#9E9E9E` | `#8A8D93` / 选中行 `#9DA0A8` |
 | SQL 关键字 / 字符串 / 数字 / 正文 | `#0033B3` / `#067D17` / `#1750EB` / `#2B2D30` | `#CF8E6D` / `#6AAB73` / `#2AACB8` / `#BCBEC4` |
 
@@ -100,7 +100,7 @@
   - **上限推导**：内层 inset 必须 ≥ 0 → `5-W ≥ 0` 且 `8-W ≥ 0` → **`W ≤ 4`**（W=4 时 `EmptyBorder(1,4,1,4)`，上内边距恰好用尽）。`W ≥ 5` 会算出负 inset 导致 `EmptyBorder` 抛 `IllegalArgumentException`——常量加 KDoc 注明安全区间 `1..4` 并做 `coerceIn` 兜底。
   - 单测**按 W 参数化**断言两侧 insets 相等（不是写死某一档），这样以后调宽不会漏改。
 - **防热路径分配**：两个 Border 实例在 `init` 预建、渲染时**引用切换**（`border = if (selected) selectedBorder else normalBorder`），零分配。描边色随主题/失焦变化 → 用自建 `AbstractBorder` 子类持**可变 color 字段**（渲染时只改字段，不重建 Border），避免「主题切换后描边色冻结在构造时」的缺陷。
-- **防描边在暗色主题下不可见**：`selectionBackground` 在暗色主题是 `#2E436E`（深蓝），而选中行底色已被类型色调加深（如 UPDATE 橙混色后约 `#5A3B22`）——深蓝描边压在深橙底上对比度不足，等于没有描边。故描边色不能直接用 `selectionBackground` 原色，需过一层对比度保障：自研纯函数 `ensureOutlineContrast(color, isDark): Color`（按亮度差阈值提亮，暗色下走亮一档）。
+- **防描边在暗色主题下不可见**：`selectionBackground` 在暗色主题是 `#2E436E`（深蓝），而选中行底色已被类型色调加深（如 UPDATE 橙混色后约 `#5A3C22`）——深蓝描边压在深橙底上对比度不足，等于没有描边。故描边色不能直接用 `selectionBackground` 原色，需过一层对比度保障：自研纯函数 `ensureOutlineContrast(color, isDark): Color`（按亮度差阈值提亮，暗色下走亮一档）。
   - 平台 `com.intellij.ui.ColorUtil.brighter(Color, int tones)` / `mix(...)` 已核实存在于编译目标（2024.3.7.1），但 `tones` 的换算语义不直观、断言需依赖平台实现细节 → **用自研纯函数**（可独立单测、行为可断言），不引入平台行为耦合。
 - **防前景色错配**：片段辅助函数按 `isSelected` 决定前景（`formatDurationFragment` 选中返回白 `0xFFFFFF`、`formatSourceFragment` 选中返回组件前景，`SqlLogPanel.kt:1344-1368`）。`background` 样式下底色是**淡色调**而非饱和选中填充，白字在亮色主题的淡底上会不可见 → 渲染器需分派 `useSelectionFill = isSelected && style != STYLE_BACKGROUND`，仅在色条样式（走平台填充）时传 `true`。
   - **附带收益**：耗时着色在背景色样式下**不再被选中态抹成白色**，快/慢信号在浏览全程保持——这是描边方案相对平台填充的一个额外好处。
@@ -320,9 +320,12 @@ internal class SqlListSelectionOutline(
    `settings.log.tab.crudColor`、`settings.log.crudColor.style`、`settings.log.crudColor.style.tip`、`settings.log.crudColor.select` / `.insert` / `.update` / `.delete`、`settings.log.crudColor.reset`、`settings.log.crudColor.reset.tip`、样式三项文案（`settings.log.crudColor.style.bar` / `.background` / `.off`）。
    - 英文侧文案为**必须**：`PluginSettingsPersistenceTest.kt:138` 断言切换英文后控件文本不得残留中文（若新增复选框还需计入 25 台账——本方案不新增复选框，故仅需保证下拉项与标签走 bundle）。
 
-### 3.5 可选增强（P1，可延后）
+### 3.5 类型过滤弹窗色块图例（原「可选 P1」，**已一并实施**）
 
-9. **类型过滤弹窗色块图例**（`SqlLogPanel.kt:586-599`）：每个类型复选框前加 12×12 颜色方块（自绘 `Icon`），让用户在筛选处即知配色；样式为 `off` 时不显示色块。理由=颜色若无图例，用户需去设置页才能对上号。实现需把每个 `JCheckBox` 包一层 `JPanel`（保持 `typePopupCheckBoxes` 的 `List<Pair<StatementType, JCheckBox>>` 结构不变，避免影响 `applyAllTypes`）。
+9. **类型过滤弹窗色块图例**（`SqlLogPanel.showTypeFilterPopup`）：每个类型复选框前加 12×12 实心色块（自绘 `Icon`），让用户在筛选处即知配色。
+   - 色块取 `SqlListTypeColor.colorOf(type)`；`off` 样式下该函数返回 null → **不加色块**（避免出现「有图例却无标记」的错位）。
+   - 每个 `JCheckBox` 包一层 `FlowLayout(LEFT)` 行面板承载色块；`typePopupCheckBoxes` 仍是 `List<Pair<StatementType, JCheckBox>>`，`applyAllTypes` 语义不受影响（已确认无测试依赖弹窗内部结构）。
+   - **无单测**：`showTypeFilterPopup` 为私有方法且弹窗需真实 UI 上下文，改由 §4.3 真机走查第 9 项覆盖。
 
 ---
 
@@ -380,7 +383,8 @@ internal class SqlListSelectionOutline(
   5. **选中感主观验收**：`background` 样式下"选中够不够明显"（描边 vs 平台填充的观感差距）——§1.2.1 唯一的主观待确认项。反馈偏弱**优先加粗描边**（`OUTLINE_WIDTH` 2→3→4，上限 4），而非加深底色（加深会压 SQL 高亮，与选型初衷相悖）；
   6. 设置改色（如 DELETE 改紫）→ 日志页与历史页均生效；
   7. 历史页切 tab / 打开历史文件 → 二级列表色条正常；
-  8. 200 条满列表滚动 → 无卡顿回潮（对比改前，EDT 无长冻结）。
+  8. 200 条满列表滚动 → 无卡顿回潮（对比改前，EDT 无长冻结）；
+  9. **类型过滤弹窗色块图例**（§3.5）：打开类型多选弹窗 → 四类前各显示与标记同色的 12×12 色块；切到「关闭」样式后**弹窗内不应再出现色块**。
 
 ---
 
@@ -412,6 +416,90 @@ internal class SqlListSelectionOutline(
 
 ---
 
+## 七、性能分析（实施后复核，2026-09-12）
+
+> **结论：无实质性能风险；但复核中发现并修复了一处「逐格 Swing 属性赋值触发 repaint」的隐患——若不修，默认样式下每格会多一次重绘调度，属 T-LogListFreeze 同类成因。**
+
+### 7.1 热路径界定
+
+`getListCellRendererComponent` 是渲染热路径：**每个可见行 × 每次重绘**调用一次（滚动、悬停、选中、resize、数据刷新均触发）。本项目此前的 16s EDT 冻结（T-LogListFreeze）就出在这条路径上（逐格 HTML 解析 + 变高测量），故新增开销一律按该标准核算，而非按「刷新一次」核算。
+
+### 7.2 逐项开销核算（默认「色条」样式，每格）
+
+| 新增操作 | 堆分配 | 复杂度 | 说明 |
+|---|---|---|---|
+| `styleOf()` 读设置 | 0 | O(1) | `PluginSettings.getInstance()` 服务查找；**既有范式本就逐格调用**（`formatTimestampFragment` / `showDurationInLogList` 同） |
+| `colorOf(type)` | **0（加缓存后）** | O(1) | 首次解析后按 hex 复用同一 `Color` 实例 |
+| `colorBar.background` | 0 | O(1) | 变化才写（守卫，见 7.4） |
+| `colorBar.isOpaque` | 0 | O(1) | 变化才写 |
+| `cell.border` | 0 | O(1) | 预建两实例 + **同一性**比较（不走 `CompoundBorder.equals` 深比较） |
+| `cell.background` | 0 | O(1) | 既有逻辑，实例取自 `list` |
+| `entry.statementType` | **0** | O(1) | 惰性、每条目仅算一次（见 7.3） |
+
+「整行淡背景」样式额外每格 1 个 `Color` 分配（`blend` 结果未缓存），但**赋值被守卫拦下**（同值不写）→ 不产生 repaint；量级可忽略。
+
+### 7.3 净收益：`statementType` 反而降低了既有开销
+
+原 `filterByType` 每次刷新对每条目调用 `LogStatementClassifier.classify`，其内部 `Regex("\\s+")` **每次调用都重新编译 Pattern**；若渲染期现算还会按格放大。改为条目级 `by lazy` 后：分类**每条目只算一次**，刷新与渲染共用同一结果。**属净收益，不是新增负担。**
+
+### 7.4 发现并修复的隐患：逐格 Swing 属性赋值 → repaint
+
+**实测证据**（JBR 21，最小用例，`JComponent` 子类统计 `revalidate`/`repaint` 调用次数）：
+
+| 操作 | revalidate | repaint |
+|---|---|---|
+| `setBorder(新实例·值相同)` | +0 | **+1** |
+| `setBorder(同一实例)` | 0 | 0 |
+| `setBackground(新 Color·值相同)` | 0 | **+1** |
+| `setBackground(同一 Color 实例)` | 0 | 0 |
+| `setOpaque(同值)` | 0 | 0 |
+
+**初版实现的问题**：`colorBar.background = tint` 中的 `tint` 由 `parseHex` **每格新建 `Color` 实例**（`trim()` + `removePrefix` 还各分配一个 String）→ 默认样式下**每格触发一次 `repaint()` 调度**。渲染器组件在绘制期被临时挂入 `CellRendererPane`（在可视树内），这类调度并非无成本空转。这与 T-LogListFreeze 的成因同类：**渲染热路径上的副作用累积**。
+
+**修复两条**：
+1. `SqlListTypeColor.colorOf` 加**实例缓存**（同 hex 复用同一 `Color`，每类型至多 1 条，共 ≤ 4 条）；
+2. `applyCrudColorMark` 内所有 Swing 属性赋值改为**变化才写**——`setBorderIfChanged`（同一性比较）/ `setBackgroundIfChanged` / `setOpaqueIfChanged`。
+
+**修复后**：同类型连续行**零属性变更、零 repaint**；仅在与上一格「类型或选中态不同」时才赋值——即赋值次数 ≈ 相邻行的类型变化次数（远小于行数）。
+
+### 7.5 回归锁定
+
+新增 4 条**实例同一性**用例（`SqlLogPanelRendererUiTest` ×3：色条样式重复渲染 / 背景样式重复渲染 / 选中↔未选中必须换实例；`HistoryCellRendererTest` ×1）。直接断言「决定 Swing 是否 repaint 的那个条件」，比断言常量更能防回退——第三例专门防「守卫写过头把该换的边框也拦掉」。
+
+### 7.6 遗留与边界（不优化的理由）
+
+- **混色结果未做实例缓存**：每格 1 个小 `Color` 分配；因赋值守卫已消除 repaint 副作用，量级可忽略，不值得引入第二层缓存。
+- **`ensureOutlineContrast` 提亮循环**：仅选中行（1 格）触发，最多约 8 次乘法，可忽略。
+- **`PluginSettings.getInstance()` 逐格多次查找**：既有范式已如此（时间戳/耗时/来源片段各一次），本次未新增量级；若要抠需在渲染器内做「每轮绘制缓存」并处理设置变更失效，收益与复杂度不成比例。
+- **未做基准测量**：本次以「分配计数 + 副作用实证」定性核算，未跑 JMH/EDT 采样；真机滚动流畅度由 §4.3 第 8 项走查确认（对比改前无卡顿回潮）。
+
+---
+
 ## 实施记录
 
-> 待实施后补：交付提交、测试计数、真机复验结论、方案偏离点。
+- **交付分支/提交**：worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-crudcolor`，分支 `t-crudcolor`（基线 master `e190a60`）。
+  实施提交 `641c815`；为消除与 master 的分叉，合并 master（`b468b46`）并解 `docs/变更记录.md` 冲突 → 合并提交 `7dae84a`；§3.5 色块图例追加提交。
+- **测试**：新增 44 用例——`SqlListTypeColorTest` 18（新增）+ `SqlListSelectionOutlineTest` 10（新增）+ `LogStatementClassifierTest` +3 + `SqlLogPanelRendererUiTest` +6 + `HistoryCellRendererTest` +5 + `PluginSettingsPanelBindingTest` +2。
+  - 分支内自测（基线 3339）：定向 7 类 98/0/0；clean 全量 **3383/0/0/6 绿**。
+  - 合并 master 后（基线 3344）：clean 全量 **3388/0/0/6 绿**（3344 + 44，与预期完全吻合，零回归）。
+  - 追加 §3.5 后复跑：clean 全量 **3388/0/0/6 绿**。
+  - **性能修复（§七）后**：新增 4 条实例同一性用例 → **clean 全量 `3393/0/0/6` 绿（本任务最终验证结果）**。
+    - **验证过程有波折**：该提交后连续 15 次尝试均被外部 Gradle 守护（PID 25856 / 63484）持有的
+      `journal-1.lock` / `javaCompile.lock` 挡住（「拒绝访问」）。经 Python 只读探测确认为**真独占锁**
+      （占用期间连 `open(r+b)` 都 Permission denied，与早期"可打开"的瞬时争用不同）。
+      经用户授权后以 `./gradlew --stop` **优雅停止**两个守护（输出 `2 Daemons stopped`）——
+      **未使用强杀、未删除任何文件**；锁随即释放，clean 全量一次通过。
+    - **排查插曲（教训，已记入项目记忆）**：我曾据「文件名与类名不匹配」判定 `DbTypeQuoteHintTest`
+      的 XML 为陈旧残留、并据此报出 3390 —— **该判断是错的**：该类真实声明在
+      `CrudPreviewFlowAndTypesTest.kt` 内（一个文件多个测试类），按**文件名**反推类是否存在会漏判。
+      **统计用例数应以 clean 运行的 XML 为准，不要靠文件名反推。**
+- **实施中对计划的四处修正/补充**（偏离点如实记录）：
+  1. **`SqlListTypeColor` 拆纯/壳双层**：原计划写「纯 JUnit 零平台依赖」，但 `colorOf`/`styleOf` 需读 `PluginSettings`（平台服务），纯类测不了。改为纯函数重载 `colorOf(type, style, hex)` / `styleOf(raw)` + 读设置薄壳，纯逻辑可测、语义不变。
+  2. **混色改显式 half-up**：Kotlin `round(Double)` 实为 ties-to-even（`round(76.5)=76`），与手算直觉相反，会让设计稿色值表出现 1/255 偏移。改为 `floor(v + 0.5).toInt()`，与 §1.2.1 色值表完全一致（暗色选中行底色由 `#5A3B22` 更正为 `#5A3C22`，设计稿已按新值重出）。
+  3. **`SqlListSelectionOutline.inner` 类型由 `Border` 改 `AbstractBorder`**：双参 `getBorderInsets(Component, Insets)` 定义在 `AbstractBorder` 上、不在 `Border` 接口上，声明成接口就调不到复用入参的零分配重载（编译期即报错）。
+  4. **`applyCrudColorMark` 提为文件级 internal 函数**（两个渲染器共用），避免 `LogEntryListCellRenderer` / `HistoryCellRenderer` 各写一份分派逻辑导致语义漂移。
+- **受新增设置分组连累的两处既有断言**（属预期连带，已同步）：
+  - `PluginSettingsPanelBuildInfoTest.testSettingsPanelSectionsTitles`：分组标题 9 → 10（新增「CRUD 颜色标记」）。
+  - `PluginSettingsPanelUiTest.testSection可见性_仅SQL日志段隐藏其他段控件`：SQL 日志段下拉控件 0 → 1（标记样式下拉）。
+- **工程环境坑（详见项目记忆 2026-09-12）**：worktree 分支名不能带斜杠（`.git/refs/heads/` 下新建子目录在本机不落盘 → `invalid reference`）；Gradle 需 JDK17+（shell 默认 JDK8，改用 IDEA 发行包自带 JBR21）；并行会话会锁死 Gradle 缓存（一次卡死 24 分钟零输出，`build/idea-sandbox` 未生成），待对方释放后 1m36s 通过——**勿往 `.lock` 文件试探写入**（写坏会报 `Unexpected lock protocol ... found 120`，须删除令 Gradle 重建）。
+- **runIde 真机验证**：留人工，按 §4.3 八项走查（重点：2px 描边清晰度、上下键浏览不丢色、文本不位移、耗时着色不抹白、暗色主题可读性）。

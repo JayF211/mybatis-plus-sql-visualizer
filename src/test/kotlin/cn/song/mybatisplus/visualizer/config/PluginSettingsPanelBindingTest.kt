@@ -263,4 +263,52 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
             settings.loadState(snapshot)
         }
     }
+
+    /**
+     * T-CrudColor：仅改「标记形态下拉」也必须置 isModified——
+     * 防 reverseWrapperFormat 式假开关回归（漏挂 isModified → Apply 灰掉、改动被平台静默丢弃）。
+     */
+    fun testCrudColorStyleChangeEnablesApplyAndPersists() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.state
+        try {
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            assertFalse("初始应与配置一致", configurable.isModified())
+            panel.selectCrudColorStyle(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND)
+            assertTrue("仅改标记形态也应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, settings.state.crudColorStyle)
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    /** T-CrudColor：仅改某个颜色同样必须置 isModified，且 apply 写回 `#RRGGBB`。 */
+    fun testCrudColorValueChangeEnablesApplyAndPersists() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.state
+        try {
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            panel.setCrudColor("delete", "#00FF00")
+            assertTrue("仅改 DELETE 颜色也应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals("#00FF00", settings.state.crudColorDelete)
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
 }
