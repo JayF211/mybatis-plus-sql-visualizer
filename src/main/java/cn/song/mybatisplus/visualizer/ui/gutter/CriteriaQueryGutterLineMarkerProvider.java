@@ -11,6 +11,7 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiTreeUtil;
@@ -40,6 +41,10 @@ public class CriteriaQueryGutterLineMarkerProvider implements LineMarkerProvider
         // 其它 leaf（关键字、括号、字面量等）不可能位于 CriteriaQuery 调用链上——早退。
         if (!(element instanceof PsiIdentifier)) return null;
         if (!gutterEnabled()) return null;
+        // T-PerfSweep F4：文件级门控——不含 criteria 特征子串的文件整体跳过 locate。
+        // daemon 每趟对本 provider 传入打开文件的每个方法名 identifier，无门控时每个方法
+        // 定义都要付一次 locate 全代码块 PSI 扫描（分析 P1-1 在 dev 的唯一残留）。
+        if (!fileMayContainCriteria(element.getContainingFile())) return null;
         // 【去重关键】锚定在包含 CriteriaQuery 调用的方法名上——仅当 element 是方法名 token 时才创建 marker，
         // 避免方法体内每个 PsiIdentifier（变量名、字段名等）都产生重复图标。
         PsiMethod method = PsiTreeUtil.getParentOfType(element, PsiMethod.class);
@@ -80,4 +85,36 @@ public class CriteriaQueryGutterLineMarkerProvider implements LineMarkerProvider
 
     private static final Icon CRITERIA_SQL_PREVIEW_ICON =
             IconLoader.getIcon("/icons/sqlGutter.svg", CriteriaQueryGutterLineMarkerProvider.class);
+
+    /** criteria API 特征子串：覆盖 CriteriaBuilder / CriteriaQuery / criteria 变量名与 import。 */
+    private static final String CRITERIA_MARKER_SUBSTRING = "riteria";
+
+    // T-PerfSweep F4：门控单条目缓存——daemon 逐文件回调，单条目即免掉逐叶子重算；
+    // 非 daemon 多线程并发最坏重复计算一次子串匹配，无正确性影响，故不加锁。
+    private static volatile PsiFile gatedFile = null;
+
+    private static volatile long gatedStamp = -1;
+
+    private static volatile boolean gatedVerdict = false;
+
+    /**
+     * 文件是否可能含 CriteriaQuery 链（保守超集：宁可放行）。判定 = 文本含
+     * {@link #CRITERIA_MARKER_SUBSTRING}，按 (file, modificationStamp) 缓存；
+     * file 为 null（分离元素）或文本读取失败均放行（回落现状路径，正确性无损）。
+     */
+    private static boolean fileMayContainCriteria(PsiFile file) {
+        if (file == null) return true;
+        long stamp = file.getModificationStamp();
+        if (file == gatedFile && stamp == gatedStamp) return gatedVerdict;
+        boolean verdict;
+        try {
+            verdict = file.getText().contains(CRITERIA_MARKER_SUBSTRING);
+        } catch (Throwable t) {
+            verdict = true;
+        }
+        gatedFile = file;
+        gatedStamp = stamp;
+        gatedVerdict = verdict;
+        return verdict;
+    }
 }

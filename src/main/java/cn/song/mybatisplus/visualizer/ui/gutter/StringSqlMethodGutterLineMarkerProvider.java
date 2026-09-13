@@ -54,7 +54,8 @@ import kotlin.Unit;
  *
  * <p><b>去重保证</b>：锚点为 PsiMethod.nameIdentifier（方法定义），与调用行 provider
  * （{@link JdbcTemplateSqlGutterLineMarkerProvider} 等锚方法调用方法名）分行显示，天然不冲突；
- * 接口/抽象方法无 body 不标。</p>
+ * 接口/抽象方法无 body 不标。方法体扫描带家族守卫（CUSTOM_DAO/HIBERNATE_TEMPLATE/JPA_SESSION
+ * 调用由专属 provider 在调用行认领，此处跳过）——防专属家族调用在方法定义行重复亮图标。</p>
  *
  * <p>注册见 plugin.xml {@code <codeInsight.lineMarkerProvider language="JAVA" .../>}。</p>
  */
@@ -91,7 +92,13 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
 
     /**
      * 方法体内是否存在字符串 SQL 调用（daemon 快速路径判定）：
-     * 白名单方法名 + 存在字符串形态实参。纯结构遍历限方法体子树。
+     * 白名单方法名 + 存在字符串形态实参 + <b>家族守卫</b>（T-GutterDedup 补盲区）。
+     * 纯结构遍历限方法体子树。
+     *
+     * <p>家族守卫：CUSTOM_DAO / HIBERNATE_TEMPLATE / JPA_SESSION 家族的调用已在调用行被各自
+     * 专属 provider（{@link CustomDaoHqlGutterLineMarkerProvider} 等）认领，方法定义行再亮图标即成
+     * 同语句双图标（demo {@code commonDao.execute(...)} 实证）——与 {@link JdbcTemplateSqlGutterLineMarkerProvider}
+     * 的家族排除制镜像，方法锚点只聚合并不归属专属家族的 JDBC / UNKNOWN 家族调用。
      */
     private static boolean hasStringSqlCall(PsiCodeBlock body) {
         // 极端大方法护栏：结构遍历成本与方法体大小线性，超限跳过（不标）
@@ -99,6 +106,12 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
         for (PsiMethodCallExpression call : PsiTreeUtil.collectElementsOfType(body, PsiMethodCallExpression.class)) {
             if (JdbcTemplateMethodDetector.isStringSqlMethodCandidate(call.getMethodExpression().getReferenceName())
                     && PreviewReceiverResolver.hasStringLikeArg(call)) {
+                PreviewReceiverResolver.Family family = PreviewReceiverResolver.classify(call);
+                if (family == PreviewReceiverResolver.Family.CUSTOM_DAO
+                        || family == PreviewReceiverResolver.Family.HIBERNATE_TEMPLATE
+                        || family == PreviewReceiverResolver.Family.JPA_SESSION) {
+                    continue;
+                }
                 return true;
             }
         }
@@ -142,36 +155,36 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
      */
     public static void previewMethodCandidates(Project project, PsiMethod method, String sourceLocation) {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            // T-M23.8 模式：候选 + 显示文本一并后台 ReadAction 预计算（弹窗只渲染）
-            Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<String>> payload;
+            // T-M23.8 模式：候选 + 显示行一并后台 ReadAction 预计算（弹窗只渲染）
+            Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
                     List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall> calls =
                             JdbcTemplateSqlPreviewService.collectMethodCandidates(method);
-                    List<String> displayTexts = new ArrayList<>();
+                    List<SqlSelectionDialog.Row> rows = new ArrayList<>();
                     for (JdbcTemplateSqlLocator.JdbcTemplateSqlCall call : calls) {
                         Document document = call.callExpression().getContainingFile().getViewProvider().getDocument();
                         int line = document != null
                                 ? document.getLineNumber(call.callExpression().getTextRange().getStartOffset()) + 1
                                 : 0;
-                        displayTexts.add(SqlSelectionDialog.displayText(
+                        rows.add(SqlSelectionDialog.Row.of(
                                 call.methodName() + "（第 " + line + " 行）",
                                 call.sqlString()));
                     }
-                    return new Pair<>(calls, displayTexts);
+                    return new Pair<>(calls, rows);
                 });
             } catch (Throwable t) {
                 payload = new Pair<>(Collections.emptyList(), Collections.emptyList());
             }
             List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall> calls = payload.getFirst();
-            List<String> displayTexts = payload.getSecond();
+            List<SqlSelectionDialog.Row> rows = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (calls.isEmpty()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (calls.size() == 1) {
                     previewCall(project, calls.get(0), sourceLocation);
                 } else {
-                    new SqlSelectionDialog<>(project, calls, displayTexts,
+                    new SqlSelectionDialog<>(project, calls, rows,
                             selected -> previewCall(project, selected, sourceLocation)).show();
                 }
             });

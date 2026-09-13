@@ -145,11 +145,13 @@ import java.util.stream.Collectors;
 /**
  * SQL 预览面板（M9-01/02/03 可编辑版，F-07/F-08）。
  *
- * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
- *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示）+ 工具栏（复制 / 压缩多行切换 / 刷新）
+ * 弹窗 SqlPreviewDialog 与工具窗口共用本面板，展示：
+ *  - 顶部单行：元信息（Wrapper 类型 / 表名 / 风险警示，T-PreviewTopOverlap F3 按宽度预算截断）
+ *    + 工具栏（压缩切换 / 格式化 / 关键字换行 / 竖向排列 / 执行计划 / 刷新 + 「更多」折叠低频动作；
+ *    复制错误仅警示时可见）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮；文档由原生 SQL FileType PSI
- *    文件支撑，挂 [SqlCompletionContributor] 提供补全（Ctrl+Space）
+ *    文件支撑，挂 SqlCompletionContributor 提供补全（Ctrl+Space）
  */
 public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposable {
 
@@ -175,6 +177,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     private static final Pattern NUMBER_REGEX = Pattern.compile("-?\\d+(\\.\\d+)?");
     private static final Pattern WHITESPACE_REGEX = Pattern.compile("\\s+");
+
+    /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
+    private static final int RENDER_DEBOUNCE_MS = 150;
 
     private final Project project;
 
@@ -223,12 +228,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private Disposable autoPopupDisposable = null;
     private final List<JBTextField> conditionValueFields = new ArrayList<>();
     private final List<JCheckBox> batchCheckBoxes = new ArrayList<>();
-    private JButton selectAllButton = null;
-    private JButton selectNoneButton = null;
-    private JButton clearButton = null;
-    private JButton batchClearButton = null;
-    private JButton batchSelectAllButton = null;
-    private JButton batchSelectNoneButton = null;
+    // T-SelToggle：全选/全不选合并为单个状态切换按钮——全勾时文案「全不选」点击清空，
+    // 其余态文案「全选」点击填满；文案随勾选态翻转（renderSql 末尾单点同步）。
+    private JButton toggleSelectButton = null;
+    private JButton clearButton = null;        // 动态条件分区清除按钮
+    private JButton batchClearButton = null;   // 批量参数列分区清除按钮
+    // T-M23.2：批量「参数列」区全选/全不选切换按钮（T-SelToggle 合并单按钮）
+    private JButton batchToggleSelectButton = null;
 
     private Editor editor = null;
 
@@ -239,6 +245,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     private volatile VirtualFile previewTempFile = null;
     private volatile Pair<VirtualFile, PsiFile> prewarmedTempFile = null;
+    /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
+    private volatile boolean prewarmFailed = false;
     private volatile boolean previewDisposed = false;
     private String sourceLocation = null;
 
@@ -268,6 +276,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private boolean rehostRetryScheduled = false;
 
     private Document nativeEditorDoc = null;
+
+    /**
+     * T-AutoFold F5：原生控制台编辑器引用（onNativeEditorReady 时登记）——
+     * showSql nativeDoc 支链的程序性折叠应用目标；detachConsole/clear/dispose 时清空，
+     * 防止 EditorFactory 泄漏告警。recoverConsole 失联路径经 embedConsole 换新组件后
+     * 由下一次 onNativeEditorReady 重新登记。
+     */
+    private Editor nativeConsoleEditor = null;
 
     private PreviewResult current = null;
     private boolean compactMode = false;
@@ -315,6 +331,40 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         historyAlarm.setRepeats(false);
     }
 
+    // T-Perf-04：参数击键路径 renderSql 防抖（Swing Timer，150ms，模式同 historyAlarm）
+    /** 待执行的渲染任务（最后一次调度者生效——防抖语义）。 */
+    private Runnable pendingRender = null;
+    private final Timer renderDebounceTimer = new Timer(RENDER_DEBOUNCE_MS, e -> flushDebouncedRender());
+
+    {
+        renderDebounceTimer.setRepeats(false);
+    }
+
+    /**
+     * 调度防抖渲染：keystroke 路径用——150ms 停顿后只渲染一次，最终结果与逐键全量渲染一致。
+     *
+     * <p>单元测试模式（isUnitTestMode，headless 无 EDT 泵）同步执行：既有测试依赖「改参数值 →
+     * 文档即时更新」的同步语义，且挂起的 Timer 在后续测试泵 EDT 时迟到触发会触碰已销毁面板
+     * 并触发 TransactionGuard "Write-unsafe context" 日志断言（交叉污染）。生产行为不变。
+     */
+    private void scheduleRender(Runnable task) {
+        pendingRender = task;
+        com.intellij.openapi.application.Application app =
+                com.intellij.openapi.application.ApplicationManager.getApplication();
+        if (app != null && app.isUnitTestMode()) {
+            flushDebouncedRender();
+            return;
+        }
+        renderDebounceTimer.restart();
+    }
+
+    /** Timer 动作：执行最后调度的渲染任务（EDT）。 */
+    private void flushDebouncedRender() {
+        Runnable task = pendingRender;
+        pendingRender = null;
+        if (task != null) task.run();
+    }
+
     private JButton modeButton;
 
     public SqlPreviewPanel() {
@@ -329,6 +379,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-PreviewTopOverlap F1：metaLabel 从 WEST 迁 CENTER——BorderLayout 的 WEST/EAST 各按
         // 理想宽整块贴边绝不收缩，两偏好宽之和超容器宽时直接互相重叠（用户真机截图实锤：元信息
         // 文字压进按钮行）；CENTER 只拿剩余宽度，与 EAST 结构性零重叠。宽度不足由 F3 截断兜底。
+        // （合并曾取 dev T-GifHeader 两行布局为基底，用户定案「更多」折叠菜单模式——单行方案转正。）
         metaLabel.setBorder(JBUI.Borders.empty(0, 8, 4, 8));
         topRow = new JBPanel<JBPanel<?>>(new BorderLayout());
         topRow.add(metaLabel, BorderLayout.CENTER);
@@ -384,19 +435,34 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 java.nio.file.Files.writeString(io.toPath(), "");
                 io.deleteOnExit();
                 VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io);
-                if (vf == null) return;
+                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒录制期实证，
+                // 00:03 SEVERE 根因）——重试一次再判失败；失败置 prewarmFailed 让 await 快速返回，不空等 2s。
+                if (vf == null) {
+                    Thread.sleep(50);
+                    vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io);
+                }
+                if (vf == null) {
+                    prewarmFailed = true;
+                    return;
+                }
                 if (previewDisposed) {
                     new java.io.File(vf.getPath()).delete();
                     return;
                 }
                 Project proj = project;
                 if (proj == null) return;
-                PsiFile psi = ReadAction.compute(() -> PsiManager.getInstance(proj).findFile(vf));
-                if (psi == null) return;
+                final VirtualFile vfFinal = vf;
+                final Project projFinal = proj;
+                PsiFile psi = ReadAction.compute(() -> PsiManager.getInstance(projFinal).findFile(vfFinal));
+                if (psi == null) {
+                    prewarmFailed = true;
+                    return;
+                }
                 previewTempFile = vf;
                 prewarmedTempFile = new Pair<>(vf, psi);
             } catch (Throwable ignored) {
                 // 预热失败不影响预览（createEditor 走同步兜底路径）
+                prewarmFailed = true;
             }
         });
     }
@@ -410,6 +476,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /**
      * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
      * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
+     * T-GifRerecord：预热线程已判定失败时立即返回 null（快速降级），不再空等 2s 预算。
      */
     private Pair<VirtualFile, PsiFile> awaitPrewarmedTempFile() {
         long waited = 0L;
@@ -419,6 +486,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 prewarmedTempFile = null;
                 return ready;
             }
+            if (prewarmFailed) return null;
             if (waited >= PREWARM_WAIT_MS) return null;
             try {
                 Thread.sleep(PREWARM_POLL_MS);
@@ -471,6 +539,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap"), this::formatClauseLine));
         // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.vertical"), this::formatVertical));
+        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照；dev 侧功能保留内联，
+        // 导入/对比/分享已按 T-PreviewTopOverlap F2 折叠进「更多」菜单）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.refresh"), this::refreshView));
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.more"), this::showMoreActionsPopup));
@@ -596,12 +666,55 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return null;
     }
 
+    /**
+     * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
+     * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
+     * EXPLAIN 归免确认类（{@link SqlTypeClassifier}），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     */
+    void explainSql() {
+        Project proj = project;
+        if (proj == null) return;
+        String sql = (nativeEditorDoc != null && !nativeEditorDoc.getText().isBlank())
+                ? nativeEditorDoc.getText()
+                : (editor != null && !editor.getDocument().getText().isBlank()
+                        ? editor.getDocument().getText() : null);
+        if (sql == null) return;
+        PreviewResult cur = current;
+        Dialect dialect = (cur != null && cur.getPreviewModel() != null && cur.getPreviewModel().getDialect() != null)
+                ? cur.getPreviewModel().getDialect() : cn.song.mybatisplus.visualizer.sql.MySqlDialect.INSTANCE;
+        String trimmed = sql.trim();
+        int end = trimmed.length();
+        while (end > 0 && trimmed.charAt(end - 1) == ';') end--;
+        String explainSqlText = dialect.renderExplainStatement(trimmed.substring(0, end));
+        if (explainSqlText == null) {
+            Messages.showInfoMessage(
+                    proj,
+                    MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.getName()),
+                    MpSqlVisualizerBundle.message("panel.explain"));
+            return;
+        }
+        Logger.getInstance(SqlPreviewPanel.class)
+                .info("[M37.2] explainSql: dialect=" + dialect.getName() + ", len=" + explainSqlText.length());
+        resultPanel.showLoading(null);
+        SqlExecutor.execute(
+                proj, explainSqlText, null, true,
+                consoleComponent -> embedConsole(consoleComponent, true),
+                consoleEditor -> onNativeEditorReady(consoleEditor),
+                errorMsg -> resultPanel.showError(errorMsg));
+    }
+
     /** M36.5：原生控制台编辑器就绪统一处理。 */
     private void onNativeEditorReady(Editor consoleEditor) {
         SqlCompletionContext ctx = buildCompletionContext();
         consoleEditor.putUserData(SqlCompletionContext.KEY, ctx);
         SqlCompletionContributor.registerContext(consoleEditor.getDocument(), ctx);
         nativeEditorDoc = consoleEditor.getDocument();
+        // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
+        //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
+        nativeConsoleEditor = consoleEditor;
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(
+                consoleEditor,
+                consoleEditor.getDocument().getText());
         if (editor != null) {
             releaseEditor();
             editorHolder.removeAll();
@@ -803,6 +916,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             }
             consoleHost.remove(embeddedConsole);
         }
+        // T-AutoFold F5：控制台组件摘除即清编辑器引用（防 EditorFactory 泄漏；新组件就绪时经
+        // onNativeEditorReady 重新登记）
+        nativeConsoleEditor = null;
         embeddedConsole = null;
         rehostListener = null;
     }
@@ -895,10 +1011,31 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 && !((SelectStatement) pm.getStatement()).getJoins().isEmpty();
         if (hasJoins) {
             ensureTabbedContent(true);
-            DiagramModel model = JoinDiagramGenerator.buildDiagramModel((SelectStatement) pm.getStatement());
+            // T-Perf-09：schema 富化（数据源全量遍历）移后台预取——数千表冷缓存时 EDT 直跑冻结秒级；
+            // 富化完成回 EDT 再展示。当前 PreviewResult 被替换（新预览）时作废迟到的应用。
             // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
-            model = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(project, model);
-            showJoinDiagram(model);
+            SelectStatement stmt = (SelectStatement) pm.getStatement();
+            Project proj = project;
+            if (proj == null) {
+                showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt));
+                return;
+            }
+            ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                DiagramModel enriched;
+                try {
+                    enriched = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
+                            proj, JoinDiagramGenerator.buildDiagramModel(stmt));
+                } catch (Throwable t) {
+                    Logger.getInstance(SqlPreviewPanel.class)
+                            .warn("[T-Perf-09] diagram schema enrich failed, showing un-enriched model", t);
+                    enriched = JoinDiagramGenerator.buildDiagramModel(stmt);
+                }
+                DiagramModel enrichedModel = enriched;
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (current != result || project == null || project.isDisposed()) return;
+                    showJoinDiagram(enrichedModel);
+                });
+            });
         } else {
             removeDiagramTab();
             diagramPanel.clear();
@@ -1142,6 +1279,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             String base = compactMode ? result.getCompactSql() : result.getSql();
             showSql(backfillParamsBySource(applyNamedParams(base), result.getUnresolvedParams(), result.getParamHints()));
         }
+        // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
+        syncToggleSelectLabels();
     }
 
     /**
@@ -1346,10 +1485,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         xmlErrors = new ArrayList<>();
         currentWarning = null;
         if (errorCopyButton != null) errorCopyButton.setVisible(false);
-        selectAllButton = null;
-        selectNoneButton = null;
-        batchSelectAllButton = null;
-        batchSelectNoneButton = null;
+        toggleSelectButton = null;
+        batchToggleSelectButton = null;
         paramPanel.removeAll();
         previousSql = null;
         // T-PreviewDisplayMode：显示模式随面板清空复位（与其余会话状态一致，不跨预览残留）
@@ -1367,6 +1504,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         resultPanel.clear();
         detachConsole();
         nativeEditorDoc = null;
+        // T-AutoFold F5：控制台编辑器引用随清空复位
+        nativeConsoleEditor = null;
         SqlExecutor.clearPrepared();
         if (project != null) prewarmPreviewTempFile();
         revalidate();
@@ -1406,6 +1545,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     suppressAutoPopup = false;
                 }
             }
+            // T-AutoFold F4-a：nativeDoc 支链的程序性折叠（关闭态 applyTo 内部即清除短路）
+            Editor foldTarget = nativeConsoleEditor;
+            if (foldTarget != null && !foldTarget.isDisposed()) {
+                cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(foldTarget, text);
+            }
             return;
         }
         Editor existing = editor;
@@ -1419,6 +1563,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     suppressAutoPopup = false;
                 }
             }
+            // T-AutoFold F4-a：自建编辑器支链
+            cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(existing, text);
             return;
         }
         fLogger.info("[M36] showSql branch=createEditor: len=" + text.length()
@@ -1467,6 +1613,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
             // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
             // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
+            // （dev 侧 T-GifRerecord 同题降级版无 ReadAction 包裹，按超集原则整取 master 版。）
             Document doc;
             try {
                 Pair<VirtualFile, PsiFile> ready = awaitPrewarmedTempFile();
@@ -1532,6 +1679,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         editorHolder.repaint();
         editor = created;
         bindAutoPopup(created);
+        // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql);
     }
 
     /**
@@ -1625,11 +1774,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         conditionCheckBoxes.clear();
         conditionValueFields.clear();
         batchCheckBoxes.clear();
-        selectAllButton = null;
-        selectNoneButton = null;
+        // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
+        toggleSelectButton = null;
         clearButton = null;
-        batchSelectAllButton = null;
-        batchSelectNoneButton = null;
+        batchToggleSelectButton = null;
         batchClearButton = null;
         List<ConditionView> views = result.getPreviewModel() != null ? result.getPreviewModel().getConditionViews() : Collections.emptyList();
         BatchModel batchModel = result.getBatchModel();
@@ -1775,15 +1923,24 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return sectionHeaderRow(title, Collections.emptyList());
     }
 
+    /**
+     * 批量「参数列」分区标题行（T-M23.2 回归，T-M26.3 TitledSeparator 化）：左侧分区标题 +
+     * 右侧单个全选/全不选切换按钮（T-SelToggle；操作 batchCheckBoxes，与动态条件区按钮互不影响）。
+     */
     private JBPanel<JBPanel<?>> batchSectionHeader() {
-        batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll"), () -> setAllBatchColumns(true));
-        batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone"), () -> setAllBatchColumns(false));
+        batchToggleSelectButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll"),
+                () -> setAllBatchColumns(!batchCheckBoxes.stream().allMatch(JCheckBox::isSelected)));
         batchClearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear"), this::clearBatchValues);
         return sectionHeaderRow(
                 MpSqlVisualizerBundle.message("panel.batch.columns"),
-                Arrays.asList(batchClearButton, batchSelectAllButton, batchSelectNoneButton));
+                Arrays.asList(batchToggleSelectButton, batchClearButton));
     }
 
+    /**
+     * 批量列全选/全不选（T-M23.2）：操作 batchCheckBoxes 与 enabledIds（列名作 id），
+     * 同步复选框 UI 与 SQL 重渲染（全不选 → 空列清单形态，文档化边界）。
+     * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
+     */
     private void setAllBatchColumns(boolean enabled) {
         BatchModel model = current != null ? current.getBatchModel() : null;
         if (model == null) return;
@@ -1797,13 +1954,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         renderSql();
     }
 
+    /**
+     * 动态条件分区标题行（T-M26.3）：TitledSeparator「动态条件」+ 右侧单个全选/全不选切换按钮
+     * （T-M23.2 形态回归，IDEA 组操作惯例，T-SelToggle 双按钮合一；XML 条件开关同样复用，见 T-M24-04）。
+     */
     private JBPanel<JBPanel<?>> conditionSectionHeader() {
-        selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll"), () -> setAllConditions(true));
-        selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone"), () -> setAllConditions(false));
+        toggleSelectButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll"),
+                () -> setAllConditions(!conditionCheckBoxes.stream().allMatch(JCheckBox::isSelected)));
         clearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear"), this::clearConditionValues);
         return sectionHeaderRow(
                 MpSqlVisualizerBundle.message("panel.condition.section"),
-                Arrays.asList(clearButton, selectAllButton, selectNoneButton));
+                Arrays.asList(toggleSelectButton, clearButton));
     }
 
     private JButton compactButton(String text, Runnable action) {
@@ -1814,6 +1975,37 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return b;
     }
 
+    /**
+     * T-SelToggle：切换按钮文案判定——复选框非空且全部勾选 → 「全不选」（点击清空），
+     * 其余一切态（空集/部分勾选）→ 「全选」（点击填满）。以复选框 UI 态为基准
+     * （enabledIds 跨场景共享可能残留本场景外 id，与用户所见不一致）。
+     */
+    private String toggleLabel(List<JCheckBox> boxes) {
+        boolean allSelected = !boxes.isEmpty() && boxes.stream().allMatch(JCheckBox::isSelected);
+        return MpSqlVisualizerBundle.message(allSelected ? "panel.condition.selectNone" : "panel.condition.selectAll");
+    }
+
+    /**
+     * T-SelToggle：切换按钮文案随勾选态刷新——挂在 renderSql 末尾单点收口
+     * （三个勾选入口——切换按钮自身、批量列行/动态条件行/XML 条件行 listener——均以 renderSql 收尾）。
+     * 文案未变化不 setText，避免每次重渲染触发标题行 FlowLayout 无谓重排。
+     */
+    private void syncToggleSelectLabels() {
+        if (toggleSelectButton != null) {
+            String label = toggleLabel(conditionCheckBoxes);
+            if (!toggleSelectButton.getText().equals(label)) toggleSelectButton.setText(label);
+        }
+        if (batchToggleSelectButton != null) {
+            String label = toggleLabel(batchCheckBoxes);
+            if (!batchToggleSelectButton.getText().equals(label)) batchToggleSelectButton.setText(label);
+        }
+    }
+
+    /**
+     * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
+     * 同步复选框 UI 与 SQL 重渲染。T-M24-04：XML 预览的条件开关（id = test 表达式）一并处理。
+     * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
+     */
     private void setAllConditions(boolean enabled) {
         List<ConditionView> views = current != null && current.getPreviewModel() != null
                 ? current.getPreviewModel().getConditionViews() : Collections.emptyList();
@@ -1926,9 +2118,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return fs != null ? MpSqlVisualizerBundle.message("panel.condition.flag", fs) : "";
     }
 
+    /**
+     * 动态条件值变更（M13：复选框纯手动）：仅更新按 source 绑定的参数值并重渲染，
+     * 勾选态只由用户操作决定（值空保留 `?`，不自动取消勾选）。
+     * T-Perf-04：击键路径——重渲染防抖（同 onParamChanged）。
+     */
     private void onConditionValueChanged(ConditionView view, String source, String text) {
         paramValues.put(source, text);
-        renderSql();
+        scheduleRender(() -> renderSql());
         saveToHistory();
     }
 
@@ -1987,7 +2184,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return row;
     }
 
+    /**
+     * foreach 值变更：T-Perf-04 击键路径每键两次全量渲染——整个处理器防抖
+     * （停顿后以最终文本执行一次；handler 内部的两段渲染依赖 xmlMappings 中间态，保持同步语义不拆散）。
+     */
     private void onXmlForEachValuesChanged(XmlForEachView view, String text) {
+        scheduleRender(() -> applyXmlForEachValues(view, text));
+    }
+
+    /** foreach 值应用（由防抖 Timer 调度；原 onXmlForEachValuesChanged 主体）。 */
+    private void applyXmlForEachValues(XmlForEachView view, String text) {
         String item = view.item();
         if (item == null) return;
         List<String> values = Arrays.stream(text.split(","))
@@ -2098,9 +2304,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return metrics.stringWidth(raw) > maxWidth ? ellipsize(raw, metrics, maxWidth) : raw;
     }
 
+    /** 普通参数值变更：更新回填表并重渲染 SQL（T-Perf-04：重渲染防抖——逐键全量重生成+格式化
+     *  +重分词在大 SQL 下构成卡顿；paramValues 即时更新，渲染合并到停顿后一次）。 */
     private void onParamChanged(String source, String value) {
         paramValues.put(source, value);
-        renderSql();
+        scheduleRender(() -> renderSql());
         saveToHistory();
     }
 
@@ -2221,7 +2429,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     private int currentParamFieldIndex(String source) {
-        return new ArrayList<>(paramValues.keySet()).indexOf(source);
+        // T-Perf-23：单趟遍历计数（原 toList+indexOf 每次 O(C) 拷贝 + 线性查找）
+        // paramFields 按 buildParamRow/buildBatchColumnRow/buildXmlForEachRow 追加顺序排列，
+        // 与 unresolvedParams + 条件值来源的顺序一致；但 source 可能出现在多个场景，
+        // 此处按 paramValues 键顺序定位（与输入框构建顺序一致）
+        int index = 0;
+        for (String key : paramValues.keySet()) {
+            if (key.equals(source)) return index;
+            index++;
+        }
+        return -1;
     }
 
     private void showImportResult(int matched, int unmatched, List<String> unmatchedKeys, boolean isEmptyClipboard) {
@@ -2230,7 +2447,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         Project proj = project;
         if (proj == null) return;
         if (isEmptyClipboard) {
-            Messages.showErrorDialog(proj, MpSqlVisualizerBundle.message("panel.param.import.result.empty"), title);
+            // T-Perf-20：空剪贴板属用户输入类提示——改面板内行内警示（元信息行红字），
+            // 不再弹模态错误框（toast 语义：下次 updateMeta 覆盖）
+            String hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty");
+            currentWarning = hint;
+            metaLabel.setText("⚠ " + hint);
+            metaLabel.setToolTipText(hint);
+            metaLabel.setForeground(JBColor.namedColor("ErrorForeground", JBColor.RED));
+            if (errorCopyButton != null) errorCopyButton.setVisible(true);
         } else if (unmatched == 0) {
             Messages.showInfoMessage(proj, MpSqlVisualizerBundle.message("panel.param.import.result.success", matched), title);
         } else {
@@ -2268,24 +2492,44 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         historyAlarm.restart();
     }
 
+    /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。
+     * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。 */
     private void flushHistoryToCache() {
         String key = historyCacheKey();
         if (key == null) return;
-        paramHistoryCache.save(key, new LinkedHashMap<>(paramValues));
+        Map<String, String> snapshot = new LinkedHashMap<>(paramValues);
+        // headless 单测：同步执行保持既有测试语义
+        if (ApplicationManager.getApplication().isUnitTestMode()) {
+            paramHistoryCache.save(key, snapshot);
+            return;
+        }
+        ApplicationManager.getApplication().executeOnPooledThread(() -> paramHistoryCache.save(key, snapshot));
     }
 
-    private Set<Integer> detectInClauseParams(String sql) {
+    /**
+     * 扫描 `IN (?, ?, ...)` 模式，返回 IN 子句内 `?` 的参数索引集合。
+     * 面板回填时这些参数按逗号分割多值渲染。
+     *
+     * <p>T-Perf-04：单趟 O(N) 扫描——旧实现对每个 `?` 复制并大写化整个前缀（O(L×P)）；
+     * 现改为就地回扫（跳过空白 → `(` → 可选一个空格 → `IN`，与旧 trimEnd+endsWith 语义一致），
+     * 零分配。
+     */
+    Set<Integer> detectInClauseParams(String sql) {
         Set<Integer> result = new LinkedHashSet<>();
         int paramIndex = 0;
-        int i = 0;
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
-            if (c == '?') {
-                String prefix = sql.substring(0, i).trim().toUpperCase();
-                if (prefix.endsWith("IN (") || prefix.endsWith("IN(")) result.add(paramIndex);
-                paramIndex++;
+        for (int i = 0; i < sql.length(); i++) {
+            if (sql.charAt(i) != '?') continue;
+            int j = i - 1;
+            while (j >= 0 && Character.isWhitespace(sql.charAt(j))) j--;
+            if (j >= 0 && sql.charAt(j) == '(') {
+                j--;
+                if (j >= 0 && sql.charAt(j) == ' ') j--; // "IN (" 单空格形态（"IN(" 直接判 N/I）
+                if (j >= 1 && (sql.charAt(j) == 'N' || sql.charAt(j) == 'n')
+                        && (sql.charAt(j - 1) == 'I' || sql.charAt(j - 1) == 'i')) {
+                    result.add(paramIndex);
+                }
             }
-            i++;
+            paramIndex++;
         }
         return result;
     }
@@ -2514,7 +2758,18 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         } catch (Throwable ignored) {
             // dispose 路径不因监听摘除失败中断
         }
+        // T-AutoFold F5：面板废弃——控制台编辑器引用一并清空（防 EditorFactory 泄漏告警）
+        nativeConsoleEditor = null;
+        // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true;
+        // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
+        renderDebounceTimer.stop();
+        pendingRender = null;
+        historyAlarm.stop();
+        // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
+        // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
+        SqlExecutor.releaseForPanel();
+        // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this);
     }
 
@@ -2524,6 +2779,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     Editor editorForTest() {
         return editor;
+    }
+
+    /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
+    Editor nativeConsoleEditorForTest() {
+        return nativeConsoleEditor;
     }
 
     PsiFile psiFileForTest() {
@@ -2699,24 +2959,18 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return index >= 0 && index < batchCheckBoxes.size() ? batchCheckBoxes.get(index) : null;
     }
 
-    JButton batchSelectAllButtonForTest() {
-        return batchSelectAllButton;
-    }
-
-    JButton batchSelectNoneButtonForTest() {
-        return batchSelectNoneButton;
+    /** T-M23.2 / T-SelToggle：批量「参数列」区全选/全不选切换按钮。 */
+    JButton batchToggleSelectButtonForTest() {
+        return batchToggleSelectButton;
     }
 
     Set<String> enabledIdsForTest() {
         return new LinkedHashSet<>(enabledIds);
     }
 
-    JButton selectAllButtonForTest() {
-        return selectAllButton;
-    }
-
-    JButton selectNoneButtonForTest() {
-        return selectNoneButton;
+    /** T-SelToggle：动态条件区全选/全不选切换按钮。 */
+    JButton toggleSelectButtonForTest() {
+        return toggleSelectButton;
     }
 
     JButton clearButtonForTest() {

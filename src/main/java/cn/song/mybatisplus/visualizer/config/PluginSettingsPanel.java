@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo;
 import cn.song.mybatisplus.visualizer.log.InjectionResult;
+import cn.song.mybatisplus.visualizer.log.SqlListTypeColor;
 import cn.song.mybatisplus.visualizer.log.SqlSourceInterceptorAutoInjector;
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager;
 import com.intellij.openapi.actionSystem.ActionManager;
@@ -25,11 +26,13 @@ import com.intellij.openapi.keymap.KeymapManager;
 import com.intellij.openapi.keymap.KeymapUtil;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
+import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.MessageDialogBuilder;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileWrapper;
+import com.intellij.ui.ColorPanel;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.components.JBCheckBox;
@@ -37,6 +40,7 @@ import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBTextField;
 import com.intellij.util.ui.JBUI;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dialog;
 import java.awt.FlowLayout;
@@ -253,6 +257,75 @@ public class PluginSettingsPanel {
         return null;
     }
 
+    /**
+     * T-CrudColor：CRUD 颜色标记形态下拉项（值 + 当前语言下的显示文案）。
+     * 与 {@link LanguageOption} 同理必须按 value 判等（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
+     */
+    private static final class CrudColorStyleOption {
+
+        final String value;
+        final String label;
+
+        CrudColorStyleOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof CrudColorStyleOption)) return false;
+            return Objects.equals(value, ((CrudColorStyleOption) o).value);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(value);
+        }
+    }
+
+    private static CrudColorStyleOption[] crudColorStyleOptions() {
+        return new CrudColorStyleOption[]{
+            new CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
+            new CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
+            new CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_OFF, MpSqlVisualizerBundle.message("settings.log.crudColor.style.off")),
+        };
+    }
+
+    private static CrudColorStyleOption crudColorStyleOptionByValue(String value) {
+        for (CrudColorStyleOption option : crudColorStyleOptions()) {
+            if (Objects.equals(option.value, value)) return option;
+        }
+        return null;
+    }
+
+    // ---------- T-CrudColor 颜色控件辅助 ----------
+
+    /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
+    private String selectedCrudColorStyle() {
+        Object selected = crudColorStyleCombo.getSelectedItem();
+        return selected instanceof CrudColorStyleOption
+            ? ((CrudColorStyleOption) selected).value
+            : PluginSettings.CRUD_COLOR_STYLE_BAR;
+    }
+
+    /** 色板 → `#RRGGBB`（未选色 → 空串，渲染侧按默认色处理）。 */
+    private static String colorHexOf(ColorPanel panel) {
+        Color c = panel.getSelectedColor();
+        if (c == null) return "";
+        return String.format(Locale.ENGLISH, "#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue());
+    }
+
+    /** `#RRGGBB` → Color（非法回退默认色，不抛）。 */
+    private static Color colorOf(String hex) {
+        return SqlListTypeColor.parseHex(hex, new Color(0x4A86E8));
+    }
+
     // T-TenantLine 诊断日志：输出 UI Apply 决策链路。
     private static final Logger LOG = Logger.getInstance(PluginSettingsPanel.class);
 
@@ -275,6 +348,12 @@ public class PluginSettingsPanel {
 
     /** 竖向排列 VALUES 行尾配对列名标注开关（T-VPairAnno，默认开）。 */
     private final JBCheckBox verticalPairAnnotationCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.verticalPairAnnotation"));
+
+    /** SQL 预览字段较多时自动折叠开关（T-AutoFold，默认关）。 */
+    private final JBCheckBox autoFoldCheck = new JBCheckBox();
+
+    /** 自动折叠字段数阈值输入框（T-AutoFold）：开关勾选才启用编辑（对齐自动保存联动范式）。 */
+    private final JBTextField autoFoldThresholdField = new JBTextField(6);
 
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
     private final JBCheckBox literalParamRecoveryCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"));
@@ -379,6 +458,17 @@ public class PluginSettingsPanel {
     private final JBCheckBox autoInjectInterceptorCheck = new JBCheckBox();
     private final JBCheckBox logShowDurationCheck = new JBCheckBox();
 
+    // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
+    /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
+    private final JComboBox<CrudColorStyleOption> crudColorStyleCombo = new ComboBox<>();
+    /** 四类型色板（平台原生 ColorPanel，点击弹出取色器）。 */
+    private final ColorPanel crudColorSelectPanel = new ColorPanel();
+    private final ColorPanel crudColorInsertPanel = new ColorPanel();
+    private final ColorPanel crudColorUpdatePanel = new ColorPanel();
+    private final ColorPanel crudColorDeletePanel = new ColorPanel();
+    /** 一键恢复四色默认值。 */
+    private final JButton crudColorResetButton = new JButton();
+
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
      * 平台 Apply 按钮启用 = `configurable.isModified()`，无此标记则写穿后 Apply 按钮灰掉
@@ -459,6 +549,12 @@ public class PluginSettingsPanel {
                 addRow(p, g, "", formatCheck);
                 verticalPairAnnotationCheck.setText(msg("settings.verticalPairAnnotation"));
                 addRow(p, g, "", verticalPairAnnotationCheck);
+                autoFoldCheck.setText(msg("settings.autoFold.enabled"));
+                autoFoldCheck.setToolTipText(msg("settings.autoFold.enabled.tip"));
+                autoFoldCheck.addActionListener(e -> autoFoldThresholdField.setEnabled(autoFoldCheck.isSelected()));
+                addRow(p, g, "", autoFoldCheck);
+                autoFoldThresholdField.setToolTipText(msg("settings.autoFold.threshold.tip"));
+                addRow(p, g, msg("settings.autoFold.threshold"), autoFoldThresholdField);
                 literalParamRecoveryCheck.setText(msg("settings.literalParamRecovery"));
                 addRow(p, g, "", literalParamRecoveryCheck);
                 injectLogicDeleteCheck.setText(msg("settings.injectLogicDelete"));
@@ -561,6 +657,26 @@ public class PluginSettingsPanel {
                 logShowDurationCheck.setText(msg("settings.log.showDuration"));
                 logShowDurationCheck.setToolTipText(msg("settings.log.showDuration.tip"));
                 addRow(p, g, "", logShowDurationCheck);
+            });
+
+            // T-CrudColor：SQL 列表 CRUD 类型颜色标记（样式 + 四色；不新增复选框，保持复选框台账不变）
+            sectionGroup(panel, gbc, "settings.log.tab.crudColor", (p, g) -> {
+                crudColorStyleCombo.setModel(new DefaultComboBoxModel<>(crudColorStyleOptions()));
+                crudColorStyleCombo.setToolTipText(msg("settings.log.crudColor.style.tip"));
+                addRow(p, g, msg("settings.log.crudColor.style"), crudColorStyleCombo);
+                addRow(p, g, msg("settings.log.crudColor.select"), crudColorSelectPanel);
+                addRow(p, g, msg("settings.log.crudColor.insert"), crudColorInsertPanel);
+                addRow(p, g, msg("settings.log.crudColor.update"), crudColorUpdatePanel);
+                addRow(p, g, msg("settings.log.crudColor.delete"), crudColorDeletePanel);
+                crudColorResetButton.setText(msg("settings.log.crudColor.reset"));
+                crudColorResetButton.setToolTipText(msg("settings.log.crudColor.reset.tip"));
+                crudColorResetButton.addActionListener(e -> {
+                    crudColorSelectPanel.setSelectedColor(colorOf(PluginSettings.CRUD_COLOR_DEFAULT_SELECT));
+                    crudColorInsertPanel.setSelectedColor(colorOf(PluginSettings.CRUD_COLOR_DEFAULT_INSERT));
+                    crudColorUpdatePanel.setSelectedColor(colorOf(PluginSettings.CRUD_COLOR_DEFAULT_UPDATE));
+                    crudColorDeletePanel.setSelectedColor(colorOf(PluginSettings.CRUD_COLOR_DEFAULT_DELETE));
+                });
+                addRow(p, g, "", crudColorResetButton);
             });
 
             sectionGroup(panel, gbc, "settings.log.tab.orm", (p, g) -> {
@@ -1024,6 +1140,26 @@ public class PluginSettingsPanel {
         reverseFormatCombo.setSelectedItem(option);
     }
 
+    /** T-CrudColor：标记形态下拉选择入口（测试用）——与用户选择同一路径。 */
+    public void selectCrudColorStyle(String value) {
+        CrudColorStyleOption match = crudColorStyleOptionByValue(value);
+        if (match == null) return;
+        crudColorStyleCombo.setSelectedItem(match);
+    }
+
+    /** T-CrudColor：四色色板设置入口（测试用）——与用户取色同一路径。 */
+    public void setCrudColor(String which, String hex) {
+        Color color = colorOf(hex);
+        switch (which) {
+            case "select" -> crudColorSelectPanel.setSelectedColor(color);
+            case "insert" -> crudColorInsertPanel.setSelectedColor(color);
+            case "update" -> crudColorUpdatePanel.setSelectedColor(color);
+            case "delete" -> crudColorDeletePanel.setSelectedColor(color);
+            default -> {
+            }
+        }
+    }
+
     /** T-M41 测试访问器：SQL→Java 快捷键编辑行（断言行存在 / 修改检测 / apply 写入 Keymap）。 */
     public ShortcutEditor reverseShortcutEditorForTest() {
         return reverseShortcutEditor;
@@ -1081,7 +1217,16 @@ public class PluginSettingsPanel {
     // F-44-7：SqlSourceInterceptor 自动注入
     // ------------------------------------------------------------------
 
-    /** 触发拦截器注入（用户勾选开关后调用）。 */
+    /** T-Perf-10：注入执行中标志（异步化后防重入——检测期间再次勾选不重复触发）。 */
+    private boolean injectionInProgress = false;
+
+    /**
+     * 触发拦截器注入（用户勾选开关后调用）。
+     *
+     * <p>T-Perf-10：改走 injectAsync——检测阶段
+     * （AnnotatedElementsSearch/findClass/源码目录递归）后台 ReadAction 执行，EDT 不再长冻结；
+     * 结果弹窗在 EDT 回调展示（模态确认/结果类提示保留）。
+     */
     private void triggerInterceptorInjection() {
         Project project = ProjectManager.getInstance().getOpenProjects().length > 0
                 ? ProjectManager.getInstance().getOpenProjects()[0]
@@ -1094,32 +1239,36 @@ public class PluginSettingsPanel {
             autoInjectInterceptorCheck.setSelected(false);
             return;
         }
-        InjectionResult result = SqlSourceInterceptorAutoInjector.inject(project);
-        if (result instanceof InjectionResult.Success) {
-            Messages.showInfoMessage(
-                    project,
-                    ((InjectionResult.Success) result).getMessage(),
-                    "源码跳转配置");
-        } else if (result instanceof InjectionResult.AlreadyExists) {
-            Messages.showInfoMessage(
-                    project,
-                    "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
-                    "源码跳转配置");
-            autoInjectInterceptorCheck.setSelected(false);
-        } else if (result instanceof InjectionResult.UnsupportedProject) {
-            Messages.showWarningDialog(
-                    project,
-                    "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n"
-                            + "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
-                    "源码跳转配置");
-            autoInjectInterceptorCheck.setSelected(false);
-        } else if (result instanceof InjectionResult.CannotDetectStructure) {
-            Messages.showWarningDialog(
-                    project,
-                    "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
-                    "源码跳转配置");
-            autoInjectInterceptorCheck.setSelected(false);
-        }
+        if (injectionInProgress) return;
+        injectionInProgress = true;
+        SqlSourceInterceptorAutoInjector.injectAsync(project, result -> {
+            injectionInProgress = false;
+            if (result instanceof InjectionResult.Success) {
+                Messages.showInfoMessage(
+                        project,
+                        ((InjectionResult.Success) result).getMessage(),
+                        "源码跳转配置");
+            } else if (result instanceof InjectionResult.AlreadyExists) {
+                Messages.showInfoMessage(
+                        project,
+                        "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
+                        "源码跳转配置");
+                autoInjectInterceptorCheck.setSelected(false);
+            } else if (result instanceof InjectionResult.UnsupportedProject) {
+                Messages.showWarningDialog(
+                        project,
+                        "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n"
+                                + "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
+                        "源码跳转配置");
+                autoInjectInterceptorCheck.setSelected(false);
+            } else if (result instanceof InjectionResult.CannotDetectStructure) {
+                Messages.showWarningDialog(
+                        project,
+                        "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
+                        "源码跳转配置");
+                autoInjectInterceptorCheck.setSelected(false);
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -1156,6 +1305,8 @@ public class PluginSettingsPanel {
             || replaceParamsCheck.isSelected() != s.getReplaceParams()
             || formatCheck.isSelected() != s.getFormatSql()
             || verticalPairAnnotationCheck.isSelected() != s.getVerticalPairAnnotation()
+            || autoFoldCheck.isSelected() != s.getAutoFoldEnabled()
+            || !Objects.equals(parseIntOrNull(autoFoldThresholdField.getText().trim()), s.getAutoFoldFieldThreshold())
             || literalParamRecoveryCheck.isSelected() != s.getLiteralParamRecovery()
             || injectLogicDeleteCheck.isSelected() != s.getInjectLogicDelete()
             || !logicDeleteValueField.getText().trim().equals(s.getLogicDeleteValue())
@@ -1210,7 +1361,14 @@ public class PluginSettingsPanel {
             || logAutoSaveCheck.isSelected() != s.getLogAutoSaveEnabled()
             || !logAutoSavePathField.getText().trim().equals(s.getLogAutoSavePath())
             || !logAutoSavePatternField.getText().trim().equals(s.getLogAutoSaveFileNamePattern())
-            || autoInjectInterceptorCheck.isSelected() != s.getAutoInjectSqlSourceInterceptor();
+            || autoInjectInterceptorCheck.isSelected() != s.getAutoInjectSqlSourceInterceptor()
+            // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
+            // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
+            || !Objects.equals(selectedCrudColorStyle(), s.getCrudColorStyle())
+            || !Objects.equals(colorHexOf(crudColorSelectPanel), s.getCrudColorSelect())
+            || !Objects.equals(colorHexOf(crudColorInsertPanel), s.getCrudColorInsert())
+            || !Objects.equals(colorHexOf(crudColorUpdatePanel), s.getCrudColorUpdate())
+            || !Objects.equals(colorHexOf(crudColorDeletePanel), s.getCrudColorDelete());
     }
 
     private boolean isModifiedUi(PluginSettings.State s) {
@@ -1241,6 +1399,11 @@ public class PluginSettingsPanel {
             s.setReplaceParams(replaceParamsCheck.isSelected());
             s.setFormatSql(formatCheck.isSelected());
             s.setVerticalPairAnnotation(verticalPairAnnotationCheck.isSelected());
+            s.setAutoFoldEnabled(autoFoldCheck.isSelected());
+            Integer autoFoldThreshold = parseIntOrNull(autoFoldThresholdField.getText().trim());
+            s.setAutoFoldFieldThreshold(autoFoldThreshold != null
+                ? autoFoldThreshold
+                : PluginSettings.DEFAULT_AUTO_FOLD_FIELD_THRESHOLD);
             s.setLiteralParamRecovery(literalParamRecoveryCheck.isSelected());
             s.setInjectLogicDelete(injectLogicDeleteCheck.isSelected());
             s.setLogicDeleteValue(logicDeleteValueField.getText().trim());
@@ -1302,6 +1465,12 @@ public class PluginSettingsPanel {
                 ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
                 : pattern);
             s.setAutoInjectSqlSourceInterceptor(autoInjectInterceptorCheck.isSelected());
+            // T-CrudColor：CRUD 颜色标记（样式 + 四色）
+            s.setCrudColorStyle(selectedCrudColorStyle());
+            s.setCrudColorSelect(colorHexOf(crudColorSelectPanel));
+            s.setCrudColorInsert(colorHexOf(crudColorInsertPanel));
+            s.setCrudColorUpdate(colorHexOf(crudColorUpdatePanel));
+            s.setCrudColorDelete(colorHexOf(crudColorDeletePanel));
         }
         if (sections.contains(SECTION_UI)) {
             s.setShowGutterIcon(gutterIconCheck.isSelected());
@@ -1342,6 +1511,9 @@ public class PluginSettingsPanel {
             replaceParamsCheck.setSelected(s.getReplaceParams());
             formatCheck.setSelected(s.getFormatSql());
             verticalPairAnnotationCheck.setSelected(s.getVerticalPairAnnotation());
+            autoFoldCheck.setSelected(s.getAutoFoldEnabled());
+            autoFoldThresholdField.setText(String.valueOf(s.getAutoFoldFieldThreshold()));
+            autoFoldThresholdField.setEnabled(s.getAutoFoldEnabled());
             literalParamRecoveryCheck.setSelected(s.getLiteralParamRecovery());
             injectLogicDeleteCheck.setSelected(s.getInjectLogicDelete());
             logicDeleteValueField.setText(s.getLogicDeleteValue());
@@ -1407,6 +1579,13 @@ public class PluginSettingsPanel {
             logAutoSaveBrowseButton.setEnabled(autoSaveEnabled);
             logAutoSavePatternField.setEnabled(autoSaveEnabled);
             updateAutoSavePreview();
+            // T-CrudColor：CRUD 颜色标记控件回填
+            CrudColorStyleOption crudStyle = crudColorStyleOptionByValue(s.getCrudColorStyle());
+            crudColorStyleCombo.setSelectedItem(crudStyle != null ? crudStyle : crudColorStyleOptions()[0]);
+            crudColorSelectPanel.setSelectedColor(colorOf(s.getCrudColorSelect()));
+            crudColorInsertPanel.setSelectedColor(colorOf(s.getCrudColorInsert()));
+            crudColorUpdatePanel.setSelectedColor(colorOf(s.getCrudColorUpdate()));
+            crudColorDeletePanel.setSelectedColor(colorOf(s.getCrudColorDelete()));
             autoInjectInterceptorCheck.setSelected(s.getAutoInjectSqlSourceInterceptor());
         }
     }

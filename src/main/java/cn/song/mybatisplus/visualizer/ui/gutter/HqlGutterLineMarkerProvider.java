@@ -39,7 +39,7 @@ import javax.swing.Icon;
  */
 public class HqlGutterLineMarkerProvider implements LineMarkerProvider {
 
-    private static final java.util.Set<String> HQL_METHODS =
+    private static final java.util.Set<String> STANDARD_JPA_QUERY_METHODS =
             java.util.Set.of("createQuery", "createNamedQuery", "createNativeQuery");
 
     @Override
@@ -60,7 +60,7 @@ public class HqlGutterLineMarkerProvider implements LineMarkerProvider {
         // 确认 element 是方法名而非 qualifier
         if (!java.util.Objects.equals(grandParent.getMethodExpression().getReferenceName(), element.getText())) return null;
         // 仅处理 createQuery / createNamedQuery / createNativeQuery 调用
-        if (!HQL_METHODS.contains(element.getText())) return null;
+        if (!STANDARD_JPA_QUERY_METHODS.contains(element.getText())) return null; // T-Perf-23：Set 提常量
         // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
         if (!hasStringFirstArgument(grandParent)) return null;
         if (!gutterEnabled()) return null;

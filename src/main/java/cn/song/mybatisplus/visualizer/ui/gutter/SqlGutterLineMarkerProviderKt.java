@@ -1,12 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.gutter;
 
 /**
- * 防抖判定（纯函数，便于单测）。对应原 Kotlin 顶层函数 {@code shouldNavigate}。
- *
- * @param lastTimeMs 上次导航时间戳（毫秒）
- * @param nowMs      当前时间戳（毫秒）
- * @param windowMs   防抖窗口（毫秒）
- * @return 是否应执行导航（true = 执行，false = 丢弃）
+ * 保留供可能外部引用的防抖纯函数。对应原 Kotlin 顶层函数 {@code shouldNavigate}。
  */
 public final class SqlGutterLineMarkerProviderKt {
 

@@ -48,6 +48,76 @@ public record LogSqlEntry(
     private static final int MAX_SUMMARY_LENGTH = 160;
 
     /**
+     * T-CrudColor/T-ListMode 缓存侧表（Java record 无实例字段——Kotlin data class 体属性的
+     * Java 等价承载）：键为条目（record 值相等语义），弱键随条目 GC。缓存内容（statementType、
+     * 行片段）均由条目组件派生，值相等的条目共享缓存结果语义完全等价。
+     * 仅 EDT 渲染路径读写，synchronized 包装仅作跨面板安全垫。
+     */
+    private static final java.util.Map<LogSqlEntry, StatementType> STATEMENT_TYPE_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** 行片段缓存载荷（片段 + 模式一并存取，保证两值一致）。 */
+    private record LineFragmentCacheEntry(List<List<SqlTextFragment>> fragments, SqlListDisplayMode mode) {
+    }
+
+    private static final java.util.Map<LogSqlEntry, LineFragmentCacheEntry> LINE_FRAGMENT_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
+     *
+     * 由 {@link LogStatementClassifier#classify(String)} 得出——与类型过滤弹窗<b>同一口径</b>，
+     * 因此「筛出来的 SELECT 行不会被标成红色」这一自洽性天然成立。
+     *
+     * 之所以缓存而非每次现算：classify 内部 {@code split("\\s+")}
+     * <b>每次调用都重新编译 Pattern</b>，渲染路径按 cell 调用会把该开销放大到
+     * 「每次重绘 × 可见行数」（滚动/悬停/选中/resize 均触发重绘）。
+     *
+     * 与 dedupeKey 同属 body 内属性——<b>不参与 record 的 equals / hashCode</b>，
+     * 故新增该字段不影响既有去重与集合语义（T-LogRowNumber 的 sequenceNumber 教训：
+     * 构造函数内新增字段会改变 equals，此处不会）。
+     */
+    public StatementType statementType() {
+        StatementType t = STATEMENT_TYPE_CACHE.get(this);
+        if (t == null) {
+            t = LogStatementClassifier.classify(restoredSql);
+            STATEMENT_TYPE_CACHE.put(this, t);
+        }
+        return t;
+    }
+
+    /**
+     * T-ListMode：多行模式（KEYWORD_WRAP/FORMATTED）的行片段缓存：可变行高下每次布局状态更新会对全部条目
+     * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
+     * 组件布局。SINGLE_LINE 不走缓存（固定行高 + 渲染直读，主题切换实时生效）。
+     */
+    public List<List<SqlTextFragment>> cachedListLineFragments() {
+        LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
+        return e != null ? e.fragments() : null;
+    }
+
+    public void setCachedListLineFragments(List<List<SqlTextFragment>> value) {
+        synchronized (LINE_FRAGMENT_CACHE) {
+            LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
+            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(value, e != null ? e.mode() : null));
+        }
+    }
+
+    /** 行片段缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
+    public SqlListDisplayMode cachedListLineFragmentsMode() {
+        LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
+        return e != null ? e.mode() : null;
+    }
+
+    public void setCachedListLineFragmentsMode(SqlListDisplayMode value) {
+        synchronized (LINE_FRAGMENT_CACHE) {
+            LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
+            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(e != null ? e.fragments() : null, value));
+        }
+    }
+
+
+    /**
      * T-Perf-19（自 dev 移植）：去重键指纹（sqlFingerprint 惰性计算一次）——dedupeCounts 不再以
      * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
      * T-LogDedupeMpMark：指纹前先 normalizeSqlWhitespace——同一语句的双路日志副本（named 行 trim 过 /

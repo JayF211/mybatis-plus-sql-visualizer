@@ -62,7 +62,7 @@ public class SqlCompletionContributor extends CompletionContributor {
 
     public static void registerContext(Document document, SqlCompletionContext ctx) {
         documentContexts.put(document, ctx);
-        LOG.info("[SqlCompletion] registerContext: doc=" + document.hashCode() + ", table=" + ctx.tableName + ", mapSize=" + documentContexts.size());
+        LOG.debug("[SqlCompletion] registerContext: doc=" + document.hashCode() + ", table=" + ctx.tableName + ", mapSize=" + documentContexts.size());
     }
 
     public SqlCompletionContributor() {
@@ -76,18 +76,18 @@ public class SqlCompletionContributor extends CompletionContributor {
                 Editor editor = parameters.getEditor();
                 PsiElement position = parameters.getPosition();
                 PsiFile containingFile = position.getContainingFile();
-                LOG.info("[SqlCompletion] addCompletions triggered");
-                LOG.info("[SqlCompletion]   editor=" + editor.getClass().getSimpleName() + ", doc=" + editor.getDocument().hashCode());
+                LOG.debug("[SqlCompletion] addCompletions triggered");
+                LOG.debug("[SqlCompletion]   editor=" + editor.getClass().getSimpleName() + ", doc=" + editor.getDocument().hashCode());
                 String posText = position.getText();
-                LOG.info("[SqlCompletion]   position=" + position.getClass().getSimpleName() + ", text='" + (posText != null ? posText.substring(0, Math.min(30, posText.length())) : "") + "'");
-                LOG.info("[SqlCompletion]   containingFile=" + (containingFile != null ? containingFile.getName() : null) + ", lang=" + (containingFile != null && containingFile.getLanguage() != null ? containingFile.getLanguage().getID() : null));
+                LOG.debug("[SqlCompletion]   position=" + position.getClass().getSimpleName() + ", text='" + (posText != null ? posText.substring(0, Math.min(30, posText.length())) : "") + "'");
+                LOG.debug("[SqlCompletion]   containingFile=" + (containingFile != null ? containingFile.getName() : null) + ", lang=" + (containingFile != null && containingFile.getLanguage() != null ? containingFile.getLanguage().getID() : null));
                 SqlCompletionContext ctxEditor = editor.getUserData(SqlCompletionContext.KEY);
-                LOG.info("[SqlCompletion]   editorUserData=" + (ctxEditor != null ? ctxEditor.tableName : null));
+                LOG.debug("[SqlCompletion]   editorUserData=" + (ctxEditor != null ? ctxEditor.tableName : null));
                 SqlCompletionContext ctxPsi = containingFile != null ? containingFile.getUserData(SqlCompletionContext.KEY) : null;
-                LOG.info("[SqlCompletion]   psiUserData=" + (ctxPsi != null ? ctxPsi.tableName : null));
-                LOG.info("[SqlCompletion]   documentContexts.size=" + documentContexts.size());
+                LOG.debug("[SqlCompletion]   psiUserData=" + (ctxPsi != null ? ctxPsi.tableName : null));
+                LOG.debug("[SqlCompletion]   documentContexts.size=" + documentContexts.size());
                 Document docFromViewProvider = containingFile != null && containingFile.getViewProvider() != null ? containingFile.getViewProvider().getDocument() : null;
-                LOG.info("[SqlCompletion]   docFromViewProvider=" + (docFromViewProvider != null ? docFromViewProvider.hashCode() : null) + ", inMap=" + (docFromViewProvider != null && documentContexts.containsKey(docFromViewProvider)));
+                LOG.debug("[SqlCompletion]   docFromViewProvider=" + (docFromViewProvider != null ? docFromViewProvider.hashCode() : null) + ", inMap=" + (docFromViewProvider != null && documentContexts.containsKey(docFromViewProvider)));
 
                 // 关键字（M16.2：不依赖上下文——ctx 缺失/丢失时关键字补全仍生效，恢复 M9 语义）
                 for (String word : provider.keywords()) {
@@ -104,7 +104,7 @@ public class SqlCompletionContributor extends CompletionContributor {
                 if (ctx == null) {
                     ctx = documentContexts.get(parameters.getEditor().getDocument());
                 }
-                LOG.info("[SqlCompletion]   resolveContext result=" + (ctx != null ? ctx.tableName : null));
+                LOG.debug("[SqlCompletion]   resolveContext result=" + (ctx != null ? ctx.tableName : null));
                 if (ctx == null) {
                     return;
                 }
@@ -135,10 +135,13 @@ public class SqlCompletionContributor extends CompletionContributor {
                     List<Pair<String, String>> colComments = provider.columnsWithComments(ctx);
                     // M35 方案 B：数据源 schema 注释优先（DB COMMENT 比实体注释权威）；
                     // 按实体表名查数据源列注释，命中则覆盖同名列的实体注释。
+                    // T-Perf-09：补全改消费已缓存结果（columnCommentsCached）——autopopup
+                    // 下每标识符字符触发一次，直查 schema 会在 EDT 做数据源全量遍历；
+                    // 缓存未命中回落实体注释，缓存由 JOIN 富化后台预取填充。
                     Project project = parameters.getEditor().getProject();
                     Map<String, String> schemaComments;
                     if (project != null && ctx.tableName != null) {
-                        schemaComments = DatabaseSchemaResolver.columnComments(project, ctx.tableName);
+                        schemaComments = DatabaseSchemaResolver.columnCommentsCached(project, ctx.tableName);
                     } else {
                         schemaComments = Map.of();
                     }
@@ -200,23 +203,23 @@ public class SqlCompletionContributor extends CompletionContributor {
      */
     public SqlCompletionContext resolveContext(SqlCompletionContext editorContext, PsiElement position) {
         if (editorContext != null) {
-            LOG.info("[SqlCompletion] resolveContext: hit level 1 (editor userData), table=" + editorContext.tableName);
+            LOG.debug("[SqlCompletion] resolveContext: hit level 1 (editor userData), table=" + editorContext.tableName);
             return editorContext;
         }
         PsiFile cf = position.getContainingFile();
         SqlCompletionContext ctxPsi = cf != null ? cf.getUserData(SqlCompletionContext.KEY) : null;
         if (ctxPsi != null) {
-            LOG.info("[SqlCompletion] resolveContext: hit level 2 (PSI userData), table=" + ctxPsi.tableName);
+            LOG.debug("[SqlCompletion] resolveContext: hit level 2 (PSI userData), table=" + ctxPsi.tableName);
             return ctxPsi;
         }
         // 最终兜底：通过 Document 映射查找
         Document doc = cf != null && cf.getViewProvider() != null ? cf.getViewProvider().getDocument() : null;
         if (doc == null) {
-            LOG.info("[SqlCompletion] resolveContext: miss (doc is null)");
+            LOG.debug("[SqlCompletion] resolveContext: miss (doc is null)");
             return null;
         }
         SqlCompletionContext ctx = documentContexts.get(doc);
-        LOG.info("[SqlCompletion] resolveContext: hit level 3 (document map)=" + (ctx != null) + ", table=" + (ctx != null ? ctx.tableName : null));
+        LOG.debug("[SqlCompletion] resolveContext: hit level 3 (document map)=" + (ctx != null) + ", table=" + (ctx != null ? ctx.tableName : null));
         return ctx;
     }
 }

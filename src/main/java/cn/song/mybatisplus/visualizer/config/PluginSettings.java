@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.config;
 
+import cn.song.mybatisplus.visualizer.log.SqlListDisplayMode;
+import cn.song.mybatisplus.visualizer.log.SqlListTypeColor;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.PersistentStateComponent;
 import com.intellij.openapi.components.RoamingType;
@@ -44,6 +46,16 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         this.state = state;
     }
 
+    /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
+    @NotNull
+    public SqlListDisplayMode sqlListDisplayMode() {
+        try {
+            return SqlListDisplayMode.valueOf(state.getLogListSqlDisplayMode());
+        } catch (Throwable e) {
+            return SqlListDisplayMode.KEYWORD_WRAP;
+        }
+    }
+
     /** 获取全局配置实例。 */
     @NotNull
     public static PluginSettings getInstance() {
@@ -82,6 +94,19 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * 仅作用于预览面板竖向排列显示模式（SqlFormatter.formatVertical 的唯一生产调用点 applyDisplayMode）。
          */
         private boolean verticalPairAnnotation = true;
+
+        /**
+         * 字段较多时自动折叠（T-AutoFold）：true = 各处 SQL 预览编辑器渲染后自动折叠超长字段列表
+         * （SELECT/INSERT 列清单、VALUES 组、UPDATE SET），默认关——关闭时写入管线零折叠操作、
+         * 行为逐字节不变；开启后的下一次程序性写入生效（与 formatSql 同构，不即时刷新已开窗体）。
+         */
+        private boolean autoFoldEnabled = false;
+
+        /**
+         * 自动折叠触发的顶层字段数阈值（T-AutoFold）：字段列表元素数 >= 该值且区域跨多行才折叠，
+         * 默认 10。
+         */
+        private int autoFoldFieldThreshold = DEFAULT_AUTO_FOLD_FIELD_THRESHOLD;
         private boolean showGutterIcon = true;
 
         /**
@@ -138,6 +163,33 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * false 时隐藏耗时，节省列表宽度。
          */
         private boolean showDurationInLogList = true;
+
+        // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
+        /**
+         * CRUD 颜色标记形态：`bar`=左侧色条（默认）/ `background`=整行淡背景（选中态走描边）/
+         * `off`=关闭。未知值按 `bar` 兜底（见 SqlListTypeColor.styleOf）。
+         * 默认值常量在 SqlListTypeColor，State 侧只引用，避免双份字面量。
+         */
+        private String crudColorStyle = CRUD_COLOR_STYLE_BAR;
+
+        /** SELECT 标记色（`#RRGGBB`；空串/非法 → 默认色）。 */
+        private String crudColorSelect = CRUD_COLOR_DEFAULT_SELECT;
+
+        /** INSERT 标记色（`#RRGGBB`）。 */
+        private String crudColorInsert = CRUD_COLOR_DEFAULT_INSERT;
+
+        /** UPDATE 标记色（`#RRGGBB`）。 */
+        private String crudColorUpdate = CRUD_COLOR_DEFAULT_UPDATE;
+
+        /** DELETE 标记色（`#RRGGBB`）。 */
+        private String crudColorDelete = CRUD_COLOR_DEFAULT_DELETE;
+
+        /**
+         * SQL 列表显示模式（T-ListMode）：SQL 日志与 SQL 历史列表条目中 SQL 行的展示形态
+         * （枚举 SqlListDisplayMode 的 name，读取走 sqlListDisplayMode() 容错）。默认关键字换行。
+         */
+        private String logListSqlDisplayMode = DEFAULT_LOG_LIST_DISPLAY_MODE;
+
         private String paramHistoryJson = "";
         private boolean logHibernateEnabled = true;
         private String logHibernateSqlPrefix = DEFAULT_LOG_HIBERNATE_SQL_PREFIX;
@@ -156,6 +208,18 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         /** F-44-7：自动注入 SqlSourceInterceptor（源码位置捕获）。默认关。 */
         private boolean autoInjectSqlSourceInterceptor = false;
 
+        // ---------- T-ErrReport 错误一键上报官网需求池 ----------
+
+        /**
+         * 需求池报告昵称（选填，报告对话框填写后记忆，下次带出；空 = 匿名提交）。
+         */
+        private String reportSubmitterName = "";
+
+        /**
+         * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
+         */
+        private String reportSubmitterEmail = "";
+
         public String getDialect() { return dialect; }
         public void setDialect(String dialect) { this.dialect = dialect; }
 
@@ -167,6 +231,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getVerticalPairAnnotation() { return verticalPairAnnotation; }
         public void setVerticalPairAnnotation(boolean verticalPairAnnotation) { this.verticalPairAnnotation = verticalPairAnnotation; }
+
+        public boolean getAutoFoldEnabled() { return autoFoldEnabled; }
+        public void setAutoFoldEnabled(boolean autoFoldEnabled) { this.autoFoldEnabled = autoFoldEnabled; }
+
+        public int getAutoFoldFieldThreshold() { return autoFoldFieldThreshold; }
+        public void setAutoFoldFieldThreshold(int autoFoldFieldThreshold) { this.autoFoldFieldThreshold = autoFoldFieldThreshold; }
 
         public boolean getShowGutterIcon() { return showGutterIcon; }
         public void setShowGutterIcon(boolean showGutterIcon) { this.showGutterIcon = showGutterIcon; }
@@ -287,6 +357,24 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getShowDurationInLogList() { return showDurationInLogList; }
         public void setShowDurationInLogList(boolean showDurationInLogList) { this.showDurationInLogList = showDurationInLogList; }
 
+        public String getCrudColorStyle() { return crudColorStyle; }
+        public void setCrudColorStyle(String crudColorStyle) { this.crudColorStyle = crudColorStyle; }
+
+        public String getCrudColorSelect() { return crudColorSelect; }
+        public void setCrudColorSelect(String crudColorSelect) { this.crudColorSelect = crudColorSelect; }
+
+        public String getCrudColorInsert() { return crudColorInsert; }
+        public void setCrudColorInsert(String crudColorInsert) { this.crudColorInsert = crudColorInsert; }
+
+        public String getCrudColorUpdate() { return crudColorUpdate; }
+        public void setCrudColorUpdate(String crudColorUpdate) { this.crudColorUpdate = crudColorUpdate; }
+
+        public String getCrudColorDelete() { return crudColorDelete; }
+        public void setCrudColorDelete(String crudColorDelete) { this.crudColorDelete = crudColorDelete; }
+
+        public String getLogListSqlDisplayMode() { return logListSqlDisplayMode; }
+        public void setLogListSqlDisplayMode(String logListSqlDisplayMode) { this.logListSqlDisplayMode = logListSqlDisplayMode; }
+
         public String getParamHistoryJson() { return paramHistoryJson; }
         public void setParamHistoryJson(String paramHistoryJson) { this.paramHistoryJson = paramHistoryJson; }
 
@@ -319,6 +407,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getAutoInjectSqlSourceInterceptor() { return autoInjectSqlSourceInterceptor; }
         public void setAutoInjectSqlSourceInterceptor(boolean autoInjectSqlSourceInterceptor) { this.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor; }
 
+        public String getReportSubmitterName() { return reportSubmitterName; }
+        public void setReportSubmitterName(String reportSubmitterName) { this.reportSubmitterName = reportSubmitterName; }
+
+        public String getReportSubmitterEmail() { return reportSubmitterEmail; }
+        public void setReportSubmitterEmail(String reportSubmitterEmail) { this.reportSubmitterEmail = reportSubmitterEmail; }
+
         /** 浅拷贝（仅复制字段引用/值；供持久化 loadState 触发引用变化）。 */
         @NotNull
         public State copy() {
@@ -327,6 +421,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.replaceParams = replaceParams;
             c.formatSql = formatSql;
             c.verticalPairAnnotation = verticalPairAnnotation;
+            c.autoFoldEnabled = autoFoldEnabled;
+            c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
             c.language = language;
             c.injectLogicDelete = injectLogicDelete;
@@ -366,6 +462,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logTimePrefix = logTimePrefix;
             c.slowQueryThresholdMs = slowQueryThresholdMs;
             c.showDurationInLogList = showDurationInLogList;
+            c.crudColorStyle = crudColorStyle;
+            c.crudColorSelect = crudColorSelect;
+            c.crudColorInsert = crudColorInsert;
+            c.crudColorUpdate = crudColorUpdate;
+            c.crudColorDelete = crudColorDelete;
+            c.logListSqlDisplayMode = logListSqlDisplayMode;
             c.paramHistoryJson = paramHistoryJson;
             c.logHibernateEnabled = logHibernateEnabled;
             c.logHibernateSqlPrefix = logHibernateSqlPrefix;
@@ -376,6 +478,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.dataPermissionMockCondition = dataPermissionMockCondition;
             c.historyMaxSize = historyMaxSize;
             c.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor;
+            c.reportSubmitterName = reportSubmitterName;
+            c.reportSubmitterEmail = reportSubmitterEmail;
             return c;
         }
 
@@ -387,6 +491,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             return replaceParams == that.replaceParams
                     && formatSql == that.formatSql
                     && verticalPairAnnotation == that.verticalPairAnnotation
+                    && autoFoldEnabled == that.autoFoldEnabled
                     && showGutterIcon == that.showGutterIcon
                     && injectLogicDelete == that.injectLogicDelete
                     && injectTenantLine == that.injectTenantLine
@@ -410,6 +515,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && slowQueryThresholdMs == that.slowQueryThresholdMs
                     && showDurationInLogList == that.showDurationInLogList
                     && historyMaxSize == that.historyMaxSize
+                    && autoFoldFieldThreshold == that.autoFoldFieldThreshold
                     && autoInjectSqlSourceInterceptor == that.autoInjectSqlSourceInterceptor
                     && Objects.equals(dialect, that.dialect)
                     && Objects.equals(language, that.language)
@@ -433,6 +539,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(logAutoSaveFileNamePattern, that.logAutoSaveFileNamePattern)
                     && Objects.equals(logTimePrefix, that.logTimePrefix)
                     && Objects.equals(paramHistoryJson, that.paramHistoryJson)
+                    && Objects.equals(crudColorStyle, that.crudColorStyle)
+                    && Objects.equals(crudColorSelect, that.crudColorSelect)
+                    && Objects.equals(crudColorInsert, that.crudColorInsert)
+                    && Objects.equals(crudColorUpdate, that.crudColorUpdate)
+                    && Objects.equals(crudColorDelete, that.crudColorDelete)
+                    && Objects.equals(logListSqlDisplayMode, that.logListSqlDisplayMode)
+                    && Objects.equals(reportSubmitterName, that.reportSubmitterName)
+                    && Objects.equals(reportSubmitterEmail, that.reportSubmitterEmail)
                     && Objects.equals(logHibernateSqlPrefix, that.logHibernateSqlPrefix)
                     && Objects.equals(logHibernateParamPrefix, that.logHibernateParamPrefix)
                     && Objects.equals(dynamicTableNameRules, that.dynamicTableNameRules)
@@ -442,7 +556,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         @Override
         public int hashCode() {
             return Objects.hash(
-                    dialect, replaceParams, formatSql, verticalPairAnnotation, showGutterIcon, language, injectLogicDelete,
+                    dialect, replaceParams, formatSql, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
+                    showGutterIcon, language, injectLogicDelete,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,
@@ -450,9 +565,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
+                    crudColorStyle, crudColorSelect, crudColorInsert, crudColorUpdate, crudColorDelete, logListSqlDisplayMode,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
-                    autoInjectSqlSourceInterceptor);
+                    autoInjectSqlSourceInterceptor, reportSubmitterName, reportSubmitterEmail);
         }
 
         @Override
@@ -466,6 +582,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             Topic.create("MpSqlVisualizerSettingsChange", SettingsChangeListener.class);
 
     public static final String DEFAULT_DIALECT = "MySQL";
+
+    /** SQL 列表显示模式默认值（T-ListMode，关键字换行）。 */
+    public static final String DEFAULT_LOG_LIST_DISPLAY_MODE = "KEYWORD_WRAP";
 
     /** 默认界面语言（M14，用户要求默认中文）。 */
     public static final String DEFAULT_LANGUAGE = "zh";
@@ -519,4 +638,23 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
     /** 默认 SQL 历史记录上限（F-7，非收藏条目）。 */
     public static final int DEFAULT_HISTORY_MAX_SIZE = 200;
+
+    // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记默认值 ----------
+    // 单一真源在 SqlListTypeColor（语义与其渲染同处一处），State 侧只引用，避免双份字面量漂移。
+    /** 默认标记形态：左侧色条。 */
+    public static final String CRUD_COLOR_STYLE_BAR = SqlListTypeColor.STYLE_BAR;
+
+    /** 备选标记形态：整行淡背景（选中态走描边）。 */
+    public static final String CRUD_COLOR_STYLE_BACKGROUND = SqlListTypeColor.STYLE_BACKGROUND;
+
+    /** 关闭标记。 */
+    public static final String CRUD_COLOR_STYLE_OFF = SqlListTypeColor.STYLE_OFF;
+
+    public static final String CRUD_COLOR_DEFAULT_SELECT = SqlListTypeColor.DEFAULT_SELECT;
+    public static final String CRUD_COLOR_DEFAULT_INSERT = SqlListTypeColor.DEFAULT_INSERT;
+    public static final String CRUD_COLOR_DEFAULT_UPDATE = SqlListTypeColor.DEFAULT_UPDATE;
+    public static final String CRUD_COLOR_DEFAULT_DELETE = SqlListTypeColor.DEFAULT_DELETE;
+
+    /** 自动折叠触发的顶层字段数阈值（T-AutoFold）。 */
+    public static final int DEFAULT_AUTO_FOLD_FIELD_THRESHOLD = 10;
 }

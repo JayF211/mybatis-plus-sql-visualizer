@@ -10,7 +10,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * SQL 行级 diff 引擎（O-4 Phase B）。
+ * T-Perf-24 死代码标注：本对象当前<strong>无任何调用方</strong>（diff 入口未接线）。
+ *
+ * <p>SQL 行级 diff 引擎（O-4 Phase B）。
  *
  * <p>对比两次预览的 SQL 文本，输出行级差异列表（新增 / 删除 / 变更 / 相同）。
  * 算法：基于最长公共子序列（LCS）的动态规划，时间复杂度 O(M*N)，

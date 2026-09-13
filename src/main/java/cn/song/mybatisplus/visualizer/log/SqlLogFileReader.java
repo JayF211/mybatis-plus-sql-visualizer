@@ -30,6 +30,18 @@ public final class SqlLogFileReader {
     private SqlLogFileReader() {
     }
 
+    /** T-Perf-05：countInFile 缓存上限（超过整体清空——路径多样性有限，简单封顶防膨胀）。 */
+    private static final int COUNT_CACHE_MAX = 256;
+
+    /**
+     * T-Perf-05：countInFile 结果缓存（键=绝对路径，值=(lastModified, length, 计数)）。
+     * 自动保存单文件滚动阈值 100MB（SqlLogAutoSaver），长期开启必然长出大文件——
+     * 每次 refresh 逐行全量扫描是历史 tab 打开冻结的主要来源；lastModified+length 未变即命中
+     * （length 一并校验，规避同毫秒重写导致 lastModified 不变而内容已变的误命中）。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, long[]> COUNT_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
      * 捕获组：1=source 2=time 3=timestamp
@@ -90,6 +102,13 @@ public final class SqlLogFileReader {
         if (!file.exists()) {
             return 0;
         }
+        String key = file.getAbsolutePath();
+        long lastModified = file.lastModified();
+        long length = file.length();
+        long[] cached = COUNT_CACHE.get(key);
+        if (cached != null && cached[0] == lastModified && cached[1] == length) {
+            return (int) cached[2];
+        }
         int count = 0;
         try {
             for (String line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
@@ -103,6 +122,10 @@ public final class SqlLogFileReader {
         } catch (Exception e) {
             return count;
         }
+        if (COUNT_CACHE.size() >= COUNT_CACHE_MAX) {
+            COUNT_CACHE.clear();
+        }
+        COUNT_CACHE.put(key, new long[]{lastModified, length, count});
         return count;
     }
 

@@ -60,6 +60,32 @@ public final class DatabaseSchemaResolver {
     }
 
     /**
+     * T-Perf-09：仅读缓存的列注释（补全 autopopup 热路径专用）——命中返回缓存值；
+     * 未命中返回空 Map（调用方回落实体注释），<strong>不触发数据源全量遍历</strong>。
+     * 缓存由 JOIN 富化后台预取（DiagramSchemaEnricher.enrich）或首次 {@link #tableMeta} 调用填充。
+     */
+    public static Map<String, String> columnCommentsCached(Project project, String tableName) {
+        if (project == null || tableName == null || tableName.isBlank()) return Map.of();
+        if (!isDatabaseAvailable()) return Map.of();
+        List<Object> dataSources = dataSources(project);
+        if (dataSources == null) return Map.of();
+        Map<String, String> out = new LinkedHashMap<>();
+        synchronized (metaCache) {
+            for (Object ds : dataSources) {
+                Map<String, TableMeta> perDs = metaCache.get(ds);
+                if (perDs == null) continue;
+                TableMeta meta = perDs.get(tableName.toLowerCase(java.util.Locale.ROOT));
+                if (meta == null) continue;
+                for (Map.Entry<String, ColumnMeta> e : meta.columns().entrySet()) {
+                    String comment = e.getValue().comment();
+                    out.putIfAbsent(e.getKey(), comment != null ? comment : "");
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
      * 列名 → 列元数据（注释 + DB 真实类型串，T-Embed-02）。
      *
      * <p>类型串 = `DasTypedObject.getDataType().getSpecification()`（如 `int(11)` / `varchar(64)`，
@@ -69,6 +95,15 @@ public final class DatabaseSchemaResolver {
     public static Map<String, ColumnMeta> columnMeta(Project project, String tableName) {
         return tableMeta(project, tableName).columns();
     }
+
+    /**
+     * T-Perf-09：TableMeta 缓存——键 = (dataSource 对象弱引用, tableName 小写)。
+     * 数据源全量遍历（DasModel.traverser().toList()）代价随 schema 规模线性，JOIN 预览
+     * 每打开一次、每个 JOIN 表各触发一次；命中后零遍历。数据源删除后条目随弱键回收；
+     * 表匹配不到（通常=未连接/introspection 未完成）<b>不缓存负命中</b>——后续连接成功即可命中。
+     */
+    private static final Map<Object, Map<String, TableMeta>> metaCache =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     /**
      * 表级元数据（表注释 + 列元数据，T-Embed-09 一次遍历同时取）。
@@ -110,13 +145,25 @@ public final class DatabaseSchemaResolver {
         } catch (Throwable e) {
             return TableMeta.EMPTY;
         }
+        String cacheKey = tableName.toLowerCase(java.util.Locale.ROOT);
         for (Object ds : dataSources) {
+            // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
+            TableMeta cached;
+            synchronized (metaCache) {
+                Map<String, TableMeta> perDs = metaCache.get(ds);
+                cached = (perDs != null) ? perDs.get(cacheKey) : null;
+            }
+            if (cached != null) return cached;
             TableMeta found = collectFromDataSource(ds, tableName, dasTableClass);
             if (!found.columns().isEmpty() || found.comment() != null) {
+                synchronized (metaCache) {
+                    metaCache.computeIfAbsent(ds, k -> new java.util.HashMap<>()).put(cacheKey, found);
+                }
                 return found;
             }
         }
         // 表在所有数据源都找不到（通常=未连接/introspection 未完成/表不在当前库）
+        // T-Perf-09：负命中不缓存——introspection 完成后同一查询应能命中
         LOG.info("DatabaseSchemaResolver: table=" + tableName + " not found in " + dataSources.size() + " data sources");
         return TableMeta.EMPTY;
     }

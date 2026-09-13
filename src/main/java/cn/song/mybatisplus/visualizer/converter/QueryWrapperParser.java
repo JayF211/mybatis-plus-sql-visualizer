@@ -22,6 +22,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 import kotlin.Pair;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -883,16 +884,19 @@ public final class QueryWrapperParser {
      */
     private List<ColumnRef> selectColumnsByPredicate(WrapperArg.PredicateArg predicate) {
         List<String> allColumns = table.getAllColumnNames();
+        // T-Perf-23：List.contains O(n^2) -> Set O(n)（列数多时显著）
+        Set<String> includeSet = new HashSet<>(predicate.getInclude());
+        Set<String> excludeSet = new HashSet<>(predicate.getExclude());
         List<String> selected;
-        if (!predicate.getInclude().isEmpty()) {
+        if (!includeSet.isEmpty()) {
             selected = new ArrayList<>();
             for (String c : allColumns) {
-                if (predicate.getInclude().contains(c)) selected.add(c);
+                if (includeSet.contains(c)) selected.add(c);
             }
         } else {
             selected = new ArrayList<>();
             for (String c : allColumns) {
-                if (!predicate.getExclude().contains(c)) selected.add(c);
+                if (!excludeSet.contains(c)) selected.add(c);
             }
         }
         List<ColumnRef> result = new ArrayList<>();

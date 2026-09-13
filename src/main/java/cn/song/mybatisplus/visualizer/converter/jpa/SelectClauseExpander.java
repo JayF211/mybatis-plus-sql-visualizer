@@ -28,6 +28,12 @@ import java.util.regex.Pattern;
  *  <li>裸表名（FROM 后无别名）→ 表名本身登记为列限定符（SQL 允许 `表名.列` 限定）</li>
  *  <li>JOIN 族关键字不登记为别名（防 `from t left join ...` 误产出 `SELECT left.id`）</li>
  *  <li>DELETE 语句不处理（无 SELECT 子句，语义不同）</li>
+ *  <li>UPDATE / INSERT 语句不处理（J2 / J19：无 SELECT 子句语义；INSERT...SELECT 的
+ *      SELECT 位于 FROM 之后，按「顶层 SELECT 在 FROM 前」的判定天然不该展开，
+ *      显式短路防误前置列清单）</li>
+ *  <li>顶层含 WITH（CTE）/ UNION / INTERSECT / EXCEPT 时不处理（J19 边界：
+ *      「识别 + 不破坏」——多 SELECT/FROM 结构下别名归属判定不可靠，展开器
+ *      宁可不展开也不误改 CTE/UNION 内部；语句其余字符串管道透传不受影响）</li>
  * </ul>
  *
  * <p>无状态单例，纯函数逻辑，可独立单测。
@@ -48,8 +54,23 @@ public final class SelectClauseExpander {
      * @return 展开后的 SQL；无需展开或无法解析时原样返回
      */
     public static String expand(String sql, TableInfo table) {
-        // DELETE 无 SELECT 子句，且展开语义不同，直接短路
-        if (trimStart(sql).toUpperCase(Locale.ROOT).startsWith("DELETE")) return sql;
+        // 非 SELECT 语句无 SELECT 子句语义，直接短路：
+        //  - DELETE（既有边界）
+        //  - UPDATE（J2：UPDATE ... SET 无 SELECT，语义不同）
+        //  - INSERT（J19：INSERT INTO ... SELECT 的 SELECT 在 FROM 之后，
+        //    若不短路会被误判为「无 SELECT 子句」而错误前置列清单）
+        String head = trimStart(sql).toUpperCase(Locale.ROOT);
+        if (head.startsWith("DELETE") || head.startsWith("UPDATE") || head.startsWith("INSERT")) return sql;
+
+        // J19 边界：CTE（WITH ...）与集合运算（UNION / INTERSECT / EXCEPT）多 SELECT/FROM
+        // 结构下「首个顶层 SELECT/FROM」不必然属于同一查询分支，展开会误改 CTE/UNION 内部，
+        // 保守整体跳过（宁可不展开也不误伤）
+        if (indexOfTopLevelKeyword(sql, "WITH") >= 0
+                || indexOfTopLevelKeyword(sql, "UNION") >= 0
+                || indexOfTopLevelKeyword(sql, "INTERSECT") >= 0
+                || indexOfTopLevelKeyword(sql, "EXCEPT") >= 0) {
+            return sql;
+        }
 
         int selectIdx = indexOfTopLevelKeyword(sql, "SELECT");
         int fromIdx = indexOfTopLevelKeyword(sql, "FROM");
@@ -195,6 +216,14 @@ public final class SelectClauseExpander {
         }
         parts.add(text.substring(start));
         return parts;
+    }
+
+    /**
+     * 顶层关键字存在性探测（J19 边界判定共用：WITH/UNION/INTERSECT/EXCEPT）。
+     * 括号内的同名词（子查询）不算。
+     */
+    public static boolean hasTopLevelKeyword(String sql, String keyword) {
+        return indexOfTopLevelKeyword(sql, keyword) >= 0;
     }
 
     /**

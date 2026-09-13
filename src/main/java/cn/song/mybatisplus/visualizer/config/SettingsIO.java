@@ -47,6 +47,8 @@ public final class SettingsIO {
         sb.append("  \"replaceParams\": ").append(state.getReplaceParams()).append(",\n");
         sb.append("  \"formatSql\": ").append(state.getFormatSql()).append(",\n");
         sb.append("  \"verticalPairAnnotation\": ").append(state.getVerticalPairAnnotation()).append(",\n");
+        sb.append("  \"autoFoldEnabled\": ").append(state.getAutoFoldEnabled()).append(",\n");
+        sb.append("  \"autoFoldFieldThreshold\": ").append(state.getAutoFoldFieldThreshold()).append(",\n");
         sb.append("  \"injectLogicDelete\": ").append(state.getInjectLogicDelete()).append(",\n");
         sb.append("  \"logicDeleteValue\": ").append(jsonString(state.getLogicDeleteValue())).append(",\n");
         sb.append("  \"injectTenantLine\": ").append(state.getInjectTenantLine()).append(",\n");
@@ -96,6 +98,10 @@ public final class SettingsIO {
         if (formatSql != null) state.setFormatSql(formatSql);
         Boolean verticalPairAnnotation = getBoolean(map, "verticalPairAnnotation");
         if (verticalPairAnnotation != null) state.setVerticalPairAnnotation(verticalPairAnnotation);
+        Boolean autoFoldEnabled = getBoolean(map, "autoFoldEnabled");
+        if (autoFoldEnabled != null) state.setAutoFoldEnabled(autoFoldEnabled);
+        Integer autoFoldFieldThreshold = getInt(map, "autoFoldFieldThreshold");
+        if (autoFoldFieldThreshold != null) state.setAutoFoldFieldThreshold(autoFoldFieldThreshold);
         Boolean injectLogicDelete = getBoolean(map, "injectLogicDelete");
         if (injectLogicDelete != null) state.setInjectLogicDelete(injectLogicDelete);
         String logicDeleteValue = getString(map, "logicDeleteValue");
@@ -357,6 +363,11 @@ public final class SettingsIO {
     private static Boolean getBoolean(Map<String, Object> map, String key) {
         Object v = map.get(key);
         return v instanceof Boolean ? (Boolean) v : null;
+    }
+
+    private static Integer getInt(Map<String, Object> map, String key) {
+        Object v = map.get(key);
+        return v instanceof Number ? ((Number) v).intValue() : null;
     }
 
     @SuppressWarnings("unchecked")

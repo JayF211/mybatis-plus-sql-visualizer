@@ -362,14 +362,45 @@ public final class DiagramRenderer {
     // Public API
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // T-Perf-24：paint 期 measure+layout 缓存——键 = (model 同一性, 结构计数, 字体)。
+    // 每帧 paint 多处重复 measure+layout（宽 SELECT 10 表×80 列 ≈ 1600 次字体度量/遍）
+    // 是掉帧根因；命中后滚动/重绘零度量。换模型或主题字体变化自然失效。
+    // ------------------------------------------------------------------
+    private record LayoutCacheKey(int modelId, int shape, int fontHash, int boldHash) {
+    }
+
+    private record CachedLayout(List<Layout> layouts, List<Pos> positions) {
+    }
+
+    private record CacheEntry(LayoutCacheKey key, CachedLayout value) {
+    }
+
+    private static volatile CacheEntry layoutCache = null;
+
+    private static CachedLayout cachedLayout(DiagramModel model, Font font, Font bold, FontRenderContext frc) {
+        LayoutCacheKey key = new LayoutCacheKey(
+                System.identityHashCode(model),
+                model.getEntities().size() * 31 + model.getRelationships().size(),
+                font.hashCode(),
+                bold.hashCode());
+        CacheEntry entry = layoutCache;
+        if (entry != null && entry.key().equals(key)) return entry.value();
+        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
+        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        layoutCache = new CacheEntry(key, new CachedLayout(layouts, positions));
+        return new CachedLayout(layouts, positions);
+    }
+
     /** Measure preferred display size (at 1x zoom). */
     public static Size measurePreferredSize(@NotNull DiagramModel model) {
         if (model.getEntities().isEmpty()) return new Size(200, 100);
         Font font = UIUtil.getLabelFont();
         Font bold = font.deriveFont(Font.BOLD);
         FontRenderContext frc = new FontRenderContext(null, true, true);
-        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, bold, frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
         int pad = MARGIN + 16;
         int totalW = contentWidth(model, layouts, positions, font, frc) + pad;
         int totalH = 0;
@@ -386,8 +417,9 @@ public final class DiagramRenderer {
         Font font = UIUtil.getLabelFont();
         Font bold = font.deriveFont(Font.BOLD);
         FontRenderContext frc = new FontRenderContext(null, true, true);
-        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, bold, frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
         int pad = MARGIN + 16;
         int totalW = contentWidth(model, layouts, positions, font, frc) + pad;
         int totalH = 0;
@@ -418,8 +450,9 @@ public final class DiagramRenderer {
         Font font = UIUtil.getLabelFont();
         Font bold = font.deriveFont(Font.BOLD);
         FontRenderContext frc = new FontRenderContext(null, true, true);
-        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, bold, frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
         int pad = MARGIN + 16;
         int totalW = contentWidth(model, layouts, positions, font, frc) + pad;
         int totalH = 0;
@@ -581,8 +614,9 @@ public final class DiagramRenderer {
     /** Draw all entity cards. */
     public static void drawCards(Graphics2D g2, DiagramModel model, Font font, Font bold) {
         FontRenderContext frc = g2.getFontRenderContext();
-        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, bold, frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
         for (int i = 0; i < model.getEntities().size(); i++) {
             drawCard(g2, model.getEntities().get(i), positions.get(i), layouts.get(i), font, bold);
         }
@@ -622,8 +656,9 @@ public final class DiagramRenderer {
     /** Canvas 专用关系线入口，复用与导出相同的布局算法。 */
     public static void drawOrthoLinesForCanvas(Graphics2D g2, DiagramModel model, List<Line> lines, Font font, Font bold) {
         FontRenderContext frc = g2.getFontRenderContext();
-        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, bold, frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
         drawOrthoLines(g2, lines, model, layouts, positions);
     }
 
@@ -631,8 +666,9 @@ public final class DiagramRenderer {
     public static void drawLabels(
             Graphics2D g2, DiagramModel model, List<Line> lines,
             Font font, FontRenderContext frc) {
-        List<Layout> layouts = measureEntities(model.getEntities(), font, font.deriveFont(Font.BOLD), frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, font.deriveFont(Font.BOLD), frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
         drawLabelsOnPath(g2, lines, model, layouts, positions, font, frc);
     }
 
@@ -1039,8 +1075,9 @@ public final class DiagramRenderer {
         String jbbg = hexOf(JOIN_BADGE_BG);
         String jbt = hexOf(JOIN_BADGE_TEXT);
 
-        List<Layout> layouts = measureEntities(model.getEntities(), font, bold, frc);
-        List<Pos> positions = computeLayout(layouts, model, font, frc);
+        CachedLayout cl = cachedLayout(model, font, bold, frc);
+        List<Layout> layouts = cl.layouts();
+        List<Pos> positions = cl.positions();
 
         for (int i = 0; i < model.getEntities().size(); i++) {
             EntityNode e = model.getEntities().get(i);

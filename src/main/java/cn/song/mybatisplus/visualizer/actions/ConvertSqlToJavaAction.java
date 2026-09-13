@@ -24,7 +24,6 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Pair;
 import com.intellij.psi.PsiClass;
-import kotlin.Unit;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
@@ -75,17 +74,21 @@ public final class ConvertSqlToJavaAction extends AnAction {
             return;
         }
 
-        // 1. SQL 解析（纯函数，EDT 安全）；失败 → 错误弹窗（含行号）
+        // 1. SQL 解析（纯函数，EDT 安全）；T-Perf-20：失败改 WARNING 通知（非模态、非红色）——
+        // 用户误选非 SQL 文本即触发，模态框过重；失败信息（含行号）仍完整可见
         SqlReverseResult result;
         try {
             result = SqlToJavaConverter.INSTANCE.parse(text);
         } catch (SqlReverseException ex) {
-            Messages.showErrorDialog(
-                    project,
-                    MpSqlVisualizerBundle.message(ex.getKey(), ex.getDetail()) + "\n（第 "
-                            + SqlToJavaConverter.INSTANCE.errorLine(text, ex.getOffset()) + " 行）",
-                    MpSqlVisualizerBundle.message("reverse.error.title")
-            );
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
+                    .createNotification(
+                            MpSqlVisualizerBundle.message("reverse.error.title"),
+                            MpSqlVisualizerBundle.message(ex.getKey(), ex.getDetail()) + "（第 "
+                                    + SqlToJavaConverter.INSTANCE.errorLine(text, ex.getOffset()) + " 行）",
+                            com.intellij.notification.NotificationType.WARNING
+                    )
+                    .notify(project);
             return;
         }
 
@@ -130,6 +133,8 @@ public final class ConvertSqlToJavaAction extends AnAction {
                 pairHolder[0] = new kotlin.Pair<>(Collections.emptyMap(), Collections.emptyMap());
             }
             ApplicationManager.getApplication().invokeLater(() -> {
+                // 3. EDT 生成 + 拼接 + 弹窗（T-Perf-21：主路径补 disposed 守卫——后台查找期间项目可能已关闭）
+                if (project.isDisposed()) return;
                 ReverseWrapperFormat format = reverseFormat();
                 String code = SqlToJavaConverter.INSTANCE.generateBatchCode(
                         parseResults, pairHolder[0].getFirst(), pairHolder[0].getSecond(), format, null);
@@ -188,28 +193,41 @@ public final class ConvertSqlToJavaAction extends AnAction {
                 }
             }
             new EntitySelectionDialog(project, rows, (Map<String, PsiClass> selections) -> {
-                PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
-                SqlToJavaConverter.EntityCandidate main = mainPsi != null
-                        ? SqlToJavaConverter.INSTANCE.candidateOf(mainPsi) : null;
-                Map<String, JavaCodeGenerator.EntityTarget> subEntities = new HashMap<>();
-                for (ReverseJoin join : result.joins()) {
-                    String alias = join.alias();
-                    if (alias == null) continue;
-                    PsiClass psi = selections.get(alias);
-                    if (psi != null) {
-                        JavaCodeGenerator.EntityTarget sub = toSubEntity(SqlToJavaConverter.INSTANCE.candidateOf(psi));
-                        if (sub != null) subEntities.put(alias, sub);
-                    }
-                }
-                if (main != null) {
-                    showCodeDialog(project, result, main, format, subEntities);
-                    return;
-                } else {
-                    // 主表未指定实体 → 回落字符串列名形态
-                    new JavaCodePreviewDialog(project,
-                            SqlToJavaConverter.INSTANCE.generateCode(result, null, format, null, Collections.emptyMap())).show();
-                    return;
-                }
+                // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历
+                // 继承链全部字段 + 注解 resolve，大实体耗时随字段数线性，EDT 直解析构成确认停顿；
+                // 后台 ReadAction 解析后回 EDT 展示代码预览（对齐上方 convert 的既有异步模式）。
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    final kotlin.Pair<SqlToJavaConverter.EntityCandidate, Map<String, JavaCodeGenerator.EntityTarget>>[] resolvedHolder =
+                            new kotlin.Pair[1];
+                    resolvedHolder[0] = ReadAction.compute(() -> {
+                        PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
+                        SqlToJavaConverter.EntityCandidate main = mainPsi != null
+                                ? SqlToJavaConverter.INSTANCE.candidateOf(mainPsi) : null;
+                        Map<String, JavaCodeGenerator.EntityTarget> subEntities = new HashMap<>();
+                        for (ReverseJoin join : result.joins()) {
+                            String alias = join.alias();
+                            if (alias == null) continue;
+                            PsiClass psi = selections.get(alias);
+                            if (psi != null) {
+                                JavaCodeGenerator.EntityTarget sub = toSubEntity(SqlToJavaConverter.INSTANCE.candidateOf(psi));
+                                if (sub != null) subEntities.put(alias, sub);
+                            }
+                        }
+                        return new kotlin.Pair<>(main, (Map<String, JavaCodeGenerator.EntityTarget>) subEntities);
+                    });
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        if (project.isDisposed()) return;
+                        SqlToJavaConverter.EntityCandidate main = resolvedHolder[0].getFirst();
+                        Map<String, JavaCodeGenerator.EntityTarget> subEntities = resolvedHolder[0].getSecond();
+                        if (main != null) {
+                            showCodeDialog(project, result, main, format, subEntities);
+                        } else {
+                            // 主表未指定实体 → 回落字符串列名形态
+                            new JavaCodePreviewDialog(project,
+                                    SqlToJavaConverter.INSTANCE.generateCode(result, null, format, null, Collections.emptyMap())).show();
+                        }
+                    });
+                });
             }).show();
             return;
         }
@@ -220,8 +238,8 @@ public final class ConvertSqlToJavaAction extends AnAction {
             showCodeDialog(project, result, candidates.get(0), format);
         } else {
             // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
-            List<String> displayTexts = candidates.stream().map(c ->
-                    SqlSelectionDialog.displayText(
+            List<SqlSelectionDialog.Row> displayTexts = candidates.stream().map(c ->
+                    SqlSelectionDialog.Row.of(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
                             c.psiClass().getContainingFile() != null
                                     ? c.psiClass().getContainingFile().getName() : ""

@@ -9,6 +9,7 @@ import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
@@ -47,6 +48,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     private static final String TOOLBAR_ID_INPUT = "cn.song.mybatisplus.visualizer.logToSql.toolbar.input";
     private static final String TOOLBAR_ID_RESULT = "cn.song.mybatisplus.visualizer.logToSql.toolbar.result";
 
+    /** T-Perf-14：大日志后台转换阈值——字符数（约 1MB）。 */
+    private static final int HEAVY_INPUT_CHARS = 1_000_000;
+    /** T-Perf-14：大日志后台转换阈值——行数（约 1000 行）。 */
+    private static final int HEAVY_INPUT_LINES = 1_000;
+
     private final Project project;
     private final Editor inputEditor;
     private final Editor resultEditor;
@@ -56,6 +62,9 @@ public class LogToSqlPanel extends JPanel implements Disposable {
 
     /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样压缩。 */
     private boolean formatToggled = true;
+
+    /** T-Perf-14：后台转换进行中标志（防重入）。 */
+    private final java.util.concurrent.atomic.AtomicBoolean converting = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private boolean disposed = false;
 
@@ -212,6 +221,8 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         @Override
         public void actionPerformed(AnActionEvent e) {
             setDocumentText(resultEditor, "");
+            // T-AutoFold F4-c：清空后同步清除折叠区域
+            cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(resultEditor, "");
             status(" ", false);
         }
     }
@@ -224,6 +235,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
      * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/压缩切换）→ 写结果区。
      *
      * 三解析器并列：MyBatis + Hibernate + JdbcTemplate 同时喂行，各自识别匹配的格式，结果合并输出。
+     * 一段混合日志（同时含多种格式）也能正确转换。
+     *
+     * T-Perf-14：大日志（超过 {@link #HEAVY_INPUT_CHARS} / {@link #HEAVY_INPUT_LINES} 阈值，粘贴数 MB 日志场景）
+     * 解析 + 逐条格式化移 {@link com.intellij.openapi.progress.Task.Backgroundable} 后台 + 进度，EDT 不再全量解析冻结；
+     * 小输入保持同步（即时反馈）。防重入：后台转换进行中忽略再次触发。
      */
     private void convert() {
         String text = inputEditor.getDocument().getText();
@@ -231,13 +247,58 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             status(MpSqlVisualizerBundle.message("logToSql.panel.empty"), true);
             return;
         }
+        // 前缀/混合/截断与自动捕获同源（每次转换即时读取，改设置立即生效）
+        Parsers parsers = buildParsers();
+        int lineCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                lineCount++;
+            }
+        }
+        boolean heavy = text.length() > HEAVY_INPUT_CHARS || lineCount >= HEAVY_INPUT_LINES;
+        if (!heavy) {
+            applyConversion(computeConversion(text, parsers));
+            return;
+        }
+        if (!converting.compareAndSet(false, true)) {
+            return;
+        }
+        status(MpSqlVisualizerBundle.message("logToSql.status.converting"), false);
+        new com.intellij.openapi.progress.Task.Backgroundable(
+                project,
+                MpSqlVisualizerBundle.message("logToSql.panel.convertingTask"),
+                true) {
+            @Override
+            public void run(com.intellij.openapi.progress.ProgressIndicator indicator) {
+                final ConversionOutput out = computeConversion(text, parsers);
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    converting.set(false);
+                    if (project.isDisposed()) {
+                        return;
+                    }
+                    applyConversion(out);
+                });
+            }
+        }.queue();
+    }
+
+    /** 三解析器装配（转换配置每次转换即时读取）。 */
+    private Parsers buildParsers() {
         PluginSettings.State state = PluginSettings.getInstance().getState();
-        LogSqlRestorer restorer = new LogSqlRestorer();
-        MyBatisLogParser myBatisParser = new MyBatisLogParser(restorer,
-                state.getLogSqlPrefix(), state.getLogParamPrefix(), state.getLogMixedPrefix(), state.getLogMaxParseLength());
-        HibernateLogParser hibernateParser = new HibernateLogParser(restorer,
-                state.getLogHibernateSqlPrefix(), state.getLogHibernateParamPrefix(), state.getLogMixedPrefix(), state.getLogMaxParseLength(), true);
-        JdbcTemplateLogParser jdbcParser = new JdbcTemplateLogParser(restorer, state.getLogJdbcEnabled(), state.getLogMaxParseLength());
+        return new Parsers(
+                new MyBatisLogParser(new LogSqlRestorer(),
+                        state.getLogSqlPrefix(), state.getLogParamPrefix(), state.getLogMixedPrefix(), state.getLogMaxParseLength()),
+                new HibernateLogParser(new LogSqlRestorer(),
+                        state.getLogHibernateSqlPrefix(), state.getLogHibernateParamPrefix(), state.getLogMixedPrefix(),
+                        state.getLogMaxParseLength(), true),
+                new JdbcTemplateLogParser(new LogSqlRestorer(), state.getLogJdbcEnabled(), state.getLogMaxParseLength()));
+    }
+
+    /** 纯计算：逐行喂三解析器 + 逐条还原/格式化（后台线程安全——不触碰 Swing）。 */
+    private ConversionOutput computeConversion(String text, Parsers parsers) {
+        MyBatisLogParser myBatisParser = parsers.myBatis();
+        HibernateLogParser hibernateParser = parsers.hibernate();
+        JdbcTemplateLogParser jdbcParser = parsers.jdbc();
         for (String line : text.split("\n", -1)) {
             myBatisParser.feed(line);
             hibernateParser.feed(line);
@@ -251,8 +312,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         entries.addAll(hibernateParser.takeEntries());
         entries.addAll(jdbcParser.takeEntries());
         if (entries.isEmpty()) {
-            status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), true);
-            return;
+            return new ConversionOutput(null, 0, 0);
         }
         boolean multi = entries.size() > 1;
         StringBuilder out = new StringBuilder();
@@ -268,14 +328,34 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             }
             out.append(piece);
         }
-        setDocumentText(resultEditor, out.toString());
         // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
         long unresolved = entries.stream().filter(e -> LogEntryPreviewRecognizerKt.countPlaceholders(e.restoredSql()) > 0).count();
-        if (unresolved > 0) {
-            status(MpSqlVisualizerBundle.message("logToSql.status.unresolved", unresolved), true);
-        } else {
-            status(MpSqlVisualizerBundle.message("logToSql.status.converted", entries.size()), false);
+        return new ConversionOutput(out.toString(), entries.size(), (int) unresolved);
+    }
+
+    /** 应用转换结果（EDT）：写结果区 + 状态行。 */
+    private void applyConversion(ConversionOutput out) {
+        if (out.text() == null) {
+            status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), true);
+            return;
         }
+        setDocumentText(resultEditor, out.text());
+        // T-AutoFold F4-c：转换产出后按当前设置重建结果区折叠（关闭态零操作）。
+        // 随 dev 的计算/应用拆分从 computeConversion（后台线程）移到此处（EDT），写后即折。
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(resultEditor, out.text());
+        if (out.unresolved() > 0) {
+            status(MpSqlVisualizerBundle.message("logToSql.status.unresolved", out.unresolved()), true);
+        } else {
+            status(MpSqlVisualizerBundle.message("logToSql.status.converted", out.entriesCount()), false);
+        }
+    }
+
+    /** 转换结果（null text = 无条目）。 */
+    private record ConversionOutput(String text, int entriesCount, int unresolved) {
+    }
+
+    /** 三解析器三元组（Kotlin Triple 的 Java 承载）。 */
+    private record Parsers(MyBatisLogParser myBatis, HibernateLogParser hibernate, JdbcTemplateLogParser jdbc) {
     }
 
     /** T-M38：列表「发送到日志转 SQL」落点——条目渲染回日志文本填入输入区并立即转换。 */
@@ -378,6 +458,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
 
     String resultTextForTest() {
         return resultEditor.getDocument().getText();
+    }
+
+    /** T-AutoFold F4-c：结果区编辑器（折叠区域断言用）。 */
+    Editor resultEditorForTest() {
+        return resultEditor;
     }
 
     String statusForTest() {

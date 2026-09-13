@@ -38,6 +38,8 @@ import org.jetbrains.annotations.Nullable;
  *
  * 支持特性：
  *  - 驼峰嵌套属性路径（如 `addressCity`）自动展开为 JOIN（需 TableInfo 含关联元数据）
+ *  - IgnoreCase（T-J4）：等值族条件（= / !=）生成 `LOWER(col) = LOWER(?)`
+ *  - IN 条件检测（T-J4）：hasInClause / inClauseParameterOrdinals 供 SqlPreviewService 接线
  *
  * 无状态单例，纯函数逻辑，可独立单测。
  */
@@ -60,6 +62,72 @@ public final class DerivedQueryConverter {
         PartTreeConverter converter = new PartTreeConverter(tableInfo);
         return converter.convert(partTree);
     }
+
+    // ------------------------------------------------------------------
+    // T-J4：IN 条件检测（SqlPreviewService 接线预留，本里程碑只备数据不接线）
+    // ------------------------------------------------------------------
+
+    /**
+     * 检测派生方法名是否含 IN / NOT IN 条件（T-J4）。
+     *
+     * <p><b>SqlPreviewService 接线点</b>：派生查询路径（previewDerivedQuery）在方法含 IN 条件时，
+     * 应把对应参数名加入 SqlPreviewService.buildJpaPreviewResult 的 {@code inClauseParams}
+     * 集合（面板回填按逗号分割多值，对齐 HqlConverter/JpqlConverter 的
+     * {@code Result.inClauseParams} 惯例）。参数名对齐方式见 inClauseParameterOrdinals。
+     *
+     * @param methodName Repository 派生方法名（如 "findByStatusIn"）
+     * @return 是否含 IN / NOT IN 条件
+     */
+    public static boolean hasInClause(@NotNull String methodName) {
+        return !inClauseParameterOrdinals(methodName).isEmpty();
+    }
+
+    /**
+     * 返回 IN / NOT IN 条件的参数序号（0-based，T-J4）。
+     *
+     * Spring Data JPA 派生查询按条件声明顺序绑定方法参数，需注意：
+     *  - 不消耗参数的条件（IS_NULL / IS_NOT_NULL / IS_EMPTY / IS_NOT_EMPTY / TRUE / FALSE / EXISTS）不占参数位；
+     *  - BETWEEN 消耗两个参数（lo/hi），占两位。
+     *
+     * 示例：
+     *  - `findByStatusIn` → [0]（第 1 个参数即 IN 参数）
+     *  - `findByNameIsNullAndStatusIn` → [0]（IsNull 跳过，StatusIn 仍是第 1 个参数）
+     *  - `findByAgeBetweenAndStatusIn` → [2]（Between 消耗参数 0/1，StatusIn 是第 3 个参数）
+     *
+     * <p><b>SqlPreviewService 接线点</b>：inClauseParameterOrdinals(methodInfo.methodName) 的序号
+     * 对齐 method.parameterList.parameters（过滤 Pageable 后）即得 IN 参数名集合。
+     *
+     * @param methodName Repository 派生方法名
+     * @return IN/NOT_IN 条件的参数序号列表（按出现顺序）
+     */
+    public static List<Integer> inClauseParameterOrdinals(@NotNull String methodName) {
+        PartTree tree = PartTreeParser.parse(methodName);
+        int ordinal = 0;
+        List<Integer> ordinals = new ArrayList<>();
+        for (PredicatePart predicate : tree.getPredicates()) {
+            for (cn.song.mybatisplus.visualizer.converter.jpa.Condition condition : predicate.getConditions()) {
+                if (PARAMETER_CONSUMING_TYPES.contains(condition.getType())) {
+                    if (condition.getType() == PartType.IN || condition.getType() == PartType.NOT_IN) {
+                        ordinals.add(ordinal);
+                    }
+                    // BETWEEN 消耗两个参数（lo/hi）
+                    ordinal += condition.getType() == PartType.BETWEEN ? 2 : 1;
+                }
+            }
+        }
+        return ordinals;
+    }
+
+    /** 消耗方法参数的条件类型集合（补集：IS_NULL/IS_NOT_NULL/IS_EMPTY/IS_NOT_EMPTY/TRUE/FALSE/EXISTS）。 */
+    private static final Set<PartType> PARAMETER_CONSUMING_TYPES = java.util.Collections.unmodifiableSet(
+            java.util.EnumSet.complementOf(java.util.EnumSet.of(
+                    PartType.IS_NULL,
+                    PartType.IS_NOT_NULL,
+                    PartType.IS_EMPTY,
+                    PartType.IS_NOT_EMPTY,
+                    PartType.TRUE,
+                    PartType.FALSE,
+                    PartType.EXISTS)));
 
     /**
      * 内部转换器实现（携带表信息上下文）。
@@ -259,6 +327,9 @@ public final class DerivedQueryConverter {
 
         /**
          * 根据 PartType 构建对应的条件模型。
+         *
+         * <p>T-J4：等值族（SIMPLE_PROPERTY / NEGATING_SIMPLE_PROPERTY）的 ignoreCase 参数生效——
+         * 生成 `LOWER(col) = LOWER(?)` / `LOWER(col) != LOWER(?)`。
          */
         private Condition buildCondition(
                 @NotNull ColumnRef column,
@@ -267,9 +338,9 @@ public final class DerivedQueryConverter {
                 @NotNull SqlValue placeholder) {
             switch (type) {
                 case SIMPLE_PROPERTY:
-                    return new Condition.Simple(column, "=", placeholder, null);
+                    return buildEqualityCondition(column, "=", ignoreCase, placeholder);
                 case NEGATING_SIMPLE_PROPERTY:
-                    return new Condition.Simple(column, "!=", placeholder, null);
+                    return buildEqualityCondition(column, "!=", ignoreCase, placeholder);
                 case LIKE:
                     return new Condition.Like(column, false, placeholder, LikePosition.ANYWHERE, null);
                 case NOT_LIKE:
@@ -322,6 +393,28 @@ public final class DerivedQueryConverter {
                     return new Condition.Raw("EMPTY 检查不支持", null);
             }
             throw new IllegalArgumentException("未知的 PartType: " + type);
+        }
+
+        /**
+         * T-J4：构建等值族条件（= / !=），ignoreCase 生效时两侧包 LOWER。
+         *
+         * 渲染说明：SqlGenerator 对 WHERE 条件仅按 `qualifiedName op value` 渲染（ColumnRef.function
+         * 在条件侧不生效），故列侧用 `LOWER(...)` 内联进 columnName（quoteIfKeyword 对整串非保留字
+         * 原样透传）、值侧用 `SqlValue.Literal("LOWER(?)")` 原样渲染——最终 SQL 为
+         * `LOWER(col) = LOWER(?)`，`?` 数量与参数表（SqlPreviewService 按方法签名构建）保持一致。
+         */
+        private Condition buildEqualityCondition(
+                @NotNull ColumnRef column,
+                @NotNull String op,
+                boolean ignoreCase,
+                @NotNull SqlValue placeholder) {
+            if (!ignoreCase) return new Condition.Simple(column, op, placeholder, null);
+            return new Condition.Simple(
+                    column.copy(column.getTableAlias(), "LOWER(" + column.getColumnName() + ")", column.getAlias(),
+                            column.getFunction(), column.getRawExpr(), column.getEntityClass(), column.getType()),
+                    op,
+                    new SqlValue.Literal("LOWER(?)", "LOWER(?)"),
+                    null);
         }
 
         /**

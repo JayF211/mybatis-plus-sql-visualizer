@@ -114,9 +114,11 @@ public final class SqlLogManager implements Disposable {
         this.project = project;
         this.bridge.onConsoleRemoved = this::onConsoleRemoved;
         // M37.3：恢复 logAutoOpenOnCapture 行为——F-44 移除独立窗口时一并丢了解接线（设置项
-        // 与设置页勾选保留至今，形同虚设）。挂**无条件** buffer 监听（面板未创建/未订阅时
+        // 与设置页勾选保留至今，形同虚设）。挂**无条件**回调（面板未创建/未订阅时
         // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
-        buffer.addListener(autoShowBufferListener);
+        // T-PerfBatch：自动展开挂 onEntryAccepted（每次成功入队即时回调，与列表内容节流解耦——
+        // 既有语义「每条都判 maybeAutoShow、60s 防抖收敛」不变）。
+        buffer.setOnEntryAccepted(autoShowBufferListener);
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
         // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
         project.getMessageBus().connect(this).subscribe(
@@ -304,7 +306,7 @@ public final class SqlLogManager implements Disposable {
         capturingListeners.add(listener);
     }
 
-    /** T-Perf-15（自 dev 移植）：注销 capturing 变化监听（面板 dispose 调用——防面板随 tool window content
+    /** T-Perf-15：注销 capturing 变化监听（面板 dispose 调用——防面板随 tool window content
      *  销毁重建逐次累积，每条新 SQL 仍回调已销毁面板）。 */
     public void removeCapturingListener(Runnable listener) {
         capturingListeners.remove(listener);
@@ -436,18 +438,26 @@ public final class SqlLogManager implements Disposable {
                 .toList();
         buffer.setFilterKeywords(kws);
         buffer.setMaxEntries(state.getLogMaxCount());
+        // F-43：自动保存历史 SQL（T-Perf-12：submit 异步批量写——回调只投递无锁队列，
+        // 磁盘 IO 全部在专用写线程，控制台输出热路径不再同步 flush）
         if (state.getLogAutoSaveEnabled()) {
             autoSaver.configure(state.getLogAutoSavePath(), state.getLogAutoSaveFileNamePattern(), project.getBasePath());
-            buffer.setOnEvicted(autoSaver::write);
+            buffer.setOnEvicted(autoSaver::submit);
         } else {
             buffer.setOnEvicted(null);
         }
     }
 
-    /** UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。 */
+    /**
+     * UI 订阅刷新回调（回调在 EDT 执行；首个订阅者开始桥接缓冲变更）。
+     * T-PerfBatch：同一回调挂三个出口——内容监听器（节流后的正式通知）、徽章变更、
+     * 内容节流抑制兜底——全部汇入 notifyUi 的置脏+幂等 flush，面板读当下快照不丢条目。
+     */
     public void addUiListener(Runnable listener) {
         if (uiListeners.isEmpty()) {
             buffer.addListener(uiNotifyListener);
+            buffer.setOnDedupeCountsChanged(uiNotifyListener);
+            buffer.setOnContentNotifySuppressed(uiNotifyListener);
         }
         uiListeners.add(listener);
     }
@@ -456,6 +466,8 @@ public final class SqlLogManager implements Disposable {
         uiListeners.remove(listener);
         if (uiListeners.isEmpty()) {
             buffer.removeListener(uiNotifyListener);
+            buffer.setOnDedupeCountsChanged(null);
+            buffer.setOnContentNotifySuppressed(null);
         }
     }
 
@@ -492,7 +504,7 @@ public final class SqlLogManager implements Disposable {
     }
 
     /**
-     * T-Perf-03（自 dev 移植）：UI 刷新合并——流式灌入时每条 SQL 一次 invokeLater 的调度风暴改为
+     * T-Perf-03：UI 刷新合并——流式灌入时每条 SQL 一次 invokeLater 的调度风暴改为
      * 「置脏 + 单个幂等 flush」：首个变更投递一个 invokeLater（pending 置位），后续变更
      * 在 flush 执行前只置脏不重复投递；flush 读的是当下缓冲快照，不丢任何条目。
      * 持续灌入期间刷新频率被 EDT 吞吐自然合并（风暴期数百条 SQL = 数十次轻量刷新）。
@@ -533,8 +545,9 @@ public final class SqlLogManager implements Disposable {
         buffer.setPaused(true);
         bridge.detach();
         buffer.removeListener(uiNotifyListener);
-        // M37.3：自动展开监听同步注销（dispose 生命周期闭环）
-        buffer.removeListener(autoShowBufferListener);
+        buffer.setOnEntryAccepted(null);
+        buffer.setOnDedupeCountsChanged(null);
+        buffer.setOnContentNotifySuppressed(null);
         uiListeners.clear();
         autoSaver.close();
     }

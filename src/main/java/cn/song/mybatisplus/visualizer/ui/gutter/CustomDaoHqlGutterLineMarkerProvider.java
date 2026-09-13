@@ -40,7 +40,7 @@ import javax.swing.Icon;
  */
 public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider {
 
-    private static final java.util.Set<String> STANDARD_JPA_METHODS =
+    private static final java.util.Set<String> EXCLUDED_JPA_METHODS =
             java.util.Set.of("createQuery", "createNamedQuery", "createNativeQuery");
 
     @Override
@@ -63,8 +63,13 @@ public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider 
         if (!java.util.Objects.equals(grandParent.getMethodExpression().getReferenceName(), element.getText())) return null;
         // 【关键排除】标准 JPA/Hibernate 方法（createQuery/createNamedQuery/createNativeQuery）由 HqlGutterLineMarkerProvider 负责，
         // 本 provider 仅处理自定义 DAO 方法（findByQuery/executeHql 等），避免同行双图标。
-        if (STANDARD_JPA_METHODS.contains(element.getText())) return null;
+        if (EXCLUDED_JPA_METHODS.contains(element.getText())) return null;
         if (!gutterEnabled()) return null;
+        // T-Perf-02：纯文本预筛（O(1)，零 resolve、零正则）——qualifier 名与方法名均无 DAO/HQL
+        // 特征的调用直接排除，不进 locate()。locate 内部会跑接收者 classify（名字启发失败时
+        // resolve 类型）与 4 条 HQL 内容正则；daemon 每趟对项目内每个方法调用都执行本 provider，
+        // 无预筛时构成热路径开销。预筛是 locate 认领路径的保守超集（宁可放行，覆盖不回退）。
+        if (!passesTextPrefilter(grandParent)) return null;
         if (CustomDaoHqlLocator.locate(grandParent) == null) return null;
         return new LineMarkerInfo<PsiElement>(
                 element,
@@ -83,6 +88,43 @@ public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider 
         } catch (Throwable t) {
             return true;
         }
+    }
+
+    /**
+     * T-Perf-02：纯文本预筛（O(1)，零 PSI resolve）——镜像 {@link CustomDaoHqlLocator} 的名字层启发
+     * （CUSTOM_DAO 的 DAO qualifier 后缀 / 查询方法名关键字、HIBERNATE_TEMPLATE 的
+     * {@code getHibernateTemplate().find(...)} 形态），任一命中即放行进 locate() 做完整判定。
+     *
+     * <p>对 find/iterate 等通用名：qualifier 名含 hibernate+template / *template / DAO 后缀均放行
+     * （类型解析命中的怪名变量如 {@code HibernateTemplate template} 会被预筛漏掉，但名字层本就无法
+     * 覆盖，与"宁可漏标不重复标"的既有口径一致且仅限极少数命名）。
+     */
+    private static boolean passesTextPrefilter(com.intellij.psi.PsiMethodCallExpression call) {
+        String methodName = call.getMethodExpression().getReferenceName();
+        if (methodName == null) return false;
+        String lowerName = methodName.toLowerCase(java.util.Locale.ROOT);
+        // 查询方法名关键字（镜像 QUERY_METHOD_KEYWORDS 的 contains-ignoreCase 语义）
+        if (lowerName.contains("query") || lowerName.contains("hql") || lowerName.contains("jpql")
+                || lowerName.contains("findbysql")) return true;
+        com.intellij.psi.PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        String qualifierName = null;
+        if (qualifier instanceof PsiReferenceExpression) {
+            qualifierName = ((PsiReferenceExpression) qualifier).getReferenceName();
+        } else if (qualifier instanceof PsiMethodCallExpression) {
+            qualifierName = ((PsiMethodCallExpression) qualifier).getMethodExpression().getReferenceName();
+        }
+        if (qualifierName != null) {
+            String lowerQ = qualifierName.toLowerCase(java.util.Locale.ROOT);
+            // DAO qualifier 后缀（镜像 DAO_QUALIFIER_SUFFIXES）
+            for (String suffix : DAO_QUALIFIER_SUFFIXES) {
+                if (qualifierName.endsWith(suffix)) return true;
+            }
+            // HibernateTemplate 形态（镜像 classifyMethodCallQualifier 的名字启发）
+            for (String hqlMethod : HIBERNATE_HQL_METHOD_NAMES) {
+                if (hqlMethod.toLowerCase(java.util.Locale.ROOT).equals(lowerName) && lowerQ.contains("template")) return true;
+            }
+        }
+        return false;
     }
 
     private static final class CustomDaoHqlGutterNavigationHandler implements GutterIconNavigationHandler<PsiElement> {
@@ -106,4 +148,12 @@ public class CustomDaoHqlGutterLineMarkerProvider implements LineMarkerProvider 
 
     private static final Icon CUSTOM_DAO_HQL_PREVIEW_ICON =
             IconLoader.getIcon("/icons/sqlGutter.svg", CustomDaoHqlGutterLineMarkerProvider.class);
+
+    /** DAO qualifier 名后缀（镜像 CustomDaoHqlLocator.DAO_QUALIFIER_SUFFIXES，预筛用）。 */
+    private static final java.util.List<String> DAO_QUALIFIER_SUFFIXES =
+            java.util.List.of("Dao", "DaoImpl", "Mapper", "Repository", "CommonDao", "DaoHelper", "BaseDao");
+
+    /** HibernateTemplate HQL 方法名（镜像 CustomDaoHqlLocator.HIBERNATE_HQL_METHODS，预筛用）。 */
+    private static final java.util.Set<String> HIBERNATE_HQL_METHOD_NAMES =
+            java.util.Set.of("find", "findByNamedParam", "findByValueBean", "iterate");
 }

@@ -56,8 +56,10 @@ import javax.swing.AbstractButton;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
+import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
@@ -76,6 +78,7 @@ import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Graphics;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Toolkit;
@@ -133,6 +136,14 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private final JLabel typeFilterLabel = new JLabel(MpSqlVisualizerBundle.message("log.filter.type.label"));
     private final JButton typeFilterButton;
     private final JToggleButton sortButton;
+    // ---------- T-ListMode：SQL 显示模式下拉（单行/关键字换行/格式化） ----------
+
+    /** 显示模式下拉：变更写设置并广播 SETTINGS_CHANGE_TOPIC——既有监听统一回同步 combo + 行高重设 + 刷新。 */
+    private final JComboBox<String> displayModeCombo;
+
+    /** combo 程序化回同步防重入守卫（防 setSelectedItem 触发监听再广播成环）。 */
+    private boolean syncingDisplayModeCombo = false;
+
     private final SearchTextField searchField;
 
     // ---------- 过滤/排序状态 ----------
@@ -196,6 +207,145 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 当前打开的类型弹窗内勾选框（全选/全不选即时同步用；弹窗每次打开重建）。 */
     private List<kotlin.Pair<StatementType, JCheckBox>> typePopupCheckBoxes = List.of();
 
+    /** T-SelToggle：弹窗底部全选/全不选切换按钮（T-SelToggle 双按钮合一；弹窗每次打开重建，与 typePopupCheckBoxes 同生命周期约定）。 */
+    private JButton typePopupToggleButton = null;
+
+    /**
+     * T-SelToggle：弹窗切换按钮文案——activeFilter 全勾 → 「全不选」（点击清空），
+     * 其余态（含空集）→ 「全选」（点击填满）。判定与外层「全部」文案（updateTypeFilterButton）同口径。
+     */
+    private String typePopupToggleLabel() {
+        return MpSqlVisualizerBundle.message(
+                activeFilter.containsAll(SqlLogPanelKt.FILTERABLE_TYPES)
+                        ? "log.filter.selectNone"
+                        : "log.filter.selectAll");
+    }
+
+    /**
+     * T-SelToggle：弹窗切换按钮文案随勾选态刷新。弹窗无公共渲染下游可收口
+     * （updateTypeFilterButton/refreshList 还被搜索等非弹窗链路调用），三个勾选态变更入口
+     * （弹窗构建末尾、applyAllTypes 末尾、单类型复选框 listener）显式调用本函数。
+     */
+    private void syncTypePopupToggleLabel() {
+        JButton button = typePopupToggleButton;
+        if (button != null) {
+            String label = typePopupToggleLabel();
+            if (!label.equals(button.getText())) {
+                button.setText(label);
+            }
+        }
+    }
+
+    /**
+     * 弹出类型多选弹窗：勾选即时生效且弹窗不关闭（JCheckBox 非 menu item，
+     * 点击不触发 popup 收起，支持连续勾选组合）；底部单个全选/全不选切换按钮（T-SelToggle）
+     * 一键设置——同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
+     */
+    private void showTypeFilterPopup() {
+        JPopupMenu popup = new JPopupMenu();
+        popup.add(buildTypeFilterContent());
+        popup.show(typeFilterButton, 0, typeFilterButton.getHeight() + 2);
+    }
+
+    /**
+     * T-SelToggle：构建弹窗内容（勾选框区 + 分隔线 + 底部切换按钮），赋值 typePopupCheckBoxes
+     * 与 typePopupToggleButton。与 showTypeFilterPopup 拆分是纯提取（行为零变更），
+     * 使测试可脱离 popup.show 直接驱动勾选框/切换按钮（headless 下 JPopupMenu.show 不可靠）。
+     */
+    private JPanel buildTypeFilterContent() {
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setOpaque(false);
+        content.setBorder(new javax.swing.border.EmptyBorder(8, 12, 8, 12));
+        List<kotlin.Pair<StatementType, JCheckBox>> checkBoxes = new ArrayList<>();
+        for (StatementType type : SqlLogPanelKt.FILTERABLE_TYPES) {
+            JCheckBox cb = new JCheckBox(labelForType(type), activeFilter.contains(type));
+            cb.setOpaque(false);
+            cb.setAlignmentX(Component.LEFT_ALIGNMENT);
+            cb.setFocusable(false);
+            cb.addActionListener(e -> {
+                if (cb.isSelected()) {
+                    activeFilter.add(type);
+                } else {
+                    activeFilter.remove(type);
+                }
+                updateTypeFilterButton();
+                refreshList();
+                // T-SelToggle：单类型勾选即时同步切换按钮文案
+                syncTypePopupToggleLabel();
+            });
+            checkBoxes.add(new kotlin.Pair<>(type, cb));
+            // T-CrudColor：复选框前置色块图例——否则用户得去设置页才能把颜色和类型对上号。
+            // 样式为 off（或该类型无标记色）时不加色块，避免出现「有图例却无标记」的错位。
+            // 包一层行面板保持 checkBoxes 结构与 applyAllTypes 语义不变。
+            Color tint = SqlListTypeColor.colorOf(type);
+            JPanel rowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            rowPanel.setOpaque(false);
+            rowPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            rowPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, cb.getPreferredSize().height + 2));
+            if (tint != null) {
+                rowPanel.add(new JLabel(colorSwatchIcon(tint)));
+            }
+            rowPanel.add(cb);
+            content.add(rowPanel);
+        }
+        typePopupCheckBoxes = checkBoxes;
+        content.add(Box.createVerticalStrut(6));
+        JSeparator sep = new JSeparator();
+        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(sep);
+        content.add(Box.createVerticalStrut(6));
+        JButton toggleButton = new JButton(typePopupToggleLabel());
+        toggleButton.setFocusable(false);
+        toggleButton.addActionListener(e -> applyAllTypes(!activeFilter.containsAll(SqlLogPanelKt.FILTERABLE_TYPES)));
+        typePopupToggleButton = toggleButton;
+        JPanel row = new JPanel(new GridBagLayout());
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.add(toggleButton);
+        content.add(row);
+        return content;
+    }
+
+    /**
+     * T-CrudColor：类型色块图例图标（12×12 实心方块）。
+     * 用于类型过滤弹窗——纯色块、无边框，与列表中的标记同色，起对照作用。
+     */
+    private Icon colorSwatchIcon(Color color) {
+        return new Icon() {
+            @Override
+            public int getIconWidth() {
+                return 12;
+            }
+
+            @Override
+            public int getIconHeight() {
+                return 12;
+            }
+
+            @Override
+            public void paintIcon(Component c, Graphics g, int x, int y) {
+                g.setColor(color);
+                g.fillRect(x, y, getIconWidth(), getIconHeight());
+            }
+        };
+    }
+
+    /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）：同步弹窗内勾选框 + 按钮文案 + 列表。 */
+    private void applyAllTypes(boolean selected) {
+        activeFilter.clear();
+        if (selected) {
+            activeFilter.addAll(SqlLogPanelKt.FILTERABLE_TYPES);
+        }
+        for (kotlin.Pair<StatementType, JCheckBox> p : typePopupCheckBoxes) {
+            p.getSecond().setSelected(activeFilter.contains(p.getFirst()));
+        }
+        updateTypeFilterButton();
+        refreshList();
+        // T-SelToggle：切换按钮点击后文案翻转（此时 activeFilter 已是新态）
+        syncTypePopupToggleLabel();
+    }
+
     public SqlLogPanel(@NotNull Project project, @NotNull SqlLogManager manager) {
         super(new BorderLayout());
         this.project = project;
@@ -235,6 +385,27 @@ public class SqlLogPanel extends JPanel implements Disposable {
         sortButton.setFocusable(false);
         sortButton.addActionListener(e -> toggleDurationSort());
 
+        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）
+        this.displayModeCombo = new JComboBox<>(new String[]{
+                MpSqlVisualizerBundle.message("log.list.displayMode.single"),
+                MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
+                MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
+        });
+        displayModeCombo.setToolTipText(MpSqlVisualizerBundle.message("log.list.displayMode"));
+        displayModeCombo.setFocusable(false);
+        displayModeCombo.setSelectedIndex(PluginSettings.getInstance().sqlListDisplayMode().ordinal());
+        displayModeCombo.addItemListener(e -> {
+            if (e.getStateChange() == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
+                SqlListDisplayMode mode = SqlListDisplayMode.values()[displayModeCombo.getSelectedIndex()];
+                PluginSettings settings = PluginSettings.getInstance();
+                if (!java.util.Objects.equals(settings.getState().getLogListSqlDisplayMode(), mode.name())) {
+                    settings.getState().setLogListSqlDisplayMode(mode.name());
+                    project.getMessageBus().syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
+                            .settingsChanged();
+                }
+            }
+        });
+
         this.logToSqlPanel = new LogToSqlPanel(project);
         this.sqlToJavaPanel = new SqlToJavaPanel(project);
         this.searchField = buildSearchField();
@@ -265,9 +436,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel);
         // F-44：开启自动保存、或 .idea 中已有历史文件时显示历史 tab
         if (PluginSettings.getInstance().getState().getLogAutoSaveEnabled() || hasHistoryFiles()) {
-            Disposer.register(this, getHistoryPanel());
-            historyTabIndex = tabs.getTabCount();
-            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), getHistoryPanel());
+            addHistoryTab();
         }
         add(tabs, BorderLayout.CENTER);
 
@@ -286,8 +455,16 @@ public class SqlLogPanel extends JPanel implements Disposable {
         SettingsChangeListener settingsListener = () -> ApplicationManager.getApplication().invokeLater(() -> {
             updateHistoryTabVisibility();
             // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
-            // 走 refreshList 重排重绘即生效（片段无缓存，原 HTML 通道的清缓存兜底不再需要）
+            // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
+            // T-ListMode：模式可能被历史面板 combo 改变——回同步本面板下拉选中态 + 行高随模式重设
+            syncDisplayModeCombo();
+            applyListCellHeight();
             refreshList();
+            // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
+            // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 惰性创建）
+            if (tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0) {
+                getHistoryPanel().repaintSqlList();
+            }
         });
         project.getMessageBus().connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener);
 
@@ -308,6 +485,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
             historyPanel = new HistorySqlLogPanel(project);
         }
         return historyPanel;
+    }
+
+    /** combo 选中态从设置回同步（模式被另一面板 combo 改变时；经既有 settings 监听驱动）。 */
+    private void syncDisplayModeCombo() {
+        syncingDisplayModeCombo = true;
+        displayModeCombo.setSelectedIndex(PluginSettings.getInstance().sqlListDisplayMode().ordinal());
+        syncingDisplayModeCombo = false;
     }
 
     // ---------- 顶部区域（工具栏行 + 搜索条） ----------
@@ -343,6 +527,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         typeFilterUnit.add(typeFilterButton);
         left.add(typeFilterUnit);
         left.add(sortButton);
+        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）
+        left.add(displayModeCombo);
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = new JLabel();
         slowQueryLabel.setForeground(new Color(0xD32F2F)); // 红色
@@ -467,70 +653,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
-    /**
-     * 弹出类型多选弹窗：勾选即时生效且弹窗不关闭（JCheckBox 非 menu item，
-     * 点击不触发 popup 收起，支持连续勾选组合）；底部全选/全不选一键设置——
-     * 同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
-     */
-    private void showTypeFilterPopup() {
-        JPopupMenu popup = new JPopupMenu();
-        JPanel content = new JPanel();
-        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-        content.setOpaque(false);
-        content.setBorder(new javax.swing.border.EmptyBorder(8, 12, 8, 12));
-        List<kotlin.Pair<StatementType, JCheckBox>> checkBoxes = new ArrayList<>();
-        for (StatementType type : SqlLogPanelKt.FILTERABLE_TYPES) {
-            JCheckBox cb = new JCheckBox(labelForType(type), activeFilter.contains(type));
-            cb.setOpaque(false);
-            cb.setAlignmentX(Component.LEFT_ALIGNMENT);
-            cb.setFocusable(false);
-            cb.addActionListener(e -> {
-                if (cb.isSelected()) {
-                    activeFilter.add(type);
-                } else {
-                    activeFilter.remove(type);
-                }
-                updateTypeFilterButton();
-                refreshList();
-            });
-            checkBoxes.add(new kotlin.Pair<>(type, cb));
-            content.add(cb);
-        }
-        typePopupCheckBoxes = checkBoxes;
-        content.add(Box.createVerticalStrut(6));
-        JSeparator sep = new JSeparator();
-        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
-        content.add(sep);
-        content.add(Box.createVerticalStrut(6));
-        JPanel row = new JPanel(new GridBagLayout());
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JButton selectAll = new JButton(MpSqlVisualizerBundle.message("log.filter.selectAll"));
-        selectAll.setFocusable(false);
-        selectAll.addActionListener(e -> applyAllTypes(true));
-        row.add(selectAll);
-        JButton selectNone = new JButton(MpSqlVisualizerBundle.message("log.filter.selectNone"));
-        selectNone.setFocusable(false);
-        selectNone.addActionListener(e -> applyAllTypes(false));
-        row.add(selectNone);
-        content.add(row);
-        popup.add(content);
-        popup.show(typeFilterButton, 0, typeFilterButton.getHeight() + 2);
-    }
-
-    /** 全选/全不选（全选 = 「全部」语义，列表透传含 OTHER）：同步弹窗内勾选框 + 按钮文案 + 列表。 */
-    private void applyAllTypes(boolean selected) {
-        activeFilter.clear();
-        if (selected) {
-            activeFilter.addAll(SqlLogPanelKt.FILTERABLE_TYPES);
-        }
-        for (kotlin.Pair<StatementType, JCheckBox> p : typePopupCheckBoxes) {
-            p.getSecond().setSelected(activeFilter.contains(p.getFirst()));
-        }
-        updateTypeFilterButton();
-        refreshList();
-    }
-
     // ---------- 工具栏动作 ----------
 
     /** 直接更新捕捉按钮图标（绕过 ActionToolbar 更新机制——沙盒中 isShowing 检查会导致更新被跳过）。 */
@@ -575,10 +697,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 () -> PluginSettings.getInstance().getState().getLogAutoSaveEnabled());
         boolean hasHistoryData = enabled || hasHistoryFiles();
         if (hasHistoryData && historyTabIndex < 0) {
-            // 添加历史 tab
-            Disposer.register(this, getHistoryPanel());
-            historyTabIndex = tabs.getTabCount();
-            tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), getHistoryPanel());
+            // 添加历史 tab（T-Perf-17：Disposer 注册带防重入守卫）
+            addHistoryTab();
         } else if (!hasHistoryData && historyTabIndex >= 0) {
             // 移除历史 tab（避免选中正在移除的 tab）
             if (tabs.getSelectedIndex() == historyTabIndex) {
@@ -586,7 +706,31 @@ public class SqlLogPanel extends JPanel implements Disposable {
             }
             tabs.removeTabAt(historyTabIndex);
             historyTabIndex = -1;
+            // T-Perf-17：tab 移除时从 Disposer 树摘除——否则下次重新添加时重复注册，
+            // 2026.x 平台报 "Object must not be registered twice" 错误弹窗。
+            // 243 平台 Disposer 无 unregister（javap 实证），dispose(historyPanel) 即摘除并执行
+            // 其轻量 dispose（仅停防抖 Timer，面板组件可复用）；dispose 后重新 register 合法。
+            if (historyPanelRegistered) {
+                Disposer.dispose(getHistoryPanel());
+                historyPanelRegistered = false;
+            }
         }
+    }
+
+    /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
+    private boolean historyPanelRegistered = false;
+
+    /**
+     * 添加历史 tab（T-Perf-17：Disposer 注册防重入守卫——构造期与设置页循环开关都会走到；
+     * 重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
+     */
+    private void addHistoryTab() {
+        if (!historyPanelRegistered) {
+            Disposer.register(this, getHistoryPanel());
+            historyPanelRegistered = true;
+        }
+        historyTabIndex = tabs.getTabCount();
+        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), getHistoryPanel());
     }
 
     /** F-44：检查 .idea 目录中是否存在历史 SQL 文件（F-44-4：目录名随插件更名，旧名不再读取）。 */
@@ -754,10 +898,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         LogEntryListCellRenderer renderer = new LogEntryListCellRenderer();
         entryCellRenderer = renderer;
         list.setCellRenderer(renderer);
-        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）。
-        // 原可变行高使每次布局状态更新逐条调渲染器取首选尺寸（叠加 HTML 排版即 16s EDT Freeze）；
-        // 固定后 WideSelectionListUI 短路逐条测量走 O(1) 快路径。全文查看由单击预览/双击弹窗承接。
-        list.setFixedCellHeight(measureFixedCellHeight());
+        applyListCellHeight();
         list.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
@@ -788,6 +929,20 @@ public class SqlLogPanel extends JPanel implements Disposable {
             }
         });
         return new JBScrollPane(list);
+    }
+
+    /**
+     * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡）：
+     * SINGLE_LINE 固定行高——WideSelectionListUI 短路逐条测量走 O(1) 快路径
+     * （原可变行高 × HTML 排版 = 16s EDT Freeze；片段通道后固定行高仍是流式灌入的最优路径）；
+     * KEYWORD_WRAP/FORMATTED 可变行高——条目行数不等，固定高会裁行；多行片段有条目级缓存，
+     * 逐条测量只剩轻量组件布局（无 HTML 解析，冻结量级不复现；真机大日志表现见计划文档）。
+     * 全文查看由单击预览/双击弹窗承接。
+     */
+    void applyListCellHeight() {
+        list.setFixedCellHeight(PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE
+                ? measureFixedCellHeight()
+                : -1);
     }
 
     /** T-LogListFreeze-04：固定行高实测——样例条目渲染一次取首选高（两行文本 + 5,8 空边框 + 1px 分隔线）。 */
@@ -822,7 +977,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // 检测是否含耗时信息（决定是否显示排序按钮）
         hasAnyDurationInfo = snapshot.stream().anyMatch(LogDurationParser::hasDurationInfo);
 
-        // 去重丢弃计数快照（徽章渲染数据源；丢弃不触发通知，随下一次刷新呈现）
+        // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
         dedupeCounts = manager.getEntries().dedupeCountsSnapshot();
         entryCellRenderer.dedupeCounts = dedupeCounts;
 
@@ -977,8 +1132,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
             if (SourceMarkers.isMpPaginationCount(entry.sourceFile())) {
                 return LjtNoSource.INSTANCE;
             }
-            // F-44-7：标记路径相对于源码根目录（如 src/main/java），需在所有源码根目录中搜索
-            VirtualFile vf = findSourceFile(entry.sourceFile());
+            // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+            VirtualFile vf = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile());
             if (vf != null) {
                 return new LjtPrecise(vf, Math.max(0, entry.sourceLine() - 1));
             }
@@ -1250,6 +1405,19 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** SQL类型多选按钮（测试断言文案）。 */
     public JButton getTypeFilterButtonForTest() {
         return typeFilterButton;
+    }
+
+    /** T-SelToggle：类型弹窗底部全选/全不选切换按钮（未打开弹窗时为 null）。 */
+    public JButton getTypePopupToggleButtonForTest() {
+        return typePopupToggleButton;
+    }
+
+    /**
+     * T-SelToggle：headless 测试直接构建弹窗内容（不经 popup.show——无显示设备时
+     * lightweight popup 不可靠），返回后 {@link #getTypePopupToggleButtonForTest()} 即非 null 可驱动。
+     */
+    public JPanel buildTypeFilterContentForTest() {
+        return buildTypeFilterContent();
     }
 
     /** SQL类型标签（测试断言存在性与文案）。 */

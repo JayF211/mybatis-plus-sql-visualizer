@@ -76,6 +76,12 @@ public class JdbcTemplateLogParser {
     /** 数值字面量（含小数与科学计数）。 */
     private static final Pattern NUMERIC_REGEX = Pattern.compile("-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?");
 
+    /**
+     * T-PerfSweep F2：NamedParameter 参数 Map 的 `, key=` 边界切分正则（lookahead 保留 key）。
+     * 捕捉热路径上每条 named 参数条目都要切分——原内联新建 Regex 提为常量。
+     */
+    private static final Pattern NAMED_PARAMS_MAP_SPLIT = Pattern.compile("\\s*,\\s*(?=\\w+\\s*=)");
+
     private final LogSqlRestorer restorer;
     private boolean enabled;
     private int maxParseLength;
@@ -281,8 +287,8 @@ public class JdbcTemplateLogParser {
             return Map.of();
         }
         Map<String, String> params = new HashMap<>();
-        // 按 `, key=` 边界切分（lookahead 保留 key）
-        String[] entries = paramsText.split("\\s*,\\s*(?=\\w+\\s*=)");
+        // 按 `, key=` 边界切分（lookahead 保留 key）；T-PerfSweep F2：正则提常量（此前每条 named 参数条目内联新建）
+        String[] entries = NAMED_PARAMS_MAP_SPLIT.split(paramsText);
         for (String entry : entries) {
             int eqIdx = entry.indexOf('=');
             if (eqIdx <= 0) {
@@ -338,8 +344,9 @@ public class JdbcTemplateLogParser {
         String rawValue = match.group(2);
         String className = match.group(3);
 
-        // null 字面量：parameter value [null], value class [null]
-        if ("null".equals(rawValue) && "null".equals(className)) {
+        // null 字面量：parameter value [null]（value class 可能是 null，也可能是具体类型如 java.lang.String）。
+        // 字符串字面值 "null" 与 SQL NULL 在该行无法区分，按 NULL 语义处理（M37.0 回归集实证）。
+        if ("null".equals(rawValue)) {
             return new IndexedParam(columnIndex, null, null);
         }
 

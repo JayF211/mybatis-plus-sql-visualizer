@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.actions;
 
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaQueryEnhancer;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator;
@@ -36,6 +37,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Pair;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
@@ -46,6 +48,7 @@ import com.intellij.psi.xml.XmlTag;
 import kotlin.Unit;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -107,24 +110,25 @@ public final class ConvertToSqlAction extends AnAction {
             final int selStart = sm.selectionStart;
             final int selEnd = sm.selectionEnd;
             ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                Pair<List<PsiMethodCallExpression>, List<String>> payload;
+                Pair<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>> payload;
                 try {
                     payload = ReadAction.compute(() -> {
                         List<PsiMethodCallExpression> heads =
                                 WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd);
-                        List<String> texts = heads.stream().map(head ->
-                                SqlSelectionDialog.displayText(
+                        List<SqlSelectionDialog.Row> rows = heads.stream().map(head ->
+                                SqlSelectionDialog.Row.of(
                                         WrapperLocator.sqlCandidateSummary(head),
                                         WrapperLocator.sqlCandidateLineText(head))
                         ).collect(Collectors.toList());
-                        return Pair.create(heads, texts);
+                        return Pair.create(heads, rows);
                     });
                 } catch (Throwable t) {
                     payload = Pair.create(Collections.emptyList(), Collections.emptyList());
                 }
                 List<PsiMethodCallExpression> chainHeads = payload.getFirst();
-                List<String> displayTexts = payload.getSecond();
+                List<SqlSelectionDialog.Row> displayTexts = payload.getSecond();
                 ApplicationManager.getApplication().invokeLater(() -> {
+                    if (project.isDisposed()) return;
                     if (chainHeads.isEmpty()) {
                         // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选
                         showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd, sourceLocation);
@@ -293,32 +297,88 @@ public final class ConvertToSqlAction extends AnAction {
                     (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
             return true;
         }
+        // 4. JPA 回落（T-J9 调用点锚点）：service/controller 中调用 Repository 派生/@Query/@Procedure 方法处
+        if (tryRepositoryCallSiteFallback(service, project, element, sourceLocation)) return true;
+        return false;
+    }
+
+    /**
+     * T-J9 调用点锚点（动作/快捷键路径）：光标落在 `userRepository.findByName(x)` 这类
+     * Repository 方法**调用**上时，resolve 被调方法到接口声明（`call.resolveMethod()`），
+     * 按声明形态分派既有预览管道：
+     *  - `@Query` → previewJpql；
+     *  - `@Procedure` → previewProcedure（T-J16）；
+     *  - 派生查询 → previewDerivedQuery，并把调用点实参带上——
+     *    `PageRequest.of(0, 20)` / `Sort.by("id")` 静态求值内联（T-J10 全路径）。
+     *
+     * <p>边界（KDoc 文档化）：gutter 图标不做调用点反查（声明↔调用反查需全文件扫描/索引缓存，
+     * 与 gutter 快速路径性能红线冲突）——调用点预览仅通过本动作/快捷键触发；Repository 声明处
+     * 图标仍由 {@link cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider} 承载。
+     */
+    private boolean tryRepositoryCallSiteFallback(SqlPreviewService service, Project project, PsiElement element, String sourceLocation) {
+        PsiMethodCallExpression call = PsiTreeUtil.getParentOfType(element, PsiMethodCallExpression.class, false);
+        if (call == null) return false;
+        PsiMethod resolved;
+        try {
+            resolved = call.resolveMethod();
+        } catch (Throwable t) {
+            return false;
+        }
+        if (resolved == null) return false;
+        PsiClass containingClass = resolved.getContainingClass();
+        if (containingClass == null) return false;
+        // 只认接口声明（Repository 接口方法无方法体；实现类方法不在此回落——派生方法本就无实现）
+        if (!containingClass.isInterface()) return false;
+
+        // @Query 优先（与 gutter 派发一致：@Query 方法即使方法名匹配派生模式也走 JPQL 路径）
+        if (JpqlQueryLocator.hasQueryAnnotation(resolved)) {
+            SqlPreviewService.previewAsync(project,
+                    () -> service.previewJpql(resolved),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return true;
+        }
+        // @Procedure（T-J16）
+        if (JpaQueryEnhancer.procedureInfo(resolved) != null) {
+            SqlPreviewService.previewAsync(project,
+                    () -> service.previewProcedure(resolved),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return true;
+        }
+        // 派生查询（T-J10：调用点实参 PageRequest.of/Sort.by 静态求值）
+        if (DerivedMethodLocator.isDerivedQuery(resolved)) {
+            List<PsiExpression> callArgs = Arrays.asList(call.getArgumentList().getExpressions());
+            SqlPreviewService.previewAsync(project,
+                    () -> service.previewDerivedQuery(resolved, callArgs),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return true;
+        }
         return false;
     }
 
     /** M26-A：文件级 SQL 注解候选——收集文件内全部 @Select/@Update 等注解（0/1/多分发）。 */
     private void showAnnotationCandidates(Project project, PsiFile file, Editor editor, String sourceLocation) {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            Pair<List<PsiAnnotation>, List<String>> payload;
+            Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
                     List<PsiAnnotation> annotations = AnnotationSqlPreviewService.INSTANCE.annotationCandidates(file);
-                    List<String> texts = annotations.stream().map(anno -> {
+                    List<SqlSelectionDialog.Row> rows = annotations.stream().map(anno -> {
                         PsiMethod m = PsiTreeUtil.getParentOfType(anno, PsiMethod.class);
                         String qn = anno.getQualifiedName();
                         String shortName = qn != null ? qn.substring(qn.lastIndexOf('.') + 1) : "";
-                        return SqlSelectionDialog.displayText(
+                        return SqlSelectionDialog.Row.of(
                                 (m != null ? m.getName() : "?") + "（" + shortName + "）",
                                 AnnotationSqlPreviewService.INSTANCE.sqlSnippet(anno, 80));
                     }).collect(Collectors.toList());
-                    return Pair.create(annotations, texts);
+                    return Pair.create(annotations, rows);
                 });
             } catch (Throwable t) {
                 payload = Pair.create(Collections.emptyList(), Collections.emptyList());
             }
             List<PsiAnnotation> annotations = payload.getFirst();
-            List<String> displayTexts = payload.getSecond();
+            List<SqlSelectionDialog.Row> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
                 if (annotations.isEmpty()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (annotations.size() == 1) {
@@ -337,27 +397,28 @@ public final class ConvertToSqlAction extends AnAction {
     private void showAnnotationSelectionCandidates(
             Project project, PsiFile file, Editor editor, int selStart, int selEnd, String sourceLocation) {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            Pair<List<PsiAnnotation>, List<String>> payload;
+            Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
                     List<PsiAnnotation> annotations =
                             AnnotationSqlPreviewService.INSTANCE.annotationCandidatesInRange(file, selStart, selEnd);
-                    List<String> texts = annotations.stream().map(anno -> {
+                    List<SqlSelectionDialog.Row> rows = annotations.stream().map(anno -> {
                         PsiMethod m = PsiTreeUtil.getParentOfType(anno, PsiMethod.class);
                         String qn = anno.getQualifiedName();
                         String shortName = qn != null ? qn.substring(qn.lastIndexOf('.') + 1) : "";
-                        return SqlSelectionDialog.displayText(
+                        return SqlSelectionDialog.Row.of(
                                 (m != null ? m.getName() : "?") + "（" + shortName + "）",
                                 AnnotationSqlPreviewService.INSTANCE.sqlSnippet(anno, 80));
                     }).collect(Collectors.toList());
-                    return Pair.create(annotations, texts);
+                    return Pair.create(annotations, rows);
                 });
             } catch (Throwable t) {
                 payload = Pair.create(Collections.emptyList(), Collections.emptyList());
             }
             List<PsiAnnotation> annotations = payload.getFirst();
-            List<String> displayTexts = payload.getSecond();
+            List<SqlSelectionDialog.Row> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
                 if (annotations.isEmpty()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (annotations.size() == 1) {
@@ -382,25 +443,26 @@ public final class ConvertToSqlAction extends AnAction {
     /** T-M29.6：XML 选择区语句候选。 */
     private void previewXmlSelection(Project project, XmlFile file, Editor editor, int selStart, int selEnd, String sourceLocation) {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            Pair<List<XmlTag>, List<String>> payload;
+            Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
                     List<XmlTag> tags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd);
-                    List<String> texts = tags.stream().map(t -> {
+                    List<SqlSelectionDialog.Row> rows = tags.stream().map(t -> {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.displayText(
+                        return SqlSelectionDialog.Row.of(
                                 t.getName() + " " + (id != null ? id : "") + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList());
-                    return Pair.create(tags, texts);
+                    return Pair.create(tags, rows);
                 });
             } catch (Throwable t) {
                 payload = Pair.create(Collections.emptyList(), Collections.emptyList());
             }
             List<XmlTag> tags = payload.getFirst();
-            List<String> displayTexts = payload.getSecond();
+            List<SqlSelectionDialog.Row> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
                 if (tags.isEmpty()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (tags.size() == 1) {
@@ -427,40 +489,48 @@ public final class ConvertToSqlAction extends AnAction {
             previewXml(project, file, statement, sourceLocation);
             return;
         }
-        // 光标不在语句内 → 全部语句候选
-        List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
-                .filter(it -> XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(it.getName()))
-                .collect(Collectors.toList());
-        if (statements.isEmpty()) {
-            SqlPreviewService.showResult(project, null, sourceLocation);
-        } else if (statements.size() == 1) {
-            previewXml(project, file, statements.get(0), sourceLocation);
-        } else {
-            ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                final List<String>[] displayTextsHolder = new List[1];
-                try {
-                    displayTextsHolder[0] = ReadAction.compute(() -> statements.stream().map(t -> {
+        // 光标不在语句内 → 全部语句候选（T-M25-01）
+        // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（大 XML 中 EDT 直跑
+        // findChildrenOfType 构成卡顿；0/1/多 分发在后台结果回来后进行，EDT 只做预览与弹窗）
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> payload;
+            try {
+                payload = ReadAction.compute(() -> {
+                    List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
+                            .filter(it -> XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(it.getName()))
+                            .collect(Collectors.toList());
+                    List<SqlSelectionDialog.Row> rows = statements.stream().map(t -> {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.displayText(
+                        return SqlSelectionDialog.Row.of(
                                 t.getName() + " " + (id != null ? id : "") + "（第 " + line + " 行）", text);
-                    }).collect(Collectors.toList()));
-                } catch (Throwable t) {
-                    displayTextsHolder[0] = Collections.emptyList();
-                }
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (displayTextsHolder[0].size() != statements.size()) {
-                        SqlPreviewService.showResult(project, null, sourceLocation);
-                        return;
-                    }
-                    new SqlSelectionDialog<>(project, statements, displayTextsHolder[0], (XmlTag selected) -> {
+                    }).collect(Collectors.toList());
+                    return Pair.create(statements, rows);
+                });
+            } catch (Throwable t) {
+                payload = Pair.create(Collections.emptyList(), Collections.emptyList());
+            }
+            final Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> finalPayload = payload;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
+                List<XmlTag> statements = finalPayload.getFirst();
+                List<SqlSelectionDialog.Row> displayTexts = finalPayload.getSecond();
+                if (statements.isEmpty()) {
+                    SqlPreviewService.showResult(project, null, sourceLocation);
+                } else if (statements.size() == 1) {
+                    previewXml(project, file, statements.get(0), sourceLocation);
+                } else if (displayTexts.size() != statements.size()) {
+                    SqlPreviewService.showResult(project, null, sourceLocation);
+                } else {
+                    new SqlSelectionDialog<>(project, statements, displayTexts, (XmlTag selected) -> {
+                        // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
                         locateEditorTo(editor, selected);
                         previewXml(project, file, selected, sourceLocation);
                     }).show();
-                });
+                }
             });
-        }
+        });
     }
 
     /** 预览单个 XML 语句（注入实体上下文）。 */
@@ -491,63 +561,70 @@ public final class ConvertToSqlAction extends AnAction {
             return;
         }
         // 光标不在 maintainPage 内 → 全部候选
-        List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
-                .filter(it -> "maintainPage".equals(it.getName()))
-                .collect(Collectors.toList());
-        if (statements.isEmpty()) {
-            SqlPreviewService.showResult(project, null, null);
-        } else if (statements.size() == 1) {
-            previewPages(project, file, statements.get(0));
-        } else {
-            ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                final List<String>[] displayTextsHolder = new List[1];
-                try {
-                    displayTextsHolder[0] = ReadAction.compute(() -> statements.stream().map(t -> {
+        // T-Perf-14：全文件 XmlTag 遍历 + 摘要预计算移同一后台 ReadAction（同 mapper 语句分支）
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> payload;
+            try {
+                payload = ReadAction.compute(() -> {
+                    List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
+                            .filter(it -> "maintainPage".equals(it.getName()))
+                            .collect(Collectors.toList());
+                    List<SqlSelectionDialog.Row> rows = statements.stream().map(t -> {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.displayText(
+                        return SqlSelectionDialog.Row.of(
                                 (id != null ? id : "") + "（第 " + line + " 行）", text);
-                    }).collect(Collectors.toList()));
-                } catch (Throwable t) {
-                    displayTextsHolder[0] = Collections.emptyList();
-                }
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (displayTextsHolder[0].size() != statements.size()) {
-                        SqlPreviewService.showResult(project, null, null);
-                        return;
-                    }
-                    new SqlSelectionDialog<>(project, statements, displayTextsHolder[0], (XmlTag selected) -> {
+                    }).collect(Collectors.toList());
+                    return Pair.create(statements, rows);
+                });
+            } catch (Throwable t) {
+                payload = Pair.create(Collections.emptyList(), Collections.emptyList());
+            }
+            final Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> finalPayload = payload;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
+                List<XmlTag> statements = finalPayload.getFirst();
+                List<SqlSelectionDialog.Row> displayTexts = finalPayload.getSecond();
+                if (statements.isEmpty()) {
+                    SqlPreviewService.showResult(project, null, null);
+                } else if (statements.size() == 1) {
+                    previewPages(project, file, statements.get(0));
+                } else if (displayTexts.size() != statements.size()) {
+                    SqlPreviewService.showResult(project, null, null);
+                } else {
+                    new SqlSelectionDialog<>(project, statements, displayTexts, (XmlTag selected) -> {
                         locateEditorTo(editor, selected);
                         previewPages(project, file, selected);
                     }).show();
-                });
+                }
             });
-        }
+        });
     }
 
     /** F-45：选择区内 maintainPage 候选。 */
     private void previewPagesSelection(Project project, XmlFile file, Editor editor, int selStart, int selEnd) {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            Pair<List<XmlTag>, List<String>> payload;
+            Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
                     List<XmlTag> tags = PagesXmlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd);
-                    List<String> texts = tags.stream().map(t -> {
+                    List<SqlSelectionDialog.Row> rows = tags.stream().map(t -> {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
                         String id = t.getAttributeValue("id");
-                        return SqlSelectionDialog.displayText(
+                        return SqlSelectionDialog.Row.of(
                                 (id != null ? id : "") + "（第 " + line + " 行）", text);
                     }).collect(Collectors.toList());
-                    return Pair.create(tags, texts);
+                    return Pair.create(tags, rows);
                 });
             } catch (Throwable t) {
                 payload = Pair.create(Collections.emptyList(), Collections.emptyList());
             }
             List<XmlTag> tags = payload.getFirst();
-            List<String> displayTexts = payload.getSecond();
+            List<SqlSelectionDialog.Row> displayTexts = payload.getSecond();
             ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
                 if (tags.isEmpty()) {
                     SqlPreviewService.showResult(project, null, null);
                 } else if (tags.size() == 1) {

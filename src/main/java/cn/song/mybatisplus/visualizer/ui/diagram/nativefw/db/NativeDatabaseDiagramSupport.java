@@ -209,15 +209,18 @@ public final class NativeDatabaseDiagramSupport {
                     } catch (Throwable t) {
                         continue;
                     }
-                    List<Object> elements = new ArrayList<>();
+                    // T-Perf-09：惰性迭代 + 命中即停（此前 toList() 全量物化再筛——数千表 schema
+                    // 下即使全部命中也遍历完整棵模型）；model 为 null（未内省）已在上行跳过
+                    Iterable<?> elements;
                     try {
-                        for (Object o : (Iterable<?>) traverser) {
-                            elements.add(o);
-                        }
+                        elements = (Iterable<?>) traverser;
                     } catch (Throwable t) {
                         continue;
                     }
                     for (Object element : elements) {
+                        if (found.size() == wanted.size()) {
+                            break;
+                        }
                         if (!(element instanceof DasTable)) {
                             continue;
                         }

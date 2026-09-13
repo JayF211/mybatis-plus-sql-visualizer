@@ -67,6 +67,8 @@ public class JoinVirtualFkProvider implements ModelRelationManager.ModelRelation
  */
 class JoinVirtualFk extends ModelRelationManager.ExtraRelation {
 
+    private static final Logger LOG = Logger.getInstance(JoinVirtualFk.class);
+
     private final DasTable childTable;
     private final DasTable refTableVal;
     private final List<String> childColumns;
@@ -92,12 +94,38 @@ class JoinVirtualFk extends ModelRelationManager.ExtraRelation {
 
     @Override
     public MultiRef<DasTypedObject> getColumnsRef() {
-        return new ColumnNamesMultiRef(childTable, childColumns);
+        return safeMultiRef(childTable, childColumns);
     }
 
     @Override
     public MultiRef<DasTypedObject> getRefColumns() {
-        return new ColumnNamesMultiRef(refTableVal, refColumns);
+        return safeMultiRef(refTableVal, refColumns);
+    }
+
+    /**
+     * T-Perf-20：构造时校验列可解析性——JOIN ON 引用列在表中缺失时过滤掉（全缺 = 空 MultiRef，
+     * 原生建边拿到空引用自然跳过该边）+ warn，不再让 IllegalStateException 从平台建边回调
+     * 上浮为 IDE internal error 气泡。
+     */
+    private MultiRef<DasTypedObject> safeMultiRef(DasTable table, List<String> names) {
+        if (table == null) return new ColumnNamesMultiRef(null, names);
+        Set<String> available = new HashSet<>();
+        for (DasTypedObject column : DasUtil.getColumns(table)) {
+            String n = column.getName();
+            if (n != null) available.add(n.toLowerCase());
+        }
+        List<String> resolvable = new ArrayList<>();
+        for (String n : names) {
+            if (available.contains(n.toLowerCase())) resolvable.add(n);
+        }
+        if (resolvable.size() < names.size()) {
+            List<String> skipped = new ArrayList<>();
+            for (String n : names) {
+                if (!available.contains(n.toLowerCase())) skipped.add(n);
+            }
+            LOG.warn("JoinVirtualFk: columns missing in " + table.getName() + ", skip=" + skipped);
+        }
+        return new ColumnNamesMultiRef(table, resolvable);
     }
 }
 
@@ -106,6 +134,8 @@ class JoinVirtualFk extends ModelRelationManager.ExtraRelation {
  * 字节码实证）使用；resolveObjects()/resolve() 按名称从所属表列中懒解析。
  */
 class ColumnNamesMultiRef implements MultiRef<DasTypedObject> {
+
+    private static final Logger LOG = Logger.getInstance(ColumnNamesMultiRef.class);
 
     private final DasTable table;
     private final List<String> names;
@@ -174,14 +204,27 @@ class ColumnNamesMultiRef implements MultiRef<DasTypedObject> {
     }
 
     private DasTypedObject resolveByName(String name) {
+        DasTypedObject found = null;
         if (table != null) {
             for (DasTypedObject column : DasUtil.getColumns(table)) {
                 if (column.getName().toLowerCase().equals(name.toLowerCase())) {
-                    return column;
+                    found = column;
+                    break;
                 }
             }
         }
-        throw new IllegalStateException("Column not found in virtual FK resolution: "
+        if (found != null) return found;
+        // T-Perf-20：列缺失兜底（构造期已过滤，此处仅防御建边与解析之间 schema 变化）
+        // ——不再 error() 抛 IllegalStateException 上浮 IDE internal error 气泡；
+        // 退化为首个可用列（边标签语义降级但建图不断链）。表零列的绝对退化场景仍抛。
+        LOG.warn("JoinVirtualFk: column '" + name + "' not found in "
+                + (table != null ? table.getName() : "?") + ", falling back to first column");
+        if (table != null) {
+            for (DasTypedObject column : DasUtil.getColumns(table)) {
+                return column;
+            }
+        }
+        throw new IllegalStateException("No columns available in virtual FK resolution: "
                 + (table != null ? table.getName() : "?") + "." + name);
     }
 }

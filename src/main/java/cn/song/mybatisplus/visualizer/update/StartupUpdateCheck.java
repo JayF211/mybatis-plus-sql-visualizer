@@ -71,7 +71,11 @@ public class StartupUpdateCheck implements ProjectActivity {
                 if (!(result instanceof PluginUpdateRunner.CheckResult.Available available)) return;
                 // 忽略守卫：该版本已被用户忽略 → 静默（仅抑制自动通知，手动检查不受影响）
                 if (VersionIgnore.isVersionIgnored(available.manifest().version(), ignoredVersions)) return;
-                ApplicationManager.getApplication().invokeLater(() -> showAvailable(project, available.manifest()));
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    // T-Perf-21：后台检查完成时项目可能已关闭——不向 disposed project 弹通知
+                    if (project.isDisposed()) return;
+                    showAvailable(project, available.manifest());
+                });
             }
         });
     }
@@ -186,7 +190,9 @@ public class StartupUpdateCheck implements ProjectActivity {
             .createNotification(
                 MpSqlVisualizerBundle.message("update.notification.failed.title"),
                 MpSqlVisualizerBundle.message("settings.update.installFailed", message),
-                NotificationType.ERROR);
+                // T-Perf-20：ERROR 红色 balloon 降 WARNING（全项目唯一 ERROR 通知清零；
+                // 更新页 Failed 态渲染仍承载失败详情，用户主动重试入口不变）
+                NotificationType.WARNING);
         try {
             notification.notify(project);
         } catch (Throwable ignored) {

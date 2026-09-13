@@ -36,7 +36,9 @@ public final class LogEntryPreviewOpener {
                     null,
                     entry.restoredSql().indexOf('?') >= 0
                             ? MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
-                            : null);
+                            : null,
+                    java.util.List.of(),
+                    java.util.Map.of());
         } else {
             // 识别成功：参数回填形态（param1..N + 日志值预填 + 类型引号提示）
             String base = SqlLogPanelKt.withTerminator(recognized.sql());

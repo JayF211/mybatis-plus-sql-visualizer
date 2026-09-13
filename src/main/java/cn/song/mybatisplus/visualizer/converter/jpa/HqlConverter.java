@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.model.DeleteStatement;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
+import cn.song.mybatisplus.visualizer.model.UpdateStatement;
+import com.intellij.openapi.project.Project;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -25,12 +27,25 @@ import org.jetbrains.annotations.Nullable;
  *  2. 位置参数 `?1` → `?`
  *  3. IN 子句修正：`IN ?` → `IN (?)`
  *  4. NEW DTO(...) 表达式 → 提取构造参数
- *  5. JOIN FETCH → LEFT JOIN（保留别名，推断 ON 条件）
+ *  5. JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件经 JpaJoinOnResolver
+ *     按「PSI 注解 > 关联元数据 > 猜测降级」三级优先真实化）
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
  *  7. 关联字段路径映射：`alias.field.id` → 外键列名（仅当有有效 TableInfo 时）
  *  8. 属性名 → 列名映射（仅当有有效 TableInfo 时）
+ *  8.5 子查询 FROM/JOIN 中的其他实体名 → 表名（J13，需 Project；无 Project 跳过）
  *  9. SELECT 子句展开：`SELECT <别名>` → 列清单（T-HQL-SELECT-01）
- *     HQL 语义 `SELECT u` = 取整个实体，须展开为全部映射列，否则 MySQL 报 1054
+ *     HQL 语义 `SELECT u` = 取整个实体，须展开为全部映射列，否则 MySQL 报 1054；
+ *     无 SELECT 子句（裸 `from 实体`）补 SELECT 列清单（T-BareFromSelect）
+ *     ——展开逻辑见 SelectClauseExpander，与 JpqlConverter 共用
+ * 10. UPDATE 语句（J2）：`UPDATE 实体 [别名] SET 列 = 值[, ...] [WHERE ...]` →
+ *     UpdateStatement（SET 对 / WHERE 解析见 JpaUpdateParser，不可精细解析的
+ *     WHERE 整体作 Raw 条件透传）
+ * 11. DELETE 语句 → DeleteStatement（既有行为不变）
+ *
+ * J19 边界（「识别 + 不破坏」）：HQL 高级特性——`INSERT INTO ... SELECT`、`WITH ... SELECT`
+ * （CTE）、UNION/INTERSECT/EXCEPT、窗口函数 `OVER (...)`——在字符串管道中天然透传
+ * （参数替换/实体替换按文本命中，SELECT 展开器对上述形态已短路不误改，见
+ * SelectClauseExpander），检测到时仅在 statement 上附降级注释，不新增完整建模。
  *
  * 关键：返回的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
  * 转换器不解析条件树（conditions 为空），因此必须使用转换后的 SQL 字符串。
@@ -38,6 +53,13 @@ import org.jetbrains.annotations.Nullable;
  * 无状态单例，纯函数逻辑，可独立单测。
  */
 public final class HqlConverter {
+
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private static final Pattern HQL_NAMED_PARAM_TO_Q = Pattern.compile("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)");
+    private static final Pattern HQL_POSITIONAL_PARAM_TO_Q = Pattern.compile("\\?\\d+");
+    private static final Pattern HQL_IN_SPACE_Q = Pattern.compile("(?i)\\bIN\\s+\\?");
+    private static final Pattern HQL_CAMEL_SPLIT_PATTERN = Pattern.compile("([a-z])([A-Z])");
+    private static final Pattern HQL_MEMBER_OF_PATTERN = Pattern.compile("(.+)\\s+MEMBER OF\\s+(.+)", Pattern.CASE_INSENSITIVE);
 
     /** 单例实例（兼容 Kotlin object 调用形式）。 */
     public static final HqlConverter INSTANCE = new HqlConverter();
@@ -49,7 +71,7 @@ public final class HqlConverter {
      * HQL 转换产物。
      *
      * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?）
-     * @param statement  语句模型（SelectStatement 或 DeleteStatement）
+     * @param statement  语句模型（SelectStatement / UpdateStatement / DeleteStatement）
      * @param inClauseParams 使用 IN 子句的参数名集合
      */
     public static final class Result {
@@ -90,13 +112,24 @@ public final class HqlConverter {
 }
 
     /**
-     * 转换 HQL 字符串为 Result（tableInfo 取默认 null）。
+     * 转换 HQL 字符串为 Result（tableInfo / project 取默认 null）。
      *
      * @param hql       HQL 查询字符串
      * @return Result（转换后 SQL + 语句模型）
      */
     public static Result convert(@NotNull String hql) {
-        return convert(hql, null);
+        return convert(hql, null, null);
+    }
+
+    /**
+     * 转换 HQL 字符串为 Result（project 取默认 null）。
+     *
+     * @param hql       HQL 查询字符串
+     * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
+     * @return Result（转换后 SQL + 语句模型）
+     */
+    public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo) {
+        return convert(hql, tableInfo, null);
     }
 
     /**
@@ -104,9 +137,11 @@ public final class HqlConverter {
      *
      * @param hql       HQL 查询字符串
      * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
+     * @param project   项目（J7 JOIN ON 注解级解析 / J13 子查询实体映射用）；
+     *                  null 时两处降级为关联元数据 / 跳过，行为与历史版本一致
      * @return Result（转换后 SQL + 语句模型）
      */
-    public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo) {
+    public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo, @Nullable Project project) {
         TableInfo table = tableInfo != null ? tableInfo : createFallbackTable();
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
@@ -124,8 +159,8 @@ public final class HqlConverter {
         // 4. 处理 NEW DTO(...) 表达式
         sql = handleNewExpression(sql);
 
-        // 5. 处理 JOIN FETCH → LEFT JOIN
-        sql = handleJoinFetch(sql);
+        // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
+        sql = JpaJoinRewriter.rewrite(sql, table, project);
 
         // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql);
@@ -142,10 +177,13 @@ public final class HqlConverter {
             sql = mapFallbackEntityToTable(sql, table.getTableName());
         }
 
-        // 9. SELECT 子句展开：SELECT <别名> → 列清单（T-HQL-SELECT-01）
-        // 必须排在步骤 5（JOIN FETCH 改写）之后——JOIN 别名只有改写后才存在。DELETE 语句内部已短路。
-        // T-HQL-SELECT-01 / T-BareFromSelect：展开逻辑见 SelectClauseExpander，与 JpqlConverter 共用
-        sql = SelectClauseExpander.INSTANCE.expand(sql, table);
+        // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project);
+
+        // 9. SELECT 子句展开（T-HQL-SELECT-01 / T-BareFromSelect）
+        // 必须排在步骤 5（JOIN 改写）之后——JOIN 别名只有改写后才存在，
+        // 早于该步解析会取不到副表别名。DELETE/UPDATE/INSERT/CTE/UNION 内部已短路。
+        sql = SelectClauseExpander.expand(sql, table);
 
         // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trim().toUpperCase().startsWith("DELETE")) {
@@ -153,6 +191,19 @@ public final class HqlConverter {
                     sql,
                     new DeleteStatement(table, List.of(), List.of(), null, List.of()),
                     inClauseParams);
+        }
+
+        // 10.5 检测 UPDATE HQL → UpdateStatement（J2）
+        if (sql.trim().toUpperCase().startsWith("UPDATE")) {
+            JpaUpdateParser.ParsedUpdate parsed = JpaUpdateParser.parse(sql);
+            if (parsed != null) {
+                return new Result(
+                        sql,
+                        new UpdateStatement(table, parsed.getSets(), parsed.getConditions(),
+                                null, parsed.getTableAlias(), List.of()),
+                        inClauseParams);
+            }
+            // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
         }
 
         return new Result(
@@ -170,7 +221,7 @@ public final class HqlConverter {
                         null,
                         null,
                         null,
-                        null,
+                        advancedConstructComment(sql),
                         List.of(),
                         null,
                         null),
@@ -185,14 +236,14 @@ public final class HqlConverter {
      * 替换命名参数 `:paramName` → `?`（排除 `::` 类型转换运算符）。
      */
     private static String replaceNamedParameters(@NotNull String hql) {
-        return hql.replaceAll("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)", "?");
+        return HQL_NAMED_PARAM_TO_Q.matcher(hql).replaceAll("?");
     }
 
     /**
      * 替换位置参数 `?1`, `?2` 等 → `?`。
      */
     private static String replacePositionalParameters(@NotNull String hql) {
-        return hql.replaceAll("\\?\\d+", "?");
+        return HQL_POSITIONAL_PARAM_TO_Q.matcher(hql).replaceAll("?");
     }
 
     // ------------------------------------------------------------------
@@ -216,7 +267,7 @@ public final class HqlConverter {
      * 处理 `IN ?` → `IN (?)`。
      */
     private static String handleInClause(@NotNull String hql) {
-        return hql.replaceAll("(?i)\\bIN\\s+\\?", "IN (?)");
+        return HQL_IN_SPACE_Q.matcher(hql).replaceAll("IN (?)");
     }
 
     // ------------------------------------------------------------------
@@ -253,60 +304,26 @@ public final class HqlConverter {
     }
 
     // ------------------------------------------------------------------
-    // JOIN FETCH
+    // JOIN FETCH / 关联 JOIN（J7：改写逻辑统一在 JpaJoinRewriter，ON 条件真实化）
     // ------------------------------------------------------------------
 
     /**
-     * 处理 `JOIN FETCH alias.relation [alias2]` → `LEFT JOIN relation_table alias2 ON ...`。
-     *
-     * 示例：`JOIN FETCH u.department d` → `LEFT JOIN department d ON d.id = u.department_id`
+     * J19 高级特性降级注释：检测 HQL `WITH ... SELECT`（CTE）、UNION/INTERSECT/EXCEPT、
+     * `INSERT INTO ... SELECT`。这些形态在字符串管道中透传（参数替换/实体替换仍生效，
+     * SELECT 展开器已短路不误改），不新增完整建模，仅附注释说明边界。
      */
-    private static String handleJoinFetch(@NotNull String hql) {
-        // 捕获前导空白（组1），避免替换后丢失空格（如 uLEFT JOIN → u LEFT JOIN）
-        Pattern joinFetchPattern = Pattern.compile(
-                "(\\s+)(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)(\\s+[a-zA-Z_][a-zA-Z0-9_]*)?",
-                Pattern.CASE_INSENSITIVE);
-        Matcher matcher = joinFetchPattern.matcher(hql);
-        StringBuffer sb = new StringBuffer();
-        while (matcher.find()) {
-            String leadingWhitespace = matcher.group(1);
-            // 组2 (LEFT|INNER)? 为可选分组，未参与匹配时 group(2) 为 null；对应 Kotlin 的 ?.uppercase()
-            String joinTypeRaw = matcher.group(2);
-            String joinType = joinTypeRaw != null ? joinTypeRaw.toUpperCase() : "";
-            String rootAlias = matcher.group(3);
-            String relationName = matcher.group(4);
-            // 组5 别名同样可选，未匹配时为 null
-            String aliasRaw = matcher.group(5);
-            String alias = aliasRaw != null ? aliasRaw.trim() : "";
-            String keyword;
-            if ("INNER".equals(joinType)) keyword = "INNER JOIN";
-            else keyword = "LEFT JOIN";
-            // 推断表名：relationName → snake_case
-            String tableName = snakeCase(relationName);
-            // 构建 ON 条件（别名只出现一次）
-            String onCondition;
-            if (!alias.isEmpty()) {
-                onCondition = alias + ".id = " + rootAlias + "." + relationName + "_id /* 推断的ON条件，请验证 */";
-            } else {
-                onCondition = relationName + "_id = " + rootAlias + "." + relationName + "_id /* 推断的ON条件，请验证 */";
-            }
-            String aliasPart = !alias.isEmpty() ? " " + alias : "";
-            String replacement = leadingWhitespace + keyword + " " + tableName + aliasPart + " ON " + onCondition;
-            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+    @Nullable
+    private static String advancedConstructComment(@NotNull String sql) {
+        String head = sql.trim().toUpperCase();
+        boolean isInsertSelect = head.startsWith("INSERT");
+        boolean hasCte = SelectClauseExpander.hasTopLevelKeyword(sql, "WITH");
+        boolean hasSetOp = SelectClauseExpander.hasTopLevelKeyword(sql, "UNION")
+                || SelectClauseExpander.hasTopLevelKeyword(sql, "INTERSECT")
+                || SelectClauseExpander.hasTopLevelKeyword(sql, "EXCEPT");
+        if (isInsertSelect || hasCte || hasSetOp) {
+            return "/* HQL 高级特性（INSERT-SELECT / CTE / UNION 等），仅做参数与实体替换透传 */";
         }
-        matcher.appendTail(sb);
-        return sb.toString();
-    }
-
-    /** 驼峰转 snake_case（保留大小写改写语义，与 Kotlin 等价）。 */
-    private static String snakeCase(@NotNull String relationName) {
-        Matcher tm = Pattern.compile("([a-z])([A-Z])").matcher(relationName);
-        StringBuffer sb = new StringBuffer();
-        while (tm.find()) {
-            tm.appendReplacement(sb, Matcher.quoteReplacement(tm.group(1) + "_" + tm.group(2).toLowerCase()));
-        }
-        tm.appendTail(sb);
-        return sb.toString();
+        return null;
     }
 
     // ------------------------------------------------------------------
@@ -318,8 +335,7 @@ public final class HqlConverter {
      */
     private static String handleMemberOf(@NotNull String hql) {
         if (!hql.toLowerCase().contains("member of")) return hql;
-        Pattern pattern = Pattern.compile("(.+)\\s+MEMBER OF\\s+(.+)", Pattern.CASE_INSENSITIVE);
-        Matcher matcher = pattern.matcher(hql);
+        Matcher matcher = HQL_MEMBER_OF_PATTERN.matcher(hql);
         StringBuffer sb = new StringBuffer();
         while (matcher.find()) {
             String replacement = matcher.group(1)

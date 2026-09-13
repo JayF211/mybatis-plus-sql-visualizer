@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import javax.swing.JPanel;
+
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.ui.SimpleTextAttributes;
 
@@ -55,7 +57,9 @@ public final class SqlLogPanelKt {
         }
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry it : entries) {
-            if (activeTypes.contains(LogStatementClassifier.classify(it))) {
+            // T-CrudColor：改用条目级缓存属性（行为等价）——避免每次刷新都重跑分类
+            // （classify 内 Regex 每次编译 Pattern），与渲染器共用同一份结果。
+            if (activeTypes.contains(it.statementType())) {
                 result.add(it);
             }
         }
@@ -183,6 +187,114 @@ public final class SqlLogPanelKt {
     /** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。 */
     public static final SimpleTextAttributes LIST_META_GRAY =
             new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, new Color(0x9E9E9E));
+
+    /**
+     * T-CrudColor：按标记形态应用「色条 / 整行淡背景 + 选中描边」——<b>两个列表渲染器共用</b>（§1.2.1）。
+     *
+     * 三分支：
+     *  - 关闭 / OTHER（tint = null）→ 与改造前逐字节一致；
+     *  - {@link SqlListTypeColor#STYLE_BAR} → 色条着色，单元格背景仍走平台选中填充（色条不受影响，选中不丢色）；
+     *  - {@link SqlListTypeColor#STYLE_BACKGROUND} → 底色与列表背景混色（选中时提高比例），<b>不铺</b>平台选中填充，
+     *    选中由「描边 + 色调加深」共同表达。
+     *
+     * selectedBorder 预建后此处只切引用 + 改色（{@link SqlListSelectionOutline#setColor}），热路径零分配；
+     * 描边色经 {@link SqlListTypeColor#ensureOutlineContrast}——暗色主题下 selectionBackground
+     * （#2E436E）压在加深后的行底色上几乎不可见，必须提亮。
+     */
+    public static void applyCrudColorMark(
+            JPanel cell,
+            JPanel colorBar,
+            javax.swing.border.Border normalBorder,
+            SqlListSelectionOutline selectedBorder,
+            Color tint,
+            boolean isSelected,
+            boolean cellHasFocus,
+            javax.swing.JList<?> list) {
+        Color listBg = list != null ? list.getBackground() : cell.getBackground();
+        Color selectionBg = list != null ? list.getSelectionBackground() : listBg;
+        switch (SqlListTypeColor.styleOf()) {
+            case SqlListTypeColor.STYLE_BAR: {
+                if (tint == null) {
+                    setOpaqueIfChanged(colorBar, false);
+                } else {
+                    setBackgroundIfChanged(colorBar, tint);
+                    setOpaqueIfChanged(colorBar, true);
+                }
+                setBorderIfChanged(cell, normalBorder);
+                setBackgroundIfChanged(cell, isSelected ? selectionBg : listBg);
+                break;
+            }
+            case SqlListTypeColor.STYLE_BACKGROUND: {
+                setOpaqueIfChanged(colorBar, false);
+                if (tint == null) {
+                    setBorderIfChanged(cell, normalBorder);
+                    setBackgroundIfChanged(cell, isSelected ? selectionBg : listBg);
+                } else {
+                    setBackgroundIfChanged(
+                            cell,
+                            SqlListTypeColor.blend(
+                                    listBg,
+                                    tint,
+                                    isSelected ? SqlListTypeColor.MIX_SELECTED : SqlListTypeColor.MIX_NORMAL));
+                    if (isSelected) {
+                        Color raw = cellHasFocus
+                                ? selectionBg
+                                : javax.swing.UIManager.getColor("List.selectionInactiveBackground");
+                        if (raw == null) {
+                            raw = selectionBg;
+                        }
+                        // setColor 只改字段、不触发 Swing 属性变更（无 repaint 副作用），故无需守卫
+                        selectedBorder.setColor(
+                                SqlListTypeColor.ensureOutlineContrast(raw, SqlListTypeColor.brightnessOf(listBg) < 0.5));
+                        setBorderIfChanged(cell, selectedBorder);
+                    } else {
+                        setBorderIfChanged(cell, normalBorder);
+                    }
+                }
+                break;
+            }
+            default: { // STYLE_OFF
+                setOpaqueIfChanged(colorBar, false);
+                setBorderIfChanged(cell, normalBorder);
+                setBackgroundIfChanged(cell, isSelected ? selectionBg : listBg);
+                break;
+            }
+        }
+    }
+
+    /**
+     * 仅在变化时设置边框（T-CrudColor 性能守卫）。
+     *
+     * 实测（JBR 21）：{@code JComponent.setBorder(新实例)} <b>即使值与旧值相同也会触发 repaint() +1</b>，
+     * 而传入<b>同一实例</b>则 revalidate/repaint 均为 0。渲染器逐格调用，若每格无脑赋值就会把
+     * 渲染热路径变成「每格一次重绘调度」——正是 T-LogListFreeze 那类副作用累积问题的成因。
+     * 用<b>同一性</b>（{@code !=}）比较：本函数只会在预建的两个 Border 实例间切换，身份比较即可，
+     * 且避免 CompoundBorder.equals 的深度比较开销。
+     */
+    private static void setBorderIfChanged(JPanel cell, javax.swing.border.Border border) {
+        if (cell.getBorder() != border) {
+            cell.setBorder(border);
+        }
+    }
+
+    /**
+     * 仅在变化时设置背景（T-CrudColor 性能守卫）。
+     *
+     * 实测（JBR 21）：{@code setBackground(新 Color 实例)} 即使 RGB 相同也会触发 repaint() +1；
+     * 传入同一实例则为 0。配合 {@link SqlListTypeColor#colorOf} 的实例缓存，同色格不再产生任何 repaint。
+     */
+    private static void setBackgroundIfChanged(JPanel target, Color color) {
+        if (!java.util.Objects.equals(color, target.getBackground())) {
+            target.setBackground(color);
+        }
+    }
+
+    /** 仅在变化时设置不透明（setOpaque 同值本身零副作用，此处为语义显式化）。 */
+    private static void setOpaqueIfChanged(JPanel target, boolean opaque) {
+        if (target.isOpaque() != opaque) {
+            target.setOpaque(opaque);
+        }
+    }
 
     /** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML span 尾空格语义）。 */
     public static kotlin.Pair<String, SimpleTextAttributes> formatTimestampFragment(long timestamp) {

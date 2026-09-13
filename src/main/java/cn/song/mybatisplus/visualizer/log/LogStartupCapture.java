@@ -56,6 +56,12 @@ public class LogStartupCapture implements ProjectActivity {
     }
 
     private void tryStartCapture(SqlLogManager manager, Project project, int attempt) {
+        // T-Perf-21：sleep 5000 后复查——项目可能在重试等待期间被关闭（project.name 访问已
+        // dispose project 会抛 AlreadyDisposed）
+        if (project.isDisposed()) {
+            LOG.info("LogStartupCapture: project disposed during retry wait, abort");
+            return;
+        }
         LOG.info("LogStartupCapture.tryStartCapture: 第 " + (attempt + 1) + " 次尝试（project=" + project.getName() + "）");
         manager.startCapture();
         if (!manager.isCapturing() && attempt < MAX_RETRIES && !project.isDisposed()) {

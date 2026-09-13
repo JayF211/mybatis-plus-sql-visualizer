@@ -1124,22 +1124,44 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             }
         }
         new EntitySelectionDialog(project, rows, (Map<String, PsiClass> selections) -> {
-            PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
-            SqlToJavaConverter.EntityCandidate main = mainPsi != null
-                    ? SqlToJavaConverter.INSTANCE.candidateOf(mainPsi) : null;
-            cacheCandidates = main != null ? Collections.singletonList(main) : Collections.emptyList();
-            Map<String, JavaCodeGenerator.EntityTarget> subEntities = new HashMap<>();
-            for (ReverseJoin join : result.joins()) {
-                String alias = join.alias();
-                if (alias == null) continue;
-                PsiClass psi = selections.get(alias);
-                if (psi != null) {
-                    JavaCodeGenerator.EntityTarget sub = toSubEntity(SqlToJavaConverter.INSTANCE.candidateOf(psi));
-                    if (sub != null) subEntities.put(alias, sub);
-                }
-            }
-            cacheSubEntities = subEntities;
-            render(result, main != null ? Collections.singletonList(main) : Collections.<SqlToJavaConverter.EntityCandidate>emptyList(), format, subEntities);
+            // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历继承链
+            // 全部字段 + 每字段注解 resolve，大实体（50+ 字段）耗时线性，EDT 直解析构成确认停顿；
+            // 后台 ReadAction 解析后回 EDT 回填缓存并渲染（对齐 convert 的既有异步模式）。
+            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                Object[] resolved = ReadAction.compute(() -> {
+                    PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
+                    SqlToJavaConverter.EntityCandidate main = mainPsi != null
+                            ? SqlToJavaConverter.INSTANCE.candidateOf(mainPsi) : null;
+                    Map<String, JavaCodeGenerator.EntityTarget> subEntities = new HashMap<>();
+                    for (ReverseJoin join : result.joins()) {
+                        String alias = join.alias();
+                        if (alias == null) continue;
+                        PsiClass psi = selections.get(alias);
+                        if (psi != null) {
+                            JavaCodeGenerator.EntityTarget sub = toSubEntity(SqlToJavaConverter.INSTANCE.candidateOf(psi));
+                            if (sub != null) subEntities.put(alias, sub);
+                        }
+                    }
+                    return new Object[]{
+                            main,
+                            subEntities,
+                            main != null ? Collections.singletonList(main)
+                                    : Collections.<SqlToJavaConverter.EntityCandidate>emptyList()};
+                });
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
+                    if (project.isDisposed()) return;
+                    @SuppressWarnings("unchecked")
+                    java.util.List<SqlToJavaConverter.EntityCandidate> candidates =
+                            (java.util.List<SqlToJavaConverter.EntityCandidate>) resolved[2];
+                    @SuppressWarnings("unchecked")
+                    Map<String, JavaCodeGenerator.EntityTarget> subEnts =
+                            (Map<String, JavaCodeGenerator.EntityTarget>) resolved[1];
+                    cacheCandidates = candidates;
+                    cacheSubEntities = subEnts;
+                    render(result, candidates, format, subEnts);
+                }, com.intellij.openapi.application.ModalityState.any());
+            });
         }).show();
     }
 
@@ -1190,8 +1212,8 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             }
             // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
             final int nextIndex = i + 1;
-            List<String> displayTexts = ReadAction.compute(() -> candidates.stream().map(c ->
-                    SqlSelectionDialog.displayText(
+            List<SqlSelectionDialog.Row> displayTexts = ReadAction.compute(() -> candidates.stream().map(c ->
+                    SqlSelectionDialog.Row.of(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
                             c.psiClass().getContainingFile() != null
                                     ? c.psiClass().getContainingFile().getName() : ""
@@ -1272,10 +1294,14 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
 
     /** T-M45：格式化结果区当前内容（IDE Java 格式化器，结果写回编辑器——复制基于当前内容）。 */
     private void formatResult() {
-        String formatted = JavaCodeFormatter.INSTANCE.format(project, resultEditor.getDocument().getText());
-        if (!formatted.equals(resultEditor.getDocument().getText())) {
-            setResultText(formatted);
-        }
+        // T-Perf-11：格式化（PSI 创建 + 全量 reformat）移 Task.Backgroundable 后台执行，
+        // 结果回 EDT 写回——批量转换 20+ 条语句拼大代码块时 EDT 不再随体积线性冻结。
+        String code = resultEditor.getDocument().getText();
+        JavaCodeFormatter.INSTANCE.formatAsync(project, code, formatted -> {
+            if (!formatted.equals(resultEditor.getDocument().getText())) {
+                setResultText(formatted);
+            }
+        });
     }
 
     /** T-M36.7：调用上下文（调用类 + VO 均非必选；留空返回 null → 纯表达式）。 */
@@ -1299,17 +1325,23 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             ReverseWrapperFormat format,
             Map<String, JavaCodeGenerator.EntityTarget> subEntities) {
         if (candidates.isEmpty()) {
-            setResultText(generateCode(result, null, format, subEntities));
+            String code0 = generateCodeOrReport(result, null, format, subEntities);
+            if (code0 == null) return;
+            setResultText(code0);
             status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), false);
         } else if (candidates.size() == 1) {
-            setResultText(generateCode(result, candidates.get(0), format, subEntities));
+String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntities);
+            if (code1 == null) return;
+            setResultText(code1);
             status(joinStatus(result, MpSqlVisualizerBundle.message(
                     "reverse.panel.status.entity",
                     candidates.get(0).psiClass().getName() != null ? candidates.get(0).psiClass().getName() : "")), false);
         } else {
             // 开关关闭 → 不弹任何选择框，取第一个（纯自动推断）
             if (!manualEntitySelectionEnabled()) {
-                setResultText(generateCode(result, candidates.get(0), format, subEntities));
+    String code2 = generateCodeOrReport(result, candidates.get(0), format, subEntities);
+                if (code2 == null) return;
+                setResultText(code2);
                 status(joinStatus(result, MpSqlVisualizerBundle.message(
                         "reverse.panel.status.entity",
                         candidates.get(0).psiClass().getName() != null ? candidates.get(0).psiClass().getName() : "")), false);
@@ -1317,14 +1349,16 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             }
             // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
             // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
-            List<String> displayTexts = ReadAction.compute(() -> candidates.stream().map(c ->
-                    SqlSelectionDialog.displayText(
+            List<SqlSelectionDialog.Row> displayTexts = ReadAction.compute(() -> candidates.stream().map(c ->
+                    SqlSelectionDialog.Row.of(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
                             c.psiClass().getContainingFile() != null
                                     ? c.psiClass().getContainingFile().getName() : ""
                     )).collect(Collectors.toList()));
             new SqlSelectionDialog<>(project, candidates, displayTexts, (SqlToJavaConverter.EntityCandidate selected) -> {
-                setResultText(generateCode(result, selected, format, subEntities));
+                String codeSel = generateCodeOrReport(result, selected, format, subEntities);
+                if (codeSel == null) return;
+                setResultText(codeSel);
                 status(MpSqlVisualizerBundle.message(
                         "reverse.panel.status.entity",
                         selected.psiClass().getName() != null ? selected.psiClass().getName() : ""), false);
@@ -1333,6 +1367,26 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     }
 
     /** 面板级生成（调用上下文 + 副实体归属）。 */
+    /**
+     * T-PickMpjErr：生成期业务拒绝（SqlReverseException，如多表 JOIN 需 MPJ 依赖而调用类无 MPJ 能力）
+     * 转状态栏错误提示，结果区保留上次内容；返回 null = 已报错。generateCode 在 EDT 鼠标回调
+     * （选类 elementChosen / 形态切换 / 弹窗回调）内同步执行，不接住会逃逸成平台 UnhandledException
+     * 红叹号（真机实证）。口径对齐 convert() 的解析期 catch（不带行号——errorLine 需原始输入文本，
+     * 生成期错误均为结构性拒绝）。报错时机与 joinStatus 成功提示互斥，调用点据 null 短路。
+     */
+    private String generateCodeOrReport(
+            @NotNull cn.song.mybatisplus.visualizer.reverse.SqlReverseResult result,
+            SqlToJavaConverter.EntityCandidate candidate,
+            @NotNull ReverseWrapperFormat format,
+            @NotNull Map<String, JavaCodeGenerator.EntityTarget> subEntities) {
+        try {
+            return generateCode(result, candidate, format, subEntities);
+        } catch (SqlReverseException ex) {
+            status(MpSqlVisualizerBundle.message(ex.getKey(), ex.getDetail()), true);
+            return null;
+        }
+    }
+
     private String generateCode(
             SqlReverseResult result,
             SqlToJavaConverter.EntityCandidate candidate,

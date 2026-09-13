@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlLexer;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
@@ -25,6 +26,22 @@ import java.util.function.Function;
 public final class SqlListFragmentRenderer {
 
     private SqlListFragmentRenderer() {
+    }
+
+    /**
+     * 按显示模式变换 SQL 文本（渲染前调用；变换器复用 {@link SqlFormatter} 既有实现，字符串原文保留）。
+     * （Kotlin 顶层函数 prepareSqlForList 的 Java 承载；SqlListDisplayMode 枚举同文件顶层声明已拆出为
+     * 同包独立枚举文件。）
+     */
+    public static String prepareSqlForList(String sql, SqlListDisplayMode mode) {
+        switch (mode) {
+            case KEYWORD_WRAP:
+                return SqlFormatter.formatClauseLine(sql);
+            case FORMATTED:
+                return SqlFormatter.format(sql);
+            default:
+                return sql; // SINGLE_LINE
+        }
     }
 
     /** 按主题 scheme 取属性（跟随 IDE 亮/暗主题，与编辑器高亮一致）。 */
@@ -57,6 +74,52 @@ public final class SqlListFragmentRenderer {
             lexer.advance();
         }
         return fragments;
+    }
+
+    /**
+     * 变换 + 分词着色 + 按行拆分（T-ListMode 多行模式）：{@link #prepareSqlForList} 变换后的文本含换行，
+     * 按行拆为独立片段序列（每行一个 {@link com.intellij.ui.SimpleColoredComponent} 承载）。整段只跑一次词法，
+     * 行拆分在片段文本内做——含换行的 token（空白）按行切开，属性原样继承。
+     */
+    /** 便捷重载：默认取全局配色（Kotlin 默认参数等价）。 */
+    public static List<List<SqlTextFragment>> renderLineFragments(String sql, SqlListDisplayMode mode) {
+        return renderLineFragments(sql, mode,
+                com.intellij.openapi.editor.colors.EditorColorsManager.getInstance().getGlobalScheme());
+    }
+
+    public static List<List<SqlTextFragment>> renderLineFragments(
+            String sql, SqlListDisplayMode mode, EditorColorsScheme scheme) {
+        Map<IElementType, SimpleTextAttributes> attrByType = new HashMap<>();
+        SqlListSyntaxHighlighter.ATTR_BY_TYPE.forEach((type, key) -> attrByType.put(type, attrOf(scheme, key)));
+        return renderLineFragments(sql, mode, attrByType::get);
+    }
+
+    /** 产多行着色片段（attrOf 注入——纯逻辑可单测，与 {@link #renderFragments} 单行版同一测试缝）。 */
+    public static List<List<SqlTextFragment>> renderLineFragments(
+            String sql, SqlListDisplayMode mode, Function<IElementType, SimpleTextAttributes> attrOf) {
+        List<SqlTextFragment> all = renderFragments(prepareSqlForList(sql, mode), attrOf);
+        List<List<SqlTextFragment>> lines = new ArrayList<>();
+        List<SqlTextFragment> current = new ArrayList<>();
+        lines.add(current);
+        for (SqlTextFragment f : all) {
+            if (!f.text().contains("\n")) {
+                current.add(f);
+                continue;
+            }
+            // 片段文本内嵌换行：按 \n 切开，非末段留在当前行，末段开新行
+            // （split 默认 limit 0 丢弃尾部空串，与 Kotlin split 同语义）
+            String[] parts = f.text().split("\n");
+            for (int i = 0; i < parts.length; i++) {
+                if (i > 0) {
+                    current = new ArrayList<>();
+                    lines.add(current);
+                }
+                if (!parts[i].isEmpty()) {
+                    current.add(new SqlTextFragment(parts[i], f.attributes()));
+                }
+            }
+        }
+        return lines;
     }
 
     private static SimpleTextAttributes attrOf(EditorColorsScheme scheme, TextAttributesKey key) {

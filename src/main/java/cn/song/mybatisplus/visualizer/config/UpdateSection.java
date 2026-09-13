@@ -1,11 +1,13 @@
 package cn.song.mybatisplus.visualizer.config;
 
+import cn.song.mybatisplus.visualizer.feedback.FeedbackApi;
+import cn.song.mybatisplus.visualizer.feedback.FeedbackReporting;
 import cn.song.mybatisplus.visualizer.update.PluginUpdateRunner;
 import cn.song.mybatisplus.visualizer.update.PluginVersion;
 import cn.song.mybatisplus.visualizer.update.UpdateManifest;
 import cn.song.mybatisplus.visualizer.update.UpdateSource;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
-import com.intellij.ide.BrowserUtil;
+import cn.song.mybatisplus.visualizer.util.SafeBrowser;
 import com.intellij.openapi.application.ApplicationInfo;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.progress.ProgressIndicator;
@@ -86,10 +88,19 @@ public class UpdateSection extends JPanel {
     private final LinkLabel<Object> giteeLink = new LinkLabel<>(
         MpSqlVisualizerBundle.message("settings.update.viewOnGitee"),
         null,
-        (link, data) -> BrowserUtil.browse(UpdateSource.GITEE_RELEASES_URL));
+        (link, data) -> SafeBrowser.browse(UpdateSource.GITEE_RELEASES_URL));
 
     private final JPanel notesContainer;
     private final JPanel doneContainer;
+
+    /** T-ErrReport：需求池报告入口（手动形态对话框 + 需求池网页链接）。 */
+    private final JButton reportProblemButton = new JButton();
+
+    /** 需求池网页直达链接（浏览反馈/投票/进度）。 */
+    private final LinkLabel<Object> feedbackPoolLink = new LinkLabel<>("", null,
+        (link, data) -> SafeBrowser.browse(FeedbackApi.SITE_BASE + "/about/feedback"));
+
+    private final JPanel feedbackContainer;
 
     private final PluginSettings settings;
 
@@ -114,6 +125,12 @@ public class UpdateSection extends JPanel {
         doneContainer.add(installedLabel, BorderLayout.WEST);
         doneContainer.add(restartButton, BorderLayout.EAST);
 
+        // T-ErrReport：需求池报告容器（报告问题按钮 + 需求池网页链接）
+        feedbackContainer = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        feedbackContainer.setOpaque(false);
+        feedbackContainer.add(reportProblemButton);
+        feedbackContainer.add(feedbackPoolLink);
+
         notesArea.setEditable(false);
         notesArea.setLineWrap(true);
         notesArea.setWrapStyleWord(true);
@@ -121,6 +138,8 @@ public class UpdateSection extends JPanel {
         checkButton.addActionListener(e -> runCheck());
         installButton.addActionListener(e -> runInstall());
         restartButton.addActionListener(e -> restartIde());
+        // T-ErrReport：报告问题（手动形态，无异常预填）
+        reportProblemButton.addActionListener(e -> FeedbackReporting.openManualDialog());
         buildLayout();
         resetState();
         updateTexts();
@@ -150,6 +169,8 @@ public class UpdateSection extends JPanel {
         addRow(progressBar, gbc);
         addRow(notesContainer, gbc);
         addRow(doneContainer, gbc);
+        // T-ErrReport：需求池报告入口（报告问题按钮 + 需求池网页链接）
+        addRow(feedbackContainer, gbc);
         // 底部占位（与设置页整体一致：内容顶置）
         gbc.gridy++;
         gbc.weighty = 1.0;
@@ -266,6 +287,8 @@ public class UpdateSection extends JPanel {
         restartButton.setText(MpSqlVisualizerBundle.message("settings.update.restartNow"));
         notesTitleLabel.setText(MpSqlVisualizerBundle.message("settings.update.changelog"));
         giteeLink.setText(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"));
+        reportProblemButton.setText(MpSqlVisualizerBundle.message("settings.update.reportProblem"));
+        feedbackPoolLink.setText(MpSqlVisualizerBundle.message("settings.update.feedbackPool"));
         renderState();
     }
 
@@ -374,6 +397,14 @@ public class UpdateSection extends JPanel {
 
     public LinkLabel<Object> getGiteeLink() {
         return giteeLink;
+    }
+
+    public JButton getReportProblemButton() {
+        return reportProblemButton;
+    }
+
+    public LinkLabel<Object> getFeedbackPoolLink() {
+        return feedbackPoolLink;
     }
 
     public void setCheckRunner(Function0<PluginUpdateRunner.CheckResult> checkRunner) {

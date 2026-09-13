@@ -32,11 +32,22 @@ public class JavaCodePreviewDialog extends DialogWrapper {
     private final Project project;
     private final Editor editor;
 
+    /**
+     * 保持二参构造真实存在（对应 Kotlin {@code @JvmOverloads}）——增量编译下
+     * 旧调用方字节码（既有测试）会 NoSuchMethodError（M37.4 全量测试实证，新旧双名同模板策略）。
+     */
     public JavaCodePreviewDialog(@Nullable Project project, @NotNull String code) {
+        this(project, code, null);
+    }
+
+    /**
+     * @param dialogTitle M37.4：自定义弹窗标题（null = 默认「SQL→Java」标题，既有调用点零影响）
+     */
+    public JavaCodePreviewDialog(@Nullable Project project, @NotNull String code, @Nullable String dialogTitle) {
         super(project, true);
         this.project = project;
         this.editor = createJavaEditor(code);
-        setTitle(MpSqlVisualizerBundle.message("reverse.dialog.title"));
+        setTitle(dialogTitle != null ? dialogTitle : MpSqlVisualizerBundle.message("reverse.dialog.title"));
         init();
         setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"));
     }

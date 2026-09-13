@@ -157,17 +157,33 @@ public final class PartTreeParser {
 
         Subject subject = parseSubject(subjectPart);
 
-        // 先剥离尾部 IgnoreCase（可能在 OrderBy 之后）
-        IgnoreCaseResult ignoreCaseResult = extractIgnoreCase(predicatePart);
-        String predicateWithoutIgnoreCase = ignoreCaseResult.body();
-        boolean globalIgnoreCase = ignoreCaseResult.global();
+        // T-J4：IgnoreCase / AllIgnoreCase 任意位置剥离（原先只认尾部，中部的会并入属性名）。
+        // 1) 尾部连续剥离（含 OrderBy 之后的形态，如 "LastNameOrderByFirstNameAscIgnoreCase"），
+        //    尾部形态沿用历史语义：视为全局忽略大小写（单条件场景与 Spring Data 等价）。
+        boolean globalIgnoreCase = false;
+        while (true) {
+            if (predicatePart.endsWith(ALL_IGNORE_CASE_KEYWORD)) {
+                predicatePart = predicatePart.substring(0, predicatePart.length() - ALL_IGNORE_CASE_KEYWORD.length());
+                globalIgnoreCase = true;
+            } else if (predicatePart.endsWith(IGNORE_CASE_KEYWORD)) {
+                predicatePart = predicatePart.substring(0, predicatePart.length() - IGNORE_CASE_KEYWORD.length());
+                globalIgnoreCase = true;
+            } else {
+                break;
+            }
+        }
+        // 2) 中部 AllIgnoreCase 剥离 → 全局生效（如 "FirstNameAllIgnoreCaseAndLastName"）。
+        if (predicatePart.contains(ALL_IGNORE_CASE_KEYWORD)) {
+            globalIgnoreCase = true;
+            predicatePart = predicatePart.replace(ALL_IGNORE_CASE_KEYWORD, "");
+        }
 
         // 从 Predicate 尾部剥离 OrderBy 子句
-        OrderByResult orderByResult = extractOrderBy(predicateWithoutIgnoreCase);
+        OrderByResult orderByResult = extractOrderBy(predicatePart);
         String predicateBody = orderByResult.body();
         List<OrderByPart> orderByParts = orderByResult.orderBy();
 
-        // 解析 Or/And 条件
+        // 解析 Or/And 条件（段内 IgnoreCase 在 parseCondition 中逐段剥离并记录标记）
         List<PredicatePart> predicates = parsePredicate(predicateBody, globalIgnoreCase);
 
         return new PartTree(subject, predicates, orderByParts);
@@ -192,11 +208,15 @@ public final class PartTreeParser {
     }
 
     /**
-     * 检查 methodName 中 position 位置的 "By" 是否是 OrderBy 的一部分。
+     * 检查 methodName 中 position 位置的 "By" 是否是 "OrderBy" 的尾部。
+     *
+     * <p>"OrderBy" = "Order" + "By"，故该 "By" 属于 OrderBy 当且仅当前 5 个字符恰为 "OrderBy"
+     * 的前段（regionMatches 从 position-5 起）。旧实现误判「By 后紧跟 OrderBy」——
+     * `findAllByOrderByXxx` 中 Subject 的 By 被跳过、OrderBy 内部的 By 反被当分隔符，
+     * 产出 `createTimeDesc = ?` 假谓词且丢失 ORDER BY（探针实证，M39 修复）。
      */
     private static boolean isOrderByAt(@NotNull String methodName, int position) {
-        int afterBy = position + 2;
-        return methodName.startsWith("OrderBy", afterBy);
+        return position >= 5 && methodName.regionMatches(position - 5, "OrderBy", 0, 7);
     }
 
     /**
@@ -416,26 +436,10 @@ public final class PartTreeParser {
     }
 
     /**
-     * 提取并剥离 IgnoreCase / AllIgnoreCase 后缀。
-     *
-     * @return [剥离后的谓词体, 全局忽略大小写标志]
-     */
-    private static IgnoreCaseResult extractIgnoreCase(@NotNull String predicateBody) {
-        if (predicateBody.endsWith(ALL_IGNORE_CASE_KEYWORD)) {
-            return new IgnoreCaseResult(
-                    predicateBody.substring(0, predicateBody.length() - ALL_IGNORE_CASE_KEYWORD.length()),
-                    true);
-        }
-        if (predicateBody.endsWith(IGNORE_CASE_KEYWORD)) {
-            return new IgnoreCaseResult(
-                    predicateBody.substring(0, predicateBody.length() - IGNORE_CASE_KEYWORD.length()),
-                    true);
-        }
-        return new IgnoreCaseResult(predicateBody, false);
-    }
-
-    /**
      * 解析 Predicate 主体为 Or/And 条件列表。
+     *
+     * @param predicateBody OrderBy 和 IgnoreCase 剥离后的谓词体
+     * @param globalIgnoreCase 全局忽略大小写标志（尾部 / AllIgnoreCase 剥离产物）
      */
     private static List<PredicatePart> parsePredicate(@NotNull String predicateBody, boolean globalIgnoreCase) {
         if (predicateBody.isEmpty()) return List.of();
@@ -493,10 +497,18 @@ public final class PartTreeParser {
      * 解析单个条件 Part。
      *
      * 按 camelCase 边界切分，从尾部匹配条件关键字。
+     *
+     * <p>T-J4：先剥离段尾 IgnoreCase / AllIgnoreCase 并逐段记录 ignoreCase 标记——
+     * 中间位置的 IgnoreCase（如 "NameIgnoreCaseAndEmail" 的第一段）不再并入属性名。
      */
     private static Condition parseCondition(@NotNull String part, boolean globalIgnoreCase) {
+        // 剥离段内 IgnoreCase（段级标记）
+        AbstractMap.SimpleEntry<String, Boolean> stripped = stripPartIgnoreCase(part);
+        String strippedPart = stripped.getKey();
+        boolean ignoreCase = globalIgnoreCase || stripped.getValue();
+
         // 查找最佳匹配的条件关键字
-        MatchResult matchResult = matchConditionKeyword(part);
+        MatchResult matchResult = matchConditionKeyword(strippedPart);
 
         if (matchResult != null) {
             String propertyPart = matchResult.propertyPart();
@@ -504,16 +516,41 @@ public final class PartTreeParser {
             return new Condition(
                     decamelize(propertyPart),
                     partType,
-                    globalIgnoreCase,
+                    ignoreCase,
                     splitNestedPath(propertyPart));
         }
 
         // 兜底：SIMPLE_PROPERTY
         return new Condition(
-                decamelize(part),
+                decamelize(strippedPart),
                 PartType.SIMPLE_PROPERTY,
-                globalIgnoreCase,
-                splitNestedPath(part));
+                ignoreCase,
+                splitNestedPath(strippedPart));
+    }
+
+    /**
+     * T-J4：剥离单个条件 Part 段尾的 IgnoreCase / AllIgnoreCase，并返回段级忽略大小写标记。
+     *
+     * <p>Spring Data 语义：紧跟属性（或条件关键字）的 `IgnoreCase` 仅对该段生效；
+     * `AllIgnoreCase` 已在 parse 全局剥离，这里兜底再剥一次。
+     *
+     * @return [剥离后的段, 该段是否忽略大小写]
+     */
+    @NotNull
+    private static AbstractMap.SimpleEntry<String, Boolean> stripPartIgnoreCase(@NotNull String part) {
+        String stripped = part;
+        boolean found = false;
+        while (true) {
+            if (stripped.endsWith(ALL_IGNORE_CASE_KEYWORD)) {
+                stripped = stripped.substring(0, stripped.length() - ALL_IGNORE_CASE_KEYWORD.length());
+                found = true;
+            } else if (stripped.endsWith(IGNORE_CASE_KEYWORD)) {
+                stripped = stripped.substring(0, stripped.length() - IGNORE_CASE_KEYWORD.length());
+                found = true;
+            } else {
+                return new AbstractMap.SimpleEntry<>(stripped, found);
+            }
+        }
     }
 
     /**
@@ -689,40 +726,6 @@ public final class PartTreeParser {
                 candidateAssociation,  // 仅候选，需 TableInfo 确认
                 remainingPath);
     }
-
-    /** IgnoreCase 提取结果。 */
-    private static final class IgnoreCaseResult {
-    private final @NotNull String body;
-    private final boolean global;
-
-    public IgnoreCaseResult(@NotNull String body, boolean global) {
-        this.body = body;
-        this.global = global;
-    }
-
-    public @NotNull String getBody() { return body; }
-    public @NotNull String body() { return body; }
-    public boolean isGlobal() { return global; }
-    public boolean global() { return global; }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof IgnoreCaseResult)) return false;
-        IgnoreCaseResult that = (IgnoreCaseResult) o;
-        return java.util.Objects.equals(this.body, that.body) && java.util.Objects.equals(this.global, that.global);
-    }
-
-    @Override
-    public int hashCode() {
-        return java.util.Objects.hash(body, global);
-    }
-
-    @Override
-    public String toString() {
-        return "IgnoreCaseResult[" + "body=" + body + ", " + "global=" + global + "]";
-    }
-}
 
     /** OrderBy 提取结果。 */
     private static final class OrderByResult {

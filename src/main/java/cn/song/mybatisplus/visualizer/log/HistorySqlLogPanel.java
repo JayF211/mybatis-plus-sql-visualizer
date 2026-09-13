@@ -15,11 +15,12 @@ import cn.song.mybatisplus.visualizer.xml.PagesColumn;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
+import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBList;
@@ -48,6 +49,7 @@ import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -82,9 +84,24 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private HistoryFileEntry currentFile = null;
     private List<LogSqlEntry> currentEntries = List.of();
 
+    // ---------- T-Perf-05：后台任务代际 + 搜索防抖 ----------
+
+    /** 后台刷新/加载代际：新任务启动即作废旧任务的 EDT apply。 */
+    private int bgGeneration = 0;
+
+    /** T-Perf-05：搜索防抖（每击键 O(N) clear+add → 停顿 200ms 应用一次）。 */
+    private final javax.swing.Timer searchDebounceTimer =
+            new javax.swing.Timer(SEARCH_DEBOUNCE_MS, e -> applySearch());
+
     private final SearchTextField searchField = new SearchTextField();
     private final JButton backButton = new JButton();
     private final JButton refreshButton = new JButton();
+
+    /** 显示模式下拉（T-ListMode）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
+    private final JComboBox<String> displayModeCombo;
+
+    /** combo 程序化回同步防重入守卫。 */
+    private boolean syncingDisplayModeCombo = false;
 
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel cards = new JPanel(cardLayout);
@@ -108,6 +125,27 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         refreshButton.setPreferredSize(new Dimension(28, 28));
         refreshButton.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
         refreshButton.addActionListener(e -> refresh());
+        this.searchDebounceTimer.setRepeats(false);
+        // T-ListMode：显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）
+        this.displayModeCombo = new JComboBox<>(new String[]{
+                MpSqlVisualizerBundle.message("log.list.displayMode.single"),
+                MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
+                MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
+        });
+        displayModeCombo.setToolTipText(MpSqlVisualizerBundle.message("log.list.displayMode"));
+        displayModeCombo.setFocusable(false);
+        displayModeCombo.setSelectedIndex(PluginSettings.getInstance().sqlListDisplayMode().ordinal());
+        displayModeCombo.addItemListener(e -> {
+            if (e.getStateChange() == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
+                SqlListDisplayMode mode = SqlListDisplayMode.values()[displayModeCombo.getSelectedIndex()];
+                PluginSettings settings = PluginSettings.getInstance();
+                if (!java.util.Objects.equals(settings.getState().getLogListSqlDisplayMode(), mode.name())) {
+                    settings.getState().setLogListSqlDisplayMode(mode.name());
+                    project.getMessageBus().syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
+                            .settingsChanged();
+                }
+            }
+        });
         buildUI();
         refresh();
     }
@@ -139,7 +177,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     /** 打开指定文件进入二级（测试驱动；等价双击文件）。 */
     public void openFileForTest(HistoryFileEntry entry) {
-        showFileContent(entry);
+        loadFileContentSync(entry);
     }
 
     /** 返回一级（测试驱动；等价点击返回按钮）。 */
@@ -147,9 +185,46 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         showFileList();
     }
 
-    /** 设置搜索词（测试驱动；等价在搜索框输入，触发 DocumentListener 实时过滤）。 */
+    /** 设置搜索词（测试驱动；等价在搜索框输入，立即应用过滤——生产路径 DocumentListener 走防抖）。 */
     public void setSearchForTest(String query) {
         searchField.setText(query);
+        applySearch();
+    }
+
+    /** 显示模式下拉（测试断言选中态回同步用）。 */
+    public JComboBox<?> getDisplayModeComboForTest() {
+        return displayModeCombo;
+    }
+
+    /** 二级列表当前行高（测试断言行高随模式重设用）。 */
+    public int getSqlListFixedCellHeightForTest() {
+        return sqlList.getFixedCellHeight();
+    }
+
+    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 回同步 combo + 二级可见时重绘。
+     *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。 */
+    void onDisplayModeChanged() {
+        syncingDisplayModeCombo = true;
+        displayModeCombo.setSelectedIndex(PluginSettings.getInstance().sqlListDisplayMode().ordinal());
+        syncingDisplayModeCombo = false;
+        applySqlListCellHeight();
+        if (currentFile != null) {
+            sqlList.repaint();
+        }
+    }
+
+    /**
+     * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡，与日志 tab SqlLogPanel.applyListCellHeight 同款）：
+     * SINGLE_LINE 固定行高走 O(1) 布局快路径；KEYWORD_WRAP/FORMATTED 可变行高（条目行数不等），
+     * 多行片段有条目级缓存，逐条测量只剩轻量组件布局。
+     */
+    void applySqlListCellHeight() {
+        Component c = sqlList.getCellRenderer().getListCellRendererComponent(
+                sqlList, new LogSqlEntry("SELECT 1", "SELECT 1", List.of()), 0, false, false);
+        sqlList.setFixedCellHeight(
+                PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE
+                        ? c.getPreferredSize().height
+                        : -1);
     }
 
     /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
@@ -162,27 +237,36 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         toolbar.add(backButton);
         toolbar.add(refreshButton);
+        // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）
+        toolbar.add(displayModeCombo);
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.files"));
         Dimension minSize = searchField.getTextEditor().getMinimumSize();
         searchField.getTextEditor().setMinimumSize(new Dimension(200, minSize.height));
         searchField.getTextEditor().getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
-                applySearch();
+                scheduleSearch();
             }
 
             @Override
             public void removeUpdate(javax.swing.event.DocumentEvent e) {
-                applySearch();
+                scheduleSearch();
             }
 
             @Override
             public void changedUpdate(javax.swing.event.DocumentEvent e) {
-                applySearch();
+                scheduleSearch();
             }
         });
         toolbar.add(searchField);
         add(toolbar, BorderLayout.NORTH);
+
+        // T-ListMode：设置变更（含模式切换广播）→ 清二级列表渲染缓存并重绘；
+        // connect(this) 随面板 Disposer 树自动注销。invokeLater 显式 ModalityState.any()
+        // （设置页红线：模态弹窗存续期默认 modality 会挂起回调）
+        project.getMessageBus().connect(this).subscribe(
+                PluginSettings.SETTINGS_CHANGE_TOPIC,
+                (cn.song.mybatisplus.visualizer.config.SettingsChangeListener) this::onSettingsChanged);
 
         // 一级：文件列表
         fileList.getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.files.empty"));
@@ -208,9 +292,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         sqlList.getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.entries.empty"));
         HistoryCellRenderer sqlRenderer = new HistoryCellRenderer();
         sqlList.setCellRenderer(sqlRenderer);
-        // T-LogListFreeze-04：固定行高（两行恒定高——元信息行 + SQL 行，T-TwoLine 结构保留）
-        sqlList.setFixedCellHeight(sqlRenderer.getListCellRendererComponent(
-                sqlList, new LogSqlEntry("SELECT 1", "SELECT 1", List.of()), 0, false, false).getPreferredSize().height);
+        applySqlListCellHeight();
         sqlList.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
@@ -244,6 +326,13 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         add(cards, BorderLayout.CENTER);
     }
 
+    /** 设置变更入口（SETTINGS_CHANGE_TOPIC）：EDT + ModalityState.any() 后走 onDisplayModeChanged。 */
+    private void onSettingsChanged() {
+        ApplicationManager.getApplication().invokeLater(
+                this::onDisplayModeChanged,
+                com.intellij.openapi.application.ModalityState.any());
+    }
+
     // ---------- 视图切换 ----------
 
     private void showFileList() {
@@ -258,38 +347,113 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     private void showFileContent(HistoryFileEntry fileEntry) {
         currentFile = fileEntry;
-        currentEntries = SqlLogFileReader.INSTANCE.readFromFile(fileEntry.file());
         backButton.setVisible(true);
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.empty"));
         cardLayout.show(cards, CARD_SQL);
+        // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
+        currentEntries = List.of();
         applySqlSearch();
-        LOG.info("HistorySqlLogPanel.showFileContent: " + fileEntry.file().getName() + " 共 " + currentEntries.size() + " 条 SQL");
+        final int gen = ++bgGeneration;
+        new Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.load.progress"), true) {
+            @Override
+            public void run(com.intellij.openapi.progress.ProgressIndicator indicator) {
+                final List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(fileEntry.file());
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (gen != bgGeneration || project.isDisposed()) {
+                        return;
+                    }
+                    currentEntries = entries;
+                    applySqlSearch();
+                    LOG.info("HistorySqlLogPanel.showFileContent: " + fileEntry.file().getName()
+                            + " 共 " + entries.size() + " 条 SQL");
+                });
+            }
+        }.queue();
+    }
+
+    /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
+    private void loadFileContentSync(HistoryFileEntry fileEntry) {
+        currentFile = fileEntry;
+        backButton.setVisible(true);
+        searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.empty"));
+        cardLayout.show(cards, CARD_SQL);
+        currentEntries = SqlLogFileReader.INSTANCE.readFromFile(fileEntry.file());
+        applySqlSearch();
     }
 
     // ---------- 刷新 ----------
 
-    /** 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。 */
+    /**
+     * T-CrudColor：仅重绘二级 SQL 列表（不重扫文件、不重载列表）。
+     *
+     * 设置页改了配色/标记样式后由 SqlLogPanel 的设置变更监听调用——渲染器直读设置，
+     * 重绘即生效；走 repaint 而非 {@link #refresh} 是为了不打断用户当前浏览位置、不触发磁盘扫描。
+     */
+    void repaintSqlList() {
+        sqlList.repaint();
+    }
+
+    /**
+     * 扫描 .idea 目录：生成文件摘要列表；若正在浏览某文件且文件仍存在则保持二级并重载，否则回一级。
+     *
+     * T-Perf-05：目录扫描 + countInFile / readFromFile 全部移入 {@link Task.Backgroundable}
+     * （100MB 自动保存文件的逐行扫描在 EDT 直跑必然长冻结）；EDT 只做结果应用。
+     * 代际守卫：新一轮刷新/加载启动后，旧后台任务的 apply 自动作废。
+     */
     public void refresh() {
-        String dir = getHistoryDir();
+        final int gen = ++bgGeneration;
+        final File keepFile = currentFile != null ? currentFile.file() : null;
+        new Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
+            @Override
+            public void run(com.intellij.openapi.progress.ProgressIndicator indicator) {
+                final List<HistoryFileEntry> scanned = scanHistoryFiles(getHistoryDir());
+                final List<LogSqlEntry> keepReload = keepFile != null && keepFile.exists()
+                        ? SqlLogFileReader.INSTANCE.readFromFile(keepFile)
+                        : null;
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (gen != bgGeneration || project.isDisposed()) {
+                        return;
+                    }
+                    applyRefresh(scanned, keepReload);
+                });
+            }
+        }.queue();
+    }
+
+    /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
+    void refreshForTest() {
+        bgGeneration++; // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
+        File keepFile = currentFile != null ? currentFile.file() : null;
+        applyRefresh(scanHistoryFiles(getHistoryDir()),
+                keepFile != null && keepFile.exists() ? SqlLogFileReader.INSTANCE.readFromFile(keepFile) : null);
+    }
+
+    /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
+    private List<HistoryFileEntry> scanHistoryFiles(String dir) {
         File directory = new File(dir);
-        List<HistoryFileEntry> files;
+        List<File> files;
         if (directory.isDirectory()) {
             File[] raw = directory.listFiles(f -> f.getName().endsWith(".sql"));
-            List<File> sorted = raw == null ? List.of() :
+            files = raw == null ? List.of() :
                     Arrays.stream(raw).sorted(Comparator.comparing(File::getName)).collect(Collectors.toList());
-            files = sorted.stream()
-                    .map(file -> new HistoryFileEntry(file, SqlLogFileReader.INSTANCE.countInFile(file)))
-                    .collect(Collectors.toList());
         } else {
             files = List.of();
         }
-        allFiles = files;
-        LOG.info("HistorySqlLogPanel.refresh: 目录 " + dir + " 扫描到 " + allFiles.size() + " 个历史文件");
+        List<HistoryFileEntry> result = new ArrayList<>();
+        for (File file : files) {
+            result.add(new HistoryFileEntry(file, SqlLogFileReader.INSTANCE.countInFile(file)));
+        }
+        return result;
+    }
+
+    /** 应用扫描结果（EDT；仅刷新/加载代际最新者执行）。 */
+    private void applyRefresh(List<HistoryFileEntry> scanned, List<LogSqlEntry> keepReload) {
+        allFiles = scanned;
+        LOG.info("HistorySqlLogPanel.refresh: 扫描到 " + allFiles.size() + " 个历史文件");
 
         // 保持二级视图：当前文件仍存在则重载内容
-        File keep = currentFile != null ? currentFile.file() : null;
-        if (keep != null && keep.exists()) {
-            currentEntries = SqlLogFileReader.INSTANCE.readFromFile(keep);
+        if (keepReload != null) {
+            currentEntries = keepReload;
             applySqlSearch();
             return;
         }
@@ -303,6 +467,11 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     }
 
     // ---------- 搜索过滤 ----------
+
+    /** T-Perf-05：搜索输入防抖调度（DocumentListener 入口）。 */
+    private void scheduleSearch() {
+        searchDebounceTimer.restart();
+    }
 
     private void applySearch() {
         if (currentFile != null) {
@@ -394,12 +563,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         if (entry.sourceFile() == null) {
             return HjtNoSource.INSTANCE;
         }
-        String basePath = project.getBasePath();
-        if (basePath == null) {
-            return HjtNoSource.INSTANCE;
-        }
-        String fullPath = basePath + "/" + entry.sourceFile();
-        VirtualFile virtualFile = LocalFileSystem.getInstance().findFileByPath(fullPath);
+        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+        VirtualFile virtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile());
         if (virtualFile != null) {
             return new HjtNavigate(virtualFile, Math.max(0, entry.sourceLine() - 1));
         }
@@ -441,10 +606,15 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     @Override
     public void dispose() {
+        // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
+        searchDebounceTimer.stop();
         sqlClickPreview.dispose();
     }
 
     private static final Logger LOG = Logger.getInstance(HistorySqlLogPanel.class);
     private static final String CARD_FILES = "files";
     private static final String CARD_SQL = "sql";
+
+    /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
+    private static final int SEARCH_DEBOUNCE_MS = 200;
 }

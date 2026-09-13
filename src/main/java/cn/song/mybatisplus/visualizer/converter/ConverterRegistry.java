@@ -29,7 +29,9 @@ public final class ConverterRegistry {
                 QueryWrapperConverter.INSTANCE,
                 UpdateWrapperConverter.INSTANCE,
                 UpdateJoinConverter.INSTANCE,
-                DeleteJoinConverter.INSTANCE
+                DeleteJoinConverter.INSTANCE,
+                // XB（M44）：xbatis（原 mybatis-mp）QueryChain/UpdateChain/DeleteChain 同构链
+                XbatisConverter.INSTANCE
         );
     }
 

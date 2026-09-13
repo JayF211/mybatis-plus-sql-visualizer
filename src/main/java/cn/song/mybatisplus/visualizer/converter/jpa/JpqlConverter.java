@@ -5,6 +5,8 @@ import cn.song.mybatisplus.visualizer.model.DeleteStatement;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
+import cn.song.mybatisplus.visualizer.model.UpdateStatement;
+import com.intellij.openapi.project.Project;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,22 +19,39 @@ import org.jetbrains.annotations.Nullable;
 /**
  * JPQL → SQL 转换器（F-JPA-02）。
  *
- * 将 Spring Data JPA @Query 注解中的 JPQL 字符串转换为可预览的 SQL（[SelectStatement]）。
+ * 将 Spring Data JPA @Query 注解中的 JPQL 字符串转换为可预览的 SQL（SelectStatement）。
  *
  * JPQL 与 SQL 的主要差异及转换规则：
- *  - 实体名 → 表名映射（通过 [cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver] 反查 @Table 注解决定的表名）
+ *  - 实体名 → 表名映射（通过 JpaEntityResolver 反查 @Table 注解决定的表名）
  *  - 属性名 → 列名映射
  *  - 命名参数 `:param` → `?` 占位符
  *  - 位置参数 `?1` → `?` 占位符
- *  - `JOIN FETCH e.relation r` → `LEFT JOIN table r ON ...`
+ *  - `JOIN FETCH e.relation r` / `JOIN e.relation r` → `LEFT/INNER JOIN table r ON ...`
+ *    （J7：ON 条件经 JpaJoinOnResolver 按「PSI 注解 > 关联元数据 > 猜测降级」三级真实化）
+ *  - `UPDATE <Entity> [alias] SET ... [WHERE ...]` → UpdateStatement（J2）
  *  - `NEW com.xxx.VO(a, b)` → `SELECT a, b`
  *  - `MEMBER OF` → 降级提示
  *
  * 对于复杂 JPQL（子查询、MEMBER OF、NEW DTO(...)），展示基础转换 + 注释提示。
  *
+ * J13 子查询边界：EXISTS / IN (SELECT ...) 依赖字符串透传——命名/位置参数替换、
+ * 实体表名替换、属性列名替换均为全文正则，子查询内同名符号天然覆盖；
+ * 有 Project 时由 JpaFromEntityMapper 额外映射子查询 FROM 中的其他实体名。
+ *
+ * J19 高级特性边界（「识别 + 不破坏」）：UNION/INTERSECT/EXCEPT、WITH CTE、
+ * INSERT...SELECT、窗口函数 OVER(...) 在本管道中原样透传（参数/实体替换仍生效，
+ * SELECT 展开器已短路不误改），检测到时仅附降级注释，不新增完整建模。
+ *
  * 无状态单例，纯函数逻辑，可独立单测。
  */
 public final class JpqlConverter {
+
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private static final Pattern JPQL_NAMED_PARAM_TO_Q = Pattern.compile("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)");
+    private static final Pattern JPQL_POSITIONAL_PARAM_TO_Q = Pattern.compile("\\?\\d+");
+    private static final Pattern JPQL_IN_SPACE_Q = Pattern.compile("(?i)\\bIN\\s+\\?");
+    private static final Pattern JPQL_MEMBER_OF_PATTERN = Pattern.compile("(.+)\\s+MEMBER OF\\s+(.+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern JPQL_STRING_LITERAL_EMPTY = Pattern.compile("'[^']*'");
 
     /** 单例实例（兼容 Kotlin object 调用形式）。 */
     public static final JpqlConverter INSTANCE = new JpqlConverter();
@@ -44,7 +63,7 @@ public final class JpqlConverter {
      * JPQL 转换产物：转换后的 SQL 字符串（含 ? 占位符）+ 语句模型。
      *
      * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?，可直接用于面板参数回填）
-     * @param statement  语句模型（SelectStatement 或 DeleteStatement，用于 previewModel）
+     * @param statement  语句模型（SelectStatement / UpdateStatement / DeleteStatement，用于 previewModel）
      * @param inClauseParams 使用 IN 子句的参数名集合（面板回填时逗号分割多值）
      */
     public static final class Result {
@@ -85,24 +104,37 @@ public final class JpqlConverter {
 }
 
     /**
-     * 转换 JPQL 字符串为 SQL + 语句模型（tableInfo 取默认 null）。
+     * 转换 JPQL 字符串为 SQL + 语句模型（tableInfo / project 取默认 null）。
      *
-     * @param jpql       JPQL 查询字符串
+     * @param jpql      JPQL 查询字符串
      * @return Result（转换后 SQL + 语句模型）
      */
     public static Result convert(@NotNull String jpql) {
-        return convertInternal(jpql, null);
+        return convertInternal(jpql, null, null);
+    }
+
+    /**
+     * 转换 JPQL 字符串为 SQL + 语句模型（project 取默认 null）。
+     *
+     * @param jpql      JPQL 查询字符串
+     * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做简单字符串替换
+     * @return Result（转换后 SQL + 语句模型）
+     */
+    public static Result convert(@NotNull String jpql, @Nullable TableInfo tableInfo) {
+        return convertInternal(jpql, tableInfo, null);
     }
 
     /**
      * 转换 JPQL 字符串为 SQL + 语句模型。
      *
-     * @param jpql       JPQL 查询字符串
-     * @param tableInfo  实体表信息（列映射用）；可为 null，此时仅做简单字符串替换
+     * @param jpql      JPQL 查询字符串
+     * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做简单字符串替换
+     * @param project   项目（J7 JOIN ON 注解级解析 / J13 子查询实体映射用）；
+     *                  null 时两处降级为关联元数据 / 跳过，行为与历史版本一致
      * @return Result（转换后 SQL + 语句模型）
      */
-    public static Result convert(@NotNull String jpql, @Nullable TableInfo tableInfo) {
-        return convertInternal(jpql, tableInfo);
+    public static Result convert(@NotNull String jpql, @Nullable TableInfo tableInfo, @Nullable Project project) {
+        return convertInternal(jpql, tableInfo, project);
     }
 
     /**
@@ -112,7 +144,7 @@ public final class JpqlConverter {
      * JPQL 转换器在字符串层面完成参数替换（:param → ?），但不会解析条件树
      * （conditions 为空），因此必须使用转换后的 SQL 字符串而非重新生成。
      */
-    private static Result convertInternal(@NotNull String jpql, @Nullable TableInfo tableInfo) {
+    private static Result convertInternal(@NotNull String jpql, @Nullable TableInfo tableInfo, @Nullable Project project) {
         TableInfo table = tableInfo != null ? tableInfo : createFallbackTable();
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测 :paramName）
@@ -130,8 +162,8 @@ public final class JpqlConverter {
         // 3. 处理 NEW DTO(...) 表达式
         sql = handleNewExpression(sql);
 
-        // 4. 处理 JOIN FETCH → LEFT JOIN
-        sql = handleJoinFetch(sql);
+        // 4. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
+        sql = JpaJoinRewriter.rewrite(sql, table, project);
 
         // 5. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql);
@@ -139,19 +171,38 @@ public final class JpqlConverter {
         // 6. 实体名 → 表名映射
         sql = mapEntityToTable(sql, table);
 
+        // 6.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project);
+
         // 7. 属性名 → 列名映射
         sql = mapPropertyToColumn(sql, table);
+
         // 7.5 SELECT 子句展开（T-BareFromSelect）：与 HqlConverter 共用展开器，
         // 补齐隐式查询（`from Entity` 无 SELECT）的列清单与 `SELECT u` 裸别名展开，
-        // 使 @NamedQuery 路径与 HQL 路径输出一致。DELETE 语句内部已短路。
-        sql = SelectClauseExpander.INSTANCE.expand(sql, table);
+        // 使 @NamedQuery 路径与 HQL 路径输出一致。DELETE/UPDATE/INSERT/CTE/UNION 内部已短路。
+        sql = SelectClauseExpander.expand(sql, table);
 
         // 8. 检测 DELETE JPQL → DeleteStatement
         if (sql.trim().toUpperCase().startsWith("DELETE")) {
             return new Result(sql, new DeleteStatement(table, List.of(), List.of(), null, List.of()), inClauseParams);
         }
 
-        String comment = hasComplexConstruct(jpql) ? "/* JPQL 含复杂语法，仅做基础转换 */" : null;
+        // 8.5 检测 UPDATE JPQL → UpdateStatement（J2）
+        if (sql.trim().toUpperCase().startsWith("UPDATE")) {
+            JpaUpdateParser.ParsedUpdate parsed = JpaUpdateParser.parse(sql);
+            if (parsed != null) {
+                return new Result(
+                        sql,
+                        new UpdateStatement(table, parsed.getSets(), parsed.getConditions(),
+                                null, parsed.getTableAlias(), List.of()),
+                        inClauseParams);
+            }
+            // 头部结构异常（非法 JPQL）→ 维持历史 SelectStatement 透传，不抛异常
+        }
+
+        String comment = hasComplexConstruct(jpql) || hasAdvancedConstruct(sql)
+                ? "/* JPQL 含复杂语法，仅做基础转换 */"
+                : null;
         return new Result(sql, new SelectStatement(
                 table,
                 List.of(),
@@ -194,7 +245,7 @@ public final class JpqlConverter {
      */
     private static String replaceNamedParameters(@NotNull String jpql) {
         // 匹配 :identifier（冒号后跟字母/数字/下划线），但排除 ::（类型转换）
-        return jpql.replaceAll("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)", "?");
+        return JPQL_NAMED_PARAM_TO_Q.matcher(jpql).replaceAll("?");
     }
 
     /**
@@ -203,7 +254,7 @@ public final class JpqlConverter {
      * JPQL 位置参数格式为 `?数字`。
      */
     private static String replacePositionalParameters(@NotNull String jpql) {
-        return jpql.replaceAll("\\?\\d+", "?");
+        return JPQL_POSITIONAL_PARAM_TO_Q.matcher(jpql).replaceAll("?");
     }
 
     /**
@@ -213,7 +264,7 @@ public final class JpqlConverter {
      * 此处在字符串层面修正，确保面板参数回填时正确展开为多占位符。
      */
     private static String handleInClause(@NotNull String jpql) {
-        return jpql.replaceAll("(?i)\\bIN\\s+\\?", "IN (?)");
+        return JPQL_IN_SPACE_Q.matcher(jpql).replaceAll("IN (?)");
     }
 
     /**
@@ -255,41 +306,22 @@ public final class JpqlConverter {
         return jpql;
     }
 
-    /**
-     * 处理 `JOIN FETCH e.relation r` → `LEFT JOIN relation_table r ON ...`。
-     *
-     * 增强版（P1-3 JOIN FETCH ON 条件推断）：
-     *  - 推断 ON 条件：从关联属性名推断外键列
-     *    （如 `JOIN FETCH u.department d` → ON d.id = u.department_id）
-     */
-    public static String handleJoinFetch(@NotNull String jpql) {
-        Pattern joinFetchPattern = Pattern.compile(
-                "(LEFT|INNER)?\\s*JOIN\\s+FETCH\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)",
-                Pattern.CASE_INSENSITIVE);
-        Matcher matcher = joinFetchPattern.matcher(jpql);
-        StringBuffer sb = new StringBuffer();
-        while (matcher.find()) {
-            // 组1 (LEFT|INNER)? 为可选分组，未参与匹配时 group(1) 为 null；对应 Kotlin 的 ?.uppercase()
-            String joinTypeRaw = matcher.group(1);
-            String joinType = joinTypeRaw != null ? joinTypeRaw.toUpperCase() : "";
-            String rootAlias = matcher.group(2);
-            String alias = matcher.group(3);
-            String keyword;
-            if ("INNER".equals(joinType)) keyword = "INNER JOIN";
-            else keyword = "LEFT JOIN";
-            String inferredOn = inferJoinOnCondition(rootAlias, alias);
-            String replacement = keyword + " /* 关联表_" + alias + " */ " + alias + " ON " + inferredOn;
-            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(sb);
-        return sb.toString();
-    }
+    // ------------------------------------------------------------------
+    // JOIN FETCH / 关联 JOIN（J7：改写逻辑统一在 JpaJoinRewriter，ON 条件真实化）
+    // ------------------------------------------------------------------
 
     /**
-     * 推断 JOIN FETCH 的 ON 条件（P1-3）。
+     * J19 高级特性检测（「识别」半边）：顶层 WITH（CTE）/ UNION / INTERSECT / EXCEPT
+     * 或 INSERT...SELECT 头部。这些形态在管道中透传且 SELECT 展开器已短路（不破坏），
+     * 检测结果仅用于附加降级注释。
      */
-    private static String inferJoinOnCondition(@NotNull String rootAlias, @NotNull String joinAlias) {
-        return joinAlias + ".id = " + rootAlias + "." + joinAlias + "_id /* 推断的ON条件，请验证 */";
+    public static boolean hasAdvancedConstruct(@NotNull String sql) {
+        String head = sql.trim().toUpperCase();
+        if (head.startsWith("INSERT")) return true;
+        return SelectClauseExpander.hasTopLevelKeyword(sql, "WITH")
+                || SelectClauseExpander.hasTopLevelKeyword(sql, "UNION")
+                || SelectClauseExpander.hasTopLevelKeyword(sql, "INTERSECT")
+                || SelectClauseExpander.hasTopLevelKeyword(sql, "EXCEPT");
     }
 
     /**
@@ -300,8 +332,7 @@ public final class JpqlConverter {
      */
     private static String handleMemberOf(@NotNull String jpql) {
         if (!jpql.toLowerCase().contains("member of")) return jpql;
-        Pattern pattern = Pattern.compile("(.+)\\s+MEMBER OF\\s+(.+)", Pattern.CASE_INSENSITIVE);
-        Matcher matcher = pattern.matcher(jpql);
+        Matcher matcher = JPQL_MEMBER_OF_PATTERN.matcher(jpql);
         StringBuffer sb = new StringBuffer();
         while (matcher.find()) {
             String replacement = matcher.group(1)
@@ -396,7 +427,7 @@ public final class JpqlConverter {
      * 检测 JPQL 中的子查询（增强版 P1-3）。
      */
     private static boolean detectSubquery(@NotNull String jpql) {
-        String cleaned = jpql.replaceAll("'[^']*'", "''");
+        String cleaned = JPQL_STRING_LITERAL_EMPTY.matcher(jpql).replaceAll("''");
         Pattern subqueryPattern = Pattern.compile("\\(\\s*SELECT\\b", Pattern.CASE_INSENSITIVE);
         return subqueryPattern.matcher(cleaned).find();
     }

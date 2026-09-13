@@ -4,14 +4,21 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings;
 import cn.song.mybatisplus.visualizer.config.TableNameRule;
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry;
+import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter;
+import cn.song.mybatisplus.visualizer.converter.MdsConverter;
+import cn.song.mybatisplus.visualizer.converter.QuerydslConverter;
 import cn.song.mybatisplus.visualizer.converter.QueryWrapperParser;
 import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter;
 import cn.song.mybatisplus.visualizer.sql.GeneratedSql;
 import cn.song.mybatisplus.visualizer.converter.jpa.DerivedQueryConverter;
 import cn.song.mybatisplus.visualizer.converter.jpa.JpqlConverter;
 import cn.song.mybatisplus.visualizer.converter.jpa.HqlConverter;
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter;
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaQueryEnhancer;
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTreeParser;
 import cn.song.mybatisplus.visualizer.converter.jpa.PartTree;
+import cn.song.mybatisplus.visualizer.converter.jpa.QueryByExampleConverter;
+import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager;
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
@@ -50,6 +57,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator;
+import cn.song.mybatisplus.visualizer.psi.jpa.DaoQueryKind;
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver;
@@ -76,6 +84,7 @@ import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
+import cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.components.Service;
@@ -97,6 +106,8 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.xml.XmlTag;
+import com.intellij.psi.xml.XmlText;
 import com.intellij.psi.search.PsiShortNamesCache;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiType;
@@ -350,6 +361,109 @@ public final class SqlPreviewService {
             if (cur instanceof PsiMethodCallExpression) { batchCall = (PsiMethodCallExpression) cur; break; }
             cur = cur.getParent();
         }
+        // T-J1/T-J6/T-J21：JPA CRUD / EntityManager 写路径 / HibernateTemplate 实体操作派发
+        // （receiver 家族感知，消歧规则见 JpaCrudOperationConverter KDoc）——receiver 判定为
+        // JPA 家族时必须走 JpaEntityResolver：MP EntityResolver 只认 @TableName，JPA 实体
+        // （@Table(name="t_user")）会被输出成 `INSERT INTO user_entity` 错表错列；
+        // 非 JPA 家族 convert 返回 null，维持下方 MP 批量路径现状（存量行为零变化）
+        // T-J5/T-J20 前置分支：Specification / Query By Example executor 调用先于 JPA CRUD 家族判定——
+        // `findAll(spec)` / `findAll(example)` 的方法名同在 JpaCrudOperationConverter.REPOSITORY_METHODS
+        // 名单内，后置会被渲染成「无 WHERE 全表 SELECT」（JpaCrudOperationConverter KDoc 建议的扩面方式：
+        // 在 SqlPreviewService 侧新增前置分支，不改 Wave2 交付文件）
+        if (batchCall != null) {
+            SpecificationQueryConverter.SpecificationPreview specPreview =
+                    SpecificationQueryConverter.convert(batchCall, resolveVariables);
+            if (specPreview != null) {
+                PreviewResult result = new PreviewResult(
+                        specPreview.getSql(),
+                        specPreview.getSql().replaceAll("\\s+", " ").trim(),
+                        specPreview.getParamSources(),
+                        ParameterReplacer.buildParamTable(specPreview.getParamSources()),
+                        null,
+                        specPreview.getTableName(),
+                        specPreview.getWarning(),
+                        specPreview.getColumns(),
+                        Map.of(),
+                        null,
+                        null,
+                        specPreview.getParamHints(),
+                        List.of(),
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null,
+                        null,
+                        null);
+                recordHistory(result, anchor);
+                return result;
+            }
+            QueryByExampleConverter.ExamplePreview examplePreview =
+                    QueryByExampleConverter.convert(batchCall, resolveVariables);
+            if (examplePreview != null) {
+                PreviewResult result = new PreviewResult(
+                        examplePreview.getSql(),
+                        examplePreview.getSql().replaceAll("\\s+", " ").trim(),
+                        examplePreview.getParamSources(),
+                        ParameterReplacer.buildParamTable(examplePreview.getParamSources()),
+                        null,
+                        examplePreview.getTableName(),
+                        null,
+                        examplePreview.getColumns(),
+                        Map.of(),
+                        null,
+                        null,
+                        examplePreview.getParamHints(),
+                        List.of(),
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null,
+                        null,
+                        null);
+                recordHistory(result, anchor);
+                return result;
+            }
+            // EQ/DS/QD（M44 其他 ORM 第一批）前置派发：Easy-Query proxy 链 / MyBatis Dynamic SQL /
+            // Querydsl——三者均非 MP Wrapper 链（locateWithTable 不命中），按 entry+receiver 启发认领；
+            // 不认领返回 null 走后续 JPA CRUD / MP 批量管道（存量行为零变化）
+            PreviewResult ormPreview = convertOtherOrm(batchCall, resolveVariables);
+            if (ormPreview != null) {
+                recordHistory(ormPreview, anchor);
+                return ormPreview;
+            }
+        }
+        JpaCrudOperationConverter.JpaCrudPreview jpaCrud = batchCall != null
+                ? JpaCrudOperationConverter.convert(batchCall, resolveVariables)
+                : null;
+        if (jpaCrud != null) {
+            PreviewResult result = new PreviewResult(
+                    jpaCrud.getSql(),
+                    jpaCrud.getSql(),
+                    jpaCrud.getParamSources(),
+                    jpaCrud.getParamGroups(),
+                    null,
+                    jpaCrud.getTableName(),
+                    jpaCrud.getWarning(),
+                    List.of(),
+                    Map.of(),
+                    null,
+                    null,
+                    jpaCrud.getParamHints(),
+                    List.of(),
+                    jpaCrud.getBatchModel(),
+                    null,
+                    Map.of(),
+                    null,
+                    null,
+                    null,
+                    null);
+            recordHistory(result, anchor);
+            return result;
+        }
+        // T-M23-01/02：批量路径接线——逻辑删除注入开关（settings.injectLogicDelete）与变量求值开关
+        // （settings.replaceParams，实参可静态求值时内联）对齐 Wrapper 路径；参数来源/回填提示透传面板
         BatchPreview batch = batchCall != null
                 ? BatchOperationConverter.convert(
                 batchCall,
@@ -386,10 +500,103 @@ public final class SqlPreviewService {
     }
 
     /**
+     * 其他 ORM 第一批（M44）前置派发：Easy-Query proxy（EQ_PROXY）/ MyBatis Dynamic SQL（MDS）/
+     * Querydsl（QD）。三者按 entry + receiver 启发认领（普通类同名方法不命中，负例守卫），
+     * 不认领返回 null（交回 JPA CRUD / MP 批量管道）。
+     */
+    private PreviewResult convertOtherOrm(PsiMethodCallExpression call, boolean resolveVariables) {
+        EasyQueryConverter.EqPreview eq = EasyQueryConverter.convert(call, resolveVariables);
+        if (eq != null) {
+            return new PreviewResult(
+                    eq.getSql(),
+                    eq.getSql().replaceAll("\\s+", " ").trim(),
+                    eq.getParamSources(),
+                    ParameterReplacer.buildParamTable(eq.getParamSources()),
+                    WrapperType.EQ_PROXY,
+                    eq.getTableName(),
+                    eq.getWarning(),
+                    eq.getColumns(),
+                    Map.of(),
+                    null,
+                    null,
+                    eq.getParamHints(),
+                    List.of(),
+                    eq.getBatchModel(),
+                    null,
+                    Map.of(),
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+        MdsConverter.MdsPreview mds = MdsConverter.convert(call, resolveVariables);
+        if (mds != null) {
+            return new PreviewResult(
+                    mds.getSql(),
+                    mds.getSql().replaceAll("\\s+", " ").trim(),
+                    mds.getParamSources(),
+                    ParameterReplacer.buildParamTable(mds.getParamSources()),
+                    WrapperType.MDS,
+                    mds.getTableName(),
+                    mds.getWarning(),
+                    mds.getColumns(),
+                    Map.of(),
+                    null,
+                    null,
+                    mds.getParamHints(),
+                    List.of(),
+                    null,
+                    null,
+                    Map.of(),
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+        QuerydslConverter.QdPreview qd = QuerydslConverter.convert(call, resolveVariables);
+        if (qd != null) {
+            return new PreviewResult(
+                    qd.getSql(),
+                    qd.getSql().replaceAll("\\s+", " ").trim(),
+                    qd.getParamSources(),
+                    ParameterReplacer.buildParamTable(qd.getParamSources()),
+                    WrapperType.QD,
+                    qd.getTableName(),
+                    qd.getWarning(),
+                    qd.getColumns(),
+                    Map.of(),
+                    null,
+                    null,
+                    qd.getParamHints(),
+                    List.of(),
+                    null,
+                    null,
+                    Map.of(),
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+        return null;
+    }
+
+    /**
      * JPA 推导查询预览（F-14 阶段四）：解析 Repository 方法名 → PartTree → SqlStatement → PreviewResult。
+     *
+     * <p>供 cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider 点击调用与
+     * T-J9 调用点反查（ConvertToSqlAction）调用。
+     *
+     * @param method   Repository 声明方法
+     * @param callArgs T-J9 调用点实参（{@code userRepository.findByName(x, PageRequest.of(0, 20))} 的实参列表）；
+     *                 非 null 时对 PageRequest.of / Sort.by 做静态求值（有字面量就内联渲染，无则 ? 占位）
      */
     @Nullable
     public PreviewResult previewDerivedQuery(@NotNull PsiMethod method) {
+        return previewDerivedQuery(method, null);
+    }
+
+    @Nullable
+    public PreviewResult previewDerivedQuery(@NotNull PsiMethod method, @Nullable List<PsiExpression> callArgs) {
         PsiFile file = method.getContainingFile();
         if (file == null) return null;
         DerivedMethodInfo methodInfo = DerivedMethodLocator.locate(file, method.getTextRange().getStartOffset());
@@ -400,53 +607,253 @@ public final class SqlPreviewService {
         if (table == null) return null;
         PartTree partTree = PartTreeParser.parse(methodInfo.getMethodName());
         SqlStatement statement = DerivedQueryConverter.INSTANCE.convert(partTree, table);
-        // Pageable 参数 → 添加 LIMIT 占位符
-        boolean hasPageable = hasPageable(method);
-        if (hasPageable) {
-            statement = applyPageableLimit(statement, method);
+        // T-J10：Pageable/Page/Sort/Limit 参数全路径——Pageable/Page → LIMIT 占位（调用点形态静态求值）、
+        // Sort → ORDER BY（Sort.by 字面量内联）、Limit（3.2） → 仅 LIMIT 无 OFFSET
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, currentDialect(), table);
+        if (pageSort != null) {
+            SelectStatement select = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
+            if (pageSort.getLimit() != null && select != null) {
+                select = copySelectWithLimit(select, pageSort.getLimit());
+            }
+            if (pageSort.getOrderBy() != null && !pageSort.getOrderBy().isEmpty() && select != null) {
+                select = copySelectWithOrderBy(select, pageSort.getOrderBy());
+            }
+            if (select != null) statement = select;
         }
         // 使用实际方法参数名（而非通用的 param1/param2）
-        List<String> paramNames;
-        if (hasPageable) {
-            List<String> base = new ArrayList<>();
-            for (PsiParameter param : method.getParameterList().getParameters()) {
-                String typeName = param.getType().getCanonicalText();
-                if (!typeName.equals("org.springframework.data.domain.Pageable") && !typeName.endsWith(".Pageable")) {
-                    base.add(param.getName());
-                }
+        // 分页/排序/限流参数：排除参数本身，追加分页占位参数行（pageOffset/pageSize 等）
+        List<String> paramNames = new ArrayList<>();
+        for (PsiParameter param : method.getParameterList().getParameters()) {
+            String typeName = param.getType().getCanonicalText();
+            int lt = typeName.indexOf('<');
+            if (lt >= 0) typeName = typeName.substring(0, lt);
+            if (JpaQueryEnhancer.isPageableType(typeName)
+                    || JpaQueryEnhancer.isSortType(typeName)
+                    || JpaQueryEnhancer.isLimitType(typeName)) {
+                continue;
             }
-            List<String> names = new ArrayList<>(base);
-            names.add("pageSize");
-            names.add("pageOffset");
-            paramNames = names;
-        } else {
-            List<String> names = new ArrayList<>();
-            for (PsiParameter param : method.getParameterList().getParameters()) names.add(param.getName());
-            paramNames = names;
+            paramNames.add(param.getName());
         }
+        if (pageSort != null && pageSort.getExtraParamNames() != null) {
+            paramNames.addAll(pageSort.getExtraParamNames());
+        }
+        // DerivedQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         String sql = SqlGenerator.generate(statement);
-        return buildJpaPreviewResult(statement, sql, table.getTableName(), paramNames, method);
+        // T-J4：IN/NOT IN 条件参数接线——inClauseParameterOrdinals 序号对齐方法参数名
+        // （过滤 Pageable 后的 paramNames 序），把 IN 参数挂进 buildJpaPreviewResult 的
+        // inClauseParams（面板回填按逗号分割多值，对齐 JPQL/HQL 路径的 Result.inClauseParams 惯例）
+        Set<String> inClauseParams = new LinkedHashSet<>();
+        for (int ordinal : DerivedQueryConverter.inClauseParameterOrdinals(methodInfo.getMethodName())) {
+            if (ordinal >= 0 && ordinal < paramNames.size()) {
+                inClauseParams.add(paramNames.get(ordinal));
+            }
+        }
+        // T-J15/J22：@Lock（FOR UPDATE）/ @QueryHints / @EntityGraph（LEFT JOIN）/ 返回类型 notes；
+        // pageNotes：分页/排序分析已在上方完成（含调用点实参求值），透传语义注释、跳过二次分析
+        String enhancedSql = applyJpaMethodEnhancements(
+                method, sql, table, false,
+                true,
+                pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of());
+        return buildJpaPreviewResult(statement, enhancedSql, table.getTableName(), paramNames, method, inClauseParams);
+    }
+
+    /** {@link SelectStatement} 的 Kotlin {@code copy(limit = ...)} Java 等价（显式全参重建）。 */
+    private static SelectStatement copySelectWithLimit(@NotNull SelectStatement sel, @Nullable LimitClause limit) {
+        return new SelectStatement(sel.getTable(), sel.getSelectColumns(), sel.getTableAlias(), sel.getJoins(),
+                sel.getDistinct(), sel.getConditions(), sel.getGroupBy(), sel.getHaving(), sel.getOrderBy(),
+                limit, sel.getRawFirst(), sel.getRawAround(), sel.getComment(), sel.getUnions(),
+                sel.getFromSubQuery(), sel.getFillClauses());
+    }
+
+    /** {@link SelectStatement} 的 Kotlin {@code copy(orderBy = ...)} Java 等价（显式全参重建）。 */
+    private static SelectStatement copySelectWithOrderBy(@NotNull SelectStatement sel, @NotNull List<OrderByItem> orderBy) {
+        return new SelectStatement(sel.getTable(), sel.getSelectColumns(), sel.getTableAlias(), sel.getJoins(),
+                sel.getDistinct(), sel.getConditions(), sel.getGroupBy(), sel.getHaving(), orderBy,
+                sel.getLimit(), sel.getRawFirst(), sel.getRawAround(), sel.getComment(), sel.getUnions(),
+                sel.getFromSubQuery(), sel.getFillClauses());
     }
 
     /**
-     * 如果方法含 Pageable 参数，为 SELECT 语句添加 LIMIT 占位符。
+     * JPA 方法级 SQL 增强（T-J10/J15/J22，文本级后处理，previewDerivedQuery / previewJpql /
+     * previewHql / previewCriteriaQuery 各路径共用）：
+     *
+     * <ul>
+     *  <li><b>T-J10</b>：宿主方法 {@code Pageable}/{@code Page}/{@code Limit} 参数 → LIMIT/OFFSET 占位（方言形态）；
+     *      {@code Sort} 参数静态求值 → ORDER BY（与查询内已有子句并存时降级注释，避免双子句）；</li>
+     *  <li><b>T-J15</b>：{@code @Lock(PESSIMISTIC_WRITE)} → SELECT 尾部 {@code FOR UPDATE}（共享锁形态注释说明方言差异）；
+     *      {@code @QueryHints} 逐条注释；{@code @EntityGraph(attributePaths)} → LEFT JOIN 注入（按关联元数据解析
+     *      真实表/列；解析失败 / 原生 SQL 路径降级注释）；</li>
+     *  <li><b>T-J22</b>：返回类型 notes（Page count 二连 / Slice 多取一条 / Stream / 接口投影）；
+     *      {@code Page} 返回 + {@code @Query.countQuery} 存在时一并展示 count SQL。</li>
+     * </ul>
+     *
+     * <p>注释行以 {@code -- } 前缀追加 SQL 尾部（对齐 JpaCrudOperationConverter notes 惯例）；
+     * 全程无注解/无参数时返回原文（存量字节级行为零变化）。
      */
-    private SqlStatement applyPageableLimit(@NotNull SqlStatement statement, @NotNull PsiMethod method) {
-        if (!hasPageable(method)) return statement;
-        if (statement instanceof SelectStatement) {
-            SelectStatement sel = (SelectStatement) statement;
-            return new SelectStatement(
-                    sel.getTable(), sel.getSelectColumns(), sel.getTableAlias(), sel.getJoins(), sel.getDistinct(),
-                    sel.getConditions(), sel.getGroupBy(), sel.getHaving(), sel.getOrderBy(),
-                    new LimitClause(new SqlValue.Placeholder("pageOffset"), new SqlValue.Placeholder("pageSize")),
-                    sel.getRawFirst(), sel.getRawAround(), sel.getComment(), sel.getUnions(), sel.getFromSubQuery(),
-                    sel.getFillClauses());
+    private String applyJpaMethodEnhancements(
+            @Nullable PsiMethod method,
+            @NotNull String sql,
+            @Nullable TableInfo table,
+            boolean nativeQuery) {
+        return applyJpaMethodEnhancements(method, sql, table, nativeQuery, false, null);
+    }
+
+    private String applyJpaMethodEnhancements(
+            @Nullable PsiMethod method,
+            @NotNull String sql,
+            @Nullable TableInfo table,
+            boolean nativeQuery,
+            boolean limitAppliedInModel,
+            @Nullable List<String> pageNotes) {
+        try {
+            if (method == null) return sql;
+            Dialect dialect = currentDialect();
+            List<String> notes = new ArrayList<>();
+            String enhanced = sql;
+
+            // T-J15：@EntityGraph → LEFT JOIN（JPQL/HQL 非原生路径；原生查询运行时不应用实体图）
+            List<String> joinLines = List.of();
+            JpaQueryEnhancer.EntityGraphInfo graph = JpaQueryEnhancer.entityGraph(method);
+            if (graph != null) {
+                if (nativeQuery || table == null) {
+                    notes.add("@EntityGraph(attributePaths)：原生 SQL 查询运行时不应用实体图，预览不追加 JOIN");
+                } else {
+                    JpaQueryEnhancer.GraphJoinResult graphResult =
+                            JpaQueryEnhancer.resolveEntityGraphJoins(graph, table);
+                    notes.addAll(graphResult.getNotes());
+                    String mainAlias = detectMainAlias(enhanced, table);
+                    List<String> rendered = new ArrayList<>();
+                    for (JpaQueryEnhancer.GraphJoin join : graphResult.getJoins()) {
+                        rendered.add(JpaQueryEnhancer.renderJoinLine(join, mainAlias, dialect));
+                    }
+                    joinLines = rendered;
+                    if (!graphResult.getJoins().isEmpty()) {
+                        notes.add("@EntityGraph(attributePaths=" + String.join(", ", graph.getPaths())
+                                + ")：按实体图 LEFT JOIN 抓取（type=" + (graph.getType() != null ? graph.getType() : "LOAD") + "）");
+                    }
+                }
+            }
+
+            // T-J10：Pageable/Limit → LIMIT；Sort → ORDER BY（查询内已有子句时降级注释）。
+            // limitAppliedInModel：派生/Criteria 路径 LIMIT 已在语句模型级挂载（传 true 跳过文本追加，
+            // 避免同语句双 LIMIT）；
+            // pageNotes 非 null：调用方已完成分页/排序分析（含调用点实参求值，T-J9/J10），notes 直接透传、
+            // 跳过本方法内的二次分析（callArgs=null 的重分析会产出与实际内联结果相悖的「静态不可解析」注释）
+            if (pageNotes != null) {
+                notes.addAll(pageNotes);
+            } else {
+                JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table);
+                if (pageSort != null) {
+                    notes.addAll(pageSort.getNotes());
+                    if (pageSort.getLimit() != null) {
+                        if (limitAppliedInModel
+                                || JpaQueryEnhancer.containsTopLevelClause(enhanced,
+                                Pattern.compile("(?i)\\b(LIMIT|OFFSET|FETCH)\\b"))) {
+                            if (!limitAppliedInModel) {
+                                notes.add("查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）");
+                            }
+                        } else {
+                            enhanced = enhanced + "\n" + dialect.renderLimit(pageSort.getLimit());
+                        }
+                    }
+                    if (pageSort.getOrderBy() != null && !pageSort.getOrderBy().isEmpty()) {
+                        if (JpaQueryEnhancer.containsTopLevelClause(enhanced, Pattern.compile("(?i)\\bORDER\\s+BY\\b"))) {
+                            notes.add("查询内已含 ORDER BY，Sort 参数运行时与其合并");
+                        } else {
+                            StringBuilder ob = new StringBuilder();
+                            for (OrderByItem item : pageSort.getOrderBy()) {
+                                if (ob.length() > 0) ob.append(", ");
+                                ob.append(item.getColumn().getQualifiedName()).append(item.isAsc() ? " ASC" : " DESC");
+                            }
+                            enhanced = enhanced + "\nORDER BY " + ob;
+                        }
+                    }
+                }
+            }
+
+            // JOIN 行插入（置于 LIMIT/ORDER BY 之前的顶层位置）
+            enhanced = JpaQueryEnhancer.insertJoinLines(enhanced, joinLines);
+
+            // T-J15：@Lock → FOR UPDATE / 共享锁方言差异注释
+            JpaQueryEnhancer.LockClause lock = JpaQueryEnhancer.lockClause(method);
+            if (lock != null) {
+                notes.add(lock.getNote());
+                if (lock.getClause() != null) enhanced = enhanced + " " + lock.getClause();
+            }
+            // T-J15：@QueryHints 逐条注释
+            notes.addAll(JpaQueryEnhancer.queryHintNotes(method));
+            // T-J22：返回类型 notes + Page 返回时展示 @Query.countQuery 的 count SQL
+            notes.addAll(JpaQueryEnhancer.returnTypeNotes(method));
+            notes.addAll(countQueryNotes(method, table));
+
+            if (notes.isEmpty()) return sql;
+            StringBuilder suffix = new StringBuilder();
+            for (String note : notes) {
+                if (!note.isBlank()) suffix.append("\n-- ").append(note);
+            }
+            return enhanced + suffix;
+        } catch (Throwable t) {
+            return sql;
         }
-        return statement;
+    }
+
+    /** T-J22：@Query.countQuery → count SQL 注释行（Page 返回语义；转换失败降级原文注释）。 */
+    private List<String> countQueryNotes(@Nullable PsiMethod method, @Nullable TableInfo table) {
+        try {
+            String countJpql = JpaQueryEnhancer.countQueryAttribute(method);
+            if (countJpql == null) return List.of();
+            // 注释前缀 "-- " 由 applyJpaMethodEnhancements 统一追加，此处只给内容行
+            List<String> out = new ArrayList<>();
+            out.add("@Query.countQuery（Page 返回的 count 伴随查询）：");
+            try {
+                String sqlText = countJpql;
+                if (table != null) {
+                    sqlText = JpqlConverter.INSTANCE.convert(countJpql, table, project).getSql();
+                }
+                out.addAll(sqlText.lines().toList());
+            } catch (Throwable t) {
+                out.clear();
+                out.add("@Query.countQuery（Page 返回的 count 伴随查询）：");
+                out.addAll(countJpql.lines().toList());
+            }
+            return out;
+        } catch (Throwable t) {
+            return List.of();
+        }
+    }
+
+    /**
+     * 从 SQL 文本探测主表别名（EntityGraph JOIN 的 ON 左值用）：
+     * {@code FROM t_user u} → {@code u}；无别名/别名是 SQL 关键字 → 表名本名。
+     */
+    private String detectMainAlias(@NotNull String sql, @NotNull TableInfo table) {
+        try {
+            java.util.regex.Pattern regex =
+                    Pattern.compile("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)");
+            java.util.regex.Matcher match = regex.matcher(sql);
+            String alias = match.find() ? match.group(2) : null;
+            boolean isKeyword = false;
+            if (alias != null) {
+                for (String kw : SQL_CLAUSE_KEYWORDS) {
+                    if (alias.equalsIgnoreCase(kw)) {
+                        isKeyword = true;
+                        break;
+                    }
+                }
+            }
+            return (alias == null || isKeyword) ? table.getTableName() : alias;
+        } catch (Throwable t) {
+            return table.getTableName();
+        }
     }
 
     /**
      * JPQL/@Query 预览（波次一）：解析 @Query 注解方法 → JPQL 字符串 → SQL → PreviewResult。
+     *
+     * <p>供 cn.song.mybatisplus.visualizer.ui.gutter.JpqlGutterLineMarkerProvider 点击调用。
+     * T-J10/J15/J22：方法级增强（Pageable/Limit → LIMIT 占位、@Lock → FOR UPDATE、
+     * @QueryHints 注释、@EntityGraph → LEFT JOIN、Page 返回 → count SQL 展示）见
+     * {@link #applyJpaMethodEnhancements}。
      */
     @Nullable
     public PreviewResult previewJpql(@NotNull PsiMethod method) {
@@ -458,27 +865,43 @@ public final class SqlPreviewService {
         List<String> paramNames = extractJpqlParamNames(method);
         PsiClass entityClass = info.getEntityClass();
         TableInfo table = (entityClass != null) ? new JpaEntityResolver().resolve(entityClass) : null;
+        // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
+        JpaQueryEnhancer.PageSortEval pageSortEval = JpaQueryEnhancer.evaluatePageSort(method, null, currentDialect(), table);
+        List<String> extraParamNames = (pageSortEval != null && pageSortEval.getExtraParamNames() != null)
+                ? pageSortEval.getExtraParamNames() : List.of();
+        List<String> allParamNames = new ArrayList<>(paramNames);
+        allParamNames.addAll(extraParamNames);
+        // 原生 SQL：转换命名参数 :param → ? 后展示（保持可读性）
         if (info.isNative()) {
             String convertedSql = convertNativeSqlParameters(jpql);
+            // 检测 IN 子句参数（在命名参数替换前检测 :paramName）
             Set<String> inParams = JpqlConverter.findInClauseParams(jpql);
             List<ParamHint> hints = !inParams.isEmpty()
-                    ? paramNames.stream().map(n -> new ParamHint(true, null, inParams.contains(n))).toList()
+                    ? allParamNames.stream().map(n -> new ParamHint(true, null, inParams.contains(n))).toList()
                     : List.of();
+            // T-J15：@EntityGraph 对原生查询运行时不生效 → 仅注释说明；LIMIT/@Lock/notes 照常
+            String enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, true);
             String tableName;
             if (table != null) tableName = table.getTableName();
             else if (info.getEntityClass() != null) tableName = JpaEntityResolver.inferDecoratedTableName(info.getEntityClass().getName());
             else tableName = "";
             return new PreviewResult(
-                    convertedSql, convertedSql, paramNames,
-                    ParameterReplacer.buildParamTable(paramNames),
+                    enhancedSql,
+                    // 无增强时保持旧字节级行为（convertedSql 原样），有增强时压缩多行空白
+                    enhancedSql.equals(convertedSql) ? convertedSql : enhancedSql.replaceAll("\\s+", " ").trim(),
+                    allParamNames,
+                    ParameterReplacer.buildParamTable(allParamNames),
                     null, tableName, null,
                     table != null ? table.getAllColumnNames() : List.of(),
                     Map.of(), null, null,
                     hints, List.of(), null, null, Map.of(), null, null, null, null);
         }
-        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table);
-        return buildJpaPreviewResult(result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
-                paramNames, method, result.getInClauseParams());
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
+        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
+        // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
+        String enhancedSql = applyJpaMethodEnhancements(method, result.getSql(), table, false);
+        return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
+                allParamNames, method, result.getInClauseParams());
     }
 
     /**
@@ -489,11 +912,22 @@ public final class SqlPreviewService {
     }
 
     /**
-     * 提取 JPQL/@Query 方法的参数名（优先 @Param 注解值，无注解时用方法参数名）。
+     * 提取 JPQL/@Query 方法的参数名。
+     * 优先 @Param 注解值（@Param("foo") → "foo"），无注解时用方法参数名。
+     * T-J10：Pageable/Sort/Limit 类型参数本体不登记参数行（分页占位参数行 pageSize/pageOffset 等
+     * 由 {@link JpaQueryEnhancer#evaluatePageSort} 的 extraParamNames 补充，避免同一参数双行）。
      */
     private List<String> extractJpqlParamNames(@NotNull PsiMethod method) {
         List<String> parameters = new ArrayList<>();
         for (PsiParameter param : method.getParameterList().getParameters()) {
+            String typeName = param.getType().getCanonicalText();
+            int lt = typeName.indexOf('<');
+            if (lt >= 0) typeName = typeName.substring(0, lt);
+            if (JpaQueryEnhancer.isPageableType(typeName)
+                    || JpaQueryEnhancer.isSortType(typeName)
+                    || JpaQueryEnhancer.isLimitType(typeName)) {
+                continue;
+            }
             PsiModifierList modifierList = param.getModifierList();
             PsiAnnotation annotation = (modifierList != null)
                     ? modifierList.findAnnotation("org.springframework.data.repository.query.Param") : null;
@@ -520,20 +954,49 @@ public final class SqlPreviewService {
 
     /**
      * CriteriaQuery 预览（波次一）：定位 CriteriaQueryModel → CriteriaQueryConverter → SQL → PreviewResult。
+     *
+     * <p>供 cn.song.mybatisplus.visualizer.ui.gutter.CriteriaQueryGutterLineMarkerProvider 点击调用。
+     * T-J10：宿主方法 Pageable/Limit 参数 → LIMIT 子句（语句模型级，进 previewModel 交互重生成）。
      */
     @Nullable
     public PreviewResult previewCriteriaQuery(@NotNull PsiElement anchor) {
+        // 1. 用 CriteriaQueryLocator.locate(anchor) 获取 CriteriaQueryModel
         CriteriaQueryModel model = CriteriaQueryLocator.INSTANCE.locate(anchor);
         if (model == null) return null;
+        // 2. CriteriaQueryConverter.convert(model) → SelectStatement
         SqlStatement statement = CriteriaQueryConverter.INSTANCE.convert(model);
-        PsiMethod method = PsiTreeUtil.getParentOfType(anchor, PsiMethod.class);
-        List<String> paramNames = (method != null)
-                ? Arrays.stream(method.getParameterList().getParameters()).map(PsiParameter::getName).toList()
-                : List.of();
+        PsiMethod hostMethod = PsiTreeUtil.getParentOfType(anchor, PsiMethod.class);
+        // 3. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
+        List<String> paramNames = (hostMethod != null)
+                ? Arrays.stream(hostMethod.getParameterList().getParameters()).map(PsiParameter::getName).toList()
+                : List.<String>of();
+        // T-J10：宿主方法分页参数 → LIMIT 子句（criteria 路径是语句模型，直接挂 limit）
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, currentDialect(), null);
+        if (pageSort != null) {
+            SelectStatement select = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
+            SelectStatement limited = select;
+            if (pageSort.getLimit() != null && select != null) {
+                limited = copySelectWithLimit(select, pageSort.getLimit());
+            }
+            if (limited != null) statement = limited;
+        }
+        // CriteriaQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         String sql = SqlGenerator.generate(statement);
+        TableInfo resolvedTable = (model.getEntityClass() != null)
+                ? new JpaEntityResolver().resolve(model.getEntityClass()) : null;
         String tableName = (model.getEntityClassName() != null)
                 ? JpaEntityResolver.inferDecoratedTableName(model.getEntityClassName()) : "";
-        return buildJpaPreviewResult(statement, sql, tableName, paramNames, method);
+        // T-J10/J15/J22：方法级增强（Sort ORDER BY/锁/hints/返回类型 notes；LIMIT 已在语句模型级挂载，
+        // 分页/排序 notes 由上方分析透传）
+        String enhancedSql = applyJpaMethodEnhancements(
+                hostMethod, sql, resolvedTable, false,
+                true,
+                pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of());
+        List<String> allParamNames = new ArrayList<>(paramNames);
+        if (pageSort != null && pageSort.getExtraParamNames() != null) {
+            allParamNames.addAll(pageSort.getExtraParamNames());
+        }
+        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod);
     }
 
     /**
@@ -560,36 +1023,76 @@ public final class SqlPreviewService {
                 PsiClass entityClass = named.getAnnotation() != null
                         ? PsiTreeUtil.getParentOfType(named.getAnnotation(), PsiClass.class, false) : null;
                 TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
-                JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable);
+                JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable, project);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
-                return buildJpaPreviewResult(namedResult.getStatement(), namedResult.getSql(),
-                        namedTable != null ? namedTable.getTableName() : "", namedParams,
+                // T-J10/J15/J22：宿主方法级增强
+                String namedEnhancedSql = applyJpaMethodEnhancements(info.getMethod(), namedResult.getSql(), namedTable, false);
+                JpaQueryEnhancer.PageSortEval namedPageSort =
+                        JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, currentDialect(), namedTable);
+                List<String> namedExtraParams = (namedPageSort != null && namedPageSort.getExtraParamNames() != null)
+                        ? namedPageSort.getExtraParamNames() : List.of();
+                List<String> namedAllParams = new ArrayList<>(namedParams);
+                namedAllParams.addAll(namedExtraParams);
+                return buildJpaPreviewResult(namedResult.getStatement(), namedEnhancedSql,
+                        namedTable != null ? namedTable.getTableName() : "", namedAllParams,
                         info.getMethod(), namedResult.getInClauseParams());
+            }
+            // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
+            HbmXmlMapping.NamedQuery hbmNamed = null;
+            try {
+                hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project);
+            } catch (Throwable t) {
+                hbmNamed = null;
+            }
+            if (hbmNamed != null) {
+                return previewHbmNamedQuery(hbmNamed, info.getMethod());
             }
         }
         TableInfo table = resolveHqlTable(info.getEntityClass(), info.getEntityClassName(), info.getHql());
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table);
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
+        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project);
+        // 参数名提取：
+        // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
+        // 2. 若为空（链式调用场景），直接从 HQL 提取
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
-        return buildJpaPreviewResult(result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
-                paramNames, info.getMethod(), result.getInClauseParams());
+        // T-J10/J15/J22：宿主方法级增强
+        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), result.getSql(), table, false);
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, currentDialect(), table);
+        List<String> extraParams = (pageSort != null && pageSort.getExtraParamNames() != null)
+                ? pageSort.getExtraParamNames() : List.of();
+        List<String> allParamNames = new ArrayList<>(paramNames);
+        allParamNames.addAll(extraParams);
+        // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
+        return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
+                allParamNames, info.getMethod(), result.getInClauseParams());
     }
 
     /**
      * 原生 SQL 预览（createNativeQuery）。
+     * 不做实体→表名映射，仅替换 :param → ? 并解析实体表名。
+     * T-J10/J15：宿主方法级增强（Pageable/Limit → LIMIT、@Lock → FOR UPDATE、notes）。
      */
     private PreviewResult previewNativeSql(@NotNull HqlQueryInfo info) {
         String sql = convertNativeSqlParameters(info.getHql());
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
+        // 解析实体表名（用于显示）
         String tableName = resolveHqlEntityTable(info.getEntityClass());
         if (tableName == null) tableName = (info.getEntityClassName() != null) ? info.getEntityClassName() : "";
+        // T-J10/J15/J22：方法级增强（native 路径：EntityGraph 仅注释说明）
+        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), sql, null, true);
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, currentDialect(), null);
+        List<String> extraParams = (pageSort != null && pageSort.getExtraParamNames() != null)
+                ? pageSort.getExtraParamNames() : List.of();
+        List<String> allParamNames = new ArrayList<>(paramNames);
+        allParamNames.addAll(extraParams);
         return new PreviewResult(
-                sql, sql.replaceAll("\\s+", " ").trim(), paramNames,
-                ParameterReplacer.buildParamTable(paramNames),
+                enhancedSql, enhancedSql.replaceAll("\\s+", " ").trim(), allParamNames,
+                ParameterReplacer.buildParamTable(allParamNames),
                 null, tableName, null,
                 List.of(), Map.of(), null, null,
-                paramNames.stream().map(n -> new ParamHint(Boolean.valueOf(!isNumericParam(info.getMethod(), n)), null, false)).toList(),
+                allParamNames.stream().map(n -> new ParamHint(Boolean.valueOf(!isNumericParam(info.getMethod(), n)), null, false)).toList(),
                 List.of(), null, null, Map.of(), null, null, null, null);
     }
 
@@ -627,7 +1130,7 @@ public final class SqlPreviewService {
         if (info == null) info = infos.get(0);
         String jpql = info.getQuery();
         TableInfo table = new JpaEntityResolver().resolve(cls);
-        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table);
+        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
         List<String> paramNames = extractParamNamesFromHql(jpql);
         return buildJpaPreviewResult(result.getStatement(), result.getSql(),
                 table != null ? table.getTableName() : "", paramNames,
@@ -636,17 +1139,306 @@ public final class SqlPreviewService {
 
     /**
      * 自定义 DAO HQL 预览（commonDao.findByQuery 等）。
+     * 供 cn.song.mybatisplus.visualizer.ui.gutter.CustomDaoHqlGutterLineMarkerProvider 点击调用。
+     *
+     * <p>T-J21：按 {@link CustomDaoHqlLocator} 登记的 {@link DaoQueryKind} 分派——
+     * <ul>
+     *  <li>HQL（默认）：既有 HqlConverter 管道（行为不变）；</li>
+     *  <li>NAMED_QUERY（findByNamedQuery 族）：hql 字段存查询名——复用 NamedQueryLocator.findByQueryName
+     *      按名回查实体 @NamedQuery 的真实 JPQL 再走 JpqlConverter（参考 previewNamedQuery 既有做法）；
+     *      回查失败优雅降级为可读占位（不抛异常、不出错误 SQL）；</li>
+     *  <li>QBC（executeFind）：可读占位「QBC/DetachedCriteria 形态暂不支持静态解析」；</li>
+     *  <li>ENTITY_OP（get/load/save/delete 等）：locate 不认领（无 SQL 字符串），由 preview 批量分支
+     *      经 JpaCrudOperationConverter 派发，不经本方法。</li>
+     * </ul>
      */
     @Nullable
     public PreviewResult previewCustomDaoHql(@NotNull PsiElement anchor) {
         CustomDaoHqlInfo info = CustomDaoHqlLocator.INSTANCE.locate(anchor);
         if (info == null) return null;
+        if (info.getKind() == DaoQueryKind.QBC) {
+            return placeholderPreview(
+                    "-- QBC/DetachedCriteria 形态暂不支持静态解析（条件树运行时构建）");
+        }
+        if (info.getKind() == DaoQueryKind.NAMED_QUERY) {
+            NamedQueryInfo named = null;
+            try {
+                named = NamedQueryLocator.INSTANCE.findByQueryName(project, info.getHql());
+            } catch (Throwable t) {
+                named = null;
+            }
+            if (named != null && !named.getQuery().isBlank()) {
+                PsiClass entityClass = named.getAnnotation() != null
+                        ? PsiTreeUtil.getParentOfType(named.getAnnotation(), PsiClass.class, false) : null;
+                TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
+                JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable, project);
+                List<String> namedParams = extractParamNamesFromHql(named.getQuery());
+                return buildJpaPreviewResult(namedResult.getStatement(), namedResult.getSql(),
+                        namedTable != null ? namedTable.getTableName() : "", namedParams,
+                        info.getMethod(), namedResult.getInClauseParams());
+            }
+            // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（与 previewHql 同款）
+            HbmXmlMapping.NamedQuery hbmNamed = null;
+            try {
+                hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project);
+            } catch (Throwable t) {
+                hbmNamed = null;
+            }
+            if (hbmNamed != null) {
+                return previewHbmNamedQuery(hbmNamed, info.getMethod());
+            }
+            // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
+            return placeholderPreview(
+                    "-- 命名查询 \"" + info.getHql() + "\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL");
+        }
         TableInfo table = resolveHqlTable(null, info.getEntityClassName(), info.getHql());
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table);
+        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
+        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project);
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
         return buildJpaPreviewResult(result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
                 paramNames, info.getMethod(), result.getInClauseParams());
+    }
+
+    /** T-J21：可读占位预览卡（优雅降级：无 SQL 模板时给出解释性注释，不抛异常）。 */
+    private PreviewResult placeholderPreview(@NotNull String note) {
+        return new PreviewResult(
+                note,
+                note,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                Map.of(),
+                null,
+                null,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                Map.of(),
+                null,
+                null,
+                null,
+                null);
+    }
+
+    /**
+     * T-H3：hbm 命名查询预览——按种类分派：
+     * <ul>
+     *  <li>HQL（{@code <query>}）→ {@link HqlConverter} 管道（实体表经 resolveHqlTable 路径 3 hbm 映射取得）；</li>
+     *  <li>原生（{@code <sql-query>}）→ 命名参数 {@code :param} → {@code ?} 替换（与 previewNativeSql 同款）。</li>
+     * </ul>
+     *
+     * <p>供 hbm 文件 gutter（cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider）
+     * 与 createNamedQuery / 自定义 DAO 回查 fallback 共用。
+     */
+    @Nullable
+    public PreviewResult previewHbmNamedQuery(@NotNull HbmXmlMapping.NamedQuery query) {
+        return previewHbmNamedQuery(query, null);
+    }
+
+    @Nullable
+    public PreviewResult previewHbmNamedQuery(@NotNull HbmXmlMapping.NamedQuery query, @Nullable PsiMethod hostMethod) {
+        if (query.getQueryText().isBlank()) return null;
+        List<String> paramNames = extractParamNamesFromHql(query.getQueryText());
+        if (query.getKind() == HbmXmlMapping.QueryKind.NATIVE) {
+            String sql = convertNativeSqlParameters(query.getQueryText());
+            String enhancedSql = applyJpaMethodEnhancements(hostMethod, sql, null, true);
+            return new PreviewResult(
+                    enhancedSql,
+                    enhancedSql.replaceAll("\\s+", " ").trim(),
+                    paramNames,
+                    ParameterReplacer.buildParamTable(paramNames),
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    Map.of(),
+                    null,
+                    null,
+                    paramNames.stream().map(n -> new ParamHint(Boolean.TRUE, null, false)).toList(),
+                    List.of(),
+                    null,
+                    null,
+                    Map.of(),
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+        // HQL：查询名前缀（LegacyItem.findLowStockHql → LegacyItem）优先，回落 FROM 子句实体
+        String namePrefix = query.getName();
+        int dot = namePrefix.indexOf('.');
+        String prefix = dot >= 0 ? namePrefix.substring(0, dot) : "";
+        prefix = prefix.trim();
+        String entityName = !prefix.isBlank() ? prefix : extractEntityNameFromHql(query.getQueryText());
+        TableInfo table = resolveHqlTable(null, entityName, query.getQueryText());
+        HqlConverter.Result result = HqlConverter.INSTANCE.convert(query.getQueryText(), table, project);
+        String enhancedSql = applyJpaMethodEnhancements(hostMethod, result.getSql(), table, false);
+        return buildJpaPreviewResult(
+                result.getStatement(),
+                enhancedSql,
+                table != null ? table.getTableName() : "",
+                paramNames,
+                hostMethod,
+                result.getInClauseParams());
+    }
+
+    /** T-H2：hbm 文件 gutter 点击入口——从 {@code <query>}/{@code <sql-query>} XmlTag 构造命名查询后预览。 */
+    @Nullable
+    public PreviewResult previewHbmNamedQueryTag(@NotNull Project tagProject, @NotNull XmlTag tag) {
+        String name = tag.getAttributeValue("name");
+        if (name == null) return null;
+        HbmXmlMapping.QueryKind kind = HbmNamedQueryGutterLineMarkerProvider.kindOf(tag.getName());
+        if (kind == null) return null;
+        // 文本提取复用 resolver 的解析口径（直属 XmlText、排除子标签）；tag 与 findNamedQuery 同源
+        StringBuilder text = new StringBuilder();
+        for (PsiElement child : tag.getChildren()) {
+            if (child instanceof XmlText) {
+                text.append(child.getText());
+            }
+        }
+        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text.toString().trim()));
+    }
+
+    /**
+     * JpaSpecificationExecutor 调用预览（T-J5）：定位 anchor 所在方法调用 →
+     * {@link SpecificationQueryConverter} 解析 Specification lambda/组合器 → SELECT/COUNT/DELETE + WHERE。
+     *
+     * <p>供 gutter 点击与 T-J9 调用点动作路径调用；不识别（非 executor 家族/非 Specification 实参）返回 null。
+     */
+    @Nullable
+    public PreviewResult previewSpecification(@NotNull PsiElement anchor) {
+        PsiMethodCallExpression call = null;
+        PsiElement cur = anchor;
+        while (cur != null) {
+            if (cur instanceof PsiMethodCallExpression) { call = (PsiMethodCallExpression) cur; break; }
+            cur = cur.getParent();
+        }
+        if (call == null) return null;
+        SpecificationQueryConverter.SpecificationPreview preview =
+                SpecificationQueryConverter.convert(call,
+                        (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true);
+        if (preview == null) return null;
+        PreviewResult result = new PreviewResult(
+                preview.getSql(),
+                preview.getSql().replaceAll("\\s+", " ").trim(),
+                preview.getParamSources(),
+                ParameterReplacer.buildParamTable(preview.getParamSources()),
+                null,
+                preview.getTableName(),
+                preview.getWarning(),
+                preview.getColumns(),
+                Map.of(),
+                null,
+                null,
+                preview.getParamHints(),
+                List.of(),
+                null,
+                null,
+                Map.of(),
+                null,
+                null,
+                null,
+                null);
+        recordHistory(result, anchor);
+        return result;
+    }
+
+    /**
+     * QueryByExampleExecutor 调用预览（T-J20）：定位 anchor 所在方法调用 →
+     * {@link QueryByExampleConverter} 解析 Example.of(probe[, matcher]) → probe 非空属性等值 WHERE。
+     */
+    @Nullable
+    public PreviewResult previewQueryByExample(@NotNull PsiElement anchor) {
+        PsiMethodCallExpression call = null;
+        PsiElement cur = anchor;
+        while (cur != null) {
+            if (cur instanceof PsiMethodCallExpression) { call = (PsiMethodCallExpression) cur; break; }
+            cur = cur.getParent();
+        }
+        if (call == null) return null;
+        QueryByExampleConverter.ExamplePreview preview =
+                QueryByExampleConverter.convert(call,
+                        (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true);
+        if (preview == null) return null;
+        PreviewResult result = new PreviewResult(
+                preview.getSql(),
+                preview.getSql().replaceAll("\\s+", " ").trim(),
+                preview.getParamSources(),
+                ParameterReplacer.buildParamTable(preview.getParamSources()),
+                null,
+                preview.getTableName(),
+                null,
+                preview.getColumns(),
+                Map.of(),
+                null,
+                null,
+                preview.getParamHints(),
+                List.of(),
+                null,
+                null,
+                Map.of(),
+                null,
+                null,
+                null,
+                null);
+        recordHistory(result, anchor);
+        return result;
+    }
+
+    /**
+     * @Procedure 存储过程预览（T-J16）：repository 方法注解 → CALL 渲染
+     * （procedureName/value 优先、方法名兜底）+ outputParameterName/name 引用标注。
+     *
+     * <p>供 gutter 点击与 T-J9 调用点动作路径调用；无 @Procedure 注解返回 null。
+     */
+    @Nullable
+    public PreviewResult previewProcedure(@NotNull PsiMethod method) {
+        JpaQueryEnhancer.ProcedureInfo info = JpaQueryEnhancer.procedureInfo(method);
+        if (info == null) return null;
+        StringBuilder placeholders = new StringBuilder();
+        for (int i = 1; i <= info.getParamCount(); i++) {
+            if (placeholders.length() > 0) placeholders.append(", ");
+            placeholders.append("?");
+        }
+        StringBuilder sql = new StringBuilder();
+        sql.append("CALL ").append(info.getProcName()).append('(').append(placeholders).append(')');
+        if (info.getNameRef() != null) {
+            sql.append("\n-- @Procedure(name=\"").append(info.getNameRef())
+                    .append("\")：引用元数据具名存储过程查询，过程名以元数据注册为准");
+        }
+        if (info.getOutputParameterName() != null) {
+            sql.append("\n-- 输出参数：").append(info.getOutputParameterName())
+                    .append("（注册为 OUT 参数，执行后按名取值）");
+        }
+        String sqlText = sql.toString();
+        PreviewResult result = new PreviewResult(
+                sqlText,
+                sqlText.replaceAll("\\s+", " ").trim(),
+                List.of(),
+                null,
+                null,
+                info.getProcName(),
+                null,
+                List.of(),
+                Map.of(),
+                null,
+                null,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                Map.of(),
+                null,
+                null,
+                null,
+                null);
+        recordHistory(result, method);
+        return result;
     }
 
     /**
@@ -1384,14 +2176,6 @@ public final class SqlPreviewService {
         return s.substring(0, 1).toLowerCase() + s.substring(1);
     }
 
-    private static boolean hasPageable(@NotNull PsiMethod method) {
-        for (PsiParameter param : method.getParameterList().getParameters()) {
-            String typeName = param.getType().getCanonicalText();
-            if (typeName.equals("org.springframework.data.domain.Pageable") || typeName.endsWith(".Pageable")) return true;
-        }
-        return false;
-    }
-
     private static <T> T safeGet(@NotNull ThrowableSupplier<T> supplier) {
         try {
             return supplier.get();
@@ -1441,8 +2225,14 @@ public final class SqlPreviewService {
     private static final String METHOD_LOGIC_DEL_TO_ON = "logicDelToOn";
     private static final String METHOD_LOGIC_DEL_TO_WHERE = "logicDelToWhere";
 
-    /** 默认租户列名（T-TenantLine）。 */
+    /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
     private static final String DEFAULT_TENANT_COLUMN = "tenant_id";
+
+    /** SQL 子句关键字（detectMainAlias 探测主表别名时排除的关键字形态）。 */
+    private static final Set<String> SQL_CLAUSE_KEYWORDS = Set.of(
+            "WHERE", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "JOIN", "ON", "CROSS",
+            "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "FETCH", "UNION", "SET", "AS"
+    );
 
     /** 联表更新/删除 Wrapper 类型集合（T-M21-08）。 */
     private static final Set<WrapperType> UPDATE_DELETE_JOIN_TYPES = Set.of(WrapperType.UPDATE_JOIN, WrapperType.DELETE_JOIN);

@@ -218,17 +218,36 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
         if (model == null) return;
         Project proj = project;
         if (proj == null) return;
-        try {
-            BufferedImage image = DiagramRenderer.render(model);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            ImageIO.write(image, "png", baos);
-            if (baos.size() == 0) throw new RuntimeException("PNG encode produced no output");
-            saveBytesToFile(proj, baos.toByteArray(), "join_diagram.png", "png");
-        } catch (Exception e) {
-            Messages.showErrorDialog(proj,
-                    MpSqlVisualizerBundle.message("diagram.export.failed", e.getMessage() != null ? e.getMessage() : "unknown"),
-                    MpSqlVisualizerBundle.message("diagram.export.title"));
-        }
+        // T-Perf-14：渲染 + 编码移后台（宽 SELECT 大模型全量重绘/图像编码在 EDT 构成卡顿）；
+        // 保存对话框留在 EDT（用户交互），渲染/编码失败回 EDT 提示
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            final byte[][] bytesHolder = new byte[1][];
+            try {
+                BufferedImage image = DiagramRenderer.render(model);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ImageIO.write(image, "png", baos);
+                if (baos.size() == 0) throw new RuntimeException("PNG encode produced no output");
+                bytesHolder[0] = baos.toByteArray();
+            } catch (Throwable t) {
+                bytesHolder[0] = null;
+            }
+            byte[] bytes = bytesHolder[0];
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (bytes == null) {
+                    Messages.showErrorDialog(proj,
+                            MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
+                            MpSqlVisualizerBundle.message("diagram.export.title"));
+                    return;
+                }
+                try {
+                    saveBytesToFile(proj, bytes, "join_diagram.png", "png");
+                } catch (Exception e) {
+                    Messages.showErrorDialog(proj,
+                            MpSqlVisualizerBundle.message("diagram.export.failed", e.getMessage() != null ? e.getMessage() : "unknown"),
+                            MpSqlVisualizerBundle.message("diagram.export.title"));
+                }
+            });
+        });
     }
 
     private void exportSvg() {
@@ -236,14 +255,31 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
         if (model == null) return;
         Project proj = project;
         if (proj == null) return;
-        try {
-            String svg = DiagramRenderer.renderToSvg(model);
-            saveBytesToFile(proj, svg.getBytes(StandardCharsets.UTF_8), "join_diagram.svg", "svg");
-        } catch (Exception e) {
-            Messages.showErrorDialog(proj,
-                    MpSqlVisualizerBundle.message("diagram.export.failed", e.getMessage() != null ? e.getMessage() : "unknown"),
-                    MpSqlVisualizerBundle.message("diagram.export.title"));
-        }
+        // T-Perf-14：SVG 渲染/编码移后台（同 exportPng）
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            final byte[][] bytesHolder = new byte[1][];
+            try {
+                bytesHolder[0] = DiagramRenderer.renderToSvg(model).getBytes(StandardCharsets.UTF_8);
+            } catch (Throwable t) {
+                bytesHolder[0] = null;
+            }
+            byte[] bytes = bytesHolder[0];
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (bytes == null) {
+                    Messages.showErrorDialog(proj,
+                            MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
+                            MpSqlVisualizerBundle.message("diagram.export.title"));
+                    return;
+                }
+                try {
+                    saveBytesToFile(proj, bytes, "join_diagram.svg", "svg");
+                } catch (Exception e) {
+                    Messages.showErrorDialog(proj,
+                            MpSqlVisualizerBundle.message("diagram.export.failed", e.getMessage() != null ? e.getMessage() : "unknown"),
+                            MpSqlVisualizerBundle.message("diagram.export.title"));
+                }
+            });
+        });
     }
 
     private void saveBytesToFile(Project proj, byte[] bytes, String defaultName, String ext) {
@@ -255,14 +291,15 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
         VirtualFileWrapper vfsFile = dialog.save((VirtualFile) null, defaultName);
         if (vfsFile != null) {
             File file = vfsFile.getFile();
-            try {
-                Files.write(file.toPath(), bytes);
-            } catch (Exception ex) {
-                Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", ex.getMessage() != null ? ex.getMessage() : "unknown"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"));
-                return;
-            }
+            // T-Perf-14：磁盘写入移后台；成功提示保持 EDT
+            ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                try {
+                    Files.write(file.toPath(), bytes);
+                } catch (Exception ex) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(DiagramPanel.class)
+                            .warn("diagram export write failed: " + ex.getMessage(), ex);
+                }
+            });
             if (!ApplicationManager.getApplication().isUnitTestMode()) {
                 ApplicationManager.getApplication().invokeLater(() ->
                         Messages.showInfoMessage(proj,

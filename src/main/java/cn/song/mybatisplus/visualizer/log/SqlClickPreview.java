@@ -219,6 +219,10 @@ public class SqlClickPreview {
         }
         editor.getComponent().setPreferredSize(new Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT));
 
+        // T-AutoFold F4-b：弹窗编辑器程序性折叠（关闭态 applyTo 内部即清除短路，零外观变更；
+        // 开启态由 applyTo 补设 isFoldingOutlineShown=true——上面紧凑外观的 false 被覆盖）
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(editor, sql);
+
         JButton copyButton = new JButton(AllIcons.Actions.Copy);
         copyButton.setToolTipText(MpSqlVisualizerBundle.message("log.preview.copy"));
         copyButton.setFocusable(false);

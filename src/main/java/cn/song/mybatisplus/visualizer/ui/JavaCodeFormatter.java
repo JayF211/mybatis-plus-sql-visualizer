@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.ui;
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiFileFactory;
@@ -33,6 +35,10 @@ public final class JavaCodeFormatter {
     private static final String WRAPPER_PREFIX = "class GeneratedSnippet {\n    void m() {\n";
     private static final String WRAPPER_SUFFIX = "\n    }\n}";
 
+    /** T-Perf-11：全量 reformat 输入长度上限——超过走 {@link #lightNormalize} 轻量降级
+     *  （write action 内的全量 reformat 不可取消，冻结与代码体积成正比）。 */
+    private static final int MAX_REFORMAT_LENGTH = 64_000;
+
     private JavaCodeFormatter() {
     }
 
@@ -40,6 +46,7 @@ public final class JavaCodeFormatter {
     @NotNull
     public static String format(@Nullable Project project, @NotNull String code) {
         if (code.isBlank() || project == null) return code;
+        if (code.length() > MAX_REFORMAT_LENGTH) return lightNormalize(code);
         PsiFile psiFile = ReadAction.compute(() ->
                 PsiFileFactory.getInstance(project)
                         .createFileFromText(SNIPPET_FILE_NAME, JavaLanguage.INSTANCE, WRAPPER_PREFIX + code + WRAPPER_SUFFIX));
@@ -50,6 +57,47 @@ public final class JavaCodeFormatter {
             holder[0] = extracted != null ? extracted : code;
         });
         return holder[0];
+    }
+
+    /**
+     * T-Perf-11：后台格式化（EDT 调用入口）——PSI 创建 + 全量 reformat 是平台标注的慢操作，
+     * 批量转换 20+ 条语句拼大代码块时 EDT 冻结与体积成正比；移 {@link Task.Backgroundable}
+     * （带后台进度指示）执行，结果回 EDT 回调。超长输入在提交后台前即走 {@link #lightNormalize} 降级。
+     */
+    public static void formatAsync(@NotNull Project project, @NotNull String code,
+                                   @NotNull java.util.function.Consumer<String> onResult) {
+        if (code.isBlank() || code.length() > MAX_REFORMAT_LENGTH) {
+            onResult.accept(code.isBlank() ? code : lightNormalize(code));
+            return;
+        }
+        com.intellij.openapi.application.Application app =
+                com.intellij.openapi.application.ApplicationManager.getApplication();
+        // headless 单测：同步执行保持既有测试语义（测试环境无进度后台任务泵）
+        if (app != null && app.isUnitTestMode()) {
+            onResult.accept(format(project, code));
+            return;
+        }
+        new Task.Backgroundable(project, MpSqlVisualizerBundle.message("reverse.panel.formatProgress"), true) {
+            @Override
+            public void run(@NotNull com.intellij.openapi.progress.ProgressIndicator indicator) {
+                String formatted = format(project, code);
+                app.invokeLater(() -> {
+                    if (project.isDisposed()) return;
+                    onResult.accept(formatted);
+                });
+            }
+        }.queue();
+    }
+
+    /** T-Perf-11：轻量缩进归一（超长输入降级路径；无 PSI、零 write action）——去行尾空白、去首尾空行。 */
+    static String lightNormalize(@NotNull String code) {
+        String joined = code.lines().map(String::stripTrailing)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        int begin = 0;
+        int end = joined.length();
+        while (begin < end && joined.charAt(begin) == '\n') begin++;
+        while (end > begin && joined.charAt(end - 1) == '\n') end--;
+        return joined.substring(begin, end);
     }
 
     /**

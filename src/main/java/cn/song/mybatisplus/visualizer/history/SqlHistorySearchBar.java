@@ -140,4 +140,28 @@ public class SqlHistorySearchBar extends JPanel {
             tagCombo.setSelectedItem(current);
         }
     }
+
+    // ------------------------------------------------------------------
+    // 测试驱动口（T-TestGuard-07：搜索/筛选逻辑此前零覆盖）
+    // ------------------------------------------------------------------
+
+    /** 模拟用户输入搜索词（触发 document 监听 → onSearch）。 */
+    void searchTextForTest(String text) {
+        searchField.setText(text);
+    }
+
+    /** 直选筛选下拉（0=全部 / 1=收藏）。 */
+    void selectFilterIndexForTest(int index) {
+        filterCombo.setSelectedIndex(index);
+    }
+
+    /** 直选标签下拉（null=全部）。 */
+    void selectTagForTest(String tag) {
+        tagCombo.setSelectedItem(tag);
+    }
+
+    /** 读标签下拉指定索引的选项。 */
+    String tagItemAtForTest(int index) {
+        return tagCombo.getItemAt(index);
+    }
 }

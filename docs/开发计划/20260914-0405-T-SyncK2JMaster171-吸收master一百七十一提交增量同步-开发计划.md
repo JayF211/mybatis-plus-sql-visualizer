@@ -118,21 +118,14 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 提交链（滚动回填）：
 - 1116da8 C1 立项计划
 - 6965236 C2-1 生产移植(1/3)：model 层 10 新件（JoinColumnRef/JoinTableInfo/SecondaryTableInfo/GeneratorInfo/SequenceGeneratorInfo/TableGeneratorInfo/SoftDeleteInfo/CustomSqlScripts/CollectionKind/CollectionAssociationInfo）+ TableInfo/AssociationInfo/ColumnInfo/WrapperType 扩展 + psi/jpa 新件（JpaMetadataReader/RepositoryBaseTypes/CriteriaOperation/CriteriaSetClause/CaseWhen/SubqueryModel/ExpressionModel + PredicateModel 六新子类 + SelectColumn/AggregateInfo/JoinModel/CriteriaQueryModel 扩展）+ 小件（Dialect EXPLAIN 七方言/DatabaseConsoleLauncher/ExecuteSqlSupport T-Perf-01/SqlExecutor releaseForPanel/PluginCacheManager T-Perf-18/PerfRulesBatch3 T-Perf-23/OgnlEvaluator T-Perf-04 解析缓存/WrapperLocator xbatis 全套/WrapperAnchorDetector 场景E F+xBatis 锚点+hasDotCallPattern/EntityResolver KeySequence+缓存键 T-Perf-18/WrapperCache 缓存键/DerivedMethodLocator SD6 SD7 T-J3/HqlQueryLocator T-J12/JpqlQueryLocator SD7/NamedQueryLocator T-J12）+ SafeBrowser 新建
+- cc4b7b1 C2-2 生产移植(2/3)：BatchOperationConverter T-M2（ResolvedTarget+buildInsertBatch 序列提示）+ PreviewReceiverResolver T-Perf-02（classify 缓存+惰性 type）+ DataSourceSelector（releaseForPanel T-Perf-16/runRunner onError T-Perf-01/prepareInConsole T-Perf-13 拆分 prepareAfterEditorResolved+异步编辑器等待+日志降 debug）+ JpaEntityResolver M39 全量（classMeta 接入/resolveColumns 复合守卫/嵌入展平/resolveAssociation T-J7/JPA_MAPPING 注解名扩集/tableAnnotationValue SD8/isIdentifierField M44 统一轨/JpaCacheKey T-Perf-18）+ log 新建 EntrySourceMatcher/SourcePathResolver/LogEntryPreviewOpener 三件
+- 6c36098 C2-3 生产移植(3b)：子代理并行翻译 29 新件——CriteriaQueryLocator.java 全量重写 1764 行（T-J4/J6/J7/J13/J17）；四 ORM 转换器 XbatisConverter(211)/MdsConverter(761)/QuerydslConverter(983)/EasyQueryConverter(1206)（ENTRY_METHODS/isEasyQueryCall/XbatisConverter 实现 WrapperConverter 接口 supportedTypes=XBATIS 已就位）；converter/jpa 八新件 4906 行（JpaCrudOperationConverter 1121 含 crudAnchorMethodNames/hasJpaCrudReceiver、SpecificationQueryConverter 980、JpaQueryEnhancer 876 含 PageRequestEval/LockClause/GraphJoinResult 嵌套类、QueryByExampleConverter 840、JpaJoinOnResolver 422 含 OnResolution、JpaUpdateParser 359、JpaJoinRewriter 192、JpaFromEntityMapper 116）；generator 五件（CrudColumn/CrudTableSpec/CrudKind/CrudStatement/CrudSqlGenerator/DbTypeQuoteHint）；database\DbTableSpecAdapter；actions 三件（GenerateCrudSqlFromEntityAction/GenerateCrudSqlFromDbTableAction/CrudSqlPreviewFlow）；feedback 九件（ErrorFingerprint/ErrorReportComposer/ErrorReportDialog/ReportSubmitterStore/FeedbackAction/FeedbackApi/HttpRequestsSender/FeedbackReporting/IdeErrorReportSubmitter）；编译缺口修复（PredicateModel @Nullable import、JpaEntityResolver model imports、JpaMetadataReader PsiType import、EntityResolver PsiModifierList+NotNull、JpaCacheKey toString、LogEntryPreviewOpener compactSql withTerminator）
 
-待办（Wave1 余）：
-- [ ] log/EntrySourceMatcher（A, 136）
-- [ ] database/DbTableSpecAdapter（A, 52）
-- [ ] execute/DataSourceSelector（M, 145——T-DsCover/ReleaseForPanel）
-- [ ] psi/PreviewReceiverResolver（M, 64）
-- [ ] psi/BatchOperationConverter（M, 60——T-M2 KeySequence 接线）
-- [ ] psi/jpa/CustomDaoHqlLocator（M, 151）
-- [ ] psi/jpa/HbmXmlEntityResolver（M, 180——含 findNamedQuery）
-- [ ] psi/jpa/JpaEntityResolver（M, 293）
-- [ ] psi/jpa/CriteriaQueryLocator（M, 1196——最大单件）
+## 8.1 剩余 M 增量文件（子代理第二批并行中，完成后按 C6 继续）
 
-Wave2：converter 四 ORM 新建 + jpa 八新件 + WrapperConverter/QueryWrapperParser/UpdateSection/StartupUpdateCheck/SqlPreviewService 等增量。
-Wave3：generator 三件/feedback 七件/actions 三件 + log 高层全部。
-Wave4：ui/history/config 剩余。
-C6 资源构建 → C7 测试 → C8 文档 → C9 收官。
+- Agent E（converter 增量+接线）：WrapperConverter/QueryWrapperParser/converter\jpa\{CriteriaQueryConverter,DerivedQueryConverter,HqlConverter,JpqlConverter,PartTreeParser,SelectClauseExpander} + 四 ORM 注册接线（查 master diff 里 ConverterRegistry/WrapperConverter 如何挂新转换器）
+- Agent F（log 增量）：log 包 16 个 M 文件（SqlLogPanel/HistorySqlLogPanel/SqlLogManager/SqlLogConsoleBridge/SqlLogEntryBuffer/SqlLogAutoSaver/SqlLogFileReader/JdbcTemplateLogParser/LogSqlModels/LogStartupCapture/LogToSqlPanel/SourceInterceptorTemplates/SqlClickPreview/SqlListFragmentRenderer/SqlSourceInterceptorAutoInjector/ConsoleReplayGuard/ExecutionTimeParser）
+- Agent G（ui 增量）：ui\{SqlPreviewPanel,SqlPreviewService,SqlInputEditor,SqlSelectionDialog,JavaCodeFormatter,JavaCodePreviewDialog,diff\SqlDiffer,diagram\DiagramPanel,DiagramRenderer,diagram\nativefw\db\{JoinVirtualFkProvider,NativeDatabaseDiagramSupport},highlight\DatabaseSchemaResolver,SqlCompletionContributor} + 新建 ui\highlight\{SqlAutoFolding,SqlAutoFoldPlanner} + gutter 7 文件增量 + 新建 HbmNamedQueryGutterLineMarkerProvider
+- Agent H（config/history/update/actions 增量）：config\{PluginSettings,PluginSettingsPanel,SettingsIO,UpdateSection}（State 加 reportSubmitterName/Email 等——ReportSubmitterStore 已引用等待中）+ history\{SqlHistoryManager,SqlHistoryPanel,SqlHistorySearchBar}+新建 SqlHistorySearchBar? + update\StartupUpdateCheck + actions\{ConvertSqlToJavaAction,ConvertToSqlAction}（T-PickMpjErr）
 
-已登记沙盒：k2jsync171（parallel_tasks，expected_end 2026-09-14T05:30）。
+方法约定：每个文件 `git -C k2j diff a0702f6..50d3fb9 -- src/main/kotlin/<F>.kt` 看增量 → 增量翻译进 k2j 对应 .java（新建件全量翻译）；翻译规则同前批简报。

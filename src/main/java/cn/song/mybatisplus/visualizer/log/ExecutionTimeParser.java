@@ -40,6 +40,15 @@ public final class ExecutionTimeParser {
     /** 行尾纯数字 + ms 兜底：行尾 ` 123ms` 或 `] 456ms`（避免误匹配 SQL 内数字）。 */
     private static final Pattern TRAILING_MS_REGEX = Pattern.compile("[\\]\\s]\\s*(\\d+)\\s*ms\\s*$", Pattern.MULTILINE);
 
+    /** 自定义前缀正则缓存——键为前缀原文（用户配置串，天然有界），每条 SQL 不再动态编译。 */
+    private static final java.util.concurrent.ConcurrentHashMap<String, Pattern> CUSTOM_PREFIX_REGEX_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static Pattern customPrefixRegex(String customPrefix) {
+        return CUSTOM_PREFIX_REGEX_CACHE.computeIfAbsent(customPrefix,
+                p -> Pattern.compile("(?i)" + Pattern.quote(p) + "\\s*(\\d+)\\s*ms?\\b"));
+    }
+
     /**
      * 从日志文本中解析执行耗时（毫秒）。
      *
@@ -95,11 +104,9 @@ public final class ExecutionTimeParser {
         if (m6.find()) {
             return toLongOrNull(m6.group(1));
         }
-        // 7. 自定义前缀（动态构建正则）
+        // 7. 自定义前缀（T-PerfSweep F2：正则按前缀缓存，捕捉热路径不再每条动态编译）
         if (customPrefix != null && !customPrefix.isBlank()) {
-            String escaped = Pattern.quote(customPrefix);
-            Pattern dynamicRegex = Pattern.compile("(?i)" + escaped + "\\s*(\\d+)\\s*ms?\\b");
-            java.util.regex.Matcher m7 = dynamicRegex.matcher(text);
+            java.util.regex.Matcher m7 = customPrefixRegex(customPrefix).matcher(text);
             if (m7.find()) {
                 return toLongOrNull(m7.group(1));
             }

@@ -12,7 +12,8 @@ import com.intellij.psi.PsiDirectory;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiFileFactory;
 import com.intellij.psi.PsiManager;
-import com.intellij.psi.codeStyle.CodeStyleManager;
+
+import java.util.function.Consumer;
 
 /**
  * F-44-7：SqlSourceInterceptor 自动注入核心。
@@ -29,36 +30,126 @@ public final class SqlSourceInterceptorAutoInjector {
     private SqlSourceInterceptorAutoInjector() {
     }
 
-    /** 自动注入入口。 */
+    /** 检测阶段产物（T-Perf-10：后台 ReadAction 检测 → EDT 最小写创建）。 */
+    private sealed interface PrepareOutcome {
+        /** 无法识别项目结构。 */
+        record CannotDetectStructure() implements PrepareOutcome {
+            static final CannotDetectStructure INSTANCE = new CannotDetectStructure();
+        }
+
+        /** 不支持的项目类型。 */
+        record UnsupportedProject() implements PrepareOutcome {
+            static final UnsupportedProject INSTANCE = new UnsupportedProject();
+        }
+
+        /** 拦截器已存在（幂等跳过）。 */
+        record AlreadyExists() implements PrepareOutcome {
+            static final AlreadyExists INSTANCE = new AlreadyExists();
+        }
+
+        /** 检测通过，可创建文件。 */
+        record Ready(ProjectType type, String basePackage, VirtualFile sourceRoot) implements PrepareOutcome {
+        }
+    }
+
+    /** 自动注入入口（同步语义保留——测试/非 EDT 场景；EDT 调用请用 {@link #injectAsync}）。 */
     public static InjectionResult inject(Project project) {
-        // 1. 检测项目结构
+        PrepareOutcome outcome = detectForInject(project);
+        if (outcome instanceof PrepareOutcome.CannotDetectStructure) {
+            return InjectionResult.CannotDetectStructure.INSTANCE;
+        }
+        if (outcome instanceof PrepareOutcome.UnsupportedProject) {
+            return InjectionResult.UnsupportedProject.INSTANCE;
+        }
+        if (outcome instanceof PrepareOutcome.AlreadyExists) {
+            return InjectionResult.AlreadyExists.INSTANCE;
+        }
+        if (outcome instanceof PrepareOutcome.Ready ready) {
+            return createFiles(project, ready);
+        }
+        return InjectionResult.UnsupportedProject.INSTANCE;
+    }
+
+    /**
+     * T-Perf-10：异步注入入口（设置页 EDT 按钮回调用）——
+     * 检测阶段（ProjectTypeDetector.detect 的 AnnotatedElementsSearch.findAll /
+     * allScope findClass / 源码目录递归遍历 + 拦截器存在性 VFS 查找）后台 ReadAction 执行；
+     * 仅文件创建保留最小 WriteCommandAction（EDT 回调内执行，2 个模板文件，毫秒级）；
+     * 结果经回调返回（EDT）。
+     */
+    public static void injectAsync(Project project, Consumer<InjectionResult> onResult) {
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+            PrepareOutcome computed;
+            try {
+                computed = com.intellij.openapi.application.ReadAction.compute(
+                        (com.intellij.openapi.util.ThrowableComputable<PrepareOutcome, Throwable>)
+                                () -> detectForInject(project));
+            } catch (Throwable t) {
+                computed = null;
+            }
+            final PrepareOutcome outcome = computed;
+            if (outcome == null) {
+                return;
+            }
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) {
+                    return;
+                }
+                onResult.accept(toResult(project, outcome));
+            });
+        });
+    }
+
+    /** 检测产物 → 注入结果（文件创建在 EDT 最小写段执行）。 */
+    private static InjectionResult toResult(Project project, PrepareOutcome outcome) {
+        if (outcome instanceof PrepareOutcome.CannotDetectStructure) {
+            return InjectionResult.CannotDetectStructure.INSTANCE;
+        }
+        if (outcome instanceof PrepareOutcome.UnsupportedProject) {
+            return InjectionResult.UnsupportedProject.INSTANCE;
+        }
+        if (outcome instanceof PrepareOutcome.AlreadyExists) {
+            return InjectionResult.AlreadyExists.INSTANCE;
+        }
+        if (outcome instanceof PrepareOutcome.Ready ready) {
+            return createFiles(project, ready);
+        }
+        return InjectionResult.UnsupportedProject.INSTANCE;
+    }
+
+    /** 检测阶段（须在 ReadAction 内调用——PSI 索引/目录访问）。 */
+    private static PrepareOutcome detectForInject(Project project) {
         ProjectStructure structure = ProjectTypeDetector.detect(project);
         if (structure == null) {
-            return InjectionResult.CannotDetectStructure.INSTANCE;
+            return PrepareOutcome.CannotDetectStructure.INSTANCE;
         }
 
         if (structure.getType() == ProjectType.UNSUPPORTED) {
-            return InjectionResult.UnsupportedProject.INSTANCE;
+            return PrepareOutcome.UnsupportedProject.INSTANCE;
         }
 
         String basePackage = structure.getBasePackage();
         if (basePackage == null) {
-            return InjectionResult.CannotDetectStructure.INSTANCE;
+            return PrepareOutcome.CannotDetectStructure.INSTANCE;
         }
 
         VirtualFile sourceRoot = structure.getSourceRoot();
 
-        // 2. 检查是否已存在（幂等性）
+        // 检查是否已存在（幂等性）
         if (interceptorExists(sourceRoot, basePackage)) {
-            return InjectionResult.AlreadyExists.INSTANCE;
+            return PrepareOutcome.AlreadyExists.INSTANCE;
         }
+        return new PrepareOutcome.Ready(structure.getType(), basePackage, sourceRoot);
+    }
 
-        // 3. 生成文件
-        if (structure.getType() == ProjectType.SPRING_BOOT) {
-            return injectSpringBoot(project, basePackage, sourceRoot);
+    /** 文件创建（EDT；最小 WriteCommandAction——T-Perf-10：reformat 省略，模板内容本身即规范缩进）。 */
+    private static InjectionResult createFiles(Project project, PrepareOutcome.Ready outcome) {
+        if (outcome.type() == ProjectType.SPRING_BOOT) {
+            return injectSpringBoot(project, outcome.basePackage(), outcome.sourceRoot());
         }
-        if (structure.getType() == ProjectType.MYBATIS_NATIVE) {
-            return injectMyBatisNative(project, basePackage, sourceRoot);
+        if (outcome.type() == ProjectType.MYBATIS_NATIVE) {
+            return injectMyBatisNative(project, outcome.basePackage(), outcome.sourceRoot());
         }
         return InjectionResult.UnsupportedProject.INSTANCE;
     }
@@ -136,7 +227,7 @@ public final class SqlSourceInterceptorAutoInjector {
         return currentDir;
     }
 
-    /** 创建 Java 文件（PSI）。 */
+    /** 创建 Java 文件（PSI；T-Perf-10：reformat 省略——模板内容本身即规范缩进，reformat 是平台标注的慢操作）。 */
     private static void createJavaFile(Project project, PsiDirectory directory, String fileName, String content) {
         // T-DepApi：StdLanguages.JAVA 全平台标 deprecated——JavaLanguage.INSTANCE（java 插件，
         // plugin.xml 已声明 com.intellij.java 依赖）是官方等价物，243/253/262 javap 实证均无弃用标记；
@@ -145,13 +236,6 @@ public final class SqlSourceInterceptorAutoInjector {
         Language javaLanguage = JavaLanguage.INSTANCE;
         PsiFile psiFile = PsiFileFactory.getInstance(project)
                 .createFileFromText(fileName, javaLanguage, content);
-
-        // 代码格式化
-        try {
-            CodeStyleManager.getInstance(project).reformat(psiFile);
-        } catch (Exception e) {
-            // 格式化失败不影响文件创建
-        }
 
         // 添加到目录
         directory.add(psiFile);

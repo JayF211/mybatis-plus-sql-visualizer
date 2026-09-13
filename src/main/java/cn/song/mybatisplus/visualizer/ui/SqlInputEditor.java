@@ -6,6 +6,7 @@ import com.intellij.codeInsight.completion.CompletionType;
 import com.intellij.codeInsight.lookup.Lookup;
 import com.intellij.codeInsight.lookup.LookupManager;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
 import com.intellij.openapi.actionSystem.DataProvider;
 import com.intellij.openapi.application.ApplicationManager;
@@ -65,7 +66,13 @@ public class SqlInputEditor implements Disposable {
         return editor.getDocument().getText();
     }
 
-    /** 创建编辑器：原生 SQL FileType PSI → 文档 → 可编辑编辑器 + 高亮 + 补全上下文双载体 + autopopup。 */
+    /**
+     * 创建编辑器：原生 SQL FileType PSI → 文档 → 可编辑编辑器 + 高亮 + 补全上下文双载体 + autopopup。
+     *
+     * <p>T-Perf-07：{@code PsiFileFactory.createFileFromText} 在 EDT 直调触发 262 平台 read access 硬抛
+     * （markGenerated 树遍历）——包 {@link ReadAction#compute}（EDT 上同步语义不变），
+     * 对齐 {@link JavaCodeFormatter} 与 SqlPreviewPanel 后台预热的既有修复（T-M42 漏点）。
+     */
     private Editor createEditor(Project project, String sql) {
         com.intellij.openapi.fileTypes.FileType sqlFileType =
                 FileTypeManager.getInstance().getStdFileType("SQL");
@@ -73,8 +80,8 @@ public class SqlInputEditor implements Disposable {
         if (project.isDisposed() || sqlFileType == null) {
             created = EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql));
         } else {
-            PsiFile psi = PsiFileFactory.getInstance(project)
-                    .createFileFromText("input.sql", sqlFileType, sql);
+            PsiFile psi = ReadAction.compute(() ->
+                    PsiFileFactory.getInstance(project).createFileFromText("input.sql", sqlFileType, sql));
             psiFile = psi;
             com.intellij.openapi.editor.Document doc = PsiDocumentManager.getInstance(project).getDocument(psi);
             if (doc == null) doc = EditorFactory.getInstance().createDocument(sql);
@@ -102,6 +109,8 @@ public class SqlInputEditor implements Disposable {
         editorHolder.add(wrapper, BorderLayout.CENTER);
 
         bindAutoPopup(created);
+        // T-AutoFold F4-d：构造初始内容按当前设置应用折叠（仅程序性写入重算，用户打字不触发）
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql);
         return created;
     }
 
@@ -118,6 +127,8 @@ public class SqlInputEditor implements Disposable {
         } finally {
             suppress = false;
         }
+        // T-AutoFold F4-d：程序性写入后按当前设置重建折叠（用户逐字打字不经过此处，不重算）
+        cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(editor, sql);
     }
 
     /** 自建 autopopup（T-M27.2 实证接线，逻辑照抄 SqlPreviewPanel.bindAutoPopup）。 */

@@ -63,6 +63,9 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
     /** 默认历史记录上限（非收藏条目）。 */
     public static final int DEFAULT_MAX_SIZE = 200;
 
+    /** T-Perf-19：收藏条目上限（宽松封顶防无限增长）。 */
+    public static final int MAX_FAVORITES = 500;
+
     private State state = new State();
 
     /** 历史记录上限（非收藏条目）。默认 200，跟随配置。 */
@@ -87,11 +90,22 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
         entry.ensureId();
         if (entry.isFavorite()) {
             insertSorted(state.getFavoriteEntries(), entry);
+            evictFavoritesIfNeeded();
         } else {
             insertSorted(state.getEntries(), entry);
             evictIfNeeded();
         }
         return entry;
+    }
+
+    /**
+     * T-Perf-19：收藏条目上限（MAX_FAVORITES）——此前 favoriteEntries 永不淘汰，
+     * 长期使用无限增长（持久化文件与内存双膨胀）。超出时淘汰最旧收藏（队尾）。
+     */
+    private void evictFavoritesIfNeeded() {
+        while (state.getFavoriteEntries().size() > MAX_FAVORITES) {
+            state.getFavoriteEntries().remove(state.getFavoriteEntries().size() - 1);
+        }
     }
 
     /**
@@ -154,6 +168,7 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
             SqlHistoryEntry e = state.getEntries().remove(inNormal);
             e.setFavorite(true);
             insertSorted(state.getFavoriteEntries(), e);
+            evictFavoritesIfNeeded();
             return;
         }
         int inFav = indexOfById(state.getFavoriteEntries(), id);

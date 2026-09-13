@@ -41,10 +41,16 @@ public class SqlLogConsoleBridge {
     /**
      * 已挂载的控制台 → Filter 代理映射。
      * 值从 Boolean 改为 Pair<filter, ifaceClass>，供 detachAllFilters 移除 Filter 使用。
+     *
+     * T-Perf-22：synchronized 包装保留 IdentityHashMap 的同一性语义——EDT 轮询/事件写
+     * （scanComponent/contentAdded）与 Filter 回调读（任意控制台出线程）并发访问普通
+     * IdentityHashMap 构成并发修改（死循环/异常风险，窗口窄但真实）。
      */
-    public final IdentityHashMap<Object, Pair<Object, Class<?>>> attachedConsoles = new IdentityHashMap<>();
+    public final Map<Object, Pair<Object, Class<?>>> attachedConsoles =
+            java.util.Collections.synchronizedMap(new IdentityHashMap<>());
     /** 每个已挂载控制台 → 解析器上下文（含暂存源码位置，F-44-6）。 */
-    private final IdentityHashMap<Object, BridgeLineContext> consoleContexts = new IdentityHashMap<>();
+    private final Map<Object, BridgeLineContext> consoleContexts =
+            java.util.Collections.synchronizedMap(new IdentityHashMap<>());
     /** descriptor → 已解析 console 缓存（T-LogPerf-03：命中且已挂载时跳过组件树遍历）。 */
     private final IdentityHashMap<Object, Object> descriptorConsoleCache = new IdentityHashMap<>();
     /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
@@ -297,7 +303,12 @@ public class SqlLogConsoleBridge {
                 continue;
             }
             Object cachedConsole = descriptorConsoleCache.get(descriptor);
-            if (shouldSkipRescan(cachedConsole, attachedConsoles.keySet())) {
+            // T-Perf-22：keys 视图遍历须持 map 监视器——快照后判定
+            List<Object> keysSnapshot;
+            synchronized (attachedConsoles) {
+                keysSnapshot = new java.util.ArrayList<>(attachedConsoles.keySet());
+            }
+            if (shouldSkipRescan(cachedConsole, keysSnapshot)) {
                 continue;
             }
             Component component = componentOf(descriptor);
@@ -329,7 +340,12 @@ public class SqlLogConsoleBridge {
      */
     void refreshConsoleContexts() {
         ParserConfig cfg = parserConfig.get();
-        for (BridgeLineContext ctx : consoleContexts.values()) {
+        // T-Perf-22：values 遍历持监视器（快照后应用，避免与 Filter 回调并发修改）
+        List<BridgeLineContext> snapshot;
+        synchronized (consoleContexts) {
+            snapshot = new java.util.ArrayList<>(consoleContexts.values());
+        }
+        for (BridgeLineContext ctx : snapshot) {
             applyConfig(ctx, cfg);
         }
         String raw = PluginSettings.getInstance().getState().getLogTimePrefix();
@@ -406,7 +422,9 @@ public class SqlLogConsoleBridge {
                                         endOffset,
                                         stampReader.get(),
                                         line,
-                                        context.line0Reader != null ? context.line0Reader.get() : null)
+                                        // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
+                                        // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
+                                        context.line0Reader)
                                         == ConsoleReplayGuard.Decision.Replay) {
                                     context.replayDropCount++;
                                 } else {
@@ -433,6 +451,9 @@ public class SqlLogConsoleBridge {
      * T-PreviewFlash：为重放守卫解析编辑器/文档反射句柄。全部 try/catch 包裹——
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * {@code getEditor} 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
+     * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次 O(文档大小) 拷贝（缓存为
+     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次拷贝，无正确性影响）。
      */
     private void attachReplayGuard(Object console, BridgeLineContext ctx) {
         try {
@@ -447,20 +468,30 @@ public class SqlLogConsoleBridge {
             if (doc == null) {
                 return;
             }
+            final java.lang.reflect.Method getStamp = doc.getClass().getMethod("getModificationStamp");
+            final java.lang.reflect.Method getText = doc.getClass().getMethod("getText");
             ctx.docStampReader = () -> {
                 try {
-                    Object stamp = doc.getClass().getMethod("getModificationStamp").invoke(doc);
+                    Object stamp = getStamp.invoke(doc);
                     return stamp instanceof Number n ? n.longValue() : Long.MIN_VALUE;
                 } catch (Throwable t) {
                     return Long.MIN_VALUE;
                 }
             };
+            final long[] cachedStamp = {Long.MIN_VALUE};
+            final String[] cachedLine0 = {null};
             ctx.line0Reader = () -> {
                 try {
-                    Object text = doc.getClass().getMethod("getText").invoke(doc);
-                    String s = (text instanceof String str) ? str : "";
-                    // 对齐 Kotlin lineSequence().firstOrNull()：空文档无首行返回 null；\r\n/\r/\n 任一换行
-                    return s.isEmpty() ? null : s.split("\r\n|\r|\n", 2)[0];
+                    Object stampObj = getStamp.invoke(doc);
+                    long stamp = stampObj instanceof Number n ? n.longValue() : Long.MIN_VALUE;
+                    if (stamp != cachedStamp[0]) {
+                        Object text = getText.invoke(doc);
+                        String s = (text instanceof String str) ? str : "";
+                        // 对齐 Kotlin lineSequence().firstOrNull()：空文档无首行返回 null；\r\n/\r/\n 任一换行
+                        cachedLine0[0] = s.isEmpty() ? null : s.split("\r\n|\r|\n", 2)[0];
+                        cachedStamp[0] = stamp;
+                    }
+                    return cachedLine0[0];
                 } catch (Throwable t) {
                     return null;
                 }
@@ -474,7 +505,13 @@ public class SqlLogConsoleBridge {
      * BUG FIX（停止后仍捕获）：移除所有已挂载控制台上的 Filter。
      */
     public void detachAllFilters() {
-        for (Map.Entry<Object, Pair<Object, Class<?>>> e : attachedConsoles.entrySet()) {
+        // T-Perf-22：entries 遍历持监视器快照（迭代体内 remove consoleContexts，不能在遍历
+        // 同一 map 时持锁直改——快照后操作）
+        List<Map.Entry<Object, Pair<Object, Class<?>>>> entriesSnapshot;
+        synchronized (attachedConsoles) {
+            entriesSnapshot = new java.util.ArrayList<>(attachedConsoles.entrySet());
+        }
+        for (Map.Entry<Object, Pair<Object, Class<?>>> e : entriesSnapshot) {
             Object console = e.getKey();
             consoleContexts.remove(console);
             Pair<Object, Class<?>> filterPair = e.getValue();
