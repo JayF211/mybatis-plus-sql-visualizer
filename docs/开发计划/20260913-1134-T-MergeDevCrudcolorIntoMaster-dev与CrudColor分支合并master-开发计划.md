@@ -99,6 +99,43 @@ merge-tree 显示 PluginSettings.kt、PluginSettingsPanel.kt、SqlPreviewPanel.k
 - [ ] 渲染器融合四要素共存：组件池行数伸缩 × WEST 色条 × 动态描边 × 行底分隔线
 - [ ] 三件套文档同步完成
 
-## 六、实施记录（回填）
+## 六、实施记录（2026-09-13 回填）
 
-（待实施后回填：各步实际冲突解法、测试计数、verifyPlugin 结果、修复清单。）
+### 提交与顺序
+
+- 备份锚点 `master-backup-pre-dev-merge-20260913`（指向合并前 master 6f626ab）。
+- 第一步 merge t-crudcolor（a5d9307）：与预演一致，仅 CHANGELOG.md / docs/MEMORY.md / docs/变更记录.md 三 docs 冲突，取两侧并集（CHANGELOG 的 T-CrudColor 两条留在 Unreleased——未随 beta.1 发行；MEMORY 计划表按 1612/1118/1003 立项号倒序穿插）。代码全自动合并。
+- 第一步全量 clean test：3401 用例 1 失败——**T-SelToggle 弹窗测试与 T-CrudColor 图例的真实交互冲突**（图例把每个复选框包进 FlowLayout 行面板，`content.components.filterIsInstance<JCheckBox>()` 顶层直查取到 0 个）。修复=测试改递归收集（collectCheckBoxes 帮助函数，两处调用点），产品代码不动（7f20336）。t-crudcolor 分支树上没有该测试（分叉早于 T-SelToggle），属跨分支适配欠账。
+- 第二步 merge dev（8d2c919）：13 文件冲突与预演完全一致，逐块按 §三 定案解决。
+
+### 冲突解法实录（偏离计划的两处）
+
+- ConvertToSqlAction：合并树 SqlSelectionDialog 已是 master 的 Row 模型且 `displayText` 已删（预判兑现）——dev 侧 T-Perf-14 结构里 `displayText(...)` 换 `Row.of(...)`，`Pair<List<XmlTag>, List<String>>` 与两处 catch 兜底同步 Row 化。
+- LogToSqlPanel：HEAD 侧 applyTo 原位置在 convert 函数内，但 dev 已把该函数重构为 `computeConversion`（纯计算、后台线程安全、注释明言不触碰 Swing）+ `applyConversion`（EDT 应用）——直接保留 HEAD 两行构成后台写 document 的 EDT 违规。融合=删原两行，applyTo 移入 applyConversion 的 `setDocumentText` 之后。
+- 渲染器融合比计划预想更顺：crudcolor 的 `normalBorder` 构成里**已含** dev 侧 matte 行分隔线（CompoundBorder(matte, EmptyBorder(5,5,5,8))，左 5+色条 3=8 与 dev 的 EmptyBorder(5,8,5,8) 等价），§3.2-A 风险点一不成立；`formatDurationFragment(entry.executionTimeMs, useSelectionFill)` 由自动合并区正确接线（淡背景样式下耗时着色不被选中白字抹掉，正是 T-CrudColor 设计意图）。
+- 市场页文案（plugin.xml 双语描述/README/marketplace-hero）取 master 2026-09-12 定稿版；marketplace 功能矩阵区的 dev 侧 M37 行由自动合并并入。
+
+### 全量测试（含一次大规模假失败）
+
+- 第二步合并后首个 clean test：3880 用例 **503 失败**，全部 `NoSuchMethodError`——首例 `ColumnInfo.<init>(8 参 + int mask + DefaultConstructorMarker)`。排查：主类 javap 显示 13 参新形态（dev 侧 M39/T-J14、T-J18 尾部追加带默认值字段，源码注释明确「既有位置构造零影响」，源码自洽），测试字节码仍调 8 参旧形态=测试产物陈旧。`clean` 后 build cache 命中陈旧 compileTestKotlin 产物（本次构建 5 个任务 from cache）——**K2J 陈旧类劫持坑的 build-cache 变体**。处置=删 build 目录 + `./gradlew test --no-build-cache` 重跑。
+- 重跑：**3880/0/6 绿**（303 测试类），超 dev 侧基线 3788（含 CrudColor 44 例与合并组合），0 失败、6 跳过（口径与两侧基线一致）。
+
+### 构建校验
+
+- `./gradlew verifyFull buildPlugin --no-build-cache`：verifyPlugin 三目标 **Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.9437.185；warning 级计数 243=3 scheduled-removal + 3 deprecated + 12 experimental、253=3+6+12、262=3+49+12，与两侧既往基线同量级，无 incompatible）；Dynamic Plugin Eligibility 通过。buildPlugin 产出 `build/distributions/mybatis-plus-sql-visualizer-2026.9.14-beta.1.zip`。
+
+### 验收清单勾销
+
+- [x] `master..dev` = 0 且 `master..t-crudcolor` = 0（合并后 dev 落后 master 40 提交，下次同步方向反转）
+- [x] 全量 3880/0/6 绿（跳过数 6 持平）
+- [x] verifyPlugin 三目标 Compatible
+- [x] buildPlugin 产出 zip
+- [x] 特征符号 git grep 终审双侧在位（dev：EntrySourceMatcher×3 / renderExplainStatement×3 / feedback.FeedbackAction / SqlListDisplayMode×7 / SqlLogEntryBuffer×9；master：SqlAutoFoldPlanner / GenerateCrudSqlFromEntityAction×4 / CrudSqlGenerator×6 / SqlListTypeColor×8 / SqlListSelectionOutline×4 / syncTypePopupToggleLabel）
+- [x] 渲染器四要素共存（组件池伸缩 × WEST 色条 × 动态描边 × matte 行分隔线）
+- [x] CHANGELOG（Unreleased 仅剩 CrudColor 两条，dev 功能条目已随 v2026.9.11 等版本块归档，无需补行）/ docs/变更记录.md / docs/MEMORY.md 三件套同步
+
+### 遗留
+
+- runIde 真机走查（渲染器融合后的列表观感：三显示模式 × 色条/淡背景/描边组合）留人工。
+- 不自动发版；dev 分支未回推（后续可 fast-forward dev 到 master 或反向合并保持同步）。
+- 503 假失败的 build-cache 劫持值得记入回归假失败清单：clean 全量遇成片 NoSuchMethodError 时先 `--no-build-cache` 重跑再排逻辑。
