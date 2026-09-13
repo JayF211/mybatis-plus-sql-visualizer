@@ -15,14 +15,42 @@ plugins {
     id("org.jetbrains.intellij.platform")
 }
 
+// T-GifRecordSwitch（2026-09-11）：演示 GIF 录制环境开关。录制需在 2026.2 沙盒运行（官方同款
+// 暗色基准 + record/ 脚本管线），但 262 下 test 源码编译不过——com.intellij.diagram.* 于 262 移入
+// Database 插件（测试 classpath 未含），且新版 Kotlin 把 String.toLowerCase() 升为硬错误，导致
+// 分支自身无法跑 ./gradlew test。故把录制所需四项配置整体收敛为本开关：
+//   默认            -> 243 常规开发态（平台 2024.3.7.1 / toolchain 17 / 无 jcef / 默认沙盒）
+//   -PgifRecord=true -> 262 录制态（平台 2026.2.1 / toolchain 24 / jcef / 独立沙盒 MPSV-GifFresh）
+// 四项必须整体切换、不可拆：jcef 自 262 起才从平台核心拆为独立模块（243 distro 无此模块，
+// 单独声明会导致依赖解析失败）；jvmToolchain(24) 用于读 262 平台 v69 类文件（javac 17/21 报
+// 「错误的版本 69.0」）；独立沙盒避免与并行任务互锁。
+// 录制用法：./gradlew runIde -PgifRecord=true
+val gifRecord = providers.gradleProperty("gifRecord").orNull?.toBoolean() ?: false
+
+// 闸门：录制开关若与发布/打包任务同用，配置期直接失败——防止 262 录制态流入发行产物。
+// 与既有 verifyIdes 同款写法（读 startParameter.taskNames），兼容 configuration-cache。
+// 局限：仅拦截「命令行直接点名」的发布任务（./gradlew buildPlugin 等）；经依赖间接触达的不拦。
+if (gifRecord) {
+    val releaseTasks = setOf("buildPlugin", "publishPlugin", "publish")
+    val invoked = gradle.startParameter.taskNames
+        .map { it.substringAfterLast(':') }
+        .filter { it in releaseTasks }
+    if (invoked.isNotEmpty()) {
+        throw GradleException(
+            "gifRecord=true 是演示录制专用（构建基准 2026.2.1），禁止用于发布/打包任务 $invoked。" +
+                "请去掉 -PgifRecord=true 后重试。"
+        )
+    }
+}
+
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
-    testImplementation(libs.junit)
     // 迁移期 Lombok 已登记于版本目录（备选），但首波转换实际全部采用 record + 手写 POJO，
     // 零 Lombok 依赖可让本机离线构建通过（`--offline` 下 lombok 无缓存会阻塞 compileClasspath）。
     // 后续若确需 Lombok（可变 data class 减样板），取消下两行注释并确保联网解析一次。
     // compileOnly(libs.lombok)
     // annotationProcessor(libs.lombok)
+    testImplementation(libs.junit)
     // T-M23.13：真实 MP jar 进测试 classpath（Heavy 语义黄金用例——方法签名/注解元数据可解析；
     // 仅测试依赖，插件运行时零依赖不变；MPJ 1.5.x 不在 Central，暂不加）
     testImplementation(libs.mp.core)
@@ -68,12 +96,17 @@ dependencies {
         // Kotlin 规则（T-M30）：多版本支持须以最低捆绑 stdlib 为编译目标——2024.3 捆绑 stdlib 2.0.21，
         // 平台 distro 进编译 classpath 后自动满足（kotlin.stdlib.default.dependency=false 不打包 stdlib）。
         // 注：本机日常 IDE 为 Ultimate 2026.2.1，243 平台需下载（gradle.properties 已配代理）。
-        intellijIdeaUltimate("2024.3.7.1")
+        intellijIdeaUltimate(if (gifRecord) "2026.2.1" else "2024.3.7.1")
         testFramework(TestFrameworkType.Platform)
 
         // Add plugin dependencies for compilation here:
         bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.kotlin")
+        // T-GifRecordSwitch：JCEF 自 262 起才从平台核心拆为独立模块（243 distro 无此模块），
+        // 故仅录制态声明；常规态声明会导致依赖解析失败。
+        if (gifRecord) {
+            bundledPlugin("com.intellij.modules.jcef")
+        }
         // T-M24-04：XML 平台模块（XML PSI 定位语句 + XML gutter；平台 bundled，IDE 恒启用）。
         // T-M30：构建基准降至 2024.3 后 XML PSI 类在平台核心（app.jar，lib/modules 无独立模块），
         // bundledModule("intellij.xml.psi") 在 2024.3 distro 中不存在（253+ 才拆分为该模块）——移除声明，
@@ -108,6 +141,12 @@ intellijPlatform {
     // 搜索索引器要求 JVM locale 为默认值）。禁用后 Settings 页面不进入 IDE 设置搜索
     // 索引（其余功能不受影响）；在非中文 locale 环境可改回 true 以获得设置搜索支持。
     buildSearchableOptions = false
+
+    // T-GifRecordSwitch：录制态用独立沙盒，避免与并行任务（record/ 脚本、其他会话）
+    // 的沙盒/索引互锁；常规态用默认沙盒。
+    if (gifRecord) {
+        sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
+    }
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
@@ -154,13 +193,16 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
 }
 
 kotlin {
-    jvmToolchain(17)
+    // T-GifRecordSwitch：常规态 243 平台用 17；录制态 262 平台类文件为 v69，
+    // 须 javac 24 才能读（javac 17/21 报「错误的版本 69.0」）。
+    jvmToolchain(if (gifRecord) 24 else 17)
 }
 
 // 2026-09-04 移植同步修复：c100f1f 把 92 个 .kt 测试转成 .java 后仍放在 src/test/kotlin 目录，
 // 该目录默认只属于 Kotlin 测试源集，compileTestJava 恒为 NO-SOURCE——这批 Java 测试从此从未被
 // 编译执行（历史 1421/1426 全绿仅统计 .kt 测试类）。显式把该目录并入 Java 测试源集
 // （SourceDirectorySet 默认只收 *.java，与 Kotlin 编译互不干扰），恢复这批测试的执行。
+// k2j 专属：测试树大半已是 .java（同目录混放），master 无此块（其测试树仍全 .kt）。
 sourceSets {
     test {
         java.srcDir("src/test/kotlin")
@@ -169,12 +211,10 @@ sourceSets {
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
 tasks.withType<JavaCompile>().configureEach {
-    options.encoding = "UTF-8"
-    // Lombok 生成方法标注 @Generated，Plugin Verifier 据此忽略
-    options.compilerArgs.add("-Alombok.addLombokGeneratedAnnotation=true")
-    // T-M36 转换：保留 Java 方法形参名，使 Kotlin 调用方可用具名参数构造
-    // （如 SqlToJavaPanel 的 JavaCodeGenerator.InvocationTarget(callerClass=…, voClass=…, mpj=…)）。
+    // k2j 专属：转换期既定编译参数（master 无）。
+    // T-M36 转换：保留 Java 方法形参名，使 Kotlin 测试调用方可用具名参数语义核对签名。
     options.compilerArgs.add("-parameters")
+    options.encoding = "UTF-8"
 }
 
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：
@@ -197,6 +237,10 @@ tasks.withType<Test>().configureEach {
                     !(it.name.contains("intellij.sql", ignoreCase = true))
                 ))
     }
+    // 默认 test（含平台型测试）保持串行（maxParallelForks=1）：多 fork 共享默认 test 沙盒，
+    // PersistentFS 互踩（2026-09-14 T-TestPerf-03 实证 testForks=4 成片 PersistentFSConnector
+    // 异常；分片任务注释同根因先例 191 失败）。安全并行走 testFast（纯逻辑桶）/ testShard1|2
+    // （独立沙盒双开），见下方 testFast 定义。
 }
 
 
@@ -213,6 +257,7 @@ tasks.withType<Jar>().configureEach {
     }
     outputs.upToDateWhen { false }
 }
+
 tasks {
     // T-M31.9：消除 runIde 启动日志的 RegionUrlMapper SecurityException: setContextClassLoader 噪音。
     // 根因：发行版 vmoptions 的 -Djava.security.manager=CoreBootstrapSecurityManager 使 JDK 21 common
@@ -260,46 +305,11 @@ tasks {
                     "cn.song.mybatisplus.visualizer.support.PlainForkJoinWorkerThreadFactory"
             )
         })
-        // T-DynUpdate：本地清单服务自动起停与 runIdeHotSwap 同款——IDE 内存里可能残留指向
-        // 本任务的旧运行配置（实证 12:48 用户点到旧配置跑 :runIde），两任务都挂保证点哪个都通。
-        // autoReload 保留开发热重载语义：热替换后平台自动重载器可能把新版再重载一次，无害。
-        // 配置缓存约束：路径配置期解析为 File，doFirst 不引用脚本对象。
-        val pidFile = layout.buildDirectory.file("hotswap-server.pid").get().asFile
-        val logFile = layout.buildDirectory.file("hotswap-server.log").get().asFile
-        val scriptFile = rootProject.file("dev-support/hotswap-local-server.py")
-        doFirst {
-            // 端口须与 .run/runIdeLocalManifest.run.xml 清单 URL 及脚本默认值一致
-            val port = 8919
-            fun listening() = runCatching {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("localhost", port), 500)
-                    true
-                }
-            }.getOrDefault(false)
-            if (listening()) {
-                logger.lifecycle("hotswap local server already listening on $port — reusing (not owned, left running at exit)")
-                pidFile.writeText("")
-                return@doFirst
-            }
-            if (!scriptFile.isFile) throw GradleException("hotswap-local-server.py not found: $scriptFile")
-            val proc = ProcessBuilder("python", scriptFile.absolutePath)
-                .redirectOutput(logFile)
-                .redirectErrorStream(true)
-                .start()
-            pidFile.writeText(proc.pid().toString())
-            val deadline = System.currentTimeMillis() + 20_000
-            while (System.currentTimeMillis() < deadline) {
-                if (listening()) {
-                    logger.lifecycle("hotswap local server started (pid=${proc.pid()}, log=$logFile)")
-                    return@doFirst
-                }
-                if (!proc.isAlive) throw GradleException("hotswap server exited during startup — see $logFile")
-                Thread.sleep(300)
-            }
-            runCatching { proc.destroy() }
-            throw GradleException("hotswap server not listening on $port within 20s — see $logFile")
-        }
-        finalizedBy("hotswapServerStop")
+        // T-DynUpdate 职责分离（用户定案）：hotswap 本地服务起停只挂 runIdeHotSwap
+        //（Run IDE (Local Manifest) 链路专属）——本任务（Run IDE with Plugin）是纯开发沙盒，
+        // 不依赖更新清单服务，曾因无条件起服务 + build/distributions 缺 zip（clean 后）导致
+        // 启动即挂（hotswap server exited during startup）。旧 .run 同名配置已删除，无误触入口。
+        // -Dmpvs.update.manifest.url 转发保留：显式传参时仍可用（属性缺席为空，无副作用）。
         // 清单 URL 转发必须在执行期读——配置期 System.getProperty 被配置缓存冻结
         //（runIdeHotSwap 同款修复，见该任务注释）
         jvmArgumentProviders.add(CommandLineArgumentProvider {
@@ -319,8 +329,26 @@ tasks {
     // 修复：显式配置 changeNotes（单一来源，与发布内容一致；更新时同步修改此处）。
     // 结构：每个发行版本一个 <h2>v{版本号}</h2> 标题块（版本号在详情页直接可见），
     // 保留全部版本标题，按时间倒序排列（最新在前）。
+    // 内测系列：对外只保留**最新一个** -beta.N 标题块，后一发 beta 替换前一发的块
+    // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.14-beta.2</h2>
+            <ul>
+                <li>SQL 列表 CRUD 类型颜色标记</li>
+                <li>gutter 左键直接预览与最近执行反查</li>
+                <li>真实 EXPLAIN 执行计划</li>
+                <li>错误与反馈一键上报官网需求池</li>
+                <li>SQL 列表三种显示模式</li>
+                <li>更多 ORM 预览支持</li>
+                <li>大日志列表性能优化</li>
+                <li>实体类与数据库表右键生成 CRUD SQL</li>
+                <li>SQL 预览字段列表自动折叠</li>
+                <li>全选全不选双按钮合一为状态切换按钮</li>
+                <li>SQL 转 Java 选类重渲染异常逃逸修复</li>
+                <li>MPJ 括号条件反向转换退化修复</li>
+                <li>262 预览控制台静默挂载失败修复</li>
+            </ul>
             <h2>v2026.9.11</h2>
             <ul>
                 <li>自更新免重启热替换</li>
@@ -389,64 +417,63 @@ tasks {
             </ul>
             <h2>v2026.8.21</h2>
             <ul>
-                <li>JPA/Hibernate SQL 预览支持（Derived / CriteriaQuery / HQL 三种查询风格）</li>
-                <li>Hibernate/JPA SQL 日志捕获支持（双解析器并列架构）</li>
+                <li>JPA/Hibernate SQL 预览支持</li>
+                <li>Hibernate/JPA SQL 日志捕获支持</li>
                 <li>SQL→Java 反向子查询 JOIN 解析 + MConsumer 形态</li>
                 <li>JPA 分页修复（Pageable → LIMIT）+ @Query 路由优先</li>
                 <li>JPQL IN 子句三层修复 + 复制时剥离注释</li>
             </ul>
             <h2>v2026.8.20</h2>
             <ul>
-                <li>参数导入交互体验升级（手动输入弹窗 + 驼峰/下划线自动匹配 + 清除按钮）</li>
+                <li>参数导入交互体验升级</li>
                 <li>内存泄漏修复（面板 Disposer 树注册）</li>
-                <li>SQL 监听手动启动无需等待项目运行（armed 态）+ 解析兼容前缀与 SQL 分行形态</li>
-                <li>插件自更新静默失败修复（改用 PathManager 定位插件目录 + zip 顶层短名）</li>
-                <li>SQL→Java 调用类校验（VO/DTO 拒绝 + 白名单放行）+ 当前打开类智能识别（this/baseMapper 上下文感知）</li>
-                <li>MPJ 工厂链 selectAll 双图标修复（initializerHeadIsWrapper 回溯停在 qualifier 引用）</li>
-                <li>IN 子句参数多值回填（XML/MP/MPJ inList 标记 + 逗号分割渲染）+ 关键字换行格式化</li>
-                <li>ReadAction.compute 废弃 API 修复（T-M52 补充，@Suppress DEPRECATION）+ 测试覆盖缺口体系化修复（T0045，四类缺口 4 波修复）</li>
+                <li>SQL 监听手动启动无需等待项目运行 + 解析兼容前缀与 SQL 分行形态</li>
+                <li>插件自更新静默失败修复</li>
+                <li>SQL→Java 调用类校验+ 当前打开类智能识别</li>
+                <li>MPJ 工厂链 selectAll 双图标修复</li>
+                <li>IN 子句参数多值回填 + 关键字换行格式化</li>
+                <li>ReadAction.compute 废弃 API 修复</li>
             </ul>
             <h2>v2026.8.19</h2>
             <ul>
-                <li>废弃API全量清理（T-M51 + T-M52）+ 插件更新机制修复（2026.8.19，ProtectionDomain.codeSource.location 定位 + DeleteCommand）</li>
+                <li>废弃API全量清理 + 插件更新机制修复</li>
                 <li>IService 内置 CRUD 方法预览支持无 Entity 后缀实体类</li>
                 <li>功能截图替换 + Marketplace Custom Page</li>
             </ul>
             <h2>v2026.8.18</h2>
             <ul>
-                <li>监听启动时机修正（打开项目不监听，启动运行才监听；停止运行自动停止）</li>
-                <li>关闭工具窗口时停止监听设置生效（监听 ToolWindow 可见性变化）</li>
-                <li>SQL 日志列表改为正序（最早在前）+ 工具栏捕捉按钮状态实时刷新</li>
-                <li>项目停止后监听不关闭修复（进程存活检查 + 移除 processTerminated 误触发）</li>
+                <li>监听启动时机修正</li>
+                <li>关闭工具窗口时停止监听设置生效</li>
+                <li>SQL 日志列表改为正序 + 工具栏捕捉按钮状态实时刷新</li>
+                <li>项目停止后监听不关闭修复</li>
                 <li>第一条 SQL 丢失修复 + 手动停止后重启不再自动开启</li>
-                <li>SQL→Java 联表反向转换修复（反引号列/换行转义/三参联表/selectAs/副表列归属）</li>
+                <li>SQL→Java 联表反向转换修复</li>
                 <li>invocationHasMpj 接口继承 + 泛型超类型误判修复</li>
-                <li>selectAs 字符串联接 + VO-only + VO 属性方法引用修复（T-M48~M50）</li>
-                <li>实体选择弹窗唯一推断时跳过（T-M49）+ notificationGroup schema 报错修复</li>
-                <li>插件描述与最新变化优化 + README 去 AI 味重写</li>
+                <li>selectAs 字符串联接 + VO-only + VO 属性方法引用修复</li>
+                <li>实体选择弹窗唯一推断时跳过+ notificationGroup schema 报错修复</li>
             </ul>
             <h2>v2026.8.17</h2>
             <ul>
-                <li>SQL→Java 生成代码三改进（T-M45：复制纯代码/格式化代码按钮/行尾注释）</li>
-                <li>调用方法按调用类真实 API 选择（T-M44）</li>
-                <li>UPSERT 按方言渲染与反向分页宽容（T-M43）</li>
-                <li>日志五项修复（T-M42：弹窗自动识别参数/Ctrl+C 复制/EDT 报错/this·baseMapper/serialVersionUID 忽略）</li>
-                <li>三处图标统一优化 + 功能截图 5 张入库（T-M40）</li>
-                <li>SQL→Java 右键预览高亮 + 快捷键可配置（T-M41）</li>
+                <li>SQL→Java 生成代码三改进</li>
+                <li>调用方法按调用类真实 API 选择</li>
+                <li>UPSERT 按方言渲染与反向分页宽容</li>
+                <li>日志五项修复</li>
+                <li>三处图标统一优化 + 功能截图 5 张入库</li>
+                <li>SQL→Java 右键预览高亮 + 快捷键可配置</li>
                 <li>SQL→Java 调用形态按 MPJ 1.5.6 实证重写 + 性能修复</li>
                 <li>手动选择实体类 + AUTO 形态 @TableName 反查 + ? 占位符反向识别</li>
             </ul>
             <h2>v2026.8.16</h2>
             <ul>
-                <li>SQL 日志工具窗口 + SQL→Java 双向转换（正向渲染/反向解析）</li>
-                <li>反向联表修复（反引号列/换行转义/三参联表/selectAs/副表列归属）</li>
+                <li>SQL 日志工具窗口 + SQL→Java 双向转换</li>
+                <li>反向联表修复</li>
                 <li>invocationHasMpj 接口继承 + 泛型超类型误判修复</li>
                 <li>实体选择弹窗唯一推断时跳过 + notificationGroup schema 报错修复</li>
             </ul>
             <h2>v2026.8.15</h2>
             <ul>
-                <li>XML + 注解动态 SQL 预览引擎（M24/M25/M26）</li>
-                <li>更新链路全面兼容（检查更新/自动安装）</li>
+                <li>XML + 注解动态 SQL 预览引擎</li>
+                <li>更新链路全面兼容</li>
                 <li>SQL→Java 反向 ? 占位符识别缺陷修复</li>
             </ul>
             <h2>v2026.8.14</h2>
@@ -502,11 +529,12 @@ tasks {
     }
 }
 
-// 并行分片测试（2026-08-15 提速）：782 个测试按方法数均衡分 4 片（~195/片）。
-// 用法：./gradlew testShards（4 片并行）或单跑某片 ./gradlew testShard1；权威串行兜底仍是 ./gradlew test。
+// 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 收编）：测试类自动分区 2 片。
+// 用法：双开终端各跑一片实现真并行（./gradlew testShard1 与 ./gradlew testShard2，同项目内
+// 多任务不并行，testShards 聚合只是串行兜底）；权威串行全量仍是 ./gradlew test。
 // 前提：每片独立 sandbox 目录——多 worker 共享 .intellijPlatform/sandbox/.../system-test 会
 // PersistentFS 互踩损坏（实证：191 失败 + 卡死），分片隔离后无共享写点。
-// 新增测试类时加入最小编号片以保持均衡。
+// 包含清单为配置期扫描 src/test 自动分区（稳定哈希），新增测试类零维护；DB 集成三类只在 testDatabase。
 // M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
@@ -587,6 +615,29 @@ intellijPlatformTesting {
         }
     }
     testIde {
+        // T-TestPerf-04（2026-09-14）：分片包含清单自动分区——配置期扫描 src/test 测试源码
+        // 推导 FQCN，按类名稳定哈希（String.hashCode + floorMod，跨 JVM 确定）均分到各片。
+        // 旧手工白名单的「新增测试类默认不进分片」漂移陷阱根除，新类零维护自动进片。
+        // DB 集成三类仍只在 testDatabase 运行（与默认 test 的排除口径一致）。
+        val dbIntegrationClasses = setOf(
+            "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
+            "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
+            "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
+        )
+        val discoveredTestClasses: List<String> = run {
+            val names = mutableListOf<String>()
+            file("src/test/kotlin").walkTopDown()
+                .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
+                .forEach { f ->
+                    val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
+                        .find(f.readText())?.groupValues?.get(1) ?: return@forEach
+                    names += "$pkg.${f.name.substringBeforeLast('.')}"
+                }
+            names.filter { it !in dbIntegrationClasses }.sorted()
+        }
+        fun shardClasses(index: Int, shards: Int): List<String> =
+            discoveredTestClasses.filter { Math.floorMod(it.hashCode(), shards) == index }
+
         register("testShard1") {
             testFramework(TestFrameworkType.Platform)
             sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard1"))
@@ -595,41 +646,7 @@ intellijPlatformTesting {
                 testClassesDirs = sourceSets["test"].output.classesDirs
                 classpath = classpath + sourceSets["test"].output
                 filter {
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewServiceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.AnnotationSqlParserTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.AnnotationPreviewServiceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.UpdateSectionTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlPreviewServiceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlEwExpanderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.EdgeCaseTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProviderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewDialogTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.UpdateFlowHeavyTest")
-
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.QueryWrapperParserTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetectorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisTest")
-                    // P0 SQL 反向转换（T-M36）：解析器单测（~30 用例，最大片）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest")
-                    // T-M36.2 实体查找 Heavy 用例（与 HeavyAnchorSemanticsTest 同片，分散重类）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.EntityClassFinderHeavyTest")
-                    // T-M31 日志还原：解析/还原纯逻辑单测
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.log.*")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.ForeachSqlNodeTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverTableConfigTest")
-                    // T-EntityCache：实体解析缓存测试（缓存命中/失效/跨类独立/清空）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCacheTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.MpjJoinExtConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolverTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.UpdateManifestTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.util.PluginBuildInfoTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginVersionTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewDialogSizeTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyAnchorSemanticsTest")
+                    shardClasses(0, 2).forEach { includeTestsMatching(it) }
                 }
             }
         }
@@ -640,60 +657,7 @@ intellijPlatformTesting {
                 testClassesDirs = sourceSets["test"].output.classesDirs
                 classpath = classpath + sourceSets["test"].output
                 filter {
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest")
-                    // P-立项-05：方言真实验证套件（H2 兼容模式/SQLite 引擎/文档黄金断言；Docker 测试
-                    // 无 Docker 时 Assume 跳过）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.verify.*")
-                    // T-M36.4 SQL→Java 面板 fixture 测试
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.log.SqlToJavaPanelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperLocatorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCommentTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.TrimSqlNodeTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.DialectTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlPreviewPanelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.DbActiveRecordCoverageTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateJoinDeleteJoinConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlLexerTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlScriptBuilderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginDistributionSelfCheckTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProviderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlKeywordsTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlEwResolverTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupportTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavySqlCompletionContextResolverTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginSettingsPanelBuildInfoTest")
-
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateDeleteMpjConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.ConsumerMethodsCoverageTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlSqlRendererTest")
-                    // P0 SQL 反向转换（T-M36）：代码生成单测 + round-trip 闭环；T-M36.3 Wrapper 形态分发
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.JavaCodeGeneratorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaRoundTripTest")
-                    // T-M36.4 共享编排纯逻辑测试
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.WrapperFormatTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
-                    // F-42：SvgRasterizer（Batik SVG 栅格化）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.SvgRasterizerTest")
-                    // T-Dgm-05：JOIN 图原生框架适配层（快照注册表 + 图构建工厂 + 关系样式）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramAdapterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramScenariosTest")
-                    // T-Dgm-05 Heavy：真实平台打开链路（反射桥 + EP 挂载 + createEditor 全链）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyNativeJoinDiagramOpenChainTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.model.BatchModelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginSettingsPersistenceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlIncludeExpanderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.VersionComparatorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.ParameterReplacerTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverColumnOrderTest")
-                    // T-M42：serialVersionUID 忽略（实体解析源头过滤）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverSerialVersionUidTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.StartupUpdateCheckTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProviderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.util.NamingStrategyTest")
+                    shardClasses(1, 2).forEach { includeTestsMatching(it) }
                 }
             }
         }
@@ -782,7 +746,7 @@ intellijPlatformTesting {
 
 tasks.register("testShards") {
     group = "verification"
-    description = "并行分片全量测试（4 片同时执行，各片独立沙盒）"
+    description = "分片全量测试（自动分区 2 片；真并行请双开终端各跑一片，本聚合任务为串行兜底）"
     dependsOn("testShard1", "testShard2")
 }
 
@@ -802,3 +766,13 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
     }
 }
+
+// T-TestPerf-03（2026-09-14）实验结论：不引入纯逻辑并行分桶任务。
+// 三点实证：① 多 fork 并行平台型测试共享默认 test 沙盒 → PersistentFS 互踩成片失败；
+// ② 独立纯逻辑桶 task 可行（classpath 须复用默认 test 任务成品、排除须统一走 filter 机制——
+//    legacy exclude 与 filter 混用时 filter 优先级覆盖 exclude、159 条 exclude 全被忽略）；
+// ③ 但 2246 个纯逻辑分类用例中 68 个（forks=1 对照同败）隐性依赖同 worker JVM 里
+//    平台测试先建立的 Application/LaF 状态，脱离平台桶即红——作为快测任务会误报。
+// 结论：全量权威=串行 ./gradlew test；真并行=分片自动分区双开终端（见 testShard1/2）；
+// 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
+
