@@ -191,6 +191,9 @@ object SqlAutoFoldPlanner {
                 }
             }
         }
+        // EOF 收口：SELECT/SET 列表无终止关键字直达文末（REPLACED INTO 展示片段等）仍产出区域；
+        // 括号型列表（INSERT 列/VALUES 元组）正常由 ')' 封口，EOF 到达即畸形 SQL，同样封口兜底
+        if (isCollecting(state)) finish()
         return specs
     }
 

@@ -50,7 +50,7 @@ internal object FeedbackReporting {
                     MpSqlVisualizerBundle.message("feedback.notify.view"),
                 ) {
                     override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
-                        com.intellij.ide.BrowserUtil.browse(FeedbackApi.detailUrl(result.postNo))
+                        cn.song.mybatisplus.visualizer.util.SafeBrowser.browse(FeedbackApi.detailUrl(result.postNo))
                     }
                 }
             ).notify(project)

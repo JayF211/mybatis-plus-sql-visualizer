@@ -2,7 +2,7 @@ package cn.song.mybatisplus.visualizer.feedback
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-import com.intellij.ide.BrowserUtil
+import cn.song.mybatisplus.visualizer.util.SafeBrowser
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
@@ -179,7 +179,7 @@ class ErrorReportDialog(
             ideVersion?.let { "ideVersion=${java.net.URLEncoder.encode(it, Charsets.UTF_8)}" },
             pluginVersion?.let { "pluginVersion=${java.net.URLEncoder.encode(it, Charsets.UTF_8)}" },
         ).joinToString("&")
-        BrowserUtil.browse("${FeedbackApi.SITE_BASE}/about/feedback?$params")
+        SafeBrowser.browse("${FeedbackApi.SITE_BASE}/about/feedback?$params")
     }
 
     private fun selectCategory(slug: String) {

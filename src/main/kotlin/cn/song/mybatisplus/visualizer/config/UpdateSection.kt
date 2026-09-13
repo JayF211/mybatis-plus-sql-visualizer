@@ -7,7 +7,7 @@ import cn.song.mybatisplus.visualizer.update.PluginVersion
 import cn.song.mybatisplus.visualizer.update.UpdateManifest
 import cn.song.mybatisplus.visualizer.update.UpdateSource
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-import com.intellij.ide.BrowserUtil
+import cn.song.mybatisplus.visualizer.util.SafeBrowser
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
@@ -79,7 +79,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     /** 变更日志 → Gitee 发布页链接（用户要求可点击跳转）。 */
     internal val giteeLink = LinkLabel<Any>(MpSqlVisualizerBundle.message("settings.update.viewOnGitee"), null) { _, _ ->
-        BrowserUtil.browse(UpdateSource.GITEE_RELEASES_URL)
+        SafeBrowser.browse(UpdateSource.GITEE_RELEASES_URL)
     }
 
     private val notesContainer = JPanel(BorderLayout(0, 2)).apply {
@@ -103,7 +103,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     /** 需求池网页直达链接（浏览反馈/投票/进度）。 */
     internal val feedbackPoolLink = LinkLabel<Any>("", null) { _, _ ->
-        BrowserUtil.browse(cn.song.mybatisplus.visualizer.feedback.FeedbackApi.SITE_BASE + "/about/feedback")
+        SafeBrowser.browse(cn.song.mybatisplus.visualizer.feedback.FeedbackApi.SITE_BASE + "/about/feedback")
     }
 
     private val feedbackContainer = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {

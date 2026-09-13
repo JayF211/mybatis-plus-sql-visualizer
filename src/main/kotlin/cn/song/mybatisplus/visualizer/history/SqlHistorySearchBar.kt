@@ -105,6 +105,28 @@ class SqlHistorySearchBar(
         }
     }
 
+    // ------------------------------------------------------------------
+    // 测试驱动口（T-TestGuard-07：搜索/筛选逻辑此前零覆盖）
+    // ------------------------------------------------------------------
+
+    /** 模拟用户输入搜索词（触发 document 监听 → onSearch）。 */
+    internal fun searchTextForTest(text: String) {
+        searchField.text = text
+    }
+
+    /** 直选筛选下拉（0=全部 / 1=收藏）。 */
+    internal fun selectFilterIndexForTest(index: Int) {
+        filterCombo.selectedIndex = index
+    }
+
+    /** 直选标签下拉（null=全部）。 */
+    internal fun selectTagForTest(tag: String?) {
+        tagCombo.selectedItem = tag
+    }
+
+    /** 读标签下拉指定索引的选项。 */
+    internal fun tagItemAtForTest(index: Int): String? = tagCombo.getItemAt(index)
+
     companion object {
         /** 收藏筛选的内部标记值。 */
         const val FAVORITES_FILTER = "__favorites__"

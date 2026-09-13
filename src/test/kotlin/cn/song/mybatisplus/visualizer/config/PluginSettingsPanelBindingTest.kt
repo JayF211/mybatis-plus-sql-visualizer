@@ -311,4 +311,24 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
             settings.loadState(snapshot)
         }
     }
+
+    /** T-TestGuard-05：apply 后 state 引用必须替换（pitfall-settings-persist-inplace——
+     *  原地修改 state 属性时 XmlSerializer 检测不到变化，不触发 XML 持久化、重启丢设置；
+     *  修复形态 = PluginSettingsPanel.apply() 末尾 settings.loadState(s.copy())，本用例防回退）。 */
+    fun testApplyReplacesStateReferenceNotMutateInPlace() {
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        val configurable = AllSectionsConfigurable()
+        configurable.createComponent()
+        val panel = configurable.panelForTest()
+
+        panel.selectReverseFormat(PluginSettings.REVERSE_QUERY)
+        configurable.apply()
+
+        assertTrue(
+            "apply 后 PluginSettings.state 必须是替换后的新引用（loadState(s.copy())），" +
+                "原地修改不触发 XmlSerializer 持久化",
+            before !== settings.state,
+        )
+    }
 }

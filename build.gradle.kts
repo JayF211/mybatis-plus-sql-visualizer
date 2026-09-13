@@ -216,6 +216,10 @@ tasks.withType<Test>().configureEach {
                     !(it.name.contains("intellij.sql", ignoreCase = true))
                 ))
     }
+    // 默认 test（含平台型测试）保持串行（maxParallelForks=1）：多 fork 共享默认 test 沙盒，
+    // PersistentFS 互踩（2026-09-14 T-TestPerf-03 实证 testForks=4 成片 PersistentFSConnector
+    // 异常；分片任务注释同根因先例 191 失败）。安全并行走 testFast（纯逻辑桶）/ testShard1|2
+    // （独立沙盒双开），见下方 testFast 定义。
 }
 
 
@@ -504,11 +508,12 @@ tasks {
     }
 }
 
-// 并行分片测试（2026-08-15 提速）：782 个测试按方法数均衡分 4 片（~195/片）。
-// 用法：./gradlew testShards（4 片并行）或单跑某片 ./gradlew testShard1；权威串行兜底仍是 ./gradlew test。
+// 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 收编）：测试类自动分区 2 片。
+// 用法：双开终端各跑一片实现真并行（./gradlew testShard1 与 ./gradlew testShard2，同项目内
+// 多任务不并行，testShards 聚合只是串行兜底）；权威串行全量仍是 ./gradlew test。
 // 前提：每片独立 sandbox 目录——多 worker 共享 .intellijPlatform/sandbox/.../system-test 会
 // PersistentFS 互踩损坏（实证：191 失败 + 卡死），分片隔离后无共享写点。
-// 新增测试类时加入最小编号片以保持均衡。
+// 包含清单为配置期扫描 src/test 自动分区（稳定哈希），新增测试类零维护；DB 集成三类只在 testDatabase。
 // M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
@@ -589,6 +594,29 @@ intellijPlatformTesting {
         }
     }
     testIde {
+        // T-TestPerf-04（2026-09-14）：分片包含清单自动分区——配置期扫描 src/test 测试源码
+        // 推导 FQCN，按类名稳定哈希（String.hashCode + floorMod，跨 JVM 确定）均分到各片。
+        // 旧手工白名单的「新增测试类默认不进分片」漂移陷阱根除，新类零维护自动进片。
+        // DB 集成三类仍只在 testDatabase 运行（与默认 test 的排除口径一致）。
+        val dbIntegrationClasses = setOf(
+            "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
+            "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
+            "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
+        )
+        val discoveredTestClasses: List<String> = run {
+            val names = mutableListOf<String>()
+            file("src/test/kotlin").walkTopDown()
+                .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
+                .forEach { f ->
+                    val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
+                        .find(f.readText())?.groupValues?.get(1) ?: return@forEach
+                    names += "$pkg.${f.name.substringBeforeLast('.')}"
+                }
+            names.filter { it !in dbIntegrationClasses }.sorted()
+        }
+        fun shardClasses(index: Int, shards: Int): List<String> =
+            discoveredTestClasses.filter { Math.floorMod(it.hashCode(), shards) == index }
+
         register("testShard1") {
             testFramework(TestFrameworkType.Platform)
             sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard1"))
@@ -597,41 +625,7 @@ intellijPlatformTesting {
                 testClassesDirs = sourceSets["test"].output.classesDirs
                 classpath = classpath + sourceSets["test"].output
                 filter {
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewServiceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.AnnotationSqlParserTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.AnnotationPreviewServiceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.UpdateSectionTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlPreviewServiceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlEwExpanderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.EdgeCaseTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProviderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewDialogTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.UpdateFlowHeavyTest")
-
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.QueryWrapperParserTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetectorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.OgnlEvaluatorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlTextAnalysisTest")
-                    // P0 SQL 反向转换（T-M36）：解析器单测（~30 用例，最大片）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlReverseParserTest")
-                    // T-M36.2 实体查找 Heavy 用例（与 HeavyAnchorSemanticsTest 同片，分散重类）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.EntityClassFinderHeavyTest")
-                    // T-M31 日志还原：解析/还原纯逻辑单测
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.log.*")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginUpdateRunnerTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.ForeachSqlNodeTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverTableConfigTest")
-                    // T-EntityCache：实体解析缓存测试（缓存命中/失效/跨类独立/清空）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCacheTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.MpjJoinExtConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolverTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.UpdateManifestTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.util.PluginBuildInfoTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.PluginVersionTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewDialogSizeTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyAnchorSemanticsTest")
+                    shardClasses(0, 2).forEach { includeTestsMatching(it) }
                 }
             }
         }
@@ -642,60 +636,7 @@ intellijPlatformTesting {
                 testClassesDirs = sourceSets["test"].output.classesDirs
                 classpath = classpath + sourceSets["test"].output
                 filter {
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest")
-                    // P-立项-05：方言真实验证套件（H2 兼容模式/SQLite 引擎/文档黄金断言；Docker 测试
-                    // 无 Docker 时 Assume 跳过）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.verify.*")
-                    // T-M36.4 SQL→Java 面板 fixture 测试
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.log.SqlToJavaPanelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.WrapperLocatorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverCommentTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.TrimSqlNodeTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.DialectTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlPreviewPanelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.DbActiveRecordCoverageTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateJoinDeleteJoinConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.SqlLexerTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlScriptBuilderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginDistributionSelfCheckTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProviderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlKeywordsTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.XmlEwResolverTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupportTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavySqlCompletionContextResolverTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginSettingsPanelBuildInfoTest")
-
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.converter.UpdateDeleteMpjConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.ConsumerMethodsCoverageTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlSqlRendererTest")
-                    // P0 SQL 反向转换（T-M36）：代码生成单测 + round-trip 闭环；T-M36.3 Wrapper 形态分发
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.JavaCodeGeneratorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaRoundTripTest")
-                    // T-M36.4 共享编排纯逻辑测试
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.reverse.WrapperFormatTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.SqlGeneratorTest")
-                    // F-42：SvgRasterizer（Batik SVG 栅格化）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.SvgRasterizerTest")
-                    // T-Dgm-05：JOIN 图原生框架适配层（快照注册表 + 图构建工厂 + 关系样式）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramAdapterTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramScenariosTest")
-                    // T-Dgm-05 Heavy：真实平台打开链路（反射桥 + EP 挂载 + createEditor 全链）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.heavy.HeavyNativeJoinDiagramOpenChainTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.model.BatchModelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.config.PluginSettingsPersistenceTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlPreviewModelTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.xml.XmlIncludeExpanderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.VersionComparatorTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.sql.ParameterReplacerTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverColumnOrderTest")
-                    // T-M42：serialVersionUID 忽略（实体解析源头过滤）
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.psi.EntityResolverSerialVersionUidTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.update.StartupUpdateCheckTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.ui.gutter.AnnotationSqlGutterLineMarkerProviderTest")
-                    includeTestsMatching("cn.song.mybatisplus.visualizer.util.NamingStrategyTest")
+                    shardClasses(1, 2).forEach { includeTestsMatching(it) }
                 }
             }
         }
@@ -784,7 +725,7 @@ intellijPlatformTesting {
 
 tasks.register("testShards") {
     group = "verification"
-    description = "并行分片全量测试（4 片同时执行，各片独立沙盒）"
+    description = "分片全量测试（自动分区 2 片；真并行请双开终端各跑一片，本聚合任务为串行兜底）"
     dependsOn("testShard1", "testShard2")
 }
 
@@ -804,3 +745,13 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
     }
 }
+
+// T-TestPerf-03（2026-09-14）实验结论：不引入纯逻辑并行分桶任务。
+// 三点实证：① 多 fork 并行平台型测试共享默认 test 沙盒 → PersistentFS 互踩成片失败；
+// ② 独立纯逻辑桶 task 可行（classpath 须复用默认 test 任务成品、排除须统一走 filter 机制——
+//    legacy exclude 与 filter 混用时 filter 优先级覆盖 exclude、159 条 exclude 全被忽略）；
+// ③ 但 2246 个纯逻辑分类用例中 68 个（forks=1 对照同败）隐性依赖同 worker JVM 里
+//    平台测试先建立的 Application/LaF 状态，脱离平台桶即红——作为快测任务会误报。
+// 结论：全量权威=串行 ./gradlew test；真并行=分片自动分区双开终端（见 testShard1/2）；
+// 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
+

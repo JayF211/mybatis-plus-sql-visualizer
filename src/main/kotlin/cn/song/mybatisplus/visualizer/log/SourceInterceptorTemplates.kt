@@ -119,7 +119,7 @@ public class SqlSourceInterceptor implements InnerInterceptor {
                 cn.startsWith("cn.song.mybatisplus.visualizer.") || cn.startsWith("com.baomidou.") ||
                 cn.startsWith("org.apache.ibatis.") || cn.startsWith("org.hibernate.") ||
                 cn.startsWith("com.zaxxer.") || cn.startsWith("org.springframework.") ||
-                cn.startsWith("com.sun.proxy.") || cn.startsWith("${'$'}{'$'}Proxy");
+                cn.startsWith("com.sun.proxy.") || cn.startsWith("${'$'}Proxy");
     }
 }
 """.trimIndent()
