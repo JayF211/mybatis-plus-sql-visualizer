@@ -4,10 +4,19 @@
 
 ## [Unreleased]
 
+## [2026.9.14-beta.2] - 2026-09-13
+
+> 内测版第二发：dev 分支（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等 119 提交）与 t-crudcolor 分支整体回合 master 后的首次发行。dev 侧条目此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 beta.1 的用户可见增量。
+
 ### Added
 
 - **SQL 列表 CRUD 类型颜色标记（T-CrudColor）**：SQL 日志页与「SQL 历史」页二级列表支持按语句类型着色标记，颜色与标记形态均可自定义——默认「左侧 3px 色条」（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红，OTHER 不标记）；可选「整行淡背景」（底色与列表背景混色 14%，天然适配亮/暗主题），其**选中态为「保留类型色调（30% 混色）+ 2px 选中描边」而非平台填充**，保证上下键浏览时颜色不丢失、且耗时快/慢着色不再被选中态抹白；样式三选一（色条 / 淡背景 / 关闭，关闭与改造前逐字节一致）。类型判定复用 `LogStatementClassifier`（与类型过滤弹窗同源，故筛出的 SELECT 行绝不会被标成红色）。新增 `SqlListTypeColor`（配色/混色/对比度纯逻辑）与 `SqlListSelectionOutline`（描边 Border，预建复用、热路径零分配）；设置项 5 个（样式 + 四色），不新增复选框
 - **图片素材按用途分层（docs/images）**：新增 `docs/images/design/` 存放开发过程设计稿，与根目录的对外素材（README/插件介绍页/Marketplace 引用的截图与二维码）分离；《文档命名规范-说明文档.md》新增 §图片/设计稿 八条（位置/命名 `{任务号}-{说明}.png`/格式/引用基准=文件相对路径/嵌入语法/禁止内嵌外链（Gitee raw 对 Marketplace 302 防盗链）/分层理由/设计稿须标注非实现截图）
+
+### Changed
+
+- **dev 分支整体回合**：M37 竞品融合（gutter 左键直接预览 / 右键菜单与「最近执行记录」反查 / 真实 EXPLAIN 执行计划含达梦·人大金仓 / 多模块源根跳转容错 / 系列预览语义修复）、T-ErrReport 错误一键上报、T-ListMode 三种显示模式、M39/M44 ORM 识别域扩展（EasyQuery / Querydsl / Xbatis / MDS / Spring Data Specification·QueryByExample / JPA 元数据增强）、自动监听被动模式、T-Perf 性能系列（后台扫描 / 增量刷新 / 渲染热路径零分配）——逐项功能入口与验收步骤见 `docs/验收文档/20260913-1225-dev与CrudColor合并master-新增功能验收文档.md`。合并全量 3880/0/6 绿，verifyPlugin 三目标 Compatible
+
 ## [2026.9.14-beta.1] - 2026-09-12
 
 > Gitee 抢先体验通道的首个内测版（`-beta.N` 后缀仅内测通道；正式版 `2026.9.14` 发行时本系列全部内测版的条目统一并入正式版本号）。

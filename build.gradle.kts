@@ -308,8 +308,15 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
-            <h2>v2026.9.14-beta.1</h2>
+            <h2>v2026.9.14-beta.2</h2>
             <ul>
+                <li>SQL 列表 CRUD 类型颜色标记</li>
+                <li>gutter 左键直接预览与最近执行反查</li>
+                <li>真实 EXPLAIN 执行计划</li>
+                <li>错误与反馈一键上报官网需求池</li>
+                <li>SQL 列表三种显示模式</li>
+                <li>更多 ORM 预览支持</li>
+                <li>大日志列表性能优化</li>
                 <li>实体类与数据库表右键生成 CRUD SQL</li>
                 <li>SQL 预览字段列表自动折叠</li>
                 <li>全选全不选双按钮合一为状态切换按钮</li>

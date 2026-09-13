@@ -189,10 +189,11 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
           <code>@Select</code> 等注解 SQL（含 <code>&lt;script&gt;</code> 与 Provider）</td>
     </tr>
     <tr>
-      <td>JPA / Hibernate <span class="tag tag-new">New</span></td>
+      <td>JPA / Hibernate / 更多 ORM <span class="tag tag-new">New</span></td>
       <td>gutter 图标</td>
-      <td>Derived 派生查询 / CriteriaQuery / HQL / <code>@Query</code>；
-          嵌套属性路径自动展开 JOIN；<code>Pageable</code> 分页 LIMIT 生成</td>
+      <td>Derived 派生查询 / CriteriaQuery / Specification / QueryByExample / HQL / <code>@Query</code>；
+          嵌套属性路径自动展开 JOIN；<code>Pageable</code> 分页 LIMIT 生成；
+          Querydsl / EasyQuery / Xbatis / MDS 链式查询支持</td>
     </tr>
     <tr>
       <td>JdbcTemplate / 自研 DAO 字符串 SQL <span class="tag tag-new">New</span></td>
@@ -219,6 +220,11 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>字段列表自动折叠 <span class="tag tag-new">New</span></td>
       <td>设置页配置（默认关）</td>
       <td>SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开；阈值可配</td>
+    </tr>
+    <tr>
+      <td>执行计划 EXPLAIN <span class="tag tag-ultimate">Ultimate</span><span class="tag tag-new">New</span></td>
+      <td>弹窗内「执行计划」按钮</td>
+      <td>按当前方言包装 EXPLAIN 提交原生控制台，真实执行计划与静态性能标注同屏对照；MySQL / PostgreSQL / 达梦 / 人大金仓等方言支持</td>
     </tr>
     <tr>
       <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
@@ -248,6 +254,16 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>单击预览 <span class="tag tag-new">New</span></td>
       <td>单击日志列表条目</td>
       <td>SQL 高亮可编辑编辑器轻量预览；临时改一个字段值后点「复制」即可取编辑后文本（双击仍开完整弹窗）</td>
+    </tr>
+    <tr>
+      <td>类型颜色标记 <span class="tag tag-new">New</span></td>
+      <td>列表自动生效 / 设置页配置</td>
+      <td>SELECT / INSERT / UPDATE / DELETE 按语句类型着色：左侧色条或整行淡背景（选中态描边）；四色可自定义，可关闭</td>
+    </tr>
+    <tr>
+      <td>显示模式 <span class="tag tag-new">New</span></td>
+      <td>工具栏下拉</td>
+      <td>单行 / 关键字换行 / 格式化三种显示，SQL 行数随模式伸缩；模式跨会话保留</td>
     </tr>
     <tr>
       <td>历史与源码定位 <span class="tag tag-new">New</span></td>

@@ -192,6 +192,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20260913-1239-合并回合与CRUD颜色标记-发行说明.md](./发行说明/20260913-1239-合并回合与CRUD颜色标记-发行说明.md) | v2026.9.14-beta.2 内测版发行说明（Gitee 抢先体验通道；dev 119 提交 + t-crudcolor 7 提交整体回合后的首次发行——T-CrudColor 颜色标记 + M37 双向深链（gutter 左右键/最近执行反查/EXPLAIN 含达梦金仓）+ T-ErrReport 上报 + T-ListMode 三显示模式 + M39/M44 ORM 扩展 + T-Perf 性能系列；changeNotes/preview 清单按 beta 规则只主标题累计块；全量 3880/0/6 绿） |
 | [20260912-1700-右键CRUD生成与预览自动折叠-发行说明.md](./发行说明/20260912-1700-右键CRUD生成与预览自动折叠-发行说明.md) | v2026.9.14-beta.1 内测版发行说明（Gitee 抢先体验通道；右键生成 CRUD SQL T-CrudSql（实体类/数据库表双入口+JBPopup 浮层候选+BatchModel 复用）+ 预览字段自动折叠 T-AutoFold（FoldingModel 六点位）+ 全选全不选按钮合一 T-SelToggle + T-PickMpjErr/T-ReverseParenWira/HelpAction 三项修复；beta 系列后续增量届时并入正式版 2026.9.14 统一日志，对外清单只留最新 beta；全量 3353/0/6 绿） |
 | [20260911-1552-自更新免重启与历史参数恢复-发行说明.md](./发行说明/20260911-1552-自更新免重启与历史参数恢复-发行说明.md) | v2026.9.11 发行说明（自更新免重启动态安装 T-DynUpdate（五入口热替换+脚本兜底+262 首参漂移弹性修复+跨版本签名护栏+卸载警告归因）+ SQL 历史页参数识别根治与字面量参数恢复 T-HistParam（历史文件 v2 pd 行+双面板识别通道统一+谓词语境数值识别）；全量 3305/0/0/6 绿） |
 | [20260910-2240-预览加载与Hibernate捕获打磨-发行说明.md](./发行说明/20260910-2240-预览加载与Hibernate捕获打磨-发行说明.md) | v2026.9.10 发行说明（双击预览加载卡顿根治 T-PreviewSlow + 预览 EDT 读权限断言全库排雷 T-PreviewDocLock/2 + Hibernate 双份日志参数分裂根治 T-HibDualCapture + 竖向排列列名标注配置项 T-VPairAnno + IN 阈值 T-VStack·InThreshold + 顶部元信息压按钮行 T-PreviewTopOverlap + 执行静默不执行 T-ExecSilentNoop + 显示模式持久化 T-PreviewDisplayMode + 版本比较改内置比较器 T-VersionUtil + 行号两处续修 T-LogRowNumber；全量 3254/0/0/6 绿） |
