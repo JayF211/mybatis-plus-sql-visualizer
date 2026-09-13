@@ -22,14 +22,13 @@
 | 1 | SQL 列表 CRUD 类型颜色标记（颜色与形态可自定义） | SQL 日志 / SQL 历史列表自动生效；设置页「SQL 日志」分组配置 | t-crudcolor |
 | 2 | 错误/反馈一键上报官网需求池 | 帮助菜单「Submit Feedback」+ 设置页 + IDE 内部错误对话框 | dev |
 | 3 | SQL 列表三种显示模式 | SQL 日志 / SQL 历史工具栏下拉 | dev |
-| 4 | 列表条目元信息两行显示 | 无独立入口（渲染结构改进，打开列表即见） | dev |
-| 5 | gutter 图标左键直接预览 / 右键菜单（含「最近执行记录」反查） | MP Wrapper 链锚点行左侧图标 | dev |
-| 6 | 真实 EXPLAIN 执行计划 | 预览面板「执行计划」按钮 | dev |
-| 7 | ORM 识别域扩展（EasyQuery / MDS / Querydsl / Xbatis / JPA 增强） | 相应代码处自动出现 gutter 预览图标 | dev |
-| 8 | 自动监听被动模式（不再「还没启动项目就自动开启」） | 设置页「SQL 日志」分组既有开关，行为变更 | dev |
-| 9 | 渲染与性能改进（后台扫描 / 增量刷新 / 热路径零分配） | 无新入口（大日志不再冻结，列表滚动更顺） | dev + t-crudcolor |
+| 4 | gutter 图标左键直接预览 / 右键菜单（含「最近执行记录」反查） | MP Wrapper 链锚点行左侧图标 | dev |
+| 5 | 真实 EXPLAIN 执行计划 | 预览面板「执行计划」按钮 | dev |
+| 6 | ORM 识别域扩展（EasyQuery / MDS / Querydsl / Xbatis / JPA 增强） | 相应代码处自动出现 gutter 预览图标 | dev |
+| 7 | 自动监听被动模式（不再「还没启动项目就自动开启」） | 设置页「SQL 日志」分组既有开关，行为变更 | dev |
+| 8 | 渲染与性能改进（后台扫描 / 增量刷新 / 热路径零分配） | 无新入口（大日志不再冻结，列表滚动更顺） | dev + t-crudcolor |
 
-以下功能**不属于**本次新增（master 此前已有，勿重复验收）：M37.3 首条 SQL 自动展开（T-AutoShowMaster 已回合）、hbm 命名查询预览（随 K2J 已入库）、JOIN 图原生渲染、T-CrudSql 右键生成 CRUD SQL、T-AutoFold 自动折叠、T-SelToggle 全选按钮合一。
+以下功能**不属于**本次新增（master 此前已有，勿重复验收）：M37.3 首条 SQL 自动展开（T-AutoShowMaster 已回合）、hbm 命名查询预览（随 K2J 已入库）、JOIN 图原生渲染、T-CrudSql 右键生成 CRUD SQL、T-AutoFold 自动折叠、T-SelToggle 全选按钮合一、**T-TwoLine 列表元信息两行显示**（2026.9.10 版本已含，本次合并沿用）。
 
 ## 三、分功能验收步骤
 
