@@ -5,6 +5,8 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.model.AssociationInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRole;
+import cn.song.mybatisplus.visualizer.model.CollectionAssociationInfo;
+import cn.song.mybatisplus.visualizer.model.JoinColumnRef;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
@@ -720,7 +722,7 @@ public class JpaEntityResolver {
 
     @Override
     public String toString() {
-        return "JpaCacheKey[" + "file=" + file + ", " + "classQualifiedName=" + classQualifiedName + ", " + "configSignature=" + configSignature + "]";
+        return "JpaCacheKey[" + "fileUrl=" + fileUrl + ", " + "fileIdentity=" + fileIdentity + ", " + "classQualifiedName=" + classQualifiedName + ", " + "configSignature=" + configSignature + "]";
     }
 }
 

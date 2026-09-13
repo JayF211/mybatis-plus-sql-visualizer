@@ -43,7 +43,7 @@ public final class LogEntryPreviewOpener {
             String sql = state.getLogFormatSql() ? SqlFormatter.format(base) : base;
             result = new PreviewResult(
                     sql,
-                    withTerminator(recognized.compactSql()),
+                    SqlLogPanelKt.withTerminator(recognized.compactSql()),
                     recognized.unresolvedParams(),
                     null,
                     null,

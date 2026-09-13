@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.psi.jpa;
 
 import java.util.List;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * WHERE 条件中间表示。

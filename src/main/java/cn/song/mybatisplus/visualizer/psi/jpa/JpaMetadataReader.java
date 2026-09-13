@@ -19,6 +19,7 @@ import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifierListOwner;
+import com.intellij.psi.PsiType;
 
 import java.util.ArrayList;
 import java.util.Arrays;

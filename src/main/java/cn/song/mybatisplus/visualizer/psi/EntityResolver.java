@@ -14,6 +14,7 @@ import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifierList;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -482,7 +483,7 @@ public class EntityResolver {
      */
     public static String keySequenceValue(@NotNull PsiClass entityClass) {
         try {
-            com.intellij.psi.PsiAnnotationList modifierList = entityClass.getModifierList();
+            PsiModifierList modifierList = entityClass.getModifierList();
             com.intellij.psi.PsiAnnotation annotation = modifierList != null
                     ? modifierList.findAnnotation(KEY_SEQUENCE) : null;
             if (annotation == null && modifierList != null) {
