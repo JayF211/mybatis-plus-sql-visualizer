@@ -194,6 +194,18 @@ public final class DataSourceSelector {
     }
 
     /**
+     * T-Perf-16：面板关闭/项目关闭时释放单例滞留引用——单例的 prepared、shared、
+     * pendingOnConsole 槽位强引用已关闭面板（pendingOnConsole 闭包捕获 SqlPreviewPanel 整棵
+     * Swing 树）与原生控制台/编辑器/文档（持旧 Project 引用）。此前只有面板「清空」按钮走
+     * clearPrepared，弹窗关闭/项目关闭路径无清理挂点 → 堆中滞留整棵面板树。
+     */
+    public static void releaseForPanel() {
+        clearPrepared();
+        dropSharedConsole();
+        pendingOnConsole = null;
+    }
+
+    /**
      * M36.5：准备控制台（不执行）。
      * 数据源选择策略：唯一数据源/last-used 命中 → 静默；多数据源 → 原生弹窗（记住选择）；
      * 无数据源 → 预览路径静默 onError（不抢侧边栏），显式执行路径打开 Database 工具窗口 + onError。
@@ -284,7 +296,7 @@ public final class DataSourceSelector {
                 if (matched != null) {
                     LOG.info("[M36] silent reuse last runner: " + last);
                     chosenRunnerName[0] = last;
-                    runRunner(matched, true);
+                    runRunner(matched, true, onError);
                     if (callback != null) callback.accept(true);
                     return;
                 }
@@ -301,7 +313,7 @@ public final class DataSourceSelector {
         } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0))) {
             LOG.info("[M36] single runner, run directly");
             chosenRunnerName[0] = getRunnerName(runners.get(0));
-            runRunner(runners.get(0), !executeAfterPrepare);
+            runRunner(runners.get(0), !executeAfterPrepare, onError);
             if (callback != null) callback.accept(true);
         } else {
             LOG.info("[M36] show popup with " + runners.size() + " runners");
@@ -313,7 +325,7 @@ public final class DataSourceSelector {
                 if (runner != null) chosenRunnerName[0] = getRunnerName(runner);
                 if (callback != null) callback.accept(runner != null);
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(runner, false);
+                if (runner != null) runRunner(runner, false, onError);
             });
         }
     }
@@ -867,6 +879,9 @@ public final class DataSourceSelector {
             Editor editor,
             Object execOption,
             Logger LOG) {
+        // T-Perf-13：诊断探针降 debug——非 debug 模式零开销（此前每次执行一次 DataManager 解析
+        // + 数十条反射 + info 刷屏；需要诊断时开 debug 恢复全部输出）
+        if (!LOG.isDebugEnabled()) return;
         ApplicationManager.getApplication().invokeLater(() ->
                 ReadAction.compute(() -> {
                     try {
@@ -1041,7 +1056,7 @@ public final class DataSourceSelector {
                         } catch (Throwable t) {
                             modelDiag = "subDiag FAILED:" + t.getMessage();
                         }
-                        LOG.info("[M36] dataContext check: PROJECT=" + projectOk + ", EDITOR=" + editorOk
+                        LOG.debug("[M36] dataContext check: PROJECT=" + projectOk + ", EDITOR=" + editorOk
                                 + ", CLIENT_KEY=" + consoleOk + ", PSI_FILE=" + psiOk
                                 + ", isSqlAtPlace=" + sqlAtPlace + ", statementsRange=" + statementsRange + ", " + modelDiag);
                         return null;
@@ -1122,19 +1137,87 @@ public final class DataSourceSelector {
                     Object documentObj = consoleClass.getMethod("getDocument").invoke(console);
                     return documentObj instanceof Document ? (Document) documentObj : null;
                 });
-            Editor editor = null;
-            for (int i = 0; i < 20; i++) {
-                if (editor != null) break;
-                if (document != null) {
-                    editor = Arrays.stream(EditorFactory.getInstance().getEditors(document)).findFirst().orElse(null);
-                }
+            // T-Perf-13：EDT 上不再 repeat(20){Thread.sleep(20)} 忙等编辑器实例（最多 400ms 冻结）——
+            // 首查即中（绝大多数：编辑器随 attachConsole 同步构造）或后台线程调用：同步短轮询（原语义）；
+            // EDT 首查未命中：后台轮询线程 20ms 一查，命中后回 EDT 继续余下准备链（prepareAfterEditorResolved）。
+            final EditorFactory editorFactory = EditorFactory.getInstance();
+            final Document documentRef = document;
+            java.util.function.Supplier<Editor> findEditor = () ->
+                    documentRef == null ? null
+                            : Arrays.stream(editorFactory.getEditors(documentRef)).findFirst().orElse(null);
+            Editor firstEditor = findEditor.get();
+            if (firstEditor != null || !ApplicationManager.getApplication().isDispatchThread()) {
+                Editor editor = firstEditor;
                 if (editor == null) {
-                    try { Thread.sleep(20); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    for (int i = 0; i < 20 && editor == null; i++) {
+                        editor = findEditor.get();
+                        if (editor == null) {
+                            try { Thread.sleep(20); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                        }
+                    }
                 }
+                LOG.info("[M36] editor=" + editor);
+                if (editor == null) return;
+                // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
+                if (onEditor != null) onEditor.accept(editor);
+                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
+                        onConsole, onError, console, document, editor);
+            } else {
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    Editor editor = null;
+                    for (int i = 0; i < 20 && editor == null; i++) {
+                        editor = findEditor.get();
+                        if (editor == null) {
+                            try { Thread.sleep(20); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                        }
+                    }
+                    final Editor resolved = editor;
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        LOG.info("[M36] editor=" + resolved + " (async wait)");
+                        if (resolved != null) {
+                            if (onEditor != null) onEditor.accept(resolved);
+                            try {
+                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
+                                        onConsole, onError, console, document, resolved);
+                            } catch (Throwable e) {
+                                LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: "
+                                        + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+                                Throwable cause = (e instanceof InvocationTargetException)
+                                        ? ((InvocationTargetException) e).getTargetException() : e;
+                                if (onError != null) {
+                                    onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+                                }
+                            }
+                        }
+                    }, ModalityState.any());
+                });
             }
-            LOG.info("[M36] editor=" + editor);
-            if (editor == null) return;
-            if (onEditor != null) onEditor.accept(editor);
+        } catch (Throwable e) {
+            LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+            // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
+            Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+        }
+    }
+
+    /**
+     * M36.5：控制台准备链后段（T-Perf-13 从 prepareInConsole 抽出——编辑器实例就绪后执行：
+     * scriptModel 装配 / 执行上下文缓存 / 原生控制台 UI 拼合内嵌 / 可选立即执行）。
+     * EDT 编辑器异步等待路径会经此继续（异常处理与同步路径一致：warn + onError 面板内显示）。
+     */
+    private static void prepareAfterEditorResolved(
+            @NotNull Project project,
+            @NotNull VirtualFile vf,
+            boolean executeAfterPrepare,
+            @Nullable String dataSourceName,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<String> onError,
+            Object console,
+            Document document,
+            Editor editor) {
+        Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        try {
+            Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
 
             Object scriptModel = consoleClass.getMethod("getScriptModel").invoke(console);
             Class<?> execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings$ExecOption");
@@ -1588,13 +1671,13 @@ public final class DataSourceSelector {
         Logger log = Logger.getInstance(DataSourceSelector.class);
         boolean tooAuto = force || topH < total * 0.35 || topH > total * 0.68;
         if (tooAuto) {
-            log.info("[M36] divider realign(force=" + force + "): topH=" + topH + " total=" + total + " → 0.6");
+            log.debug("[M36] divider realign(force=" + force + "): topH=" + topH + " total=" + total + " → 0.6");
             sp.setDividerLocation(0.6);
             sp.revalidate();
             sp.repaint();
             dumpSplitBounds(sp, log);
         } else {
-            log.info("[M36] divider OK: topH=" + topH + " total=" + total + " (no change)");
+            log.debug("[M36] divider OK: topH=" + topH + " total=" + total + " (no change)");
         }
         ApplicationManager.getApplication().invokeLater(() -> installOutputHistoryFillLayout(sp, log), ModalityState.any());
     }
@@ -1609,7 +1692,7 @@ public final class DataSourceSelector {
             List<Component> targets = new ArrayList<>();
             findAllOutputs(sr, 0, targets);
             if (targets.isEmpty()) {
-                log.info("[M36][OUTFILL] no output editor (EditorImpl$PanelWithFloatingToolbar) in result area; skip");
+                log.debug("[M36][OUTFILL] no output editor (EditorImpl$PanelWithFloatingToolbar) in result area; skip");
                 return;
             }
             boolean installedAny = false;
@@ -1642,20 +1725,20 @@ public final class DataSourceSelector {
                             p = p.getParent();
                             lvl++;
                         }
-                        log.info("[M36][OUTFILL] EMHSBL panel not found above output editor; ancestors=" + chainDesc);
+                        log.debug("[M36][OUTFILL] EMHSBL panel not found above output editor; ancestors=" + chainDesc);
                     }
                     continue;
                 }
                 Component child = t;
                 for (Container c : chain) {
                     if (c instanceof JScrollPane) {
-                        log.info("[M36][OUTFILL] chain node is JScrollPane (" + c.getClass().getName() + "), keep its layout");
+                        log.debug("[M36][OUTFILL] chain node is JScrollPane (" + c.getClass().getName() + "), keep its layout");
                     } else if (!(c.getLayout() instanceof FillTargetLayout)) {
                         String oldLayout = c.getLayout() != null ? c.getLayout().getClass().getName() : "null";
                         java.awt.Rectangle before = c.getBounds();
                         c.setLayout(new FillTargetLayout(child));
                         c.revalidate();
-                        log.info("[M36][OUTFILL] installed on " + c.getClass().getName() + " (was " + oldLayout + ") target=" + child.getClass().getSimpleName() + " before=" + before);
+                        log.debug("[M36][OUTFILL] installed on " + c.getClass().getName() + " (was " + oldLayout + ") target=" + child.getClass().getSimpleName() + " before=" + before);
                         installedAny = true;
                     }
                     child = c;
@@ -1717,7 +1800,7 @@ public final class DataSourceSelector {
             }
             if (logged < 3 && avail > 0 && target.getHeight() != avail) {
                 logged++;
-                Logger.getInstance(DataSourceSelector.class).info("[M36][OUTFILL] layout: parent=" + parent.getClass().getSimpleName()
+                Logger.getInstance(DataSourceSelector.class).debug("[M36][OUTFILL] layout: parent=" + parent.getClass().getSimpleName()
                         + " h=" + parent.getHeight() + " target(" + target.getClass().getSimpleName() + ") → " + avail);
             }
         }
@@ -1725,6 +1808,8 @@ public final class DataSourceSelector {
 
     /** M36.5.60：运行时组件边界取证。 */
     private static void dumpSplitBounds(JSplitPane sp, Logger log) {
+        // T-Perf-13：取证 dump 降 debug 门控（非 debug 模式零开销）
+        if (!log.isDebugEnabled()) return;
         try {
             java.util.function.Function<Component, String> b = c -> {
                 if (c == null) return "null";
@@ -2155,7 +2240,7 @@ public final class DataSourceSelector {
             attempts[0]++;
             if (generation != swapGeneration) {
                 timerHolder[0].stop();
-                LOG.info("[M36] result tab retry cancelled (generation " + generation + " != " + swapGeneration + ")");
+                LOG.debug("[M36] result tab retry cancelled (generation " + generation + " != " + swapGeneration + ")");
                 return;
             }
             String err = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
@@ -2314,8 +2399,8 @@ public final class DataSourceSelector {
         }
     }
 
-    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 弹错误引导。 */
-    private static void runRunner(Object runner, boolean silent) {
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板行内回调 + 按 silent 决定是否模态引导。 */
+    private static void runRunner(Object runner, boolean silent, Consumer<String> onError) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Method method = runner.getClass().getMethod("run");
@@ -2327,6 +2412,10 @@ public final class DataSourceSelector {
             LOG.warn("[M36] runRunner FAILED: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(), cause);
             // T-DsCover：预览默认准备路径静默失败（被动展示不应弹模态打断）；
             // 并清 last-used 记忆，避免驱动损坏的数据源每次预览都白失败一次。
+            // T-Perf-01：失败同时回调 onError（面板行内红字 + 「执行中」态恢复），静默与非静默路径都回调。
+            String failMsg = MpSqlVisualizerBundle.message("execute.datasource.failed",
+                    cause.getMessage() != null ? cause.getMessage() : cause.toString());
+            if (onError != null) onError.accept(failMsg);
             if (silent) {
                 Project[] open = ProjectManager.getInstance().getOpenProjects();
                 if (open.length > 0) {

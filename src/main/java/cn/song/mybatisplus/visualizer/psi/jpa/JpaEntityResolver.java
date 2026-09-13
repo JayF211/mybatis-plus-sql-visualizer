@@ -62,7 +62,10 @@ public class JpaEntityResolver {
         String qName = entityClass.getQualifiedName() != null ? entityClass.getQualifiedName() : className;
         String configSig = TableConfigSignature.projectSignature();
 
-        JpaCacheKey key = new JpaCacheKey(file, qName, configSig);
+        // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
+        JpaCacheKey key = new JpaCacheKey(
+                file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null,
+                System.identityHashCode(file), qName, configSig);
         long stamp = file.getModificationStamp();
         JpaEntry entry = cache.get(key);
         if (entry != null) {
@@ -81,19 +84,27 @@ public class JpaEntityResolver {
     private TableInfo resolveInternal(@NotNull PsiClass entityClass) {
         String className = entityClass.getName();
         if (className == null) return new TableInfo("", "", List.of(), null, null, null, List.of());
-        // 表名：优先 @Table(name="xxx")，否则按命名策略由类名推断
-        String tableName = annotationAttributeValue(entityClass, TABLE_ANNOTATION, "name");
+        // 类级元数据：schema/catalog、限制子句、软删除、自定义脚本、生成器、副表、继承与判别、@IdClass
+        // （T-J8 / T-J14 / T-J18，读取失败整体降级为空元数据）
+        JpaMetadataReader.ClassMeta classMeta = JpaMetadataReader.readClassMeta(entityClass);
+        // 表名：优先 @Table 注解（SD8：name → value 双属性兜底——relational @Table("t_user") value
+        // 简写最常用），否则按命名策略由类名推断
+        String tableName = tableAnnotationValue(entityClass);
         if (tableName == null) tableName = decorateTableName(inferTableName(className));
 
         // 递归父类收集字段（支持 @MappedSuperclass 继承；父类字段在前、子类字段在后）
         List<PsiField> fields = collectFieldsIncludingSuper(entityClass);
+        Set<String> ignoredFields = ignoredFieldNames();
+        // 类级 @AttributeOverride（嵌入列名覆写，字段级覆写优先于类级，T-J18）
+        java.util.Map<String, String> classOverrides = JpaMetadataReader.attributeOverrides(entityClass);
         // 按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，组内保持声明顺序）
-        List<ColumnInfo> columns = fields.stream()
-                .map(field -> resolveColumn(field, ignoredFieldNames()))
-                .filter(c -> c != null)
-                .sorted(Comparator.comparing(ColumnInfo::getRole))
-                .collect(Collectors.toList());
+        List<ColumnInfo> columns = new ArrayList<>();
+        for (PsiField field : fields) {
+            columns.addAll(resolveColumns(field, ignoredFields, classOverrides));
+        }
+        columns.sort(Comparator.comparing(ColumnInfo::getRole));
         // 去重：同一列名只保留第一个（简单字段优先于 @ManyToOne 关联字段）
+        // 示例：departmentId(@Column) 和 department(@ManyToOne+@JoinColumn) 同映射 department_id
         LinkedHashMap<String, ColumnInfo> byCol = new LinkedHashMap<>();
         for (ColumnInfo c : columns) {
             byCol.putIfAbsent(c.getColumnName(), c);
@@ -101,13 +112,64 @@ public class JpaEntityResolver {
         columns = new ArrayList<>(byCol.values());
         // 表注释（类级注解 > javadoc > 行注释）
         String comment = resolveComment(entityClass);
-        // 收集 @ManyToOne / @OneToOne 关联元数据
+        // 收集 @ManyToOne / @OneToOne 关联元数据（T-J7：referencedColumnName/复合外键/mappedBy 侧别/@MapsId/@NotFound）
         List<AssociationInfo> associations = new ArrayList<>();
         for (PsiField field : fields) {
             AssociationInfo a = resolveAssociation(field);
             if (a != null) associations.add(a);
         }
-        return new TableInfo(className, tableName, columns, null, null, comment, associations);
+        // 集合关联元数据（T-J7/T-J18：@OneToMany/@ManyToMany/@ElementCollection → 中间表/集合表语义）
+        List<CollectionAssociationInfo> collectionAssociations = new ArrayList<>();
+        for (PsiField field : fields) {
+            CollectionAssociationInfo c = JpaMetadataReader.readCollectionAssociation(field,
+                    this::resolveTargetTableName, tableName);
+            if (c != null) collectionAssociations.add(c);
+        }
+        // jakarta/javax + spring-data/Easy-Query/xbatis @Version → versionColumn（T-J8/EQ9/XB）
+        String versionColumn = null;
+        for (PsiField versionField : fields) {
+            if (JpaMetadataReader.hasAnyVersionAnnotation(versionField)) {
+                for (ColumnInfo c : columns) {
+                    if (versionField.getName() != null && c.getFieldName().equals(versionField.getName())) {
+                        versionColumn = c.getColumnName();
+                        break;
+                    }
+                }
+                if (versionColumn != null) break;
+            }
+        }
+        // EQ9/XB：@LogicDelete 标记字段 → logicDeleteColumn（可解析时）
+        String logicDeleteColumn = null;
+        for (PsiField field : fields) {
+            String name = field.getName();
+            if (name == null) continue;
+            String candidate = JpaMetadataReader.logicDeleteColumnOf(field, name);
+            if (candidate != null) {
+                logicDeleteColumn = candidate;
+                break;
+            }
+        }
+        // 复合主键列清单（T-J18：@EmbeddedId / @IdClass / 多 @Id，声明顺序；单主键为空列表）
+        boolean hasEmbeddedId = false;
+        for (PsiField field : fields) {
+            if (JpaMetadataReader.hasEmbeddedIdAnnotation(field)) {
+                hasEmbeddedId = true;
+                break;
+            }
+        }
+        List<String> idColumns = new ArrayList<>();
+        for (ColumnInfo c : columns) {
+            if (c.isId()) idColumns.add(c.getColumnName());
+        }
+        List<String> compositeIdColumns = hasEmbeddedId || classMeta.getIdClassType() != null || idColumns.size() > 1
+                ? idColumns : List.of();
+        return new TableInfo(className, tableName, columns, logicDeleteColumn, versionColumn, comment,
+                associations, classMeta.getSchema(), classMeta.getCatalog(),
+                classMeta.getRestrictionClause(), classMeta.getSoftDelete(), classMeta.getCustomSqlScripts(),
+                classMeta.getSequenceGenerators(), classMeta.getTableGenerators(), collectionAssociations,
+                classMeta.getSecondaryTables(), classMeta.getPrimaryKeyJoinColumns(),
+                classMeta.getInheritanceStrategy(), classMeta.getDiscriminatorColumn(),
+                classMeta.getDiscriminatorValue(), compositeIdColumns, classMeta.getIdClassType());
     }
 
     /**
@@ -136,39 +198,75 @@ public class JpaEntityResolver {
     }
 
     /**
-     * 解析单个字段为列信息；非持久化字段（@Transient / 关联注解 @OneToMany/@ManyToMany 等）返回 null。
+     * 解析单个字段为列信息（可能展开为多列——嵌入对象展平，T-J18）；
+     * 非持久化字段（@Transient / 集合关联注解 / mappedBy 侧 @OneToOne / 复合外键等）返回空列表。
      */
-    @Nullable
-    private ColumnInfo resolveColumn(@NotNull PsiField field, @NotNull Set<String> ignoredFields) {
+    @NotNull
+    private List<ColumnInfo> resolveColumns(
+            @NotNull PsiField field,
+            @NotNull Set<String> ignoredFields,
+            @NotNull java.util.Map<String, String> classOverrides) {
         String fieldName = field.getName();
 
-        // @Transient：非持久化字段，跳过
-        if (hasAnnotation(field, TRANSIENT_ANNOTATION)) return null;
+        // @Transient / @ColumnIgnore / @Ignore：非持久化字段，跳过
+        // （SD8：spring-data @Transient；EQ8：@ColumnIgnore；XB：@Ignore——M44 统一轨）
+        if (JpaMetadataReader.hasTransientLikeAnnotation(field)) return List.of();
 
-        // 一对多 / 多对多关联字段跳过（非简单列，对应集合类型属性）
-        if (hasAnnotation(field, ONE_TO_MANY_ANNOTATION) || hasAnnotation(field, MANY_TO_MANY_ANNOTATION)) return null;
+        // 一对多 / 多对多 / 元素集合关联字段跳过（非简单列，对应集合类型属性；
+        // 集合语义由 TableInfo.collectionAssociations 承载）
+        if (hasAnnotation(field, ONE_TO_MANY_ANNOTATION) || hasAnnotation(field, MANY_TO_MANY_ANNOTATION)
+                || JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_ELEMENT_COLLECTION) != null) {
+            return List.of();
+        }
+
+        // SD10（M44 止血）：@MappedCollection 集合/嵌套实体字段不落父表列（止血期不做反向列展开）
+        if (JpaMetadataReader.isMappedCollectionField(field)) return List.of();
+        // SD10：无注解的嵌套实体引用字段 / 元素为实体的集合字段同样跳过——
+        // 否则 SELECT/INSERT 出现不存在的列（宁缺列不出错误列）
+        if (JpaMetadataReader.isNestedEntityOrEntityCollectionField(field)) return List.of();
+
+        // M44：Easy-Query @Column(exist = false) / xbatis @TableField(exists = false) 字段跳过
+        if (JpaMetadataReader.hasExistFalse(field)) return List.of();
+
+        // @OneToOne(mappedBy=...) 无外键侧：外键列在对方表，本表无列（T-J7 侧别语义——二次 SELECT 标记）
+        if (hasAnnotation(field, ONE_TO_ONE_ANNOTATION) && JpaMetadataReader.mappedByOf(field) != null) {
+            return List.of();
+        }
 
         // 忽略字段名配置（`;` 分隔，按 Java 字段名匹配）
-        if (fieldName != null && ignoredFields.contains(fieldName)) return null;
+        if (fieldName != null && ignoredFields.contains(fieldName)) return List.of();
 
         // serialVersionUID 默认忽略
-        if (fieldName != null && fieldName.toLowerCase().replace("_", "").equals("serialversionuid")) return null;
+        if (fieldName != null && fieldName.toLowerCase().replace("_", "").equals("serialversionuid")) {
+            return List.of();
+        }
 
-        // 列名：优先 @Column(name="xxx") 或 @JoinColumn(name="xxx")（@ManyToOne 外键列），否则驼峰转下划线
-        boolean isId = hasAnnotation(field, ID_ANNOTATION);
         boolean isManyToOne = hasAnnotation(field, MANY_TO_ONE_ANNOTATION);
         boolean isOneToOne = hasAnnotation(field, ONE_TO_ONE_ANNOTATION);
+        boolean isEmbeddedId = JpaMetadataReader.hasEmbeddedIdAnnotation(field);
 
+        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）
+        if (isEmbeddedId || JpaMetadataReader.isEmbeddedField(field)) {
+            return flattenEmbeddedColumns(field, isEmbeddedId, classOverrides);
+        }
+
+        // @JoinColumns 复合外键：多列外键无法以单列表达，完整清单记入 AssociationInfo.joinColumns（T-J7）
+        if ((isManyToOne || isOneToOne) && JpaMetadataReader.hasCompositeJoinColumns(field)) {
+            return List.of();
+        }
+
+        // 列名：优先 @Column(name→value 兜底，SD8)/@JoinColumn（@ManyToOne 外键列）/
+        // xbatis @TableField(value)，否则驼峰转下划线
+        boolean isId = isIdentifierField(field);
+        List<JoinColumnRef> toOneJoinColumnRefs = isManyToOne || isOneToOne
+                ? JpaMetadataReader.readToOneJoinColumns(field, fieldName) : List.<JoinColumnRef>of();
         String columnName;
-        if (isManyToOne) {
-            columnName = annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name");
-            if (columnName == null) columnName = NamingStrategy.INSTANCE.toSnakeCase(fieldName) + "_id";
-        } else if (isOneToOne) {
-            columnName = annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name");
-            if (columnName == null) columnName = NamingStrategy.INSTANCE.toSnakeCase(fieldName) + "_id";
+        if (!toOneJoinColumnRefs.isEmpty()) {
+            // @ManyToOne / @OneToOne + @JoinColumn：外键列名（含无注解时的推断名）
+            columnName = toOneJoinColumnRefs.get(0).getName();
         } else {
-            columnName = annotationAttributeValue(field, COLUMN_ANNOTATION, "name");
-            if (columnName == null) columnName = NamingStrategy.INSTANCE.toSnakeCase(fieldName);
+            // @Column / @TableField：普通列名（SD8：name → value 双属性兜底）
+            columnName = JpaMetadataReader.columnValueOrSnake(field, fieldName);
         }
 
         // 字段类型（参数回填引号推断用）；PSI 类型解析异常时兜底 null
@@ -185,7 +283,54 @@ public class JpaEntityResolver {
         // 角色分组——主键置顶(PRIMARY)、关联外键(BUSINESS)、普通业务字段(BUSINESS)
         ColumnRole role = isId ? ColumnRole.PRIMARY : ColumnRole.BUSINESS;
 
-        return new ColumnInfo(fieldName, columnName, isId, false, fieldType, null, comment, role);
+        JoinColumnRef firstRef = toOneJoinColumnRefs.isEmpty() ? null : toOneJoinColumnRefs.get(0);
+        return List.of(new ColumnInfo(fieldName, columnName, isId, false, fieldType, null, comment, role,
+                firstRef != null ? firstRef.isInsertable() : JpaMetadataReader.columnInsertableOf(field),
+                firstRef != null ? firstRef.isUpdatable() : JpaMetadataReader.columnUpdatableOf(field),
+                isId ? JpaMetadataReader.generatedValueStrategy(field) : null,
+                false,
+                JpaMetadataReader.hasConvertAnnotation(field)));
+    }
+
+    /**
+     * 展平嵌入对象字段为列清单（T-J18）：@AttributeOverride 覆写 > 内部字段 @Column > 驼峰转下划线；
+     * @EmbeddedId 展平列全部标记主键。嵌入类型不可解析等异常场景降级为单列形态（字段名推断列名），不丢字段。
+     */
+    @NotNull
+    private List<ColumnInfo> flattenEmbeddedColumns(
+            @NotNull PsiField field,
+            boolean isPrimaryKey,
+            @NotNull java.util.Map<String, String> classOverrides) {
+        String fieldName = field.getName();
+        // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
+        java.util.Map<String, String> overrides = new LinkedHashMap<>(classOverrides);
+        overrides.putAll(JpaMetadataReader.attributeOverrides(field));
+        List<JpaMetadataReader.EmbeddedColumnSpec> specs;
+        try {
+            specs = JpaMetadataReader.flattenEmbeddedColumns(field, overrides);
+        } catch (Throwable ignored) {
+            specs = List.of();
+        }
+        if (specs.isEmpty()) {
+            String fallbackType;
+            try {
+                fallbackType = field.getType().getCanonicalText();
+            } catch (Throwable ignored) {
+                fallbackType = null;
+            }
+            return List.of(new ColumnInfo(fieldName, NamingStrategy.INSTANCE.toSnakeCase(fieldName),
+                    isPrimaryKey, false, fallbackType, null, resolveComment(field),
+                    isPrimaryKey ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
+                    true, true, null, true, false));
+        }
+        List<ColumnInfo> result = new ArrayList<>();
+        for (JpaMetadataReader.EmbeddedColumnSpec spec : specs) {
+            result.add(new ColumnInfo(spec.getFieldName(), spec.getColumnName(), isPrimaryKey, false,
+                    spec.getFieldType(), null, resolveComment(spec.getField()),
+                    isPrimaryKey ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
+                    spec.isInsertable(), spec.isUpdatable(), null, true, false));
+        }
+        return result;
     }
 
     /**
@@ -198,9 +343,12 @@ public class JpaEntityResolver {
         if (!isManyToOne && !isOneToOne) return null;
 
         String fieldName = field.getName();
-        // 外键列名：@JoinColumn(name="xxx") 或默认 {fieldName}_id
-        String joinColumn = annotationAttributeValue(field, JOIN_COLUMN_ANNOTATION, "name");
-        if (joinColumn == null) joinColumn = NamingStrategy.INSTANCE.toSnakeCase(fieldName) + "_id";
+        // 外键列清单：@JoinColumn(name="xxx") / @JoinColumns 复合 / 无注解时默认 {fieldName}_id
+        List<JoinColumnRef> joinColumnRefs = JpaMetadataReader.readToOneJoinColumns(field, fieldName);
+        // 既有 joinColumn 字段语义不变：单列为该列名，复合外键取首列（完整清单见 joinColumns）
+        String joinColumn = joinColumnRefs.get(0).getName();
+        // mappedBy 侧别：本表无外键，查询语义为按主键二次 SELECT（T-J7）
+        String mappedBy = JpaMetadataReader.mappedByOf(field);
 
         // 目标实体类：从字段类型获取
         PsiClass targetClass = resolveTargetEntityClass(field);
@@ -212,7 +360,10 @@ public class JpaEntityResolver {
         String base = targetName != null ? targetName : fieldName;
         String targetAlias = base.substring(0, 1).toLowerCase() + base.substring(1);
 
-        return new AssociationInfo(fieldName, joinColumn, targetTableName, targetAlias);
+        return new AssociationInfo(fieldName, joinColumn, targetTableName, targetAlias,
+                joinColumnRefs.get(0).getReferencedColumnName(), joinColumnRefs, mappedBy,
+                mappedBy == null, null,
+                JpaMetadataReader.isNotFoundIgnore(field), JpaMetadataReader.hasMapsId(field));
     }
 
     /**
@@ -231,7 +382,7 @@ public class JpaEntityResolver {
      */
     @NotNull
     private String resolveTargetTableName(@NotNull PsiClass targetClass) {
-        String explicitTable = annotationAttributeValue(targetClass, TABLE_ANNOTATION, "name");
+        String explicitTable = tableAnnotationValue(targetClass);
         if (explicitTable != null) return explicitTable;
         String className = targetClass.getName();
         if (className == null) return NamingStrategy.INSTANCE.toSnakeCase("unknown");
@@ -381,11 +532,22 @@ public class JpaEntityResolver {
     /** 通用注释属性（非白名单注解兜底提取，不取 value——value 常为标识符）。 */
     private static final List<String> COMMENT_ATTRIBUTE_NAMES = List.of("description", "name", "comment", "desc");
 
-    /** JPA 核心映射注解（name/value 是表名/列名而非注释，不参与提取）。 */
+    /** JPA 核心映射注解（name/value 是表名/列名而非注释，不参与提取；含 M39 扩展元数据注解）。 */
     private static final Set<String> JPA_MAPPING_ANNOTATION_NAMES = Set.of(
             "Entity", "Table", "Column", "Id", "Transient",
             "ManyToOne", "OneToMany", "OneToOne", "ManyToMany",
-            "JoinColumn", "JoinTable", "MappedSuperclass"
+            "JoinColumn", "JoinColumns", "JoinTable", "MappedSuperclass",
+            // M39 元数据扩展（T-J7/T-J8/T-J14/T-J18）：name/value 是生成器名、SQL 脚本、覆写目标等，非注释
+            "GeneratedValue", "SequenceGenerator", "SequenceGenerators",
+            "TableGenerator", "TableGenerators", "Version",
+            "Where", "SQLRestriction", "SoftDelete",
+            "SQLDelete", "SQLDeleteAll", "SQLInsert", "SQLUpdate", "NotFound",
+            "ElementCollection", "CollectionTable", "Embedded", "Embeddable", "EmbeddedId", "IdClass",
+            "AttributeOverride", "AttributeOverrides", "MapsId", "Convert",
+            "Inheritance", "DiscriminatorColumn", "DiscriminatorValue",
+            "SecondaryTable", "SecondaryTables",
+            "PrimaryKeyJoinColumn", "PrimaryKeyJoinColumns",
+            "OrderBy", "OrderColumn"
     );
 
     // ------------------------------------------------------------------
@@ -456,6 +618,42 @@ public class JpaEntityResolver {
         return attributeString(annotation, attribute);
     }
 
+    /**
+     * 类级表名注解取值（SD8，M44）：@Table `name` → `value` 双属性兜底——
+     * jakarta @Table 只有 name 属性（value 兜底天然落空），relational/Easy-Query/xbatis @Table
+     * 以 value 简写为最常用形态（`@Table("t_user")`）。查找轨道：jakarta/javax FQN + relational
+     * FQN + 短名兜底（findAnnotation/FQN_XBATIS_TABLE 显式轨）。
+     */
+    private String tableAnnotationValue(@NotNull PsiClass psi) {
+        String value = annotationAttributeValue(psi, TABLE_ANNOTATION, "name");
+        if (value != null) return value;
+        value = annotationAttributeValue(psi, TABLE_ANNOTATION, "value");
+        if (value != null) return value;
+        value = annotationAttributeValue(psi, JpaMetadataReader.FQN_RELATIONAL_TABLE, "name");
+        if (value != null) return value;
+        value = annotationAttributeValue(psi, JpaMetadataReader.FQN_RELATIONAL_TABLE, "value");
+        if (value != null) return value;
+        return annotationAttributeValue(psi, JpaMetadataReader.FQN_XBATIS_TABLE, "value");
+    }
+
+    /**
+     * 字段主键判定（M44 统一轨）：jakarta/javax @Id（既有短名兜底）+ spring-data @Id（SD8）+
+     * xbatis @TableId（XB）+ Easy-Query @Column(primaryKey = true)（EQ8）。
+     */
+    private boolean isIdentifierField(@NotNull PsiField field) {
+        return hasAnnotation(field, ID_ANNOTATION)
+                || hasAnnotation(field, JpaMetadataReader.FQN_SD_ID)
+                || hasAnnotation(field, JpaMetadataReader.FQN_XBATIS_TABLE_ID)
+                || isEasyQueryPrimaryKey(field);
+    }
+
+    /** EQ8：@Column(primaryKey = true)（Easy-Query 以 Column 注解属性标记主键）。 */
+    private boolean isEasyQueryPrimaryKey(@NotNull PsiField field) {
+        PsiAnnotation column = JpaMetadataReader.findFlex(field, JpaMetadataReader.FQN_EASY_QUERY_COLUMN);
+        if (column == null) return false;
+        return Boolean.TRUE.equals(JpaMetadataReader.attrBoolean(column, "primaryKey"));
+    }
+
     @Nullable
     private String attributeString(@NotNull PsiAnnotation annotation, @NotNull String attribute) {
         PsiAnnotationMemberValue memberValue = annotation.findAttributeValue(attribute);
@@ -474,9 +672,7 @@ public class JpaEntityResolver {
     /** JPA 注解全限定名（jakarta.persistence）。 */
     private static final String ENTITY_ANNOTATION = "jakarta.persistence.Entity";
     private static final String TABLE_ANNOTATION = "jakarta.persistence.Table";
-    private static final String COLUMN_ANNOTATION = "jakarta.persistence.Column";
     private static final String ID_ANNOTATION = "jakarta.persistence.Id";
-    private static final String TRANSIENT_ANNOTATION = "jakarta.persistence.Transient";
     private static final String MANY_TO_ONE_ANNOTATION = "jakarta.persistence.ManyToOne";
     private static final String ONE_TO_MANY_ANNOTATION = "jakarta.persistence.OneToMany";
     private static final String ONE_TO_ONE_ANNOTATION = "jakarta.persistence.OneToOne";
@@ -487,18 +683,23 @@ public class JpaEntityResolver {
 
     /** JPA 实体解析缓存键（PsiFile + classQualifiedName + configSignature）。 */
     private static final class JpaCacheKey {
-    private final PsiFile file;
+    private final String fileUrl;
+    /** T-Perf-18：文件实例同一性辅助键（同 EntityResolver——light/mock 文件 url 可重复）。 */
+    private final int fileIdentity;
     private final String classQualifiedName;
     private final String configSignature;
 
-    public JpaCacheKey(PsiFile file, String classQualifiedName, String configSignature) {
-        this.file = file;
+    public JpaCacheKey(String fileUrl, int fileIdentity, String classQualifiedName, String configSignature) {
+        this.fileUrl = fileUrl;
+        this.fileIdentity = fileIdentity;
         this.classQualifiedName = classQualifiedName;
         this.configSignature = configSignature;
     }
 
-    public PsiFile getFile() { return file; }
-    public PsiFile file() { return file; }
+    public String getFileUrl() { return fileUrl; }
+    public String fileUrl() { return fileUrl; }
+    public int getFileIdentity() { return fileIdentity; }
+    public int fileIdentity() { return fileIdentity; }
     public String getClassQualifiedName() { return classQualifiedName; }
     public String classQualifiedName() { return classQualifiedName; }
     public String getConfigSignature() { return configSignature; }
@@ -509,12 +710,12 @@ public class JpaEntityResolver {
         if (this == o) return true;
         if (!(o instanceof JpaCacheKey)) return false;
         JpaCacheKey that = (JpaCacheKey) o;
-        return java.util.Objects.equals(this.file, that.file) && java.util.Objects.equals(this.classQualifiedName, that.classQualifiedName) && java.util.Objects.equals(this.configSignature, that.configSignature);
+        return this.fileIdentity == that.fileIdentity && java.util.Objects.equals(this.fileUrl, that.fileUrl) && java.util.Objects.equals(this.classQualifiedName, that.classQualifiedName) && java.util.Objects.equals(this.configSignature, that.configSignature);
     }
 
     @Override
     public int hashCode() {
-        return java.util.Objects.hash(file, classQualifiedName, configSignature);
+        return java.util.Objects.hash(fileUrl, fileIdentity, classQualifiedName, configSignature);
     }
 
     @Override

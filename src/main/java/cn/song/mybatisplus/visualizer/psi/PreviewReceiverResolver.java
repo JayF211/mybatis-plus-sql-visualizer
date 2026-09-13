@@ -62,12 +62,67 @@ public final class PreviewReceiverResolver {
         if (qualifier == null) return Family.UNKNOWN;
         if (qualifier instanceof PsiReferenceExpression) {
             PsiReferenceExpression reference = (PsiReferenceExpression) qualifier;
-            return classifyByNameAndType(reference.getReferenceName(), reference.getType());
+            Family cached = cachedFamily(call);
+            if (cached != null) return cached;
+            Family family = classifyByNameAndType(reference.getReferenceName(), reference::getType);
+            cacheFamily(call, family);
+            return family;
         }
         if (qualifier instanceof PsiMethodCallExpression) {
-            return classifyMethodCallQualifier((PsiMethodCallExpression) qualifier);
+            Family cached = cachedFamily(call);
+            if (cached != null) return cached;
+            Family family = classifyMethodCallQualifier((PsiMethodCallExpression) qualifier);
+            cacheFamily(call, family);
+            return family;
         }
         return Family.UNKNOWN;
+    }
+
+    // ------------------------------------------------------------------
+    // T-Perf-02：per-file modificationStamp 分类缓存
+    // ------------------------------------------------------------------
+
+    /** classify 结果条目（文件修改戳 + 调用起始偏移→家族）。 */
+    private static final class StampEntry {
+        final long stamp;
+        final java.util.HashMap<Integer, Family> families;
+
+        StampEntry(long stamp, java.util.HashMap<Integer, Family> families) {
+            this.stamp = stamp;
+            this.families = families;
+        }
+    }
+
+    /**
+     * classify 结果缓存（键=PsiFile 弱引用）。
+     *
+     * <p>文件编辑（stamp 变化）整包失效，无逐条生命周期管理；文件释放后条目随弱键回收。
+     * 同步 WeakHashMap——daemon 判定本身就是并发线程池调用。
+     */
+    private static final java.util.Map<com.intellij.psi.PsiFile, StampEntry> classifyCache =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** 缓存命中：文件版本一致且该调用已分类过时返回家族，否则 null。 */
+    private static Family cachedFamily(@NotNull PsiMethodCallExpression call) {
+        com.intellij.psi.PsiFile file = call.getContainingFile();
+        if (file == null) return null;
+        StampEntry entry = classifyCache.get(file);
+        if (entry == null || entry.stamp != file.getModificationStamp()) return null;
+        return entry.families.get(call.getTextRange().getStartOffset());
+    }
+
+    /** 写缓存：文件版本一致时增量更新，否则整包重建。 */
+    private static void cacheFamily(@NotNull PsiMethodCallExpression call, Family family) {
+        com.intellij.psi.PsiFile file = call.getContainingFile();
+        if (file == null) return;
+        long stamp = file.getModificationStamp();
+        synchronized (classifyCache) {
+            StampEntry entry = classifyCache.get(file);
+            java.util.HashMap<Integer, Family> map =
+                    entry != null && entry.stamp == stamp ? entry.families : new java.util.HashMap<>();
+            map.put(call.getTextRange().getStartOffset(), family);
+            classifyCache.put(file, new StampEntry(stamp, map));
+        }
     }
 
     /**
@@ -84,7 +139,7 @@ public final class PreviewReceiverResolver {
         if (lower.equals("getsession") || lower.equals("getnativeentitymanager") || lower.endsWith("entitymanager")) {
             return Family.JPA_SESSION;
         }
-        // 解析返回类型简单名再判
+        // 解析返回类型简单名再判（T-Perf-02：仅名字启发全部失败后到达）
         String typeName;
         try {
             typeName = typeSimpleName(qualifier.getType());
@@ -97,7 +152,8 @@ public final class PreviewReceiverResolver {
     }
 
     /** 变量型 qualifier：先按变量名后缀启发，再按解析类型。 */
-    private static Family classifyByNameAndType(@Nullable String name, @Nullable PsiType type) {
+    private static Family classifyByNameAndType(@Nullable String name,
+                                                java.util.function.Supplier<PsiType> typeResolver) {
         // 1. 变量名后缀启发（O(1)，覆盖测试与 IDE 常见命名）
         if (name != null) {
             for (String suffix : DAO_NAME_SUFFIXES) {
@@ -108,10 +164,10 @@ public final class PreviewReceiverResolver {
             if (lower.contains("hibernatetemplate")) return Family.HIBERNATE_TEMPLATE;
             if (lower.equals("em") || lower.endsWith("entitymanager") || lower.equals("session")) return Family.JPA_SESSION;
         }
-        // 2. 解析类型简单名
+        // 2. 解析类型简单名（惰性：仅名字启发失败后触发 resolve）
         String typeSimple;
         try {
-            typeSimple = typeSimpleName(type);
+            typeSimple = typeSimpleName(typeResolver.get());
         } catch (Throwable t) {
             typeSimple = null;
         }

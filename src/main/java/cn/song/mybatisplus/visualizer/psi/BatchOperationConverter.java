@@ -81,6 +81,13 @@ public final class BatchOperationConverter {
     /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
     private static final String DEFAULT_TENANT_COLUMN = "tenant_id";
 
+    /**
+     * T-M2：@KeySequence 序列提示生效的方言名集合（Oracle/DM/KingBase——序列取主键的常见国产/PL 方言；
+     * PG 常用 serial/identity 序列形态不在本提示范围，MySQL/SQL Server 无序列语义）。
+     */
+    private static final Set<String> KEY_SEQUENCE_DIALECT_NAMES =
+        Set.of("Oracle", "DM（达梦）", "KingBase（人大金仓）");
+
     /** 批量方法 → SQL 模板生成策略。 */
     private enum Operation {
         UPDATE("UPDATE"),
@@ -202,6 +209,24 @@ public final class BatchOperationConverter {
         BatchBuild withParamGroups(String groups) {
             return new BatchBuild(sql, params, groups, model);
         }
+
+        BatchBuild withSql(String newSql) {
+            return new BatchBuild(newSql, params, paramGroups, model);
+        }
+    }
+
+    /**
+     * 批量操作方法调用解析结果（T-M2）：表信息 + 实体 PsiClass（@KeySequence 等类级注解读取用；
+     * 实体来自泛型推断等无具体 PsiClass 的路径为 null）。
+     */
+    private static final class ResolvedTarget {
+        final TableInfo table;
+        final com.intellij.psi.PsiClass entityClass;
+
+        ResolvedTarget(TableInfo table, com.intellij.psi.PsiClass entityClass) {
+            this.table = table;
+            this.entityClass = entityClass;
+        }
     }
 
     /**
@@ -266,9 +291,10 @@ public final class BatchOperationConverter {
         if (methodName == null) return null;
         Operation operation = BATCH_OPERATIONS.get(methodName);
         if (operation == null) return null;
-        TableInfo table = resolveEntityTable(call);
-        if (table == null) return null;
-        // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 模板）
+        ResolvedTarget target = resolveEntityTable(call);
+        if (target == null) return null;
+        TableInfo table = target.table;
+        // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 分支）
         BatchBuild build;
         if (MAP_CONDITION_METHODS.contains(methodName)) {
             build = buildMapConditionBatch(methodName, table, injectLogicDelete);
@@ -278,7 +304,7 @@ public final class BatchOperationConverter {
                     build = buildUpdateBatch(call, methodName, table);
                     break;
                 case INSERT:
-                    build = buildInsertBatch(call, methodName, table, injectTenantLine);
+                    build = buildInsertBatch(call, methodName, table, target.entityClass, injectTenantLine);
                     break;
                 case DELETE:
                     build = buildDeleteBatch(call, methodName, table, injectLogicDelete, resolveVariables);
@@ -322,14 +348,14 @@ public final class BatchOperationConverter {
      * 的实参 Long 在真实 IDE 可解析，原实现把 java.lang.Long 当实体；限定后 Long/String 等基础类型跳过，
      * 走步骤 3 service 泛型。</p>
      */
-    private static TableInfo resolveEntityTable(PsiMethodCallExpression call) {
+    private static ResolvedTarget resolveEntityTable(PsiMethodCallExpression call) {
         PsiExpression[] args = call.getArgumentList().getExpressions();
         // 1. 集合参数泛型（List<Entity>）；2. 实体参数类型（save(entity) / updateById(entity)）
         if (args.length > 0) {
             PsiExpression firstArg = args[0];
             PsiClass entityFromList = resolveGenericArg(firstArg.getType(), 0);
             if (entityFromList != null && isLikelyEntity(entityFromList)) {
-                return new EntityResolver().resolve(entityFromList);
+                return new ResolvedTarget(new EntityResolver().resolve(entityFromList), entityFromList);
             }
             // 类字面量实参（Db.getById(User.class, id) / Db.list(User.class, wrapper)，T-M22-04）显式处理：
             // LightPlatform 下 `User.class` 表达式的 type（Class<User>）可能不可解析，
@@ -344,22 +370,26 @@ public final class BatchOperationConverter {
                     ? ((PsiClassType) firstArg.getType()).resolve() : null;
             }
             if (entityFromArg != null && isLikelyEntity(entityFromArg)) {
-                return new EntityResolver().resolve(entityFromArg);
+                return new ResolvedTarget(new EntityResolver().resolve(entityFromArg), entityFromArg);
             }
         }
         // 3. service qualifier 泛型（getById(id) 等单参非实体场景）
         PsiClass entityFromService = resolveServiceEntityClass(call);
-        if (entityFromService != null) return new EntityResolver().resolve(entityFromService);
+        if (entityFromService != null) return new ResolvedTarget(new EntityResolver().resolve(entityFromService), entityFromService);
         // 3b. 隐式 this 回退（this.getById(id)）
         PsiClass entityFromImplicitThis = resolveEntityFromImplicitThis(call);
-        if (entityFromImplicitThis != null) return new EntityResolver().resolve(entityFromImplicitThis);
+        if (entityFromImplicitThis != null) {
+            return new ResolvedTarget(new EntityResolver().resolve(entityFromImplicitThis), entityFromImplicitThis);
+        }
         // 3c. 方法调用 qualifier 回退（getBaseMapper().selectById(id)）
         PsiClass entityFromMethodQualifier = resolveEntityFromMethodQualifier(call);
-        if (entityFromMethodQualifier != null) return new EntityResolver().resolve(entityFromMethodQualifier);
+        if (entityFromMethodQualifier != null) {
+            return new ResolvedTarget(new EntityResolver().resolve(entityFromMethodQualifier), entityFromMethodQualifier);
+        }
         // 4. qualifier 实体类型（T-M22-04，ActiveRecord 无参形态）
         PsiClass entityFromQualifier = resolveQualifierEntityClass(call);
         if (entityFromQualifier == null) return null;
-        return new EntityResolver().resolve(entityFromQualifier);
+        return new ResolvedTarget(new EntityResolver().resolve(entityFromQualifier), entityFromQualifier);
     }
 
     /** 取类类型的第 index 个泛型参数并 resolve（类型不匹配或无该参数时返回 null）。 */
@@ -549,6 +579,7 @@ public final class BatchOperationConverter {
         PsiMethodCallExpression call,
         String methodName,
         TableInfo table,
+        PsiClass entityClass,
         boolean injectTenantLine
     ) {
         List<ColumnInfo> columns;
@@ -592,8 +623,16 @@ public final class BatchOperationConverter {
         List<String> groupColumns = new ArrayList<>();
         for (ColumnInfo column : columns) groupColumns.add(column.getColumnName());
         String paramGroups = buildParamGroups(groupColumns);
-        return modelBuild(new BatchModel(BatchKind.INSERT, table.getTableName(), toggleColumns))
+        BatchBuild build = modelBuild(new BatchModel(BatchKind.INSERT, table.getTableName(), toggleColumns))
             .withParamGroups(paramGroups);
+        // T-M2：@KeySequence 序列方言注释提示（主键列占位不变，仅追加提示行）
+        String keySequence = entityClass != null ? EntityResolver.keySequenceValue(entityClass) : null;
+        if (keySequence == null) return build;
+        Dialect dialect = PsiDialect.currentDialect();
+        if (!KEY_SEQUENCE_DIALECT_NAMES.contains(dialect.getName())) return build;
+        return build.withSql(build.sql
+            + "\n-- @KeySequence: 主键取序列 " + keySequence
+            + "（" + dialect.getName() + " 方言，运行时由 MP KeyGenerator 取 nextval）");
     }
 
     /**

@@ -115,4 +115,24 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 
 ## 8. 实施记录
 
-（实施过程中回填）
+提交链（滚动回填）：
+- 1116da8 C1 立项计划
+- 6965236 C2-1 生产移植(1/3)：model 层 10 新件（JoinColumnRef/JoinTableInfo/SecondaryTableInfo/GeneratorInfo/SequenceGeneratorInfo/TableGeneratorInfo/SoftDeleteInfo/CustomSqlScripts/CollectionKind/CollectionAssociationInfo）+ TableInfo/AssociationInfo/ColumnInfo/WrapperType 扩展 + psi/jpa 新件（JpaMetadataReader/RepositoryBaseTypes/CriteriaOperation/CriteriaSetClause/CaseWhen/SubqueryModel/ExpressionModel + PredicateModel 六新子类 + SelectColumn/AggregateInfo/JoinModel/CriteriaQueryModel 扩展）+ 小件（Dialect EXPLAIN 七方言/DatabaseConsoleLauncher/ExecuteSqlSupport T-Perf-01/SqlExecutor releaseForPanel/PluginCacheManager T-Perf-18/PerfRulesBatch3 T-Perf-23/OgnlEvaluator T-Perf-04 解析缓存/WrapperLocator xbatis 全套/WrapperAnchorDetector 场景E F+xBatis 锚点+hasDotCallPattern/EntityResolver KeySequence+缓存键 T-Perf-18/WrapperCache 缓存键/DerivedMethodLocator SD6 SD7 T-J3/HqlQueryLocator T-J12/JpqlQueryLocator SD7/NamedQueryLocator T-J12）+ SafeBrowser 新建
+
+待办（Wave1 余）：
+- [ ] log/EntrySourceMatcher（A, 136）
+- [ ] database/DbTableSpecAdapter（A, 52）
+- [ ] execute/DataSourceSelector（M, 145——T-DsCover/ReleaseForPanel）
+- [ ] psi/PreviewReceiverResolver（M, 64）
+- [ ] psi/BatchOperationConverter（M, 60——T-M2 KeySequence 接线）
+- [ ] psi/jpa/CustomDaoHqlLocator（M, 151）
+- [ ] psi/jpa/HbmXmlEntityResolver（M, 180——含 findNamedQuery）
+- [ ] psi/jpa/JpaEntityResolver（M, 293）
+- [ ] psi/jpa/CriteriaQueryLocator（M, 1196——最大单件）
+
+Wave2：converter 四 ORM 新建 + jpa 八新件 + WrapperConverter/QueryWrapperParser/UpdateSection/StartupUpdateCheck/SqlPreviewService 等增量。
+Wave3：generator 三件/feedback 七件/actions 三件 + log 高层全部。
+Wave4：ui/history/config 剩余。
+C6 资源构建 → C7 测试 → C8 文档 → C9 收官。
+
+已登记沙盒：k2jsync171（parallel_tasks，expected_end 2026-09-14T05:30）。
