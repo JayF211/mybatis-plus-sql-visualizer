@@ -41,6 +41,9 @@
 - **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`，被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）
 - **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用走降级分支 `BrowserUtil.browse` 直接拉起真机默认浏览器——三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式短路只记日志
 
+- **多选错误一次性报告不再撞限流（T-FeedbackBatch）**：IDE 错误列表里勾选多条后点「报告到需求池」，2~5 条**合并成一条帖子**（标题带「等 N 条异常」、描述列 `#N 类名: 消息`、附件换成多节全文），更多条时首发仍是一条合并帖、其余各成独立帖**每 12 分钟错峰补发**——服务端限流是每 IP 每小时 5 次提交，此前「全选后报告」实际只会提交第一条、其余条目被静默丢弃；对话框底部新增「其他 N 条异常」分节，逐条复选框默认全勾、取消即不报该条
+- **报告提交失败不再只剩一条 toast（T-FeedbackErr）**：IDE 内点「报告到需求池」提交被服务端拒绝（400）时，此前只弹一条 `Server returned HTTP response code: 400 for URL: …` 通知，既看不到原因也无法重试。现在：提交时对话框不关闭、按钮转「提交中…」，失败则留在窗内、状态行红字给出**服务端返回的具体原因**（如「标题长度需在 5-200 字符之间」）与重试引导，可改完内容直接再提交，成功才关窗；同时异常堆栈附件上传失败不再连坐整帖（帖子照发、另行提示堆栈未附上）
+
 ### Test
 
 - **CRUD SQL**：`CrudSqlGeneratorTest` 11 例 + `DbTypeQuoteHintTest` 3 例 + `CrudSqlPreviewFlowTest` 3 例；真机反馈轮补 `CrudSqlPreviewPanelRenderTest` 3 例（六种语句逐一喂真实面板）+ doOKAction 回调/双击直开 2 例 + 浮层渲染器冒烟 1 例
@@ -48,7 +51,9 @@
 - **颜色标记**：`SqlListTypeColorTest` 18 + `SqlListSelectionOutlineTest` 10 + 分类器/两渲染器/设置绑定共 44 例（含选中态 insets 逐边相等防抖动参数化与实例同一性防回退）
 - **按钮合一**：新建 `SqlLogPanelTypePopupToggleTest` 6 例（初始文案/清空回填/逐勾选翻转/部分态回填/未构建 null/重建初始化）；`XmlPreviewPanelTest` 历史错位用法统一 `deselectAllConditions`
 - **09-14 修复链**：`InjectionModulePickerDialogTest` 4 例（默认全选/全不选清空/联动恢复/行文本）；T-IntrUpg 防线表驱动/桥不暂存/升级判定表驱动/upgraded 键落地 10 例；T-MergeFollowup 五段模式循环行高恒等、右键 renderer、下拉按钮同构断言；T-FeedbackDlg 三波布局与错误池过滤断言；T-PreviewExecDs 缓存项目绑定/console 探活三分量；T-ExecSlowOps 两段式映射与 setMapping 字面量单文件收口守卫
-- 本版全量 **4039/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible
+- **批量报告**：`BatchSubmitterTest` 9 例（合并附件分节 / 单条原样 / 全不勾不带附件 / 阈值边界 / 补发列表与条目勾选 / 间隔常量）+ `ErrorReportComposerTest` +6 例批量合并
+- **反馈链路**：`FeedbackApiTest` 16 例（+4：服务端 4xx 正文优先于通道文案 / 附件被拒降级为不带附件发帖 / 上传抛 HttpFailure 同样降级 / `serverMessageOf` 边界）、`ErrorReportDialogLayoutTest` 14 例（+2：状态行在面板底部且不参与纵向伸缩 / 提交状态机三阶段文案）；回归踩坑修复 `BundleParityGuardTest`——bundle 值用物理续行会被 `java.util.Properties` 解析成 key（中英 key 集合漂移），改单行转义后中英 key 620/620 对齐
+- 本版全量 **4072/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible
 
 ## [2026.9.11] - 2026-09-11
 
