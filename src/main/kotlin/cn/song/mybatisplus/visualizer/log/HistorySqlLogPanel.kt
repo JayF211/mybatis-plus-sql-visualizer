@@ -16,6 +16,7 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
+import javax.swing.JLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.SearchTextField
@@ -101,9 +102,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 显示模式下拉（T-ListMode；T-MergeFollowup-04 原生化）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
     private val displayModeAction = SqlListDisplayModeComboBoxAction(project)
 
-    /** 显示模式按钮当前文案（测试断言选中态回同步用——原生化后无 selectedIndex）。 */
+    /** 显示模式按钮当前文案（测试断言选中态回同步用——与按钮显示同源，原生化后无 selectedIndex）。 */
     internal val displayModeSelectedLabelForTest: String
-        get() = displayModeAction.templatePresentation.text
+        get() = displayModeAction.currentLabelForTest()
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
     internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
@@ -177,14 +178,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(backButton)
         toolbar.add(refreshButton)
-        // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）
-        // T-MergeFollowup-04：createCustomComponent 创建平台原生 ComboBoxButton（place 影响 arrowIcon 选取）
-        toolbar.add(
-            displayModeAction.createCustomComponent(
-                displayModeAction.templatePresentation,
-                com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR,
-            ),
-        )
+        // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）。
+        // T-MergeFollowup-04 复查修正：按钮左侧加「显示模式」名字标签 + createToolbarComponent 先填文本再创建
+        // （手动场景无 ActionToolbar 驱动 update，按钮初始只剩箭头）
+        val displayModeUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(JLabel(MpSqlVisualizerBundle.message("log.list.displayMode")))
+            add(displayModeAction.createToolbarComponent(com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR))
+        }
+        toolbar.add(displayModeUnit)
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {

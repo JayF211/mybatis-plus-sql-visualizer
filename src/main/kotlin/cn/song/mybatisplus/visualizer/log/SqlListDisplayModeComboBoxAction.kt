@@ -20,6 +20,9 @@ import javax.swing.JComponent
  */
 internal class SqlListDisplayModeComboBoxAction(private val project: Project) : ComboBoxAction() {
 
+    /** [createToolbarComponent] 创建的按钮 presentation 引用（syncFromSettings 更新它触发按钮文本刷新）。 */
+    private var buttonPresentation: com.intellij.openapi.actionSystem.Presentation? = null
+
     /** 选项 action（文案 = 模式名，携带模式值）。 */
     private inner class ModeItem(val mode: SqlListDisplayMode) : AnAction(modeLabel(mode)) {
         override fun actionPerformed(e: AnActionEvent) {
@@ -42,12 +45,30 @@ internal class SqlListDisplayModeComboBoxAction(private val project: Project) : 
     override fun update(e: AnActionEvent) {
         super.update(e)
         e.presentation.text = modeLabel(currentMode())
+        e.presentation.description = MpSqlVisualizerBundle.message("log.list.displayMode")
     }
 
-    /** 程序化回同步（模式被另一面板或设置页改变）：刷新按钮文本——presentation 变化由 ComboBoxButton 监听刷新。 */
-    fun syncFromSettings() {
-        templatePresentation.text = modeLabel(currentMode())
+    /**
+     * 创建工具栏按钮组件（T-MergeFollowup-04 复查修正）：**先填充文本再创建**——243 ComboBoxButton
+     * 构造时取一次 `presentation.text`（手动场景无 ActionToolbar 驱动 update()，首次显示前文本恒空，
+     * 只剩箭头；后续变更经 presentation 属性监听刷新）。syncFromSettings 更新同实例保持监听生效。
+     */
+    fun createToolbarComponent(place: String): JComponent {
+        val presentation = com.intellij.openapi.actionSystem.Presentation()
+        presentation.text = modeLabel(currentMode())
+        presentation.description = MpSqlVisualizerBundle.message("log.list.displayMode")
+        buttonPresentation = presentation
+        return createCustomComponent(presentation, place)
     }
+
+    /** 程序化回同步（模式被另一面板或设置页改变）：更新按钮 presentation——ComboBoxButton 属性监听刷新文本。 */
+    fun syncFromSettings() {
+        val presentation = buttonPresentation ?: return
+        presentation.text = modeLabel(currentMode())
+    }
+
+    /** 当前模式文案（测试断言用——与按钮显示同源）。 */
+    fun currentLabelForTest(): String = modeLabel(currentMode())
 
     private fun currentMode(): SqlListDisplayMode = PluginSettings.getInstance().sqlListDisplayMode()
 

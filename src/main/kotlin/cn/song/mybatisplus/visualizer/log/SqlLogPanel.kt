@@ -506,14 +506,15 @@ class SqlLogPanel(
         }
         left.add(typeFilterUnit)
         left.add(sortButton)
-        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）；
-        // T-MergeFollowup-04：createCustomComponent 创建平台原生 ComboBoxButton（place 影响 arrowIcon 选取）
-        left.add(
-            displayModeAction.createCustomComponent(
-                displayModeAction.templatePresentation,
-                com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR,
-            ),
-        )
+        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）。
+        // T-MergeFollowup-04 复查修正：按钮左侧加「显示模式」名字标签（与「SQL类型：」单元同构）；
+        // createToolbarComponent 先填文本再创建（手动场景无 ActionToolbar 驱动 update，按钮初始只剩箭头）
+        val displayModeUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(JLabel(MpSqlVisualizerBundle.message("log.list.displayMode")))
+            add(displayModeAction.createToolbarComponent(com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR))
+        }
+        left.add(displayModeUnit)
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
             foreground = Color(0xD32F2F) // 红色
