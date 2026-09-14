@@ -96,6 +96,29 @@ interface Dialect {
      * @return 可直接提交执行的 EXPLAIN 语句，null = 不支持
      */
     fun renderExplainStatement(sql: String): String? = null
+
+    /**
+     * T-ExplainDbl：幂等 EXPLAIN 包装——文本已以 EXPLAIN 关键字开头（词边界、忽略大小写）时
+     * 原样返回（去首尾空白与结尾分号后），否则委托 [renderExplainStatement]。
+     *
+     * 根因场景：首次点击「执行计划」后包装好的 EXPLAIN 语句经执行链写入控制台文档，
+     * 再点一次在已包装文本上二次加前缀 → `EXPLAIN FORMAT=JSON EXPLAIN FORMAT=JSON SELECT ...`
+     * → MySQL 1064 语法错误。
+     */
+    fun renderExplainStatementIdempotent(sql: String): String? {
+        val trimmed = sql.trim().trimEnd(';').trim()
+        if (startsWithExplainKeyword(trimmed)) return trimmed
+        return renderExplainStatement(trimmed)
+    }
+}
+
+/**
+ * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——紧随字符须非字母/数字/下划线
+ * （词边界），避免 `EXPLAINING_TABLE` 之类标识符误判。
+ */
+private fun startsWithExplainKeyword(sql: String): Boolean {
+    if (!sql.startsWith("EXPLAIN", ignoreCase = true)) return false
+    return sql.length == 7 || (!sql[7].isLetterOrDigit() && sql[7] != '_')
 }
 
 /**

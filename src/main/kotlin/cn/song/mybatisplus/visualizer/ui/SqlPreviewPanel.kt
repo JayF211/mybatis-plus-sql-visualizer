@@ -725,7 +725,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
             ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
         val dialect = current?.previewModel?.dialect ?: MySqlDialect
-        val explainSql = dialect.renderExplainStatement(sql.trim().trimEnd(';'))
+        // T-ExplainDbl：幂等包装——首次执行后 EXPLAIN 语句已在控制台文档中，再点一次
+        // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
+        val explainSql = dialect.renderExplainStatementIdempotent(sql)
         if (explainSql == null) {
             Messages.showInfoMessage(
                 proj,
