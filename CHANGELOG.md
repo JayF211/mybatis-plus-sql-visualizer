@@ -8,6 +8,7 @@
 
 - **SQL 预览一键生成回滚 SQL（T-RollbackSql，r2 分支合流）**：预览面板按钮行新增「回滚」按钮（执行计划之后、刷新之前），对当前预览的 INSERT / UPDATE / DELETE 生成对应逆向 SQL（INSERT→DELETE 按主键、UPDATE→SET 还原原值、DELETE→按 WHERE 重插），弹窗展示并一键复制；快照存取 `RollbackSnapshotStore` 纯逻辑可测
 
+- **预览交互吸收包四件套（T-PreviewUx-Pack，DBX 精华吸收 #1~#4）**：① UPDATE 预览 (new) 列——竖排模式 SET 各项行尾追加「列名 (new) = 表达式」行尾标注（表达式原样搬，自引用 `a = a + 1` 原样即新值；T-VPairAnno 同款范式不破坏 SQL 可执行性）；② 诚实降级横幅——预览面板/日志转 SQL 面板内嵌非模态提示（渲染警示、日志还原失败、T-PreviewExecDs 降级链层级三触发面，文案三要素：哪段没还原/为什么/能做什么，绝不静默）；③ `${table}` 快捷模板——mapper/预览编辑器选中文本一键 EXPLAIN / COUNT / 抽样 10 行（右键菜单 SQL 快捷模板组 + Alt+Shift+E/C/T，默认键位冲突自动换绑备选键位并提示；走原生 Database 控制台链路）；④ 多语句执行确认——日志转 SQL 产物一键执行，单条直通、多条弹候选勾选浮层（T-CrudSql 原生形态：无按钮/Enter/双击/速度搜索）
 ### Changed
 
 - **插件描述兼容承诺与 Log Free 迁移文案回补（N-6/N-7，r2 分支合流）**：插件描述（en/zh）补「Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line / 支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x）」兼容句；README 增「从 MyBatis Log Free 迁移？」段、理由升级为四条、Gitee 内测通道补 Marketplace 评分与一次性迁移指引；marketplace 页 FAQ 首条补适配承诺（新版 IDEA 正式版 5 个工作日内完成适配，Windows 计划任务每周自动 verifyPlugin 三目标兜底）
