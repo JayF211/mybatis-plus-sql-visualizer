@@ -91,21 +91,25 @@ class ErrorReportDialogLayoutTest {
     }
 
     @Test
-    fun `手动形态堆栈导入控件默认态`() {
-        // 字段类默认=错误形态基线（只读预览、导入按钮隐藏）；手动形态由对话框 init 翻转，
-        // 这里锁定默认态与 T-FeedbackDlg3 新键，init 翻转行为留真机走查
+    fun `手动形态堆栈来源引导占位与导入键摘除`() {
+        // T-MarketInternal：错误池导入依赖 MessagePool（262 Internal API）整体摘除——
+        // 三个 stackImport 键必须从 bundle 删除（解析回键名即证明已删），占位文案改为
+        // 来源引导（可从 IDE 错误通知/帮助日志复制）；堆栈区默认只读基线不变
         val fields = ReportFormFields()
         assertFalse("堆栈区默认只读（错误形态基线）", fields.stackPreview.isEditable)
-        assertFalse("导入按钮默认隐藏（错误形态）", fields.stackImportButton.isVisible)
-        for (key in arrayOf(
+        for (removed in arrayOf(
                 "error.report.dialog.stackImport",
                 "error.report.dialog.stackImport.tip",
                 "error.report.dialog.stackImport.empty",
-                "error.report.dialog.stackPreview.placeholder",
             )
         ) {
-            assertNotEquals("键 $key 缺 bundle 文案（会原样显示键名）", key, MpSqlVisualizerBundle.message(key))
+            assertEquals("键 $removed 应已随导入功能删除", removed, MpSqlVisualizerBundle.message(removed))
         }
+        assertNotEquals(
+            "占位键须落地且为来源引导文案",
+            "error.report.dialog.stackPreview.placeholder",
+            MpSqlVisualizerBundle.message("error.report.dialog.stackPreview.placeholder"),
+        )
     }
 
     @Test
@@ -177,17 +181,6 @@ class ErrorReportDialogLayoutTest {
         assertFalse("默认隐藏（对齐 errorCopyButton.isVisible = currentWarning != null）", fields.statusCopyButton.isVisible)
         // 处理器默认空实现（对话框注入真实复制逻辑），headless 可安全触发
         fields.statusCopyHandler()
-    }
-
-    @Test
-    fun `导入错误池堆栈自动勾选附带堆栈`() {
-        // 真机第三轮：从 IDE 错误池选了一条堆栈，意图就是「这条要带上」——勾选框须自动打勾，
-        // 否则刚导入的内容不随帖提交
-        val fields = ReportFormFields()
-        assertFalse("手动形态默认不勾", fields.attachStackCheck.isSelected)
-        ErrorReportDialog.applyImportedStack(fields, "java.lang.RuntimeException: boom\n\tat a.B.c(B.java:1)")
-        assertTrue("导入后应自动勾选", fields.attachStackCheck.isSelected)
-        assertTrue("堆栈已填入", fields.stackPreview.text.startsWith("java.lang.RuntimeException"))
     }
 
     @Test

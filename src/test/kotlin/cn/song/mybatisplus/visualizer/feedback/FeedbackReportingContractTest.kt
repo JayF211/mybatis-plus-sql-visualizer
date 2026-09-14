@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.feedback
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,13 +37,6 @@ class FeedbackReportingContractTest {
         assertTrue("ideVersion 应为 null 或非空平台名", version == null || version.isNotBlank())
     }
 
-    @Test
-    fun `错误池归属判定_按插件包名匹配堆栈或消息`() {
-        assertTrue(
-            FeedbackReporting.isPluginError("at cn.song.mybatisplus.visualizer.ui.Foo.bar(Foo.kt:1)", null),
-        )
-        assertTrue(FeedbackReporting.isPluginError(null, "cn.song.mybatisplus.visualizer boom"))
-        assertFalse(FeedbackReporting.isPluginError("at com.intellij.openapi.foo.Bar(Bar.java:1)", "unrelated"))
-        assertFalse(FeedbackReporting.isPluginError(null, null))
-    }
+    // T-MarketInternal（2026-09-14）：`错误池归属判定` 用例随 isPluginError 删除——
+    // 错误池读取走 MessagePool（262 Internal API），市场整改整体摘除，无新数据源可锁。
 }

@@ -22,9 +22,6 @@ import com.intellij.openapi.project.Project
  */
 internal object FeedbackReporting {
 
-    /** 本插件根包名：错误池堆栈归属匹配锚（手动形态取最近插件错误用）。 */
-    private const val PLUGIN_PACKAGE = "cn.song.mybatisplus.visualizer"
-
     /**
      * 后台提交（任何线程可调）；完成后 EDT 回调 [onResult]。
      * 网络异常折入 [FeedbackApi.SubmitResult.Failure]，不抛出。
@@ -90,7 +87,8 @@ internal object FeedbackReporting {
     }
 
     /** 手动入口（Help 菜单 / 设置页按钮）：打开手动形态报告框，提交后结果走通知。
-     *  堆栈区可编辑（粘贴）+「从 IDE 错误池导入」候选（[pluginErrorPoolStacks]，T-FeedbackDlg3）。 */
+     *  堆栈区可编辑（自主粘贴，T-FeedbackDlg3）；错误池候选已随 T-MarketInternal 摘除——
+     *  MessagePool 系在 262 标 @ApiStatus.Internal，Marketplace 阻断。 */
     fun openManualDialog(project: Project? = null) {
         ApplicationManager.getApplication().invokeLater {
             val dialog = ErrorReportDialog(
@@ -99,7 +97,6 @@ internal object FeedbackReporting {
                 fingerprint = null,
                 ideVersion = ideVersion(),
                 pluginVersion = PluginVersion.current(),
-                stackPoolProvider = { pluginErrorPoolStacks() },
             ) { submission: FeedbackApi.Submission,
                 _: List<BatchSubmitter.BatchItem>,
                 onResult: (FeedbackApi.SubmissionOutcome) -> Unit ->
@@ -120,26 +117,13 @@ internal object FeedbackReporting {
     }
 
     /**
-     * IDE 错误池中本插件错误堆栈候选（T-FeedbackDlg3，手动形态「导入」菜单数据源）：
-     * 与 Internal Errors 对话框同一错误列表（243 app-client.jar / 262 ide.impl.jar 均 public，
-     * 签名一致，直连编译期依赖），按本插件包名过滤（243 无 belongsToPlugin，统一文本匹配），
-     * 最近在前、按堆栈去重、至多 10 条。任何异常折空列表（菜单显示「无」说明项）。
+     * T-MarketInternal（2026-09-14）：`pluginErrorPoolStacks()` / `isPluginError()` 整体删除。
+     * 读取 IDE 错误池必须走 `MessagePool` / `AbstractMessage`，二者在 262 平台标
+     * `@ApiStatus.Internal`（243 无标注——编译基准看不见，verifyMinimal 才暴露），
+     * Plugin Verifier 报 6 条 Internal API，Marketplace 审核阻断级。平台侧无公开替代
+     * （整条诊断链含 ErrorReportSubmitter/IdeErrorsDialog 均 Internal），错误池候选体验
+     * 无合规实现路径，手动形态收敛为自主粘贴（来源引导见堆栈区占位文案）。
      */
-    fun pluginErrorPoolStacks(): List<String> = runCatching {
-        com.intellij.diagnostic.MessagePool.getInstance()
-            // (includeReadMessages, includeSubmittedMessages)：已读/已报告过的也保留——
-            // 用户点「报告到需求池」通常就是来报刚发生过的错
-            .getFatalErrors(true, true)
-            .asReversed()
-            .filter { message -> isPluginError(message.throwableText, message.message) }
-            .mapNotNull { message -> message.throwableText?.takeIf { it.isNotBlank() } }
-            .distinct()
-            .take(10)
-    }.getOrDefault(emptyList())
-
-    /** 错误池条目归属判定（纯函数，T-FeedbackDlg2-02）：堆栈全文或消息含本插件包名即算本插件错误。 */
-    internal fun isPluginError(throwableText: String?, message: String?): Boolean =
-        throwableText?.contains(PLUGIN_PACKAGE) == true || message?.contains(PLUGIN_PACKAGE) == true
 
     /** 报告时间戳（批量组装与单条附件共用同一格式）。 */
     fun nowStamp(): String = java.time.ZonedDateTime.now().format(
