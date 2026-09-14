@@ -80,9 +80,12 @@ object DataSourceSelector {
     private var sharedFullComponent: javax.swing.JComponent? = null
     private var sharedDataSourceName: String? = null
 
-    /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。 */
+    /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。
+     *  T-ExecSlowOps F3：[prewarmExecTempFile] 后台线程成为第二写方后须 volatile 跨线程可见。 */
+    @Volatile
     private var cachedTempPsiFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
     /** T-PreviewExecDs-02 F1：缓存归属项目名（跨项目拒绝诊断用，与 cachedTempPsiFile 同生命周期）。 */
+    @Volatile
     private var cachedTempPsiProjectName: String? = null
 
     /**
@@ -93,8 +96,13 @@ object DataSourceSelector {
     @Volatile
     private var lastTempFileFailure: String? = null
 
-    /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
+     * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
+    @Volatile
     private var dialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
+
+    /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
+    private val execPrewarmInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** M36.5.6：结果区换入回调（准备阶段挂 ContentManager 监听，任一路径出结果即换入；复用时由新面板接管）。 */
     private var pendingOnConsole: ((javax.swing.JComponent) -> Unit)? = null
@@ -2905,11 +2913,15 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * 实参，243~262 交集——T-Wia262）——修 262 真机最可能根因：refreshAndFindFileByIoFile 同步
      * VFS refresh 要求 write-safe 语境，262 平台 RefreshSessionImpl.launch 对 EDT-ReadAction
      * 硬抛 "Access is allowed from write thread only"（T-PreviewWiLock 同 API 先例）。WIRA 隐含
-     * 读权限，refresh 后续链不受影响。**后台化经评估否决**：setMapping 须在 EDT（线程语义未
-     * 验证，M36.5 约束）而 refresh 适合 BGT，双向交接（BGT invokeAndWait 等 EDT 执行映射、
-     * EDT 阻塞等 BGT 产物）形成互锁死锁面——invokeAndWait 须等 EDT 回事件泵，冷路径必超时。
-     * SEVERE 慢操作噪音（findFile → WorkspaceFileIndex 断言）为生产 LOG.error 不抛、且 F2c 后
-     * 冷路径每会话仅首次真实执行，不为其冒险。
+     * 读权限，refresh 后续链不受影响。
+     *
+     * T-ExecSlowOps F2：**本方法自此退化为兜底路径**——预览链成功后
+     * [prewarmExecTempFile] 已在后台线程完成 写盘→refresh→方言映射→findFile→填缓存槽，
+     * 弹窗打开后这里 [consumeCachedTempPsiFile] 必命中，EDT 上不再执行 refresh/findFile
+     * （262 真机 "Slow operations are prohibited on EDT" SEVERE 本体，WorkspaceFileIndex
+     * .ensureIsUpToDate）。冷路径仅存于无预览链触达的显式执行首跑等场景。原"后台化经评估
+     * 否决"（BGT 无法安全做 EDT-only 的 setMapping）已被 [DialectPreMapping.ensureMapped]
+     * 两段式（BGT 读探测 + invokeLater 派 EDT + 有界 latch 等待，绝不 invokeAndWait）解决。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun createTempPsiFile(project: Project, sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
@@ -3066,35 +3078,18 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * PSI 创建时即按映射解析为 MySQL（否则走 SqlDialectPusher，dumb mode 下被推迟）。
      * 方言实例经 SqlDialectMappings.getAvailableValues() 按 Language.id 匹配（不硬编码实现类），
      * 任何环节失败静默跳过（保持原行为，仅记录日志）。
+     *
+     * T-ExecSlowOps F1：反射段收编 [DialectPreMapping]（与预览路径 mapPreviewDialectBeforePsi 共用），
+     * 本方法保留 exec 侧「进程内同 vf 幂等短路」语义 + 成功回写 [dialectMappedVf]；[ensureMapped]
+     * 线程自适应——EDT 直调安全（本方法现调用点全在 EDT），BGT 调用自动走两段式派发。
      */
     private fun mapDialectBeforePsi(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, LOG: com.intellij.openapi.diagnostic.Logger) {
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
-        if (dialectMappedVf?.isValid == true && dialectMappedVf === vf) {
-            LOG.debug("[M36] dialect already mapped for ${vf.name}, skip setMapping")
-            return
-        }
-        runCatching {
-            val mappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
-            val mappings = mappingsClass.getMethod("getInstance", Project::class.java).invoke(null, project)
-            @Suppress("UNCHECKED_CAST")
-            val values = mappingsClass.getMethod("getAvailableValues").invoke(mappings) as? List<Any?>
-            val mysql = values?.firstOrNull {
-                (it as? com.intellij.lang.Language)?.id.equals("MySQL", ignoreCase = true)
-            }
-            if (mysql != null) {
-                mappingsClass.getMethod(
-                    "setMapping",
-                    com.intellij.openapi.vfs.VirtualFile::class.java,
-                    Any::class.java,
-                ).invoke(mappings, vf, mysql)
-                dialectMappedVf = vf
-                LOG.info("[M36] dialect pre-mapped to MySQL for ${vf.name}")
-            } else {
-                LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)")
-            }
-        }.onFailure { e ->
-            LOG.warn("[M36] dialect pre-mapping skipped: ${e.message}")
+        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
+        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+            dialectMappedVf = vf
+            LOG.info("[M36] dialect pre-mapped to MySQL for ${vf.name}")
         }
     }
 
@@ -3114,6 +3109,102 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     /** T-ExecCopyFix F2c：exec 临时文件 vf+psi 缓存是否仍持有（clearPrepared 不清缓存断言用）。 */
     internal fun cachedTempPsiFileForTest(): Boolean = cachedTempPsiFile != null
 
+    /**
+     * T-ExecSlowOps F2：后台预热 exec 临时文件（写盘 → VFS refresh → 方言映射 → findFile →
+     * 填 [cachedTempPsiFile]）——**只允许后台线程调用**（EDT 直调拒绝并 warn：本链含
+     * refresh/findFile 慢操作，EDT 执行正是 262 真机堆栈①的 SEVERE 本体）。
+     *
+     * 由 `SqlPreviewService.previewAsync` 在池线程内、`invokeLater` 派发弹窗之前调用：弹窗打开后
+     * `prepareDefaultConsole → chooseAndPrepare → consumeCachedTempPsiFile` 必命中缓存，EDT 冷路径
+     * （[createTempPsiFile] 的 refresh+findFile）退化为兜底（无预览链触达的显式执行路径首跑等）。
+     *
+     * SQL 一致性：预热写入的是 [cn.song.mybatisplus.visualizer.model.PreviewResult.sql] 原文，与
+     * 面板渲染文本（格式化/参数回填后）可能不同——与 T-PreviewFlash 缓存命中路径同款语义（缓存命中
+     * 时本就不重写文件，文档内容差异由下游 console doc 同步链吸收：reuseSharedConsole setText /
+     * prepareAfterEditorResolved model 同步 / executeOnConsole 执行前同步）。
+     *
+     * 幂等：缓存已对当前项目可用即直接返回（同项目连续预览仅一次真实链）。
+     * Community/无 Database 插件场景安全：本方法不触任何 Database 类，纯 VFS/PSI。
+     */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    fun prewarmExecTempFile(project: Project, sql: String) {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        if (ApplicationManager.getApplication().isDispatchThread) {
+            LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)")
+            return
+        }
+        if (project.isDisposed || sql.isBlank()) return
+        val cachedVf = cachedTempPsiFile?.first
+        if (cachedVf != null && isCacheUsable(project, cachedVf)) {
+            // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
+            // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
+            // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
+            runCatching { projectExecFile(project, sql) }.onFailure { e ->
+                LOG.warn("[M36] exec prewarm refresh-content failed: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            LOG.info("[M36] exec prewarm: cache hit, content refreshed only")
+            return
+        }
+        // 并发预览（gutter 连点/多面板）只允许一条真实预热链——其余直接返回，弹窗冷路径兜底
+        if (!execPrewarmInFlight.compareAndSet(false, true)) {
+            LOG.info("[M36] exec prewarm skipped (another prewarm in flight)")
+            return
+        }
+        try {
+            prewarmExecTempFileInner(project, sql, LOG)
+        } finally {
+            execPrewarmInFlight.set(false)
+        }
+    }
+
+    /** [prewarmExecTempFile] 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun prewarmExecTempFileInner(project: Project, sql: String, LOG: com.intellij.openapi.diagnostic.Logger) {
+        lastTempFileFailure = null
+        // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
+        val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
+            LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        } ?: return
+        val vf = try {
+            com.intellij.openapi.application.WriteIntentReadAction
+                .compute<com.intellij.openapi.vfs.VirtualFile?> {
+                    LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
+                }
+        } catch (e: Throwable) {
+            LOG.warn("[M36] exec prewarm refreshVfs failed: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        } ?: run {
+            LOG.warn("[M36] exec prewarm: VFS not visible after refresh (${ioFile.path}, exists=${ioFile.exists()})")
+            return
+        }
+        // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）
+        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
+        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+            dialectMappedVf = vf
+        }
+        val psi = try {
+            ReadAction.compute<PsiFile?, Throwable> {
+                PsiManager.getInstance(project).findFile(vf)
+            }
+        } catch (e: Throwable) {
+            LOG.warn("[M36] exec prewarm findPsi failed: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        } ?: run {
+            LOG.warn("[M36] exec prewarm: findFile null (${vf.name})")
+            return
+        }
+        if (project.isDisposed) return
+        markCachedTempPsiFile(project, vf, psi)
+        LOG.info("[M36] exec prewarm DONE (cache filled off EDT): ${vf.name}")
+    }
+
+    /** T-ExecSlowOps F2：填 exec 临时文件 vf+psi 缓存槽（项目绑定；BGT/EDT 均可调用——volatile 写）。 */
+    internal fun markCachedTempPsiFile(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, psi: PsiFile) {
+        cachedTempPsiFile = vf to psi
+        cachedTempPsiProjectName = project.name
+    }
+
     /** T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（成功时 null）。 */
     internal fun lastTempFileFailureForTest(): String? = lastTempFileFailure
 
@@ -3123,8 +3214,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             PsiManager.getInstance(project).findFile(vf)
         }
         checkNotNull(psi) { "markCachedTempPsiFileForTest: findFile null for ${vf.name}" }
-        cachedTempPsiFile = vf to psi
-        cachedTempPsiProjectName = project.name
+        markCachedTempPsiFile(project, vf, psi)
     }
 
     /** T-ExecCopyFix F2c 测试缝：清缓存槽（测试隔离收尾）。 */
