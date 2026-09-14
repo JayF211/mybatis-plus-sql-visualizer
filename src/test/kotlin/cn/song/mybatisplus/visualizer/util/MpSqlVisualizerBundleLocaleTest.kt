@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.util
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -34,5 +35,20 @@ class MpSqlVisualizerBundleLocaleTest {
         val text = MpSqlVisualizerBundle.message("error.report.action")
         assertNotNull(text)
         assertTrue("应解析到中文文案而非 key 本身", text != "error.report.action")
+    }
+
+    @Test
+    fun `嵌入平台文案按IDE显示语言解析_不随插件语言设置`() {
+        // T-ReportL10n-02 契约：messageForIde 只看 ideDisplayLocale——zh → 中文值，
+        // 其余语言（utf8Control 禁回退直达 base）→ 英文值；永不是 key 本身
+        val locale = MpSqlVisualizerBundle.ideDisplayLocale()
+        val text = MpSqlVisualizerBundle.messageForIde("error.report.action")
+        val zhText = "报告到 SQL Visualizer 需求池"
+        val enText = "Report to SQL Visualizer Feedback Pool"
+        if (locale.language == "zh") {
+            assertEquals("zh 显示语言应取 _zh 文案", zhText, text)
+        } else {
+            assertEquals("非 zh 显示语言应直达 base 英文文案", enText, text)
+        }
     }
 }

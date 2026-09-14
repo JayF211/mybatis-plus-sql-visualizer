@@ -72,6 +72,25 @@ object MpSqlVisualizerBundle {
     private val loader: ClassLoader get() = MpSqlVisualizerBundle::class.java.classLoader
 
     /**
+     * T-ReportL10n-02：嵌入平台 UI 的文案（如 errorHandler 的「报告到…」菜单项与隐私
+     * 提示）恒按 **IDE 显示语言** 解析，不经插件语言设置。
+     *
+     * 真机二次反馈：插件语言默认 zh，仅改 AUTO 分支不会生效——这两处文案出现在平台
+     * Internal Errors 界面里，周围全是 IDE 语言，必须跟随 IDE 显示语言才不割裂；
+     * 插件自己的对话框仍走 [message]（跟随插件语言设置），边界与 M23「平台组件文案
+     * 不跟插件语言须显式覆盖」一脉相承。IDE locale 不可用（headless）回退 JVM locale。
+     */
+    @JvmStatic
+    fun messageForIde(@PropertyKey(resourceBundle = BUNDLE_NAME) key: String, vararg params: Any?): String {
+        val pattern = runCatching {
+            ResourceBundle.getBundle(BUNDLE_NAME, ideDisplayLocale(), loader, utf8Control).getString(key)
+        }.getOrDefault(key)
+        return if (params.isEmpty()) pattern else runCatching {
+            MessageFormat.format(pattern, *params)
+        }.getOrDefault(pattern)
+    }
+
+    /**
      * 当前语言 locale：默认简体中文；`en`→English；`AUTO`→跟随 IDE 显示语言；
      * settings 未注册（测试环境）兜底中文。
      */

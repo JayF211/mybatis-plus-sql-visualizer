@@ -146,6 +146,9 @@ val psi = ReadAction.compute { PsiManager.getInstance(proj).findFile(vf) }
    `BannedApiSourceScanTest` 新增守卫「`"setMapping"` 字面量 src/main 只允许
    DialectPreMapping.kt 单入口」（等价承载原计划『预热方法体内无 setMapping 直调』意图，
    收口更强——任何新文件反射直调都红）。全量裸命令 **3979/0/0/6 绿**（基线 3975+4）。
+6. **合入 master**（merge e2a7419，docs 两表按时间序并集解冲突）：合并后 detached worktree
+   独立沙盒全量 **4028/0/0/6 绿**（中途 XmlPreviewPanelTest 剪贴板 1 例=并行会话抢系统
+   剪贴板环境型 flake，单类重跑绿）；分支与 worktree 用后即删。
 
 F2 SQL 时效性说明：预热写 `result.sql` 原文与面板渲染文本差异由既有三级同步链吸收
 （reuseSharedConsole setText / prepareAfterEditorResolved console-doc→vf 同步 + smart

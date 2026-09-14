@@ -31,9 +31,12 @@ class IdeErrorReportSubmitter : ErrorReportSubmitter() {
     internal var openReportFlow: (ErrorReportComposer.Prefill, String?, String, Consumer<in SubmittedReportInfo>) -> Unit =
         { prefill, stackText, fingerprint, consumer -> openDialogAndSubmit(prefill, stackText, fingerprint, consumer) }
 
-    override fun getReportActionText(): String = MpSqlVisualizerBundle.message("error.report.action")
+    // T-ReportL10n-02：这两处文案渲染在平台 Internal Errors 界面里，恒跟随 IDE 显示
+    // 语言（messageForIde）不经插件语言设置——真机二次反馈：上轮只改 AUTO 分支落点，
+    // 但插件语言默认 zh（非 AUTO），菜单项照样中文与周围英文界面割裂
+    override fun getReportActionText(): String = MpSqlVisualizerBundle.messageForIde("error.report.action")
 
-    override fun getPrivacyNoticeText(): String = MpSqlVisualizerBundle.message("error.report.privacy")
+    override fun getPrivacyNoticeText(): String = MpSqlVisualizerBundle.messageForIde("error.report.privacy")
 
     override fun submit(
         events: Array<IdeaLoggingEvent>,
