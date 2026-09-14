@@ -5,6 +5,10 @@ package cn.song.mybatisplus.visualizer.feedback
  *
  * 标题/描述满足需求池服务端约束（title 5~200、description ≥10，见开发计划 §2.2 契约表）；
  * 分类映射为粗粒度启发式（按插件包名线索），管理员可在需求池后台改判。
+ *
+ * T-FeedbackBatch（2026-09-14 用户定案「不能被轻易限流」）：平台错误列表可多选，用户常一次报一堆——
+ * 服务端限流是 5 次/小时/IP，逐条提交必然 429。策略：多条合并成**一条**帖子（描述出清单、附件收全文，
+ * 见 [buildBatchTitle]/[buildBatchDescription]/[buildStackAttachment]），把 N 次请求压成 1 次。
  */
 object ErrorReportComposer {
 
@@ -78,6 +82,19 @@ object ErrorReportComposer {
         pluginVersion: String?,
         fingerprint: String?,
         occurredAt: String,
+    ): String = buildStackAttachment(listOf(stackTraceText ?: "(无堆栈)"), ideVersion, pluginVersion, fingerprint, occurredAt)
+
+    /**
+     * 多事件堆栈附件（T-FeedbackBatch）：平台在对话框里可多选错误，勾选几条就带几条——
+     * 每条独立分节（`#N 异常类: 消息` 标题 + 全文），空/空白条目剔除；
+     * 全部为空时退化为单节 `(无堆栈)`。总量仍截断到 60_000 字符。
+     */
+    fun buildStackAttachment(
+        stackTraces: List<String>,
+        ideVersion: String?,
+        pluginVersion: String?,
+        fingerprint: String?,
+        occurredAt: String,
     ): String = buildString {
         appendLine("SQL Visualizer 错误报告")
         appendLine("========================================")
@@ -86,10 +103,72 @@ object ErrorReportComposer {
         appendLine("插件版本: ${pluginVersion ?: "unknown"}")
         appendLine("操作系统: ${System.getProperty("os.name") ?: "unknown"} ${System.getProperty("os.version") ?: ""}")
         appendLine("指纹: ${fingerprint ?: "none"}")
+        appendLine("异常条数: ${stackTraces.count { it.isNotBlank() }.coerceAtLeast(1)}")
         appendLine("========================================")
         appendLine()
-        append(stackTraceText?.take(60_000) ?: "(无堆栈)")
+        val meaningful = stackTraces.filter { it.isNotBlank() }
+        if (meaningful.isEmpty()) {
+            append("(无堆栈)")
+            return@buildString
+        }
+        meaningful.forEachIndexed { index, stack ->
+            if (index > 0) appendLine().appendLine()
+            appendLine("----- #${index + 1} -----")
+            append(stack)
+            if (!stack.endsWith("\n")) appendLine()
+        }
+    }.take(60_000)
+
+    // ---------- 多事件批量报告（T-FeedbackBatch） ----------
+
+    /** 批量报告条目：一条异常事件 → 一节内容。 */
+    data class BatchEntry(val title: String, val message: String?, val stackTraceText: String?)
+
+    /** 批量合并阈值：≤ 此条数合成一条帖子（服务端 5 次/小时/IP，逐条报必撞 429）。 */
+    const val BATCH_MERGE_MAX = 5
+
+    /** 单条合并帖子的异常数上限（超出截断并注明）。 */
+    const val BATCH_MAX_ITEMS = 20
+
+    /**
+     * 合并帖标题（纯函数，≤200）：首条异常摘要 + `等 N 条异常`，让管理员一眼看出是批次报告。
+     */
+    fun buildBatchTitle(entries: List<BatchEntry>): String {
+        val first = entries.firstOrNull()
+        val head = buildTitle(first?.title, first?.message)
+        if (entries.size <= 1) return head
+        val suffix = "（等 ${entries.size} 条异常）"
+        val room = TITLE_MAX - suffix.length
+        val truncated = if (head.length > room) head.take(room) else head
+        return if (truncated.length < TITLE_MIN) "$truncated$suffix (SQL Visualizer)" else "$truncated$suffix"
     }
+
+    /**
+     * 合并帖描述（纯函数）：总条数说明 + 每条 `#N [异常类] 消息` 清单（超出 [BATCH_MAX_ITEMS] 截断并注明），
+     * 保证 ≥ [DESCRIPTION_MIN]（服务端 400 拒绝线）。
+     */
+    fun buildBatchDescription(entries: List<BatchEntry>, userNotes: String?): String {
+        val total = entries.size
+        val shown = entries.take(BATCH_MAX_ITEMS)
+        val text = buildString {
+            appendLine("（来自 IDE 的错误批次报告，共 $total 条）")
+            shown.forEachIndexed { index, entry ->
+                val type = entry.title.substringAfterLast('.').ifBlank { "PluginError" }
+                val firstLine = entry.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                appendLine("#${index + 1} $type${if (firstLine.isBlank()) "" else ": $firstLine"}")
+            }
+            if (total > shown.size) appendLine("（其余 ${total - shown.size} 条见附件）")
+            userNotes?.trim()?.takeUnless { it.isBlank() }?.let { appendLine(); appendLine(it) }
+        }.trim()
+        return if (text.length < DESCRIPTION_MIN) "$text\n(from IDE error report)" else text
+    }
+
+    /**
+     * 是否走合并帖（纯函数）：条数 > 1 且 ≤ [BATCH_MERGE_MAX] 时合并成一条帖子，
+     * 把 N 次请求压成 1 次——限流桶是「5 次/小时/IP」，逐条提交等于把用户的额度一次烧光。
+     * 条数更多时另走「先传附件、再补发」两步（见 [FeedbackApi.scheduleFollowUp]）。
+     */
+    fun shouldMerge(entryCount: Int): Boolean = entryCount in 2..BATCH_MERGE_MAX
 
     /** 需求池分类 slug（与 sql-visualizer-admin Categories 一致）。 */
     const val CATEGORY_WRAPPER = "wrapper"

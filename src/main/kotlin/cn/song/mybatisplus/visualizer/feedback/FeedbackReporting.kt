@@ -15,6 +15,10 @@ import com.intellij.openapi.project.Project
  *
  * 网络一律后台线程；回调 `invokeLater` 显式 `ModalityState.any()`——报告对话框/设置页
  * 模态存续期挂起默认 modality 的回调（设置页反馈红线，真机实证）。
+ *
+ * T-FeedbackErr（2026-09-14 真机）：提交结果不再只有 toast——对话框保持打开并内联展示
+ * 「提交中 / 失败原因（服务端文案）/ 重试按钮」，失败时用户能当场改内容再试；
+ * 附件上传失败降级为「不带附件提交」并另行提示，不再连坐整帖。
  */
 internal object FeedbackReporting {
 
@@ -24,16 +28,24 @@ internal object FeedbackReporting {
     /**
      * 后台提交（任何线程可调）；完成后 EDT 回调 [onResult]。
      * 网络异常折入 [FeedbackApi.SubmitResult.Failure]，不抛出。
+     *
+     * T-FeedbackErr：回调升格为 [FeedbackApi.SubmissionOutcome]（结果 + 附件降级提示），
+     * 并新增 [onProgress]——提交进度由调用方决定怎么显示（对话框内联状态行），
+     * 真机教训是「提交中/提交失败」全靠 toast，用户看不到任何可操作的东西。
      */
     fun submitInBackground(
         submission: FeedbackApi.Submission,
-        onResult: (FeedbackApi.SubmitResult) -> Unit,
+        onProgress: (Boolean) -> Unit = {},
+        onResult: (FeedbackApi.SubmissionOutcome) -> Unit,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = runCatching { FeedbackApi.submit(submission) }
-                .getOrElse { FeedbackApi.SubmitResult.Failure(it.message ?: "submit failed") }
+            val outcome = runCatching { FeedbackApi.submit(submission) }
+                .getOrElse { FeedbackApi.SubmissionOutcome(FeedbackApi.SubmitResult.Failure(it.message ?: "submit failed")) }
             ApplicationManager.getApplication().invokeLater(
-                { onResult(result) },
+                {
+                    onProgress(false)
+                    onResult(outcome)
+                },
                 ModalityState.any(),
             )
         }
@@ -66,6 +78,17 @@ internal object FeedbackReporting {
         }
     }
 
+    /** 附件降级提示 toast（T-FeedbackErr）：帖子已发出、但堆栈附件没带上。 */
+    fun notifyAttachmentWarning(project: Project?, warning: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("cn.song.mybatisplus.visualizer.feedback")
+            .createNotification(
+                MpSqlVisualizerBundle.message("feedback.notify.attachmentSkipped.title"),
+                warning,
+                NotificationType.WARNING,
+            ).notify(project)
+    }
+
     /** 手动入口（Help 菜单 / 设置页按钮）：打开手动形态报告框，提交后结果走通知。
      *  堆栈区可编辑（粘贴）+「从 IDE 错误池导入」候选（[pluginErrorPoolStacks]，T-FeedbackDlg3）。 */
     fun openManualDialog(project: Project? = null) {
@@ -77,11 +100,19 @@ internal object FeedbackReporting {
                 ideVersion = ideVersion(),
                 pluginVersion = PluginVersion.current(),
                 stackPoolProvider = { pluginErrorPoolStacks() },
-            ) { submission ->
-                submitInBackground(submission) { result -> notifyResult(project, result) }
+            ) { submission: FeedbackApi.Submission,
+                _: List<BatchSubmitter.BatchItem>,
+                onResult: (FeedbackApi.SubmissionOutcome) -> Unit ->
+                submitInBackground(submission) { result -> onResult(result) }
             }
             dialog.show()
         }
+    }
+
+    /** 报告结果通知（对话框内联状态行的共用呈现，T-FeedbackErr）：成功/失败都落到项目通知组。 */
+    fun notifyOutcome(project: Project?, outcome: FeedbackApi.SubmissionOutcome) {
+        outcome.warning?.let { notifyAttachmentWarning(project, it) }
+        notifyResult(project, outcome.result)
     }
 
     /**
@@ -105,6 +136,11 @@ internal object FeedbackReporting {
     /** 错误池条目归属判定（纯函数，T-FeedbackDlg2-02）：堆栈全文或消息含本插件包名即算本插件错误。 */
     internal fun isPluginError(throwableText: String?, message: String?): Boolean =
         throwableText?.contains(PLUGIN_PACKAGE) == true || message?.contains(PLUGIN_PACKAGE) == true
+
+    /** 报告时间戳（批量组装与单条附件共用同一格式）。 */
+    fun nowStamp(): String = java.time.ZonedDateTime.now().format(
+        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX"),
+    )
 
     /** IDE 版本描述（如 `IntelliJ IDEA 2024.3.7.1 Ultimate`）；平台读取失败返回 null。 */
     fun ideVersion(): String? =

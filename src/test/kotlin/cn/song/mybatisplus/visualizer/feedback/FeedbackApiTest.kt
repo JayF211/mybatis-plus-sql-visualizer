@@ -4,12 +4,16 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * T-ErrReport-01：需求池 API 客户端单测——JSON 契约 / multipart 字节结构 / 响应解析 /
  * fake sender 全链路。网络实现（HttpRequestsSender）按 UpdateApi 惯例不在单测覆盖。
+ *
+ * T-FeedbackErr：补「失败原因呈现」（describeHttpFailure/serverMessageOf）与「附件降级」
+ * （不再连坐整帖）两组契约。
  */
 class FeedbackApiTest {
 
@@ -61,9 +65,11 @@ class FeedbackApiTest {
     fun `无附件提交_发送JSON契约字段`() {
         val sender = RecordingSender()
         FeedbackApi.sender = sender
-        val result = FeedbackApi.submit(FeedbackApi.Submission(request(), stackAttachment = null))
+        val outcome = FeedbackApi.submit(FeedbackApi.Submission(request(), stackAttachment = null))
+        val result = outcome.result
         assertTrue(result is FeedbackApi.SubmitResult.Success)
         assertEquals("FR-0042", (result as FeedbackApi.SubmitResult.Success).postNo)
+        assertNull("无附件时不应有降级提示", outcome.warning)
         assertEquals(0, sender.uploadCalls.size)
         assertEquals(1, sender.jsonCalls.size)
         assertEquals(FeedbackApi.POSTS_URL, sender.jsonCalls[0].first)
@@ -86,8 +92,9 @@ class FeedbackApiTest {
         val sender = RecordingSender()
         FeedbackApi.sender = sender
         val stack = FeedbackApi.StackAttachment("stack.txt", "hello stack".toByteArray())
-        val result = FeedbackApi.submit(FeedbackApi.Submission(request(), stackAttachment = stack))
-        assertTrue(result is FeedbackApi.SubmitResult.Success)
+        val outcome = FeedbackApi.submit(FeedbackApi.Submission(request(), stackAttachment = stack))
+        assertTrue(outcome.result is FeedbackApi.SubmitResult.Success)
+        assertNull(outcome.warning)
         assertEquals(1, sender.uploadCalls.size)
         assertEquals(FeedbackApi.UPLOAD_URL, sender.uploadCalls[0].first)
         assertEquals("stack.txt", sender.uploadCalls[0].second)
@@ -99,25 +106,58 @@ class FeedbackApiTest {
         assertEquals(9L, (attachments?.firstOrNull()?.get("fileSize") as Number).toLong())
     }
 
+    /**
+     * T-FeedbackErr 降级契约：附件被服务端拒绝（415）时不再连坐整帖——
+     * 帖子照发（无附件）、结果成功、warning 说明原因，用户填的标题描述不丢。
+     */
     @Test
-    fun `上传失败短路_不再发帖`() {
+    fun `附件被拒_降级为无附件发帖并带warning`() {
         val sender = RecordingSender(
             uploadResponse = { _, _, _ -> """{"code":415,"message":"不支持的附件类型 .exe"}""" },
         )
         FeedbackApi.sender = sender
-        val result = FeedbackApi.submit(
+        val outcome = FeedbackApi.submit(
             FeedbackApi.Submission(request(), FeedbackApi.StackAttachment("s.txt", byteArrayOf(1))),
         )
-        assertTrue("RES=<${result}>", result is FeedbackApi.SubmitResult.Failure)
-        assertTrue("MSG=<${(result as FeedbackApi.SubmitResult.Failure).message}>", result.message.contains("415") || result.message.contains("附件"))
-        assertEquals(0, sender.jsonCalls.size)
+        assertTrue("RES=<${outcome.result}>", outcome.result is FeedbackApi.SubmitResult.Success)
+        assertEquals("不支持的附件类型 .exe", outcome.warning)
+        assertEquals(1, sender.jsonCalls.size)
+        val sent: Map<String, Any?> = gson.fromJson(sender.jsonCalls[0].second, object : TypeToken<Map<String, Any?>>() {}.type)
+        assertEquals("降级后请求不带附件", true, (sent["attachments"] as? List<*>)?.isEmpty())
+    }
+
+    /** 附件上传抛通道异常（HttpFailure）时同样降级，warning 取服务端文案。 */
+    @Test
+    fun `附件上传抛HttpFailure_降级且warning取服务端文案`() {
+        val sender = RecordingSender(uploadResponse = { _, _, _ ->
+            throw HttpFailure(413, """{"code":413,"message":"附件超过 5MB，请压缩后上传"}""")
+        })
+        FeedbackApi.sender = sender
+        val outcome = FeedbackApi.submit(
+            FeedbackApi.Submission(request(), FeedbackApi.StackAttachment("s.txt", byteArrayOf(1))),
+        )
+        assertTrue(outcome.result is FeedbackApi.SubmitResult.Success)
+        assertEquals("附件超过 5MB，请压缩后上传", outcome.warning)
+    }
+
+    /** T-FeedbackErr 主线：4xx 正文里的服务端文案必须压过通道级 message。 */
+    @Test
+    fun `服务端4xx正文优先于通道消息`() {
+        val sender = RecordingSender(jsonResponse = { _, _ ->
+            throw HttpFailure(400, """{"code":400,"message":"标题长度需在 5-200 字符之间"}""")
+        })
+        FeedbackApi.sender = sender
+        val outcome = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
+        val failure = outcome.result as FeedbackApi.SubmitResult.Failure
+        assertEquals("标题长度需在 5-200 字符之间", failure.message)
     }
 
     @Test
     fun `服务端业务错误透出message`() {
         val sender = RecordingSender(jsonResponse = { _, _ -> """{"code":400,"message":"标题长度需在 5-200 字符之间"}""" })
         FeedbackApi.sender = sender
-        val result = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
+        val outcome = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
+        val result = outcome.result
         assertTrue(result is FeedbackApi.SubmitResult.Failure)
         assertEquals("标题长度需在 5-200 字符之间", (result as FeedbackApi.SubmitResult.Failure).message)
     }
@@ -128,9 +168,41 @@ class FeedbackApiTest {
             override fun postJson(url: String, json: String): String = throw java.io.IOException("connection refused")
             override fun postMultipart(url: String, fileName: String, mimeType: String, content: ByteArray): String = ""
         }
-        val result = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
+        val outcome = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
+        val result = outcome.result
         assertTrue(result is FeedbackApi.SubmitResult.Failure)
         assertTrue((result as FeedbackApi.SubmitResult.Failure).message.contains("connection refused"))
+    }
+
+    // ---------- 失败原因呈现（纯函数，T-FeedbackErr） ----------
+
+    @Test
+    fun `失败原因_取服务端正文message`() {
+        val error = HttpFailure(400, """{"code":400,"message":"描述至少 10 个字符"}""")
+        assertEquals("描述至少 10 个字符", FeedbackApi.describeHttpFailure(error))
+    }
+
+    @Test
+    fun `失败原因_正文不可解析时回退通道消息并保留原文`() {
+        val error = HttpFailure(400, "<html>Bad Request</html>")
+        val message = FeedbackApi.describeHttpFailure(error)
+        assertTrue("MSG=<$message>", message?.contains("Server returned HTTP response code: 400") == true)
+    }
+
+    @Test
+    fun `失败原因_非HTTP异常走cause链`() {
+        val wrapper = RuntimeException("outer", java.io.IOException("connection reset"))
+        assertEquals("connection reset", FeedbackApi.describeHttpFailure(wrapper))
+        assertEquals(null, FeedbackApi.describeHttpFailure(null))
+    }
+
+    @Test
+    fun `服务端message提取_非法JSON与缺字段返回null`() {
+        assertEquals(null, FeedbackApi.serverMessageOf(null))
+        assertEquals(null, FeedbackApi.serverMessageOf("   "))
+        assertEquals(null, FeedbackApi.serverMessageOf("not json"))
+        assertEquals(null, FeedbackApi.serverMessageOf("""{"code":400}"""))
+        assertEquals("boom", FeedbackApi.serverMessageOf("""{"code":400,"message":"boom"}"""))
     }
 
     // ---------- 响应解析（纯函数） ----------

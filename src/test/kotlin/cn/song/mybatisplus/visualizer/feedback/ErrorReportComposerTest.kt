@@ -99,4 +99,76 @@ class ErrorReportComposerTest {
         assertTrue(prefill.description.contains("boom"))
         assertEquals("sql-log", prefill.category)
     }
+
+    // ---------- 批量报告（T-FeedbackBatch：一次多勾也不撞 429） ----------
+
+    private fun entries(count: Int) = (1..count).map { index ->
+        ErrorReportComposer.BatchEntry(
+            title = "cn.song.mybatisplus.visualizer.Boom$index",
+            message = "boom $index",
+            stackTraceText = "java.lang.RuntimeException: boom $index\n\tat cn.song.mybatisplus.visualizer.log.P$index.r(P$index.kt:1)",
+        )
+    }
+
+    @Test
+    fun `合并阈值_两条到五条合并_单条与更多不合并`() {
+        assertEquals(false, ErrorReportComposer.shouldMerge(1))
+        assertEquals(true, ErrorReportComposer.shouldMerge(2))
+        assertEquals(true, ErrorReportComposer.shouldMerge(ErrorReportComposer.BATCH_MERGE_MAX))
+        assertEquals(false, ErrorReportComposer.shouldMerge(ErrorReportComposer.BATCH_MERGE_MAX + 1))
+        assertEquals(false, ErrorReportComposer.shouldMerge(0))
+    }
+
+    @Test
+    fun `合并标题含条数且不超服务端上限`() {
+        assertEquals("Boom1: boom 1（等 3 条异常）", ErrorReportComposer.buildBatchTitle(entries(3)))
+        // 超长首条也须 ≤200（服务端 400 拒绝线）
+        val long = ErrorReportComposer.buildBatchTitle(
+            listOf(ErrorReportComposer.BatchEntry("a.B", "x".repeat(500), null)) + entries(2),
+        )
+        assertTrue("len=${long.length}", long.length <= ErrorReportComposer.TITLE_MAX)
+        assertTrue(long.endsWith("（等 3 条异常）"))
+    }
+
+    @Test
+    fun `合并描述出条目清单并保留用户补充`() {
+        val description = ErrorReportComposer.buildBatchDescription(entries(3), "顺便说一句")
+        assertTrue(description.contains("共 3 条"))
+        assertTrue(description.contains("#1 Boom1: boom 1"))
+        assertTrue(description.contains("#3 Boom3: boom 3"))
+        assertTrue(description.contains("顺便说一句"))
+    }
+
+    @Test
+    fun `合并描述超20条截断并注明`() {
+        val description = ErrorReportComposer.buildBatchDescription(entries(25), null)
+        assertTrue(description.contains("共 25 条"))
+        assertTrue(description.contains("其余 5 条见附件"))
+        assertEquals(false, description.contains("#21"))
+    }
+
+    @Test
+    fun `多节附件含每条分节与条数`() {
+        val content = ErrorReportComposer.buildStackAttachment(
+            entries(3).map { it.stackTraceText ?: "" },
+            ideVersion = "IntelliJ IDEA 2026.2.1",
+            pluginVersion = "2026.9.14",
+            fingerprint = null,
+            occurredAt = "2026-09-14 20:00:00 +08:00",
+        )
+        assertTrue(content.contains("异常条数: 3"))
+        assertTrue(content.contains("----- #1 -----"))
+        assertTrue(content.contains("----- #3 -----"))
+        assertTrue(content.contains("boom 3"))
+    }
+
+    @Test
+    fun `多节附件空条目退化且总长受限`() {
+        val empty = ErrorReportComposer.buildStackAttachment(listOf("", "  "), null, null, null, "t")
+        assertTrue(empty.contains("(无堆栈)"))
+        val huge = ErrorReportComposer.buildStackAttachment(
+            List(3) { "at a.B.c(B.java:1)\n".repeat(5_000) }, null, null, null, "t",
+        )
+        assertTrue("len=${huge.length}", huge.length <= 60_000)
+    }
 }

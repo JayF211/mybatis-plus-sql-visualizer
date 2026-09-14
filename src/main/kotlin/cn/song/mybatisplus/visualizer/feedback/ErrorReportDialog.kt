@@ -47,8 +47,22 @@ import javax.swing.JTextField
  *   弹窗时实时读池）；附件内容取文本区实际内容（[collectStackAttachment]）；
  * - 描述框默认高收敛（滚动面板首选 140→90，文本区 6→4 行）。
  * 错误形态维持原语义：event 堆栈预填只读预览、附件用全文、无堆栈隐藏勾选行。
- * 布局与校验抽为 [buildCenterPanel]/[validateForm] 纯函数（[ReportFormFields] 载体），
- * headless 测试零 DialogWrapper peer 依赖。
+ *
+ * T-FeedbackErr（2026-09-14 真机：报告失败只有一个「Server returned HTTP response code:
+ * 400」toast，用户既看不到原因也没有重试入口）——提交状态机落进对话框本身：
+ * - 点提交后对话框**不关**，按钮转「提交中…」并禁用，状态行就地显示进度；
+ * - 失败（服务端 4xx 正文文案已透出）时按钮恢复「提交」、状态行给红字原因 + 转浏览器兜底，
+ *   用户改完内容可直接再提交，输入不会随关窗丢失；
+ * - 成功才自动关闭，通知路径（FR 编号 + 查看详情）保持不变；
+ * - 附件上传失败降级（[FeedbackApi.SubmissionOutcome.warning]）时正文照发、状态行提示堆栈没带上。
+ * 结果文案为纯函数（[successStatusText]/[failureStatusText]），headless 可测。
+ *
+ * T-FeedbackBatch（用户定案「不能被轻易限流」）：平台错误列表可多选，用户常一次勾十几条。
+ * 服务端限流为每 IP 每小时 5 次提交，逐条提交必然撞 429，因此：
+ * - 批次条目非空时对话框底部出现「其他 N 条异常」分节，逐条复选框默认全勾
+ *   （用户看得见「这批会一起报上去」，不是被静默合并）；
+ * - 提交按条数分流（[BatchSubmitter]）：≤5 条合并成一条帖子，更多则首发带合并附件、其余错峰补发；
+ * - 标题/描述由 [composeSubmission] 纯函数派生，条目全不勾时退化为普通单条报告。
  */
 class ErrorReportDialog(
     /** 错误形态预填；null = 手动形态。 */
@@ -61,17 +75,43 @@ class ErrorReportDialog(
     private val pluginVersion: String?,
     /** 手动形态「从 IDE 错误池导入」候选堆栈提供者（点菜单时实时调用，已按插件包名过滤）。 */
     private val stackPoolProvider: () -> List<String> = { emptyList() },
-    /** 用户点击提交后回调（携带最终请求与可选堆栈附件；提交在回调方后台执行）。 */
-    private val onSubmit: (FeedbackApi.Submission) -> Unit,
+    /**
+     * 用户点击提交后回调：携带最终请求/附件与勾选后的批次条目，以及提交结束回调；
+     * 调用方拿到结果后必须回调它（成功/失败都要），对话框据此恢复按钮、渲染状态行、成功时自行关闭。
+     */
+    private val onSubmit: (
+        FeedbackApi.Submission,
+        List<BatchSubmitter.BatchItem>,
+        (FeedbackApi.SubmissionOutcome) -> Unit,
+    ) -> Unit,
 ) : DialogWrapper(true) {
 
     internal val fields = ReportFormFields()
+
+    /**
+     * 本次会话附带的批次条目（错误形态由 [IdeErrorReportSubmitter] 按勾选的 events 注入；
+     * 手动形态为空）。条目级勾选状态在提交时读取（[selectedBatchItems]）。
+     */
+    internal var batchItems: List<BatchSubmitter.BatchItem> = emptyList()
+        set(value) {
+            field = value
+            if (prefill != null) applyBatchItemsToFields(fields, value)
+        }
+
+    /** 提交进行中标记：重复点提交直接忽略（T-FeedbackErr 状态机）。 */
+    private var isSubmitting = false
+
+    /** 失败状态行文字色（状态行默认继承标签前景色，失败时才染红）。 */
+    private val STATUS_ERROR_COLOR = java.awt.Color(0xC0, 0x39, 0x2B)
 
     init {
         title = MpSqlVisualizerBundle.message("error.report.dialog.title")
         setOKButtonText(MpSqlVisualizerBundle.message("error.report.dialog.submit"))
         // 平台组件文案不跟插件语言（DialogWrapper cancelAction 坑）：显式覆盖 Cancel 文案
         setCancelButtonText(MpSqlVisualizerBundle.message("error.report.dialog.cancel"))
+        // T-FeedbackErr：提交不再一按就关窗——状态行在窗内，失败可原地改内容重试
+        setOKButtonTooltip(MpSqlVisualizerBundle.message("error.report.dialog.submit.tip"))
+        isOKActionEnabled = true
 
         fields.browserFallbackHandler = { browserFallback() }
 
@@ -191,9 +231,7 @@ class ErrorReportDialog(
         if (stack == null) return null
         val content = ErrorReportComposer.buildStackAttachment(
             stack, ideVersion, pluginVersion, fingerprint,
-            occurredAt = java.time.ZonedDateTime.now().format(
-                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX"),
-            ),
+            occurredAt = FeedbackReporting.nowStamp(),
         )
         return FeedbackApi.StackAttachment(FeedbackApi.STACK_ATTACHMENT_NAME, content.toByteArray(Charsets.UTF_8))
     }
@@ -224,15 +262,102 @@ class ErrorReportDialog(
     }
 
     override fun doOKAction() {
-        // 校验不过先交框架弹错（super 只在校验通过时关闭对话框），通过才组装提交回调
+        // 校验不过先交框架弹错（校验失败时框架不会关窗），通过才组装提交
         if (validateForm(fields.titleField.text, fields.descriptionArea.text) != null) {
             super.doOKAction()
             return
         }
-        val submission = FeedbackApi.Submission(collectRequest(), collectStackAttachment())
-        super.doOKAction()
-        onSubmit(submission)
+        if (isSubmitting) return
+        val submission = composeSubmission(
+            FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
+            selectedBatchItems(),
+        )
+        beginSubmitting()
+        // T-FeedbackErr：不再 super.doOKAction()（那会先关窗）——结果由提交结束回调决定：
+        // 成功才关窗，失败留窗可改可重试
+        runCatching { onSubmit(submission, selectedBatchItems()) { outcome -> finishSubmitting(outcome) } }
+            .onFailure { finishSubmitting(FeedbackApi.SubmissionOutcome(FeedbackApi.SubmitResult.Failure(it.message ?: "提交失败"))) }
     }
+
+    /** 勾选后参与提交的批次条目（T-FeedbackBatch；全不勾 = 普通单条报告）。 */
+    internal fun selectedBatchItems(): List<BatchSubmitter.BatchItem> =
+        if (prefill == null) emptyList() else fields.selectedBatchItems(batchItems)
+
+    /** 把批次条目渲染进对话框（错误形态；条目多时显示「其他 N 条异常」分节 + 逐条勾选）。 */
+    private fun applyBatchItemsToFields(fields: ReportFormFields, items: List<BatchSubmitter.BatchItem>) {
+        fields.batchSection.removeAll()
+        fields.batchSection.isVisible = items.isNotEmpty()
+        if (items.isEmpty()) return
+        fields.batchSection.add(
+            JBLabel(MpSqlVisualizerBundle.message("error.report.dialog.batchHeader", items.size)),
+            BorderLayout.NORTH,
+        )
+        fields.batchSection.add(
+            JBScrollPane(fields.batchList).apply { preferredSize = JBUI.size(620, 90) },
+            BorderLayout.CENTER,
+        )
+        fields.batchList.removeAll()
+        items.forEach { item ->
+            fields.batchList.add(
+                JCheckBox(batchItemLabel(item)).apply {
+                    isSelected = item.attachStack
+                    toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.batchItem.tip")
+                    // 勾选态即条目语义：勾上=该条连堆栈一起报
+                    addItemListener { item.attachStack = isSelected }
+                },
+            )
+        }
+    }
+
+    /** 进入「提交中」：按钮禁用并改文案，状态行显示进度（T-FeedbackErr）。 */
+    internal fun beginSubmitting() {
+        isSubmitting = true
+        if (!isHeadless) runCatching {
+            setOKButtonText(MpSqlVisualizerBundle.message("error.report.dialog.submitting"))
+            isOKActionEnabled = false
+        }
+        fields.statusLabel.foreground = null
+        fields.statusLabel.text = submitStatusText(SubmitPhase.SUBMITTING, null, null)
+        repaintStatus()
+    }
+
+    /**
+     * 提交结束（成功/失败都走这里，T-FeedbackErr）：成功 → 关窗并由调用方发通知；
+     * 失败 → 留在窗内，按钮恢复可点、状态行给原因（服务端文案已透出）。
+     */
+    internal fun finishSubmitting(outcome: FeedbackApi.SubmissionOutcome) {
+        isSubmitting = false
+        when (val result = outcome.result) {
+            is FeedbackApi.SubmitResult.Success -> {
+                if (!isHeadless) runCatching { close(OK_EXIT_CODE) }
+            }
+
+            is FeedbackApi.SubmitResult.Failure -> {
+                if (!isHeadless) runCatching {
+                    setOKButtonText(MpSqlVisualizerBundle.message("error.report.dialog.submit"))
+                    isOKActionEnabled = true
+                }
+                fields.statusLabel.foreground = STATUS_ERROR_COLOR
+                fields.statusLabel.text = submitStatusText(SubmitPhase.FAILED, result.message, outcome.warning)
+                repaintStatus()
+            }
+        }
+    }
+
+    /** 状态行文案变化后标记重绘（headless 无 peer，静默跳过）。 */
+    private fun repaintStatus() {
+        if (isHeadless) return
+        runCatching {
+            fields.statusLabel.invalidate()
+            contentPane?.let {
+                it.invalidate()
+                it.repaint()
+            }
+        }
+    }
+
+    /** peer 未创建（headless/异常路径）时不碰按钮与关窗 API。 */
+    private val isHeadless: Boolean get() = runCatching { window == null || !window.isDisplayable }.getOrDefault(true)
 
     private fun browserFallback() {
         val params = listOfNotNull(
@@ -370,7 +495,70 @@ class ErrorReportDialog(
             labelRow("error.report.dialog.email", fields.emailField)
             fullRow(fields.anonymousCheck)
             fullRow(fields.browserLink)
+            // T-FeedbackBatch：批次条目分节（默认隐藏，有批次条目时才显示）
+            fullRow(fields.batchSection, stretchVertically = true)
+            // T-FeedbackErr：状态行常驻最底部（提交中/失败原因就地展示，不依赖 toast）
+            fullRow(fields.statusLabel)
             return panel
+        }
+
+        /** 失败状态行文案（纯函数，T-FeedbackErr）：服务端原因 + 可选附件降级说明 + 重试引导。 */
+        internal fun failureStatusText(message: String, warning: String? = null): String {
+            val head = MpSqlVisualizerBundle.message("error.report.dialog.status.failed", message)
+            return if (warning.isNullOrBlank()) head
+            else "$head\n${MpSqlVisualizerBundle.message("error.report.dialog.status.attachmentSkipped", warning)}"
+        }
+
+        /** 附件降级提示文案（纯函数）：帖子已发出、堆栈附件缺失。 */
+        internal fun attachmentSkippedText(warning: String): String =
+            MpSqlVisualizerBundle.message("error.report.dialog.status.attachmentSkipped", warning)
+
+        /** 提交阶段（状态机；[submitStatusText] 的输入）。 */
+        internal enum class SubmitPhase { SUBMITTING, SUCCESS, FAILED }
+
+        /**
+         * 状态行文案（纯函数，T-FeedbackErr 唯一事实源）：对话框实例上的
+         * beginSubmitting/finishSubmitting 只是把它写进状态行——DialogWrapper 构造断言 EDT
+         * （`ThreadingAssertions` 硬抛，测试 worker 非 EDT），逻辑本身必须能脱离实例被锁定。
+         * 返回 null = 该阶段无状态文案（成功即关窗，不需要写状态行）。
+         */
+        internal fun submitStatusText(phase: SubmitPhase, message: String?, warning: String?): String? =
+            when (phase) {
+                SubmitPhase.SUBMITTING -> MpSqlVisualizerBundle.message("error.report.dialog.status.submitting")
+                SubmitPhase.SUCCESS -> null
+                SubmitPhase.FAILED -> failureStatusText(message.orEmpty(), warning)
+            }
+
+        // ---------- T-FeedbackBatch：批量条目（纯函数，headless 可测） ----------
+
+        /** 批次条目复选框文案：异常类简单名 + 消息首行（超长截断）。 */
+        internal fun batchItemLabel(item: BatchSubmitter.BatchItem): String {
+            val type = item.title.substringAfterLast('.').ifBlank { "PluginError" }
+            val firstLine = item.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+            val text = if (firstLine.isBlank()) type else "$type: $firstLine"
+            return if (text.length > 90) text.take(90) + "…" else text
+        }
+
+        /**
+         * 按勾选重写首发载荷（纯函数，T-FeedbackBatch）：≥2 条勾选时标题/描述改为批次形态
+         * （`等 N 条异常` + 条目清单），并把堆栈附件换成多节合并附件；1 条或 0 条时原样返回。
+         */
+        internal fun composeSubmission(
+            submission: FeedbackApi.Submission,
+            selected: List<BatchSubmitter.BatchItem>,
+        ): FeedbackApi.Submission {
+            if (selected.size < 2) return submission
+            val entries = selected.map { item ->
+                ErrorReportComposer.BatchEntry(item.title, item.message, item.stackTraceText)
+            }
+            val request = submission.request.copy(
+                title = ErrorReportComposer.buildBatchTitle(entries),
+                description = ErrorReportComposer.buildBatchDescription(entries, submission.request.description),
+            )
+            return BatchSubmitter.composeFirstSubmission(
+                submission.copy(request = request),
+                selected,
+            )
         }
 
         internal fun typeLabel(type: Int): String = MpSqlVisualizerBundle.message("feedback.type.$type")
@@ -433,6 +621,21 @@ internal class ReportFormFields {
     val anonymousCheck = JCheckBox().apply {
         text = MpSqlVisualizerBundle.message("error.report.dialog.anonymous")
     }
+
+    /** 提交状态行（T-FeedbackErr）：初始空占位（不占额外纵向空间，weighty=0）。 */
+    val statusLabel = JBLabel(" ")
+
+    /** 批次条目列表（T-FeedbackBatch）：每个条目一个复选框，勾选态即该条的「附带堆栈」。 */
+    val batchList = JPanel(java.awt.GridLayout(0, 1, 0, 2))
+
+    /** 批次分节容器（默认隐藏；[ErrorReportDialog.batchItems] 注入后显示）。 */
+    val batchSection = JPanel(BorderLayout(4, 2)).apply { isVisible = false }
+
+    /** 当前勾选的批次条目（纯遍历，测试可断言）。 */
+    fun selectedBatchItems(all: List<BatchSubmitter.BatchItem>): List<BatchSubmitter.BatchItem> =
+        all.filterIndexed { index, _ ->
+            (batchList.getComponent(index) as? JCheckBox)?.isSelected ?: false
+        }
 
     /** 浏览器兜底链接行为由对话框注入（[browserFallbackHandler]），字段类保持无逻辑。 */
     var browserFallbackHandler: () -> Unit = {}

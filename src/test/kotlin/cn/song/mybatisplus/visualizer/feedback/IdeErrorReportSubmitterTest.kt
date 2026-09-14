@@ -24,7 +24,7 @@ class IdeErrorReportSubmitterTest {
     fun `无事件返回false且不弹框`() {
         val submitter = IdeErrorReportSubmitter()
         var flowCalled = false
-        submitter.openReportFlow = { _, _, _, _ -> flowCalled = true }
+        submitter.openReportFlow = { _, _, _, _, _ -> flowCalled = true }
         assertFalse(submitter.submit(emptyArray(), null, javax.swing.JPanel(), Consumer { }))
         assertFalse(flowCalled)
     }
@@ -33,7 +33,7 @@ class IdeErrorReportSubmitterTest {
     fun `指纹命中去重_直接DUPLICATE回调且不弹框`() {
         val submitter = IdeErrorReportSubmitter()
         var flowCalled = false
-        submitter.openReportFlow = { _, _, _, _ -> flowCalled = true }
+        submitter.openReportFlow = { _, _, _, _, _ -> flowCalled = true }
         submitter.dedupeGate = { true }
         var received: SubmittedReportInfo? = null
         val accepted = submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { received = it })
@@ -49,16 +49,21 @@ class IdeErrorReportSubmitterTest {
         var capturedPrefill: ErrorReportComposer.Prefill? = null
         var capturedStack: String? = null
         var capturedFingerprint: String? = null
-        submitter.openReportFlow = { prefill, stackText, fingerprint, _ ->
+        var capturedBatch: List<BatchSubmitter.BatchItem>? = null
+        submitter.openReportFlow = { prefill, stackText, fingerprint, batch, _ ->
             capturedPrefill = prefill
             capturedStack = stackText
             capturedFingerprint = fingerprint
+            capturedBatch = batch
         }
         val accepted = submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
         assertTrue(accepted)
         assertEquals("RuntimeException: boom", capturedPrefill?.title)
         assertTrue(capturedStack?.contains("Foo.bar") == true)
         assertEquals(ErrorFingerprint.of(throwable.javaClass.name, throwable.stackTraceToString()), capturedFingerprint)
+        // T-FeedbackBatch：勾选的每条错误都作为批次条目传到对话框
+        assertEquals(1, capturedBatch?.size)
+        assertEquals(capturedBatch?.first()?.message, "boom")
     }
 
     @Test
@@ -76,6 +81,19 @@ class IdeErrorReportSubmitterTest {
         val info = submitter.reportInfo(FeedbackApi.SubmitResult.Failure("429"))
         assertEquals(SubmittedReportInfo.SubmissionStatus.FAILED, info.status)
         assertNull(info.url)
+    }
+
+    @Test
+    fun `勾选多条事件_每条都成为批次条目`() {
+        val submitter = IdeErrorReportSubmitter()
+        val second = RuntimeException("second")
+            .apply { stackTrace = arrayOf(StackTraceElement("cn.song.mybatisplus.visualizer.log.Bar", "baz", "Bar.kt", 2)) }
+        val items = submitter.batchItemsOf(arrayOf(event(), IdeaLoggingEvent("second", second)))
+        assertEquals(2, items.size)
+        assertEquals(RuntimeException::class.java.name, items[0].title)
+        assertEquals("boom", items[0].message)
+        assertTrue("条目默认带堆栈", items[0].attachStack)
+        assertEquals("second", items[1].message)
     }
 
     @Test
