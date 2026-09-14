@@ -34,6 +34,9 @@ sealed class InjectionResult {
 
     /** 文件已存在（幂等跳过）。 */
     data object AlreadyExists : InjectionResult()
+
+    /** 用户在模块选择弹框取消（T-ModPick：多模块工程不再全量注入，先让用户勾选）。 */
+    data object Cancelled : InjectionResult()
 }
 
 object SqlSourceInterceptorAutoInjector {
@@ -73,6 +76,9 @@ object SqlSourceInterceptorAutoInjector {
      * AnnotatedElementsSearch / 源码目录递归遍历 + 拦截器存在性 VFS 查找）后台 ReadAction 执行；
      * 仅文件创建保留最小 WriteCommandAction（EDT 回调内执行，每模块 2 个模板文件，毫秒级）；
      * 结果经回调返回（EDT）。
+     *
+     * T-ModPick：检测出多个待处理模块时先在 EDT 弹勾选框让用户选择（单模块不打扰直注），
+     * 取消 → [InjectionResult.Cancelled]。
      */
     fun injectAsync(project: Project, onResult: (InjectionResult) -> Unit) {
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
@@ -83,15 +89,42 @@ object SqlSourceInterceptorAutoInjector {
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 onResult(
-                    when (outcome) {
+                    when (val prepared = outcome) {
                         PrepareOutcome.CannotDetectStructure -> InjectionResult.CannotDetectStructure
                         PrepareOutcome.UnsupportedProject -> InjectionResult.UnsupportedProject
                         PrepareOutcome.AlreadyExists -> InjectionResult.AlreadyExists
-                        is PrepareOutcome.Ready -> createFiles(project, outcome)
+                        is PrepareOutcome.Ready -> {
+                            val picked = pickModules(project, prepared)
+                                ?: return@invokeLater onResult(InjectionResult.Cancelled)
+                            createFiles(project, picked)
+                        }
                     },
                 )
             }
         }
+    }
+
+    /** 模块选择键（与 [createFiles] 的模块名口径一致）。 */
+    private fun moduleKey(structure: ProjectStructure): String =
+        structure.moduleName ?: structure.basePackage ?: "?"
+
+    /**
+     * T-ModPick：待处理模块（新建 + 升级）多于一个时弹勾选框（用户反馈：多模块应让用户
+     * 选择而非全部生成）；单模块直接返回不打扰。取消 → null（调用方回调 Cancelled）。
+     */
+    private fun pickModules(project: Project, outcome: PrepareOutcome.Ready): PrepareOutcome.Ready? {
+        if (outcome.ready.size + outcome.upgradable.size <= 1) return outcome
+        val rows = buildList {
+            outcome.ready.forEach { add(InjectionModulePickerDialog.Row(moduleKey(it), "${moduleKey(it)} · ${it.basePackage ?: "?"}", false)) }
+            outcome.upgradable.forEach { add(InjectionModulePickerDialog.Row(moduleKey(it), "${moduleKey(it)} · ${it.basePackage ?: "?"}", true)) }
+        }
+        val dialog = InjectionModulePickerDialog(project, rows)
+        if (!dialog.showAndGet()) return null
+        val selected = dialog.selectedKeys()
+        return outcome.copy(
+            ready = outcome.ready.filter { selected.contains(moduleKey(it)) },
+            upgradable = outcome.upgradable.filter { selected.contains(moduleKey(it)) },
+        )
     }
 
     /** 检测阶段（须在 ReadAction 内调用——PSI 索引/目录访问）。 */

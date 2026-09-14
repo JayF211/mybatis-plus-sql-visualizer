@@ -106,6 +106,8 @@ object SourceCaptureGuide {
                 )
                 false
             }
+            // T-ModPick：用户在模块勾选弹框取消——静默返回，无结果弹窗（用户主动退出非异常态）
+            InjectionResult.Cancelled -> false
         }
     }
 }
