@@ -104,7 +104,16 @@
 - 签名护栏（铁律 6）：`McpDbExecutor` 全部反射入口（数据源发现/建连/remote JDBC 三链 18 个方法）登记 `McpDbSignatureChecker` + `McpDbSignatureCrossVersionTest`，对本机 243/253/262 发行版用各自 JBR 核验（checker 按内容收集含 com/intellij/database/ 的插件 jar——243 在 grid-core-impl、262 EAP 在 grid-core-plugin、装机版在 connectivity，拆分形态漂移大，按内容收集形态无关；URLClassLoader parent 用平台 loader 保 java.sql 可见）。
 - 全量门禁：**4204/0/0/6 绿**（独立工作树 mpsv-mcptoolset，并行表登记 t-mcptoolset / sandbox build/test-sandbox-mcptoolset）。
 
-### 7.5 留人工的真机走查清单
+### 7.5 verifyPlugin 三目标门禁定案（2026-09-15 集成链终验补记）
+
+首度三目标实跑（T-MergeR2IntoMaster 集成链 t-fourplans-20260914）暴露 253/243 两类真问题，逐一定案：
+
+- **IU-253（实修）**：253 分支 Marketplace 包的 `McpToolset` 接口**没有 isEnabled/alwaysIncluded 默认方法**（262 有）——桩按 262 全默认体建模时，K2（jvm-default=all-compatibility）为「实现类未覆写的接口默认方法」在类内生成兼容桥，桥内 invokespecial 引用接口默认方法 → 253 报未解析。修复=桩三钩子改**抽象**（强制实现类字面量覆写 isEnabled=true / isExperimental=false / alwaysIncluded=false，与 262 默认值一致），类内零接口默认方法引用，253/262 双清。教训：**跨版本桩必须按「最小公共接口面」建模**，按最新版建模会在旧版生成悬空引用。
+- **IU-243（重构部分清除 + 豁免收尾）**：① `SpillingKt`——K2 协程状态机 null-out 内在函数（`nullOutSpilledVariable`），高阶 suspend（`audit(tool, block)` 的 lambda 参数在挂起点死值占槽）结构性必然发射，243 平台 stdlib（Kotlin 2.0.x）无此类。重构（explain 挂起帧单槽化：project/数据源/方言打包 `ExplainTarget`，audit 的 tool/started 打包 `AuditTicket`；explain 前置链改非挂起）清除了 lambda 侧引用，`audit` 本体属高阶形态不可消除。② `com.intellij.mcpserver.*` 三类缺类：optional 插件类型在 243 本不存在，预期内。两者在 243 均**永不可达**（mcp-optional.xml 整文件不加载、适配类零实例化）→ `dev-support/verifier-ignored-problems.txt`（-ignored-problems，版本段 `.*` 通配免维护）豁免，门禁不计失败、报告留痕。实证：`-external-prefixes` 对「Package not found」与方法级 unresolved 两类问题**无效**；`-ignored-problems` 有效（243 单目标 online/offline 双跑 exit 0）。
+- **作用域守卫**：新增 `McpScopeSourceScanTest` 2 例——mcpserver 引用只许出现在 `visualizer/mcp/` 包、META-INF 除 mcp-optional.xml 外零类引用（XML 注释剥离后判）。引用越包=243 真正走到缺类路径，豁免即失效须回退。
+- **终验**：verifyPlugin 三目标通过（243 豁免 2 项留痕 / 253 Compatible / 262 Compatible，deprecated·experimental 量级与基线一致）+ buildPlugin 出包（zip 内 com/intellij/mcpserver 桩零泄漏）+ 全量 test 绿。过程坑留档：marketplace 元数据接口对 TLS 连接间歇性掐断（同 endpoint 代理/直连 curl 双通，重试即过）；中断的验证器进程会锁 `~/.pluginVerifier/extracted-plugins`，清理后重跑（发行工作流既有坑的 verifier 变体）。
+
+### 7.6 留人工的真机走查清单
 
 1. IDEA 2026.2.1 真机：Settings | Tools | MCP Server 显示 mpsv_render_sql / mpsv_schema_context / mpsv_explain 三工具（非实验区），`claude mcp add` 或 AI Assistant `use_idea_mcp` 后外部 agent 可见可调。
 2. mpsv_render_sql：Wrapper 链行 / mapper XML 语句行 / @Select 注解行 / JPA 派生查询行四种入参各一调，返回 SQL 与 IDE 预览一致。

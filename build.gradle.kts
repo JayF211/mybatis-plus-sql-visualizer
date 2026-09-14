@@ -201,6 +201,72 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         "-Dhttps.proxyHost=127.0.0.1",
         "-Dhttps.proxyPort=7890"
     )
+    // T-McpToolset：243 目标两类「永不可达」缺类豁免（-ignored-problems；清单文件内含完整定案）。
+    // 1) com.intellij.mcpserver.*：平台可选插件类型，mcp-optional.xml 仅在其存在时加载；
+    // 2) kotlin.coroutines.jvm.internal.SpillingKt：K2 挂起帧 null-out 内在函数，仅 mcp 框架
+    //    回调形态发射，243 平台 stdlib（Kotlin 2.0.x）无此类。
+    // 两者在 243 均零可达（适配类零实例化），豁免不计失败但报告留痕；作用域由
+    // McpScopeSourceScanTest 守卫，引用越包即回退本豁免。手工实证：243 单目标
+    // -offline -ignored-problems → exit 0（2026-09-15）；-external-prefixes 对这两类问题无效。
+    ignoredProblemsFile.set(layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt"))
+    // IPGP 2.18.1 的任务级判定不采纳 CLI -ignored-problems 的豁免（验证器 exit 0 / 报告已豁免，
+    // 任务仍从控制台文本重数 COMPATIBILITY_PROBLEMS 判失败，且存在输出解析竞态——同输入一次过
+    // 一次挂，三轮实证）。兼容门禁由下方 verifyGate 承担，本任务降级为报告/弃用清单生成器。
+    failureLevel.set(
+        VerifyPluginTask.FailureLevel.entries - setOf(VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS),
+    )
+}
+
+// T-McpToolset：权威兼容门禁——直驱 verifier-cli（-offline 断 marketplace 网络抖动，
+// -ignored-problems 豁免清单见 dev-support/verifier-ignored-problems.txt）。手工三跑实证
+// exit 0（online/offline × 243 单目标），IPGP 的 verifyPlugin 封装做不到（见上）。
+val verifyGate = tasks.register<JavaExec>("verifyGate") {
+    group = "verification"
+    description = "发行兼容门禁：verifier-cli -offline -ignored-problems 三目标直验（绕过 IPGP 豁免判定缺陷）"
+    dependsOn("buildPlugin")
+    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+    // 配置期捕获（configuration cache 兼容：执行期不触达 project state）
+    val pluginVersion = providers.gradleProperty("version").get()
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifier").get().asFile
+    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val ignoredFile = rootProject.file("dev-support/verifier-ignored-problems.txt")
+    val gradleUserHome = gradle.gradleUserHomeDir
+    classpath(
+        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+            .walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+    )
+    argumentProviders.add(CommandLineArgumentProvider {
+        val guh = gradleUserHome
+        fun ideDir(name: String): File =
+            guh.resolve("caches").listFiles()?.asSequence()
+                ?.filter { it.resolve("transforms").isDirectory }
+                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+                ?.map { hash -> hash.resolve("transformed").resolve(name) }
+                ?.firstOrNull { it.isDirectory }
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin）")
+
+        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
+        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（runtime-dir 必需）")
+        buildList {
+            add("check-plugin")
+            add("-offline")
+            add("-ignored-problems")
+            add(ignoredFile.absolutePath)
+            add("-verification-reports-dir")
+            add(reportsDir.absolutePath)
+            add("-runtime-dir")
+            add(jbr.absolutePath)
+            add("-verification-reports-formats")
+            add("plain,html")
+            add(zipFile.absolutePath)
+            add(ide243.absolutePath)
+            add(ideDir("idea-2025.3.5-win").absolutePath)
+            add(ideDir("idea-2026.2.1-win").absolutePath)
+        }
+    })
 }
 
 kotlin {
@@ -503,7 +569,7 @@ tasks {
     register("verifyFull") {
         group = "verification"
         description = "发布前全量验证（三版本 243+253+262，约 14min）"
-        dependsOn("verifyPlugin")
+        dependsOn("verifyGate")
     }
 
     // M28（内测通道改造）：生成更新清单 update/update.json（Gitee 抢先体验通道数据源）——

@@ -18,17 +18,20 @@ package com.intellij.mcpserver
  * classpath，不进 runtime/打包产物）——运行时若插件 jar 携带 com.intellij.mcpserver.* 类，
  * 会与平台插件类冲突导致 instanceof/注解解析错乱。
  *
- * 真实接口默认实现（javap -c 字节码实证）：isEnabled()=true、isExperimental()=true、
- * alwaysIncluded()=false。Kotlin 接口默认方法编译为 Java default 方法，本桩以同语义覆写默认值
- * 表达（工具集实现类三钩子全部显式覆写，不依赖桩默认值）。
+ * 真实接口默认实现（javap -c 字节码实证，262）：isEnabled()=true、isExperimental()=true、
+ * alwaysIncluded()=false。**三钩子必须以抽象方法表达（不留桩默认体）**：Kotlin（K2，
+ * jvm-default=all-compatibility）会为「实现类未覆写的接口默认方法」在类内生成兼容桥——桥内
+ * invokespecial 引用接口默认方法，而 **253 分支 Marketplace 包的 McpToolset 接口没有
+ * isEnabled/alwaysIncluded**（verifyPlugin IU-253 实证），桥落空即报未解析方法。桩改抽象后
+ * 实现类三钩子全部显式字面量覆写，类内零接口默认方法引用，253/262 双清。
  */
 interface McpToolset {
-    /** 桩不表达 default 语义——真实接口此钩子默认返回 true。 */
-    fun isEnabled(): Boolean = true
+    /** 真实接口（262）此钩子默认返回 true；实现类必须显式覆写字面量。 */
+    fun isEnabled(): Boolean
 
-    /** 真实接口此钩子默认返回 true（实验态），稳定工具集必须显式覆写为 false。 */
-    fun isExperimental(): Boolean = true
+    /** 真实接口（262）此钩子默认返回 true（实验态），稳定工具集必须覆写为 false。 */
+    fun isExperimental(): Boolean
 
-    /** 真实接口此钩子默认返回 false。 */
-    fun alwaysIncluded(): Boolean = false
+    /** 真实接口（262）此钩子默认返回 false；实现类必须显式覆写字面量。 */
+    fun alwaysIncluded(): Boolean
 }

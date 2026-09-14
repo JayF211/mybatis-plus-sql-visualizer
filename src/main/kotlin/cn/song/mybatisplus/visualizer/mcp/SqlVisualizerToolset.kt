@@ -28,8 +28,15 @@ import kotlinx.coroutines.withContext
  */
 class SqlVisualizerToolset : McpToolset {
 
+    /** 三钩子显式字面量覆写（桩已改抽象强制）。253 版真实接口缺 isEnabled/alwaysIncluded 默认方法，
+     *  K2 兼容桥会在类内生成 invokespecial 引用接口默认方法 → 253 验证报未解析（verifyPlugin 实证）；
+     *  字面量返回与 262 接口默认值一致（isEnabled=true / isExperimental=false / alwaysIncluded=false）。 */
+    override fun isEnabled(): Boolean = true
+
     /** 稳定工具集（真实接口 isExperimental 默认 true = 实验态，必须显式 false 才进稳定集）。 */
     override fun isExperimental(): Boolean = false
+
+    override fun alwaysIncluded(): Boolean = false
 
     // ------------------------------------------------------------------
     // mpsv_render_sql
@@ -136,8 +143,39 @@ class SqlVisualizerToolset : McpToolset {
         dataSource: String = "",
         dialect: String = "",
     ): String = audit("mpsv_explain") {
-        val project = requireProject()
+        val target = resolveExplainTarget(requireProject(), selectSql, dataSource, dialect)
+        McpExplainFormatter.format(executeExplain(target)) + "\n\ndialect: ${target.dialectName}"
+    }
 
+    // ------------------------------------------------------------------
+    // 骨架工具方法
+    // ------------------------------------------------------------------
+
+    /** 审计包裹：成功/预期错误统一记 idea.log（计划 §三-5）。非预期异常不在此吞（平台记 Internal error）。
+     *  tool/started 打包单值 [AuditTicket] 过挂起点——挂起帧单槽位，杜绝 K2 nullOutSpilledVariable
+     *  → SpillingKt 引用（该类 243 平台 stdlib 缺失，verifyPlugin 实证）。 */
+    private suspend fun audit(tool: String, block: suspend () -> String): String {
+        val ticket = AuditTicket(tool)
+        try {
+            val result = block()
+            ticket.ok()
+            return result
+        } catch (e: McpExpectedError) {
+            ticket.expectedError(e)
+            throw e
+        }
+    }
+
+    private class AuditTicket(private val tool: String) {
+        private val started = System.currentTimeMillis()
+        fun ok() = McpAuditLog.call(tool, "ok", "OK", System.currentTimeMillis() - started)
+        fun expectedError(e: McpExpectedError) =
+            McpAuditLog.call(tool, e.mcpErrorText, "EXPECTED_ERROR", System.currentTimeMillis() - started)
+    }
+
+    /** explain 前置链（白名单→数据源定位→方言派发，步骤 1~3）。全链非挂起：不进协程状态机，
+     *  从结构上杜绝 SpillingKt 引用；语义与分步内联版逐行一致（T-McpToolset 253/243 门禁修复）。 */
+    private fun resolveExplainTarget(project: Project, selectSql: String, dataSource: String, dialect: String): ExplainTarget {
         // 1) 只读白名单（fail closed：非 SELECT / 多语句 / 锁读 / INTO / 解析失败全拒）
         val verdict = McpSelectGuard.checkSingleSelect(selectSql)
         if (!verdict.allowed) {
@@ -191,39 +229,32 @@ class SqlVisualizerToolset : McpToolset {
                     "dialect '$dialectName' has no EXPLAIN rendering in this plugin version.",
                 ),
             )
+        return ExplainTarget(project, ds, explainSql, dialectName)
+    }
 
-        // 4) headless 执行（同步、无 UI、密码未保存即失败）+ 文本化
-        val raw = withContext(Dispatchers.IO) {
+    /** 4) headless 执行（同步、无 UI、密码未保存即失败）。挂起帧只持 target 单引用。 */
+    private suspend fun executeExplain(target: ExplainTarget): McpExplainFormatter.RawResult =
+        withContext(Dispatchers.IO) {
             runCatching {
-                McpDbExecutor.executeQuery(project, ds, explainSql, McpExplainFormatter.MAX_ROWS)
+                McpDbExecutor.executeQuery(target.project, target.ds, target.explainSql, McpExplainFormatter.MAX_ROWS)
             }.getOrElse { e ->
                 throwExpected(
                     McpToolErrors.code(
                         McpToolErrors.DATASOURCE_UNREACHABLE,
-                        "EXPLAIN failed on '${dialectName}' data source: ${firstLine(e.message ?: e.javaClass.simpleName)}",
+                        "EXPLAIN failed on '${target.dialectName}' data source: ${firstLine(e.message ?: e.javaClass.simpleName)}",
                     ),
                 )
             }
         }
-        McpExplainFormatter.format(raw) + "\n\ndialect: $dialectName"
-    }
 
-    // ------------------------------------------------------------------
-    // 骨架工具方法
-    // ------------------------------------------------------------------
-
-    /** 审计包裹：成功/预期错误统一记 idea.log（计划 §三-5）。非预期异常不在此吞（平台记 Internal error）。 */
-    private suspend fun audit(tool: String, block: suspend () -> String): String {
-        val started = System.currentTimeMillis()
-        return try {
-            block().also {
-                McpAuditLog.call(tool, "ok", "OK", System.currentTimeMillis() - started)
-            }
-        } catch (e: McpExpectedError) {
-            McpAuditLog.call(tool, e.mcpErrorText, "EXPECTED_ERROR", System.currentTimeMillis() - started)
-            throw e
-        }
-    }
+    /** explain 解析产物载体：项目/数据源/方言信息打包单值过挂起点（挂起帧单槽位，杜绝
+     *  K2 nullOutSpilledVariable → SpillingKt 引用；该类 243 平台 stdlib 缺失，verifyPlugin 实证）。 */
+    private class ExplainTarget(
+        val project: Project,
+        val ds: Any,
+        val explainSql: String,
+        val dialectName: String,
+    )
 
     /** 取当前项目（框架注入 coroutineContext；桩扩展运行时解析平台 McpCallInfoKt）。 */
     private suspend fun requireProject(): Project =
