@@ -129,3 +129,19 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 - Agent H（config/history/update/actions 增量）：config\{PluginSettings,PluginSettingsPanel,SettingsIO,UpdateSection}（State 加 reportSubmitterName/Email 等——ReportSubmitterStore 已引用等待中）+ history\{SqlHistoryManager,SqlHistoryPanel,SqlHistorySearchBar}+新建 SqlHistorySearchBar? + update\StartupUpdateCheck + actions\{ConvertSqlToJavaAction,ConvertToSqlAction}（T-PickMpjErr）
 
 方法约定：每个文件 `git -C k2j diff a0702f6..50d3fb9 -- src/main/kotlin/<F>.kt` 看增量 → 增量翻译进 k2j 对应 .java（新建件全量翻译）；翻译规则同前批简报。
+
+## 8.2 执行状态（2026-09-14 实际）
+
+- 6965236 生产(1/3) → cc4b7b1 生产(2/3) → 6c36098 生产(3b 子代理 29 新件) → 3597673 生产完成（第二批发包 E/F/G/H 84 文件增量）+ compileJava 全绿
+- 1f8a67a C6 资源/构建：plugin.xml/database-optional/bundle×2/html×2/gradle.properties 直取；build.gradle.kts union（gifRecord 开关+T-TestPerf 串行注释+changeNotes beta.2 段+a274e30 职责分离；k2j 自有 sourceSets.test.srcDir/Lombok 注释/-parameters 三块零丢失）；活引用审计 9+2 引用 0 缺失（补回丢失的 SqlHistoryToolWindowFactory.java——90e8d09 教训重演防范）
+- d665555 测试移植 89 文件（子代理 T1~T4 并行：51 新建 .kt 互操作适配 + 23 .kt/.java 增量 + 15 JinK 增量）+ b8b9179 测试编译修复（Kotlin 访问 Java is-前缀访问器须显式调用 isResolved()/isValue() 等 39 处 + FeedbackApi.setSender/ErrorFingerprint.seenEntriesForTest 测试缝）→ compileTestJava/compileTestKotlin 全绿
+- 894fe19 C8 文档：直取 137 件 + 三册 git merge-file --union（CHANGELOG 丢 1 行=master 发行时已更新的同条目按新版收编；MEMORY 丢 11 行=master 已更新的陈旧快照；k2j 台账行 T-SyncK2JMaster32/14/23 全留存；变更记录零丢失）
+- 进行中：全量测试（后台 gradlew test）→ 失败修复 → buildPlugin/verifyPlugin 三目标 → .port-sync 锚点推进 50d3fb9 → 收官提交（还原 sandboxContainer k2jsync171 行 + 注销 parallel_tasks 登记）
+
+## 8.3 终验结论（收官）
+
+- 全量测试 **3975/0/0/6 绿（319 套件）**，较锚点 3315/268 增加 +660 用例/+51 套件，与 master 增量吻合；
+- buildPlugin 出包 `mybatis-plus-sql-visualizer-2026.9.14-beta.2.zip`（5.77 MB）；
+- verifyPlugin **243/253/262 三目标全部 Compatible**（experimental 8，与 master 同源：RestartDialogImpl×4 + WriteIntentReadAction×4）；
+- 7 个初轮失败全数根治：MdsConverter LIMIT offset 折叠（1 处翻译错误）、关键字换行 3 套件（Java split(limit=0) 吞尾空串 vs Kotlin split 语义差异，limit=-1 复刻）、SqlClickPreviewTest 2 warning（JUnit3 lambda 合成方法抽工厂）；
+- 沙盒 k2jsync171 已注销，build.gradle.kts sandboxContainer 临时行已还原；push 留用户 GUI。
