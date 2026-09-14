@@ -261,21 +261,6 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
 
             panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
 
-            val expectedModeLabel = when (
-                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode()
-            ) {
-                SqlListDisplayMode.SINGLE_LINE ->
-                    cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.list.displayMode.single")
-                SqlListDisplayMode.KEYWORD_WRAP ->
-                    cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap")
-                SqlListDisplayMode.FORMATTED ->
-                    cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("log.list.displayMode.formatted")
-            }
-            assertEquals(
-                "显示模式按钮文本应回同步设置值（T-MergeFollowup-04 原生化后无 selectedIndex）",
-                expectedModeLabel,
-                panel.displayModeSelectedLabelForTest,
-            )
             assertEquals(
                 "行高应随模式重设（单行=固定高，多行=-1 可变）",
                 cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE,

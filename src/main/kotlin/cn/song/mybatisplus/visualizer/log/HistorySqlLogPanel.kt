@@ -16,7 +16,6 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
-import javax.swing.JLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.SearchTextField
@@ -102,26 +101,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         addActionListener { refresh() }
     }
 
-    /** 显示模式下拉（T-ListMode；T-MergeFollowup-04）：与日志 tab 的「SQL类型」按钮完全同构；变更广播 SETTINGS_CHANGE_TOPIC。 */
-    private val displayModeButton = SqlListDisplayModeButton(project)
-
-    /** 显示模式按钮当前文案（测试断言选中态回同步用——与按钮显示同源）。 */
-    internal val displayModeSelectedLabelForTest: String
-        get() = displayModeButton.currentLabelForTest()
-
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
     internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
 
     /** 二级列表实例（测试断言 getCellBounds 行高与渲染 preferred 一致——布局缓存失效防回归用）。 */
     internal val sqlListForTest: javax.swing.JList<*> get() = sqlList
 
-    /** 显示模式变更处理（topic 监听与测试共用）：按钮文本回同步 + 行高随模式重设 + 二级可见时全量重建。
+    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 二级可见时全量重建。
      *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。
      *  T-MergeFollowup-03（复查二轮）：BasicListUI 的 cellHeights 布局缓存不归 Swing layout 管
      *  （revalidate 无效），多行模式间切换 -1→-1 也不触发 setFixedCellHeight 的 propertyChange——
-     *  updateUI() 重装列表 UI 强制布局状态失效（与日志页同款），applySqlSearch 全量重建作为双保险。 */
+     *  updateUI() 重装列表 UI 强制布局状态失效（与日志页同款），applySqlSearch 全量重建作为双保险。
+     *  T-DisplayModeToSettings：入口迁设置页「列表显示」，此处仅响应设置广播。 */
     internal fun onDisplayModeChanged() {
-        displayModeButton.syncFromSettings()
         applySqlListCellHeight()
         sqlList.updateUI()
         if (currentFile != null) applySqlSearch()
@@ -184,15 +176,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(backButton)
         toolbar.add(refreshButton)
-        // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）。
-        // T-MergeFollowup-04 复查二轮：按钮与「SQL类型」完全同构（普通 JButton + ArrowDown + popup），
-        // 左侧「显示模式」标签——字体与样式天然靠齐
-        val displayModeUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-            isOpaque = false
-            add(JLabel(MpSqlVisualizerBundle.message("log.list.displayMode")))
-            add(displayModeButton)
-        }
-        toolbar.add(displayModeUnit)
+        // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {

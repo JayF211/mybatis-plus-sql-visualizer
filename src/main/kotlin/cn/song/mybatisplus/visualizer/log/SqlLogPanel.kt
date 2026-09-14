@@ -335,20 +335,7 @@ class SqlLogPanel(
         addActionListener { toggleDurationSort() }
     }
 
-    // ---------- T-ListMode：SQL 显示模式下拉（单行/关键字换行/格式化） ----------
-
-    /**
-     * 显示模式下拉（T-ListMode；T-MergeFollowup-04）：与 [typeFilterButton] 完全同构的
-     * [SqlListDisplayModeButton]（复查修正：ComboBoxAction 的 ComboBoxButton 手动创建场景
-     * 字体/边框与既有按钮不一致且需手工驱动文本，弃用）。变更写设置并广播 SETTINGS_CHANGE_TOPIC——
-     * 既有监听统一回同步按钮文本 + 行高重设 + 全量刷新。
-     */
-    private val displayModeButton = SqlListDisplayModeButton(project)
-
-    /** 显示模式按钮文本回同步（模式被另一面板/设置页改变时；经既有 settings 监听驱动）。 */
-    private fun syncDisplayModeCombo() {
-        displayModeButton.syncFromSettings()
-    }
+    // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
     private val searchField = buildSearchField()
@@ -469,13 +456,11 @@ class SqlLogPanel(
                 updateHistoryTabVisibility()
                 // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
                 // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
-                // T-ListMode：模式可能被历史面板 combo 改变——回同步本面板下拉选中态 + 行高随模式重设。
-                // T-MergeFollowup-03（复查二轮）：BasicListUI 的 cellHeights 布局缓存**不归 Swing layout
-                // 管**——revalidate 无效；且多行模式间切换是 -1→-1（setFixedCellHeight 值不变不触发
-                // propertyChange 失效），refreshList 增量路径在内容无变化时也不产生 model 结构事件——
-                // 三重失效路径全空，旧行高框内画新多行内容即呈重叠挤压/字号错乱（真机截图实锤）。
-                // updateUI() 重装列表 UI 强制布局状态失效，是最直接可靠的失效手段。
-                syncDisplayModeCombo()
+                // T-ListMode：显示模式入口已迁设置页（T-DisplayModeToSettings）——设置页 apply 广播后
+                // 行高随模式重设。T-MergeFollowup-03（复查二轮）：BasicListUI 的 cellHeights 布局缓存
+                // **不归 Swing layout 管**——revalidate 无效；且多行模式间切换是 -1→-1（setFixedCellHeight
+                // 值不变不触发 propertyChange 失效），refreshList 增量路径在内容无变化时也不产生 model
+                // 结构事件——updateUI() 重装列表 UI 强制布局状态失效，是最直接可靠的失效手段。
                 applyListCellHeight()
                 list.updateUI()
                 refreshList()
@@ -534,15 +519,7 @@ class SqlLogPanel(
         }
         left.add(typeFilterUnit)
         left.add(sortButton)
-        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）。
-        // T-MergeFollowup-04 复查二轮：按钮与「SQL类型」完全同构（普通 JButton + ArrowDown + popup），
-        // 左侧「显示模式」标签同「SQL类型：」单元——字体与样式天然靠齐
-        val displayModeUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-            isOpaque = false
-            add(JLabel(MpSqlVisualizerBundle.message("log.list.displayMode")))
-            add(displayModeButton)
-        }
-        left.add(displayModeUnit)
+        // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
             foreground = Color(0xD32F2F) // 红色

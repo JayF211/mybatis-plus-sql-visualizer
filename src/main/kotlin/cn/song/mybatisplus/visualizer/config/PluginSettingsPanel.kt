@@ -145,6 +145,22 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** `#RRGGBB` → Color（非法回退默认色，不抛）。 */
     private fun colorOf(hex: String): Color = SqlListTypeColor.parseHex(hex, Color(0x4A86E8))
 
+    /** T-DisplayModeToSettings：SQL 列表显示模式下拉项（value=SqlListDisplayMode.name）。 */
+    private data class ListDisplayModeOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun listDisplayModeOptions(): Array<ListDisplayModeOption> = arrayOf(
+        ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.SINGLE_LINE.name, MpSqlVisualizerBundle.message("log.list.displayMode.single")),
+        ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP.name, MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap")),
+        ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED.name, MpSqlVisualizerBundle.message("log.list.displayMode.formatted")),
+    )
+
+    /** 当前下拉选中的显示模式值（空选兜默认——与 PluginSettings.sqlListDisplayMode 的兜底一致）。 */
+    private fun selectedListDisplayMode(): String =
+        (logDisplayModeCombo.selectedItem as? ListDisplayModeOption)?.value
+            ?: PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
+
     private fun reverseFormatOptions(): Array<ReverseFormatOption> = arrayOf(
         ReverseFormatOption(PluginSettings.REVERSE_AUTO, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.auto")),
         ReverseFormatOption(PluginSettings.REVERSE_QUERY, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.query")),
@@ -283,6 +299,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
     /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
     private val crudColorStyleCombo = ComboBox<CrudColorStyleOption>()
+
+    /** T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史两列表共享一键）。 */
+    private val logDisplayModeCombo = ComboBox<ListDisplayModeOption>()
     /** 四类型色板（平台原生 ColorPanel，点击弹出取色器）。 */
     private val crudColorSelectPanel = ColorPanel()
     private val crudColorInsertPanel = ColorPanel()
@@ -533,6 +552,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logShowDurationCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
+                })
+            }
+
+            // T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史 两列表共享一键，设置页唯一入口）
+            sectionGroup("settings.log.tab.list") { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("log.list.displayMode"), logDisplayModeCombo.apply {
+                    model = DefaultComboBoxModel(listDisplayModeOptions())
+                    toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode.tip")
                 })
             }
 
@@ -917,6 +944,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
         crudColorStyleCombo.selectedItem = crudColorStyleOptions().firstOrNull { it.value == value } ?: return
     }
 
+    /** T-DisplayModeToSettings：显示模式下拉选择入口（测试用）——与用户选择同一路径。 */
+    internal fun selectListDisplayMode(value: String) {
+        logDisplayModeCombo.selectedItem = listDisplayModeOptions().firstOrNull { it.value == value } ?: return
+    }
+
+    /** T-DisplayModeToSettings：当前下拉选中值（测试断言 reset 回填用）。 */
+    internal fun currentListDisplayModeForTest(): String = selectedListDisplayMode()
+
     /** T-CrudColor：四色色板设置入口（测试用）——与用户取色同一路径。 */
     internal fun setCrudColor(which: String, hex: String) {
         val color = colorOf(hex)
@@ -1085,6 +1120,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
             // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
             || selectedCrudColorStyle() != s.crudColorStyle
+            || selectedListDisplayMode() != s.logListSqlDisplayMode
             || colorHexOf(crudColorSelectPanel) != s.crudColorSelect
             || colorHexOf(crudColorInsertPanel) != s.crudColorInsert
             || colorHexOf(crudColorUpdatePanel) != s.crudColorUpdate
@@ -1167,6 +1203,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.autoInjectSqlSourceInterceptor = autoInjectInterceptorCheck.isSelected
             // T-CrudColor：CRUD 颜色标记（样式 + 四色）
             s.crudColorStyle = selectedCrudColorStyle()
+            // T-DisplayModeToSettings：SQL 列表显示模式（apply 后经 SETTINGS_CHANGE_TOPIC 广播，两列表既有监听刷新）
+            s.logListSqlDisplayMode = selectedListDisplayMode()
             s.crudColorSelect = colorHexOf(crudColorSelectPanel)
             s.crudColorInsert = colorHexOf(crudColorInsertPanel)
             s.crudColorUpdate = colorHexOf(crudColorUpdatePanel)
@@ -1278,6 +1316,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // T-CrudColor：CRUD 颜色标记控件回填
             crudColorStyleCombo.selectedItem = crudColorStyleOptions()
                 .firstOrNull { it.value == s.crudColorStyle } ?: crudColorStyleOptions().first()
+            // T-DisplayModeToSettings：显示模式下拉回填
+            logDisplayModeCombo.selectedItem = listDisplayModeOptions()
+                .firstOrNull { it.value == s.logListSqlDisplayMode } ?: listDisplayModeOptions().first()
             crudColorSelectPanel.selectedColor = colorOf(s.crudColorSelect)
             crudColorInsertPanel.selectedColor = colorOf(s.crudColorInsert)
             crudColorUpdatePanel.selectedColor = colorOf(s.crudColorUpdate)
