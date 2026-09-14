@@ -183,6 +183,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+
+    /**
+     * T-PerfTail #2：预热产物异步载体（消除 EDT sleep-poll）——prewarmPreviewTempFile 每次
+     * 预热新建（clear 重预热随之更新），createEditor 热态同步消费、冷态注册回调回 EDT 装配。
+     */
+    @Volatile
+    private var prewarmAwait: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>? = null
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     private var prewarmFailed = false
@@ -400,14 +407,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private fun prewarmPreviewTempFile() {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        // T-PerfTail #2：预热线程产出 PrewarmAwait 完成态（成功 complete / 失败 fail）——
+        // 消费侧（createEditor）不再 EDT sleep-poll
+        val await = PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>(PREWARM_WAIT_MS) { runnable ->
+            ApplicationManager.getApplication().invokeLater(runnable, com.intellij.openapi.application.ModalityState.any())
+        }
+        prewarmAwait = await
         ApplicationManager.getApplication().executeOnPooledThread {
-            if (previewTempFile != null || previewDisposed) return@executeOnPooledThread
+            if (previewTempFile != null || previewDisposed) {
+                await.fail(IllegalStateException("prewarm skipped: disposed or already prepared"))
+                return@executeOnPooledThread
+            }
             runCatching {
                 // T-PreviewExecDs-01a：预览临时文件迁项目内 .idea/sql-visualizer/preview/
                 // ——系统 Temp 不在数据源关联范围，Database 插件不解析（M36.5.12 exec 同教训，
                 // 预览路径此前未跟进；旧实现 09:34:40 起持续预热失败后回退裸文档，补全/注释全灭）。
                 val io = projectPreviewFile() ?: run {
                     prewarmFailed = true
+                    await.fail(IllegalStateException("project preview file unavailable"))
                     LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)")
                     return@executeOnPooledThread
                 }
@@ -424,11 +441,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
                 if (vf == null) {
                     prewarmFailed = true
+                    await.fail(IllegalStateException("VFS refresh null after ${retries + 1} tries"))
                     LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                     return@executeOnPooledThread
                 }
                 if (previewDisposed) {
                     java.io.File(vf.path).delete()
+                    await.fail(IllegalStateException("disposed during prewarm"))
                     return@executeOnPooledThread
                 }
                 val proj = project ?: return@executeOnPooledThread
@@ -439,13 +458,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
                 } ?: run {
                     prewarmFailed = true
+                    await.fail(IllegalStateException("PsiManager.findFile null for ${vf.name}"))
                     LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
                 prewarmedTempFile = vf to psi
+                await.complete(vf to psi)
             }.onFailure { e ->
                 prewarmFailed = true
+                await.fail(e)
                 LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             }
         }
@@ -509,25 +531,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
-     * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
-     * T-GifRerecord：预热线程已判定失败时立即返回 null（快速降级），不再空等 2s 预算。
+     * T-PerfTail #2：预热产物消费决策（替代原 `awaitPrewarmedTempFile` 的 EDT sleep-poll）。
+     *
+     *  - **热态（结果已出）**：同步取产物装配——主路径（成功）或快速降级（失败，原 prewarmFailed
+     *    快速返回语义），EDT 零等待；
+     *  - **冷态（预热线程未完成）**：`scheduleOnce` 注册完成回调，超时预算语义保留
+     *    （PrewarmAwait 内 completeOnTimeout，预算=PREWARM_WAIT_MS），回调统一回 EDT 装配——
+     *    EDT 零阻塞，超时/失败走降级链（T-PreviewExecDs 三级降级语义保留）；
+     *  - **单元测试模式**：无真实 EDT 泵，为保留既有测试「showResult 返回时编辑器即就绪」语义，
+     *    退回同步有界等待（awaitOrNullForTest，生产路径不走）。
+     *
+     * @return 产物（热态主路径非 null）；null = 本调用不装配（回调挂起中）或快速降级。
+     *         消费装配由调用方按 `assembled` 标志区分。
      */
-    private fun awaitPrewarmedTempFile(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
-        var waited = 0L
-        while (true) {
-            val ready = prewarmedTempFile?.also { prewarmedTempFile = null }
-            if (ready != null) return ready
-            if (prewarmFailed) return null
-            if (waited >= PREWARM_WAIT_MS) return null
-            try {
-                Thread.sleep(PREWARM_POLL_MS)
-                waited += PREWARM_POLL_MS
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return null
-            }
+    private fun resolvePreviewEditorSource(sql: String): Pair<Boolean, Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?> {
+        val await = prewarmAwait
+        if (await == null) return true to null
+        if (await.isDone()) return true to await.joinOrNull()
+        if (ApplicationManager.getApplication()?.isUnitTestMode == true) {
+            return true to await.awaitOrNullForTest()
         }
+        // 冷态：注册回调（幂等），本次渲染不装配（编辑器挂起至回调完成，≤ 超时预算）
+        await.scheduleOnce(
+            onReady = { pair ->
+                if (!previewDisposed) assemblePreviewEditor(sql, pair)
+            },
+            onFallback = {
+                if (!previewDisposed) assemblePreviewEditor(sql, null)
+            },
+        )
+        return false to null
     }
 
     /** T-DarkTheme：主题变更回调——重绘面板（命名色已自动更新，仅需触发 UI 刷新）。 */
@@ -1882,74 +1915,75 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M36] createEditor: len=${sql.length}, nativeDoc=${nativeEditorDoc != null}, embedded=${System.identityHashCode(embeddedConsole)}", Throwable("createEditor path"))
         val proj = project
+        if (proj == null) {
+            assemblePreviewEditor(sql, null)
+            return
+        }
+        // T-PerfTail #2：预热产物消费决策——热态同步装配（主路径/快速降级，EDT 零等待）、
+        // 冷态注册回调回 EDT 装配（超时预算语义保留，EDT 零阻塞）、单元测试模式同步有界等待
+        val (resolved, prewarmed) = resolvePreviewEditorSource(sql)
+        if (!resolved) return   // 回调挂起中——装配延后至回调（超时/失败走降级链）
+        assemblePreviewEditor(sql, prewarmed)
+    }
+
+    /**
+     * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
+     *
+     * @param prewarmed 预热产物（项目内文件 + PSI）；null → 降级链（内存 PSI → 裸 document，
+     *   T-PreviewExecDs 降级顺序与诚实降级横幅层级提示保留）。主路径对 `prewarmedTempFile`
+     *   做**一次性消费**（同引用校验）——releaseEditor 后二次 createEditor 时产物已被消费，
+     *   与原 await 一次性语义一致地走降级。
+     */
+    private fun assemblePreviewEditor(sql: String, prewarmed: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?) {
+        val proj = project
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
-        val created = if (proj != null) {
-            // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
+        val doc = if (proj != null) {
+            // T-PreviewFlash：createTempFile + refresh + findFile 全在后台线程，
             // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
-            // T-PreviewDocLock2 F3：临时文件支链从「必得」改「尽力」——awaitPrewarmedTempFile 超时/拿不到
-            // 产物、或 releaseEditor 后未经 clear() 二次 createEditor 时（prewarmedTempFile 一次性、已置 null），
-            // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
-            // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
-            // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
-            // （dev 侧 T-GifRerecord 同题降级版无 ReadAction 包裹，按超集原则整取 master 版。）
-            // T-PreviewExecDs-01d：降级链第二级 = 内存 PSI（PsiFileFactory.createFileFromText，
-            // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
-            // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
-            val fallbackDoc = { msg: String ->
-                // T-PreviewUx-Pack #2：降级链层级横幅——第二级（内存 PSI）/第三级（裸 document）
-                // 触发时明示当前层级与恢复指引（不破坏 T-PreviewExecDs 降级顺序与快速降级语义）
-                val memoryPsiDoc = createInMemoryPreviewPsi(sql)
-                if (memoryPsiDoc != null) {
-                    degradationBanner.show(
-                        DegradationBanner.Kind.DEGRADED,
-                        MpSqlVisualizerBundle.message("panel.banner.degradedPsi"),
-                    )
-                    memoryPsiDoc
-                } else {
-                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-                        .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
-                    psiFile = null
-                    degradationBanner.show(
-                        DegradationBanner.Kind.DEGRADED,
-                        MpSqlVisualizerBundle.message("panel.banner.degradedPlain"),
-                    )
-                    EditorFactory.getInstance().createDocument(sql)
-                }
-            }
-            val doc = runCatching {
-                val (vFile, psi) = awaitPrewarmedTempFile()
-                    ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
-                // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
-                degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
-                previewTempFile = vFile
-                psiFile = psi
-                // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
-                // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
-                // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
-                //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
-                // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
-                // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
-                // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
-                // 且 UsefulTestCase 模式下直接抛 AssertionError（平台抬版跑测试即红）。处置同 T-M42（同文件
-                // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
-                // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
-                // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
-                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-                val d = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
-                    com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
-                } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
-                // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
-                //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
-                if (d.text != sql) {
-                    com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
-                        d.setText(sql)
-                        com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(d)
+            // T-PreviewDocLock2 F3：临时文件支链「尽力」——产物缺失（预热超时/失败/已消费）时
+            // 降级到内存 PSI → 裸文档（功能降级优于硬失败——主路径行为逐字节不变）。
+            if (prewarmed != null && prewarmedTempFile === prewarmed) {
+                prewarmedTempFile = null
+                runCatching {
+                    val (vFile, psi) = prewarmed
+                    // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
+                    degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
+                    previewTempFile = vFile
+                    psiFile = psi
+                    // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
+                    // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
+                    // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
+                    //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
+                    // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
+                    // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
+                    // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
+                    // 且 UsefulTestCase 模式下直接抛 AssertionError（平台抬版跑测试即红）。处置同 T-M42（同文件
+                    // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
+                    // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
+                    // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
+                    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                    val d = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
+                        com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
+                    } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
+                    // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+                    //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+                    if (d.text != sql) {
+                        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
+                            d.setText(sql)
+                            com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(d)
+                        }
                     }
-                }
-                d
-            }.getOrElse { fallbackDoc(it.message ?: it.javaClass.simpleName) }
+                    d
+                }.getOrElse { fallbackPreviewDocument(sql, it.message ?: it.javaClass.simpleName) }
+            } else {
+                fallbackPreviewDocument(sql, "prewarmed product unavailable (timeout/failed/consumed)")
+            }
+        } else {
+            null
+        }
+        val created = if (proj != null && doc != null) {
             EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
@@ -1993,6 +2027,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
+    }
+
+    /**
+     * T-PreviewExecDs-01d / T-PerfTail #2：预览文档降级链（第二级 → 第三级）——
+     * 第二级 = 内存 PSI（PsiFileFactory.createFileFromText，无 VFS 文件但保留补全上下文载体）；
+     * 第三级（兜底）= 纯内存文档编辑器（无 PSI，补全/注释灭）。
+     * T-PreviewUx-Pack #2：降级链层级横幅——触发时明示当前层级与恢复指引（不破坏降级顺序）。
+     */
+    private fun fallbackPreviewDocument(sql: String, msg: String): com.intellij.openapi.editor.Document {
+        // 第二级：内存 PSI（保留补全上下文载体）
+        createInMemoryPreviewPsi(sql)?.let { memoryPsiDoc ->
+            degradationBanner.show(
+                DegradationBanner.Kind.DEGRADED,
+                MpSqlVisualizerBundle.message("panel.banner.degradedPsi"),
+            )
+            return memoryPsiDoc
+        }
+        // 第三级：裸 document（内存 PSI 也失败）
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
+        psiFile = null
+        degradationBanner.show(
+            DegradationBanner.Kind.DEGRADED,
+            MpSqlVisualizerBundle.message("panel.banner.degradedPlain"),
+        )
+        return EditorFactory.getInstance().createDocument(sql)
     }
 
     /**

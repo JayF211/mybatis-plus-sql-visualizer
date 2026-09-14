@@ -96,6 +96,24 @@ class SqlPreviewService(private val project: Project) {
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
     private val cache = WrapperCache()
 
+    init {
+        // T-PerfTail #1：编辑器关闭即清理该文件的 WrapperCache 条目——长会话中条目数随打开
+        // 文件集有界（LRU 512 上限之外的主动回收）。连接绑定 project Disposable，项目关闭自动注销。
+        // FileEditorManagerListener 的 fileClosed 携带 VirtualFile，与 WrapperCache 键的
+        // VirtualFile.url 字符串维度（T-Perf-18）直接对齐。
+        project.messageBus.connect(project).subscribe(
+            com.intellij.openapi.fileEditor.FileEditorManagerListener.FILE_EDITOR_MANAGER,
+            object : com.intellij.openapi.fileEditor.FileEditorManagerListener {
+                override fun fileClosed(
+                    source: com.intellij.openapi.fileEditor.FileEditorManager,
+                    file: com.intellij.openapi.vfs.VirtualFile,
+                ) {
+                    cache.evictFile(file.url)
+                }
+            },
+        )
+    }
+
     // T-TenantLine 诊断日志：输出注入决策链路（开关值/列名/语句类型/跳过原因），
     // 供沙盒排查「开启租户但不拼接」问题（无日志 = 本方法未被调用）。
 

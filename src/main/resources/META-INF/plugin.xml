@@ -204,9 +204,11 @@
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor"/>
 
-        <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
-             仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
-             （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
+        <!-- M28 插件更新：启动自动检查（开关默认关——稳定版更新由 JetBrains Marketplace 推送，
+             State.autoCheckUpdate=false，PluginSettings.kt 为权威；勾选「抢先体验」后静默检查
+             Gitee 通道，仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；
+             分组显示名走 bundle（NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：
+             bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.updates"
