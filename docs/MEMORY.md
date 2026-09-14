@@ -73,6 +73,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20260914-1406-T-ReportL10n-报告需求池文案跟随IDE显示语言-开发计划.md](./开发计划/20260914-1406-T-ReportL10n-报告需求池文案跟随IDE显示语言-开发计划.md) | **T-ReportL10n：报告需求池文案与 IDE 显示语言不一致**。AUTO 语言落点 Locale.getDefault()（JVM locale）与 IDE 显示语言脱节 → 改 DynamicBundle.getLocale()（243/262 javap 同签名），headless 回退 JVM locale；全量 3989/0/0/6 绿 | ✅ 已实施（2026-09-14，提交 5296022；真机走查 §五 留人工） |
 | [20260812-1058-MP-SQL可视化-需求文档.md](./需求文档/20260812-1058-MP-SQL可视化-需求文档.md) | **功能需求源**：功能编号 F-01~F-20 定义（Wrapper 转换/参数替换/格式化/展示/配置/批量等） |
 
 ## 开发计划（docs/开发计划/，时间倒序；调研性质报告已于 2026-09-12 拆分至独立目录 docs/调研报告/，见下方「调研报告」节）
@@ -256,6 +257,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-14 | T-ReportL10n 报告需求池文案与 IDE 显示语言不一致：语言设置 AUTO 落 JVM locale（与 IDE 显示语言脱节）→ MpSqlVisualizerBundle AUTO 分支改 DynamicBundle.getLocale()（javap 双版本实证），headless 回退 JVM locale；陈旧 java/main 类劫持编译排障；全量 3989/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-FeedbackDlg2 报告对话框真机复查两缺陷（堆栈勾选跳动/手动形态堆栈无来源）：GridBag weighty 堆栈行出现挤占描述行致「跳动」→ toggleResizeDelta 窗口高度补偿；手动形态 openManualDialog 接 MessagePool 错误池最近插件错误（latestPluginErrorStack，默认不勾、无则整行隐藏死框）；javap 双版本实证 MessagePool 系签名；全量 3982/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-FeedbackDlg 报告对话框真机反馈三缺陷（宽度 1272px/无灰提示/不可拖拽）：根因=`JTextField(TITLE_MAX=200)` 上限误作列数（列数即首选宽语义）——JBTextField(30)+滚动面板 preferredSize 钳宽；标题/描述 getEmptyText 占位对齐官网 + doValidate 客户端校验闭环（手动形态短输入此前直吃服务端 400，Composer 常量升 internal 单源）；setResizable/DimensionService/weighty 拖拽伸缩；buildCenterPanel/validateForm 抽纯函数零 peer 可测，新测试 6 例。全量 3974/0/0/6 绿（worktree mpsv-feedbackdlg 隔离跑：并行会话未登记占默认沙盒，「用户映射区域」互锁复现台账坑，M28×M29 路线绕行）。verifyFull/buildPlugin 仅发版/大功能跑（用户口径，已沉淀记忆 feedback-verify-scope）。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | 记忆第八次精简（31→21）：新增 8 个归档（bug-fixes：T-RollbackSql 预览回滚 SQL、T-CrudColor 颜色标记、dev×CrudColor 双合并交付、T-M56-00/T-M56-01 两期交付、dev→master 丢功能审计历史台账；pitfalls：runIde/hotswap 职责分离定案、K2J 陈旧产物劫持六犯实录——标准前置清 build 精华收编 pitfall-regression-false-failure-flakes）；9 个升级 global（WIRA 锁嵌套、WorkBuddy 沙盒吞嵌套 ref、能力验证对照实验、win32 中文乱码/tsx 验证、GLM/阿里云/dots-nova 线路、ZCode 模型配置位置——后 7 个来自文档站与管理后台仓库，两仓库同日各自完成首次记忆精简：文档站 28→23、管理后台 17→10）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-14/`（三个项目同惯例）；本项目 memory 降至 21 个文件（含 MEMORY.md），archive 增至 180 个文件，global 增至 85 个文件 |
