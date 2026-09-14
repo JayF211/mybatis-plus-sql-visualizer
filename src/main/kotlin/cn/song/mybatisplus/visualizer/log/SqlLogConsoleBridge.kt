@@ -628,10 +628,14 @@ internal class BridgeLineContext(
 /**
  * 处理一行控制台文本（F-44-6）：
  *  1. 若为本插件源码标记（[SqlSourceInterceptor] 注入）→ 暂存，不喂解析器；
+ *     T-IntrUpg-01：自位污染标记（旧模板 isSelf 常量分叉时拦截器上报自身帧）不暂存，
+ *     条目落无位置链路（MissingSource 引导 → 立即注入触发升级）；
  *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
  *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
  * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（[SqlLogConsoleBridgeMarkerTest]）。
  */
+private val MARKER_DEFENSE_LOG = Logger.getInstance("cn.song.mybatisplus.visualizer.log.SqlSourceMarkerDefense")
+
 internal fun processConsoleLine(
     line: String,
     ctx: BridgeLineContext,
@@ -641,6 +645,12 @@ internal fun processConsoleLine(
     // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
     val marker = SqlSourceMarker.parse(line)
     if (marker != null) {
+        if (SqlSourceMarker.isInterceptorSelfPath(marker.first)) {
+            // T-IntrUpg-01 防线：标记指向拦截器文件本身 = 存量旧件自位污染，丢弃不暂存。
+            // 留痕含原路径/行号，远程排障定位污染拷贝件用。
+            MARKER_DEFENSE_LOG.info("SqlLogConsoleBridge: 丢弃拦截器自位污染标记 ${marker.first}:${marker.second}（旧版生成文件，建议设置页重新注入升级）")
+            return emptyList()
+        }
         ctx.pendingSource = marker
         return emptyList()
     }

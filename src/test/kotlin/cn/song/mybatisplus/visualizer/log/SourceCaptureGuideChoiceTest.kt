@@ -70,6 +70,14 @@ class SourceCaptureGuideChoiceTest : BasePlatformTestCase() {
         assertTrue("successMulti 文案参数未全部就位：$formatted", (0..3).none { formatted.contains("{$it}") })
     }
 
+    fun test拦截器升级键有真实文案() {
+        // T-IntrUpg-03：upgraded 两参（模块数、模块清单）；「旧版」「更新」语义是升级链路的用户承诺
+        val formatted = MpSqlVisualizerBundle.message("log.inject.upgraded", "1", "mybatis-plus-join-demo")
+        assertNotEquals("log.inject.upgraded 缺 bundle 文案", "log.inject.upgraded", formatted)
+        assertTrue("upgraded 文案参数未全部就位：$formatted", formatted.contains("1") && formatted.contains("mybatis-plus-join-demo"))
+        assertTrue("upgraded 文案应说明旧版文件已更新：$formatted", formatted.contains("旧版") || formatted.contains("legacy"))
+    }
+
     fun testMP计数纯提示文案不含拦截器引导语义() {
         // 防回归：NoSource（MP COUNT）文案若被改回「未记录源码位置」类表述，会与 MissingSource 引导混淆
         val text = MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource")

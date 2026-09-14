@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ModuleRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.PsiManager
@@ -45,8 +46,15 @@ object SqlSourceInterceptorAutoInjector {
         data object UnsupportedProject : PrepareOutcome()
         data object AlreadyExists : PrepareOutcome()
 
-        /** [ready] = 待注入的支持模块；[existed] = 已注入过的支持模块名（幂等跳过）。 */
-        data class Ready(val ready: List<ProjectStructure>, val existed: List<String>) : PrepareOutcome()
+        /**
+         * [ready] = 待注入的支持模块；[existed] = 已注入过且为新版模板的支持模块名（幂等跳过）；
+         * [upgradable] = 已存在旧形态模板、可内容升级的支持模块（T-IntrUpg-03）。
+         */
+        data class Ready(
+            val ready: List<ProjectStructure>,
+            val existed: List<String>,
+            val upgradable: List<ProjectStructure> = emptyList(),
+        ) : PrepareOutcome()
     }
 
     /** 自动注入入口（同步语义保留——测试/非 EDT 场景；EDT 调用请用 [injectAsync]）。 */
@@ -97,11 +105,42 @@ object SqlSourceInterceptorAutoInjector {
                 PrepareOutcome.CannotDetectStructure
             }
         }
-        val (existedStructures, ready) = structures.partition { interceptorExists(it.sourceRoot, it.basePackage ?: "") }
-        if (ready.isEmpty()) return PrepareOutcome.AlreadyExists
-        val existed = existedStructures.mapNotNull { it.moduleName }
-        return PrepareOutcome.Ready(ready, existed)
+        val ready = mutableListOf<ProjectStructure>()
+        val existed = mutableListOf<String>()
+        val upgradable = mutableListOf<ProjectStructure>()
+        for (structure in structures) {
+            val existing = interceptorFile(structure.sourceRoot, structure.basePackage ?: "")
+            if (existing == null) {
+                ready += structure
+                continue
+            }
+            // T-IntrUpg-03：已存在拦截器文件 → 读文本判形态。旧模板产物（isSelf 常量拼接
+            // 与运行类可能分叉）纳入升级清单，EDT 内容重写；其余（新版/用户自写）幂等跳过。
+            val text = runCatching { VfsUtil.loadText(existing) }.getOrNull()
+            if (text != null && needsInterceptorUpgrade(text)) {
+                upgradable += structure
+            } else {
+                structure.moduleName?.let { existed += it }
+            }
+        }
+        if (ready.isEmpty() && upgradable.isEmpty()) return PrepareOutcome.AlreadyExists
+        return PrepareOutcome.Ready(ready, existed, upgradable)
     }
+
+    /**
+     * 已存在拦截器文件是否需要升级（T-IntrUpg-02，表驱动单测 [InjectionUpgradeDecisionTest]）。
+     *
+     * 三条件缺一不可：
+     *  - 含模板生成标记：仅插件生成物可被覆盖，用户手改/自写文件永不动；
+     *  - isSelf 为生成期常量拼接形态（旧模板特征 `cn.equals("`）：存在常量与运行类分叉缺陷；
+     *  - 不含运行时比对 `getClass().getName()`：已是新模板则跳过。
+     *
+     * 判定基于运行时行为缺陷形态而非模板全文比对——模板其他部分后续演进不误判。
+     */
+    internal fun needsInterceptorUpgrade(text: String): Boolean =
+        text.contains("自动生成于 SQL Visualizer 插件") &&
+            text.contains("cn.equals(\"") &&
+            !text.contains("getClass().getName()")
 
     /** 项目是否存在任何模块源根（区分 CannotDetectStructure 与 UnsupportedProject）。 */
     private fun hasAnySourceRoot(project: Project): Boolean =
@@ -128,7 +167,8 @@ object SqlSourceInterceptorAutoInjector {
 
     /** 文件创建（EDT；逐模块最小 WriteCommandAction——T-Perf-10：reformat 省略，模板即规范缩进）。 */
     private fun createFiles(project: Project, outcome: PrepareOutcome.Ready): InjectionResult {
-        val injected = mutableListOf<String>()
+        val created = mutableListOf<String>()
+        val upgraded = mutableListOf<String>()
         val failed = mutableListOf<String>()
         for (structure in outcome.ready) {
             val moduleName = structure.moduleName ?: structure.basePackage ?: "?"
@@ -137,28 +177,74 @@ object SqlSourceInterceptorAutoInjector {
                 else -> injectMyBatisNative(project, structure.basePackage ?: "", structure.sourceRoot)
             }
             if (result is InjectionResult.Success) {
-                injected += moduleName
+                created += moduleName
             } else {
                 failed += moduleName
                 LOG.info("SqlSourceInterceptorAutoInjector: 模块 $moduleName 注入未成功（$result），继续其余模块")
             }
         }
-        return decideAggregate(injected, outcome.existed, failed) { names -> successMessage(names, outcome) }
+        // T-IntrUpg-03：旧形态模板内容升级（不新建、不搬文件——拷贝件所在包即检测到的
+        // 模块基础包，重写内容后 package 声明与 isSelf 常量随所在包修正）。
+        for (structure in outcome.upgradable) {
+            val moduleName = structure.moduleName ?: structure.basePackage ?: "?"
+            if (upgradeInterceptorFile(project, structure)) {
+                upgraded += moduleName
+            } else {
+                failed += moduleName
+            }
+        }
+        return decideAggregate(created + upgraded, outcome.existed, failed) { names ->
+            successMessage(names, created, upgraded, outcome)
+        }
     }
 
-    /** 成功消息：单模块沿用既有三参文案；多模块列模块清单（T-JumpPath-04 聚合形态）。 */
-    private fun successMessage(injectedNames: List<String>, outcome: PrepareOutcome.Ready): String {
+    /**
+     * 单个旧形态拦截器文件内容升级（EDT 最小写）。文件定位失败/写失败 → false（调用方计 failed）。
+     * 只重写拦截器文件，不动 Config——拷贝件场景 Config 的 appPackages 现值已正确（计划 §七）。
+     */
+    private fun upgradeInterceptorFile(project: Project, structure: ProjectStructure): Boolean {
+        val basePackage = structure.basePackage ?: return false
+        return try {
+            WriteCommandAction.runWriteCommandAction<Boolean>(project) {
+                val file = interceptorFile(structure.sourceRoot, basePackage) ?: return@runWriteCommandAction false
+                VfsUtil.saveText(file, SourceInterceptorTemplates.generateInterceptorClass(basePackage))
+                true
+            }.also {
+                LOG.info("SqlSourceInterceptorAutoInjector: 拦截器文件${if (it) "升级成功" else "升级未成功"}，basePackage=$basePackage")
+            }
+        } catch (e: Exception) {
+            LOG.warn("SqlSourceInterceptorAutoInjector: 拦截器文件升级失败，basePackage=$basePackage", e)
+            false
+        }
+    }
+
+    /**
+     * 成功消息：全部为升级 → 升级文案（已更新旧版拦截器文件）；
+     * 单模块纯新建沿用既有三参文案；其余多模块/混合形态列模块清单（T-JumpPath-04 聚合形态）。
+     */
+    private fun successMessage(
+        injectedNames: List<String>,
+        created: List<String>,
+        upgraded: List<String>,
+        outcome: PrepareOutcome.Ready,
+    ): String {
         val bundle = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-        return if (injectedNames.size == 1) {
-            val structure = outcome.ready.first { (it.moduleName ?: it.basePackage ?: "?") == injectedNames[0] }
-            bundle.message(
-                "log.inject.success",
-                SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
-                SourceInterceptorTemplates.CONFIG_FILE_NAME,
-                structure.basePackage ?: injectedNames[0],
+        return when {
+            created.isEmpty() && upgraded.isNotEmpty() -> bundle.message(
+                "log.inject.upgraded",
+                upgraded.size.toString(),
+                upgraded.joinToString("、"),
             )
-        } else {
-            bundle.message(
+            injectedNames.size == 1 -> {
+                val structure = outcome.ready.first { (it.moduleName ?: it.basePackage ?: "?") == injectedNames[0] }
+                bundle.message(
+                    "log.inject.success",
+                    SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
+                    SourceInterceptorTemplates.CONFIG_FILE_NAME,
+                    structure.basePackage ?: injectedNames[0],
+                )
+            }
+            else -> bundle.message(
                 "log.inject.successMulti",
                 injectedNames.size.toString(),
                 injectedNames.joinToString("、"),
@@ -168,12 +254,12 @@ object SqlSourceInterceptorAutoInjector {
         }
     }
 
-    /** 检查拦截器类是否已存在。 */
-    private fun interceptorExists(sourceRoot: VirtualFile, basePackage: String): Boolean {
+    /** 拦截器类文件（不存在返回 null）。 */
+    private fun interceptorFile(sourceRoot: VirtualFile, basePackage: String): VirtualFile? {
         val configDir = "${basePackage.replace('.', '/')}/config"
         val interceptorPath = "${sourceRoot.path}/$configDir/${SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME}"
         val file = LocalFileSystem.getInstance().findFileByPath(interceptorPath)
-        return file != null && file.exists()
+        return file?.takeIf { it.exists() }
     }
 
     /** Spring Boot 项目注入（单模块；聚合消息在 [createFiles] 统一组装，此处 message 仅占位）。 */
