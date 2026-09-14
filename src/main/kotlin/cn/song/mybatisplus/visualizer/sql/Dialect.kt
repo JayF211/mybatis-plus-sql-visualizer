@@ -85,7 +85,10 @@ interface Dialect {
      * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
      *
      * 返回 null → 本方言不支持（调用方按钮降级提示）。支持矩阵真机实证（DBX 通道 2026-09-02）：
-     *  - MySQL 5.7/8.4、MariaDB：`EXPLAIN FORMAT=JSON`（MySQL 8.4/5.7 实测，MariaDB 同语法族）；
+     *  - MySQL 5.7/8.4、MariaDB：`EXPLAIN <sql>`（T-ExplainFirstNative 对齐 IDEA 原生
+     *    MysqlBaseRawPlanData 表格形态——原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN
+     *    表格行，按 id 嵌套建树；M37.2 曾用 `EXPLAIN FORMAT=JSON`，属自创形态且全树无
+     *    渲染器消费，真机网格只能呈现一坨 JSON 文本）；
      *  - PostgreSQL：`EXPLAIN (FORMAT JSON, VERBOSE)`（PG 16 实测）；
      *  - KingBase：`EXPLAIN (FORMAT JSON)`（KingbaseES V8 实测，PG 兼容完整）；
      *  - DM：`EXPLAIN <sql>`（DM8 实测，返回 #NSET2 计划文本）；
@@ -179,7 +182,7 @@ object MySqlDialect : Dialect {
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderMySqlStyleUpsert(updateColumns)
 
-    override fun renderExplainStatement(sql: String): String? = "EXPLAIN FORMAT=JSON $sql"
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**
@@ -317,7 +320,7 @@ object MariaDbDialect : Dialect {
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderMySqlStyleUpsert(updateColumns)
 
-    override fun renderExplainStatement(sql: String): String? = "EXPLAIN FORMAT=JSON $sql"
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**

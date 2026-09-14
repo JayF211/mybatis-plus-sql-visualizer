@@ -7,9 +7,11 @@ import org.junit.Test
 /**
  * 方言 EXPLAIN 语句渲染单元测试（M37.2 / P-立项-06 N-1）。
  *
- * 支持矩阵（DBX 真机实证 2026-09-02）：MySQL 5.7/8.4、MariaDB（FORMAT=JSON）、
- * PostgreSQL 16（FORMAT JSON, VERBOSE）、KingbaseES V8（FORMAT JSON）、DM8（原生 EXPLAIN）、
- * H2（PLAN FOR）、SQLite（QUERY PLAN）；Oracle（两步链）/ SQL Server（会话 SET）null 降级。
+ * 支持矩阵（DBX 真机实证 2026-09-02；T-ExplainFirstNative 对齐 IDEA 原生形态）：
+ * MySQL 5.7/8.4、MariaDB（EXPLAIN 表格行——原生 MysqlBaseRawPlanData 同款，FORMAT=JSON
+ * 为自创形态无渲染器消费）、PostgreSQL 16（FORMAT JSON, VERBOSE）、KingbaseES V8
+ * （FORMAT JSON）、DM8（原生 EXPLAIN）、H2（PLAN FOR）、SQLite（QUERY PLAN）；
+ * Oracle（两步链）/ SQL Server（会话 SET）null 降级。
  */
 class DialectExplainTest {
 
@@ -17,12 +19,12 @@ class DialectExplainTest {
 
     @Test
     fun `MySQL 形态`() {
-        assertEquals("EXPLAIN FORMAT=JSON $sample", MySqlDialect.renderExplainStatement(sample))
+        assertEquals("EXPLAIN $sample", MySqlDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `MariaDB 同 MySQL 形态`() {
-        assertEquals("EXPLAIN FORMAT=JSON $sample", MariaDbDialect.renderExplainStatement(sample))
+        assertEquals("EXPLAIN $sample", MariaDbDialect.renderExplainStatement(sample))
     }
 
     @Test
@@ -84,12 +86,12 @@ class DialectExplainTest {
     fun `幂等-词边界不误判标识符`() {
         // EXPLAINING_... 是标识符不是关键字 → 正常包装
         val ident = "EXPLAINING_TABLE"
-        assertEquals("EXPLAIN FORMAT=JSON $ident", MySqlDialect.renderExplainStatementIdempotent(ident))
+        assertEquals("EXPLAIN $ident", MySqlDialect.renderExplainStatementIdempotent(ident))
     }
 
     @Test
     fun `幂等-未包装文本正常加前缀`() {
-        assertEquals("EXPLAIN FORMAT=JSON $sample", MySqlDialect.renderExplainStatementIdempotent(sample))
+        assertEquals("EXPLAIN $sample", MySqlDialect.renderExplainStatementIdempotent(sample))
         assertEquals(
             "EXPLAIN (FORMAT JSON, VERBOSE) $sample",
             PostgreSQLDialect.renderExplainStatementIdempotent(sample),

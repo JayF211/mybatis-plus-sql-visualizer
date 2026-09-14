@@ -44,6 +44,8 @@
 - **多选错误一次性报告不再撞限流（T-FeedbackBatch）**：IDE 错误列表里勾选多条后点「报告到需求池」，2~5 条**合并成一条帖子**（标题带「等 N 条异常」、描述列 `#N 类名: 消息`、附件换成多节全文），更多条时首发仍是一条合并帖、其余各成独立帖**每 12 分钟错峰补发**——服务端限流是每 IP 每小时 5 次提交，此前「全选后报告」实际只会提交第一条、其余条目被静默丢弃；对话框底部新增「其他 N 条异常」分节，逐条复选框默认全勾、取消即不报该条
 - **报告提交失败不再只剩一条 toast（T-FeedbackErr）**：IDE 内点「报告到需求池」提交被服务端拒绝（400）时，此前只弹一条 `Server returned HTTP response code: 400 for URL: …` 通知，既看不到原因也无法重试。现在：提交时对话框不关闭、按钮转「提交中…」，失败则留在窗内、状态行红字给出**服务端返回的具体原因**（如「标题长度需在 5-200 字符之间」）与重试引导，可改完内容直接再提交，成功才关窗；同时异常堆栈附件上传失败不再连坐整帖（帖子照发、另行提示堆栈未附上）
 - **报告失败诊断与对话框收敛（T-FeedbackErr 第二轮）**：真机反馈两缺陷——①「提交失败：Expected BEGIN_OBJECT but was STRING」实为**响应 gzip 未解压**（平台 `HttpRequests` 默认 `Accept-Encoding: gzip`、Cloudflare 返回压缩响应，服务端实际已入库；手写读取按 `Content-Encoding` 解压修复），非 JSON 响应（代理/CDN 拦截页）改为可读归类并附正文片段与 HTTP 状态；② 失败信息单行渲染把对话框撑到 ~1900px——状态行改可换行文本区；失败现场「帖子已提交」措辞矛盾一并修正；并新增**「复制失败信息」按钮**（对齐 SQL 预览窗口交互，复制后按钮变「已复制」）
+- **执行计划首次点击结果不进预览面板（T-ExplainFirstNative）**：首次执行时 DBN 先创建**空名占位**结果 Tab 再异步改名/构建网格，而换入判定以「名称不在提交时刻快照」识别新结果——空名恒判新，重试第 1 拍就选中占位并强制换入（网格尚未构建），事后无人补换入，结果滞留 IDEA 原生控制台、预览面板空白，再点一次才恢复。修复：空名占位不作为结果候选（400ms 换入重试与 contentAdded 钩子两处），结果换入监视每拍快照结果 Tab 名称集合、集合变化（占位改名/新 Tab）即补一次换入重绘兜底
+- **执行计划输出对齐 IDEA 原生表格形态（T-ExplainFirstNative）**：MySQL/MariaDB 由 `EXPLAIN FORMAT=JSON` 改为原生同款 `EXPLAIN <sql>`——本地 DatabaseTools jar 反编译实证，原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN 表格行（`MysqlBaseRawPlanData` 直读 id/select_type/table/type/key_len/rows/filtered/Extra），FORMAT=JSON 属 M37.2 自创形态且全树无渲染器消费，真机网格只能呈现一坨 JSON 文本；现在执行计划结果直接是经典计划表格行（PostgreSQL/KingBase 的 FORMAT JSON 为 PG 家族原生形态，保留不动）
 
 ### Test
 
@@ -54,7 +56,8 @@
 - **09-14 修复链**：`InjectionModulePickerDialogTest` 4 例（默认全选/全不选清空/联动恢复/行文本）；T-IntrUpg 防线表驱动/桥不暂存/升级判定表驱动/upgraded 键落地 10 例；T-MergeFollowup 五段模式循环行高恒等、右键 renderer、下拉按钮同构断言；T-FeedbackDlg 三波布局与错误池过滤断言；T-PreviewExecDs 缓存项目绑定/console 探活三分量；T-ExecSlowOps 两段式映射与 setMapping 字面量单文件收口守卫
 - **批量报告**：`BatchSubmitterTest` 9 例（合并附件分节 / 单条原样 / 全不勾不带附件 / 阈值边界 / 补发列表与条目勾选 / 间隔常量）+ `ErrorReportComposerTest` +6 例批量合并
 - **反馈链路**：`FeedbackApiTest` 21 例（+4：服务端 4xx 正文优先于通道文案 / 附件被拒降级为不带附件发帖 / 上传抛 HttpFailure 同样降级 / `serverMessageOf` 边界）、`ErrorReportDialogLayoutTest` 14 例（+2：状态行在面板底部且不参与纵向伸缩 / 提交状态机三阶段文案）；回归踩坑修复 `BundleParityGuardTest`——bundle 值用物理续行会被 `java.util.Properties` 解析成 key（中英 key 集合漂移），改单行转义后中英 key 620/620 对齐
-- 本版全量 **4078/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible
+- **执行计划链**：`ResultTabSelectionTest` +3 例（空名占位不作为新结果候选 / 阈值后也不复用空名只选具名旧 Tab / 占位改名后第 1 拍即选中——真机首点病灶的动态代理链路复现）；`DialectExplainTest` MySQL/MariaDB 期望改 `EXPLAIN <sql>`（历史 FORMAT=JSON 已包装文本幂等样例保留，证明升级后二次点击不双前缀）
+- 本版全量 **4081/0/0/6 绿**（基线 4078 + 本轮 3 例）；`verifyPlugin` 三目标（IU-243/253/262）Compatible
 
 ## [2026.9.11] - 2026-09-11
 

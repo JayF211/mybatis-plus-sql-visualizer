@@ -756,6 +756,9 @@ object DataSourceSelector {
         val shared = sharedConsole
         var ticks = 0
         var swapped = false
+        // T-ExplainFirstNative：结果 Tab 名称集合逐拍快照——集合变化（空名占位改名/新 Tab 出现）
+        // 说明结果内容更新，即使组件实例未变也要补一次换入重绘（首点网格晚于换入构建的兜底）
+        var lastResultNames: Set<String>? = null
         val timer = javax.swing.Timer(600, null)
         timer.addActionListener(object : java.awt.event.ActionListener {
             override fun actionPerformed(e: java.awt.event.ActionEvent) {
@@ -784,10 +787,13 @@ object DataSourceSelector {
                     }
                 // M36.5.13：每拍清提示符（压制执行后重设）
                 if (shared != null) clearConsolePrompt(shared, LOG)
+                val names = resultContents(ui).map { it.displayName }.toSet()
+                val namesChanged = lastResultNames != null && names != lastResultNames
+                lastResultNames = names
                 val live = runCatching {
                     ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
                 }.getOrNull()
-                val shouldSwap = live != null && (forceSwapIn && !swapped || live !== lastLiveResultSwapped)
+                val shouldSwap = live != null && (forceSwapIn && !swapped || live !== lastLiveResultSwapped || namesChanged)
                 if (shouldSwap && live != null) {
                     // M36.5.41-A4：持久整控台原位换底（不重建 SplitPane，身份稳定）；
                     // M36.5.43：swap 助手不再返回 null（强制换入），持久容器缺失时回退
@@ -803,7 +809,7 @@ object DataSourceSelector {
                         // Timer 回调已在 EDT，直接换入（模态 pump 中 Timer 照常 fire）
                         cb.invoke(full)
                     }
-                    LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, gen=$generation)")
+                    LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, namesChanged=$namesChanged, gen=$generation)")
                 }
                 if (ticks >= 8) {
                     timer.stop()
@@ -840,6 +846,9 @@ object DataSourceSelector {
                     val name = event.content?.displayName ?: return
                     LOG.info("[M36] contentAdded: $name")
                     if (name.equals("Output", ignoreCase = true) || name.equals("输出", ignoreCase = true)) return
+                    // T-ExplainFirstNative：空名占位（DBN 先 add 后改名）换入必然过早——网格未构建，
+                    // 交由 startResultTabRetry 在改名后 select+换入
+                    if (name.isBlank()) return
                     val callback = pendingOnConsole ?: run {
                         LOG.info("[M36] contentAdded swap-in SKIPPED (pendingOnConsole=null)")
                         return
@@ -2535,7 +2544,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 val watch = javax.swing.Timer(8000, null)
                 watch.addActionListener {
                     watch.stop()
-                    val newTab = resultContents(uiForWatch).any { it.displayName !in preExistingNames }
+                    val newTab = resultContents(uiForWatch).any { it.displayName.isNotBlank() && it.displayName !in preExistingNames }
                     val namespaceOk = runCatching {
                         val ns = consoleForWatch.javaClass
                             .getMethod("getCurrentNamespace").invoke(consoleForWatch)
@@ -2615,15 +2624,21 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      *     才接受复用（防"任意见到旧 Tab 就换入"把上一轮结果顶进面板——M36.5.22 真因；
      *     [swapGeneration] 已保证 watch 生命周期仅本次执行，同名 Tab 即本次结果，可快速接受）。
      *  3. 无结果 Tab（仅 Output/空）→ null（继续等待）。
+     *
+     * T-ExplainFirstNative：**空名占位不算结果**——DBN 首次执行先 add 空名 Content 再异步
+     * 改名/建网格（262 真机 21:06:45 实证 `contentAdded: `），空名 ∉ 快照集合恒真会把占位当
+     * 新结果第 1 拍选中并强制换入（网格尚未构建），事后无人补换入 → 结果滞留原生控制台。
      */
     internal fun pickResultTab(
         contents: Array<com.intellij.ui.content.Content>,
         preExistingNames: Set<String>,
         attempts: Int,
     ): com.intellij.ui.content.Content? {
-        val newOne = contents.firstOrNull { !isOutputContent(it) && it.displayName !in preExistingNames }
+        val newOne = contents.firstOrNull {
+            !isOutputContent(it) && it.displayName.isNotBlank() && it.displayName !in preExistingNames
+        }
         if (newOne != null) return newOne
-        val staleOne = contents.firstOrNull { !isOutputContent(it) }
+        val staleOne = contents.firstOrNull { !isOutputContent(it) && it.displayName.isNotBlank() }
         return if (staleOne != null && attempts >= REUSE_ACCEPT_TICKS) staleOne else null
     }
 
