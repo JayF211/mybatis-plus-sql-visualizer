@@ -218,8 +218,11 @@ tasks.withType<Test>().configureEach {
     }
     // 默认 test（含平台型测试）保持串行（maxParallelForks=1）：多 fork 共享默认 test 沙盒，
     // PersistentFS 互踩（2026-09-14 T-TestPerf-03 实证 testForks=4 成片 PersistentFSConnector
-    // 异常；分片任务注释同根因先例 191 失败）。安全并行走 testFast（纯逻辑桶）/ testShard1|2
-    // （独立沙盒双开），见下方 testFast 定义。
+    // 异常；分片任务注释同根因先例 191 失败）。安全并行走分片（./gradlew testShards 一命令，
+    // 各片独立沙盒并发执行），见下方 testShards 定义。
+    // T-TestPerf2：测试 JVM 堆可临时覆盖（Gradle Test 默认 maxHeapSize=512m），用法
+    // -PtestHeapSize=2g；缺省不动，是否转正由实测收益定（见 T-TestPerf2 计划 P9）。
+    providers.gradleProperty("testHeapSize").orNull?.let { maxHeapSize = it }
 }
 
 
@@ -510,15 +513,35 @@ tasks {
     }
 }
 
-// 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 收编）：测试类自动分区 2 片。
-// 用法：双开终端各跑一片实现真并行（./gradlew testShard1 与 ./gradlew testShard2，同项目内
-// 多任务不并行，testShards 聚合只是串行兜底）；权威串行全量仍是 ./gradlew test。
+// 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2
+// 时长均衡分区 + 片数可配 + 一命令并行与聚合报告）。
+// 用法：./gradlew testShards 一命令即真并行（org.gradle.parallel=true，各片任务并发执行，
+// 并发实证与提速数据见 docs/开发计划/20260915-0238-T-TestPerf2 计划 §六）；串行权威全量
+// 仍是 ./gradlew test（对照口径保留）。
 // 前提：每片独立 sandbox 目录——多 worker 共享 .intellijPlatform/sandbox/.../system-test 会
 // PersistentFS 互踩损坏（实证：191 失败 + 卡死），分片隔离后无共享写点。
-// 包含清单为配置期扫描 src/test 自动分区（稳定哈希），新增测试类零维护；DB 集成三类只在 testDatabase。
+// 包含清单为配置期扫描 src/test 自动分区（时长权重贪心均衡，详见 testIde 块注释），
+// 新增测试类零维护自动进片；DB 集成三类只在 testDatabase。
 // M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
+
+// T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
+// 供配置期时长权重与 testShards 聚合报告两处复用；解析失败静默跳过（半截 XML 不挡分区）。
+fun parseTestSuiteAttrs(f: File): Map<String, String>? = runCatching {
+    val head = f.useLines { lines -> lines.take(8).joinToString("\n") }
+    val tag = head.substringAfter("<testsuite", "").substringBefore(">")
+    if (tag.isEmpty()) null
+    else Regex("([\\w.-]+)=\"([^\"]*)\"").findAll(tag).associate { it.groupValues[1] to it.groupValues[2] }
+}.getOrNull()
+
+fun listSuiteXmls(dir: File): List<File> =
+    dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
+
+// T-TestPerf2：分片数，-PtestShardCount=N（默认 3，上限 6；6C12T 实测 3 片最优，2 片慢 ~40%）。
+// 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
+val testShardCount = providers.gradleProperty("testShardCount").orNull
+    ?.toIntOrNull()?.coerceIn(1, 6) ?: 3
 
 intellijPlatformTesting {
     // T-DynUpdate 热替换本地验证沙盒（配套 dev-support/hotswap-local-server.py 与
@@ -596,49 +619,112 @@ intellijPlatformTesting {
         }
     }
     testIde {
-        // T-TestPerf-04（2026-09-14）：分片包含清单自动分区——配置期扫描 src/test 测试源码
-        // 推导 FQCN，按类名稳定哈希（String.hashCode + floorMod，跨 JVM 确定）均分到各片。
-        // 旧手工白名单的「新增测试类默认不进分片」漂移陷阱根除，新类零维护自动进片。
+        // T-TestPerf-04（2026-09-14）分片包含清单自动分区 + T-TestPerf2（2026-09-15）时长均衡：
+        // 配置期扫描 src/test 推导 FQCN 全集（DB 集成三类仍只在 testDatabase，与默认 test 口径一致），
+        // 权重来自 build/test-results 下历史 XML（test/ 与 testShardN/ 全扫，同类取 mtime 最新——
+        // 串行与分片互相喂养）；无数据类取已知权重中位数，全新检出零数据时全体同权，
+        // 退化为按类名字典序贪心均分，仍确定性。贪心排序键 = (时长降序, 类名升序)，
+        // 同输入必得同分区——双开终端两进程与配置缓存复用前后结果一致。
+        // 配置缓存语义与类发现一致：新增测试类/时长变化在下一次配置失效后生效，短暂失衡不影响正确性。
+        // 片数：-PtestShardCount=N（默认 3）。旧类名哈希两片实测失衡 26%（157.9s/93.7s），
+        // 时长均衡两片 125.8s/125.8s——并行墙钟被重片拖死的问题根除（数据见 T-TestPerf2 计划 §二）。
+        // 单遍扫描测试源码：Triple(包名, 顶层测试类名列表, 原文)。类名从内容提取而非文件名——
+        // Kotlin 文件名≠类名合法（实证 CrudPreviewFlowAndTypesTest.kt 内是 class DbTypeQuoteHintTest，
+        // 3 用例曾被「文件名=FQCN」旧法漏掉，分片并集比串行少 3）；列 0 的 class 声明含 Kotlin/Java
+        // 常见修饰符；无顶层类声明时回退文件名（嵌套类套件等形态）。新增测试类零维护自动进片。
         // DB 集成三类仍只在 testDatabase 运行（与默认 test 的排除口径一致）。
         val dbIntegrationClasses = setOf(
             "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
             "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
             "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
         )
-        val discoveredTestClasses: List<String> = run {
-            val names = mutableListOf<String>()
-            file("src/test/kotlin").walkTopDown()
-                .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
-                .forEach { f ->
-                    val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
-                        .find(f.readText())?.groupValues?.get(1) ?: return@forEach
-                    names += "$pkg.${f.name.substringBeforeLast('.')}"
-                }
-            names.filter { it !in dbIntegrationClasses }.sorted()
-        }
-        fun shardClasses(index: Int, shards: Int): List<String> =
-            discoveredTestClasses.filter { Math.floorMod(it.hashCode(), shards) == index }
-
-        register("testShard1") {
-            testFramework(TestFrameworkType.Platform)
-            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard1"))
-            task {
-                // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
-                testClassesDirs = sourceSets["test"].output.classesDirs
-                classpath = classpath + sourceSets["test"].output
-                filter {
-                    shardClasses(0, 2).forEach { includeTestsMatching(it) }
+        val testFileEntries: List<Triple<String, List<String>, String>> = file("src/test/kotlin").walkTopDown()
+            .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
+            .map { f ->
+                val text = f.readText()
+                val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
+                    .find(text)?.groupValues?.get(1) ?: ""
+                val classNames = Regex(
+                    """(?m)^(?:public\s+|internal\s+|open\s+|abstract\s+|final\s+|data\s+|sealed\s+|annotation\s+)*class\s+(\w+)\b""",
+                ).findAll(text).mapNotNull { it.groupValues[1].takeIf { cn -> cn.endsWith("Test") } }.toList()
+                Triple(pkg, classNames.ifEmpty { listOf(f.name.substringBeforeLast('.')) }, text)
+            }.toList()
+        val discoveredTestClasses: List<String> = testFileEntries
+            .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
+            .filter { it !in dbIntegrationClasses }
+            .sorted()
+        // 时长权重表：discoveredTestClasses 全集覆盖（已知→实测秒数，未知→已知中位数）
+        val durationWeights: Map<String, Double> = run {
+            val resultDirs = sequenceOf(file("build/test-results/test")) +
+                (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
+            val best = HashMap<String, Pair<Long, Double>>() // FQCN -> (mtime, seconds)
+            for (dir in resultDirs) {
+                if (!dir.isDirectory) continue
+                for (f in listSuiteXmls(dir)) {
+                    val attrs = parseTestSuiteAttrs(f) ?: continue
+                    val name = attrs["name"] ?: continue
+                    val time = attrs["time"]?.toDoubleOrNull() ?: continue
+                    val mtime = f.lastModified()
+                    val prev = best[name]
+                    if (prev == null || mtime >= prev.first) best[name] = mtime to time
                 }
             }
+            val known = best.values.map { it.second }.sorted()
+            val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+            discoveredTestClasses.associateWith { best[it]?.second ?: median }
         }
-        register("testShard2") {
-            testFramework(TestFrameworkType.Platform)
-            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard2"))
-            task {
-                testClassesDirs = sourceSets["test"].output.classesDirs
-                classpath = classpath + sourceSets["test"].output
-                filter {
-                    shardClasses(1, 2).forEach { includeTestsMatching(it) }
+        // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
+        // 互斥），并发分片 JVM 互抢 → cannot open system clipboard（2026-09-15 冷启动第一跑
+        // shard2 实证 1 例，假失败清单「剪贴板 flake」的并行放大版）。测试源码含
+        // CopyPasteManager/systemClipboard 的类固定进第 1 片——片内串行天然无争用，不改任何测试代码；
+        // 与类发现同源单遍扫描，新增剪贴板用例零维护。
+        val machineGlobalAffinityClasses: Set<String> = testFileEntries
+            .filter { (_, _, text) -> text.contains("CopyPasteManager") || text.contains("systemClipboard") }
+            .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
+            .toSet()
+        // 贪心均衡：亲和类先固定第 1 片（discoveredTestClasses 已字典序，分区确定性不变），
+        // 其余逐类放入当前最轻片（并列取最小下标，minByOrNull 语义即确定性）
+        val shardAssignment: List<List<String>> = run {
+            val shards = List(testShardCount) { mutableListOf<String>() }
+            val loads = DoubleArray(testShardCount)
+            discoveredTestClasses.filter { it in machineGlobalAffinityClasses }.forEach { name ->
+                shards[0] += name
+                loads[0] += durationWeights[name] ?: 0.0
+            }
+            durationWeights.entries
+                .filter { it.key !in machineGlobalAffinityClasses }
+                .sortedWith(compareByDescending<Map.Entry<String, Double>> { it.value }.thenBy { it.key })
+                .forEach { entry ->
+                    val target = loads.indices.minByOrNull { loads[it] }!!
+                    shards[target] += entry.key
+                    loads[target] += entry.value
+                }
+            shards
+        }
+        logger.lifecycle(
+            "testShards: $testShardCount shards duration-balanced, loads=" +
+                shardAssignment.indices.joinToString(" ") { i ->
+                    "shard${i + 1}=%.1fs/%dclasses".format(
+                        shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 },
+                        shardAssignment[i].size,
+                    )
+                }
+        )
+        for (i in 1..testShardCount) {
+            val idx = i - 1
+            register("testShard$i") {
+                testFramework(TestFrameworkType.Platform)
+                sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard$i"))
+                task {
+                    // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
+                    testClassesDirs = sourceSets["test"].output.classesDirs
+                    classpath = classpath + sourceSets["test"].output
+                    filter {
+                        shardAssignment[idx].forEach { includeTestsMatching(it) }
+                    }
+                    // 并发审计锚点：起止毫秒时间戳，验证一命令多片是否真并行（T-TestPerf-05）
+                    doFirst { logger.lifecycle("testShard$i START ${System.currentTimeMillis()}") }
+                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
                 }
             }
         }
@@ -727,8 +813,56 @@ intellijPlatformTesting {
 
 tasks.register("testShards") {
     group = "verification"
-    description = "分片全量测试（自动分区 2 片；真并行请双开终端各跑一片，本聚合任务为串行兜底）"
-    dependsOn("testShard1", "testShard2")
+    description =
+        "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
+    dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+    // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
+    // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
+    // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
+    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") }
+    doLast {
+        fun suiteXmls(dir: File): List<File> =
+            dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
+        fun suiteAttrs(f: File): Map<String, String>? = runCatching {
+            val head = f.useLines { lines -> lines.take(8).joinToString("\n") }
+            val tag = head.substringAfter("<testsuite", "").substringBefore(">")
+            if (tag.isEmpty()) null
+            else Regex("([\\w.-]+)=\"([^\"]*)\"").findAll(tag).associate { it.groupValues[1] to it.groupValues[2] }
+        }.getOrNull()
+        var total = 0
+        var failed = 0
+        var errored = 0
+        var skipped = 0
+        var execSeconds = 0.0
+        shardResultDirs.forEachIndexed { idx, dir ->
+            var n = 0
+            var f = 0
+            var e = 0
+            var s = 0
+            var t = 0.0
+            val xmls = suiteXmls(dir)
+            if (xmls.isEmpty()) {
+                logger.lifecycle("testShard${idx + 1}: $dir 下无结果 XML（该分片未跑？）")
+            }
+            for (xml in xmls) {
+                val attrs = suiteAttrs(xml) ?: continue
+                fun num(key: String) = attrs[key]?.toDoubleOrNull() ?: 0.0
+                n += num("tests").toInt()
+                f += num("failures").toInt()
+                e += num("errors").toInt()
+                s += num("skipped").toInt()
+                t += num("time")
+            }
+            logger.lifecycle(
+                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs".format(t),
+            )
+            total += n; failed += f; errored += e; skipped += s; execSeconds += t
+        }
+        logger.lifecycle(
+            "SHARD TOTAL: tests=$total failures=$failed errors=$errored skipped=$skipped " +
+                "(parity 口径 = 串行 ./gradlew test 计数；两者同出一份自动分区清单，DB 集成三类都在 testDatabase)"
+        )
+    }
 }
 
 // P-立项-05 真机验证：-Dmpvs.* 透传到测试 JVM（渲染导出 DialectRenderDumpTest / 外部实例入口）
@@ -754,6 +888,7 @@ tasks.test {
 //    legacy exclude 与 filter 混用时 filter 优先级覆盖 exclude、159 条 exclude 全被忽略）；
 // ③ 但 2246 个纯逻辑分类用例中 68 个（forks=1 对照同败）隐性依赖同 worker JVM 里
 //    平台测试先建立的 Application/LaF 状态，脱离平台桶即红——作为快测任务会误报。
-// 结论：全量权威=串行 ./gradlew test；真并行=分片自动分区双开终端（见 testShard1/2）；
+// 结论：全量权威=串行 ./gradlew test；真并行=./gradlew testShards 一命令（T-TestPerf2 收编，
+// 时长均衡自动分区；旧「双开终端」用法仍可用但已非必需）；
 // 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
 
