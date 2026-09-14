@@ -262,6 +262,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-14 | T-ListPreviewCopy 列表预览默认格式化＋多选防误弹＋多选批量复制（master merge 412a762，4039 绿）：预览统一跟随「预览时格式化还原SQL」设置——clickPreviewSql 先补分号再 SqlFormatter.format，历史双击 buildPreviewResult 弃 formatSql=false 硬编码改读 logFormatSql；多选 selectedIndices>1 时 onClick 停表关旧不排程＋show() 兜底封补选竞态；右键命中行在多选内保留/不在收敛（resolveContextMenuSelection）＋batchCopySql 批量复制（与内置 Ctrl+C 逐字节同构、文案带条数）；坑=测试断言后挂起定时器 300ms 到点 EDT 真弹浮窗致 Editor 泄漏（TraceableDisposable$DisposalException），finally cp.dispose() 停表修复。worktree 独立沙盒 4033 绿＋合并后 4039 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | SQL 历史列表行号（T-LogHistoryRowNo，master dee44ae）：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号——SqlLogFileReader.parseContent 注入 sequenceNumber=索引+1（读取层派生不持久化，旧文件零迁移）＋HistoryCellRenderer 元信息行最前 #N 片段；搜索过滤下行号稳定。全量 4020/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ReportL10n2 嵌入平台 UI 文案恒跟 IDE 显示语言（真机二次反馈）：一波只改 AUTO 落点但插件语言默认 zh 非 AUTO 故不触达 → MpSqlVisualizerBundle 新增 messageForIde（按 ideDisplayLocale 直接解析），提交器 getReportActionText/getPrivacyNoticeText 切换；插件自身对话框维持插件语言设置（语言归属边界定案）；worktree 隔离全量 4030/0/0/6 绿，代码随并行会话 0672adf 入册。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ReportL10n 报告需求池文案与 IDE 显示语言不一致：语言设置 AUTO 落 JVM locale（与 IDE 显示语言脱节）→ MpSqlVisualizerBundle AUTO 分支改 DynamicBundle.getLocale()（javap 双版本实证），headless 回退 JVM locale；陈旧 java/main 类劫持编译排障；全量 3989/0/0/6 绿。详见 docs/变更记录.md 同日行 |
