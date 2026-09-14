@@ -2,6 +2,18 @@ import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 
 rootProject.name = "mybatis-plus-sql-visualizer"
 
+// T-TestPerf2（2026-09-15）：build cache 关闭改落 settings 层。gradle.properties 的
+// org.gradle.caching=false 会被用户级 ~/.gradle/gradle.properties 的 caching=true 按 Gradle
+// 属性优先级（GRADLE_USER_HOME > 项目根）覆盖而空转——实证：冷启动分片构建出现
+// 「5 from cache」，且 daemon 实际按用户级 jvmargs（MaxMetaspaceSize=256m）运行；
+// 即 T-TestPerf-01 的「关闭」自落地起在本机从未真正生效。此块优先级高于属性文件，
+// 才把历史三次成片 NoSuchMethodError 假失败的根源（复用陈旧 compileTestKotlin 产物）真正关死。
+buildCache {
+    local {
+        isEnabled = false
+    }
+}
+
 pluginManagement {
     plugins {
         id("org.jetbrains.kotlin.jvm") version "2.3.20"
