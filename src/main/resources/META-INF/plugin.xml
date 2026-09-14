@@ -1,5 +1,7 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin>
+<!-- url：插件官网链接（idea-plugin 根元素属性，官方文档实证——显示在 JetBrains Marketplace 插件页的
+     Plugin Homepage 入口；与 vendor url（厂商页 Gitee）分工互补） -->
+<idea-plugin url="https://sql-visualizer.jvtools.cn">
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
