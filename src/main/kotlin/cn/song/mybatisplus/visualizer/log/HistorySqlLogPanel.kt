@@ -66,8 +66,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
-    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val sqlClickPreview = SqlClickPreview(project, sqlList) { i -> withTerminator(sqlList.model.getElementAt(i).restoredSql) }
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
+     *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
+    private val sqlClickPreview = SqlClickPreview(project, sqlList) {
+        i -> clickPreviewSql(sqlList.model.getElementAt(i).restoredSql, PluginSettings.getInstance().state.logFormatSql)
+    }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
@@ -420,11 +423,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /**
      * 双击预览的 PreviewResult 构建（T-HistParam F3，internal 供 UI 测试不弹窗断言识别结果）：
      * 与日志 tab 共用 [toPreviewResult] 统一识别通道——v2 历史条目（rawSql/params 齐全）参数行
-     * 与日志页一致，字面量条目走 F4 恢复；formatSql=false 保持历史页现状不格式化。
+     * 与日志页一致，字面量条目走 F4 恢复；T-ListPreviewCopy：formatSql 改跟随设置
+     * 「预览时格式化还原 SQL」（logFormatSql，默认开=默认格式化），消除与日志 tab 双击预览的不一致。
      */
     internal fun buildPreviewResult(entry: LogSqlEntry): PreviewResult =
         entry.toPreviewResult(
-            formatSql = false,
+            formatSql = PluginSettings.getInstance().state.logFormatSql,
             literalRecovery = PluginSettings.getInstance().state.literalParamRecovery,
         )
 
@@ -433,14 +437,17 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun showSqlContextMenu(e: MouseEvent) {
         val idx = sqlList.locationToIndex(e.point)
         if (idx < 0) return
-        sqlList.selectedIndex = idx
-        val entry = sqlList.model.getElementAt(idx) ?: return
+        // T-ListPreviewCopy：与日志 tab 同款选中收敛——命中行已在多选内保留（复制项=批量复制多条），
+        // 否则收敛为该行；跳转等其余菜单项恒作用于被右键的行
+        sqlList.selectedIndices = resolveContextMenuSelection(sqlList.selectedIndices, idx)
+        val entry = sqlListModel.getElementAt(idx)
+        val selectedEntries = sqlList.selectedIndices.map { sqlListModel.getElementAt(it) }
 
         val menu = JPopupMenu()
-        menu.add(JMenuItem(MpSqlVisualizerBundle.message("log.history.copy"), AllIcons.Actions.Copy).apply {
+        menu.add(JMenuItem(copyMenuText("log.history.copy", "log.history.copySelected", selectedEntries.size), AllIcons.Actions.Copy).apply {
             addActionListener {
                 val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                clipboard.setContents(java.awt.datatransfer.StringSelection(withTerminator(entry.restoredSql)), null)
+                clipboard.setContents(java.awt.datatransfer.StringSelection(batchCopySql(selectedEntries)), null)
             }
         })
         menu.add(JMenuItem(MpSqlVisualizerBundle.message("log.history.jumpToSource"), AllIcons.Actions.EditSource).apply {
