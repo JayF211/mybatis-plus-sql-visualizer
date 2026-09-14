@@ -99,12 +99,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         addActionListener { refresh() }
     }
 
-    /** 显示模式下拉（T-ListMode；T-MergeFollowup-04 原生化）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
-    private val displayModeAction = SqlListDisplayModeComboBoxAction(project)
+    /** 显示模式下拉（T-ListMode；T-MergeFollowup-04）：与日志 tab 的「SQL类型」按钮完全同构；变更广播 SETTINGS_CHANGE_TOPIC。 */
+    private val displayModeButton = SqlListDisplayModeButton(project)
 
-    /** 显示模式按钮当前文案（测试断言选中态回同步用——与按钮显示同源，原生化后无 selectedIndex）。 */
+    /** 显示模式按钮当前文案（测试断言选中态回同步用——与按钮显示同源）。 */
     internal val displayModeSelectedLabelForTest: String
-        get() = displayModeAction.currentLabelForTest()
+        get() = displayModeButton.currentLabelForTest()
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
     internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
@@ -115,7 +115,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      *  仅 repaint 时旧行高框内画新多行内容即呈「文字重叠/间距挤压」；且 repaint 改走 [applySqlSearch]
      *  全量重建（model 全量变更触发 layoutState 重算，双保险）。 */
     internal fun onDisplayModeChanged() {
-        displayModeAction.syncFromSettings()
+        displayModeButton.syncFromSettings()
         applySqlListCellHeight()
         sqlList.revalidate()
         if (currentFile != null) applySqlSearch()
@@ -179,12 +179,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         toolbar.add(backButton)
         toolbar.add(refreshButton)
         // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）。
-        // T-MergeFollowup-04 复查修正：按钮左侧加「显示模式」名字标签 + createToolbarComponent 先填文本再创建
-        // （手动场景无 ActionToolbar 驱动 update，按钮初始只剩箭头）
+        // T-MergeFollowup-04 复查二轮：按钮与「SQL类型」完全同构（普通 JButton + ArrowDown + popup），
+        // 左侧「显示模式」标签——字体与样式天然靠齐
         val displayModeUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
             add(JLabel(MpSqlVisualizerBundle.message("log.list.displayMode")))
-            add(displayModeAction.createToolbarComponent(com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR))
+            add(displayModeButton)
         }
         toolbar.add(displayModeUnit)
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")

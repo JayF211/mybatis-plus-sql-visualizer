@@ -314,15 +314,16 @@ class SqlLogPanel(
     // ---------- T-ListMode：SQL 显示模式下拉（单行/关键字换行/格式化） ----------
 
     /**
-     * 显示模式下拉（T-MergeFollowup-04 原生化：平台 [com.intellij.openapi.actionSystem.ex.ComboBoxAction]，
-     * 替换 Swing 默认样式 JComboBox）：变更写设置并广播 SETTINGS_CHANGE_TOPIC——既有监听统一回同步按钮文本
-     * + 行高重设 + 全量刷新。按钮组件在 [buildToolbar] 经 createCustomComponent 创建。
+     * 显示模式下拉（T-ListMode；T-MergeFollowup-04）：与 [typeFilterButton] 完全同构的
+     * [SqlListDisplayModeButton]（复查修正：ComboBoxAction 的 ComboBoxButton 手动创建场景
+     * 字体/边框与既有按钮不一致且需手工驱动文本，弃用）。变更写设置并广播 SETTINGS_CHANGE_TOPIC——
+     * 既有监听统一回同步按钮文本 + 行高重设 + 全量刷新。
      */
-    private val displayModeAction = SqlListDisplayModeComboBoxAction(project)
+    private val displayModeButton = SqlListDisplayModeButton(project)
 
     /** 显示模式按钮文本回同步（模式被另一面板/设置页改变时；经既有 settings 监听驱动）。 */
     private fun syncDisplayModeCombo() {
-        displayModeAction.syncFromSettings()
+        displayModeButton.syncFromSettings()
     }
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
@@ -507,12 +508,12 @@ class SqlLogPanel(
         left.add(typeFilterUnit)
         left.add(sortButton)
         // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）。
-        // T-MergeFollowup-04 复查修正：按钮左侧加「显示模式」名字标签（与「SQL类型：」单元同构）；
-        // createToolbarComponent 先填文本再创建（手动场景无 ActionToolbar 驱动 update，按钮初始只剩箭头）
+        // T-MergeFollowup-04 复查二轮：按钮与「SQL类型」完全同构（普通 JButton + ArrowDown + popup），
+        // 左侧「显示模式」标签同「SQL类型：」单元——字体与样式天然靠齐
         val displayModeUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
             add(JLabel(MpSqlVisualizerBundle.message("log.list.displayMode")))
-            add(displayModeAction.createToolbarComponent(com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR))
+            add(displayModeButton)
         }
         left.add(displayModeUnit)
         // O-1：工具栏慢查询计数标签
