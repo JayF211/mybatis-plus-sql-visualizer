@@ -317,36 +317,16 @@ class SqlLogPanel(
 
     // ---------- T-ListMode：SQL 显示模式下拉（单行/关键字换行/格式化） ----------
 
-    /** 显示模式下拉：变更写设置并广播 SETTINGS_CHANGE_TOPIC——既有监听统一回同步 combo + 行高重设 + 刷新。 */
-    private val displayModeCombo = JComboBox(arrayOf(
-        MpSqlVisualizerBundle.message("log.list.displayMode.single"),
-        MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
-        MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
-    )).apply {
-        toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode")
-        isFocusable = false
-        selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
-        addItemListener { e ->
-            if (e.stateChange == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
-                val mode = SqlListDisplayMode.values()[selectedIndex]
-                val settings = PluginSettings.getInstance()
-                if (settings.state.logListSqlDisplayMode != mode.name) {
-                    settings.state.logListSqlDisplayMode = mode.name
-                    project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
-                        .settingsChanged()
-                }
-            }
-        }
-    }
+    /**
+     * 显示模式下拉（T-MergeFollowup-04 原生化：平台 [com.intellij.openapi.actionSystem.ex.ComboBoxAction]，
+     * 替换 Swing 默认样式 JComboBox）：变更写设置并广播 SETTINGS_CHANGE_TOPIC——既有监听统一回同步按钮文本
+     * + 行高重设 + 全量刷新。按钮组件在 [buildToolbar] 经 createCustomComponent 创建。
+     */
+    private val displayModeAction = SqlListDisplayModeComboBoxAction(project)
 
-    /** combo 程序化回同步防重入守卫（防 setSelectedItem 触发监听再广播成环）。 */
-    private var syncingDisplayModeCombo = false
-
-    /** combo 选中态从设置回同步（模式被另一面板 combo 改变时；经既有 settings 监听驱动）。 */
+    /** 显示模式按钮文本回同步（模式被另一面板/设置页改变时；经既有 settings 监听驱动）。 */
     private fun syncDisplayModeCombo() {
-        syncingDisplayModeCombo = true
-        displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
-        syncingDisplayModeCombo = false
+        displayModeAction.syncFromSettings()
     }
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
@@ -530,8 +510,14 @@ class SqlLogPanel(
         }
         left.add(typeFilterUnit)
         left.add(sortButton)
-        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）
-        left.add(displayModeCombo)
+        // T-ListMode：SQL 显示模式下拉（变更广播 SETTINGS_CHANGE_TOPIC → 既有监听统一清缓存+刷新）；
+        // T-MergeFollowup-04：createCustomComponent 创建平台原生 ComboBoxButton（place 影响 arrowIcon 选取）
+        left.add(
+            displayModeAction.createCustomComponent(
+                displayModeAction.templatePresentation,
+                com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR,
+            ),
+        )
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
             foreground = Color(0xD32F2F) // 红色

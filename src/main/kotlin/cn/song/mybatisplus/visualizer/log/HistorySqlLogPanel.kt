@@ -98,46 +98,23 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         addActionListener { refresh() }
     }
 
-    /** 显示模式下拉（T-ListMode）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
-    private val displayModeCombo = JComboBox(arrayOf(
-        MpSqlVisualizerBundle.message("log.list.displayMode.single"),
-        MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap"),
-        MpSqlVisualizerBundle.message("log.list.displayMode.formatted"),
-    )).apply {
-        toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode")
-        isFocusable = false
-        selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
-        addItemListener { e ->
-            if (e.stateChange == java.awt.event.ItemEvent.SELECTED && !syncingDisplayModeCombo) {
-                val mode = SqlListDisplayMode.values()[selectedIndex]
-                val settings = PluginSettings.getInstance()
-                if (settings.state.logListSqlDisplayMode != mode.name) {
-                    settings.state.logListSqlDisplayMode = mode.name
-                    project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC)
-                        .settingsChanged()
-                }
-            }
-        }
-    }
+    /** 显示模式下拉（T-ListMode；T-MergeFollowup-04 原生化）：与日志 tab 共享同一设置；变更广播 SETTINGS_CHANGE_TOPIC。 */
+    private val displayModeAction = SqlListDisplayModeComboBoxAction(project)
 
-    /** combo 程序化回同步防重入守卫。 */
-    private var syncingDisplayModeCombo = false
-
-    /** 显示模式下拉（测试断言选中态回同步用）。 */
-    internal val displayModeComboForTest: JComboBox<*> get() = displayModeCombo
+    /** 显示模式按钮当前文案（测试断言选中态回同步用——原生化后无 selectedIndex）。 */
+    internal val displayModeSelectedLabelForTest: String
+        get() = displayModeAction.templatePresentation.text
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
     internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
 
-    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 回同步 combo + 二级可见时全量重建。
+    /** 显示模式变更处理（topic 监听与测试共用）：按钮文本回同步 + 行高随模式重设 + 二级可见时全量重建。
      *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。
      *  T-MergeFollowup-03：模式切换后 JList 的行高布局缓存（固定→可变切换）必须 revalidate 失效，
      *  仅 repaint 时旧行高框内画新多行内容即呈「文字重叠/间距挤压」；且 repaint 改走 [applySqlSearch]
      *  全量重建（model 全量变更触发 layoutState 重算，双保险）。 */
     internal fun onDisplayModeChanged() {
-        syncingDisplayModeCombo = true
-        displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
-        syncingDisplayModeCombo = false
+        displayModeAction.syncFromSettings()
         applySqlListCellHeight()
         sqlList.revalidate()
         if (currentFile != null) applySqlSearch()
@@ -201,7 +178,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         toolbar.add(backButton)
         toolbar.add(refreshButton)
         // T-ListMode：SQL 显示模式下拉（与日志 tab 同一设置，变更经 topic 双向同步）
-        toolbar.add(displayModeCombo)
+        // T-MergeFollowup-04：createCustomComponent 创建平台原生 ComboBoxButton（place 影响 arrowIcon 选取）
+        toolbar.add(
+            displayModeAction.createCustomComponent(
+                displayModeAction.templatePresentation,
+                com.intellij.openapi.actionSystem.ActionPlaces.MAIN_TOOLBAR,
+            ),
+        )
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
         searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
