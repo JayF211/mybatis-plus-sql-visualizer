@@ -76,6 +76,27 @@ import javax.swing.event.DocumentListener
 internal fun withTerminator(sql: String): String =
     if (sql.isEmpty() || sql.endsWith(";")) sql else sql + ";"
 
+/**
+ * 右键菜单选中收敛（T-ListPreviewCopy）：命中行已在多选集合内 → 保留原多选（复制项=批量复制）；
+ * 否则收敛为命中行（右键=切换操作目标，与改造前无条件收敛单行等价）。纯函数可独立单测，
+ * 日志 tab 与历史 tab 右键菜单共用。
+ */
+internal fun resolveContextMenuSelection(selectedIndices: IntArray, hitIndex: Int): IntArray =
+    if (hitIndex in selectedIndices) selectedIndices else intArrayOf(hitIndex)
+
+/**
+ * 批量复制文本（T-ListPreviewCopy）：选中条目升序逐条 [withTerminator] 后 `"\n"` 拼接——
+ * 与 JBList 内置 Ctrl+C 多选拼接链路（itemToText 逐条 + join("\n")）逐字节同构，
+ * 右键批量复制与键盘复制两条入口产物一致。
+ */
+internal fun batchCopySql(entries: List<LogSqlEntry>): String =
+    entries.joinToString("\n") { withTerminator(it.restoredSql) }
+
+/** 复制菜单项文案（T-ListPreviewCopy）：多选带条数走 [selectedKey]（`{0}`=条数），单选沿用 [baseKey]。 */
+internal fun copyMenuText(baseKey: String, selectedKey: String, count: Int): String =
+    if (count > 1) MpSqlVisualizerBundle.message(selectedKey, count.toString())
+    else MpSqlVisualizerBundle.message(baseKey)
+
 // ---------- T-LogListFreeze：列表刷新分批常量 ----------
 
 /** 首屏立即写入条数（保证快速首屏，EDT 冻结可控）。 */
@@ -219,8 +240,11 @@ class SqlLogPanel(
     private val list = SqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
-    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val clickPreview = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
+     *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
+    private val clickPreview = SqlClickPreview(project, list) {
+        i -> clickPreviewSql(list.model.getElementAt(i).restoredSql, PluginSettings.getInstance().state.logFormatSql)
+    }
     private val tabs = JBTabbedPane()
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)
@@ -1228,14 +1252,18 @@ class SqlLogPanel(
 
     private fun showContextMenu(e: MouseEvent) {
         val index = list.locationToIndex(e.point)
-        if (index >= 0) list.selectedIndex = index
-        val entry = list.selectedValue ?: return
+        if (index < 0) return
+        // T-ListPreviewCopy：命中行已在多选内 → 保留多选（复制项=批量复制多条）；否则收敛为该行。
+        // 删除/发送/跳转等其余菜单项恒作用于被右键的行
+        list.selectedIndices = resolveContextMenuSelection(list.selectedIndices, index)
+        val entry = list.model.getElementAt(index)
+        val selectedEntries = list.selectedIndices.map { list.model.getElementAt(it) }
         val menu = JPopupMenu()
         menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.copy")).apply {
+            JMenuItem(copyMenuText("log.panel.copy", "log.panel.copySelected", selectedEntries.size)).apply {
                 addActionListener {
                     Toolkit.getDefaultToolkit().systemClipboard
-                        .setContents(StringSelection(withTerminator(entry.restoredSql)), null)
+                        .setContents(StringSelection(batchCopySql(selectedEntries)), null)
                 }
             },
         )

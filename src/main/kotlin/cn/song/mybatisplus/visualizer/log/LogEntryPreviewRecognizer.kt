@@ -77,8 +77,8 @@ internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).siz
  *    运行期逐字符一致性熔断 [verifyLiteralRoundTrip]）→ 字面量改写为 `?` 复用参数管线；
  * 3. 回退现状（restoredSql + 零参数/数量不匹配警告分流，零 `?` 无警告）。
  *
- * 纯函数无平台依赖（开关由调用方读设置传入）：SqlLogPanel 传 formatSql=设置值；
- * HistorySqlLogPanel 传 formatSql=false（历史页现状不格式化）。
+ * 纯函数无平台依赖（开关由调用方读设置传入）：SqlLogPanel 与 HistorySqlLogPanel 均传
+ * formatSql=设置值（T-ListPreviewCopy：两页预览统一跟随「预览时格式化还原 SQL」，默认开）。
  */
 internal fun LogSqlEntry.toPreviewResult(
     formatSql: Boolean,

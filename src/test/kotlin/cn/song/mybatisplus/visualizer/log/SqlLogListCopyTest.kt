@@ -64,4 +64,34 @@ class SqlLogListCopyTest : BasePlatformTestCase() {
         )
         assertEquals("SELECT * FROM t WHERE id = 10;", list.textFor(0, e))
     }
+
+    // ---------- T-ListPreviewCopy：右键批量复制 + 右键选中收敛 ----------
+
+    fun testBatchCopySql多选拼接与内置CtrlC同构() {
+        val entries = listOf(
+            entry(restoredSql = "SELECT * FROM t WHERE id = 1"),
+            entry(restoredSql = "UPDATE t SET name = 'a' WHERE id = 2"),
+        )
+        val joined = batchCopySql(entries)
+        assertEquals("多条换行拼接、逐条分号收尾", "SELECT * FROM t WHERE id = 1;\nUPDATE t SET name = 'a' WHERE id = 2;", joined)
+        assertTrue("拼接后仍为纯文本", !joined.contains("<html"))
+    }
+
+    fun testBatchCopySql单条与分号不重复() {
+        assertEquals("SELECT 1;", batchCopySql(listOf(entry(restoredSql = "SELECT 1"))))
+        assertEquals("已有分号不重复追加", "SELECT 1;", batchCopySql(listOf(entry(restoredSql = "SELECT 1;"))))
+        assertEquals("空列表空串", "", batchCopySql(emptyList()))
+    }
+
+    fun testResolveContextMenuSelection命中行在多选内保留多选() {
+        val kept = resolveContextMenuSelection(intArrayOf(0, 2, 5), hitIndex = 2)
+        assertTrue("命中行在集合内应保留原多选（复制项=批量复制）", kept.contentEquals(intArrayOf(0, 2, 5)))
+    }
+
+    fun testResolveContextMenuSelection命中行不在集合内收敛为该行() {
+        val collapsed = resolveContextMenuSelection(intArrayOf(0, 2, 5), hitIndex = 4)
+        assertTrue("命中行不在集合内应收敛为该行（右键=切换操作目标）", collapsed.contentEquals(intArrayOf(4)))
+        val single = resolveContextMenuSelection(intArrayOf(1), hitIndex = 1)
+        assertTrue("单选右键自身保持单选", single.contentEquals(intArrayOf(1)))
+    }
 }
