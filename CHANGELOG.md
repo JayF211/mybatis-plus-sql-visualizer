@@ -12,6 +12,7 @@
 ### Changed
 
 - **插件描述兼容承诺与 Log Free 迁移文案回补（N-6/N-7，r2 分支合流）**：插件描述（en/zh）补「Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line / 支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x）」兼容句；README 增「从 MyBatis Log Free 迁移？」段、理由升级为四条、Gitee 内测通道补 Marketplace 评分与一次性迁移指引；marketplace 页 FAQ 首条补适配承诺（新版 IDEA 正式版 5 个工作日内完成适配，Windows 计划任务每周自动 verifyPlugin 三目标兜底）
+- **性能长尾三项治理（T-PerfTail，性能调研报告 §9 发现点全收口）**：① WrapperCache 容量上限 512 + LRU 淘汰（accessOrder LinkedHashMap），编辑器关闭主动清理该文件条目（FileEditorManagerListener.fileClosed），三维修失效与「清除缓存」行为不变，极端长会话条目数有界；② 预览面板预热等待异步化——新增 PrewarmAwait（CompletableFuture + completeOnTimeout 超时预算等价），消除 EDT sleep-poll 形态，回调 invokeLater 回 EDT 装配，超时/失败走既有三级降级链；③ 重放守卫行 0 读取零拷贝——getCharsSequence 视图 subSequence 提取首行替代全文档拷贝（64MB 控制台文档混合态窗口风险收口）；④ plugin.xml 更新检查注释修正（默认关——稳定版由 Marketplace 推送，代码为权威）
 
 ## [2026.9.14] - 2026-09-14
 
