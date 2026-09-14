@@ -162,18 +162,32 @@ class ErrorReportDialogLayoutTest {
     }
 
     @Test
-    fun `复制失败信息按钮就位且文案走bundle`() {
+    fun `复制错误信息按钮对齐预览窗口语义`() {
         val fields = ReportFormFields()
         val row = ErrorReportDialog.buildStatusRow(fields)
         assertTrue("复制按钮应在状态行内", fields.statusCopyButton in row.components)
-        assertFalse("不能原样显示键名", fields.statusCopyButton.text.startsWith("error.report.dialog."))
-        assertNotEquals(
-            "复制按钮文案须有 bundle 落地",
-            MpSqlVisualizerBundle.message("error.report.dialog.status.copy"),
-            "error.report.dialog.status.copy",
+        // 文案复用预览窗口同一键（真机第三轮用户定案：与 SQL 预览窗口完全一致）
+        assertEquals(
+            MpSqlVisualizerBundle.message("panel.copyError"),
+            fields.statusCopyButton.text,
         )
+        assertNotEquals("不能原样显示键名", "panel.copyError", fields.statusCopyButton.text)
+        // 预览窗口同款样式：11f 小字按钮 + 默认隐藏（仅失败态出现）
+        assertEquals(11f, fields.statusCopyButton.font.size2D)
+        assertFalse("默认隐藏（对齐 errorCopyButton.isVisible = currentWarning != null）", fields.statusCopyButton.isVisible)
         // 处理器默认空实现（对话框注入真实复制逻辑），headless 可安全触发
         fields.statusCopyHandler()
+    }
+
+    @Test
+    fun `导入错误池堆栈自动勾选附带堆栈`() {
+        // 真机第三轮：从 IDE 错误池选了一条堆栈，意图就是「这条要带上」——勾选框须自动打勾，
+        // 否则刚导入的内容不随帖提交
+        val fields = ReportFormFields()
+        assertFalse("手动形态默认不勾", fields.attachStackCheck.isSelected)
+        ErrorReportDialog.applyImportedStack(fields, "java.lang.RuntimeException: boom\n\tat a.B.c(B.java:1)")
+        assertTrue("导入后应自动勾选", fields.attachStackCheck.isSelected)
+        assertTrue("堆栈已填入", fields.stackPreview.text.startsWith("java.lang.RuntimeException"))
     }
 
     @Test

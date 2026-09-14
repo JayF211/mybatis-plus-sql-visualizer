@@ -171,4 +171,14 @@ class ErrorReportComposerTest {
         )
         assertTrue("len=${huge.length}", huge.length <= 60_000)
     }
+
+    @Test
+    fun `附件带UTF8BOM自描述编码`() {
+        // 真机第三轮：R2 元数据 MIME 不带 charset，消费方忽略响应头时中文显示成乱码——
+        // BOM 让文本文件自描述（服务端响应头同时补 charset=utf-8）
+        val content = ErrorReportComposer.buildStackAttachment(stack, null, null, null, "t")
+        assertTrue("应以 U+FEFF 开头", content.startsWith('\uFEFF'))
+        assertEquals("BOM 编码为 EF BB BF", 0xEF, content.toByteArray(Charsets.UTF_8)[0].toInt() and 0xFF)
+        assertTrue(content.contains("SQL Visualizer 错误报告"))
+    }
 }

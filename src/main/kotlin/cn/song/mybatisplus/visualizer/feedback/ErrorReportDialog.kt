@@ -266,7 +266,7 @@ class ErrorReportDialog(
                 val item = javax.swing.JMenuItem(
                     if (firstLine.length > 80) firstLine.take(80) + "…" else firstLine,
                 )
-                item.addActionListener { fields.stackPreview.text = stack }
+                item.addActionListener { applyImportedStack(fields, stack) }
                 menu.add(item)
             }
         }
@@ -330,6 +330,8 @@ class ErrorReportDialog(
         }
         fields.statusLabel.foreground = null
         fields.statusLabel.text = submitStatusText(SubmitPhase.SUBMITTING, null, null)
+        // 复制按钮随错误出现（预览窗口语义）：提交中尚无错误，先收起
+        fields.statusCopyButton.isVisible = false
         repaintStatus()
     }
 
@@ -351,6 +353,8 @@ class ErrorReportDialog(
                 }
                 fields.statusLabel.foreground = STATUS_ERROR_COLOR
                 fields.statusLabel.text = submitStatusText(SubmitPhase.FAILED, result.message, outcome.warning)
+                // 复制按钮随错误出现（与 SQL 预览窗口 errorCopyButton 同款时机）
+                fields.statusCopyButton.isVisible = true
                 repaintStatus()
             }
         }
@@ -528,7 +532,7 @@ class ErrorReportDialog(
         internal enum class SubmitPhase { SUBMITTING, SUCCESS, FAILED }
 
         /**
-         * 状态行组装（纯函数）：可换行文本区居中 + 「复制失败信息」按钮居东——按钮不随行拉伸，
+         * 状态行组装（纯函数）：可换行文本区居中 + 「复制错误信息」按钮居东——按钮不随行拉伸，
          * 文本区吸收宽度；单独抽出的目的与 buildCenterPanel 一致（headless 可测、布局无 peer 依赖）。
          */
         internal fun buildStatusRow(fields: ReportFormFields): JComponent =
@@ -537,6 +541,16 @@ class ErrorReportDialog(
                 add(fields.statusLabel, java.awt.BorderLayout.CENTER)
                 add(fields.statusCopyButton, java.awt.BorderLayout.EAST)
             }
+
+        /**
+         * 导入错误池堆栈（纯函数，真机第三轮用户定案）：填入堆栈区并**自动勾选**「附带异常堆栈」——
+         * 用户从 IDE 错误池挑了一条，意图就是「这条要带上」；不自动勾选会让刚导入的内容不随帖提交
+         *（勾选框与预览区在手动形态下本就恒显示，勾上即展开预览，无额外副作用）。
+         */
+        internal fun applyImportedStack(fields: ReportFormFields, stack: String) {
+            fields.stackPreview.text = stack
+            fields.attachStackCheck.isSelected = true
+        }
 
         /**
          * 状态行文案（纯函数，T-FeedbackErr 唯一事实源）：对话框实例上的
@@ -656,8 +670,13 @@ internal class ReportFormFields {
         isOpaque = false
     }
 
-    /** 状态行「复制失败信息」按钮（对齐 SQL 预览窗口失败信息交互，用户可直接复制完整原因反馈）。 */
-    val statusCopyButton = javax.swing.JButton(MpSqlVisualizerBundle.message("error.report.dialog.status.copy"))
+    /** 状态行「复制错误信息」按钮（真机第三轮用户定案：与 SQL 预览窗口完全一致）——样式取其
+     *  `smallButton`（11f 小字）、文案复用同一键 `panel.copyError`、**默认隐藏**，仅失败态出现
+     *  （预览窗口同款语义：`errorCopyButton.isVisible = currentWarning != null`）。 */
+    val statusCopyButton = javax.swing.JButton(MpSqlVisualizerBundle.message("panel.copyError")).apply {
+        font = font.deriveFont(11f)
+        isVisible = false
+    }
 
     /** 状态行复制行为由对话框注入（[statusCopyHandler]），字段类保持无逻辑（同 browserLink 模式）。 */
     var statusCopyHandler: () -> Unit = {}

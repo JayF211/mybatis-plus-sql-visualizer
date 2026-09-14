@@ -96,6 +96,10 @@ object ErrorReportComposer {
         fingerprint: String?,
         occurredAt: String,
     ): String = buildString {
+        // T-FeedbackErr 真机第三轮：UTF-8 BOM 让附件自描述编码——R2 元数据里的 MIME 不带 charset，
+        // 消费方若忽略响应头（浏览器按本地编码猜、编辑器按系统默认）会把中文堆栈显示成乱码。
+        // 真机乱码根因在服务端响应头（已同步补 charset=utf-8），BOM 是文本文件的标准自描述兜底
+        append('\uFEFF')
         appendLine("SQL Visualizer 错误报告")
         appendLine("========================================")
         appendLine("时间: $occurredAt")
