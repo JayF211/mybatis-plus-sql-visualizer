@@ -93,13 +93,16 @@ object FeedbackApi {
 
     /**
      * 通道错误 → 用户可读原因（纯函数，T-FeedbackErr）：服务端响应体里的 `message` 永远优先
-     * （那是人写的、能指向具体字段），拿不到正文才回退 HTTP 通道消息；连通道消息都没有时给兜底句。
+     * （那是人写的、能指向具体字段），非 JSON 正文（代理/CDN 拦截页）给可读归类，拿不到才回退
+     * HTTP 通道消息；连通道消息都没有时给兜底句。
      * 4xx/5xx 在 [HttpRequestsSender] 里以 [HttpFailure] 抛出（正文已读回），非 HTTP 异常走 cause 链。
      */
     internal fun describeHttpFailure(error: Throwable?): String? {
         if (error == null) return null
-        val serverMessage = (error as? HttpFailure)?.body?.let(::serverMessageOf)
-        if (!serverMessage.isNullOrBlank()) return serverMessage
+        if (error is HttpFailure) {
+            serverMessageOf(error.body)?.let { return it }
+            nonJsonHint(error.body)?.let { return "$it（HTTP ${error.status}）" }
+        }
         return error.cause?.message?.takeIf { it.isNotBlank() }
             ?: error.message?.takeIf { it.isNotBlank() }
             ?: return null
@@ -113,6 +116,20 @@ object FeedbackApi {
             val map: Map<String, Any?> = gson.fromJson(text, object : TypeToken<Map<String, Any?>>() {}.type)
             map["message"]?.toString()?.takeIf { it.isNotBlank() }
         }.getOrNull()
+    }
+
+    /**
+     * 非 JSON 正文的可读归类（纯函数，T-FeedbackErr 真机第二轮）：本服务所有接口的 2xx 响应
+     * 都是 `{...}` 对象；不以 `{` 开头＝响应被中间层替换——HTML 拦截页（代理/CDN）、网关错误页、
+     * SPA 404 页最常见。Gson lenient 模式对这类正文报「Expected BEGIN_OBJECT but was STRING
+     * at line 1 column 1」，对用户毫无诊断价值，故截取正文片段给出处线索。
+     */
+    internal fun nonJsonHint(body: String?): String? {
+        val text = body?.trim().orEmpty()
+        if (text.isEmpty()) return "服务端返回空响应（网络或代理异常）"
+        if (text.startsWith("{")) return null
+        val snippet = text.take(80).replace(Regex("\\s+"), " ")
+        return "服务端返回了非 JSON 响应（疑似代理/CDN 拦截页或网关错误页）：$snippet"
     }
 
     @Volatile
@@ -147,7 +164,7 @@ object FeedbackApi {
     /** 详情页深链（官网已有 postNo 路由约定）。 */
     fun detailUrl(postNo: String): String = "$SITE_BASE/about/feedback?postNo=$postNo"
 
-    /** posts 响应解析（纯函数）：code=0 取 data.postNo，否则 message 透出；非法 JSON 归类失败。 */
+    /** posts 响应解析（纯函数）：code=0 取 data.postNo，否则 message 透出；正文不是 JSON 对象时给可读归类。 */
     internal fun parsePostResponse(body: String): SubmitResult = runCatching {
         val map: Map<String, Any?> = gson.fromJson(body, object : TypeToken<Map<String, Any?>>() {}.type)
         val code = (map["code"] as? Number)?.toInt()
@@ -158,23 +175,32 @@ object FeedbackApi {
         } else {
             SubmitResult.Failure(map["message"]?.toString() ?: "提交失败（code=$code）")
         }
-    }.getOrElse { SubmitResult.Failure("响应解析失败：${it.message}") }
+    }.getOrElse { failure ->
+        SubmitResult.Failure(nonJsonHint(body) ?: "响应解析失败：${failure.message}")
+    }
 
     /** upload 响应解析（纯函数）：code=0 才取 data 附件引用；错误分支必须透出服务端 message（data 缺席是常态）。 */
-    internal fun parseUploadResponse(body: String): Result<AttachmentRef> = runCatching {
-        val map: Map<String, Any?> = gson.fromJson(body, object : TypeToken<Map<String, Any?>>() {}.type)
+    internal fun parseUploadResponse(body: String): Result<AttachmentRef> {
+        val map = runCatching {
+            gson.fromJson(body, object : TypeToken<Map<String, Any?>>() {}.type) as Map<String, Any?>
+        }.getOrElse { failure ->
+            return Result.failure(IllegalStateException(nonJsonHint(body) ?: "响应解析失败：${failure.message}"))
+        }
         val code = (map["code"] as? Number)?.toInt()
         val data = map["data"] as? Map<String, Any?>
-        if (code == 0 && data != null) {
-            val key = data["key"]?.toString().takeUnless { it.isNullOrBlank() } ?: error("响应缺少附件 key")
-            AttachmentRef(
-                key = key,
-                fileName = data["fileName"]?.toString() ?: STACK_ATTACHMENT_NAME,
-                mimeType = data["mimeType"]?.toString() ?: "text/plain",
-                fileSize = (data["fileSize"] as? Number)?.toLong() ?: 0L,
+        return if (code == 0 && data != null) {
+            val key = data["key"]?.toString().takeUnless { it.isNullOrBlank() }
+                ?: return Result.failure(IllegalStateException("响应缺少附件 key"))
+            Result.success(
+                AttachmentRef(
+                    key = key,
+                    fileName = data["fileName"]?.toString() ?: STACK_ATTACHMENT_NAME,
+                    mimeType = data["mimeType"]?.toString() ?: "text/plain",
+                    fileSize = (data["fileSize"] as? Number)?.toLong() ?: 0L,
+                ),
             )
         } else {
-            error(map["message"]?.toString() ?: "附件上传失败（code=$code）")
+            Result.failure(IllegalStateException(map["message"]?.toString() ?: "附件上传失败（code=$code）"))
         }
     }
 
@@ -206,12 +232,19 @@ object FeedbackApi {
  * - multipart：request + tuner 设 POST 方法与 Content-Type（tuner 在连接建立前回调），
  *   body 字节经 `Request.write(byte[])` 写出——write/readString 均 javap 核实存在。
  *
- * T-FeedbackErr：两条链路都改用 [postJsonWithBody] 手写（不再走 `HttpRequests.post` /
- * `throwStatusCodeException`）。原因是平台默认异常只带通道消息（`Server returned HTTP
- * response code: 400 for URL: …`），而服务端在 4xx 响应体里写明了具体原因；要拿到它必须
- * 自己在错误码分支上把 errorStream 读完，再把「状态码 + 正文」包成 [HttpFailure] 抛出去。
- * 请求方式是 `RequestBuilder.tuner` 里设 RequestMethod（与 multipart 同一手法，javap 已在
- * 生产路径验证过；`RequestBuilder.post(String)` 是 2023.3+ 的新名，243 基线不依赖它）。
+ * T-FeedbackErr：两条链路都改用手写 POST + 自读响应（不走 `throwStatusCodeException`）。
+ * 原因是平台默认异常只带通道消息（`Server returned HTTP response code: 400 for URL: …`），
+ * 而服务端在 4xx 响应体里写明了具体原因；要拿到它必须自己在错误码分支上把 errorStream 读完，
+ * 再把「状态码 + 正文」包成 [HttpFailure] 抛出去。
+ *
+ * T-FeedbackErr 真机第二轮（gzip 根因，字节码级实锤）：平台 `RequestBuilderImpl` 构造器
+ * `iconst_1 → putfield myGzip`（gzip 默认 true），connect 时自动加
+ * `Accept-Encoding: gzip`；Cloudflare 对该头返回 `Content-Encoding: gzip` 的压缩响应。
+ * 平台自己的 `readString()` 会解压，手写读取若直接读原始字节流，得到的 gzip 二进制经 UTF-8
+ * 解码成乱码字符串，Gson lenient 模式即报「Expected BEGIN_OBJECT but was STRING at line 1
+ * column 1」——正是真机现场（服务端 FR-0023 完整入库、客户端却解析失败）。对策：tuner 显式
+ * 协商 `Accept-Encoding: gzip`（与平台默认值一致，语义自洽），[readBody] 按 `Content-Encoding`
+ * 响应头解压；显式化后不再依赖平台的隐式行为。
  */
 internal object HttpRequestsSender : FeedbackApi.HttpSender {
 
@@ -242,6 +275,8 @@ internal object HttpRequestsSender : FeedbackApi.HttpSender {
                 http.requestMethod = "POST"
                 http.doOutput = true
                 http.setRequestProperty("Content-Type", contentType)
+                // 显式协商 gzip（平台 myGzip 默认本就为 true，此处显式化保证协商与解压配套）
+                http.setRequestProperty("Accept-Encoding", "gzip")
             }
             .connect { request ->
                 request.write(body)
@@ -255,11 +290,20 @@ internal object HttpRequestsSender : FeedbackApi.HttpSender {
         return response.body
     }
 
-    /** 错误码分支读 errorStream——平台 `readString()` 只认成功流，读错流会抛 NPE。 */
+    /**
+     * 错误码分支读 errorStream——平台 `readString()` 只认成功流，读错流会抛 NPE。
+     * `Content-Encoding: gzip` 时先解压（真机 gzip 根因，见类注释）。
+     */
     private fun readBody(connection: HttpURLConnection, status: Int): String = runCatching {
         val stream = (if (status in 200..299) connection.inputStream else connection.errorStream)
             ?: return@runCatching ""
-        stream.use { it.readBytes().toString(Charsets.UTF_8) }
+        val raw = stream.use { it.readBytes() }
+        val body = if (connection.contentEncoding?.equals("gzip", ignoreCase = true) == true) {
+            runCatching { java.util.zip.GZIPInputStream(raw.inputStream()).use { it.readBytes() } }.getOrElse { raw }
+        } else {
+            raw
+        }
+        body.toString(Charsets.UTF_8)
     }.getOrDefault("")
 }
 
@@ -268,5 +312,5 @@ internal object HttpRequestsSender : FeedbackApi.HttpSender {
  * [FeedbackApi.describeHttpFailure] 优先取正文里的 `message`，取不到才回退 [message]
  * （保留 `Server returned HTTP response code: 400 for URL: …` 这种通道信息，供排查）。
  */
-internal class HttpFailure(status: Int, val body: String) :
+internal class HttpFailure(val status: Int, val body: String) :
     IOException("Server returned HTTP response code: $status for URL (body: ${body.take(200)})")

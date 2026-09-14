@@ -111,7 +111,11 @@ internal object FeedbackReporting {
 
     /** 报告结果通知（对话框内联状态行的共用呈现，T-FeedbackErr）：成功/失败都落到项目通知组。 */
     fun notifyOutcome(project: Project?, outcome: FeedbackApi.SubmissionOutcome) {
-        outcome.warning?.let { notifyAttachmentWarning(project, it) }
+        // 附件降级提醒只在成功语境成立（标题是「反馈已提交（未附堆栈）」）——失败时该提示
+        // 与失败 toast 同屏自相矛盾（真机第二轮实证），失败现场的状态行/toast 已含附件原因
+        if (outcome.result is FeedbackApi.SubmitResult.Success) {
+            outcome.warning?.let { notifyAttachmentWarning(project, it) }
+        }
         notifyResult(project, outcome.result)
     }
 

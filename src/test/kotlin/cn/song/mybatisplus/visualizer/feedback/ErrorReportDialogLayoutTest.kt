@@ -128,9 +128,13 @@ class ErrorReportDialogLayoutTest {
     fun `状态行在面板最底部且不参与纵向伸缩`() {
         val fields = ReportFormFields()
         val panel = ErrorReportDialog.buildCenterPanel(fields)
-        assertTrue("状态行必须在中心面板里（提交中/失败原因就地可见）", fields.statusLabel in panel.components)
+        // 状态行 = 包装行（文本区居中 + 复制按钮居东），包装行本身是中心面板的直接子组件
+        val row = panel.components.filterIsInstance<java.awt.Container>()
+            .singleOrNull { fields.statusLabel in it.components }
+        assertNotNull("状态行必须在中心面板里（提交中/失败原因就地可见）", row)
+        assertTrue("复制按钮应在状态行内", fields.statusCopyButton in row!!.components)
         val layout = panel.layout as GridBagLayout
-        val gbc = layout.getConstraints(fields.statusLabel)
+        val gbc = layout.getConstraints(row)
         assertEquals("状态行不应参与纵向伸缩（避免与描述/堆栈行争空间）", 0.0, gbc.weighty, 0.0)
     }
 
@@ -146,17 +150,46 @@ class ErrorReportDialogLayoutTest {
     }
 
     @Test
-    fun `失败状态行带附件降级说明`() {
+    fun `失败状态行附件说明为中性表述`() {
+        // 真机第二轮：失败现场同屏出现「提交失败」与「帖子已提交」自相矛盾——状态行只在失败时
+        // 出现，附件说明必须中性（不得含「已提交」字样）
         val text = ErrorReportDialog.failureStatusText("请求体不是合法 JSON", "附件超过 5MB，请压缩后上传")
         assertTrue("TEXT=<$text>", text.contains("请求体不是合法 JSON"))
         assertTrue("TEXT=<$text>", text.contains("附件超过 5MB，请压缩后上传"))
+        assertFalse("失败语境不得宣称已提交", text.contains("已提交"))
+        val noWarning = ErrorReportDialog.failureStatusText("原因", null)
+        assertFalse("无 warning 时不应出现附件说明", noWarning.contains("附件"))
     }
 
     @Test
-    fun `附件跳过文案走bundle`() {
-        val text = ErrorReportDialog.attachmentSkippedText("不支持的附件类型 .exe")
-        assertTrue("TEXT=<$text>", text.contains("不支持的附件类型 .exe"))
-        assertFalse("不能原样显示键名", text.startsWith("error.report.dialog.status."))
+    fun `复制失败信息按钮就位且文案走bundle`() {
+        val fields = ReportFormFields()
+        val row = ErrorReportDialog.buildStatusRow(fields)
+        assertTrue("复制按钮应在状态行内", fields.statusCopyButton in row.components)
+        assertFalse("不能原样显示键名", fields.statusCopyButton.text.startsWith("error.report.dialog."))
+        assertNotEquals(
+            "复制按钮文案须有 bundle 落地",
+            MpSqlVisualizerBundle.message("error.report.dialog.status.copy"),
+            "error.report.dialog.status.copy",
+        )
+        // 处理器默认空实现（对话框注入真实复制逻辑），headless 可安全触发
+        fields.statusCopyHandler()
+    }
+
+    @Test
+    fun `状态行长文本不撑宽面板`() {
+        // 真机第二轮：JBLabel 单行渲染长失败消息（Gson 排障链接）把对话框撑到 ~1900px；
+        // 状态行改可换行文本区后，preferred 宽度必须被列数封顶
+        val fields = ReportFormFields()
+        val longText = "提交失败：服务端返回了非 JSON 响应（疑似代理/CDN 拦截页或网关错误页）：" + "很长的诊断片段".repeat(20)
+        fields.statusLabel.text = longText
+        val panel = ErrorReportDialog.buildCenterPanel(fields)
+        assertTrue(
+            "面板首选宽应≤800px（实际 ${panel.preferredSize.width}，状态行 ${fields.statusLabel.preferredSize.width}）",
+            panel.preferredSize.width <= 800,
+        )
+        assertTrue("状态行应可换行（lineWrap）", fields.statusLabel.lineWrap)
+        assertFalse("状态行不可编辑", fields.statusLabel.isEditable)
     }
 
     @Test

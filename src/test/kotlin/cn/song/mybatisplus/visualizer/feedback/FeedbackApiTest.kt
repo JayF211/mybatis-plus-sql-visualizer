@@ -183,8 +183,9 @@ class FeedbackApiTest {
     }
 
     @Test
-    fun `失败原因_正文不可解析时回退通道消息并保留原文`() {
-        val error = HttpFailure(400, "<html>Bad Request</html>")
+    fun `失败原因_JSON无message时回退通道消息`() {
+        // 服务端 400 但正文是 JSON 对象且无 message（非常规）→ 保留通道原文供排查
+        val error = HttpFailure(400, """{"code":400}""")
         val message = FeedbackApi.describeHttpFailure(error)
         assertTrue("MSG=<$message>", message?.contains("Server returned HTTP response code: 400") == true)
     }
@@ -203,6 +204,47 @@ class FeedbackApiTest {
         assertEquals(null, FeedbackApi.serverMessageOf("not json"))
         assertEquals(null, FeedbackApi.serverMessageOf("""{"code":400}"""))
         assertEquals("boom", FeedbackApi.serverMessageOf("""{"code":400,"message":"boom"}"""))
+    }
+
+    // ---------- 非 JSON 响应归类（纯函数，T-FeedbackErr 真机第二轮） ----------
+
+    @Test
+    fun `非JSON归类_HTML正文给可读线索`() {
+        val hint = FeedbackApi.nonJsonHint("<html><body>blocked by proxy</body></html>")
+        assertTrue("HINT=<$hint>", hint!!.contains("非 JSON"))
+        assertTrue(hint.contains("blocked by proxy"))
+    }
+
+    @Test
+    fun `非JSON归类_空正文与纯文本与JSON对象`() {
+        assertTrue(FeedbackApi.nonJsonHint(null)!!.contains("空响应"))
+        assertTrue(FeedbackApi.nonJsonHint("   ")!!.contains("空响应"))
+        val plain = FeedbackApi.nonJsonHint("Internal Server Error")
+        assertTrue("PLAIN=<$plain>", plain!!.contains("非 JSON") && plain.contains("Internal Server Error"))
+        // 正常 JSON 对象正文 → 无提示
+        assertEquals(null, FeedbackApi.nonJsonHint("""{"code":0,"data":{}}"""))
+    }
+
+    @Test
+    fun `posts解析_HTML正文给归类而非Gson原文`() {
+        val result = FeedbackApi.parsePostResponse("<html>challenge page</html>")
+        val message = (result as FeedbackApi.SubmitResult.Failure).message
+        assertTrue("MSG=<$message>", message.contains("非 JSON"))
+        assertTrue("不应透出 Gson 英文原文", !message.contains("BEGIN_OBJECT"))
+    }
+
+    @Test
+    fun `upload解析_HTML正文给归类`() {
+        val bad = FeedbackApi.parseUploadResponse("<html>blocked</html>")
+        assertTrue(bad.isFailure)
+        assertTrue("MSG=<${bad.exceptionOrNull()?.message}>", bad.exceptionOrNull()?.message?.contains("非 JSON") == true)
+    }
+
+    @Test
+    fun `通道失败_HTML正文带HTTP状态归类`() {
+        val message = FeedbackApi.describeHttpFailure(HttpFailure(403, "<html>error 1010</html>"))
+        assertTrue("MSG=<$message>", message!!.contains("非 JSON") && message.contains("HTTP 403"))
+        assertTrue(!message.contains("BEGIN_OBJECT"))
     }
 
     // ---------- 响应解析（纯函数） ----------

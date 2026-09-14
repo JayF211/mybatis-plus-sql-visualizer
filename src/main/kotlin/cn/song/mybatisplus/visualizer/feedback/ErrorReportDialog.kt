@@ -115,6 +115,18 @@ class ErrorReportDialog(
 
         fields.browserFallbackHandler = { browserFallback() }
 
+        // T-FeedbackErr 真机第二轮：状态行复制按钮（对齐 SQL 预览窗口失败信息交互）——
+        // 复制当前状态行全文（含服务端原因/诊断片段），成功后按钮短暂变「已复制」
+        fields.statusCopyHandler = {
+            val text = fields.statusLabel.text.orEmpty()
+            if (text.isNotBlank()) {
+                com.intellij.openapi.ide.CopyPasteManager.getInstance()
+                    .setContents(java.awt.datatransfer.StringSelection(text))
+                cn.song.mybatisplus.visualizer.ui.flashCopied(fields.statusCopyButton)
+            }
+        }
+        fields.statusCopyButton.addActionListener { fields.statusCopyHandler() }
+
         prefill?.let {
             fields.titleField.text = it.title
             fields.descriptionArea.text = it.description
@@ -497,24 +509,34 @@ class ErrorReportDialog(
             fullRow(fields.browserLink)
             // T-FeedbackBatch：批次条目分节（默认隐藏，有批次条目时才显示）
             fullRow(fields.batchSection, stretchVertically = true)
-            // T-FeedbackErr：状态行常驻最底部（提交中/失败原因就地展示，不依赖 toast）
-            fullRow(fields.statusLabel)
+            // T-FeedbackErr：状态行常驻最底部（提交中/失败原因就地展示，不依赖 toast），
+            // 行内带「复制失败信息」按钮（buildStatusRow 组装）
+            fullRow(buildStatusRow(fields))
             return panel
         }
 
-        /** 失败状态行文案（纯函数，T-FeedbackErr）：服务端原因 + 可选附件降级说明 + 重试引导。 */
+        /** 失败状态行文案（纯函数，T-FeedbackErr）：服务端原因 + 可选附件降级说明 + 重试引导。
+ *  附件行用中性表述（attachmentFailed）——状态行只在失败时出现，「帖子已提交，但…」的成功语境
+ *  在失败现场自相矛盾（真机第二轮截图实证：同屏出现「提交失败」与「帖子已提交」）。 */
         internal fun failureStatusText(message: String, warning: String? = null): String {
             val head = MpSqlVisualizerBundle.message("error.report.dialog.status.failed", message)
             return if (warning.isNullOrBlank()) head
-            else "$head\n${MpSqlVisualizerBundle.message("error.report.dialog.status.attachmentSkipped", warning)}"
+            else "$head\n${MpSqlVisualizerBundle.message("error.report.dialog.status.attachmentFailed", warning)}"
         }
-
-        /** 附件降级提示文案（纯函数）：帖子已发出、堆栈附件缺失。 */
-        internal fun attachmentSkippedText(warning: String): String =
-            MpSqlVisualizerBundle.message("error.report.dialog.status.attachmentSkipped", warning)
 
         /** 提交阶段（状态机；[submitStatusText] 的输入）。 */
         internal enum class SubmitPhase { SUBMITTING, SUCCESS, FAILED }
+
+        /**
+         * 状态行组装（纯函数）：可换行文本区居中 + 「复制失败信息」按钮居东——按钮不随行拉伸，
+         * 文本区吸收宽度；单独抽出的目的与 buildCenterPanel 一致（headless 可测、布局无 peer 依赖）。
+         */
+        internal fun buildStatusRow(fields: ReportFormFields): JComponent =
+            javax.swing.JPanel(java.awt.BorderLayout(8, 0)).apply {
+                isOpaque = false
+                add(fields.statusLabel, java.awt.BorderLayout.CENTER)
+                add(fields.statusCopyButton, java.awt.BorderLayout.EAST)
+            }
 
         /**
          * 状态行文案（纯函数，T-FeedbackErr 唯一事实源）：对话框实例上的
@@ -622,8 +644,23 @@ internal class ReportFormFields {
         text = MpSqlVisualizerBundle.message("error.report.dialog.anonymous")
     }
 
-    /** 提交状态行（T-FeedbackErr）：初始空占位（不占额外纵向空间，weighty=0）。 */
-    val statusLabel = JBLabel(" ")
+        /**
+     * 提交状态行（T-FeedbackErr 真机第二轮）：必须用可换行文本区而非 JBLabel——失败原因可能
+     * 很长（如 Gson 排障链接、非 JSON 正文片段），JBLabel 单行渲染会把 GridBag 整行撑到上千 px，
+     * 整个对话框被拉宽到 ~1900px（真机截图实证）。透明背景融入面板，preferred 宽 40 列封顶。
+     */
+    val statusLabel = JBTextArea(2, 40).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        isOpaque = false
+    }
+
+    /** 状态行「复制失败信息」按钮（对齐 SQL 预览窗口失败信息交互，用户可直接复制完整原因反馈）。 */
+    val statusCopyButton = javax.swing.JButton(MpSqlVisualizerBundle.message("error.report.dialog.status.copy"))
+
+    /** 状态行复制行为由对话框注入（[statusCopyHandler]），字段类保持无逻辑（同 browserLink 模式）。 */
+    var statusCopyHandler: () -> Unit = {}
 
     /** 批次条目列表（T-FeedbackBatch）：每个条目一个复选框，勾选态即该条的「附带堆栈」。 */
     val batchList = JPanel(java.awt.GridLayout(0, 1, 0, 2))
