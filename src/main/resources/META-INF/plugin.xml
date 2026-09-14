@@ -237,6 +237,9 @@
         <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.log.LogStartupCapture"/>
 
+        <!-- T-PreviewUx-Pack #3：快捷模板默认键位冲突检测（应用级单次——冲突换绑备选键位 + 通知提示） -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.actions.SqlTemplateShortcutConflictCheck"/>
+
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
              T-M31.2：侧边栏图标 /icons/sqlLog.svg（MP 蓝圆角 + </>，修复默认圆形图标）
@@ -301,6 +304,41 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
+
+        <!-- T-PreviewUx-Pack #3：${table} 快捷模板三动作（选中表名一键 EXPLAIN / COUNT / 抽样 10 行；
+             三动作共享一个 group 注册 EditorPopupMenu，与「生成 CRUD SQL」入口并存不合并菜单；
+             执行走既有内嵌控制台链路（DataSourceSelector + SqlExecutor），凭证不出 IDE；
+             默认键位冲突由 SqlTemplateShortcutConflictCheck 启动检测并换绑备选键位 + 提示） -->
+        <group id="cn.song.mybatisplus.visualizer.SqlTemplateGroup"
+               popup="true"
+               text="action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.text"
+               description="action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.description">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <action id="cn.song.mybatisplus.visualizer.ExplainSelectedTable"
+                    class="cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction"
+                    text="action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text"
+                    description="action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.description"
+                    icon="/icons/sqlGutter.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift E"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift E"/>
+            </action>
+            <action id="cn.song.mybatisplus.visualizer.CountSelectedTable"
+                    class="cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction"
+                    text="action.cn.song.mybatisplus.visualizer.CountSelectedTable.text"
+                    description="action.cn.song.mybatisplus.visualizer.CountSelectedTable.description"
+                    icon="/icons/sqlGutter.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift C"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift C"/>
+            </action>
+            <action id="cn.song.mybatisplus.visualizer.SampleSelectedTable"
+                    class="cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction"
+                    text="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text"
+                    description="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.description"
+                    icon="/icons/sqlGutter.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift T"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift T"/>
+            </action>
+        </group>
 
         <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
              对话框底部提供带 source/ideVersion/pluginVersion 参数的浏览器兜底链接） -->

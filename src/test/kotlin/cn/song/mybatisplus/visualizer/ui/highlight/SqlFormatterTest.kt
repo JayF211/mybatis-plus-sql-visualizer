@@ -594,13 +594,15 @@ class SqlFormatterTest {
 
     @Test
     fun testVerticalUpdateExpandsInList() {
-        // T-VStack·扩面 + InThreshold：UPDATE SET 赋值清单维持 format 逐行；IN 2 元素 < 5 保持同行
+        // T-VStack·扩面 + InThreshold：UPDATE SET 赋值清单维持 format 逐行；IN 2 元素 < 5 保持同行。
+        // T-PreviewUx-Pack #1：UPDATE 竖排产物行尾追加 (new) 列标注（DBX 口径：表达式原样搬，
+        // 按旧值求值即得新值；T-VPairAnno 同款行尾注释范式，不破坏 SQL 可执行性）
         val input = "update t set name = 'x', age = 1 where id in (1, 2)"
         val expected = """
             UPDATE t
             SET
-                name = 'x',
-                age = 1
+                name = 'x',  -- name (new) = 'x'
+                age = 1  -- age (new) = 1
             WHERE id IN (1, 2)
         """.trimIndent()
         assertEquals(expected, SqlFormatter.formatVertical(input))
