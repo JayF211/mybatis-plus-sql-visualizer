@@ -1,5 +1,7 @@
 # WrapperSearchService 服务链搜索补全（回退跳转覆盖 IService 链形态） 开发计划
 
+> **状态（2026-09-15 T-MergeR2IntoMaster 合流定案）**：**已随 T-JumpCapture 路线收敛，O-6 增强废弃**——master 侧用户定性「按表名搜 Wrapper 定位」不可用（同表名≠同调用点，命中即误导），WrapperSearchService 整族已删除、跳转仅依赖拦截器捕获位置 + 缺失三按钮引导；本文档随 r2 分支合流入库留档，不再实施。
+
 - **任务ID**：T-ServiceChainSearch
 - **立项时间**：2026-09-06 02:20
 - **分支**：`dev`

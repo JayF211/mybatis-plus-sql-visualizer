@@ -268,6 +268,10 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-15 | T-PerfTail 三项治理（t-perftail 11e2671+ba0fb13，4207 绿）：WrapperCache LRU 512+fileClosed 清理 / PrewarmAwait CompletableFuture 消灭 EDT sleep-poll / 重放守卫行 0 getCharsSequence 零拷贝 / plugin.xml 注释修正。详见 docs/变更记录.md 同日行 |
+| 2026-09-15 | T-PreviewUx-Pack 四件套（t-previewux-pack 7c77640+b7ea9de，4193 绿）：诚实降级横幅（DegradationBanner）/UPDATE (new) 列（行尾注释形态保可执行性）/多语句执行确认（JBPopup 候选）/${table} 快捷模板（Alt+Shift+E/C/T 冲突自动备选键位）。i18n 16 键×2。详见 docs/变更记录.md 同日行 |
+| 2026-09-15 | T-McpToolset MCP 一期（t-mcptoolset 9164a8e+9c4eaf2，4204/0/0/6 绿）：三只读工具注册平台 mcpServer.mcpToolset EP；262 mcpserver.jar v69 类文件 JDK17 读不了 → src/mcpStub 桩源集（javap 对齐签名、不进插件 jar）；18 反射入口登记 McpDbSignatureCrossVersionTest。详见 docs/变更记录.md 同日行 |
+| 2026-09-15 | T-MergeR2IntoMaster r2 分支合流（集成链 t-fourplans-20260914 首笔，4b5b964）：63 提交入 master，9 冲突按决断表定案；§3.5 两前提证伪（hero 三理由已在位、Log Free FAQ 实为 r2 README 段）；按钮行手正对齐 §3.2；4167/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ExplainFirstNative 执行计划首点结果缺失＋EXPLAIN 形态对齐原生（master）：首点病灶=DBN 空名占位结果 Tab 被当新结果第 1 拍强制换入（真机 idea.1.log 21:06 逐行实证，二点快照已含 Result 1 故正常）——pickResultTab/contentAdded 钩子跳过空名、refreshResultsComponent 名称集合变化补换入；EXPLAIN 形态=DatabaseTools jar 反编译定案原生 MySQL 家族跑裸 EXPLAIN 表格行（FORMAT=JSON 自创无消费者），MySQL/MariaDB renderExplainStatement 改 `EXPLAIN <sql>`。全量 4081/0/0/6 绿（独立沙盒，并行铁律隔离）。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ListPreviewCopy 列表预览默认格式化＋多选防误弹＋多选批量复制（master merge 412a762，4039 绿）：预览统一跟随「预览时格式化还原SQL」设置——clickPreviewSql 先补分号再 SqlFormatter.format，历史双击 buildPreviewResult 弃 formatSql=false 硬编码改读 logFormatSql；多选 selectedIndices>1 时 onClick 停表关旧不排程＋show() 兜底封补选竞态；右键命中行在多选内保留/不在收敛（resolveContextMenuSelection）＋batchCopySql 批量复制（与内置 Ctrl+C 逐字节同构、文案带条数）；坑=测试断言后挂起定时器 300ms 到点 EDT 真弹浮窗致 Editor 泄漏（TraceableDisposable$DisposalException），finally cp.dispose() 停表修复。worktree 独立沙盒 4033 绿＋合并后 4039 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | SQL 历史列表行号（T-LogHistoryRowNo，master dee44ae）：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号——SqlLogFileReader.parseContent 注入 sequenceNumber=索引+1（读取层派生不持久化，旧文件零迁移）＋HistoryCellRenderer 元信息行最前 #N 片段；搜索过滤下行号稳定。全量 4020/0/0/6 绿。详见 docs/变更记录.md 同日行 |
