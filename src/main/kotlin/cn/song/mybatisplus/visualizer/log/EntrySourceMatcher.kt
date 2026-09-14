@@ -50,13 +50,24 @@ object EntrySourceMatcher {
         if (sourceFilePath.isNullOrBlank() || anchorLine <= 0) return emptyList()
         val key = normalize(sourceFilePath)
         val sameFile = entries
-            .filter { it.sourceFile != null && normalize(it.sourceFile) == key }
+            .filter { it.sourceFile != null && sameFile(normalize(it.sourceFile), key) }
             .sortedByDescending { it.timestamp }
         if (sameFile.isEmpty()) return emptyList()
         val inWindow = sameFile.filter { abs(it.sourceLine - anchorLine) <= window }
         val outWindow = sameFile.filter { abs(it.sourceLine - anchorLine) > window }
         return (inWindow + outWindow).take(MAX_RESULTS)
     }
+
+    /**
+     * 同一文件判定（T-JumpPath-03）：两种路径形态段对齐后缀互含。
+     *
+     * 锚点=项目根相对（多模块含模块前缀，如 `mod/src/main/java/cn/song/a/S.java`），
+     * 条目 sourceFile=拦截器包式路径（相对源码根，如 `cn/song/a/S.java`）——
+     * 等值比较恒不命中，「最近执行记录」恒空（真机实锤）。段对齐（`/` 为界）
+     * 杜绝 `xmod/...` 之类后缀假命中。
+     */
+    internal fun sameFile(a: String, b: String): Boolean =
+        a == b || a.endsWith("/$b") || b.endsWith("/$a")
 
     /** 路径规约：统一正斜杠、去首尾空白与尾斜杠（Windows 反斜杠来源兼容）。 */
     internal fun normalize(path: String): String =
@@ -66,7 +77,11 @@ object EntrySourceMatcher {
 /**
  * sourceFile 相对路径 → VirtualFile（M37.1 多源根容错）。
  *
- * 先按项目根直拼（F-44 既有语义）；失败再按各模块 content root 直拼——只查模块声明的根
+ * 三级策略按精确度递减：① 项目根直拼（历史面板 `src/main/java/...` 形态，F-44 既有语义）；
+ * ② 各模块 content root 直拼；③ 各模块 **source root** 直拼（T-JumpPath-02 收编旧
+ * `SqlLogPanel.findSourceFile` 语义——拦截器标记路径是包式相对**源码根**
+ * `cn/song/a/S.java`，Maven/Gradle 标准布局下前两级均缺 `src/main/java` 段，
+ * 缺本策略实时拦截器条目多模块工程全形态解析失败）。只查模块声明的根
  * （O(模块数) 次路径查找），不遍历文件树，无慢操作风险。调用方保证持有读权限
  * （EDT 或 ReadAction；模块模型读取在两者下均合法）。
  */
@@ -80,10 +95,15 @@ object SourcePathResolver {
             fs.findFileByPath("${EntrySourceMatcher.normalize(base)}/$rel")?.let { return it }
         }
         return runCatching {
-            ModuleManager.getInstance(project).modules.asSequence()
+            val modules = ModuleManager.getInstance(project).modules
+            modules.asSequence()
                 .flatMap { ModuleRootManager.getInstance(it).contentRoots.asSequence() }
                 .map { it.path }
                 .firstNotNullOfOrNull { root -> fs.findFileByPath("$root/$rel") }
+                ?: modules.asSequence()
+                    .flatMap { ModuleRootManager.getInstance(it).sourceRoots.asSequence() }
+                    .map { it.path }
+                    .firstNotNullOfOrNull { root -> fs.findFileByPath("$root/$rel") }
         }.getOrNull()
     }
 }

@@ -2,11 +2,12 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ModuleRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDirectory
-import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.PsiManager
 
@@ -17,9 +18,11 @@ import com.intellij.psi.PsiManager
  * 应用重启后实时日志携带源码位置，实现精确跳转。
  *
  * 幂等性：注入前检查文件是否已存在，已存在则跳过。
+ * T-JumpPath-04：多模块工程逐模块注入（旧实现只落第一个模块，用户手工拷贝到其他模块
+ * 引发拷贝件生成期 basePackage 常量漏改的连锁缺陷），结果聚合规则见 [decideAggregate]。
  */
 sealed class InjectionResult {
-    /** 注入成功。 */
+    /** 注入成功（多模块时消息含成功模块清单）。 */
     data class Success(val message: String) : InjectionResult()
 
     /** 项目类型不支持。 */
@@ -41,7 +44,9 @@ object SqlSourceInterceptorAutoInjector {
         data object CannotDetectStructure : PrepareOutcome()
         data object UnsupportedProject : PrepareOutcome()
         data object AlreadyExists : PrepareOutcome()
-        data class Ready(val type: ProjectType, val basePackage: String, val sourceRoot: VirtualFile) : PrepareOutcome()
+
+        /** [ready] = 待注入的支持模块；[existed] = 已注入过的支持模块名（幂等跳过）。 */
+        data class Ready(val ready: List<ProjectStructure>, val existed: List<String>) : PrepareOutcome()
     }
 
     /** 自动注入入口（同步语义保留——测试/非 EDT 场景；EDT 调用请用 [injectAsync]）。 */
@@ -56,9 +61,9 @@ object SqlSourceInterceptorAutoInjector {
 
     /**
      * T-Perf-10：异步注入入口（设置页 EDT 按钮回调用）——
-     * 检测阶段（[ProjectTypeDetector.detect] 的 AnnotatedElementsSearch.findAll /
-     * allScope findClass / 源码目录递归遍历 + 拦截器存在性 VFS 查找）后台 ReadAction 执行；
-     * 仅文件创建保留最小 WriteCommandAction（EDT 回调内执行，2 个模板文件，毫秒级）；
+     * 检测阶段（[ProjectTypeDetector.detectPerModule] 的 JavaPsiFacade.findClass /
+     * AnnotatedElementsSearch / 源码目录递归遍历 + 拦截器存在性 VFS 查找）后台 ReadAction 执行；
+     * 仅文件创建保留最小 WriteCommandAction（EDT 回调内执行，每模块 2 个模板文件，毫秒级）；
      * 结果经回调返回（EDT）。
      */
     fun injectAsync(project: Project, onResult: (InjectionResult) -> Unit) {
@@ -75,7 +80,7 @@ object SqlSourceInterceptorAutoInjector {
                         PrepareOutcome.UnsupportedProject -> InjectionResult.UnsupportedProject
                         PrepareOutcome.AlreadyExists -> InjectionResult.AlreadyExists
                         is PrepareOutcome.Ready -> createFiles(project, outcome)
-                    }
+                    },
                 )
             }
         }
@@ -83,31 +88,83 @@ object SqlSourceInterceptorAutoInjector {
 
     /** 检测阶段（须在 ReadAction 内调用——PSI 索引/目录访问）。 */
     private fun detectForInject(project: Project): PrepareOutcome {
-        val structure = ProjectTypeDetector.detect(project)
-            ?: return PrepareOutcome.CannotDetectStructure
-
-        if (structure.type == ProjectType.UNSUPPORTED) {
-            return PrepareOutcome.UnsupportedProject
+        val structures = ProjectTypeDetector.detectPerModule(project)
+        if (structures.isEmpty()) {
+            // 无任何支持模块：区分「项目里根本没有可用源码结构」与「有结构但都不是 MP 工程」
+            return if (hasAnySourceRoot(project)) {
+                PrepareOutcome.UnsupportedProject
+            } else {
+                PrepareOutcome.CannotDetectStructure
+            }
         }
-
-        val basePackage = structure.basePackage
-            ?: return PrepareOutcome.CannotDetectStructure
-
-        val sourceRoot = structure.sourceRoot
-
-        // 检查是否已存在（幂等性）
-        if (interceptorExists(sourceRoot, basePackage)) {
-            return PrepareOutcome.AlreadyExists
-        }
-        return PrepareOutcome.Ready(structure.type, basePackage, sourceRoot)
+        val (existedStructures, ready) = structures.partition { interceptorExists(it.sourceRoot, it.basePackage ?: "") }
+        if (ready.isEmpty()) return PrepareOutcome.AlreadyExists
+        val existed = existedStructures.mapNotNull { it.moduleName }
+        return PrepareOutcome.Ready(ready, existed)
     }
 
-    /** 文件创建（EDT；最小 WriteCommandAction——T-Perf-10：reformat 省略，模板内容本身即规范缩进）。 */
+    /** 项目是否存在任何模块源根（区分 CannotDetectStructure 与 UnsupportedProject）。 */
+    private fun hasAnySourceRoot(project: Project): Boolean =
+        ModuleManager.getInstance(project).modules.any {
+            ModuleRootManager.getInstance(it).sourceRoots.isNotEmpty()
+        }
+
+    /**
+     * 逐模块结果 → 用户可见聚合（纯决策，消息经 [successMessageFor] 注入——表驱动单测驱动本函数）。
+     *
+     * 规则（计划 §4.4）：至少一模块新注入 → Success（成功优先，失败模块并入由调用方日志留痕）；
+     * 无新注入但有已存在模块 → AlreadyExists；全失败/无支持模块 → UnsupportedProject。
+     */
+    internal fun decideAggregate(
+        injected: List<String>,
+        existed: List<String>,
+        failed: List<String>,
+        successMessageFor: (List<String>) -> String,
+    ): InjectionResult = when {
+        injected.isNotEmpty() -> InjectionResult.Success(successMessageFor(injected))
+        existed.isNotEmpty() -> InjectionResult.AlreadyExists
+        else -> InjectionResult.UnsupportedProject
+    }
+
+    /** 文件创建（EDT；逐模块最小 WriteCommandAction——T-Perf-10：reformat 省略，模板即规范缩进）。 */
     private fun createFiles(project: Project, outcome: PrepareOutcome.Ready): InjectionResult {
-        return when (outcome.type) {
-            ProjectType.SPRING_BOOT -> injectSpringBoot(project, outcome.basePackage, outcome.sourceRoot)
-            ProjectType.MYBATIS_NATIVE -> injectMyBatisNative(project, outcome.basePackage, outcome.sourceRoot)
-            else -> InjectionResult.UnsupportedProject
+        val injected = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        for (structure in outcome.ready) {
+            val moduleName = structure.moduleName ?: structure.basePackage ?: "?"
+            val result = when (structure.type) {
+                ProjectType.SPRING_BOOT -> injectSpringBoot(project, structure.basePackage!!, structure.sourceRoot)
+                else -> injectMyBatisNative(project, structure.basePackage ?: "", structure.sourceRoot)
+            }
+            if (result is InjectionResult.Success) {
+                injected += moduleName
+            } else {
+                failed += moduleName
+                LOG.info("SqlSourceInterceptorAutoInjector: 模块 $moduleName 注入未成功（$result），继续其余模块")
+            }
+        }
+        return decideAggregate(injected, outcome.existed, failed) { names -> successMessage(names, outcome) }
+    }
+
+    /** 成功消息：单模块沿用既有三参文案；多模块列模块清单（T-JumpPath-04 聚合形态）。 */
+    private fun successMessage(injectedNames: List<String>, outcome: PrepareOutcome.Ready): String {
+        val bundle = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+        return if (injectedNames.size == 1) {
+            val structure = outcome.ready.first { (it.moduleName ?: it.basePackage ?: "?") == injectedNames[0] }
+            bundle.message(
+                "log.inject.success",
+                SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
+                SourceInterceptorTemplates.CONFIG_FILE_NAME,
+                structure.basePackage ?: injectedNames[0],
+            )
+        } else {
+            bundle.message(
+                "log.inject.successMulti",
+                injectedNames.size.toString(),
+                injectedNames.joinToString("、"),
+                SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
+                SourceInterceptorTemplates.CONFIG_FILE_NAME,
+            )
         }
     }
 
@@ -119,10 +176,10 @@ object SqlSourceInterceptorAutoInjector {
         return file != null && file.exists()
     }
 
-    /** Spring Boot 项目注入。 */
+    /** Spring Boot 项目注入（单模块；聚合消息在 [createFiles] 统一组装，此处 message 仅占位）。 */
     private fun injectSpringBoot(project: Project, basePackage: String, sourceRoot: VirtualFile): InjectionResult {
         return try {
-            val result = WriteCommandAction.runWriteCommandAction<InjectionResult>(project) {
+            WriteCommandAction.runWriteCommandAction<InjectionResult>(project) {
                 // 创建 config 包目录
                 val configDir = createPackageDirectories(project, sourceRoot, "$basePackage.config")
                     ?: return@runWriteCommandAction InjectionResult.CannotDetectStructure
@@ -141,18 +198,10 @@ object SqlSourceInterceptorAutoInjector {
                     SourceInterceptorTemplates.generateSpringBootConfigClass(basePackage),
                 )
 
-                InjectionResult.Success(
-                    // T-JumpCapture：结果文案 i18n 化（弹窗统一由 SourceCaptureGuide 展示，双语 bundle）
-                    cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
-                        "log.inject.success",
-                        SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
-                        SourceInterceptorTemplates.CONFIG_FILE_NAME,
-                        basePackage,
-                    ),
-                )
+                InjectionResult.Success(basePackage)
+            }.also {
+                LOG.info("SqlSourceInterceptorAutoInjector: Spring Boot 注入${if (it is InjectionResult.Success) "成功" else "未成功"}，basePackage=$basePackage")
             }
-            LOG.info("SqlSourceInterceptorAutoInjector: Spring Boot 注入成功，basePackage=$basePackage")
-            result
         } catch (e: Exception) {
             LOG.warn("SqlSourceInterceptorAutoInjector: Spring Boot 注入失败", e)
             InjectionResult.CannotDetectStructure

@@ -37,7 +37,7 @@ import java.util.Set;
  * 标记行格式：SQLVIS-SOURCE|&lt;相对路径&gt;|&lt;行号&gt;
  * 例：SQLVIS-SOURCE|src/main/java/com/example/service/UserService.java|87
  *
- * 自动生成于 SQL Visualizer 插件，可安全删除（删除后源码跳转回退为表名搜索）。
+ * 自动生成于 SQL Visualizer 插件，可安全删除（删除后实时日志不再携带源码位置）。
  */
 public class SqlSourceInterceptor implements InnerInterceptor {
 
@@ -93,9 +93,13 @@ public class SqlSourceInterceptor implements InnerInterceptor {
         return null;
     }
 
-    /** 是否为拦截器自身（跳过，避免捕获到自己的位置）。 */
+    /**
+     * 是否为拦截器自身（跳过，避免捕获到自己的位置）。
+     * 用运行时类名而非生成期包名常量——用户拷贝/改包/改类名后自跳过依旧生效
+     * （历史缺陷：包名常量与运行类分叉时拦截器自身帧被当成调用点上报）。
+     */
     private boolean isSelf(String cn) {
-        return cn.equals("${basePackage}.config.SqlSourceInterceptor");
+        return cn.equals(getClass().getName());
     }
 
     /** 取 str 中 delimiter 最后一次出现之前的子串（兼容 Java 8+，无 Kotlin 扩展方法）。 */

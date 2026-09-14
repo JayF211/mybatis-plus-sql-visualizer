@@ -57,12 +57,15 @@ class SqlSourceInterceptor(
         println("SQLVIS-SOURCE|${src.first}|${src.second}")
     }
 
-    /** 沿调用栈跳过框架帧，取第一个用户代码帧。 */
+    /** 沿调用栈跳过框架帧和拦截器自身，取第一个用户代码帧。 */
     private fun locateSource(): Pair<String, Int>? {
         val stack = Thread.currentThread().stackTrace
         for (frame in stack) {
             val cn = frame.className
             if (isFrameworkFrame(cn)) continue
+            // 跳过拦截器自身（运行时类名比对，拷贝/改包后依旧生效）——
+            // 拦截器注册在业务包内时，不跳过则位置会被打成本文件的 locateSource 行
+            if (cn == javaClass.name) continue
             if (appPackages.isNotEmpty() && appPackages.none { cn.startsWith(it) }) continue
             val fileName = frame.fileName ?: continue
             val pkg = cn.substringBeforeLast('.').replace('.', '/')

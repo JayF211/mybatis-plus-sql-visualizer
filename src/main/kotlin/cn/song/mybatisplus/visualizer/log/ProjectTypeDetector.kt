@@ -29,11 +29,12 @@ enum class ProjectType {
     UNSUPPORTED,
 }
 
-/** 项目结构信息。 */
+/** 项目结构信息。[moduleName] 仅逐模块检测（[detectPerModule]）填充，供多模块聚合消息列模块清单。 */
 data class ProjectStructure(
     val type: ProjectType,
     val basePackage: String?,
     val sourceRoot: VirtualFile,
+    val moduleName: String? = null,
 )
 
 object ProjectTypeDetector {
@@ -80,6 +81,88 @@ object ProjectTypeDetector {
 
         LOG.info("ProjectTypeDetector: 不支持的项目类型，sourceRoot=${sourceRoot.path}")
         return ProjectStructure(ProjectType.UNSUPPORTED, null, sourceRoot)
+    }
+
+    /**
+     * T-JumpPath-04：逐模块检测（多模块工程注入不再只落第一个模块）。
+     *
+     * 单模块 [detect] 取「第一个有源根的模块 + 项目级特征」，多模块聚合工程下注入只进一个模块
+     * （真机实锤：用户只能手工拷贝到其他模块，拷贝件生成期 basePackage 常量漏改引发连锁缺陷）。
+     * 本入口按模块独立判定：模块依赖可见 SpringApplication → SPRING_BOOT；模块依赖可见
+     * SqlSessionFactory → MYBATIS_NATIVE；均不可见 → 跳过（如无 MyBatis 依赖的 jpa 模块）；
+     * 无源根模块同样跳过（无处落盘）。返回各支持模块的 [ProjectStructure]（含 moduleName）。
+     */
+    fun detectPerModule(project: Project): List<ProjectStructure> {
+        return ReadAction.compute<List<ProjectStructure>, Throwable> {
+            val modules = ModuleManager.getInstance(project).modules
+            modules.mapNotNull { detectModule(project, it) }
+        }
+    }
+
+    /** 单模块检测（ReadAction 内）；不支持或无源根返回 null（调用方跳过该模块）。 */
+    private fun detectModule(project: Project, module: com.intellij.openapi.module.Module): ProjectStructure? {
+        val sourceRoot = findMainSourceRootIn(module) ?: return null
+        val facade = JavaPsiFacade.getInstance(project)
+        // MP / Spring 类都在 jar 依赖里，scope 必须含库（moduleWithDependenciesScope 不含，findClass 恒 null）
+        val moduleScope = GlobalSearchScope.moduleWithDependenciesAndLibrariesScope(module)
+        // 准入门槛 = 生成物编译依赖本身：模板实现 MP InnerInterceptor，模块依赖不可见该类
+        // 时注入即用户模块编译失败（如聚合工程里的 jpa 模块——可能可见 SpringApplication 但无 MP），
+        // 故按 MP 类严格判定而非仅 Spring Boot 标记。
+        val mybatisPlus = runCatching {
+            facade.findClass(
+                "com.baomidou.mybatisplus.extension.plugins.inner.InnerInterceptor",
+                moduleScope,
+            ) != null
+        }.getOrDefault(false)
+        if (!mybatisPlus) {
+            LOG.info("ProjectTypeDetector: 模块 ${module.name} 无 MyBatis-Plus 依赖，跳过注入")
+            return null
+        }
+        // 运行时注册链走 Spring bean（@Configuration + SmartInitializingSingleton），
+        // 模块可见 SpringApplication 即按 SPRING_BOOT 注入；否则原生链（当前未实现，注入侧兜底提示）
+        val springBoot = runCatching {
+            facade.findClass("org.springframework.boot.SpringApplication", moduleScope) != null
+        }.getOrDefault(false)
+        val basePackage = findBasePackageInModule(project, module, sourceRoot) ?: return null
+        val type = if (springBoot) ProjectType.SPRING_BOOT else ProjectType.MYBATIS_NATIVE
+        LOG.info("ProjectTypeDetector: 模块 ${module.name} = $type，basePackage=$basePackage, sourceRoot=${sourceRoot.path}")
+        return ProjectStructure(type, basePackage, sourceRoot, module.name)
+    }
+
+    /** 单模块主源码目录（src/main/java 优先，回退第一个源根）；无源根返回 null。 */
+    private fun findMainSourceRootIn(module: com.intellij.openapi.module.Module): VirtualFile? {
+        val rootManager = com.intellij.openapi.roots.ModuleRootManager.getInstance(module)
+        for (sourceRoot in rootManager.sourceRoots) {
+            val path = sourceRoot.path
+            if (path.endsWith("src/main/java") || path.endsWith("src/main/java/")) return sourceRoot
+        }
+        return rootManager.getSourceRoots(false).firstOrNull()
+    }
+
+    /** 模块内基础包：本模块 @SpringBootApplication 所在包优先，回退模块源根首个 java 文件包名推断。 */
+    private fun findBasePackageInModule(
+        project: Project,
+        module: com.intellij.openapi.module.Module,
+        sourceRoot: VirtualFile,
+    ): String? {
+        val facade = JavaPsiFacade.getInstance(project)
+        try {
+            val annotationClass = facade.findClass(
+                "org.springframework.boot.autoconfigure.SpringBootApplication",
+                // 注解类在 jar 里，findClass 必须用含库 scope（同 detectModule 注释）
+                GlobalSearchScope.moduleWithLibrariesScope(module),
+            )
+            if (annotationClass != null) {
+                val psiClass = AnnotatedElementsSearch
+                    .searchPsiClasses(annotationClass, GlobalSearchScope.moduleScope(module))
+                    .findAll().firstOrNull()
+                val qualifiedName = psiClass?.qualifiedName
+                if (qualifiedName != null) return qualifiedName.substringBeforeLast('.')
+            }
+        } catch (e: Exception) {
+            LOG.debug("ProjectTypeDetector: 模块 ${module.name} 包名提取异常，回退推断", e)
+        }
+        return inferPackageFromSourceRoot(project, sourceRoot)
     }
 
     /** 查找主源码目录（src/main/java）。 */
