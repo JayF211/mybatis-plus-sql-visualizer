@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **SQL 历史列表行号（T-LogHistoryRowNo）**：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号（灰色元信息行最前），搜索过滤下行号稳定不变
+
 ## [2026.9.14-beta.2] - 2026-09-13
 
 > 内测版第二发：dev 分支（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等 119 提交）与 t-crudcolor 分支整体回合 master 后的首次发行。dev 侧条目此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 beta.1 的用户可见增量。

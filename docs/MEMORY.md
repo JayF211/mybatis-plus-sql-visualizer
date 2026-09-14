@@ -260,6 +260,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-14 | SQL 历史列表行号（T-LogHistoryRowNo，master dee44ae）：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号——SqlLogFileReader.parseContent 注入 sequenceNumber=索引+1（读取层派生不持久化，旧文件零迁移）＋HistoryCellRenderer 元信息行最前 #N 片段；搜索过滤下行号稳定。全量 4020/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ReportL10n 报告需求池文案与 IDE 显示语言不一致：语言设置 AUTO 落 JVM locale（与 IDE 显示语言脱节）→ MpSqlVisualizerBundle AUTO 分支改 DynamicBundle.getLocale()（javap 双版本实证），headless 回退 JVM locale；陈旧 java/main 类劫持编译排障；全量 3989/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-FeedbackDlg2 报告对话框真机复查两缺陷（堆栈勾选跳动/手动形态堆栈无来源）：GridBag weighty 堆栈行出现挤占描述行致「跳动」→ toggleResizeDelta 窗口高度补偿；手动形态 openManualDialog 接 MessagePool 错误池最近插件错误（latestPluginErrorStack，默认不勾、无则整行隐藏死框）；javap 双版本实证 MessagePool 系签名；全量 3982/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-FeedbackDlg 报告对话框真机反馈三缺陷（宽度 1272px/无灰提示/不可拖拽）：根因=`JTextField(TITLE_MAX=200)` 上限误作列数（列数即首选宽语义）——JBTextField(30)+滚动面板 preferredSize 钳宽；标题/描述 getEmptyText 占位对齐官网 + doValidate 客户端校验闭环（手动形态短输入此前直吃服务端 400，Composer 常量升 internal 单源）；setResizable/DimensionService/weighty 拖拽伸缩；buildCenterPanel/validateForm 抽纯函数零 peer 可测，新测试 6 例。全量 3974/0/0/6 绿（worktree mpsv-feedbackdlg 隔离跑：并行会话未登记占默认沙盒，「用户映射区域」互锁复现台账坑，M28×M29 路线绕行）。verifyFull/buildPlugin 仅发版/大功能跑（用户口径，已沉淀记忆 feedback-verify-scope）。详见 docs/变更记录.md 同日行 |
