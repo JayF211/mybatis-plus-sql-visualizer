@@ -43,6 +43,9 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 **SQL 代码补全**（表名 / 列名 / `#{}` 参数 / XML 动态标签）
 <img src="docs/images/demo-08-code-completion.gif" width="720" alt="SQL 代码补全演示"/>
 
+**实体类 / 数据库表右键生成 CRUD SQL**（三入口右键 / 候选浮层打字过滤 / 列勾选实时收缩）
+<img src="docs/images/demo-09-crud-sql.gif" width="720" alt="CRUD SQL 生成演示"/>
+
 > 更多功能细节与在线文档见 [官网](https://sql-visualizer.jvtools.cn)。
 
 ## 痛点分析
