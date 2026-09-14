@@ -477,17 +477,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /**
      * 跳转到产生该 SQL 的源码位置。
-     * 通过 sourceFile + sourceLine 直接定位（F-44 新格式）。
+     * 通过 sourceFile + sourceLine 直接定位（F-44 新格式）；
+     * T-JumpCapture：无捕获位置时弹框引导开启源码捕获拦截器。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
         when (val target = resolveJumpTarget(entry)) {
             is HistoryJumpTarget.NoSource -> {
-                // 缺源码位置：旧版 F-43 保存的条目无 sourceFile，提示无法跳转
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.history.jumpToSource.noSource"),
-                    MpSqlVisualizerBundle.message("log.history.jumpToSource"),
-                )
+                // 缺源码位置（旧版 F-43 条目 / 未启用拦截器捕获）：引导开启源码捕获（T-JumpCapture）
+                SourceCaptureGuide.showMissingSourceDialog(project)
             }
             is HistoryJumpTarget.NotFound -> {
                 // 文件不存在时提示（项目结构可能已变化）

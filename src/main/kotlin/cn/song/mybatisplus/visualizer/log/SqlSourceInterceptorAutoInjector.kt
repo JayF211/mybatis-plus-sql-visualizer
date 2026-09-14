@@ -142,8 +142,13 @@ object SqlSourceInterceptorAutoInjector {
                 )
 
                 InjectionResult.Success(
-                    "已生成 ${SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME} 和 ${SourceInterceptorTemplates.CONFIG_FILE_NAME}，" +
-                        "位于 ${basePackage}.config 包下，重启应用后生效。",
+                    // T-JumpCapture：结果文案 i18n 化（弹窗统一由 SourceCaptureGuide 展示，双语 bundle）
+                    cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(
+                        "log.inject.success",
+                        SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
+                        SourceInterceptorTemplates.CONFIG_FILE_NAME,
+                        basePackage,
+                    ),
                 )
             }
             LOG.info("SqlSourceInterceptorAutoInjector: Spring Boot 注入成功，basePackage=$basePackage")
