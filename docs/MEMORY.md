@@ -74,7 +74,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 文档 | 用途 |
 |------|------|
 | [20260914-1617-T-FeedbackDlg3-手动形态堆栈自主输入与描述框默认高收敛-开发计划.md](./开发计划/20260914-1617-T-FeedbackDlg3-手动形态堆栈自主输入与描述框默认高收敛-开发计划.md) | **T-FeedbackDlg3：手动形态堆栈自主输入**。勾选恒显示+堆栈区可编辑（粘贴）+「从 IDE 错误池导入」按包名过滤候选（pluginErrorPoolStacks）；描述框默认高 140→90。全量 4025/0/0/6 绿 | ✅ 已实施（2026-09-14，提交 0b8c293；真机走查 §五 留人工） |
-| [20260914-1406-T-ReportL10n-报告需求池文案跟随IDE显示语言-开发计划.md](./开发计划/20260914-1406-T-ReportL10n-报告需求池文案跟随IDE显示语言-开发计划.md) | **T-ReportL10n：报告需求池文案与 IDE 显示语言不一致**。AUTO 语言落点 Locale.getDefault()（JVM locale）与 IDE 显示语言脱节 → 改 DynamicBundle.getLocale()（243/262 javap 同签名），headless 回退 JVM locale；全量 3989/0/0/6 绿 | ✅ 已实施（2026-09-14，提交 5296022；真机走查 §五 留人工） |
+| [20260914-1406-T-ReportL10n-报告需求池文案跟随IDE显示语言-开发计划.md](./开发计划/20260914-1406-T-ReportL10n-报告需求池文案跟随IDE显示语言-开发计划.md) | **T-ReportL10n：报告需求池文案与 IDE 显示语言不一致**。AUTO 语言落点 Locale.getDefault()（JVM locale）与 IDE 显示语言脱节 → 改 DynamicBundle.getLocale()（243/262 javap 同签名），headless 回退 JVM locale；全量 3989/0/0/6 绿。**二波 T-ReportL10n2**（真机仍中文）：根因=插件语言默认 zh 非 AUTO，AUTO 修复不触达 → 嵌入平台 UI 文案（提交器菜单/隐私提示）恒跟 IDE 显示语言，新增 messageForIde 不经插件语言设置；插件自身对话框维持插件语言；全量 4030/0/0/6 绿 | ✅ 已实施（一波 2026-09-14 提交 5296022；二波随 0672adf 入册；真机复验菜单项英文留人工） |
 | [20260812-1058-MP-SQL可视化-需求文档.md](./需求文档/20260812-1058-MP-SQL可视化-需求文档.md) | **功能需求源**：功能编号 F-01~F-20 定义（Wrapper 转换/参数替换/格式化/展示/配置/批量等） |
 
 ## 开发计划（docs/开发计划/，时间倒序；调研性质报告已于 2026-09-12 拆分至独立目录 docs/调研报告/，见下方「调研报告」节）
@@ -263,6 +263,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 日期 | 变更 |
 |------|------|
 | 2026-09-14 | SQL 历史列表行号（T-LogHistoryRowNo，master dee44ae）：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号——SqlLogFileReader.parseContent 注入 sequenceNumber=索引+1（读取层派生不持久化，旧文件零迁移）＋HistoryCellRenderer 元信息行最前 #N 片段；搜索过滤下行号稳定。全量 4020/0/0/6 绿。详见 docs/变更记录.md 同日行 |
+| 2026-09-14 | T-ReportL10n2 嵌入平台 UI 文案恒跟 IDE 显示语言（真机二次反馈）：一波只改 AUTO 落点但插件语言默认 zh 非 AUTO 故不触达 → MpSqlVisualizerBundle 新增 messageForIde（按 ideDisplayLocale 直接解析），提交器 getReportActionText/getPrivacyNoticeText 切换；插件自身对话框维持插件语言设置（语言归属边界定案）；worktree 隔离全量 4030/0/0/6 绿，代码随并行会话 0672adf 入册。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ReportL10n 报告需求池文案与 IDE 显示语言不一致：语言设置 AUTO 落 JVM locale（与 IDE 显示语言脱节）→ MpSqlVisualizerBundle AUTO 分支改 DynamicBundle.getLocale()（javap 双版本实证），headless 回退 JVM locale；陈旧 java/main 类劫持编译排障；全量 3989/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-FeedbackDlg3 手动形态堆栈自主输入（粘贴/错误池导入）与描述框默认高收敛：勾选恒显示+堆栈区可编辑+「从 IDE 错误池导入」按包名过滤候选（latestPluginErrorStack→pluginErrorPoolStacks 列表版）；描述滚动面板 140→90/文本区 6→4；全量 4025/0/0/6 绿。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-FeedbackDlg2 报告对话框真机复查两缺陷（堆栈勾选跳动/手动形态堆栈无来源）：GridBag weighty 堆栈行出现挤占描述行致「跳动」→ toggleResizeDelta 窗口高度补偿；手动形态 openManualDialog 接 MessagePool 错误池最近插件错误（latestPluginErrorStack，默认不勾、无则整行隐藏死框）；javap 双版本实证 MessagePool 系签名；全量 3982/0/0/6 绿。详见 docs/变更记录.md 同日行 |
