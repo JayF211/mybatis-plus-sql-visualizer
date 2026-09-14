@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.feedback
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -85,6 +86,24 @@ class ErrorReportDialogLayoutTest {
             "error.report.dialog.description.placeholder",
         )
         for (key in keys) {
+            assertNotEquals("键 $key 缺 bundle 文案（会原样显示键名）", key, MpSqlVisualizerBundle.message(key))
+        }
+    }
+
+    @Test
+    fun `手动形态堆栈导入控件默认态`() {
+        // 字段类默认=错误形态基线（只读预览、导入按钮隐藏）；手动形态由对话框 init 翻转，
+        // 这里锁定默认态与 T-FeedbackDlg3 新键，init 翻转行为留真机走查
+        val fields = ReportFormFields()
+        assertFalse("堆栈区默认只读（错误形态基线）", fields.stackPreview.isEditable)
+        assertFalse("导入按钮默认隐藏（错误形态）", fields.stackImportButton.isVisible)
+        for (key in arrayOf(
+                "error.report.dialog.stackImport",
+                "error.report.dialog.stackImport.tip",
+                "error.report.dialog.stackImport.empty",
+                "error.report.dialog.stackPreview.placeholder",
+            )
+        ) {
             assertNotEquals("键 $key 缺 bundle 文案（会原样显示键名）", key, MpSqlVisualizerBundle.message(key))
         }
     }

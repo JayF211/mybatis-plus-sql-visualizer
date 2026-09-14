@@ -41,20 +41,26 @@ import javax.swing.JTextField
  * - 勾选跳动：堆栈行以 weighty=1 参与分配、窗口高度不变，堆栈出现即压扁上方描述行。
  *   [toggleStackPreview] 勾选时给窗口做等量高度补偿（堆栈行首选高 + 行距 + 当前纵向富余量，
  *   富余量项保证描述行实际高度分毫不差），取消时按堆栈行实际高对称缩回；
- * - 手动形态堆栈：手动入口也从平台错误池取本插件最近一条错误（[FeedbackReporting.latestPluginErrorStack]）
- *   作附件候补（默认不勾选，用户自行决定）；无错误时整行隐藏，不再显示死的勾选框。
+ * T-FeedbackDlg3（2026-09-14 真机反馈两缺陷）：
+ * - 手动形态堆栈自主输入：勾选行不再依赖错误池有无（恒显示），勾选后堆栈区**可编辑**——
+ *   用户自行粘贴，或点「从 IDE 错误池导入」按插件包名过滤后选择（[stackPoolProvider] 懒取，
+ *   弹窗时实时读池）；附件内容取文本区实际内容（[collectStackAttachment]）；
+ * - 描述框默认高收敛（滚动面板首选 140→90，文本区 6→4 行）。
+ * 错误形态维持原语义：event 堆栈预填只读预览、附件用全文、无堆栈隐藏勾选行。
  * 布局与校验抽为 [buildCenterPanel]/[validateForm] 纯函数（[ReportFormFields] 载体），
  * headless 测试零 DialogWrapper peer 依赖。
  */
 class ErrorReportDialog(
     /** 错误形态预填；null = 手动形态。 */
     private val prefill: ErrorReportComposer.Prefill?,
-    /** 异常堆栈全文（错误形态=event 堆栈；手动形态=错误池最近插件错误，可 null）；null 时隐藏勾选行。 */
+    /** 异常堆栈全文（仅错误形态=event 堆栈）；错误形态 null 时隐藏勾选行。 */
     private val stackText: String?,
     /** 栈指纹（写入描述尾部，管理员合并重复帖依据）；手动形态 null。 */
     private val fingerprint: String?,
     private val ideVersion: String?,
     private val pluginVersion: String?,
+    /** 手动形态「从 IDE 错误池导入」候选堆栈提供者（点菜单时实时调用，已按插件包名过滤）。 */
+    private val stackPoolProvider: () -> List<String> = { emptyList() },
     /** 用户点击提交后回调（携带最终请求与可选堆栈附件；提交在回调方后台执行）。 */
     private val onSubmit: (FeedbackApi.Submission) -> Unit,
 ) : DialogWrapper(true) {
@@ -79,10 +85,20 @@ class ErrorReportDialog(
             (if (prefill != null) ErrorReportComposer.TYPE_BUG else ErrorReportComposer.TYPE_QUESTION) - 1
         if (prefill == null) selectCategory(ErrorReportComposer.CATEGORY_OTHER)
 
-        stackText?.let { fields.stackPreview.text = it.lineSequence().take(60).joinToString("\n") }
-        // 无堆栈可附（手动形态且错误池也没有）时整行隐藏，不再显示点了没反应的死勾选框；
-        // 勾选默认开仅限错误形态（T-FeedbackDlg 原语义），手动形态取到的错误池堆栈默认不带，用户自行决定
-        fields.attachStackCheck.isVisible = stackText != null
+        if (prefill == null) {
+            // T-FeedbackDlg3：手动形态堆栈自主输入——勾选恒显示，堆栈区可编辑（自行粘贴），
+            // 导入按钮按插件包名列错误池候选（点菜单时才读池，反映实时状态）
+            fields.stackPreview.isEditable = true
+            fields.stackPreview.emptyText.setText(MpSqlVisualizerBundle.message("error.report.dialog.stackPreview.placeholder"))
+            fields.stackImportButton.isVisible = true
+            fields.stackImportButton.addActionListener { showStackImportMenu() }
+            fields.attachStackCheck.isVisible = true
+        } else {
+            // 错误形态维持原语义：event 堆栈预填只读预览；无堆栈时整行隐藏不留死勾选框
+            stackText?.let { fields.stackPreview.text = it.lineSequence().take(60).joinToString("\n") }
+            fields.attachStackCheck.isVisible = stackText != null
+        }
+        // 勾选默认开仅限错误形态（T-FeedbackDlg 原语义）；手动形态默认关，用户自行决定
         fields.attachStackCheck.isSelected = prefill != null && stackText != null
         fields.stackPreviewContainer.isVisible = fields.attachStackCheck.isSelected
         // 监听在初始状态落定后注册：初始可见性直调，不触发窗口高度补偿
@@ -165,15 +181,46 @@ class ErrorReportDialog(
         )
     }
 
+    /**
+     * 附件堆栈：错误形态用 event 全文（预览区仅为截断展示）；手动形态取堆栈区实际内容
+     * （用户粘贴或从错误池导入，T-FeedbackDlg3）——勾选但内容为空视同不附带。
+     */
     internal fun collectStackAttachment(): FeedbackApi.StackAttachment? {
-        if (stackText == null || !fields.attachStackCheck.isSelected) return null
+        if (!fields.attachStackCheck.isSelected) return null
+        val stack = if (prefill != null) stackText else fields.stackPreview.text?.takeIf { it.isNotBlank() }
+        if (stack == null) return null
         val content = ErrorReportComposer.buildStackAttachment(
-            stackText, ideVersion, pluginVersion, fingerprint,
+            stack, ideVersion, pluginVersion, fingerprint,
             occurredAt = java.time.ZonedDateTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX"),
             ),
         )
         return FeedbackApi.StackAttachment(FeedbackApi.STACK_ATTACHMENT_NAME, content.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * 手动形态「从 IDE 错误池导入」菜单（T-FeedbackDlg3）：点按钮时经 [stackPoolProvider]
+     * 实时拉取本插件错误候选（已按包名过滤），每项以首行（异常类: 消息）为菜单文本，
+     * 点击填入堆栈区（覆盖式——导入即替换，用户仍可再编辑）。空池给出说明项。
+     */
+    private fun showStackImportMenu() {
+        val menu = javax.swing.JPopupMenu()
+        val candidates = runCatching { stackPoolProvider() }.getOrDefault(emptyList())
+        if (candidates.isEmpty()) {
+            val empty = javax.swing.JMenuItem(MpSqlVisualizerBundle.message("error.report.dialog.stackImport.empty"))
+            empty.isEnabled = false
+            menu.add(empty)
+        } else {
+            candidates.forEach { stack ->
+                val firstLine = stack.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                val item = javax.swing.JMenuItem(
+                    if (firstLine.length > 80) firstLine.take(80) + "…" else firstLine,
+                )
+                item.addActionListener { fields.stackPreview.text = stack }
+                menu.add(item)
+            }
+        }
+        menu.show(fields.stackImportButton, 0, fields.stackImportButton.height)
     }
 
     override fun doOKAction() {
@@ -310,9 +357,14 @@ class ErrorReportDialog(
             labelRow("error.report.dialog.type", fields.typeCombo)
             labelRow("error.report.dialog.category", fields.categoryCombo)
             labelRow("error.report.dialog.description", JBScrollPane(fields.descriptionArea).apply {
-                preferredSize = JBUI.size(620, 140)
+                // T-FeedbackDlg3：默认首选高 140→90（用户真机反馈描述框默认过大）
+                preferredSize = JBUI.size(620, 90)
             }, stretchVertically = true)
-            fullRow(fields.attachStackCheck)
+            // 勾选 + 导入按钮同行（导入按钮仅手动形态可见，隐藏时 FlowLayout 不留空位）
+            fullRow(javax.swing.JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
+                add(fields.attachStackCheck)
+                add(fields.stackImportButton)
+            })
             fullRow(fields.stackPreviewContainer, stretchVertically = true)
             labelRow("error.report.dialog.name", fields.nameField)
             labelRow("error.report.dialog.email", fields.emailField)
@@ -345,7 +397,7 @@ internal class ReportFormFields {
         ErrorReportDialog.categoryLabel(ErrorReportDialog.CATEGORIES[index])
     })
 
-    val descriptionArea = JBTextArea(6, 40).apply {
+    val descriptionArea = JBTextArea(4, 40).apply {
         lineWrap = true
         wrapStyleWord = true
         emptyText.setText(MpSqlVisualizerBundle.message("error.report.dialog.description.placeholder"))
@@ -356,6 +408,15 @@ internal class ReportFormFields {
         toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.attachStack.tip")
     }
 
+    /** 手动形态勾选行右侧「从 IDE 错误池导入」（T-FeedbackDlg3）；错误形态隐藏（预览已预填）。 */
+    val stackImportButton = javax.swing.JButton(
+        MpSqlVisualizerBundle.message("error.report.dialog.stackImport"),
+    ).apply {
+        toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.stackImport.tip")
+        isVisible = false
+    }
+
+    /** 堆栈区：错误形态只读预览；手动形态可编辑（粘贴/导入，T-FeedbackDlg3）。 */
     val stackPreview = JBTextArea(10, 40).apply {
         isEditable = false
         lineWrap = false
