@@ -60,4 +60,56 @@
 - 自建 stdio server：移出一期，二期评估
 - N-14 AI SQL 分析：另立任务（OpenAI 兼容单路径 + PasswordSafe 存 key；「ride 平台 LLM API」已被 ACP 专项证伪）
 
-## 七、实施记录（交付后回填）
+## 七、实施记录（2026-09-14 交付）
+
+### 7.1 核实到的真实 API 面（jar 为唯一权威）
+
+全部签名 javap 自本机 IDEA 2026.2.1 内置 MCP Server 插件
+`C:\Users\USER\AppData\Local\Programs\IntelliJ IDEA\plugins\mcpserver\lib\mcpserver.jar`
+（IU-262.10315.125；253 分支 Marketplace 包 253.28294.336 的 EP 名与接口包名相同，见 ACP 调研报告 §3.2）。与计划文档记载的差异点：
+
+| 计划记载 | jar 实证 | 结论 |
+|---|---|---|
+| `@McpTool/@McpDescription/@McpToolHints` | `com.intellij.mcpserver.annotations.McpTool(name, title)`、`McpDescription(description)`、`McpToolHints(readOnlyHint, destructiveHint, idempotentHint, openWorldHint)`，四属性**全部带默认值**（AnnotationDefault 字节码 = UNSPECIFIED） | 一致；openWorldHint 可省 |
+| hint 三值枚举 | `McpToolHintValue { UNSPECIFIED, TRUE, FALSE }` | 一致 |
+| `McpExpectedError` | `com.intellij.mcpserver.McpExpectedError(String, JsonObject?)` extends Exception，getter `getMcpErrorText()`；另有静态捷径 `McpToolKt.mcpFail(message, JsonObject?)`（$default mask=2 证实第二参默认 null） | 一致 |
+| `mcpServer.mcpToolset` EP | mcpserver.jar META-INF/plugin.xml `<extensionPoint name="mcpToolset" interface="com.intellij.mcpserver.McpToolset" dynamic="true"/>`；EP 名 `com.intellij.mcpServer.mcpToolset`（McpToolset$Companion 字节码 ldc 实证） | 一致 |
+| `isExperimental` 默认 true | javap -c 三钩子默认实现：`isEnabled=iconst_1 / isExperimental=iconst_1 / alwaysIncluded=iconst_0`，且均为 Java default 方法 | 一致；工具集显式覆写 false |
+| Project 获取 | `McpCallInfoKt.getProject(CoroutineContext)` / `getProjectOrNull`（KDoc 的 `coroutineContext.project`） | 一致 |
+| 工具方法形态 | 平台自带 ReadToolset.read_file 实证：`suspend fun` + 可序列化参数 + 返回 String；注解出现在 RuntimeVisibleAnnotations 表（**RUNTIME retention 是桩的硬约束**） | 一致 |
+
+`McpToolCallResult.text()/error()` 工厂存在（`(String, JsonObject)` + $default），但注解 DSL 的 suspend 方法直接返回 String 即可（平台自带工具集同款），未使用。
+
+### 7.2 编译期接线（本机构建辅助）
+
+基线平台 IU 2024.3.7.1（243）不含 mcpServer 插件；262 内置 mcpserver.jar 类文件为 **major 69（Java 25）**，JDK 17 编译读不了（javac 17/21 报「错误的版本 69.0」，与 build.gradle.kts T-GifRecordSwitch 注释同源实证；Marketplace 253 包类文件同样超出 JDK17 可读范围，1.0.30 虽可读但为旧 EP 形态不可用）。故弃 `compileOnly(files(...))`，采用**本地桩源码（stub source set）**：
+
+- `src/mcpStub/kotlin/com/intellij/mcpserver/`（KGP 自定义 sourceSet 约定目录）：`McpToolset.kt`（接口三钩子）、`McpExpectedError.kt`、`annotations/McpToolAnnotations.kt`、**`McpCallInfo.kt`**——文件名即契约：Kotlin 扩展属性静态绑定到声明文件类，桩文件必须命名 `McpCallInfo.kt` 使编译产物同为 `McpCallInfoKt`，`coroutineContext.project` 生成的静态调用才能在运行时命中平台真类；
+- 桩 @Retention 必须 RUNTIME（真实注解在 RuntimeVisibleAnnotations 表，运行时框架反射扫描）；
+- 接线（防 task 依赖环）：`compileKotlin.libraries.from(mcpStub.output)`（主编译任务挂桩产物），mcpStub 编译类路径复用 main 的 compileClasspath（平台/stdlib/JSqlParser），**不反向依赖**——桩产物只进编译 classpath，不进插件 jar 与运行时（运行时类型由平台内置插件提供；插件 jar 若携带 com.intellij.mcpserver.* 会与平台类冲突）。
+
+### 7.3 实现摘要
+
+- 分层：纯逻辑层 `mcp/McpToolErrors / McpSelectGuard / McpSchemaFormatter / McpExplainFormatter / McpDialectDetector / McpRenderInput`（零 mcpServer/com.intellij 类型，单测无需桩 classpath）+ 适配层 `SqlVisualizerToolset / McpSourceLocator / McpSchemaContextService / McpDbExecutor / McpAuditLog`（注解声明、ReadAction、转发）。
+- 安全红线六条落地：readOnly/destructive/idempotent 三 hint 显式声明；SELECT 白名单双保险（JSqlParser 结构判定优先：单语句/Select 子类/锁读 `getForUpdateTable() + getForMode()`（JSqlParser 5.3 javap 实证，裸 FOR UPDATE 落 forMode）/无 SELECT INTO；关键字粗扫兜底，粗扫前剥离字符串字面量与注释防误杀 `LIKE '%update%'`）；零弹窗（拒绝全走 McpExpectedError，EXPLAIN 建连显式 `setAskPassword(false)`）；不提供连接管理；`[MCP-AUDIT]` 审计行（时间/工具/状态/耗时/入参摘要）；无数据源/别名不匹配/未索引（DumbService）/introspection 未完成均结构化报错不挂死。
+- `mpsv_render_sql`：文件+行号 → ReadAction 内 13 类触发面定位链（复刻 ConvertToSqlAction 光标分支：mapper XML / MyBatis 注解 / Wrapper 链 / HQL / 自定义 DAO / JdbcTemplate / @Query / 派生 / Criteria / 方法体字符串 SQL），多候选零弹窗取首个并附说明；mapper XML 片段直渲（XmlPreviewService text 形态入口）。裁剪：Repository 调用点回落与文件级注解候选弹窗不带；Java 片段无 PSI 锚点不支持（渲染链是 PSI 语义的）。
+- `mpsv_schema_context`：复用 DatabaseSchemaResolver 通道（弱引用缓存）逐表取表/列注释+类型+NOT NULL，max_tables 默认 8 上限 20（DBX 口径），截断附提示；别名仅做存在性校验与错误提示（现有通道按表名全局匹配，不按数据源过滤）。
+- `mpsv_explain`：白名单 → 数据源别名定位（复用 DataSourceManager 反射链，未给别名且多数据源时报错列名）→ 方言解析（显式别名表精确匹配 > JDBC URL 推断 > MySQL 默认）→ `DialectRegistry.byName(...).renderExplainStatement` 七方言派发 → **新建 headless 执行通道**（既有 SqlExecutor 链是 UI 控制台形态：弹数据源选择框+异步回调+结果进原生控制台，违反零弹窗红线且拿不到文本）：反射 `DatabaseConnectionManager.getInstance().build(project, ds).setAskPassword(false).createBlocking()` → `getRemoteConnection()` → RemoteStatement/ResultSet 采集行列（243/262 javap 同形实证；Method 一律从声明接口拿，T-Embed-10 铁律）→ McpExplainFormatter 文本化（行数 200/单元格 2000 预算）。
+- i18n：工具错误/描述面向 agent，英文常量不进 bundle，零新 bundle 键。
+- 243 明确不支持（旧 EP `org.jetbrains.mcpserverplugin.McpTool` HTTP handler 形态适配成本>收益），发行说明由主会话发版时写明「MCP 面需 IDEA 2025.2+（内置）或装 253+ MCP Server 插件的环境」。
+
+### 7.4 测试
+
+- 新增：`McpSelectGuardTest` 14 例（越权全拒矩阵 + 字面量/词边界防误杀）、`McpSchemaFormatterTest` 6 例（限幅/去重/截断/预算）、`McpRenderInputTest` 11 例、`McpDialectDetectorTest` 5 例、`McpToolErrorsTest` 1 例、`McpDbSignatureCrossVersionTest` 1 例（跨版本签名护栏）；`PluginXmlStructureGuardTest` +2（mcp 成对注册守卫 + 主描述文件不得引用 mcp 类型）。
+- 签名护栏（铁律 6）：`McpDbExecutor` 全部反射入口（数据源发现/建连/remote JDBC 三链 18 个方法）登记 `McpDbSignatureChecker` + `McpDbSignatureCrossVersionTest`，对本机 243/253/262 发行版用各自 JBR 核验（checker 按内容收集含 com/intellij/database/ 的插件 jar——243 在 grid-core-impl、262 EAP 在 grid-core-plugin、装机版在 connectivity，拆分形态漂移大，按内容收集形态无关；URLClassLoader parent 用平台 loader 保 java.sql 可见）。
+- 全量门禁：**4204/0/0/6 绿**（独立工作树 mpsv-mcptoolset，并行表登记 t-mcptoolset / sandbox build/test-sandbox-mcptoolset）。
+
+### 7.5 留人工的真机走查清单
+
+1. IDEA 2026.2.1 真机：Settings | Tools | MCP Server 显示 mpsv_render_sql / mpsv_schema_context / mpsv_explain 三工具（非实验区），`claude mcp add` 或 AI Assistant `use_idea_mcp` 后外部 agent 可见可调。
+2. mpsv_render_sql：Wrapper 链行 / mapper XML 语句行 / @Select 注解行 / JPA 派生查询行四种入参各一调，返回 SQL 与 IDE 预览一致。
+3. mpsv_explain：MySQL 数据源跑一条 SELECT 返回计划表格文本；UPDATE/多语句/FOR UPDATE 各一调确认结构化拒绝（MCP_READ_ONLY/SQL_BLOCKED）。
+4. mpsv_schema_context：多数据源项目不给 dataSource 参数 → 错误列可选名；introspection 未连接的表 → SCHEMA_NOT_AVAILABLE 不挂死。
+5. 审计：idea.log grep `[MCP-AUDIT]` 每次调用一行。
+6. 243 环境插件加载无异常（mcp-optional.xml 不加载，三工具缺席其余功能正常）。
+
