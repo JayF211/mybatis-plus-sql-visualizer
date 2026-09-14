@@ -123,4 +123,10 @@
 
 ## 实施记录
 
-（实施后回填）
+- **交付提交**：master `dee44ae`（功能）+ `e78b151`（文档），2026-09-14
+- **测试**：新增 8 用例（SqlLogFileReaderTest 4 / HistoryCellRendererTest 3 / SqlLogHistoryRoundTripTest 1）；定向 50/0/0；全量 4020/0/0/6 绿（sandbox-loghistrow 隔离）
+- **实施说明**：
+  - 序号在 `SqlLogFileReader.parseContent` 返回前 `mapIndexed` 注入（防御已有序号不覆盖）——一处覆盖 readFromFile / readAll / 后台 keepReload 全部读取路径，旧文件零迁移；
+  - `HistoryCellRenderer` 元信息行最前 `#N ` HISTORY_META_GRAY 片段（`sequenceNumber > 0` 才显示，与日志页 `LogEntryListCellRenderer` 守卫一致）；
+  - 并行会话 t-intrup（T-IntrUpg）在工作树同改 `HistorySqlLogPanel.kt` 显示模式行高逻辑，与本次渲染片段改动不同段，无冲突；其提交先落（a7bb545），本次提交干净。
+- **runIde 真机验证**：留人工（历史 tab 打开文件 → #1 #2 #3；搜索过滤行号跟随；一级文件列表无行号；与主列表视觉一致）。
