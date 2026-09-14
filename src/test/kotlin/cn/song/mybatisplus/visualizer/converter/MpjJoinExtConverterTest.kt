@@ -594,4 +594,139 @@ class MpjJoinExtConverterTest {
         )
         assertTrue("setTableName/pageByMain 不产生额外 SQL 片段", !sql.contains("getTableName"))
     }
+
+    // ------------------------------------------------------------------
+    // T-MpjColAlias：联表实体 lambda 列归属 join 别名（真机 1054 复现）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `mpjJoin_select关联实体lambda列归属join别名`() {
+        // T-MpjColAlias 真机复现：selectAll(主表) + select(StationInfoEntity::getStationName) +
+        // leftJoin(Class, "st", 左列, "t", 右列)。接收者实体类命中 join 映射 → 列归 st 而非主表 t
+        // （修复前补主表别名渲染 t.station_name，car_device_info 无此列，执行报 1054）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectAll", listOf(WrapperArg.ValueArg(SqlValue.Literal("DeviceInfoEntity")))),
+                WrapperCall("select", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_name", entityClass = "StationInfoEntity")),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(stationTable),
+                    WrapperArg.ValueArg(SqlValue.Literal("st")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                )),
+                WrapperCall("eq", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("1")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertEquals(
+            """
+            SELECT t.id, t.station_id, t.share_scheme_id, st.station_name
+            FROM car_device_info t
+            LEFT JOIN station_info st ON st.station_id = t.id
+            WHERE t.id = 1
+            """.trimIndent(),
+            sql,
+        )
+    }
+
+    @Test
+    fun `mpjJoin_select主实体lambda列保持主表别名`() {
+        // 回归：接收者 = 主实体类 → 不改写，仍归主表别名
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("select", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id", entityClass = "DeviceInfoEntity")),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(stationTable),
+                    WrapperArg.ValueArg(SqlValue.Literal("st")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertTrue("主实体列保持 t.：$sql", sql.contains("SELECT t.station_id"))
+    }
+
+    @Test
+    fun `mpjJoin_select未知实体lambda列保持主表别名`() {
+        // 回归：接收者实体类不在任何 join 映射（非联表列/单表误带 entityClass）→ 原样走主表别名
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("select", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "device_name", entityClass = "DeviceOtherEntity")),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(stationTable),
+                    WrapperArg.ValueArg(SqlValue.Literal("st")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertTrue("未知实体列保持 t.：$sql", sql.contains("SELECT t.device_name"))
+    }
+
+    @Test
+    fun `mpjJoin_已带别名lambda列不覆盖`() {
+        // 回归：tableAlias 已有值（如 selectAs 字符串显式限定形态）→ 归属逻辑不覆盖
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("select", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "x", columnName = "station_name", entityClass = "StationInfoEntity")),
+                )),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(stationTable),
+                    WrapperArg.ValueArg(SqlValue.Literal("st")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertTrue("显式别名保留 x.：$sql", sql.contains("SELECT x.station_name"))
+    }
+
+    @Test
+    fun `mpjJoin_嵌套条件关联实体列归属join别名`() {
+        // and(nested) 体内的关联实体 lambda 列同样归属 join 别名（NestedArg 递归重写）
+        val chain = WrapperChain(
+            WrapperType.MPJ_LAMBDA, "DeviceInfoEntity",
+            listOf(
+                WrapperCall("selectAll", listOf(WrapperArg.ValueArg(SqlValue.Literal("DeviceInfoEntity")))),
+                WrapperCall("leftJoin", listOf(
+                    WrapperArg.EntityRefArg(stationTable),
+                    WrapperArg.ValueArg(SqlValue.Literal("st")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ValueArg(SqlValue.Literal("t")),
+                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                )),
+                WrapperCall("and", listOf(
+                    WrapperArg.NestedArg(WrapperChain(WrapperType.NESTED, null, listOf(
+                        WrapperCall("eq", listOf(
+                            WrapperArg.ColumnArg(ColumnRef(columnName = "station_name", entityClass = "StationInfoEntity")),
+                            WrapperArg.ValueArg(SqlValue.Placeholder("keyword")),
+                        )),
+                    ))),
+                )),
+            ),
+        )
+        val sql = SqlGenerator.generate(MpjLambdaConverter.convert(chain, table))
+        assertTrue("嵌套体内关联列归 st.：$sql", sql.contains("(st.station_name = ?)"))
+    }
 }
