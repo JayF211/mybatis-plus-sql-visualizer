@@ -5,7 +5,7 @@
 >
 > **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（78 个通用文件）
+> **全局备份**：`~/.zcode/cli/memories/global/`（85 个通用文件）
 > **项目记忆**：保留 20 个核心文件 + MEMORY.md 索引（第八次精简后）
 
 ---
@@ -285,7 +285,7 @@
 
 ---
 
-## 全局通用记忆（78 个）
+## 全局通用记忆（85 个）
 
 > 已复制到 `~/.zcode/cli/memories/global/`，跨项目复用。
 
@@ -299,7 +299,7 @@
 
 **第七次精简升级（2026-09-13，1 个）**：pitfall-subagent-claims-verify（子代理断言先证伪）
 
-**第八次精简升级（2026-09-14，2 个）**：pitfall-wira-not-in-readaction（ReadAction 内开 WIRA 硬抛、WIRA-in-WIRA 合法）/ pitfall-workbuddy-ai-sandbox-eats-nested-refs（WorkBuddy AI 沙盒吞嵌套 ref 事故与恢复法）
+**第八次精简升级（2026-09-14，共 9 个）**：pitfall-wira-not-in-readaction（ReadAction 内开 WIRA 硬抛、WIRA-in-WIRA 合法）/ pitfall-workbuddy-ai-sandbox-eats-nested-refs（WorkBuddy AI 沙盒吞嵌套 ref 事故与恢复法）/ verify-capability-before-claiming（能力验证对照实验，文档站）/ win32-shell-cjk-mojibake、win32-tsx-file-url-import（本机命令行与 TS 验证环境坑，管理后台）/ glm-relay-api-test、zcode-model-config-location、aliyun-token-plan-provider、dots-nova-relay-lines（中转线路与模型配置，管理后台）
 
 ---
 
@@ -308,6 +308,6 @@
 | 位置 | 文件数 |
 |------|--------|
 | 项目 memory（保留） | 21（含 MEMORY.md） |
-| 全局记忆 global/ | 78 |
+| 全局记忆 global/ | 85 |
 | 归档 archive/ | 180（bug-fixes 123 + pitfalls 54 + methodology 1 + user-context 1 + README） |
-| **合计** | **279** |
+| **合计** | **286** |

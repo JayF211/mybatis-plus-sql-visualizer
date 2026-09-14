@@ -218,7 +218,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
 > 从本地记忆系统归档的已完成/已交付内容（180 个文件，2026-09-14 第八次精简后），不再每次会话加载，按需查阅。
-> 全局通用记忆（78 个）备份在 `~/.zcode/cli/memories/global/`。
+> 全局通用记忆（85 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
@@ -242,14 +242,14 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 产品介绍 / 使用说明 | `README.md`（产品定位、功能特性、截图、已知差异） |
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
 | 已修复 Bug / 已解决踩坑（归档） | `docs/memory-archive/README.md` |
-| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（78 个文件，手动查阅） |
+| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（85 个文件，手动查阅） |
 | 记忆精简规范 | `docs/记忆精简规范.md`（分类标准、归档流程、数量基线） |
 
 ## 变更记录
 
 | 日期 | 变更 |
 |------|------|
-| 2026-09-14 | 记忆第八次精简（31→21）：新增 8 个归档（bug-fixes：T-RollbackSql 预览回滚 SQL、T-CrudColor 颜色标记、dev×CrudColor 双合并交付、T-M56-00/T-M56-01 两期交付、dev→master 丢功能审计历史台账；pitfalls：runIde/hotswap 职责分离定案、K2J 陈旧产物劫持六犯实录——标准前置清 build 精华收编 pitfall-regression-false-failure-flakes）；2 个升级 global（pitfall-wira-not-in-readaction WIRA 锁嵌套、pitfall-workbuddy-ai-sandbox-eats-nested-refs 沙盒吞嵌套 ref）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-14/`；项目 memory 降至 21 个文件（含 MEMORY.md），archive 增至 180 个文件，global 增至 78 个文件 |
+| 2026-09-14 | 记忆第八次精简（31→21）：新增 8 个归档（bug-fixes：T-RollbackSql 预览回滚 SQL、T-CrudColor 颜色标记、dev×CrudColor 双合并交付、T-M56-00/T-M56-01 两期交付、dev→master 丢功能审计历史台账；pitfalls：runIde/hotswap 职责分离定案、K2J 陈旧产物劫持六犯实录——标准前置清 build 精华收编 pitfall-regression-false-failure-flakes）；9 个升级 global（WIRA 锁嵌套、WorkBuddy 沙盒吞嵌套 ref、能力验证对照实验、win32 中文乱码/tsx 验证、GLM/阿里云/dots-nova 线路、ZCode 模型配置位置——后 7 个来自文档站与管理后台仓库，两仓库同日各自完成首次记忆精简：文档站 28→23、管理后台 17→10）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-14/`（三个项目同惯例）；本项目 memory 降至 21 个文件（含 MEMORY.md），archive 增至 180 个文件，global 增至 85 个文件 |
 | 2026-09-14 | T-TestGuard / T-TestPerf 测试守卫补全与全量提速（分支 feature/t-testguard-perf）：三族约定守卫（bundle parity / plugin.xml 结构 / 禁用 API 扫描）+ 零覆盖补测 9 文件 + 渲染器冻结守卫 + exists/settings 守卫 + 14 死测试复活；守卫当场抓获 en/zh bundle 幽灵键×2、拦截器模板 `${'$'}{'$'}Proxy` 转义死代码、planner EOF 不收口、4 处 browse 缺沙盒短路（新增 SafeBrowser 收口）。提速：build cache 关闭、configuration cache 复活（两大防坑开关惯例作废）、分片自动分区双开终端真并行；纯逻辑并行分桶否决（68 例隐性平台依赖实证）。全量 `./gradlew test` 裸命令 3968/0/0/6 绿 4m03s（快 28%）。详见 docs/变更记录.md 同日行 |
 | 2026-09-13 | dev 与 t-crudcolor 两分支合并 master（T-MergeDevCrudcolorIntoMaster，merge a5d9307 + 8d2c919）：先合 t-crudcolor（7 提交，仅 3 docs 冲突并集）再合 dev（119 提交，13 文件冲突按 merge-tree 串联预演逐块定案）。核心融合：两渲染器=dev 组件池骨架（T-ListMode 行数伸缩）× T-CrudColor 色条 WEST+动态描边（normalBorder 已含 matte 分隔线）；ConvertToSqlAction 取 dev T-Perf-14 全后台结构、调用换 master `Row.of`（displayText 已删）；T-AutoFold applyTo 移入 applyConversion（dev 把 computeConversion 重构为后台纯计算）；市场页文案取 master 定稿。适配修复：T-SelToggle 弹窗测试复选框改递归收集（CrudColor 图例行面板）。**踩坑：clean 全量首跑 503 假失败**=build cache 命中陈旧 compileTestKotlin 产物（ColumnInfo 8 参旧合成构造器 vs dev M39/T-J18 的 13 参新形态，NoSuchMethodError），删 build + `--no-build-cache` 即绿——K2J 陈旧类坑的 build-cache 变体。最终 clean 全量 3880/0/6 绿（303 类）；verifyPlugin 三目标 Compatible；buildPlugin 出 2026.9.14-beta.1.zip。特征符号终审双侧在位；备份锚点 master-backup-pre-dev-merge-20260913。详见 docs/变更记录.md 同日行 |
 | 2026-09-13 | 记忆第七次精简（43→29）：新增 12 个归档（bug-fixes：T-DynUpdate 免重启热替换、T-PickMpjErr 与 T-SQL2Java 同笔双档、dev→r2 与 master→dev 两轮合并交付、T-AutoFold、T-CrudSql、产品标语定稿、JOIN 图原生框架历程、CoolRequest/DebugTools agent 调研、架构文档 dev 同步）；1 个通用方法论升级 global（pitfall-subagent-claims-verify 子代理断言先证伪）；2 个收编合并（分支目录抹除事故并入 WorkBuddy 事故记忆、架构文档分支同步定案并入 project-doc-conventions）；精简前全量备份 `~/.zcode/cli/memories/projects/.../memory-backup-2026-09-13/`；项目 memory 降至 29 个文件（含 MEMORY.md），archive 增至 172 个文件，global 增至 76 个文件 |
