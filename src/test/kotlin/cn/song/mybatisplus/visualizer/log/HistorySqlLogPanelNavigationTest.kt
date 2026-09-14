@@ -271,6 +271,12 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
                 cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE,
                 panel.sqlListFixedCellHeightForTest != -1,
             )
+            // T-MergeFollowup-03：模式切换改走 applySqlSearch 全量重建（repaint 不重算 JList 行高布局缓存）
+            assertEquals(
+                "模式切换后二级列表条目应经全量重建保持不丢",
+                1,
+                panel.sqlListEntries.size,
+            )
         } finally {
             panel.dispose()
         }

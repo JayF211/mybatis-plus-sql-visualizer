@@ -468,9 +468,12 @@ class SqlLogPanel(
                 updateHistoryTabVisibility()
                 // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
                 // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
-                // T-ListMode：模式可能被历史面板 combo 改变——回同步本面板下拉选中态 + 行高随模式重设
+                // T-ListMode：模式可能被历史面板 combo 改变——回同步本面板下拉选中态 + 行高随模式重设。
+                // T-MergeFollowup-03：行高模型变更（固定↔可变切换）后 list 布局缓存须 revalidate 失效，
+                // 否则固定行高框内画新多行内容呈重叠挤压（历史页 onDisplayModeChanged 同款修复）
                 syncDisplayModeCombo()
                 applyListCellHeight()
+                list.revalidate()
                 refreshList()
                 // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
                 // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 是 lazy）

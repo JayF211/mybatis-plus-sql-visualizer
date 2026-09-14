@@ -129,14 +129,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
     internal val sqlListFixedCellHeightForTest: Int get() = sqlList.fixedCellHeight
 
-    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 回同步 combo + 二级可见时重绘。
-     *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。 */
+    /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 回同步 combo + 二级可见时全量重建。
+     *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。
+     *  T-MergeFollowup-03：模式切换后 JList 的行高布局缓存（固定→可变切换）必须 revalidate 失效，
+     *  仅 repaint 时旧行高框内画新多行内容即呈「文字重叠/间距挤压」；且 repaint 改走 [applySqlSearch]
+     *  全量重建（model 全量变更触发 layoutState 重算，双保险）。 */
     internal fun onDisplayModeChanged() {
         syncingDisplayModeCombo = true
         displayModeCombo.selectedIndex = PluginSettings.getInstance().sqlListDisplayMode().ordinal
         syncingDisplayModeCombo = false
         applySqlListCellHeight()
-        if (currentFile != null) sqlList.repaint()
+        sqlList.revalidate()
+        if (currentFile != null) applySqlSearch()
     }
 
     /**
