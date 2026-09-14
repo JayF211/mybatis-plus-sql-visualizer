@@ -131,3 +131,18 @@
 | 特征符号终审 | dev 侧（EntrySourceMatcher / renderExplainStatement / feedback 包 / SqlListDisplayMode 等）与 master 侧（SqlListTypeColor / SqlAutoFoldPlanner / CrudSql 全家等）全部在位 |
 
 自动化未覆盖、需按本文档 §三 真机走查：颜色标记视觉效果、gutter 右键菜单、EXPLAIN 真实数据源执行、显示模式切换观感。
+
+---
+
+## 六、2026-09-14 修复轮增量（T-MergeFollowup，首轮走查反馈四缺陷）
+
+首轮真机走查反馈四缺陷已修复（计划与实施记录见 `docs/开发计划/20260914-0949-T-MergeFollowup-合并后真机反馈四缺陷-开发计划.md` §六），复查时按下表执行：
+
+| 缺陷 | 修复后验收要点 | 状态 |
+|------|---------------|------|
+| 预览弹窗无「执行计划」按钮 | 按钮行出现「执行计划」（竖向排列与刷新之间），点击按方言出真实执行计划 | ✅ 已修复 |
+| gutter 右键无反应 | MP Wrapper 锚点图标右键弹「预览 SQL / 最近执行记录」两项目菜单（根因=243 平台右键只走 `getRightButtonClickAction` API，原实现在 navigationHandler 判右键永远收不到事件） | ✅ 已修复，真机点击复查 |
+| 显示模式多次切换后列表文字重叠/间距挤压 | 历史页与日志页三模式循环切换 ×10 渲染正常（根因=切换后 JList 行高布局缓存未失效，已 revalidate + 全量重建） | ✅ 已修复，真机复查 |
+| 显示模式下拉样式非 IDEA 原生 | 两面板下拉换平台 ComboBoxAction（Git 分支切换器同款下拉按钮，按钮文本随当前模式、菜单内当前项高亮）；窄侧栏下按钮可见性顺带复查 | ✅ 已修复，真机复查 |
+
+补充说明：窄侧栏下模式下拉「不见」经用户确认实为 WrapLayout 折行到第二行（拓宽侧边栏可见），非丢失缺陷；原生化后按钮组件变窄，折行概率下降。

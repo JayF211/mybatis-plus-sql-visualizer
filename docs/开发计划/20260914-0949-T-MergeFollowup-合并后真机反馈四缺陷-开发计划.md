@@ -93,6 +93,24 @@
 4. 日志页：同上；窄侧栏（~570px）与宽侧栏两档宽度下拉可见性
 5. 颜色标记 × 三显示模式组合抽查（合并渲染融合面）
 
-## 六、实施记录（回填）
+## 六、实施记录（2026-09-14 回填）
 
-（待实施后回填：取证结论、逐项修复提交、测试计数、真机复查结果。）
+### 交付提交（四笔）
+
+1. **T-MergeFollowup-01 EXPLAIN 恢复**：`toolbar()` 竖向排列与刷新之间补回 `add(smallButton(panel.explain) { explainSql() })`，过时注释改指本任务号；`SqlPreviewTopRowLayoutTest.test直显按钮集合` 直显断言加 `panel.explain`。
+2. **T-MergeFollowup-02 gutter 右键根治**：javap `app-client.jar` 实证 243 平台 `GutterIconRenderer.getRightButtonClickAction()` 基类恒 `aconst_null`（返回 null）且 `LineMarkerGutterIconRenderer` 未覆写——平台在事件分发层就把右键分流走该 API，M37.1 的 navigate 内判右键永远收不到事件。修复=getLineMarkerInfo 返回匿名 `LineMarkerInfo` 覆写 `createGutterRenderer()` 返回自定义 renderer 覆写 `getRightButtonClickAction()`，新增 `SqlGutterRightClickAction`（AnActionEvent.inputEvent → MouseEvent）→ `SqlGutterNavigationHandler.onRightClick`（共享 200ms 防抖窗口与菜单逻辑）。Kotlin 嵌套类 import 注意：`LineMarkerInfo.LineMarkerGutterIconRenderer`。
+3. **T-MergeFollowup-03 切换错乱**：`HistorySqlLogPanel.onDisplayModeChanged` 补 `sqlList.revalidate()` 且二级列表由 repaint 改 `applySqlSearch()` 全量重建（model 全量变更触发 layoutState 重算双保险）；`SqlLogPanel` settingsListener 同步补 `list.revalidate()`（refreshList 增量路径在行高模型变更后不触发布局失效）。渲染器 grep 核实零 setFont——截图「字体大小不一」系重叠绘制视觉假象。防回归断言：模式切换后二级条目经全量重建不丢（HistorySqlLogPanelNavigationTest）。
+4. **T-MergeFollowup-04 下拉原生化**：新增共享 `SqlListDisplayModeComboBoxAction`（`com.intellij.openapi.actionSystem.ex.ComboBoxAction`——注意包路径 ex；javap 实证 `createCustomComponent(presentation, place)`/`getPreselectCondition()`），按钮文本随当前模式、菜单内当前项高亮；双面板 `createCustomComponent(templatePresentation, MAIN_TOOLBAR)` 创建原生 ComboBoxButton；同步链简化为 presentation 文本单向同步（弃 syncingDisplayModeCombo 防重入守卫——点菜单项写设置广播、按钮文本由监听统一 syncFromSettings，天然无环）。测试断言 selectedIndex→按钮文案。
+
+### 门禁
+
+- 全量 clean test `--no-build-cache`：**3968/0/6 绿**（基线 3880 + dev 合并带入测试与本轮新增断言，0 失败）
+- **verifyFull/buildPlugin 未跑**（用户口径 2026-09-14 定案：verifyPlugin 三目标校验与发行包构建仅发版前或大功能时执行，缺陷修复轮全量测试绿即达标；原计划任务因并行会话 T-FeedbackDlg 占用默认沙盒触发隔离守卫失败，顺势取消）
+- 工程坑：`ComboBoxAction` 在 `actionSystem.ex` 子包（首写主包 Unresolved）；gutter renderer 嵌套类 import 须 `LineMarkerInfo.LineMarkerGutterIconRenderer`
+
+### 遗留与真机复查（§五清单执行）
+
+- gutter 右键修复为平台 API 正解（字节码级根因实锤），但弹窗交互仍需 runIde 真机点击验证（headless 无法覆盖平台事件分发）。
+- 切换错乱修复后需真机三模式循环切换复查（截图对比）。
+- 下拉原生化后窄侧栏折行可见性复查（ComboBoxButton 单组件较 JComboBox 窄，折行概率下降；仍建议复查）。
+- 计划外发现：`git add -A` 曾把并行会话的调研文档捎带进 01 提交，已 reset 拆分（调研文档恢复未跟踪状态）。
