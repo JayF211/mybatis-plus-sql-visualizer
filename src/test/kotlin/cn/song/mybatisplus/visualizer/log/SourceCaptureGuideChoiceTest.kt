@@ -61,6 +61,15 @@ class SourceCaptureGuideChoiceTest : BasePlatformTestCase() {
         assertTrue("success 文案参数未全部就位：$formatted", !formatted.contains("{0}") && !formatted.contains("{1}") && !formatted.contains("{2}"))
     }
 
+    fun test多模块聚合成功键有真实文案() {
+        // T-JumpPath-04：successMulti 四参（模块数、模块清单、两个文件名），双语 parity 由守卫测试兜底
+        val formatted = MpSqlVisualizerBundle.message(
+            "log.inject.successMulti", "2", "mod-a、mod-b", "SqlSourceInterceptor.java", "SqlVisualizerConfig.java",
+        )
+        assertNotEquals("log.inject.successMulti", formatted)
+        assertTrue("successMulti 文案参数未全部就位：$formatted", (0..3).none { formatted.contains("{$it}") })
+    }
+
     fun testMP计数纯提示文案不含拦截器引导语义() {
         // 防回归：NoSource（MP COUNT）文案若被改回「未记录源码位置」类表述，会与 MissingSource 引导混淆
         val text = MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource")
