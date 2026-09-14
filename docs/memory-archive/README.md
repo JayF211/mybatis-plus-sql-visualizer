@@ -3,17 +3,23 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（76 个通用文件）
-> **项目记忆**：保留 28 个核心文件 + MEMORY.md 索引（第七次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（78 个通用文件）
+> **项目记忆**：保留 20 个核心文件 + MEMORY.md 索引（第八次精简后）
 
 ---
 
-## 已修复 Bug（117 个）
+## 已修复 Bug（123 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [t-rollbacksql-plan.md](bug-fixes/t-rollbacksql-plan.md) | 预览回滚 SQL 按钮交付（r2 分支，F1~F6）：262 连接 API 不可达走快照粘贴半自动降级、JSqlParser 5.3 四坑、整行谓词恒 Partial；分支债归第三轮竞品对比跟踪 |
+| [t-crudcolor-plan.md](bug-fixes/t-crudcolor-plan.md) | SQL 日志/历史列表 CRUD 类型颜色标记（44 例，2026-09-13 合入 master）：色条/整行淡背景/关闭三选一 + 四色自定义 + 2px 描边选中态 |
+| [t-mergedevcrudcolor-delivery.md](bug-fixes/t-mergedevcrudcolor-delivery.md) | dev 与 t-crudcolor 两步真 merge master（a5d9307+8d2c919）：master 吸收 dev 全部 119 提交成全功能超集、渲染器组件池×色条融合四定式 |
+| [t-m56-00-delivery.md](bug-fixes/t-m56-00-delivery.md) | M56 消费端先导（feature/t-m56-00-consumer）：条目四字段+AGENT 来源/标记行 3~5 段/pd 载荷扩展回环/聚焦过滤层 |
+| [t-m56-agent-delivery.md](bug-fixes/t-m56-agent-delivery.md) | M56 agent 字节码通道一期（feature/t-m56-01-agent-base）：fat jar/attach 门禁 JDK17+JDK8 双目标实测/IDE 集成/consoleFilterProvider EP 双轨 |
+| [branch-port-loss-audit.md](bug-fixes/branch-port-loss-audit.md) | dev→master 人工移植丢功能全量审计（假开关 4/缺失 9/带病 9）——2026-09-13 真合并 master 后全部回合清账，仅存历史价值 |
 | [project-dynupdate-hotswap.md](bug-fixes/project-dynupdate-hotswap.md) | 自更新免重启热替换交付（master 0fbd13b）：五入口反射+跨版本签名护栏；「未完全卸载」警告=GC 时机非泄漏 |
 | [t-pickmpjerr-delivery.md](bug-fixes/t-pickmpjerr-delivery.md) | SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT 根治（master 7218078）：generateCodeOrReport 单点收口 |
 | [t-sql2java-regenerate-uncaught.md](bug-fixes/t-sql2java-regenerate-uncaught.md) | 同一笔修复的过程记忆（预览读断言连刷=旧构建，堆栈无 WIRA lambda 帧=判据） |
@@ -219,10 +225,12 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（52 个）
+## 已解决踩坑（54 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [feedback-runide-hotswap-separation.md](pitfalls/feedback-runide-hotswap-separation.md) | hotswap 服务只挂 runIdeHotSwap、普通 runIde 绝不拉副作用（用户定案 a274e30）——辅助服务按任务职责挂载，不为「点错配置」兜底 |
+| [pitfall-k2j-stale-classes-hijack.md](pitfalls/pitfall-k2j-stale-classes-hijack.md) | K2J 期 build/classes/java/main 陈旧类劫持编译/运行六犯实录——标准前置动作（加 internal 新函数与合并后首跑先清 build/classes+build/kotlin）已收编 pitfall-regression-false-failure-flakes |
 | [pitfall-swing-html-list-renderer.md](pitfalls/pitfall-swing-html-list-renderer.md) | JList+JLabel-HTML 每次 O(N) BasicHTML 解析冻 EDT——根治 SimpleColoredComponent 片段 + 固定行高 |
 | [pitfall-vfs-refresh-write-intent-lock.md](pitfalls/pitfall-vfs-refresh-write-intent-lock.md) | 262 EDT ReadAction 包同步 VFS refresh 硬抛——须 WriteIntentReadAction（27ccfcf） |
 | [pitfall-test-sandbox-browser-leak.md](pitfalls/pitfall-test-sandbox-browser-leak.md) | 测试沙盒 HelpAction 降级分支 BrowserUtil 弹宿主真机浏览器——isUnitTestMode 守卫（56df6d6） |
@@ -277,7 +285,7 @@
 
 ---
 
-## 全局通用记忆（76 个）
+## 全局通用记忆（78 个）
 
 > 已复制到 `~/.zcode/cli/memories/global/`，跨项目复用。
 
@@ -291,13 +299,15 @@
 
 **第七次精简升级（2026-09-13，1 个）**：pitfall-subagent-claims-verify（子代理断言先证伪）
 
+**第八次精简升级（2026-09-14，2 个）**：pitfall-wira-not-in-readaction（ReadAction 内开 WIRA 硬抛、WIRA-in-WIRA 合法）/ pitfall-workbuddy-ai-sandbox-eats-nested-refs（WorkBuddy AI 沙盒吞嵌套 ref 事故与恢复法）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 29（含 MEMORY.md） |
-| 全局记忆 global/ | 76 |
-| 归档 archive/ | 172（bug-fixes 117 + pitfalls 52 + methodology 1 + user-context 1 + README） |
-| **合计** | **277** |
+| 项目 memory（保留） | 21（含 MEMORY.md） |
+| 全局记忆 global/ | 78 |
+| 归档 archive/ | 180（bug-fixes 123 + pitfalls 54 + methodology 1 + user-context 1 + README） |
+| **合计** | **279** |
