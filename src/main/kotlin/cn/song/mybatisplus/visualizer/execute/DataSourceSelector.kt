@@ -82,6 +82,8 @@ object DataSourceSelector {
 
     /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。 */
     private var cachedTempPsiFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+    /** T-PreviewExecDs-02 F1：缓存归属项目名（跨项目拒绝诊断用，与 cachedTempPsiFile 同生命周期）。 */
+    private var cachedTempPsiProjectName: String? = null
 
     /**
      * T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（stage 标识或异常摘要），
@@ -292,7 +294,7 @@ object DataSourceSelector {
                 runners.firstOrNull { getRunnerName(it) == last }?.let { matched ->
                     LOG.info("[M36] silent reuse last runner: $last")
                     chosenRunnerName = last
-                    runRunner(matched, silent = true, onError)
+                    runRunner(project, matched, silent = true, onError)
                     callback?.invoke(true)
                     return
                 }
@@ -312,7 +314,7 @@ object DataSourceSelector {
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
                 LOG.info("[M36] single runner, run directly")
                 chosenRunnerName = getRunnerName(runners.first())
-                runRunner(runners.first(), silent = !executeAfterPrepare, onError)
+                runRunner(project, runners.first(), silent = !executeAfterPrepare, onError)
                 callback?.invoke(true)
             }
             else -> {
@@ -326,7 +328,7 @@ object DataSourceSelector {
                     if (runner != null) chosenRunnerName = getRunnerName(runner)
                     callback?.invoke(runner != null)
                     // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                    if (runner != null) runRunner(runner, onError = onError)
+                    if (runner != null) runRunner(project, runner, onError = onError)
                 }
             }
         }
@@ -1202,7 +1204,18 @@ object DataSourceSelector {
             LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-            onError?.invoke(cause.message ?: cause.toString())
+            // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
+            // 特判，见 prepareAfterEditorResolved onFailure）
+            if (cause is com.intellij.util.IncorrectOperationException &&
+                cause.message?.contains("already been disposed") == true
+            ) {
+                LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: ${cause.message?.take(120)}")
+                clearPrepared()
+                dropSharedConsole()
+                onError?.invoke(MpSqlVisualizerBundle.message("execute.console.disposed"))
+            } else {
+                onError?.invoke(cause.message ?: cause.toString())
+            }
         }
     }
 
@@ -1225,6 +1238,32 @@ object DataSourceSelector {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val consoleClass = Class.forName(CONSOLE_CLASS)
+
+            // T-PreviewExecDs-03 F2：getScriptModel 前 isValid 预检 + 三分量诊断——attach 后
+            // console 可能已被 getActiveConsoles 清扫（isValid=false，依赖 facade 数据源加载状态，
+            // 见开发计划 §2.2 反编译实锤）。disposed 直接快速失败（等待无意义，F3 自愈清缓存）；
+            // 未 disposed 但分量失效时，非 EDT 上有界重查等 facade 异步窗口，EDT 不阻塞直走
+            // （getScriptModel 若撞上清扫由 F3 特判接管）。
+            val initialValidity = probeConsoleValidity(console, project, LOG)
+            if (initialValidity != null && initialValidity.disposed) {
+                LOG.warn("[M36] console DISPOSED right after attach: $initialValidity")
+                throw IllegalStateException(MpSqlVisualizerBundle.message("execute.console.disposed"))
+            }
+            if (initialValidity != null && !initialValidity.valid &&
+                !ApplicationManager.getApplication().isDispatchThread
+            ) {
+                runCatching {
+                    repeat(3) { attempt ->
+                        Thread.sleep(300)
+                        val v = probeConsoleValidity(console, project, LOG)
+                        if (v != null && v.valid) {
+                            LOG.info("[M36] console valid after retry (attempt=${attempt + 1})")
+                            return@repeat
+                        }
+                    }
+                }
+                LOG.warn("[M36] console still invalid after bounded retry: ${probeConsoleValidity(console, project, LOG)}")
+            }
 
             // 3. scriptModel + execOption
             val scriptModel = consoleClass.getMethod("getScriptModel").invoke(console)
@@ -1560,9 +1599,61 @@ object DataSourceSelector {
             LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-            onError?.invoke(cause.message ?: cause.toString())
+            // T-PreviewExecDs-03 F3：console 已被 getActiveConsoles 清扫（Disposer.register 撞
+            // 已 dispose 父节点抛 IncorrectOperationException）→ 清单例缓存（否则下轮执行复用
+            // dead 缓存继续失败）+ 可读文案，不再透平台异常长串。
+            if (cause is com.intellij.util.IncorrectOperationException &&
+                cause.message?.contains("already been disposed") == true
+            ) {
+                LOG.warn("[M36] console disposed during prepare (swept by getActiveConsoles), clear caches for retry: ${cause.message?.take(120)}")
+                clearPrepared()
+                dropSharedConsole()
+                onError?.invoke(MpSqlVisualizerBundle.message("execute.console.disposed"))
+            } else {
+                onError?.invoke(cause.message ?: cause.toString())
+            }
         }
     }
+
+    /**
+     * T-PreviewExecDs-03 F2：console 有效性的三分量快照（反编译实锤 `isValid` =
+     * `!isDisposed && isViewValid && facade.findDataSource(dataSource.uniqueId) != null`）。
+     * 任何一环为 false 即可能被 `getActiveConsoles` 清扫 dispose——日志/自愈判定共用。
+     */
+    internal data class ConsoleValidity(
+        val disposed: Boolean,
+        val viewValid: Boolean?,
+        val dsInFacade: Boolean?,
+    ) {
+        val valid: Boolean get() = !disposed && viewValid != false && dsInFacade != false
+        override fun toString(): String = "disposed=$disposed, viewValid=$viewValid, dsInFacade=$dsInFacade, valid=$valid"
+    }
+
+    /** T-PreviewExecDs-03 F2：反射探测 console 三分量有效性（任一环节失败降级 null，绝不阻断）。 */
+    private fun probeConsoleValidity(console: Any, project: Project, LOG: com.intellij.openapi.diagnostic.Logger): ConsoleValidity? =
+        runCatching {
+            val consoleClass = Class.forName(CONSOLE_CLASS)
+            val disposed = runCatching {
+                // 243 平台仅 Disposable 版本（标 deprecated），无 Object 重载——cast + suppress
+                @Suppress("DEPRECATION")
+                (console as? com.intellij.openapi.Disposable)
+                    ?.let { com.intellij.openapi.util.Disposer.isDisposed(it) } ?: false
+            }.getOrDefault(false)
+            val viewValid = runCatching {
+                consoleClass.getMethod("isViewValid").invoke(console) as? Boolean
+            }.getOrNull()
+            val dsInFacade = runCatching {
+                val ds = consoleClass.getMethod("getDataSource").invoke(console) ?: return@runCatching null
+                val id = ds.javaClass.getMethod("getUniqueId").invoke(ds) as? String ?: return@runCatching null
+                val facade = Class.forName("com.intellij.database.psi.DbPsiFacade")
+                    .getMethod("getInstance", Project::class.java).invoke(null, project)
+                facade.javaClass.getMethod("findDataSource", String::class.java)
+                    .invoke(facade, id) != null
+            }.getOrNull()
+            ConsoleValidity(disposed, viewValid, dsInFacade)
+        }.onFailure { e ->
+            LOG.warn("[M36] probeConsoleValidity FAILED: ${e.message}")
+        }.getOrNull()
 
     /**
      * M36.5.24g：dumb 退出后重建 console 的 scriptModel——在 **DBN SqlDialectPusher 的 dialect push
@@ -2722,7 +2813,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     }.getOrNull() ?: false
 
     /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板行内回调 + 按 silent 决定是否模态引导。 */
-    private fun runRunner(runner: Any, silent: Boolean = false, onError: ((String) -> Unit)? = null) {
+    // T-PreviewExecDs-02 F4：显式传 project——失败路径曾用 openProjects.firstOrNull() 清 last-used
+    // /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。
+    private fun runRunner(project: Project, runner: Any, silent: Boolean = false, onError: ((String) -> Unit)? = null) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
             val method = runner.javaClass.getMethod("run")
@@ -2738,16 +2831,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             val failMsg = MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString())
             onError?.invoke(failMsg)
             if (silent) {
-                val proj = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
-                if (proj != null) {
-                    runCatching {
-                        com.intellij.ide.util.PropertiesComponent.getInstance(proj).unsetValue(LAST_RUNNER_KEY)
-                    }
+                runCatching {
+                    com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(LAST_RUNNER_KEY)
                 }
                 return
             }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
-            val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
             com.intellij.openapi.ui.Messages.showErrorDialog(
                 project,
                 failMsg,
@@ -2761,8 +2850,16 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      */
     private fun showRunnerPopup(project: Project, runners: List<Any>, callback: (Any?) -> Unit) {
         val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
+        // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
+        // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
+        val multiProject = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.size > 1
+        val title = if (multiProject) {
+            MpSqlVisualizerBundle.message("execute.datasource.select.in", project.name)
+        } else {
+            MpSqlVisualizerBundle.message("execute.datasource.select")
+        }
         val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem>(
-            MpSqlVisualizerBundle.message("execute.datasource.select"),
+            title,
             items,
         ) {
             override fun getTextFor(value: RunnerItem): String = value.name
@@ -2839,13 +2936,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         // T-PreviewFlash：EDT 同步 VFS refresh + PsiManager.findFile 已被跨点击缓存吸收——
         // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
         // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
-        cachedTempPsiFile?.let { (vf, psi) ->
-            if (vf.isValid) {
-                LOG.info("[M36] exec psi cache hit (no VFS refresh): ${vf.name}")
-                return vf to psi
-            }
-            cachedTempPsiFile = null
-        }
+        consumeCachedTempPsiFile(project)?.let { return it }
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 KDoc）；
         // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
         // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
@@ -2866,7 +2957,45 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
         } ?: return fail("findPsi", "PsiManager.findFile null (${vf.name})")
         cachedTempPsiFile = vf to psi
+        cachedTempPsiProjectName = project.name
         return vf to psi
+    }
+
+    /**
+     * T-PreviewExecDs-02 F1：消费 exec 临时文件 vf+psi 缓存——可用（归属当前项目且 vf 有效）
+     * 返回配对，否则清缓存返回 null（走冷路径重建）。抽 internal 供跨项目隔离测试直测。
+     * 跨项目泄漏实锤见开发计划 §2.2：旧实现只查 vf.isValid，在 B 项目执行时返回 A 项目的
+     * vf+psi → runner 按 A 项目 facade 枚举数据源 → 弹窗显示另一项目数据源 → console 因
+     * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
+     */
+    internal fun consumeCachedTempPsiFile(project: Project): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        return cachedTempPsiFile?.let { (vf, psi) ->
+            if (isCacheUsable(project, vf)) {
+                LOG.info("[M36] exec psi cache hit (no VFS refresh): ${vf.name}")
+                vf to psi
+            } else {
+                // 跨项目/失效命中——弃缓存，禁止把别项目的 vf+psi 当当前项目用
+                if (cachedTempPsiProjectName != null && cachedTempPsiProjectName != project.name) {
+                    LOG.warn("[M36] exec psi cache REJECTED across project (cached=${cachedTempPsiProjectName}, current=${project.name}), rebuild")
+                }
+                cachedTempPsiFile = null
+                cachedTempPsiProjectName = null
+                null
+            }
+        }
+    }
+
+    /**
+     * T-PreviewExecDs-02 F1：exec 临时文件 vf+psi 缓存是否对当前项目可用——既要 vf 有效，
+     * 也要 vf 归属当前项目（basePath 前缀）。跨项目泄漏根因修复的判定纯函数（表驱动单测）。
+     */
+    internal fun isCacheUsable(project: Project, vf: com.intellij.openapi.vfs.VirtualFile): Boolean {
+        if (!vf.isValid) return false
+        val base = project.basePath ?: return false
+        val nBase = com.intellij.openapi.util.io.FileUtil.toSystemIndependentName(base).trimEnd('/')
+        val nPath = com.intellij.openapi.util.io.FileUtil.toSystemIndependentName(vf.path)
+        return nPath.startsWith("$nBase/")
     }
 
     /**
@@ -2995,10 +3124,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         }
         checkNotNull(psi) { "markCachedTempPsiFileForTest: findFile null for ${vf.name}" }
         cachedTempPsiFile = vf to psi
+        cachedTempPsiProjectName = project.name
     }
 
     /** T-ExecCopyFix F2c 测试缝：清缓存槽（测试隔离收尾）。 */
     internal fun clearCachedTempPsiFileForTest() {
         cachedTempPsiFile = null
+        cachedTempPsiProjectName = null
     }
 }

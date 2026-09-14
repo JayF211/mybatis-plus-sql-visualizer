@@ -5,6 +5,8 @@ import cn.song.mybatisplus.visualizer.generator.CrudKind
 import cn.song.mybatisplus.visualizer.generator.CrudSqlGenerator
 import cn.song.mybatisplus.visualizer.generator.CrudTableSpec
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 
 /**
  * T-CrudSql 修复验证：CrudSqlGenerator 产出的 PreviewResult 必须能被 SqlPreviewPanel.showResult
@@ -52,6 +54,22 @@ class CrudSqlPreviewPanelRenderTest : BasePlatformTestCase() {
         try {
             val text = panel.editorForTest()?.document?.text
             assertTrue("rendered text=$text", text?.contains("SELECT") == true && text?.contains("user") == true)
+        } finally {
+            disposeQuietly(panel)
+        }
+    }
+
+    /**
+     * T-PreviewExecDs-01d：降级链第二级（内存 PSI 预览）的创建前提——PsiFileFactory
+     * .createFileFromText 在项目 fixture 下必须产出非空 PsiFile（无 VFS 文件但补全载体可用）。
+     * 项目内预览文件预热失败时 createEditor 借此保留补全/注释，不再一步掉到裸 document。
+     */
+    fun testInMemoryPreviewPsiAvailableAsFallback() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val psi = panel.createPreviewFileForTest(project, "SELECT 1 FROM user")
+            assertNotNull("内存 PSI 降级产物不应为 null", psi)
+            assertTrue("内存 PSI 应含 SQL 文本", psi.text.contains("SELECT"))
         } finally {
             disposeQuietly(panel)
         }

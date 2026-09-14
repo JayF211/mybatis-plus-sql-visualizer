@@ -189,6 +189,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。 */
     @Volatile
     private var previewDisposed = false
+    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    @Volatile
+    private var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -385,22 +388,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private fun prewarmPreviewTempFile() {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         ApplicationManager.getApplication().executeOnPooledThread {
             if (previewTempFile != null || previewDisposed) return@executeOnPooledThread
             runCatching {
-                val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
-                io.writeText("")
-                io.deleteOnExit()
-                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒录制期实证，
-                // 00:03 SEVERE 根因）——重试一次再判失败；失败置 prewarmFailed 让 await 快速返回，不空等 2s。
+                // T-PreviewExecDs-01a：预览临时文件迁项目内 .idea/sql-visualizer/preview/
+                // ——系统 Temp 不在数据源关联范围，Database 插件不解析（M36.5.12 exec 同教训，
+                // 预览路径此前未跟进；旧实现 09:34:40 起持续预热失败后回退裸文档，补全/注释全灭）。
+                val io = projectPreviewFile() ?: run {
+                    prewarmFailed = true
+                    LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)")
+                    return@executeOnPooledThread
+                }
+                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒
+                // 录制期实证）——旧实现只重试一次仍持续失败（两项目同开 VFS 忙窗口）；T-PreviewExecDs-01b
+                // 加重试到 3 次带退避，失败置 prewarmFailed 让 await 快速返回，不空等预算。
                 val lfs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
                 var vf = lfs.refreshAndFindFileByIoFile(io)
-                if (vf == null) {
-                    Thread.sleep(50)
+                var retries = 0
+                while (vf == null && retries < 3 && !previewDisposed) {
+                    Thread.sleep(100L * (retries + 1))
                     vf = lfs.refreshAndFindFileByIoFile(io)
+                    retries++
                 }
                 if (vf == null) {
                     prewarmFailed = true
+                    LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                     return@executeOnPooledThread
                 }
                 if (previewDisposed) {
@@ -408,15 +421,91 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     return@executeOnPooledThread
                 }
                 val proj = project ?: return@executeOnPooledThread
+                // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
+                // 创建后再映射需 push 重建；exec 路径同款顺序）
+                mapPreviewDialectBeforePsi(proj, vf)
                 val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
                     com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
                 } ?: run {
                     prewarmFailed = true
+                    LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
                 prewarmedTempFile = vf to psi
-            }.onFailure { prewarmFailed = true }
+            }.onFailure { e ->
+                prewarmFailed = true
+                LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+            }
+        }
+    }
+
+    /**
+     * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/mpsql-preview.sql`。
+     * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。文件在项目内容内，Database 插件才能解析
+     * schema 补全/注释。VFS 安全写入三态（document 驱动 > setBinaryContent > FileUtil 兜底），
+     * 杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗（exec 路径 M36.5.13 同款）。
+     */
+    @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun projectPreviewFile(): java.io.File? {
+        val proj = project ?: return null
+        val base = proj.basePath ?: return null
+        val dir = java.io.File(
+            base,
+            ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
+        )
+        if (!dir.exists() && !dir.mkdirs()) return null
+        val f = java.io.File(dir, "mpsql-preview.sql")
+        val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
+        if (existing != null) {
+            val ok = runCatching {
+                com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                    val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                        .getInstance().getDocument(existing)
+                    when {
+                        fileDoc != null -> fileDoc.setText("") // 预热占位空内容，createEditor 装配时按实际 SQL 填充
+                        fileDoc == null -> existing.setBinaryContent("".toByteArray())
+                    }
+                }
+                true
+            }.getOrDefault(false)
+            if (ok) return f
+        }
+        com.intellij.openapi.util.io.FileUtil.writeToFile(f, "")
+        return f
+    }
+
+    /**
+     * T-PreviewExecDs-01c：预览文件方言预映射（exec 路径 DataSourceSelector.mapDialectBeforePsi 同款）——
+     * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。映射匹配与 exec 一致：
+     * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
+     * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
+     * 同 vf 已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+     */
+    private fun mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        if (previewDialectMappedVf?.isValid == true && previewDialectMappedVf === vf) return
+        runCatching {
+            val mappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
+            val mappings = mappingsClass.getMethod("getInstance", Project::class.java).invoke(null, proj)
+            @Suppress("UNCHECKED_CAST")
+            val values = mappingsClass.getMethod("getAvailableValues").invoke(mappings) as? List<Any?>
+            val mysql = values?.firstOrNull {
+                (it as? com.intellij.lang.Language)?.id.equals("MySQL", ignoreCase = true)
+            }
+            if (mysql != null) {
+                mappingsClass.getMethod(
+                    "setMapping",
+                    com.intellij.openapi.vfs.VirtualFile::class.java,
+                    Any::class.java,
+                ).invoke(mappings, vf, mysql)
+                previewDialectMappedVf = vf
+                LOG.info("[M36] preview dialect pre-mapped to MySQL for ${vf.name}")
+            } else {
+                LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)")
+            }
+        }.onFailure { e ->
+            LOG.warn("[M36] preview dialect pre-mapping skipped: ${e.message}")
         }
     }
 
@@ -1667,11 +1756,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
             // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
             // （dev 侧 T-GifRerecord 同题降级版无 ReadAction 包裹，按超集原则整取 master 版。）
+            // T-PreviewExecDs-01d：降级链第二级 = 内存 PSI（PsiFileFactory.createFileFromText，
+            // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
+            // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
             val fallbackDoc = { msg: String ->
-                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-                    .warn("[M36] preview temp file unavailable, fall back to in-memory editor: $msg")
-                psiFile = null
-                EditorFactory.getInstance().createDocument(sql)
+                createInMemoryPreviewPsi(sql) ?: run {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
+                    psiFile = null
+                    EditorFactory.getInstance().createDocument(sql)
+                }
             }
             val doc = runCatching {
                 val (vFile, psi) = awaitPrewarmedTempFile()
@@ -1746,6 +1840,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
+    }
+
+    /**
+     * T-PreviewExecDs-01d：降级链第二级——内存 PSI 预览文档（无项目内 VFS 文件，但保留
+     * [SqlCompletionContext] 补全载体，避免掉到裸 document 后补全/注释全灭）。createFileFromText
+     * 包 ReadAction（T-M42 同机制先例：EDT 直调触发 markGenerated softAssertReadAccess 硬抛）。
+     * 失败返回 null，由调用方回落到第三级裸文档。
+     */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun createInMemoryPreviewPsi(sql: String): com.intellij.openapi.editor.Document? {
+        val proj = project ?: return null
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        return runCatching {
+            val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
+            val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
+                com.intellij.psi.PsiFileFactory.getInstance(proj)
+                    .createFileFromText("mpsql-preview-memory.sql", fileType, sql)
+            }
+            psiFile = psi
+            LOG.info("[M36] in-memory PSI preview document created (len=${sql.length})")
+            com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
+                ?: EditorFactory.getInstance().createDocument(sql)
+        }.onFailure { e ->
+            LOG.warn("[M36] in-memory PSI preview fallback FAILED: ${e.message}")
+            psiFile = null
+        }.getOrNull()
     }
 
     /**
