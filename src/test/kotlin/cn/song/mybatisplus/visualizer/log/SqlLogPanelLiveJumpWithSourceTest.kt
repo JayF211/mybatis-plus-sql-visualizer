@@ -4,14 +4,20 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import java.io.File
 
 /**
- * 实时日志「精确跳转」回归（F-44-6）：[SqlLogPanel] 在条目携带源码位置时，
- * 应走与历史面板一致的 file:line 精确跳转（[LogJumpTarget.Precise]），
- * 而非退化为不可靠的表名搜索；仅在无源码位置时回退表名启发式。
+ * 实时日志「跳转到源码」解析回归（F-44-6 精确跳转 + T-JumpCapture 语义定案）：
+ *
+ * 用户定性「按表名搜索 Wrapper 定位」不可用（同表名 ≠ 同调用点，命中即误导），
+ * [SqlLogPanel.resolveEntryJump] 现仅依赖 [SqlSourceInterceptor] 捕获的源码位置：
+ *  - 携带位置 → Precise（file:line 精确跳转，行号 = sourceLine-1）；
+ *  - 位置指向的文件缺失 → NotFound（仅提示，与拦截器无关）；
+ *  - MP 分页 COUNT 标记 → NoSource（无用户调用点，纯提示，不得引导开拦截器）;
+ *  - 无位置（未开拦截器 / 旧版条目）→ MissingSource（[SourceCaptureGuide] 引导弹框）。
+ *
+ * headless 下不触发 jumpToSource 弹窗副作用，仅断言确定性解析分支。
  */
 class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
 
@@ -77,38 +83,47 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
         }
     }
 
-    fun test无源码位置_回退表名搜索_SearchByTable() {
+    fun testMP分页COUNT标记_NoSource_不引导开拦截器() {
         val panel = SqlLogPanel(project, manager)
         try {
-            val target = panel.resolveEntryJump(entry("SELECT * FROM user u WHERE u.id = 1"))
-            // 无源码位置 → 走原表名启发式（尽力而为，不可靠）
-            assertTrue("无源码位置应回退表名搜索", target is SqlLogPanel.LogJumpTarget.SearchByTable)
-            assertEquals("user", (target as SqlLogPanel.LogJumpTarget.SearchByTable).tableName)
+            val target = panel.resolveEntryJump(entry("SELECT COUNT(*) FROM user", SourceMarkers.MP_PAGINATION_COUNT, 0))
+            assertTrue(
+                "MP 分页 COUNT 应为 NoSource（纯提示），不得判为 MissingSource（引导开拦截器对其无意义）",
+                target is SqlLogPanel.LogJumpTarget.NoSource,
+            )
         } finally {
             panel.dispose()
         }
     }
 
-    fun test无源码位置_无表名_NoTable() {
+    fun test无源码位置_有表名_MissingSource_引导弹框() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            // 旧行为回退表名搜索 SearchByTable，T-JumpCapture 后同输入必须判 MissingSource（防回退复活）
+            val target = panel.resolveEntryJump(entry("SELECT * FROM user u WHERE u.id = 1"))
+            assertTrue("无源码位置应判 MissingSource（引导开启源码捕获）", target is SqlLogPanel.LogJumpTarget.MissingSource)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test无源码位置_无表名_MissingSource() {
         val panel = SqlLogPanel(project, manager)
         try {
             val target = panel.resolveEntryJump(entry("SELECT 1"))
-            assertTrue(target is SqlLogPanel.LogJumpTarget.NoTable)
+            assertTrue("提不到表名同样 MissingSource（不再区分 NoTable）", target is SqlLogPanel.LogJumpTarget.MissingSource)
         } finally {
             panel.dispose()
         }
     }
 
-    fun test旧版条目_sourceFile为null_回退路径不崩() {
-        // 旧版 F-43 保存的实时条目 sourceFile 恒为 null → 必须回退表名搜索，不得 NPE
-        // （headless 下不实际调用 jumpToSourceForTest，因其会触发 Messages 弹窗；仅断言决策分支）
+    fun test旧版条目_sourceFile为null_不崩() {
+        // 旧版 F-43 保存的实时条目 sourceFile 恒为 null → MissingSource，不得 NPE
+        // （headless 下不实际调用 jumpToSourceForTest，因其触发 Messages 弹窗；仅断言决策分支）
         val panel = SqlLogPanel(project, manager)
         try {
             val target = panel.resolveEntryJump(entry("SELECT * FROM t", sourceFile = null, sourceLine = 0))
-            assertTrue(
-                "无源码位置应回退（SearchByTable / NoTable），不得抛异常",
-                target is SqlLogPanel.LogJumpTarget.SearchByTable || target is SqlLogPanel.LogJumpTarget.NoTable,
-            )
+            assertTrue("无源码位置应判 MissingSource，不得抛异常", target is SqlLogPanel.LogJumpTarget.MissingSource)
         } finally {
             panel.dispose()
         }

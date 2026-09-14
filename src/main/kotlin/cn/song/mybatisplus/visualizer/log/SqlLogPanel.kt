@@ -8,7 +8,6 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
@@ -21,13 +20,10 @@ import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
-import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleColoredComponent
@@ -1143,89 +1139,45 @@ class SqlLogPanel(
     // 供 LogEntryListCellRenderer 与 SqlLogPanel 共用。
 
     /**
-     * O-1：日志 ↔ 源码关联跳转的解析结果（internal 供 UI 测试断言「无法跳转」分支，
-     * 避免 headless 下 Messages 弹窗阻塞与后台 ReferencesSearch 的不确定性）：
-     * NoTable=SQL 无表名（无法定位实体）；Proceed=已提取表名，交由后台搜索实体。
+     * F-44-6 / T-JumpCapture：实时日志跳转的统一解析结果。
+     * 跳转完全依赖 [SqlSourceInterceptor] 捕获的源码位置：
+     * 有位置 → 精确 file:line（[Precise]）或文件已失效（[NotFound]）；
+     * MP 分页 COUNT 标记 → [NoSource]（无用户调用点，纯提示）；
+     * 无位置 → [MissingSource]（引导开启源码捕获，[SourceCaptureGuide]）。
      *
-     * 注：实时 SQL 日志来自控制台输出（p6spy/MyBatis/Hibernate），本身不含 file:line
-     * 调用位置，故「跳转到源码」实为「按表名定位对应实体 Wrapper」——与历史面板
-     * （携带 sourceFile/sourceLine）的精确行跳转不同。
-     */
-    internal sealed class LiveJumpResolution {
-        data object NoTable : LiveJumpResolution()
-        data class Proceed(val tableName: String) : LiveJumpResolution()
-    }
-
-    /** 解析日志跳转目标（与 [jumpToSource] 共用；仅做廉价表名提取，不触发 PSI 搜索）。 */
-    internal fun resolveLiveJump(entry: LogSqlEntry): LiveJumpResolution {
-        val tableName = SqlTableExtractor.extractFirst(entry.restoredSql)
-        return if (tableName == null) LiveJumpResolution.NoTable else LiveJumpResolution.Proceed(tableName)
-    }
-
-    /**
-     * F-44-6：实时日志跳转的统一解析结果。优先级高于 [LiveJumpResolution]：
-     * 若条目携带源码位置（由 [SqlSourceInterceptor] 标记注入），直接精确 file:line 跳转；
-     * 否则回退到表名启发式（[LiveJumpResolution]）。
+     * 原「按表名搜索 Wrapper」回退已整体移除：同表名 ≠ 同调用点，命中即误导。
      */
     internal sealed class LogJumpTarget {
         data class Precise(val virtualFile: VirtualFile, val line: Int) : LogJumpTarget()
         data object NoSource : LogJumpTarget()
         data class NotFound(val sourceFile: String) : LogJumpTarget()
-        data class SearchByTable(val tableName: String) : LogJumpTarget()
-        data object NoTable : LogJumpTarget()
+        data object MissingSource : LogJumpTarget()
     }
 
-    /** 统一解析跳转目标：有源码位置 → 精确跳转；否则按表名搜索（尽力而为）。 */
+    /** 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。 */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
-        if (entry.sourceFile != null) {
-            // F-44-7：MP 分页 COUNT 查询特殊标记 → 无源码可跳转
-            if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
-                return LogJumpTarget.NoSource
-            }
-            // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
-            val vf = cn.song.mybatisplus.visualizer.log.SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
-            return if (vf != null) {
-                LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
-            } else {
-                LogJumpTarget.NotFound(entry.sourceFile)
-            }
+        if (entry.sourceFile == null) {
+            return LogJumpTarget.MissingSource
         }
-        return when (val resolution = resolveLiveJump(entry)) {
-            is LiveJumpResolution.NoTable -> LogJumpTarget.NoTable
-            is LiveJumpResolution.Proceed -> LogJumpTarget.SearchByTable(resolution.tableName)
+        // F-44-7：MP 分页 COUNT 查询特殊标记 → 无用户调用点可跳转
+        if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
+            return LogJumpTarget.NoSource
+        }
+        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
+        val vf = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
+        return if (vf != null) {
+            LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
+        } else {
+            LogJumpTarget.NotFound(entry.sourceFile)
         }
     }
 
-    /**
-     * F-44-7：在项目所有源码根目录中搜索文件。
-     * 标记路径（如 cn/example/service/UserService.java）相对于源码根目录，
-     * 需拼接 src/main/java 等前缀才能定位到实际文件。
-     */
-    private fun findSourceFile(relativePath: String): VirtualFile? {
-        // 策略 1：直接在项目根目录查找（兼容历史面板精确跳转）
-        val basePath = project.basePath
-        if (basePath != null) {
-            val direct = LocalFileSystem.getInstance().findFileByPath("$basePath/$relativePath")
-            if (direct != null) return direct
-        }
-        // 策略 2：在所有源码根目录中搜索（兼容 SqlSourceInterceptor 标记路径）
-        val modules = com.intellij.openapi.module.ModuleManager.getInstance(project).modules
-        for (module in modules) {
-            val rootManager = com.intellij.openapi.roots.ModuleRootManager.getInstance(module)
-            for (sourceRoot in rootManager.sourceRoots) {
-                val file = LocalFileSystem.getInstance().findFileByPath("${sourceRoot.path}/$relativePath")
-                if (file != null) return file
-            }
-        }
-        return null
-    }
-
-    /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗/后台搜索）。 */
+    /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
     internal fun jumpToSourceForTest(entry: LogSqlEntry) = jumpToSource(entry)
 
     /**
      * F-44-6：日志 ↔ 源码关联跳转。
-     * 优先精确跳转（条目携带源码位置）；无源码位置时回退「按表名定位实体 Wrapper」。
+     * 仅依赖捕获位置精确跳转；无位置时弹框引导开启源码捕获（T-JumpCapture）。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
         when (val target = resolveEntryJump(entry)) {
@@ -1243,64 +1195,8 @@ class SqlLogPanel(
                     MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile),
                     MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
                 )
-            is LogJumpTarget.SearchByTable -> searchByTable(target.tableName)
-            is LogJumpTarget.NoTable ->
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.noTable"),
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                )
-        }
-    }
-
-    /** 按表名后台搜索实体 Wrapper 并跳转（回退路径，尽力而为）。 */
-    private fun searchByTable(tableName: String) {
-        object : Task.Backgroundable(
-            project,
-            "Searching Wrappers for table \"$tableName\"",
-            false,
-        ) {
-            private var result: WrapperSearchResult = WrapperSearchResult.None
-
-            override fun run(indicator: ProgressIndicator) {
-                indicator.text = "Searching Wrappers..."
-                result = ReadAction.compute<WrapperSearchResult, Throwable> {
-                    WrapperSearchService.search(project, tableName)
-                }
-            }
-
-            override fun onSuccess() {
-                when (val r = result) {
-                    is WrapperSearchResult.Single ->
-                        WrapperSearchService.navigateTo(project, r.candidate)
-                    is WrapperSearchResult.Multiple ->
-                        showCandidateChooser(r.candidates)
-                    is WrapperSearchResult.None ->
-                        Messages.showInfoMessage(
-                            project,
-                            MpSqlVisualizerBundle.message("log.panel.jumpToSource.noWrapper", tableName),
-                            MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                        )
-                }
-            }
-        }.queue()
-    }
-
-    /** 多候选选择弹窗（O-1 Phase A）。 */
-    private fun showCandidateChooser(candidates: List<WrapperCandidate>) {
-        val options = candidates.map {
-            "${it.anchorMethod.name}  (${it.file.name})"
-        }.toTypedArray()
-        val choice = Messages.showChooseDialog(
-            project,
-            MpSqlVisualizerBundle.message("log.panel.jumpToSource.multipleHeader", candidates.size, candidates.first().table.tableName),
-            MpSqlVisualizerBundle.message("log.panel.jumpToSource.multipleTitle"),
-            Messages.getQuestionIcon(),
-            options,
-            options.firstOrNull() ?: "",
-        )
-        if (choice >= 0 && choice < candidates.size) {
-            WrapperSearchService.navigateTo(project, candidates[choice])
+            is LogJumpTarget.MissingSource ->
+                SourceCaptureGuide.showMissingSourceDialog(project)
         }
     }
 

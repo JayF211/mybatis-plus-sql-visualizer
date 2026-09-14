@@ -43,6 +43,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
     }
 
     fun test缺源码位置_nullSource_无法跳转_NoSource() {
+        // T-JumpCapture：NoSource 的生产侧行为 = SourceCaptureGuide 引导弹框（headless 不触弹窗，仅断言解析分支）
         val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = null)
