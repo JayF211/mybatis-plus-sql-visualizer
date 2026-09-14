@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.feedback
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,5 +36,15 @@ class FeedbackReportingContractTest {
         // null（提交载荷里 ideVersion 可空）——两者皆合法，契约是「永不抛异常、不返回空白串」
         val version = FeedbackReporting.ideVersion()
         assertTrue("ideVersion 应为 null 或非空平台名", version == null || version.isNotBlank())
+    }
+
+    @Test
+    fun `错误池归属判定_按插件包名匹配堆栈或消息`() {
+        assertTrue(
+            FeedbackReporting.isPluginError("at cn.song.mybatisplus.visualizer.ui.Foo.bar(Foo.kt:1)", null),
+        )
+        assertTrue(FeedbackReporting.isPluginError(null, "cn.song.mybatisplus.visualizer boom"))
+        assertFalse(FeedbackReporting.isPluginError("at com.intellij.openapi.foo.Bar(Bar.java:1)", "unrelated"))
+        assertFalse(FeedbackReporting.isPluginError(null, null))
     }
 }

@@ -88,4 +88,18 @@ class ErrorReportDialogLayoutTest {
             assertNotEquals("键 $key 缺 bundle 文案（会原样显示键名）", key, MpSqlVisualizerBundle.message(key))
         }
     }
+
+    @Test
+    fun `堆栈行显隐窗口补偿量_勾选撑高取消缩回`() {
+        // 勾选：描述行损失 Δ=(slack+S)/2，撑高 2Δ=slack+S 让描述行分毫不差
+        assertEquals(218, ErrorReportDialog.toggleResizeDelta(true, 700, 670, 188, 0))
+        // 窗口无纵向富余（贴首选高）：只补堆栈行首选高
+        assertEquals(188, ErrorReportDialog.toggleResizeDelta(true, 670, 670, 188, 0))
+        // 取消：按堆栈行实占高（含富余分配）整块释放
+        assertEquals(-280, ErrorReportDialog.toggleResizeDelta(false, 918, 670, -188, 280))
+        // 取消且堆栈行未布局（实占高0）：退化为 preferred 缩减量的负值
+        assertEquals(-188, ErrorReportDialog.toggleResizeDelta(false, 918, 670, -188, 0))
+        // 取消但测不到任何释放量：不动窗口
+        assertEquals(0, ErrorReportDialog.toggleResizeDelta(false, 670, 670, 0, 0))
+    }
 }

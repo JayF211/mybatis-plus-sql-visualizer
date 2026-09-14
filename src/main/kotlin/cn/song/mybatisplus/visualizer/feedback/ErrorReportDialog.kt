@@ -36,13 +36,20 @@ import javax.swing.JTextField
  *   客户端校验（title 5~200 / description ≥10），短输入拦截在触网前；
  * - 拖拽：[isResizable]=true + [getDimensionServiceKey] 记忆尺寸，描述/堆栈行
  *   weighty=1 + BOTH 随拖拽纵向伸缩。
+ *
+ * T-FeedbackDlg2（2026-09-14 真机复查两缺陷）：
+ * - 勾选跳动：堆栈行以 weighty=1 参与分配、窗口高度不变，堆栈出现即压扁上方描述行。
+ *   [toggleStackPreview] 勾选时给窗口做等量高度补偿（堆栈行首选高 + 行距 + 当前纵向富余量，
+ *   富余量项保证描述行实际高度分毫不差），取消时按堆栈行实际高对称缩回；
+ * - 手动形态堆栈：手动入口也从平台错误池取本插件最近一条错误（[FeedbackReporting.latestPluginErrorStack]）
+ *   作附件候补（默认不勾选，用户自行决定）；无错误时整行隐藏，不再显示死的勾选框。
  * 布局与校验抽为 [buildCenterPanel]/[validateForm] 纯函数（[ReportFormFields] 载体），
  * headless 测试零 DialogWrapper peer 依赖。
  */
 class ErrorReportDialog(
     /** 错误形态预填；null = 手动形态。 */
     private val prefill: ErrorReportComposer.Prefill?,
-    /** 异常堆栈全文；null = 手动形态（无附件勾选行）。 */
+    /** 异常堆栈全文（错误形态=event 堆栈；手动形态=错误池最近插件错误，可 null）；null 时隐藏勾选行。 */
     private val stackText: String?,
     /** 栈指纹（写入描述尾部，管理员合并重复帖依据）；手动形态 null。 */
     private val fingerprint: String?,
@@ -61,9 +68,6 @@ class ErrorReportDialog(
         setCancelButtonText(MpSqlVisualizerBundle.message("error.report.dialog.cancel"))
 
         fields.browserFallbackHandler = { browserFallback() }
-        fields.attachStackCheck.addItemListener {
-            fields.stackPreviewContainer.isVisible = fields.attachStackCheck.isSelected
-        }
 
         prefill?.let {
             fields.titleField.text = it.title
@@ -76,8 +80,13 @@ class ErrorReportDialog(
         if (prefill == null) selectCategory(ErrorReportComposer.CATEGORY_OTHER)
 
         stackText?.let { fields.stackPreview.text = it.lineSequence().take(60).joinToString("\n") }
-        fields.attachStackCheck.isSelected = stackText != null
+        // 无堆栈可附（手动形态且错误池也没有）时整行隐藏，不再显示点了没反应的死勾选框；
+        // 勾选默认开仅限错误形态（T-FeedbackDlg 原语义），手动形态取到的错误池堆栈默认不带，用户自行决定
+        fields.attachStackCheck.isVisible = stackText != null
+        fields.attachStackCheck.isSelected = prefill != null && stackText != null
         fields.stackPreviewContainer.isVisible = fields.attachStackCheck.isSelected
+        // 监听在初始状态落定后注册：初始可见性直调，不触发窗口高度补偿
+        fields.attachStackCheck.addItemListener { toggleStackPreview(fields.attachStackCheck.isSelected) }
 
         fields.nameField.text = ReportSubmitterStore.loadName()
         fields.emailField.text = ReportSubmitterStore.loadEmail()
@@ -94,6 +103,43 @@ class ErrorReportDialog(
     override fun isResizable(): Boolean = true
 
     override fun getDimensionServiceKey(): String = DIMENSION_SERVICE_KEY
+
+    /**
+     * 堆栈行显隐 + 窗口高度补偿（T-FeedbackDlg2-01）。真机跳动根因：堆栈行 weighty=1
+     * 参与 GridBag 纵向分配，勾选后窗口高度不变、堆栈行与描述行争抢纵向空间，
+     * 描述被压扁、勾选框整体「跳上去」。补偿公式见 [toggleResizeDelta]——勾选撑高、
+     * 取消对称缩回，描述行高度分毫不差。preferred 增长量在翻可见性前后各测一次
+     * （GridBagLayout 的 preferred 只统计可见组件），不依赖行高假设。
+     * peer 未建（headless/异常路径）时静默跳过补偿，显隐本身照常。
+     */
+    internal fun toggleStackPreview(show: Boolean) {
+        val container = fields.stackPreviewContainer
+        val pane = runCatching { contentPane }.getOrNull()
+        if (pane == null) {
+            container.isVisible = show
+            return
+        }
+        val prefBefore = pane.preferredSize.height
+        val stackRowHeight = container.height
+        container.isVisible = show
+        val delta = toggleResizeDelta(
+            show = show,
+            contentHeight = pane.height,
+            contentPrefHeight = prefBefore,
+            preferredGrowth = pane.preferredSize.height - prefBefore,
+            stackRowHeight = stackRowHeight,
+        )
+        if (delta != 0) {
+            runCatching {
+                val window = javax.swing.SwingUtilities.getWindowAncestor(pane)
+                if (window != null) {
+                    window.setSize(window.width, (window.height + delta).coerceAtLeast(MIN_WINDOW_HEIGHT))
+                }
+            }
+        }
+        pane.invalidate()
+        pane.validate()
+    }
 
     override fun doValidate(): ValidationInfo? {
         val key = validateForm(fields.titleField.text, fields.descriptionArea.text) ?: return null
@@ -170,6 +216,35 @@ class ErrorReportDialog(
 
         /** DimensionService key：用户拖拽后的对话框尺寸跨会话记忆（T-FeedbackDlg-02）。 */
         internal const val DIMENSION_SERVICE_KEY = "MpSqlVisualizer.ErrorReportDialog"
+
+        /** 取消勾选缩窗时的地板高（防把手动拖到极小的窗口缩到看不见内容）。 */
+        internal const val MIN_WINDOW_HEIGHT = 400
+
+        /**
+         * 勾选/取消「附带异常堆栈」的窗口高度补偿量（纯函数，T-FeedbackDlg2-01）。
+         * GridBag 把纵向富余（contentHeight - 可见行首选高之和）在 weighty=1 行间平分，
+         * 描述行（weighty=1）随堆栈行显隐被挤占/释放空间——真机即「点击勾选后整片跳上去」。
+         *
+         * - 勾选：描述行损失 Δ = (slack + S)/2（slack=当前富余、S=堆栈行首选高，即
+         *   preferredGrowth）；此后两 weighty 行对分新增空间，窗口撑高 2Δ = slack + S
+         *   即可让描述行分毫不差。
+         * - 取消：堆栈行当前实占高 R（含行间隙近似）整块释放给唯一 weighty 描述行，
+         *   窗口缩回 R 即恢复原状。
+         *
+         * 返回单位 px，正=撑高、负=缩回；0 = 无需调整。
+         */
+        internal fun toggleResizeDelta(
+            show: Boolean,
+            contentHeight: Int,
+            contentPrefHeight: Int,
+            preferredGrowth: Int,
+            stackRowHeight: Int,
+        ): Int = if (show) {
+            (contentHeight - contentPrefHeight).coerceAtLeast(0) + preferredGrowth.coerceAtLeast(0)
+        } else {
+            // 取消：堆栈行当前实占高与 preferred 缩减量取大者整块释放（后者兜底未布局态）
+            -maxOf(stackRowHeight, -preferredGrowth).coerceAtLeast(0)
+        }
 
         internal const val VALIDATION_TITLE_KEY = "error.report.dialog.validation.title"
         internal const val VALIDATION_DESCRIPTION_KEY = "error.report.dialog.validation.description"
