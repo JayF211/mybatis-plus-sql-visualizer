@@ -696,4 +696,86 @@ public class DerivedQueryConverterTest {
         assertTrue("应包含 DISTINCT", sql.contains("DISTINCT"));
         assertTrue("应包含 status 条件", sql.contains("status = ?"));
     }
+
+    // ------------------------------------------------------------------
+    // T-J4：ignoreCase 生效（等值族 LOWER 包装）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void TJ4_ignoreCase等值_生成LOWER包裹() throws Exception {
+        PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(
+                simpleProp("lastName", PartType.SIMPLE_PROPERTY, true))));
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+
+        assertTrue(
+            "等值条件应生成 LOWER(col) = LOWER(?)",
+            sql.contains("LOWER(last_name) = LOWER(?)"));
+        assertFalse("不应再出现未包装的裸等值", sql.contains("last_name = ?"));
+    }
+
+    @Test
+    public void TJ4_ignoreCase不等_生成LOWER包裹() throws Exception {
+        PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(
+                simpleProp("status", PartType.NEGATING_SIMPLE_PROPERTY, true))));
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+
+        assertTrue("不等条件应生成 LOWER(col) != LOWER(?)", sql.contains("LOWER(status) != LOWER(?)"));
+    }
+
+    @Test
+    public void TJ4_ignoreCase为false_保持裸列() throws Exception {
+        PartTree partTree = findTree(new PredicatePart(Connector.AND, List.of(simpleProp("lastName"))));
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+
+        assertTrue("无 ignoreCase 不应包 LOWER", sql.contains("last_name = ?"));
+        assertFalse(sql.contains("LOWER"));
+    }
+
+    @Test
+    public void TJ4_与PartTreeParser联动_ignoreCase全链路() throws Exception {
+        // findByNameIgnoreCase → name IGNORE CASE → LOWER(name) = LOWER(?)
+        PartTree partTree = PartTreeParser.INSTANCE.parse("findByNameIgnoreCase");
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+
+        assertTrue("端到端应生成 LOWER(name) = LOWER(?)", sql.contains("LOWER(name) = LOWER(?)"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J4：IN 条件检测（SqlPreviewService 接线预留）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void TJ4_hasInClause_各类形态() throws Exception {
+        assertTrue("findByStatusIn 应检测到 IN", DerivedQueryConverter.hasInClause("findByStatusIn"));
+        assertTrue("findByStatusNotIn 应检测到 NOT IN", DerivedQueryConverter.hasInClause("findByStatusNotIn"));
+        assertTrue("findByStatusIsIn 应检测到 IN", DerivedQueryConverter.hasInClause("findByStatusIsIn"));
+        assertFalse("findByStatus 不应检测到 IN", DerivedQueryConverter.hasInClause("findByStatus"));
+        assertFalse("findAll 不应检测到 IN", DerivedQueryConverter.hasInClause("findAll"));
+    }
+
+    @Test
+    public void TJ4_inClauseParameterOrdinals_跳过无参条件() throws Exception {
+        // IsNull 不消耗参数 → StatusIn 仍是第 0 个参数
+        assertEquals(
+            List.of(0),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByNameIsNullAndStatusIn"));
+        assertEquals(
+            List.of(0),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByStatusIn"));
+        // Between 消耗两个参数（age lo/hi 占 0、1）→ StatusIn 是第 3 个参数（序号 2）
+        assertEquals(
+            List.of(2),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByAgeBetweenAndStatusIn"));
+    }
+
+    @Test
+    public void TJ4_inClauseParameterOrdinals_多In条件() throws Exception {
+        assertEquals(
+            List.of(0, 1),
+            DerivedQueryConverter.inClauseParameterOrdinals("findByStatusInAndDeptIn"));
+    }
 }

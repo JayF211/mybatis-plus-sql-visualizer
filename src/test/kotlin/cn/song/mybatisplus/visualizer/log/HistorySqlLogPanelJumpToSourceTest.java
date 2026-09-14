@@ -51,6 +51,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     @Test
     public void test缺源码位置_nullSource_无法跳转_NoSource() throws Exception {
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
+        panel.refreshForTest();
         try {
             LogSqlEntry entry = makeEntry("SELECT * FROM user WHERE id = 1", null, 0);
             HistoryJumpTarget target = panel.resolveJumpTarget(entry);
@@ -63,6 +64,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     @Test
     public void test源码路径无效_文件不存在_无法跳转_NotFound() throws Exception {
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
+        panel.refreshForTest();
         try {
             LogSqlEntry entry = makeEntry("SELECT * FROM user WHERE id = 1", "src/missing/MissingMapper.java", 5);
             HistoryJumpTarget target = panel.resolveJumpTarget(entry);
@@ -77,6 +79,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     public void test源码位置有效_文件存在_可跳转_Navigate且行号正确() throws Exception {
         writeRealSource("UserMapper.java", "public class UserMapper {}\n");
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
+        panel.refreshForTest();
         try {
             LogSqlEntry entry = makeEntry("SELECT * FROM user WHERE id = 1", "UserMapper.java", 10);
             HistoryJumpTarget target = panel.resolveJumpTarget(entry);
@@ -96,6 +99,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     public void test源码行号0_不崩溃_跳转到第0行() throws Exception {
         writeRealSource("ZeroLineMapper.java", "public class ZeroLineMapper {}\n");
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
+        panel.refreshForTest();
         try {
             LogSqlEntry entry = makeEntry("SELECT 1", "ZeroLineMapper.java", 0);
             HistoryJumpTarget target = panel.resolveJumpTarget(entry);
@@ -121,6 +125,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
         VfsUtil.markDirtyAndRefresh(false, true, true, histFile);
 
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
+        panel.refreshForTest();
         try {
             assertTrue("默认一级", panel.isShowingFiles());
             assertEquals("应读到 1 个历史文件", 1, panel.getFileListEntries().size());
@@ -142,6 +147,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
     public void test可跳转条目_jumpToSource不抛异常_跳转链路可达() throws Exception {
         writeRealSource("NavMapper.java", "public class NavMapper {}\n");
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
+        panel.refreshForTest();
         try {
             LogSqlEntry entry = makeEntry("SELECT * FROM nav WHERE id = 1", "NavMapper.java", 3);
             // 先确定性确认目标是可跳转的

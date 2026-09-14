@@ -66,4 +66,55 @@ class SqlListFragmentRendererTest {
         val f = fragmentOf("SELECT 1 -- note", "-- note")
         assertEquals("注释应着灰色", Color(0x7F848E), f?.attributes?.fgColor)
     }
+
+    // ---------- T-ListMode：显示模式变换与多行拆分（承接 SqlListHtmlRendererTest 三模式映射语义） ----------
+
+    @Test
+    fun test模式变换映射_单行原文() {
+        val sql = "SELECT a FROM t WHERE b = 1"
+        assertEquals("SINGLE_LINE 应原文直出", sql, SqlListFragmentRenderer.prepareSqlForList(sql, SqlListDisplayMode.SINGLE_LINE))
+    }
+
+    @Test
+    fun test模式变换映射_关键字换行与格式化() {
+        val sql = "SELECT a, b FROM t WHERE x = 1 AND y = 2"
+        val kw = SqlListFragmentRenderer.prepareSqlForList(sql, SqlListDisplayMode.KEYWORD_WRAP)
+        val fm = SqlListFragmentRenderer.prepareSqlForList(sql, SqlListDisplayMode.FORMATTED)
+        assertTrue("关键字换行应含换行", kw.contains('\n'))
+        assertTrue("格式化应含换行", fm.contains('\n'))
+        assertTrue("AND 同行（关键字换行）与 AND 独立行（格式化）应产出不同文本", kw != fm)
+    }
+
+    @Test
+    fun test模式变换映射_空串() {
+        assertEquals("", SqlListFragmentRenderer.prepareSqlForList("", SqlListDisplayMode.SINGLE_LINE))
+        assertEquals("", SqlListFragmentRenderer.prepareSqlForList("", SqlListDisplayMode.KEYWORD_WRAP))
+        assertEquals("", SqlListFragmentRenderer.prepareSqlForList("", SqlListDisplayMode.FORMATTED))
+    }
+
+    @Test
+    fun test多行片段按行拆分_属性继承() {
+        val lines = SqlListFragmentRenderer.renderLineFragments(
+            "SELECT a FROM t WHERE b = 1",
+            SqlListDisplayMode.KEYWORD_WRAP,
+            attrOf,
+        )
+        assertTrue("关键字换行应拆出多行（实际 ${lines.size} 行）", lines.size >= 3)
+        assertTrue("首行含 SELECT 片段", lines[0].any { it.text.contains("SELECT") })
+        assertTrue("FROM 独立成行", lines.any { line -> line.firstOrNull()?.text == "FROM" })
+        assertTrue("WHERE 独立成行", lines.any { line -> line.firstOrNull()?.text == "WHERE" })
+        val fromLine = lines.first { line -> line.firstOrNull()?.text == "FROM" }
+        assertEquals(
+            "FROM 关键字应着主题色（属性随行拆分继承）",
+            Color(0xC678DD),
+            fromLine.first().attributes.fgColor,
+        )
+    }
+
+    @Test
+    fun test多行片段按行拆分_空串单空行() {
+        val lines = SqlListFragmentRenderer.renderLineFragments("", SqlListDisplayMode.FORMATTED, attrOf)
+        assertEquals("空 SQL 变换后仍为空——拆分恒单空行", 1, lines.size)
+        assertTrue(lines[0].isEmpty())
+    }
 }

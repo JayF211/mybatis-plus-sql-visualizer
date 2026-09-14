@@ -327,6 +327,30 @@ class DerivedMethodLocatorTest : BasePlatformTestCase() {
             "UserRepository.java",
             """
             public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                UserEntity fetchByUsername(String username);
+            }
+
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+                private String username;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("fetchByUsername")
+        assertNull("非 PartTree 前缀应返回 null", DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset))
+    }
+
+    // ------------------------------------------------------------------
+    // T-J3：派生前缀断链补齐（query / search / stream）
+    // ------------------------------------------------------------------
+
+    fun testTJ3_queryPrefixRecognized() {
+        // 旧实现 query 前缀缺失（门控断链），PartTreeParser 早已支持解析
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
                 UserEntity queryByUsername(String username);
             }
 
@@ -338,7 +362,166 @@ class DerivedMethodLocatorTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         val method = findMethod("queryByUsername")
-        assertNull("非 PartTree 前缀应返回 null", DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset))
+        val info = DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset)
+        assertNotNull("query 前缀派生方法应识别（T-J3）", info)
+        assertEquals("queryByUsername", info!!.methodName)
+        assertEquals("UserEntity", info.entityClass?.name)
+    }
+
+    fun testTJ3_searchPrefixRecognized() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                List<UserEntity> searchByStatus(Integer status);
+            }
+
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+                private Integer status;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("searchByStatus")
+        assertNotNull("search 前缀派生方法应识别（T-J3）", DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset))
+    }
+
+    fun testTJ3_streamPrefixRecognizedAsFind() {
+        // streamBy 返回 Stream 的形态当 find 处理（PartTreeParser.QUERY_KEYWORDS 已含 stream）
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                java.util.stream.Stream<UserEntity> streamByStatus(Integer status);
+            }
+
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+                private Integer status;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("streamByStatus")
+        val info = DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset)
+        assertNotNull("streamBy 前缀派生方法应识别（T-J3，按 find 处理）", info)
+        assertEquals("streamByStatus", info!!.methodName)
+        assertEquals("UserEntity", info.entityClass?.name)
+    }
+
+    // ------------------------------------------------------------------
+    // T-J3：无 By 形态放行（findAll / count / readAll / getAll 等，宿主须为 Repository）
+    // ------------------------------------------------------------------
+
+    fun testTJ3_findAllWithoutByRecognized() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                List<UserEntity> findAll();
+            }
+
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("findAll")
+        val info = DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset)
+        assertNotNull("findAll() 无 By 形态应识别（T-J3）", info)
+        assertEquals("findAll", info!!.methodName)
+        assertEquals("UserEntity", info.entityClass?.name)
+        assertTrue("findAll 应为可预览 Repository 方法", DerivedMethodLocator.isRepositoryMethod(method))
+    }
+
+    fun testTJ3_bareCountRecognized() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                long count();
+            }
+
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("count")
+        val info = DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset)
+        assertNotNull("count() 无 By 形态应识别（T-J3）", info)
+        assertEquals("count", info!!.methodName)
+    }
+
+    fun testTJ3_allSuffixFormsRecognized() {
+        myFixture.configureByText(
+            "UserRepository.java",
+            """
+            public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                List<UserEntity> readAll();
+                List<UserEntity> getAll();
+                List<UserEntity> queryAll();
+                List<UserEntity> searchAll();
+                java.util.stream.Stream<UserEntity> streamAll();
+                long countAll();
+            }
+
+            class JpaRepository<T, ID> {}
+            class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("readAll", "getAll", "queryAll", "searchAll", "streamAll", "countAll")) {
+            val method = findMethod(name)
+            assertTrue("$name 应为派生查询（T-J3 All 后缀形态）", DerivedMethodLocator.isDerivedQuery(method))
+            assertNotNull("$name 应可定位", DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset))
+        }
+    }
+
+    fun testTJ3_nonRepositoryClassFindAllExcluded() {
+        // 守卫：非 Repository 类的同名方法绝不识别
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public List<UserEntity> findAll() { return null; }
+                public long count() { return 0; }
+                public List<UserEntity> getAll() { return null; }
+            }
+
+            class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        for (name in listOf("findAll", "count", "getAll")) {
+            val method = findMethod(name)
+            assertFalse("$name 在非 Repository 类上不应识别为派生查询（T-J3 守卫）", DerivedMethodLocator.isDerivedQuery(method))
+            assertFalse("$name 不应识别为 Repository 方法", DerivedMethodLocator.isRepositoryMethod(method))
+        }
+    }
+
+    fun testTJ3_nonRepositoryInterfaceFindAllExcluded() {
+        // 守卫：非 Repository 接口（无基类、名字不以 Repository 结尾）的同名方法不识别
+        myFixture.configureByText(
+            "GenericStore.java",
+            """
+            public interface GenericStore {
+                List<UserEntity> findAll();
+            }
+
+            class UserEntity {
+                private Long id;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("findAll")
+        assertFalse("非 Repository 接口 findAll 不应识别（T-J3 守卫）", DerivedMethodLocator.isDerivedQuery(method))
+        assertNull("locate 应返回 null", DerivedMethodLocator.locate(myFixture.file, method.textRange.startOffset))
     }
 
     // ------------------------------------------------------------------

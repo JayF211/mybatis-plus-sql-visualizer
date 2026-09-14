@@ -5,7 +5,11 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.SimpleColoredComponent;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
@@ -31,6 +35,25 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     /** 真实（非空）列表实例；渲染器取 selectionBackground 等需 list 非空（生产环境 list 恒非空）。 */
     private final JList<Object> list = new JList<>();
 
+    /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
+    private String savedDisplayMode;
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        savedDisplayMode = state.getLogListSqlDisplayMode();
+        state.setLogListSqlDisplayMode("SINGLE_LINE");
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        state.setLogListSqlDisplayMode(savedDisplayMode != null
+                ? savedDisplayMode : PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE);
+        super.tearDown();
+    }
+
     /** 触发渲染并返回渲染组件（片段通道：元信息行/SQL 行经 metaLine/sqlLine 断言）。 */
     private LogEntryListCellRenderer render(LogSqlEntry entry) {
         return render(entry, false);
@@ -39,6 +62,12 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     private LogEntryListCellRenderer render(LogSqlEntry entry, boolean selected) {
         java.awt.Component c = renderer.getListCellRendererComponent(list, entry, 0, selected, false);
         return (LogEntryListCellRenderer) c;
+    }
+
+    /** 切显示模式渲染（T-ListMode 专区用例；自动随测试收尾还原）。 */
+    private LogEntryListCellRenderer renderInMode(String mode, LogSqlEntry entry) {
+        PluginSettings.getInstance().getState().setLogListSqlDisplayMode(mode);
+        return render(entry);
     }
 
     private String joinedText(SimpleColoredComponent component) {
@@ -63,8 +92,8 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         LogEntryListCellRenderer r = render(entry("SELECT * FROM user"));
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）",
                 r.metaLine instanceof SimpleColoredComponent);
-        assertTrue("SQL 行应含 SELECT", joinedText(r.sqlLine).contains("SELECT"));
-        assertFalse("渲染文本不应为 HTML 包裹", joinedText(r.sqlLine).startsWith("<html>"));
+        assertTrue("SQL 行应含 SELECT", joinedText(r.getSqlLine()).contains("SELECT"));
+        assertFalse("渲染文本不应为 HTML 包裹", joinedText(r.getSqlLine()).startsWith("<html>"));
         assertFalse("无耗时不应出现 ms", joinedText(r.metaLine).contains("ms"));
     }
 
@@ -78,14 +107,14 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         assertTrue("元信息行含去重徽章", meta.contains("⨉2"));
         assertFalse("元信息行不应混入 SQL", meta.contains("SELECT"));
         assertTrue("SQL 行完整保留语句（含分号结束符）",
-                joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"));
+                joinedText(r.getSqlLine()).contains("SELECT * FROM repeated WHERE id = 1;"));
     }
 
     @Test
     public void test特殊字符SQL_原文保真() throws Exception {
         // 片段通道无 HTML 解析面——< > & 原样绘制即安全（原通道需转义，此处断言不转义不破版）
         LogEntryListCellRenderer r = render(entry("SELECT * FROM t WHERE a < 5 AND b > 3 AND c & d"));
-        String sqlText = joinedText(r.sqlLine);
+        String sqlText = joinedText(r.getSqlLine());
         assertTrue("小于号原文保留", sqlText.contains("< 5"));
         assertTrue("大于号原文保留", sqlText.contains("> 3"));
         assertTrue("与号原文保留", sqlText.contains("& d"));
@@ -95,7 +124,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     public void testSQL含标签样文本_不构成HTML结构() throws Exception {
         LogEntryListCellRenderer r = render(entry("SELECT '</span><script>'"));
         assertTrue("标签样文本原样保留（片段通道无注入面）",
-                joinedText(r.sqlLine).contains("</span><script>"));
+                joinedText(r.getSqlLine()).contains("</span><script>"));
     }
 
     @Test
@@ -109,7 +138,7 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         String longSql = sb.toString();
         assertTrue("构造的 SQL 超过 160 字符", longSql.length() > 160);
         LogEntryListCellRenderer r = render(entry(longSql));
-        String sqlText = joinedText(r.sqlLine);
+        String sqlText = joinedText(r.getSqlLine());
         assertTrue("摘要截断开头仍是 SELECT", sqlText.contains("SELECT"));
         assertTrue("超长 SQL 摘要含省略号", sqlText.contains("…"));
     }
@@ -158,6 +187,65 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         assertTrue("渲染组件应为渲染器自身（含双行组件面板）", c instanceof java.awt.Component);
     }
 
+    // ---------- T-ListMode：三种显示模式（嫁接片段管线） ----------
+
+    @Test
+    public void test单行模式_恒单行_完整SQL含结束符() throws Exception {
+        LogEntryListCellRenderer r = renderInMode("SINGLE_LINE", entry("SELECT * FROM user WHERE id = 1"));
+        assertEquals("单行模式 SQL 行组件恒 1 个", 1, r.getSqlLines().size());
+        assertTrue("完整 SQL 保留（含分号结束符）", joinedText(r.getSqlLine()).contains("SELECT * FROM user WHERE id = 1;"));
+        LogSqlEntry e2 = entry("SELECT 1");
+        renderInMode("SINGLE_LINE", e2);
+        assertNull("单行模式不走条目级片段缓存", e2.cachedListLineFragments());
+    }
+
+    @Test
+    public void test关键字换行模式_多子句分行且缓存生效() throws Exception {
+        LogSqlEntry e = entry("SELECT * FROM orders WHERE id = 1");
+        LogEntryListCellRenderer r = renderInMode("KEYWORD_WRAP", e);
+        assertTrue("关键字换行应多行（实际 " + r.getSqlLines().size() + " 行）", r.getSqlLines().size() >= 3);
+        assertTrue("首行 SELECT 开头", joinedText(r.getSqlLines().get(0)).startsWith("SELECT"));
+        assertTrue("FROM 独立成行", r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("FROM")));
+        assertTrue("WHERE 独立成行", r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("WHERE")));
+        assertNotNull("多行模式应写条目级片段缓存", e.cachedListLineFragments());
+        assertEquals("缓存键记录当前模式", "KEYWORD_WRAP",
+                e.cachedListLineFragmentsMode() != null ? e.cachedListLineFragmentsMode().name() : null);
+    }
+
+    @Test
+    public void test格式化模式_缩进行保真() throws Exception {
+        LogEntryListCellRenderer r = renderInMode("FORMATTED", entry("SELECT * FROM t WHERE a = 1 AND b = 2"));
+        assertTrue("格式化应多行", r.getSqlLines().size() >= 3);
+        assertTrue(
+            "AND 应独立成行且顶层缩进 4 空格（片段文本不折叠空格）",
+            r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("    AND")));
+    }
+
+    @Test
+    public void test模式切换_缓存按模式键自动失效() throws Exception {
+        LogSqlEntry e = entry("SELECT * FROM orders WHERE id = 1");
+        LogEntryListCellRenderer kw = renderInMode("KEYWORD_WRAP", e);
+        int kwLines = kw.getSqlLines().size();
+        LogEntryListCellRenderer fm = renderInMode("FORMATTED", e);
+        assertEquals("模式键已更新", "FORMATTED",
+                e.cachedListLineFragmentsMode() != null ? e.cachedListLineFragmentsMode().name() : null);
+        assertTrue(
+            "格式化与关键字换行行数不同（缓存重算而非复用）",
+            fm.getSqlLines().size() != kwLines);
+    }
+
+    @Test
+    public void test元信息行不受显示模式影响() throws Exception {
+        String sql = "SELECT * FROM user WHERE id = 1";
+        for (String mode : List.of("SINGLE_LINE", "KEYWORD_WRAP", "FORMATTED")) {
+            renderer.dedupeCounts = Map.of(LogSqlModelsKt.sqlFingerprint(sql), 2);
+            LogEntryListCellRenderer r = renderInMode(mode, entry(sql, null, "src/main/java/A.java", 42));
+            String meta = joinedText(r.metaLine);
+            assertTrue("[" + mode + "] 元信息行含来源与徽章", meta.contains("[A.java:42]") && meta.contains("⨉2"));
+            assertFalse("[" + mode + "] 元信息行不混入 SQL", meta.contains("SELECT"));
+        }
+    }
+
     // ---------- T-LogRowNumber：行号片段 ----------
 
     @Test
@@ -175,6 +263,167 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         // sequenceNumber=0：历史文件读回 / round-trip 条目
         LogEntryListCellRenderer r = render(entry("SELECT 1"));
         assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"));
+    }
+
+    // ---------- T-CrudColor：CRUD 类型颜色标记 ----------
+
+    /** 在给定标记样式 + 固定四色下执行断言（其余状态原样恢复）。 */
+    private void withCrudColors(String style, Runnable block) {
+        PluginSettings.State s = PluginSettings.getInstance().getState();
+        String savedStyle = s.getCrudColorStyle();
+        List<String> saved = List.of(s.getCrudColorSelect(), s.getCrudColorInsert(),
+                s.getCrudColorUpdate(), s.getCrudColorDelete());
+        try {
+            s.setCrudColorStyle(style);
+            s.setCrudColorSelect("#4A86E8");
+            s.setCrudColorInsert("#4CAF50");
+            s.setCrudColorUpdate("#E67E22");
+            s.setCrudColorDelete("#D32F2F");
+            block.run();
+        } finally {
+            s.setCrudColorStyle(savedStyle);
+            s.setCrudColorSelect(saved.get(0));
+            s.setCrudColorInsert(saved.get(1));
+            s.setCrudColorUpdate(saved.get(2));
+            s.setCrudColorDelete(saved.get(3));
+        }
+    }
+
+    /** 渲染后取色条色（未着色 → null）。 */
+    private Color barColorAfterRender(String sql, boolean selected) {
+        render(entry(sql), selected);
+        return renderer.colorBar.isOpaque() ? renderer.colorBar.getBackground() : null;
+    }
+
+    private Color barColorAfterRender(String sql) {
+        return barColorAfterRender(sql, false);
+    }
+
+    @Test
+    public void test色条样式_四类型着色且OTHER不标记() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            assertEquals(new Color(0x4A86E8), barColorAfterRender("SELECT * FROM user"));
+            assertEquals(new Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"));
+            assertEquals(new Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"));
+            assertEquals(new Color(0xD32F2F), barColorAfterRender("DELETE FROM user"));
+            assertEquals("OTHER 不应着色（避免满屏色条稀释信号）",
+                null, barColorAfterRender("MERGE INTO t USING s ON (1=1)"));
+        });
+    }
+
+    @Test
+    public void test色条样式_选中态色条不丢色() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            // 选型核心依据：选中行仍保留类型色（平台填充只覆盖单元格背景，色条是独立子组件）
+            assertEquals("选中态色条应仍为类型色", new Color(0x4A86E8), barColorAfterRender("SELECT * FROM user", true));
+        });
+    }
+
+    @Test
+    public void test关闭样式_色条不可见且背景走原逻辑() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_OFF, () -> {
+            assertEquals(null, barColorAfterRender("SELECT * FROM user"));
+            assertEquals("关闭态应与改造前一致（非选中取列表背景）", list.getBackground(), renderer.getBackground());
+            render(entry("SELECT * FROM user"), true);
+            assertEquals("关闭态选中仍走平台填充", list.getSelectionBackground(), renderer.getBackground());
+        });
+    }
+
+    @Test
+    public void test背景样式_未选中与选中混色比例不同且不铺平台填充() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            Color bg = list.getBackground();
+            Color update = new Color(0xE67E22);
+            render(entry("UPDATE user SET a = 1"));
+            assertEquals("未选中应为 14% 混色",
+                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_NORMAL), renderer.getBackground());
+            render(entry("UPDATE user SET a = 1"), true);
+            assertEquals("选中应为 30% 混色",
+                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_SELECTED), renderer.getBackground());
+            assertNotEquals("选中态**不铺**平台选中填充（否则类型色被覆盖丢失）",
+                list.getSelectionBackground(), renderer.getBackground());
+        });
+    }
+
+    @Test
+    public void test背景样式_选中态描边且两状态insets逐边相等() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            render(entry("UPDATE user SET a = 1"));
+            assertEquals("未选中应为普通边框", renderer.normalBorder, renderer.getBorder());
+            render(entry("UPDATE user SET a = 1"), true);
+            assertEquals("选中应为描边边框（同一实例，锁零分配引用切换）",
+                renderer.selectedBorder, renderer.getBorder());
+
+            java.awt.Insets normal = renderer.normalBorder.getBorderInsets(renderer);
+            java.awt.Insets selected = renderer.selectedBorder.getBorderInsets(renderer);
+            assertEquals("上", normal.top, selected.top);
+            assertEquals("左", normal.left, selected.left);
+            assertEquals("下", normal.bottom, selected.bottom);
+            assertEquals("右", normal.right, selected.right);
+        });
+    }
+
+    @Test
+    public void test背景样式_选中态前景不转白_色条样式仍转白() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            render(entry("SELECT 1", 5L, null, 0), true);
+            assertEquals("淡底上白字不可见 → 背景样式不取 selectionForeground",
+                list.getForeground(), renderer.metaLine.getForeground());
+        });
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            render(entry("SELECT 1", 5L, null, 0), true);
+            assertEquals("色条样式走平台填充，前景仍为 selectionForeground（现状不变）",
+                list.getSelectionForeground(), renderer.metaLine.getForeground());
+        });
+    }
+
+    // ---------- T-CrudColor：渲染热路径无副作用（性能守卫） ----------
+
+    /**
+     * 同状态连续渲染不得产生 Swing 属性实例变更。
+     *
+     * 依据（JBR 21 实测）：`setBorder(新实例)` 即使同值也 `repaint() +1`、`setBackground(新 Color 同值)`
+     * 同样 `+1`；传**同一实例**则零副作用。逐格无脑赋值 = 每格一次重绘调度，
+     * 与 T-LogListFreeze 的成因同类，故用**实例同一性**锁定。
+     */
+    @Test
+    public void test色条样式_重复渲染同类型条目不产生属性实例变更() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            render(entry("SELECT 1"));
+            Color barBg = renderer.colorBar.getBackground();
+            javax.swing.border.Border border = renderer.getBorder();
+            Color cellBg = renderer.getBackground();
+            render(entry("SELECT 2"));
+            assertSame("同色格应复用同一 Color 实例", barBg, renderer.colorBar.getBackground());
+            assertSame("同状态应复用同一 Border 实例", border, renderer.getBorder());
+            assertSame("同状态单元格背景不应换实例", cellBg, renderer.getBackground());
+        });
+    }
+
+    @Test
+    public void test背景样式_重复渲染不替换背景与边框实例() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            render(entry("UPDATE t SET a = 1"));
+            Color bg = renderer.getBackground();
+            javax.swing.border.Border border = renderer.getBorder();
+            // 混色每次都会算出「新 Color 实例但同值」——守卫必须拦下它，否则每格一次 repaint
+            render(entry("UPDATE t SET a = 1"));
+            assertSame("同值混色结果不应重新赋值背景", bg, renderer.getBackground());
+            assertSame("同状态不应换边框实例", border, renderer.getBorder());
+        });
+    }
+
+    @Test
+    public void test背景样式_选中与未选中之间切换会换边框实例() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            render(entry("UPDATE t SET a = 1"));
+            javax.swing.border.Border normal = renderer.getBorder();
+            render(entry("UPDATE t SET a = 1"), true);
+            javax.swing.border.Border selected = renderer.getBorder();
+            assertNotSame("选中态必须换成描边边框（守卫不能把该变更也拦掉）", normal, selected);
+            render(entry("UPDATE t SET a = 1"));
+            assertSame("回到未选中应换回原 Border 实例", normal, renderer.getBorder());
+        });
     }
 
     @Test

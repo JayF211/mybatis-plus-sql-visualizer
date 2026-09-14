@@ -1,0 +1,230 @@
+package cn.song.mybatisplus.visualizer.generator
+
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * CrudSqlGenerator 测试（T-CrudSql-01）：四类语句生成、INSERT/UPDATE 的 BatchModel 复用
+ * （自增主键默认不勾、@Version 语义）、无主键降级、逻辑删除变体、保留字引用。
+ * 纯函数测试，不依赖平台/PSI。
+ */
+class CrudSqlGeneratorTest {
+
+    /** 标准表：主键 id（自增）+ 业务列 + 逻辑删除 + 版本列（对齐真实 BaseEntity 形态）。 */
+    private fun fullSpec() = CrudTableSpec(
+        "biz_order",
+        listOf(
+            CrudColumn("id", null, true, true, false),
+            CrudColumn("order_no", "订单号", false, false, true),
+            CrudColumn("amount", null, false, false, false),
+            CrudColumn("version", null, false, false, false),
+            CrudColumn("deleted", null, false, false, false),
+        ),
+        "deleted",
+        "version",
+    )
+
+    // ------------------------------------------------------------------
+    // SELECT
+    // ------------------------------------------------------------------
+
+    @Test
+    fun selectAllRendersColumnsAndTableWithoutParams() {
+        val stmts = CrudSqlGenerator.generate(fullSpec())
+        val select = stmts.first { it.kind == CrudKind.SELECT_ALL }
+        assertEquals(
+            """
+            SELECT id, order_no, amount, version, deleted
+            FROM biz_order
+            """.trimIndent(),
+            select.result.sql,
+        )
+        assertTrue(select.result.unresolvedParams.isEmpty())
+        assertNull(select.result.batchModel)
+        assertFalse(select.missingPrimaryKey)
+    }
+
+    @Test
+    fun selectByPkAddsWhereAndParamRows() {
+        val stmts = CrudSqlGenerator.generate(fullSpec())
+        val select = stmts.first { it.kind == CrudKind.SELECT_BY_PK }
+        assertEquals(
+            """
+            SELECT id, order_no, amount, version, deleted
+            FROM biz_order
+            WHERE id = ?
+            """.trimIndent(),
+            select.result.sql,
+        )
+        assertEquals(listOf("id"), select.result.unresolvedParams)
+        assertEquals(listOf(false), select.result.paramHints.map { it.quote })
+    }
+
+    @Test
+    fun compositePrimaryKeyJoinsWithAnd() {
+        val spec = CrudTableSpec(
+            "t_map",
+            listOf(
+                CrudColumn("k1", null, true, false, true),
+                CrudColumn("k2", null, true, false, false),
+                CrudColumn("v", null, false, false, true),
+            ),
+        )
+        val delete = CrudSqlGenerator.generate(spec).first { it.kind == CrudKind.DELETE }
+        assertEquals(
+            """
+            DELETE FROM t_map
+            WHERE k1 = ? AND k2 = ?
+            """.trimIndent(),
+            delete.result.sql,
+        )
+        assertEquals(listOf("k1", "k2"), delete.result.unresolvedParams)
+    }
+
+    // ------------------------------------------------------------------
+    // INSERT / UPDATE（BatchModel 复用）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun insertExcludesAutoIdByDefaultAndKeepsBatchModel() {
+        val insert = CrudSqlGenerator.generate(fullSpec()).first { it.kind == CrudKind.INSERT }
+        val model = insert.result.batchModel!!
+        // 对齐 BatchOperationConverter.buildInsertBatch：全列可勾选、自增主键默认不勾；
+        // @Version 列按普通列参与 INSERT（勾选态，与 save(entity) 语义一致）
+        assertEquals(
+            """
+            INSERT INTO biz_order (order_no, amount, version, deleted)
+            VALUES (?, ?, ?, ?)
+            """.trimIndent(),
+            insert.result.sql,
+        )
+        // 参数登记出自 BatchModel（唯一渲染源），与 SQL 中 ? 顺序一一对应
+        assertEquals(listOf("order_no", "amount", "version", "deleted"), insert.result.unresolvedParams)
+        // 勾选重建逐字符一致（BatchModel 既有约定）
+        val initialActive = model.toggleColumns.filter { it.isChecked }.map { it.columnName }.toSet()
+        assertEquals(insert.result.sql, model.renderSql(initialActive))
+    }
+
+    @Test
+    fun updateSetExcludesPkAndVersionAndFixedColumnsCarryWhere() {
+        val update = CrudSqlGenerator.generate(fullSpec()).first { it.kind == CrudKind.UPDATE }
+        val model = update.result.batchModel!!
+        // 对齐 BatchOperationConverter.buildUpdateBatch（T-M22-02 @Version 乐观锁语义）：
+        // version 列不进实体 SET（`version = version + 1` 取代）、WHERE 末尾追加 `AND version = ?`；
+        // SET 主键/版本外列全勾选（含逻辑删除列 deleted）
+        assertEquals(
+            """
+            UPDATE biz_order
+            SET order_no = ?, amount = ?, deleted = ?, version = version + 1
+            WHERE id = ? AND version = ?
+            """.trimIndent(),
+            update.result.sql,
+        )
+        assertEquals(listOf("order_no", "amount", "deleted", "id", "version"), update.result.unresolvedParams)
+        // SET 勾选重建：取消 amount 后仍保留 WHERE 主键与版本（fixedColumns 恒参与）
+        val rebuilt = model.renderSql(setOf("order_no"))
+        assertEquals(
+            """
+            UPDATE biz_order
+            SET order_no = ?, version = version + 1
+            WHERE id = ? AND version = ?
+            """.trimIndent(),
+            rebuilt,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // DELETE / 逻辑删除变体
+    // ------------------------------------------------------------------
+
+    @Test
+    fun deleteRendersPhysicalDeleteByPk() {
+        val delete = CrudSqlGenerator.generate(fullSpec()).first { it.kind == CrudKind.DELETE }
+        assertEquals(
+            """
+            DELETE FROM biz_order
+            WHERE id = ?
+            """.trimIndent(),
+            delete.result.sql,
+        )
+    }
+
+    @Test
+    fun logicDeleteVariantAppearsOnlyWithLogicColumn() {
+        val stmts = CrudSqlGenerator.generate(fullSpec())
+        val logic = stmts.firstOrNull { it.kind == CrudKind.LOGIC_DELETE }
+        assertEquals(
+            """
+            UPDATE biz_order
+            SET deleted = 1
+            WHERE id = ?
+            """.trimIndent(),
+            logic?.result?.sql,
+        )
+        // 无逻辑删除列的表不提供变体
+        val plain = CrudTableSpec("t_plain", listOf(CrudColumn("id", null, true), CrudColumn("name")))
+        assertTrue(CrudSqlGenerator.generate(plain).none { it.kind == CrudKind.LOGIC_DELETE })
+    }
+
+    // ------------------------------------------------------------------
+    // 无主键降级
+    // ------------------------------------------------------------------
+
+    @Test
+    fun missingPkDegradesWhereToOneEqualsZeroAndMarksCandidates() {
+        val spec = CrudTableSpec("t_nopk", listOf(CrudColumn("name"), CrudColumn("age", null, false, false, false)))
+        val stmts = CrudSqlGenerator.generate(spec)
+        val selectByPk = stmts.first { it.kind == CrudKind.SELECT_BY_PK }
+        val update = stmts.first { it.kind == CrudKind.UPDATE }
+        val delete = stmts.first { it.kind == CrudKind.DELETE }
+
+        assertTrue(selectByPk.missingPrimaryKey && update.missingPrimaryKey && delete.missingPrimaryKey)
+        assertEquals(
+            """
+            SELECT name, age
+            FROM t_nopk
+            WHERE 1 = 0 /* 未识别到主键，请补充条件 */
+            """.trimIndent(),
+            selectByPk.result.sql,
+        )
+        // 降级 UPDATE 不挂 batchModel（勾选重建会重放出无 WHERE 的破坏性 UPDATE）
+        assertNull(update.result.batchModel)
+        assertEquals(
+            """
+            UPDATE t_nopk
+            SET name = ?, age = ?
+            WHERE 1 = 0 /* 未识别到主键，请补充条件 */
+            """.trimIndent(),
+            update.result.sql,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // 边界与保留字引用
+    // ------------------------------------------------------------------
+
+    @Test
+    fun emptyColumnsYieldsNoStatements() {
+        assertTrue(CrudSqlGenerator.generate(CrudTableSpec("t_empty", emptyList())).isEmpty())
+    }
+
+    @Test
+    fun keywordIdentifiersQuotedByDialect() {
+        val spec = CrudTableSpec(
+            "order",
+            listOf(CrudColumn("id", null, true), CrudColumn("name")),
+        )
+        val select = CrudSqlGenerator.generate(spec).first { it.kind == CrudKind.SELECT_ALL }
+        // `order` 为 SQL 保留字 → MySQL 反引号包裹（与 BatchModel 同一 dialect 管线）
+        assertTrue(select.result.sql.contains("FROM `order`"))
+    }
+
+    @Test
+    fun defaultDialectIsMySql() {
+        assertEquals(MySqlDialect.INSTANCE, CrudTableSpec("t", listOf(CrudColumn("id"))).dialect)
+    }
+}

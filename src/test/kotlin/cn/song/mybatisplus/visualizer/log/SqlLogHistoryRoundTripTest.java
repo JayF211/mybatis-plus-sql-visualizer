@@ -48,7 +48,9 @@ public class SqlLogHistoryRoundTripTest {
         File dir = tempDir();
         SqlLogAutoSaver saver = new SqlLogAutoSaver();
         saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
-        // 真实捕获条目：带源码位置 + 5ms 耗时
+        // 真实捕获条目：带源码位置 + 5ms 耗时。
+        // T-SqlDuration（master）：读回端 removeSuffix(";") 剥除 SQL 结束符——写入侧带分号、
+        // 读回侧统一无分号，故本用例输入不带分号；带分号写入的剥除行为由下方独立断言覆盖。
         LogSqlEntry captured = capturedEntry(
                 "SELECT id, username, password FROM user WHERE id = 1",
                 "src/main/java/com/example/mapper/UserMapper.java",
@@ -112,6 +114,24 @@ public class SqlLogHistoryRoundTripTest {
                 .collect(Collectors.toList());
         assertEquals(2, noDuration.size());
         noDuration.forEach(e -> assertNull("无耗时条目读回 null", e.executionTimeMs()));
+    }
+
+    @Test
+    public void 真实链路_带分号写入读回剥除结束符() throws Exception {
+        // T-SqlDuration（master 5fbb3c7）：历史读回统一剥除 SQL 结束符（；耗时展示不受分号干扰）。
+        // M38 合并期 feature 侧曾按旧读回器断言「保留分号」，合并后产品行为以剥除为准——
+        // 本用例显式固化：带分号写入 → 读回无分号。
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(capturedEntry("SELECT * FROM user WHERE id = 1;",
+                "src/main/java/com/example/mapper/UserMapper.java", 42, 5L, 1724567890000L));
+        saver.close();
+
+        File[] files = Objects.requireNonNull(dir.listFiles((d, n) -> n.endsWith(".sql")));
+        List<LogSqlEntry> read = SqlLogFileReader.INSTANCE.readFromFile(files[0]);
+        assertEquals(1, read.size());
+        assertEquals("读回剥除结束符", "SELECT * FROM user WHERE id = 1", read.get(0).restoredSql());
     }
 
     @Test

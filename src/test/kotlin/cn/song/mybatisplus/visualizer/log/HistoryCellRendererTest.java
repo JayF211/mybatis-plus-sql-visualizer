@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.SimpleColoredComponent;
 import com.intellij.ui.SimpleTextAttributes;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
@@ -29,7 +33,11 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     private final JList<Object> list = new JList<>();
 
     private HistoryCellRenderer renderSql(LogSqlEntry entry) {
-        java.awt.Component c = sqlRenderer.getListCellRendererComponent(list, entry, 0, false, false);
+        return renderSql(entry, false);
+    }
+
+    private HistoryCellRenderer renderSql(LogSqlEntry entry, boolean selected) {
+        java.awt.Component c = sqlRenderer.getListCellRendererComponent(list, entry, 0, selected, false);
         return (HistoryCellRenderer) c;
     }
 
@@ -51,13 +59,32 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), 1_700_000_000_000L, sourceFile, sourceLine, ms);
     }
 
+    /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
+    private String savedDisplayMode;
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        savedDisplayMode = state.getLogListSqlDisplayMode();
+        state.setLogListSqlDisplayMode("SINGLE_LINE");
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        state.setLogListSqlDisplayMode(savedDisplayMode != null
+                ? savedDisplayMode : PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE);
+        super.tearDown();
+    }
+
     @Test
     public void test二级条目_片段通道_非HTML标签() throws Exception {
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）",
                 r.metaLine instanceof SimpleColoredComponent);
         String meta = joinedText(r.metaLine);
-        String sql = joinedText(r.sqlLine);
+        String sql = joinedText(r.getSqlLine());
         assertTrue("含 SQL 关键字", sql.contains("SELECT"));
         assertTrue("无耗时显示占位符 —", meta.contains("[—]"));
         assertTrue("无源码显示占位符 unknown", meta.contains("[unknown]"));
@@ -77,7 +104,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     @Test
     public void test二级条目_特殊字符SQL原文保真() throws Exception {
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM t WHERE a < 5 AND b > 3", null, 0, null));
-        String sql = joinedText(r.sqlLine);
+        String sql = joinedText(r.getSqlLine());
         assertTrue("小于号原文保留", sql.contains("< 5"));
         assertTrue("大于号原文保留", sql.contains("> 3"));
     }
@@ -91,7 +118,46 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         }
         sb.append(" FROM t WHERE id = 1");
         HistoryCellRenderer r = renderSql(sqlEntry(sb.toString(), null, 0, null));
-        assertTrue("超长 SQL 摘要含省略号", joinedText(r.sqlLine).contains("…"));
+        assertTrue("超长 SQL 摘要含省略号", joinedText(r.getSqlLine()).contains("…"));
+    }
+
+    // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
+
+    @Test
+    public void test二级条目_元信息在上SQL在下两行显示() throws Exception {
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", "OrderDao.java", 9, 30L));
+        String meta = joinedText(r.metaLine);
+        assertTrue("耗时占位应在元信息行", meta.contains("[30ms]"));
+        assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"));
+        assertTrue("SQL 应在 SQL 行", joinedText(r.getSqlLine()).contains("SELECT"));
+        assertFalse("来源不应混入 SQL 行", joinedText(r.getSqlLine()).contains("OrderDao.java"));
+        assertTrue("元信息行恒存在（T-TwoLine 两行结构，占位符归元信息行）", meta.contains("[") && meta.contains("]"));
+    }
+
+    @Test
+    public void test二级条目_空耗时与未知来源占位渲染在元信息行() throws Exception {
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
+        String meta = joinedText(r.metaLine);
+        assertTrue("空耗时占位 [—] 应在元信息行", meta.contains("[—]"));
+        assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"));
+        assertTrue("SQL 应在 SQL 行", joinedText(r.getSqlLine()).contains("SELECT"));
+    }
+
+    // ---------- T-ListMode：SQL 三种显示模式 ----------
+
+    @Test
+    public void test二级条目_关键字换行模式SQL子句分行() throws Exception {
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        String saved = state.getLogListSqlDisplayMode();
+        state.setLogListSqlDisplayMode("KEYWORD_WRAP");
+        try {
+            HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", "OrderDao.java", 9, 0));
+            assertTrue("FROM 应独立成行", r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("FROM")));
+            assertTrue("WHERE 应独立成行", r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("WHERE")));
+            assertFalse("元信息行不混入 SQL", joinedText(r.metaLine).contains("SELECT"));
+        } finally {
+            state.setLogListSqlDisplayMode(saved);
+        }
     }
 
     @Test
@@ -139,5 +205,109 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         SimpleTextAttributes attrs = it.getTextAttributes();
         assertTrue("文件名片段应加粗（原 HTML <b> 语义）",
                 (attrs.getStyle() & SimpleTextAttributes.STYLE_BOLD) != 0);
+    }
+
+    // ---------- T-CrudColor：二级 SQL 列表 CRUD 类型颜色标记（与日志页同构） ----------
+
+    private void withCrudColors(String style, Runnable block) {
+        PluginSettings.State s = PluginSettings.getInstance().getState();
+        String savedStyle = s.getCrudColorStyle();
+        List<String> saved = List.of(s.getCrudColorSelect(), s.getCrudColorInsert(),
+                s.getCrudColorUpdate(), s.getCrudColorDelete());
+        try {
+            s.setCrudColorStyle(style);
+            s.setCrudColorSelect("#4A86E8");
+            s.setCrudColorInsert("#4CAF50");
+            s.setCrudColorUpdate("#E67E22");
+            s.setCrudColorDelete("#D32F2F");
+            block.run();
+        } finally {
+            s.setCrudColorStyle(savedStyle);
+            s.setCrudColorSelect(saved.get(0));
+            s.setCrudColorInsert(saved.get(1));
+            s.setCrudColorUpdate(saved.get(2));
+            s.setCrudColorDelete(saved.get(3));
+        }
+    }
+
+    private java.awt.Color barColorAfterRender(String sql, boolean selected) {
+        renderSql(sqlEntry(sql, null, 0, null), selected);
+        return sqlRenderer.colorBar.isOpaque() ? sqlRenderer.colorBar.getBackground() : null;
+    }
+
+    private java.awt.Color barColorAfterRender(String sql) {
+        return barColorAfterRender(sql, false);
+    }
+
+    @Test
+    public void test二级条目_色条样式_四类型着色且OTHER不标记() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            assertEquals(new java.awt.Color(0x4A86E8), barColorAfterRender("SELECT * FROM user"));
+            assertEquals(new java.awt.Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"));
+            assertEquals(new java.awt.Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"));
+            assertEquals(new java.awt.Color(0xD32F2F), barColorAfterRender("DELETE FROM user"));
+            assertEquals("OTHER 不应着色", null, barColorAfterRender("TRUNCATE TABLE user"));
+        });
+    }
+
+    @Test
+    public void test二级条目_色条样式_选中态色条不丢色() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            assertEquals(new java.awt.Color(0x4A86E8), barColorAfterRender("SELECT * FROM user", true));
+        });
+    }
+
+    @Test
+    public void test二级条目_背景样式_未选中与选中混色比例不同且不铺平台填充() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            java.awt.Color bg = list.getBackground();
+            renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null));
+            assertEquals("未选中 14% 混色",
+                    SqlListTypeColor.blend(bg, new java.awt.Color(0xE67E22), SqlListTypeColor.MIX_NORMAL),
+                    sqlRenderer.getBackground());
+            renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null), true);
+            assertEquals("选中 30% 混色",
+                    SqlListTypeColor.blend(bg, new java.awt.Color(0xE67E22), SqlListTypeColor.MIX_SELECTED),
+                    sqlRenderer.getBackground());
+            assertNotEquals("选中态不铺平台填充", list.getSelectionBackground(), sqlRenderer.getBackground());
+        });
+    }
+
+    @Test
+    public void test二级条目_背景样式_选中态描边且两状态insets逐边相等() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
+            renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null));
+            assertEquals(sqlRenderer.normalBorder, sqlRenderer.getBorder());
+            renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null), true);
+            assertEquals(sqlRenderer.selectedBorder, sqlRenderer.getBorder());
+
+            java.awt.Insets normal = sqlRenderer.normalBorder.getBorderInsets(sqlRenderer);
+            java.awt.Insets selected = sqlRenderer.selectedBorder.getBorderInsets(sqlRenderer);
+            assertEquals("上", normal.top, selected.top);
+            assertEquals("左", normal.left, selected.left);
+            assertEquals("下", normal.bottom, selected.bottom);
+            assertEquals("右", normal.right, selected.right);
+        });
+    }
+
+    @Test
+    public void test二级条目_重复渲染不产生属性实例变更() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
+            renderSql(sqlEntry("SELECT 1", null, 0, null));
+            java.awt.Color barBg = sqlRenderer.colorBar.getBackground();
+            javax.swing.border.Border border = sqlRenderer.getBorder();
+            renderSql(sqlEntry("SELECT 2", null, 0, null));
+            assertSame("同色格应复用同一 Color 实例（否则每格一次 repaint）",
+                    barBg, sqlRenderer.colorBar.getBackground());
+            assertSame("同状态应复用同一 Border 实例", border, sqlRenderer.getBorder());
+        });
+    }
+
+    @Test
+    public void test二级条目_关闭样式_色条不可见且背景走原逻辑() throws Exception {
+        withCrudColors(SqlListTypeColor.STYLE_OFF, () -> {
+            assertEquals(null, barColorAfterRender("SELECT * FROM user"));
+            assertEquals(list.getBackground(), sqlRenderer.getBackground());
+        });
     }
 }

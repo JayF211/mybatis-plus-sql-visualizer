@@ -117,8 +117,11 @@ public class SqlLogCaptureRealtimeScenarioTest {
         SqlLogEntryBuffer buffer = new SqlLogEntryBuffer(200);
         buffer.setDedupeEnabled(true);
         buffer.setDedupeWindowMs(60000L);
-        int[] notified = {0};
-        buffer.addListener(() -> notified[0]++);
+        // T-PerfBatch 分层契约：内容通知与徽章通知拆通道——去重丢弃只即时刷新徽章
+        int[] contentNotified = {0};
+        int[] badgeNotified = {0};
+        buffer.addListener(() -> contentNotified[0]++);
+        buffer.setOnDedupeCountsChanged(() -> badgeNotified[0]++);
 
         // 真实分页：同一页 SQL 因不同页码参数不同 → 不同 SQL；模拟「同一查询重复执行 5 次」
         String sql = "SELECT id,username FROM user WHERE status = 'ACTIVE' ORDER BY id LIMIT 10";
@@ -133,7 +136,8 @@ public class SqlLogCaptureRealtimeScenarioTest {
 
         assertEquals("窗口内 5 次执行只留 1 条", 1, buffer.snapshot().size());
         assertEquals("徽章 ⨉4", 4, buffer.dedupeCount(sql));
-        assertEquals("5 次入列 + 4 次丢弃共通知 5 次", 5, notified[0]);
+        assertEquals("4 次丢弃即时走徽章通道", 4, badgeNotified[0]);
+        assertEquals("内容通道时间窗内只通知首条", 1, contentNotified[0]);
     }
 
     @Test

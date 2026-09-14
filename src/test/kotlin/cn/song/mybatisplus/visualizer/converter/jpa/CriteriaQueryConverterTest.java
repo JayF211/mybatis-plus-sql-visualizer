@@ -6,6 +6,8 @@ import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.ColumnRef;
 import cn.song.mybatisplus.visualizer.model.Condition;
 import cn.song.mybatisplus.visualizer.model.Connector;
+import cn.song.mybatisplus.visualizer.model.DeleteStatement;
+import cn.song.mybatisplus.visualizer.model.JoinClause;
 import cn.song.mybatisplus.visualizer.model.JoinType;
 import cn.song.mybatisplus.visualizer.model.LikePosition;
 import cn.song.mybatisplus.visualizer.model.OrderByItem;
@@ -13,15 +15,23 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
+import cn.song.mybatisplus.visualizer.model.UpdateStatement;
+import cn.song.mybatisplus.visualizer.psi.jpa.AggregateInfo;
+import cn.song.mybatisplus.visualizer.psi.jpa.CaseWhen;
+import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaOperation;
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryModel;
+import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaSetClause;
+import cn.song.mybatisplus.visualizer.psi.jpa.ExpressionModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.GroupConnector;
 import cn.song.mybatisplus.visualizer.psi.jpa.JoinModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.OrderByModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.PredicateModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.SelectColumn;
+import cn.song.mybatisplus.visualizer.psi.jpa.SubqueryModel;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
@@ -75,6 +85,22 @@ public class CriteriaQueryConverterTest {
         return new CriteriaQueryModel(
                 entityClassName, null, selectColumns, predicates,
                 List.of(), List.of(), orderBys, joins, null);
+    }
+
+    /** 便捷构造模型（T-J4/T-J17/T-J6 扩展形态：带 distinct / operation / setClauses）。 */
+    private static CriteriaQueryModel modelFull(
+            String entityClassName,
+            List<SelectColumn> selectColumns,
+            List<PredicateModel> predicates,
+            List<OrderByModel> orderBys,
+            List<JoinModel> joins,
+            boolean distinct,
+            CriteriaOperation operation,
+            List<CriteriaSetClause> setClauses) {
+        return new CriteriaQueryModel(
+                entityClassName, null, selectColumns, predicates,
+                List.of(), List.of(), orderBys, joins, null,
+                distinct, operation, setClauses);
     }
 
     /** 便捷构造：Simple 条件。 */
@@ -272,10 +298,12 @@ public class CriteriaQueryConverterTest {
         Condition.Like cond = (Condition.Like) stmt.getConditions().get(0);
         assertEquals("username", cond.getColumn().getColumnName());
         assertFalse(cond.isNegated());
-        assertEquals(LikePosition.ANYWHERE, cond.getPosition());
+        // T-J17：Criteria 的 LIKE 模式自带通配符，位置语义为 NONE（不二次包裹 %）
+        assertEquals(LikePosition.NONE, cond.getPosition());
 
         String sql = SqlGenerator.INSTANCE.generate(stmt);
         assertTrue("SQL 应包含 LIKE", sql.contains("LIKE"));
+        assertTrue("模式应原样渲染: " + sql, sql.contains("username LIKE 'admin%'"));
     }
 
     @Test
@@ -617,5 +645,557 @@ public class CriteriaQueryConverterTest {
         Condition.Simple cond = (Condition.Simple) stmt.getConditions().get(0);
         // 无列映射时按驼峰转下划线兜底
         assertEquals("status", cond.getColumn().getColumnName());
+    }
+
+    // ------------------------------------------------------------------
+    // T-J4：distinct
+    // ------------------------------------------------------------------
+
+    @Test
+    public void distinct_生成SELECT_DISTINCT() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(simple("status", "=", "1")),
+                List.of(),
+                List.of(),
+                true, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        assertTrue("应标记 distinct", stmt.isDistinct());
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 SELECT DISTINCT: " + sql, sql.contains("SELECT DISTINCT"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J17：布尔常量 / 表达式比较 / escapeChar
+    // ------------------------------------------------------------------
+
+    @Test
+    public void conjunction_disjunction_生成恒真假条件() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.BooleanConstant(true),
+                        new PredicateModel.BooleanConstant(false)),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Raw first = (Condition.Raw) stmt.getConditions().get(0);
+        Condition.Raw second = (Condition.Raw) stmt.getConditions().get(1);
+        assertEquals("1 = 1", first.getSqlText());
+        assertEquals("1 = 0", second.getSqlText());
+
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 1 = 1: " + sql, sql.contains("1 = 1"));
+        assertTrue("SQL 应包含 1 = 0: " + sql, sql.contains("1 = 0"));
+    }
+
+    @Test
+    public void isTrue_生成等值TRUE条件() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(simple("status", "=", "TRUE")),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Simple cond = (Condition.Simple) stmt.getConditions().get(0);
+        assertEquals(new SqlValue.Literal("TRUE"), cond.getValue());
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 = TRUE: " + sql, sql.contains("status = TRUE"));
+    }
+
+    @Test
+    public void 表达式左值_函数比较渲染为列表达式() throws Exception {
+        // cb.equal(cb.lower(root.get("username")), "admin") 的模型形态
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.ExpressionComparison(
+                                new ExpressionModel.Function(
+                                        "LOWER",
+                                        List.of(new ExpressionModel.Column("username")),
+                                        null),
+                                "=",
+                                new ExpressionModel.Value("'admin'"))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Simple cond = (Condition.Simple) stmt.getConditions().get(0);
+        assertEquals("LOWER(username)", cond.getColumn().getColumnName());
+        assertEquals("=", cond.getOp());
+        assertEquals(new SqlValue.Literal("'admin'", "admin"), cond.getValue());
+
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含函数表达式: " + sql, sql.contains("LOWER(username) = 'admin'"));
+    }
+
+    @Test
+    public void 表达式IS_NULL_渲染Unary条件() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.ExpressionComparison(
+                                new ExpressionModel.Function("LOWER", List.of(new ExpressionModel.Column("username")), null),
+                                "IS NULL",
+                                new ExpressionModel.Value("null"))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Unary cond = (Condition.Unary) stmt.getConditions().get(0);
+        assertEquals("IS NULL", cond.getOp());
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 LOWER(username) IS NULL: " + sql, sql.contains("LOWER(username) IS NULL"));
+    }
+
+    @Test
+    public void 表达式BETWEEN_渲染Raw片段() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.ExpressionBetween(
+                                new ExpressionModel.Function("LOWER", List.of(new ExpressionModel.Column("username")), null),
+                                new ExpressionModel.Value("'a'"),
+                                new ExpressionModel.Value("'z'"))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Raw cond = (Condition.Raw) stmt.getConditions().get(0);
+        assertTrue("应包含 BETWEEN: " + cond.getSqlText(),
+                cond.getSqlText().contains("LOWER(username) BETWEEN 'a' AND 'z'"));
+    }
+
+    @Test
+    public void like带escapeChar_渲染ESCAPE子句() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.Like("username", false, "'a!%b'", "'!'")),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Raw cond = (Condition.Raw) stmt.getConditions().get(0);
+        assertTrue(
+                "应渲染 ESCAPE: " + cond.getSqlText(),
+                cond.getSqlText().contains("username LIKE 'a!%b' ESCAPE '!'"));
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 ESCAPE: " + sql, sql.contains("ESCAPE '!'"));
+        // ? 计数：字面量不产生占位符
+        assertEquals(0, sql.chars().filter(c -> c == '?').count());
+    }
+
+    @Test
+    public void 算术表达式_渲染中缀与MOD() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn(null, null, null,
+                                new ExpressionModel.Function(
+                                        "ADD",
+                                        List.of(new ExpressionModel.Column("age"), new ExpressionModel.Value("10")),
+                                        null)),
+                        new SelectColumn(null, null, null,
+                                new ExpressionModel.Function(
+                                        "MOD",
+                                        List.of(new ExpressionModel.Column("id"), new ExpressionModel.Value("2")),
+                                        null))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 (age + 10): " + sql, sql.contains("(age + 10)"));
+        assertTrue("SQL 应包含 MOD(id, 2): " + sql, sql.contains("MOD(id, 2)"));
+    }
+
+    @Test
+    public void cast表达式_渲染CAST类型() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn(null, null, null,
+                                new ExpressionModel.Function(
+                                        "CAST",
+                                        List.of(new ExpressionModel.Column("age")),
+                                        "BIGINT"))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("SQL 应包含 CAST(age AS BIGINT): " + sql, sql.contains("CAST(age AS BIGINT)"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J17：CASE / COALESCE 表达式列
+    // ------------------------------------------------------------------
+
+    @Test
+    public void CASE表达式列_渲染WHEN_THEN_ELSE() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn(null, null, null,
+                                new ExpressionModel.Case(
+                                        null,
+                                        List.of(
+                                                new CaseWhen(
+                                                        null,
+                                                        new PredicateModel.Simple("status", "=", "1"),
+                                                        new ExpressionModel.Value("'active'"))),
+                                        new ExpressionModel.Value("'inactive'")))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue(
+                "SQL 应包含 CASE WHEN: " + sql,
+                sql.contains("CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END"));
+    }
+
+    @Test
+    public void COALESCE表达式列_渲染多参() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn(null, null, null,
+                                new ExpressionModel.Function(
+                                        "COALESCE",
+                                        List.of(
+                                                new ExpressionModel.Column("nickname"),
+                                                new ExpressionModel.Column("username")),
+                                        null))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("SQL 应包含 COALESCE(nickname, username): " + sql, sql.contains("COALESCE(nickname, username)"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J17：聚合扩展
+    // ------------------------------------------------------------------
+
+    @Test
+    public void countDistinct_渲染COUNT_DISTINCT() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn("username", null,
+                                new AggregateInfo("COUNT", "username", true))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        assertEquals("COUNT(DISTINCT username)", stmt.getSelectColumns().get(0).getRawExpr());
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 COUNT(DISTINCT username): " + sql, sql.contains("COUNT(DISTINCT username)"));
+    }
+
+    @Test
+    public void sumAsLong_渲染SUM_CAST() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn("age", null,
+                                new AggregateInfo("SUM", "age", false, "BIGINT", null))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("SQL 应包含 SUM(CAST(age AS BIGINT)): " + sql, sql.contains("SUM(CAST(age AS BIGINT))"));
+    }
+
+    @Test
+    public void greatest_least_映射MAX_MIN() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn("age", null, new AggregateInfo("MAX", "age", false)),
+                        new SelectColumn("age", null, new AggregateInfo("MIN", "age", false))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("SQL 应包含 MAX(age): " + sql, sql.contains("MAX(age)"));
+        assertTrue("SQL 应包含 MIN(age): " + sql, sql.contains("MIN(age)"));
+    }
+
+    @Test
+    public void 聚合内层表达式_渲染AVG_COALESCE() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(
+                        new SelectColumn(null, null,
+                                new AggregateInfo(
+                                        "AVG",
+                                        null,
+                                        false,
+                                        null,
+                                        new ExpressionModel.Function(
+                                                "COALESCE",
+                                                List.of(new ExpressionModel.Column("age"), new ExpressionModel.Value("0")),
+                                                null)))),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("SQL 应包含 AVG(COALESCE(age, 0)): " + sql, sql.contains("AVG(COALESCE(age, 0))"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J17/J13：子查询渲染与降级
+    // ------------------------------------------------------------------
+
+    @Test
+    public void exists子查询_渲染EXISTS_SELECT() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.Exists(
+                                new SubqueryModel(
+                                        "OrderEntity",
+                                        "id",
+                                        List.of(new PredicateModel.ColumnEquals("userId", "id")),
+                                        null))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Raw cond = (Condition.Raw) stmt.getConditions().get(0);
+        // 子查询实体无列映射 → 字段按命名策略转下划线（userId → user_id），表名按类名推断
+        assertTrue(
+                "应渲染 EXISTS 子查询: " + cond.getSqlText(),
+                cond.getSqlText().contains("EXISTS (SELECT id FROM order_entity WHERE user_id = id)"));
+    }
+
+    @Test
+    public void notExists_渲染NOT_EXISTS() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.Exists(
+                                new SubqueryModel("OrderEntity", "id", List.of(), null),
+                                true)),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("SQL 应包含 NOT EXISTS: " + sql, sql.contains("NOT EXISTS (SELECT id FROM order_entity)"));
+    }
+
+    @Test
+    public void in子查询_渲染IN_SELECT() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.InSubQuery(
+                                "id",
+                                new SubqueryModel(
+                                        "OrderEntity",
+                                        "userId",
+                                        List.of(new PredicateModel.Simple("status", "=", "1")),
+                                        null))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        Condition.Raw cond = (Condition.Raw) stmt.getConditions().get(0);
+        // 子查询 select 字段同样走列名映射（userId → user_id）
+        assertTrue(
+                "应渲染 IN 子查询: " + cond.getSqlText(),
+                cond.getSqlText().contains("id IN (SELECT user_id FROM order_entity WHERE status = 1)"));
+        // ? 计数：子查询内字面量不产生占位符
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertEquals(0, sql.chars().filter(c -> c == '?').count());
+    }
+
+    @Test
+    public void 子查询含占位符_渲染问号() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.Exists(
+                                new SubqueryModel(
+                                        "OrderEntity",
+                                        "id",
+                                        List.of(new PredicateModel.Simple("ownerName", "=", "ownerNameVar")),
+                                        null))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("变量应渲染为 ?: " + sql, sql.contains("WHERE owner_name = ?"));
+        assertEquals(1, sql.chars().filter(c -> c == '?').count());
+    }
+
+    @Test
+    public void correlate子查询_降级注释() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(
+                        new PredicateModel.Exists(
+                                new SubqueryModel(
+                                        "OrderEntity",
+                                        null,
+                                        List.of(),
+                                        "correlate 关联子查询"))),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("应降级为注释: " + sql, sql.contains("/* 子查询暂不支持静态解析：correlate 关联子查询 */"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J7：显式 ON 优先
+    // ------------------------------------------------------------------
+
+    @Test
+    public void join显式ON_优先于外键推断() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(
+                        new JoinModel(
+                                "department",
+                                null,
+                                JoinType.LEFT,
+                                null,
+                                false,
+                                List.of(
+                                        new PredicateModel.ColumnEquals(
+                                                "code", "deptCode", "=", "deptJoin", "root")),
+                                "deptJoin")),
+                false, CriteriaOperation.SELECT, List.of());
+        SelectStatement stmt = convert(model);
+        JoinClause join = stmt.getJoins().get(0);
+        assertEquals(1, join.getOnConditions().size());
+        Condition.ColumnComparison on = (Condition.ColumnComparison) join.getOnConditions().get(0);
+        assertEquals("deptJoin", on.getLeft().getTableAlias());
+        assertNull("root 侧应无别名", on.getRight().getTableAlias());
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含显式 ON: " + sql, sql.contains("ON deptJoin.code = dept_code"));
+    }
+
+    @Test
+    public void join无显式ON_回退外键推断() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(
+                        new JoinModel("department", null, JoinType.LEFT, null)),
+                false, CriteriaOperation.SELECT, List.of());
+        String sql = SqlGenerator.INSTANCE.generate(convert(model));
+        assertTrue("应回退推断 ON: " + sql, sql.contains("ON department.id = department_id"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-J6：CriteriaUpdate / CriteriaDelete
+    // ------------------------------------------------------------------
+
+    @Test
+    public void update转换_生成UpdateStatement() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(simple("id", "=", "1L")),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.UPDATE,
+                List.of(
+                        new CriteriaSetClause("status", "2"),
+                        new CriteriaSetClause("username", "\"admin\"")));
+        SqlStatement stmt = CriteriaQueryConverter.convert(model, TABLE);
+        assertTrue("应生成 UpdateStatement", stmt instanceof UpdateStatement);
+        UpdateStatement update = (UpdateStatement) stmt;
+        assertEquals(2, update.getSets().size());
+        assertEquals("status", update.getSets().get(0).getColumn().getColumnName());
+        assertEquals(new SqlValue.Literal("2"), update.getSets().get(0).getValue());
+        assertEquals("username", update.getSets().get(1).getColumn().getColumnName());
+        assertEquals(new SqlValue.Literal("'admin'", "admin"), update.getSets().get(1).getValue());
+
+        String sql = SqlGenerator.INSTANCE.generate(update);
+        assertTrue("SQL 应包含 SET: " + sql, sql.contains("SET status = 2, username = 'admin'"));
+        assertTrue("SQL 应包含 WHERE: " + sql, sql.contains("WHERE"));
+    }
+
+    @Test
+    public void update_setNull_渲染NULL() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.UPDATE,
+                List.of(
+                        new CriteriaSetClause("remark", "null")));
+        UpdateStatement update = (UpdateStatement) CriteriaQueryConverter.convert(model, TABLE);
+        assertEquals(new SqlValue.Literal("NULL"), update.getSets().get(0).getValue());
+        String sql = SqlGenerator.INSTANCE.generate(update);
+        assertTrue("SQL 应包含 remark = NULL: " + sql, sql.contains("remark = NULL"));
+    }
+
+    @Test
+    public void update占位值_渲染问号() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(simple("id", "=", "idVar")),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.UPDATE,
+                List.of(
+                        new CriteriaSetClause("username", "newNameVar")));
+        String sql = SqlGenerator.INSTANCE.generate(CriteriaQueryConverter.convert(model, TABLE));
+        // ? 计数：SET 1 个 + WHERE 1 个
+        assertEquals(2, sql.chars().filter(c -> c == '?').count());
+        assertTrue(sql.contains("username = ?"));
+        assertTrue(sql.contains("id = ?"));
+    }
+
+    @Test
+    public void delete转换_生成DeleteStatement() throws Exception {
+        CriteriaQueryModel model = modelFull(
+                "UserEntity",
+                List.of(),
+                List.of(simple("status", "=", "0")),
+                List.of(),
+                List.of(),
+                false, CriteriaOperation.DELETE,
+                List.of());
+        SqlStatement stmt = CriteriaQueryConverter.convert(model, TABLE);
+        assertTrue("应生成 DeleteStatement", stmt instanceof DeleteStatement);
+        String sql = SqlGenerator.INSTANCE.generate(stmt);
+        assertTrue("SQL 应包含 DELETE FROM: " + sql, sql.contains("DELETE FROM user_entity"));
+        assertTrue("SQL 应包含 WHERE: " + sql, sql.contains("status = 0"));
     }
 }

@@ -515,25 +515,54 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         assertTrue(panel.editorForTest().getDocument().getText().contains("WHERE id = 1"));
         assertFalse(panel.editorForTest().getDocument().getText().contains("station_id = 2"));
 
-        // 全选 → 两个条件都在，复选框状态同步
-        panel.selectAllButtonForTest().doClick();
+        // T-SelToggle：单个切换按钮——初始非全勾（仅 c0）→ 文案「全选」→ 点击全勾、文案翻「全不选」
+        javax.swing.JButton toggle = panel.toggleSelectButtonForTest();
+        assertEquals("初始非全勾应为全选文案",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.getText());
+        toggle.doClick();
         assertTrue(panel.editorForTest().getDocument().getText().contains("AND station_id = 2"));
         assertTrue(panel.conditionCheckboxForTest(0).isSelected());
         assertTrue(panel.conditionCheckboxForTest(1).isSelected());
+        assertEquals("全勾后应翻转为全不选文案",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.getText());
 
-        // 全不选 → 动态条件全部移除（无 WHERE），复选框状态同步
-        panel.selectNoneButtonForTest().doClick();
+        // 再点一次 → 动态条件全部移除（无 WHERE），复选框状态同步、文案回「全选」
+        toggle.doClick();
         assertFalse(panel.editorForTest().getDocument().getText().contains("WHERE"));
         assertFalse(panel.conditionCheckboxForTest(0).isSelected());
         assertFalse(panel.conditionCheckboxForTest(1).isSelected());
         assertTrue(panel.enabledIdsForTest().isEmpty());
+        assertEquals("全不选后应回到全选文案",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.getText());
 
-        // 全选后再取消单个勾选 → 另一个保留
-        panel.selectAllButtonForTest().doClick();
+        // 全选后再取消单个勾选 → 另一个保留，文案随部分勾选态翻回「全选」
+        toggle.doClick();
         panel.conditionCheckboxForTest(1).doClick();
         String sql = panel.editorForTest().getDocument().getText();
         assertTrue(sql.contains("id = 1"));
         assertFalse(sql.contains("station_id = 2"));
+        assertEquals("部分勾选应为全选文案",
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.getText());
+        panel.clear();
+    }
+
+    public void testToggleSelectLabelFollowsSingleCheckboxClick() throws Exception {
+        // T-SelToggle：文案同步挂在 renderSql 单点收口——单个复选框点选即应翻转切换按钮文案
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(dynamicResult(
+                List.of(
+                        new Condition.Simple(new ColumnRef(null, "id", null, null, null, null, null), "=",
+                                new SqlValue.Literal("1"),
+                                new ConditionToggle("c0", "true", true, "id = 1", null, List.of()))),
+                List.of(
+                        new ConditionView("c0", "id = 1", "true", true, null, List.of()))));
+        javax.swing.JButton toggle = panel.toggleSelectButtonForTest();
+        // 初始：唯一条件已勾选 → 全勾 → 「全不选」
+        assertEquals(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.getText());
+        panel.conditionCheckboxForTest(0).doClick(); // 取消唯一勾选 → 空集 → 「全选」
+        assertEquals(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.getText());
+        panel.conditionCheckboxForTest(0).doClick(); // 勾回 → 全勾 → 「全不选」
+        assertEquals(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.getText());
         panel.clear();
     }
 
@@ -800,21 +829,24 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
                 List.of(), null, null, MySqlDialect.INSTANCE);
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(batchResult(model));
-        assertNotNull("批量区应有全选按钮", panel.batchSelectAllButtonForTest());
-        assertNotNull("批量区应有全不选按钮", panel.batchSelectNoneButtonForTest());
-        // 全不选 → 空列清单（文档化边界）
-        panel.batchSelectNoneButtonForTest().doClick();
-        assertFalse(panel.batchCheckboxForTest(0).isSelected());
-        assertFalse(panel.batchCheckboxForTest(1).isSelected());
-        assertFalse(panel.batchCheckboxForTest(2).isSelected());
-        assertTrue(panel.editorForTest().getDocument().getText().contains("INSERT INTO biz_store_coupon ()"));
-        // 全选 → 全列恢复
-        panel.batchSelectAllButtonForTest().doClick();
+        javax.swing.JButton toggle = panel.batchToggleSelectButtonForTest();
+        assertNotNull("批量区应有全选/全不选切换按钮", toggle);
+        // T-SelToggle：初始部分勾选（id 未勾）→ 文案「全选」；点击 → 全列恢复
+        assertEquals(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.getText());
+        toggle.doClick();
         assertTrue(panel.batchCheckboxForTest(0).isSelected());
         assertTrue(panel.batchCheckboxForTest(1).isSelected());
         assertTrue(panel.batchCheckboxForTest(2).isSelected());
+        assertEquals(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.getText());
         assertTrue(
                 panel.editorForTest().getDocument().getText().contains("INSERT INTO biz_store_coupon (id, name, dic_status)"));
+        // 再点 → 全不选 → 空列清单（文档化边界），文案回「全选」
+        toggle.doClick();
+        assertFalse(panel.batchCheckboxForTest(0).isSelected());
+        assertFalse(panel.batchCheckboxForTest(1).isSelected());
+        assertFalse(panel.batchCheckboxForTest(2).isSelected());
+        assertEquals(cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.getText());
+        assertTrue(panel.editorForTest().getDocument().getText().contains("INSERT INTO biz_store_coupon ()"));
         panel.clear();
     }
 
@@ -904,7 +936,7 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
                 List.of(new ConditionView("c0", longExpr, "true", true, "stationIds", List.of("stationIds")))));
         JBScrollPane scroll = (JBScrollPane) split.getLeftComponent();
         javax.swing.JViewport viewport = scroll.getViewport();
-        javax.swing.JButton button = panel.selectAllButtonForTest();
+        javax.swing.JButton button = panel.toggleSelectButtonForTest();
         // 按钮在参数面板内
         assertTrue("按钮应在参数面板内", SwingUtilities.isDescendingFrom(button, viewport.getView()));
         // 布局后按钮仍可见于视口
@@ -1216,8 +1248,8 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         // 无参数 → 无按钮
         panel.showResult(result());
-        assertNull("无内容时应无全选按钮", panel.selectAllButtonForTest());
-        assertNull("无内容时应无批量全选按钮", panel.batchSelectAllButtonForTest());
+        assertNull("无内容时应无全选按钮", panel.toggleSelectButtonForTest());
+        assertNull("无内容时应无批量全选按钮", panel.batchToggleSelectButtonForTest());
         // 动态条件 → 条件组
         panel.showResult(dynamicResult(
                 List.of(
@@ -1225,17 +1257,17 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
                                 new SqlValue.Literal("1"),
                                 new ConditionToggle("c0", "true", true, "id = 1", null, List.of()))),
                 List.of(new ConditionView("c0", "id = 1", "true", true, null, List.of()))));
-        assertNotNull("动态条件场景应有全选按钮", panel.selectAllButtonForTest());
-        assertNull("动态条件场景不应有批量全选按钮", panel.batchSelectAllButtonForTest());
+        assertNotNull("动态条件场景应有全选按钮", panel.toggleSelectButtonForTest());
+        assertNull("动态条件场景不应有批量全选按钮", panel.batchToggleSelectButtonForTest());
         // 批量列 → 批量组
         panel.showResult(batchResult(new BatchModel(BatchKind.INSERT, "biz_store_coupon",
                 List.of(new BatchColumn("name", "entity.name", true, true)),
                 List.of(), null, null, MySqlDialect.INSTANCE)));
-        assertNull("批量场景不应有全选按钮", panel.selectAllButtonForTest());
-        assertNotNull("批量场景应有批量全选按钮", panel.batchSelectAllButtonForTest());
+        assertNull("批量场景不应有全选按钮", panel.toggleSelectButtonForTest());
+        assertNotNull("批量场景应有批量全选按钮", panel.batchToggleSelectButtonForTest());
         panel.clear();
-        assertNull("clear 后应无全选按钮", panel.selectAllButtonForTest());
-        assertNull("clear 后应无批量全选按钮", panel.batchSelectAllButtonForTest());
+        assertNull("clear 后应无全选按钮", panel.toggleSelectButtonForTest());
+        assertNull("clear 后应无批量全选按钮", panel.batchToggleSelectButtonForTest());
     }
 
     // ------------------------------------------------------------------
@@ -1435,5 +1467,90 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         assertTrue("应含联表候选表名 merchant_entity：" + items, items.contains("merchant_entity"));
         lookupManager.hideActiveLookup();
         panel.clear();
+    }
+
+    // ---------- T-AutoFold F4-a：showSql 程序性折叠 ----------
+
+    private void withAutoFold(boolean enabled, Runnable block) {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.State state =
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
+        boolean oldEnabled = state.getAutoFoldEnabled();
+        int oldThreshold = state.getAutoFoldFieldThreshold();
+        try {
+            state.setAutoFoldEnabled(enabled);
+            state.setAutoFoldFieldThreshold(3);
+            block.run();
+        } finally {
+            state.setAutoFoldEnabled(oldEnabled);
+            state.setAutoFoldFieldThreshold(oldThreshold);
+        }
+    }
+
+    private java.util.List<com.intellij.openapi.editor.FoldRegion> ownFoldRegions(com.intellij.openapi.editor.Editor editor) {
+        java.util.List<com.intellij.openapi.editor.FoldRegion> out = new ArrayList<>();
+        for (com.intellij.openapi.editor.FoldRegion region : editor.getFoldingModel().getAllFoldRegions()) {
+            if (region.getPlaceholderText().startsWith("…")) out.add(region);
+        }
+        return out;
+    }
+
+    public void test开启自动折叠后showResult产生折叠区域() throws Exception {
+        withAutoFold(true, () -> {
+            SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+            panel.showResult(result(
+                    "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+                    "SELECT a1, a2, a3, a4 FROM t"));
+            com.intellij.openapi.editor.Editor editor = panel.editorForTest();
+            java.util.List<com.intellij.openapi.editor.FoldRegion> regions = ownFoldRegions(editor);
+            assertEquals("showSql 后应有本方折叠区域", 1, regions.size());
+            assertFalse("区域应收起", regions.get(0).isExpanded());
+            panel.clear();
+        });
+    }
+
+    public void test关闭自动折叠后showResult零区域() throws Exception {
+        withAutoFold(false, () -> {
+            SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+            panel.showResult(result(
+                    "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+                    "SELECT a1, a2, a3, a4 FROM t"));
+            assertEquals("关闭态零折叠区域（逐字节不变）", 0, ownFoldRegions(panel.editorForTest()).size());
+            panel.clear();
+        });
+    }
+
+    // ---------- T-Perf-04：detectInClauseParams 单趟扫描（与旧 O(L×P) 实现语义一致） ----------
+
+    public void testDetectInClauseParams_InParens多参数命中() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        try {
+            // 语义与旧实现（对每个 ? 前缀做 endsWith("IN ("/"IN(")）完全一致：
+            // 仅紧贴 "IN (" 的首个 ? 命中（后续 ? 的前缀以 "?," 结尾不命中）。
+            java.util.Set<Integer> detected = panel.detectInClauseParams(
+                    "SELECT * FROM t WHERE id IN ( ?, ?, ? ) AND name = ?");
+            assertEquals(java.util.Set.of(0), detected);
+        } finally {
+            panel.dispose();
+        }
+    }
+
+    public void testDetectInClauseParams_紧凑形态与大小写() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        try {
+            assertEquals(java.util.Set.of(0),
+                    panel.detectInClauseParams("select * from t where id in(?)"));
+        } finally {
+            panel.dispose();
+        }
+    }
+
+    public void testDetectInClauseParams_非In问号不命中() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        try {
+            assertEquals(java.util.Set.<Integer>of(),
+                    panel.detectInClauseParams("SELECT * FROM t WHERE a = ? AND b = ?"));
+        } finally {
+            panel.dispose();
+        }
     }
 }

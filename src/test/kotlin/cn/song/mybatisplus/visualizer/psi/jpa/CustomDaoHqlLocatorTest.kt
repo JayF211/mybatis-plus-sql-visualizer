@@ -322,6 +322,177 @@ class CustomDaoHqlLocatorTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-J12：HibernateTemplate 家族方法名扩展（bulkUpdate / findByNamedQuery）
+    // ------------------------------------------------------------------
+
+    fun testTJ12_hibernateTemplateBulkUpdate() {
+        // bulkUpdate 是 HibernateTemplate 唯一 DML 入口，首参 UPDATE HQL 字符串走现有 HQL 路径
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public int deactivateUsers() {
+                    return getHibernateTemplate().bulkUpdate(
+                        "update UserEntity set status = :status where lastLogin < :cutoff",
+                        "status", 0, "cutoff", "2020-01-01");
+                }
+                HibernateTemplate getHibernateTemplate() { return null; }
+            }
+            interface HibernateTemplate {
+                int bulkUpdate(String hql, Object... values);
+            }
+            class UserEntity {
+                private Integer status;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("deactivateUsers")
+        val info = CustomDaoHqlLocator.locate(method)
+        assertNotNull("bulkUpdate（HibernateTemplate DML）应被识别（T-J12）", info)
+        assertEquals(DaoQueryKind.HQL, info!!.kind)
+        assertTrue("HQL 应为 UPDATE 语句字面量: [" + info.hql + "]", info.hql.startsWith("update UserEntity"))
+        assertEquals(ParamSource.NAME_VALUE_PAIRS, info.paramSource)
+    }
+
+    fun testTJ12_hibernateTemplateFindByNamedQuery() {
+        // findByNamedQuery 首参是查询名字符串而非 HQL：kind=NAMED_QUERY，hql 存查询名，entityClassName 为 null
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public java.util.List findByStatus(int status) {
+                    return getHibernateTemplate().findByNamedQuery("UserEntity.findByStatus", "status", status);
+                }
+                HibernateTemplate getHibernateTemplate() { return null; }
+            }
+            interface HibernateTemplate {
+                java.util.List findByNamedQuery(String queryName, Object... values);
+            }
+            class UserEntity {
+                private Integer status;
+            }
+            """.trimIndent(),
+        )
+        val method = findMethod("findByStatus")
+        val info = CustomDaoHqlLocator.locate(method)
+        assertNotNull("findByNamedQuery 应被识别（T-J12）", info)
+        assertEquals("类别应标记为 NAMED_QUERY（SqlPreviewService 接线后续做）", DaoQueryKind.NAMED_QUERY, info!!.kind)
+        assertEquals("hql 字段应存查询名", "UserEntity.findByStatus", info.hql)
+        assertNull("查询名形态不应提取实体类名", info.entityClassName)
+    }
+
+    fun testTJ12_qbcMethodsRegisteredButNotClaimed() {
+        // findByCriteria/executeFind 只登记到名单（QBC 形态占位），无 SQL 字符串不认领、不误抛
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public java.util.List byCriteria() {
+                    return getHibernateTemplate().findByCriteria(null);
+                }
+                public java.util.List executeFind() {
+                    return getHibernateTemplate().executeFind(null);
+                }
+                HibernateTemplate getHibernateTemplate() { return null; }
+            }
+            interface HibernateTemplate {
+                java.util.List findByCriteria(Object criteria);
+                java.util.List executeFind(Object action);
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        assertNull("findByCriteria 不应认领（无 SQL 字符串）", CustomDaoHqlLocator.locate(findMethod("byCriteria")))
+        assertNull("executeFind 不应认领（QBC 形态占位）", CustomDaoHqlLocator.locate(findMethod("executeFind")))
+        // 名单登记可查：findByCriteria 按 T-J21 归 ENTITY_OP（两名单无交集），executeFind 仍为 QBC
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByCriteria"))
+        assertEquals(DaoQueryKind.QBC, CustomDaoHqlLocator.classifyHibernateTemplateMethod("executeFind"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-J21：HibernateTemplate 实体操作名单（仅登记，不认领、不误判 HQL）
+    // ------------------------------------------------------------------
+
+    fun testTJ21_entityOpMethodsNotClaimed() {
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public void allEntityOps(UserEntity user) {
+                    HibernateTemplate t = getHibernateTemplate();
+                    t.save(user);
+                    t.saveOrUpdate(user);
+                    t.update(user);
+                    t.delete(user);
+                    t.deleteAll(java.util.Arrays.asList(user));
+                    t.get(UserEntity.class, 1L);
+                    t.load(UserEntity.class, 1L);
+                    t.loadAll(UserEntity.class);
+                    t.refresh(user);
+                    t.merge(user);
+                    t.persist(user);
+                    t.replicate(user, null);
+                    t.lock(user, null);
+                    t.findByExample(user);
+                    t.findByCriteria(null);
+                }
+                HibernateTemplate getHibernateTemplate() { return null; }
+            }
+            interface HibernateTemplate {
+                void save(Object entity);
+                void saveOrUpdate(Object entity);
+                void update(Object entity);
+                void delete(Object entity);
+                void deleteAll(java.util.Collection entities);
+                Object get(Class clazz, Long id);
+                Object load(Class clazz, Long id);
+                java.util.List loadAll(Class clazz);
+                void refresh(Object entity);
+                Object merge(Object entity);
+                void persist(Object entity);
+                void replicate(Object entity, Object mode);
+                void lock(Object entity, Object lockMode);
+                java.util.List findByExample(Object entity);
+                java.util.List findByCriteria(Object criteria);
+            }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val method = findMethod("allEntityOps")
+        assertNull("实体操作方法（save/update/delete/...）无 SQL 字符串，不应认领（T-J21）", CustomDaoHqlLocator.locate(method))
+    }
+
+    fun testTJ21_entityOpClassifierMappings() {
+        // 名单登记（SqlPreviewService 批量派发接线由 T-J1 里程碑做）
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("save"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("saveOrUpdate"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("update"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("delete"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("deleteAll"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("get"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("load"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("loadAll"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("refresh"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("merge"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("persist"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("replicate"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("lock"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByExample"))
+        assertEquals(DaoQueryKind.ENTITY_OP, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByCriteria"))
+        // 名单外方法不归类
+        assertNull(CustomDaoHqlLocator.classifyHibernateTemplateMethod("execute"))
+        assertNull(CustomDaoHqlLocator.classifyHibernateTemplateMethod(null))
+    }
+
+    fun testTJ12_classifierMappings() {
+        assertEquals(DaoQueryKind.HQL, CustomDaoHqlLocator.classifyHibernateTemplateMethod("find"))
+        assertEquals(DaoQueryKind.HQL, CustomDaoHqlLocator.classifyHibernateTemplateMethod("bulkUpdate"))
+        assertEquals(DaoQueryKind.NAMED_QUERY, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByNamedQuery"))
+        assertEquals(DaoQueryKind.NAMED_QUERY, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByNamedQueryAndNamedParam"))
+        assertEquals(DaoQueryKind.NAMED_QUERY, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByNamedQueryAndValueBean"))
+    }
+
+    // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
 

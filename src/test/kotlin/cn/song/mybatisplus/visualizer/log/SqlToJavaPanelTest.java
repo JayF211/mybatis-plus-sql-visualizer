@@ -213,6 +213,30 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     }
 
     @Test
+    public void testPickCallerWithoutMpjOnJoinShowsStatusNotThrow() throws Exception {
+        // T-PickMpjErr：多表 JOIN + 无 MPJ 能力调用类 → 生成期 SqlReverseException 须转状态栏
+        // 错误提示（真机曾从选类 elementChosen 逃逸成 EDT UnhandledException 红叹号）
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        boolean original = state.getReverseManualEntitySelection();
+        state.setReverseManualEntitySelection(false);
+        try {
+            panel.inputEditorForTest().setSql("SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1");
+            panel.convertForTest();
+            String fallback = awaitResult();
+            assertTrue(fallback, fallback.contains("new MPJQueryWrapper<>"));
+            // 选中无 MPJ 能力的调用类（Light 环境无 MPJ 索引，callerMpj=false）→ 重渲染触发业务拒绝
+            panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService");
+            assertTrue(panel.statusForTest(), panel.statusForTest().contains("暂不支持的 SQL 结构"));
+            assertTrue(panel.statusForTest(), panel.statusForTest().contains("无 MPJ 能力"));
+            // 结果区保留上次成功内容，未被错误分支改写
+            assertTrue(panel.resultTextForTest(), panel.resultTextForTest().contains("new MPJQueryWrapper<>"));
+        } finally {
+            state.setReverseManualEntitySelection(original);
+            panel.callerFieldForTest().clearForTest();
+        }
+    }
+
+    @Test
     public void testFindSubEntityCandidatesKeysByAlias() throws Exception {
         SqlReverseResult result = SqlToJavaConverter.parse(
             "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id");

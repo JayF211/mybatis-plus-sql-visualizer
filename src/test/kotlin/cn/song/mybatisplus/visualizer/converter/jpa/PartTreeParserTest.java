@@ -667,6 +667,55 @@ public class PartTreeParserTest {
         assertEquals(1, tree.getOrderBy().size());
     }
 
+    // ------------------------------------------------------------------------
+    // T-J4：IgnoreCase / AllIgnoreCase 任意位置剥离 + 逐段 ignoreCase 标记
+    // ------------------------------------------------------------------------
+
+    @Test
+    public void TJ4_IgnoreCase_中间位置逐段剥离不并入属性名() throws Exception {
+        // 旧实现：中间位置的 IgnoreCase 会并入属性名（"nameIgnoreCase"）
+        PartTree tree = tree("findByNameIgnoreCaseAndEmail");
+        java.util.List<Condition> conditions = tree.getPredicates().get(0).getConditions();
+        assertEquals(2, conditions.size());
+        assertEquals("name", conditions.get(0).getPropertyPath());
+        assertTrue("IgnoreCase 紧跟的段应记录 ignoreCase 标记", conditions.get(0).isIgnoreCase());
+        assertEquals("email", conditions.get(1).getPropertyPath());
+        assertFalse("其余段不应误标 ignoreCase", conditions.get(1).isIgnoreCase());
+    }
+
+    @Test
+    public void TJ4_IgnoreCase_条件关键字后仍生效() throws Exception {
+        PartTree tree = tree("findByNameStartingWithIgnoreCaseAndEmail");
+        java.util.List<Condition> conditions = tree.getPredicates().get(0).getConditions();
+        assertEquals(2, conditions.size());
+        assertEquals(PartType.STARTING_WITH, conditions.get(0).getType());
+        assertEquals("name", conditions.get(0).getPropertyPath());
+        assertTrue(conditions.get(0).isIgnoreCase());
+        assertEquals("email", conditions.get(1).getPropertyPath());
+        assertFalse(conditions.get(1).isIgnoreCase());
+    }
+
+    @Test
+    public void TJ4_AllIgnoreCase_中间位置全局生效() throws Exception {
+        PartTree tree = tree("findByNameAllIgnoreCaseAndEmail");
+        java.util.List<Condition> conditions = tree.getPredicates().get(0).getConditions();
+        assertEquals(2, conditions.size());
+        assertEquals("name", conditions.get(0).getPropertyPath());
+        assertEquals("email", conditions.get(1).getPropertyPath());
+        assertTrue("AllIgnoreCase 应全局生效", conditions.get(0).isIgnoreCase());
+        assertTrue(conditions.get(1).isIgnoreCase());
+    }
+
+    @Test
+    public void TJ4_跨Or段_逐段标记() throws Exception {
+        PartTree tree = tree("findByNameIgnoreCaseOrEmail");
+        assertEquals(2, tree.getPredicates().size());
+        assertTrue(tree.getPredicates().get(0).getConditions().get(0).isIgnoreCase());
+        assertEquals("name", tree.getPredicates().get(0).getConditions().get(0).getPropertyPath());
+        assertFalse(tree.getPredicates().get(1).getConditions().get(0).isIgnoreCase());
+        assertEquals("email", tree.getPredicates().get(1).getConditions().get(0).getPropertyPath());
+    }
+
     // ========================================================================
     // 嵌套属性路径测试
     // ========================================================================
@@ -827,5 +876,33 @@ public class PartTreeParserTest {
         assertEquals("address", result.getAssociationPath());
         assertEquals("CityStreet", result.getRemainingPath());
         assertTrue(result.isNested());
+    }
+
+    // ------------------------------------------------------------------
+    // T-J3/M39：By 与 OrderBy 相邻形态（isOrderByAt 修复回归）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void parse_AllByOrderBy_无谓词仅排序() throws Exception {
+        PartTree result = PartTreeParser.parse("findAllByOrderByCreateTimeDesc");
+        assertTrue("Subject 的 By 不应被误跳过，OrderBy 应被剥离为排序", result.getPredicates().isEmpty());
+        assertEquals(1, result.getOrderBy().size());
+        assertEquals("createTime", result.getOrderBy().get(0).getPropertyPath());
+    }
+
+    @Test
+    public void parse_Top10ByOrderBy_谓词为空且排序保留() throws Exception {
+        PartTree result = PartTreeParser.parse("findTop10ByOrderByCreateTimeDesc");
+        assertTrue(result.getPredicates().isEmpty());
+        assertEquals(1, result.getOrderBy().size());
+        assertEquals("DESC", result.getOrderBy().get(0).getDirection().name());
+    }
+
+    @Test
+    public void parse_XxxOrderByYyy_常规OrderBy仍正确() throws Exception {
+        PartTree result = PartTreeParser.parse("findByStatusOrderByIdDesc");
+        assertEquals(1, result.getPredicates().size());
+        assertEquals(1, result.getOrderBy().size());
+        assertEquals("id", result.getOrderBy().get(0).getPropertyPath());
     }
 }

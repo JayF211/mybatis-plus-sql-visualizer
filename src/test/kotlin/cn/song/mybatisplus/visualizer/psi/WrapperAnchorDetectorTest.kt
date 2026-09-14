@@ -719,6 +719,152 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
         )
     }
 
+    fun testListByIdsOnMapperVariableAnchors() {
+        // T-J1 补充：listByIds（MP 批量名单方法）在 mapper 变量上仍按场景 D 名单锚定（行为不变）
+        configure(
+            """
+            public class Demo {
+                private DeviceInfoMapper deviceInfoMapper;
+
+                public void query() {
+                    deviceInfoMapper.listByIds(ids);
+                }
+
+                static class DeviceInfoMapper {}
+            }
+            """.trimIndent(),
+        )
+        val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "listByIds" }
+        assertSame(
+            "MP 批量名单方法在 mapper 变量上应仍为锚点",
+            call.methodExpression.referenceNameElement,
+            WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+        )
+    }
+
+    fun testJpaCrudReceiverCallAnchors() {
+        // T-J1/T-J6/T-J21（场景 E）：JPA 专属方法名在 JPA 家族 receiver 上标锚点——
+        // Repository（findById/findAll/count/getOne）、EntityManager（persist）、HibernateTemplate（get）
+        configure(
+            """
+            public class Demo {
+                private UserRepository userRepository;
+                private javax.persistence.EntityManager em;
+                private HibernateTemplate hibernateTemplate;
+
+                public void ops() {
+                    userRepository.findById(1L);
+                    userRepository.getOne(1L);
+                    userRepository.findAll();
+                    userRepository.count();
+                    em.persist(entity);
+                    hibernateTemplate.get(UserEntity.class, 1L);
+                }
+            }
+
+            interface UserRepository extends JpaRepository<UserEntity, Long> {}
+            class JpaRepository<T, ID> {}
+            class HibernateTemplate {}
+            class UserEntity { private Long id; }
+            """.trimIndent(),
+        )
+        for (name in listOf("findById", "getOne", "findAll", "count", "persist", "get")) {
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == name }
+            assertSame(
+                "JPA 家族 receiver 上的 $name 应为锚点",
+                call.methodExpression.referenceNameElement,
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
+    }
+
+    fun testJpaCrudMethodNamesOnPlainReceiverNotAnchors() {
+        // T-J1/T-J6 负例守卫（宁可无图标不可误亮）：同名方法在非 JPA receiver 上不标锚点——
+        // 普通类 repository（无 Spring Data 基类）/ List.count / Map.get
+        configure(
+            """
+            public class Demo {
+                private PlainUserRepository userRepository;
+                private java.util.List<String> list;
+                private java.util.Map<String, String> map;
+
+                public void ops() {
+                    userRepository.findById(1L);
+                    userRepository.findAll();
+                    list.count();
+                    map.get("k");
+                }
+            }
+
+            class PlainUserRepository {}
+            """.trimIndent(),
+        )
+        for (name in listOf("findById", "findAll", "count", "get")) {
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == name }
+            assertNull(
+                "非 JPA receiver 上的 $name 不应标锚点",
+                WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+            )
+        }
+    }
+
+    fun testMpAndJpaSaveCollisionBothAnchored() {
+        // T-J1 消歧（锚点层面）：save 同时收录于 MP 批量名单（场景 D 名单先行）与 JPA CRUD 名单
+        // （场景 E）——MP service 与 JPA repository 上的 save 都有图标（同元素单 marker），
+        // 语义分派发生在 preview 层（receiver 家族 → 各自转换器，见 SqlPreviewServiceJpaCrudTest）
+        configure(
+            """
+            public class Demo {
+                private MpUserService mpUserService;
+                private UserRepository userRepository;
+
+                public void ops() {
+                    mpUserService.save(mp);
+                    userRepository.save(jpa);
+                }
+            }
+
+            interface UserRepository extends JpaRepository<JpaEntity, Long> {}
+            class JpaRepository<T, ID> {}
+            class JpaEntity { private Long id; }
+            class MpUserService {}
+            """.trimIndent(),
+        )
+        for (name in listOf("save")) {
+            for (call in PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+                .filter { it.methodExpression.referenceName == name }) {
+                assertSame(
+                    "撞名方法 save 在两种 receiver 上都应有锚点",
+                    call.methodExpression.referenceNameElement,
+                    WrapperAnchorDetector.anchorElement(call.methodExpression.referenceNameElement),
+                )
+            }
+        }
+    }
+
+    fun testWrapperChainTerminalCountNotJpaAnchor() {
+        // T-J1 负例守卫（撞链终结点）：`service.lambdaQuery()...count()` 的 count 是 wrapper 链终结点，
+        // 不标 JPA CRUD 锚点（链锚点由 lambdaQuery 承载，避免双图标）
+        configure(
+            """
+            public class Demo {
+                public void query() {
+                    long total = service.lambdaQuery().eq(DeviceEntity::getId, 1L).count();
+                }
+            }
+            """.trimIndent(),
+        )
+        val countCall = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "count" }
+        assertNull(
+            "wrapper 链终结点 count 不应标 JPA 锚点",
+            WrapperAnchorDetector.anchorElement(countCall.methodExpression.referenceNameElement),
+        )
+    }
+
     fun testLambdaParameterWrapperIsNotAnchor() {
         // T-M23.12（用户实测）：`wrapper.and(o -> ...)` 嵌套条件 lambda 参数（显式声明 wrapper 类型，
         // LightPlatform 可解析类型文本）不应标锚点——真实 IDE 推断类型为 LambdaQueryWrapper 会被

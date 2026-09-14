@@ -46,22 +46,50 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
         dialog.panelForTest().clear();
     }
 
-    public void testDisplayTextTwoLineWithTruncationAndEscape() throws Exception {
-        // T-M23.8：列表项显示文本纯函数——两行布局（摘要 + 代码行缩进）、
-        // 超长行截断 80 字符 + 省略号、& < > HTML 转义防破坏布局
-        String shortText = SqlSelectionDialog.displayText("L3 LAMBDA_QUERY  tbl", "service.getById(id);");
-        assertTrue(
-                "两行布局应以 HTML 形式组合摘要与缩进代码行",
-                shortText.startsWith("<html>L3 LAMBDA_QUERY  tbl<br>&nbsp;&nbsp;&nbsp;service.getById(id);</html>"));
+    public void testRowOfContentFidelityAndTruncation() throws Exception {
+        // T-M23.8：列表行纯函数；T-CrudSql 原生化改造：Row.of 纯文本行（截断 80 字符加省略号；
+        // HTML 转义由渲染器 html.disable 承担，摘要/详情原样保留）
+        SqlSelectionDialog.Row shortRow = SqlSelectionDialog.Row.of("L3 LAMBDA_QUERY  tbl", "service.getById(id);");
+        assertEquals("摘要原样保留", "L3 LAMBDA_QUERY  tbl", shortRow.getSummary());
+        assertEquals("详情原样保留", "service.getById(id);", shortRow.getDetail());
         String longLine = "x".repeat(100);
-        String truncated = SqlSelectionDialog.displayText("L1 BATCH", longLine);
-        assertTrue("超长行应截断加省略号", truncated.contains("…"));
-        assertFalse("截断后不应保留完整长行", truncated.contains("x".repeat(81)));
-        String escaped = SqlSelectionDialog.displayText("L1 BATCH", "w.eq(\"a<b&c>d\");");
-        assertTrue("& 应转义为 &amp;", escaped.contains("&amp;"));
-        assertTrue("< 应转义为 &lt;", escaped.contains("&lt;"));
-        assertTrue("> 应转义为 &gt;", escaped.contains("&gt;"));
-        assertFalse("原始 < 不应直接出现在 HTML 中", escaped.contains("a<b"));
+        SqlSelectionDialog.Row truncated = SqlSelectionDialog.Row.of("L1 BATCH", longLine);
+        assertTrue("超长行应截断加省略号", truncated.getDetail().endsWith("…"));
+        assertFalse("截断后不应保留完整长行", truncated.getDetail().contains("x".repeat(81)));
+        SqlSelectionDialog.Row special = SqlSelectionDialog.Row.of("L1 BATCH", "w.eq(\"a<b&c>d\");");
+        assertEquals("特殊字符原样保留（渲染层禁 HTML 解析）", "w.eq(\"a<b&c>d\");", special.getDetail());
+    }
+
+    public void testDoOkActionInvokesCallbackWithSelectedCandidate() throws Exception {
+        // T-CrudSql 回归防护：OK（doOKAction）必须把选中候选交给 onSelect 回调——
+        // 真机曾因回调内同步开 modeless 预览被模态上下文吞掉而表现"OK 无响应"
+        List<String> candidates = List.of("A", "B");
+        List<String> selected = new ArrayList<>();
+        SqlSelectionDialog<String> dialog = new SqlSelectionDialog<>(
+                getProject(), candidates,
+                List.of(new SqlSelectionDialog.Row("PA", ""), new SqlSelectionDialog.Row("PB", "")),
+                selected::add);
+        dialog.listForTest().setSelectedIndex(1);
+        dialog.doOKAction();
+        assertEquals("doOKAction 应把选中候选交给回调", List.of("B"), selected);
+    }
+
+    public void testDoubleClickOnCandidateConfirmsSelection() throws Exception {
+        // T-CrudSql 用户反馈：双击候选直接确认预览（对齐 IDEA 原生弹窗交互）
+        List<String> candidates = List.of("A", "B");
+        List<String> selected = new ArrayList<>();
+        SqlSelectionDialog<String> dialog = new SqlSelectionDialog<>(
+                getProject(), candidates,
+                List.of(new SqlSelectionDialog.Row("PA", ""), new SqlSelectionDialog.Row("PB", "")),
+                selected::add);
+        javax.swing.JList<SqlSelectionDialog.Row> list = dialog.listForTest();
+        assertTrue("列表应注册鼠标监听（双击确认）", list.getMouseListeners().length > 0);
+        list.dispatchEvent(
+                new java.awt.event.MouseEvent(
+                        list, java.awt.event.MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), 0,
+                        10, 10, 2, false, java.awt.event.MouseEvent.BUTTON1));
+        assertEquals("双击第一项应触发回调并选中该项", List.of("A"), selected);
+        assertEquals("双击后选中索引应落在双击项上", 0, list.getSelectedIndex());
     }
 
     public void testDialogRendersPrecomputedTextsWithoutPsiResolve() throws Exception {
@@ -90,16 +118,16 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
         List<PsiMethodCallExpression> candidates =
                 WrapperLocator.sqlCandidatesInRange(file, 0, file.getTextLength());
         assertTrue("fixture 应含多个候选（触发多选弹窗分支）", candidates.size() >= 2);
-        List<String> displayTexts = new ArrayList<>();
+        List<SqlSelectionDialog.Row> rows = new ArrayList<>();
         for (int i = 0; i < candidates.size(); i++) {
-            displayTexts.add("PRE-" + i);
+            rows.add(SqlSelectionDialog.Row.of("PRE-" + i, ""));
         }
         SqlSelectionDialog<PsiMethodCallExpression> dialog =
-                new SqlSelectionDialog<>(getProject(), candidates, displayTexts, t -> {});
-        javax.swing.ListModel<String> model = dialog.listForTest().getModel();
-        assertEquals("列表项数应与预计算文本数一致", displayTexts.size(), model.getSize());
-        for (int i = 0; i < displayTexts.size(); i++) {
-            assertEquals("列表第 " + i + " 项应原样渲染预计算文本（不重新解析 PSI）", displayTexts.get(i), model.getElementAt(i));
+                new SqlSelectionDialog<>(getProject(), candidates, rows, t -> {});
+        javax.swing.ListModel<SqlSelectionDialog.Row> model = dialog.listForTest().getModel();
+        assertEquals("列表项数应与预计算行数一致", rows.size(), model.getSize());
+        for (int i = 0; i < rows.size(); i++) {
+            assertEquals("列表第 " + i + " 项应原样渲染预计算行（不重新解析 PSI）", rows.get(i), model.getElementAt(i));
         }
     }
 
@@ -118,16 +146,16 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
         List<XmlTag> candidates =
                 XmlSqlGutterLineMarkerProvider.statementsInRange(file, 0, file.getTextLength());
         assertTrue("fixture 应含多条语句（触发多选弹窗分支）", candidates.size() >= 2);
-        List<String> displayTexts = new ArrayList<>();
+        List<SqlSelectionDialog.Row> rows = new ArrayList<>();
         for (int i = 0; i < candidates.size(); i++) {
-            displayTexts.add("PRE-" + i);
+            rows.add(SqlSelectionDialog.Row.of("PRE-" + i, ""));
         }
         SqlSelectionDialog<XmlTag> dialog =
-                new SqlSelectionDialog<>(getProject(), candidates, displayTexts, t -> {});
-        javax.swing.ListModel<String> model = dialog.listForTest().getModel();
-        assertEquals("列表项数应与预计算文本数一致", displayTexts.size(), model.getSize());
-        for (int i = 0; i < displayTexts.size(); i++) {
-            assertEquals("列表第 " + i + " 项应原样渲染预计算文本（不重新解析 PSI）", displayTexts.get(i), model.getElementAt(i));
+                new SqlSelectionDialog<>(getProject(), candidates, rows, t -> {});
+        javax.swing.ListModel<SqlSelectionDialog.Row> model = dialog.listForTest().getModel();
+        assertEquals("列表项数应与预计算行数一致", rows.size(), model.getSize());
+        for (int i = 0; i < rows.size(); i++) {
+            assertEquals("列表第 " + i + " 项应原样渲染预计算行（不重新解析 PSI）", rows.get(i), model.getElementAt(i));
         }
     }
 }

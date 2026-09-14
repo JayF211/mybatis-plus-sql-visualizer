@@ -256,4 +256,36 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
         panel.setInputForTest("");
         assertTrue("清空输入 → 提示恢复可见", panel.inputHintLabelForTest().isVisible());
     }
+
+    // ---------- T-AutoFold F4-c：转换产出后结果区程序性折叠 ----------
+
+    private void withAutoFold(boolean enabled, Runnable block) {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.State state =
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
+        boolean oldEnabled = state.getAutoFoldEnabled();
+        int oldThreshold = state.getAutoFoldFieldThreshold();
+        try {
+            state.setAutoFoldEnabled(enabled);
+            state.setAutoFoldFieldThreshold(3);
+            block.run();
+        } finally {
+            state.setAutoFoldEnabled(oldEnabled);
+            state.setAutoFoldFieldThreshold(oldThreshold);
+        }
+    }
+
+    @Test
+    public void test开启自动折叠后转换产出含折叠区域() throws Exception {
+        withAutoFold(true, () -> {
+            panel.setInputForTest(
+                "==>  Preparing: SELECT a1, a2, a3, a4 FROM user WHERE id = ?\n" +
+                    "==> Parameters: 1(Long)");
+            panel.convertForTest();
+            // 结果经 SqlFormatter.format 多行缩进 → 列清单跨多行，达阈值折叠
+            long regions = java.util.Arrays.stream(panel.resultEditorForTest().getFoldingModel().getAllFoldRegions())
+                .filter(it -> it.getPlaceholderText().startsWith("…"))
+                .count();
+            assertTrue("转换产出后结果区应有折叠区域", regions > 0);
+        });
+    }
 }
