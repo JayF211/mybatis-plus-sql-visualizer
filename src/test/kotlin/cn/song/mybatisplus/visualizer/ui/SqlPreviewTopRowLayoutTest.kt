@@ -59,6 +59,8 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     private fun layoutAt(panel: SqlPreviewPanel, width: Int, height: Int = 420) {
         panel.setSize(width, height)
         panel.doLayout()
+        // T-PreviewUx-Pack #2：topRow 外包 northHost（诚实降级横幅宿主）——布局链多一层，手动逐层 doLayout
+        panel.topRowForTest().parent?.doLayout()
         panel.topRowForTest().doLayout()
         panel.applyMetaTruncationForTest()
         waitForEdt()

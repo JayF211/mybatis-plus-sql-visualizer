@@ -290,6 +290,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
 
+    // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
+    // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
+    private val degradationBanner = DegradationBanner()
+
     // P-05：参数历史缓存 + debounce 写回
     private val paramHistoryCache = ParamHistoryCache()
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
@@ -338,7 +342,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // M36.5：收边距与原生工具行对齐（上 6→4，右 8→8 保留）
             border = JBUI.Borders.empty(4, 8, 2, 8)
         }
-        add(topRow, BorderLayout.NORTH)
+        // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——渲染警示 /
+        // T-PreviewExecDs 降级链层级提示统一收口（触发即显示、恢复即隐藏，不占高度）
+        val northHost = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            isOpaque = false
+            add(topRow, BorderLayout.NORTH)
+            add(degradationBanner, BorderLayout.SOUTH)
+        }
+        add(northHost, BorderLayout.NORTH)
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
         topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
@@ -1887,16 +1898,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
             // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
             val fallbackDoc = { msg: String ->
-                createInMemoryPreviewPsi(sql) ?: run {
+                // T-PreviewUx-Pack #2：降级链层级横幅——第二级（内存 PSI）/第三级（裸 document）
+                // 触发时明示当前层级与恢复指引（不破坏 T-PreviewExecDs 降级顺序与快速降级语义）
+                val memoryPsiDoc = createInMemoryPreviewPsi(sql)
+                if (memoryPsiDoc != null) {
+                    degradationBanner.show(
+                        DegradationBanner.Kind.DEGRADED,
+                        MpSqlVisualizerBundle.message("panel.banner.degradedPsi"),
+                    )
+                    memoryPsiDoc
+                } else {
                     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                         .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
                     psiFile = null
+                    degradationBanner.show(
+                        DegradationBanner.Kind.DEGRADED,
+                        MpSqlVisualizerBundle.message("panel.banner.degradedPlain"),
+                    )
                     EditorFactory.getInstance().createDocument(sql)
                 }
             }
             val doc = runCatching {
                 val (vFile, psi) = awaitPrewarmedTempFile()
                     ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
+                // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
+                degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
                 previewTempFile = vFile
                 psiFile = psi
                 // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
@@ -2935,6 +2961,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-M25.3：错误复制按钮随警示可见
         errorCopyButton?.isVisible = currentWarning != null
+        // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
+        // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
+        if (currentWarning != null) {
+            degradationBanner.show(
+                DegradationBanner.Kind.RENDER_WARNING,
+                MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: ""),
+            )
+        } else {
+            degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
+        }
         // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
         lastMetaBudget = -1
         applyMetaTruncation()
@@ -3203,6 +3239,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun importParamsForTest(params: Map<String, String>) = importParams(params)
     /** P-05：参数历史缓存（大小断言用）。 */
     internal fun paramHistoryCacheForTest(): ParamHistoryCache = paramHistoryCache
+
+    /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案/类别断言用）。 */
+    internal fun degradationBannerForTest(): DegradationBanner = degradationBanner
     /** P-05：当前 paramValues 快照（断言用）。 */
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
