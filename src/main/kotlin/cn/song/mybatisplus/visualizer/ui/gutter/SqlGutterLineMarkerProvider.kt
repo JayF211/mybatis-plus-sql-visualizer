@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
+import com.intellij.codeInsight.daemon.LineMarkerInfo.LineMarkerGutterIconRenderer
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -41,8 +42,11 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
         // T-Perf-23：开关判断前置——用户关闭图标后不再对每个 leaf 跑锚点判定
         if (!gutterEnabled()) return null
         val anchor = WrapperAnchorDetector.anchorElement(element) ?: return null
-        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
-        return LineMarkerInfo(
+        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用。
+        // T-MergeFollowup-02：覆写 createGutterRenderer——243 平台 LineMarkerGutterIconRenderer 不覆写
+        // getRightButtonClickAction（基类字节码恒 aconst_null），GutterIconNavigationHandler 只接左键 click，
+        // M37.1 的「navigate 里判右键」永远收不到右键事件（真机右键无反应根因）——右键经平台正解 API 接线。
+        return object : LineMarkerInfo<PsiElement>(
             anchor,
             anchor.textRange,
             SQL_PREVIEW_ICON,
@@ -50,7 +54,12 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             SqlGutterNavigationHandler,
             GutterIconRenderer.Alignment.CENTER,
             { MpSqlVisualizerBundle.message("gutter.accessible.name") },
-        )
+        ) {
+            override fun createGutterRenderer(): GutterIconRenderer =
+                object : LineMarkerGutterIconRenderer<PsiElement>(this) {
+                    override fun getRightButtonClickAction(): AnAction = SqlGutterRightClickAction(anchor)
+                }
+        }
     }
 
     /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
@@ -103,9 +112,19 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             previewSource(project, elt)
         }
 
+        /**
+         * 右键入口（T-MergeFollowup-02）：[SqlGutterRightClickAction] 经平台 `getRightButtonClickAction`
+         * 分发到此处——与 navigate 共享 200ms 防抖窗口（同 [lastNavigateTime]），菜单逻辑复用。
+         */
+        fun onRightClick(project: Project, elt: PsiElement, e: MouseEvent) {
+            val now = System.currentTimeMillis()
+            if (!shouldNavigate(lastNavigateTime, now)) return
+            lastNavigateTime = now
+            showMenuPopup(project, elt, e)
+        }
+
         /** 右键菜单：预览 SQL / 最近执行记录。 */
-        private fun showMenuPopup(project: Project, elt: PsiElement, e: MouseEvent) {
-            val actions = listOf<GutterAction>(GutterAction.Preview, GutterAction.Recent)
+        private fun showMenuPopup(project: Project, elt: PsiElement, e: MouseEvent) {            val actions = listOf<GutterAction>(GutterAction.Preview, GutterAction.Recent)
             val step = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<GutterAction>(
                 null,
                 actions,
@@ -202,6 +221,19 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             val normAbs = absolutePath.replace('\\', '/')
             val normBase = base.replace('\\', '/').trimEnd('/')
             return if (normAbs.startsWith("$normBase/")) normAbs.removePrefix("$normBase/") else null
+        }
+    }
+
+    /**
+     * 右键动作（T-MergeFollowup-02）：挂在自定义 renderer 的 `getRightButtonClickAction()` 上——
+     * 243 平台对 gutter 图标右键只认该 API（`LineMarkerGutterIconRenderer` 未覆写、基类恒 null，
+     * 平台事件分发层直接分流，`GutterIconNavigationHandler` 只接左键 click）。
+     * 防抖与菜单逻辑收口 [SqlGutterNavigationHandler.onRightClick]。
+     */
+    private class SqlGutterRightClickAction(private val elt: PsiElement) : AnAction() {
+        override fun actionPerformed(e: AnActionEvent) {
+            val mouseEvent = e.inputEvent as? MouseEvent ?: return
+            SqlGutterNavigationHandler.onRightClick(elt.project, elt, mouseEvent)
         }
     }
 
