@@ -57,7 +57,11 @@ object DatabaseSchemaResolver {
         synchronized(metaCache) {
             for (ds in dataSources) {
                 metaCache[ds]?.get(tableName.lowercase())?.let { meta ->
-                    meta.columns.forEach { (col, m) -> out.putIfAbsent(col, m.comment ?: "") }
+                    // T-TestAssertReal：收录条件放宽后仅非空标记列会带空注释进缓存——
+                    // 补全侧只消费 comment，过滤 blank 保持放宽前消费语义
+                    meta.columns.forEach { (col, m) ->
+                        m.comment?.takeIf { it.isNotBlank() }?.let { out.putIfAbsent(col, it) }
+                    }
                 }
             }
         }
@@ -98,8 +102,12 @@ object DatabaseSchemaResolver {
     data class TableMeta(val comment: String?, val columns: Map<String, ColumnMeta>)
 
     /** 数据源侧列元数据（均为 null 时表示该维度缺失，调用方逐维度回落）。 */
-    data class ColumnMeta(val comment: String?, val typeSpec: String?)
+    data class ColumnMeta(val comment: String?, val typeSpec: String?, val notNull: Boolean? = null)
 
+    // T-TestAssertReal：notNull 取自 DasTypedObject.isNotNull()（javap 实证，DasColumn extends
+    // DasTypedObject）。收录条件放宽为「comment/typeSpec 非空 或 notNull==true」后，仅非空标记
+    // 列（comment/typeSpec 双空）也会进 Map——只消费 comment 的调用点（columnCommentsCached）
+    // 自行过滤 blank 保持放宽前语义。
     private fun tryCompute(project: Project, tableName: String): TableMeta {
         val dataSources = dataSources(project) ?: return TableMeta(null, emptyMap()).also {
             LOG.warn("DatabaseSchemaResolver: dataSources(project) reflection failed, table=$tableName")
@@ -209,8 +217,19 @@ object DatabaseSchemaResolver {
                         val dataType = Class.forName(DAS_TYPED_OBJECT).getMethod("getDataType").invoke(col)
                         dataType?.let { Class.forName(DATA_TYPE).getMethod("getSpecification").invoke(it) } as? String
                     }.getOrNull()
-                    if (!comment.isNullOrBlank() || !typeSpec.isNullOrBlank()) {
-                        out[cName] = ColumnMeta(comment = comment?.takeIf { it.isNotBlank() }, typeSpec = typeSpec?.takeIf { it.isNotBlank() })
+                    // T-TestAssertReal：DasTypedObject.isNotNull()（javap 实证声明于 DasTypedObject 接口，
+                    // DasColumn extends DasTypedObject）——Method 一律从声明接口获取（T-Embed-10 跨
+                    // classloader 教训，禁止 obj.javaClass.getMethod）；反射失败为 null，不进非空清单
+                    val notNull = runCatching {
+                        Class.forName(DAS_TYPED_OBJECT).getMethod("isNotNull").invoke(col) as? Boolean
+                    }.getOrNull()
+                    // 收录条件放宽：clean DDL（无注释无类型串）的 NOT NULL 列此前会被过滤掉
+                    if (!comment.isNullOrBlank() || !typeSpec.isNullOrBlank() || notNull == true) {
+                        out[cName] = ColumnMeta(
+                            comment = comment?.takeIf { it.isNotBlank() },
+                            typeSpec = typeSpec?.takeIf { it.isNotBlank() },
+                            notNull = notNull,
+                        )
                     }
                 }
             }

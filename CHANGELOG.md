@@ -2,6 +2,16 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+
+- **SQL 预览一键生成回滚 SQL（T-RollbackSql，r2 分支合流）**：预览面板按钮行新增「回滚」按钮（执行计划之后、刷新之前），对当前预览的 INSERT / UPDATE / DELETE 生成对应逆向 SQL（INSERT→DELETE 按主键、UPDATE→SET 还原原值、DELETE→按 WHERE 重插），弹窗展示并一键复制；快照存取 `RollbackSnapshotStore` 纯逻辑可测
+
+### Changed
+
+- **插件描述兼容承诺与 Log Free 迁移文案回补（N-6/N-7，r2 分支合流）**：插件描述（en/zh）补「Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line / 支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x）」兼容句；README 增「从 MyBatis Log Free 迁移？」段、理由升级为四条、Gitee 内测通道补 Marketplace 评分与一次性迁移指引；marketplace 页 FAQ 首条补适配承诺（新版 IDEA 正式版 5 个工作日内完成适配，Windows 计划任务每周自动 verifyPlugin 三目标兜底）
+
 ## [2026.9.14] - 2026-09-14
 
 > 正式版：合并内测版 beta.1（Gitee 抢先体验通道已发行）、beta.2（仅提交未发行，内容直接并入本版）与 09-14 当日全部交付链。dev 分支回合条目（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等）此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 v2026.9.11 的用户可见增量。

@@ -4,9 +4,11 @@ import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 
 /**
  * Wrapper→SQL 语义对照**金样矩阵**（M38.2 / P-立项-06 A2）。
@@ -41,19 +43,31 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
         }
     """
 
-    private fun previewSql(code: String): String? {
+    private fun previewResult(code: String): PreviewResult? {
         myFixture.configureByText("Demo.java", code.trimIndent())
         val anchor = PsiTreeUtil.findChildOfType(myFixture.file, PsiMethodCallExpression::class.java)
             ?: PsiTreeUtil.findChildOfType(myFixture.file, PsiLocalVariable::class.java)
             ?: return null
-        return SqlPreviewService(project).preview(anchor)?.sql
+        return SqlPreviewService(project).preview(anchor)
     }
+
+    private fun previewSql(code: String): String? = previewResult(code)?.sql
 
     /** 金样断言：name 进失败信息，便于矩阵定位。 */
     private fun spec(name: String, code: String, expectedSql: String) {
         val actual = previewSql(code)
         assertNotNull("$name: 应产出预览结果", actual)
         assertEquals(name, expectedSql.trimIndent(), actual)
+    }
+
+    /** 金样断言（warning 形态，O-8）：SQL 全等 + 警示文本包含断言（安全门锁定用）。 */
+    private fun specWarning(name: String, code: String, expectedSql: String, expectedWarningPart: String) {
+        val result = previewResult(code)
+        assertNotNull("$name: 应产出预览结果", result)
+        assertEquals(name, expectedSql.trimIndent(), result!!.sql)
+        val warning = result.warning
+        assertNotNull("$name: 应携带警示", warning)
+        assertTrue("$name: 警示应含「$expectedWarningPart」，实际：$warning", warning!!.contains(expectedWarningPart))
     }
 
     // ========== 探针批次：条件族基础（校准输出格式后扩量） ==========
@@ -1142,13 +1156,202 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
         )
     }
 
-/*
- * M38.2 已知缺陷记录（矩阵复现，待后续版本修复）：
- *  - 字符串版 QueryWrapper 的**消费形态**（`QueryWrapper w = new QueryWrapper<Device>().eq("id", 3L); service.remove(w);`）
- *    条件丢失——deleteConsumed/updateEntityConsumed 分支硬编码 Lambda 语义的 QueryWrapperParser，
- *    字符串列链需走 ConverterRegistry 分派（S37 已改为 Lambda 版回归；S75 Wrappers.query() 工厂 + var
- *    变量 + 字符串列同因，场景暂移除）。
- */
+    // ========== 第九批：字符串版 QueryWrapper 服务链消费 / DELETE 边界（O-8，T-StrWrapperDeleteWhere） ==========
+
+    /** 服务链消费场景模板：body 放在方法体内（service 形参类型无需声明，与 S37 同风格）。 */
+    private fun removeChain(body: String): String = """
+        import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+
+        public class Demo {
+            public void remove(DeviceService service) {
+                $body
+            }
+
+            $entity
+        }
+    """
+
+    // ---- var 结果变量反向守卫（先于 isWrapperVariable 放宽落库：T-M15-01/T-M19.5 两次回归都在这条门上）----
+
+    fun `test var 结果变量 one 终结点不误判为 wrapper 变量`() {
+        // `var d = ...one()`：链含终结点 one——结果变量不得走变量路径（防误判成 wrapper 变量），
+        // 经工厂路径渲染链本身 SQL（与显式类型形态一致）
+        spec(
+            "var-one-guard",
+            """
+            public class Demo {
+                public Device query(DeviceService service) {
+                    var d = service.lambdaQuery().eq(Device::getStatus, 1).one();
+                    return d;
+                }
+
+                $entity
+            }
+            """,
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE status = 1
+            """,
+        )
+    }
+
+    fun `test var 结果变量 count 终结点不误判为 wrapper 变量`() {
+        // T-M15-01 原始回归形态的 var 版：`long total = service.lambdaQuery()...count()` 链含 count 终结点，
+        // 放宽 isWrapperVariable 后仍须拒绝（终结名单单一来源守卫），渲染 SELECT COUNT(*)
+        spec(
+            "var-count-guard",
+            """
+            public class Demo {
+                public long count(DeviceService service) {
+                    var total = service.lambdaQuery().eq(Device::getStatus, 1).count();
+                    return total;
+                }
+
+                $entity
+            }
+            """,
+            """
+            SELECT COUNT(*)
+            FROM device
+            WHERE status = 1
+            """,
+        )
+    }
+
+    // ---- 当前已正确的锁定场景（M38.2 移除场景回补，防回潮）----
+
+    fun `test S83 字符串 QueryWrapper remove 消费`() {
+        spec(
+            "S83",
+            removeChain("QueryWrapper<Device> w = new QueryWrapper<Device>().eq(\"id\", 3L); service.remove(w);"),
+            """
+            DELETE FROM device
+            WHERE id = 3
+            """,
+        )
+    }
+
+    fun `test S84 字符串 apply 条件 remove 消费`() {
+        spec(
+            "S84",
+            removeChain("QueryWrapper<Device> w = new QueryWrapper<Device>().apply(\"status = {0}\", 1); service.remove(w);"),
+            """
+            DELETE FROM device
+            WHERE status = 1
+            """,
+        )
+    }
+
+    fun `test S85 字符串 inSql 条件 remove 消费`() {
+        spec(
+            "S85",
+            removeChain("QueryWrapper<Device> w = new QueryWrapper<Device>().inSql(\"id\", \"SELECT id FROM old\"); service.remove(w);"),
+            """
+            DELETE FROM device
+            WHERE id IN (SELECT id FROM old)
+            """,
+        )
+    }
+
+    fun `test S87 无条件 wrapper remove 消费警示`() {
+        specWarning(
+            "S87",
+            removeChain("QueryWrapper<Device> w = new QueryWrapper<Device>(); service.remove(w);"),
+            """
+            DELETE FROM device
+            """,
+            "无 WHERE 条件",
+        )
+    }
+
+    // ---- 三处缺陷修复后场景（缺陷 A var 消费语义 / 缺陷 C DELETE last 尾段 / 缺陷 B service.query 预览）----
+
+    fun `test S86 字符串 remove 消费携带 last 尾段`() {
+        spec(
+            "S86",
+            removeChain("QueryWrapper<Device> w = new QueryWrapper<Device>().eq(\"status\", 1).last(\"LIMIT 5\"); service.remove(w);"),
+            """
+            DELETE FROM device
+            WHERE status = 1
+            LIMIT 5
+            """,
+        )
+    }
+
+    fun `test S88 var 工厂形态 remove 消费`() {
+        // 缺陷 A：var 声明 + Wrappers 工厂——走变量路径后 ReferencesSearch 消费检测恢复，
+        // 删除意图渲染 DELETE（修复前整体按查询渲染）
+        spec(
+            "S88",
+            """
+            import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+            public class Demo {
+                public void remove(DeviceService service) {
+                    var w = Wrappers.<Device>query().eq("id", 3L);
+                    service.remove(w);
+                }
+
+                $entity
+            }
+            """,
+            """
+            DELETE FROM device
+            WHERE id = 3
+            """,
+        )
+    }
+
+    fun `test S89 service query 字符串服务链预览`() {
+        // 缺陷 B：实体经服务类型泛型实参第三通道解析（DeviceService extends IService<Device>）
+        spec(
+            "S89",
+            """
+            public class Demo {
+                public Device query(DeviceService service) {
+                    return service.query().eq("id", 3L).one();
+                }
+
+                $entity
+
+                interface IService<T> {
+                }
+
+                interface DeviceService extends IService<Device> {
+                }
+            }
+            """,
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE id = 3
+            """,
+        )
+    }
+
+    fun `test S90 service query 无法推断实体时显式降级警示`() {
+        // 缺陷 B 降级路径：全通道失败 → 带警示的空结果（不再静默 null）
+        val result = previewResult(
+            """
+            public class Demo {
+                public Device query(DeviceService service) {
+                    return service.query().eq("id", 3L).one();
+                }
+
+                $entity
+
+                interface DeviceService {
+                }
+            }
+            """,
+        )
+        assertNotNull("S90: 应返回降级结果而非 null", result)
+        assertEquals("S90", "", result!!.sql)
+        val warning = result.warning
+        assertNotNull("S90: 应携带降级警示", warning)
+        assertTrue("S90: 警示应说明无法推断实体表，实际：$warning", warning!!.contains("无法推断实体表"))
+    }
 
     // ========== 第八批：M38.3 apply {i} 绑定参数链路查漏（Flex toSQL「一步完整 SQL」体验对齐） ==========
 

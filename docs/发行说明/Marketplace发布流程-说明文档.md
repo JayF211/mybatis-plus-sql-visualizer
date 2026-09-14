@@ -284,9 +284,10 @@ flowchart TD
     V --> B["buildPlugin + verifyPlugin"]
     B --> M["Marketplace：网页上传新 zip<br/>或 Gradle publishPlugin（需 token）"]
     B --> U["writeUpdateManifest 生成 update.json<br/>→ 人工补 changeNotes → 双推"]
+    M --> CH["审核状态确认：作者后台<br/>核对 Pending 版本号与内容<br/>（预期则等放行，误传则撤回）"]
     M --> R["Gitee Release 上传同名 zip<br/>（自更新下载地址）"]
     U --> R
-    M --> DONE["发布完成：两渠道版本一致"]
+    CH --> DONE["发布完成：两渠道版本一致"]
     R --> DONE
 ```
 
@@ -295,7 +296,8 @@ flowchart TD
 | 升版本 | 改 `gradle.properties`（`YYYY.M.D`） | Marketplace 不接受同版本重复上传 |
 | 构建验证 | `./gradlew clean test buildPlugin verifyPlugin -PverifyIdes=243` | 发布前必做 |
 | Marketplace 上传 | 网页手动，或 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…` | 后续版本可自动化 |
-| 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json` |
+| 审核状态确认 | 登录作者后台（<https://plugins.jetbrains.com/author/me>）→ My Plugins → 版本列表 | 核对 Pending 更新的版本号与上传内容：预期内的新版本核对 changeNotes 后等审核放行；误传/过期/内容不明的包后台撤回（撤回不可逆，处置前对版本列表截图留档） |
+| 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
 | Gitee Release | 网页创建 Release，附同名 zip | 自更新 downloadUrl 指向这里 |
 | 双推 | `scripts/push-all.sh` | 源码链接保持最新 |
 
@@ -356,6 +358,7 @@ flowchart TD
 □ 9. 沙盒 runIde 冒烟：zip 安装后功能正常
 □ 10.（可选）签名配置后：signPlugin + verifyPluginSignature
 □ 11. **上传新版后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变**
+□ 12. **上传新版后在 Marketplace 后台确认审核状态（Pending 清零或结论留档）**
 ```
 
 ---

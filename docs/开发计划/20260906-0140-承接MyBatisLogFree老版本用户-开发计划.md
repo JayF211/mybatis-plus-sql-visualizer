@@ -72,11 +72,11 @@ MyBatis Log Free 新版把 2025.1–2025.3 上的存量用户放生（第二轮�
 
 ## 4. 验收标准
 
-- [ ] plugin.xml 描述 / README / HTML 三处兼容声明一致，均明示「含 2025.1–2025.3」
-- [ ] 四个痛点（面板固定/IN 引号/LocalDate/JPA）对比文案各有着落（README 迁移小节 + HTML FAQ）
-- [ ] 描述文本含 "MyBatis SQL log" 等竞品搜索短语，无营销堆砌（每处短语对应真实功能）
-- [ ] verifyPlugin smoke（243）通过；零生产代码改动（仅 plugin.xml CDATA 文本与文档）
-- [ ] Marketplace 后台 tags/页面描述核对动作列入下次上传清单（随 T-MktColdStart 补入发布流程的步骤执行）
+- [x] plugin.xml 描述 / README / HTML 三处兼容声明一致，均明示「含 2025.1–2025.3」
+- [x] 四个痛点（面板固定/IN 引号/LocalDate/JPA）对比文案各有着落（README 迁移小节 + HTML FAQ）
+- [x] 描述文本含 "MyBatis SQL log" 等竞品搜索短语，无营销堆砌（每处短语对应真实功能）
+- [x] verifyPlugin smoke（243）通过；零生产代码改动（仅 plugin.xml CDATA 文本与文档）
+- [x] Marketplace 后台 tags/页面描述核对动作列入下次上传清单（随 T-MktColdStart 补入发布流程的步骤执行）（T-MktColdStart 已落地：发布流程 §11 第 8 条含 tags、新增第 12 条上传后后台确认审核状态；页面描述以 plugin.xml 为唯一权威源，后台单独编辑仅作临时先行、下次上传对齐）
 
 ## 5. 风险
 
@@ -87,3 +87,4 @@ MyBatis Log Free 新版把 2025.1–2025.3 上的存量用户放生（第二轮�
 ## 变更记录
 
 - 2026-09-06 T-MktLegacyUptake 立项：承接 MyBatis Log Free 放生的 2025.x 老版本用户（三处兼容声明统一 + 竞品搜索词植入 + 四痛点对比文案），未实施。
+- 2026-09-06 T-MktLegacyUptake 交付：三处兼容声明统一为「IDEA 2024.3 起全版本兼容（含 2025.1–2025.3 与 2026.x）」——plugin.xml 描述英文段兼容句改写（含 "including the full 2025.1–2025.3 line"）、中文段同步，README 第 14 行与 HTML faq-1 对齐（faq-1 保留 2024.3/2025.3/2026.2 为发布前 verifyPlugin 校验目标的标注）；竞品搜索短语植入描述——英文段功能清单改为 "MyBatis SQL log capture &amp; restore — console log to executable SQL (MyBatis / Hibernate / JdbcTemplate)"，中文段改为「MyBatis SQL 日志还原：控制台日志捕获还原」，两处短语均对应已交付的日志还原功能，不引入 `<keywords>`；四痛点对比文案落地——README「功能特性」后新增「从 MyBatis Log Free 迁移？」小节（计划 §2.3 第三列四行对照 + 兼容声明一句），HTML FAQ 新增 faq-13「我在用 MyBatis Log Free，可以换过来吗？」（四条精简对照 + 互链 faq-1，置于 faq-1 之后、不动既有 faq-2~12 的 id）。验证：grep 三处兼容口径一致（2025.1–2025.3 均在）；`./gradlew verifyPlugin -PverifyIdes=smoke --no-build-cache --no-configuration-cache` BUILD SUCCESSFUL（IU-243.28141.41，仅既有 Experimental API 警告）；零生产代码改动（仅 plugin.xml CDATA 文本与文档）。§4 第 5 条待 T-MktColdStart 补入发布流程步骤后于该交付勾选。

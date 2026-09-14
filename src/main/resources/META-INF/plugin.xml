@@ -24,11 +24,12 @@
     <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
         <p><b>See the exact SQL your code will run — before the server starts.</b> SQL Visualizer turns MyBatis-Plus Wrapper chains, XML mappers, annotation SQL, JPA/Hibernate queries and JdbcTemplate string SQL into readable, executable SQL with real parameter values, right inside IntelliJ IDEA.</p>
+        <p>Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line — continuously adapted.</p>
         <h3>Highlights</h3>
         <ul>
             <li><b>All SQL sources covered</b>: Lambda / Query / Update / Delete Wrappers &amp; service chains, MPJ join wrappers, mapper XML dynamic tags (if / foreach / choose ...), <code>@Select</code> annotation SQL, Spring Data <code>findByXxx</code>, CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate &amp; custom-DAO string SQL</li>
             <li><b>Real parameters, one click</b>: <code>?</code> placeholders replaced with actual values (LIKE auto-wildcard, type-aware quoting); OGNL condition checkboxes; auto formatting for 9 database dialects</li>
-            <li><b>Live SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering, per-statement color marks and precise jump-to-source</li>
+            <li><b>Live MyBatis SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering, per-statement color marks and precise jump-to-source</li>
             <li><b>SQL → Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD &amp; joins)</li>
             <li><b>JOIN diagram &amp; execution</b>: native IDE ER diagram with PNG / SVG export; execute SQL and one-click EXPLAIN plans in an embedded native Database console (Ultimate)</li>
             <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
@@ -39,11 +40,12 @@
         <p>Found an issue? Please report it at the <a href="https://sql-visualizer.jvtools.cn/about/feedback">Feedback Pool</a>.</p>
         <hr/>
         <p><b>服务未启，SQL 先知</b>——SQL Visualizer 在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填。</p>
+        <p>支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x），持续适配。</p>
         <h3>核心能力</h3>
         <ul>
             <li><b>SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose 等）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>
             <li><b>真实参数一键回填</b>：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；OGNL 条件勾选模拟；9 种数据库方言自动格式化</li>
-            <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、按语句类型着色标记、精确跳转源码</li>
+            <li><b>MyBatis SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种控制台日志格式，去重过滤、按语句类型着色标记、精确跳转源码</li>
             <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL 与一键执行计划 EXPLAIN（Ultimate）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>

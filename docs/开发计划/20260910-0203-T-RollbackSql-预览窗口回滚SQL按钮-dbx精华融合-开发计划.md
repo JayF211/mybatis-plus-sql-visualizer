@@ -157,3 +157,44 @@ dbx 的回滚不走 MySQL binlog 解析（全库 grep 无命中，flashback 仅�
 - 核心文件：`crates/dbx-core/src/data_grid_sql.rs`（DML 反推，单文件 7000+ 行）、`schema_diff.rs`（RollbackGraph :1259）、前端 `apps/desktop/src/components/QueryHistory.vue`（回滚入口 :359）与 `useDataGridEditor.ts`（保存编排 :1803）。
 - dbx 实现回滚零第三方回滚库依赖，SQL 解析用 `sqlparser 0.62` 仅做语句切分，回滚生成本身是字符串模板拼装——对 JVM 侧移植反而友好（JSqlParser 同样只做解析，生成走自家模板）。
 - dbx 的联合纠偏计划（`correction.rs:354`）里 data compare 产生的 DML 回滚只是注释占位——再次印证其哲学：没见过原始数据就不给可执行回滚。
+
+---
+
+## 六、实施记录（2026-09-12 交付）
+
+> 分支 `feature/r2-competition-response`（worktree `mpsv-r2`），P1/P2 两期合并一次交付（用户定案：verifyPlugin 三目标放最后一次）。
+
+### 6.1 交付清单（F1~F6 全数落地）
+
+| 功能 | 落位 | 说明 |
+|---|---|---|
+| F1 生成器 | `sql/rollback/RollbackSqlGenerator.kt` | INSERT→DELETE 全列等值谓词（NULL→IS NULL）；UPDATE/DELETE 诚实拒绝 + 恢复指引 + 自查/快照共用模板；`primaryKeyColumns` 可选参数；上限防呆 500 语句/256KB；`parseSnapshotTsv` + `generateFromSnapshotRows`（P2） |
+| F2 评级 | `RollbackResult(rating, statements, warnings, countCheckSql, …)` | 三档 Complete/Partial/Unable；warnings 为本地化键结构（PerfWarning 同款），UI 层渲染 |
+| F3 回滚视图 | `ui/RollbackSqlDialog.kt` + 面板【回滚SQL】按钮 | MODELESS DialogWrapper；评级横幅（绿/橙/红）+ 只读 SQL 编辑器（随弹窗 disposable 释放）+ 底部「执行回滚/复制/关闭」 |
+| F4 执行复用 | `SqlPreviewPanel.executeAdhocSql(sql, dmlConfirmed, rollbackOfEntry)` | 复用 executeSql 管线（卫队天然生效）；DML 二次确认内置 |
+| F5 快照 | `sql/rollback/RollbackSnapshotStore.kt`（project light service） | **降级半自动方案**（见 6.2）；快照登记/指纹查找/粘贴回填三模式（REVERT_INSERT/BACKFILL_INSERT/REVERT_UPDATE） |
+| F6 留痕 | store `markRollbackExecuted` + `parentExecutionId` | 执行回滚后条目置 ROLLBACK_EXECUTED + 横幅「已执行」+ LOG.info 埋点；回滚 DML 自身也登记，parent 指向被回滚的原执行 |
+
+i18n：`panel.rollbackSql` + `rollback.*` 34 键，en/zh 双 bundle 同步。
+
+### 6.2 关键定夺（javap/测试实证）
+
+1. **F5 路线定夺：程序化 JDBC 快照不可达，走计划预设降级**。262 发行包实证：`AbstractDataSource` 无任何连接方法；连接建立收敛到 `DatabaseConnectionManager.build(project, point).createBlocking()` → `GuardedRef<DatabaseConnection>` → `DatabaseConnectionCore.getRemoteConnection()`，而其返回类型 `com.intellij.database.remote.jdbc.RemoteConnection` **不在任何本地发行 jar**（remote 驱动运行时按需加载）——反射桥最后一跳无可用 API，依「生成代码严禁调用不存在的 API」铁律放弃路线 b，落计划 §三.5 预设的「快照 SQL 模板 + 用户粘贴结果」半自动方案：回滚弹窗内【执行快照查询】经 executeAdhocSql 跑 `SELECT * FROM t WHERE 原WHERE`（结果落面板控制台网格，用户亲眼取得 before-image）→ 复制网格（TSV）→ 粘贴 + 可选主键标记 → 生成完整回滚。dbx「有 before-image 才回滚」哲学完整保留。
+2. **Unable 也可进视图（对 §2.2 的演进）**：可解析的 UPDATE/DELETE（Unable 但有快照工作流）打开弹窗（红色横幅 + 指引 + 快照区）；仅完全不可推导（解析失败/MERGE/DDL/SELECT）维持「点按钮只出消息框」。理由：降级方案下粘贴回填是 UPDATE/DELETE 的唯一回滚入口，堵在消息框外工作流无处安放；且视图非空、不存在「只有警告横幅的空视图」。
+3. **评级口径**：按 §4.1 细则执行——整行谓词 → Partial + COUNT 自查模板；主键定位/快照回填带主键 → Complete。§4.3「预览 INSERT 评级 Complete」的达成路径为主键定位（P2 快照）场景，P1 无主键元数据时整行谓词恒 Partial（诚实口径优先）。
+4. **多语句混合任一 Unable → 整体 Unable**：部分回滚比不回滚更危险。
+
+### 6.3 JSqlParser 5.3 实证坑（全数 javap/单测双验，勿回退）
+
+- `getSetUpdateSets()/getDuplicateUpdateSets()` 运行时可空（Kotlin 平台类型判空内建硬抛 `must not be null`）——一律先 `val x: List<UpdateSet>? =` 收窄。
+- `Values extends Select` 且 `Insert.getValues()` 实现是 `(Values) getSelect()` 强转——对 INSERT…SELECT 直调 CCE；判别一律走 `getSelect() as? Values`。
+- 单行 INSERT 的 `Values.expressions` 为**扁平** ExpressionList，多行为**嵌套**（每元素一 ExpressionList 行）——按首元素类型归一。
+- `StringValue.getValue()` 保留原始转义形态（`O''Brien`），渲染只补外引号、再转义即四引号。
+- `DateValue.toString` 渲染 `{d '…'}` JDBC 转义（MySQL 不接受）——按 java.sql 值格式化为带引号字面量。
+
+### 6.4 测试与验证
+
+- `RollbackSqlGeneratorTest` 35 用例（§4.1 清单全数 + P2 回填/TSV/乐观锁）；`RollbackSnapshotStoreTest` 7 用例（登记/指纹/覆盖/LRU/留痕终态）；`RollbackSqlPanelTest` 9 用例（工具栏按钮/快照登记/查询跳过/留痕链/全链降级/卫队不抢他面控制台）；`RollbackSqlDialogTest` 7 用例（横幅分层/粘贴生成/解析失败拒绝/DELETE 回填/已执行横幅/Partial 自查）；`RollbackRoundTripTest` 5 用例（H2 MySQL 模式往返：INSERT→DELETE 清空、DELETE→INSERT 还原含 NULL、UPDATE→反向还原 + 乐观锁二次执行 no-op）。
+- 全量回归 **303 类 / 3878 用例 / 0 失败 / 0 错误 / 6 跳过** 一次通过（基线 298/3815/0/6 + 本任务 5 套件 63 用例，零破坏）；verifyPlugin 三目标（243/253/262）Compatible。
+- runIde 真机走查（按钮点击/粘贴工作流/深色主题横幅）留人工。
+- 并行沙盒：登记 t-rollbacksql / MPSV-Rollback（`-ProllbackDev=true`，与 gifRecord 同款机制临时新增，交付前已还原）。
