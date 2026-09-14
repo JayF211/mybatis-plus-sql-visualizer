@@ -240,7 +240,7 @@ intellijPlatform {
 - **描述**：默认取自 `plugin.xml <description>`，预览卡取**前 40 字符英文摘要**（本插件英文段已满足）；可单独在页面编辑（与插件包分开保存）；
 - **图标**：自动取自插件包内图标；页面图标可单独上传更高质量的；
 - **截图**：推荐 1200×760，展示预览弹窗、动态条件面板、日志工具窗口实际效果（禁止默认主题截图、误导性图片）；
-- **Additional Information**：可加 Gitee 仓库链接、issue tracker（https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues）等，**外链必须公网可达**。
+- **Additional Information**：可加 Gitee 仓库链接、官网需求池（https://sql-visualizer.jvtools.cn/about/feedback）等，**外链必须公网可达**。
 
 ---
 

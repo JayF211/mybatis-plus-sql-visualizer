@@ -3,17 +3,66 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（63 个通用文件）
-> **项目记忆**：保留 17 个核心文件 + MEMORY.md 索引
+> **全局备份**：`~/.zcode/cli/memories/global/`（76 个通用文件）
+> **项目记忆**：保留 28 个核心文件 + MEMORY.md 索引（第七次精简后）
 
 ---
 
-## 已修复 Bug（68 个）
+## 已修复 Bug（117 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-dynupdate-hotswap.md](bug-fixes/project-dynupdate-hotswap.md) | 自更新免重启热替换交付（master 0fbd13b）：五入口反射+跨版本签名护栏；「未完全卸载」警告=GC 时机非泄漏 |
+| [t-pickmpjerr-delivery.md](bug-fixes/t-pickmpjerr-delivery.md) | SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT 根治（master 7218078）：generateCodeOrReport 单点收口 |
+| [t-sql2java-regenerate-uncaught.md](bug-fixes/t-sql2java-regenerate-uncaught.md) | 同一笔修复的过程记忆（预览读断言连刷=旧构建，堆栈无 WIRA lambda 帧=判据） |
+| [t-mergedevr2round3-delivery.md](bug-fixes/t-mergedevr2round3-delivery.md) | dev→r2 第三轮合并（e4d7857）：21 文件 40 冲突块取 dev 超集侧，3815 用例一次过 |
+| [t-mergemasterintodev2-delivery.md](bug-fixes/t-mergemasterintodev2-delivery.md) | master→dev 第二轮合并（613eae6）：5 冲突块语义融合，dev 与 master 完全同步 |
+| [t-autofold-plan.md](bug-fixes/t-autofold-plan.md) | SQL 预览字段列表自动折叠（master 4a754ba，随 v2026.9.14-beta.1 发行）：程序化 FoldingModel |
+| [t-crudsql-plan.md](bug-fixes/t-crudsql-plan.md) | 实体类+数据库表右键生成 CRUD SQL（master bf303aa 起，三轮弹窗原生化已合入） |
+| [project-tagline.md](bug-fixes/project-tagline.md) | 产品标语「服务未启，SQL 先知」五处统一（master 37fafcb）+ 反馈入口切官网需求池 |
+| [project-idea-diagram-framework.md](bug-fixes/project-idea-diagram-framework.md) | JOIN 图 IDEA 原生框架接入全集（已发行；dev 已随 master 合入，2026-09-13 实证） |
+| [reference-coolrequest-agent-analysis.md](bug-fixes/reference-coolrequest-agent-analysis.md) | M56 输入调研：CoolRequest premain 实态/驱动自拼 SQL/ByteBuddy retransform/relocate |
+| [reference-debugtools-agent-analysis.md](bug-fixes/reference-debugtools-agent-analysis.md) | M56 输入调研：DebugTools 真 attach+agentmain 反面教材与可照搬四手法 |
+| [t-archdocs-sync-dev.md](bug-fixes/t-archdocs-sync-dev.md) | docs/架构设计 五文件同步 dev 基线（dev 6f9bd5e）；分支同步范围定案已收编 project-doc-conventions |
+| [t-histparam-plan.md](bug-fixes/t-histparam-plan.md) | 历史页参数识别丢失根治 + 字面量恢复两轮（v2 pd 行 + LiteralParamRecovery，cef6081/f5983b8） |
+| [t-perfsweep-delivery.md](bug-fixes/t-perfsweep-delivery.md) | dev 遗留四热点清扫（重放守卫惰性化/热路径 Regex/dedupeCounts 4096 上限） |
+| [t-perfbatch-plan.md](bug-fixes/t-perfbatch-plan.md) | 监听器三出口分层 + 内容通知「20条/200ms」节流（dev fb73825） |
+| [t-previewslow-delivery.md](bug-fixes/t-previewslow-delivery.md) | 双击预览卡顿根治（预热等待 2000ms→60ms + 控制台挂载去 ReadAction） |
+| [t-versionutil-delivery.md](bug-fixes/t-versionutil-delivery.md) | 版本比较改用平台 VersionComparatorUtil（beta 先行提示倒挂） |
+| [t-previewdoclock2-delivery.md](bug-fixes/t-previewdoclock2-delivery.md) | EDT 读权限断言全库排雷 + 原生控制台挂载修复（7bf5860） |
+| [t-previewdoclock-delivery.md](bug-fixes/t-previewdoclock-delivery.md) | 262 读权限硬断言排雷（softAssert* 名字骗人，e8b9d1d） |
+| [t-dynupdate-plan.md](bug-fixes/t-dynupdate-plan.md) | 自更新免重启动态安装全链 + 跨版本签名护栏（f60e419/4df60a2） |
+| [t-vpairanno-plan.md](bug-fixes/t-vpairanno-plan.md) | 竖排 VALUES 行尾列名标注配置项 + 复选框台账教训（770313a） |
+| [t-previewdisplaymode-plan.md](bug-fixes/t-previewdisplaymode-plan.md) | 显示模式形态消失根因（预览编辑器=模型派生视图） |
+| [t-previewdisplaymode-delivery.md](bug-fixes/t-previewdisplaymode-delivery.md) | applyDisplayMode 落 showSql 唯一收敛点（7bf110e） |
+| [t-hibdualcapture-plan.md](bug-fixes/t-hibdualcapture-plan.md) | Hibernate 双份 SQL 参数分裂根治（隔离槽 !collecting 冲刷，90f082a） |
+| [t-hibdualcapture-repro-method.md](bug-fixes/t-hibdualcapture-repro-method.md) | 日志抓包复现方法论（demo 副本临时端口逐行喂解析器） |
+| [t-execsilentnoop-plan.md](bug-fixes/t-execsilentnoop-plan.md) | 首次执行静默不执行（DBN 静默出口实证 + freshModel 回落兜底） |
+| [t-vstack-plan.md](bug-fixes/t-vstack-plan.md) | 竖向排列三笔（INSERT 配对竖排/横向组展开/IN 阈值 <5 同行） |
+| [t-previewtopoverlap-plan.md](bug-fixes/t-previewtopoverlap-plan.md) | 预览顶部元信息压按钮行（WEST→CENTER + 「更多」菜单，739588c） |
+| [t-mergedevr2-delivery.md](bug-fixes/t-mergedevr2-delivery.md) | dev 合入 r2 + 生成测试双线下线（063ed5d/b2fc4ea） |
+| [t-refreshdbsteal-delivery.md](bug-fixes/t-refreshdbsteal-delivery.md) | 多弹窗僵尸 rehost 监听抢共享控制台根治（707e76a，8 用例） |
+| [t-refreshdbsteal-plan.md](bug-fixes/t-refreshdbsteal-plan.md) | 刷新后内嵌 Database 控制台丢失三症状方案定稿 |
+| [t-depapi-delivery.md](bug-fixes/t-depapi-delivery.md) | 三处弃用 API 换现代等价物（三平台弃用 40→38，3ba0708） |
+| [t-execcopyfix-plan.md](bug-fixes/t-execcopyfix-plan.md) | 复制错误对号闪变 + 临时文件失败可见化（27799c3） |
+| [t-logrownumber-plan.md](bug-fixes/t-logrownumber-plan.md) | SQL 日志列表行号 + 主配置 gating/跨窗口去重两轮 follow-up（2467f94） |
+| [t-autoshowmaster-delivery.md](bug-fixes/t-autoshowmaster-delivery.md) | 发现 SQL 自动打开日志窗口 master 假开关修复（3ff30bb） |
+| [t-master-merge-into-dev-20260908.md](bug-fixes/t-master-merge-into-dev-20260908.md) | master 合入 dev（ListMode 嫁接管线 + 自动合并陷阱实录，a6570ce） |
+| [t-wia262-delivery.md](bug-fixes/t-wia262-delivery.md) | WIRA 重载 262 移除致 verifyPlugin 失败修复（44f77d0） |
+| [t-dscover-t-clickpreview05-delivery.md](bug-fixes/t-dscover-t-clickpreview05-delivery.md) | 双击预览 Database 工具窗抢占 + 复制按钮对号反馈（5e75c12/be232ce） |
+| [t-previewflash-plan.md](bug-fixes/t-previewflash-plan.md) | 预览点击侧边栏闪烁根治（重放守卫 + 慢操作消解 + 方言短路，7953aa2） |
+| [t-previewlistreload-plan.md](bug-fixes/t-previewlistreload-plan.md) | 预览点击致列表重载方案收编入 T-PreviewFlash |
+| [t-errreport-plan.md](bug-fixes/t-errreport-plan.md) | 错误一键上报官网需求池（errorHandler EP 直报，dev 51efbe3） |
+| [t-jdbcmultiline-plan.md](bug-fixes/t-jdbcmultiline-plan.md) | 多行 JdbcTemplate 日志漏捕获两态机修复（0b178ff） |
+| [t-twoline-list-meta-line-delivery.md](bug-fixes/t-twoline-list-meta-line-delivery.md) | 列表元信息行（dev e77b696，空元信息守卫） |
+| [t-loglistfreeze04-delivery.md](bug-fixes/t-loglistfreeze04-delivery.md) | 列表 HTML 逐条解析 EDT 冻结 16s 根治（53ecd9d） |
+| [t-portlossbatch1-delivery.md](bug-fixes/t-portlossbatch1-delivery.md) | 丢功能审计二/三类批量修复两笔（5507b86/066051e） |
+| [branch-dev-to-master-merge-probe.md](bug-fixes/branch-dev-to-master-merge-probe.md) | T-AutoShowRecover 会话抑制选择性恢复 + stopOnToolWindowClose 转正（78cc7c2） |
+| [project-dev-branch-state.md](bug-fixes/project-dev-branch-state.md) | dev 分支状态快照（worktree 布局/自动监听 cherry-pick 记录） |
+| [project-f42-join-diagram-render.md](bug-fixes/project-f42-join-diagram-render.md) | JOIN 图自绘 Swing 引擎与踩坑（后被 IDEA 原生图框架替代） |
+| [reference-competitor-plugin-links.md](bug-fixes/reference-competitor-plugin-links.md) | README「参考与致谢」6 项定稿（Marketplace API 核验法） |
 | [project-exists-bugfix.md](bug-fixes/project-exists-bugfix.md) | exists 条件预览链终结点误判 |
 | [project-iscrud-entity-resolution-bug.md](bug-fixes/project-iscrud-entity-resolution-bug.md) | IService/BaseMapper 实体解析后缀硬约束（v2026.8.19 已修复） |
 | [project-iscrud-this-and-chain-qualifier-bug.md](bug-fixes/project-iscrud-this-and-chain-qualifier-bug.md) | 隐式 this 与链式调用预览失败 |
@@ -170,10 +219,13 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（49 个）
+## 已解决踩坑（52 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-swing-html-list-renderer.md](pitfalls/pitfall-swing-html-list-renderer.md) | JList+JLabel-HTML 每次 O(N) BasicHTML 解析冻 EDT——根治 SimpleColoredComponent 片段 + 固定行高 |
+| [pitfall-vfs-refresh-write-intent-lock.md](pitfalls/pitfall-vfs-refresh-write-intent-lock.md) | 262 EDT ReadAction 包同步 VFS refresh 硬抛——须 WriteIntentReadAction（27ccfcf） |
+| [pitfall-test-sandbox-browser-leak.md](pitfalls/pitfall-test-sandbox-browser-leak.md) | 测试沙盒 HelpAction 降级分支 BrowserUtil 弹宿主真机浏览器——isUnitTestMode 守卫（56df6d6） |
 | [pitfall-criteriaquery-in-clause.md](pitfalls/pitfall-criteriaquery-in-clause.md) | CriteriaQuery IN 子句参数替换 |
 | [pitfall-custom-dao-gutter-dedup.md](pitfalls/pitfall-custom-dao-gutter-dedup.md) | 自定义 DAO 方法 gutter 去重 |
 | [pitfall-dataclass-signature-clean-rebuild.md](pitfalls/pitfall-dataclass-signature-clean-rebuild.md) | Data class clean rebuild 签名问题 |
@@ -225,7 +277,7 @@
 
 ---
 
-## 全局通用记忆（63 个）
+## 全局通用记忆（76 个）
 
 > 已复制到 `~/.zcode/cli/memories/global/`，跨项目复用。
 
@@ -235,13 +287,17 @@
 
 **平台陷阱（47 个）**：pitfall-actiontoolbar-refresh-api / pitfall-classloader-forname-execution-api / pitfall-contentmanagerlistener-unavailable / pitfall-edt-psi-read-in-callbacks / pitfall-execution-api-missing / pitfall-getJarPathForClass-243-missing / pitfall-gradle-windows / pitfall-headless-validate / pitfall-heavy-psi-interface-resolution / pitfall-ipgp-stripped-ui-classes / pitfall-jblist-copy-itemToText / pitfall-kotlin-incremental / pitfall-kotlin-synthetic-bridge-internal-api / pitfall-lightplatform / pitfall-notification-setlistener-no-2param / pitfall-notificationgroup-displayname / pitfall-panel-disposer-leak / pitfall-parallel-inflight-block / pitfall-plugin-xml-listener-unsupported / pitfall-psi-create-edt-readaccess / pitfall-runide-sandbox-warnings / pitfall-sandbox-corruption / pitfall-script-edit-kotlin-escapes / pitfall-swing-mouse-no-bubble / pitfall-toolwindow-manager-listener / pitfall-uicompatible-dataprovider / pitfall-verifyplugin-proxy / feedback-anaction-icon-update-presentation / feedback-baseplatformtestcase-junit3-runner / feedback-junit3-kotlin-lambda-testname / feedback-popup-chooserbuilder-single-click / feedback-swing-wrap-layout-clipping / pitfall-bash-backtick-inline-corruption / pitfall-editor-colors-scheme-dark-unavailable / pitfall-gradle-cache-locked-by-idea / pitfall-headless-ui-test-gotchas / pitfall-java-code-gen-no-kotlin-ext / pitfall-jcef-css-limitations / pitfall-kotlin-nested-class-prohibited-in-inner / pitfall-native-run-query-chain / pitfall-newbufferedwriter-truncate / pitfall-plugin-xml-configurable-displayname / pitfall-runcatching-debug-log-swallow / pitfall-settings-tree-ampersand-escape / pitfall-slowoperations-edt-readaction / pitfall-verifyplugin-kotlin-mode-optional-dep
 
+**第六次精简升级（2026-09-12，8 个）**：hprof-idea-snapshot-analysis / parallel-session-index-commit-split / pitfall-merge-whole-side-take / pitfall-toolcall-newline-escaping / zcode-tps-footer-windows-install / feedback-doc-lists-keep-main-only / reference-api-proxies / reference-fernflower-decompile
+
+**第七次精简升级（2026-09-13，1 个）**：pitfall-subagent-claims-verify（子代理断言先证伪）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 18（含 MEMORY.md） |
-| 全局记忆 global/ | 63 |
-| 归档 archive/ | 120（bug-fixes 68 + pitfalls 49 + methodology 1 + user-context 1 + README） |
-| **合计** | **205** |
+| 项目 memory（保留） | 29（含 MEMORY.md） |
+| 全局记忆 global/ | 76 |
+| 归档 archive/ | 172（bug-fixes 117 + pitfalls 52 + methodology 1 + user-context 1 + README） |
+| **合计** | **277** |

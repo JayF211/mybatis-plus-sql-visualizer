@@ -14,6 +14,8 @@
 
 ## 0. 结论速览（立项决策表）
 
+> **交付快照（2026-09-05，M44 第一批已实施于分支 feature/m44-orm-batch2，未合并 master）**：Spring Data JDBC 止血（SD6/SD7/SD8/SD10）✅、xbatis（XB1/XB2）✅、Easy-Query proxy MVP（EQ1/EQ4~EQ10）✅、MyBatis Dynamic SQL（DS1~DS5）✅、Querydsl MVP（QD1/QD2/QD4/QD5 ✅、QD3 算术 Raw 🟡）；全量 3353 测试 0 失败 + buildPlugin 通过。仍待立项：SD 完整期（SD1~SD5/SD9）、EQ core/api4j（EQ2/EQ3）、QD 子查询（QD6）/版本矩阵声明（QD7）、jOOQ（JO）、Jimmer（JM）、Fluent MyBatis/dbVisitor/BeetlSQL/sqltoy/lazy。
+
 | 框架 | 最新版（2026-09） | 结构家族 | 成本档 | 结论 | 建议节奏 |
 |------|------|------|------|------|------|
 | Spring Data JDBC / R2DBC | 4.1.1（Boot 4 线） | Spring Data 家族（与 JPA 共轨） | 止血 <5%；完整 5-15% | **立项·止血优先**（当前 @Query 链路产出错误 SQL，❗） | M44 第一批 |
@@ -42,7 +44,7 @@
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
 | `CrudRepository` 直系 CRUD（findById/save/findAll/findAllById/existsById/count/deleteById/deleteAll 系） | 🟡 | SD1 | 家族判定已命中（JpaCrudOperationConverter REPOSITORY_BASE_TYPES 含 CrudRepository，SQL 大体正确）；save 的 isNew 注解文案是 JPA 语境，需按家族分流 |
-| `ListCrudRepository` / `ListPagingAndSortingRepository`（3.0 变体） | 🟡 | SD6 | JpaCrudOperationConverter 名单已含 List*，但 DerivedMethodLocator 基类名单**不含**（仅靠「接口名 Repository 后缀」启发式侥幸放行派生方法）——三处名单需抽公共常量对齐 |
+| `ListCrudRepository` / `ListPagingAndSortingRepository`（3.0 变体） | ✅ | SD6 | JpaCrudOperationConverter 名单已含 List*，但 DerivedMethodLocator 基类名单**不含**（仅靠「接口名 Repository 后缀」启发式侥幸放行派生方法）——三处名单需抽公共常量对齐 |
 | `deleteById` | 🟡 | SD2 | SQL 本体可用（DELETE WHERE id=?），但 note 误标「JPA 逐实体 remove 语义」——JDBC 实为 bulk DELETE+级联删子表 |
 | `save` / `saveAll` | 🟡 | SD3 | JDBC 语义：新聚合=根表 INSERT+级联 INSERT 子表；旧聚合=UPDATE+**子表全删重插**——插件仅呈现根表单语句，注解需换 JDBC 语境 |
 | `R2dbcRepository` / `ReactiveCrudRepository` / `ReactiveSortingRepository` | 🟡 | SD4 | 三者均不在基类名单，仅启发式侥幸；javap 证实 R2dbcRepository 自身零方法（聚合接口）；Mono/Flux 返回类型与实体推断天然兼容，仅需名单+notes 标注 Reactive 语义 |
@@ -51,12 +53,12 @@
 
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
-| `@Table(value/name/schema)` | 🟡 | SD8 | 短名兜底命中且 relational @Table 确有 name 属性→`@Table(name=...)` 正确；但社区最常用的 **value 简写** `@Table("t_user")` 只读 name 属性→表名丢失回退推断；另支持 SpEL 动态表名（文档化边界） |
-| `@Column(value)` | ❗ | SD8 | relational @Column **只有 value 属性**（无 name/insertable/updatable），插件只读 name→**列名系统性丢失**为字段名 snake |
-| `@Id`（org.springframework.data.annotation.Id） | 🟡 | SD8 | 短名兜底正确解析；需固化双轨 FQN（commons 包非 jakarta）；无 @GeneratedValue——主键生成靠 @Sequence/KeyGenerator |
-| `@Transient` / `@Version`（spring-data-commons 包） | 🟡 | SD8 | 短名兜底正确；同上固化 FQN |
+| `@Table(value/name/schema)` | ✅ | SD8 | 短名兜底命中且 relational @Table 确有 name 属性→`@Table(name=...)` 正确；但社区最常用的 **value 简写** `@Table("t_user")` 只读 name 属性→表名丢失回退推断；另支持 SpEL 动态表名（文档化边界） |
+| `@Column(value)` | ✅ | SD8 | relational @Column **只有 value 属性**（无 name/insertable/updatable），插件只读 name→**列名系统性丢失**为字段名 snake |
+| `@Id`（org.springframework.data.annotation.Id） | ✅ | SD8 | 短名兜底正确解析；需固化双轨 FQN（commons 包非 jakarta）；无 @GeneratedValue——主键生成靠 @Sequence/KeyGenerator |
+| `@Transient` / `@Version`（spring-data-commons 包） | ✅ | SD8 | 短名兜底正确；同上固化 FQN |
 | `@Embedded(prefix/onEmpty)` | 🟡 | SD9 | 展平命中但 prefix 不读（JPA 走 @AttributeOverride）→有前缀时列名全错；前缀化列名拼接为新增语义 |
-| `@MappedCollection(idColumn/keyColumn)` | ❗ | SD10 | 最大单项：集合/嵌套实体字段不在 jakarta 跳过名单→被当**普通列**输出不存在的列（错误 SQL）；正确语义：反向列=引用方实体表名、key 列=反向列+_KEY（NamingStrategy javap+文档双证）；可复用 TableInfo.collectionAssociations 通道 |
+| `@MappedCollection(idColumn/keyColumn)` | ✅ | SD10 | 最大单项：集合/嵌套实体字段不在 jakarta 跳过名单→被当**普通列**输出不存在的列（错误 SQL）；正确语义：反向列=引用方实体表名、key 列=反向列+_KEY（NamingStrategy javap+文档双证）；可复用 TableInfo.collectionAssociations 通道 |
 | `@Sequence(value/sequence/schema)` / `@InsertOnlyProperty` | ⬜ | SD9 | 主键序列/聚合根仅插入属性（INSERT 进、UPDATE 跳过） |
 | 命名策略默认 snake_case | ✅ | — | DefaultNamingStrategy.getTableName=reconcatenateCamelCase(name,"_")，与插件 inferTableName 默认一致；自定义 NamingStrategy bean 文档化边界 |
 | save 聚合级联呈现 | ⬜ | SD3 | 根+子表多语句展开（远期，先注解说明） |
@@ -67,9 +69,9 @@
 |------|:----:|------|------|
 | 派生方法（CrudRepository 直系） | 🟡 | SD5 | PartTreeParser 关键字是 JDBC 支持面的**超集**（JDBC 无 RegExp/NEAR/WITHIN/EMPTY），交集输出一致；**JDBC 禁跨聚合 JOIN** 而插件嵌套属性会展开 JOIN→产出运行时不存在的 SQL，需家族门控 |
 | countBy / existsBy / deleteBy | 🟡 | SD5 | 4.1.x 运行时支持（PartTreeJdbcQuery.createDeleteQueries/JdbcDeleteQueryCreator javap 实证），插件可出 |
-| `org.springframework.data.jdbc.repository.query.Query` | ❗ | SD7 | **最危险假阳性链路**：短名 Query 兜底亮图标→JpqlQueryLocator 命中→无 nativeQuery 属性被当 **JPQL** 喂 JpqlConverter→`SELECT *` 等非 JPQL 语法产出错误结果；正确路由=native 透传分支（现成代码 :594-612）；仅命名参数、不支持分页参数（文档明示） |
-| `@Modifying`（jdbc/r2dbc 包，纯标记） | ⬜ | SD7 | 随 @Query 路由一并识别 |
-| R2DBC `@Query`（仅 value；`$1` 原生绑定+SpEL `:#{}`） | ⬜ | SD7 | 走 native 透传最干净 |
+| `org.springframework.data.jdbc.repository.query.Query` | ✅ | SD7 | **最危险假阳性链路**：短名 Query 兜底亮图标→JpqlQueryLocator 命中→无 nativeQuery 属性被当 **JPQL** 喂 JpqlConverter→`SELECT *` 等非 JPQL 语法产出错误结果；正确路由=native 透传分支（现成代码 :594-612）；仅命名参数、不支持分页参数（文档明示） |
+| `@Modifying`（jdbc/r2dbc 包，纯标记） | ✅ | SD7 | 随 @Query 路由一并识别 |
+| R2DBC `@Query`（仅 value；`$1` 原生绑定+SpEL `:#{}`） | ✅ | SD7 | 走 native 透传最干净 |
 | R2DBC 返回类型 Mono/Flux | ⬜ | SD4 | notes 标注 Reactive 语义即可，实体解析无需特判 |
 
 ### 1.4 实施切分建议
@@ -108,16 +110,16 @@
 
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
-| `JPAQueryFactory` 10 方法（select/selectDistinct/selectFrom/selectOne/from/query/update/delete/insert） | ⬜ | QD1 | 锚点与现有 WrapperLocator 初始化器/字段类型识别同构；update/delete/insert 返回独立 Clause |
-| JPAQuery 链：where(Predicate...)/groupBy/having/orderBy/limit/offset/restrict + join/innerJoin/leftJoin/rightJoin/fetchJoin/on | ⬜ | QD1 | **无 fullJoin**（JPQL 限制，白名单）；fetchJoin→JOIN FETCH 语义 |
-| Fetchable 终态：fetch/fetchOne/fetchFirst/iterate/stream | ⬜ | QD1 | fetchCount/fetchResults 已弃用（忽略） |
-| SimpleExpression：eq/ne/in/notIn/isNull/isNotNull/eqAny/eqAll/count/countDistinct | ⬜ | QD2 | 与 MP 1:1 |
-| ComparableExpression：gt/goe/lt/loe/between/notBetween/min/max/coalesce | ⬜ | QD2 | |
-| StringExpression：like/notLike/likeIgnoreCase/contains/startsWith/endsWith/lower/upper/trim/substring/concat | ⬜ | QD2 | LikePosition 直接对应 |
-| NumberExpression：add/subtract/multiply/divide/mod/abs/sum/avg | ⬜ | QD3 | Raw 或算术 RawExpr |
-| BooleanExpression and/or/not/isTrue/isFalse + BooleanBuilder 动态累积 | ⬜ | QD2 | Group；BooleanBuilder 链式 and/or 可静态收集 |
-| **表达式树 walker**（where 实参是 Operation mixin 表达式树而非平铺链） | ⬜ | QD4 | 唯一新件：Predicate→Condition 递归收集器（量级小） |
-| Q 类（EntityPathBase + BeanPath.createString/Number/... 属性名字面量） | ⬜ | QD5 | APT 源在 generated-sources/annotations，PSI 可读；字段类型名→StringPath/NumberPath 可判；列名映射走实体 @Table/@Column（复用 JpaEntityResolver） |
+| `JPAQueryFactory` 10 方法（select/selectDistinct/selectFrom/selectOne/from/query/update/delete/insert） | ✅ | QD1 | 锚点与现有 WrapperLocator 初始化器/字段类型识别同构；update/delete/insert 返回独立 Clause |
+| JPAQuery 链：where(Predicate...)/groupBy/having/orderBy/limit/offset/restrict + join/innerJoin/leftJoin/rightJoin/fetchJoin/on | ✅ | QD1 | **无 fullJoin**（JPQL 限制，白名单）；fetchJoin→JOIN FETCH 语义 |
+| Fetchable 终态：fetch/fetchOne/fetchFirst/iterate/stream | ✅ | QD1 | fetchCount/fetchResults 已弃用（忽略） |
+| SimpleExpression：eq/ne/in/notIn/isNull/isNotNull/eqAny/eqAll/count/countDistinct | ✅ | QD2 | 与 MP 1:1 |
+| ComparableExpression：gt/goe/lt/loe/between/notBetween/min/max/coalesce | ✅ | QD2 | |
+| StringExpression：like/notLike/likeIgnoreCase/contains/startsWith/endsWith/lower/upper/trim/substring/concat | ✅ | QD2 | LikePosition 直接对应 |
+| NumberExpression：add/subtract/multiply/divide/mod/abs/sum/avg | 🟡 | QD3 | Raw 或算术 RawExpr |
+| BooleanExpression and/or/not/isTrue/isFalse + BooleanBuilder 动态累积 | ✅ | QD2 | Group；BooleanBuilder 链式 and/or 可静态收集 |
+| **表达式树 walker**（where 实参是 Operation mixin 表达式树而非平铺链） | ✅ | QD4 | 唯一新件：Predicate→Condition 递归收集器（量级小） |
+| Q 类（EntityPathBase + BeanPath.createString/Number/... 属性名字面量） | ✅ | QD5 | APT 源在 generated-sources/annotations，PSI 可读；字段类型名→StringPath/NumberPath 可判；列名映射走实体 @Table/@Column（复用 JpaEntityResolver） |
 | JPAExpressions 子查询（select/selectFrom/avg/max/min/treat/type） | ⬜ | QD6 | 复用子查询渲染 |
 | Expressions.*Template / CaseBuilder / PathBuilder 动态路径 | ⬜ | 文档化边界 | Template 走 Raw；动态路径 get(String) 可解析 |
 | 版本矩阵声明（javax 5.x 主 + fork jakarta 6/7 辅） | — | QD7 | README/描述文档级工作 |
@@ -131,19 +133,19 @@
 
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
-| proxy 入口 `easyEntityQuery.queryable/insertable/updatable/deletable(Class)` | ⬜ | EQ1 | 官方主推；锚点=现有链首识别（qualifier 类型+方法名）同构 |
+| proxy 入口 `easyEntityQuery.queryable/insertable/updatable/deletable(Class)` | ✅ | EQ1 | 官方主推；锚点=现有链首识别（qualifier 类型+方法名）同构 |
 | core 入口 `easyQueryClient.queryable(...)`（条件为 String 列名+布尔重载） | ⬜ | EQ2 | 与 MP Wrapper **9/10 同构**（布尔重载/and-or 闭包/limit/orderBy 全对应） |
 | sql-api4j 方法引用版 `eq(DefTable::getId, id)` | ⬜ | EQ3 | Property 接口 Serializable——与 MP SFunction 同基建（SerializedLambda 语义名解析复用）；二期 |
-| proxy 条件 `o.name().eq()/like()/in()/isNull()`（void 注册式 lambda 块） | ⬜ | EQ4 | 7.5/10：lambda 体内是分号分隔的注册语句（非纯链式 qualifier），现有 lambda 收集器需增强为「块内语句遍历」 |
-| 布尔前置重载贯穿（`where(boolean, lambda)`/`eq(boolean,...)`） | ⬜ | EQ5 | ConditionToggle 直接复用 |
-| and/or 闭包嵌套 + `whereObject(dto)` | ⬜ | EQ5 | NestedArg 复用；whereObject≈MP 实体条件形态 |
-| `leftJoin(Class, (a,b) -> a.uid().eq(b.id()))` 双参 on lambda | ⬜ | EQ6 | 与 MPJ on-lambda 同构（MpjJoinSupport.parseOnLambda 思路复用）；@Navigate 声明关联 |
-| range 族：rangeClosed/rangeOpen/rangeOpenClosed/rangeClosedOpen | ⬜ | EQ7 | Between 家族映射（开闭区间语义需在渲染层区分） |
-| 实体注解 @Table(value,schema,oldName)/@Column(value,primaryKey,exist)/@ColumnIgnore/@InsertIgnore/@UpdateIgnore | ⬜ | EQ8 | 与 JPA 形态几乎一致——JpaEntityResolver 轨道复制改注即可；默认命名同为驼峰转下划线 |
-| @LogicDelete(strategy) / @Version / @Navigate(RelationTypeEnum,...) | ⬜ | EQ9 | 逻辑删除/乐观锁注入复用中央注入点模式；@Navigate 关联声明 |
-| 生成类 XxxProxy（`getStringColumn("name",...)` 字面量） | ⬜ | EQ8 | APT 源静态可读，作列名二级来源 |
-| toPageResult/limit/distinct/union | ⬜ | EQ5 | EntityPageAble1 |
-| 写路径 insertable(entity)/updatable+setColumns/deletable + 条件版 ClientExpressionUpdatable/Deletable | ⬜ | EQ10 | BatchModel 模板可复用 |
+| proxy 条件 `o.name().eq()/like()/in()/isNull()`（void 注册式 lambda 块） | ✅ | EQ4 | 7.5/10：lambda 体内是分号分隔的注册语句（非纯链式 qualifier），现有 lambda 收集器需增强为「块内语句遍历」 |
+| 布尔前置重载贯穿（`where(boolean, lambda)`/`eq(boolean,...)`） | ✅ | EQ5 | ConditionToggle 直接复用 |
+| and/or 闭包嵌套 + `whereObject(dto)` | ✅ | EQ5 | NestedArg 复用；whereObject≈MP 实体条件形态 |
+| `leftJoin(Class, (a,b) -> a.uid().eq(b.id()))` 双参 on lambda | ✅ | EQ6 | 与 MPJ on-lambda 同构（MpjJoinSupport.parseOnLambda 思路复用）；@Navigate 声明关联 |
+| range 族：rangeClosed/rangeOpen/rangeOpenClosed/rangeClosedOpen | ✅ | EQ7 | Between 家族映射（开闭区间语义需在渲染层区分） |
+| 实体注解 @Table(value,schema,oldName)/@Column(value,primaryKey,exist)/@ColumnIgnore/@InsertIgnore/@UpdateIgnore | ✅ | EQ8 | 与 JPA 形态几乎一致——JpaEntityResolver 轨道复制改注即可；默认命名同为驼峰转下划线 |
+| @LogicDelete(strategy) / @Version / @Navigate(RelationTypeEnum,...) | ✅ | EQ9 | 逻辑删除/乐观锁注入复用中央注入点模式；@Navigate 关联声明 |
+| 生成类 XxxProxy（`getStringColumn("name",...)` 字面量） | ✅ | EQ8 | APT 源静态可读，作列名二级来源 |
+| toPageResult/limit/distinct/union | ✅ | EQ5 | EntityPageAble1 |
+| 写路径 insertable(entity)/updatable+setColumns/deletable + 条件版 ClientExpressionUpdatable/Deletable | ✅ | EQ10 | BatchModel 模板可复用 |
 | **成本结论** | — | — | **8-12%（5-15% 档）**；结论：立项，proxy 优先 MVP、core/api4j 二期 |
 
 ---
@@ -172,9 +174,9 @@
 
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
-| `QueryWrapper.of(User.class).eq(User::getId, 1L).like(User::getName, "a").list(userDao)` | ⬜ | XB1 | 复用 LambdaQueryConverter 语义：方法名别名表 + QueryWrapperParser 前置分派 |
-| QueryChain / IService 风格链 | ⬜ | XB1 | 同上 |
-| 双坐标识别（cn.mybatis-mp 旧版存量项目 + cn.xbatis 新版） | ⬜ | XB2 | wrapperFactoryClassNames 补两组 |
+| `QueryWrapper.of(User.class).eq(User::getId, 1L).like(User::getName, "a").list(userDao)` | ✅ | XB1 | 复用 LambdaQueryConverter 语义：方法名别名表 + QueryWrapperParser 前置分派 |
+| QueryChain / IService 风格链 | ✅ | XB1 | 同上 |
+| 双坐标识别（cn.mybatis-mp 旧版存量项目 + cn.xbatis 新版） | ✅ | XB2 | wrapperFactoryClassNames 补两组 |
 | **成本结论** | — | — | **<5%**；P0 |
 
 ---
@@ -185,12 +187,12 @@
 
 | API / 形态 | 插件现状 | 对应任务 | 备注 |
 |------|:----:|------|------|
-| `SelectDSL.select(cols).from(table[,alias]).where(col, isEqualTo(1).and(col2, isIn(...)))` | ⬜ | DS1 | 新建 MdsConverter：链→现有 Condition 模型→9 方言渲染 |
-| SqlTable.of("t_user") / table.column("id", JDBCType) 手写常量 | ⬜ | DS2 | 列名直接可读（无生成代码） |
-| VisitableCondition 谓词 50+（isEqualTo/isNotEqualTo/isIn/notIn/isLike/isBetween/isNotNull/isNull/...） | ⬜ | DS3 | 高频 20 个先覆盖 + 未支持条件降级提示 |
-| RenderingStrategy：MyBatis3（#{} / p1,p2）与 SpringNamedParameter（:name） | ⬜ | DS4 | 占位符形态与插件参数面板两套对齐 |
-| orderBy(descending)/groupBy/having/limit/fetchFirst/offsetWhenPresent/union/join(JoinType,...) | ⬜ | DS1 | |
-| update/delete/insert(+multiple/insertSelect) DSL + build().render() | ⬜ | DS5 | 终态拦截点 |
+| `SelectDSL.select(cols).from(table[,alias]).where(col, isEqualTo(1).and(col2, isIn(...)))` | ✅ | DS1 | 新建 MdsConverter：链→现有 Condition 模型→9 方言渲染 |
+| SqlTable.of("t_user") / table.column("id", JDBCType) 手写常量 | ✅ | DS2 | 列名直接可读（无生成代码） |
+| VisitableCondition 谓词 50+（isEqualTo/isNotEqualTo/isIn/notIn/isLike/isBetween/isNotNull/isNull/...） | ✅ | DS3 | 高频 20 个先覆盖 + 未支持条件降级提示 |
+| RenderingStrategy：MyBatis3（#{} / p1,p2）与 SpringNamedParameter（:name） | ✅ | DS4 | 占位符形态与插件参数面板两套对齐 |
+| orderBy(descending)/groupBy/having/limit/fetchFirst/offsetWhenPresent/union/join(JoinType,...) | ✅ | DS1 | |
+| update/delete/insert(+multiple/insertSelect) DSL + build().render() | ✅ | DS5 | 终态拦截点 |
 | **成本结论** | — | — | **5-15%**；P0 候选 |
 
 ---
@@ -247,4 +249,5 @@
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-05 | **M44 第一批交付勾行（分支 feature/m44-orm-batch2）**：SD 止血 4 任务（含两处 ❗ 错误输出链路修复：JDBC @Query native 路由、@Column value）、xbatis 全量、Easy-Query proxy MVP、MyBatis Dynamic SQL、Querydsl MVP 共 24 个任务行置 ✅/🟡；单智能体实施 + 编排者集中测试，修复三处共性根因（collectSegments 引用层断链、xbatis 泛型形参误当实体、cn.xbatis.* 前缀宽松匹配误判变量）；全量 3353 测试 0 失败 |
 | 2026-09-05 | 初版：四路智能体并行调研（Spring Data JDBC/R2DBC、jOOQ+Querydsl、Easy-Query+Jimmer、国产长尾 7 框架）——建立 10 个框架的 API 覆盖行与立项决策表；关键发现：Spring Data JDBC 存在「侥幸可用」面与两处 ❗ 错误输出链路（@Column value 丢失、JDBC @Query 被当 JPQL）、xbatis 成本 <5% 最易、Querydsl 优于 jOOQ（10-20% vs 25-35%）、Easy-Query 与 MP 9/10 同构可立项、Jimmer 与 Flex 同判暂缓；org.querydsl 坐标已从 Central 下架（openfeign fork 接续）的版本风险记录 |
