@@ -63,4 +63,42 @@ class DialectExplainTest {
             d.renderExplainStatement(sample)
         }
     }
+
+    // ---------- T-ExplainDbl：幂等包装（重复点击执行计划不二次加前缀） ----------
+
+    @Test
+    fun `幂等-已包装文本原样返回`() {
+        val wrapped = "EXPLAIN FORMAT=JSON $sample"
+        assertEquals(wrapped, MySqlDialect.renderExplainStatementIdempotent(wrapped))
+        // 首次点击后该文本写回控制台文档，二次点击读取到的即此文本——不再产生双前缀
+        assertEquals(wrapped, MySqlDialect.renderExplainStatementIdempotent(wrapped))
+    }
+
+    @Test
+    fun `幂等-大小写与首尾空白结尾分号`() {
+        assertEquals("explain $sample", MySqlDialect.renderExplainStatementIdempotent("  explain $sample;  "))
+        assertEquals("EXPLAIN $sample", DmDialect.renderExplainStatementIdempotent("EXPLAIN $sample"))
+    }
+
+    @Test
+    fun `幂等-词边界不误判标识符`() {
+        // EXPLAINING_... 是标识符不是关键字 → 正常包装
+        val ident = "EXPLAINING_TABLE"
+        assertEquals("EXPLAIN FORMAT=JSON $ident", MySqlDialect.renderExplainStatementIdempotent(ident))
+    }
+
+    @Test
+    fun `幂等-未包装文本正常加前缀`() {
+        assertEquals("EXPLAIN FORMAT=JSON $sample", MySqlDialect.renderExplainStatementIdempotent(sample))
+        assertEquals(
+            "EXPLAIN (FORMAT JSON, VERBOSE) $sample",
+            PostgreSQLDialect.renderExplainStatementIdempotent(sample),
+        )
+    }
+
+    @Test
+    fun `幂等-不支持方言未包装降级null 已包装原样`() {
+        assertNull(OracleDialect.renderExplainStatementIdempotent(sample))
+        assertEquals("EXPLAIN $sample", OracleDialect.renderExplainStatementIdempotent("EXPLAIN $sample"))
+    }
 }
