@@ -43,6 +43,24 @@ if (gifRecord) {
     }
 }
 
+// T-McpToolset：MCP Server 插件（com.intellij.mcpServer）编译期 API 桩源集。
+// 基线平台 243 不含 mcpServer 插件，而本机 262 内置 mcpserver.jar 类文件是 major 69（Java 25），
+// JDK 17 编译读不了（javac 17/21 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——
+// 故用桩源码提供与真实 jar 完全一致的编译期签名（签名逐条 javap 自 262 jar，见桩文件头注释）。
+// 接线方式（防 task 依赖环）：
+//  - 主编译任务 compileKotlin.libraries 挂桩产物目录（task 依赖：compileKotlin → compileKotlinMcpStub）；
+//  - 桩源集编译类路径复用 main 的 compileClasspath（平台 jar/stdlib/JSqlParser 等，不含桩产物，
+//    天然无环——若桩 classpath 反向含 main.compileClasspath 且 main 含桩产物则成环）；
+//  - 桩产物只进编译 classpath，**不进运行时与打包产物**（运行时类型由平台内置插件提供，
+//    253+/262 内置；插件 jar 携带 com.intellij.mcpserver.* 会与平台类冲突）。
+val mcpStub: SourceSet by sourceSets.creating
+
+sourceSets {
+    named("mcpStub") {
+        compileClasspath += sourceSets.main.get().compileClasspath
+    }
+}
+
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     testImplementation(libs.junit)
@@ -189,6 +207,12 @@ kotlin {
     // T-GifRecordSwitch：常规态 243 平台用 17；录制态 262 平台类文件为 v69，
     // 须 javac 24 才能读（javac 17/21 报「错误的版本 69.0」）。
     jvmToolchain(if (gifRecord) 24 else 17)
+}
+
+// T-McpToolset：主编译 classpath 追加 MCP 桩产物（详见文件头 mcpStub 源集注释）。
+// 只挂编译任务 libraries，不动 runtime classpath/打包——桩不进插件 jar。
+tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileKotlin") {
+    libraries.from(sourceSets.named("mcpStub").map { it.output })
 }
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败

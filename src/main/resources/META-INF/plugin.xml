@@ -81,6 +81,12 @@
          Community / Diagrams 缺席时经 NativeJoinDiagramSupport 门面降级回自绘 DiagramPanel -->
     <depends optional="true" config-file="diagram-optional.xml">com.intellij.diagram</depends>
 
+    <!-- T-McpToolset MCP 能力一期：com.intellij.mcpServer（平台内置 MCP Server 插件，253+/262 内置，
+         243 不支持——旧 EP 形态适配成本>收益，见 CHANGELOG）——mcp-optional.xml 注册
+         mcpServer.mcpToolset（SqlVisualizerToolset 三只读工具）。未装该插件的环境整文件不加载，
+         插件其余功能零影响；编译期类型来自 mcpStub 桩源集（本机构建辅助，见 build.gradle.kts 注释） -->
+    <depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>
+
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
         <!-- 全局配置（application-level，F-16）——@Service(Service.Level.APP) 注解式注册（M16.1 移除 XML

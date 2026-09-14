@@ -27,6 +27,7 @@ class PluginXmlStructureGuardTest {
 
     private val xmlNames = listOf(
         "plugin.xml", "kotlin-optional.xml", "database-optional.xml", "diagram-optional.xml",
+        "mcp-optional.xml",
     )
 
     private fun strippedXmls(): List<Pair<String, String>> = xmlNames.map { name ->
@@ -120,5 +121,35 @@ class PluginXmlStructureGuardTest {
         assertTrue("applicationConfigurable 注册不应丢失", xml.contains("applicationConfigurable"))
         assertTrue("可选 Kotlin 依赖声明不应丢失", xml.contains("supportsKotlinPluginMode"))
         assertTrue("errorHandler EP 不应丢失（Internal Errors 上报按钮）", xml.contains("<errorHandler"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-McpToolset：MCP 可选依赖结构守卫
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `mcp可选依赖声明与工具集注册成对存在`() {
+        val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val mcpXml = strippedXmls().first { it.first == "mcp-optional.xml" }.second
+        assertHolds(
+            "plugin.xml 缺 mcpServer 可选依赖声明（MCP 工具注册失效）",
+            pluginXml.contains("""<depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>"""),
+        )
+        assertHolds(
+            "mcp-optional.xml 缺 mcpServer.mcpToolset 注册（三工具不上线）",
+            mcpXml.contains("mcpServer.mcpToolset") &&
+                mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.SqlVisualizerToolset"),
+        )
+    }
+
+    @Test
+    fun `主描述文件不得直接引用mcpserver类型`() {
+        // 可选依赖铁律（M17 database-optional 同款）：主描述文件不得直接引用可选插件类型/注册——
+        // mcpServer 缺席（243/未装）时整份主文件仍须可加载，mcp 引用只允许出现在 mcp-optional.xml
+        val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
+        assertHolds(
+            "plugin.xml 主文件出现 mcpToolset/mcpServer EP 注册（须收敛进 mcp-optional.xml）",
+            !pluginXml.contains("mcpToolset"),
+        )
     }
 }
