@@ -72,14 +72,26 @@ object MpSqlVisualizerBundle {
     private val loader: ClassLoader get() = MpSqlVisualizerBundle::class.java.classLoader
 
     /**
-     * 当前语言 locale：默认简体中文；`en`→English；`AUTO`→跟随 IDE（JVM 默认）；
+     * 当前语言 locale：默认简体中文；`en`→English；`AUTO`→跟随 IDE 显示语言；
      * settings 未注册（测试环境）兜底中文。
      */
     private fun currentLocale(): Locale = runCatching {
         when (PluginSettings.getInstance().state.language) {
             "en" -> Locale.ENGLISH
-            "AUTO" -> Locale.getDefault()
+            "AUTO" -> ideDisplayLocale()
             else -> Locale.SIMPLIFIED_CHINESE
         }
     }.getOrElse { Locale.SIMPLIFIED_CHINESE }
+
+    /**
+     * T-ReportL10n：`AUTO` 的语言落点从 [Locale.getDefault]（JVM 进程 locale）改为
+     * [com.intellij.DynamicBundle.getLocale]（IDE 实际显示语言）。真机反馈：IDE 界面
+     * 已切英文（Internal Errors 全英文），「报告到需求池」菜单项仍显示中文——
+     * 语言设置选「跟随系统」时 JVM locale 可能仍是系统中文，与 IDE 显示语言脱节。
+     * 平台入口 243（util-8.jar）/262（intellij.platform.core.jar）javap 实证
+     * `public static Locale getLocale()` 同签名；测试/headless 不可用时回退 JVM locale。
+     */
+    internal fun ideDisplayLocale(): Locale = runCatching {
+        com.intellij.DynamicBundle.getLocale()
+    }.getOrElse { Locale.getDefault() }
 }
