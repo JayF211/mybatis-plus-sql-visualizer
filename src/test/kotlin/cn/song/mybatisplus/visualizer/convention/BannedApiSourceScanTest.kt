@@ -110,4 +110,22 @@ class BannedApiSourceScanTest {
             bad.isEmpty(),
         )
     }
+
+    @Test
+    fun `方言setMapping反射只允许DialectPreMapping单入口`() {
+        // T-ExecSlowOps F1：SqlDialectMappings.setMapping 平台硬要求 EDT（handleMappingChange →
+        // reparseFiles → runWriteAction → VcsVFSListener.beforeContentsChange 断言），262 真机
+        // 后台预热线程反射直调必炸 "Access is allowed from EDT only"。方言映射唯一入口是
+        // DialectPreMapping.ensureMapped（BGT 读探测 + invokeLater 派 EDT），新调用点禁止绕开。
+        val allowed = "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.kt"
+        val bad = mainSources()
+            .filter { (_, code) -> code.contains("\"setMapping\"") }
+            .map { (path, _) -> path }
+            .filter { it != allowed }
+        assertTrue(
+            "setMapping 反射出现在 $allowed 之外（线程语义收口被绕开，BGT 直调 EDT-only API 必抛）：$bad。" +
+                "方言映射统一走 DialectPreMapping.ensureMapped",
+            bad.isEmpty(),
+        )
+    }
 }

@@ -105,8 +105,8 @@ val psi = ReadAction.compute { PsiManager.getInstance(proj).findFile(vf) }
 - [ ] gutter 预览 → 控制台默认展示（非首见）：日志无 `Slow operations are prohibited on EDT`（堆栈 ① 场景消除）；exec 缓存命中日志出现于 prepareConsole 前
 - [ ] 项目首见（删 `.idea/sql-visualizer/` 与 workspace.xml 方言映射节点后首开）：允许一次既有形态降级（内存 PSI 回退），第二次预览起完整命中、日志干净
 - [ ] 执行链不回归：预览 ▶ 执行、跨项目两开（T-PreviewExecDs 场景）、切换数据源、M36.5.3 场景（索引期执行不静默——MySQL 方言 PSI 生效）
-- [ ] 源扫描守卫绿：预热方法体内无 `setMapping` 直调；全量测试 0 失败；verifyFull 按既定口径仅发版前跑
-- [ ] DataSourceSelector `createTempPsiFile` KDoc「容忍 SEVERE 噪音」旧表述更新为本计划结论
+- [x] 源扫描守卫绿：`setMapping` 反射字面量 src/main 收口 DialectPreMapping.kt 单入口（守卫口径较原计划收紧）；全量测试 3979/0/0/6 绿；verifyFull 按既定口径仅发版前跑
+- [x] DataSourceSelector `createTempPsiFile` KDoc「容忍 SEVERE 噪音」旧表述更新为本计划结论
 
 ## 六、真机走查清单（runIde，留人工）
 
@@ -118,4 +118,36 @@ val psi = ReadAction.compute { PsiManager.getInstance(proj).findFile(vf) }
 
 ## 七、实施记录（回填）
 
-（待实施后回填）
+**2026-09-14 实施完成**（worktree `wt-t-execslowops`，分支 `t-execslowops`）：
+
+1. **F1 方言映射两段式收编**：新建 `execute/DialectPreMapping.kt`（internal object）——
+   `shouldSkip` 纯函数路由 + `configuredAsMySql` BGT 读探测（getConfiguredMapping，243/262 双版
+   javap 实锤 public 无 EDT 限制）+ `setMySqlOnEdt`（EDT 硬校验，非 EDT 拒绝并 warn 防御网）+
+   `ensureMapped` 编排（EDT 直调走同步语义；BGT 读探测稳态跳过 / 首见 `invokeLater` 派 EDT +
+   `CountDownLatch.await(2000ms)` 有界等待，绝不 invokeAndWait）。两处调用点收编为薄委托：
+   `SqlPreviewPanel.mapPreviewDialectBeforePsi`（面板级 `previewDialectMappedVf` 短路 + 回写）与
+   `DataSourceSelector.mapDialectBeforePsi`（exec 级 `dialectMappedVf` 同款）。真机堆栈②
+   （BGT setMapping → VcsVFSListener 断言，SEVERE ×4）自此消除。
+2. **F2 exec 临时文件 BGT 预热**：新增 `DataSourceSelector.prewarmExecTempFile(project, sql)`
+   （BGT 专属入口，EDT 直调拒绝）——EDT 守卫 → 缓存命中改「仅刷新文件内容」（projectExecFile
+   doc 驱动三方同步，连续预览 SQL 变化时保 attachConsole 初始内容一致）→ AtomicBoolean
+   `execPrewarmInFlight` 防重 → 写盘 → WIRA refresh → F1 两段式映射 → ReadAction findFile →
+   `markCachedTempPsiFile`（新 internal 正函数，测试缝 `markCachedTempPsiFileForTest` 改薄委托）。
+   挂点 = `SqlPreviewService.previewAsync` compute 之后、`invokeLater` 派发弹窗之前，独立池线程
+   fire-and-forget（不推迟弹窗）；守卫 = 确定性 SQL（previewModel/batchModel/xmlModel/fillClauses
+   全空）+ `ExecuteSqlSupport.isAvailable()`。**挂点与原计划 §3.2 面板构造器方案偏差**：
+   previewAsync 是 gutter + 全部工具栏/快捷键入口的单一池线程收口点，一处接线全覆盖且天然
+   拿到确定性 result.sql，故改挂此处。`createTempPsiFile` KDoc 删除「容忍 SEVERE 噪音/后台化
+   经评估否决」旧表述，改注「预热 + 冷路径兜底」新形态（验收项 ⑥）。
+3. **F3 跨线程可见性**：`cachedTempPsiFile`/`cachedTempPsiProjectName`/`dialectMappedVf`/
+   `lastTempFileFailure` 全部 `@Volatile`（BGT 成为第二写方）。
+4. **F4** 按预案砍掉（F1/F2 已消双 SEVERE，预览面板级项目缓存不阻塞交付）。
+5. **测试**：新增 `ExecSlowOpsRoutingTest` 3 例（shouldSkip 表驱动）；
+   `BannedApiSourceScanTest` 新增守卫「`"setMapping"` 字面量 src/main 只允许
+   DialectPreMapping.kt 单入口」（等价承载原计划『预热方法体内无 setMapping 直调』意图，
+   收口更强——任何新文件反射直调都红）。全量裸命令 **3979/0/0/6 绿**（基线 3975+4）。
+
+F2 SQL 时效性说明：预热写 `result.sql` 原文与面板渲染文本差异由既有三级同步链吸收
+（reuseSharedConsole setText / prepareAfterEditorResolved console-doc→vf 同步 + smart
+updateScriptModel / executeOnConsole 执行前同步），与 T-PreviewFlash 缓存命中路径同款语义，
+未新增同步面。真机走查清单（§六）留人工。

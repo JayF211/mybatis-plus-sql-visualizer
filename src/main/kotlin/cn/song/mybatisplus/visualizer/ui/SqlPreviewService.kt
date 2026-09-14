@@ -1881,6 +1881,23 @@ class SqlPreviewService(private val project: Project) {
                 } catch (e: Throwable) {
                     null
                 }
+                // T-ExecSlowOps F2：确定性 SQL（无参数开关/批量/XML 模型）预览成功即后台预热
+                // exec 临时文件（写盘→refresh→方言映射→findFile→填缓存槽），弹窗打开后
+                // prepareDefaultConsole 命中缓存，EDT 冷路径（refresh+findFile 慢操作 SEVERE 本体）
+                // 退化为兜底。独立池线程 fire-and-forget——预热含 VFS refresh 有界耗时，不得推迟
+                // 弹窗；带参/批量/XML 预览 SQL 随面板勾选变化，预热内容不可信，跳过。
+                if (result != null && result.previewModel == null && result.batchModel == null &&
+                    result.xmlModel == null && result.fillClauses.isNullOrEmpty() &&
+                    cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
+                ) {
+                    ApplicationManager.getApplication().executeOnPooledThread {
+                        runCatching {
+                            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, result.sql)
+                        }.onFailure {
+                            LOG.warn("[M36] exec prewarm dispatch failed: ${it.javaClass.simpleName}: ${it.message}")
+                        }
+                    }
+                }
                 ApplicationManager.getApplication().invokeLater { onResult(result) }
             }
         }

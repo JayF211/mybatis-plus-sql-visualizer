@@ -481,31 +481,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
      * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
      * 同 vf 已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+     *
+     * T-ExecSlowOps F1：反射段收编进 [DialectPreMapping]，本方法仅保留「面板级进程内幂等短路」语义 +
+     * 成功回写 [previewDialectMappedVf]。真机实锤：本方法在 [prewarmPreviewTempFile] 后台线程内调用，
+     * 旧实现反射直调 `setMapping` → 平台 `handleMappingChange → reparseFiles → runWriteAction →
+     * VcsVFSListener.beforeContentsChange` 的 `assertEventDispatchThread` 硬抛
+     * RuntimeExceptionWithAttachments（SEVERE ×3）。DialectPreMapping.ensureMapped 两段式：
+     * 稳态（workspace.xml 映射幸存/本进程已设）读探测直接跳过，仅项目首见经 invokeLater 派 EDT 执行
+     * 映射并 CountDownLatch 有界等待——映射写归 EDT、慢操作归 BGT，两侧 SEVERE 同消。
      */
     private fun mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
-        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-        if (previewDialectMappedVf?.isValid == true && previewDialectMappedVf === vf) return
-        runCatching {
-            val mappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
-            val mappings = mappingsClass.getMethod("getInstance", Project::class.java).invoke(null, proj)
-            @Suppress("UNCHECKED_CAST")
-            val values = mappingsClass.getMethod("getAvailableValues").invoke(mappings) as? List<Any?>
-            val mysql = values?.firstOrNull {
-                (it as? com.intellij.lang.Language)?.id.equals("MySQL", ignoreCase = true)
-            }
-            if (mysql != null) {
-                mappingsClass.getMethod(
-                    "setMapping",
-                    com.intellij.openapi.vfs.VirtualFile::class.java,
-                    Any::class.java,
-                ).invoke(mappings, vf, mysql)
-                previewDialectMappedVf = vf
-                LOG.info("[M36] preview dialect pre-mapped to MySQL for ${vf.name}")
-            } else {
-                LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)")
-            }
-        }.onFailure { e ->
-            LOG.warn("[M36] preview dialect pre-mapping skipped: ${e.message}")
+        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === vf
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, vf, inProcessMapped)) {
+            previewDialectMappedVf = vf
         }
     }
 
