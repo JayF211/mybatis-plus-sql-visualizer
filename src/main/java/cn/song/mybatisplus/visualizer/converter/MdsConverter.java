@@ -300,7 +300,8 @@ public final class MdsConverter {
             case "select", "selectDistinct" -> {
                 LimitClause limit = null;
                 if (ctx.limit != null) {
-                    limit = new LimitClause(ctx.offset != null ? ctx.offset : ctx.limit.getCount(),
+                    // 对齐 master：offset 缺席时保持 null（渲染 LIMIT n 而非 LIMIT n, n）
+                    limit = new LimitClause(ctx.offset != null ? ctx.offset : ctx.limit.getOffset(),
                             ctx.limit.getCount());
                 }
                 statement = new SelectStatement(table, ctx.selectColumns, ctx.tableAlias, List.of(),

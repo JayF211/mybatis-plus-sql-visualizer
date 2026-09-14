@@ -108,7 +108,8 @@ public final class SqlListFragmentRenderer {
             }
             // 片段文本内嵌换行：按 \n 切开，非末段留在当前行，末段开新行
             // （split 默认 limit 0 丢弃尾部空串，与 Kotlin split 同语义）
-            String[] parts = f.text().split("\n");
+            // T-SyncK2JMaster171 修复：Java split(limit=0) 丢尾部空串而 Kotlin split 保留——独立 "\n" 空白 token 会 split 成空数组、换行被整个吞掉（3 用例回归实证），limit=-1 复刻 Kotlin 语义
+            String[] parts = f.text().split("\n", -1);
             for (int i = 0; i < parts.length; i++) {
                 if (i > 0) {
                     current = new ArrayList<>();

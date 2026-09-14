@@ -301,14 +301,17 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     private fun ownFoldRegions(editor: Editor) =
         editor.foldingModel.allFoldRegions.filter { it.placeholderText.startsWith("…") }
 
+    private fun openFoldProbeEditor(): SqlClickPreviewContent =
+        SqlClickPreview.buildContent(
+            project,
+            "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
+            {},
+            {},
+        )
+
     fun test开启自动折叠后弹窗内容含折叠区域() {
         withAutoFold(enabled = true) {
-            val content = SqlClickPreview.buildContent(
-                project,
-                "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
-                {},
-                {},
-            )
+            val content = openFoldProbeEditor()
             try {
                 val regions = ownFoldRegions(content.editor)
                 assertEquals("开启态应有一个折叠区域", 1, regions.size)
@@ -322,12 +325,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
 
     fun test关闭自动折叠后弹窗内容零区域且无轮廓() {
         withAutoFold(enabled = false) {
-            val content = SqlClickPreview.buildContent(
-                project,
-                "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
-                {},
-                {},
-            )
+            val content = openFoldProbeEditor()
             try {
                 assertEquals("关闭态零折叠区域（紧凑外观逐字节不变）", 0, ownFoldRegions(content.editor).size)
                 assertFalse("关闭态不补设折叠轮廓", content.editor.settings.isFoldingOutlineShown)
