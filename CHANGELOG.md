@@ -2,57 +2,53 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.9.14] - 2026-09-14
 
-### Added
-
-- **SQL 历史列表行号（T-LogHistoryRowNo）**：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号（灰色元信息行最前），搜索过滤下行号稳定不变
-- **SQL 列表多选批量复制（T-ListPreviewCopy）**：SQL 日志页与「SQL 历史」页二级列表 Ctrl/Shift 多选后右键「复制」一次性复制全部选中 SQL（文案带条数，如「复制选中 SQL（3 条）」，逐条分号收尾、换行拼接，与内置 Ctrl+C 多选复制产物一致）；右键命中行已在多选集合内时保留多选，不在集合内时收敛为该行（删除/发送/跳转等其余菜单项仍作用于被右键的行）
-
-### Changed
-
-- **单击预览默认格式化显示（T-ListPreviewCopy）**：两页列表单击预览浮层与历史页双击预览弹窗统一跟随设置页既有「预览时格式化还原 SQL」开关（默认开启）——长 SQL 点开即多行缩进展示，与列表格式化模式视觉一致；显式关闭该开关的用户保留原文展示
-- **多选进行中不再触发单击预览（T-ListPreviewCopy）**：Ctrl/Shift 多选时单击行不再弹出单行预览浮层（已打开的浮层一并关闭），多选操作不再被逐行弹出的预览干扰；恢复单选后单击预览正常
-
-## [2026.9.14-beta.2] - 2026-09-13
-
-> 内测版第二发：dev 分支（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等 119 提交）与 t-crudcolor 分支整体回合 master 后的首次发行。dev 侧条目此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 beta.1 的用户可见增量。
-
-### Added
-
-- **SQL 列表 CRUD 类型颜色标记（T-CrudColor）**：SQL 日志页与「SQL 历史」页二级列表支持按语句类型着色标记，颜色与标记形态均可自定义——默认「左侧 3px 色条」（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红，OTHER 不标记）；可选「整行淡背景」（底色与列表背景混色 14%，天然适配亮/暗主题），其**选中态为「保留类型色调（30% 混色）+ 2px 选中描边」而非平台填充**，保证上下键浏览时颜色不丢失、且耗时快/慢着色不再被选中态抹白；样式三选一（色条 / 淡背景 / 关闭，关闭与改造前逐字节一致）。类型判定复用 `LogStatementClassifier`（与类型过滤弹窗同源，故筛出的 SELECT 行绝不会被标成红色）。新增 `SqlListTypeColor`（配色/混色/对比度纯逻辑）与 `SqlListSelectionOutline`（描边 Border，预建复用、热路径零分配）；设置项 5 个（样式 + 四色），不新增复选框
-- **图片素材按用途分层（docs/images）**：新增 `docs/images/design/` 存放开发过程设计稿，与根目录的对外素材（README/插件介绍页/Marketplace 引用的截图与二维码）分离；《文档命名规范-说明文档.md》新增 §图片/设计稿 八条（位置/命名 `{任务号}-{说明}.png`/格式/引用基准=文件相对路径/嵌入语法/禁止内嵌外链（Gitee raw 对 Marketplace 302 防盗链）/分层理由/设计稿须标注非实现截图）
-
-### Changed
-
-- **dev 分支整体回合**：M37 竞品融合（gutter 左键直接预览 / 右键菜单与「最近执行记录」反查 / 真实 EXPLAIN 执行计划含达梦·人大金仓 / 多模块源根跳转容错 / 系列预览语义修复）、T-ErrReport 错误一键上报、T-ListMode 三种显示模式、M39/M44 ORM 识别域扩展（EasyQuery / Querydsl / Xbatis / MDS / Spring Data Specification·QueryByExample / JPA 元数据增强）、自动监听被动模式、T-Perf 性能系列（后台扫描 / 增量刷新 / 渲染热路径零分配）——逐项功能入口与验收步骤见 `docs/验收文档/20260913-1225-dev与CrudColor合并master-新增功能验收文档.md`。合并全量 3880/0/6 绿，verifyPlugin 三目标 Compatible
-
-## [2026.9.14-beta.1] - 2026-09-12
-
-> Gitee 抢先体验通道的首个内测版（`-beta.N` 后缀仅内测通道；正式版 `2026.9.14` 发行时本系列全部内测版的条目统一并入正式版本号）。
+> 正式版：合并内测版 beta.1（Gitee 抢先体验通道已发行）、beta.2（仅提交未发行，内容直接并入本版）与 09-14 当日全部交付链。dev 分支回合条目（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等）此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 v2026.9.11 的用户可见增量。
 
 ### Added
 
 - **实体类与数据库表右键生成 CRUD SQL（T-CrudSql）**：双入口 action——实体类（EditorPopupMenu + ProjectViewPopupMenu，判定 MP 注解实体，后台 ReadAction 内 EntityResolver→CrudTableSpec）+ Database 工具窗表节点（DatabaseViewPopupMenu，可选依赖 database-optional.xml，Community 版仅实体侧入口）；一键产出 INSERT / UPDATE / SELECT / DELETE。展示层零新弹窗：候选选择为原生 `JBPopup` 浮层（Recent Files 式——打字按摘要过滤、Enter/双击选定、ESC 关闭、主题色双行渲染器加粗摘要+等宽代码行详情），选中进既有 SqlPreviewService 预览窗口；INSERT/UPDATE 复用 BatchModel 列勾选重建（自增主键默认不勾、`@Version` 列 SET 尾 `= version + 1` + WHERE 追加、逻辑删除变体仅实体侧）；无主键降级 `WHERE 1 = 0` 占位提示。真机反馈三轮：OK/双击进预览（回调 invokeLater 出模态上下文，原同步 show 被模态吞）、候选样式分层、模态对话框整体退出 CRUD 流程
 - **SQL 预览字段列表自动折叠（T-AutoFold）**：宽表 SQL 列清单逐行展开定位困难（官网需求池 FR-0017），新增「SQL 预览字段较多时自动折叠」配置项（默认关，关闭时行为逐字节不变）。程序化 FoldingModel 路线：`SqlAutoFoldPlanner` 纯逻辑规划器（SqlLexer token 流单遍状态机，识别 SELECT/INSERT 列清单、VALUES 每组、UPDATE SET 四类顶层列表，元素数 ≥ 阈值且跨 ≥ 2 行才折叠）+ `SqlAutoFolding.applyTo` 公共应用器唯一收口（UserData 挂本方区域清单，只摘自己的，绝不越权碰平台 ConsoleFolding 区域）。六点位接入：主预览三分支 + 原生 Database 控制台 + 单击预览弹窗 + LogToSqlPanel 结果区 + SqlInputEditor 输入区；阈值默认 10 可配，设置页复选框总数台账 24→25
+- **SQL 列表 CRUD 类型颜色标记（T-CrudColor）**：SQL 日志页与「SQL 历史」页二级列表支持按语句类型着色标记，颜色与标记形态均可自定义——默认「左侧 3px 色条」（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红，OTHER 不标记）；可选「整行淡背景」（底色与列表背景混色 14%，天然适配亮/暗主题），其**选中态为「保留类型色调（30% 混色）+ 2px 选中描边」而非平台填充**，保证上下键浏览时颜色不丢失、且耗时快/慢着色不再被选中态抹白；样式三选一（色条 / 淡背景 / 关闭，关闭与改造前逐字节一致）。类型判定复用 `LogStatementClassifier`（与类型过滤弹窗同源，故筛出的 SELECT 行绝不会被标成红色）。新增 `SqlListTypeColor`（配色/混色/对比度纯逻辑）与 `SqlListSelectionOutline`（描边 Border，预建复用、热路径零分配）；设置项 5 个（样式 + 四色），不新增复选框
+- **SQL 列表多选批量复制（T-ListPreviewCopy）**：SQL 日志页与「SQL 历史」页二级列表 Ctrl/Shift 多选后右键「复制」一次性复制全部选中 SQL（文案带条数，如「复制选中 SQL（3 条）」，逐条分号收尾、换行拼接，与内置 Ctrl+C 多选复制产物一致）；右键命中行已在多选集合内时保留多选，不在集合内时收敛为该行（删除/发送/跳转等其余菜单项仍作用于被右键的行）
+- **SQL 历史列表行号（T-LogHistoryRowNo）**：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号（灰色元信息行最前），搜索过滤下行号稳定不变
+- **多模块注入改为用户勾选选择（T-ModPick）**：多模块项目注入拦截器此前一律全模块生成——新增 `InjectionModulePickerDialog`（DialogWrapper+JBCheckBox 逐模块行=模块名·基础包+旧版待更新标注，默认全选+全选/全不选按钮，空选禁确定）；注入检测后多模块（新建+升级>1）EDT 弹勾选、单模块不打扰直注、取消回滚设置页勾选（新结果态 `InjectionResult.Cancelled`）
+- **图片素材按用途分层（docs/images）**：新增 `docs/images/design/` 存放开发过程设计稿，与根目录的对外素材（README/插件介绍页/Marketplace 引用的截图与二维码）分离；《文档命名规范-说明文档.md》新增 §图片/设计稿 八条（位置/命名 `{任务号}-{说明}.png`/格式/引用基准=文件相对路径/嵌入语法/禁止内嵌外链（Gitee raw 对 Marketplace 302 防盗链）/分层理由/设计稿须标注非实现截图）
 
 ### Changed
 
+- **dev 分支整体回合**：M37 竞品融合（gutter 左键直接预览 / 右键菜单与「最近执行记录」反查 / 真实 EXPLAIN 执行计划含达梦·人大金仓 / 多模块源根跳转容错 / 系列预览语义修复）、T-ErrReport 错误一键上报、T-ListMode 三种显示模式、M39/M44 ORM 识别域扩展（EasyQuery / Querydsl / Xbatis / MDS / Spring Data Specification·QueryByExample / JPA 元数据增强）、自动监听被动模式、T-Perf 性能系列（后台扫描 / 增量刷新 / 渲染热路径零分配）——逐项功能入口与验收步骤见 `docs/验收文档/20260913-1225-dev与CrudColor合并master-新增功能验收文档.md`
 - **全选/全不选双按钮合一为状态切换按钮（T-SelToggle）**：预览「动态条件」「批量列」两分区与日志「类型过滤」弹窗三处并排的「全选」「全不选」按钮各合并为一个随勾选态切换文案的单按钮——全勾显示「全不选」点击清空，其余（空集/部分勾选）显示「全选」点击补满；点击行为与 SQL 产物零变更。预览侧文案收口 `renderSql()` 单点，弹窗侧三处显式同步；i18n 零新键。含前置改动：两分区「清除」按钮移至行末位
+- **单击预览默认格式化显示（T-ListPreviewCopy）**：两页列表单击预览浮层与历史页双击预览弹窗统一跟随设置页既有「预览时格式化还原 SQL」开关（默认开启）——长 SQL 点开即多行缩进展示，与列表格式化模式视觉一致；显式关闭该开关的用户保留原文展示
+- **多选进行中不再触发单击预览（T-ListPreviewCopy）**：Ctrl/Shift 多选时单击行不再弹出单行预览浮层（已打开的浮层一并关闭），多选操作不再被逐行弹出的预览干扰；恢复单选后单击预览正常
+- **显示模式下拉按钮与「SQL类型」完全同构（T-MergeFollowup-04）**：工具栏「显示模式」经两轮返工定稿为普通 JButton + ArrowDown 图标 + JPopupMenu 单选菜单（JRadioButtonMenuItem 勾选当前项），字体边框与「SQL类型：」单元逐像素同构——初版裸 JComboBox 与二版平台 ComboBoxButton 手动创建形态（无 ActionToolbar 驱动 update() 首显空文本、字体偏小无平台按钮边框）均弃用
 
 ### Fixed
 
+- **合并回合四缺陷（T-MergeFollowup）**：① 预览工具栏「执行计划」按钮在 dev 合并中丢失（master 按钮行重构删行无冲突标记、`explainSql()` 全树零调用——「注释与代码矛盾/函数零调用=合并语义丢失」信号沉淀）——补回内联高频位；② gutter 右键菜单无反应根治——243 平台 `LineMarkerGutterIconRenderer` 不覆写 `getRightButtonClickAction`（基类字节码恒 null），改匿名 `LineMarkerInfo` 覆写 `createGutterRenderer` 走平台右键正解 API；③ 日志页多次切换显示模式后列表重叠错乱根治——`BasicListUI` 的 cellHeights 布局缓存不归 Swing layout 管（revalidate 无效、固定→可变 `-1→-1` 不触发 propertyChange、增量刷新无 model 事件，三重失效路径全空），两面板改 `list.updateUI()` 重装 UI 强制布局状态失效；④ 显示模式下拉按钮同构化（见 Changed）
+- **报告对话框真机反馈三波六缺陷（T-FeedbackDlg 系列）**：一波——对话框宽度、灰提示对比度、面板不可拖拽；二波——堆栈勾选显隐窗口跳动（weighty 行显隐须窗口高度补偿 `toggleResizeDelta`）与手动形态堆栈来源缺失（补 `MessagePool` 错误池，243/262 同签名）；三波——手动形态堆栈自主输入（勾选恒显示 + 可编辑粘贴 + 「从错误池导入」按包名过滤候选）与描述框默认高 140→90。形态反复教训沉淀：反馈 UI 不替用户自动决定形态
+- **日志跳转源码仅依赖拦截器捕获位置（T-JumpCapture）**：Wrapper 表名反查回退链会把跳转指到同名表任意文件——回退链整体移除，跳转仅认拦截器捕获的真实位置；缺位置时三按钮引导弹框（打开设置 / 立即注入 / 取消）
+- **多模块源码跳转三缺陷（T-JumpPath）**：① 拦截器 `isSelf` 以构建路径比对，运行时项目根不同则自位污染（自己的日志被当业务位置）——改运行时实际比对封死；② 标记位置包式路径（`cn.song.Foo`）与项目根式路径解析缺失——Resolver 三级解析补 sourceRoots；③ 最近执行反查 `sameFile` 前缀/后缀互含判定恒空——段对齐比较封死；注入侧 `detectPerModule` + `decideAggregate` 多模块逐模块聚合
+- **重复点击执行计划 EXPLAIN 前缀双加致 1064（T-ExplainDbl）**：执行链回写控制台文档后二次点击在前次已含 EXPLAIN 的文本上再包装——`Dialect` 幂等包装 `renderExplainStatementIdempotent` 单点收口；教训：包装 SQL 的按钮必须幂等
+- **MPJ 联表 lambda 列错归主表别名致预览 SQL 执行 1054（T-MpjColAlias）**：联表场景列归属未按 join 别名映射改写——委托前按 join 映射重写列归属
+- **报告需求池文案与 IDE 显示语言不一致（T-ReportL10n / T-ReportL10n2）**：AUTO 语言落点改 `DynamicBundle.getLocale`；边界定案=嵌入平台 UI 的文案恒跟 IDE 语言走（`messageForIde`），插件语言设置默认 zh 非 AUTO，AUTO 改默认不触达该路径
+- **旧生成拦截器自位污染残留与自动升级（T-IntrUpg）**：用户手工拷贝的旧版拦截器 `isSelf` 常量与实际类分叉，位置恒显 `[SqlSourceInterceptor.java:62]`——① 解析防线 `SqlSourceMarker.isInterceptorSelfPath`（包式/项目根式/裸名/反斜杠全形态命中即丢弃不暂存，旧件环境条目落无位置引导链路）；② `needsInterceptorUpgrade` 三条件纯函数（模板生成标记 ∧ 旧常量拼接形态 ∧ 非运行时比对——用户自写文件永不覆盖）；③ 注入链自动升级：检测对已存在文件判形态转升级清单、注入时内容重写（只动拦截器不动 Config）、新键 `log.inject.upgraded`。用户恢复=重新注入 + 应用重启
+- **预览执行链 EDT 慢操作双 SEVERE（T-ExecSlowOps）**：预览/执行临时文件链路 EDT `findFile` 慢操作 SEVERE 与后台方言 `setMapping` 断言对向缺陷——`DialectPreMapping` 两段式映射单入口（后台线程读探测、首见 invokeLater 回 EDT + latch 2s）+ 预热全离 EDT（挂 `previewAsync`，确定性 SQL 守卫 + 防重）+ 四缓存字段 `@Volatile`
+- **SQL 预览补全缺失与执行跨项目数据源错乱（T-PreviewExecDs）**：多项目窗口下预览补全静默失败、执行 SQL 打到另一个项目的数据源——三根因：`cachedTempPsiFile` 跨项目泄漏、共享 console 被平台清扫 dispose 后未感知、Temp 预览文件在项目外 + 预热失败静默。修复=缓存项目绑定、`probeConsoleValidity` 三分量探活 + disposed 特判重挂、runRunner 显式传 project、预览文件迁项目内 + 内存 PSI 三级降级链 + 方言映射
 - **SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT（T-PickMpjErr）**：SQL→Java 弹窗选定目标类后重渲染时，设计内的 `SqlReverseException`（MPJ 业务异常）从 elementChosen 鼠标回调裸调 `generateCode` 逃逸为未处理异常——新增 `generateCodeOrReport` 单点收口四分支，业务异常转状态栏提示并保留上次渲染结果
-- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动。注：本修复与下一条交付于 v2026.9.11 打标签之后，未入该版发行包，随本内测版发出
-- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`（T-PreviewSlow 拆包后该断言真机兑现），被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入——262 锁实现反编译实证仅持锁为纯 Read 才抛禁嵌套异常）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）；262 真机 idea.log 复验留人工
-- **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：自动化任务跑全量测试期间宿主机默认浏览器每隔一段时间被自动拉起打开帮助在线文档——`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用/`openEditor` 抛异常走降级分支 `BrowserUtil.browse`，该 API 不经沙盒隔离直接 ShellExecute 拉起真机浏览器（沙盒 idea.log 与浏览器历史双侧实证）。修复=三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式（`isUnitTestMode`）短路只记日志
+- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动
+- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`，被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）
+- **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用走降级分支 `BrowserUtil.browse` 直接拉起真机默认浏览器——三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式短路只记日志
 
 ### Test
 
 - **CRUD SQL**：`CrudSqlGeneratorTest` 11 例 + `DbTypeQuoteHintTest` 3 例 + `CrudSqlPreviewFlowTest` 3 例；真机反馈轮补 `CrudSqlPreviewPanelRenderTest` 3 例（六种语句逐一喂真实面板）+ doOKAction 回调/双击直开 2 例 + 浮层渲染器冒烟 1 例
 - **自动折叠**：`SqlAutoFoldPlannerTest` 12 例（纯 JUnit 零平台依赖）+ `SqlAutoFoldingTest` 5 例（含只摘本方清单守卫）+ 各点位行为 5 例 + 设置台账/导入导出断言
+- **颜色标记**：`SqlListTypeColorTest` 18 + `SqlListSelectionOutlineTest` 10 + 分类器/两渲染器/设置绑定共 44 例（含选中态 insets 逐边相等防抖动参数化与实例同一性防回退）
 - **按钮合一**：新建 `SqlLogPanelTypePopupToggleTest` 6 例（初始文案/清空回填/逐勾选翻转/部分态回填/未构建 null/重建初始化）；`XmlPreviewPanelTest` 历史错位用法统一 `deselectAllConditions`
-- 本版全量 **3353/0/0/6 绿**，与基线一致零回归
+- **09-14 修复链**：`InjectionModulePickerDialogTest` 4 例（默认全选/全不选清空/联动恢复/行文本）；T-IntrUpg 防线表驱动/桥不暂存/升级判定表驱动/upgraded 键落地 10 例；T-MergeFollowup 五段模式循环行高恒等、右键 renderer、下拉按钮同构断言；T-FeedbackDlg 三波布局与错误池过滤断言；T-PreviewExecDs 缓存项目绑定/console 探活三分量；T-ExecSlowOps 两段式映射与 setMapping 字面量单文件收口守卫
+- 本版全量 **4039/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible
 
 ## [2026.9.11] - 2026-09-11
 

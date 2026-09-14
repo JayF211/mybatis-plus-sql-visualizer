@@ -312,7 +312,7 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
-            <h2>v2026.9.14-beta.2</h2>
+            <h2>v2026.9.14</h2>
             <ul>
                 <li>SQL 列表 CRUD 类型颜色标记</li>
                 <li>gutter 左键直接预览与最近执行反查</li>
@@ -324,6 +324,8 @@ tasks {
                 <li>实体类与数据库表右键生成 CRUD SQL</li>
                 <li>SQL 预览字段列表自动折叠</li>
                 <li>全选全不选双按钮合一为状态切换按钮</li>
+                <li>SQL 列表多选批量复制</li>
+                <li>多模块注入勾选选择</li>
                 <li>SQL 转 Java 选类重渲染异常逃逸修复</li>
                 <li>MPJ 括号条件反向转换退化修复</li>
                 <li>262 预览控制台静默挂载失败修复</li>
