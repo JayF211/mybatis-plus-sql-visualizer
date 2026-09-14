@@ -17,7 +17,7 @@ class FeedbackApiTest {
 
     @After
     fun tearDown() {
-        FeedbackApi.sender = HttpRequestsSender.INSTANCE
+        FeedbackApi.setSender(HttpRequestsSender.INSTANCE)
     }
 
     /** 记录调用并返回可配置响应的 fake sender（捕获列表供断言）。 */
@@ -61,7 +61,7 @@ class FeedbackApiTest {
     @Test
     fun `无附件提交_发送JSON契约字段`() {
         val sender = RecordingSender()
-        FeedbackApi.sender = sender
+        FeedbackApi.setSender(sender)
         val result = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
         assertTrue(result is FeedbackApi.SubmitResult.Success)
         assertEquals("FR-0042", (result as FeedbackApi.SubmitResult.Success).postNo)
@@ -85,7 +85,7 @@ class FeedbackApiTest {
     @Test
     fun `带附件提交_先上传后引用key`() {
         val sender = RecordingSender()
-        FeedbackApi.sender = sender
+        FeedbackApi.setSender(sender)
         val stack = FeedbackApi.StackAttachment("stack.txt", "hello stack".toByteArray())
         val result = FeedbackApi.submit(FeedbackApi.Submission(request(), stack))
         assertTrue(result is FeedbackApi.SubmitResult.Success)
@@ -105,7 +105,7 @@ class FeedbackApiTest {
         val sender = RecordingSender(
             uploadResponse = { _, _, _ -> """{"code":415,"message":"不支持的附件类型 .exe"}""" },
         )
-        FeedbackApi.sender = sender
+        FeedbackApi.setSender(sender)
         val result = FeedbackApi.submit(
             FeedbackApi.Submission(request(), FeedbackApi.StackAttachment("s.txt", byteArrayOf(1))),
         )
@@ -117,7 +117,7 @@ class FeedbackApiTest {
     @Test
     fun `服务端业务错误透出message`() {
         val sender = RecordingSender(jsonResponse = { _, _ -> """{"code":400,"message":"标题长度需在 5-200 字符之间"}""" })
-        FeedbackApi.sender = sender
+        FeedbackApi.setSender(sender)
         val result = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
         assertTrue(result is FeedbackApi.SubmitResult.Failure)
         assertEquals("标题长度需在 5-200 字符之间", (result as FeedbackApi.SubmitResult.Failure).message)
@@ -125,10 +125,10 @@ class FeedbackApiTest {
 
     @Test
     fun `网络异常折入Failure不抛出`() {
-        FeedbackApi.sender = object : FeedbackApi.HttpSender {
+        FeedbackApi.setSender(object : FeedbackApi.HttpSender {
             override fun postJson(url: String, json: String): String = throw java.io.IOException("connection refused")
             override fun postMultipart(url: String, fileName: String, mimeType: String, content: ByteArray): String = ""
-        }
+        })
         val result = FeedbackApi.submit(FeedbackApi.Submission(request(), null))
         assertTrue(result is FeedbackApi.SubmitResult.Failure)
         assertTrue((result as FeedbackApi.SubmitResult.Failure).message.contains("connection refused"))

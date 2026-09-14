@@ -83,7 +83,7 @@ class GenerateCrudSqlFromEntityActionTest : BasePlatformTestCase() {
         val spec = action.entitySpec(entity)
         assertNotNull("MP 实体应产出表规格", spec)
         assertEquals("t_order", spec!!.tableName)
-        assertTrue("列应含 id 且识别为主键", spec.columns.any { it.columnName == "id" && it.isPrimaryKey })
+        assertTrue("列应含 id 且识别为主键", spec.columns.any { it.columnName == "id" && it.isPrimaryKey() })
         assertTrue("列应含 remark", spec.columns.any { it.columnName == "remark" })
     }
 }

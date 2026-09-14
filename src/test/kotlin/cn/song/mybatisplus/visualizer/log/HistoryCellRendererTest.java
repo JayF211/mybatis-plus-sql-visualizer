@@ -151,7 +151,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         String saved = state.getLogListSqlDisplayMode();
         state.setLogListSqlDisplayMode("KEYWORD_WRAP");
         try {
-            HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", "OrderDao.java", 9, 0));
+            HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", "OrderDao.java", 9, 0L));
             assertTrue("FROM 应独立成行", r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("FROM")));
             assertTrue("WHERE 应独立成行", r.getSqlLines().stream().anyMatch(it -> joinedText(it).startsWith("WHERE")));
             assertFalse("元信息行不混入 SQL", joinedText(r.metaLine).contains("SELECT"));

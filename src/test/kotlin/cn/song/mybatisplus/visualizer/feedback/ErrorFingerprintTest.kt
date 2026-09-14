@@ -120,7 +120,7 @@ class ErrorFingerprintTest {
         repeat(140) { index ->
             ErrorFingerprint.record("fp-$index")
         }
-        assertEquals(128, ErrorFingerprint.seenEntries.size)
+        assertEquals(128, ErrorFingerprint.seenEntriesForTest().size)
         // 最旧的 fp-0 ~ fp-11 被淘汰，最新的保留
         assertFalse(ErrorFingerprint.seenRecently("fp-0"))
         assertTrue(ErrorFingerprint.seenRecently("fp-139"))

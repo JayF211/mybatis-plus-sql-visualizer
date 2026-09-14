@@ -21,7 +21,7 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         manager = SqlLogManager(project)
-        manager.entries.dedupeEnabled = false
+        manager.entries.setDedupeEnabled(false)
     }
 
     override fun tearDown() {

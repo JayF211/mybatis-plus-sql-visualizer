@@ -62,7 +62,7 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         fixture("cq.distinct(true);")
         val model = locateFromMethod()
         assertNotNull(model)
-        assertTrue("distinct(true) 应置位", model!!.distinct)
+        assertTrue("distinct(true) 应置位", model!!.isDistinct())
     }
 
     fun testTJ4_notIn死条目不再识别() {
@@ -110,8 +110,8 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         val preds = model!!.predicates
         assertEquals(2, preds.size)
         assertTrue(preds[0] is PredicateModel.BooleanConstant)
-        assertTrue((preds[0] as PredicateModel.BooleanConstant).value)
-        assertTrue((preds[1] as PredicateModel.BooleanConstant).value.not())
+        assertTrue((preds[0] as PredicateModel.BooleanConstant).isValue())
+        assertTrue((preds[1] as PredicateModel.BooleanConstant).isValue().not())
     }
 
     // ------------------------------------------------------------------
@@ -133,7 +133,7 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         val preds = model!!.predicates
         assertEquals("只应有一条 NOT 组", 1, preds.size)
         val group = preds[0] as PredicateModel.Group
-        assertTrue("应取反", group.negated)
+        assertTrue("应取反", group.isNegated())
         assertEquals(1, group.children.size)
         assertTrue(group.children[0] is PredicateModel.In)
     }
@@ -293,9 +293,9 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         val model = locateFromMethod()
         assertEquals(2, model!!.orderBys.size)
         assertEquals("id", model.orderBys[0].fieldName)
-        assertEquals(false, model.orderBys[0].asc)
+        assertEquals(false, model.orderBys[0].isAsc())
         assertEquals("username", model.orderBys[1].fieldName)
-        assertEquals(true, model.orderBys[1].asc)
+        assertEquals(true, model.orderBys[1].isAsc())
     }
 
     fun testTJ17_groupBy列表实参解引用() {
@@ -328,7 +328,7 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         val model = locateFromMethod()
         assertEquals(1, model!!.predicates.size)
         val group = model.predicates[0] as PredicateModel.Group
-        assertTrue(group.negated)
+        assertTrue(group.isNegated())
         assertEquals(1, group.children.size)
     }
 
@@ -360,7 +360,7 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         val model = locateFromMethod()
         assertEquals(1, model!!.joins.size)
         val join = model.joins[0]
-        assertTrue("fetch 应标记", join.fetch)
+        assertTrue("fetch 应标记", join.isFetch())
         assertEquals(cn.song.mybatisplus.visualizer.model.JoinType.LEFT, join.joinType)
     }
 

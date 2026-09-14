@@ -576,7 +576,7 @@ class JpaEntityResolverJoinTest : BasePlatformTestCase() {
             val assoc = table.associations[0]
             assertEquals("user", assoc.fieldName)
             assertEquals("mappedBy 应记录对方持有字段名", "profile", assoc.mappedBy)
-            assertTrue("mappedBy 侧应标记 hasForeignKey=false", !assoc.hasForeignKey)
+            assertTrue("mappedBy 侧应标记 hasForeignKey=false", !assoc.isHasForeignKey())
         }
     }
 
@@ -619,11 +619,11 @@ class JpaEntityResolverJoinTest : BasePlatformTestCase() {
             val table = JpaEntityResolver().resolve(clazz)
             assertTrue(
                 "@NotFound(IGNORE) 应标记 notFoundIgnore",
-                table.associationByField("department")?.notFoundIgnore == true,
+                table.associationByField("department")?.isNotFoundIgnore() == true,
             )
             assertTrue(
                 "未标注 @NotFound 应为 false",
-                table.associationByField("office")?.notFoundIgnore == false,
+                table.associationByField("office")?.isNotFoundIgnore() == false,
             )
         }
     }
@@ -735,7 +735,7 @@ class JpaEntityResolverJoinTest : BasePlatformTestCase() {
                 """.trimIndent(),
             )
             val table = JpaEntityResolver().resolve(clazz)
-            assertTrue("@MapsId 应标记 mapsId", table.associationByField("department")?.mapsId == true)
+            assertTrue("@MapsId 应标记 mapsId", table.associationByField("department")?.isMapsId() == true)
             // @MapsId 不影响外键列本身
             assertEquals("dept_id", table.columnByField("department")?.columnName)
         }

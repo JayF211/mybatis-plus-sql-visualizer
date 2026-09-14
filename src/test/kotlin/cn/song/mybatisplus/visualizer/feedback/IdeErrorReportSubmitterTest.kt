@@ -90,7 +90,7 @@ class IdeErrorReportSubmitterTest {
     fun `报告按钮与隐私文案来自bundle非键名`() {
         val submitter = IdeErrorReportSubmitter()
         assertFalse(submitter.reportActionText.isNullOrBlank())
-        assertFalse(submitter.reportActionText.startsWith("error.report."))
-        assertFalse(submitter.privacyNoticeText.startsWith("error.report."))
+        assertFalse((submitter.reportActionText ?: "").startsWith("error.report."))
+        assertFalse((submitter.privacyNoticeText ?: "").startsWith("error.report."))
     }
 }

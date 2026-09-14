@@ -141,7 +141,7 @@ class JpaJoinOnResolverTest : BasePlatformTestCase() {
     /** T-J7：@ManyToOne + @JoinColumn(name, referencedColumnName) → 真实 ON（被引用列优先）。 */
     fun testPsiManyToOne_referencedColumnName优先() {
         val resolution = JpaJoinOnResolver.resolveWithPsi(userClass, "u", "department", "d")
-        assertTrue("注解级解析应命中", resolution.resolved)
+        assertTrue("注解级解析应命中", resolution.isResolved())
         assertEquals("d.dept_no = u.dept_id", resolution.onCondition)
         assertEquals("副表名应来自目标实体 @Table", "t_department", resolution.targetTable)
     }
@@ -149,14 +149,14 @@ class JpaJoinOnResolverTest : BasePlatformTestCase() {
     /** T-J7：无 referencedColumnName 时读目标实体 @Id 字段的真实主键列名。 */
     fun testPsiManyToOne_目标实体主键列兜底() {
         val resolution = JpaJoinOnResolver.resolveWithPsi(userClass, "u", "managerDept", "md")
-        assertTrue(resolution.resolved)
+        assertTrue(resolution.isResolved())
         assertEquals("md.dept_no = u.manager_dept_id", resolution.onCondition)
     }
 
     /** T-J7：@OneToMany(mappedBy) 方向反转——外键在副表，ON = 主表主键 = 副表外键。 */
     fun testPsiOneToMany_mappedBy方向反转() {
         val resolution = JpaJoinOnResolver.resolveWithPsi(userClass, "u", "orders", "o")
-        assertTrue("mappedBy 反查应命中", resolution.resolved)
+        assertTrue("mappedBy 反查应命中", resolution.isResolved())
         assertEquals("u.user_id = o.buyer_id", resolution.onCondition)
         assertEquals("t_order", resolution.targetTable)
     }
@@ -168,7 +168,7 @@ class JpaJoinOnResolverTest : BasePlatformTestCase() {
     /** T-J7：@MapsId 派生标识 → 降级为既有猜测文本 + 请验证注释。 */
     fun testMapsId_降级为猜测() {
         val resolution = JpaJoinOnResolver.resolveWithPsi(userClass, "u", "probationDept", "s", userTable)
-        assertFalse(resolution.resolved)
+        assertFalse(resolution.isResolved())
         assertEquals("s.id = u.probationDept_id /* 推断的ON条件，请验证 */", resolution.onCondition)
         assertNotNull(resolution.note)
     }
@@ -183,7 +183,7 @@ class JpaJoinOnResolverTest : BasePlatformTestCase() {
     /** T-J7：@ManyToMany + @JoinTable 中间表 → 降级猜测（双 JOIN 展开超界）。 */
     fun testManyToMany_降级() {
         val resolution = JpaJoinOnResolver.resolveWithPsi(userClass, "u", "roles", "r")
-        assertFalse(resolution.resolved)
+        assertFalse(resolution.isResolved())
         assertEquals("r.id = u.roles_id /* 推断的ON条件，请验证 */", resolution.onCondition)
     }
 
@@ -194,14 +194,14 @@ class JpaJoinOnResolverTest : BasePlatformTestCase() {
     /** T-J7：TableInfo.associations 命中 → 外键列真实（来自 @JoinColumn(name)），主键按惯例 id。 */
     fun test关联元数据_真实外键列() {
         val resolution = JpaJoinOnResolver.resolve(userTable, "u", "department", "d")
-        assertTrue(resolution.resolved)
+        assertTrue(resolution.isResolved())
         assertEquals("d.id = u.dept_id", resolution.onCondition)
     }
 
     /** T-J7：associations 未命中 → 维持既有猜测文本（存量测试断言依据，不可改动）。 */
     fun test无元数据_维持既有猜测文本() {
         val resolution = JpaJoinOnResolver.resolve(userTable, "u", "orders", "o")
-        assertFalse(resolution.resolved)
+        assertFalse(resolution.isResolved())
         assertEquals("o.id = u.orders_id /* 推断的ON条件，请验证 */", resolution.onCondition)
     }
 

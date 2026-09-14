@@ -40,6 +40,11 @@ public final class ErrorFingerprint {
     /** 已报指纹 → 记录时间（accessOrder=true 的 LRU；internal 供测试断言与重置）。 */
     private static volatile LinkedHashMap<String, Long> seenEntries = new LinkedHashMap<>(16, 0.75f, true);
 
+    /** 测试缝：直读淘汰缓存（与 master Kotlin object 内部字段访问等价）。 */
+    public static java.util.Map<String, Long> seenEntriesForTest() {
+        return seenEntries;
+    }
+
     /** 时钟 seam（测试注入固定时间）。 */
     private static volatile LongSupplier clock = System::currentTimeMillis;
 

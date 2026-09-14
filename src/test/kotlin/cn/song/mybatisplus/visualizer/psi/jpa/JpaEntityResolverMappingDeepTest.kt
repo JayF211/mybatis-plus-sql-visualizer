@@ -71,10 +71,10 @@ class JpaEntityResolverMappingDeepTest : BasePlatformTestCase() {
                 """.trimIndent(),
             )
             val table = JpaEntityResolver().resolve(clazz)
-            assertEquals(false, table.columnByField("createdAt")?.insertable)
-            assertEquals(false, table.columnByField("createdAt")?.updatable)
-            assertEquals("未标注时默认 true", true, table.columnByField("userName")?.insertable)
-            assertEquals(true, table.columnByField("userName")?.updatable)
+            assertEquals(false, table.columnByField("createdAt")?.isInsertable())
+            assertEquals(false, table.columnByField("createdAt")?.isUpdatable())
+            assertEquals("未标注时默认 true", true, table.columnByField("userName")?.isInsertable())
+            assertEquals(true, table.columnByField("userName")?.isUpdatable())
             // insertable=false 列仍保留在列清单中（写模板消费方决定是否剔除）
             assertEquals("created_at", table.columnByField("createdAt")?.columnName)
         }
@@ -110,8 +110,8 @@ class JpaEntityResolverMappingDeepTest : BasePlatformTestCase() {
             )
             val table = JpaEntityResolver().resolve(clazz)
             // 简单字段优先保留，insertable/updatable 记录其 @Column 声明
-            assertEquals(false, table.columnByField("departmentId")?.insertable)
-            assertEquals(false, table.columnByField("departmentId")?.updatable)
+            assertEquals(false, table.columnByField("departmentId")?.isInsertable())
+            assertEquals(false, table.columnByField("departmentId")?.isUpdatable())
         }
     }
 
@@ -152,8 +152,8 @@ class JpaEntityResolverMappingDeepTest : BasePlatformTestCase() {
             val cityColumn = table.columnByField("city")
             assertNotNull("展平列应保留内部字段名可查", cityColumn)
             assertEquals("home_city", cityColumn?.columnName)
-            assertTrue("展平列应标记 embedded", cityColumn?.embedded == true)
-            assertTrue("street 展平列应标记 embedded", table.columnByField("street")?.embedded == true)
+            assertTrue("展平列应标记 embedded", cityColumn?.isEmbedded() == true)
+            assertTrue("street 展平列应标记 embedded", table.columnByField("street")?.isEmbedded() == true)
             assertNull("嵌入字段本身不应落列", table.columnByField("address"))
         }
     }
@@ -435,8 +435,8 @@ class JpaEntityResolverMappingDeepTest : BasePlatformTestCase() {
                 """.trimIndent(),
             )
             val table = JpaEntityResolver().resolve(clazz)
-            assertTrue("@Convert 应标记 converted", table.columnByField("email")?.converted == true)
-            assertTrue("未标注 @Convert 应为 false", table.columnByField("id")?.converted == false)
+            assertTrue("@Convert 应标记 converted", table.columnByField("email")?.isConverted() == true)
+            assertTrue("未标注 @Convert 应为 false", table.columnByField("id")?.isConverted() == false)
             assertEquals("email_addr", table.columnByField("email")?.columnName)
         }
     }
