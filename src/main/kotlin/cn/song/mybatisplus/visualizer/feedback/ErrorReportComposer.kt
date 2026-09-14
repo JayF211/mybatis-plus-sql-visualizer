@@ -9,8 +9,9 @@ package cn.song.mybatisplus.visualizer.feedback
 object ErrorReportComposer {
 
     const val TITLE_MAX = 200
-    private const val TITLE_MIN = 5
-    private const val DESCRIPTION_MIN = 10
+    /** 下限供对话框客户端校验复用（T-FeedbackDlg-01，单一事实源）。 */
+    internal const val TITLE_MIN = 5
+    internal const val DESCRIPTION_MIN = 10
 
     /** 需求池反馈类型：1功能需求 / 2Bug / 3体验优化 / 4疑问咨询（sql-visualizer-admin constants）。 */
     const val TYPE_BUG = 2

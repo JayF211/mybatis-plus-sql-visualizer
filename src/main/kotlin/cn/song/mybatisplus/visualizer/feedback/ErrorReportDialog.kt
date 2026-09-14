@@ -3,12 +3,14 @@ package cn.song.mybatisplus.visualizer.feedback
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.SafeBrowser
-import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.labels.LinkLabel
+import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -26,6 +28,16 @@ import javax.swing.JTextField
  * UI 只做编排：请求组装在 [collectRequest]（组合 ErrorReportComposer 纯函数），
  * 提交交回调用方回调（后台线程）；提交结果经通知展示（[FeedbackReporting.notifyResult]），
  * 不在对话框内等网络。普通 Swing 组件布局，不走 HTML 渲染（EDT 冻结教训）。
+ *
+ * T-FeedbackDlg（2026-09-14 真机反馈三缺陷）：
+ * - 宽度：标题框列数曾误用 TITLE_MAX=200（JTextField 列数是首选宽度语义）致弹窗 1272px，
+ *   收敛为 30 列 + 描述/堆栈滚动面板首选宽 620，整体 ~660px 量级；
+ * - 占位：标题/描述经 getEmptyText 显示灰色提示（文案对齐官网表单），并补 [doValidate]
+ *   客户端校验（title 5~200 / description ≥10），短输入拦截在触网前；
+ * - 拖拽：[isResizable]=true + [getDimensionServiceKey] 记忆尺寸，描述/堆栈行
+ *   weighty=1 + BOTH 随拖拽纵向伸缩。
+ * 布局与校验抽为 [buildCenterPanel]/[validateForm] 纯函数（[ReportFormFields] 载体），
+ * headless 测试零 DialogWrapper peer 依赖。
  */
 class ErrorReportDialog(
     /** 错误形态预填；null = 手动形态。 */
@@ -40,26 +52,7 @@ class ErrorReportDialog(
     private val onSubmit: (FeedbackApi.Submission) -> Unit,
 ) : DialogWrapper(true) {
 
-    private val titleField = JTextField(ErrorReportComposer.TITLE_MAX)
-    private val typeCombo = JComboBox(Array(4) { index -> typeLabel(index + 1) })
-    private val categoryCombo = JComboBox(Array(8) { index -> categoryLabel(CATEGORIES[index]) })
-    private val descriptionArea = JBTextArea(8, 46)
-    private val stackPreview = JBTextArea(10, 46)
-    private val attachStackCheck = JCheckBox().apply {
-        text = MpSqlVisualizerBundle.message("error.report.dialog.attachStack")
-        toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.attachStack.tip")
-        addItemListener { stackPreviewContainer.isVisible = isSelected }
-    }
-    private val stackPreviewContainer = JPanel(BorderLayout(4, 2)).apply {
-        add(JBLabel(MpSqlVisualizerBundle.message("error.report.dialog.stackPreview")), BorderLayout.NORTH)
-        add(JBScrollPane(stackPreview), BorderLayout.CENTER)
-    }
-    private val nameField = JTextField(20)
-    private val emailField = JTextField(20)
-    private val anonymousCheck = JCheckBox().apply {
-        text = MpSqlVisualizerBundle.message("error.report.dialog.anonymous")
-    }
-    private val browserLink = LinkLabel<Any>("", null) { _, _ -> browserFallback() }
+    internal val fields = ReportFormFields()
 
     init {
         title = MpSqlVisualizerBundle.message("error.report.dialog.title")
@@ -67,88 +60,58 @@ class ErrorReportDialog(
         // 平台组件文案不跟插件语言（DialogWrapper cancelAction 坑）：显式覆盖 Cancel 文案
         setCancelButtonText(MpSqlVisualizerBundle.message("error.report.dialog.cancel"))
 
-        descriptionArea.lineWrap = true
-        descriptionArea.wrapStyleWord = true
-        stackPreview.isEditable = false
-        stackPreview.lineWrap = false
+        fields.browserFallbackHandler = { browserFallback() }
+        fields.attachStackCheck.addItemListener {
+            fields.stackPreviewContainer.isVisible = fields.attachStackCheck.isSelected
+        }
 
         prefill?.let {
-            titleField.text = it.title
-            descriptionArea.text = it.description
+            fields.titleField.text = it.title
+            fields.descriptionArea.text = it.description
             selectCategory(it.category)
         }
         // 类型：错误形态默认 Bug、手动形态默认疑问咨询
-        typeCombo.selectedIndex =
+        fields.typeCombo.selectedIndex =
             (if (prefill != null) ErrorReportComposer.TYPE_BUG else ErrorReportComposer.TYPE_QUESTION) - 1
         if (prefill == null) selectCategory(ErrorReportComposer.CATEGORY_OTHER)
 
-        stackText?.let { stackPreview.text = it.lineSequence().take(60).joinToString("\n") }
-        attachStackCheck.isSelected = stackText != null
-        stackPreviewContainer.isVisible = attachStackCheck.isSelected
+        stackText?.let { fields.stackPreview.text = it.lineSequence().take(60).joinToString("\n") }
+        fields.attachStackCheck.isSelected = stackText != null
+        fields.stackPreviewContainer.isVisible = fields.attachStackCheck.isSelected
 
-        nameField.text = ReportSubmitterStore.loadName()
-        emailField.text = ReportSubmitterStore.loadEmail()
+        fields.nameField.text = ReportSubmitterStore.loadName()
+        fields.emailField.text = ReportSubmitterStore.loadEmail()
         // 匿名默认开（与 web 表单一致）；已记忆昵称则默认实名展示，用户可自行勾回
-        anonymousCheck.isSelected = nameField.text.isBlank()
+        fields.anonymousCheck.isSelected = fields.nameField.text.isBlank()
 
-        browserLink.text = MpSqlVisualizerBundle.message("error.report.dialog.browser")
+        fields.browserLink.text = MpSqlVisualizerBundle.message("error.report.dialog.browser")
 
         init()
     }
 
-    override fun createCenterPanel(): JComponent {
-        val gbc = GridBagConstraints().apply {
-            gridx = 0
-            gridy = 0
-            anchor = GridBagConstraints.WEST
-            insets = Insets(4, 0, 4, 0)
-        }
-        val panel = JPanel(GridBagLayout())
-        fun labelRow(textKey: String, component: JComponent) {
-            gbc.gridx = 0
-            gbc.gridy++
-            gbc.weightx = 0.0
-            gbc.fill = GridBagConstraints.NONE
-            panel.add(JBLabel(MpSqlVisualizerBundle.message(textKey)), gbc)
-            gbc.gridx = 1
-            gbc.weightx = 1.0
-            gbc.fill = GridBagConstraints.HORIZONTAL
-            panel.add(component, gbc)
-        }
-        fun fullRow(component: JComponent) {
-            gbc.gridx = 0
-            gbc.gridy++
-            gbc.gridwidth = 2
-            gbc.weightx = 1.0
-            gbc.fill = GridBagConstraints.HORIZONTAL
-            panel.add(component, gbc)
-            gbc.gridwidth = 1
-        }
+    override fun createCenterPanel(): JComponent = buildCenterPanel(fields)
 
-        labelRow("error.report.dialog.subject", titleField)
-        labelRow("error.report.dialog.type", typeCombo)
-        labelRow("error.report.dialog.category", categoryCombo)
-        labelRow("error.report.dialog.description", JBScrollPane(descriptionArea))
-        fullRow(attachStackCheck)
-        fullRow(stackPreviewContainer)
-        labelRow("error.report.dialog.name", nameField)
-        labelRow("error.report.dialog.email", emailField)
-        fullRow(anonymousCheck)
-        fullRow(browserLink)
-        return panel
+    override fun isResizable(): Boolean = true
+
+    override fun getDimensionServiceKey(): String = DIMENSION_SERVICE_KEY
+
+    override fun doValidate(): ValidationInfo? {
+        val key = validateForm(fields.titleField.text, fields.descriptionArea.text) ?: return null
+        val component = if (key == VALIDATION_TITLE_KEY) fields.titleField else fields.descriptionArea
+        return ValidationInfo(MpSqlVisualizerBundle.message(key), component)
     }
 
     /** 提交前组装最终请求（描述追加指纹行；昵称/邮箱记忆随提交持久化）。 */
     internal fun collectRequest(): FeedbackApi.PostRequest {
-        ReportSubmitterStore.save(nameField.text.trim(), emailField.text.trim())
+        ReportSubmitterStore.save(fields.nameField.text.trim(), fields.emailField.text.trim())
         return FeedbackApi.PostRequest(
-            title = titleField.text.trim(),
-            description = ErrorReportComposer.buildDescription(null, descriptionArea.text, fingerprint),
-            type = typeCombo.selectedIndex + 1,
-            category = CATEGORIES[categoryCombo.selectedIndex],
-            submitterName = nameField.text.trim().ifEmpty { null },
-            submitterEmail = emailField.text.trim().ifEmpty { null },
-            isAnonymous = anonymousCheck.isSelected,
+            title = fields.titleField.text.trim(),
+            description = ErrorReportComposer.buildDescription(null, fields.descriptionArea.text, fingerprint),
+            type = fields.typeCombo.selectedIndex + 1,
+            category = CATEGORIES[fields.categoryCombo.selectedIndex],
+            submitterName = fields.nameField.text.trim().ifEmpty { null },
+            submitterEmail = fields.emailField.text.trim().ifEmpty { null },
+            isAnonymous = fields.anonymousCheck.isSelected,
             source = FeedbackApi.SOURCE_IDE,
             ideVersion = ideVersion,
             pluginVersion = pluginVersion,
@@ -157,7 +120,7 @@ class ErrorReportDialog(
     }
 
     internal fun collectStackAttachment(): FeedbackApi.StackAttachment? {
-        if (stackText == null || !attachStackCheck.isSelected) return null
+        if (stackText == null || !fields.attachStackCheck.isSelected) return null
         val content = ErrorReportComposer.buildStackAttachment(
             stackText, ideVersion, pluginVersion, fingerprint,
             occurredAt = java.time.ZonedDateTime.now().format(
@@ -168,6 +131,11 @@ class ErrorReportDialog(
     }
 
     override fun doOKAction() {
+        // 校验不过先交框架弹错（super 只在校验通过时关闭对话框），通过才组装提交回调
+        if (validateForm(fields.titleField.text, fields.descriptionArea.text) != null) {
+            super.doOKAction()
+            return
+        }
         val submission = FeedbackApi.Submission(collectRequest(), collectStackAttachment())
         super.doOKAction()
         onSubmit(submission)
@@ -184,12 +152,8 @@ class ErrorReportDialog(
 
     private fun selectCategory(slug: String) {
         val index = CATEGORIES.indexOf(slug)
-        if (index >= 0) categoryCombo.selectedIndex = index
+        if (index >= 0) fields.categoryCombo.selectedIndex = index
     }
-
-    private fun typeLabel(type: Int): String = MpSqlVisualizerBundle.message("feedback.type.$type")
-
-    private fun categoryLabel(slug: String): String = MpSqlVisualizerBundle.message("feedback.category.$slug")
 
     companion object {
         /** 与需求池 Categories 一致（sql-visualizer-admin constants.ts 顺序）。 */
@@ -203,7 +167,140 @@ class ErrorReportDialog(
             ErrorReportComposer.CATEGORY_COMPLETION,
             ErrorReportComposer.CATEGORY_OTHER,
         )
+
+        /** DimensionService key：用户拖拽后的对话框尺寸跨会话记忆（T-FeedbackDlg-02）。 */
+        internal const val DIMENSION_SERVICE_KEY = "MpSqlVisualizer.ErrorReportDialog"
+
+        internal const val VALIDATION_TITLE_KEY = "error.report.dialog.validation.title"
+        internal const val VALIDATION_DESCRIPTION_KEY = "error.report.dialog.validation.description"
+
+        /**
+         * 提交前客户端校验（纯函数）：title 5~200 / description ≥10（需求池服务端契约，
+         * 与 ErrorReportComposer 同源常量）。返回应提示的 i18n key；null = 通过。
+         */
+        internal fun validateForm(title: String, description: String): String? {
+            val trimmed = title.trim()
+            if (trimmed.length < ErrorReportComposer.TITLE_MIN || trimmed.length > ErrorReportComposer.TITLE_MAX) {
+                return VALIDATION_TITLE_KEY
+            }
+            if (description.trim().length < ErrorReportComposer.DESCRIPTION_MIN) {
+                return VALIDATION_DESCRIPTION_KEY
+            }
+            return null
+        }
+
+        /**
+         * 布局组装（纯函数，T-FeedbackDlg-03/02）：描述与堆栈滚动面板首选宽 620 钳制弹窗宽度，
+         * 两行 fill=BOTH + weighty=1 随对话框拖拽纵向伸缩（堆栈未勾选不可见时不参与分配）。
+         */
+        internal fun buildCenterPanel(fields: ReportFormFields): JComponent {
+            val gbc = GridBagConstraints().apply {
+                gridx = 0
+                gridy = 0
+                anchor = GridBagConstraints.WEST
+                insets = Insets(4, 0, 4, 0)
+            }
+            val panel = JPanel(GridBagLayout())
+            fun labelRow(textKey: String, component: JComponent, stretchVertically: Boolean = false) {
+                gbc.gridx = 0
+                gbc.gridy++
+                gbc.weightx = 0.0
+                gbc.weighty = 0.0
+                gbc.fill = GridBagConstraints.NONE
+                panel.add(JBLabel(MpSqlVisualizerBundle.message(textKey)), gbc)
+                gbc.gridx = 1
+                gbc.weightx = 1.0
+                if (stretchVertically) {
+                    gbc.weighty = 1.0
+                    gbc.fill = GridBagConstraints.BOTH
+                } else {
+                    gbc.fill = GridBagConstraints.HORIZONTAL
+                }
+                panel.add(component, gbc)
+                gbc.weighty = 0.0
+            }
+            fun fullRow(component: JComponent, stretchVertically: Boolean = false) {
+                gbc.gridx = 0
+                gbc.gridy++
+                gbc.gridwidth = 2
+                gbc.weightx = 1.0
+                gbc.weighty = if (stretchVertically) 1.0 else 0.0
+                gbc.fill = if (stretchVertically) GridBagConstraints.BOTH else GridBagConstraints.HORIZONTAL
+                panel.add(component, gbc)
+                gbc.gridwidth = 1
+                gbc.weighty = 0.0
+            }
+
+            labelRow("error.report.dialog.subject", fields.titleField)
+            labelRow("error.report.dialog.type", fields.typeCombo)
+            labelRow("error.report.dialog.category", fields.categoryCombo)
+            labelRow("error.report.dialog.description", JBScrollPane(fields.descriptionArea).apply {
+                preferredSize = JBUI.size(620, 140)
+            }, stretchVertically = true)
+            fullRow(fields.attachStackCheck)
+            fullRow(fields.stackPreviewContainer, stretchVertically = true)
+            labelRow("error.report.dialog.name", fields.nameField)
+            labelRow("error.report.dialog.email", fields.emailField)
+            fullRow(fields.anonymousCheck)
+            fullRow(fields.browserLink)
+            return panel
+        }
+
+        internal fun typeLabel(type: Int): String = MpSqlVisualizerBundle.message("feedback.type.$type")
+
+        internal fun categoryLabel(slug: String): String = MpSqlVisualizerBundle.message("feedback.category.$slug")
     }
+}
+
+/**
+ * 对话框全部输入控件（T-FeedbackDlg 可测试性抽取）：构造即带占位提示与换行配置，
+ * [ErrorReportDialog.buildCenterPanel]/[ErrorReportDialog.validateForm] 的纯函数载体，
+ * headless 测试直接构造，零 DialogWrapper peer 依赖。
+ */
+internal class ReportFormFields {
+
+    /** 标题 30 列（T-FeedbackDlg-03：旧实现误用 TITLE_MAX=200 列致弹窗 1272px 过宽）。 */
+    val titleField = JBTextField(30).apply {
+        emptyText.setText(MpSqlVisualizerBundle.message("error.report.dialog.subject.placeholder"))
+    }
+
+    val typeCombo = JComboBox(Array(4) { index -> ErrorReportDialog.typeLabel(index + 1) })
+
+    val categoryCombo = JComboBox(Array(ErrorReportDialog.CATEGORIES.size) { index ->
+        ErrorReportDialog.categoryLabel(ErrorReportDialog.CATEGORIES[index])
+    })
+
+    val descriptionArea = JBTextArea(6, 40).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        emptyText.setText(MpSqlVisualizerBundle.message("error.report.dialog.description.placeholder"))
+    }
+
+    val attachStackCheck = JCheckBox().apply {
+        text = MpSqlVisualizerBundle.message("error.report.dialog.attachStack")
+        toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.attachStack.tip")
+    }
+
+    val stackPreview = JBTextArea(10, 40).apply {
+        isEditable = false
+        lineWrap = false
+    }
+
+    val stackPreviewContainer = JPanel(BorderLayout(4, 2)).apply {
+        add(JBLabel(MpSqlVisualizerBundle.message("error.report.dialog.stackPreview")), BorderLayout.NORTH)
+        add(JBScrollPane(stackPreview).apply { preferredSize = JBUI.size(620, 180) }, BorderLayout.CENTER)
+    }
+
+    val nameField = JTextField(20)
+    val emailField = JTextField(20)
+
+    val anonymousCheck = JCheckBox().apply {
+        text = MpSqlVisualizerBundle.message("error.report.dialog.anonymous")
+    }
+
+    /** 浏览器兜底链接行为由对话框注入（[browserFallbackHandler]），字段类保持无逻辑。 */
+    var browserFallbackHandler: () -> Unit = {}
+    val browserLink = LinkLabel<Any>("", null) { _, _ -> browserFallbackHandler() }
 }
 
 /**
