@@ -257,4 +257,29 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             assertEquals(list.background, sqlRenderer.background)
         }
     }
+
+    // ---------- T-LogHistoryRowNo：历史列表行号片段 ----------
+
+    fun test二级条目_行号片段在元信息行最前() {
+        val r = renderSql(sqlEntry("SELECT 1").copy(sequenceNumber = 12L))
+        val meta = joinedText(r.metaLine)
+        assertTrue("元信息行含行号 #12", meta.contains("#12 "))
+        assertTrue("行号应在片段序列最前", meta.startsWith("#12 "))
+        assertFalse("SQL 不混入元信息行", meta.contains("SELECT"))
+    }
+
+    fun test二级条目_无行号条目不渲染行号片段() {
+        // sequenceNumber=0：旧文件读回 / 未注入条目
+        val r = renderSql(sqlEntry("SELECT 1"))
+        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"))
+    }
+
+    fun test二级条目_行号在耗时占位之前() {
+        val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
+        val meta = joinedText(renderSql(e).metaLine)
+        val idxRow = meta.indexOf("#5 ")
+        val idxDur = meta.indexOf("[3ms]")
+        assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0)
+        assertTrue("行号在耗时之前", idxRow < idxDur)
+    }
 }

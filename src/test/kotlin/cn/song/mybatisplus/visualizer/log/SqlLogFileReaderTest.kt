@@ -320,4 +320,63 @@ class SqlLogFileReaderTest {
         assertEquals("SELECT '1'", entries[0].restoredSql)
         assertEquals("SELECT 2", entries[1].restoredSql)
     }
+
+    // ---------- T-LogHistoryRowNo：文件内条目顺序号 ----------
+
+    @Test
+    fun `parseContent 注入文件内顺序号_连续`() {
+        val content = """
+            --- source: A.java:1 | time: 1ms | 2026-08-25 10:00:00.000 ---
+            SELECT 1
+
+            --- source: B.java:2 | time: 2ms | 2026-08-25 10:00:01.000 ---
+            SELECT 2
+
+            --- source: C.java:3 | time: 3ms | 2026-08-25 10:00:02.000 ---
+            SELECT 3
+
+        """.trimIndent()
+        val entries = SqlLogFileReader.parseContent(content)
+        assertEquals(listOf(1L, 2L, 3L), entries.map { it.sequenceNumber })
+    }
+
+    @Test
+    fun `parseContent 混合格式顺序号按文件解析顺序`() {
+        // 新旧格式混合：序号按文件出现顺序连续（不按格式分组）
+        val content = """
+            -- source: UserMapper.java:10 | time: 3ms | 2026-08-31 17:30:00.000 --
+            SELECT 1
+
+            -- 2026-08-31 09:00:00
+            SELECT 2
+
+            --- source: OrderMapper.java:20 | time: 10ms | 2026-08-31 17:30:01.000 ---
+            SELECT 3
+
+        """.trimIndent()
+        val entries = SqlLogFileReader.parseContent(content)
+        assertEquals(3, entries.size)
+        assertEquals(listOf(1L, 2L, 3L), entries.map { it.sequenceNumber })
+    }
+
+    @Test
+    fun `readAll 多文件每文件内序号独立从1起`() {
+        val dir = Files.createTempDirectory("loghistrow-").toFile()
+        dir.deleteOnExit()
+        File(dir, "a.sql").writeText(
+            "--- source: A.java:1 | time: 1ms | 2026-08-25 10:00:00.000 ---\nSELECT 1\n\n" +
+                "--- source: B.java:2 | time: 2ms | 2026-08-25 10:00:01.000 ---\nSELECT 2\n\n",
+        )
+        File(dir, "b.sql").writeText(
+            "--- source: C.java:1 | time: 3ms | 2026-08-25 10:00:02.000 ---\nSELECT 3\n\n",
+        )
+        // 历史面板按单文件展示：每文件内序号各自 1..N（不跨文件连续）
+        assertEquals(listOf(1L, 2L), SqlLogFileReader.readFromFile(File(dir, "a.sql")).map { it.sequenceNumber })
+        assertEquals(listOf(1L), SqlLogFileReader.readFromFile(File(dir, "b.sql")).map { it.sequenceNumber })
+    }
+
+    @Test
+    fun `空内容序号无影响`() {
+        assertTrue(SqlLogFileReader.parseContent("").isEmpty())
+    }
 }

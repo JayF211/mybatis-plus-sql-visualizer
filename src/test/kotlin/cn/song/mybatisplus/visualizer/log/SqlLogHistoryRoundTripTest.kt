@@ -110,6 +110,10 @@ class SqlLogHistoryRoundTripTest {
         val noDuration = all.filter { it.restoredSql.startsWith("SELECT A") || it.restoredSql.startsWith("SELECT B") }
         assertEquals(2, noDuration.size)
         noDuration.forEach { assertNull("无耗时条目读回 null", it.executionTimeMs) }
+
+        // T-LogHistoryRowNo：round-trip 读回条目按文件内顺序带序号（写端不持久化，读端派生）
+        val today = SqlLogFileReader.readFromFile(files[0])
+        assertEquals("今天文件 3 条按顺序号 1..3", listOf(1L, 2L, 3L), today.map { it.sequenceNumber })
     }
 
     @Test

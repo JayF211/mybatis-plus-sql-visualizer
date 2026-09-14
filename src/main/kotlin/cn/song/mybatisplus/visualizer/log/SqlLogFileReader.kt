@@ -100,6 +100,10 @@ object SqlLogFileReader {
     /**
      * 解析文件内容为 LogSqlEntry 列表。
      * 逐行扫描，遇到头部行则开始新块，兼容新旧两种头部混合。
+     *
+     * T-LogHistoryRowNo：返回前按解析顺序注入文件内条目序号（sequenceNumber = 索引+1）——
+     * 历史行号语义 = 文件内顺序号（静态历史无「会话内捕获序号」概念，见开发计划 §1.2）。
+     * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
      */
     fun parseContent(content: String): List<LogSqlEntry> {
         val entries = mutableListOf<LogSqlEntry>()
@@ -134,7 +138,10 @@ object SqlLogFileReader {
             }
         }
         flushBlock()
-        return entries
+        // T-LogHistoryRowNo：按文件内解析顺序注入序号（防御：已有序号的条目不覆盖）
+        return entries.mapIndexed { index, entry ->
+            if (entry.sequenceNumber == 0L) entry.copy(sequenceNumber = (index + 1).toLong()) else entry
+        }
     }
 
     private fun parseBlock(block: String): LogSqlEntry? {
