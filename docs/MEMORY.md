@@ -65,6 +65,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20260914-0907-ZCode仓库Wiki同步Gitee-经验总结.md](./经验总结/20260914-0907-ZCode仓库Wiki同步Gitee-经验总结.md) | **ZCode repo-wiki → Gitee Wiki 同步经验**：wiki.json 结构解析 + 导出脚本（`dev-support/export_zcode_wiki_to_gitee.py`）+ Gitee wiki 机制实测（页面树按文件名排序/Home 落底坑/00- 前缀落地首屏/_Sidebar 自动生效/API 需登录）+ 刷新后两条命令再同步流程 |
 | [20260902-1730-Kotlin转Java-经验总结.md](./经验总结/20260902-1730-Kotlin转Java-经验总结.md) | **Kotlin → Java 全量改写经验**：Wave 分批迁移 + 固定验证链 + 测试源集共存策略 + master 同步 + Git 历史管理 + Windows 内存映射锁/OOM 规避 |
 | [20260910-0100-IntelliJ演示GIF录制-经验总结.md](./经验总结/20260910-0100-IntelliJ演示GIF录制-经验总结.md) | **IntelliJ 插件演示 GIF 录制经验**：脚本重放+帧稳定采样管线（分块最大均值差消稀释/mss 光标回绘/无害 mp4 反复转制）、坐标标定、分镜偏离教训（关键词补全不存在/编辑器 Action 未注册/Ctrl+Space 系 IME 热键）、262 沙盒编译三处必改（v69 需 JDK24+JCEF 插件+沙盒隔离）、环境还原清单。脚本在 `record/` |
 
@@ -186,6 +187,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| 20260914-0907-ZCode仓库Wiki同步Gitee-经验总结.md | repo-wiki 本地 wiki.json 结构/导出脚本 dev-support/、Gitee wiki 落地页与排序机制实测/中文链接尖括号/refresh 后再同步流程（60 页已上线 `0b9d0dc`+`0490a98`） |
 | 20260912-0855-插件免重启更新与跨版本签名核验-经验总结.md | 动态热替换平台机制/五入口反射范式/跨版本签名护栏/踩坑清单（vetoer 误判、签名漂移、配置缓存、Kotlin DSL 坑等）/本地热替换测试三步 |
 | 20260902-1730-Kotlin转Java-经验总结.md | Kotlin→Java 全量改写的 Wave 策略、语法映射、验证链与 master 同步经验 |
 

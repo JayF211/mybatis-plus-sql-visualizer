@@ -497,8 +497,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
         // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
         add(smallButton(MpSqlVisualizerBundle.message("panel.vertical")) { formatVertical() })
-        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照；dev 侧功能保留内联，
-        // 导入/对比/分享已按 T-PreviewTopOverlap F2 折叠进「更多」菜单）
+        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照）。
+        // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
+        // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
+        add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         add(smallButton(MpSqlVisualizerBundle.message("panel.more")) { showMoreActionsPopup() })
