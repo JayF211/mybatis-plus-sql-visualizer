@@ -351,4 +351,37 @@ class RollbackSqlGeneratorTest {
         val result = generate("INSERT INTO t (d) VALUES ({d '2020-01-31'})")
         assertEquals(listOf("DELETE FROM t WHERE d = '2020-01-31';"), result.statements)
     }
+
+    // ======================== 弱谓词警示（T-UnboundedWriteGuard / T-UW-03） ========================
+
+    @Test
+    fun `恒真WHERE的UPDATE回滚附弱谓词警示`() {
+        val result = generate("UPDATE t SET a = 1 WHERE 1 = 1")
+        assertEquals(RollbackSqlGenerator.Rating.UNABLE, result.rating)
+        assertTrue(
+            "恒真谓词 → rollback.warn.tautology（快照 SELECT 复用原 WHERE 将覆盖全表）",
+            result.warnings.any { it.messageKey == "rollback.warn.tautology" },
+        )
+    }
+
+    @Test
+    fun `OR恒真WHERE的DELETE回滚附弱谓词警示`() {
+        val result = generate("DELETE FROM t WHERE id = 1 OR id = id")
+        assertEquals(RollbackSqlGenerator.Rating.UNABLE, result.rating)
+        assertTrue(result.warnings.any { it.messageKey == "rollback.warn.tautology" })
+    }
+
+    @Test
+    fun `LIKE纯通配WHERE的DELETE回滚附弱谓词警示`() {
+        val result = generate("DELETE FROM t WHERE name LIKE '%'")
+        assertTrue(result.warnings.any { it.messageKey == "rollback.warn.likeWildcard" })
+    }
+
+    @Test
+    fun `有界WHERE不附弱谓词警示`() {
+        val bounded = generate("UPDATE t SET a = 1 WHERE id = 7")
+        assertFalse(bounded.warnings.any { it.messageKey == "rollback.warn.tautology" || it.messageKey == "rollback.warn.likeWildcard" })
+        val prefixLike = generate("DELETE FROM t WHERE name LIKE 'abc%'")
+        assertFalse(prefixLike.warnings.any { it.messageKey == "rollback.warn.likeWildcard" })
+    }
 }

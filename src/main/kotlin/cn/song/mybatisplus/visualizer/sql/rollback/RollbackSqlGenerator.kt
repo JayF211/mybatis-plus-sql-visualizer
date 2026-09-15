@@ -255,13 +255,30 @@ object RollbackSqlGenerator {
         val t = table ?: return RollbackResult.unable(RollbackWarning("rollback.unable.type", listOf(kind.uppercase())))
         val whereText = where?.toString()
         val snapshotSql = if (whereText.isNullOrBlank()) "SELECT * FROM $table;" else "SELECT * FROM $table WHERE $whereText;"
+        val warnings = mutableListOf(
+            RollbackWarning("rollback.unable.$kind", listOf(t)),
+            RollbackWarning("rollback.guidance.recovery"),
+        )
+        // T-UnboundedWriteGuard（T-UW-03）：原语句弱谓词警示——恒真 / LIKE 纯通配（复用
+        // UnboundedWriteDetector.analyzeWhere）。快照 SELECT 直接复用原 WHERE，弱谓词 = 快照
+        // 覆盖全表。UPDATE/DELETE 回滚本就 UNABLE（无 before-image），警示只追加不降级评级
+        // （诚实原则：不把 UNABLE 虚标成 PARTIAL；计划 §三的「PARTIAL 触发面」按此落记）。
+        cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.analyzeWhere(where).forEach { finding ->
+            when (finding.kind) {
+                cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.FindingKind.TAUTOLOGY,
+                cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.FindingKind.OR_TAUTOLOGY,
+                -> warnings += RollbackWarning("rollback.warn.tautology")
+
+                cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.FindingKind.LIKE_WILDCARD ->
+                    warnings += RollbackWarning("rollback.warn.likeWildcard")
+
+                else -> Unit
+            }
+        }
         return RollbackResult(
             rating = Rating.UNABLE,
             statements = emptyList(),
-            warnings = listOf(
-                RollbackWarning("rollback.unable.$kind", listOf(t)),
-                RollbackWarning("rollback.guidance.recovery"),
-            ),
+            warnings = warnings,
             countCheckSql = null,
             targetTable = t,
             whereText = whereText,

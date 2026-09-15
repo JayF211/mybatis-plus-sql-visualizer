@@ -79,4 +79,9 @@ T-UW-01（探测器+表驱动测试）→ T-UW-02（执行链文案接线）
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-15 实施完毕（基于 fe11c97，任务相关定向套件全绿）**
+
+- **T-UW-01**：`execute/UnboundedWriteDetector.kt` 交付——七规则（MISSING_WHERE / TAUTOLOGY / OR_TAUTOLOGY / LIKE_WILDCARD / NO_COLUMN_REF / SUBQUERY 提示型 / PARSE_FAILED fail closed），多语句取并集，INSERT 忽略；SUBQUERY 不算危险（dangerous 仅对其余类别）。实施中两处 JSqlParser 5.3 实证修正：① OR 链无论结合方向摊平 `collectOrSides`（首版把 OrExpression 整个当 side 传导致 OR 恒真恒漏报，表驱动测试当场抓获）；② 括号组在 5.3 解析为 `ParenthesedExpressionList`（单元素列表）而非 `Parenthesis`——`unwrapGroup` 双形态递归解包，`(a=1 AND 1=1)` 括号内 AND 组也摊平不漏报。
+- **T-UW-02**：三处确认流共用新 `execute/ExecuteConfirmMessages.build`（纯函数可测）——LogToSqlPanel.executeStatement / SqlPreviewPanel.executeSql / SqlPreviewPanel.executeAdhocSql（计划只点名 LogToSqlPanel，三处同对话框同键，只升级一处会造成不一致，故全接；dmlConfirmed 豁免路径不动）。无危险发现文案逐字节不变；有发现 → 摘要 + 类别去重清单（每类一行）。零新弹窗形态/步骤。
+- **T-UW-03 偏差定案（诚实原则）**：计划原文「PARTIAL 评级补两类触发面」——实际盘点后 UPDATE/DELETE 回滚路径恒为 UNABLE（无 before-image，P1 设计如此），不存在「COMPLETE/PARTIAL 降级」落点；两类警示（rollback.warn.tautology / rollback.warn.likeWildcard）落 `unableForDml` 的 warnings（快照 SELECT 复用原 WHERE，弱谓词=快照全表——正是需要警示的用户瞬间），不把 UNABLE 虚标成 PARTIAL。复用 analyzeWhere 单点判定。
+- **T-UW-04**：i18n 双语 9+2 键（execute.confirm.unbounded.* 7 键 + summary + rollback.warn.* 2 键）；测试三件套——UnboundedWriteDetectorTest 22 例（每规则 ≥3 正例 + 业务形态反例 + 解析失败 + 多语句 + 注释干扰）、ExecuteConfirmMessagesTest 6 例（零变化红线/精确全等/类别去重/仅子查询不算危险）、RollbackSqlGeneratorTest 追加 4 例（两类警示正反例，既有 63 用例零回归）。

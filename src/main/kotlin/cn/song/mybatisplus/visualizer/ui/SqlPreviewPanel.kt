@@ -716,7 +716,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = Messages.showYesNoDialog(
                 proj,
-                MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 Messages.getWarningIcon(),
             )
@@ -821,7 +821,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = Messages.showYesNoDialog(
                 proj,
-                MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 Messages.getWarningIcon(),
             )

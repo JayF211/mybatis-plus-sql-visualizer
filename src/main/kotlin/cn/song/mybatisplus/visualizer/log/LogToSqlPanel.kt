@@ -280,14 +280,16 @@ class LogToSqlPanel(
             .showInFocusCenter()
     }
 
-    /** 执行单条语句：非查询先 DML 二次确认（与预览面板执行同交互），随后送原生控制台链路。 */
+    /** 执行单条语句：非查询先 DML 二次确认（与预览面板执行同交互），随后送原生控制台链路。
+     *  T-UnboundedWriteGuard：确认消息经 ExecuteConfirmMessages——命中无界写特征时同一对话框
+     *  列出发现（不新增弹窗形态/步骤），无发现时文案逐字节不变。 */
     private fun executeStatement(sql: String) {
         val isQuery = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(sql)
         if (!isQuery) {
             val keyword = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = com.intellij.openapi.ui.Messages.showYesNoDialog(
                 project,
-                MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 com.intellij.openapi.ui.Messages.getWarningIcon(),
             )
