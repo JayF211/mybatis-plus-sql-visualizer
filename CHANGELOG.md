@@ -6,6 +6,14 @@
 
 ### Added
 
+- **执行确认升级为无界写发现清单（T-UnboundedWriteGuard，O-9）**：执行 UPDATE/DELETE 前的二次确认对话框在静态检查命中无界写特征时列出发现（无 WHERE 全表 / 恒真条件如 `1=1` / OR 分支恒真 / `LIKE '%'` 纯通配 / WHERE 仅常量 / 子查询提示 / 无法解析请人工确认）——同一对话框形态零新弹窗，无发现时文案逐字节不变（高频确认不添乱）；规则集对齐 DBX `sql_risk.rs`，JSqlParser AST 权威、解析失败 fail closed。预览执行、日志转 SQL 执行、回滚执行三处确认流共用；回滚视图对恒真/纯通配 WHERE 追加「快照将覆盖全表」警示
+
+- **预览 `${}` 直接替换提示横幅（T-DollarInjectMark，O-11）**：XML 动态 SQL 预览含 `${}` 直替时，预览面板显示非模态单行提示「预览含 N 处 ${} 直接替换——替换文本未转义，注意 SQL 注入面」——引擎忠实计数（转义 `\${` 不计，字符串字面量内同样直替同样计数，MyBatis 同语义）；信息级可 ✕ 关闭，关闭后本 IDE 会话不再弹；纯 `#{}` 预览零打扰；渲染文本零变化（只加元数据）
+
+- **DDL/事务提交后元数据缓存失效（T-DdlCacheInvalidate，O-12）**：内嵌控制台执行 DDL 或 COMMIT/ROLLBACK 等语句提交前，自动失效插件自持的表/列注释缓存（补全与 JOIN 富化的 metaCache）——ALTER TABLE 后立刻预览/补全不再命中旧结构；「失败也要失效」语义继承 DBX（Oracle 系 DDL 隐式提交），失效动作失败只记日志绝不影响执行结果；盘点确认插件其余缓存均不持 schema 信息（架构定案留档）
+
+- **批量等值删除的 IN 合并参考行（T-BatchInMerge，O-14）**：foreach 批删日志还原后执行多语句时，确认浮层显示单行参考「检测到 N 条同表等值删除，可合并为：DELETE FROM t WHERE id IN (…）」——仅预览参考，执行仍逐条原样（等价性不由插件背书）；500 行 + 8KB 双约束截断计数，异构语句在场按「N/M 条」诚实披露，含引号字面量原样显示
+
 - **SQL 预览一键生成回滚 SQL（T-RollbackSql，r2 分支合流）**：预览面板按钮行新增「回滚」按钮（执行计划之后、刷新之前），对当前预览的 INSERT / UPDATE / DELETE 生成对应逆向 SQL（INSERT→DELETE 按主键、UPDATE→SET 还原原值、DELETE→按 WHERE 重插），弹窗展示并一键复制；快照存取 `RollbackSnapshotStore` 纯逻辑可测
 
 - **预览交互吸收包四件套（T-PreviewUx-Pack，DBX 精华吸收 #1~#4）**：① UPDATE 预览 (new) 列——竖排模式 SET 各项行尾追加「列名 (new) = 表达式」行尾标注（表达式原样搬，自引用 `a = a + 1` 原样即新值；T-VPairAnno 同款范式不破坏 SQL 可执行性）；② 诚实降级横幅——预览面板/日志转 SQL 面板内嵌非模态提示（渲染警示、日志还原失败、T-PreviewExecDs 降级链层级三触发面，文案三要素：哪段没还原/为什么/能做什么，绝不静默）；③ `${table}` 快捷模板——mapper/预览编辑器选中文本一键 EXPLAIN / COUNT / 抽样 10 行（右键菜单 SQL 快捷模板组 + Alt+Shift+E/C/T，默认键位冲突自动换绑备选键位并提示；走原生 Database 控制台链路）；④ 多语句执行确认——日志转 SQL 产物一键执行，单条直通、多条弹候选勾选浮层（T-CrudSql 原生形态：无按钮/Enter/双击/速度搜索）
@@ -14,9 +22,18 @@
 
 ### Changed
 
+- **三套语句切分收敛为单一状态机（T-SemicolonGuard，O-13）**：字符串感知切分（引号/注释内分号不切）此前有三处独立实现且行为不一——分类器会把 `'a;b'` 误切两段、注释内分号误切、字符串内 `--` 误剥；收敛为 util/SqlStatementSplitter 单实现（新增括号深度与 BEGIN/END 块感知：存储过程块/`(1;2)` 参数形态不再切碎，无配对 END 保守按原样切分），三处消费方委托迁移，既有行为逐段一致有守卫测试锁死
+
+- **MCP 工具描述补位差叙事与多语句说明（T-McpGuard，N-16）**：三只读工具描述各补一句定位（渲染器给出可执行 SQL 本体而非校验结论）；README 与插件市场页新增「MCP：给 AI agent 的确定性 SQL 工具」小节。structuredContent 协议合规核查完成——262 mcpserver.jar 字节码实证 String 返回走 content 文本块（structuredContent 仅对象返回类型填充，DBX 数组返工踩的正是该分支），三工具协议合规零改码；附每日竞品更新哨兵脚本（开发资产，不进插件产物）
+
 - **插件描述兼容承诺与 Log Free 迁移文案回补（N-6/N-7，r2 分支合流）**：插件描述（en/zh）补「Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line / 支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x）」兼容句；README 增「从 MyBatis Log Free 迁移？」段、理由升级为四条、Gitee 内测通道补 Marketplace 评分与一次性迁移指引；marketplace 页 FAQ 首条补适配承诺（新版 IDEA 正式版 5 个工作日内完成适配，Windows 计划任务每周自动 verifyPlugin 三目标兜底）
 
 - **性能长尾三项治理（T-PerfTail，性能调研报告 §9 发现点全收口）**：① WrapperCache 容量上限 512 + LRU 淘汰（accessOrder LinkedHashMap），编辑器关闭主动清理该文件条目（FileEditorManagerListener.fileClosed），三维修失效与「清除缓存」行为不变，极端长会话条目数有界；② 预览面板预热等待异步化——新增 PrewarmAwait（CompletableFuture + completeOnTimeout 超时预算等价），消除 EDT sleep-poll 形态，回调 invokeLater 回 EDT 装配，超时/失败走既有三级降级链；③ 重放守卫行 0 读取零拷贝——getCharsSequence 视图 subSequence 提取首行替代全文档拷贝（64MB 控制台文档混合态窗口风险收口）；④ plugin.xml 更新检查注释修正（默认关——稳定版由 Marketplace 推送，代码为权威）
+
+### Test
+
+- **方言 Lab 配方一致性守卫（T-DialectLabMatrix，O-10）**：五容器配方补 healthcheck（各库官方镜像自带工具），新增 database-lab/ 国产库资产（达梦/金仓官方 tar 取得路径 + load 脚本 + 示例片段 + 外部实例验证命令样例）；DockerComposeLabConsistencyTest 不起 Docker 即可校验配方四硬约束（钉版本/端口避让/必填 env/healthcheck）与文档一致性，漂移自证三例。国产库真实容器验证维持「环境受限未验证」诚实口径
+
 ## [2026.9.14] - 2026-09-14
 
 > 正式版：合并内测版 beta.1（Gitee 抢先体验通道已发行）、beta.2（仅提交未发行，内容直接并入本版）与 09-14 当日全部交付链。dev 分支回合条目（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等）此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 v2026.9.11 的用户可见增量。

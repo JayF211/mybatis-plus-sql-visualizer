@@ -269,6 +269,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-15 | 第四轮竞品应答七任务全交付（N-16+O-9~O-14，master 合入 dev fe11c97 基线）：T-McpGuard（structuredContent 字节码实证分支 a 零改码+位差叙事四处+竞品哨兵脚本）/T-UnboundedWriteGuard（七规则探测器+三确认流消息升级）/T-DialectLabMatrix（配方守卫+database-lab 国产库资产）/T-DollarInjectMark（引擎直替计数+DOLLAR_INJECT 横幅）/T-DdlCacheInvalidate（元数据失效挂 executeOnConsole）/T-SemicolonGuard（三处切分收敛单实现+括号深度 BEGIN/END）/T-BatchInMerge（等值批删 IN 合并参考行）；三处偏差定案留痕（O-9 PARTIAL→warnings 诚实降级、O-11 引擎忠实计数、O-14 adText 提示位）。全量 testShards 360类/4410/0/0/6 绿（基线 350/4267 → +10 类 +143 例）。详见 docs/变更记录.md 同日七行与各计划 §八 |
 | 2026-09-15 | 记忆第九次精简（44→28 含索引）：16 个已交付任务记忆归档 bug-fixes（T-TestPerf2/T-MarketInternal/T-ExplainFirstNative/T-ListPreviewCopy/T-MergeFollowup/T-LogHistoryRowNo/T-JumpCapture/T-JumpPath/T-IntrUpg/T-ExecSlowOps/T-ExplainDbl/T-FeedbackDlg/T-FeedbackErr/T-PreviewExecDs/竞品对比第三·四轮）＋pitfall-edt-slowops-coldpath 升级全局（allowSlowOperations 逃生舱 243+262 双重证伪）；archive 增至 196 个文件（bug-fixes 139）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-15 |
 | 2026-09-15 | T-PerfTail 三项治理（t-perftail 11e2671+ba0fb13，4207 绿）：WrapperCache LRU 512+fileClosed 清理 / PrewarmAwait CompletableFuture 消灭 EDT sleep-poll / 重放守卫行 0 getCharsSequence 零拷贝 / plugin.xml 注释修正。详见 docs/变更记录.md 同日行 |
 | 2026-09-15 | T-PreviewUx-Pack 四件套（t-previewux-pack 7c77640+b7ea9de，4193 绿）：诚实降级横幅（DegradationBanner）/UPDATE (new) 列（行尾注释形态保可执行性）/多语句执行确认（JBPopup 候选）/${table} 快捷模板（Alt+Shift+E/C/T 冲突自动备选键位）。i18n 16 键×2。详见 docs/变更记录.md 同日行 |
