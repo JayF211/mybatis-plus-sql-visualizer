@@ -202,7 +202,7 @@
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor"/>
 
-        <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
+        <!-- M28 插件更新：启动自动检查（开关默认关，PluginSettings.autoCheckUpdate=false，T-PerfSweep2-06 对齐代码权威；稳定版由 Marketplace 推送，内测期手动开启）——静默检查，
              仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
              （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"

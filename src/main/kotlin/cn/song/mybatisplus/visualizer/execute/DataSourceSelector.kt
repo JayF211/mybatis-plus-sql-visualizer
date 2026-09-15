@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiFile
@@ -116,7 +117,8 @@ object DataSourceSelector {
 
     /** M36.5.57：本次执行开始时 console history 的长度基线——早检只扫**本次执行之后**新增的
      * 文本，忽略 history 里的旧错误残留（否则正常 SQL 会把上个失败的错误"带过来"，用户实测）。 */
-    private var consoleErrorBaseline: Int = 0
+    // T-PerfSweep2-01：internal 供 ConsoleErrorExtractTest 注入基线（生产路径仅 :2237 赋值）。
+    internal var consoleErrorBaseline: Int = 0
 
     /** T-ExecSilentNoop：本次执行的提示已发出标记——8s 连接监控与 40 拍超时窗口共用，
      * 保证同一次执行只报一次提示（此前二者各按同一 key 报一次，用户见两次红字）。 */
@@ -568,22 +570,27 @@ object DataSourceSelector {
      * M36.5.57：只扫 **consoleErrorBaseline 之后**的文本——历史残留错误（上个失败 SQL 写入的
      * Unknown column 等）不在本次范围，正常 SQL 执行后不会"带过来"旧错误。
      */
-    private fun extractConsoleError(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger): String? {
+    internal fun extractConsoleError(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger): String? {
         if (console == null) return null
         return runCatching {
             val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return null
             val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return null
             val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
                 ?: return null
-            var text = doc.javaClass.getMethod("getText").invoke(doc) as? String
+            // T-PerfSweep2-01：getCharsSequence + subSequence 片段读取——本函数被 600ms×8 拍与
+            // 400ms×40/100 拍两个定时器**逐拍**调用，此前 doc.getText() 每拍整串拷贝全史
+            // （history 随长会话涨到 MB 级后是 EDT 上唯一可感知的 O(全史) 重复分配）。
+            // 只物化 baseline 之后的切片；getCharsSequence 与 getText 同属 Document 接口，
+            // 反射可达性一致，且免去 BadLocationException 面。
+            val seq = doc.javaClass.getMethod("getCharsSequence").invoke(doc) as? CharSequence
                 ?: return null
             // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
             // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，return null。
             val baseline = consoleErrorBaseline
-            if (baseline > 0 && text.length > baseline) {
-                text = text.substring(baseline)
-            } else if (baseline > 0) {
-                return null
+            val text = when {
+                baseline <= 0 -> seq.toString()
+                seq.length > baseline -> seq.subSequence(baseline, seq.length).toString()
+                else -> return null
             }
             if (text.isBlank()) return null
             val lines = text.lines().filter { it.isNotBlank() }
@@ -2705,13 +2712,17 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 val contents = runCatching {
                     ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
                 }.getOrNull() ?: emptyArray()
-                val all = contents.map { it.displayName }
-                val ids = contents.map { System.identityHashCode(it) }
                 val result = pickResultTab(contents, preExistingNames, attempts)
                 if (result != null && result.displayName in preExistingNames) {
                     LOG.info("[M36] result tab reused (name=${result.displayName}) - accepting existing tab")
                 }
-                LOG.debug("[M36] retry#$attempts contents=$all, ids=$ids, select=${result?.displayName}, preExisting=$preExistingNames")
+                // T-PerfSweep2-01：列表构建仅喂 LOG.debug——debug 关闭时不再逐拍白建两份列表
+                //（400ms 定时器最长 100 拍，此前每拍 2 次 map 空转）。
+                if (LOG.isDebugEnabled) {
+                    val all = contents.map { it.displayName }
+                    val ids = contents.map { System.identityHashCode(it) }
+                    LOG.debug("[M36] retry#$attempts contents=$all, ids=$ids, select=${result?.displayName}, preExisting=$preExistingNames")
+                }
                 if (result != null) {
                     timer.stop()
                     // M36.5.48 勘误：此处**不**调用 extractConsoleError——结果 Tab 复用成功时
@@ -2983,8 +2994,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         } catch (e: Throwable) {
             return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
         } ?: return fail("findPsi", "PsiManager.findFile null (${vf.name})")
-        cachedTempPsiFile = vf to psi
-        cachedTempPsiProjectName = project.name
+        // T-PerfSweep2-04：写点统一走 markCachedTempPsiFile（挂一次性项目关闭钩子）
+        markCachedTempPsiFile(project, vf, psi)
         return vf to psi
     }
 
@@ -3214,10 +3225,37 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         LOG.info("[M36] exec prewarm DONE (cache filled off EDT): ${vf.name}")
     }
 
-    /** T-ExecSlowOps F2：填 exec 临时文件 vf+psi 缓存槽（项目绑定；BGT/EDT 均可调用——volatile 写）。 */
-    internal fun markCachedTempPsiFile(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, psi: PsiFile) {
+    /** T-PerfSweep2-04：已挂项目关闭钩子的项目集——防对同一项目重复 Disposer.register。 */
+    private val hookProjectsClose =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Project, Boolean>())
+
+    /**
+     * T-ExecSlowOps F2：填 exec 临时文件 vf+psi 缓存槽（项目绑定；BGT/EDT 均可调用——volatile 写）。
+     * T-PerfSweep2-04：同时挂一次性项目关闭钩子——项目关闭即清槽，不再等下次消费顶掉
+     * （此前项目关闭后槽里残留该项目的 vf+psi 强引用至下次写入；isCacheUsable 惰性校验
+     * 保留为双保险）。[parentDisposable] 默认项目自身，测试注入自有 Disposable 手动触发。
+     */
+    internal fun markCachedTempPsiFile(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        psi: PsiFile,
+        parentDisposable: com.intellij.openapi.Disposable = project,
+    ) {
         cachedTempPsiFile = vf to psi
         cachedTempPsiProjectName = project.name
+        hookProjectClose(project, parentDisposable)
+    }
+
+    private fun hookProjectClose(project: Project, parentDisposable: com.intellij.openapi.Disposable) {
+        if (!hookProjectsClose.add(project)) return
+        Disposer.register(parentDisposable) {
+            hookProjectsClose.remove(project)
+            val cached = cachedTempPsiFile
+            if (cached != null && cached.second.project == project) {
+                cachedTempPsiFile = null
+                cachedTempPsiProjectName = null
+            }
+        }
     }
 
     /** T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（成功时 null）。 */
