@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.feedback
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -180,5 +181,42 @@ class ErrorReportComposerTest {
         assertTrue("应以 U+FEFF 开头", content.startsWith('\uFEFF'))
         assertEquals("BOM 编码为 EF BB BF", 0xEF, content.toByteArray(Charsets.UTF_8)[0].toInt() and 0xFF)
         assertTrue(content.contains("SQL Visualizer 错误报告"))
+    }
+
+    // ---------- per-item 截断（T-PerfSweep2-03） ----------
+
+    @Test
+    fun `批量超长堆栈逐条截断带尾注且总量受限`() {
+        // 病灶回归：20 条 × 50k 堆栈——此前全文 append 后才 take(60_000)，EDT 瞬时 ~1MB 字符
+        // 操作且只保留前 60k（后续条目内容全部丢失）；现在逐条 8k 截断，每节都保留内容
+        val bigStack = "at a.B.c(B.java:1)\n".repeat(2_500) // ≈50k 字符
+        val content = ErrorReportComposer.buildStackAttachment(
+            List(20) { "#${it + 1} marker\n$bigStack" },
+            null, null, null, "t",
+        )
+        assertTrue("总量仍受限 len=${content.length}", content.length <= 60_000)
+        assertEquals("20 节全部在场（此前尾部落入 take 之外被整体丢失）", 20, Regex("----- #\\d+ -----").findAll(content).count())
+        assertEquals("每节都带截断尾注", 20, content.split("（已截断，原 ").size - 1)
+        assertTrue("尾注带原长度", content.contains("（已截断，原 ${bigStack.length + "#1 marker\n".length} 字符）"))
+    }
+
+    @Test
+    fun `单条超长路径行为不变_无尾注逐字节同旧`() {
+        // 单条路径保持 60_000 上限（存量行为兼容）：超长时 take 终裁，suffix 落在截断线之外
+        val bigStack = "at a.B.c(B.java:1)\n".repeat(5_000) // ≈95k 字符
+        val content = ErrorReportComposer.buildStackAttachment(bigStack, null, null, null, "t")
+        assertEquals("单条总量 = 60_000", 60_000, content.length)
+        assertFalse("单条路径不出现尾注（suffix 被 take 切掉）", content.contains("已截断"))
+    }
+
+    @Test
+    fun `小堆栈批量不受截断影响`() {
+        val content = ErrorReportComposer.buildStackAttachment(
+            listOf("java.lang.IllegalStateException: one\nat A.b(A.java:1)", "java.lang.Error: two\nat C.d(C.java:2)"),
+            null, null, null, "t",
+        )
+        assertFalse("小堆栈不带尾注", content.contains("已截断"))
+        assertTrue(content.contains("one"))
+        assertTrue(content.contains("two"))
     }
 }
