@@ -9,7 +9,7 @@
 | master HEAD | `155e0cf`（docs: T-ListParamCollect 合入 master） |
 | feature HEAD | `59e8510`（fix: 恢复变更记录总册） |
 | 差异规模 | master 领先 248 提交；feature 自身 9 提交（M56 agent 字节码通道一期） |
-| 状态 | 实施中——首环完成（§五 1~6 全落地），master 并行两次推进，正按 §六做增量收口 |
+| 状态 | **已交付**——首环（§五 1~6）与增量收口（§六：da37ad5 二次 + d0ae910 三次）全落地，最终门禁 testShards 4200/0/0/6 + agent 21/0 + buildPlugin 2026.9.18-beta.1.zip + verifyGate 三目标 Compatible，详见交接文档 §八 |
 
 ---
 
