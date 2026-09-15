@@ -24,15 +24,19 @@ final class StatementHandler implements InvocationHandler {
     /** prepareStatement 时捕获的 SQL（Statement 纯无参：execute(String) 时取参数）。 */
     private final String preparedSql;
 
+    /** connect 时的连接 URL（T-AgentDialectLoop：透传到事件供面板识别目标库）。 */
+    private final String url;
+
     /** 参数槽：显式枚举 setXxx 捕获（index → 值文本/类型名）。 */
     private final ParamCapture params = new ParamCapture();
 
     /** 批处理语句累积（addBatch(String)）。 */
     private final StringBuilder batchSqls = new StringBuilder();
 
-    StatementHandler(Object raw, String preparedSql) {
+    StatementHandler(Object raw, String preparedSql, String url) {
         this.raw = raw;
         this.preparedSql = preparedSql;
+        this.url = url;
     }
 
     @Override
@@ -117,7 +121,7 @@ final class StatementHandler implements InvocationHandler {
         event.methodKey = frame == null ? null : frame.methodKey;
         event.requestTag = MdcAccessor.requestTag();
         event.params = params.snapshot(sql, AgentState.isDesensitize());
-        event.url = null; // 连接级信息（一期不透传到事件，面板按 SQL 识别）
+        event.url = url; // connect 时 URL（面板据此展示目标库类型；测试/池代理下可能为 null）
         event.threadName = Thread.currentThread().getName();
         EventBus.offer(event);
     }

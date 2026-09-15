@@ -220,7 +220,9 @@ class SqlLogAutoSaver(
             )
             // 日志原始时间（解析到才写，向后兼容旧文件）
             val logTimePart = entry.logTimestamp?.let { " | logTime: $it" } ?: ""
-            w.write("-- source: $source | time: $duration | $timestamp$logTimePart --\n")
+            // T-AgentDialectLoop：目标库显示名（agent 通道才有，解析到才写）
+            val dbPart = entry.databaseName?.let { " | db: $it" } ?: ""
+            w.write("-- source: $source | time: $duration | $timestamp$logTimePart$dbPart --\n")
             // T-HistParam F1：参数持久化——params 非空或 rawSql 含 `?`（绑定行缺失未识别条目）时，
             // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）。
             // M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）任一在场也写

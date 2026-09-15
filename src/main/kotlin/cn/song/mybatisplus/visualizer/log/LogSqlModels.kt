@@ -91,6 +91,12 @@ data class LogSqlEntry(
      * 影响行数（agent 通道 `getUpdateCount` 直取，DML 语义）；null 表示未知（查询 / 旧条目）。
      */
     val updateCount: Long? = null,
+    /**
+     * 目标数据库显示名（T-AgentDialectLoop：agent 通道由连接 URL 子协议映射，
+     * 如 "MySQL" / "DM（达梦）"）；null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。
+     * 展示性字段，不入去重指纹。
+     */
+    val databaseName: String? = null,
 ) {
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。

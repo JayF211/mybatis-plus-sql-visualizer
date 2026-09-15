@@ -22,8 +22,9 @@ public final class DriverRegistry {
         s.add("com.mysql.cj.jdbc.Driver");
         s.add("com.mysql.cj.jdbc.NonRegisteringDriver");
         s.add("org.mariadb.jdbc.Driver");
-        // PostgreSQL / OpenGauss 兼容
+        // PostgreSQL / OpenGauss 兼容（openGauss 2.x 走 PG 驱动，3.x 起自带驱动）
         s.add("org.postgresql.Driver");
+        s.add("org.opengauss.Driver");
         // H2 / HSQL / SQLite（嵌入式，测试矩阵主力）
         s.add("org.h2.Driver");
         s.add("org.hsqldb.jdbcDriver");

@@ -123,4 +123,24 @@ class AgentEventAdapterTest {
         assertEquals(bridgeEntry.dedupeKey, agentEntry.dedupeKey)
         assertEquals(sqlFingerprint(normalizeSqlWhitespace("SELECT * FROM user WHERE id = 42")), agentEntry.dedupeKey)
     }
+
+    @Test
+    fun `事件解析_url键与缺失容错`() {
+        val withUrl = AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"dn":1,"url":"jdbc:dm://localhost:5236"}""")!!
+        assertEquals("jdbc:dm://localhost:5236", withUrl.url)
+        val withoutUrl = AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"dn":1}""")!!
+        assertNull("旧版 agent 无 url 键 → null 容错", withoutUrl.url)
+    }
+
+    @Test
+    fun `映射_url推断目标库名_缺失为null`() {
+        val dm = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:dm://localhost:5236"))
+        assertEquals("DM（达梦）", dm.databaseName)
+        val mysql = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:mysql://localhost/db"))
+        assertEquals("MySQL", mysql.databaseName)
+        val unknown = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:weirddb://x"))
+        assertNull("未知子协议不显示角标", unknown.databaseName)
+        val legacy = AgentEventAdapter.toEntry(event("SELECT 1"))
+        assertNull("旧版 agent 无 url → null", legacy.databaseName)
+    }
 }

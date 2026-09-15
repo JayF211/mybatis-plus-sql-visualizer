@@ -28,7 +28,7 @@ public final class SqlEvent {
     public String requestTag;
     /** 参数快照 [index, valueText|null, type|null]（已过脱敏层）。 */
     public List<String[]> params;
-    /** connect 时的 URL（一期不透传，预留）。 */
+    /** connect 时的 URL（T-AgentDialectLoop 起透传；面板据此识别目标库）。 */
     public String url;
     /** 执行线程名。 */
     public String threadName;

@@ -29,6 +29,8 @@ data class AgentEvent(
     val params: List<Triple<Int, String?, String?>>,
     /** 执行线程名。 */
     val threadName: String?,
+    /** connect 时连接 URL（T-AgentDialectLoop；旧版 agent 无此键 → null 容错）。 */
+    val url: String? = null,
 ) {
     companion object {
         /** 解析 EVENT 帧 body；结构不符返回 null（丢弃并计数，不断流）。 */
@@ -61,6 +63,7 @@ data class AgentEvent(
                 requestTag = o.get("rt")?.takeIf { it.isJsonPrimitive }?.asString,
                 params = params,
                 threadName = o.get("th")?.takeIf { it.isJsonPrimitive }?.asString,
+                url = o.get("url")?.takeIf { it.isJsonPrimitive }?.asString,
             )
         }.getOrNull()
 

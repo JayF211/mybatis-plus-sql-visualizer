@@ -25,6 +25,7 @@ public final class Jsons {
         str(sb, "mk", e.methodKey);
         str(sb, "rt", e.requestTag);
         str(sb, "th", e.threadName);
+        str(sb, "url", e.url);
         if (e.params != null && !e.params.isEmpty()) {
             sb.append(",\"p\":[");
             for (int i = 0; i < e.params.size(); i++) {

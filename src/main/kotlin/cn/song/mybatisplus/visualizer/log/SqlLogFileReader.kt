@@ -23,10 +23,11 @@ object SqlLogFileReader {
 
     /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
-     * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）
+     * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）5=db（可选，T-AgentDialectLoop）。
+     * 毫秒分数为非捕获组——曾误用捕获组占位第 4 组致 logTime 永远读丢（T-AgentDialectLoop 修复）。
      */
     private val NEW_HEADER_REGEX = Regex(
-        """^--+ source: (.+?) \| time: (.+?) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{3})?)(?: \| logTime: (\d+))? --+$"""
+        """^--+ source: (.+?) \| time: (.+?) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})?)(?: \| logTime: (\d+))?(?: \| db: (.+?))? --+$"""
     )
 
     /** 旧版格式头部：-- timestamp（无源码位置和耗时） */
@@ -190,6 +191,7 @@ object SqlLogFileReader {
                 sourceFile = sourceFile,
                 sourceLine = sourceLine,
                 executionTimeMs = executionTimeMs,
+                databaseName = mr.groupValues[5].takeIf { it.isNotBlank() },
                 mapperStatement = decodedExt?.mapperStatement,
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,

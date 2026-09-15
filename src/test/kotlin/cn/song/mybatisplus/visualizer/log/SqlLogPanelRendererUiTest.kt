@@ -91,6 +91,32 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertTrue("SQL 行完整保留语句（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"))
     }
 
+    fun test目标库角标_有库名渲染到元信息行() {
+        // T-AgentDialectLoop：agent 条目带 databaseName → 元信息行出现 [MySQL] 角标
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.AGENT,
+            databaseName = "MySQL",
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertTrue("元信息行应含目标库角标", meta.contains("[MySQL] "))
+    }
+
+    fun test目标库角标_未知库名不显示() {
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.AGENT,
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertFalse("无 databaseName 不应显示角标", meta.contains("[MySQL]"))
+    }
+
     fun test特殊字符SQL_原文保真() {
         // 片段通道无 HTML 解析面——< > & 原样绘制即安全（原通道需转义，此处断言不转义不破版）
         val r = render(entry("SELECT * FROM t WHERE a < 5 AND b > 3 AND c & d"))

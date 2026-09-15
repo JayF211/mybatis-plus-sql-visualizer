@@ -50,4 +50,18 @@ public class JsonsTest {
         String json = Jsons.writeEvent(e);
         assertTrue(json.contains("a\\\\b\\\"c\\nd\\te"));
     }
+
+    @Test
+    public void url键序列化与null省略() {
+        // T-AgentDialectLoop：连接 URL 透传（面板识别目标库）；null 不落键（旧 IDE 兼容）
+        SqlEvent e = new SqlEvent();
+        e.sql = "SELECT 1";
+        e.timestamp = 1;
+        e.durationNanos = 1;
+        String json = Jsons.writeEvent(e);
+        assertFalse(json.contains("url"));
+        e.url = "jdbc:dm://localhost:5236";
+        json = Jsons.writeEvent(e);
+        assertTrue(json.contains("\"url\":\"jdbc:dm://localhost:5236\""));
+    }
 }

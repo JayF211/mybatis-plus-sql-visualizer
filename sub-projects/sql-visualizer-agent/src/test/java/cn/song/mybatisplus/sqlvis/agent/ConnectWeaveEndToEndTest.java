@@ -37,17 +37,45 @@ public class ConnectWeaveEndToEndTest {
         return dir;
     }
 
+    /**
+     * 子优先 loader：FakeDriver* 只从织入目录加载（父加载器测试 classpath 上有同名原始类，
+     * 默认父优先会遮蔽织入字节——本文件旧断言因此长期「空真」，T-AgentDialectLoop 修正）；
+     * 其余类（SqlHookCallbacks/AgentState 等）照常父委派（回调类须两侧同源可见）。
+     */
+    private ClassLoader childFirstLoader(File dir) throws Exception {
+        return new java.net.URLClassLoader(new java.net.URL[]{dir.toURI().toURL()},
+                ClassLoader.getSystemClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (name.startsWith("cn.song.mybatisplus.sqlvis.agent.FakeDriver")) {
+                    synchronized (getClassLoadingLock(name)) {
+                        Class<?> c = findLoadedClass(name);
+                        if (c == null) {
+                            c = findClass(name);
+                        }
+                        if (resolve) {
+                            resolveClass(c);
+                        }
+                        return c;
+                    }
+                }
+                return super.loadClass(name, resolve);
+            }
+        };
+    }
+
     @Test
     public void 织入后connect返回被代理的Connection() throws Exception {
         File dir = writeWoven(ClassLoader.getSystemClassLoader());
-        ClassLoader loader = new java.net.URLClassLoader(new java.net.URL[]{dir.toURI().toURL()},
-                ClassLoader.getSystemClassLoader());
+        ClassLoader loader = childFirstLoader(dir);
         Class<?> driver = Class.forName(FakeDriver.class.getName(), true, loader);
         Object instance = driver.getDeclaredConstructor().newInstance();
         Connection conn = (Connection) driver.getMethod("connect", String.class, Properties.class)
                 .invoke(instance, "jdbc:fake://t", new Properties());
         assertNotNull(conn);
         assertTrue("connect 出口应被包装为代理", Proxy.isProxyClass(conn.getClass()));
+        assertTrue("conn 应为本 agent 的 ConnectionHandler 包装（织入字节真实生效）",
+                Proxy.getInvocationHandler(conn) instanceof cn.song.mybatisplus.sqlvis.agent.hook.ConnectionHandler);
         // 代理仍然可用：走 prepareStatement → executeUpdate 原语义透传
         PreparedStatement ps = conn.prepareStatement("INSERT INTO t VALUES (?)");
         assertTrue(Proxy.isProxyClass(ps.getClass()));
@@ -56,10 +84,25 @@ public class ConnectWeaveEndToEndTest {
     }
 
     @Test
+    public void 连接url透传到Statement代理() throws Exception {
+        // T-AgentDialectLoop：connect 入参 URL 经 ConnectionHandler → StatementHandler 一路携带
+        File dir = writeWoven(ClassLoader.getSystemClassLoader());
+        ClassLoader loader = childFirstLoader(dir);
+        Object instance = Class.forName(FakeDriver.class.getName(), true, loader)
+                .getDeclaredConstructor().newInstance();
+        Connection conn = (Connection) driverConnect(instance, "jdbc:fake://dialect");
+        assertTrue(Proxy.getInvocationHandler(conn) instanceof cn.song.mybatisplus.sqlvis.agent.hook.ConnectionHandler);
+        PreparedStatement ps = conn.prepareStatement("SELECT 1");
+        Object handler = Proxy.getInvocationHandler(ps);
+        java.lang.reflect.Field url = handler.getClass().getDeclaredField("url");
+        url.setAccessible(true);
+        assertEquals("jdbc:fake://dialect", url.get(handler));
+    }
+
+    @Test
     public void null连接路径安全() throws Exception {
         File dir = writeWoven(ClassLoader.getSystemClassLoader());
-        ClassLoader loader = new java.net.URLClassLoader(new java.net.URL[]{dir.toURI().toURL()},
-                ClassLoader.getSystemClassLoader());
+        ClassLoader loader = childFirstLoader(dir);
         Object instance = Class.forName(FakeDriver.class.getName(), true, loader)
                 .getDeclaredConstructor().newInstance();
         Object conn = driverConnect(instance, null);

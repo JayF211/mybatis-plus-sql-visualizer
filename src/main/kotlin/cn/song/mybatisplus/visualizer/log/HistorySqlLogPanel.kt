@@ -701,6 +701,8 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
             // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
             // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
             formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
+            // T-AgentDialectLoop：目标库角标（与日志页同款落点：耗时/时间后、来源前）
+            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {

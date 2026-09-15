@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import com.intellij.openapi.Disposable
@@ -199,6 +200,8 @@ class AgentManager(private val project: Project) : Disposable {
         }
         // 接管/回落切换：桥暂停挂载 ↔ 恢复（§4.3；桥链路本身零改动）
         SqlCaptureGate.paused.set(online)
+        // T-AgentDialectLoop：回落/关闭时清空日志时间相关器，防跨运行陈旧匹配
+        if (!online) LogTimeCorrelator.clear()
     }
 
     private fun sweepOffline() {
@@ -317,7 +320,12 @@ internal class AgentSession(
                     return
                 }
                 try {
-                    project.getService(SqlLogManager::class.java).entries.addEntry(AgentEventAdapter.toEntry(event))
+                    val entry = AgentEventAdapter.toEntry(event)
+                    // T-AgentDialectLoop：接管期间控制台嗅探暂存的「日志行原始时间」按同指纹回填
+                    // （未命中保持 null——显示回落捕获时间，与既有语义一致）
+                    val stamped = if (entry.logTimestamp != null) entry
+                    else LogTimeCorrelator.take(entry.dedupeKey)?.let { entry.copy(logTimestamp = it) } ?: entry
+                    project.getService(SqlLogManager::class.java).entries.addEntry(stamped)
                 } catch (t: Throwable) {
                     LOG.warn("EVENT 入队失败（不斩断流）", t)
                 }

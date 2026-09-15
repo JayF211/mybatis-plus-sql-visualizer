@@ -31,21 +31,16 @@ public final class ConnectionHandler implements InvocationHandler {
             if (args != null && args.length >= 1 && args.length <= 4 && args[0] instanceof String) {
                 if ("prepareStatement".equals(name) || "prepareCall".equals(name)) {
                     final Object stmt = method.invoke(raw, args);
-                    return stmt == null ? null : ProxySupport.wrapStatement(stmt, (String) args[0]);
+                    return stmt == null ? null : ProxySupport.wrapStatement(stmt, (String) args[0], url);
                 }
             }
             if (args == null && "createStatement".equals(name)) {
                 final Object stmt = method.invoke(raw, args);
-                return stmt == null ? null : ProxySupport.wrapStatement(stmt, null);
+                return stmt == null ? null : ProxySupport.wrapStatement(stmt, null, url);
             }
             return method.invoke(raw, args);
         } catch (java.lang.reflect.InvocationTargetException e) {
             throw e.getCause() != null ? e.getCause() : e;
         }
-    }
-
-    /** 连接 URL（connect 时的原始 URL，事件附带便于面板识别目标库）。 */
-    String url() {
-        return url;
     }
 }

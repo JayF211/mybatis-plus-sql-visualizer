@@ -23,11 +23,11 @@ final class ProxySupport {
                 handler);
     }
 
-    static Object wrapStatement(Object rawStatement, String sql) {
+    static Object wrapStatement(Object rawStatement, String sql, String url) {
         final Class<?> cls = rawStatement.getClass();
         final Set<Class<?>> ifaces = new HashSet<Class<?>>();
         collectInterfaces(cls, ifaces);
-        final StatementHandler handler = new StatementHandler(rawStatement, sql);
+        final StatementHandler handler = new StatementHandler(rawStatement, sql, url);
         return Proxy.newProxyInstance(
                 ProxySupport.class.getClassLoader(),
                 ifaces.toArray(new Class<?>[0]),

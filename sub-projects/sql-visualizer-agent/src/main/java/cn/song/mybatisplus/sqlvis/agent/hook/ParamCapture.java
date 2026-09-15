@@ -134,7 +134,28 @@ public final class ParamCapture {
         if (v instanceof BigDecimal) {
             return ((BigDecimal) v).toPlainString();
         }
-        return String.valueOf(v);
+        final String s = String.valueOf(v);
+        // 驱动私有类型未覆写 toString 时产出 类名@哈希 垃圾值（oracle.sql.Datum 族、达梦/金仓
+        // 私有类型实测形态）——降级为形态标注，防止面板出现不可读文本（T-AgentDialectLoop）
+        if (isDefaultToString(v, s)) {
+            return "<" + simpleTypeName(v) + ">";
+        }
+        return s;
+    }
+
+    /** 判定字符串是否为未覆写的默认 Object.toString 形态（全限定类名@十六进制哈希）。 */
+    private static boolean isDefaultToString(Object v, String s) {
+        final String name = v.getClass().getName();
+        if (s.length() <= name.length() || s.charAt(name.length()) != '@' || !s.startsWith(name)) {
+            return false;
+        }
+        for (int i = name.length() + 1; i < s.length(); i++) {
+            final char c = s.charAt(i);
+            if ((c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String simpleTypeName(Object v) {

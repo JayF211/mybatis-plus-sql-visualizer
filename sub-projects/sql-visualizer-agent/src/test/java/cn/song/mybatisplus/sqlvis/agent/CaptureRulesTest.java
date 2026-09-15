@@ -54,6 +54,20 @@ public class CaptureRulesTest {
         assertEquals("NULL", snap.get(2)[2]);
     }
 
+    @Test
+    public void 未覆写toString的驱动私有类型降级为形态标注() {
+        // T-AgentDialectLoop：oracle.sql.Datum 族/达梦金仓私有类型 setObject 直传时
+        // 默认 toString 产出 类名@哈希 垃圾值——须降级 <类名> 形态；常规值不受影响
+        ParamCapture pc = new ParamCapture();
+        pc.tryCapture("setObject", new Object[]{1, new Object()});
+        pc.tryCapture("setObject", new Object[]{2, 7});
+        pc.tryCapture("setString", new Object[]{3, "plain"});
+        List<String[]> snap = pc.snapshot("INSERT INTO t VALUES (?, ?, ?)", false);
+        assertEquals("<Object>", snap.get(0)[1]);
+        assertEquals("7", snap.get(1)[1]);
+        assertEquals("plain", snap.get(2)[1]);
+    }
+
     // ---------- columnHint：第 n 个 `?` 前置标识符 ----------
 
     @Test
@@ -117,7 +131,8 @@ public class CaptureRulesTest {
         for (String cn : new String[]{
                 "com.mysql.cj.jdbc.NonRegisteringDriver", "org.postgresql.Driver", "org.h2.Driver",
                 "org.sqlite.JDBC", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-                "dm.jdbc.driver.DmDriver", "com.kingbase8.Driver", "com.gbasedbt.jdbc.Driver"}) {
+                "dm.jdbc.driver.DmDriver", "com.kingbase8.Driver", "com.gbasedbt.jdbc.Driver",
+                "org.opengauss.Driver"}) {
             assertTrue("应命中登记表: " + cn, DriverRegistry.isWeavable(cn));
         }
         assertFalse(DriverRegistry.isWeavable("com.example.NotADriver"));

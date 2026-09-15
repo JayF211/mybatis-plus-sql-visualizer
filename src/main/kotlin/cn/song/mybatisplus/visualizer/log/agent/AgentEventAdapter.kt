@@ -32,6 +32,8 @@ object AgentEventAdapter {
             errorText = event.errorText,
             requestTag = event.requestTag,
             updateCount = event.updateCount,
+            // T-AgentDialectLoop：连接 URL → 目标库显示名（未知/畸形 URL 为 null，面板不显示角标）
+            databaseName = JdbcUrlDialects.displayName(event.url),
         )
     }
 

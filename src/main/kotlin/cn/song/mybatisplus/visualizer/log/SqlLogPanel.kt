@@ -1608,6 +1608,13 @@ internal fun formatAgentBadgeFragment(entry: LogSqlEntry, isSelected: Boolean): 
     return "[⚡增强] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
 }
 
+/** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
+internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    val db = entry.databaseName ?: return null
+    val color = if (isSelected) Color(0xFFFFFF) else Color(0x00695C)
+    return "[$db] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
+}
+
 /** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
 internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
     val u = entry.updateCount ?: return null
@@ -1752,6 +1759,8 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
                 val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
                 metaLine.append(t, a)
             }
+            // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
+            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             // M56 T-M56-02：增强捕获角标（AGENT 来源）；T-M56-05：影响行数与报错同列
             formatAgentBadgeFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }

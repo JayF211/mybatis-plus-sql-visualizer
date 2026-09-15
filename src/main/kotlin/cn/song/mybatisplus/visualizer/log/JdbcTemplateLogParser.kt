@@ -227,7 +227,9 @@ val sql = bucket.pendingSql ?: return null
      * 返回 null 表示无法可靠提取（→ 回退共享默认桶，fail-open）。
      */
     private fun extractThreadToken(line: String): String? {
-        val levelMatch = Regex("""\b(DEBUG|TRACE|INFO|WARN|ERROR)\b""").find(line) ?: return null
+        // T-PerfSweep2 复查在案热点收口（T-AgentDialectLoop 落码）：级别正则曾在此每行现场编译
+        // （feed→bucketFor→extractThreadToken 逐行路径），提为 companion 常量 LEVEL_KEYWORD_PATTERN
+        val levelMatch = LEVEL_KEYWORD_PATTERN.find(line) ?: return null
         val levelPos = levelMatch.range.first
         // level 前 35 字符（SkyWalking: [TID][thread] LEVEL）
         val beforeLevel = line.substring((levelPos - THREAD_WINDOW).coerceAtLeast(0), levelPos)
@@ -453,6 +455,13 @@ val sql = bucket.pendingSql ?: return null
 
         /** T-JdbcThreadBucket：纯数字判定（column index / 数组下标 / BIGINT 等非线程名）。 */
         private val PURE_DIGIT = Regex("""\d+""")
+
+        /**
+         * T-JdbcThreadBucket：日志级别关键词锚点（线程 token 提取定位用）。
+         * 曾在 [extractThreadToken] 内每行现场编译（第五轮性能复查在案中低热点），
+         * T-AgentDialectLoop 收口为常量——嗅探模式同样走逐行喂入路径。
+         */
+        private val LEVEL_KEYWORD_PATTERN = Regex("""\b(DEBUG|TRACE|INFO|WARN|ERROR)\b""")
 
         /**
          * SQL 行动作短语（T-JdbcMultiline 自旧「同行 `[...]` 正则」拆出）。
