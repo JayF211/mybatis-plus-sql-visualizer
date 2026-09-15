@@ -118,10 +118,27 @@ object ErrorReportComposer {
         meaningful.forEachIndexed { index, stack ->
             if (index > 0) appendLine().appendLine()
             appendLine("----- #${index + 1} -----")
-            append(stack)
+            // T-PerfSweep2-03：append 前逐条截断——此前全文 append 后才 take(60_000)，
+            // 组装瞬时分配与所选堆栈总量成正比（20 条 × 大堆栈病态场景在 EDT 瞬时数十 MB
+            // 字符操作，弹窗打开有可感卡顿窗）。单条路径保持 [ATTACHMENT_MAX_CHARS]（存量
+            // 行为 byte 级兼容）；批量按条数均分上限（半幅均分，留足分节头与尾注余量）——
+            // 瞬时上界 ~30KB 且 20 节级批次不再被终裁整节丢弃（固定 8k/条 × 20 = 160k 仍会
+            // 触发 take 丢节，均分方案同时修复内存面与丢节面）；末尾 take 保留为最后防线。
+            val limit = if (meaningful.size == 1) {
+                ATTACHMENT_MAX_CHARS
+            } else {
+                maxOf(ATTACHMENT_MAX_CHARS / (meaningful.size * 2), PER_STACK_MIN_CHARS)
+            }
+            append(if (stack.length > limit) stack.take(limit) + "（已截断，原 ${stack.length} 字符）" else stack)
             if (!stack.endsWith("\n")) appendLine()
         }
-    }.take(60_000)
+    }.take(ATTACHMENT_MAX_CHARS)
+
+    /** 单条附件字符上限（原 60_000 字面量收编为常量，单/批两路径共用最后防线）。 */
+    private const val ATTACHMENT_MAX_CHARS = 60_000
+
+    /** T-PerfSweep2-03：批量路径每条堆栈下限——条数极多时每节仍保 1k（≈15 帧堆栈）诊断上下文。 */
+    private const val PER_STACK_MIN_CHARS = 1_000
 
     // ---------- 多事件批量报告（T-FeedbackBatch） ----------
 

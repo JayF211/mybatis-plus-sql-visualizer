@@ -211,7 +211,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
-| [20260914-1707-内测系列转正与一日修复链-发行说明.md](./发行说明/20260914-1707-内测系列转正与一日修复链-发行说明.md) | v2026.9.14 正式版发行说明（内测系列转正：beta.1 已发行 + beta.2 未发行内容并入；颜色标记/双向深链/EXPLAIN/一键上报/三显示模式/ORM 扩展/CRUD 右键/自动折叠/多选复制/模块勾选注入 + 09-14 一日修复链十五项；全量 4039 绿） |
+| [20260914-1707-内测系列转正与一日修复链-发行说明.md](./发行说明/20260914-1707-内测系列转正与一日修复链-发行说明.md) | v2026.9.14 正式版发行说明（内测系列转正：beta.1 已发行 + beta.2 未发行内容并入；颜色标记/双向深链/EXPLAIN/一键上报/三显示模式/ORM 扩展/CRUD 右键/自动折叠/多选复制/模块勾选注入 + 真机反馈修复链：执行计划首点与形态对齐原生、报告失败可见与多条合并上报、显示模式迁设置页、内部 API 三平台清零、设置子项钉序、性能第四轮；全量 4081 绿，三版本 internal 与 for-removal 双清零） |
 | [20260913-1239-合并回合与CRUD颜色标记-发行说明.md](./发行说明/20260913-1239-合并回合与CRUD颜色标记-发行说明.md) | v2026.9.14-beta.2 内测版发行说明（Gitee 抢先体验通道；dev 119 提交 + t-crudcolor 7 提交整体回合后的首次发行——T-CrudColor 颜色标记 + M37 双向深链（gutter 左右键/最近执行反查/EXPLAIN 含达梦金仓）+ T-ErrReport 上报 + T-ListMode 三显示模式 + M39/M44 ORM 扩展 + T-Perf 性能系列；changeNotes/preview 清单按 beta 规则只主标题累计块；全量 3880/0/6 绿） |
 | [20260912-1700-右键CRUD生成与预览自动折叠-发行说明.md](./发行说明/20260912-1700-右键CRUD生成与预览自动折叠-发行说明.md) | v2026.9.14-beta.1 内测版发行说明（Gitee 抢先体验通道；右键生成 CRUD SQL T-CrudSql（实体类/数据库表双入口+JBPopup 浮层候选+BatchModel 复用）+ 预览字段自动折叠 T-AutoFold（FoldingModel 六点位）+ 全选全不选按钮合一 T-SelToggle + T-PickMpjErr/T-ReverseParenWira/HelpAction 三项修复；beta 系列后续增量届时并入正式版 2026.9.14 统一日志，对外清单只留最新 beta；全量 3353/0/6 绿） |
 | [20260911-1552-自更新免重启与历史参数恢复-发行说明.md](./发行说明/20260911-1552-自更新免重启与历史参数恢复-发行说明.md) | v2026.9.11 发行说明（自更新免重启动态安装 T-DynUpdate（五入口热替换+脚本兜底+262 首参漂移弹性修复+跨版本签名护栏+卸载警告归因）+ SQL 历史页参数识别根治与字面量参数恢复 T-HistParam（历史文件 v2 pd 行+双面板识别通道统一+谓词语境数值识别）；全量 3305/0/0/6 绿） |
@@ -269,6 +269,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-15 | 记忆第九次精简（44→28 含索引）：16 个已交付任务记忆归档 bug-fixes（T-TestPerf2/T-MarketInternal/T-ExplainFirstNative/T-ListPreviewCopy/T-MergeFollowup/T-LogHistoryRowNo/T-JumpCapture/T-JumpPath/T-IntrUpg/T-ExecSlowOps/T-ExplainDbl/T-FeedbackDlg/T-FeedbackErr/T-PreviewExecDs/竞品对比第三·四轮）＋pitfall-edt-slowops-coldpath 升级全局（allowSlowOperations 逃生舱 243+262 双重证伪）；archive 增至 196 个文件（bug-fixes 139）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-15 |
 | 2026-09-15 | T-PerfTail 三项治理（t-perftail 11e2671+ba0fb13，4207 绿）：WrapperCache LRU 512+fileClosed 清理 / PrewarmAwait CompletableFuture 消灭 EDT sleep-poll / 重放守卫行 0 getCharsSequence 零拷贝 / plugin.xml 注释修正。详见 docs/变更记录.md 同日行 |
 | 2026-09-15 | T-PreviewUx-Pack 四件套（t-previewux-pack 7c77640+b7ea9de，4193 绿）：诚实降级横幅（DegradationBanner）/UPDATE (new) 列（行尾注释形态保可执行性）/多语句执行确认（JBPopup 候选）/${table} 快捷模板（Alt+Shift+E/C/T 冲突自动备选键位）。i18n 16 键×2。详见 docs/变更记录.md 同日行 |
 | 2026-09-15 | T-McpToolset MCP 一期（t-mcptoolset 9164a8e+9c4eaf2，4204/0/0/6 绿）：三只读工具注册平台 mcpServer.mcpToolset EP；262 mcpserver.jar v69 类文件 JDK17 读不了 → src/mcpStub 桩源集（javap 对齐签名、不进插件 jar）；18 反射入口登记 McpDbSignatureCrossVersionTest。详见 docs/变更记录.md 同日行 |

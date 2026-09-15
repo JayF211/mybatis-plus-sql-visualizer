@@ -251,6 +251,9 @@ internal object HttpRequestsSender : FeedbackApi.HttpSender {
     private const val CONNECT_TIMEOUT_MS = 10_000
     private const val READ_TIMEOUT_MS = 10_000
 
+    /** T-PerfSweep2-02：响应体/解压输出上限——需求池 API 实际响应 KB 级，2MB 余量足。 */
+    private const val RESPONSE_MAX_BYTES = 2 * 1024 * 1024
+
     /** 读回的响应：正文参数按 UTF-8 解释（服务端 JSON 恒 UTF-8）。 */
     private data class Response(val status: Int, val body: String)
 
@@ -297,14 +300,33 @@ internal object HttpRequestsSender : FeedbackApi.HttpSender {
     private fun readBody(connection: HttpURLConnection, status: Int): String = runCatching {
         val stream = (if (status in 200..299) connection.inputStream else connection.errorStream)
             ?: return@runCatching ""
-        val raw = stream.use { it.readBytes() }
+        val raw = stream.use { readBounded(it) }
         val body = if (connection.contentEncoding?.equals("gzip", ignoreCase = true) == true) {
-            runCatching { java.util.zip.GZIPInputStream(raw.inputStream()).use { it.readBytes() } }.getOrElse { raw }
+            runCatching { java.util.zip.GZIPInputStream(raw.inputStream()).use { readBounded(it) } }.getOrElse { raw }
         } else {
             raw
         }
         body.toString(Charsets.UTF_8)
     }.getOrDefault("")
+
+    /**
+     * T-PerfSweep2-02：有界读取——响应体与 gzip 解压输出统一封顶 [RESPONSE_MAX_BYTES]。
+     * 此前 readBytes() 无上限，10s 超时只是限时不限量：对端（自家站点 + CDN）若返回超大
+     * 拦截页或 gzip 炸弹，解压输出可在超时保护之外放大内存。达上限即停（后续字节不再消费），
+     * 截断产物为非法 JSON，由既有 nonJsonHint 路径给出可读失败归类。
+     */
+    internal fun readBounded(input: java.io.InputStream, maxBytes: Int = RESPONSE_MAX_BYTES): ByteArray {
+        val out = java.io.ByteArrayOutputStream(minOf(maxBytes, 64 * 1024))
+        val buf = ByteArray(16 * 1024)
+        var total = 0
+        while (total < maxBytes) {
+            val n = input.read(buf, 0, minOf(buf.size, maxBytes - total))
+            if (n < 0) break
+            out.write(buf, 0, n)
+            total += n
+        }
+        return out.toByteArray()
+    }
 }
 
 /**

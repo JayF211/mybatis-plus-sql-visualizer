@@ -298,4 +298,45 @@ class FeedbackApiTest {
             FeedbackApi.detailUrl("FR-0042"),
         )
     }
+
+    // ---------- 有界读取（T-PerfSweep2-02） ----------
+
+    @Test
+    fun `有界读取_小响应原样返回`() {
+        val raw = "hello feedback".toByteArray(Charsets.UTF_8)
+        val out = HttpRequestsSender.readBounded(java.io.ByteArrayInputStream(raw))
+        assertEquals("hello feedback", String(out, Charsets.UTF_8))
+    }
+
+    @Test
+    fun `有界读取_空流返回空数组`() {
+        assertTrue(HttpRequestsSender.readBounded(java.io.ByteArrayInputStream(ByteArray(0))).isEmpty())
+    }
+
+    @Test
+    fun `有界读取_明文超限截断到上限`() {
+        val big = ByteArray(3 * 1024 * 1024) { 'x'.code.toByte() }
+        val out = HttpRequestsSender.readBounded(java.io.ByteArrayInputStream(big))
+        assertEquals("3MB 输入应截断到 2MB 上限", 2 * 1024 * 1024, out.size)
+        assertTrue("截断产物应是输入前缀", out[0].toInt() == 'x'.code && out.last().toInt() == 'x'.code)
+    }
+
+    @Test
+    fun `有界读取_自定义上限生效`() {
+        val out = HttpRequestsSender.readBounded(java.io.ByteArrayInputStream("0123456789ABCDEF".toByteArray()), 10)
+        assertEquals("0123456789", String(out, Charsets.UTF_8))
+    }
+
+    @Test
+    fun `有界读取_gzip解压输出封顶_炸弹不放大`() {
+        // gzip 炸弹：5MB 零压缩后仅 KB 级，解压输出被封顶在 2MB——此前 readBytes() 会全量解出 5MB
+        val bomb = java.io.ByteArrayOutputStream().also { out ->
+            java.util.zip.GZIPOutputStream(out).use { it.write(ByteArray(5 * 1024 * 1024)) }
+        }.toByteArray()
+        assertTrue("炸弹压缩后应远小于上限（用例自身有效性）", bomb.size < 128 * 1024)
+        val decoded = HttpRequestsSender.readBounded(
+            java.util.zip.GZIPInputStream(java.io.ByteArrayInputStream(bomb)),
+        )
+        assertEquals("解压输出应封顶 2MB", 2 * 1024 * 1024, decoded.size)
+    }
 }

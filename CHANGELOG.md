@@ -38,6 +38,8 @@
 - **单击预览默认格式化显示（T-ListPreviewCopy）**：两页列表单击预览浮层与历史页双击预览弹窗统一跟随设置页既有「预览时格式化还原 SQL」开关（默认开启）——长 SQL 点开即多行缩进展示，与列表格式化模式视觉一致；显式关闭该开关的用户保留原文展示
 - **多选进行中不再触发单击预览（T-ListPreviewCopy）**：Ctrl/Shift 多选时单击行不再弹出单行预览浮层（已打开的浮层一并关闭），多选操作不再被逐行弹出的预览干扰；恢复单选后单击预览正常
 - **显示模式下拉按钮与「SQL类型」完全同构（T-MergeFollowup-04）**：工具栏「显示模式」经两轮返工定稿为普通 JButton + ArrowDown 图标 + JPopupMenu 单选菜单（JRadioButtonMenuItem 勾选当前项），字体边框与「SQL类型：」单元逐像素同构——初版裸 JComboBox 与二版平台 ComboBoxButton 手动创建形态（无 ActionToolbar 驱动 update() 首显空文本、字体偏小无平台按钮边框）均弃用
+- **SQL 显示模式入口迁入插件设置页（T-DisplayModeToSettings）**：两处列表工具栏的下拉按钮移除，设置页 SQL 日志组新开「列表显示」子分组（平台原生下拉，选项文案复用既有三键零新文案）——显示模式收敛为单点设置、两列表即时同步生效；多次切换后的列表行高重算沿用既有强制重装策略兜底
+- **全量测试命令提速（T-TestPerf2）**：`./gradlew testShards` 一条命令即并行跑全量（各片独立沙盒并发），分片改为按历史耗时贪心均衡（原类名哈希两片实测 157.9s / 93.7s 失衡 26%，现两片 125.8s / 125.8s），片数可配；聚合报告直接打印各片与总数四项计数与串行口径对齐。本机串行 4m47s → 2m05s（约 2.3 倍），零用例删减、零断言改动；串行 `test` 保留为权威对照
 
 ### Fixed
 
@@ -53,9 +55,11 @@
 - **SQL 预览补全缺失与执行跨项目数据源错乱（T-PreviewExecDs）**：多项目窗口下预览补全静默失败、执行 SQL 打到另一个项目的数据源——三根因：`cachedTempPsiFile` 跨项目泄漏、共享 console 被平台清扫 dispose 后未感知、Temp 预览文件在项目外 + 预热失败静默。修复=缓存项目绑定、`probeConsoleValidity` 三分量探活 + disposed 特判重挂、runRunner 显式传 project、预览文件迁项目内 + 内存 PSI 三级降级链 + 方言映射
 - **SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT（T-PickMpjErr）**：SQL→Java 弹窗选定目标类后重渲染时，设计内的 `SqlReverseException`（MPJ 业务异常）从 elementChosen 鼠标回调裸调 `generateCode` 逃逸为未处理异常——新增 `generateCodeOrReport` 单点收口四分支，业务异常转状态栏提示并保留上次渲染结果
 - **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动
-- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`，被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）
+- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed inside read-action only`，被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）
 - **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用走降级分支 `BrowserUtil.browse` 直接拉起真机默认浏览器——三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式短路只记日志
-
+- **插件市场内部 API 整改（T-MarketInternal）**：三版本（2024.3 / 2025.3 / 2026.2）内部 API 与 scheduled-for-removal **双双清零**——IDE 错误池导入链整体摘除（该链路含错误报告提交器、错误对话框在内均为平台内部 API 且无公开替代，手动上报形态收敛为自主粘贴，引导文案并入占位提示）；三处待移除 API 换公开等价物（Database 树子节点取用、数据类型转换、表元素定位改走数据模型注册表，均为方法体等价替换，javap 双版本实证）
+- **设置页子项顺序随语言漂移（T-SettingsOrder）**：插件语言切中文后设置页五个子页按中文名码点重排、与英文版声明序不一致——子页扩展点显式声明递减 `groupWeight` 钉死声明序，与插件语言解耦；配套守卫测试防新增子页漏配
+- **反馈链性能收口（T-PerfSweep2）**：① 控制台错误文本提取改基线片段读取，取消每拍全文档拷贝（600ms×8 与 400ms×40 两个定时器逐拍 EDT 分配消除）；② 需求池响应体读取 2MB 封顶（含 gzip 解压输出），超限截断并归入可读提示；③ 多选批量上报的附件在 EDT 逐条截断并按份数均分预算，瞬时分配有界且不再整节丢内容；④ 待补发上报调度器改单拍链式（不再长时间占用线程、不再静默丢弃新批次）；⑤ 预览临时文件缓存槽挂项目关闭钩子，单槽残留即时回收；⑥ 插件描述中更新检查默认值注释对齐代码
 - **多选错误一次性报告不再撞限流（T-FeedbackBatch）**：IDE 错误列表里勾选多条后点「报告到需求池」，2~5 条**合并成一条帖子**（标题带「等 N 条异常」、描述列 `#N 类名: 消息`、附件换成多节全文），更多条时首发仍是一条合并帖、其余各成独立帖**每 12 分钟错峰补发**——服务端限流是每 IP 每小时 5 次提交，此前「全选后报告」实际只会提交第一条、其余条目被静默丢弃；对话框底部新增「其他 N 条异常」分节，逐条复选框默认全勾、取消即不报该条
 - **报告提交失败不再只剩一条 toast（T-FeedbackErr）**：IDE 内点「报告到需求池」提交被服务端拒绝（400）时，此前只弹一条 `Server returned HTTP response code: 400 for URL: …` 通知，既看不到原因也无法重试。现在：提交时对话框不关闭、按钮转「提交中…」，失败则留在窗内、状态行红字给出**服务端返回的具体原因**（如「标题长度需在 5-200 字符之间」）与重试引导，可改完内容直接再提交，成功才关窗；同时异常堆栈附件上传失败不再连坐整帖（帖子照发、另行提示堆栈未附上）
 - **报告失败诊断与对话框收敛（T-FeedbackErr 第二轮）**：真机反馈两缺陷——①「提交失败：Expected BEGIN_OBJECT but was STRING」实为**响应 gzip 未解压**（平台 `HttpRequests` 默认 `Accept-Encoding: gzip`、Cloudflare 返回压缩响应，服务端实际已入库；手写读取按 `Content-Encoding` 解压修复），非 JSON 响应（代理/CDN 拦截页）改为可读归类并附正文片段与 HTTP 状态；② 失败信息单行渲染把对话框撑到 ~1900px——状态行改可换行文本区；失败现场「帖子已提交」措辞矛盾一并修正；并新增**「复制失败信息」按钮**（对齐 SQL 预览窗口交互，复制后按钮变「已复制」）
@@ -73,7 +77,9 @@
 - **批量报告**：`BatchSubmitterTest` 9 例（合并附件分节 / 单条原样 / 全不勾不带附件 / 阈值边界 / 补发列表与条目勾选 / 间隔常量）+ `ErrorReportComposerTest` +6 例批量合并
 - **反馈链路**：`FeedbackApiTest` 21 例（+4：服务端 4xx 正文优先于通道文案 / 附件被拒降级为不带附件发帖 / 上传抛 HttpFailure 同样降级 / `serverMessageOf` 边界）、`ErrorReportDialogLayoutTest` 14 例（+2：状态行在面板底部且不参与纵向伸缩 / 提交状态机三阶段文案）；回归踩坑修复 `BundleParityGuardTest`——bundle 值用物理续行会被 `java.util.Properties` 解析成 key（中英 key 集合漂移），改单行转义后中英 key 620/620 对齐
 - **执行计划链**：`ResultTabSelectionTest` +3 例（空名占位不作为新结果候选 / 阈值后也不复用空名只选具名旧 Tab / 占位改名后第 1 拍即选中——真机首点病灶的动态代理链路复现）；`DialectExplainTest` MySQL/MariaDB 期望改 `EXPLAIN <sql>`（历史 FORMAT=JSON 已包装文本幂等样例保留，证明升级后二次点击不双前缀）
-- 本版全量 **4081/0/0/6 绿**（基线 4078 + 本轮 3 例）；`verifyPlugin` 三目标（IU-243/253/262）Compatible
+- **性能收口（T-PerfSweep2）**：新增 `ConsoleErrorExtractTest`（基线片段读取等价性）、`CachedTempPsiFileTest`（缓存槽收口与项目关闭回收）、`PendingReportSchedulerTest`（单拍链式与队尾顺延），`FeedbackApiTest`/`ErrorReportComposerTest` 扩 8 例，共 22 例
+- **内部 API 整改与设置项钉序**：`IdeErrorReportSubmitterTest`/`FeedbackReportingContractTest` 随错误池导入链摘除同步收敛；`PluginXmlStructureGuardTest` 增「设置子页 groupWeight 按声明序严格递减」守卫（防新增子页漏配或乱序）
+- 本版全量 **4081/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible，**三版本 internal API 与 scheduled-for-removal 均为 0**（弃用计数 243=3 / 253=6 / 262=52 无新增）；`./gradlew testShards` 一命令并行全量 2m05s
 
 ## [2026.9.11] - 2026-09-11
 

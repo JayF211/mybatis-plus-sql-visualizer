@@ -18,7 +18,10 @@ import org.junit.Test
  *    （bug-fixes/project-native-sql-highlighting.md，M34 补全失效根因之一）；
  *  - `notificationGroup` 带 `displayName=`：NotificationGroupEP 无该属性（243 javap 实证），
  *    分组显示名必须走 bundle + key；
- *  - `<toolWindow` 带 `title=`：不支持该属性（bug-fixes/toolwindow-button-tooltip-mechanism.md）。
+ *  - `<toolWindow` 带 `title=`：不支持该属性（bug-fixes/toolwindow-button-tooltip-mechanism.md）；
+ *  - 设置子页面 `applicationConfigurable` 缺 `groupWeight` 或非声明序递减：平台 Weighted.COMPARATOR
+ *    按 weight 降序优先、displayName 自然比较兜底，缺 weight 时中文按码点序重排，中英文子页
+ *    顺序不一致（2026-09-15 真机发现，243 源码 + 262 字节码双核实）。
  *
  * 纯逻辑测试：从 classpath 读 META-INF 下全部 xml，先剥注释再断言（plugin.xml 注释里有历史
  * 注册段残段，不剥会误报）。
@@ -108,6 +111,32 @@ class PluginXmlStructureGuardTest {
         for ((name, xml) in strippedXmls()) {
             val bad = tagsOf(xml, "toolWindow").filter { it.contains("title=") }
             assertHolds("$name toolWindow 带 title 属性（平台不支持）：$bad", bad.isEmpty())
+        }
+    }
+
+    @Test
+    fun `设置子页面groupWeight按声明序严格递减`() {
+        val xml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val children = tagsOf(xml, "applicationConfigurable")
+            .filter { it.contains("""parentId="cn.song.mybatisplus.visualizer.settings"""") }
+        assertHolds("SQL Visualizer 子设置页注册数应为 5，实际 ${children.size}", children.size == 5)
+        val weights = children.map { tag ->
+            val id = Regex("""id="([^"]+)"""").find(tag)!!.groupValues[1]
+            val w = Regex("""groupWeight="(\d+)"""").find(tag)?.groupValues?.get(1)?.toIntOrNull()
+            assertHolds(
+                "子设置页 $id 缺 groupWeight（平台按 displayName 自然比较兜底排序，中文名码点序" +
+                    "与英文不一致导致中英文子页顺序错乱）",
+                w != null,
+            )
+            id to w!!
+        }
+        for (i in 1 until weights.size) {
+            val (prevId, prevW) = weights[i - 1]
+            val (id, w) = weights[i]
+            assertHolds(
+                "子设置页 groupWeight 须按声明序严格递减（weight 降序=树中显示顺序）：$prevId=$prevW 应大于 $id=$w",
+                prevW > w,
+            )
         }
     }
 
