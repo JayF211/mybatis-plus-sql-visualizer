@@ -29,6 +29,20 @@ open class DynamicContext(
     /** 渲染期错误提示（如 foreach collection 为 null 且 nullable=false、表达式解析失败）。 */
     val errors = mutableListOf<String>()
 
+    /**
+     * `${}` 直替计数（T-DollarInjectMark）：TextSqlNode 每求值一个 `${}` token 经
+     * [countDollarSubstitution] 自增——引擎忠实口径（MyBatis 对字符串字面量内的 `${}`
+     * 同样直替，计数不排除）；转义 `\${` 不经求值不计。渲染结束随
+     * RenderedXmlSql.dollarSubstitutions 出栈，预览横幅消费。
+     */
+    var dollarSubstitutions: Int = 0
+        protected set
+
+    /** 直替计数入口：子类过滤上下文（Foreach 的 Prefixed/Filtered）转发到 delegate，计数落根上下文。 */
+    open fun countDollarSubstitution() {
+        dollarSubstitutions++
+    }
+
     private val sqlBuilder = StringBuilder()
     private var uniqueNumber = 0
 

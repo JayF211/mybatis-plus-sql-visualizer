@@ -32,6 +32,9 @@ class TextSqlNode(val text: String) : SqlNode {
     }
 
     private fun applyTokens(context: DynamicContext): String = TokenParser.parse(text, "\${", "}") { content ->
+        // T-DollarInjectMark：每次 `${}` 直替求值计数（null→空串也算——token 已从产物移除；
+        // 经 open 函数走 delegate 转发——foreach 过滤上下文内计数不丢失）
+        context.countDollarSubstitution()
         // 复刻 BindingTokenParser.handleToken：先维护 `value` 便捷绑定，再 OGNL 求值
         val parameter = context.bindings[DynamicContext.PARAMETER_OBJECT_KEY]
         when {

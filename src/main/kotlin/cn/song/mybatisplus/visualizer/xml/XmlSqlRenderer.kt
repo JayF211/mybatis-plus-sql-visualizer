@@ -41,6 +41,11 @@ data class RenderedXmlSql(
     val errors: List<String>,
     /** bind 名 → 求值结果字符串（含面板覆盖值；供参数行自动回填显示）。 */
     val bindValues: Map<String, String> = emptyMap(),
+    /**
+     * `${}` 直替次数（T-DollarInjectMark）：默认 0，既有消费者无感——预览横幅据 >0 显示
+     * 「直接替换未转义」提示。只加元数据不改渲染文本（防回归断言见任务测试）。
+     */
+    val dollarSubstitutions: Int = 0,
 )
 
 /**
@@ -69,7 +74,7 @@ class XmlSqlRenderer {
             context.bindings[name]?.toString()?.let { name to it }
         }.toMap()
         val (sql, mappings) = parseParameterMappings(context.getSql(), context.errors)
-        return RenderedXmlSql(sql, mappings, context.errors, bindValues)
+        return RenderedXmlSql(sql, mappings, context.errors, bindValues, context.dollarSubstitutions)
     }
 
     private fun parseParameterMappings(sql: String, errors: List<String>): Pair<String, List<ParameterMapping>> {

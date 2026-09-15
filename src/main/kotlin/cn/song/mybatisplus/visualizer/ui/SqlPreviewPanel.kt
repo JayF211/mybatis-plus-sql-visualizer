@@ -299,7 +299,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
     // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
-    private val degradationBanner = DegradationBanner()
+    private val degradationBanner = DegradationBanner().apply {
+        // T-DollarInjectMark：✕ 关闭 → 会话级记忆（本 IDE 会话不再弹；测试经 resetDollarMarkForTest 复位）
+        onDismiss = {
+            dollarMarkDismissedSession = true
+            clear(DegradationBanner.Kind.DOLLAR_INJECT)
+        }
+    }
+
+    /** T-DollarInjectMark：最近一次 XML 渲染的 `${}` 直替计数（非 XML 路径恒 0）。 */
+    private var xmlDollarSubstitutions = 0
 
     // P-05：参数历史缓存 + debounce 写回
     private val paramHistoryCache = ParamHistoryCache()
@@ -1237,6 +1246,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             xmlForEachCounts.putAll(model.defaultState().forEachCounts)
             xmlForEachNulls.clear()
             xmlErrors = emptyList()
+            xmlDollarSubstitutions = 0
             // T-M25.5：预渲染提取 bind 自动求值结果（参数行初始显示求值后的值，用户可覆盖）
             val initial = model.renderSql(XmlPreviewState(
                 enabledIds = enabledIds.toSet(),
@@ -1519,6 +1529,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val rendered = xml.renderSql(state)
                 xmlErrors = rendered.errors
                 xmlMappings = rendered.mappings
+                xmlDollarSubstitutions = rendered.dollarSubstitutions
                 // T-M25.5：bind 自动求值结果并入参数回填（用户手动输入优先，清空则恢复自动值）
                 rendered.bindValues.forEach { (name, value) ->
                     if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
@@ -1783,6 +1794,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         xmlForEachCounts.clear()
         xmlForEachNulls.clear()
         xmlErrors = emptyList()
+        xmlDollarSubstitutions = 0
         currentWarning = null
         errorCopyButton?.isVisible = false
         toggleSelectButton = null
@@ -3031,6 +3043,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         } else {
             degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
         }
+        // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
+        // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。
+        if (currentWarning == null && result.xmlModel != null && xmlDollarSubstitutions > 0 &&
+            !dollarMarkDismissedSession
+        ) {
+            degradationBanner.show(
+                DegradationBanner.Kind.DOLLAR_INJECT,
+                MpSqlVisualizerBundle.message("panel.banner.dollarInject", DOLLAR_TOKEN, xmlDollarSubstitutions),
+            )
+        } else {
+            degradationBanner.clear(DegradationBanner.Kind.DOLLAR_INJECT)
+        }
         // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
         lastMetaBudget = -1
         applyMetaTruncation()
@@ -3331,6 +3355,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
         private const val RENDER_DEBOUNCE_MS = 150
+
+        /**
+         * T-DollarInjectMark：`${}` 直替提示的会话级关闭记忆（✕ 后本 IDE 会话所有预览面板
+         * 不再弹——常用 `${orderBy}` 场景的横幅疲劳缓解；面板关闭/切换文件不重置）。
+         */
+        private var dollarMarkDismissedSession = false
+
+        /** T-DollarInjectMark：横幅文案里的 `${}` token（技术记号非语言文案，双语言共用，作 {0} 参数传入）。 */
+        internal const val DOLLAR_TOKEN = "\${}"
+
+        /** 测试复位：清除 `${}` 提示的会话级关闭记忆。 */
+        internal fun resetDollarMarkForTest() {
+            dollarMarkDismissedSession = false
+        }
 
         /** T-PreviewFlash：EDT 等待预热产物的轮询间隔与超时（毫秒）。 */
         const val PREWARM_POLL_MS = 20L

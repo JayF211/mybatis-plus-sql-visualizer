@@ -47,6 +47,8 @@ open class TrimSqlNode(
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 
+        override fun countDollarSubstitution() = delegate.countDollarSubstitution()
+
         override fun getUniqueNumber(): Int = delegate.getUniqueNumber()
 
         override fun conditionResult(test: String): Boolean? = delegate.conditionResult(test)
