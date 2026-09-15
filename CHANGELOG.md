@@ -2,6 +2,33 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+> 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.1（内测已发行），本节全部内容在该版发行提交之后合入。
+
+### Added
+
+- **日志原始时间记录与显示切换（20260915-1530）**：捕获 SQL 日志时同时从日志行解析原始时间戳并随条目记录——`LogTimestampParser` 预置 Logback / Log4j2 / Spring Boot 默认、ISO 8601（含时区两种形态）、nginx 风格等常见格式严格解析（非法日期 / 残缺时间戳一律回退），解析失败回退捕获时间；设置页「SQL 日志」新增「时间来源」单选组——「日志时间」（默认，显示日志行解析出的原始时间，未解析到回退捕获时间）与「捕获时间」（插件捕获到日志的时刻），时间戳格式设置对两种来源同样生效；MyBatis / JdbcTemplate / Hibernate 三个解析器统一接线；历史文件随条目保存原始时间（新字段 `logTime`），旧版文件照常读取（回退捕获时间），新版可读全部旧文件
+- **日志列表搜索支持行号/时间 + 右键复制时间戳（T-LogSearchRowTime，20260915-1650 修订一）**：日志页与历史页搜索框在 SQL 内容 / 源文件之外新增两类匹配——`#行号`（`#5` 或 `5` 精确等于第 5 条捕获序号，精确而非包含，搜 `1` 不会命中全部 1xx 行）与时间文本（按列表显示格式「所见即所搜」，时间显示关闭时该分支不参与）；右键菜单新增「复制时间戳」（多选显示「复制时间戳（N 条）」），逐行复制纯时间文本（去显示用方括号），与批量复制 SQL 同构；时间显示关闭时菜单项置灰
+
+### Fixed
+
+- **JdbcTemplate 并发日志交错参数错挂/丢失 + 历史页时间戳格式不跟随设置（20260915-1440）**：`JdbcTemplateLogParser` 每控制台单实例单槽状态机假设「SQL 行→参数行→下一条」严格串行，Tomcat 并发请求日志按到达序混排时 named 单行的 `closePending()` 会强制闭合其它线程的 prepared 残句，该线程随后到达的参数绑定行因 `pendingSql` 已清空被静默丢弃（`?` 残留 + 参数空 → 预览误报「未捕获到参数绑定日志」）——改按日志行线程 token 分桶（`ThreadBucket`），每桶独立 `pendingSql/pendingCollecting` 状态机，无线程 token 的多行续行路由到唯一收集桶，提取失败回退共享桶（fail-open）；零参预览警告按来源分流（JDBC 来源引导 `org.springframework.jdbc.core` 设 TRACE，Hibernate 来源维持原引导）。同修：SQL 历史 tab 二级列表时间戳此前硬编码 `yyyy-MM-dd HH:mm:ss` 从未读设置，与日志页分叉——统一改走 `formatTimestampFragment`（含非法 pattern 回退与显示开关语义），history 包死代码面板顺手对齐防复活分叉
+- **批量报告同一波 submit 合并为一个弹窗（T-FeedbackBatch2）**：262 平台 IdeErrorsDialog「报告全部」逐错误簇循环调 `reportMessage`，每次固定构造长度 1 的事件数组——N 个错误 = N 次独立 submit = N 个弹窗，且每次批次只有 1 条（分节显示「其他 1 条异常」+ 与主预填重复的勾选行），T-FeedbackBatch「平台一次传多条 events」的前提在该平台不成立。修复=提交侧累积合并：PendingCall 队列 + 500ms debounce（自最后一次调用起算，入队取消重排）+ 自首条 3s 强制兜底，flush 合并全部新鲜事件开一个对话框，consumer 合成复合回调（本波每个簇收到同一 `SubmittedReportInfo`，平台侧全部标记已提交）；逐事件指纹去重（整条全命中直接 DUPLICATE 不弹框），提交发起时记录全部条目指纹（原实现只记首条，其余条目 24h 去重从未生效）；对话框分节标题改「本批共 N 条异常」如实计数，批次条目仅 1 条（=主预填自己）不再出分节，头部复选框禁用仅镜像、收集时以主表单「附带异常堆栈」单一事实源回写，消除两处开关不一致丢主堆栈的暗坑
+
+### Changed
+
+- **内网换源生效值补诊断日志（T-Intranet-01）**：内网部署依赖 `mpvs.update.manifest.url` 换源，但此前生产代码无任何「当前生效 URL 是默认还是被覆盖」的日志——现仅在被系统属性覆盖时打印一行 `update manifest url overridden by system property: <url>`（默认路径静默，绝大多数用户不产生噪音），类注释补记「该属性在进程启动时读取一次，改 -D 后须重启」实测结论
+- **发版链路提速（T-ReleasePerf）**：verifyGate 权威门禁离线化（直驱 verifier-cli：`-offline` + 豁免清单 + 独立 verify-home 并发隔离，IPGP `VerifyPluginTask` 判定缺陷字节码实证——collectProblems 按控制台小节标题重数问题行、不读豁免文件）+ `releaseGate` 一命令串行编排（buildPlugin → verifyGate → testShards，任一环失败即停）+ `verifyOnly` 改文案/文档后复用产物重验——三目标兼容性验证 7m26s → 3m06s（-58%），零用例/目标版本删减
+
+### Test
+
+- **日志原始时间**：新增 `LogTimestampParserTest` 14 例（五种格式正负样例、时间戳在级别关键字前 / 行首空白 / 精确边界、无时间戳 / 空行 / 非法日期 / 残缺时间戳回退 null）
+- **搜索行号/时间**：新增 `SqlLogSearchRowTimeTest` 14 例（`#N` / 裸数字精确命中与 1xx 不误中、时间片段所见即所搜与显示关闭不参与、SQL / 摘要语义不变、批量复制纯文本拼接与置灰）
+- **并发分桶**：`JdbcTemplateLogParserTest` +12 例（prepared+named 混排、两线程 prepared 参数不互串、多行收集态与它线程完整语句互不冲刷、裸行回退共享桶、SkyWalking TID 排除、SpringBoot 默认后置线程名、桶数超限冲刷）、`HistoryCellRendererTest` +3 例（跟随设置格式 / 显示开关关闭隐藏 / 非法 pattern 回退默认）；5 个既有测试适配分桶后线程 token 一致化
+- **批量报告合并**：`IdeErrorReportSubmitterTest` 13 例 + `ErrorReportDialogLayoutTest` 23 例（合并 flush / 逐事件去重 / 复合回调 / 兜底时序 / 头部镜像 / 收集单一事实源）
+- **换源诊断**：`UpdateSourceTest` +2 例（属性未设 / 空白走默认源、设值走覆盖源）
+
 ## [2026.9.18-beta.1] - 2026-09-15
 
 > 内测版（Gitee 抢先体验通道）：基线 v2026.9.14 正式版，本版增量仅 T-ListParamCollect 一项修复——该修复交付于 2026.9.14 发行提交之后，未入该版发行包，随本内测版发出。
