@@ -600,85 +600,17 @@ class LogToSqlPanel(
     companion object {
 
         /**
-         * T-PreviewUx-Pack #4：结果文本 → 语句列表（纯函数，字符串感知）——按语句结尾 `;` 顶层切分，
+         * T-PreviewUx-Pack #4：结果文本 → 语句列表（纯函数）——按顶层 `;` 切分，
          * 引号字符串内的 `;` 不切分；`--` 行注释与块注释内的 `;` 不切分（LogToSqlPanel 产物
          * 组间自带 `-- SQL #N` 注释头，注释随所属语句一并保留——原生控制台接受注释）。
          * 段间空白丢弃，空列表 = 无可执行语句。
+         *
+         * T-SemicolonGuard（O-13）：实现收敛委托至 util/SqlStatementSplitter
+         * （单实现三处历史切分合一）；新增括号深度与 BEGIN/END 块感知两项语义
+         * （迁移前后既有样例输出逐段一致，守卫测试锁死）。
          */
-        internal fun splitSqlStatements(sql: String): List<String> {
-            val parts = ArrayList<String>()
-            val sb = StringBuilder()
-            var inSingleQuote = false
-            var inDoubleQuote = false
-            var inLineComment = false
-            var inBlockComment = false
-            var i = 0
-            while (i < sql.length) {
-                val c = sql[i]
-                val next = if (i + 1 < sql.length) sql[i + 1] else '\u0000'
-                when {
-                    inLineComment -> {
-                        sb.append(c)
-                        if (c == '\n') inLineComment = false
-                    }
-                    inBlockComment -> {
-                        sb.append(c)
-                        if (c == '*' && next == '/') {
-                            sb.append(next)
-                            i++
-                            inBlockComment = false
-                        }
-                    }
-                    inSingleQuote -> {
-                        sb.append(c)
-                        when {
-                            c == '\\' && next != '\u0000' -> {
-                                sb.append(next)
-                                i++
-                            }
-                            c == '\'' -> inSingleQuote = false
-                        }
-                    }
-                    inDoubleQuote -> {
-                        sb.append(c)
-                        when {
-                            c == '\\' && next != '\u0000' -> {
-                                sb.append(next)
-                                i++
-                            }
-                            c == '"' -> inDoubleQuote = false
-                        }
-                    }
-                    c == '-' && next == '-' -> {
-                        inLineComment = true
-                        sb.append(c)
-                    }
-                    c == '/' && next == '*' -> {
-                        inBlockComment = true
-                        sb.append(c)
-                    }
-                    c == '\'' -> {
-                        inSingleQuote = true
-                        sb.append(c)
-                    }
-                    c == '"' -> {
-                        inDoubleQuote = true
-                        sb.append(c)
-                    }
-                    c == ';' -> {
-                        val part = sb.toString().trim()
-                        if (part.isNotEmpty()) parts += part
-                        sb.setLength(0)
-                    }
-                    else -> sb.append(c)
-                }
-                i++
-            }
-            val tail = sb.toString().trim()
-            // 无分号结尾的残余段：非空视为一条语句（容错——用户手动删尾分号后仍可执行）
-            if (tail.isNotEmpty()) parts += tail
-            return parts
-        }
+        internal fun splitSqlStatements(sql: String): List<String> =
+            cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(sql)
 
         /** T-Perf-14：大日志后台转换阈值——字符数（约 1MB）。 */
         private const val HEAVY_INPUT_CHARS = 1_000_000

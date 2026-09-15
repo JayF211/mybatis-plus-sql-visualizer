@@ -54,56 +54,8 @@ object SqlToJavaConverter {
      *  - 空语句（`SELECT 1;; SELECT 2`）跳过中间空段；
      *  - 末段无分号（`SELECT 1`）也作为一条。
      */
-    fun splitStatements(text: String): List<String> {
-        val statements = mutableListOf<String>()
-        val current = StringBuilder()
-        var inSingleQuote = false
-        var inDoubleQuote = false
-        var lineComment = false
-        var blockComment = false
-        var i = 0
-        while (i < text.length) {
-            val c = text[i]
-            val next = text.getOrNull(i + 1)
-            when {
-                // 行注释开始
-                !inSingleQuote && !inDoubleQuote && !blockComment && c == '-' && next == '-' -> {
-                    lineComment = true; current.append(c); i++
-                }
-                // 行注释结束
-                lineComment && c == '\n' -> {
-                    lineComment = false; current.append(c); i++
-                }
-                // 块注释开始
-                !inSingleQuote && !inDoubleQuote && !lineComment && c == '/' && next == '*' -> {
-                    blockComment = true; current.append(c); i++
-                }
-                // 块注释结束
-                blockComment && c == '*' && next == '/' -> {
-                    blockComment = false; current.append(c); i++
-                }
-                // 单引号字符串
-                !inDoubleQuote && !lineComment && !blockComment && c == '\'' -> {
-                    inSingleQuote = !inSingleQuote; current.append(c); i++
-                }
-                // 双引号字符串
-                !inSingleQuote && !lineComment && !blockComment && c == '"' -> {
-                    inDoubleQuote = !inDoubleQuote; current.append(c); i++
-                }
-                // 顶层分号 → 拆分
-                !inSingleQuote && !inDoubleQuote && !lineComment && !blockComment && c == ';' -> {
-                    val stmt = current.toString().trim()
-                    if (stmt.isNotEmpty()) statements.add(stmt)
-                    current.clear(); i++
-                }
-                else -> { current.append(c); i++ }
-            }
-        }
-        // 末段（无尾分号）
-        val tail = current.toString().trim()
-        if (tail.isNotEmpty()) statements.add(tail)
-        return statements
-    }
+    fun splitStatements(text: String): List<String> =
+        cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(text)
 
     /** 单条解析结果（成功 or 失败）。 */
     data class BatchItemResult(

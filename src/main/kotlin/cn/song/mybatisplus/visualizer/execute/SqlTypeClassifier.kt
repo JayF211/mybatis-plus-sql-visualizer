@@ -67,13 +67,15 @@ object SqlTypeClassifier {
     /**
      * 按分号分割 SQL 为多条语句（忽略空语句），并逐条去注释。
      *
+     * T-SemicolonGuard（O-13）：实现收敛委托至 util/SqlStatementSplitter（与
+     * LogToSqlPanel/SqlToJavaConverter 单实现合一）；顺带修复两个历史缺陷——字符串内
+     * 分号误切（`'a;b'`）、字符串内 `--` 被误剥注释（差异清单见开发计划 T-SG-01）。
+     *
      * @param sql SQL 文本
-     * @return 去注释后的非空语句列表
+     * @return 去注释后的非空语句列表（段已 trim）
      */
-    internal fun splitStatements(sql: String): List<String> {
-        val statements = sql.split(";")
-        return statements.map { stripComments(it) }.filter { it.isNotBlank() }
-    }
+    internal fun splitStatements(sql: String): List<String> =
+        cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.splitStripped(sql)
 
     /**
      * 去除 SQL 语句中的注释（-- 单行注释 + /* */ 块注释）。

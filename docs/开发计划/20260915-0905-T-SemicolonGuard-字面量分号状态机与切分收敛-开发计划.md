@@ -72,4 +72,25 @@ T-SG-01（差分测试，暴露差异）→ T-SG-02（统一实现+委托迁移�
 
 ## 八、实施记录（实施后回填；含 T-SG-01 差异清单）
 
-（未实施）
+**2026-09-15 实施完毕（统一切分器 31 例 + 三委托方回归全绿）**
+
+### T-SG-01 差异清单（A=LogToSqlPanel.splitSqlStatements / B=SqlTypeClassifier.splitStatements）
+
+| # | 形态 | A（迁移前） | B（迁移前） | 判定（以执行链语义为准） | 处置 |
+|---|---|---|---|---|---|
+| 1 | 字符串内分号 `'a;b'` | 不切 ✓ | **切两段**（naive `split(";")`） | A 对 | **修复 B**（差分修复①测试锁死） |
+| 2 | 注释内分号 `-- a;` / `/* a; */` | 不切 ✓ | **切两段**（先切后剥，界符含注释内的） | A 对 | **修复 B**（差分修复②） |
+| 3 | 字符串内 `--`（`'a--b'`） | 不受影响 ✓ | 剥注释时**误当行注释起点** | A 对 | **修复 B**（splitStripped 引号感知剥离） |
+| 4 | 注释是否随语句保留 | 保留（原生控制台接受） | 剥离 | 契约差异（各有消费者） | 单实现双入口保留两契约 |
+| 5 | 段 trim | trim ✓ | **不 trim**（`SELECT 1; SELECT 2` 第二段带前导空格） | A 对 | 统一 trim（B 的 size 断言不受影响） |
+| 6 | 转义引号 `'` | 处理 ✓ | 无引号概念 | A 对 | 统一 A 语义 |
+| 7 | 反引号 `` ` `` | 不感知（标识符内分号理论可误切——MySQL 反引号内分号罕见） | 同 | 双方一致按现状 | 不做方言级增强（计划 §六 范围红线，留 DBX 28e2568 对应项另行立项） |
+
+另发现**第四处同款实现**：`SqlToJavaConverter.splitStatements`（T-BatchSql 引入，A 的复刻）——按收敛精神一并委托（计划 §一 只列三处，实际收敛 1/2 + 第四处）。
+
+### 实施明细
+
+- **T-SG-02**：`util/SqlStatementSplitter.kt` 单实现——A 的状态机（单/双引号 + 反斜杠转义 + 行/块注释）+ DBX 增量语义（**括号深度**：`(1;2)` 不切，字符串内括号不计数；**BEGIN/END 块感知**：词边界识别大小写不敏感、字符串/注释内不算、**前视保守启用**——后方无配对 END 词则不启用块态按顶层切分原样，MySQL 事务 `BEGIN;` 语句不受影响）。双入口：`split`（注释保留=A/批量转换契约）、`splitStripped`（引号感知去注释=B 契约）。
+- **委托迁移**：A（LogToSqlPanel，删 75 行实现换委托）、B（SqlTypeClassifier，删 4 行 naive 实现）、SqlToJavaConverter（删 50 行复刻实现）——消费方公开 API 与返回形态不变、代码量净减少；B 的 `stripComments` 保留（既有测试断言在册）。RollbackSqlGenerator 维持 JSqlParser parseStatements（parser 权威不动，KDoc 三处分工注明于 SqlStatementSplitter 类头）。
+- **T-SG-03**：SqlStatementSplitterTest 31 例——DBX 样例回放 4（`'00390360;081111'`/双引号/转义引号/`''` 加倍）、注释保留契约 3、空段容错 4、业务样例 4（时间串分号后缀/JSON 值/批量产物/IN 列表）、括号深度 3、BEGIN/END 正反例 6（含字符串内 BEGIN 不算、无配对 END 保守、块后恢复切分）、splitStripped 3、差分修复锁死 2、三委托方逐段一致 3 + 迁移前 A 历史断言逐字复刻 1。既有 SqlTypeClassifierTest/LogToSqlPanelExecuteTest/SqlToJava 面板测试零回归。
+- **实施中修正两处测试期望**（切分器行为本身正确）：①行注释吞掉本行全部界符——「注释内分号」差分样例的语句界符须在注释之前；②顶层界符按契约丢弃（BEGIN…END; 尾分号不进产物）。
