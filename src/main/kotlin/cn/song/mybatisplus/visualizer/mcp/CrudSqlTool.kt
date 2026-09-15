@@ -1,0 +1,120 @@
+package cn.song.mybatisplus.visualizer.mcp
+
+import cn.song.mybatisplus.visualizer.actions.GenerateCrudSqlFromEntityAction
+import cn.song.mybatisplus.visualizer.generator.CrudSqlGenerator
+import cn.song.mybatisplus.visualizer.generator.CrudTableSpec
+import com.intellij.mcpserver.annotations.McpDescription
+import com.intellij.mcpserver.annotations.McpTool
+import com.intellij.mcpserver.annotations.McpToolHintValue
+import com.intellij.mcpserver.annotations.McpToolHints
+import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiClassOwner
+import com.intellij.psi.PsiManager
+import com.intellij.psi.search.GlobalSearchScope
+
+/**
+ * mpsv_crud_sql 工具（T-McpToolset2 / T-MTS2-02，R2 PSI）：实体类 → CRUD 四件套 SQL。
+ *
+ * 复用 IDE 右键生成链的纯逻辑段：`GenerateCrudSqlFromEntityAction.entitySpec`
+ * （internal 同模块复用——EntityResolver 解析 + 引号提示 + 方言，单一真相源不复制）→
+ * `CrudSqlGenerator.generate`（零 PSI 纯生成，无主键降级 `1 = 0` 占位与 IDE 口径一致）。
+ * PSI 定位包 ReadAction（McpSourceLocator 同款线程模型）；**只生成不执行**。
+ * 逻辑分层同 [CheckSqlTool]：[resolveSpec]/[crudOutput] 非 suspend 可测，挂起方法只做 audit 包装。
+ */
+class CrudSqlTool : McpToolsetSupport("mpsv_crud_sql") {
+
+    @McpTool(name = "mpsv_crud_sql", title = "Generate CRUD SQL from a MyBatis-Plus entity class")
+    @McpDescription(
+        "Generate INSERT / UPDATE / SELECT / DELETE statements for a MyBatis-Plus entity class in the " +
+            "current IntelliJ project (same chain as the IDE right-click action): primary keys, " +
+            "auto-generated columns excluded from INSERT, @Version optimistic-lock SET tail, " +
+            "@TableLogic logic-delete variant; no-primary-key degrades to a '1 = 0' placeholder WHERE. " +
+            "Pass 'filePath' (project-relative or absolute, .java/.kt entity file) or 'className' " +
+            "(fully-qualified). Deterministic generation; read-only: produces SQL text only — " +
+            "never executes; pair with mpsv_check_sql before any real execution.",
+    )
+    @McpToolHints(
+        readOnlyHint = McpToolHintValue.TRUE,
+        destructiveHint = McpToolHintValue.FALSE,
+        idempotentHint = McpToolHintValue.TRUE,
+    )
+    suspend fun mpsv_crud_sql(
+        filePath: String = "",
+        className: String = "",
+    ): String = audit("mpsv_crud_sql") {
+        val project = requireProject()
+        requireSmart(project)
+        crudOutput(resolveSpec(project, filePath, className))
+    }
+
+    /** 实体定位 + 规格适配（PSI 读包 ReadAction；非挂起——测试在 fixture 里直调）。 */
+    internal fun resolveSpec(project: Project, filePath: String, className: String): CrudTableSpec {
+        if (filePath.isBlank() && className.isBlank()) {
+            throwExpected(
+                McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "provide filePath or className."),
+            )
+        }
+        val psiClass = ReadAction.compute<PsiClass?, Throwable> {
+            when {
+                filePath.isNotBlank() -> locateEntityFile(project, filePath)
+                else -> com.intellij.psi.JavaPsiFacade.getInstance(project)
+                    .findClass(className.trim(), GlobalSearchScope.allScope(project))
+            }
+        } ?: throwExpected(
+            McpToolErrors.code(
+                McpToolErrors.SOURCE_NOT_FOUND,
+                if (filePath.isNotBlank()) "entity file not found or contains no class: $filePath"
+                else "class not found in project: $className",
+            ),
+        )
+        // 实体适配（internal 同模块复用——非 MP 实体/无表名映射诚实拒绝）
+        return ReadAction.compute<CrudTableSpec?, Throwable> {
+            GenerateCrudSqlFromEntityAction().entitySpec(psiClass)
+        } ?: throwExpected(
+            McpToolErrors.code(
+                McpToolErrors.INVALID_ARGUMENT,
+                "not a MyBatis-Plus entity (no @TableName/@TableId/@TableField annotations) or " +
+                    "table mapping is empty: ${psiClass.qualifiedName}",
+            ),
+        )
+    }
+
+    /** 语句渲染（纯函数；零列实体诚实拒绝）。 */
+    internal fun crudOutput(spec: CrudTableSpec): String {
+        val statements = CrudSqlGenerator.generate(spec)
+        if (statements.isEmpty()) {
+            throwExpected(
+                McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "entity has no mappable columns: ${spec.tableName}"),
+            )
+        }
+        return buildString {
+            append("table: ").append(spec.tableName).append('\n')
+            statements.forEachIndexed { index, statement ->
+                append('\n').append("-- ").append(index + 1).append(". ").append(statement.kind.name)
+                if (statement.missingPrimaryKey) append(" (no primary key — degraded WHERE)")
+                append('\n').append(statement.result.sql)
+                if (index < statements.size - 1) append('\n')
+            }
+        }.trimEnd()
+    }
+
+    /** 文件 → 实体 PsiClass（McpSourceLocator 同款定位：绝对/项目相对均收，PsiClassOwner 取首类）。 */
+    private fun locateEntityFile(project: Project, filePath: String): PsiClass? {
+        var vFile = LocalFileSystem.getInstance().findFileByPath(filePath)
+        if (vFile == null && !com.intellij.openapi.util.io.FileUtil.isAbsolute(filePath)) {
+            project.basePath?.let { base ->
+                vFile = LocalFileSystem.getInstance()
+                    .findFileByPath(base + "/" + filePath.trimStart('/'))
+            }
+        }
+        val psiFile = vFile?.let { PsiManager.getInstance(project).findFile(it) } ?: return null
+        return when (psiFile) {
+            is PsiClassOwner -> psiFile.classes.firstOrNull()
+            is PsiClass -> psiFile
+            else -> null
+        }
+    }
+}

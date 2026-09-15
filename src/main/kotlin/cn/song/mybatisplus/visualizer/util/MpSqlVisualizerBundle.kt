@@ -69,6 +69,22 @@ object MpSqlVisualizerBundle {
         }.getOrDefault(pattern)
     }
 
+    /**
+     * T-McpToolset2：agent 面英文文案——MCP 工具输出的警告/指引恒英文（agent 文案英文口径），
+     * 与插件语言设置无关。bundle base 文件即英文（_zh 才是中文覆盖），Locale.ROOT 直读 base，
+     * **零新键**（复用既有键的英文版本）；key 缺失兜底返回 key 本身（与 [message] 同策略）。
+     * 消费方：mpsv_rollback_plan / mpsv_perf_advice 的 warnings 渲染。
+     */
+    @JvmStatic
+    fun messageEn(@PropertyKey(resourceBundle = BUNDLE_NAME) key: String, vararg params: Any?): String {
+        val pattern = runCatching {
+            ResourceBundle.getBundle(BUNDLE_NAME, Locale.ROOT, loader, utf8Control).getString(key)
+        }.getOrDefault(key)
+        return if (params.isEmpty()) pattern else runCatching {
+            MessageFormat.format(pattern, *params)
+        }.getOrDefault(pattern)
+    }
+
     private val loader: ClassLoader get() = MpSqlVisualizerBundle::class.java.classLoader
 
     /**

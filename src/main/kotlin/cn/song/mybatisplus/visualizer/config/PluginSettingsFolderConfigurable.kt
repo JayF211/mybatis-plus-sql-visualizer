@@ -439,7 +439,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.Class, SqlPreviewConfigurable::class.java),
             SubPageDesc("settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables, TableMappingConfigurable::class.java),
             SubPageDesc("settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console, SqlLogConfigurable::class.java),
-            // T-ShortcutSettings：MCP 工具（跳转平台 MCP Server 设置 + 三工具说明；位列关于上方）
+            // T-ShortcutSettings：快捷键统一管理 + MCP 工具（跳转平台 MCP Server 设置 + 门控开关）
+            SubPageDesc("settings.section.shortcuts", "settings.section.shortcuts.desc", AllIcons.Nodes.Plugin, ShortcutsConfigurable::class.java),
             SubPageDesc("settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin, McpConfigurable::class.java),
             SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite, AboutConfigurable::class.java),
         )

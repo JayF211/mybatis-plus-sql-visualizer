@@ -9,7 +9,7 @@ import javax.swing.ListModel
 
 /**
  * 设置页主页面（左侧树导航父节点）测试（F-44 续 · 补用例大波次）：此前 0 测试。
- * 覆盖：createComponent 列出全部 5 个子页面（搜索空）；搜索无匹配项时列表清空（rebuildList 过滤）。
+ * 覆盖：createComponent 列出全部 7 个子页面（搜索空）；搜索无匹配项时列表清空（rebuildList 过滤）。
  * 通过遍历取 JBList 与 SearchTextField，无需新增生产缝。
  */
 class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
@@ -20,11 +20,11 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         return list
     }
 
-    fun testCreateComponent_空搜索列出全部5个子页面() {
+    fun testCreateComponent_空搜索列出全部7个子页面() {
         val cfg = PluginSettingsFolderConfigurable()
         val comp = cfg.createComponent()
         val list = all(comp).filterIsInstance<JBList<*>>().first()
-        assertEquals("默认应列出 5 个子页面", 5, (list.model as ListModel<*>).size)
+        assertEquals("默认应列出 7 个子页面（主五页+shortcuts/mcp，T-ShortcutSettings）", 7, (list.model as ListModel<*>).size)
     }
 
     fun test搜索过滤_无匹配项时列表清空() {

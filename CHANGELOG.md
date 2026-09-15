@@ -6,6 +6,8 @@
 
 ### Added
 
+- **MCP 工具二期扩容 + 设置页门控（T-McpToolset2）**：平台 MCP Server 工具从 3 个扩到 10 个——新增 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）、`mpsv_check_sql`（静态写风险与类型核查）、`mpsv_rollback_plan`（回滚预案，只产出不执行）、`mpsv_perf_advice`（20 条规则性能建议）、`mpsv_crud_sql`（实体类生成 CRUD 四件套）、`mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）、`mpsv_mapper_check`（mapper 契约核查 + 可选 simulate 对渲染产物做写风险/性能分析——校验器给不出的证据形态）；全部只读三 hint、拒绝走 McpExpectedError、每调用 `[MCP-AUDIT]` 审计。设置页「MCP 工具」子页新增门控区：总开关（整体启停插件 MCP 功能）+ 十工具逐项启用/禁用 + 全部启用/禁用切换按钮——平台工具面在下一次工具列表/调用即时生效（262 mcpserver.jar 字节码实证 getEnabledToolsets 每次重新求值）。一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度 isEnabled），McpToolsetSupport 基类三钩子字面量覆写保持 253 兼容
+
 - **执行确认升级为无界写发现清单（T-UnboundedWriteGuard，O-9）**：执行 UPDATE/DELETE 前的二次确认对话框在静态检查命中无界写特征时列出发现（无 WHERE 全表 / 恒真条件如 `1=1` / OR 分支恒真 / `LIKE '%'` 纯通配 / WHERE 仅常量 / 子查询提示 / 无法解析请人工确认）——同一对话框形态零新弹窗，无发现时文案逐字节不变（高频确认不添乱）；规则集对齐 DBX `sql_risk.rs`，JSqlParser AST 权威、解析失败 fail closed。预览执行、日志转 SQL 执行、回滚执行三处确认流共用；回滚视图对恒真/纯通配 WHERE 追加「快照将覆盖全表」警示
 
 - **预览 `${}` 直接替换提示横幅（T-DollarInjectMark，O-11）**：XML 动态 SQL 预览含 `${}` 直替时，预览面板显示非模态单行提示「预览含 N 处 ${} 直接替换——替换文本未转义，注意 SQL 注入面」——引擎忠实计数（转义 `\${` 不计，字符串字面量内同样直替同样计数，MyBatis 同语义）；信息级可 ✕ 关闭，关闭后本 IDE 会话不再弹；纯 `#{}` 预览零打扰；渲染文本零变化（只加元数据）

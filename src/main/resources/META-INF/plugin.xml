@@ -103,10 +103,6 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable"/>
 
-        <!-- 子页面顺序由 groupWeight 决定：平台 Weighted.COMPARATOR 按 weight 降序优先、displayName
-             自然比较兜底；不设 weight 时 displayName 比较会随插件语言变化导致中英文子项顺序不一致
-             （中文按码点序重排），故显式声明与声明序一致的递减 weight（ui=50 → about=10）。
-             新增子页面时按区间插值取 weight，保持英文版既定顺序。 -->
         <!-- 界面与操作（gutter图标/语言；快捷键已独立为快捷键子页） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.ui"
@@ -114,6 +110,14 @@
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.ui"
                                  instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
+
+        <!-- T-ShortcutSettings：快捷键统一管理（5 个动作快捷键内嵌录制编辑） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.shortcuts"
+                                 groupWeight="45"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.shortcuts"
+                                 instance="cn.song.mybatisplus.visualizer.config.ShortcutsConfigurable"/>
 
         <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
@@ -139,6 +143,14 @@
                                  key="settings.section.sqlLog"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
 
+        <!-- T-ShortcutSettings：MCP 工具；T-McpToolset2/T-MTS2-00 增补门控区（总开关+工具级启用禁用，McpToolGate） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.mcp"
+                                 groupWeight="15"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.mcp"
+                                 instance="cn.song.mybatisplus.visualizer.config.McpConfigurable"/>
+
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
@@ -146,22 +158,6 @@
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
-
-        <!-- T-ShortcutSettings：快捷键统一管理（5 个动作快捷键内嵌录制编辑） -->
-        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
-                                 id="cn.song.mybatisplus.visualizer.settings.shortcuts"
-                                 groupWeight="45"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.shortcuts"
-                                 instance="cn.song.mybatisplus.visualizer.config.ShortcutsConfigurable"/>
-
-        <!-- T-ShortcutSettings：MCP 工具（跳转平台 MCP Server 设置 + 三工具说明；位列关于上方） -->
-        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
-                                 id="cn.song.mybatisplus.visualizer.settings.mcp"
-                                 groupWeight="15"
-                                 bundle="messages.MpSqlVisualizerBundle"
-                                 key="settings.section.mcp"
-                                 instance="cn.song.mybatisplus.visualizer.config.McpConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"

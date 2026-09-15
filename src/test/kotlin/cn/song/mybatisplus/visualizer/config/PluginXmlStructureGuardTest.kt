@@ -119,7 +119,10 @@ class PluginXmlStructureGuardTest {
         val xml = strippedXmls().first { it.first == "plugin.xml" }.second
         val children = tagsOf(xml, "applicationConfigurable")
             .filter { it.contains("""parentId="cn.song.mybatisplus.visualizer.settings"""") }
-        assertHolds("SQL Visualizer 子设置页注册数应为 5，实际 ${children.size}", children.size == 5)
+        assertHolds(
+            "SQL Visualizer 子设置页注册数应为 7（主五页 + shortcuts/mcp，T-ShortcutSettings），实际 ${children.size}",
+            children.size == 7,
+        )
         val weights = children.map { tag ->
             val id = Regex("""id="([^"]+)"""").find(tag)!!.groupValues[1]
             val w = Regex("""groupWeight="(\d+)"""").find(tag)?.groupValues?.get(1)?.toIntOrNull()
@@ -165,9 +168,20 @@ class PluginXmlStructureGuardTest {
             pluginXml.contains("""<depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>"""),
         )
         assertHolds(
-            "mcp-optional.xml 缺 mcpServer.mcpToolset 注册（三工具不上线）",
-            mcpXml.contains("mcpServer.mcpToolset") &&
-                mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.SqlVisualizerToolset"),
+            "mcp-optional.xml 缺 mcpServer.mcpToolset 注册（工具不上线）",
+            mcpXml.contains("mcpServer.mcpToolset"),
+        )
+        // T-McpToolset2 / T-MTS2-00：一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度
+        // isEnabled）——十工具逐类断言，新工具漏注册即红
+        val expectedToolsets = listOf(
+            "RenderSqlTool", "SchemaContextTool", "ExplainTool",
+            "RenderLogsTool", "CheckSqlTool", "RollbackPlanTool", "PerfAdviceTool",
+            "CrudSqlTool", "ReverseSqlTool", "MapperCheckTool",
+        )
+        val missing = expectedToolsets.filter { !mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.$it") }
+        assertHolds(
+            "mcp-optional.xml 缺 toolset 注册：$missing（清单与 McpToolGate.TOOL_NAMES 对齐）",
+            missing.isEmpty(),
         )
     }
 

@@ -378,6 +378,21 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
          */
         var reportSubmitterEmail: String = "",
+
+        // ---------- T-McpToolset2 MCP 工具门控 ----------
+
+        /**
+         * 插件 MCP 功能总开关（T-MTS2-00）：false = 全部工具在平台 MCP Server 不可见
+         * （McpToolsetSupport.isEnabled 恒 false——平台 getEnabledToolsets 每次
+         * getTools 重新求值，262 mcpserver.jar 字节码实证，切换即时生效无需重启）。
+         */
+        var mcpToolsEnabled: Boolean = true,
+
+        /**
+         * 工具级禁用清单（T-MTS2-00）：工具名（mpsv_render_sql 等）→ 不出现在工具面。
+         * 清单外默认启用——新增工具向后兼容（用户不配置即全部可用）。
+         */
+        var mcpDisabledTools: MutableList<String> = mutableListOf(),
     )
 
     private var state = State()

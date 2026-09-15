@@ -279,8 +279,16 @@ kotlin {
 
 // T-McpToolset：主编译 classpath 追加 MCP 桩产物（详见文件头 mcpStub 源集注释）。
 // 只挂编译任务 libraries，不动 runtime classpath/打包——桩不进插件 jar。
+// T-McpToolset2：test 编译同样需要桩（工具级门控测试直接实例化 Tool 类——其超类型
+// McpToolset 来自桩源集）；依旧不进 runtime/打包。
 tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileKotlin") {
     libraries.from(sourceSets.named("mcpStub").map { it.output })
+}
+tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileTestKotlin") {
+    libraries.from(sourceSets.named("mcpStub").map { it.output })
+}
+tasks.named<Test>("test") {
+    classpath += files(sourceSets.named("mcpStub").map { it.output })
 }
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
@@ -815,6 +823,10 @@ intellijPlatformTesting {
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
+                    // T-McpToolset2：分片同样需要 mcpStub 桩产物（工具级门控测试实例化 Tool 类，
+                    // 超类型 McpToolset 来自桩源集；test 任务已挂，分片默认不含——漏挂致
+                    // NoClassDefFoundError 成片）
+                    classpath = classpath + files(sourceSets.named("mcpStub").map { it.output })
                     filter {
                         shardAssignment[idx].forEach { includeTestsMatching(it) }
                     }

@@ -36,11 +36,21 @@ class McpScopeSourceScanTest {
             .lineSequence()
             .joinToString("\n") { it.substringBefore("//") }
 
+    /**
+     * 剥离字符串字面量（T-McpToolset2 收口 fe11c97 合并回归）：设置页跳转经
+     * `Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")`
+     * 运行时反射定位平台 Configurable（McpConfigurable/PluginSettingsPanel，T-ShortcutSettings
+     * 设计如此）——字符串引用不是编译期类型引用（不会让 243 编译期解析缺类），未装环境
+     * 已走「不可用提示」兜底；守卫关心的是 import/类型位置的真引用，故字符串一律豁免。
+     */
+    private fun stripStrings(source: String): String =
+        source.replace(Regex("\"[^\"]*\""), "")
+
     @Test
     fun testMcpServerReferencesConfinedToMcpPackage() {
         val offenders = repoRoot().resolve("src/main/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
-            .filter { stripComments(it.readText()).contains("com.intellij.mcpserver") }
+            .filter { stripStrings(stripComments(it.readText())).contains("com.intellij.mcpserver") }
             .filter { !(it.path.replace('\\', '/')).contains("/visualizer/mcp/") }
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
             .toList()
