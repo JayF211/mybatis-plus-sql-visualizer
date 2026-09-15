@@ -95,9 +95,14 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable"/>
 
+        <!-- 子页面顺序由 groupWeight 决定：平台 Weighted.COMPARATOR 按 weight 降序优先、displayName
+             自然比较兜底；不设 weight 时 displayName 比较会随插件语言变化导致中英文子项顺序不一致
+             （中文按码点序重排），故显式声明与声明序一致的递减 weight（ui=50 → about=10）。
+             新增子页面时按区间插值取 weight，保持英文版既定顺序。 -->
         <!-- 界面与操作（gutter图标/语言/快捷键） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.ui"
+                                 groupWeight="50"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.ui"
                                  instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
@@ -105,6 +110,7 @@
         <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.preview"
+                                 groupWeight="40"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.preview"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlPreviewConfigurable"/>
@@ -112,6 +118,7 @@
         <!-- 表名映射（前缀/后缀/移除/忽略字段/推断策略） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.tableMapping"
+                                 groupWeight="30"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.tableMapping"
                                  instance="cn.song.mybatisplus.visualizer.config.TableMappingConfigurable"/>
@@ -119,6 +126,7 @@
         <!-- SQL 日志（前缀/自动捕获/时间戳/格式化/过滤/去重/最大条数/耗时/慢查询/Hibernate/Jdbc/自动保存） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.sqlLog"
+                                 groupWeight="20"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.sqlLog"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
@@ -126,6 +134,7 @@
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
+                                 groupWeight="10"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
