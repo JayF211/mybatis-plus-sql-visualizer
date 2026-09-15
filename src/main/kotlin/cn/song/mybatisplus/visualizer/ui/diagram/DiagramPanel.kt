@@ -17,6 +17,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFileWrapper
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
@@ -31,8 +32,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
 import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.JProgressBar
 import javax.swing.SwingConstants
 
 /**
@@ -40,32 +39,22 @@ import javax.swing.SwingConstants
  *
  * 渲染方案：paintComponent 内直接 Graphics2D 变换绘制，无中间位图。
  * 组件尺寸 = 图表自然尺寸 × zoom，scroll pane 处理溢出。
+ *
+ * T-UiNative T-UN-14：加载态/空态接原生件——加载态由 [JBLoadingPanel] 盖平台转圈
+ * （原 indeterminate JProgressBar 自摆页删除），「无 JOIN」占位与错误态保留原样。
  */
 class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>(BorderLayout()), Disposable {
 
     private var zoom = 1.0
     private var currentModel: DiagramModel? = null
 
-    private val loadingLabel = JBLabel(
-        MpSqlVisualizerBundle.message("diagram.render.loading"), SwingConstants.CENTER,
-    ).apply {
-        foreground = JBColor.GRAY
-        font = UIUtil.getLabelFont()
-    }
-    private val loadingProgress = JProgressBar().apply {
-        isIndeterminate = true
-        maximum = 100
-        foreground = JBColor.GRAY
-        background = UIUtil.getPanelBackground()
-        border = javax.swing.border.EmptyBorder(0, 0, 0, 0)
-    }
-    private val loadingPanel: JComponent = JPanel().apply {
-        background = UIUtil.getPanelBackground()
-        layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
-        add(loadingLabel)
-        add(loadingProgress)
-        border = JBUI.Borders.empty(40, 20, 20, 20)
-    }
+    /**
+     * T-UiNative T-UN-14：加载态接原生件——[JBLoadingPanel] 作为 CENTER 容器包住 swapContent
+     * 的目标区（占位/画布/错误态都在其内容层换页），加载时 startLoading 盖平台转圈，
+     * 原自摆 JBLabel + indeterminate JProgressBar 加载页删除；文案沿用既有 "diagram.render.loading" 键。
+     * Disposable 挂面板自身（本类实现 Disposable，dispose 走既有 `Disposer.dispose(this)` 链）。
+     */
+    private val contentLayer = JBLoadingPanel(BorderLayout(), this)
 
     private val placeholderLabel = JBLabel(
         MpSqlVisualizerBundle.message("diagram.placeholder.noJoin"), SwingConstants.CENTER,
@@ -98,6 +87,7 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     init {
         add(buildToolbar(), BorderLayout.NORTH)
+        add(contentLayer, BorderLayout.CENTER)
         swapContent(placeholderLabel)
     }
 
@@ -160,12 +150,34 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         repaint()
     }
 
+    /**
+     * T-UiNative T-UN-14：换页目标从面板本体改为 [contentLayer] 内容层
+     * （加载转圈盖在内容层之上，画布/占位/错误态不受影响）。
+     */
     private fun swapContent(component: JComponent) {
         if (currentCenter === component) return
-        currentCenter?.let { remove(it) }
-        add(component, BorderLayout.CENTER)
+        currentCenter?.let { contentLayer.remove(it) }
+        contentLayer.add(component, BorderLayout.CENTER)
         currentCenter = component
     }
+
+    /** T-UiNative T-UN-14：进入加载态——平台转圈 + 既有「加载中」文案键（原自摆进度条删除）。 */
+    fun showLoading() {
+        contentLayer.setLoadingText(MpSqlVisualizerBundle.message("diagram.render.loading"))
+        contentLayer.startLoading()
+        revalidate()
+        repaint()
+    }
+
+    /** T-UiNative T-UN-14：退出加载态（渲染/换页完成后调用）。 */
+    fun hideLoading() {
+        contentLayer.stopLoading()
+        revalidate()
+        repaint()
+    }
+
+    /** T-UiNative T-UN-14：加载态（测试断言用）。 */
+    internal fun isLoadingForTest(): Boolean = contentLayer.isLoading
 
     fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
     fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
