@@ -10,28 +10,32 @@ import com.intellij.openapi.options.ex.Settings
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.ui.DoubleClickListener
 import com.intellij.ui.SearchTextField
+import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
-import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Component
 import java.awt.Container
 import java.awt.Cursor
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
+import java.awt.GridLayout
 import java.awt.event.MouseEvent
-import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.Icon
 import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
+import javax.swing.SwingConstants
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+
+/** 落地页描述灰（T-UN-20：与日志页 LIST_META_GRAY / 历史页 HISTORY_META_GRAY 同源 namedColor，亮值 0x9E9E9E）。 */
+private val SETTINGS_DESC_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
 
 /**
  * 设置页主页面（左侧树导航的父节点）。
@@ -305,8 +309,42 @@ class PluginSettingsFolderConfigurable : Configurable {
      * 列表渲染器 — 参考 IDEA 原生设置风格。
      * 子页面：图标 + 名称（粗体）+ 描述（灰色小字）
      * 设置项：图标 + 名称 + 所属页面路径
+     *
+     * T-UN-20（T-UiNative）：行渲染归一 [SimpleColoredComponent] 片段通道——与日志页
+     * LogEntryListCellRenderer、历史页 HistoryCellRenderer 同款双行结构（名称行在上、描述行在下），
+     * GridBag 行内面板拼接退役。选中态走平台选中填充（背景取列表选中色、文本随 selectionForeground），
+     * 不再自绘选中背景/描边；固定 56px 行高由 list.fixedCellHeight 承担，渲染器只管内容。
      */
-    private class SearchItemRenderer : DefaultListCellRenderer() {
+    private class SearchItemRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
+
+        /** 名称行（internal 供测试遍历片段断言文本与着色）。 */
+        internal val nameLine = SimpleColoredComponent()
+
+        /** 描述行（internal 供测试遍历片段断言文本与着色）。 */
+        internal val descLine = SimpleColoredComponent()
+
+        private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
+
+        private val iconLabel = JBLabel().apply {
+            border = EmptyBorder(JBUI.insetsRight(12))
+            // 原 GridBag NORTHWEST 锚点语义：图标顶对齐（BorderLayout.WEST 纵向拉伸后需显式置顶）
+            verticalAlignment = SwingConstants.TOP
+        }
+
+        init {
+            layout = BorderLayout()
+            isOpaque = true
+            nameLine.isOpaque = false
+            descLine.isOpaque = false
+            descLine.border = EmptyBorder(JBUI.insetsTop(2)) // 原两行间距
+            linesPanel.add(nameLine)
+            linesPanel.add(descLine)
+            add(iconLabel, BorderLayout.WEST)
+            add(linesPanel, BorderLayout.CENTER)
+            border = EmptyBorder(JBUI.insets(8, 16))
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        }
+
         override fun getListCellRendererComponent(
             list: JList<*>?,
             value: Any?,
@@ -315,123 +353,40 @@ class PluginSettingsFolderConfigurable : Configurable {
             cellHasFocus: Boolean,
         ): Component {
             val item = value as? SearchItem
-                ?: return super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-
-            val bg = if (isSelected) list?.selectionBackground else list?.background
-            val fg = if (isSelected) list?.selectionForeground else list?.foreground
-
-            return when (item) {
-                is SearchItem.PageItem -> renderPageItem(item, bg, fg, isSelected)
-                is SearchItem.FieldItem -> renderFieldItem(item, bg, fg, isSelected)
+            if (item == null) {
+                iconLabel.icon = null
+                nameLine.clear()
+                descLine.clear()
+                return this
             }
+
+            // 平台选中填充：背景/前景取列表（选中）色，不自绘选中视觉（与日志/历史页渲染器同款）
+            val listBg = list?.background ?: background
+            background = if (isSelected) (list?.selectionBackground ?: listBg) else listBg
+            val fg = if (isSelected) (list?.selectionForeground ?: foreground) else (list?.foreground ?: foreground)
+
+            nameLine.foreground = fg
+            descLine.foreground = fg
+            nameLine.clear()
+            descLine.clear()
+            when (item) {
+                is SearchItem.PageItem -> {
+                    iconLabel.icon = item.icon
+                    nameLine.append(MpSqlVisualizerBundle.message(item.labelKey), SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                    descLine.append(MpSqlVisualizerBundle.message(item.descKey), descAttributes(isSelected))
+                }
+                is SearchItem.FieldItem -> {
+                    iconLabel.icon = AllIcons.Actions.Search
+                    nameLine.append(item.fieldLabel, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                    descLine.append(MpSqlVisualizerBundle.message(item.pageLabelKey), descAttributes(isSelected))
+                }
+            }
+            return this
         }
 
-        private fun renderPageItem(
-            item: SearchItem.PageItem,
-            bg: java.awt.Color?,
-            fg: java.awt.Color?,
-            isSelected: Boolean,
-        ): Component {
-            val panel = JPanel(GridBagLayout()).apply {
-                background = bg
-                isOpaque = true
-                border = EmptyBorder(JBUI.insets(8, 16))
-                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            }
-
-            // 图标
-            val iconLabel = JBLabel(item.icon).apply {
-                border = EmptyBorder(JBUI.insetsRight(12))
-            }
-
-            // 名称 + 描述
-            val name = MpSqlVisualizerBundle.message(item.labelKey)
-            val desc = MpSqlVisualizerBundle.message(item.descKey)
-
-            val textPanel = JPanel(GridBagLayout()).apply {
-                isOpaque = false
-            }
-
-            val nameLabel = JBLabel(name).apply {
-                font = JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD)
-                foreground = fg
-            }
-
-            val descLabel = JBLabel(desc).apply {
-                font = JBUI.Fonts.smallFont()
-                foreground = if (isSelected) fg else UIUtil.getContextHelpForeground()
-            }
-
-            textPanel.add(nameLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
-            })
-            textPanel.add(descLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets =
-                JBUI.insetsTop(2)
-            })
-
-            panel.add(iconLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 0; anchor = GridBagConstraints.NORTHWEST
-            })
-            panel.add(textPanel, GridBagConstraints().apply {
-                gridx = 1; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
-            })
-
-            return panel
-        }
-
-        private fun renderFieldItem(
-            item: SearchItem.FieldItem,
-            bg: java.awt.Color?,
-            fg: java.awt.Color?,
-            isSelected: Boolean,
-        ): Component {
-            val panel = JPanel(GridBagLayout()).apply {
-                background = bg
-                isOpaque = true
-                border = EmptyBorder(JBUI.insets(8, 16))
-                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            }
-
-            // 图标
-            val iconLabel = JBLabel(AllIcons.Actions.Search).apply {
-                border = EmptyBorder(JBUI.insetsRight(12))
-            }
-
-            // 字段名 + 所属页面
-            val pageName = MpSqlVisualizerBundle.message(item.pageLabelKey)
-
-            val textPanel = JPanel(GridBagLayout()).apply {
-                isOpaque = false
-            }
-
-            val fieldLabel = JBLabel(item.fieldLabel).apply {
-                font = JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD)
-                foreground = fg
-            }
-
-            val pathLabel = JBLabel(pageName).apply {
-                font = JBUI.Fonts.smallFont()
-                foreground = if (isSelected) fg else UIUtil.getContextHelpForeground()
-            }
-
-            textPanel.add(fieldLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
-            })
-            textPanel.add(pathLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 1; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; insets =
-                JBUI.insetsTop(2)
-            })
-
-            panel.add(iconLabel, GridBagConstraints().apply {
-                gridx = 0; gridy = 0; anchor = GridBagConstraints.NORTHWEST
-            })
-            panel.add(textPanel, GridBagConstraints().apply {
-                gridx = 1; gridy = 0; anchor = GridBagConstraints.WEST; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
-            })
-
-            return panel
-        }
+        /** 描述行着色：未选中用元信息灰；选中随 selectionForeground（REGULAR）保证可读——与日志页 meta 灰同款。 */
+        private fun descAttributes(isSelected: Boolean): SimpleTextAttributes =
+            if (isSelected) SimpleTextAttributes.REGULAR_ATTRIBUTES else SETTINGS_DESC_GRAY
     }
 
     companion object {
