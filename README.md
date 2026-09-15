@@ -95,7 +95,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码
+- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码；JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）
 - 条目显示耗时（p6spy / MP TimeCount / 自定义前缀），超阈值红色标记并统计慢查询；列表支持 SQL 类型筛选、Ctrl+F 搜索、耗时排序、重复条目去重（⨉N 徽章即时同步）
 - 条目带 `#N` 会话内捕获序号；列表支持单行 / 关键字换行 / 格式化三种显示模式（工具栏下拉即时切换），并按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义）
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码

@@ -51,6 +51,7 @@
 - **错误信息复制按钮与附件编码（T-FeedbackErr 第三轮）**：失败信息行的复制按钮改为与 SQL 预览窗口完全一致（同一文案键、11f 小字、**仅在出错时出现**）；从 IDE 错误池导入堆栈时**自动勾选**「附带异常堆栈」，导入即随帖提交；修复附件 .txt 中文乱码——字节本为合法 UTF-8，乱码源于 `text/plain` 响应头缺 charset （服务端补 `charset=utf-8`，插件侧同时为附件写 UTF-8 BOM 自描述编码）
 - **执行计划首次点击结果不进预览面板（T-ExplainFirstNative）**：首次执行时 DBN 先创建**空名占位**结果 Tab 再异步改名/构建网格，而换入判定以「名称不在提交时刻快照」识别新结果——空名恒判新，重试第 1 拍就选中占位并强制换入（网格尚未构建），事后无人补换入，结果滞留 IDEA 原生控制台、预览面板空白，再点一次才恢复。修复：空名占位不作为结果候选（400ms 换入重试与 contentAdded 钩子两处），结果换入监视每拍快照结果 Tab 名称集合、集合变化（占位改名/新 Tab）即补一次换入重绘兜底
 - **执行计划输出对齐 IDEA 原生表格形态（T-ExplainFirstNative）**：MySQL/MariaDB 由 `EXPLAIN FORMAT=JSON` 改为原生同款 `EXPLAIN <sql>`——本地 DatabaseTools jar 反编译实证，原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN 表格行（`MysqlBaseRawPlanData` 直读 id/select_type/table/type/key_len/rows/filtered/Extra），FORMAT=JSON 属 M37.2 自创形态且全树无渲染器消费，真机网格只能呈现一坨 JSON 文本；现在执行计划结果直接是经典计划表格行（PostgreSQL/KingBase 的 FORMAT JSON 为 PG 家族原生形态，保留不动）
+- **JdbcTemplate 命名参数的集合值不再把方括号带进 SQL（T-ListParamCollect）**：Spring `NamedParameterJdbcTemplate` 的 `sql = … IN (:param3) , parameters = {param3=[6b31…]}` 此前把 Java 集合的 `toString()` 原文（含方括号）当成单个字符串渲染成 `IN ('[6b31…]')`——字符串里带着方括号，查出来的永远是空集。现在位于 `IN (...)` 内的集合值剥括号后按元素渲染（单元素即 `IN ('6b31…')`，多元素逗号分隔、数值裸渲染、空集合输出 `NULL`），非 `IN` 位置的值逐字节不变（形如 `[a]` 的普通字符串仍原样加引号）；**不涉及「一个命名参数传多值」**——该日志行的 SQL 是参数解析后的文本，多元素集合运行时会被展开成 `IN (:p1, :p2, …)`，此处只修「方括号不落进 SQL」
 
 ### Test
 
@@ -64,6 +65,7 @@
 - **执行计划链**：`ResultTabSelectionTest` +3 例（空名占位不作为新结果候选 / 阈值后也不复用空名只选具名旧 Tab / 占位改名后第 1 拍即选中——真机首点病灶的动态代理链路复现）；`DialectExplainTest` MySQL/MariaDB 期望改 `EXPLAIN <sql>`（历史 FORMAT=JSON 已包装文本幂等样例保留，证明升级后二次点击不双前缀）
 - **性能收口（T-PerfSweep2）**：新增 `ConsoleErrorExtractTest`（基线片段读取等价性）、`CachedTempPsiFileTest`（缓存槽收口与项目关闭回收）、`PendingReportSchedulerTest`（单拍链式与队尾顺延），`FeedbackApiTest`/`ErrorReportComposerTest` 扩 8 例，共 22 例
 - **内部 API 整改与设置项钉序**：`IdeErrorReportSubmitterTest`/`FeedbackReportingContractTest` 随错误池导入链摘除同步收敛；`PluginXmlStructureGuardTest` 增「设置子页 groupWeight 按声明序严格递减」守卫（防新增子页漏配或乱序）
+- **JdbcTemplate 集合参数**：新增 `ListParamRendererTest` 9 例（集合拆分、`IN` 识别的大小写/无空格/注释/字符串字面量/嵌套括号/标识符误判、渲染与回调逐元素）；`JdbcTemplateLogParserTest` +6 例（用户真机日志逐字复现并断言产物**不含方括号**、多元素逐元素引号、空集合 `NULL`、非 `IN` 位置形如 `[a]` 的值原样、`IN` 位置单值一致、数值集合裸渲染）；`LogEntryPreviewRecognizerTest` +2 例（命名参数集合值预填为元素清单、引用数与参数数不齐时整体弃用防错位）
 - 本版全量 **4081/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible，**三版本 internal API 与 scheduled-for-removal 均为 0**（弃用计数 243=3 / 253=6 / 262=52 无新增）；`./gradlew testShards` 一命令并行全量 2m05s
 
 ## [2026.9.11] - 2026-09-11
