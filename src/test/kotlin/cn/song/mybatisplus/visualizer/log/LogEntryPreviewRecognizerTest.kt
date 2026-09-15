@@ -204,4 +204,48 @@ class LogEntryPreviewRecognizerTest {
         assertTrue(noBinding.unresolvedParams.isEmpty())
         assertNotNull("缺绑定行应有引导警告", noBinding.warning)
     }
+
+    // ------------------------------------------------------------------
+    // T-ListParamCollect：命名参数条目的集合值预填
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `命名参数条目_集合值预填为元素清单`() {
+        // 与解析器同构的数据：SQL 中 `:name` 出现顺序 ⇔ params 顺序（本例 2 个引用 2 个参数）
+        val named = entry(
+            rawSql = "SELECT * FROM t WHERE ((\"deleted\" = :param1) AND (\"id\" IN (:param3)))",
+            params = listOf(
+                LogSqlParam("0", null),
+                LogSqlParam("[6b31d693xxxxx7f4979b]", null),
+            ),
+        ).toRecognizedPreview()
+        assertFalse("命名参数条目无 ? 占位符 → 不走参数行通道", named.recognized)
+        // IN 位置的集合值剥括号为元素清单，非 IN 位置原样
+        assertEquals(
+            mapOf("param1" to "0", "param3" to "6b31d693xxxxx7f4979b"),
+            named.initialValues,
+        )
+        assertTrue("命名参数条目仍无参数行来源", named.unresolvedParams.isEmpty())
+    }
+
+    @Test
+    fun `命名参数条目_参数数与引用数不齐时不预填`() {
+        // 防御：refs 与 params 数量不符时整体弃用（宁可空表，不把值错位配到别的参数名上）
+        val mismatched = entry(
+            rawSql = "SELECT * FROM t WHERE a = :p1",
+            params = listOf(LogSqlParam("1", null), LogSqlParam("2", null)),
+        ).toRecognizedPreview()
+        assertTrue(mismatched.initialValues.isEmpty())
+    }
+
+    @Test
+    fun `占位符条目_不受集合值预填影响`() {
+        // `?` 条目（含 `:name` 混排的极端形态）仍按占位符通道预填，行为不变
+        val recognized = entry(
+            rawSql = "SELECT * FROM t WHERE a = ? AND note = ':x'",
+            params = listOf(LogSqlParam("1", "Long")),
+        ).toRecognizedPreview()
+        assertTrue(recognized.recognized)
+        assertEquals(mapOf("param1" to "1"), recognized.initialValues)
+    }
 }

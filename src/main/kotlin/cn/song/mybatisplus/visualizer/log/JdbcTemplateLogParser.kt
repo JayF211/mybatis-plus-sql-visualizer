@@ -203,11 +203,15 @@ class JdbcTemplateLogParser(
     /**
      * 替换 SQL 中的命名参数为渲染后的字面量。
      * 无类型标注 → 启发式：数值/true/false 原样，其余引号包裹。
+     *
+     * T-ListParamCollect：IN 子句内的集合值（日志形态 `[a]`/`[a, b]`）剥括号按元素渲染，
+     * 方括号不再落进 SQL 字面量；非 IN 位置行为与改造前逐字节一致。
      */
     private fun replaceNamedParams(sql: String, params: Map<String, String>): String {
+        val inClauseNames = ListParamRenderer.inClauseParamNames(sql)
         var result = sql
         for ((name, value) in params) {
-            val rendered = renderUntyped(value)
+            val rendered = ListParamRenderer.renderParam(value, name in inClauseNames) { renderUntyped(it) }
             result = result.replace(":$name", rendered)
         }
         return result

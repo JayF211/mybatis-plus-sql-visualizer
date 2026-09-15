@@ -35,16 +35,23 @@ data class RecognizedLogPreview(
  *
  * 参数命名：日志无参数名，用序号 `param1..N`（对齐 MP 生成器 `param1` 风格）；
  * 值预填 `LogSqlParam.value`（null → 空串，回填显示 `?`——与还原 `NULL` 不一致的边界见开发计划 §7）。
+ *
+ * T-ListParamCollect：命名参数条目（`:paramN`）无 `?` 占位符，`recognized=false` 走回退分支——
+ * 但其 `initialValues` 提供参数名 → 日志值映射（集合值为元素清单），供预览面板按名回填。
  */
 fun LogSqlEntry.toRecognizedPreview(): RecognizedLogPreview {
     val placeholderCount = countPlaceholders(rawSql)
     val recognized = placeholderCount > 0 && placeholderCount == params.size
+    // T-ListParamCollect：命名参数条目（`sql = … :paramN` + 日志集合值）无 `?` 占位符，
+    // 不进参数行通道；其 SQL 由解析器按同口径还原，此处只负责把集合值还原为元素清单，
+    // 供参数行预填（面板既有 inList 逗号分支渲染出与还原 SQL 一致的形态）。
+    val namedInClause = if (rawSql.contains(':')) ListParamRenderer.inClauseParamNames(rawSql) else emptySet()
     if (!recognized) {
         return RecognizedLogPreview(
             sql = rawSql,
             compactSql = rawSql,
             unresolvedParams = emptyList(),
-            initialValues = emptyMap(),
+            initialValues = namedInitialValues(namedInClause),
             paramHints = emptyList(),
             recognized = false,
         )
@@ -61,6 +68,30 @@ fun LogSqlEntry.toRecognizedPreview(): RecognizedLogPreview {
         recognized = true,
     )
 }
+
+/**
+ * T-ListParamCollect：命名参数条目的参数名 → 预填值（集合值剥括号为逗号分隔元素清单）。
+ *
+ * 顺序口径与 [JdbcTemplateLogParser.extractNamedParamEntry] 收集 `params` 时**逐字一致**：
+ * 都是按 SQL 中 `:name` 的出现顺序（重复出现则都收，位置一一对应）。两侧必须同源，
+ * 否则参数值会整体错位（`param3` 拿到 `param1` 的值）。
+ *
+ * 仅当 SQL 含命名参数（`:name`）时产出；普通 `?` 条目与裸 SQL 返回空表（零行为变化）。
+ */
+private fun LogSqlEntry.namedInitialValues(inClauseNames: Set<String>): Map<String, String> {
+    if (params.isEmpty()) return emptyMap()
+    val refs = NAMED_PARAM_REF.findAll(rawSql).map { it.groupValues[1] }.toList()
+    if (refs.isEmpty() || refs.size != params.size) return emptyMap()
+    val values = refs.zip(params).mapNotNull { (name, param) ->
+        val value = param.value ?: return@mapNotNull null
+        val elements = if (name in inClauseNames) ListParamRenderer.splitListElements(value) else null
+        name to (elements?.joinToString(", ") ?: value)
+    }
+    return values.toMap()
+}
+
+/** 命名参数引用模式：`:name`（与 [JdbcTemplateLogParser] 的收集口径一致）。 */
+private val NAMED_PARAM_REF = Regex(""":(\w+)""")
 
 /**
  * T-HibDualCapture：string-aware `?` 占位符计数——口径与 [placeholderPositions]（还原回填）

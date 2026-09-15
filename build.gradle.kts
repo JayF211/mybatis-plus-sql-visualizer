@@ -140,6 +140,8 @@ intellijPlatform {
     if (gifRecord) {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
     }
+    // T-ListParamCollect：并行会话隔离（临时——用后还原本行）
+    sandboxContainer = layout.buildDirectory.dir("test-sandbox-listparam")
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
@@ -895,4 +897,3 @@ tasks.test {
 // 结论：全量权威=串行 ./gradlew test；真并行=./gradlew testShards 一命令（T-TestPerf2 收编，
 // 时长均衡自动分区；旧「双开终端」用法仍可用但已非必需）；
 // 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
-
