@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.PluginSettings.Companion.LOG_TIMESTAMP_SOURCE_LOG
 import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -1477,13 +1478,17 @@ private fun setOpaqueIfChanged(target: JPanel, opaque: Boolean) {
 
 
 /** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML `<span>` 尾空格语义）。 */
-internal fun formatTimestampFragment(timestamp: Long): Pair<String, SimpleTextAttributes>? {
+internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
     val state = PluginSettings.getInstance().state
     if (!state.logTimestampEnabled) return null
+    val ts = when (state.logTimestampSource) {
+        LOG_TIMESTAMP_SOURCE_LOG -> entry.logTimestamp ?: entry.timestamp
+        else -> entry.timestamp
+    }
     val formatted = try {
-        SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
+        SimpleDateFormat(state.logTimestampFormat).format(Date(ts))
     } catch (_: IllegalArgumentException) {
-        SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp))
+        SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(ts))
     }
     return "[$formatted] " to LIST_META_GRAY
 }
@@ -1626,7 +1631,7 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
                 metaLine.append("#${entry.sequenceNumber} ", LIST_META_GRAY)
             }
             // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
-            formatTimestampFragment(entry.timestamp)?.let { (t, a) -> metaLine.append(t, a) }
+            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             if (PluginSettings.getInstance().state.showDurationInLogList) {
                 val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
                 metaLine.append(t, a)

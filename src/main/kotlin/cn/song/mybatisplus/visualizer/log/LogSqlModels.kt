@@ -30,6 +30,8 @@ data class LogSqlEntry(
     val params: List<LogSqlParam>,
     /** 捕获时间戳。 */
     val timestamp: Long = System.currentTimeMillis(),
+    /** 日志原始时间戳（从日志行中解析，未解析到则为 null）。 */
+    val logTimestamp: Long? = null,
     /**
      * 摘要（列表展示用，智能截断：在第一行末尾或 MAX_SUMMARY_LENGTH 处取较小值，
      * 避免 mid-line 截断导致 multiline SQL 列表展示不完整）。

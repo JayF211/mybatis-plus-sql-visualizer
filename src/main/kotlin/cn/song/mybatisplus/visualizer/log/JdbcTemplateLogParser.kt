@@ -47,6 +47,7 @@ class JdbcTemplateLogParser(
     /** 单线程桶的完整状态机（对应旧解析器实例级字段，现按线程 token 隔离）。 */
     private class ThreadBucket {
         var pendingSql: String? = null
+        var pendingLogLine: String? = null
         val pendingParams = mutableListOf<IndexedParam>()
         var collecting = false
         val multilineBuffer = StringBuilder()
@@ -107,6 +108,7 @@ class JdbcTemplateLogParser(
                 bucket.pendingParams.clear()
                 if (probe.closeIdx >= 0) {
                     bucket.pendingSql = line.substring(openIdx + 1, probe.closeIdx).take(maxParseLength)
+                    bucket.pendingLogLine = line
                 } else {
                     bucket.collecting = true
                     bucket.multilineBuffer.setLength(0)
@@ -150,8 +152,10 @@ class JdbcTemplateLogParser(
                 bucket.multilineInString = false
             }
         }
-        val sql = bucket.pendingSql ?: return null
+val sql = bucket.pendingSql ?: return null
         bucket.pendingSql = null
+        val logTs = bucket.pendingLogLine?.let { LogTimestampParser.parse(it) }
+        bucket.pendingLogLine = null
         // 按 column index 升序排列（1-based → 0-based 由 restorer 按序处理）
         val sortedParams = bucket.pendingParams.sortedBy { it.index }
             .map { LogSqlParam(it.value, it.mappedType) }
@@ -160,6 +164,7 @@ class JdbcTemplateLogParser(
             restoredSql = restorer.restore(sql, sortedParams),
             params = sortedParams,
             source = SqlSource.JDBC,
+            logTimestamp = logTs,
         )
         entries += entry
         bucket.pendingParams.clear()
@@ -267,6 +272,7 @@ class JdbcTemplateLogParser(
             restoredSql = restoredSql,
             params = params,
             source = SqlSource.JDBC,
+            logTimestamp = LogTimestampParser.parse(line),
         )
     }
 

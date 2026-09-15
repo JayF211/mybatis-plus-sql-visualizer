@@ -38,6 +38,7 @@ class HibernateLogParser(
 
     private val entries = mutableListOf<LogSqlEntry>()
     private var pendingSql: String? = null
+    private var pendingLogLine: String? = null
     private val pendingParams = mutableListOf<LogSqlParam>()
 
     /**
@@ -79,6 +80,7 @@ class HibernateLogParser(
         if (isPrefixOnly(line, sqlPrefix)) {
             closePending()
             collecting = true
+            pendingLogLine = line
             pendingParams.clear()
             return
         }
@@ -88,6 +90,7 @@ class HibernateLogParser(
             val (unclosed, afterComment) = hasUnclosedComment(line)
             closePending()
             collecting = true
+            pendingLogLine = line
             pendingParams.clear()
             if (unclosed) {
                 inComment = true
@@ -110,6 +113,7 @@ class HibernateLogParser(
                 closePending()
                 collecting = true
                 multilineBuffer.append(trimmed)
+                pendingLogLine = line
                 pendingParams.clear()
                 return
             }
@@ -214,11 +218,14 @@ class HibernateLogParser(
             else -> pendingSql
         } ?: return null
         pendingSql = null
+        val logTs = pendingLogLine?.let { LogTimestampParser.parse(it) }
+        pendingLogLine = null
         val entry = LogSqlEntry(
             rawSql = sql,
             restoredSql = restorer.restore(sql, pendingParams),
             params = pendingParams.toList(),
             source = SqlSource.HIBERNATE,
+            logTimestamp = logTs,
         )
         pendingParams.clear()
 
@@ -272,6 +279,7 @@ class HibernateLogParser(
             val (unclosed, afterComment) = hasUnclosedComment(afterKeyword)
             closePending()
             collecting = true
+            pendingLogLine = line
             pendingParams.clear()
             if (unclosed) {
                 inComment = true
@@ -286,6 +294,7 @@ class HibernateLogParser(
             closePending()
             collecting = true
             multilineBuffer.append(afterKeyword)
+            pendingLogLine = line
             pendingParams.clear()
         }
         return true

@@ -199,6 +199,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 时间戳格式（对齐参考插件默认）。 */
         var logTimestampFormat: String = DEFAULT_LOG_TIMESTAMP_FORMAT,
 
+        /** 时间戳显示模式：log=日志时间（默认），capture=捕获时间。 */
+        var logTimestampSource: String = DEFAULT_LOG_TIMESTAMP_SOURCE,
+
         /** 日志还原 SQL 格式化（多行缩进；预览编辑器展示用）。 */
         var logFormatSql: Boolean = true,
 
@@ -434,6 +437,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_SQL_PREFIX = "Preparing:"
         const val DEFAULT_LOG_PARAM_PREFIX = "Parameters:"
         const val DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
+        const val DEFAULT_LOG_TIMESTAMP_SOURCE = "log"
+        const val LOG_TIMESTAMP_SOURCE_LOG = "log"
+        const val LOG_TIMESTAMP_SOURCE_CAPTURE = "capture"
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOG_MAX_COUNT = 200
