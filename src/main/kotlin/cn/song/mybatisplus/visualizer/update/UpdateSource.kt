@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.update
 
+import com.intellij.openapi.diagnostic.Logger
+
 /**
  * 更新源配置（M28 → 内测通道改造）：清单 URL 与下载文件名约定集中于此。
  *
@@ -8,9 +10,14 @@ package cn.song.mybatisplus.visualizer.update
  * 草稿请写 [update/preview.update.json]（不参与检查），发布时复制到 [update/update.json]。
  *
  * 系统属性 `mpvs.update.manifest.url` 可覆盖清单 URL（沙盒/本地 HTTP server 验证用，
- * 与项目「发布前本地验证」惯例一致）。
+ * 与项目「发布前本地验证」惯例一致；内网私有通道亦复用此入口，见 README「内网与离线环境」）。
+ *
+ * 注意：该属性在**进程启动时读取一次**——[manifestUrl] 首次调用触发本 object 类初始化，
+ * 覆盖值随即固化；启动后修改 `-D` 不生效，须重启 IDE。
  */
 object UpdateSource {
+
+    private val LOG = Logger.getInstance(UpdateSource::class.java)
 
     /** 插件 id（与 plugin.xml `<id>` 一致；安装/卸载判定与下载文件命名共用）。 */
     const val PLUGIN_ID = "cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer"
@@ -31,6 +38,16 @@ object UpdateSource {
     /** 实际清单 URL（系统属性覆盖优先；属性空白视为未设置）。 */
     fun manifestUrl(): String =
         System.getProperty(MANIFEST_URL_OVERRIDE)?.takeIf { it.isNotBlank() } ?: DEFAULT_MANIFEST_URL
+
+    /**
+     * 换源生效时的诊断日志（T-Intranet-01）：仅在被覆盖时打印一行，默认路径静默。
+     * 内网运维排查「配了内网源却仍在打 Gitee」时由此处定位；object 类初始化保证单次。
+     */
+    internal fun logOverrideIfAny(url: String) {
+        if (url != DEFAULT_MANIFEST_URL) {
+            LOG.info("update manifest url overridden by system property: $url")
+        }
+    }
 
     /** Gitee Release 附件下载文件名（与 buildPlugin 产物命名一致）。 */
     fun downloadFileName(version: String): String = "mybatis-plus-sql-visualizer-$version.zip"
