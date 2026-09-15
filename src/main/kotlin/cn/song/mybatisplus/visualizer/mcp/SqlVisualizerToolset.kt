@@ -48,7 +48,10 @@ class SqlVisualizerToolset : McpToolset {
             "MyBatis annotation SQL (@Select etc.), JPA @Query/derived queries/CriteriaQuery, HQL and " +
             "JdbcTemplate string SQL in the current IntelliJ project, with real parameter values filled in. " +
             "Pass (filePath, line) of the source location (line is 1-based; omit for the first statement), " +
-            "or pass xmlSnippet + sourceType='xml_mapper' for a mapper XML text. Read-only: never executes SQL.",
+            "or pass xmlSnippet + sourceType='xml_mapper' for a mapper XML text. When the target yields " +
+            "several statements, each is prefixed with a '-- SQL #N' comment line. This is a deterministic " +
+            "renderer: it returns the executable SQL itself, not a validation verdict. " +
+            "Read-only: never executes SQL.",
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
@@ -93,7 +96,8 @@ class SqlVisualizerToolset : McpToolset {
             "tables, resolved from the real data source configured in the IDE (credentials never leave the IDE). " +
             "Pass a comma-separated 'tables' whitelist (1-50 names) and optionally 'dataSource' display name " +
             "when several data sources exist. 'maxTables' caps how many tables are returned (default 8, hard limit 20). " +
-            "Read-only: metadata only, never executes SQL.",
+            "Deterministic live-schema lookup; pairs with mpsv_render_sql when you need column types " +
+            "before writing SQL. Read-only: metadata only, never executes SQL.",
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
@@ -130,8 +134,10 @@ class SqlVisualizerToolset : McpToolset {
     @McpDescription(
         "Run EXPLAIN for a single read-only SELECT statement against a real data source configured in the IDE " +
             "and return the plan text (MySQL/MariaDB/PostgreSQL/Oracle/SQL Server/H2/DM/KingBase dialect dispatch, " +
-            "dialect auto-detected from the data source URL unless overridden). Strictly read-only: the statement " +
-            "must be a single plain SELECT (no locking reads, no INTO, no writes); rejections are fail-closed.",
+            "dialect auto-detected from the data source URL unless overridden). Deterministic plan rendering for " +
+            "a statement you already have — pair with mpsv_render_sql to produce it first. " +
+            "Strictly read-only: the statement must be a single plain SELECT (no locking reads, no INTO, no writes); " +
+            "rejections are fail-closed.",
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,

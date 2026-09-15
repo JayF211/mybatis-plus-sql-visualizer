@@ -102,6 +102,11 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码
 - 双击/右键「跳转到源码」：应用注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）后可精确定位到触发 SQL 的代码行；未注册时按表名智能搜索实体近似跳转（覆盖 `Wrappers.lambdaQuery()` 等静态工厂与 `service.lambdaQuery()` 等 IService 服务链写法）
 
+**MCP：给 AI agent 的确定性 SQL 工具**
+
+- 内置 MCP Server 注册三个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：`mpsv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）、`mpsv_schema_context`（表列结构紧凑上下文）、`mpsv_explain`（七方言执行计划）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用
+- 与校验类工具的位差一句话：校验器告诉你 SQL 可不可信，这里是渲染器——直接给出可执行的 SQL 本体
+
 **检查更新（Gitee 抢先体验通道）**
 
 - 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装，下载后热替换即时生效免重启（环境不支持时自动回退重启安装）；支持「忽略此版本」

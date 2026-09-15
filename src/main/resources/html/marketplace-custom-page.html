@@ -308,6 +308,12 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>实体含 <code>@TableLogic</code> 时自动追加 <code>AND deleted = 值</code>（值可配置，默认 0）</td>
     </tr>
     <tr>
+      <td>MCP 工具（AI agent）<span class="tag tag-new">New</span></td>
+      <td>内置 MCP Server 三只读工具（IDEA 2025.2+）：<code>mpsv_render_sql</code> 源码直接渲染可执行 SQL、
+          <code>mpsv_schema_context</code> 表列上下文、<code>mpsv_explain</code> 执行计划；
+          校验器告诉你 SQL 可不可信，渲染器直接给可执行的 SQL 本体——Claude Code / Cursor / AI Assistant 可直接调用</td>
+    </tr>
+    <tr>
       <td>检查更新</td>
       <td>设置页一键检查更新，热替换即时生效免重启；支持 Gitee 抢先体验通道</td>
     </tr>
