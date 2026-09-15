@@ -83,9 +83,18 @@ object DatabaseSchemaResolver {
      * 数据源全量遍历（DasModel.traverser().toList()）代价随 schema 规模线性，JOIN 预览
      * 每打开一次、每个 JOIN 表各触发一次；命中后零遍历。数据源删除后条目随弱键回收；
      * 表匹配不到（通常=未连接/introspection 未完成）**不缓存负命中**——后续连接成功即可命中。
+     *
+     * T-DdlCacheInvalidate：DDL/事务提交语句执行提交前经 execute/MetadataInvalidator 全量失效
+     * （本缓存是 T-DC-01 盘点出的唯一自持 schema 面——ALTER TABLE 后补全/JOIN 富化拿旧结构
+     * 是正确性破口，失效走 O(1) 引用清空）。
      */
     private val metaCache =
         java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, MutableMap<String, TableMeta>>())
+
+    /** T-DdlCacheInvalidate：全量失效（引用置空语义，下次取数零遍历回填）。 */
+    fun invalidateAll() {
+        synchronized(metaCache) { metaCache.clear() }
+    }
 
     /**
      * 表级元数据（表注释 + 列元数据，T-Embed-09 一次遍历同时取）。

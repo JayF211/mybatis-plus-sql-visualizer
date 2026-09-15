@@ -68,4 +68,25 @@ T-DC-01（盘点表，定分支）→ T-DC-02（识别器+测试）
 
 ## 八、实施记录（实施后回填；含 T-DC-01 盘点表）
 
-（未实施）
+**2026-09-15 实施完毕（分支 A；识别器表驱动 12 例 + 编排 3 例全绿）**
+
+### T-DC-01 缓存面盘点表（跨调用存活面逐个取证）
+
+| 缓存面 | 位置 | 是否持 schema 信息 | 处置 |
+|---|---|---|---|
+| DatabaseSchemaResolver.metaCache（表注释+列注释+类型+notNull，WeakHashMap<数据源, 表→TableMeta>） | `ui/highlight/DatabaseSchemaResolver.kt:87` | **是**（T-Perf-09 引入，无任何失效动作） | **登记失效（invalidateAll）** |
+| DataSourceSelector @Volatile 族（cachedTempPsiFile/ProjectName/dialectMappedVf/lastTempFileFailure/代际计数/提示标记） | `execute/DataSourceSelector.kt:86-144` | 否（临时 PSI 文件/项目名/方言幂等标记/执行代际） | 不登记 |
+| DialectPreMapping | `execute/DialectPreMapping.kt` | 否（无自持缓存，只读探测平台 SqlDialectMappings，平台自管失效） | 不登记 |
+| WrapperCache LRU 512 | `psi/WrapperCache.kt` | 否（PSI 解析产物，不持表结构） | 不登记 |
+| McpSchemaContextService | `mcp/McpSchemaContextService.kt` | 否（每次取数无自持缓存） | 不登记 |
+| RollbackSnapshotStore | `sql/rollback/RollbackSnapshotStore.kt` | 用户粘贴的 before-image 历史镜像（DDL 后反而更需要，语义即快照） | 不登记 |
+| 预览列补全/EXPLAIN 目标解析 | PSI + 平台 introspection | 否（真相源=平台，平台自有失效） | 不登记 |
+
+**结论：分支 A**——自持 schema 面恰一处（metaCache），按 T-DC-03 挂失效；同时按 T-DC-04② 预留显式登记位（MetadataInvalidator.register + 「新增 schema 缓存必须登记」守卫注释在类 KDoc）。
+
+### 实施明细
+
+- **T-DC-02**：`execute/MetadataInvalidator.kt`——`mayChangeMetadata` 两路判定（AST 前缀 Create/Alter/Drop/Truncate/Rename/Comment + Commit/RollbackStatement；**不透明类型关键字扫描兜底**——实证 JSqlParser 5.3 把残缺 `CREATE TABLE` 宽松包成 UnsupportedStatement、`BEGIN…END` 包成 Block，首词路由会双双漏判，改为仅对这两类不透明容器按词边界正则扫 DDL 动词+事务提交词并集；结构可判语句不受字面量误伤）；解析失败 fail closed true（`commit work`/`ABORT` 等实测即抛异常走此路）。
+- **T-DC-03**：DatabaseSchemaResolver 补 `invalidateAll()`（O(1) 引用清空）；挂接点=DataSourceSelector.executeOnConsole（全执行链唯一提交收口，三调用路径共用），SQL 取控制台编辑器文档（提交时刻即执行内容）；失效在提交前、外层 runCatching 双保险（hook 失败/动作失败均只记日志绝不吞执行结果——DBX 语义原样继承）。
+- **T-DC-04 兼做**：登记位守卫注释（新增 schema 缓存必须在 MetadataInvalidator 登记否则 DDL 后旧结构泄漏）落在类 KDoc；盘点表即上表（架构结论：本插件 schema 真相源是平台 introspection，自持面仅 metaCache 一处且已挂失效）。
+- **测试**：MetadataInvalidatorTest 15 例——DDL 正例 10 形态（含小写/CREATE OR REPLACE VIEW/RENAME）、提交关键字 5、DML/查询/字符串内关键字/注释内 DDL 反例、解析失败 fail closed、多语句任一命中、空与纯注释、编排（登记动作命中/SELECT 不触发/动作异常不外抛不阻断后续/内置登记在册/invalidateAll 幂等）。

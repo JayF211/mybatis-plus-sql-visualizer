@@ -2235,6 +2235,12 @@ object DataSourceSelector {
         dsName: String? = sharedDataSourceName,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        // T-DdlCacheInvalidate（O-12）：DDL/事务提交语句在提交前失效插件自持 schema 缓存
+        // （DBX object_cache 语义：失效须在结果返回前、失效失败只记日志不吞执行结果——
+        // Oracle 系 DDL 隐式提交，DDL 报错不代表没提交）。全执行链唯一提交收口点；
+        // SQL 文本取控制台编辑器文档（三调用路径共用同一文档，提交时刻即执行内容）。
+        runCatching { MetadataInvalidator.invalidateAfterExecution(editor.document.text) }
+            .onFailure { LOG.warn("[T-DdlCacheInvalidate] invalidate hook failed (execution continues)", it) }
         // M36.5.52：新执行重置错误去重基线——本次执行产生的错误应上报，不与上次残留混淆。
         lastReportedError = null
         // T-ExecSilentNoop：新执行亦重置提示去重标记——同一次执行只报一次提示。
