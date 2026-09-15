@@ -2,19 +2,14 @@ package cn.song.mybatisplus.visualizer.history
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
-import com.intellij.ui.components.JBTextField
+import com.intellij.ui.SearchTextField
 import com.intellij.util.ui.JBUI
-import java.awt.BorderLayout
 import java.awt.FlowLayout
-import java.awt.event.ActionEvent
-import java.awt.event.KeyEvent
-import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.Icon
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
-import javax.swing.KeyStroke
 import javax.swing.border.EmptyBorder
 
 /**
@@ -28,12 +23,8 @@ class SqlHistorySearchBar(
     private val onFilterChange: () -> Unit,
 ) : JPanel(FlowLayout(FlowLayout.LEFT, 4, 4)) {
 
-    private val searchField = JBTextField(20).apply {
-        emptyText.text = MpSqlVisualizerBundle.message("history.panel.search")
-        border = BorderFactory.createCompoundBorder(
-            border,
-            JBUI.Borders.empty(2, 4),
-        )
+    private val searchField = SearchTextField(false).apply {
+        textEditor.emptyText.text = MpSqlVisualizerBundle.message("history.panel.search")
     }
 
     /** 筛选模式下拉：全部 / 收藏。 */
@@ -45,20 +36,12 @@ class SqlHistorySearchBar(
     init {
         border = EmptyBorder(4, 4, 4, 4)
 
-        // 搜索框：回车 / 即时输入触发
-        searchField.addActionListener { emitSearch() }
-        searchField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+        // 搜索框：即时输入触发（Enter 同效）；ESC 清空由 SearchTextField 内建
+        searchField.textEditor.addActionListener { emitSearch() }
+        searchField.addDocumentListener(object : javax.swing.event.DocumentListener {
             override fun insertUpdate(e: javax.swing.event.DocumentEvent?) = emitSearch()
             override fun removeUpdate(e: javax.swing.event.DocumentEvent?) = emitSearch()
             override fun changedUpdate(e: javax.swing.event.DocumentEvent?) = emitSearch()
-        })
-        // ESC 清空
-        searchField.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "clear")
-        searchField.actionMap.put("clear", object : AbstractAction() {
-            override fun actionPerformed(e: ActionEvent?) {
-                searchField.text = ""
-                emitSearch()
-            }
         })
 
         // 筛选下拉
@@ -111,7 +94,7 @@ class SqlHistorySearchBar(
 
     /** 模拟用户输入搜索词（触发 document 监听 → onSearch）。 */
     internal fun searchTextForTest(text: String) {
-        searchField.text = text
+        searchField.textEditor.text = text
     }
 
     /** 直选筛选下拉（0=全部 / 1=收藏）。 */

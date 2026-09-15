@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.feedback
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.SafeBrowser
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBLabel
@@ -126,8 +127,7 @@ class ErrorReportDialog(
         fields.statusCopyHandler = {
             val text = fields.statusLabel.text.orEmpty()
             if (text.isNotBlank()) {
-                com.intellij.openapi.ide.CopyPasteManager.getInstance()
-                    .setContents(java.awt.datatransfer.StringSelection(text))
+                UiTextClipboard.copy(text)
                 cn.song.mybatisplus.visualizer.ui.flashCopied(fields.statusCopyButton)
             }
         }

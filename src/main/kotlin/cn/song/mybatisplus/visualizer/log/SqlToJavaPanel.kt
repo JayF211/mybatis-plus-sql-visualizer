@@ -48,6 +48,7 @@ import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.IconScaler
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
@@ -60,8 +61,6 @@ import java.awt.Graphics2D
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.RenderingHints
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import java.awt.event.ActionEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -326,8 +325,7 @@ class SqlToJavaPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             // T-M45：只复制 Java 代码——剥离说明注释（忽略「日志」），粘贴即用
-            Toolkit.getDefaultToolkit().systemClipboard
-                .setContents(StringSelection(copyText()), null)
+            UiTextClipboard.copy(copyText())
             status(MpSqlVisualizerBundle.message("reverse.copy.done"), error = false)
         }
     }

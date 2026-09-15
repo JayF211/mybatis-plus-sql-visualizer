@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.Logger
@@ -14,6 +15,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
+import com.intellij.ui.ListSpeedSearch
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
@@ -57,7 +59,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     // ---------- 一级：文件列表 ----------
     private val fileListModel = DefaultListModel<HistoryFileEntry>()
-    private val fileList = JBList<HistoryFileEntry>(fileListModel)
+    private val fileList = JBList<HistoryFileEntry>(fileListModel).also {
+        // T-UiNative P0：一级文件列表打字即搜（平台 ListSpeedSearch，按文件名匹配）
+        ListSpeedSearch.installOn(it) { entry -> entry.displayName }
+    }
     private var allFiles: List<HistoryFileEntry> = emptyList()
 
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
@@ -436,8 +441,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val menu = JPopupMenu()
         menu.add(JMenuItem(copyMenuText("log.history.copy", "log.history.copySelected", selectedEntries.size), AllIcons.Actions.Copy).apply {
             addActionListener {
-                val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                clipboard.setContents(java.awt.datatransfer.StringSelection(batchCopySql(selectedEntries)), null)
+                UiTextClipboard.copy(batchCopySql(selectedEntries))
             }
         })
         // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰）
@@ -446,8 +450,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             isEnabled = timestampClip.isNotEmpty()
             addActionListener {
                 if (timestampClip.isNotEmpty()) {
-                    val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                    clipboard.setContents(java.awt.datatransfer.StringSelection(timestampClip), null)
+                    UiTextClipboard.copy(timestampClip)
                 }
             }
         })

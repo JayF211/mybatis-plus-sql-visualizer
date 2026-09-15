@@ -28,6 +28,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
@@ -63,6 +64,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
 import com.intellij.ui.JBColor
 import com.intellij.ui.TitledSeparator
+import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -74,10 +76,8 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.FontMetrics
-import java.awt.Graphics
-import java.awt.Toolkit
+import java.awt.Insets
 import java.awt.datatransfer.DataFlavor
-import java.awt.datatransfer.StringSelection
 import java.awt.datatransfer.UnsupportedFlavorException
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
@@ -85,7 +85,6 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComponent
-import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.KeyStroke
 import javax.swing.event.DocumentEvent
@@ -348,13 +347,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 中部左右分栏：参数输入 | SQL 编辑器/原生控制台
         // T-M26.3：按钮回挂分区标题行右侧（conditionSectionHeader/batchSectionHeader），
         // 左面板即参数滚动区（T-M26.2 的固定操作行已拆除——长文本按视口截断后按钮不再被推出视口）
-        val split = ThemedSplitPane(paramScroll, editorHolder).apply {
-            resizeWeight = 0.3
-            isContinuousLayout = true
-            isOneTouchExpandable = false
-            dividerSize = 3
-            border = JBUI.Borders.empty()   // M36.5：去 LAF 默认边框（白色描边根因之一）
-            background = UIUtil.getPanelBackground()
+        val split = OnePixelSplitter(false, "mpvs.preview.splitter", 0.3f).apply {
+            firstComponent = paramScroll
+            secondComponent = editorHolder
         }
         // M36.5：删除 verticalSplit 下半区——控制台已内嵌右侧，底部仅保留状态行
         //（resultPanel SOUTH，无内容时隐藏不占高度，错误/执行状态正常显示）
@@ -526,29 +521,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     private lateinit var modeButton: JButton
-
-    /**
-     * T-M26.1：分隔条主题化分栏——Swing JSplitPane 的分隔条由 LAF 的 SplitPaneUI 绘制：
-     * 平台 LAF 委托 Metal，MetalSplitPaneDivider 直接以 Metal 主题浅色（controlColor）填充，
-     * 与 JSplitPane/divider 的 setBackground 均无关，深色主题下呈现白色竖条纹割裂感。
-     * 此处覆写 paint，在 LAF 绘制完成后把分隔条区域覆盖为面板底色（亮/暗主题均与面板
-     * 融为一体；拖拽/布局行为不变，拖拽中分隔条移动时本覆盖随 dividerLocation 更新）。
-     */
-    private class ThemedSplitPane(left: JComponent, right: JComponent) :
-        JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right) {
-        override fun paint(g: Graphics) {
-            super.paint(g)
-            // 注意：dividerLocation 因 setDividerLocation(int/double) 重载无法作 Kotlin 属性合成，须显式 getter
-            val loc = getDividerLocation()
-            if (loc < 0) return
-            g.color = UIUtil.getPanelBackground()
-            g.fillRect(loc, 0, getDividerSize(), height)
-        }
-        init {
-            // M36.5：去 LAF 默认边框（面板四周白色描边根因之一）
-            border = JBUI.Borders.empty()
-        }
-    }
 
     /**
      * 顶部工具栏：复制错误（有警示时可见，永不折叠——错误反馈链路一环）/ 压缩多行切换 / 格式化 /
@@ -1503,8 +1475,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ?: return false
         // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
         val text = SqlCommentStripper.strip(raw)
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(text), null)
+        UiTextClipboard.copy(text)
         project?.let {
             // T-M23.6：提示改多按钮——[确定, 关闭 SQL 面板]，点「关闭 SQL 面板」（index 1）→ 回调关闭预览弹窗
             val options = arrayOf(
@@ -2902,8 +2873,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     fun copyError(): Boolean {
         val warning = currentWarning ?: return false
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(warning), null)
+        UiTextClipboard.copy(warning)
         return true
     }
 
@@ -3047,11 +3017,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun toggleSelectButtonForTest(): JButton? = toggleSelectButton
     internal fun clearButtonForTest(): JButton? = clearButton
     internal fun batchClearButtonForTest(): JButton? = batchClearButton
-    /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。M36 垂直结果分栏加入后，须按方向取水平分栏（垂直分栏的左组件即水平分栏）。 */
-    internal fun splitPaneForTest(): JSplitPane? {
-        fun find(c: java.awt.Container): JSplitPane? {
+    /** T-M26.1→T-UiNative：左右分栏（平台 OnePixelSplitter，原生分隔条主题融合 + 比例记忆）。 */
+    internal fun splitPaneForTest(): OnePixelSplitter? {
+        fun find(c: java.awt.Container): OnePixelSplitter? {
             for (child in c.components) {
-                if (child is JSplitPane && child.orientation == JSplitPane.HORIZONTAL_SPLIT) return child
+                if (child is OnePixelSplitter && !child.orientation) return child
                 if (child is java.awt.Container) find(child)?.let { return it }
             }
             return null

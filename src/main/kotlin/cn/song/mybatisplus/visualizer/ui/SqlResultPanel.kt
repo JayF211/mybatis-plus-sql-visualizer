@@ -1,14 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.FlowLayout
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import javax.swing.JButton
 
 /**
@@ -223,8 +222,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
 
     /** M36.5.48：复制文本到系统剪贴板。 */
     private fun copyToClipboard(text: String) {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(text), null)
+        UiTextClipboard.copy(text)
     }
 
     /** M36.5.48：当前错误文本（测试断言用）。 */

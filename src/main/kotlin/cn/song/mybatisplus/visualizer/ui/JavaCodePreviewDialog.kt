@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.lang.java.JavaLanguage
 import com.intellij.lang.java.JavaSyntaxHighlighterFactory
 import com.intellij.openapi.editor.Editor
@@ -13,8 +14,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import java.awt.Dimension
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import javax.swing.Action
 import javax.swing.JComponent
 import javax.swing.JScrollPane
@@ -86,8 +85,7 @@ class JavaCodePreviewDialog @JvmOverloads constructor(
 
     /** 复制纯 Java 代码到系统剪贴板（T-M45：剥离说明注释——只复制代码忽略「日志」；对齐 SqlPreviewPanel.copySql 的复制实现）。 */
     private fun copyCode() {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(copyText()), null)
+        UiTextClipboard.copy(copyText())
         Messages.showInfoMessage(
             project,
             MpSqlVisualizerBundle.message("reverse.copy.done"),

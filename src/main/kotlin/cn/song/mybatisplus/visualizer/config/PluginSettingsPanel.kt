@@ -8,10 +8,10 @@ import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
@@ -729,7 +729,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
                         isEnabled = PluginBuildInfo.mpvBuild() != null
                         addActionListener {
-                            CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()))
+                            UiTextClipboard.copy(PluginBuildInfo.displayText())
                             val original = text
                             text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
                             javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }

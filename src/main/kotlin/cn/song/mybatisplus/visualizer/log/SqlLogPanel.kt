@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
@@ -43,8 +44,6 @@ import java.awt.Graphics
 import java.awt.GridBagLayout
 import java.awt.GridLayout
 import java.awt.Insets
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -52,6 +51,7 @@ import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
 import java.util.Date
 import com.intellij.ui.JBColor
+import com.intellij.ui.ListSpeedSearch
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -113,7 +113,15 @@ internal const val REFRESH_CHUNK_SIZE = 30
  * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
  */
 internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
-    override fun itemToText(index: Int, element: LogSqlEntry): String = withTerminator(element.restoredSql)
+    override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)
+
+    init {
+        // T-UiNative P0：打字即搜（平台 ListSpeedSearch），匹配文本与 Ctrl+C 复制同口径
+        ListSpeedSearch.installOn(this) { element -> textFor(element) }
+    }
+
+    /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
+    internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
 }
 
 /**
@@ -1271,8 +1279,7 @@ class SqlLogPanel(
         menu.add(
             JMenuItem(copyMenuText("log.panel.copy", "log.panel.copySelected", selectedEntries.size)).apply {
                 addActionListener {
-                    Toolkit.getDefaultToolkit().systemClipboard
-                        .setContents(StringSelection(batchCopySql(selectedEntries)), null)
+                    UiTextClipboard.copy(batchCopySql(selectedEntries))
                 }
             },
         )
@@ -1284,8 +1291,7 @@ class SqlLogPanel(
                 isEnabled = timestampClip.isNotEmpty()
                 addActionListener {
                     if (timestampClip.isNotEmpty()) {
-                        Toolkit.getDefaultToolkit().systemClipboard
-                            .setContents(StringSelection(timestampClip), null)
+                        UiTextClipboard.copy(timestampClip)
                     }
                 }
             },

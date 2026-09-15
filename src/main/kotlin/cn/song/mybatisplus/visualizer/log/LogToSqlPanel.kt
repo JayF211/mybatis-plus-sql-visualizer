@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
@@ -29,8 +30,6 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.FlowLayout
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import javax.swing.JPanel
 
 /**
@@ -175,8 +174,7 @@ class LogToSqlPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            Toolkit.getDefaultToolkit().systemClipboard
-                .setContents(StringSelection(resultEditor.document.text), null)
+            UiTextClipboard.copy(resultEditor.document.text)
             status(MpSqlVisualizerBundle.message("logToSql.copy.done"), error = false)
         }
     }
