@@ -22,9 +22,10 @@ import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
@@ -1230,19 +1231,27 @@ class SqlLogPanel(
             is LogJumpTarget.Precise ->
                 OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
             is LogJumpTarget.NoSource ->
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"),
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                )
+                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
             is LogJumpTarget.NotFound ->
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile),
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                )
+                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile))
             is LogJumpTarget.MissingSource ->
                 SourceCaptureGuide.showMissingSourceDialog(project)
+        }
+    }
+
+    /**
+     * T-UiNative T-UN-02：跳转无源码提示改轻通知（原模态弹窗——纯告知无需打断）。
+     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     */
+    private fun showJumpToast(content: String) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+                content,
+                NotificationType.INFORMATION,
+            ).notify(project)
         }
     }
 
@@ -1401,6 +1410,8 @@ class SqlLogPanel(
     companion object {
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"

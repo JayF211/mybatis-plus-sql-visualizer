@@ -33,6 +33,9 @@ import javax.swing.Icon
  */
 object DataSourceSelector {
 
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
     /** DatabaseRunners 类名（反射入口）。 */
     private const val RUNNERS_CLASS = "com.intellij.database.console.DatabaseRunners"
 
@@ -2871,11 +2874,18 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 return
             }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                project,
-                failMsg,
-                MpSqlVisualizerBundle.message("execute.title"),
-            )
+            // T-UiNative T-UN-02：改 ERROR 轻通知（原模态错误框——失败仍醒目，但不打断）；
+            // 测试模式跳过 + runCatching 兜底（对齐 CopyExecutableSqlAction.showToast 约定）
+            if (!com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
+                runCatching {
+                    com.intellij.notification.Notification(
+                        NOTIFICATION_GROUP_ID,
+                        MpSqlVisualizerBundle.message("execute.title"),
+                        failMsg,
+                        com.intellij.notification.NotificationType.ERROR,
+                    ).notify(project)
+                }
+            }
         }
     }
 

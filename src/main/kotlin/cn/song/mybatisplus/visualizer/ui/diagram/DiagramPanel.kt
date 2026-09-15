@@ -1,12 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui.diagram
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooserFactory
 import com.intellij.openapi.fileChooser.FileSaverDescriptor
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFileWrapper
 import com.intellij.ui.JBColor
@@ -165,17 +166,13 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }.getOrNull()
             ApplicationManager.getApplication().invokeLater {
                 if (bytes == null) {
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, "render/encode")
                     return@invokeLater
                 }
                 runCatching {
                     saveBytesToFile(proj, bytes, "join_diagram.png", "png")
                 }.onFailure { e ->
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, e.message ?: "unknown")
                 }
             }
         }
@@ -191,17 +188,13 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }.getOrNull()
             ApplicationManager.getApplication().invokeLater {
                 if (bytes == null) {
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, "render/encode")
                     return@invokeLater
                 }
                 runCatching {
                     saveBytesToFile(proj, bytes, "join_diagram.svg", "svg")
                 }.onFailure { e ->
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, e.message ?: "unknown")
                 }
             }
         }
@@ -225,17 +218,43 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }
             if (!ApplicationManager.getApplication().isUnitTestMode) {
                 ApplicationManager.getApplication().invokeLater {
-                    Messages.showInfoMessage(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.success", file.absolutePath),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("diagram.export.title"),
+                            MpSqlVisualizerBundle.message("diagram.export.success", file.absolutePath),
+                            NotificationType.INFORMATION,
+                        ).notify(proj)
+                    }
                 }
             }
+        }
+    }
+
+    /**
+     * T-UiNative T-UN-02：导出失败改 ERROR 轻通知（原模态错误框——失败仍醒目，但不打断）。
+     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     */
+    private fun showExportError(proj: Project, detail: String) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("diagram.export.title"),
+                MpSqlVisualizerBundle.message("diagram.export.failed", detail),
+                NotificationType.ERROR,
+            ).notify(proj)
         }
     }
 
     override fun dispose() {
         currentModel = null
         Disposer.dispose(this)
+    }
+
+    private companion object {
+        /** T-UiNative T-UN-02：导出成功/失败轻通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
     }
 
     /**

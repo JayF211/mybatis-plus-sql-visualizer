@@ -50,16 +50,26 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
     private var savedDisplayMode: String? = null
 
+    /** 时间戳设置原始值快照（setUp 捕获）——曾被 finally 里「读当前值再还原」污染成用例自设格式，泄漏给同类后续用例。 */
+    private var savedTsFormat: String = ""
+    private var savedTsEnabled: Boolean = true
+
     override fun setUp() {
         super.setUp()
         val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
         savedDisplayMode = state.logListSqlDisplayMode
         state.logListSqlDisplayMode = "SINGLE_LINE"
+        savedTsFormat = state.logTimestampFormat
+        savedTsEnabled = state.logTimestampEnabled
     }
 
     override fun tearDown() {
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logListSqlDisplayMode =
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        state.logListSqlDisplayMode =
             savedDisplayMode ?: cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
+        // 兜底还原时间戳设置（各用例 finally 已自还；此处防断言抛错前的半程泄漏）
+        state.logTimestampFormat = savedTsFormat
+        state.logTimestampEnabled = savedTsEnabled
         super.tearDown()
     }
 
@@ -294,12 +304,6 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(testTimestamp))
         }
 
-    private fun savedTimestampFormat(): String =
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampFormat
-
-    private fun savedTimestampEnabled(): Boolean =
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampEnabled
-
     private fun setTimestampFormat(format: String) {
         cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampFormat = format
     }
@@ -324,7 +328,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             val meta = joinedText(r.metaLine)
             assertTrue("应渲染为设置格式 HH:mm:ss（期望 $expected，实际 meta=$meta）", meta.contains("[$expected]"))
         } finally {
-            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
+            restoreTimestampSettings(savedTsFormat, savedTsEnabled)
         }
     }
 
@@ -336,7 +340,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             // 关闭后时间戳片段应不存在（耗时/源码片段仍存在，但无时间）
             assertFalse("关闭时间戳后不应含时间片段 " + meta, meta.contains(expectedFormatted("yyyy-MM-dd")))
         } finally {
-            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
+            restoreTimestampSettings(savedTsFormat, savedTsEnabled)
         }
     }
 
@@ -348,7 +352,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
             val expected = expectedFormatted("not-a-valid-pattern-%%") // 回退默认 yyyy-MM-dd HH:mm:ss
             assertTrue("非法 pattern 应回退默认格式（期望 $expected）", meta.contains("[$expected]"))
         } finally {
-            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
+            restoreTimestampSettings(savedTsFormat, savedTsEnabled)
         }
     }
 }

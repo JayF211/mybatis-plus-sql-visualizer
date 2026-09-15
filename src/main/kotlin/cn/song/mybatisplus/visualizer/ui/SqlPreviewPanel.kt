@@ -34,6 +34,9 @@ import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataProvider
@@ -689,11 +692,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
         val explainSql = dialect.renderExplainStatementIdempotent(sql)
         if (explainSql == null) {
-            Messages.showInfoMessage(
-                proj,
-                MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
-                MpSqlVisualizerBundle.message("panel.explain"),
-            )
+            // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
+            if (!ApplicationManager.getApplication().isUnitTestMode) {
+                runCatching {
+                    Notification(
+                        NOTIFICATION_GROUP_ID,
+                        MpSqlVisualizerBundle.message("panel.explain"),
+                        MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                        NotificationType.INFORMATION,
+                    ).notify(proj)
+                }
+            }
             return
         }
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
@@ -1477,16 +1486,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val text = SqlCommentStripper.strip(raw)
         UiTextClipboard.copy(text)
         project?.let {
-            // T-M23.6：提示改多按钮——[确定, 关闭 SQL 面板]，点「关闭 SQL 面板」（index 1）→ 回调关闭预览弹窗
-            val options = arrayOf(
-                MpSqlVisualizerBundle.message("dialog.ok"),
-                MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
-            )
-            val choice = Messages.showDialog(
-                it, MpSqlVisualizerBundle.message("dialog.copy.done"),
-                MpSqlVisualizerBundle.message("plugin.name"), options, 0, Messages.getInformationIcon(),
-            )
-            if (choice == 1) onClosePanelRequested?.invoke()
+            // T-UiNative T-UN-02：复制成功提示改轻通知 + 「关闭 SQL 面板」动作（T-M23.6 原双按钮
+            // 模态改为非模态——点动作等价原 index==1 分支，回调关闭预览弹窗）；
+            // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+            if (!ApplicationManager.getApplication().isUnitTestMode) {
+                runCatching {
+                    val notification = Notification(
+                        NOTIFICATION_GROUP_ID,
+                        MpSqlVisualizerBundle.message("plugin.name"),
+                        MpSqlVisualizerBundle.message("dialog.copy.done"),
+                        NotificationType.INFORMATION,
+                    )
+                    notification.addAction(
+                        NotificationAction.createSimpleExpiring(
+                            MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+                        ) { onClosePanelRequested?.invoke() },
+                    )
+                    notification.notify(it)
+                }
+            }
         }
         return true
     }
@@ -2579,14 +2597,30 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
                 errorCopyButton?.isVisible = true
             }
-            unmatched == 0 -> Messages.showInfoMessage(
-                proj, MpSqlVisualizerBundle.message("panel.param.import.result.success", matched), title,
-            )
-            else -> Messages.showMessageDialog(
-                proj, MpSqlVisualizerBundle.message(
-                    "panel.param.import.result.partial", matched, unmatched, unmatchedKeys.joinToString(", "),
-                ), title, Messages.getWarningIcon(),
-            )
+            unmatched == 0 -> {
+                // T-UiNative T-UN-02：导入结果改轻通知（原模态弹窗——纯告知无需打断）
+                runCatching {
+                    Notification(
+                        NOTIFICATION_GROUP_ID,
+                        title,
+                        MpSqlVisualizerBundle.message("panel.param.import.result.success", matched),
+                        NotificationType.INFORMATION,
+                    ).notify(proj)
+                }
+            }
+            else -> {
+                // T-UiNative T-UN-02：部分匹配改轻通知（原模态警示框；WARNING 保留原警示图标语义）
+                runCatching {
+                    Notification(
+                        NOTIFICATION_GROUP_ID,
+                        title,
+                        MpSqlVisualizerBundle.message(
+                            "panel.param.import.result.partial", matched, unmatched, unmatchedKeys.joinToString(", "),
+                        ),
+                        NotificationType.WARNING,
+                    ).notify(proj)
+                }
+            }
         }
     }
 

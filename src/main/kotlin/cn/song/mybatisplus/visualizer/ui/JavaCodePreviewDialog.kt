@@ -9,10 +9,12 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
 import java.awt.Dimension
 import javax.swing.Action
 import javax.swing.JComponent
@@ -83,14 +85,20 @@ class JavaCodePreviewDialog @JvmOverloads constructor(
         }
     }
 
-    /** 复制纯 Java 代码到系统剪贴板（T-M45：剥离说明注释——只复制代码忽略「日志」；对齐 SqlPreviewPanel.copySql 的复制实现）。 */
+    /** 复制纯 Java 代码到系统剪贴板（T-M45：剥离说明注释——只复制代码忽略「日志」；对齐 SqlPreviewPanel.copySql 的复制实现）。
+     * T-UiNative T-UN-02：复制成功提示改轻通知（原模态弹窗——纯告知无需打断）；测试模式跳过
+     * （对齐 CopyExecutableSqlAction.showToast 约定）。 */
     private fun copyCode() {
         UiTextClipboard.copy(copyText())
-        Messages.showInfoMessage(
-            project,
-            MpSqlVisualizerBundle.message("reverse.copy.done"),
-            MpSqlVisualizerBundle.message("plugin.name"),
-        )
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("plugin.name"),
+                MpSqlVisualizerBundle.message("reverse.copy.done"),
+                NotificationType.INFORMATION,
+            ).notify(project)
+        }
     }
 
     /** 复制文本 = 剥离注释后的当前编辑器内容（headless 测试无剪贴板，经此断言）。 */
@@ -103,6 +111,9 @@ class JavaCodePreviewDialog @JvmOverloads constructor(
     internal fun editorForTest(): Editor = editor
 
     companion object {
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
         const val DIALOG_WIDTH = 680
         const val DIALOG_HEIGHT = 420
         const val DIALOG_MIN_WIDTH = 480

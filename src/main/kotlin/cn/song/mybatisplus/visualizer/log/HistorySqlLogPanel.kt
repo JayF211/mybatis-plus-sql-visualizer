@@ -10,9 +10,10 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.intellij.ui.ListSpeedSearch
@@ -503,12 +504,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 SourceCaptureGuide.showMissingSourceDialog(project)
             }
             is HistoryJumpTarget.NotFound -> {
-                // 文件不存在时提示（项目结构可能已变化）
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
-                    MpSqlVisualizerBundle.message("log.history.jumpToSource"),
-                )
+                // 文件不存在时提示（项目结构可能已变化）；T-UiNative T-UN-02：改轻通知（原模态弹窗）
+                // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+                if (!ApplicationManager.getApplication().isUnitTestMode) {
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("log.history.jumpToSource"),
+                            MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
+                            NotificationType.INFORMATION,
+                        ).notify(project)
+                    }
+                }
             }
             is HistoryJumpTarget.Navigate -> {
                 OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
@@ -526,6 +533,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private val LOG = Logger.getInstance(HistorySqlLogPanel::class.java)
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
+
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
         /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
