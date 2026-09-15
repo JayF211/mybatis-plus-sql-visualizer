@@ -1,4 +1,6 @@
 # P-立项-05：方言真实验证本地环境（可选，Phase 2 Tier 2）
+# T-DialectLabMatrix：配方升级——每服务补 healthcheck（DBX Database Lab 配方标配，
+# 结构守卫见 DockerComposeLabConsistencyTest：钉版本/端口避让/必填 env/healthcheck 四硬约束）。
 #
 # 用途：无 Testcontainers / 想复用长期运行的数据库实例时，`docker compose up -d` 起本套环境，
 # 再以外部实例方式执行验证：
@@ -7,10 +9,11 @@
 #     -Dmpvs.dialect.jdbcUrl="jdbc:mysql://localhost:3306/p05?useSSL=false&allowPublicKeyRetrieval=true" \
 #     -Dmpvs.dialect.user=root -Dmpvs.dialect.password=p05pass -Dmpvs.dialect.name="MySQL"
 #
-# DM（达梦）/ KingBase（人大金仓）无官方公开镜像——真实环境验证需指向用户自有实例
-# （官方文档级验证见 DialectDocGoldenTest）。
+# DM（达梦）/ KingBase（人大金仓）无官方公开 pull 镜像（官方以 tar 包分发，需实名/许可）——
+# 取得路径与 load 脚本、验证命令样例见 database-lab/README.md（T-DialectLabMatrix）；
+# 未取得实例前，文档级验证见 DialectDocGoldenTest。
 #
-# 端口分配避让常用端口；凭据仅限本地验证环境。
+# 端口分配避让常用端口（1xxxx 段，守卫测试断言 ≥10000 且互不冲突）；凭据仅限本地验证环境。
 
 services:
   mysql80:
@@ -20,6 +23,11 @@ services:
       MYSQL_DATABASE: p05
     ports:
       - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   postgres16:
     image: postgres:16.2
@@ -28,6 +36,11 @@ services:
       POSTGRES_DB: p05
     ports:
       - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   mariadb11:
     image: mariadb:11.2
@@ -36,6 +49,11 @@ services:
       MARIADB_DATABASE: p05
     ports:
       - "13307:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   sqlserver2022:
     image: mcr.microsoft.com/mssql/server:2022-CU12-ubuntu-22.04
@@ -44,6 +62,11 @@ services:
       MSSQL_SA_PASSWORD: "P05pass!strong"
     ports:
       - "11433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
   oracle23free:
     image: gvenzl/oracle-free:23.5-slim
@@ -53,3 +76,8 @@ services:
       APP_USER_PASSWORD: p05pass
     ports:
       - "11521:1521"
+    healthcheck:
+      test: ["CMD-SHELL", "echo \"SELECT 1 FROM DUAL;\" | sqlplus -s p05/p05pass@localhost/FREEPDB1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10

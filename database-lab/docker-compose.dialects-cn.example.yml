@@ -1,0 +1,45 @@
+# T-DialectLabMatrix：国产方言（达梦 DM8 / 人大金仓 KingbaseES）示例配方片段。
+#
+# 两库均无官方公开 pull 镜像——官方以 tar 包分发（需实名注册/许可）：
+#   - DM8：https://eco.dameng.com/download/ （Docker 镜像 tar，如 dm8_20250206_x86_rh6_rq_single.tar）
+#   - KingbaseES：https://www.kingbase.com.cn/download.html （Docker 镜像 tar 精简包 + License 申请）
+#
+# 使用流程（详见 database-lab/README.md）：
+#   1. 官网下载 tar 包（人工，实名/许可）
+#   2. powershell -File database-lab/load-dm8.ps1 -Tar <tar 路径>   （或 load-kingbase.ps1）
+#   3. 用 `docker images` 查看载入的实际镜像名，替换下方 image: 占位
+#   4. docker compose -f database-lab/docker-compose.dialects-cn.example.yml up -d
+#   5. 按 README 验证命令跑 DialectDockerVerificationTest 外部实例模式
+#
+# 端口走 1xxxx 避让段（与主配方 docker-compose-dialects.yml 互不冲突，守卫测试断言）。
+# 镜像名占位不校验钉版本（用户侧 tar 版本由官方渠道决定，守卫只查端口避让——见
+# DockerComposeLabConsistencyTest）。
+
+services:
+  dm8:
+    # ← 替换为 docker load 后 docker images 显示的实际名称（形如 dm8_single:dm8_20250206_x86_rh6_rq_single）
+    image: REPLACE_WITH_LOADED_DM8_IMAGE
+    container_name: mpsv-dm8
+    privileged: true
+    ports:
+      - "15236:5236"
+    environment:
+      PAGE_SIZE: "16"
+      LD_LIBRARY_PATH: /opt/dmdbms/bin
+      INSTANCE_NAME: mpsv_lab
+
+  kingbase:
+    # ← 替换为 docker load 后 docker images 显示的实际名称（形如 kingbase_v009r001c002b0014）
+    image: REPLACE_WITH_LOADED_KINGBASE_IMAGE
+    container_name: mpsv-kingbase
+    privileged: true
+    ports:
+      - "15433:54321"
+    environment:
+      DB_USER: system
+      DB_PASSWORD: p05pass
+      NEED_START: "1"
+      DB_MODE: pg
+    # 金仓企业版需挂载 License（官网免费申请 90 天开发授权）：
+    # volumes:
+    #   - ./kingbase.lic:/opt/kingbase/license.dat:ro

@@ -84,6 +84,8 @@ dependencies {
     testImplementation(libs.mssql.jdbc)
     testImplementation(libs.mariadb.java.client)
     testImplementation(libs.ojdbc11)
+    // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
+    testImplementation(libs.snakeyaml)
 
     // P-立项-05：jackson 版本约束——testcontainers 传递的 jackson-annotations 2.10.3 缺失
     // JsonProperty.namespace()（2.11+ 才有），在测试 classpath 上遮蔽 IDEA 平台所用的新版
