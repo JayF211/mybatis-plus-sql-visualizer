@@ -5,9 +5,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.ui.SimpleColoredComponent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -277,47 +275,38 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         }
     }
 
-    fun test背景样式_未选中与选中混色比例不同且不铺平台填充() {
+    fun test背景样式_未选中淡背景混色_选中走平台填充() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             val bg = list.background
             val update = Color(0xE67E22)
             render(entry("UPDATE user SET a = 1"))
-            assertEquals("未选中应为 14% 混色",
+            assertEquals("未选中应为 14% 混色（类型淡背景标记保留）",
                 SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_NORMAL), renderer.background)
             render(entry("UPDATE user SET a = 1"), true)
-            assertEquals("选中应为 30% 混色",
-                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_SELECTED), renderer.background)
-            assertNotEquals("选中态**不铺**平台选中填充（否则类型色被覆盖丢失）",
+            assertEquals("选中态交给平台选中色（T-UN-09 描边退役）",
                 list.selectionBackground, renderer.background)
         }
     }
 
-    fun test背景样式_选中态描边且两状态insets逐边相等() {
+    fun test背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             render(entry("UPDATE user SET a = 1"))
-            assertEquals("未选中应为普通边框", renderer.normalBorder, renderer.border)
+            assertSame("未选中应为普通边框", renderer.normalBorder, renderer.border)
             render(entry("UPDATE user SET a = 1"), true)
-            assertEquals("选中应为描边边框（同一实例，锁零分配引用切换）",
-                renderer.selectedBorder, renderer.border)
-
-            val normal = renderer.normalBorder.getBorderInsets(renderer)
-            val selected = renderer.selectedBorder.getBorderInsets(renderer)
-            assertEquals("上", normal.top, selected.top)
-            assertEquals("左", normal.left, selected.left)
-            assertEquals("下", normal.bottom, selected.bottom)
-            assertEquals("右", normal.right, selected.right)
+            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
+                renderer.normalBorder, renderer.border)
         }
     }
 
-    fun test背景样式_选中态前景不转白_色条样式仍转白() {
+    fun test背景样式与色条样式_选中态前景均走selectionForeground() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             render(entry("SELECT 1", ms = 5L), true)
-            assertEquals("淡底上白字不可见 → 背景样式不取 selectionForeground",
-                list.foreground, renderer.metaLine.foreground)
+            assertEquals("选中态底色已是平台选中填充，前景应转 selectionForeground（T-UN-09）",
+                list.selectionForeground, renderer.metaLine.foreground)
         }
         withCrudColors(SqlListTypeColor.STYLE_BAR) {
             render(entry("SELECT 1", ms = 5L), true)
-            assertEquals("色条样式走平台填充，前景仍为 selectionForeground（现状不变）",
+            assertEquals("色条样式选中前景仍为 selectionForeground（现状不变）",
                 list.selectionForeground, renderer.metaLine.foreground)
         }
     }
@@ -356,15 +345,14 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         }
     }
 
-    fun test背景样式_选中与未选中之间切换会换边框实例() {
+    fun test背景样式_选中与未选中边框恒同一实例() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             render(entry("UPDATE t SET a = 1"))
             val normal = renderer.border
             render(entry("UPDATE t SET a = 1"), true)
-            val selected = renderer.border
-            assertNotSame("选中态必须换成描边边框（守卫不能把该变更也拦掉）", normal, selected)
+            assertSame("描边退役后选中/未选中共用同一 Border（不再切换）", normal, renderer.border)
             render(entry("UPDATE t SET a = 1"))
-            assertSame("回到未选中应换回原 Border 实例", normal, renderer.border)
+            assertSame("回到未选中仍是同一实例", normal, renderer.border)
         }
     }
 

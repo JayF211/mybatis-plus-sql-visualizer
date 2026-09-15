@@ -7,6 +7,10 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -38,9 +42,7 @@ import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JComboBox
-import javax.swing.JMenuItem
 import javax.swing.JPanel
-import javax.swing.JPopupMenu
 import javax.swing.SwingConstants
 
 /**
@@ -439,26 +441,56 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val entry = sqlListModel.getElementAt(idx)
         val selectedEntries = sqlList.selectedIndices.map { sqlListModel.getElementAt(it) }
 
-        val menu = JPopupMenu()
-        menu.add(JMenuItem(copyMenuText("log.history.copy", "log.history.copySelected", selectedEntries.size), AllIcons.Actions.Copy).apply {
-            addActionListener {
-                UiTextClipboard.copy(batchCopySql(selectedEntries))
-            }
-        })
-        // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰）
+        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
+        val group = DefaultActionGroup()
+        group.add(CopySqlAction(selectedEntries))
+        // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰，
+        // 置灰逻辑在 CopyTimestampAction.update）
         val timestampClip = batchCopyTimestamps(selectedEntries)
-        menu.add(JMenuItem(copyMenuText("log.history.copyTimestamp", "log.history.copyTimestampSelected", selectedEntries.size), AllIcons.Actions.Copy).apply {
-            isEnabled = timestampClip.isNotEmpty()
-            addActionListener {
-                if (timestampClip.isNotEmpty()) {
-                    UiTextClipboard.copy(timestampClip)
-                }
+        group.add(CopyTimestampAction(selectedEntries, timestampClip))
+        group.add(JumpToSourceAction(entry))
+        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.history.sql", group)
+        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
+        popup.setTargetComponent(sqlList)
+        popup.component.show(sqlList, e.x, e.y)
+    }
+
+    // ---------- T-UiNative P1a：二级右键菜单动作（原 JMenuItem 语义平移，update 设图标/文案/灰置） ----------
+
+    private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.text = copyMenuText("log.history.copy", "log.history.copySelected", entries.size)
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            UiTextClipboard.copy(batchCopySql(entries))
+        }
+    }
+
+    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.text = copyMenuText("log.history.copyTimestamp", "log.history.copyTimestampSelected", entries.size)
+            e.presentation.isEnabled = clip.isNotEmpty()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (clip.isNotEmpty()) {
+                UiTextClipboard.copy(clip)
             }
-        })
-        menu.add(JMenuItem(MpSqlVisualizerBundle.message("log.history.jumpToSource"), AllIcons.Actions.EditSource).apply {
-            addActionListener { jumpToSource(entry) }
-        })
-        menu.show(sqlList, e.x, e.y)
+        }
+    }
+
+    private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToSource")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            jumpToSource(entry)
+        }
     }
 
     /**
@@ -640,28 +672,10 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         isOpaque = false
     }
 
-    /** 未选中态 Border（分隔线 + 内边距）。 */
+    /** Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
     internal val normalBorder: Border = BorderFactory.createCompoundBorder(
         BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
         javax.swing.BorderFactory.createEmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
-
-    /**
-     * T-CrudColor：选中态描边 Border（整行淡背景样式专用）。
-     * 预建一次、渲染时只切引用 + 改色，热路径零分配；内层分隔线为透明占位（底边为纯描边）。
-     */
-    internal val selectedBorder: SqlListSelectionOutline = SqlListSelectionOutline(
-        SqlListTypeColor.OUTLINE_WIDTH,
-        JBColor.foreground(),
-        BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
-            javax.swing.BorderFactory.createEmptyBorder(
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                8 - SqlListTypeColor.OUTLINE_WIDTH,
-            ),
-        ),
     )
 
     init {
@@ -687,8 +701,10 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         val entry = value as? LogSqlEntry
         // T-CrudColor：标记形态分派（与日志页共用 applyCrudColorMark，语义完全一致）
         val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        val useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(SqlListTypeColor.styleOf())
-        applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list)
+        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
+        // selectionForeground（与日志页 LogEntryListCellRenderer 同款）
+        val useSelectionFill = isSelected
+        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
 
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())

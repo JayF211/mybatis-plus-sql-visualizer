@@ -26,6 +26,7 @@ import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
@@ -45,6 +46,7 @@ import java.awt.Graphics
 import java.awt.GridBagLayout
 import java.awt.GridLayout
 import java.awt.Insets
+import java.awt.Point
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -53,6 +55,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import com.intellij.ui.JBColor
 import com.intellij.ui.ListSpeedSearch
+import com.intellij.ui.awt.RelativePoint
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -62,9 +65,7 @@ import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JLabel
-import javax.swing.JMenuItem
 import javax.swing.JPanel
-import javax.swing.JPopupMenu
 import javax.swing.JSeparator
 import javax.swing.JToggleButton
 import javax.swing.ListModel
@@ -693,15 +694,19 @@ class SqlLogPanel(
      * 一键设置——同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
      */
     private fun showTypeFilterPopup() {
-        val popup = JPopupMenu()
-        popup.add(buildTypeFilterContent())
-        popup.show(typeFilterButton, 0, typeFilterButton.height + 2)
+        // T-UiNative P1a：JPopupMenu 外壳 → 平台 JBPopup（createComponentPopupBuilder 承载 JCheckBox 面板；
+        // 触发源是工具栏按钮 ActionListener 无 MouseEvent，锚点沿用原 show 坐标——按钮正下方 2px）
+        val contentPanel = buildTypeFilterContent()
+        JBPopupFactory.getInstance().createComponentPopupBuilder(contentPanel, contentPanel).apply {
+            setRequestFocus(false)
+            setCancelOnClickOutside(true)
+        }.createPopup().show(RelativePoint(typeFilterButton, Point(0, typeFilterButton.height + 2)))
     }
 
     /**
      * T-SelToggle：构建弹窗内容（勾选框区 + 分隔线 + 底部切换按钮），赋值 [typePopupCheckBoxes]
      * 与 [typePopupToggleButton]。与 [showTypeFilterPopup] 拆分是纯提取（行为零变更），
-     * 使测试可脱离 `popup.show` 直接驱动勾选框/切换按钮（headless 下 JPopupMenu.show 不可靠）。
+     * 使测试可脱离 `popup.show` 直接驱动勾选框/切换按钮（headless 下弹层 show 不可靠）。
      */
     private fun buildTypeFilterContent(): JPanel {
         val content = JPanel()
@@ -1284,57 +1289,97 @@ class SqlLogPanel(
         list.selectedIndices = resolveContextMenuSelection(list.selectedIndices, index)
         val entry = list.model.getElementAt(index)
         val selectedEntries = list.selectedIndices.map { list.model.getElementAt(it) }
-        val menu = JPopupMenu()
-        menu.add(
-            JMenuItem(copyMenuText("log.panel.copy", "log.panel.copySelected", selectedEntries.size)).apply {
-                addActionListener {
-                    UiTextClipboard.copy(batchCopySql(selectedEntries))
-                }
-            },
-        )
+        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
+        val group = DefaultActionGroup()
+        group.add(CopySqlAction(selectedEntries))
         // T-LogSearchRowTime：复制时间戳（所见即所复制的纯时间文本，无方括号）；
-        // 显示开关关闭时无片段可复制 → 菜单项置灰
+        // 显示开关关闭时无片段可复制 → 菜单项置灰（置灰逻辑在 CopyTimestampAction.update）
         val timestampClip = batchCopyTimestamps(selectedEntries)
-        menu.add(
-            JMenuItem(copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", selectedEntries.size)).apply {
-                isEnabled = timestampClip.isNotEmpty()
-                addActionListener {
-                    if (timestampClip.isNotEmpty()) {
-                        UiTextClipboard.copy(timestampClip)
-                    }
-                }
-            },
-        )
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.delete")).apply {
-                addActionListener { manager.entries.removeEntry(entry) }
-            },
-        )
+        group.add(CopyTimestampAction(selectedEntries, timestampClip))
+        group.add(DeleteSqlAction(entry))
         // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.sendToReverse")).apply {
-                addActionListener {
-                    sqlToJavaPanel.setInputSql(entry.restoredSql)
-                    tabs.selectedComponent = sqlToJavaPanel
-                }
-            },
-        )
+        group.add(SendToSqlToJavaAction(entry))
         // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("logToSql.sendTo")).apply {
-                addActionListener {
-                    logToSqlPanel.loadFromEntry(entry)
-                    tabs.selectedComponent = logToSqlPanel
-                }
-            },
-        )
+        group.add(SendToLogToSqlAction(entry))
         // O-1：日志 ↔ 源码关联跳转（Phase A）
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.jumpToSource")).apply {
-                addActionListener { jumpToSource(entry) }
-            },
-        )
-        menu.show(list, e.x, e.y)
+        group.add(JumpToSourceAction(entry))
+        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
+        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
+        popup.setTargetComponent(list)
+        popup.component.show(list, e.x, e.y)
+    }
+
+    // ---------- T-UiNative P1a：列表右键菜单动作（原 JMenuItem 语义平移，update 设文案/灰置，actionPerformed 平移原监听体） ----------
+
+    /** 复制 SQL：多选批量逐行拼接（[batchCopySql]），单选复制该行。 */
+    private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = copyMenuText("log.panel.copy", "log.panel.copySelected", entries.size)
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            UiTextClipboard.copy(batchCopySql(entries))
+        }
+    }
+
+    /** 复制时间戳：显示开关关闭时无片段可复制 → update 置灰。 */
+    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", entries.size)
+            e.presentation.isEnabled = clip.isNotEmpty()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (clip.isNotEmpty()) {
+                UiTextClipboard.copy(clip)
+            }
+        }
+    }
+
+    /** 删除被右键的条目。 */
+    private inner class DeleteSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.delete")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            manager.entries.removeEntry(entry)
+        }
+    }
+
+    /** 发送到 SQL → Java 转换（第三 tab）。 */
+    private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            sqlToJavaPanel.setInputSql(entry.restoredSql)
+            tabs.selectedComponent = sqlToJavaPanel
+        }
+    }
+
+    /** 发送到日志转 SQL（第二 tab）。 */
+    private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            logToSqlPanel.loadFromEntry(entry)
+            tabs.selectedComponent = logToSqlPanel
+        }
+    }
+
+    /** 跳转到源码（无位置→引导捕获弹窗，无提示/文件丢失→toast——原 jumpToSource 分支原样复用）。 */
+    private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToSource")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            jumpToSource(entry)
+        }
     }
 
     /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
@@ -1440,26 +1485,20 @@ class SqlLogPanel(
 private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0x9E9E9E))
 
 /**
- * T-CrudColor：按标记形态应用「色条 / 整行淡背景 + 选中描边」——**两个列表渲染器共用**（§1.2.1）。
+ * T-CrudColor：按标记形态应用「色条 / 整行淡背景」——**两个列表渲染器共用**（§1.2.1）。
  *
  * 三分支：
  *  - 关闭 / OTHER（[tint] = null）→ 与改造前逐字节一致；
- *  - [SqlListTypeColor.STYLE_BAR] → 色条着色，单元格背景仍走平台选中填充（色条不受影响，选中不丢色）；
- *  - [SqlListTypeColor.STYLE_BACKGROUND] → 底色与列表背景混色（选中时提高比例），**不铺**平台选中填充，
- *    选中由「描边 + 色调加深」共同表达。
- *
- * [selectedBorder] 预建后此处只切引用 + 改色（[SqlListSelectionOutline.setColor]），热路径零分配；
- * 描边色经 [SqlListTypeColor.ensureOutlineContrast]——暗色主题下 `selectionBackground`
- * （`#2E436E`）压在加深后的行底色上几乎不可见，必须提亮。
+ *  - [SqlListTypeColor.STYLE_BAR] → 色条着色，单元格背景走平台选中填充（色条不受影响，选中不丢色）；
+ *  - [SqlListTypeColor.STYLE_BACKGROUND] → **未选中**行底色与列表背景淡混色（类型标记）；
+ *    选中行交给平台选中填充（T-UN-09 描边退役——自研选中视觉整体下线，不再干预 Border）。
  */
 internal fun applyCrudColorMark(
     cell: JPanel,
     colorBar: JPanel,
     normalBorder: Border,
-    selectedBorder: SqlListSelectionOutline,
     tint: Color?,
     isSelected: Boolean,
-    cellHasFocus: Boolean,
     list: javax.swing.JList<*>?,
 ) {
     val listBg = list?.background ?: cell.background
@@ -1477,30 +1516,15 @@ internal fun applyCrudColorMark(
         }
         SqlListTypeColor.STYLE_BACKGROUND -> {
             setOpaqueIfChanged(colorBar, false)
-            if (tint == null) {
-                setBorderIfChanged(cell, normalBorder)
-                setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
-            } else {
-                setBackgroundIfChanged(
-                    cell,
-                    SqlListTypeColor.blend(
-                        listBg,
-                        tint,
-                        if (isSelected) SqlListTypeColor.MIX_SELECTED else SqlListTypeColor.MIX_NORMAL,
-                    ),
-                )
-                if (isSelected) {
-                    val raw = if (cellHasFocus) selectionBg
-                    else javax.swing.UIManager.getColor("List.selectionInactiveBackground") ?: selectionBg
-                    // setColor 只改字段、不触发 Swing 属性变更（无 repaint 副作用），故无需守卫
-                    selectedBorder.setColor(
-                        SqlListTypeColor.ensureOutlineContrast(raw, SqlListTypeColor.brightnessOf(listBg) < 0.5)
-                    )
-                    setBorderIfChanged(cell, selectedBorder)
-                } else {
-                    setBorderIfChanged(cell, normalBorder)
-                }
-            }
+            setBorderIfChanged(cell, normalBorder)
+            setBackgroundIfChanged(
+                cell,
+                when {
+                    isSelected -> selectionBg
+                    tint == null -> listBg
+                    else -> SqlListTypeColor.blend(listBg, tint, SqlListTypeColor.MIX_NORMAL)
+                },
+            )
         }
         else -> { // STYLE_OFF
             setOpaqueIfChanged(colorBar, false)
@@ -1619,29 +1643,10 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         isOpaque = false
     }
 
-    /** 未选中态 Border（分隔线 + 内边距）。 */
+    /** 未选中态 Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
     internal val normalBorder: Border = BorderFactory.createCompoundBorder(
         BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
         EmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
-
-    /**
-     * T-CrudColor：选中态描边 Border（[SqlListTypeColor.STYLE_BACKGROUND] 专用）。
-     * 预建一次、渲染时只切引用 + 改色（[SqlListSelectionOutline.setColor]），热路径零分配。
-     * 内层分隔线为**透明占位**：仅占 1px inset，不绘制——否则灰线会画在蓝框内部把底边割断。
-     */
-    internal val selectedBorder: SqlListSelectionOutline = SqlListSelectionOutline(
-        SqlListTypeColor.OUTLINE_WIDTH,
-        JBColor.foreground(),
-        BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
-            EmptyBorder(
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                8 - SqlListTypeColor.OUTLINE_WIDTH,
-            ),
-        ),
     )
 
     init {
@@ -1671,17 +1676,14 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): java.awt.Component {
-        val listBg = list?.background ?: background
-        val selectionBg = list?.selectionBackground ?: listBg
         val entry = value as? LogSqlEntry
 
         // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
-        val style = SqlListTypeColor.styleOf()
         val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        // 背景色样式下底色是淡色调而非饱和选中填充：若按选中态取白字，亮色主题下不可见；
-        // 且耗时着色会被抹成白色、丢失快/慢信号。故仅在色条样式（走平台填充）时按选中态取前景。
-        val useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(style)
-        applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list)
+        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
+        // selectionForeground（耗时着色随 formatDurationFragment 的选中白语义）
+        val useSelectionFill = isSelected
+        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
 
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())

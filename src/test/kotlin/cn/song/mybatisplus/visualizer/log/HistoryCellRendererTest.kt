@@ -6,7 +6,6 @@ import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.io.File
@@ -218,34 +217,26 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         }
     }
 
-    fun test二级条目_背景样式_未选中与选中混色比例不同且不铺平台填充() {
+    fun test二级条目_背景样式_未选中淡背景混色_选中走平台填充() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             val bg = list.background
             renderSql(sqlEntry("UPDATE user SET a = 1"))
-            assertEquals("未选中 14% 混色",
+            assertEquals("未选中 14% 混色（类型淡背景标记保留）",
                 SqlListTypeColor.blend(bg, java.awt.Color(0xE67E22), SqlListTypeColor.MIX_NORMAL),
                 sqlRenderer.background)
             renderSql(sqlEntry("UPDATE user SET a = 1"), true)
-            assertEquals("选中 30% 混色",
-                SqlListTypeColor.blend(bg, java.awt.Color(0xE67E22), SqlListTypeColor.MIX_SELECTED),
-                sqlRenderer.background)
-            assertNotEquals("选中态不铺平台填充", list.selectionBackground, sqlRenderer.background)
+            assertEquals("选中态交给平台选中色（T-UN-09 描边退役）",
+                list.selectionBackground, sqlRenderer.background)
         }
     }
 
-    fun test二级条目_背景样式_选中态描边且两状态insets逐边相等() {
+    fun test二级条目_背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             renderSql(sqlEntry("UPDATE user SET a = 1"))
-            assertEquals(sqlRenderer.normalBorder, sqlRenderer.border)
+            assertSame("未选中为普通边框", sqlRenderer.normalBorder, sqlRenderer.border)
             renderSql(sqlEntry("UPDATE user SET a = 1"), true)
-            assertEquals(sqlRenderer.selectedBorder, sqlRenderer.border)
-
-            val normal = sqlRenderer.normalBorder.getBorderInsets(sqlRenderer)
-            val selected = sqlRenderer.selectedBorder.getBorderInsets(sqlRenderer)
-            assertEquals("上", normal.top, selected.top)
-            assertEquals("左", normal.left, selected.left)
-            assertEquals("下", normal.bottom, selected.bottom)
-            assertEquals("右", normal.right, selected.right)
+            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
+                sqlRenderer.normalBorder, sqlRenderer.border)
         }
     }
 
