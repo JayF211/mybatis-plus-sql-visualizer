@@ -140,7 +140,9 @@ T-MTS2-00（设置门控：状态字段+McpToolGate+设置页开关+三工具拆
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-15 实施完毕（分支 t-mcp-toolset2，全量 testShards 385类/4508/0/0/6 绿；独立子代理复核 9/10 通过，1 处措辞补正）**
+**2026-09-15 实施完毕并合入 dev（分支 t-mcp-toolset2 → dev 快进合并，dev HEAD f6533f7；合并后全量 testShards 367类/4421/0/0/6 绿——基线 350/4267 → +17 类 +154 例；verifyGate 三目标 exit 0，253/262 Compatible + 243 豁免留痕；独立子代理复核 9/10 通过，1 处措辞补正）**
+
+> 合并踩坑留档：dev worktree 旧 build 目录直接跑 testShards 出现成片 `NoSuchMethodError`（PluginSettings 新增字段后旧 class 被陈旧产物劫持）——**清 build/classes + build/kotlin 后即绿**，与记忆 pitfall-regression-false-failure-flakes 的「合并后首跑先清产物」同型。
 
 - **T-MTS2-00 门控落地**：PluginSettings.State 增 `mcpToolsEnabled`(默认 true) + `mcpDisabledTools`(默认空)；McpToolGate 统一读口（服务未注册兜底启用）；**一工具一 toolset 类**（平台 per-tool 门控只有 toolset 粒度 isEnabled——262 mcpserver.jar getEnabledToolsets 字节码实证每次 getTools 重新求值，开关即时生效无需重启）；McpToolsetSupport 抽象基类三钩子 final 字面量覆写（253 兼容机制与一期相同）；mcp-optional.xml 注册 10 个 toolset。McpConfigurable 门控区：总开关 + 10 工具复选框 + 全部启用/禁用切换按钮（T-SelToggle 同款）+ isModified/apply/reset；**工具复选框与总开关正交**（仅表达「不在禁用清单」——否则 master off 时复选框全不勾会把全部工具误写禁用清单，apply 反噬）。
 - **T-MTS2-01 R1 四工具**：render_logs（三解析器 feed→takeEntries 复用面板同构，`LogSqlEntry.restoredSql` 直接消费，前缀缺省读设置可覆盖）/ check_sql（splitter+classifier+detector 组合）/ rollback_plan（RollbackSqlGenerator + messageEn）/ perf_advice（SqlPerfAnalyzer + messageEn）。**英文文案定案**：MpSqlVisualizerBundle 增 internal `messageEn`（Locale.ROOT + utf8Control 读 base 英文，零新键），替代原 McpPerfText 键映射方案（无映射不全风险）。
