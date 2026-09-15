@@ -9,7 +9,7 @@
 | master HEAD | `155e0cf`（docs: T-ListParamCollect 合入 master） |
 | feature HEAD | `59e8510`（fix: 恢复变更记录总册） |
 | 差异规模 | master 领先 248 提交；feature 自身 9 提交（M56 agent 字节码通道一期） |
-| 状态 | 实施中 |
+| 状态 | 实施中——首环完成（§五 1~6 全落地），master 并行两次推进，正按 §六做增量收口 |
 
 ---
 
@@ -77,3 +77,28 @@
 4. 全量测试通过记录（用例数/失败数/耗时）
 5. buildPlugin 产物 + verifyPlugin 报告结论
 6. 交接文档（`docs/开发计划/` 同级：冲突清单、变更摘要、测试与校验结果、遗留事项、回滚方式）
+
+## 六、master 并行推进的增量收口（二次/三次合并）
+
+master 在本任务执行期间被并行会话两次推进，「master 功能全部合入」目标要求随之做增量合并。本节在动代码前登记增量计划。
+
+### 二次合并（已完成，提交 `da37ad5`）
+
+| 项 | 值 |
+|----|----|
+| master 合入点 | `d366731`（T-Intranet 内网离线可用性 + v2026.9.18-beta.1 发行链 + T-TestPerf2 沉淀） |
+| 冲突 | 1 文件（`docs/变更记录.md` 表格行追加型）→ union（master T-Intranet 两行 + M56 台账行归位表首） |
+| 测试 | testShards **4162/0/0/6**（1570+1344+1248，跳过=6 Docker）+ agent 21 用例绿 |
+| 中断点 | 最终 buildPlugin + verifyPlugin 未跑完（会话中断），由三次合并后统一收口 |
+
+### 三次合并（本节计划，master 合入点 `5eeb884`）
+
+增量内容 8 提交、28 文件：T-ReleasePerf 收尾（`c44dbfd`/`e8f0224`：build.gradle.kts verifyGate 离线化、`dev-support/verifier-ignored-problems.txt` 豁免清单、发行说明/开发测试指南文档）、日志原始时间记录与显示切换（`51eb01a`/`a2436f1`：LogTimestampParser + 各 parser + 设置项）、JdbcTemplate 并发修复（`7d23c1d`）、日志列表搜索行号/时间 + 右键复制时间戳（`5eeb884`/`71bffa1`：SqlLogPanel/SqlHistoryPanel）。
+
+- **预演**：`git merge-tree --write-tree HEAD master` → exit=0 **零文本冲突**（28 文件全部自动合并）；`docs/MEMORY.md`、`docs/变更记录.md`、M56 实施计划文档 master 侧在 `da37ad5..5eeb884` 区间未改动（差异纯来自 feature 侧），合并保留 feature 版。
+- **自动合并语义复核点**（零冲突 ≠ 语义正确，逐项过守卫）：
+  1. `build.gradle.kts`：T-ReleasePerf verifyGate/releaseGate 改动与 feature embedAgentJar 尾块共存性；
+  2. 两个 bundle：master 新增 timestamp/search 键自动并入后，en/zh 键集合仍须全等（BundleParityGuardTest 守卫）；
+  3. `SqlLogPanel.kt`：master 搜索行号/时间与右键复制时间戳 vs feature agent badge（非重叠区自动合并，渲染冻结守卫复核）；
+  4. `PluginSettings.kt`：master 日志时间新字段与 feature enhancedCapture 字段并列完整。
+- **门禁**（合并后一次性收口，含二次合并遗留）：testShards 全量 + `:sql-visualizer-agent:test` + buildPlugin（核对 agent jar 内嵌）+ verifyPlugin 三目标 Compatible。
