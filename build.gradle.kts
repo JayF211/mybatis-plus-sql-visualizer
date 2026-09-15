@@ -317,6 +317,10 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.18-beta.1</h2>
+            <ul>
+                <li>JdbcTemplate 集合参数方括号误入 SQL 修复</li>
+            </ul>
             <h2>v2026.9.14</h2>
             <ul>
                 <li>SQL 列表 CRUD 类型颜色标记</li>
