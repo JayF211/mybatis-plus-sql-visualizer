@@ -45,7 +45,7 @@ class McpConfigurable : Configurable {
 
         val jumpRow = FormBuilder.createFormBuilder()
             .addLabeledComponent(
-                MpSqlVisualizerBundle.message("settings.mcp.open"),
+                MpSqlVisualizerBundle.message("settings.mcp.label"),
                 JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                     isOpaque = false
                     add(openButton)

@@ -155,10 +155,10 @@
                                  key="settings.section.shortcuts"
                                  instance="cn.song.mybatisplus.visualizer.config.ShortcutsConfigurable"/>
 
-        <!-- T-ShortcutSettings：MCP 工具（跳转平台 MCP Server 设置 + 三工具说明） -->
+        <!-- T-ShortcutSettings：MCP 工具（跳转平台 MCP Server 设置 + 三工具说明；位列关于上方） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.mcp"
-                                 groupWeight="5"
+                                 groupWeight="15"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.mcp"
                                  instance="cn.song.mybatisplus.visualizer.config.McpConfigurable"/>
