@@ -55,7 +55,9 @@ object PluginUpdateRunner {
         if (!VersionComparator.isRecognizable(currentVersion)) {
             return CheckResult.Failure("current version unavailable")
         }
-        val json = fetch(UpdateSource.manifestUrl()) ?: return CheckResult.Failure("network unavailable")
+        val url = UpdateSource.manifestUrl()
+        UpdateSource.logOverrideIfAny(url)
+        val json = fetch(url) ?: return CheckResult.Failure("network unavailable")
         val manifest = parseManifest(json) ?: return CheckResult.Failure("manifest malformed")
         return if (VersionComparator.compare(manifest.version, currentVersion) > 0) {
             CheckResult.Available(manifest)
