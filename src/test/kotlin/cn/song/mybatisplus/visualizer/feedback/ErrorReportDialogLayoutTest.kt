@@ -301,4 +301,64 @@ class ErrorReportDialogLayoutTest {
             ),
         )
     }
+
+    // ---------- T-FeedbackBatch2：分节可见性、头部镜像与收集语义 ----------
+
+    private fun item(index: Int) =
+        BatchSubmitter.BatchItem("cn.song.mybatisplus.visualizer.Boom$index", "boom $index", "stack $index")
+
+    @Test
+    fun `单条批次条目不出分节_两条起才显示`() {
+        val fields = ReportFormFields()
+        // 单条 = 主预填自己：旧文案「其他 1 条异常」列的正是主预填那条，自相矛盾，不再出分节
+        ErrorReportDialog.applyBatchItemsToFields(fields, listOf(item(0)))
+        assertFalse("单条不出分节", fields.batchSection.isVisible)
+        assertEquals(0, fields.batchList.componentCount)
+
+        ErrorReportDialog.applyBatchItemsToFields(fields, listOf(item(0), item(1)))
+        assertTrue("两条起显示批次分节", fields.batchSection.isVisible)
+        assertEquals(2, fields.batchList.componentCount)
+    }
+
+    @Test
+    fun `头部行复选框禁用镜像_其余行可勾`() {
+        val fields = ReportFormFields()
+        ErrorReportDialog.applyBatchItemsToFields(fields, listOf(item(0), item(1)))
+        val head = fields.batchList.getComponent(0) as javax.swing.JCheckBox
+        val second = fields.batchList.getComponent(1) as javax.swing.JCheckBox
+        assertFalse("头部行禁用：堆栈开关收敛到主表单「附带异常堆栈」", head.isEnabled)
+        assertTrue("非头部行保持可勾", second.isEnabled)
+        assertEquals(
+            "头部行 tooltip 走新增键",
+            MpSqlVisualizerBundle.message("error.report.dialog.batchItem.head.tip"),
+            head.toolTipText,
+        )
+    }
+
+    @Test
+    fun `收集语义_头部堆栈随主开关_其余按复选框`() {
+        val fields = ReportFormFields()
+        val items = listOf(item(0), item(1), item(2))
+        ErrorReportDialog.applyBatchItemsToFields(fields, items)
+
+        val headOff = ErrorReportDialog.selectedBatchItemsFor(items, headAttachStack = false, batchList = fields.batchList)
+        assertEquals("头部不勾（主开关关）+ 其余默认勾 → 2 条", 2, headOff.size)
+        assertFalse(items[0].attachStack)
+        assertFalse("头部镜像复选框同步显示为未勾", (fields.batchList.getComponent(0) as javax.swing.JCheckBox).isSelected)
+
+        val headOn = ErrorReportDialog.selectedBatchItemsFor(items, headAttachStack = true, batchList = fields.batchList)
+        assertEquals("主开关开 → 头部条目回到选中集", 3, headOn.size)
+        assertTrue(items[0].attachStack)
+        assertTrue((fields.batchList.getComponent(0) as javax.swing.JCheckBox).isSelected)
+    }
+
+    @Test
+    fun `空条目收集返回空集`() {
+        val selected = ErrorReportDialog.selectedBatchItemsFor(
+            emptyList(),
+            headAttachStack = true,
+            batchList = javax.swing.JPanel(),
+        )
+        assertEquals(0, selected.size)
+    }
 }

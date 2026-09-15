@@ -58,12 +58,19 @@ import javax.swing.JTextField
  * - 附件上传失败降级（[FeedbackApi.SubmissionOutcome.warning]）时正文照发、状态行提示堆栈没带上。
  * 结果文案为纯函数（[successStatusText]/[failureStatusText]），headless 可测。
  *
- * T-FeedbackBatch（用户定案「不能被轻易限流」）：平台错误列表可多选，用户常一次勾十几条。
+ * T-FeedbackBatch（用户定案「不能被轻易限流」）：本波全部错误事件进入同一对话框。
  * 服务端限流为每 IP 每小时 5 次提交，逐条提交必然撞 429，因此：
- * - 批次条目非空时对话框底部出现「其他 N 条异常」分节，逐条复选框默认全勾
- *   （用户看得见「这批会一起报上去」，不是被静默合并）；
+ * - 批次条目 ≥2 条时对话框底部出现「本批共 N 条异常」分节（条目含头部主预填自己），
+ *   逐条复选框默认全勾（用户看得见「这批会一起报上去」，不是被静默合并）；
  * - 提交按条数分流（[BatchSubmitter]）：≤5 条合并成一条帖子，更多则首发带合并附件、其余错峰补发；
  * - 标题/描述由 [composeSubmission] 纯函数派生，条目全不勾时退化为普通单条报告。
+ *
+ * T-FeedbackBatch2（2026-09-15）：262 平台对「报告全部」逐簇调用 submit、每次只带 1 条
+ * 事件（合并收口在 [IdeErrorReportSubmitter]），本对话框随之修两处显示语义：
+ * - 批次条目只剩 1 条（= 主预填自己）时**不出分节**——旧文案「其他 1 条异常」列的却是
+ *   主预填那条，自相矛盾（真机症状「堆栈选择只有一个待选择的」）；
+ * - 头部条目的堆栈开关收敛到主表单「附带异常堆栈」单一事实源：分节里头部行复选框禁用
+ *   仅镜像显示，收集提交条目时以主勾选态回写（此前两处开关各写各的，合并附件可能丢主堆栈）。
  */
 class ErrorReportDialog(
     /** 错误形态预填；null = 手动形态。 */
@@ -264,35 +271,14 @@ class ErrorReportDialog(
             .onFailure { finishSubmitting(FeedbackApi.SubmissionOutcome(FeedbackApi.SubmitResult.Failure(it.message ?: "提交失败"))) }
     }
 
-    /** 勾选后参与提交的批次条目（T-FeedbackBatch；全不勾 = 普通单条报告）。 */
+    /**
+     * 勾选后参与提交的批次条目（T-FeedbackBatch；全不勾 = 普通单条报告）。
+     * 头部条目的堆栈开关以主表单「附带异常堆栈」为准（T-FeedbackBatch2，纯函数收口在
+     * [selectedBatchItemsFor]）。
+     */
     internal fun selectedBatchItems(): List<BatchSubmitter.BatchItem> =
-        if (prefill == null) emptyList() else fields.selectedBatchItems(batchItems)
-
-    /** 把批次条目渲染进对话框（错误形态；条目多时显示「其他 N 条异常」分节 + 逐条勾选）。 */
-    private fun applyBatchItemsToFields(fields: ReportFormFields, items: List<BatchSubmitter.BatchItem>) {
-        fields.batchSection.removeAll()
-        fields.batchSection.isVisible = items.isNotEmpty()
-        if (items.isEmpty()) return
-        fields.batchSection.add(
-            JBLabel(MpSqlVisualizerBundle.message("error.report.dialog.batchHeader", items.size)),
-            BorderLayout.NORTH,
-        )
-        fields.batchSection.add(
-            JBScrollPane(fields.batchList).apply { preferredSize = JBUI.size(620, 90) },
-            BorderLayout.CENTER,
-        )
-        fields.batchList.removeAll()
-        items.forEach { item ->
-            fields.batchList.add(
-                JCheckBox(batchItemLabel(item)).apply {
-                    isSelected = item.attachStack
-                    toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.batchItem.tip")
-                    // 勾选态即条目语义：勾上=该条连堆栈一起报
-                    addItemListener { item.attachStack = isSelected }
-                },
-            )
-        }
-    }
+        if (prefill == null) emptyList()
+        else selectedBatchItemsFor(batchItems, fields.attachStackCheck.isSelected, fields.batchList)
 
     /** 进入「提交中」：按钮禁用并改文案，状态行显示进度（T-FeedbackErr）。 */
     internal fun beginSubmitting() {
@@ -527,12 +513,66 @@ class ErrorReportDialog(
 
         // ---------- T-FeedbackBatch：批量条目（纯函数，headless 可测） ----------
 
+        /**
+         * 把批次条目渲染进对话框（错误形态；条目 ≥2 时显示「本批共 N 条异常」分节 + 逐条勾选）。
+         * T-FeedbackBatch2：单条 = 主预填自己，不出分节；头部行复选框禁用仅镜像主表单勾选态。
+         * companion 纯函数：只碰 Swing 组件与 bundle，无 DialogWrapper peer 依赖，headless 可直调。
+         */
+        internal fun applyBatchItemsToFields(fields: ReportFormFields, items: List<BatchSubmitter.BatchItem>) {
+            fields.batchSection.removeAll()
+            fields.batchSection.isVisible = items.size >= 2
+            if (items.size < 2) return
+            fields.batchSection.add(
+                JBLabel(MpSqlVisualizerBundle.message("error.report.dialog.batchHeader", items.size)),
+                BorderLayout.NORTH,
+            )
+            fields.batchSection.add(
+                JBScrollPane(fields.batchList).apply { preferredSize = JBUI.size(620, 90) },
+                BorderLayout.CENTER,
+            )
+            fields.batchList.removeAll()
+            items.forEachIndexed { index, item ->
+                fields.batchList.add(
+                    JCheckBox(batchItemLabel(item)).apply {
+                        isSelected = item.attachStack
+                        if (index == 0) {
+                            // T-FeedbackBatch2：头部条目的堆栈开关即主表单「附带异常堆栈」，此处仅镜像
+                            isEnabled = false
+                            toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.batchItem.head.tip")
+                        } else {
+                            toolTipText = MpSqlVisualizerBundle.message("error.report.dialog.batchItem.tip")
+                        }
+                        // 勾选态即条目语义：勾上=该条连堆栈一起报（头部行被禁用，收集时由主开关回写）
+                        addItemListener { item.attachStack = isSelected }
+                    },
+                )
+            }
+        }
+
         /** 批次条目复选框文案：异常类简单名 + 消息首行（超长截断）。 */
         internal fun batchItemLabel(item: BatchSubmitter.BatchItem): String {
             val type = item.title.substringAfterLast('.').ifBlank { "PluginError" }
             val firstLine = item.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
             val text = if (firstLine.isBlank()) type else "$type: $firstLine"
             return if (text.length > 90) text.take(90) + "…" else text
+        }
+
+        /**
+         * 按勾选收集参与提交的批次条目（纯函数，T-FeedbackBatch2）：
+         * 头部条目（主预填那条）的堆栈开关以主表单「附带异常堆栈」为准——回写条目状态并
+         * 同步分节里被禁用的头部复选框显示；其余条目按各自复选框。无条目返回空集。
+         */
+        internal fun selectedBatchItemsFor(
+            all: List<BatchSubmitter.BatchItem>,
+            headAttachStack: Boolean,
+            batchList: java.awt.Container,
+        ): List<BatchSubmitter.BatchItem> {
+            val head = all.firstOrNull() ?: return emptyList()
+            head.attachStack = headAttachStack
+            (batchList.getComponent(0) as? JCheckBox)?.isSelected = headAttachStack
+            return all.filterIndexed { index, _ ->
+                (batchList.getComponent(index) as? JCheckBox)?.isSelected ?: false
+            }
         }
 
         /**
@@ -638,12 +678,6 @@ internal class ReportFormFields {
 
     /** 批次分节容器（默认隐藏；[ErrorReportDialog.batchItems] 注入后显示）。 */
     val batchSection = JPanel(BorderLayout(4, 2)).apply { isVisible = false }
-
-    /** 当前勾选的批次条目（纯遍历，测试可断言）。 */
-    fun selectedBatchItems(all: List<BatchSubmitter.BatchItem>): List<BatchSubmitter.BatchItem> =
-        all.filterIndexed { index, _ ->
-            (batchList.getComponent(index) as? JCheckBox)?.isSelected ?: false
-        }
 
     /** 浏览器兜底链接行为由对话框注入（[browserFallbackHandler]），字段类保持无逻辑。 */
     var browserFallbackHandler: () -> Unit = {}
