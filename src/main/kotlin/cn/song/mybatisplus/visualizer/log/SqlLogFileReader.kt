@@ -23,10 +23,10 @@ object SqlLogFileReader {
 
     /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
-     * 捕获组：1=source 2=time 3=timestamp
+     * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）
      */
     private val NEW_HEADER_REGEX = Regex(
-        """^--+ source: (.+?) \| time: (.+?) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{3})?) --+$"""
+        """^--+ source: (.+?) \| time: (.+?) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{3})?)(?: \| logTime: (\d+))? --+$"""
     )
 
     /** 旧版格式头部：-- timestamp（无源码位置和耗时） */
@@ -178,6 +178,7 @@ object SqlLogFileReader {
             val timeStr = mr.groupValues[2]
             val timestampStr = mr.groupValues[3]
             val timestamp = parseTimestampNew(timestampStr) ?: return null
+            val logTime = mr.groupValues[4].toLongOrNull()
             val (sourceFile, sourceLine) = parseSource(sourceStr)
             val executionTimeMs = parseDuration(timeStr)
             return LogSqlEntry(
@@ -185,6 +186,7 @@ object SqlLogFileReader {
                 restoredSql = sql,
                 params = params,
                 timestamp = timestamp,
+                logTimestamp = logTime,
                 sourceFile = sourceFile,
                 sourceLine = sourceLine,
                 executionTimeMs = executionTimeMs,

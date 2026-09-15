@@ -129,7 +129,15 @@ object LogEntryPreviewOpener {
                 wrapperType = null,
                 tableName = null,
                 warning = if ('?' in entry.restoredSql) {
-                    MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
+                    // T-JdbcThreadBucket F2：零参数时按来源分流引导文案
+                    if (entry.params.isEmpty()) {
+                        MpSqlVisualizerBundle.message(
+                            if (entry.source == SqlSource.JDBC) "log.preview.unresolvedNoBinding.jdbc"
+                            else "log.preview.unresolvedNoBinding",
+                        )
+                    } else {
+                        MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
+                    }
                 } else {
                     null
                 },

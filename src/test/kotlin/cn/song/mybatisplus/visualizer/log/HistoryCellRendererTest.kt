@@ -282,4 +282,73 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0)
         assertTrue("行号在耗时之前", idxRow < idxDur)
     }
+
+    // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
+
+    private val testTimestamp: Long = 1_700_000_000_000L
+
+    private fun expectedFormatted(pattern: String): String =
+        try {
+            java.text.SimpleDateFormat(pattern).format(java.util.Date(testTimestamp))
+        } catch (_: IllegalArgumentException) {
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(testTimestamp))
+        }
+
+    private fun savedTimestampFormat(): String =
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampFormat
+
+    private fun savedTimestampEnabled(): Boolean =
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampEnabled
+
+    private fun setTimestampFormat(format: String) {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampFormat = format
+    }
+
+    private fun setTimestampEnabled(enabled: Boolean) {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampEnabled = enabled
+    }
+
+    private fun restoreTimestampSettings(format: String, enabled: Boolean) {
+        val s = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        s.logTimestampFormat = format
+        s.logTimestampEnabled = enabled
+    }
+
+    fun test历史页时间戳_跟随设置格式() {
+        val fmt = "HH:mm:ss"
+        val expected = expectedFormatted(fmt) // 系统时区下的 HH:mm:ss
+        setTimestampFormat(fmt)
+        setTimestampEnabled(true)
+        try {
+            val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
+            val meta = joinedText(r.metaLine)
+            assertTrue("应渲染为设置格式 HH:mm:ss（期望 $expected，实际 meta=$meta）", meta.contains("[$expected]"))
+        } finally {
+            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
+        }
+    }
+
+    fun test历史页时间戳_显示开关关闭则隐藏() {
+        setTimestampEnabled(false)
+        try {
+            val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
+            val meta = joinedText(r.metaLine)
+            // 关闭后时间戳片段应不存在（耗时/源码片段仍存在，但无时间）
+            assertFalse("关闭时间戳后不应含时间片段 " + meta, meta.contains(expectedFormatted("yyyy-MM-dd")))
+        } finally {
+            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
+        }
+    }
+
+    fun test历史页时间戳_非法pattern回退默认() {
+        setTimestampFormat("not-a-valid-pattern-%%")
+        try {
+            val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
+            val meta = joinedText(r.metaLine)
+            val expected = expectedFormatted("not-a-valid-pattern-%%") // 回退默认 yyyy-MM-dd HH:mm:ss
+            assertTrue("非法 pattern 应回退默认格式（期望 $expected）", meta.contains("[$expected]"))
+        } finally {
+            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
+        }
+    }
 }

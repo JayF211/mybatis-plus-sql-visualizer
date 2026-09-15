@@ -22,8 +22,10 @@ import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.ui.ColorPanel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBRadioButton
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBTextField
+import javax.swing.ButtonGroup
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Color
@@ -282,6 +284,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logStopOnToolWindowCloseCheck = JBCheckBox()
     private val logTimestampCheck = JBCheckBox()
     private val logTimestampFormatField = JBTextField(12)
+    private val logTimestampSourceLogRadio = JBRadioButton()
+    private val logTimestampSourceCaptureRadio = JBRadioButton()
+    private val logTimestampSourceGroup = ButtonGroup()
     private val logFormatSqlCheck = JBCheckBox()
     private val logFilterKeywordsField = JBTextField(12)
     private val logDedupeField = JBTextField(12)
@@ -554,6 +559,21 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
+                })
+                // 时间来源单选组（日志时间 / 捕获时间）
+                logTimestampSourceLogRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.timestampSource.log")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampSource.log.tip")
+                }
+                logTimestampSourceCaptureRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.timestampSource.capture")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampSource.capture.tip")
+                }
+                logTimestampSourceGroup.add(logTimestampSourceLogRadio)
+                logTimestampSourceGroup.add(logTimestampSourceCaptureRadio)
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampSource"), JPanel().apply {
+                    add(logTimestampSourceLogRadio)
+                    add(logTimestampSourceCaptureRadio)
                 })
                 addRow(p, g, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
@@ -1129,6 +1149,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
+            || (if (logTimestampSourceLogRadio.isSelected) "log" else "capture") != s.logTimestampSource
             || logFormatSqlCheck.isSelected != s.logFormatSql
             || logFilterKeywordsField.text.trim() != s.logFilterKeywords
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
@@ -1213,6 +1234,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
+            s.logTimestampSource = if (logTimestampSourceLogRadio.isSelected) "log" else "capture"
             s.logFormatSql = logFormatSqlCheck.isSelected
             s.logFilterKeywords = logFilterKeywordsField.text.trim()
             s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
@@ -1325,6 +1347,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat
+            if (s.logTimestampSource == "capture") {
+                logTimestampSourceCaptureRadio.isSelected = true
+            } else {
+                logTimestampSourceLogRadio.isSelected = true
+            }
             logFormatSqlCheck.isSelected = s.logFormatSql
             logFilterKeywordsField.text = s.logFilterKeywords
             logDedupeField.text = s.logDedupeWindowMs.toString()

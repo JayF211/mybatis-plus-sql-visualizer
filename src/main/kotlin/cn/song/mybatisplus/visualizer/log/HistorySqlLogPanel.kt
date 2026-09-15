@@ -30,8 +30,6 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.border.Border
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
@@ -380,16 +378,24 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         filtered.forEach { fileListModel.addElement(it) }
     }
 
-    /** 二级：按 SQL 内容 / 源文件过滤。 */
+    /**
+     * 二级：按 SQL 内容 / 行号 / 时间 / 源文件过滤（T-LogSearchRowTime 与日志页 filterBySearch
+     * 同款语义——行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
+     * 源文件为历史页特有检索目标，保留独立分支。
+     */
     private fun applySqlSearch() {
-        val query = searchField.text.trim().lowercase()
+        val q = searchField.text.trim()
         sqlListModel.clear()
-        val filtered = if (query.isEmpty()) {
+        val filtered = if (q.isEmpty()) {
             currentEntries
         } else {
+            val rowNumber = q.removePrefix("#").toLongOrNull()
             currentEntries.filter { entry ->
-                entry.restoredSql.lowercase().contains(query) ||
-                    entry.sourceFile?.lowercase()?.contains(query) == true
+                entry.restoredSql.contains(q, ignoreCase = true) ||
+                    entry.summary.contains(q, ignoreCase = true) ||
+                    (rowNumber != null && entry.sequenceNumber == rowNumber) ||
+                    timestampDisplayText(entry)?.contains(q, ignoreCase = true) == true ||
+                    entry.sourceFile?.contains(q, ignoreCase = true) == true
             }
         }
         filtered.forEach { sqlListModel.addElement(it) }
@@ -432,6 +438,17 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             addActionListener {
                 val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
                 clipboard.setContents(java.awt.datatransfer.StringSelection(batchCopySql(selectedEntries)), null)
+            }
+        })
+        // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰）
+        val timestampClip = batchCopyTimestamps(selectedEntries)
+        menu.add(JMenuItem(copyMenuText("log.history.copyTimestamp", "log.history.copyTimestampSelected", selectedEntries.size), AllIcons.Actions.Copy).apply {
+            isEnabled = timestampClip.isNotEmpty()
+            addActionListener {
+                if (timestampClip.isNotEmpty()) {
+                    val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                    clipboard.setContents(java.awt.datatransfer.StringSelection(timestampClip), null)
+                }
             }
         })
         menu.add(JMenuItem(MpSqlVisualizerBundle.message("log.history.jumpToSource"), AllIcons.Actions.EditSource).apply {
@@ -665,7 +682,6 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = when {
                 SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
@@ -682,7 +698,9 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
                 metaLine.append("#${entry.sequenceNumber} ", HISTORY_META_GRAY)
             }
             metaLine.append("[$duration] ", HISTORY_META_GRAY)
-            metaLine.append("[$timestamp] ", HISTORY_META_GRAY)
+            // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
+            // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
+            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {

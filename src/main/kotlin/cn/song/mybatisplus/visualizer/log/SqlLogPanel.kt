@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.PluginSettings.Companion.LOG_TIMESTAMP_SOURCE_LOG
 import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -142,14 +143,45 @@ internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<Statement
 /**
  * 搜索过滤（纯逻辑，可独立单测）：查询词忽略大小写 contains，匹配还原 SQL 与摘要
  * （摘要含参数值的还原 SQL 前缀；参数值是常见检索目标）；空白查询透传全部。
+ *
+ * T-LogSearchRowTime 扩展：
+ * - 行号——`#5` / `5` 精确 equals [LogSqlEntry.sequenceNumber]（渲染形态 `#123`，所见即可搜；
+ *   精确而非 contains：搜 `1` 不应命中全部 1xx 行；0 = 无行号条目天然不命中任何行号查询）
+ * - 时间——对显示片段（[timestampDisplayText]，含方括号与设置格式，所见即所搜）contains；
+ *   显示开关关闭时片段为 null，时间分支天然不参与
+ * [timestampTextOf] 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
  */
-internal fun filterBySearch(entries: List<LogSqlEntry>, query: String): List<LogSqlEntry> {
+internal fun filterBySearch(
+    entries: List<LogSqlEntry>,
+    query: String,
+    timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
+): List<LogSqlEntry> {
     val q = query.trim()
     if (q.isEmpty()) return entries
+    val rowNumber = q.removePrefix("#").toLongOrNull()?.takeIf { it > 0 }
     return entries.filter {
-        it.restoredSql.contains(q, ignoreCase = true) || it.summary.contains(q, ignoreCase = true)
+        it.restoredSql.contains(q, ignoreCase = true)
+            || it.summary.contains(q, ignoreCase = true)
+            || (rowNumber != null && it.sequenceNumber == rowNumber)
+            || timestampTextOf(it)?.contains(q, ignoreCase = true) == true
     }
 }
+
+/**
+ * 时间显示片段文本（T-LogSearchRowTime）：`[yyyy-MM-dd HH:mm:ss]` 形态（去段间距尾随空格），
+ * 与列表渲染逐字节一致（所见即所搜/所复制的单一真源——格式/来源/开关语义全在
+ * [formatTimestampFragment]）；开关关闭返回 null（页面上没有时间片段可搜可复制）。
+ */
+internal fun timestampDisplayText(entry: LogSqlEntry): String? =
+    formatTimestampFragment(entry)?.first?.trim()
+
+/**
+ * 批量复制时间戳（T-LogSearchRowTime）：显示片段去方括号（用户定调：复制出纯时间文本
+ * `2024-01-15 10:30:45`，不带显示装饰括号）逐行拼接，与 [batchCopySql] 同构；
+ * 显示开关关闭时片段为 null 被跳过——全部关闭时返回空串（菜单项据此置灰）。
+ */
+internal fun batchCopyTimestamps(entries: List<LogSqlEntry>): String =
+    entries.mapNotNull { timestampDisplayText(it)?.removeSurrounding("[", "]") }.joinToString("\n")
 
 // ---------- T-Perf-03：流式增量刷新差分（纯逻辑，可独立单测） ----------
 
@@ -1293,6 +1325,20 @@ class SqlLogPanel(
                 }
             },
         )
+        // T-LogSearchRowTime：复制时间戳（所见即所复制的纯时间文本，无方括号）；
+        // 显示开关关闭时无片段可复制 → 菜单项置灰
+        val timestampClip = batchCopyTimestamps(selectedEntries)
+        menu.add(
+            JMenuItem(copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", selectedEntries.size)).apply {
+                isEnabled = timestampClip.isNotEmpty()
+                addActionListener {
+                    if (timestampClip.isNotEmpty()) {
+                        Toolkit.getDefaultToolkit().systemClipboard
+                            .setContents(StringSelection(timestampClip), null)
+                    }
+                }
+            },
+        )
         menu.add(
             JMenuItem(MpSqlVisualizerBundle.message("log.panel.delete")).apply {
                 addActionListener { manager.entries.removeEntry(entry) }
@@ -1526,13 +1572,17 @@ private fun setOpaqueIfChanged(target: JPanel, opaque: Boolean) {
 
 
 /** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML `<span>` 尾空格语义）。 */
-internal fun formatTimestampFragment(timestamp: Long): Pair<String, SimpleTextAttributes>? {
+internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
     val state = PluginSettings.getInstance().state
     if (!state.logTimestampEnabled) return null
+    val ts = when (state.logTimestampSource) {
+        LOG_TIMESTAMP_SOURCE_LOG -> entry.logTimestamp ?: entry.timestamp
+        else -> entry.timestamp
+    }
     val formatted = try {
-        SimpleDateFormat(state.logTimestampFormat).format(Date(timestamp))
+        SimpleDateFormat(state.logTimestampFormat).format(Date(ts))
     } catch (_: IllegalArgumentException) {
-        SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(timestamp))
+        SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(ts))
     }
     return "[$formatted] " to LIST_META_GRAY
 }
@@ -1697,7 +1747,7 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
                 metaLine.append("#${entry.sequenceNumber} ", LIST_META_GRAY)
             }
             // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
-            formatTimestampFragment(entry.timestamp)?.let { (t, a) -> metaLine.append(t, a) }
+            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             if (PluginSettings.getInstance().state.showDurationInLogList) {
                 val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
                 metaLine.append(t, a)
