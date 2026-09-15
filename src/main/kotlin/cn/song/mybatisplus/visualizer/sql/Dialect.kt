@@ -80,6 +80,48 @@ interface Dialect {
      * @param conflictKey 冲突键列名（原始值；必在 [columns] 内）
      */
     fun renderUpsertStatement(tableName: String, columns: List<String>, conflictKey: String): String? = null
+
+    /**
+     * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
+     *
+     * 返回 null → 本方言不支持（调用方按钮降级提示）。支持矩阵真机实证（DBX 通道 2026-09-02）：
+     *  - MySQL 5.7/8.4、MariaDB：`EXPLAIN <sql>`（T-ExplainFirstNative 对齐 IDEA 原生
+     *    MysqlBaseRawPlanData 表格形态——原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN
+     *    表格行，按 id 嵌套建树；M37.2 曾用 `EXPLAIN FORMAT=JSON`，属自创形态且全树无
+     *    渲染器消费，真机网格只能呈现一坨 JSON 文本）；
+     *  - PostgreSQL：`EXPLAIN (FORMAT JSON, VERBOSE)`（PG 16 实测）；
+     *  - KingBase：`EXPLAIN (FORMAT JSON)`（KingbaseES V8 实测，PG 兼容完整）；
+     *  - DM：`EXPLAIN <sql>`（DM8 实测，返回 #NSET2 计划文本）；
+     *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
+     *  - Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 SET SHOWPLAN_XML）不接入。
+     *
+     * @param sql 不含结尾分号的查询语句
+     * @return 可直接提交执行的 EXPLAIN 语句，null = 不支持
+     */
+    fun renderExplainStatement(sql: String): String? = null
+
+    /**
+     * T-ExplainDbl：幂等 EXPLAIN 包装——文本已以 EXPLAIN 关键字开头（词边界、忽略大小写）时
+     * 原样返回（去首尾空白与结尾分号后），否则委托 [renderExplainStatement]。
+     *
+     * 根因场景：首次点击「执行计划」后包装好的 EXPLAIN 语句经执行链写入控制台文档，
+     * 再点一次在已包装文本上二次加前缀 → `EXPLAIN FORMAT=JSON EXPLAIN FORMAT=JSON SELECT ...`
+     * → MySQL 1064 语法错误。
+     */
+    fun renderExplainStatementIdempotent(sql: String): String? {
+        val trimmed = sql.trim().trimEnd(';').trim()
+        if (startsWithExplainKeyword(trimmed)) return trimmed
+        return renderExplainStatement(trimmed)
+    }
+}
+
+/**
+ * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——紧随字符须非字母/数字/下划线
+ * （词边界），避免 `EXPLAINING_TABLE` 之类标识符误判。
+ */
+private fun startsWithExplainKeyword(sql: String): Boolean {
+    if (!sql.startsWith("EXPLAIN", ignoreCase = true)) return false
+    return sql.length == 7 || (!sql[7].isLetterOrDigit() && sql[7] != '_')
 }
 
 /**
@@ -139,6 +181,8 @@ object MySqlDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderMySqlStyleUpsert(updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**
@@ -160,6 +204,8 @@ object PostgreSQLDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderPgStyleUpsert(conflictKey, updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN (FORMAT JSON, VERBOSE) $sql"
 }
 
 /**
@@ -228,6 +274,8 @@ object H2Dialect : Dialect {
         return "MERGE INTO ${quoteIfKeyword(tableName)} ($cols) KEY (${quoteIfKeyword(conflictKey)}) " +
             "VALUES (${columns.joinToString(", ") { "?" }})"
     }
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN PLAN FOR $sql"
 }
 
 /**
@@ -246,6 +294,8 @@ object SqliteDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderPgStyleUpsert(conflictKey, updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN QUERY PLAN $sql"
 }
 
 /**
@@ -269,6 +319,8 @@ object MariaDbDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderMySqlStyleUpsert(updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**
@@ -292,6 +344,8 @@ object DmDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = DM_RESERVED
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**
@@ -317,6 +371,8 @@ object KingBaseDialect : Dialect {
 
     override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
         renderPgStyleUpsert(conflictKey, updateColumns)
+
+    override fun renderExplainStatement(sql: String): String? = "EXPLAIN (FORMAT JSON) $sql"
 }
 
 /**

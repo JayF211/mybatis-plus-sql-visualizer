@@ -950,17 +950,29 @@ class SqlToJavaPanel(
             }
         }
         EntitySelectionDialog(project, rows) { selections ->
-            val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
-            cacheCandidates = listOfNotNull(main)
-            val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
-            result.joins.forEach { join ->
-                val alias = join.alias ?: return@forEach
-                selections[alias]?.let { psi ->
-                    toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+            // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历继承链
+            // 全部字段 + 每字段注解 resolve，大实体（50+ 字段）耗时线性，EDT 直解析构成确认停顿；
+            // 后台 ReadAction 解析后回 EDT 回填缓存并渲染（对齐 convert 的既有异步模式）。
+            ApplicationManager.getApplication().executeOnPooledThread {
+                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                val resolved = ReadAction.compute<Triple<SqlToJavaConverter.EntityCandidate?, Map<String, JavaCodeGenerator.EntityTarget>, List<SqlToJavaConverter.EntityCandidate>>, Throwable> {
+                    val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
+                    val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                    result.joins.forEach { join ->
+                        val alias = join.alias ?: return@forEach
+                        selections[alias]?.let { psi ->
+                            toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                        }
+                    }
+                    Triple(main, subEntities as Map<String, JavaCodeGenerator.EntityTarget>, listOfNotNull(main))
                 }
+                ApplicationManager.getApplication().invokeLater({
+                    if (project.isDisposed) return@invokeLater
+                    cacheCandidates = resolved.third
+                    cacheSubEntities = resolved.second
+                    render(result, resolved.third, format, resolved.second)
+                }, ModalityState.any())
             }
-            cacheSubEntities = subEntities
-            render(result, listOfNotNull(main), format, subEntities)
         }.show()
     }
 
@@ -1001,9 +1013,9 @@ class SqlToJavaPanel(
                         }
                         // 多候选弹窗（EDT；displayTexts 仿主表候选用法）——选完继续处理后续副表
                         // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
-                        val displayTexts = ReadAction.compute<List<String>, Throwable> {
+                        val displayTexts = ReadAction.compute<List<SqlSelectionDialog.Row>, Throwable> {
                             candidates.map { c ->
-                                SqlSelectionDialog.displayText(
+                                SqlSelectionDialog.Row.of(
                                     "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
                                     c.psiClass.containingFile?.name ?: "",
                                 )
@@ -1086,11 +1098,17 @@ class SqlToJavaPanel(
     /** T-M45：复制文本 = 剥离注释后的结果区内容（复制按钮经此取文本）。 */
     private fun copyText(): String = JavaCommentStripper.strip(resultEditor.document.text)
 
-    /** T-M45：格式化结果区当前内容（IDE Java 格式化器，结果写回编辑器——复制基于当前内容）。 */
+    /**
+     * T-M45：格式化结果区当前内容（IDE Java 格式化器，结果写回编辑器——复制基于当前内容）。
+     * T-Perf-11：格式化（PSI 创建 + 全量 reformat）移 [Task.Backgroundable] 后台执行，
+     * 结果回 EDT 写回——批量转换 20+ 条语句拼大代码块时 EDT 不再随体积线性冻结。
+     */
     private fun formatResult() {
-        val formatted = JavaCodeFormatter.format(project, resultEditor.document.text)
-        if (formatted != resultEditor.document.text) {
-            setResultText(formatted)
+        val code = resultEditor.document.text
+        JavaCodeFormatter.formatAsync(project, code) { formatted ->
+            if (formatted != resultEditor.document.text) {
+                setResultText(formatted)
+            }
         }
     }
 
@@ -1148,9 +1166,9 @@ class SqlToJavaPanel(
                     return
                 }
                 // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
-                val displayTexts = ReadAction.compute<List<String>, Throwable> {
+                val displayTexts = ReadAction.compute<List<SqlSelectionDialog.Row>, Throwable> {
                     candidates.map { c ->
-                        SqlSelectionDialog.displayText(
+                        SqlSelectionDialog.Row.of(
                             "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
                             c.psiClass.containingFile?.name ?: "",
                         )

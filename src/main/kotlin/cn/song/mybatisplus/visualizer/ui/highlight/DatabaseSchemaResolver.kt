@@ -45,6 +45,26 @@ object DatabaseSchemaResolver {
         columnMeta(project, tableName).mapValues { it.value.comment ?: "" }
 
     /**
+     * T-Perf-09：仅读缓存的列注释（补全 autopopup 热路径专用）——命中返回缓存值；
+     * 未命中返回空 Map（调用方回落实体注释），**不触发数据源全量遍历**。
+     * 缓存由 JOIN 富化后台预取（DiagramSchemaEnricher.enrich）或首次 [tableMeta] 调用填充。
+     */
+    fun columnCommentsCached(project: Project?, tableName: String?): Map<String, String> {
+        if (project == null || tableName.isNullOrBlank()) return emptyMap()
+        if (!isDatabaseAvailable()) return emptyMap()
+        val dataSources = dataSources(project) ?: return emptyMap()
+        val out = linkedMapOf<String, String>()
+        synchronized(metaCache) {
+            for (ds in dataSources) {
+                metaCache[ds]?.get(tableName.lowercase())?.let { meta ->
+                    meta.columns.forEach { (col, m) -> out.putIfAbsent(col, m.comment ?: "") }
+                }
+            }
+        }
+        return out
+    }
+
+    /**
      * 列名 → 列元数据（注释 + DB 真实类型串，T-Embed-02）。
      *
      * 类型串 = `DasTypedObject.getDataType().getSpecification()`（如 `int(11)` / `varchar(64)`，
@@ -53,6 +73,15 @@ object DatabaseSchemaResolver {
      */
     fun columnMeta(project: Project, tableName: String): Map<String, ColumnMeta> =
         tableMeta(project, tableName).columns
+
+    /**
+     * T-Perf-09：TableMeta 缓存——键 = (dataSource 对象弱引用, tableName 小写)。
+     * 数据源全量遍历（DasModel.traverser().toList()）代价随 schema 规模线性，JOIN 预览
+     * 每打开一次、每个 JOIN 表各触发一次；命中后零遍历。数据源删除后条目随弱键回收；
+     * 表匹配不到（通常=未连接/introspection 未完成）**不缓存负命中**——后续连接成功即可命中。
+     */
+    private val metaCache =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, MutableMap<String, TableMeta>>())
 
     /**
      * 表级元数据（表注释 + 列元数据，T-Embed-09 一次遍历同时取）。
@@ -80,11 +109,21 @@ object DatabaseSchemaResolver {
             return TableMeta(null, emptyMap())
         }
         val dasTableClass = Class.forName(DAS_TABLE)
+        val cacheKey = tableName.lowercase()
         for (ds in dataSources) {
+            // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
+            val cached = synchronized(metaCache) { metaCache[ds]?.get(cacheKey) }
+            if (cached != null) return cached
             val found = collectFromDataSource(ds, tableName, dasTableClass)
-            if (found.columns.isNotEmpty() || found.comment != null) return found
+            if (found.columns.isNotEmpty() || found.comment != null) {
+                synchronized(metaCache) {
+                    metaCache.getOrPut(ds) { HashMap() }[cacheKey] = found
+                }
+                return found
+            }
         }
         // 表在所有数据源都找不到（通常=未连接/introspection 未完成/表不在当前库）
+        // T-Perf-09：负命中不缓存——introspection 完成后同一查询应能命中
         LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${dataSources.size} data sources")
         return TableMeta(null, emptyMap())
     }

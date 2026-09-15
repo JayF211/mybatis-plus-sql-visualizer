@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -43,6 +47,22 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     private fun sqlEntry(sql: String, sourceFile: String? = null, sourceLine: Int = 0, ms: Long? = null) =
         LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = 1_700_000_000_000L, sourceFile = sourceFile, sourceLine = sourceLine, executionTimeMs = ms)
 
+    /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
+    private var savedDisplayMode: String? = null
+
+    override fun setUp() {
+        super.setUp()
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        savedDisplayMode = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = "SINGLE_LINE"
+    }
+
+    override fun tearDown() {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logListSqlDisplayMode =
+            savedDisplayMode ?: cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
+        super.tearDown()
+    }
+
     fun test二级条目_片段通道_非HTML标签() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）", r.metaLine is SimpleColoredComponent)
@@ -76,6 +96,42 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("超长 SQL 摘要含省略号", joinedText(r.sqlLine).contains("…"))
     }
 
+    // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------
+
+    fun test二级条目_元信息在上SQL在下两行显示() {
+        val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
+        val meta = joinedText(r.metaLine)
+        assertTrue("耗时占位应在元信息行", meta.contains("[30ms]"))
+        assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"))
+        assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
+        assertFalse("来源不应混入 SQL 行", joinedText(r.sqlLine).contains("OrderDao.java"))
+        assertTrue("元信息行恒存在（T-TwoLine 两行结构，占位符归元信息行）", meta.contains("[") && meta.contains("]"))
+    }
+
+    fun test二级条目_空耗时与未知来源占位渲染在元信息行() {
+        val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
+        val meta = joinedText(r.metaLine)
+        assertTrue("空耗时占位 [—] 应在元信息行", meta.contains("[—]"))
+        assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"))
+        assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
+    }
+
+    // ---------- T-ListMode：SQL 三种显示模式 ----------
+
+    fun test二级条目_关键字换行模式SQL子句分行() {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val saved = state.logListSqlDisplayMode
+        state.logListSqlDisplayMode = "KEYWORD_WRAP"
+        try {
+            val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9))
+            assertTrue("FROM 应独立成行", r.sqlLines.any { joinedText(it).startsWith("FROM") })
+            assertTrue("WHERE 应独立成行", r.sqlLines.any { joinedText(it).startsWith("WHERE") })
+            assertFalse("元信息行不混入 SQL", joinedText(r.metaLine).contains("SELECT"))
+        } finally {
+            state.logListSqlDisplayMode = saved
+        }
+    }
+
     fun test一级文件_大小为0字节显示0B() {
         val f = File.createTempFile("hist0", ".sql").apply { deleteOnExit() }
         val text = joinedText(renderFile(f, 0).line)
@@ -107,5 +163,123 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("应展示条数 12", text.contains("12"))
         val nameFragment = r.line.iterator().let { it.next() to it.textAttributes }.second
         assertTrue("文件名片段应加粗（原 HTML <b> 语义）", nameFragment.style and SimpleTextAttributes.STYLE_BOLD != 0)
+    }
+
+    // ---------- T-CrudColor：二级 SQL 列表 CRUD 类型颜色标记（与日志页同构） ----------
+
+    private fun withCrudColors(style: String, block: () -> Unit) {
+        val s = PluginSettings.getInstance().state
+        val savedStyle = s.crudColorStyle
+        val saved = listOf(s.crudColorSelect, s.crudColorInsert, s.crudColorUpdate, s.crudColorDelete)
+        try {
+            s.crudColorStyle = style
+            s.crudColorSelect = "#4A86E8"
+            s.crudColorInsert = "#4CAF50"
+            s.crudColorUpdate = "#E67E22"
+            s.crudColorDelete = "#D32F2F"
+            block()
+        } finally {
+            s.crudColorStyle = savedStyle
+            s.crudColorSelect = saved[0]
+            s.crudColorInsert = saved[1]
+            s.crudColorUpdate = saved[2]
+            s.crudColorDelete = saved[3]
+        }
+    }
+
+    private fun barColorAfterRender(sql: String, selected: Boolean = false): java.awt.Color? {
+        renderSql(sqlEntry(sql), selected)
+        return sqlRenderer.colorBar.takeIf { it.isOpaque }?.background
+    }
+
+    fun test二级条目_色条样式_四类型着色且OTHER不标记() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            assertEquals(java.awt.Color(0x4A86E8), barColorAfterRender("SELECT * FROM user"))
+            assertEquals(java.awt.Color(0x4CAF50), barColorAfterRender("INSERT INTO user VALUES (1)"))
+            assertEquals(java.awt.Color(0xE67E22), barColorAfterRender("UPDATE user SET a = 1"))
+            assertEquals(java.awt.Color(0xD32F2F), barColorAfterRender("DELETE FROM user"))
+            assertEquals("OTHER 不应着色", null, barColorAfterRender("TRUNCATE TABLE user"))
+        }
+    }
+
+    fun test二级条目_色条样式_选中态色条不丢色() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            assertEquals(java.awt.Color(0x4A86E8), barColorAfterRender("SELECT * FROM user", true))
+        }
+    }
+
+    fun test二级条目_背景样式_未选中与选中混色比例不同且不铺平台填充() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            val bg = list.background
+            renderSql(sqlEntry("UPDATE user SET a = 1"))
+            assertEquals("未选中 14% 混色",
+                SqlListTypeColor.blend(bg, java.awt.Color(0xE67E22), SqlListTypeColor.MIX_NORMAL),
+                sqlRenderer.background)
+            renderSql(sqlEntry("UPDATE user SET a = 1"), true)
+            assertEquals("选中 30% 混色",
+                SqlListTypeColor.blend(bg, java.awt.Color(0xE67E22), SqlListTypeColor.MIX_SELECTED),
+                sqlRenderer.background)
+            assertNotEquals("选中态不铺平台填充", list.selectionBackground, sqlRenderer.background)
+        }
+    }
+
+    fun test二级条目_背景样式_选中态描边且两状态insets逐边相等() {
+        withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
+            renderSql(sqlEntry("UPDATE user SET a = 1"))
+            assertEquals(sqlRenderer.normalBorder, sqlRenderer.border)
+            renderSql(sqlEntry("UPDATE user SET a = 1"), true)
+            assertEquals(sqlRenderer.selectedBorder, sqlRenderer.border)
+
+            val normal = sqlRenderer.normalBorder.getBorderInsets(sqlRenderer)
+            val selected = sqlRenderer.selectedBorder.getBorderInsets(sqlRenderer)
+            assertEquals("上", normal.top, selected.top)
+            assertEquals("左", normal.left, selected.left)
+            assertEquals("下", normal.bottom, selected.bottom)
+            assertEquals("右", normal.right, selected.right)
+        }
+    }
+
+    fun test二级条目_重复渲染不产生属性实例变更() {
+        withCrudColors(SqlListTypeColor.STYLE_BAR) {
+            renderSql(sqlEntry("SELECT 1"))
+            val barBg = sqlRenderer.colorBar.background
+            val border = sqlRenderer.border
+            renderSql(sqlEntry("SELECT 2"))
+            assertSame("同色格应复用同一 Color 实例（否则每格一次 repaint）",
+                barBg, sqlRenderer.colorBar.background)
+            assertSame("同状态应复用同一 Border 实例", border, sqlRenderer.border)
+        }
+    }
+
+    fun test二级条目_关闭样式_色条不可见且背景走原逻辑() {
+        withCrudColors(SqlListTypeColor.STYLE_OFF) {
+            assertEquals(null, barColorAfterRender("SELECT * FROM user"))
+            assertEquals(list.background, sqlRenderer.background)
+        }
+    }
+
+    // ---------- T-LogHistoryRowNo：历史列表行号片段 ----------
+
+    fun test二级条目_行号片段在元信息行最前() {
+        val r = renderSql(sqlEntry("SELECT 1").copy(sequenceNumber = 12L))
+        val meta = joinedText(r.metaLine)
+        assertTrue("元信息行含行号 #12", meta.contains("#12 "))
+        assertTrue("行号应在片段序列最前", meta.startsWith("#12 "))
+        assertFalse("SQL 不混入元信息行", meta.contains("SELECT"))
+    }
+
+    fun test二级条目_无行号条目不渲染行号片段() {
+        // sequenceNumber=0：旧文件读回 / 未注入条目
+        val r = renderSql(sqlEntry("SELECT 1"))
+        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"))
+    }
+
+    fun test二级条目_行号在耗时占位之前() {
+        val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
+        val meta = joinedText(renderSql(e).metaLine)
+        val idxRow = meta.indexOf("#5 ")
+        val idxDur = meta.indexOf("[3ms]")
+        assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0)
+        assertTrue("行号在耗时之前", idxRow < idxDur)
     }
 }

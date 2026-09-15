@@ -263,4 +263,99 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
             settings.loadState(snapshot)
         }
     }
+
+    /**
+     * T-CrudColor：仅改「标记形态下拉」也必须置 isModified——
+     * 防 reverseWrapperFormat 式假开关回归（漏挂 isModified → Apply 灰掉、改动被平台静默丢弃）。
+     */
+    fun testCrudColorStyleChangeEnablesApplyAndPersists() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.state
+        try {
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            assertFalse("初始应与配置一致", configurable.isModified())
+            panel.selectCrudColorStyle(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND)
+            assertTrue("仅改标记形态也应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, settings.state.crudColorStyle)
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    /** T-CrudColor：仅改某个颜色同样必须置 isModified，且 apply 写回 `#RRGGBB`。 */
+    fun testCrudColorValueChangeEnablesApplyAndPersists() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.state
+        try {
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            panel.setCrudColor("delete", "#00FF00")
+            assertTrue("仅改 DELETE 颜色也应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals("#00FF00", settings.state.crudColorDelete)
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    /** T-DisplayModeToSettings：仅改显示模式同样必须置 isModified，且 apply 写回设置值（两列表共享一键）。 */
+    fun testListDisplayModeChangeEnablesApplyAndPersists() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.state
+        try {
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            assertFalse("初始应与配置一致", configurable.isModified())
+            panel.selectListDisplayMode(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED.name)
+            assertTrue("仅改显示模式也应检测到变化", configurable.isModified())
+
+            configurable.apply()
+            assertEquals(
+                cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED.name,
+                settings.state.logListSqlDisplayMode,
+            )
+
+            configurable.reset()
+            assertEquals("reset 后下拉应回到 state 值", settings.state.logListSqlDisplayMode, panel.currentListDisplayModeForTest())
+            assertFalse("reset 后应回到与配置一致", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    /** T-TestGuard-05：apply 后 state 引用必须替换（pitfall-settings-persist-inplace——
+     *  原地修改 state 属性时 XmlSerializer 检测不到变化，不触发 XML 持久化、重启丢设置；
+     *  修复形态 = PluginSettingsPanel.apply() 末尾 settings.loadState(s.copy())，本用例防回退）。 */
+    fun testApplyReplacesStateReferenceNotMutateInPlace() {
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        val configurable = AllSectionsConfigurable()
+        configurable.createComponent()
+        val panel = configurable.panelForTest()
+
+        panel.selectReverseFormat(PluginSettings.REVERSE_QUERY)
+        configurable.apply()
+
+        assertTrue(
+            "apply 后 PluginSettings.state 必须是替换后的新引用（loadState(s.copy())），" +
+                "原地修改不触发 XmlSerializer 持久化",
+            before !== settings.state,
+        )
+    }
 }

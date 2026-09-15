@@ -188,8 +188,8 @@ class JdbcTemplateLogParser(
     private fun parseNamedParamsMap(paramsText: String): Map<String, String> {
         if (paramsText.isEmpty()) return emptyMap()
         val params = mutableMapOf<String, String>()
-        // 按 `, key=` 边界切分（lookahead 保留 key）
-        val entries = paramsText.split(Regex("""\s*,\s*(?=\w+\s*=)"""))
+        // 按 `, key=` 边界切分（lookahead 保留 key）；T-PerfSweep F2：正则提常量（此前每条 named 参数条目内联新建）
+        val entries = paramsText.split(NAMED_PARAMS_MAP_SPLIT)
         for (entry in entries) {
             val eqIdx = entry.indexOf('=')
             if (eqIdx <= 0) continue
@@ -203,11 +203,15 @@ class JdbcTemplateLogParser(
     /**
      * 替换 SQL 中的命名参数为渲染后的字面量。
      * 无类型标注 → 启发式：数值/true/false 原样，其余引号包裹。
+     *
+     * T-ListParamCollect：IN 子句内的集合值（日志形态 `[a]`/`[a, b]`）剥括号按元素渲染，
+     * 方括号不再落进 SQL 字面量；非 IN 位置行为与改造前逐字节一致。
      */
     private fun replaceNamedParams(sql: String, params: Map<String, String>): String {
+        val inClauseNames = ListParamRenderer.inClauseParamNames(sql)
         var result = sql
         for ((name, value) in params) {
-            val rendered = renderUntyped(value)
+            val rendered = ListParamRenderer.renderParam(value, name in inClauseNames) { renderUntyped(it) }
             result = result.replace(":$name", rendered)
         }
         return result
@@ -233,8 +237,9 @@ class JdbcTemplateLogParser(
         val rawValue = match.groupValues[2]
         val className = match.groupValues[3]
 
-        // null 字面量：parameter value [null], value class [null]
-        if (rawValue == "null" && className == "null") {
+        // null 字面量：parameter value [null]（value class 可能是 null，也可能是具体类型如 java.lang.String）。
+        // 字符串字面值 "null" 与 SQL NULL 在该行无法区分，按 NULL 语义处理（M37.0 回归集实证）。
+        if (rawValue == "null") {
             return IndexedParam(columnIndex, null, null)
         }
 
@@ -391,5 +396,11 @@ class JdbcTemplateLogParser(
 
         /** 数值字面量（含小数与科学计数）。 */
         private val NUMERIC_REGEX = Regex("""-?\d+(\.\d+)?([eE][+-]?\d+)?""")
+
+        /**
+         * T-PerfSweep F2：NamedParameter 参数 Map 的 `, key=` 边界切分正则（lookahead 保留 key）。
+         * 捕捉热路径上每条 named 参数条目都要切分——原内联新建 Regex 提为常量。
+         */
+        private val NAMED_PARAMS_MAP_SPLIT = Regex("""\s*,\s*(?=\w+\s*=)""")
     }
 }

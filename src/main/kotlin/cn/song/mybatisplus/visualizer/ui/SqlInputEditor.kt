@@ -56,15 +56,22 @@ class SqlInputEditor(
 
     val text: String get() = editor.document.text
 
-    /** 创建编辑器：原生 SQL FileType PSI → 文档 → 可编辑编辑器 + 高亮 + 补全上下文双载体 + autopopup。 */
+    /** 创建编辑器：原生 SQL FileType PSI → 文档 → 可编辑编辑器 + 高亮 + 补全上下文双载体 + autopopup。
+     *
+     * T-Perf-07：`PsiFileFactory.createFileFromText` 在 EDT 直调触发 262 平台 read access 硬抛
+     * （markGenerated 树遍历）——包 [ReadAction.compute]（EDT 上同步语义不变），
+     * 对齐 [JavaCodeFormatter] 与 SqlPreviewPanel 后台预热的既有修复（T-M42 漏点）。 */
     private fun createEditor(sql: String): Editor {
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
         val created = if (project.isDisposed || sqlFileType == null) {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
         } else {
-            val psi = PsiFileFactory.getInstance(project)
-                .createFileFromText("input.sql", sqlFileType, sql)
+            @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+            val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
+                PsiFileFactory.getInstance(project)
+                    .createFileFromText("input.sql", sqlFileType, sql)
+            }
             psiFile = psi
             val doc = PsiDocumentManager.getInstance(project).getDocument(psi)
                 ?: EditorFactory.getInstance().createDocument(sql)

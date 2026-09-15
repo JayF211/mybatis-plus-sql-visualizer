@@ -71,6 +71,20 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
 
     private fun compact(text: String): String = text.replace(Regex("\\s+"), " ").trim()
 
+    /**
+     * T-SelToggle：把 XML 条件全部取消勾选。切换按钮文案按勾选态翻转——
+     * 默认全勾 → 文案「全不选」→ 一次点击归零（原测试借按钮的「全选/全不选」错位用法已废弃）。
+     */
+    private fun deselectAllConditions(panel: SqlPreviewPanel) {
+        val toggle = panel.toggleSelectButtonForTest()!!
+        assertEquals(
+            "XML 条件默认全勾，切换按钮应为全不选文案",
+            cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.condition.selectNone"),
+            toggle.text,
+        )
+        toggle.doClick()
+    }
+
     fun testXmlPreviewRendersSql() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
@@ -111,7 +125,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
         // 把 foreach 外的条件全关，只剩 IN 片段便于断言次数
-        panel.selectAllButtonForTest()?.actionListeners?.forEach { it.actionPerformed(null) } // 全不选
+        deselectAllConditions(panel)
         panel.conditionCheckboxForTest(1)?.let { box ->
             box.isSelected = true
             box.actionListeners.forEach { it.actionPerformed(null) }
@@ -125,7 +139,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         // T-M25.4（用户实测：在 foreach 次数框输入 2,3 无效）——集合值输入：逗号分隔自动回填 IN (2, 3)
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
-        panel.selectNoneButtonForTest()?.actionListeners?.forEach { it.actionPerformed(null) }
+        deselectAllConditions(panel)
         panel.conditionCheckboxForTest(1)?.let { box ->
             box.isSelected = true
             box.actionListeners.forEach { it.actionPerformed(null) }
@@ -142,10 +156,10 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
     }
 
     fun testXmlForEachCountZeroDropsInClause() {
-        // 全不选（selectNone 按钮）→ 只剩 foreach 条件开启 → 次数 0 → IN 片段消失
+        // 全不选（切换按钮）→ 只剩 foreach 条件开启 → 次数 0 → IN 片段消失
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
-        panel.selectNoneButtonForTest()?.actionListeners?.forEach { it.actionPerformed(null) }
+        deselectAllConditions(panel)
         panel.conditionCheckboxForTest(1)?.let { box ->
             box.isSelected = true
             box.actionListeners.forEach { it.actionPerformed(null) }

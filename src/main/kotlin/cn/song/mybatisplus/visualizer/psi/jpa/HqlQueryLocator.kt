@@ -59,6 +59,7 @@ data class HqlParameter(
  *  - `session.createQuery("HQL字符串", Entity.class)` 或 `session.createQuery("HQL字符串")`
  *  - `sessionFactory.getCurrentSession().createQuery(...)`
  *  - `session.createNamedQuery("name")`（命名查询，hql 字段存查询名）
+ *  - `session.createNativeQuery("SQL")` / `session.createSQLQuery("SQL")`（T-J12，Hibernate3 老入口，native SQL 语义）
  *  - 参数设置：`query.setParameter("name", value)` / `query.setInteger("name", value)` 等
  *
  * 定位策略：
@@ -70,7 +71,13 @@ data class HqlParameter(
 object HqlQueryLocator {
 
     // Hibernate Session.createQuery / createNamedQuery / createNativeQuery 方法名
-    private val CREATE_QUERY_METHODS = setOf("createQuery", "createNamedQuery", "createNativeQuery")
+    // T-J12：补 createSQLQuery（老 Hibernate3 Session API，按 native SQL 语义归类）
+    private val CREATE_QUERY_METHODS = setOf(
+        "createQuery", "createNamedQuery", "createNativeQuery", "createSQLQuery",
+    )
+
+    /** native SQL 语义的创建方法名（不做实体→表名映射，仅参数替换）。 */
+    private val NATIVE_QUERY_METHODS = setOf("createNativeQuery", "createSQLQuery")
 
     // Query 接口参数设置方法名
     private val SET_PARAM_METHODS = setOf(
@@ -229,7 +236,8 @@ object HqlQueryLocator {
         }
 
         val createQueryMethodName = call.methodExpression.referenceName ?: ""
-        val isNativeQuery = createQueryMethodName == "createNativeQuery"
+        // T-J12：createSQLQuery（Hibernate3）与 createNativeQuery 同为 native SQL 语义
+        val isNativeQuery = createQueryMethodName in NATIVE_QUERY_METHODS
 
         return HqlQueryInfo(
             methodName = method.name,

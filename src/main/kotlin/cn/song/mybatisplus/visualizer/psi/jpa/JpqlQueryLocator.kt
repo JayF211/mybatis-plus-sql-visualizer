@@ -47,6 +47,26 @@ object JpqlQueryLocator {
     /** Spring Data @Query 注解全限定名。 */
     private const val QUERY_ANNOTATION = "org.springframework.data.jpa.repository.Query"
 
+    /**
+     * SD7（M44 止血）：Spring Data JDBC / R2DBC 的 @Query 全限定名。
+     *
+     * javap 实证（spring-data-jdbc 4.1.1 / spring-data-r2dbc 4.1.1）：两者均**无 nativeQuery 属性**
+     * （jdbc 版属性 = value/name/rowMapper 族，r2dbc 版仅 value），查询体本就是原生 SQL——
+     * 此前短名 "Query" 兜底命中后被当 JPQL 喂 JpqlConverter，`SELECT * FROM ...` 等非 JPQL 语法
+     * 产出错误结果（矩阵 §1.3 最危险假阳性链路）。识别后 [JpqlQueryInfo.isNative] 置 true，
+     * 使 previewJpql 走**原生透传分支**（convertNativeSqlParameters 命名参数替换），不做 JPQL 转换。
+     */
+    private val NATIVE_QUERY_ANNOTATIONS: Set<String> = setOf(
+        "org.springframework.data.jdbc.repository.query.Query",
+        "org.springframework.data.r2dbc.repository.Query",
+    )
+
+    /** SD7：JDBC/R2DBC @Query 的 FQN 前缀（qualifiedName 仅在注解类可解析时可靠，前缀兜底 import 场景）。 */
+    private val NATIVE_QUERY_FQN_PREFIXES: List<String> = listOf(
+        "org.springframework.data.jdbc.repository.query.Query",
+        "org.springframework.data.r2dbc.repository.Query",
+    )
+
     // ------------------------------------------------------------------
     // 公开 API
     // ------------------------------------------------------------------
@@ -92,6 +112,8 @@ object JpqlQueryLocator {
      * 从指定方法定位 @Query 查询信息。
      *
      * 完整校验链：是否为 @Query 注解方法 + 提取属性。
+     * SD7（M44）：JDBC/R2DBC @Query 识别为原生 SQL（[isNativeQueryAnnotation]），
+     * isNative 置 true 走原生透传分支；nativeQuery 属性仅在 JPA @Query 上读取。
      */
     private fun locateFromMethod(method: PsiMethod): JpqlQueryInfo? {
         if (!hasQueryAnnotation(method)) return null
@@ -100,7 +122,7 @@ object JpqlQueryLocator {
         val queryAnnotation = findQueryAnnotation(method) ?: return null
 
         val jpql = extractJpql(queryAnnotation) ?: return null
-        val isNative = isNativeQuery(queryAnnotation)
+        val isNative = isNativeQueryAnnotation(queryAnnotation) || isNativeQuery(queryAnnotation)
         val queryName = extractQueryName(queryAnnotation)
         val entityClass = DerivedMethodLocator.resolveEntityClass(containingClass)
 
@@ -113,6 +135,31 @@ object JpqlQueryLocator {
             queryName = queryName,
             method = method,
         )
+    }
+
+    /**
+     * SD7（M44）：注解是否为 Spring Data JDBC / R2DBC @Query（原生 SQL 语义）。
+     *
+     * 判定路径：
+     *  1. qualifiedName 精确 / 前缀匹配（注解类可解析或注解以全限定名书写时可靠）；
+     *  2. 兜底：宿主文件的 import 语句含 JDBC/R2DBC Query FQN（`@Query` 短名书写 +
+     *     注解类不可解析的测试/跨模块场景——qualifiedName 退化为短名文本，只能靠 import 定包）。
+     */
+    private fun isNativeQueryAnnotation(annotation: PsiAnnotation): Boolean {
+        val qualifiedName = annotation.qualifiedName ?: return hasNativeQueryImport(annotation)
+        if (qualifiedName in NATIVE_QUERY_ANNOTATIONS) return true
+        if (NATIVE_QUERY_FQN_PREFIXES.any { qualifiedName.startsWith(it) }) return true
+        // 短名兜底场景（qualifiedName 无包名或与 JPA Query 不匹配时按 import 判定）
+        if (qualifiedName.substringAfterLast('.') != "Query") return false
+        return hasNativeQueryImport(annotation)
+    }
+
+    /** 宿主文件 import 列表是否引入 JDBC/R2DBC @Query（短名兜底场景的包归属判定）。 */
+    private fun hasNativeQueryImport(annotation: PsiAnnotation): Boolean {
+        val javaFile = annotation.containingFile as? com.intellij.psi.PsiJavaFile ?: return false
+        val imports = javaFile.importList?.allImportStatements ?: return false
+        return imports.filterIsInstance<com.intellij.psi.PsiImportStatement>()
+            .any { it.qualifiedName in NATIVE_QUERY_ANNOTATIONS }
     }
 
     /**

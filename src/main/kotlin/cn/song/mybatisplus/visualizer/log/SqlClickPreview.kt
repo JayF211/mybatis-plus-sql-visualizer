@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -31,6 +32,15 @@ import javax.swing.Timer
 internal class SqlClickPreviewContent(val component: JComponent, val editor: Editor)
 
 /**
+ * 单击预览浮层文本（T-ListPreviewCopy）：分号收尾 + 按设置「预览时格式化还原 SQL」
+ * （logFormatSql，默认开=默认格式化显示）决定是否 [SqlFormatter.format] 多行展开。
+ * 与双击弹窗 `toPreviewResult` 的 `formatIfNeeded(withTerminator(...))` 同序——
+ * 先补分号再格式化（生产已验证的分号处理路径）。纯函数，开关由调用方读设置传入。
+ */
+internal fun clickPreviewSql(sql: String, formatSql: Boolean): String =
+    if (formatSql) SqlFormatter.format(withTerminator(sql)) else withTerminator(sql)
+
+/**
  * 单击 SQL 预览（T-ClickPreview）：主日志列表 / 历史 tab 二级列表 / F-7 历史窗列表共用。
  *
  * 背景：列表条目多时悬停 tooltip（renderer toolTipText = 完整 SQL）逐行弹出/销毁、
@@ -43,6 +53,8 @@ internal class SqlClickPreviewContent(val component: JComponent, val editor: Edi
  * - 单击落在空白区（无行/行下留白）：立即停表并关预览——不借旧选中复活预览（二轮用户反馈：
  *   点其他地方后未再单击 SQL，预览又出现）；
  * - 双击：停定时器 + 关旧预览（随后面板自行 openPreview 走完整弹窗）。
+ * - 多选进行中（Ctrl/Shift/拖框 ≥2 行）单击：不排程、已弹出的关闭（T-ListPreviewCopy 用户反馈：
+ *   同时选择多个 SQL 时不要再出现单击预览）；[show] 到点时兜底复查，封 300ms 延迟窗内补选竞态。
  *
  * 弹窗形态：头部复制/关闭图标按钮 + **SQL 高亮可编辑编辑器**（三轮用户要求：高亮展示 +
  * 可临时改字段值再复制）。高亮走 [SqlListSyntaxHighlighter]（SqlLexer 分词 +
@@ -74,9 +86,16 @@ internal class SqlClickPreview(
         addActionListener { show() }
     }
 
-    /** 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览。 */
+    /** 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；多选进行中不排程。 */
     fun onClick(clickCount: Int, clickPoint: Point) {
         if (clickCount >= 2) {
+            timer.stop()
+            hide()
+            return
+        }
+        // T-ListPreviewCopy：多选（Ctrl/Shift/拖框 ≥2 行）时单击不再排程预览——多选操作被
+        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧
+        if (list.selectedIndices.size > 1) {
             timer.stop()
             hide()
             return
@@ -120,9 +139,13 @@ internal class SqlClickPreview(
         return Point(bounds.x, bounds.y + bounds.height + ANCHOR_GAP_PX)
     }
 
-    /** Timer 到点：对点击时捕获的行弹出预览（新弹前先关旧的）。 */
+    /** Timer 到点：对点击时捕获的行弹出预览（新弹前先关旧的）；已多选则放弃（延迟窗内补选竞态兜底）。 */
     private fun show() {
         val sql = pendingSql ?: return
+        if (list.selectedIndices.size > 1) {
+            hide()
+            return
+        }
         popup?.let { if (it.isVisible) it.cancel() }
         val next = buildPopup(sql)
         popup = next

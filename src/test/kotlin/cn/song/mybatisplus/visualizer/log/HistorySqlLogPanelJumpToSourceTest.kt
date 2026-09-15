@@ -43,7 +43,8 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
     }
 
     fun test缺源码位置_nullSource_无法跳转_NoSource() {
-        val panel = HistorySqlLogPanel(project)
+        // T-JumpCapture：NoSource 的生产侧行为 = SourceCaptureGuide 引导弹框（headless 不触弹窗，仅断言解析分支）
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = null)
             val target = panel.resolveJumpTarget(entry)
@@ -54,7 +55,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
     }
 
     fun test源码路径无效_文件不存在_无法跳转_NotFound() {
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = "src/missing/MissingMapper.java", sourceLine = 5)
             val target = panel.resolveJumpTarget(entry)
@@ -67,7 +68,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
 
     fun test源码位置有效_文件存在_可跳转_Navigate且行号正确() {
         writeRealSource("UserMapper.java", "public class UserMapper {}\n")
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val entry = makeEntry("SELECT * FROM user WHERE id = 1", sourceFile = "UserMapper.java", sourceLine = 10)
             val target = panel.resolveJumpTarget(entry)
@@ -84,7 +85,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
 
     fun test源码行号0_不崩溃_跳转到第0行() {
         writeRealSource("ZeroLineMapper.java", "public class ZeroLineMapper {}\n")
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val entry = makeEntry("SELECT 1", sourceFile = "ZeroLineMapper.java", sourceLine = 0)
             val target = panel.resolveJumpTarget(entry)
@@ -109,7 +110,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         )
         VfsUtil.markDirtyAndRefresh(false, true, true, histFile)
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertTrue("默认一级", panel.isShowingFiles)
             assertEquals("应读到 1 个历史文件", 1, panel.fileListEntries.size)
@@ -129,7 +130,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
 
     fun test可跳转条目_jumpToSource不抛异常_跳转链路可达() {
         writeRealSource("NavMapper.java", "public class NavMapper {}\n")
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val entry = makeEntry("SELECT * FROM nav WHERE id = 1", sourceFile = "NavMapper.java", sourceLine = 3)
             // 先确定性确认目标是可跳转的

@@ -1,23 +1,51 @@
 # SQL Visualizer
 
+> **服务未启，SQL 先知**
+
+MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
+> **别的插件给你文本，我们给你可执行的 SQL。**
+> 三条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
+
+## 能力全景：覆盖调试的两个阶段
+
+**编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
+
+**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志），日志条目与源码双向跳转，历史 SQL 落盘与两级导航。
+
+**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化。
+
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
 
-## 功能截图
+## 功能演示
 
-**Wrapper → SQL 预览弹窗**（动态条件勾选 / 参数回填 / 格式化）
-<img src="docs/images/screenshot-01-sql-preview.png" width="720" alt="Wrapper→SQL 预览弹窗"/>
+**Wrapper → SQL 预览**（动态条件勾选 / 参数回填 / 格式化 / 一键执行）
+<img src="docs/images/demo-01-wrapper-preview.gif" width="720" alt="Wrapper→SQL 预览演示"/>
 
-**SQL 日志工具窗口**（控制台日志捕获还原、日志转 SQL）
-<img src="docs/images/screenshot-02-log-panel.png" width="720" alt="SQL 日志工具窗口"/>
+**XML / HQL 动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
+<img src="docs/images/demo-02-xml-preview.gif" width="720" alt="XML 动态 SQL 预览演示"/>
 
-**SQL → MP Java 代码反向转换**（右键 / Alt+Shift+J / 侧边栏 tab）
-<img src="docs/images/screenshot-03-sql-to-java.png" width="720" alt="SQL→Java 反向转换"/>
-
-**XML 动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
-<img src="docs/images/screenshot-04-xml-preview.png" width="720" alt="XML动态 SQL 预览"/>
+**JPA / Hibernate SQL 预览**（派生方法 / JPQL / Criteria / hbm 命名查询）
+<img src="docs/images/demo-03-jpa-preview.gif" width="720" alt="JPA / Hibernate SQL 预览演示"/>
 
 **Java 注解 SQL 预览**（@Select/@Update 等，注解行 gutter 图标）
-<img src="docs/images/screenshot-05-annotation-preview.png" width="720" alt="注解动态 SQL 预览"/>
+<img src="docs/images/demo-04-annotation-preview.gif" width="720" alt="注解动态 SQL 预览演示"/>
+
+**SQL → MP Java 代码反向转换**（右键 / Alt+Shift+J / 侧边栏 tab）
+<img src="docs/images/demo-05-sql-to-java.gif" width="720" alt="SQL→Java 反向转换演示"/>
+
+**SQL 日志工具窗口**（控制台日志捕获还原、跳转源码、历史回看）
+<img src="docs/images/demo-06-sql-log.gif" width="720" alt="SQL 日志工具窗口演示"/>
+
+**批量操作参数面板**（批量 SQL 按列展开、参数逐列勾选）
+<img src="docs/images/demo-07-batch-operation.gif" width="720" alt="批量操作参数面板演示"/>
+
+**SQL 代码补全**（表名 / 列名 / `#{}` 参数 / XML 动态标签）
+<img src="docs/images/demo-08-code-completion.gif" width="720" alt="SQL 代码补全演示"/>
+
+**实体类 / 数据库表右键生成 CRUD SQL**（三入口右键 / 候选浮层打字过滤 / 列勾选实时收缩）
+<img src="docs/images/demo-09-crud-sql.gif" width="720" alt="CRUD SQL 生成演示"/>
+
+> 更多功能细节与在线文档见 [官网](https://sql-visualizer.jvtools.cn)。
 
 ## 痛点分析
 
@@ -34,7 +62,9 @@
 
 **Wrapper 转 SQL 预览**
 
-- 支持 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`、字符串版 `QueryWrapper` / `UpdateWrapper`、`MPJLambdaWrapper` / `MPJQueryWrapper` 联表查询，以及 `service.lambdaQuery()` 等服务链
+- 支持 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`、字符串版 `QueryWrapper` / `UpdateWrapper`、`MPJLambdaWrapper` / `MPJQueryWrapper` 联表查询，以及 `service.lambdaQuery()` 等服务链；Java 与 Kotlin 文件均支持
+- 其他 ORM / JDBC 写法同样行内 gutter 一键预览：JdbcTemplate 字符串 SQL（命名参数按名回填、`StringBuilder` 拼接自动聚合）、自研 DAO 字符串 SQL（调用行与方法定义行双锚点）、xbatis（原 mybatis-mp）、Easy-Query、MyBatis Dynamic SQL、Querydsl
+- Wrapper 锚点行 gutter 图标：左键直接弹出预览，右键菜单可选「预览 SQL」或「最近执行记录」，反查本会话捕获的该位置执行记录
 - 左侧面板可勾选动态条件（`.eq(true, ...)` 布尔重载）、回填 `?` 参数（LIKE 自动拼百分号、按字段类型决定是否加引号）、调整 foreach / bind 值
 - SQL 自动格式化（多行 / 单行），分页子句按 9 种方言差异渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase）
 
@@ -45,8 +75,9 @@
 
 **JPA / Hibernate SQL 预览**
 
-- Spring Data JPA 派生方法（`findByXxx`）、`@Query`（JPQL / 原生 SQL）、CriteriaBuilder 调用链、HQL（含自定义 DAO 与命名查询）均可一键预览为 SQL
-- 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解与 Hibernate `.hbm.xml` 映射；HQL 的 `SELECT u` 自动展开为实体列清单
+- Spring Data JPA 派生方法（`findByXxx`）、Repository CRUD 方法（`save` / `findById` / `deleteById` 等直接解析出 SQL）、`@Query`（JPQL / 原生 SQL）、`@NamedQuery`、CriteriaBuilder 调用链、HQL（含自定义 DAO）均可一键预览为 SQL
+- `JpaSpecificationExecutor` 的 Specification 调用链与 `QueryByExampleExecutor`（`Example.of`）按实体映射解析为 WHERE 条件；Hibernate `.hbm.xml` 映射实体及其 `<query>` / `<sql-query>` 命名查询同样支持
+- 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单
 
 **SQL 代码补全**
 
@@ -57,26 +88,33 @@
 - 选中 SQL 文本右键或按 Alt+Shift+J 生成 MyBatis-Plus 代码（QueryWrapper / LambdaQueryWrapper / Wrappers / MPJ 形态，默认形态可在设置页配置），支持增删改查与多表 JOIN，可指定调用类与返回 VO，生成的代码可直接编译
 - 侧边栏工具窗口「SQL → Java」tab：粘贴 SQL 即转，支持形态快捷切换
 
+**实体类 / 数据库表右键生成 CRUD SQL**
+
+- 实体类文件、项目视图实体节点或 Database 工具窗表节点右键，一键生成 INSERT / UPDATE / SELECT / DELETE 并进入预览：自增主键默认不勾选、`@Version` 列 SET 尾自动递增并进 WHERE、逻辑删除实体出对应变体语句；Community 版仅实体侧入口
+- 候选语句以原生浮层选择：打字按摘要过滤、Enter / 双击选定、ESC 关闭
+
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表，双击预览、右键复制 / 跳转源码
+- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码；JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）
 - 条目显示耗时（p6spy / MP TimeCount / 自定义前缀），超阈值红色标记并统计慢查询；列表支持 SQL 类型筛选、Ctrl+F 搜索、耗时排序、重复条目去重（⨉N 徽章即时同步）
+- 条目带 `#N` 会话内捕获序号；列表支持单行 / 关键字换行 / 格式化三种显示模式（工具栏下拉即时切换），并按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义）
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码
 - 双击/右键「跳转到源码」：应用注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）后可精确定位到触发 SQL 的代码行；未注册时按表名智能搜索实体近似跳转
 
 **检查更新（Gitee 抢先体验通道）**
 
-- 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装（重启生效）；支持「忽略此版本」
+- 稳定版由 JetBrains Marketplace 推送；设置页勾选「启动时自动检查更新」后进入 Gitee 内测通道，抢先获取新版本，发现新版弹通知一键下载安装，下载后热替换即时生效免重启（环境不支持时自动回退重启安装）；支持「忽略此版本」
 
 **其他**
 
 - SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示
-- JOIN 关系图：联表查询在预览面板「关系图」tab 自绘渲染表间 JOIN 关系
+- JOIN 关系图：联表查询在预览面板「关系图」tab 由 IDE 原生 Diagrams 框架渲染（Community 降级自绘渲染），支持 PNG / SVG 导出
 - 性能建议与复杂度：预览时按规则集给出 `SELECT *`、无索引列等性能提示与 SQL 复杂度评分
 - 对比与分享：当前 SQL 与上次预览并排 Diff（IDEA 原生 Diff）；一键复制可执行 SQL；分享为 Markdown / HTML 报告
 - 批量操作预览：`save` / `updateBatchById` 等批量 SQL 按列展开，参数可逐列勾选；`saveOrUpdate` 冲突子句按方言渲染（MySQL `ON DUPLICATE KEY UPDATE` / PG `ON CONFLICT` 等）
 - 逻辑删除注入：实体含 `@TableLogic` 时自动追加 `AND deleted = 0`（可配置关闭）；多租户 / 数据权限拦截器模拟（占位符注入，可配置）
 - UPDATE / DELETE 无 WHERE 条件时红色警示全表操作风险
+- 错误一键上报：IDE 内部错误对话框一键报告到官网需求池（异常预填、堆栈附件、IDE / 插件版本自动携带、24 小时去重），帮助菜单与设置页亦有反馈入口
 
 ## 预览 SQL 与运行时 SQL 的差异
 
@@ -96,7 +134,7 @@
 |------|------|
 | 右键菜单 | 光标置于 Wrapper 上 → 右键 → `Convert to SQL` |
 | 快捷键 | 默认 `Alt+Shift+Q`（macOS `Option+Shift+Q`），可在 Keymap 或插件设置页修改 |
-| 代码左侧图标 | Wrapper 锚点行左侧 gutter 图标，点击弹窗预览（可配置关闭） |
+| 代码左侧图标 | Wrapper 锚点行左侧 gutter 图标：左键直接预览，右键菜单「预览 SQL」/「最近执行记录」（可配置关闭） |
 
 ### 示例
 
@@ -141,6 +179,7 @@ ORDER BY t1.create_time DESC
 - **XML / 注解 SQL**：mapper XML 的 `<select>` 等语句或 Java Mapper 注解行左侧 gutter 图标，点击即预览；选中包含多条 SQL 的代码段会弹出候选栏（行号 + 摘要 + 定位跳转）
 - **JPA / Hibernate**：Repository 派生方法、`@Query`、Criteria 链、HQL（含自定义 DAO）行左侧 gutter 图标，点击即预览
 - **SQL → Java**：选中 SQL 文本右键 → `Convert SQL to MP Java Code`（或 Alt+Shift+J）；侧边栏工具窗口「SQL → Java」tab 粘贴即转
+- **CRUD SQL**：实体类文件 / 项目视图实体节点 / Database 工具窗表节点右键 → 生成 CRUD SQL，浮层选定语句后进入预览
 - **SQL 日志**：侧边栏「SQL Visualizer」工具窗口点「捕捉」开始监听控制台；双击日志条目预览还原 SQL；「日志 → SQL」tab 粘贴日志批量还原；「历史」tab 浏览自动保存的历史 SQL
 - **帮助**：工具窗口工具栏「?」按钮在内嵌浏览器打开功能与快捷键一览（本地页面，无网络依赖）
 
@@ -157,6 +196,7 @@ ORDER BY t1.create_time DESC
 | 格式化输出 | 开 | 多行缩进（关 = 单行） |
 | 逻辑删除注入 | 开 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值` |
 | 逻辑删除值 | 0 | 逻辑删除条件的值（对齐 MP `logic-delete-value`） |
+| 字段列表自动折叠 | 关 | SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开（阈值可配，默认 10） |
 
 **表名映射**
 
@@ -179,8 +219,8 @@ ORDER BY t1.create_time DESC
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
 | SQL / 参数前缀 | `Preparing:` / `Parameters:` | 控制台日志识别前缀（「混合前缀」开启后可同时识别两种格式；另支持 Hibernate / JdbcTemplate 前缀与耗时前缀配置） |
-| 自动捕捉 | 关 | IDE 启动后自动开始监听控制台 |
-| 发现 SQL 自动打开窗口 | 关 | 捕获到 SQL 时自动打开日志工具窗口 |
+| 自动捕捉 | 关 | 运行 / 调试项目时自动开始监听控制台（进程级被动监听；手动点「停止捕捉」后本会话不再自动弹回） |
+| 发现 SQL 自动打开窗口 | 开 | 捕获到 SQL 时自动展开日志工具窗口（60 秒防抖、不抢编辑器焦点；手动关闭后本次会话不再自动弹出） |
 | 时间戳显示 | 开 | 条目列表显示捕获时间（格式可配，默认 `yyyy-MM-dd HH:mm:ss`） |
 | 耗时显示 / 慢查询阈值 | - | 解析 p6spy / TimeCount / 自定义前缀耗时，超阈值红色标记并统计慢查询 |
 | 最大条数 | 可配 | 日志条目上限（M46），超出自动淘汰 |
@@ -195,13 +235,14 @@ ORDER BY t1.create_time DESC
 | 代码左侧显示预览 SQL 图标 | 开 | Wrapper 锚点行 gutter 图标入口 |
 | 界面语言 | 简体中文 | 插件 UI 语言（English / 跟随系统可选） |
 | 快捷键 | `Alt+Shift+Q` / `Alt+Shift+J` | 分别对应 Wrapper 转 SQL 与 SQL→Java 反向转换；录制式修改，保存写入 IDE Keymap（冲突可「强制使用」抢占） |
+| SQL 列表类型颜色标记 | 左侧色条 | 日志 / 历史列表按语句类型着色（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红），形态三选一（色条 / 整行淡背景 / 关闭），四色可自定义 |
 
 **更新与诊断**
 
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
 | 启动时自动检查更新 | 关 | 勾选后进入 Gitee 抢先体验通道，启动静默检查（检查源为仓库 `update/update.json`），发现新版弹通知（可一键后台下载安装，支持「忽略此版本」）；稳定版由 JetBrains Marketplace 推送 |
-| 检查更新 / 下载并安装 | - | 手动检查更新、查看变更日志、一键下载安装（重启生效） |
+| 检查更新 / 下载并安装 | - | 手动检查更新、查看变更日志、一键下载安装（热替换免重启生效，环境不支持时回退重启安装） |
 | 插件缓存 | - | 显示反查缓存占用大小，可一键清除 |
 | 内部构建号 | - | 每次构建唯一（MPV-Build），反馈问题时一键复制粘贴 |
 
@@ -298,4 +339,4 @@ M28 起发布流程新增一步（插件设置页「检查更新」的数据源�
 |----------|--------|
 | ![微信](docs/images/wechat-qr.png) | ![交流群](docs/images/group-qr.png) |
 
-遇到问题或有建议？请在 [Issues](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues) 提交反馈。
+遇到问题或有建议？请在 [官网需求池](https://sql-visualizer.jvtools.cn/about/feedback) 提交反馈。

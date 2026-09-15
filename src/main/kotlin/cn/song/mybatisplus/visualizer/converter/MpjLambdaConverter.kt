@@ -76,12 +76,19 @@ object MpjLambdaConverter : WrapperConverter {
                 || it.methodName == AROUND_METHOD
                 || it.methodName in NOOP_METHODS
         }
-        val base = QueryWrapperParser(table, mainAlias)
-            .parse(WrapperChain(chain.wrapperType, chain.entityClass, restCalls))
 
         // Build alias → table and class → alias mappings (needed for selectAs column attribution)
         val aliasToTable = buildAliasToTable(joinCalls)
         val classToAlias = aliasToTable.entries.associate { (alias, ti) -> ti.entityClassName to alias }
+
+        // T-MpjColAlias：MPJ 联表列归属——lambda 列接收者是关联实体（如
+        // select(StationInfoEntity::getStationName)）时，列按 join 解析出的关联别名归属
+        // （st.station_name）而非主表别名。QueryWrapperParser 的 columnPrefix 无条件补主表
+        // 别名（withTableAlias 仅空别名时补），不改解析器（单表/MPJ 共用语义不变），
+        // 在委托前重写调用树 ColumnArg 的 tableAlias，覆盖 select/条件/orderBy 全部列入口。
+        val attributedRest = restCalls.map { attributeJoinColumns(it, classToAlias, chain.entityClass) }
+        val base = QueryWrapperParser(table, mainAlias)
+            .parse(WrapperChain(chain.wrapperType, chain.entityClass, attributedRest))
 
         // selectAll(Class[, prefix][, exclude...])：主表全列（带主表别名前缀）+ 聚合列（selectSum 等，委托 base）
         // + selectAs/selectAsClass/selectSub 列追加；exclude 排除字段（官方 API）、prefix 列前缀（官方 API）
@@ -317,6 +324,55 @@ object MpjLambdaConverter : WrapperConverter {
             map[alias] = tableInfo
         }
         return map
+    }
+
+    /**
+     * T-MpjColAlias：委托 [QueryWrapperParser] 前重写调用树中的列别名归属——lambda 列接收者
+     * 实体类命中 join 关联映射（[classToAlias]）且非主实体类时，把 ColumnArg 列的 tableAlias
+     * 预置为 join 别名；解析器 columnPrefix（[cn.song.mybatisplus.visualizer.model.withTableAlias]
+     * 仅空别名补前缀）保留既有归属，select/条件/orderBy/聚合全部列入口一并修正。
+     *
+     * 根因场景：`select(StationInfoEntity::getStationName)` 原被无条件补主表别名 →
+     * `t.station_name`（car_device_info 无此列，执行报 1054 Unknown column）。
+     * NestedArg 递归处理（and/or 嵌套 lambda 体内的关联列）；字符串列（ValueArg）已含
+     * 别名原样，不触碰。
+     */
+    private fun attributeJoinColumns(
+        call: WrapperCall,
+        classToAlias: Map<String, String>,
+        mainEntityClass: String?,
+    ): WrapperCall {
+        if (classToAlias.isEmpty()) return call
+        var changed = false
+        val newArgs = call.args.map { arg ->
+            when (arg) {
+                is WrapperArg.ColumnArg -> {
+                    val attributed = attributeColumn(arg.column, classToAlias, mainEntityClass)
+                    if (attributed === arg.column) arg else { changed = true; WrapperArg.ColumnArg(attributed) }
+                }
+                is WrapperArg.NestedArg -> {
+                    val newChain = arg.chain.copy(
+                        calls = arg.chain.calls.map { attributeJoinColumns(it, classToAlias, mainEntityClass) },
+                    )
+                    if (newChain.calls == arg.chain.calls) arg else { changed = true; WrapperArg.NestedArg(newChain) }
+                }
+                is WrapperArg.FuncArg -> {
+                    val cols = arg.columns.map { attributeColumn(it, classToAlias, mainEntityClass) }
+                    if (cols == arg.columns) arg else { changed = true; arg.copy(columns = cols) }
+                }
+                else -> arg
+            }
+        }
+        return if (changed) call.copy(args = newArgs) else call
+    }
+
+    /** 单列归属：仅无别名 lambda 列、接收者实体类 ≠ 主实体类、且命中 join 映射时改写（self-join 主列保主表）。 */
+    private fun attributeColumn(column: ColumnRef, classToAlias: Map<String, String>, mainEntityClass: String?): ColumnRef {
+        val receiver = column.entityClass ?: return column
+        if (column.tableAlias != null) return column
+        if (receiver == mainEntityClass) return column
+        val alias = classToAlias[receiver] ?: return column
+        return column.copy(tableAlias = alias)
     }
 
     /**

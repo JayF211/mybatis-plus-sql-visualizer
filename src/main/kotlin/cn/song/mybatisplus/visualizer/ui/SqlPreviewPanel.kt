@@ -95,8 +95,9 @@ import javax.swing.event.DocumentListener
  * SQL 预览面板（M9-01/02/03 可编辑版，F-07/F-08）。
  *
  * 弹窗 [SqlPreviewDialog] 与工具窗口共用本面板，展示：
- *  - 顶部：元信息（Wrapper 类型 / 表名 / 风险警示，T-PreviewTopOverlap F3 按宽度预算截断）
- *    + 工具栏（压缩切换 / 格式化 / 关键字换行 / 刷新 + 「更多」折叠低频动作；复制错误仅警示时可见）
+ *  - 顶部单行：元信息（Wrapper 类型 / 表名 / 风险警示，T-PreviewTopOverlap F3 按宽度预算截断）
+ *    + 工具栏（压缩切换 / 格式化 / 关键字换行 / 竖向排列 / 执行计划 / 刷新 + 「更多」折叠低频动作；
+ *    复制错误仅警示时可见）
  *  - 中部左右分栏：左侧**参数值输入框**（`#param` → 值，输入实时回填 SQL），右侧**可编辑 SQL 编辑器**
  *  - SQL 编辑器：`EditorFactory.createEditor`（可写）+ 原生 SQL 语法高亮（平台自动关联）；
  *    文档由原生 SQL FileType PSI 文件支撑，挂 [SqlCompletionContributor]（language="SQL" + IS_PREVIEW_EDITOR 守卫）提供补全（Ctrl+Space）
@@ -158,13 +159,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
     // T-M26.3：全选/全不选按钮回挂分区标题行右侧（IDEA 组操作惯例，T-M23.2 原生形态；
     // T-M26.2 曾固定面板右上角，长文本截断后按钮不再被推出视口）。
-    private var selectAllButton: JButton? = null
-    private var selectNoneButton: JButton? = null
+    // T-SelToggle：全选/全不选合并为单个状态切换按钮——全勾时文案「全不选」点击清空，
+    // 其余态文案「全选」点击填满；文案随勾选态翻转（renderSql 末尾单点同步）。
+    private var toggleSelectButton: JButton? = null
     private var clearButton: JButton? = null        // 动态条件分区清除按钮
     private var batchClearButton: JButton? = null    // 批量参数列分区清除按钮
-    // T-M23.2：批量「参数列」区全选/全不选按钮
-    private var batchSelectAllButton: JButton? = null
-    private var batchSelectNoneButton: JButton? = null
+    // T-M23.2：批量「参数列」区全选/全不选切换按钮（T-SelToggle 合并单按钮）
+    private var batchToggleSelectButton: JButton? = null
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
@@ -182,9 +183,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+    /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
+    @Volatile
+    private var prewarmFailed = false
     /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。 */
     @Volatile
     private var previewDisposed = false
+    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    @Volatile
+    private var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     private val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -288,11 +295,41 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
     private val historyAlarm = javax.swing.Timer(500) { flushHistoryToCache() }.apply { isRepeats = false }
 
+    // T-Perf-04：参数击键路径 renderSql 防抖（Swing Timer，150ms，模式同 historyAlarm）
+    /** 待执行的渲染任务（最后一次调度者生效——防抖语义）。 */
+    private var pendingRender: (() -> Unit)? = null
+    private val renderDebounceTimer = javax.swing.Timer(RENDER_DEBOUNCE_MS) { flushDebouncedRender() }.apply { isRepeats = false }
+
+    /**
+     * 调度防抖渲染： keystroke 路径用——150ms 停顿后只渲染一次，最终结果与逐键全量渲染一致。
+     *
+     * 单元测试模式（isUnitTestMode，headless 无 EDT 泵）同步执行：既有测试依赖「改参数值 →
+     * 文档即时更新」的同步语义，且挂起的 Timer 在后续测试泵 EDT 时迟到触发会触碰已销毁面板
+     * 并触发 TransactionGuard "Write-unsafe context" 日志断言（交叉污染）。生产行为不变。
+     */
+    private fun scheduleRender(task: () -> Unit) {
+        pendingRender = task
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        if (app != null && app.isUnitTestMode) {
+            flushDebouncedRender()
+            return
+        }
+        renderDebounceTimer.restart()
+    }
+
+    /** Timer 动作：执行最后调度的渲染任务（EDT）。 */
+    private fun flushDebouncedRender() {
+        val task = pendingRender
+        pendingRender = null
+        task?.invoke()
+    }
+
     init {
         // 顶部元信息行 + 工具栏
         // T-PreviewTopOverlap F1：metaLabel 从 WEST 迁 CENTER——BorderLayout 的 WEST/EAST 各按
         // 理想宽整块贴边绝不收缩，两偏好宽之和超容器宽时直接互相重叠（用户真机截图实锤：元信息
         // 文字压进按钮行）；CENTER 只拿剩余宽度，与 EAST 结构性零重叠。宽度不足由 F3 截断兜底。
+        // （合并曾取 dev T-GifHeader 两行布局为基底，用户定案「更多」折叠菜单模式——单行方案转正。）
         metaLabel.border = JBUI.Borders.empty(0, 8, 4, 8)
         topRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             add(metaLabel, BorderLayout.CENTER)
@@ -351,37 +388,126 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private fun prewarmPreviewTempFile() {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         ApplicationManager.getApplication().executeOnPooledThread {
             if (previewTempFile != null || previewDisposed) return@executeOnPooledThread
             runCatching {
-                val io = java.io.File.createTempFile("mp-sql-preview-", ".sql")
-                io.writeText("")
-                io.deleteOnExit()
-                val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
-                    ?: return@executeOnPooledThread
+                // T-PreviewExecDs-01a：预览临时文件迁项目内 .idea/sql-visualizer/preview/
+                // ——系统 Temp 不在数据源关联范围，Database 插件不解析（M36.5.12 exec 同教训，
+                // 预览路径此前未跟进；旧实现 09:34:40 起持续预热失败后回退裸文档，补全/注释全灭）。
+                val io = projectPreviewFile() ?: run {
+                    prewarmFailed = true
+                    LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)")
+                    return@executeOnPooledThread
+                }
+                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒
+                // 录制期实证）——旧实现只重试一次仍持续失败（两项目同开 VFS 忙窗口）；T-PreviewExecDs-01b
+                // 加重试到 3 次带退避，失败置 prewarmFailed 让 await 快速返回，不空等预算。
+                val lfs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+                var vf = lfs.refreshAndFindFileByIoFile(io)
+                var retries = 0
+                while (vf == null && retries < 3 && !previewDisposed) {
+                    Thread.sleep(100L * (retries + 1))
+                    vf = lfs.refreshAndFindFileByIoFile(io)
+                    retries++
+                }
+                if (vf == null) {
+                    prewarmFailed = true
+                    LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
+                    return@executeOnPooledThread
+                }
                 if (previewDisposed) {
                     java.io.File(vf.path).delete()
                     return@executeOnPooledThread
                 }
                 val proj = project ?: return@executeOnPooledThread
+                // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
+                // 创建后再映射需 push 重建；exec 路径同款顺序）
+                mapPreviewDialectBeforePsi(proj, vf)
                 val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
                     com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                } ?: return@executeOnPooledThread
+                } ?: run {
+                    prewarmFailed = true
+                    LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
+                    return@executeOnPooledThread
+                }
                 previewTempFile = vf
                 prewarmedTempFile = vf to psi
+            }.onFailure { e ->
+                prewarmFailed = true
+                LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             }
+        }
+    }
+
+    /**
+     * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/mpsql-preview.sql`。
+     * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。文件在项目内容内，Database 插件才能解析
+     * schema 补全/注释。VFS 安全写入三态（document 驱动 > setBinaryContent > FileUtil 兜底），
+     * 杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗（exec 路径 M36.5.13 同款）。
+     */
+    @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun projectPreviewFile(): java.io.File? {
+        val proj = project ?: return null
+        val base = proj.basePath ?: return null
+        val dir = java.io.File(
+            base,
+            ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
+        )
+        if (!dir.exists() && !dir.mkdirs()) return null
+        val f = java.io.File(dir, "mpsql-preview.sql")
+        val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
+        if (existing != null) {
+            val ok = runCatching {
+                com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                    val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                        .getInstance().getDocument(existing)
+                    when {
+                        fileDoc != null -> fileDoc.setText("") // 预热占位空内容，createEditor 装配时按实际 SQL 填充
+                        fileDoc == null -> existing.setBinaryContent("".toByteArray())
+                    }
+                }
+                true
+            }.getOrDefault(false)
+            if (ok) return f
+        }
+        com.intellij.openapi.util.io.FileUtil.writeToFile(f, "")
+        return f
+    }
+
+    /**
+     * T-PreviewExecDs-01c：预览文件方言预映射（exec 路径 DataSourceSelector.mapDialectBeforePsi 同款）——
+     * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。映射匹配与 exec 一致：
+     * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
+     * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
+     * 同 vf 已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+     *
+     * T-ExecSlowOps F1：反射段收编进 [DialectPreMapping]，本方法仅保留「面板级进程内幂等短路」语义 +
+     * 成功回写 [previewDialectMappedVf]。真机实锤：本方法在 [prewarmPreviewTempFile] 后台线程内调用，
+     * 旧实现反射直调 `setMapping` → 平台 `handleMappingChange → reparseFiles → runWriteAction →
+     * VcsVFSListener.beforeContentsChange` 的 `assertEventDispatchThread` 硬抛
+     * RuntimeExceptionWithAttachments（SEVERE ×3）。DialectPreMapping.ensureMapped 两段式：
+     * 稳态（workspace.xml 映射幸存/本进程已设）读探测直接跳过，仅项目首见经 invokeLater 派 EDT 执行
+     * 映射并 CountDownLatch 有界等待——映射写归 EDT、慢操作归 BGT，两侧 SEVERE 同消。
+     */
+    private fun mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
+        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === vf
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, vf, inProcessMapped)) {
+            previewDialectMappedVf = vf
         }
     }
 
     /**
      * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
      * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
+     * T-GifRerecord：预热线程已判定失败时立即返回 null（快速降级），不再空等 2s 预算。
      */
     private fun awaitPrewarmedTempFile(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
         var waited = 0L
         while (true) {
             val ready = prewarmedTempFile?.also { prewarmedTempFile = null }
             if (ready != null) return ready
+            if (prewarmFailed) return null
             if (waited >= PREWARM_WAIT_MS) return null
             try {
                 Thread.sleep(PREWARM_POLL_MS)
@@ -448,6 +574,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap")) { formatClauseLine() })
         // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
         add(smallButton(MpSqlVisualizerBundle.message("panel.vertical")) { formatVertical() })
+        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照）。
+        // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
+        // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
+        add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         add(smallButton(MpSqlVisualizerBundle.message("panel.more")) { showMoreActionsPopup() })
@@ -567,6 +697,40 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
+            onError = { errorMsg ->
+                resultPanel.showError(errorMsg)
+            },
+        )
+    }
+
+    /**
+     * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
+     * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
+     * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     */
+    internal fun explainSql() {
+        val proj = project ?: return
+        val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        // T-ExplainDbl：幂等包装——首次执行后 EXPLAIN 语句已在控制台文档中，再点一次
+        // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
+        val explainSql = dialect.renderExplainStatementIdempotent(sql)
+        if (explainSql == null) {
+            Messages.showInfoMessage(
+                proj,
+                MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                MpSqlVisualizerBundle.message("panel.explain"),
+            )
+            return
+        }
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")
+        resultPanel.showLoading()
+        SqlExecutor.execute(
+            proj, explainSql, null, true,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             onError = { errorMsg ->
                 resultPanel.showError(errorMsg)
             },
@@ -932,13 +1096,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (hasJoins) {
             // 确保内容区已切换为标签页模式
             ensureTabbedContent()
-            // 构建结构化模型并展示（原生框架优先，缺席/异常降级自绘）
+            // T-Perf-09：schema 富化（数据源全量遍历）移后台预取——数千表冷缓存时 EDT 直跑冻结秒级；
+            // 富化完成回 EDT 再展示。当前 PreviewResult 被替换（新预览）时作废迟到的应用。
             // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
-            val model = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
-                project,
-                JoinDiagramGenerator.buildDiagramModel(statement as SelectStatement),
-            )
-            showJoinDiagram(model)
+            val stmt = statement as SelectStatement
+            val proj = project
+            if (proj == null) {
+                showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
+                return
+            }
+            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val enriched = try {
+                    cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
+                        proj,
+                        JoinDiagramGenerator.buildDiagramModel(stmt),
+                    )
+                } catch (t: Throwable) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[T-Perf-09] diagram schema enrich failed, showing un-enriched model", t)
+                    JoinDiagramGenerator.buildDiagramModel(stmt)
+                }
+                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    if (current !== result || project?.isDisposed == true) return@invokeLater
+                    showJoinDiagram(enriched)
+                }
+            }
         } else {
             // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
             removeDiagramTab()
@@ -1196,6 +1378,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 showSql(backfillParamsBySource(applyNamedParams(base), result.unresolvedParams, result.paramHints))
             }
         }
+        // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
+        syncToggleSelectLabels()
     }
 
     /**
@@ -1420,10 +1604,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         xmlErrors = emptyList()
         currentWarning = null
         errorCopyButton?.isVisible = false
-        selectAllButton = null
-        selectNoneButton = null
-        batchSelectAllButton = null
-        batchSelectNoneButton = null
+        toggleSelectButton = null
+        batchToggleSelectButton = null
         paramPanel.removeAll()
         // O-4：重置会话缓存
         previousSql = null
@@ -1563,11 +1745,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
             // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
             // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
+            // （dev 侧 T-GifRerecord 同题降级版无 ReadAction 包裹，按超集原则整取 master 版。）
+            // T-PreviewExecDs-01d：降级链第二级 = 内存 PSI（PsiFileFactory.createFileFromText，
+            // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
+            // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
             val fallbackDoc = { msg: String ->
-                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-                    .warn("[M36] preview temp file unavailable, fall back to in-memory editor: $msg")
-                psiFile = null
-                EditorFactory.getInstance().createDocument(sql)
+                createInMemoryPreviewPsi(sql) ?: run {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
+                    psiFile = null
+                    EditorFactory.getInstance().createDocument(sql)
+                }
             }
             val doc = runCatching {
                 val (vFile, psi) = awaitPrewarmedTempFile()
@@ -1642,6 +1830,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
+    }
+
+    /**
+     * T-PreviewExecDs-01d：降级链第二级——内存 PSI 预览文档（无项目内 VFS 文件，但保留
+     * [SqlCompletionContext] 补全载体，避免掉到裸 document 后补全/注释全灭）。createFileFromText
+     * 包 ReadAction（T-M42 同机制先例：EDT 直调触发 markGenerated softAssertReadAccess 硬抛）。
+     * 失败返回 null，由调用方回落到第三级裸文档。
+     */
+    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+    private fun createInMemoryPreviewPsi(sql: String): com.intellij.openapi.editor.Document? {
+        val proj = project ?: return null
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        return runCatching {
+            val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
+            val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
+                com.intellij.psi.PsiFileFactory.getInstance(proj)
+                    .createFileFromText("mpsql-preview-memory.sql", fileType, sql)
+            }
+            psiFile = psi
+            LOG.info("[M36] in-memory PSI preview document created (len=${sql.length})")
+            com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
+                ?: EditorFactory.getInstance().createDocument(sql)
+        }.onFailure { e ->
+            LOG.warn("[M36] in-memory PSI preview fallback FAILED: ${e.message}")
+            psiFile = null
+        }.getOrNull()
     }
 
     /**
@@ -1758,11 +1972,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionValueFields.clear()
         batchCheckBoxes.clear()
         // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
-        selectAllButton = null
-        selectNoneButton = null
+        toggleSelectButton = null
         clearButton = null
-        batchSelectAllButton = null
-        batchSelectNoneButton = null
+        batchToggleSelectButton = null
         batchClearButton = null
         val views = result.previewModel?.conditionViews.orEmpty()
         val batchModel = result.batchModel
@@ -1898,21 +2110,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /**
      * 批量「参数列」分区标题行（T-M23.2 回归，T-M26.3 TitledSeparator 化）：左侧分区标题 +
-     * 右侧全选/全不选按钮（操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
+     * 右侧单个全选/全不选切换按钮（T-SelToggle；操作 [batchCheckBoxes]，与动态条件区按钮互不影响）。
      */
     private fun batchSectionHeader(): JBPanel<JBPanel<*>> {
-        batchSelectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllBatchColumns(true) }
-        batchSelectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllBatchColumns(false) }
+        batchToggleSelectButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) {
+            setAllBatchColumns(!batchCheckBoxes.all { it.isSelected })
+        }
         batchClearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear")) { clearBatchValues() }
         return sectionHeaderRow(
             MpSqlVisualizerBundle.message("panel.batch.columns"),
-            listOf( batchClearButton!!,batchSelectAllButton!!, batchSelectNoneButton!!),
+            listOf(batchToggleSelectButton!!, batchClearButton!!),
         )
     }
 
     /**
      * 批量列全选/全不选（T-M23.2）：操作 [batchCheckBoxes] 与 [enabledIds]（列名作 id），
      * 同步复选框 UI 与 SQL 重渲染（全不选 → 空列清单形态，文档化边界）。
+     * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
      */
     private fun setAllBatchColumns(enabled: Boolean) {
         val model = current?.batchModel ?: return
@@ -1924,16 +2138,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * 动态条件分区标题行（T-M26.3）：TitledSeparator「动态条件」+ 右侧全选/全不选按钮
-     * （T-M23.2 形态回归，IDEA 组操作惯例；XML 条件开关同样复用，见 T-M24-04）。
+     * 动态条件分区标题行（T-M26.3）：TitledSeparator「动态条件」+ 右侧单个全选/全不选切换按钮
+     * （T-M23.2 形态回归，IDEA 组操作惯例，T-SelToggle 双按钮合一；XML 条件开关同样复用，见 T-M24-04）。
      */
     private fun conditionSectionHeader(): JBPanel<JBPanel<*>> {
-        selectAllButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) { setAllConditions(true) }
-        selectNoneButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectNone")) { setAllConditions(false) }
+        toggleSelectButton = compactButton(MpSqlVisualizerBundle.message("panel.condition.selectAll")) {
+            setAllConditions(!conditionCheckBoxes.all { it.isSelected })
+        }
         clearButton = compactButton(MpSqlVisualizerBundle.message("panel.param.clear")) { clearConditionValues() }
         return sectionHeaderRow(
             MpSqlVisualizerBundle.message("panel.condition.section"),
-            listOf(clearButton!!,selectAllButton!!, selectNoneButton!!),
+            listOf(toggleSelectButton!!, clearButton!!),
         )
     }
 
@@ -1945,8 +2160,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-SelToggle：切换按钮文案判定——复选框非空且全部勾选 → 「全不选」（点击清空），
+     * 其余一切态（空集/部分勾选）→ 「全选」（点击填满）。以复选框 UI 态为基准
+     * （enabledIds 跨场景共享可能残留本场景外 id，与用户所见不一致）。
+     */
+    private fun toggleLabel(boxes: List<JCheckBox>): String =
+        MpSqlVisualizerBundle.message(
+            if (boxes.isNotEmpty() && boxes.all { it.isSelected }) "panel.condition.selectNone"
+            else "panel.condition.selectAll",
+        )
+
+    /**
+     * T-SelToggle：切换按钮文案随勾选态刷新——挂在 [renderSql] 末尾单点收口
+     * （三个勾选入口——切换按钮自身、批量列行/动态条件行/XML 条件行 listener——均以 renderSql 收尾）。
+     * 文案未变化不 setText，避免每次重渲染触发标题行 FlowLayout 无谓重排。
+     */
+    private fun syncToggleSelectLabels() {
+        toggleSelectButton?.let {
+            val label = toggleLabel(conditionCheckBoxes)
+            if (it.text != label) it.text = label
+        }
+        batchToggleSelectButton?.let {
+            val label = toggleLabel(batchCheckBoxes)
+            if (it.text != label) it.text = label
+        }
+    }
+
+    /**
      * 全选/全不选（M13.1）：批量设置动态条件勾选态（普通参数不受影响），
      * 同步复选框 UI 与 SQL 重渲染。T-M24-04：XML 预览的条件开关（id = test 表达式）一并处理。
+     * T-SelToggle：由单个切换按钮按当前勾选态取反调用。
      */
     private fun setAllConditions(enabled: Boolean) {
         val views = current?.previewModel?.conditionViews.orEmpty()
@@ -2025,10 +2268,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * 动态条件值变更（M13：复选框纯手动）：仅更新按 source 绑定的参数值并重渲染，
      * 勾选态只由用户操作决定（值空保留 `?`，不自动取消勾选）。
+     * T-Perf-04：击键路径——重渲染防抖（同 [onParamChanged]）。
      */
     private fun onConditionValueChanged(view: ConditionView, source: String, text: String) {
         paramValues[source] = text
-        renderSql()
+        scheduleRender { renderSql() }
         saveToHistory()
     }
 
@@ -2086,8 +2330,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * `2,3` → 展开 2 项 + `IN ( 2 , 3 )`；留空 → 恢复默认展开次数并清空该 foreach 的参数值（`?` 保持）。
      * **先渲染一次刷新键清单**（逐字符输入时中间态 counts 会改变渲染键数量，直接取旧键会漏填），
      * 再按新键填值二次渲染。
+     *
+     * T-Perf-04：击键路径每键两次全量渲染——整个处理器防抖（停顿后以最终文本执行一次；
+     * handler 内部的两段渲染依赖 xmlMappings 中间态，保持同步语义不拆散）。
      */
     private fun onXmlForEachValuesChanged(view: XmlForEachView, text: String) {
+        scheduleRender { applyXmlForEachValues(view, text) }
+    }
+
+    /** foreach 值应用（由防抖 Timer 调度；原 onXmlForEachValuesChanged 主体）。 */
+    private fun applyXmlForEachValues(view: XmlForEachView, text: String) {
         val item = view.item ?: return
         val values = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         xmlForEachCounts[view.collectionExpr] =
@@ -2188,10 +2440,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return if (metrics.stringWidth(raw) > maxWidth) ellipsize(raw, metrics, maxWidth) else raw
     }
 
-    /** 普通参数值变更：更新回填表并重渲染 SQL。 */
+    /** 普通参数值变更：更新回填表并重渲染 SQL（T-Perf-04：重渲染防抖——逐键全量重生成+格式化
+     *  +重分词在大 SQL 下构成卡顿；paramValues 即时更新，渲染合并到停顿后一次）。 */
     private fun onParamChanged(source: String, value: String) {
         paramValues[source] = value
-        renderSql()
+        scheduleRender { renderSql() }
         saveToHistory()
     }
 
@@ -2322,8 +2575,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // paramFields 按 buildParamRow/buildBatchColumnRow/buildXmlForEachRow 追加顺序排列，
         // 与 unresolvedParams + 条件值来源的顺序一致；但 source 可能出现在多个场景，
         // 此处按 paramValues 键顺序定位（与输入框构建顺序一致）
-        val sources = paramValues.keys.toList()
-        return sources.indexOf(source)
+        // T-Perf-23：单趟遍历计数（原 toList+indexOf 每次 O(C) 拷贝 + 线性查找）
+        var index = 0
+        for (key in paramValues.keys) {
+            if (key == source) return index
+            index++
+        }
+        return -1
     }
 
     /**
@@ -2340,9 +2598,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
         val proj = project ?: return
         when {
-            isEmptyClipboard -> Messages.showErrorDialog(
-                proj, MpSqlVisualizerBundle.message("panel.param.import.result.empty"), title,
-            )
+            isEmptyClipboard -> {
+                // T-Perf-20：空剪贴板属用户输入类提示——改面板内行内警示（元信息行红字），
+                // 不再弹模态错误框（toast 语义：下次 updateMeta 覆盖）
+                val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
+                currentWarning = hint
+                metaLabel.text = "⚠ $hint"
+                metaLabel.toolTipText = hint
+                metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
+                errorCopyButton?.isVisible = true
+            }
             unmatched == 0 -> Messages.showInfoMessage(
                 proj, MpSqlVisualizerBundle.message("panel.param.import.result.success", matched), title,
             )
@@ -2395,10 +2660,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         historyAlarm.restart()
     }
 
-    /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。 */
+    /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。
+     * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。 */
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
-        paramHistoryCache.save(key, paramValues.toMap())
+        val snapshot = paramValues.toMap()
+        // headless 单测：同步执行保持既有测试语义
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            paramHistoryCache.save(key, snapshot)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            paramHistoryCache.save(key, snapshot)
+        }
     }
 
     /**
@@ -2411,22 +2685,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *
      * 扫描 `IN (?, ?, ...)` 模式，返回 IN 子句内 `?` 的参数索引集合。
      * 面板回填时这些参数按逗号分割多值渲染。
+     *
+     * T-Perf-04：单趟 O(N) 扫描——旧实现对每个 `?` 复制并大写化整个前缀（O(L×P)）；
+     * 现改为就地回扫（跳过空白 → `(` → 可选一个空格 → `IN`，与旧 trimEnd+endsWith 语义一致），
+     * 零分配。
      */
-    private fun detectInClauseParams(sql: String): Set<Int> {
+    internal fun detectInClauseParams(sql: String): Set<Int> {
         val result = mutableSetOf<Int>()
         var paramIndex = 0
-        var i = 0
-        while (i < sql.length) {
-            val c = sql[i]
-            if (c == '?') {
-                // 检查前面是否有 IN ( 关键字
-                val prefix = sql.substring(0, i).trimEnd().uppercase()
-                if (prefix.endsWith("IN (") || prefix.endsWith("IN(")) {
+        for (i in sql.indices) {
+            if (sql[i] != '?') continue
+            var j = i - 1
+            while (j >= 0 && sql[j].isWhitespace()) j--
+            if (j >= 0 && sql[j] == '(') {
+                j--
+                if (j >= 0 && sql[j] == ' ') j-- // "IN (" 单空格形态（"IN(" 直接判 N/I）
+                if (j >= 1 && (sql[j] == 'N' || sql[j] == 'n') && (sql[j - 1] == 'I' || sql[j - 1] == 'i')) {
                     result.add(paramIndex)
                 }
-                paramIndex++
             }
-            i++
+            paramIndex++
         }
         return result
     }
@@ -2648,6 +2926,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
+        // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
+        renderDebounceTimer.stop()
+        pendingRender = null
+        historyAlarm.stop()
+        // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
+        // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
+        SqlExecutor.releaseForPanel()
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this)
     }
@@ -2756,12 +3041,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
     internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
-    /** T-M23.2：批量「参数列」区全选/全不选按钮。 */
-    internal fun batchSelectAllButtonForTest(): JButton? = batchSelectAllButton
-    internal fun batchSelectNoneButtonForTest(): JButton? = batchSelectNoneButton
+    /** T-M23.2 / T-SelToggle：批量「参数列」区全选/全不选切换按钮。 */
+    internal fun batchToggleSelectButtonForTest(): JButton? = batchToggleSelectButton
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
-    internal fun selectAllButtonForTest(): JButton? = selectAllButton
-    internal fun selectNoneButtonForTest(): JButton? = selectNoneButton
+    internal fun toggleSelectButtonForTest(): JButton? = toggleSelectButton
     internal fun clearButtonForTest(): JButton? = clearButton
     internal fun batchClearButtonForTest(): JButton? = batchClearButton
     /** T-M26.1：左右分栏 JSplitPane（分隔条背景断言用）。M36 垂直结果分栏加入后，须按方向取水平分栏（垂直分栏的左组件即水平分栏）。 */
@@ -2807,6 +3090,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")
+
+        /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
+        private const val RENDER_DEBOUNCE_MS = 150
 
         /** T-PreviewFlash：EDT 等待预热产物的轮询间隔与超时（毫秒）。 */
         const val PREWARM_POLL_MS = 20L

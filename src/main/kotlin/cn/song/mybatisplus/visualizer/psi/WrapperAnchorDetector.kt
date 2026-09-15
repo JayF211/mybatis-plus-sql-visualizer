@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter
+import cn.song.mybatisplus.visualizer.converter.jpa.JpaCrudOperationConverter
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
 import com.intellij.psi.PsiIdentifier
@@ -88,6 +90,14 @@ object WrapperAnchorDetector {
         if (element is PsiIdentifier) {
             val ref = element.parent as? PsiReferenceExpression ?: return null
             if (ref.referenceNameElement !== element) return null
+            // XB（M44）：xbatis 双坐标静态工厂（QueryChain.of(userDao, X.class) / QueryChain.create()）——
+            // 工厂方法名 + 工厂类简名双重语法门控（O(1)，Optional.of/Map.of 等通用 of 调用天然排除）
+            if (ref.referenceName in WrapperLocator.xbatisFactoryMethodNames &&
+                (ref.qualifierExpression as? PsiReferenceExpression)?.referenceName in WrapperLocator.xbatisFactoryClassNames
+            ) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                return if (isInsideWrapperVariableInitializer(call)) null else element
+            }
             if (ref.referenceName in WrapperLocator.wrapperFactoryMethodNames) {
                 val call = ref.parent as? PsiMethodCallExpression ?: return null
                 val qualifier = ref.qualifierExpression as? PsiReferenceExpression
@@ -126,6 +136,27 @@ object WrapperAnchorDetector {
                     if (variable != null && WrapperLocator.isWrapperVariable(variable)) return null
                 }
                 return element
+            }
+            // 场景 E（T-J1/T-J6/T-J21）：JPA CRUD / EntityManager 写路径 / HibernateTemplate 实体操作
+            // （`userRepository.findById(id)` / `em.persist(entity)` / `getHibernateTemplate().get(X.class, id)` 等）。
+            // **与场景 D 撞名面大（save/count/delete/find 等通用名）**，必须叠加 receiver 家族判定——
+            // qualifier 变量一次 resolve + 类型父链文本匹配（BATCH_CHAIN_COLLISION_NAMES 同款微秒级先例，
+            // 非纯 O(1) 的文档化例外）；家族判定失败（普通类/无 qualifier/wrapper 链上同名终结点）不亮图标：
+            // 宁可无图标，不可误亮（`stream.count()` 等海量负例）。点击后 preview 仍以 receiver 家族派发，
+            // 非 JPA 家族返回 null 走 MP 批量路径。
+            if (ref.referenceName in JpaCrudOperationConverter.crudAnchorMethodNames) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (initializerHeadIsWrapper(call)) return null
+                return if (JpaCrudOperationConverter.hasJpaCrudReceiver(call)) element else null
+            }
+            // 场景 F（EQ，M44 其他 ORM 第一批）：Easy-Query proxy 链 entry
+            // （easyEntityQuery.queryable(Topic.class)/insertable/updatable/deletable）——
+            // entry 方法名 + receiver 变量名/类型启发双重门控（普通类同名方法不识别，负例守卫；
+            // qualifier 变量一次 resolve 同场景 E 的文档化例外）。
+            if (ref.referenceName in EasyQueryConverter.ENTRY_METHODS) {
+                val call = ref.parent as? PsiMethodCallExpression ?: return null
+                if (initializerHeadIsWrapper(call)) return null
+                return if (EasyQueryConverter.isEasyQueryCall(call)) element else null
             }
             return null
         }
@@ -217,12 +248,29 @@ object WrapperAnchorDetector {
         if (!isChainStart && !isConstructor) return null
 
         // 检查该行是否包含 Wrapper 操作（eq/like/set 等），确认是 Wrapper 链
-        val hasWrapperOp = wrapperOperationMethodNames.any { op ->
-            lineText.contains(".$op(")
-        }
-        if (!hasWrapperOp) return null
+        // T-Perf-23：单趟扫描 ".标识符(" 形态（24 个操作名的 contains 全是它的必要子形态），
+        // 替代每叶子 24 次 contains 全行扫描
+        if (!hasDotCallPattern(lineText)) return null
 
         return element
+    }
+
+    /** 单趟扫描：行内是否存在 `.标识符(` 形态（Wrapper 操作调用的必要条件）。 */
+    private fun hasDotCallPattern(s: String): Boolean {
+        val n = s.length
+        var i = 0
+        while (i < n - 1) {
+            val c = s[i]
+            if (c == '.' && i + 1 < n) {
+                var j = i + 1
+                while (j < n && (s[j].isLetterOrDigit() || s[j] == '_')) j++
+                if (j > i + 1 && j < n && s[j] == '(') return true
+                i = j
+            } else {
+                i++
+            }
+        }
+        return false
     }
 
     /** 获取元素所在行文本（O(1) 按偏移量计算）。 */

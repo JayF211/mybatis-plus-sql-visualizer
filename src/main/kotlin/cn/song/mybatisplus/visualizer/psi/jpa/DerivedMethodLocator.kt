@@ -32,27 +32,39 @@ data class DerivedMethodInfo(
  * 识别逻辑：
  *  1. 从光标位置找到 [PsiMethod]
  *  2. 判断 containing class 是否为 Repository 接口（superType 含 Spring Data 基类 / 接口名后缀 Repository）
- *  3. 判断方法是否为推导查询（非 @Query、非 default、非 static、方法名含 By、符合 PartTree 前缀）
+ *  3. 判断方法是否为推导查询（非 @Query、非 default、非 static、符合 PartTree 前缀；
+ *     含 `By` 的标准形态，或 T-J3 放行的无 By 全量/计数形态——后者强制宿主为 Repository 接口）
  *  4. 从返回类型泛型参数解析实体类
  */
 object DerivedMethodLocator {
 
-    /** Spring Data Repository 基类全限定名（superType 匹配用）。 */
-    private val REPOSITORY_BASE_TYPES: Set<String> = setOf(
-        "org.springframework.data.repository.Repository",
-        "org.springframework.data.repository.CrudRepository",
-        "org.springframework.data.repository.PagingAndSortingRepository",
-        "org.springframework.data.jpa.repository.JpaRepository",
-        "org.springframework.data.jpa.repository.QueryExecutorAdapter",
-    )
+    /** Spring Data Repository 基类全限定名（SD6 起统一走 [RepositoryBaseTypes] 名单，含 JDBC/R2DBC 侧）。 */
+    private val REPOSITORY_BASE_TYPES: Set<String> = RepositoryBaseTypes.FQNS
 
     /** Spring Data @Query 注解全限定名（排除用）。 */
     private const val QUERY_ANNOTATION = "org.springframework.data.jpa.repository.Query"
 
-    /** PartTree 推导查询方法名前缀（Spring Data JPA 官方支持）。 */
+    /** SD7：@Modifying 注解短名（jakarta / spring-data-jdbc / spring-data-r2dbc 三包共用短名）。 */
+    private const val MODIFYING_SHORT_NAME = "Modifying"
+
+    /** PartTree 推导查询方法名前缀（Spring Data JPA 官方支持；T-J3 补 query/search/stream）。 */
     private val PART_TREE_PREFIXES: Set<String> = setOf(
         "find", "findAll", "read", "get", "count", "exists", "delete", "remove",
+        "query", "search", "stream",
     )
+
+    /**
+     * T-J3：无 `By` 形态允许的 Subject 关键字（`findAll()` / `readAll()` / `getAll()` /
+     * `queryAll()` / `searchAll()` / `streamAll()` / `countAll()` 的词干 + 裸 `count()`）。
+     *
+     * 仅这些形态可放行「无 By」门控；其余无 By 方法名（getUsername/getOne 等）仍不识别。
+     */
+    private val NO_BY_SUBJECT_KEYWORDS: Set<String> = setOf(
+        "find", "read", "get", "query", "search", "stream", "count",
+    )
+
+    /** T-J3：无 `By` 形态的统一 `All` 后缀。 */
+    private const val ALL_SUFFIX = "All"
 
     // ------------------------------------------------------------------
     // 公开 API
@@ -78,14 +90,21 @@ object DerivedMethodLocator {
      *  - 非 @Query 注解方法
      *  - 非 default 方法
      *  - 非 static 方法
-     *  - 方法名包含 `By` 关键字
-     *  - 方法名以 PartTree 前缀开头（find/count/exists/delete 等）
+     *  - 方法名以 PartTree 前缀开头，且满足以下形态之一：
+     *    - 含 `By` 关键字（`findByUsername` / `streamByLastName` 等，T-J3 扩展 query/search/stream 前缀）
+     *    - 无 `By` 的全量/计数形态（T-J3）：`findAll()` / `readAll()` / `getAll()` 等 `*All` 形态、
+     *      裸 `count()`——守卫：宿主**必须是 Repository 接口**（基类识别 + Repository 后缀启发），
+     *      非 Repository 类/接口的同名方法绝不识别
      *
      * @param method 目标方法
      * @return 是否为可预览的推导查询
      */
     fun isDerivedQuery(method: PsiMethod): Boolean {
         if (hasQueryAnnotation(method)) return false
+        // SD7（M44）：@Modifying（jakarta / spring-data-jdbc / spring-data-r2dbc 包）标记 DML @Query，
+        // 绝非派生查询——@Query 已被上方排除，此处兜底拦截「仅 @Modifying / 注解解析不完整」的漏网形态，
+        // 防止 `updateStatusByXxx` 等 DML 方法被 PartTree 误派生成 SELECT
+        if (hasModifyingAnnotation(method)) return false
         // 排除 default 方法（含方法体，非接口推导）
         if (method.hasModifierProperty("default")) return false
         // 排除 static 方法
@@ -93,9 +112,29 @@ object DerivedMethodLocator {
 
         val methodName = method.name
         // 方法名必须包含 By 关键字（PartTree 分隔符）
-        if (!methodName.contains("By")) return false
+        if (!methodName.contains("By")) {
+            // T-J3：无 By 形态放行（findAll/count 等），但强制宿主为 Repository 接口——
+            // 普通类的 findAll()/count() 不识别（isDerivedQuery 也做类校验，仅此形态）。
+            if (!isNoBySubjectForm(methodName)) return false
+            val containingClass = method.containingClass ?: return false
+            return isRepositoryInterface(containingClass)
+        }
         // 方法名必须以 PartTree 前缀开头
         return PART_TREE_PREFIXES.any { methodName.startsWith(it) }
+    }
+
+    /**
+     * T-J3：判断方法名是否为无 `By` 的合法 Subject 形态。
+     *
+     * 合法形态：
+     *  - `<queryKeyword>All`：findAll / readAll / getAll / queryAll / searchAll / streamAll / countAll
+     *  - 裸 `count`
+     */
+    private fun isNoBySubjectForm(methodName: String): Boolean {
+        if (methodName == "count") return true
+        if (!methodName.endsWith(ALL_SUFFIX)) return false
+        val stem = methodName.dropLast(ALL_SUFFIX.length)
+        return stem in NO_BY_SUBJECT_KEYWORDS
     }
 
     /**
@@ -262,5 +301,14 @@ object DerivedMethodLocator {
             if (shortName == "Query") return true
         }
         return false
+    }
+
+    /**
+     * SD7（M44）：方法是否标注 @Modifying（jakarta.persistence / spring-data-jdbc / spring-data-r2dbc
+     * 三包短名同形）。识别用途见 [isDerivedQuery] 内注释。
+     */
+    private fun hasModifyingAnnotation(method: PsiMethod): Boolean {
+        val annotations = method.modifierList?.annotations ?: return false
+        return annotations.any { it.nameReferenceElement?.referenceName == MODIFYING_SHORT_NAME }
     }
 }

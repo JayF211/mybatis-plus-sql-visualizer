@@ -1,7 +1,7 @@
 {
-  "version": "2026.9.11",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.11/mybatis-plus-sql-visualizer-2026.9.11.zip",
-  "changeNotes": "自更新免重启热替换\nSQL 历史页参数识别丢失根治\n无占位符 SQL 字面量参数恢复\n262 平台热替换探测失败回退修复\n更新通知入口去重与卸载警告缓解",
-  "publishDate": "2026-09-11",
+  "version": "2026.9.14",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.14/mybatis-plus-sql-visualizer-2026.9.14.zip",
+  "changeNotes": "SQL 列表 CRUD 类型颜色标记\ngutter 左键直接预览与最近执行反查\n真实 EXPLAIN 执行计划\n错误与反馈一键上报官网需求池\nSQL 列表三种显示模式\n更多 ORM 预览支持\n大日志列表性能优化\n实体类与数据库表右键生成 CRUD SQL\nSQL 预览字段列表自动折叠\n全选全不选双按钮合一为状态切换按钮\nSQL 列表多选批量复制\n多模块注入勾选选择\n插件市场内部 API 整改\n执行计划首点结果缺失修复\n报告提交失败原因可见与多条错误合并上报\n设置页子项顺序随语言漂移修复\nSQL 转 Java 选类重渲染异常逃逸修复\nMPJ 括号条件反向转换退化修复\n262 预览控制台静默挂载失败修复",
+  "publishDate": "2026-09-14",
   "sinceBuild": "243"
 }

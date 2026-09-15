@@ -91,12 +91,40 @@ data class LogSqlEntry(
     val updateCount: Long? = null,
 ) {
     /**
+     * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
+     *
+     * 由 [LogStatementClassifier.classify] 得出——与类型过滤弹窗**同一口径**，
+     * 因此「筛出来的 SELECT 行不会被标成红色」这一自洽性天然成立。
+     *
+     * 之所以缓存而非每次现算：[LogStatementClassifier.classify] 内部 `Regex("\\s+")`
+     * **每次调用都重新编译 Pattern**，渲染路径按 cell 调用会把该开销放大到
+     * 「每次重绘 × 可见行数」（滚动/悬停/选中/resize 均触发重绘）。
+     *
+     * 与 [dedupeKey] 同属 body 内属性——**不参与 data class 的 equals / hashCode / copy**，
+     * 故新增该字段不影响既有去重与集合语义（T-LogRowNumber 的 `sequenceNumber` 教训：
+     * 构造函数内新增字段会改变 equals，此处不会）。
+     */
+    val statementType: StatementType by lazy { LogStatementClassifier.classify(restoredSql) }
+
+    /**
      * T-Perf-19（自 dev 移植）：去重键指纹（[sqlFingerprint] 惰性计算一次）——dedupeCounts 不再以
      * 完整 SQL 原文为键（还原参数文本可达数 KB/条，长会话数十~上百 MB 永久驻留）。
      * T-LogDedupeMpMark：指纹前先 [normalizeSqlWhitespace]——同一语句的双路日志副本（named 行 trim 过 /
      * prepared 行尾随空白原样保留）仅差首尾空白，原文指纹判重永不命中。
      */
     val dedupeKey: String by lazy { sqlFingerprint(normalizeSqlWhitespace(restoredSql)) }
+
+    // ---------- T-ListMode：多行显示模式行片段缓存（体属性不入 equals/copy；仅 EDT 渲染路径读写） ----------
+
+    /**
+     * 多行模式（KEYWORD_WRAP/FORMATTED）的行片段缓存：可变行高下每次布局状态更新会对全部条目
+     * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
+     * 组件布局。SINGLE_LINE 不走缓存（固定行高 + 渲染直读，主题切换实时生效）。
+     */
+    var cachedListLineFragments: List<List<SqlTextFragment>>? = null
+
+    /** 缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
+    var cachedListLineFragmentsMode: SqlListDisplayMode? = null
 
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160

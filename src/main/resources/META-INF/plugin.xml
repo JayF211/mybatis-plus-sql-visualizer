@@ -1,5 +1,7 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin>
+<!-- url：插件官网链接（idea-plugin 根元素属性，官方文档实证——显示在 JetBrains Marketplace 插件页的
+     Plugin Homepage 入口；与 vendor url（厂商页 Gitee）分工互补） -->
+<idea-plugin url="https://sql-visualizer.jvtools.cn">
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
@@ -21,38 +23,34 @@
 
     <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
-        SQL Visualizer is a debugging tool for MyBatis-Plus, MyBatis-Plus-Join, Hibernate and JPA inside IntelliJ IDEA: preview Wrapper chains, XML mappers, annotation SQL, Spring Data JPA derived queries, CriteriaBuilder queries, JPQL/@Query and JdbcTemplate/custom-DAO string SQL as readable SQL with resolved parameters, restore SQL from console logs, and convert SQL back to MP Java code.
-        <br/>
-        <h2>Core capabilities</h2>
+        <p><b>See the exact SQL your code will run — before the server starts.</b> SQL Visualizer turns MyBatis-Plus Wrapper chains, XML mappers, annotation SQL, JPA/Hibernate queries and JdbcTemplate string SQL into readable, executable SQL with real parameter values, right inside IntelliJ IDEA.</p>
+        <h3>Highlights</h3>
         <ul>
-            <li>Wrapper chains to SQL: LambdaQueryWrapper / LambdaUpdateWrapper / LambdaDeleteWrapper / string QueryWrapper / UpdateWrapper / MPJLambdaWrapper / MPJQueryWrapper joins / service chains</li>
-            <li>JPA / Hibernate: Spring Data derived query methods (findByXxx), CriteriaBuilder queries, JPQL/@Query annotations — preview generated SQL with entity annotation resolution (@Entity/@Table/@Column/@ManyToOne); HQL association field resolution + Hibernate XML mapping</li>
-            <li>XML mapper dynamic SQL and Java annotation SQL (@Select/@Insert/...) preview (dynamic tags, OGNL conditions, parameter backfill); maintainPage XML preview; JdbcTemplate / custom-DAO string SQL preview (named parameters, StringBuilder chains, method-declaration anchors)</li>
-            <li>Native Database console embedding: execute SQL with full data-source/Tx/session toolbar (Ultimate); native syntax highlighting + code completion with data-source schema comments</li>
-            <li>Replace <code>?</code> placeholders with actual parameter values; dynamic condition checkboxes; SQL auto formatting</li>
-            <li>Console SQL log capture &amp; restore (MyBatis / Hibernate / JdbcTemplate, multi-line statements); click-to-preview with an editable highlighted editor (copy after tweaking a value); precise source jump via InnerInterceptor; auto-save history with two-level navigation</li>
-            <li>SQL to MP Java code reverse conversion (QueryWrapper / LambdaQueryWrapper / Wrappers / MPJ, CRUD &amp; joins, compilable output)</li>
-            <li>JOIN diagram rendered by the IDE native Diagrams framework (class-diagram look; classic self-drawn renderer as fallback, PNG/SVG export); 9 database dialects; trigger via context menu / shortcut / gutter icon</li>
+            <li><b>All SQL sources covered</b>: Lambda / Query / Update / Delete Wrappers &amp; service chains, MPJ join wrappers, mapper XML dynamic tags (if / foreach / choose ...), <code>@Select</code> annotation SQL, Spring Data <code>findByXxx</code>, CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate &amp; custom-DAO string SQL</li>
+            <li><b>Real parameters, one click</b>: <code>?</code> placeholders replaced with actual values (LIKE auto-wildcard, type-aware quoting); OGNL condition checkboxes; auto formatting for 9 database dialects</li>
+            <li><b>Live SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering, per-statement color marks and precise jump-to-source</li>
+            <li><b>SQL → Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD &amp; joins)</li>
+            <li><b>JOIN diagram &amp; execution</b>: native IDE ER diagram with PNG / SVG export; execute SQL and one-click EXPLAIN plans in an embedded native Database console (Ultimate)</li>
+            <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
+            <li>One keystroke away: gutter icon / context menu / <code>Alt+Shift+Q</code></li>
         </ul>
-        <p>See the project <code>docs/</code> directory for the development plan and feature overview.</p>
+        <p>Feature matrix &amp; docs: <a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · Screenshots on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace page</a></p>
+        <!-- M18.1 问题反馈入口：跳转官网需求池（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
+        <p>Found an issue? Please report it at the <a href="https://sql-visualizer.jvtools.cn/about/feedback">Feedback Pool</a>.</p>
         <hr/>
-        <h2>核心能力（中文说明）</h2>
-        <p>MyBatis-Plus / MyBatis-Plus-Join / Hibernate / JPA 的 SQL 调试利器——Wrapper 链、XML/注解/JPA/JdbcTemplate/自研 DAO 字符串 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。</p>
+        <p><b>服务未启，SQL 先知</b>——SQL Visualizer 在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填。</p>
+        <h3>核心能力</h3>
         <ul>
-            <li>Wrapper 链转 SQL：<code>LambdaQueryWrapper</code> / <code>LambdaUpdateWrapper</code> / <code>LambdaDeleteWrapper</code> / 字符串版 <code>QueryWrapper</code> / <code>UpdateWrapper</code> / <code>MPJLambdaWrapper</code> / <code>MPJQueryWrapper</code> 联表 / 服务链</li>
-            <li>JPA / Hibernate SQL 预览：Spring Data 派生查询（<code>findByXxx</code>）、CriteriaQuery 强类型查询、HQL/@Query 自定义 DAO 方法；HQL 关联字段解析 + Hibernate XML 映射</li>
-            <li>XML mapper 动态 SQL 与 <code>@Select</code> 等注解 SQL 预览：动态标签、OGNL 条件勾选、参数回填；maintainPage XML 预览；JdbcTemplate / 自研 DAO 字符串 SQL 预览（命名参数回填、StringBuilder 链聚合、方法定义处锚点）</li>
-            <li>原生 Database 控制台内嵌：执行 SQL 保留完整数据源/Tx/会话工具栏（Ultimate）；原生语法高亮 + 数据源 schema 字段注释补全</li>
-            <li>参数替换：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；动态条件复选框</li>
-            <li>控制台 SQL 日志捕获还原（MyBatis / Hibernate / JdbcTemplate，支持跨行多行语句）+ 单击预览可编辑高亮编辑器（临时改字段值再复制）+ 精确跳转源码（InnerInterceptor）+ 自动保存历史 + 两级导航</li>
-            <li>SQL 反向转 MP Java 代码：增删改查 / 多表 JOIN，QueryWrapper / Lambda / Wrappers / MPJ 四种形态，生成代码可直接编译</li>
-            <li>JOIN 关系图：IDE 原生 Diagrams 框架渲染（类图观感：表头表注释、字段类型/注释、JOIN 连线语义、分类切换；PNG/SVG 导出；自绘渲染降级）；9 种数据库方言分页差异渲染；执行 SQL（Ultimate）</li>
-            <li>多种触发方式：右键菜单 / 快捷键（默认 <code>Alt+Shift+Q</code>）/ 代码左侧 gutter 图标，一键复制</li>
+            <li><b>SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose 等）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>
+            <li><b>真实参数一键回填</b>：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；OGNL 条件勾选模拟；9 种数据库方言自动格式化</li>
+            <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、按语句类型着色标记、精确跳转源码</li>
+            <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
+            <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL 与一键执行计划 EXPLAIN（Ultimate）</li>
+            <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
+            <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
         </ul>
-        <p>开发计划与功能概览见项目 <code>docs/</code> 目录。</p>
-        <p>Screenshots are available on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">plugin Marketplace page</a>.</p>
-        <!-- M18.1 问题反馈入口：跳转仓库 Issues 页（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
-        <p>Found an issue? Please report it at <a href="https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/issues">Gitee Issues</a> / 遇到问题？请到仓库 Issues 页提交反馈</p>
+        <p>功能矩阵与文档：<a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · 截图见 <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace 页面</a></p>
+        <p>遇到问题？请到<a href="https://sql-visualizer.jvtools.cn/about/feedback">官网需求池</a>提交反馈。</p>
         ]]></description>
 
     <!-- 插件变更说明由 build.gradle.kts patchPluginXml.changeNotes 注入（M18.2）——
@@ -72,7 +70,8 @@
     <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
          官方规范（Plugin Dependencies）：可选依赖须声明 optional="true" + config-file，
          主描述文件不得直接引用可选插件类（本插件经反射隔离调用，Community 下优雅降级）；
-         database-optional.xml 存放可选插件存在时才激活的声明（当前无 EP 注册，为占位） -->
+         database-optional.xml 存放可选插件存在时才激活的声明（modelRelationProvider EP +
+         T-CrudSql 数据库表右键 action——Community 下整文件不加载，实体类入口不受影响） -->
     <depends optional="true" config-file="database-optional.xml">com.intellij.database</depends>
 
     <!-- T-Dgm-01 JOIN 图原生渲染：com.intellij.diagram（Ultimate 捆绑 "Diagrams"，类图/关系图底座）——
@@ -98,9 +97,14 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable"/>
 
+        <!-- 子页面顺序由 groupWeight 决定：平台 Weighted.COMPARATOR 按 weight 降序优先、displayName
+             自然比较兜底；不设 weight 时 displayName 比较会随插件语言变化导致中英文子项顺序不一致
+             （中文按码点序重排），故显式声明与声明序一致的递减 weight（ui=50 → about=10）。
+             新增子页面时按区间插值取 weight，保持英文版既定顺序。 -->
         <!-- 界面与操作（gutter图标/语言/快捷键） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.ui"
+                                 groupWeight="50"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.ui"
                                  instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
@@ -108,6 +112,7 @@
         <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.preview"
+                                 groupWeight="40"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.preview"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlPreviewConfigurable"/>
@@ -115,6 +120,7 @@
         <!-- 表名映射（前缀/后缀/移除/忽略字段/推断策略） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.tableMapping"
+                                 groupWeight="30"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.tableMapping"
                                  instance="cn.song.mybatisplus.visualizer.config.TableMappingConfigurable"/>
@@ -122,6 +128,7 @@
         <!-- SQL 日志（前缀/自动捕获/时间戳/格式化/过滤/去重/最大条数/耗时/慢查询/Hibernate/Jdbc/自动保存） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.sqlLog"
+                                 groupWeight="20"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.sqlLog"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
@@ -129,6 +136,7 @@
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
+                                 groupWeight="10"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
@@ -149,6 +157,9 @@
         <!-- F-45 maintainPage XML 预览：<maintainPage> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider"/>
+        <!-- T-H2 hbm 命名查询预览：<hibernate-mapping> 下 <query>/<sql-query> 行显示预览图标（O(1) 标签名判定） -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
@@ -202,7 +213,7 @@
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor"/>
 
-        <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
+        <!-- M28 插件更新：启动自动检查（开关默认关，PluginSettings.autoCheckUpdate=false，T-PerfSweep2-06 对齐代码权威；稳定版由 Marketplace 推送，内测期手动开启）——静默检查，
              仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
              （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
@@ -213,6 +224,16 @@
         <notificationGroup id="cn.song.mybatisplus.visualizer.preview"
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.preview"
+                           displayType="BALLOON"/>
+        <!-- T-ErrReport 错误一键上报：注册后 IDE Internal Errors 对话框对本插件错误出现
+             「报告到 SQL Visualizer 需求池」按钮——平台按错误归属插件解析（IdeErrorsDialog
+             getSubmitter(Throwable, PluginId)，com.intellij.errorHandler EP dynamic，
+             243 平台 jar javap 实证，见开发计划 20260908-1259 §四） -->
+        <errorHandler implementation="cn.song.mybatisplus.visualizer.feedback.IdeErrorReportSubmitter"/>
+        <!-- T-ErrReport：提交结果 toast（成功 FR 编号 + 查看详情 / 失败原因） -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.feedback"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.feedback"
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
@@ -270,6 +291,27 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift J"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift J"/>
+        </action>
+
+        <!-- T-CrudSql：实体类右键生成 CRUD SQL（编辑器 + 项目视图；update 判定 MP 实体注解；
+             展示复用现有 SqlSelectionDialog + SqlPreviewService.showResult，零新弹窗；
+             数据库表节点入口在 database-optional.xml——com.intellij.database 在场时才加载） -->
+        <action id="cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity"
+                class="cn.song.mybatisplus.visualizer.actions.GenerateCrudSqlFromEntityAction"
+                text="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity.text"
+                description="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromEntity.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+
+        <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
+             对话框底部提供带 source/ideVersion/pluginVersion 参数的浏览器兜底链接） -->
+        <action id="cn.song.mybatisplus.visualizer.Feedback"
+                class="cn.song.mybatisplus.visualizer.feedback.FeedbackAction"
+                text="action.cn.song.mybatisplus.visualizer.Feedback.text"
+                description="action.cn.song.mybatisplus.visualizer.Feedback.description">
+            <add-to-group group-id="HelpMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

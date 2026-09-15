@@ -59,15 +59,19 @@ class ConvertSqlToJavaAction : AnAction() {
             return
         }
 
-        // 1. SQL 解析（纯函数，EDT 安全）；失败 → 错误弹窗（含行号）
+        // 1. SQL 解析（纯函数，EDT 安全）；T-Perf-20：失败改 WARNING 通知（非模态、非红色）——
+        // 用户误选非 SQL 文本即触发，模态框过重；失败信息（含行号）仍完整可见
         val result = try {
             SqlToJavaConverter.parse(text)
         } catch (ex: SqlReverseException) {
-            Messages.showErrorDialog(
-                project,
-                MpSqlVisualizerBundle.message(ex.key, ex.detail) + "\n（第 ${SqlToJavaConverter.errorLine(text, ex.offset)} 行）",
-                MpSqlVisualizerBundle.message("reverse.error.title"),
-            )
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                .getNotificationGroup("cn.song.mybatisplus.visualizer.preview")
+                .createNotification(
+                    MpSqlVisualizerBundle.message("reverse.error.title"),
+                    MpSqlVisualizerBundle.message(ex.key, ex.detail) + "（第 ${SqlToJavaConverter.errorLine(text, ex.offset)} 行）",
+                    com.intellij.notification.NotificationType.WARNING,
+                )
+                .notify(project)
             return
         }
 
@@ -109,8 +113,9 @@ class ConvertSqlToJavaAction : AnAction() {
             val (mainCandidates, subCandidates) = ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
                 SqlToJavaConverter.findCandidatesBatch(project, parseResults)
             }
-            // 3. EDT 生成 + 拼接 + 弹窗
+            // 3. EDT 生成 + 拼接 + 弹窗（T-Perf-21：主路径补 disposed 守卫——后台查找期间项目可能已关闭）
             ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
                 val format = reverseFormat()
                 val code = SqlToJavaConverter.generateBatchCode(
                     parseResults,
@@ -167,19 +172,32 @@ class ConvertSqlToJavaAction : AnAction() {
                 }
             }
             EntitySelectionDialog(project, rows) { selections ->
-                val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
-                val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
-                result.joins.forEach { join ->
-                    val alias = join.alias ?: return@forEach
-                    selections[alias]?.let { psi ->
-                        toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历
+                // 继承链全部字段 + 注解 resolve，大实体耗时随字段数线性，EDT 直解析构成确认停顿；
+                // 后台 ReadAction 解析后回 EDT 展示代码预览（对齐上方 convert 的既有异步模式）。
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                    val resolved = ReadAction.compute<Pair<SqlToJavaConverter.EntityCandidate?, Map<String, JavaCodeGenerator.EntityTarget>>, Throwable> {
+                        val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
+                        val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
+                        result.joins.forEach { join ->
+                            val alias = join.alias ?: return@forEach
+                            selections[alias]?.let { psi ->
+                                toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                            }
+                        }
+                        main to (subEntities as Map<String, JavaCodeGenerator.EntityTarget>)
                     }
-                }
-                if (main != null) {
-                    showCodeDialog(project, result, main, format, subEntities)
-                } else {
-                    // 主表未指定实体 → 回落字符串列名形态
-                    JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, null, format)).show()
+                    ApplicationManager.getApplication().invokeLater {
+                        if (project.isDisposed) return@invokeLater
+                        val (main, subEntities) = resolved
+                        if (main != null) {
+                            showCodeDialog(project, result, main, format, subEntities)
+                        } else {
+                            // 主表未指定实体 → 回落字符串列名形态
+                            JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, null, format)).show()
+                        }
+                    }
                 }
             }.show()
             return
@@ -193,7 +211,7 @@ class ConvertSqlToJavaAction : AnAction() {
             else -> {
                 // 摘要/行文本为纯数据（PSI 已在后台解析），EDT 直接构造
                 val displayTexts = candidates.map { c ->
-                    SqlSelectionDialog.displayText(
+                    SqlSelectionDialog.Row.of(
                         "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
                         c.psiClass.containingFile?.name ?: "",
                     )

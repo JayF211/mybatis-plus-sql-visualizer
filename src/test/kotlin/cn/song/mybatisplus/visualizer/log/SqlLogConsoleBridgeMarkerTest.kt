@@ -85,6 +85,31 @@ class SqlLogConsoleBridgeMarkerTest {
         assertEquals("b/B.java", e2[0].sourceFile)
     }
 
+    // ---------- T-IntrUpg-01：拦截器自位污染标记防线 ----------
+
+    @Test
+    fun `自位污染标记不暂存_条目无位置`() {
+        val ctx = newCtx()
+        // 旧拷贝件上报的自位标记（真机截图形态：SqlSourceInterceptor.java:62）
+        assertTrue(processConsoleLine("SQLVIS-SOURCE|cn/song/mpjdemo/config/SqlSourceInterceptor.java|62", ctx, null, {}).isEmpty())
+        assertNull("防线：自位标记不得暂存", ctx.pendingSource)
+        processConsoleLine("==>  Preparing: SELECT * FROM t", ctx, null, {})
+        val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
+        assertEquals(1, entries.size)
+        assertNull("自位污染位置不落条目（落无位置引导链路）", entries[0].sourceFile)
+    }
+
+    @Test
+    fun `防线不粘滞_自位标记后正常标记照常生效`() {
+        val ctx = newCtx()
+        processConsoleLine("SQLVIS-SOURCE|cn/song/config/SqlSourceInterceptor.java|62", ctx, null, {})
+        processConsoleLine("SQLVIS-SOURCE|cn/song/service/UserService.java|87", ctx, null, {})
+        processConsoleLine("==>  Preparing: SELECT * FROM t", ctx, null, {})
+        val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
+        assertEquals("cn/song/service/UserService.java", entries[0].sourceFile)
+        assertEquals(87, entries[0].sourceLine)
+    }
+
     // ---------- M56 T-M56-00：标记第 4/5 段 → mapperStatement/requestTag ----------
 
     @Test

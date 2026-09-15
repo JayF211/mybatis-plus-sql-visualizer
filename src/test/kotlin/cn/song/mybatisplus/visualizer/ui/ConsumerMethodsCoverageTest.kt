@@ -841,4 +841,72 @@ class ConsumerMethodsCoverageTest : BasePlatformTestCase() {
             located!!.chain.calls.none { it.methodName == "getObj" },
         )
     }
+
+    // ------------------------------------------------------------------
+    // exists 同名双语义回归（T-TestGuard-05，bug-fixes/project-exists-bugfix.md）
+    // ------------------------------------------------------------------
+
+    fun testIServiceExistsConsumesBareChainEndingWithExistsCondition() {
+        // Q14-④：裸链直接作 service.exists 实参、链尾恰为带参 .exists(sql)（与 exists 终结点
+        // 同名双语义）——中间段的 .exists 必须按条件解析，消费语义由外层 service.exists 决定；
+        // 回归背景：裸链实参场景曾把链尾 .exists 误判为终结点剔除（档案明言当时无回归用例落地）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void check() {
+                    boolean exists = deviceInfoService.exists(
+                        new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getStationId, 7L)
+                            .exists("SELECT 1 FROM station WHERE station.id = device_info_entity.station_id"));
+                }
+
+                static class DeviceInfoEntity { private Long id; private Long stationId; }
+
+                static class DeviceInfoService {
+                    public boolean exists(Object w) { return false; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("裸链（链尾带参 exists）+ exists(w) 消费应产出预览结果", result)
+        assertEquals(
+            "SELECT EXISTS (SELECT id, station_id FROM device_info_entity " +
+                "WHERE station_id = 7 AND EXISTS (SELECT 1 FROM station " +
+                "WHERE station.id = device_info_entity.station_id))",
+            result!!.compactSql.trim(),
+        )
+    }
+
+    fun testIServiceExistsConsumesBareChainWithMidChainExistsCondition() {
+        // Q14-④ 续：带参 .exists 位于链中段、链尾为普通条件——exists 条件不得破坏后续链解析
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void check() {
+                    boolean exists = deviceInfoService.exists(
+                        new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .exists("SELECT 1 FROM station WHERE station.id = device_info_entity.station_id")
+                            .eq(DeviceInfoEntity::getId, 1001L));
+                }
+
+                static class DeviceInfoEntity { private Long id; private Long stationId; }
+
+                static class DeviceInfoService {
+                    public boolean exists(Object w) { return false; }
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("中段 exists 条件的裸链消费应产出预览结果", result)
+        assertEquals(
+            "SELECT EXISTS (SELECT id, station_id FROM device_info_entity " +
+                "WHERE EXISTS (SELECT 1 FROM station WHERE station.id = device_info_entity.station_id) " +
+                "AND id = 1001)",
+            result!!.compactSql.trim(),
+        )
+    }
 }

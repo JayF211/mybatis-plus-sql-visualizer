@@ -71,8 +71,24 @@ sealed interface EvalResult {
 
 object OgnlEvaluator {
 
+    /**
+     * T-Perf-04：表达式解析缓存——同一表达式（test/bind/`${}` 在每次 renderSql 重求值）
+     * 只 parse 一次。解析是表达式的纯函数（与 bindings 无关），缓存安全；
+     * 键为表达式原文，超上限整体清空（表达式多样性有限，简单封顶防膨胀）。
+     */
+    private val parseCache = java.util.concurrent.ConcurrentHashMap<String, ParseResult>()
+
     /** 解析表达式（T-M25.2：`||X||` 剥壳兼容——社区非标准写法，真实 OGNL 会报 Malformed；预览宽容按 X 解析）。 */
-    fun parse(text: String): ParseResult = try {
+    fun parse(text: String): ParseResult {
+        val cached = parseCache[text]
+        if (cached != null) return cached
+        val fresh = parseUncached(text)
+        if (parseCache.size >= PARSE_CACHE_MAX) parseCache.clear()
+        parseCache[text] = fresh
+        return fresh
+    }
+
+    private fun parseUncached(text: String): ParseResult = try {
         Parser(Lexer(unwrapOrBars(text))).parseExpression()
     } catch (e: OgnlParseException) {
         ParseResult.Err(e.message ?: "parse error")
@@ -781,4 +797,7 @@ object OgnlEvaluator {
             val RELATIONAL_OPS = setOf("<", ">", "<=", ">=", "in")
         }
     }
+
+    /** T-Perf-04：表达式解析缓存上限（超过整体清空——防一次性生成海量动态表达式的膨胀）。 */
+    private const val PARSE_CACHE_MAX = 1024
 }

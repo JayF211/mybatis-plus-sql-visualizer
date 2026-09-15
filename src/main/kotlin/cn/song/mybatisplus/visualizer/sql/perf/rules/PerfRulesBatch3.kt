@@ -276,7 +276,7 @@ object PerfRulesBatch3 {
         val matches = mismatchPattern.findAll(expr.toString())
         matches.forEach { match ->
             val col = match.groupValues[1]
-            if (col.lowercase().matches(Regex(".*(id|num|count|age|qty|price|amount|code|status).*"))) {
+            if (col.lowercase().matches(PRB3_NUMERIC_LIKE_COLUMN)) {
                 result += col
             }
         }
@@ -304,4 +304,7 @@ object PerfRulesBatch3 {
         val offset = select.offset?.offset ?: return 0
         return if (offset is Number) offset.toLong() else 0
     }
+    // T-Perf-23：函数体内 Regex(...) 提为常量（热路径免重复编译 Pattern）
+    private val PRB3_NUMERIC_LIKE_COLUMN = Regex(".*(id|num|count|age|qty|price|amount|code|status).*")
+
 }

@@ -7,6 +7,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -74,6 +75,66 @@ class ExecTempFileFixTest : BasePlatformTestCase() {
     fun testClearPreparedStillResetsReadiness() {
         DataSourceSelector.clearPrepared()
         assertFalse("clearPrepared 后 isPrepared 应为 false（既有语义不变）", DataSourceSelector.isPrepared())
+    }
+
+    // ======================== T-PreviewExecDs-02 F1：跨项目缓存隔离 ========================
+
+    /**
+     * isCacheUsable 表驱动：项目内文件命中；项目外文件拒绝（跨项目泄漏判定——
+     * 开发计划 §2.2 根因：旧实现只查 vf.isValid，B 项目会拿到 A 项目的 vf+psi）。
+     */
+    fun testIsCacheUsableProjectBound() {
+        val inProject = writeExecFile("SELECT 1")
+        val inVf = WriteIntentReadAction.compute<com.intellij.openapi.vfs.VirtualFile?> {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(inProject)
+        }
+        assertNotNull("项目内文件应 VFS 可见", inVf)
+        assertTrue("项目内 vf 应判可用", DataSourceSelector.isCacheUsable(project, inVf!!))
+
+        val foreign = foreignTempFile("foreign-isCacheUsable.sql", "SELECT 2")
+        assertFalse("项目外 vf 应判不可用（跨项目拒绝）", DataSourceSelector.isCacheUsable(project, foreign))
+
+        DataSourceSelector.clearCachedTempPsiFileForTest()
+    }
+
+    /** 缓存槽残留项目外文件（模拟跨项目泄漏的缓存）→ consume 拒绝并清空缓存，不再返回别项目 vf。 */
+    fun testConsumeCachedTempPsiFileRejectsForeignProjectFile() {
+        val foreign = foreignTempFile("foreign-consume.sql", "SELECT 3")
+        DataSourceSelector.markCachedTempPsiFileForTest(project, foreign)
+        assertTrue("缓存槽应持有配对", DataSourceSelector.cachedTempPsiFileForTest())
+
+        val consumed = DataSourceSelector.consumeCachedTempPsiFile(project)
+        assertNull("跨项目缓存应被拒绝（不返回别项目 vf+psi）", consumed)
+        assertFalse("跨项目缓存应被清空（走冷路径重建）", DataSourceSelector.cachedTempPsiFileForTest())
+
+        DataSourceSelector.clearCachedTempPsiFileForTest()
+    }
+
+    /** 项目内缓存 → consume 正常命中（F1 不破坏既有跨点击复用语义）。 */
+    fun testConsumeCachedTempPsiFileHitsWithinProject() {
+        val inProject = writeExecFile("SELECT 4")
+        val inVf = WriteIntentReadAction.compute<com.intellij.openapi.vfs.VirtualFile?> {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(inProject)
+        }
+        assertNotNull(inVf)
+        DataSourceSelector.markCachedTempPsiFileForTest(project, inVf!!)
+        val consumed = DataSourceSelector.consumeCachedTempPsiFile(project)
+        assertNotNull("项目内缓存应命中复用", consumed)
+        DataSourceSelector.clearCachedTempPsiFileForTest()
+    }
+
+    // ======================== 辅助 ========================
+
+    /** 项目外临时文件（System tmpdir，不在 fixture 项目 basePath 下）——跨项目模拟用。 */
+    private fun foreignTempFile(name: String, sql: String): com.intellij.openapi.vfs.VirtualFile {
+        val io = java.io.File(System.getProperty("java.io.tmpdir"), name)
+        io.writeText(sql)
+        io.deleteOnExit()
+        val vf = WriteIntentReadAction.compute<com.intellij.openapi.vfs.VirtualFile?> {
+            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io)
+        }
+        assertNotNull("项目外文件应 VFS 可见", vf)
+        return vf!!
     }
 
     // ======================== 辅助 ========================

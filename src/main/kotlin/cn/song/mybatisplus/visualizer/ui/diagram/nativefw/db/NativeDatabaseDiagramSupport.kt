@@ -5,7 +5,6 @@ import com.intellij.database.model.DasObject
 import com.intellij.database.model.DasTable
 import com.intellij.database.model.RawDataSource
 import com.intellij.database.psi.DbElement
-import com.intellij.database.psi.DbPsiFacade
 import com.intellij.database.psi.DataSourceManager
 import com.intellij.diagram.DiagramBuilder
 import com.intellij.diagram.DiagramBuilderFactory
@@ -125,14 +124,21 @@ object NativeDatabaseDiagramSupport {
     }
 
     /**
-     * 按表名在全部数据源中定位 [DbElement]（遍历 DasModel → DasTable 名称匹配 → DbPsiFacade）。
+     * 按表名在全部数据源中定位 [DbElement]（遍历 DasModel → DasTable 名称匹配 → DbModelRegistry）。
      * 任一表未找到时该表缺值；调用方以「全部命中」为 B 路径前置条件。异常返回 null。
+     *
+     * T-MarketInternal：原 `DbPsiFacade.findElement(DasObject)` scheduled-for-removal——
+     * 243/262 的实现链为 DbPsiFacadeImpl → DatabaseCoreUiService.findElement →
+     * `project.getService(DbModelRegistry).findDbElement(das)`（jar 反编译双版本实证）。
+     * DatabaseCoreUiService.findElement 本身仍标 deprecated，故直取链尾的
+     * [com.intellij.database.DbModelRegistry]（project 级 service，243 database-plugin.jar /
+     * 262 intellij.database.core.impl.jar 均 public、非 deprecated、非 Internal）。
      */
     private fun locateDbTables(project: Project, tableNames: List<String>): Map<String, DbElement>? {
         return try {
             val wanted = tableNames.map { it.trim().lowercase() }.toSet()
             val found = mutableMapOf<String, DbElement>()
-            val facade = DbPsiFacade.getInstance(project)
+            val modelRegistry = project.getService(com.intellij.database.DbModelRegistry::class.java)
             for (manager in DataSourceManager.getManagers(project)) {
                 if (found.size == wanted.size) break
                 val sources: List<RawDataSource> = manager.dataSources
@@ -140,12 +146,17 @@ object NativeDatabaseDiagramSupport {
                     if (found.size == wanted.size) break
                     // RawDataSource → DasDataSource.getModel()（DasModel），编译期直调
                     val model = runCatching { ds.model }.getOrNull() ?: continue
-                    val elements = runCatching { model.traverser().toList() }.getOrNull() ?: continue
+                    // T-Perf-09：惰性迭代 + 命中即停（此前 toList() 全量物化再筛——数千表 schema
+                    // 下即使全部命中也遍历完整棵模型）；model 为 null（未内省）已在上行跳过
+                    val elements = runCatching { model.traverser() }.getOrNull()
+                        ?.let { it as? Iterable<*> }
+                        ?: continue
                     for (element in elements) {
+                        if (found.size == wanted.size) break
                         if (element !is DasTable) continue
                         val name = element.name?.lowercase() ?: continue
                         if (name in wanted && name !in found) {
-                            val dbElement = facade.findElement(element) ?: continue
+                            val dbElement = modelRegistry.findDbElement(element) ?: continue
                             found[name] = dbElement
                         }
                     }

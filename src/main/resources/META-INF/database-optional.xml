@@ -12,4 +12,18 @@
     <extensions defaultExtensionNs="com.intellij.database">
         <modelRelationProvider implementation="cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinVirtualFkProvider"/>
     </extensions>
+
+    <!-- T-CrudSql：数据库表节点右键生成 CRUD SQL——add-to-group DatabaseViewPopupMenu
+         （DatabaseTools 内部组，2024.3.7.1 plugin.xml:713 实证，无专门视图 action EP）；
+         本文件仅 com.intellij.database 在场时加载，DbTable/DasTable 类引用全部直引编译期类型。
+         update 判定 PSI_ELEMENT_ARRAY 含 DbTable，多选表合并展示。 -->
+    <actions>
+        <action id="cn.song.mybatisplus.visualizer.GenerateCrudSqlFromDbTable"
+                class="cn.song.mybatisplus.visualizer.actions.GenerateCrudSqlFromDbTableAction"
+                text="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromDbTable.text"
+                description="action.cn.song.mybatisplus.visualizer.GenerateCrudSqlFromDbTable.description"
+                icon="/icons/sqlGutter.svg">
+            <add-to-group group-id="DatabaseViewPopupMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

@@ -55,6 +55,19 @@ object SqlSourceMarker {
         val requestTag = if (mapperStatement != null) segs.getOrNull(3)?.takeIf { it.isNotBlank() } else null
         return SourceMarkerData(path, ln, mapperStatement, requestTag)
     }
+
+    /**
+     * T-IntrUpg-01：标记路径是否指向拦截器模板文件本身（自位污染形态）。
+     *
+     * 旧模板 isSelf 用生成期包名常量，用户拷贝/改包后常量与运行类分叉 → 自跳过失效，
+     * 拦截器把 locateSource 自身帧上报为调用点。该形态路径文件名恒为模板注入文件名
+     * [SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME]（包式/项目根式/裸文件名均可识别，
+     * 与 [SourceMarkers.MP_PAGINATION_COUNT] 特殊标记互不干扰——后者不含 .java）。
+     * 误伤面 = 用户业务类恰名同名文件（模板文件名常量决定，可忽略级；误伤也只丢位置不丢条目）。
+     */
+    fun isInterceptorSelfPath(relativePath: String): Boolean =
+        EntrySourceMatcher.normalize(relativePath).substringAfterLast('/') ==
+            SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME
 }
 
 /**

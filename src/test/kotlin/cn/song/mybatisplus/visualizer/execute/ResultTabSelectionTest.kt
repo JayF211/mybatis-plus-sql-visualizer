@@ -150,6 +150,39 @@ class ResultTabSelectionTest : BasePlatformTestCase() {
         assertNull(DataSourceSelector.pickResultTab(emptyArray(), emptySet(), attempts = 40))
     }
 
+    // ==================== 场景五：空名占位（T-ExplainFirstNative 首点病灶） ====================
+
+    /**
+     * DBN 首次执行先 add 空名 Content 再异步改名/建网格（262 真机 21:06:45 实证
+     * `contentAdded: `）。空名 ∉ 空快照集合恒真，此前第 1 拍即被当新结果选中并强制换入
+     * （网格尚未构建），事后无人补换入 → 结果滞留原生控制台。
+     */
+    @Test
+    fun testBlankNamePlaceholderNotPickedAsNew() {
+        val blank = FakeContent("").proxy
+        assertNull("空名占位不得当新结果选中", DataSourceSelector.pickResultTab(arrayOf(blank), emptySet(), attempts = 1))
+        assertNull("阈值后空名占位也不得复用（不是结果）", DataSourceSelector.pickResultTab(arrayOf(blank), emptySet(), attempts = DataSourceSelector.REUSE_ACCEPT_TICKS))
+    }
+
+    /** 空名占位与旧名 Tab 并存：不选空名，走旧 Tab 阈值语义。 */
+    @Test
+    fun testBlankNameWithStaleTabWaitsForThreshold() {
+        val blank = FakeContent("").proxy
+        val stale = FakeContent("Result 1").proxy
+        assertNull(DataSourceSelector.pickResultTab(arrayOf(blank, stale), setOf("Result 1"), attempts = 1))
+        assertEquals("阈值后选中的是具名旧 Tab 而非占位", "Result 1", DataSourceSelector.pickResultTab(arrayOf(blank, stale), setOf("Result 1"), attempts = DataSourceSelector.REUSE_ACCEPT_TICKS)?.displayName)
+    }
+
+    /** 占位改名后（"" → "Result 1"）第 1 拍即选中——真机首点病灶的完整链路复现。 */
+    @Test
+    fun testPlaceholderRenamedPickedImmediately() {
+        val placeholder = FakeContent("")
+        val preExisting = DataSourceSelector.resultContents(FakeUi(arrayOf(placeholder.proxy))).map { it.displayName }.toSet()
+        placeholder.displayName = "Result 1" // DBN 异步改名+建网格
+        val picked = DataSourceSelector.pickResultTab(arrayOf(placeholder.proxy), preExisting, attempts = 1)
+        assertEquals("改名后应立即选中并换入", "Result 1", picked?.displayName)
+    }
+
     // ==================== resultContents 反射读取 ====================
 
     @Test

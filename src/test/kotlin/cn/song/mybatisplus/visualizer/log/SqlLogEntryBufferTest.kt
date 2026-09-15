@@ -86,16 +86,52 @@ class SqlLogEntryBufferTest {
     }
 
     @Test
-    fun `监听器在条目变更时通知`() {
-        var notified = 0
-        val listener: () -> Unit = { notified += 1 }
+    fun `监听器分层_内容通知节流与即时出口`() {
+        // T-PerfBatch 分层契约：内容监听器走「数量+时间」节流（时间窗内首条即时）；
+        // onEntryAccepted 每次成功入队即时回调（自动展开语义）；被抑制条目由兜底出口承接。
+        var contentNotified = 0
+        var suppressed = 0
+        var accepted = 0
+        val listener: () -> Unit = { contentNotified += 1 }
         buffer.addListener(listener)
-        buffer.addEntry(entry("SELECT 1"))
-        buffer.addEntry(entry("SELECT 2")) // 不同 SQL（去重不拦截）
-        assertEquals(2, notified)
-        buffer.removeListener(listener)
+        buffer.onContentNotifySuppressed = { suppressed += 1 }
+        buffer.onEntryAccepted = { accepted += 1 }
+
+        buffer.addEntry(entry("SELECT 1")) // 首条：距上次通知超时间窗 → 即时
+        buffer.addEntry(entry("SELECT 2")) // 窗口内：节流抑制，兜底出口接管
+        assertEquals("时间窗内首条即时通知", 1, contentNotified)
+        assertEquals("被抑制条目由兜底出口承接", 1, suppressed)
+        assertEquals("每次成功入队即时回调", 2, accepted)
+
+        // 超过时间窗（200ms）后恢复即时通知——低流量等价即时
+        Thread.sleep(210)
         buffer.addEntry(entry("SELECT 3"))
-        assertEquals(2, notified)
+        assertEquals("超窗后恢复即时通知", 2, contentNotified)
+
+        buffer.removeListener(listener)
+        buffer.onContentNotifySuppressed = null
+        buffer.onEntryAccepted = null
+        buffer.addEntry(entry("SELECT 4"))
+        assertEquals("移除监听后内容通知停止", 2, contentNotified)
+    }
+
+    @Test
+    fun `监听器分层_去重丢弃只走徽章通道不触内容`() {
+        buffer.dedupeWindowMs = 60000L
+        var contentNotified = 0
+        var badgeNotified = 0
+        var accepted = 0
+        buffer.addListener { contentNotified += 1 }
+        buffer.onDedupeCountsChanged = { badgeNotified += 1 }
+        buffer.onEntryAccepted = { accepted += 1 }
+
+        buffer.addEntry(entry("SELECT 1")) // 成功：内容（即时）+ 接受回调
+        buffer.addEntry(entry("SELECT 1")) // 窗口内重复：丢弃 → 仅徽章通道
+        buffer.addEntry(entry("SELECT 1")) // 同上
+        assertEquals("首条即时内容通知", 1, contentNotified)
+        assertEquals("两次丢弃两次徽章通知（⨉N 即时）", 2, badgeNotified)
+        assertEquals("重复 SQL 不是新 SQL，接受回调不触发", 1, accepted)
+        assertEquals(1, buffer.snapshot().size)
     }
 
     // ---------- F-43：onEvicted 回调 ----------
@@ -162,14 +198,17 @@ class SqlLogEntryBufferTest {
 
     @Test
     fun `去重窗口内相同 SQL 丢弃且通知徽章`() {
-        // F-44-2：用户实测「重复值计数更新的也不及时」——徽章数据变了必须通知 UI，
-        // 本用例断言「首条入列通知 + 末尾丢弃通知」共 2 次。
+        // F-44-2：用户实测「重复值计数更新的也不及时」——徽章数据变了必须即时通知 UI。
+        // T-PerfBatch 分层：丢弃走徽章通道（即时），内容通道时间窗内首条入列即时通知。
         buffer.dedupeEnabled = true
-        var notified = 0
-        buffer.addListener { notified++ }
+        var contentNotified = 0
+        var badgeNotified = 0
+        buffer.addListener { contentNotified++ }
+        buffer.onDedupeCountsChanged = { badgeNotified++ }
         assertTrue(buffer.addEntry(entryAt("SELECT 1", 0L)))
         assertFalse(buffer.addEntry(entryAt("SELECT 1", 500L))) // 窗口 1000ms 内
-        assertEquals(2, notified) // 入列 1 次 + 丢弃通知 1 次
+        assertEquals(1, contentNotified) // 首条入列内容通知
+        assertEquals(1, badgeNotified) // 丢弃即时走徽章通道
         assertEquals(1, buffer.snapshot().size)
         assertEquals(1, buffer.dedupeCount("SELECT 1"))
     }
@@ -312,13 +351,34 @@ class SqlLogEntryBufferTest {
 
     @Test
     fun `去重丢弃触发监听器`() {
-        // F-44-2：徽章数据变了必须通知 UI（实测反馈「不及时」是缺陷）
+        // F-44-2：徽章数据变了必须通知 UI（实测反馈「不及时」是缺陷）。
+        // T-PerfBatch 分层：徽章走独立通道，丢弃不再触发内容监听器。
         buffer.dedupeEnabled = true
-        var notified = 0
-        buffer.addListener { notified++ }
+        var contentNotified = 0
+        var badgeNotified = 0
+        buffer.addListener { contentNotified++ }
+        buffer.onDedupeCountsChanged = { badgeNotified++ }
         buffer.addEntry(entryAt("SELECT 1", 0L))
         buffer.addEntry(entryAt("SELECT 1", 100L)) // 丢弃
-        assertEquals(2, notified) // 第一条入列 + 第二条丢弃
+        assertEquals(1, contentNotified) // 第一条入列
+        assertEquals(1, badgeNotified) // 第二条丢弃 → 徽章通道即时
+    }
+
+    @Test
+    fun `去重计数有界化_超限淘汰最旧键`() {
+        // T-PerfSweep F3：计数键超上限淘汰最旧——内存有界，最新徽章语义保持。
+        // 计数键仅在「丢弃」时产生：每个键构造「入队一条 + 重复丢弃一条」。
+        val buf = SqlLogEntryBuffer(maxEntries = 10000)
+        buf.dedupeWindowMs = 60000L
+        buf.addEntry(entryAt("SELECT key-0", 0L))
+        buf.addEntry(entryAt("SELECT key-0", 1L)) // 丢弃 → 键 key-0 计数（最旧，将被淘汰）
+        for (i in 1..4096) {
+            buf.addEntry(entryAt("SELECT key-$i", 0L))
+            buf.addEntry(entryAt("SELECT key-$i", 1L)) // 丢弃 → 键 key-$i 计数
+        }
+        assertEquals("最新键计数保留", 1, buf.dedupeCount("SELECT key-4096"))
+        assertEquals("最旧键已淘汰", 0, buf.dedupeCount("SELECT key-0"))
+        assertEquals("计数键总量封顶", 4096, buf.dedupeCountsSnapshot().size)
     }
 
     // ---------- F-44-2：dedupeExisting / disableDedupe ----------

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -76,7 +77,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             // 默认一级：文件列表
             assertTrue("默认应处于一级文件列表视图", panel.isShowingFiles)
@@ -105,7 +106,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             val fileEntry = panel.fileListEntries.first()
             panel.openFileForTest(fileEntry) // 等价双击文件
@@ -132,7 +133,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             panel.openFileForTest(panel.fileListEntries.first())
             assertEquals("未搜索时 2 条", 2, panel.sqlListEntries.size)
@@ -165,7 +166,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         writeHistoryFile("sql-history-2026-08-31.sql", f44FileContent(listOf(Triple("SELECT 1", "A.java:1", 1L))))
         writeHistoryFile("sql-history-2026-08-30.sql", f44FileContent(listOf(Triple("SELECT 2", "A.java:2", 1L))))
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertEquals("默认 2 个文件", 2, panel.fileListEntries.size)
 
@@ -195,19 +196,19 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             ),
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             panel.openFileForTest(panel.fileListEntries.first())
             assertEquals("二级 3 条", 3, panel.sqlListEntries.size)
 
             // 文件仍存在 → 刷新保持二级并重载
-            panel.refresh()
+            panel.refreshForTest()
             assertFalse("文件仍存在时刷新保持二级", panel.isShowingFiles)
             assertEquals("重载后仍 3 条", 3, panel.sqlListEntries.size)
 
             // 文件被删除（模拟外部清理）→ 刷新回一级
             assertTrue(f.delete())
-            panel.refresh()
+            panel.refreshForTest()
             assertTrue("文件删除后刷新回一级", panel.isShowingFiles)
             assertEquals("一级列表为空", 0, panel.fileListEntries.size)
         } finally {
@@ -217,7 +218,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
 
     fun test空历史目录_一级显示空列表() {
         // 不写任何文件（setUp 已清理；F-44-4 新目录名，旧目录数据不读取）
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertTrue(panel.isShowingFiles)
             assertEquals(0, panel.fileListEntries.size)
@@ -234,10 +235,98 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             "-- source: Legacy.java:1 | time: 5ms | 2026-08-31 17:00:00.000 --\nSELECT legacy\n\n",
         )
 
-        val panel = HistorySqlLogPanel(project)
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertEquals("旧目录数据不应读取（不考虑向前兼容）", 0, panel.fileListEntries.size)
         } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test显示模式变更_行高重设_回同步combo_残留缓存按模式键失效() {
+        writeHistoryFile(
+            "sql-history-2026-08-31.sql",
+            f44FileContent(
+                listOf(Triple("SELECT * FROM user WHERE id = 1", "UserMapper.java:10", 3L)),
+            ),
+        )
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            val entry = panel.sqlListEntries.single()
+            // 模拟旧模式残留缓存（键=FORMATTED，与当前模式不同——渲染读取处按键比对自动失效）
+            entry.cachedListLineFragments = listOf(emptyList())
+            entry.cachedListLineFragmentsMode = SqlListDisplayMode.FORMATTED
+
+            panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
+
+            assertEquals(
+                "行高应随模式重设（单行=固定高，多行=-1 可变）",
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE,
+                panel.sqlListFixedCellHeightForTest != -1,
+            )
+            // T-MergeFollowup-03：模式切换改走 applySqlSearch 全量重建（repaint 不重算 JList 行高布局缓存）
+            assertEquals(
+                "模式切换后二级列表条目应经全量重建保持不丢",
+                1,
+                panel.sqlListEntries.size,
+            )
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-MergeFollowup-03（复查二轮）防回归：多次切换显示模式后 BasicListUI 的 cellHeights 布局缓存
+     * 必须失效（updateUI 重装 UI）——旧行高框内画新多行内容即真机「文字重叠/间距挤压/字号错乱」。
+     * 判据：每次切换后 [javax.swing.JList.getCellBounds] 行高须等于当前模式渲染器 preferred 高
+     * （缓存未失效时 getCellBounds 返回旧缓存高度，与多行展开的新渲染高度不一致）。
+     */
+    fun test多次切换显示模式后行高布局缓存失效() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val savedMode = settings.state.logListSqlDisplayMode
+        // 多列 SELECT：FORMATTED 竖排展开后渲染行数远大于单行，行高差可判
+        writeHistoryFile(
+            "sql-history-2026-09-14.sql",
+            f44FileContent(
+                listOf(Triple("SELECT id, station_id, share_scheme_id, device_name, station_name FROM car_device_info", "SqlSourceInterceptor.java:621", 3L)),
+            ),
+        )
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            assertEquals(1, panel.sqlListEntries.size)
+
+            fun assertCellHeightMatchesRenderer(stage: String) {
+                @Suppress("UNCHECKED_CAST")
+                val renderer = panel.sqlListForTest.cellRenderer as javax.swing.ListCellRenderer<Any?>
+                panel.sqlListForTest.getCellBounds(0, 0)!!.let { bounds ->
+                    val renderedPreferred = renderer
+                        .getListCellRendererComponent(panel.sqlListForTest, panel.sqlListEntries.single(), 0, false, false)
+                        .preferredSize.height
+                    assertEquals(
+                        "$stage：切换后 JList 行高布局缓存应失效（cellBounds 高度 = 当前模式渲染 preferred）",
+                        renderedPreferred,
+                        bounds.height,
+                    )
+                }
+            }
+
+            listOf(
+                SqlListDisplayMode.SINGLE_LINE,
+                SqlListDisplayMode.FORMATTED,
+                SqlListDisplayMode.KEYWORD_WRAP,
+                SqlListDisplayMode.FORMATTED,
+                SqlListDisplayMode.SINGLE_LINE,
+            ).forEach { mode ->
+                settings.state.logListSqlDisplayMode = mode.name
+                panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
+                assertCellHeightMatchesRenderer("切至 $mode")
+            }
+        } finally {
+            settings.state.logListSqlDisplayMode = savedMode
             panel.dispose()
         }
     }

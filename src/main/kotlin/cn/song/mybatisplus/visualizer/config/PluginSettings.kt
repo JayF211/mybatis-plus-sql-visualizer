@@ -7,6 +7,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.util.messages.Topic
+import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 
 /**
  * 插件配置状态（T-M5-01，F-16 配置项持久化）。
@@ -259,6 +260,33 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var showDurationInLogList: Boolean = true,
 
+        // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
+        /**
+         * CRUD 颜色标记形态：`bar`=左侧色条（默认）/ `background`=整行淡背景（选中态走描边）/
+         * `off`=关闭。未知值按 `bar` 兜底（见 [cn.song.mybatisplus.visualizer.log.SqlListTypeColor.styleOf]）。
+         * 默认值常量在 [cn.song.mybatisplus.visualizer.log.SqlListTypeColor]，State 侧只引用，避免双份字面量。
+         */
+        var crudColorStyle: String = CRUD_COLOR_STYLE_BAR,
+
+        /** SELECT 标记色（`#RRGGBB`；空串/非法 → 默认色）。 */
+        var crudColorSelect: String = CRUD_COLOR_DEFAULT_SELECT,
+
+        /** INSERT 标记色（`#RRGGBB`）。 */
+        var crudColorInsert: String = CRUD_COLOR_DEFAULT_INSERT,
+
+        /** UPDATE 标记色（`#RRGGBB`）。 */
+        var crudColorUpdate: String = CRUD_COLOR_DEFAULT_UPDATE,
+
+        /** DELETE 标记色（`#RRGGBB`）。 */
+        var crudColorDelete: String = CRUD_COLOR_DEFAULT_DELETE,
+
+        /**
+         * SQL 列表显示模式（T-ListMode）：SQL 日志与 SQL 历史列表条目中 SQL 行的展示形态
+         * （枚举 [cn.song.mybatisplus.visualizer.log.SqlListDisplayMode] 的 name，读取走
+         * [sqlListDisplayMode] 容错）。默认关键字换行。
+         */
+        var logListSqlDisplayMode: String = DEFAULT_LOG_LIST_DISPLAY_MODE,
+
         /**
          * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
          * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
@@ -338,6 +366,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 默认关——用户需主动开启并按提示确认生成。
          */
         var autoInjectSqlSourceInterceptor: Boolean = false,
+
+        // ---------- T-ErrReport 错误一键上报官网需求池 ----------
+
+        /**
+         * 需求池报告昵称（选填，报告对话框填写后记忆，下次带出；空 = 匿名提交）。
+         */
+        var reportSubmitterName: String = "",
+
+        /**
+         * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
+         */
+        var reportSubmitterEmail: String = "",
+
         // ---------- M56 增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
 
         /**
@@ -369,8 +410,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         this.state = state
     }
 
+    /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
+    fun sqlListDisplayMode(): cn.song.mybatisplus.visualizer.log.SqlListDisplayMode =
+        runCatching { cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.valueOf(state.logListSqlDisplayMode) }
+            .getOrDefault(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP)
+
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
+
+        /** SQL 列表显示模式默认值（T-ListMode，关键字换行）。 */
+        const val DEFAULT_LOG_LIST_DISPLAY_MODE = "KEYWORD_WRAP"
 
         /** 设置变更通知 Topic（订阅方据此即时刷新 UI）。 */
         @JvmField
@@ -431,6 +480,22 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 默认 SQL 历史记录上限（F-7，非收藏条目）。 */
         const val DEFAULT_HISTORY_MAX_SIZE = 200
+
+        // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记默认值 ----------
+        // 单一真源在 SqlListTypeColor（语义与其渲染同处一处），State 侧只引用，避免双份字面量漂移。
+        /** 默认标记形态：左侧色条。 */
+        const val CRUD_COLOR_STYLE_BAR = SqlListTypeColor.STYLE_BAR
+
+        /** 备选标记形态：整行淡背景（选中态走描边）。 */
+        const val CRUD_COLOR_STYLE_BACKGROUND = SqlListTypeColor.STYLE_BACKGROUND
+
+        /** 关闭标记。 */
+        const val CRUD_COLOR_STYLE_OFF = SqlListTypeColor.STYLE_OFF
+
+        const val CRUD_COLOR_DEFAULT_SELECT = SqlListTypeColor.DEFAULT_SELECT
+        const val CRUD_COLOR_DEFAULT_INSERT = SqlListTypeColor.DEFAULT_INSERT
+        const val CRUD_COLOR_DEFAULT_UPDATE = SqlListTypeColor.DEFAULT_UPDATE
+        const val CRUD_COLOR_DEFAULT_DELETE = SqlListTypeColor.DEFAULT_DELETE
 
         /** 自动折叠触发的顶层字段数阈值（T-AutoFold）。 */
         const val DEFAULT_AUTO_FOLD_FIELD_THRESHOLD = 10

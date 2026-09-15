@@ -50,4 +50,21 @@ object HbmXmlMapping {
         val targetClassName: String,
         val joinColumn: String,
     )
+
+    /**
+     * hbm 命名查询（T-H1）：对应 `<hibernate-mapping>` 下的 `<query>` / `<sql-query>` 元素。
+     *
+     * @param name      完整查询名（`name` 属性，惯例 `<实体简单名>.<查询名>`）
+     * @param kind      HQL（`<query>`）或原生 SQL（`<sql-query>`）
+     * @param queryText 查询文本（直属 XmlText，CDATA 展开；`<sql-query>` 内
+     *                  `<return-scalar>`/`<return>` 等子标签内容排除）
+     */
+    data class NamedQuery(
+        val name: String,
+        val kind: QueryKind,
+        val queryText: String,
+    )
+
+    /** hbm 命名查询种类。 */
+    enum class QueryKind { HQL, NATIVE }
 }

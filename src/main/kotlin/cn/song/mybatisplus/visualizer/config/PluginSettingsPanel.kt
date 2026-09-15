@@ -2,8 +2,8 @@ package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
-import cn.song.mybatisplus.visualizer.log.SqlSourceInterceptorAutoInjector
-import cn.song.mybatisplus.visualizer.log.InjectionResult
+import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
+import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -16,14 +16,17 @@ import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.project.ProjectManager
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.MessageDialogBuilder
+import com.intellij.ui.ColorPanel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.FlowLayout
 import java.awt.Component
 import java.awt.Dialog
@@ -40,6 +43,7 @@ import javax.swing.JDialog
 import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
+import java.util.Locale
 import javax.swing.event.DocumentListener
 
 /**
@@ -113,6 +117,49 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private data class ReverseFormatOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
+
+    /** T-CrudColor：CRUD 颜色标记形态下拉项。 */
+    private data class CrudColorStyleOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
+        CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
+        CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
+        CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_OFF, MpSqlVisualizerBundle.message("settings.log.crudColor.style.off")),
+    )
+
+    // ---------- T-CrudColor 颜色控件辅助 ----------
+
+    /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
+    private fun selectedCrudColorStyle(): String =
+        (crudColorStyleCombo.selectedItem as? CrudColorStyleOption)?.value
+            ?: PluginSettings.CRUD_COLOR_STYLE_BAR
+
+    /** 色板 → `#RRGGBB`（未选色 → 空串，渲染侧按默认色处理）。 */
+    private fun colorHexOf(panel: ColorPanel): String {
+        val c = panel.selectedColor ?: return ""
+        return String.format(Locale.ENGLISH, "#%02X%02X%02X", c.red, c.green, c.blue)
+    }
+
+    /** `#RRGGBB` → Color（非法回退默认色，不抛）。 */
+    private fun colorOf(hex: String): Color = SqlListTypeColor.parseHex(hex, Color(0x4A86E8))
+
+    /** T-DisplayModeToSettings：SQL 列表显示模式下拉项（value=SqlListDisplayMode.name）。 */
+    private data class ListDisplayModeOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun listDisplayModeOptions(): Array<ListDisplayModeOption> = arrayOf(
+        ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.SINGLE_LINE.name, MpSqlVisualizerBundle.message("log.list.displayMode.single")),
+        ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP.name, MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap")),
+        ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED.name, MpSqlVisualizerBundle.message("log.list.displayMode.formatted")),
+    )
+
+    /** 当前下拉选中的显示模式值（空选兜默认——与 PluginSettings.sqlListDisplayMode 的兜底一致）。 */
+    private fun selectedListDisplayMode(): String =
+        (logDisplayModeCombo.selectedItem as? ListDisplayModeOption)?.value
+            ?: PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
 
     private fun reverseFormatOptions(): Array<ReverseFormatOption> = arrayOf(
         ReverseFormatOption(PluginSettings.REVERSE_AUTO, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.auto")),
@@ -259,6 +306,20 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logTimePrefixField = JBTextField(12)
     private val slowQueryThresholdField = JBTextField(12)
     private val logShowDurationCheck = JBCheckBox()
+
+    // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
+    /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
+    private val crudColorStyleCombo = ComboBox<CrudColorStyleOption>()
+
+    /** T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史两列表共享一键）。 */
+    private val logDisplayModeCombo = ComboBox<ListDisplayModeOption>()
+    /** 四类型色板（平台原生 ColorPanel，点击弹出取色器）。 */
+    private val crudColorSelectPanel = ColorPanel()
+    private val crudColorInsertPanel = ColorPanel()
+    private val crudColorUpdatePanel = ColorPanel()
+    private val crudColorDeletePanel = ColorPanel()
+    /** 一键恢复四色默认值。 */
+    private val crudColorResetButton = JButton()
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -517,6 +578,36 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logShowDurationCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
+                })
+            }
+
+            // T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史 两列表共享一键，设置页唯一入口）
+            sectionGroup("settings.log.tab.list") { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("log.list.displayMode"), logDisplayModeCombo.apply {
+                    model = DefaultComboBoxModel(listDisplayModeOptions())
+                    toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode.tip")
+                })
+            }
+
+            // T-CrudColor：SQL 列表 CRUD 类型颜色标记（样式 + 四色；不新增复选框，保持复选框台账不变）
+            sectionGroup("settings.log.tab.crudColor") { p, g ->
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.style"), crudColorStyleCombo.apply {
+                    model = DefaultComboBoxModel(crudColorStyleOptions())
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.crudColor.style.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.select"), crudColorSelectPanel)
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.insert"), crudColorInsertPanel)
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.update"), crudColorUpdatePanel)
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.delete"), crudColorDeletePanel)
+                addRow(p, g, "", crudColorResetButton.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.crudColor.reset")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.crudColor.reset.tip")
+                    addActionListener {
+                        crudColorSelectPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_SELECT)
+                        crudColorInsertPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_INSERT)
+                        crudColorUpdatePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_UPDATE)
+                        crudColorDeletePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_DELETE)
+                    }
                 })
             }
 
@@ -874,6 +965,30 @@ class PluginSettingsPanel @JvmOverloads constructor(
         reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == value } ?: return
     }
 
+    /** T-CrudColor：标记形态下拉选择入口（测试用）——与用户选择同一路径。 */
+    internal fun selectCrudColorStyle(value: String) {
+        crudColorStyleCombo.selectedItem = crudColorStyleOptions().firstOrNull { it.value == value } ?: return
+    }
+
+    /** T-DisplayModeToSettings：显示模式下拉选择入口（测试用）——与用户选择同一路径。 */
+    internal fun selectListDisplayMode(value: String) {
+        logDisplayModeCombo.selectedItem = listDisplayModeOptions().firstOrNull { it.value == value } ?: return
+    }
+
+    /** T-DisplayModeToSettings：当前下拉选中值（测试断言 reset 回填用）。 */
+    internal fun currentListDisplayModeForTest(): String = selectedListDisplayMode()
+
+    /** T-CrudColor：四色色板设置入口（测试用）——与用户取色同一路径。 */
+    internal fun setCrudColor(which: String, hex: String) {
+        val color = colorOf(hex)
+        when (which) {
+            "select" -> crudColorSelectPanel.selectedColor = color
+            "insert" -> crudColorInsertPanel.selectedColor = color
+            "update" -> crudColorUpdatePanel.selectedColor = color
+            "delete" -> crudColorDeletePanel.selectedColor = color
+        }
+    }
+
     /** T-M41 测试访问器：SQL→Java 快捷键编辑行（断言行存在 / 修改检测 / apply 写入 Keymap）。 */
     internal fun reverseShortcutEditorForTest(): ShortcutEditor = reverseShortcutEditor
 
@@ -924,52 +1039,26 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // F-44-7：SqlSourceInterceptor 自动注入
     // ------------------------------------------------------------------
 
-    /** 触发拦截器注入（用户勾选开关后调用）。 */
+    /**
+     * 触发拦截器注入（用户勾选开关后调用）。
+     *
+     * T-JumpCapture：注入编排与四类结果弹窗收敛到 [SourceCaptureGuide]（与「跳转源码」
+     * 引导弹框共用，防重入亦在其中）；面板侧仅保留勾选回滚——仅它持有 checkbox。
+     */
     private fun triggerInterceptorInjection() {
         val project = ProjectManager.getInstance().openProjects.firstOrNull()
         if (project == null) {
             Messages.showWarningDialog(
                 null,
-                "请先打开一个项目，再启用源码捕获拦截器自动注入。",
-                "源码跳转配置",
+                MpSqlVisualizerBundle.message("log.inject.noProject"),
+                MpSqlVisualizerBundle.message("log.inject.title"),
             )
             autoInjectInterceptorCheck.isSelected = false
             return
         }
-        val result = SqlSourceInterceptorAutoInjector.inject(project)
-        when (result) {
-            is InjectionResult.Success -> {
-                Messages.showInfoMessage(
-                    project,
-                    result.message,
-                    "源码跳转配置",
-                )
-            }
-            is InjectionResult.AlreadyExists -> {
-                Messages.showInfoMessage(
-                    project,
-                    "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
-                    "源码跳转配置",
-                )
-                autoInjectInterceptorCheck.isSelected = false
-            }
-            is InjectionResult.UnsupportedProject -> {
-                Messages.showWarningDialog(
-                    project,
-                    "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n" +
-                        "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
-                    "源码跳转配置",
-                )
-                autoInjectInterceptorCheck.isSelected = false
-            }
-            is InjectionResult.CannotDetectStructure -> {
-                Messages.showWarningDialog(
-                    project,
-                    "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
-                    "源码跳转配置",
-                )
-                autoInjectInterceptorCheck.isSelected = false
-            }
+        SourceCaptureGuide.runInjection(project) { result ->
+            val success = SourceCaptureGuide.showInjectionResult(project, result)
+            if (!success) autoInjectInterceptorCheck.isSelected = false
         }
     }
 
@@ -1056,6 +1145,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
             || autoInjectInterceptorCheck.isSelected != s.autoInjectSqlSourceInterceptor
+            // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
+            // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
+            || selectedCrudColorStyle() != s.crudColorStyle
+            || selectedListDisplayMode() != s.logListSqlDisplayMode
+            || colorHexOf(crudColorSelectPanel) != s.crudColorSelect
+            || colorHexOf(crudColorInsertPanel) != s.crudColorInsert
+            || colorHexOf(crudColorUpdatePanel) != s.crudColorUpdate
+            || colorHexOf(crudColorDeletePanel) != s.crudColorDelete
 
     private fun isModifiedUi(s: PluginSettings.State): Boolean =
         gutterIconCheck.isSelected != s.showGutterIcon
@@ -1134,6 +1231,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
                 .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
             s.autoInjectSqlSourceInterceptor = autoInjectInterceptorCheck.isSelected
+            // T-CrudColor：CRUD 颜色标记（样式 + 四色）
+            s.crudColorStyle = selectedCrudColorStyle()
+            // T-DisplayModeToSettings：SQL 列表显示模式（apply 后经 SETTINGS_CHANGE_TOPIC 广播，两列表既有监听刷新）
+            s.logListSqlDisplayMode = selectedListDisplayMode()
+            s.crudColorSelect = colorHexOf(crudColorSelectPanel)
+            s.crudColorInsert = colorHexOf(crudColorInsertPanel)
+            s.crudColorUpdate = colorHexOf(crudColorUpdatePanel)
+            s.crudColorDelete = colorHexOf(crudColorDeletePanel)
         }
         if (SECTION_UI in sections) {
             s.showGutterIcon = gutterIconCheck.isSelected
@@ -1240,6 +1345,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
             logAutoSavePatternField.isEnabled = autoSaveEnabled
             updateAutoSavePreview()
+            // T-CrudColor：CRUD 颜色标记控件回填
+            crudColorStyleCombo.selectedItem = crudColorStyleOptions()
+                .firstOrNull { it.value == s.crudColorStyle } ?: crudColorStyleOptions().first()
+            // T-DisplayModeToSettings：显示模式下拉回填
+            logDisplayModeCombo.selectedItem = listDisplayModeOptions()
+                .firstOrNull { it.value == s.logListSqlDisplayMode } ?: listDisplayModeOptions().first()
+            crudColorSelectPanel.selectedColor = colorOf(s.crudColorSelect)
+            crudColorInsertPanel.selectedColor = colorOf(s.crudColorInsert)
+            crudColorUpdatePanel.selectedColor = colorOf(s.crudColorUpdate)
+            crudColorDeletePanel.selectedColor = colorOf(s.crudColorDelete)
             autoInjectInterceptorCheck.isSelected = s.autoInjectSqlSourceInterceptor
         }
     }

@@ -20,6 +20,7 @@ import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
 import com.intellij.testFramework.EditorTestUtil
 import com.intellij.util.ui.UIUtil
@@ -435,25 +436,52 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = 1"))
         assertFalse(panel.editorForTest()!!.document.text.contains("station_id = 2"))
 
-        // 全选 → 两个条件都在，复选框状态同步
-        panel.selectAllButtonForTest()!!.doClick()
+        // T-SelToggle：单个切换按钮——初始非全勾（仅 c0）→ 文案「全选」→ 点击全勾、文案翻「全不选」
+        val toggle = panel.toggleSelectButtonForTest()!!
+        assertEquals("初始非全勾应为全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
+        toggle.doClick()
         assertTrue(panel.editorForTest()!!.document.text.contains("AND station_id = 2"))
         assertTrue(panel.conditionCheckboxForTest(0)!!.isSelected)
         assertTrue(panel.conditionCheckboxForTest(1)!!.isSelected)
+        assertEquals("全勾后应翻转为全不选文案", MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
 
-        // 全不选 → 动态条件全部移除（无 WHERE），复选框状态同步
-        panel.selectNoneButtonForTest()!!.doClick()
+        // 再点一次 → 动态条件全部移除（无 WHERE），复选框状态同步、文案回「全选」
+        toggle.doClick()
         assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
         assertFalse(panel.conditionCheckboxForTest(0)!!.isSelected)
         assertFalse(panel.conditionCheckboxForTest(1)!!.isSelected)
         assertTrue(panel.enabledIdsForTest().isEmpty())
+        assertEquals("全不选后应回到全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
 
-        // 全选后再取消单个勾选 → 另一个保留
-        panel.selectAllButtonForTest()!!.doClick()
+        // 全选后再取消单个勾选 → 另一个保留，文案随部分勾选态翻回「全选」
+        toggle.doClick()
         panel.conditionCheckboxForTest(1)!!.doClick()
         val sql = panel.editorForTest()!!.document.text
         assertTrue(sql.contains("id = 1"))
         assertFalse(sql.contains("station_id = 2"))
+        assertEquals("部分勾选应为全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
+        panel.clear()
+    }
+
+    fun testToggleSelectLabelFollowsSingleCheckboxClick() {
+        // T-SelToggle：文案同步挂在 renderSql 单点收口——单个复选框点选即应翻转切换按钮文案
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                ),
+                views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
+            ),
+        )
+        val toggle = panel.toggleSelectButtonForTest()!!
+        // 初始：唯一条件已勾选 → 全勾 → 「全不选」
+        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
+        panel.conditionCheckboxForTest(0)!!.doClick() // 取消唯一勾选 → 空集 → 「全选」
+        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
+        panel.conditionCheckboxForTest(0)!!.doClick() // 勾回 → 全勾 → 「全不选」
+        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
         panel.clear()
     }
 
@@ -737,22 +765,25 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         )
         val panel = SqlPreviewPanel(project)
         panel.showResult(batchResult(model))
-        assertNotNull("批量区应有全选按钮", panel.batchSelectAllButtonForTest())
-        assertNotNull("批量区应有全不选按钮", panel.batchSelectNoneButtonForTest())
-        // 全不选 → 空列清单（文档化边界）
-        panel.batchSelectNoneButtonForTest()!!.doClick()
-        assertFalse(panel.batchCheckboxForTest(0)!!.isSelected)
-        assertFalse(panel.batchCheckboxForTest(1)!!.isSelected)
-        assertFalse(panel.batchCheckboxForTest(2)!!.isSelected)
-        assertTrue(panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon ()"))
-        // 全选 → 全列恢复
-        panel.batchSelectAllButtonForTest()!!.doClick()
+        val toggle = panel.batchToggleSelectButtonForTest()
+        assertNotNull("批量区应有全选/全不选切换按钮", toggle)
+        // T-SelToggle：初始部分勾选（id 未勾）→ 文案「全选」；点击 → 全列恢复
+        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle!!.text)
+        toggle.doClick()
         assertTrue(panel.batchCheckboxForTest(0)!!.isSelected)
         assertTrue(panel.batchCheckboxForTest(1)!!.isSelected)
         assertTrue(panel.batchCheckboxForTest(2)!!.isSelected)
+        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
         assertTrue(
             panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, name, dic_status)"),
         )
+        // 再点 → 全不选 → 空列清单（文档化边界），文案回「全选」
+        toggle.doClick()
+        assertFalse(panel.batchCheckboxForTest(0)!!.isSelected)
+        assertFalse(panel.batchCheckboxForTest(1)!!.isSelected)
+        assertFalse(panel.batchCheckboxForTest(2)!!.isSelected)
+        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
+        assertTrue(panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon ()"))
         panel.clear()
     }
 
@@ -863,7 +894,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         )
         val scroll = split.leftComponent as JBScrollPane
         val viewport = scroll.viewport
-        val button = panel.selectAllButtonForTest()!!
+        val button = panel.toggleSelectButtonForTest()!!
         // 按钮在参数面板内（回挂分区标题行，随列表滚动——T-M26.2 曾固定视口外）
         assertTrue("按钮应在参数面板内", SwingUtilities.isDescendingFrom(button, viewport.view))
         // 布局（doLayout 不递归，逐层布局组件树）后按钮仍可见于视口（长标签按视口截断 → 行宽受限）
@@ -1142,8 +1173,8 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         // 无参数 → 无按钮
         panel.showResult(result())
-        assertNull("无内容时应无全选按钮", panel.selectAllButtonForTest())
-        assertNull("无内容时应无批量全选按钮", panel.batchSelectAllButtonForTest())
+        assertNull("无内容时应无全选按钮", panel.toggleSelectButtonForTest())
+        assertNull("无内容时应无批量全选按钮", panel.batchToggleSelectButtonForTest())
         // 动态条件 → 条件组
         panel.showResult(
             dynamicResult(
@@ -1154,8 +1185,8 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
             ),
         )
-        assertNotNull("动态条件场景应有全选按钮", panel.selectAllButtonForTest())
-        assertNull("动态条件场景不应有批量全选按钮", panel.batchSelectAllButtonForTest())
+        assertNotNull("动态条件场景应有全选按钮", panel.toggleSelectButtonForTest())
+        assertNull("动态条件场景不应有批量全选按钮", panel.batchToggleSelectButtonForTest())
         // 批量列 → 批量组
         panel.showResult(
             batchResult(
@@ -1168,11 +1199,11 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 ),
             ),
         )
-        assertNull("批量场景不应有全选按钮", panel.selectAllButtonForTest())
-        assertNotNull("批量场景应有批量全选按钮", panel.batchSelectAllButtonForTest())
+        assertNull("批量场景不应有全选按钮", panel.toggleSelectButtonForTest())
+        assertNotNull("批量场景应有批量全选按钮", panel.batchToggleSelectButtonForTest())
         panel.clear()
-        assertNull("clear 后应无全选按钮", panel.selectAllButtonForTest())
-        assertNull("clear 后应无批量全选按钮", panel.batchSelectAllButtonForTest())
+        assertNull("clear 后应无全选按钮", panel.toggleSelectButtonForTest())
+        assertNull("clear 后应无批量全选按钮", panel.batchToggleSelectButtonForTest())
     }
 
     // ------------------------------------------------------------------
@@ -1440,6 +1471,38 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             )
             assertEquals("关闭态零折叠区域（逐字节不变）", 0, ownFoldRegions(panel.editorForTest()!!).size)
             panel.clear()
+        }
+    }
+
+    // ---------- T-Perf-04：detectInClauseParams 单趟扫描（与旧 O(L×P) 实现语义一致） ----------
+
+    fun testDetectInClauseParams_InParens多参数命中() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            // 语义与旧实现（对每个 ? 前缀做 endsWith("IN ("/"IN(")）完全一致：
+            // 仅紧贴 "IN (" 的首个 ? 命中（后续 ? 的前缀以 "?," 结尾不命中）。
+            val detected = panel.detectInClauseParams("SELECT * FROM t WHERE id IN ( ?, ?, ? ) AND name = ?")
+            assertEquals(setOf(0), detected)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testDetectInClauseParams_紧凑形态与大小写() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            assertEquals(setOf(0), panel.detectInClauseParams("select * from t where id in(?)"))
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testDetectInClauseParams_非In问号不命中() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            assertEquals(emptySet<Int>(), panel.detectInClauseParams("SELECT * FROM t WHERE a = ? AND b = ?"))
+        } finally {
+            panel.dispose()
         }
     }
 }

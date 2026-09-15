@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.history
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.SlowQueryDetector
 import cn.song.mybatisplus.visualizer.log.SqlClickPreview
+import cn.song.mybatisplus.visualizer.log.clickPreviewSql
 import cn.song.mybatisplus.visualizer.log.withTerminator
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewDialog
@@ -44,6 +46,9 @@ import javax.swing.SwingConstants
 import javax.swing.border.EmptyBorder
 
 /**
+ * T-Perf-24 死代码标注：本面板**未注册到任何工具窗口/弹窗**（F-7 视图由历史 tab 承接）。
+ */
+/**
  * SQL 历史记录面板（F-7）：列表渲染（摘要 + 时间戳 + 来源）+ 双击预览 + 右键菜单（收藏/复制/删除/标签）。
  *
  * <p>列表条目按时间倒序（最新在前）；收藏条目左侧显示星形图标。搜索/标签筛选由外层 [SqlHistorySearchBar] 驱动，
@@ -56,8 +61,11 @@ class SqlHistoryPanel(
     private val manager = SqlHistoryManager.getInstance()
     private val listModel = DefaultListModel<SqlHistoryEntry>()
     private val list = JBList<SqlHistoryEntry>(listModel)
-    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。 */
-    private val clickPreview = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).sql) }
+    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
+     *  T-ListPreviewCopy：预览文本经 clickPreviewSql 跟随「预览时格式化还原 SQL」设置（与另两面板同构；本面板为 T-Perf-24 死代码，接线保持一致防复活分叉）。 */
+    private val clickPreview = SqlClickPreview(project, list) {
+        i -> clickPreviewSql(list.model.getElementAt(i).sql, PluginSettings.getInstance().state.logFormatSql)
+    }
 
     /** 当前筛选模式（null = 全部）。 */
     private var tagFilter: String? = null
