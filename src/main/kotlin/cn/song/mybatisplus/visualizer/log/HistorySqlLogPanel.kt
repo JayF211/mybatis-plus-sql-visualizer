@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
@@ -40,7 +41,6 @@ import java.io.File
 import java.util.Locale
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
-import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.SwingConstants
@@ -89,22 +89,40 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
 
     private val searchField = SearchTextField()
-    private val backButton = JButton().apply {
-        icon = AllIcons.Actions.Back
-        toolTipText = MpSqlVisualizerBundle.message("log.history.back.tip")
-        isFocusable = false
-        preferredSize = Dimension(28, 28)
-        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
-        addActionListener { showFileList() }
-        isVisible = false // 默认一级，不显示返回
+
+    // ---------- T-UiNative T-UN-10：顶部导航动作（原手摆 28×28「仿平台按钮」JButton 平移） ----------
+
+    /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
+    private var _navToolbarRef: ActionToolbar? = null
+
+    /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
+    private inner class BackAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Back
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.back.tip")
+            e.presentation.isVisible = !isShowingFiles
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            showFileList()
+        }
     }
-    private val refreshButton = JButton().apply {
-        icon = AllIcons.Actions.Refresh
-        toolTipText = MpSqlVisualizerBundle.message("log.history.refresh.tip")
-        isFocusable = false
-        preferredSize = Dimension(28, 28)
-        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
-        addActionListener { refresh() }
+
+    /** 刷新（原 refreshButton）：图标 Refresh、tooltip 沿用 log.history.refresh.tip。 */
+    private inner class RefreshAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Refresh
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.refresh.tip")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            refresh()
+        }
+    }
+
+    /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
+    private fun refreshNavToolbar() {
+        _navToolbarRef?.updateActionsImmediately()
     }
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
@@ -179,9 +197,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
+        // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
+        val navToolbar = ActionManager.getInstance()
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction()), true)
+            .apply { targetComponent = this@HistorySqlLogPanel }
+        _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
-        toolbar.add(backButton)
-        toolbar.add(refreshButton)
+        toolbar.add(navToolbar.component)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
@@ -253,7 +275,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         currentFile = null
         currentEntries = emptyList()
         sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
-        backButton.isVisible = false
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
         applyFileSearch()
@@ -261,7 +283,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileContent(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
-        backButton.isVisible = true
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
         cardLayout.show(cards, CARD_SQL)
         // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
@@ -284,7 +306,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
     private fun loadFileContentSync(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
-        backButton.isVisible = true
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
         cardLayout.show(cards, CARD_SQL)
         currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
@@ -357,7 +379,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 否则回一级（默认展示文件列表）
         currentFile = null
         currentEntries = emptyList()
-        backButton.isVisible = false
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
         applyFileSearch()

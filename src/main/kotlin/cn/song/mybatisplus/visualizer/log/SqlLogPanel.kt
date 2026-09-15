@@ -436,11 +436,18 @@ class SqlLogPanel(
     internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
 
     /**
+     * 捕捉开关动作（T-UiNative T-UN-11）：挂工具窗标题栏（SqlLogToolWindowFactory 调
+     * ToolWindow.setTitleActions），面板工具栏不再含捕捉按钮。图标/文案在 [CaptureAction.update]
+     * 按 manager.capturing 态输出；测试断言直接读 captureToggleAction.presentation，不依赖按钮刷新。
+     */
+    val captureToggleAction: AnAction = CaptureAction()
+
+    /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
+     * T-UiNative T-UN-11：捕捉开关迁工具窗标题栏（[captureToggleAction]），此处不再包含。
      */
     internal val toolbarGroup = DefaultActionGroup(
-        CaptureAction(),
         ClearAction(),
         SettingsAction(),
         ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
@@ -452,11 +459,16 @@ class SqlLogPanel(
     /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
     private val uiRefreshListener: () -> Unit = { refreshList() }
 
-    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
+    /** capturing 状态变化 → 刷新捕捉动作 presentation（T-UiNative T-UN-11：动作挂工具窗标题栏，
+     *  图标/文案由 [CaptureAction.update] 按 capturing 态输出）。 */
     private val capturingUiListener: () -> Unit = {
         LOG.info("SqlLogPanel.capturingListener: 触发")
         ApplicationManager.getApplication().invokeLater {
-            updateCaptureButtonIcon()
+            // T-UiNative T-UN-11：反射 hack（updateCaptureButtonIcon 遍历组件树强改 ActionButton 图标）
+            // 退役——回归平台更新机制。真实 IDE 中工具窗可见，isShowing 满足，updateActionsImmediately
+            // 正常执行；沙盒/单测中组件不可见时平台会跳过更新——测试断言直接读
+            // captureToggleAction.presentation，不依赖按钮刷新。
+            _toolbarRef?.updateActionsImmediately()
         }
     }
 
@@ -520,10 +532,9 @@ class SqlLogPanel(
         manager.addUiListener(uiRefreshListener)
         refreshList()
 
-        // capturing 变化 → 刷新工具栏按钮图标/文案
-        // 注意：updateActionsAsync()/updateActionsImmediately() 在组件不可见时会跳过更新
-        // （ToolbarUpdater$MyUpdateRunnable 检查 isShowing，沙盒中工具栏可能不可见），
-        // 故直接遍历 ActionButton 设置图标（绕过平台更新机制）
+        // capturing 变化 → 刷新捕捉动作（T-UiNative T-UN-11：动作挂工具窗标题栏，presentation
+        // 由 CaptureAction.update 按 capturing 态输出；监听经平台更新机制刷新，沙盒测试断言直读
+        // captureToggleAction.presentation）
         manager.addCapturingListener(capturingUiListener)
     }
 
@@ -784,31 +795,6 @@ class SqlLogPanel(
 
     // ---------- 工具栏动作 ----------
 
-    /** 直接更新捕捉按钮图标（绕过 ActionToolbar 更新机制——沙盒中 isShowing 检查会导致更新被跳过）。 */
-    private fun updateCaptureButtonIcon() {
-        val toolbar = _toolbarRef ?: return
-        val capturing = manager.capturing
-        val icon = if (capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
-        val text = MpSqlVisualizerBundle.message(if (capturing) "log.panel.stop" else "log.panel.capture")
-        // 遍历工具栏组件树，找到 ActionButton 并通过 getAction() 匹配 CaptureAction
-        com.intellij.util.ui.UIUtil.uiTraverser(toolbar.component)
-            .preOrderDfsTraversal()
-            .filter { it.javaClass.simpleName == "ActionButton" }
-            .forEach { btn ->
-                val action = try {
-                    btn.javaClass.getMethod("getAction").invoke(btn)
-                } catch (_: Throwable) { null }
-                if (action is CaptureAction) {
-                    (btn as? javax.swing.AbstractButton)?.let {
-                        it.icon = icon
-                        it.text = text
-                        it.repaint()
-                    }
-                    LOG.info("updateCaptureButtonIcon: 设置图标=${if (capturing) "停止" else "捕捉"}")
-                }
-            }
-    }
-
     /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
     private var historyPanelRegistered = false
 
@@ -861,9 +847,13 @@ class SqlLogPanel(
         return dir.isDirectory && dir.listFiles { f -> f.extension == "sql" }?.isNotEmpty() == true
     }
 
-    /** 工具栏引用（capturing 变化时刷新按钮状态）。 */
+    /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private var _toolbarRef: ActionToolbar? = null
 
+    /**
+     * 捕捉开关（T-UiNative T-UN-11：挂工具窗标题栏，经 [captureToggleAction] 暴露）。
+     * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
+     */
     private inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {

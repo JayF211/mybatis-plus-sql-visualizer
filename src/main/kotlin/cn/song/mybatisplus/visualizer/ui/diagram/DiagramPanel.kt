@@ -1,9 +1,14 @@
 package cn.song.mybatisplus.visualizer.ui.diagram
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooserFactory
 import com.intellij.openapi.fileChooser.FileSaverDescriptor
@@ -17,7 +22,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
-import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -26,7 +30,6 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
-import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JProgressBar
@@ -98,18 +101,36 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         swapContent(placeholderLabel)
     }
 
+    /**
+     * T-UiNative T-UN-10：文本 JButton 按钮行 → 平台 ActionToolbar 图标动作组。
+     * 图标均为 AllIcons 既有常量（javap 243 app-client.jar 核实：缩放/导出键都在 General，
+     * Actions 组无 Zoom、Export 字段）；原按钮文案键转 tooltip（presentation.description），
+     * 不新增 bundle 键。
+     */
     private fun buildToolbar(): JComponent {
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2))
-        toolbar.isOpaque = false
-        toolbar.border = JBUI.Borders.empty(2, 8, 2, 4)
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.zoomIn")).apply { addActionListener { zoomIn() } })
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.zoomOut")).apply { addActionListener { zoomOut() } })
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.zoomReset")).apply { addActionListener { zoomReset() } })
-        toolbar.add(javax.swing.JSeparator(javax.swing.SwingConstants.VERTICAL))
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.exportPng")).apply { addActionListener { exportPng() } })
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.exportSvg")).apply { addActionListener { exportSvg() } })
-        return toolbar
+        val group = DefaultActionGroup(
+            diagramToolbarAction(AllIcons.General.ZoomIn, "diagram.zoomIn") { zoomIn() },
+            diagramToolbarAction(AllIcons.General.ZoomOut, "diagram.zoomOut") { zoomOut() },
+            diagramToolbarAction(AllIcons.General.ActualZoom, "diagram.zoomReset") { zoomReset() },
+        ).apply { addSeparator() } // 保留原「缩放 | 导出」分隔
+        group.add(diagramToolbarAction(AllIcons.General.Export, "diagram.exportPng") { exportPng() })
+        group.add(diagramToolbarAction(AllIcons.General.Export, "diagram.exportSvg") { exportSvg() })
+        val toolbar = ActionManager.getInstance()
+            .createActionToolbar("mpvs.diagram.toolbar", group, true)
+            .apply { targetComponent = this@DiagramPanel }
+        return toolbar.component
     }
+
+    /** 图标动作（T-UN-10）：icon 固定、tooltip 沿用原按钮 bundle 键、回调直通原按钮逻辑。 */
+    private fun diagramToolbarAction(icon: javax.swing.Icon, tipKey: String, action: () -> Unit): AnAction =
+        object : AnAction() {
+            override fun update(e: AnActionEvent) {
+                e.presentation.icon = icon
+                e.presentation.description = MpSqlVisualizerBundle.message(tipKey)
+            }
+
+            override fun actionPerformed(e: AnActionEvent) = action()
+        }
 
     fun showDiagram(model: DiagramModel) {
         if (model.isEmpty) { showPlaceholder(); return }
