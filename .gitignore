@@ -70,6 +70,7 @@ record/**/__pycache__/
 
 ### Plugin Verifier（校验产物，不进仓库） ###
 dev-support/verify-target/
+dev-support/verify-logs/
 verification-*/
 *.hprof
 

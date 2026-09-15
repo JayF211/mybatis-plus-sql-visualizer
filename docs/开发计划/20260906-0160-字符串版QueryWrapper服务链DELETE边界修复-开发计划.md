@@ -94,12 +94,12 @@ M37M38 记录的已知边界：字符串版 `QueryWrapper` 经 `service.remove(w
 
 ## 4. 验收标准
 
-- [ ] 字符串版 QueryWrapper 消费形态不再静默丢失语义：var+工厂渲染 DELETE（或真机差异已文档化），声明变量/内联形态回归锁定（S83~S85 全绿）
-- [ ] `service.query()` 字符串服务链可预览（S89），无法解析实体时返回显式降级警示而非 null（S90）
-- [ ] DELETE 消费不再丢 `last()` 尾段（S86）
-- [ ] 无 WHERE DELETE 必须有警示：S87 断言 warning 文本，复用既有 buildWarning 机制
-- [ ] 新增用例全绿 + 全量回归绿；M38.2 矩阵尾注删除、说明文档 §五 勘误完成（文档三处同步）
-- [ ] 全程未触碰 `plugin.xml`（无扩展点变更，跳过全量 verify 的约定不变）
+- [x] 字符串版 QueryWrapper 消费形态不再静默丢失语义：var+工厂渲染 DELETE（S88 绿），声明变量/内联形态回归锁定（S83~S85 全绿）
+- [x] `service.query()` 字符串服务链可预览（S89 绿），无法解析实体时返回显式降级警示而非 null（S90 绿；降级收窄为仅服务链形态，工厂/Kotlin/构造形态维持 null 语义）
+- [x] DELETE 消费不再丢 `last()` 尾段（S86 绿；方言渲染：MySQL 族输出 LIMIT，其他方言静默省略）
+- [x] 无 WHERE DELETE 必须有警示：S87 断言 warning 文本，复用既有 buildWarning 机制
+- [x] 新增用例全绿 + 全量回归绿（矩阵 91/0/0，定向家族 192/0/0，全量 3519/0/0/6）；M38.2 矩阵尾注删除、说明文档 §五 勘误完成（文档三处同步）
+- [x] 全程未触碰 `plugin.xml`（无扩展点变更，跳过全量 verify 的约定不变）
 
 ## 5. 风险
 
@@ -111,3 +111,4 @@ M37M38 记录的已知边界：字符串版 `QueryWrapper` 经 `service.remove(w
 ## 变更记录
 
 - 2026-09-06 T-StrWrapperDeleteWhere 立项：字符串版 QueryWrapper 服务链 DELETE 边界修复（探针实测修正预设——真实缺陷为 var+工厂消费语义丢失、service.query 无预览、DELETE 丢 last 三处，含无 WHERE 警示安全门用例锁定与 §五 文档勘误）。
+- 2026-09-06 T-StrWrapperDeleteWhere 交付：三处缺陷修复合入 feature/r2-o8-strwrapper-delete（046a724 基线锁定场景先行：S83~S85/S87 + specWarning helper + var 结果变量 one/count 反向守卫，修复前实证绿；d863292 三处修复 + S86/S88~S90 + M38.2 尾注删除）。实施要点：① var 判定走 typeElement 文本（getType() 在 LightPlatform 对不可解析 var 返回 null 型，不可依赖），新增 wrapperTypeFromInitializerChain 修工厂链首识别——原 detectWrapperTypeFromInitializer 沿 qualifier 回溯终点是引用（`Wrappers.<Device>query()` 链头判定落空），工厂调用自身即链首；② 缺陷B 实体第三通道挂 buildChainFromFactory 解析链末位，降级收窄为仅服务链形态（LocatedWrapper.entityResolutionFailed，接收者非静态工厂类才置位）；③ DELETE 尾段承载取 LimitClause 复用（非 rawLast），方言渲染由 Dialect.supportsDeleteLimit（MySQL/MariaDB/DM true）决定。测试：矩阵 91/0/0、定向家族 192/0/0、全量 3519/0/0/6 绿。步骤 8（runIde 真机抽查 var 与 service.query 各一例）未执行——runIde 真机验证待补。

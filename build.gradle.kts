@@ -43,6 +43,24 @@ if (gifRecord) {
     }
 }
 
+// T-McpToolset：MCP Server 插件（com.intellij.mcpServer）编译期 API 桩源集。
+// 基线平台 243 不含 mcpServer 插件，而本机 262 内置 mcpserver.jar 类文件是 major 69（Java 25），
+// JDK 17 编译读不了（javac 17/21 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——
+// 故用桩源码提供与真实 jar 完全一致的编译期签名（签名逐条 javap 自 262 jar，见桩文件头注释）。
+// 接线方式（防 task 依赖环）：
+//  - 主编译任务 compileKotlin.libraries 挂桩产物目录（task 依赖：compileKotlin → compileKotlinMcpStub）；
+//  - 桩源集编译类路径复用 main 的 compileClasspath（平台 jar/stdlib/JSqlParser 等，不含桩产物，
+//    天然无环——若桩 classpath 反向含 main.compileClasspath 且 main 含桩产物则成环）；
+//  - 桩产物只进编译 classpath，**不进运行时与打包产物**（运行时类型由平台内置插件提供，
+//    253+/262 内置；插件 jar 携带 com.intellij.mcpserver.* 会与平台类冲突）。
+val mcpStub: SourceSet by sourceSets.creating
+
+sourceSets {
+    named("mcpStub") {
+        compileClasspath += sourceSets.main.get().compileClasspath
+    }
+}
+
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     testImplementation(libs.junit)
@@ -183,12 +201,84 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         "-Dhttps.proxyHost=127.0.0.1",
         "-Dhttps.proxyPort=7890"
     )
+    // T-McpToolset：243 目标两类「永不可达」缺类豁免（-ignored-problems；清单文件内含完整定案）。
+    // 1) com.intellij.mcpserver.*：平台可选插件类型，mcp-optional.xml 仅在其存在时加载；
+    // 2) kotlin.coroutines.jvm.internal.SpillingKt：K2 挂起帧 null-out 内在函数，仅 mcp 框架
+    //    回调形态发射，243 平台 stdlib（Kotlin 2.0.x）无此类。
+    // 两者在 243 均零可达（适配类零实例化），豁免不计失败但报告留痕；作用域由
+    // McpScopeSourceScanTest 守卫，引用越包即回退本豁免。手工实证：243 单目标
+    // -offline -ignored-problems → exit 0（2026-09-15）；-external-prefixes 对这两类问题无效。
+    ignoredProblemsFile.set(layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt"))
+    // IPGP 2.18.1 的任务级判定不采纳 CLI -ignored-problems 的豁免（验证器 exit 0 / 报告已豁免，
+    // 任务仍从控制台文本重数 COMPATIBILITY_PROBLEMS 判失败，且存在输出解析竞态——同输入一次过
+    // 一次挂，三轮实证）。兼容门禁由下方 verifyGate 承担，本任务降级为报告/弃用清单生成器。
+    failureLevel.set(
+        VerifyPluginTask.FailureLevel.entries - setOf(VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS),
+    )
+}
+
+// T-McpToolset：权威兼容门禁——直驱 verifier-cli（-offline 断 marketplace 网络抖动，
+// -ignored-problems 豁免清单见 dev-support/verifier-ignored-problems.txt）。手工三跑实证
+// exit 0（online/offline × 243 单目标），IPGP 的 verifyPlugin 封装做不到（见上）。
+val verifyGate = tasks.register<JavaExec>("verifyGate") {
+    group = "verification"
+    description = "发行兼容门禁：verifier-cli -offline -ignored-problems 三目标直验（绕过 IPGP 豁免判定缺陷）"
+    dependsOn("buildPlugin")
+    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+    // 配置期捕获（configuration cache 兼容：执行期不触达 project state）
+    val pluginVersion = providers.gradleProperty("version").get()
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifier").get().asFile
+    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val ignoredFile = rootProject.file("dev-support/verifier-ignored-problems.txt")
+    val gradleUserHome = gradle.gradleUserHomeDir
+    classpath(
+        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+            .walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+    )
+    argumentProviders.add(CommandLineArgumentProvider {
+        val guh = gradleUserHome
+        fun ideDir(name: String): File =
+            guh.resolve("caches").listFiles()?.asSequence()
+                ?.filter { it.resolve("transforms").isDirectory }
+                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+                ?.map { hash -> hash.resolve("transformed").resolve(name) }
+                ?.firstOrNull { it.isDirectory }
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin）")
+
+        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
+        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（runtime-dir 必需）")
+        buildList {
+            add("check-plugin")
+            add("-offline")
+            add("-ignored-problems")
+            add(ignoredFile.absolutePath)
+            add("-verification-reports-dir")
+            add(reportsDir.absolutePath)
+            add("-runtime-dir")
+            add(jbr.absolutePath)
+            add("-verification-reports-formats")
+            add("plain,html")
+            add(zipFile.absolutePath)
+            add(ide243.absolutePath)
+            add(ideDir("idea-2025.3.5-win").absolutePath)
+            add(ideDir("idea-2026.2.1-win").absolutePath)
+        }
+    })
 }
 
 kotlin {
     // T-GifRecordSwitch：常规态 243 平台用 17；录制态 262 平台类文件为 v69，
     // 须 javac 24 才能读（javac 17/21 报「错误的版本 69.0」）。
     jvmToolchain(if (gifRecord) 24 else 17)
+}
+
+// T-McpToolset：主编译 classpath 追加 MCP 桩产物（详见文件头 mcpStub 源集注释）。
+// 只挂编译任务 libraries，不动 runtime classpath/打包——桩不进插件 jar。
+tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileKotlin") {
+    libraries.from(sourceSets.named("mcpStub").map { it.output })
 }
 
 // Java 源文件使用 UTF-8 编码（与 Kotlin 一致）；Windows 默认 GBK 会导致中文注释/字符串编译失败
@@ -482,7 +572,7 @@ tasks {
     register("verifyFull") {
         group = "verification"
         description = "发布前全量验证（三版本 243+253+262，约 14min）"
-        dependsOn("verifyPlugin")
+        dependsOn("verifyGate")
     }
 
     // M28（内测通道改造）：生成更新清单 update/update.json（Gitee 抢先体验通道数据源）——

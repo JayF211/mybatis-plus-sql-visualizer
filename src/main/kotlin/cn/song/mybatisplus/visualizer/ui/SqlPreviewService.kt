@@ -96,6 +96,24 @@ class SqlPreviewService(private val project: Project) {
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
     private val cache = WrapperCache()
 
+    init {
+        // T-PerfTail #1：编辑器关闭即清理该文件的 WrapperCache 条目——长会话中条目数随打开
+        // 文件集有界（LRU 512 上限之外的主动回收）。连接绑定 project Disposable，项目关闭自动注销。
+        // FileEditorManagerListener 的 fileClosed 携带 VirtualFile，与 WrapperCache 键的
+        // VirtualFile.url 字符串维度（T-Perf-18）直接对齐。
+        project.messageBus.connect(project).subscribe(
+            com.intellij.openapi.fileEditor.FileEditorManagerListener.FILE_EDITOR_MANAGER,
+            object : com.intellij.openapi.fileEditor.FileEditorManagerListener {
+                override fun fileClosed(
+                    source: com.intellij.openapi.fileEditor.FileEditorManager,
+                    file: com.intellij.openapi.vfs.VirtualFile,
+                ) {
+                    cache.evictFile(file.url)
+                }
+            },
+        )
+    }
+
     // T-TenantLine 诊断日志：输出注入决策链路（开关值/列名/语句类型/跳过原因），
     // 供沙盒排查「开启租户但不拼接」问题（无日志 = 本方法未被调用）。
 
@@ -202,6 +220,24 @@ class SqlPreviewService(private val project: Project) {
         // 1. Wrapper 转换（优先）
         effectiveLocated?.let { located ->
             val table = located.table ?: run {
+                // O-8（缺陷 B）：字符串服务链实体解析失败（三通道与方法引用推断全失败）→
+                // 返回带显式警示的空结果（面板红字），不再静默 return null——
+                // 「返回 null = 非 wrapper 锚点」契约收窄保留：仅 located 带 entityResolutionFailed
+                // 标记（服务链形态）时降级，工厂/Kotlin/构造形态与其余锚点行为不变
+                if (located.entityResolutionFailed) {
+                    LOG.info("preview: DEGRADE table=null, wrapperType=${located.chain.wrapperType}, " +
+                             "anchor=${anchor.textRange}")
+                    return PreviewResult(
+                        sql = "",
+                        compactSql = "",
+                        unresolvedParams = emptyList(),
+                        paramTable = null,
+                        wrapperType = located.chain.wrapperType,
+                        tableName = null,
+                        warning = "⚠ 字符串服务链无法推断实体表：Wrapper 链未携带实体类型" +
+                            "（无 <实体> 类型实参，服务接口/调用返回类型也无实体泛型），SQL 无法生成",
+                    )
+                }
                 LOG.info("preview: RETURN_NULL table=null, wrapperType=${located.chain.wrapperType}, " +
                          "anchor=${anchor.textRange}")
                 return null
@@ -245,8 +281,12 @@ class SqlPreviewService(private val project: Project) {
                 // 多表删除目标（delete(Class...)/deleteAll()）由 DeleteJoinConverter 处理（下方 else）
                 located.chain.deleteConsumed &&
                     (located.chain.wrapperType.isQueryLike() || located.chain.wrapperType == WrapperType.LAMBDA_UPDATE) &&
-                    located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES ->
-                    DeleteStatement(table, QueryWrapperParser(table).parse(located.chain).conditions)
+                    located.chain.wrapperType !in UPDATE_DELETE_JOIN_TYPES -> {
+                    val parsed = QueryWrapperParser(table).parse(located.chain)
+                    // O-8（缺陷 C）：`last("LIMIT n")` 尾段透传 DELETE 渲染（此前落在 SelectStatement
+                    // 独有字段被静默丢弃；跨方言渲染与否由 SqlGenerator 按 [Dialect.supportsDeleteLimit] 决定）
+                    DeleteStatement(table, parsed.conditions, limit = parsed.limit)
+                }
                 else -> ConverterRegistry.convert(located.chain, table) ?: return null
             }
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`

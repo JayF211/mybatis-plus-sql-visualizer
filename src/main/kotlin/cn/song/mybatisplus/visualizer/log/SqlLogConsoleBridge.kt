@@ -366,8 +366,11 @@ open class SqlLogConsoleBridge(
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * `getEditor` 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
      * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
-     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次 O(文档大小) 拷贝（缓存为
-     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次拷贝，无正确性影响）。
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次行 0 提取成本（缓存为
+     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次，无正确性影响）。
+     * T-PerfTail #3：行 0 读取零拷贝——`getCharsSequence()`（CharSequence 视图，不复制）
+     * 取首行 subSequence 再 toString，仅付 O(行 0 长度) 拷贝，替代旧 `getText()` 的
+     * O(文档大小) 全文档拷贝（数十 MB 控制台文档混合态窗口的残余风险收口）。
      */
     private fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
         runCatching {
@@ -377,7 +380,7 @@ open class SqlLogConsoleBridge(
             val getDoc = editor.javaClass.getMethod("getDocument")
             val doc = getDoc.invoke(editor) ?: return
             val getStamp = doc.javaClass.getMethod("getModificationStamp")
-            val getText = doc.javaClass.getMethod("getText")
+            val getCharsSequence = doc.javaClass.getMethod("getCharsSequence")
             ctx.docStampReader = {
                 runCatching {
                     (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
@@ -389,7 +392,8 @@ open class SqlLogConsoleBridge(
                 runCatching {
                     val stamp = (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
                     if (stamp != cachedStamp) {
-                        cachedLine0 = (getText.invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                        val seq = getCharsSequence.invoke(doc) as? CharSequence
+                        cachedLine0 = seq?.let { firstLineText(it) }
                         cachedStamp = stamp
                     }
                     cachedLine0
@@ -519,6 +523,17 @@ open class SqlLogConsoleBridge(
         internal fun nextFastDelay(currentMs: Int, backoff: Boolean): Int =
             if (!backoff) FAST_POLL_INTERVAL_MS
             else (currentMs * 2).coerceAtMost(POLL_INTERVAL_MS)
+
+        /**
+         * T-PerfTail #3：行 0 文本零拷贝提取（纯函数便于单测）——对 CharSequence 视图只读前缀
+         * 后 toString（O(首行长度)），不再全文档拷贝。语义与旧 `getText().lineSequence().firstOrNull()`
+         * 逐一对齐：空文档 → null（守卫按 Reset 处理）；无换行 → 全文；`\n` 开头 → 空串（首行为空行）。
+         */
+        internal fun firstLineText(seq: CharSequence): String? =
+            if (seq.isEmpty()) null
+            else seq.indexOf('\n').let { nl ->
+                if (nl >= 0) seq.subSequence(0, nl).toString() else seq.toString()
+            }
 
         /** T-LogPerf-03：短路判定（纯函数便于单测）——已知 console 且已挂载时跳过重新扫描。 */
         internal fun shouldSkipRescan(cachedConsole: Any?, attachedConsoles: Collection<Any>): Boolean =

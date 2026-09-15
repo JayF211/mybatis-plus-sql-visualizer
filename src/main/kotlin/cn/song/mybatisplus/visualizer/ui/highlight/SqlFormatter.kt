@@ -388,6 +388,13 @@ object SqlFormatter {
         if (tokens.isEmpty()) return sql.trim()
         val first = tokens.firstOrNull { it.first != SqlTokenTypes.COMMENT } ?: return format(sql)
         if (first.first != SqlTokenTypes.KEYWORD || first.second.uppercase() != "INSERT") {
+            // T-PreviewUx-Pack #1：UPDATE → SET 各项行尾追加「列名 (new) = 表达式」标注（吸收 DBX
+            // UPDATE 预览 (new) 列口径：SET 表达式原样搬——按旧值求值即得新值，自引用 a = a + 1 亦正确）。
+            // 标注以行尾注释呈现（T-VPairAnno 同款范式），不破坏 SQL 可执行性；开关复用 annotatePairs
+            //（verticalPairAnnotation 设置，竖排标注族同一开关）。
+            if (first.first == SqlTokenTypes.KEYWORD && first.second.uppercase() == "UPDATE") {
+                return annotateUpdateNewColumns(expandHorizontalGroups(format(sql)), tokens, annotatePairs)
+            }
             // T-VStack·扩面：非 INSERT = format 全展开 + 横向组展开后处理（IN 列表/ORDER BY/
             // GROUP BY/FROM 联表纵向化），与「格式化」按钮产出可区分
             return expandHorizontalGroups(format(sql))
@@ -652,6 +659,192 @@ object SqlFormatter {
             }
         }
         return emptyList()
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewUx-Pack #1：UPDATE 预览 (new) 列（吸收 DBX dml_preview_sql 纯函数口径）
+    // ------------------------------------------------------------------
+
+    /** SET 赋值项：列名（token 原文紧贴拼合）+ 表达式（token 渲染，运算符空格/函数括号紧贴）。 */
+    internal data class UpdateSetAssignment(val column: String, val expression: String)
+
+    /** SET 段终止关键字（顶层新主子句开始；沿用 NEW_LINE_KEYWORDS，剔除 SET 自身）。 */
+    private val SET_TERMINAL_KEYWORDS = NEW_LINE_KEYWORDS - "SET"
+
+    /**
+     * 解析 UPDATE 语句 SET 子句 → 列名/表达式分离（纯函数，无 PSI，headless 可测）。
+     *
+     * 口径（DBX dml_preview_sql.rs）：SET 表达式**原样搬**——按旧行值求值即得新值，
+     * 自引用（`a = a + 1`）原样即正确。顶层逗号切分各项，括号内逗号（函数参数/嵌套表达式）
+     * 不切分；每项以首个顶层 `=` 分离列名与表达式；无 `=`/表达式为空的项跳过（不标注）。
+     */
+    internal fun parseUpdateSetAssignments(tokens: List<Pair<IElementType, String>>): List<UpdateSetAssignment> {
+        // 1) 定位 UPDATE 后首个顶层 SET（防表名恰为 set 的误匹配）
+        var depth = 0
+        var setIdx = -1
+        var seenUpdate = false
+        var i = 0
+        while (i < tokens.size) {
+            val (type, text) = tokens[i]
+            when {
+                type == SqlTokenTypes.PAREN && text == "(" -> depth++
+                type == SqlTokenTypes.PAREN && text == ")" -> depth--
+                type == SqlTokenTypes.KEYWORD && depth == 0 -> {
+                    val upper = text.uppercase()
+                    if (upper == "UPDATE" && !seenUpdate) {
+                        seenUpdate = true
+                    } else if (upper == "SET" && seenUpdate) {
+                        setIdx = i
+                        break
+                    }
+                }
+            }
+            i++
+        }
+        if (setIdx < 0) return emptyList()
+        // 2) SET 段收集各项：顶层逗号切分，终止于下一个顶层主子句关键字
+        val items = ArrayList<List<Pair<IElementType, String>>>()
+        var cur = ArrayList<Pair<IElementType, String>>()
+        depth = 0
+        var j = setIdx + 1
+        while (j < tokens.size) {
+            val (type, text) = tokens[j]
+            when {
+                type == SqlTokenTypes.COMMENT -> {}
+                type == SqlTokenTypes.PAREN && text == "(" -> {
+                    depth++
+                    cur += tokens[j]
+                }
+                type == SqlTokenTypes.PAREN && text == ")" -> {
+                    depth--
+                    cur += tokens[j]
+                }
+                type == SqlTokenTypes.OPERATOR && text == "," && depth == 0 -> {
+                    if (cur.isNotEmpty()) items += cur
+                    cur = ArrayList()
+                }
+                type == SqlTokenTypes.KEYWORD && depth == 0 && text.uppercase() in SET_TERMINAL_KEYWORDS -> return finishUpdateSetItems(items, cur)
+                else -> cur += tokens[j]
+            }
+            j++
+        }
+        return finishUpdateSetItems(items, cur)
+    }
+
+    /** 各项按首个顶层 `=` 分离列名/表达式（无 `=`/表达式空的项跳过）。 */
+    private fun finishUpdateSetItems(
+        items: List<List<Pair<IElementType, String>>>,
+        tail: List<Pair<IElementType, String>>,
+    ): List<UpdateSetAssignment> {
+        val all = if (tail.isNotEmpty()) items + listOf(tail) else items
+        return all.mapNotNull { item ->
+            val eqIdx = item.indexOfFirst { it.first == SqlTokenTypes.OPERATOR && it.second == "=" }
+            if (eqIdx <= 0) return@mapNotNull null
+            val exprTokens = item.subList(eqIdx + 1, item.size)
+            if (exprTokens.isEmpty()) return@mapNotNull null
+            UpdateSetAssignment(
+                column = concatTokenText(item.subList(0, eqIdx)),
+                expression = renderTokenText(exprTokens),
+            )
+        }
+    }
+
+    /** token 原文紧贴拼合（列名形态：`age` / `t.a` / `` `order` ``）。 */
+    private fun concatTokenText(tokens: List<Pair<IElementType, String>>): String =
+        tokens.joinToString("") { it.second }
+
+    /**
+     * token 渲染为表达式文本（与 INSERT 组元素渲染同款空格规则：运算符两侧空格、点号紧贴、
+     * 函数名后括号紧贴、逗号后空格）。
+     */
+    private fun renderTokenText(elem: List<Pair<IElementType, String>>): String {
+        val s = StringBuilder()
+        var space = false
+        var prev = ""
+        for ((type, text) in elem) {
+            when {
+                text == "(" -> {
+                    if (prev.uppercase() !in FUNCTION_NAMES && space && s.isNotEmpty()) s.append(' ')
+                    s.append('(')
+                    space = false
+                }
+                text == ")" -> {
+                    s.append(')')
+                    space = true
+                }
+                text == "." -> {
+                    s.append('.')
+                    space = false
+                }
+                text == "," -> {
+                    s.append(',')
+                    space = true
+                }
+                else -> {
+                    if (space && s.isNotEmpty()) s.append(' ')
+                    s.append(text)
+                    space = true
+                }
+            }
+            prev = text
+        }
+        return s.toString()
+    }
+
+    /**
+     * UPDATE 竖排产物追加 (new) 列标注：SET 段内匹配到 [parseUpdateSetAssignments] 项的行，
+     * 行尾追加 `-- 列名 (new) = 表达式`（T-VPairAnno 行尾标注同款范式，不破坏 SQL 可执行性）。
+     * 幂等：已有同名 `(new)` 标注（行尾注释或独立注释行，format 会把行尾注释拆为独立行）不重复追加。
+     */
+    private fun annotateUpdateNewColumns(formatted: String, tokens: List<Pair<IElementType, String>>, annotate: Boolean): String {
+        if (!annotate) return formatted
+        val assignments = parseUpdateSetAssignments(tokens)
+        if (assignments.isEmpty()) return formatted
+        val lines = formatted.split("\n")
+        // 第一遍：全量收集已有 (new) 标注列名——format 会把行尾注释拆为独立行（位于其 SET 项行
+        // 下方），逐行边收集边追加会漏掉下方注释导致重复标注
+        val annotatedCols = HashSet<String>()
+        lines.forEach { line -> existingNewColumnAnnotation(line.trim())?.let { annotatedCols += it } }
+        // 第二遍：SET 段内匹配项追加行尾标注
+        val out = StringBuilder(formatted.length + 64)
+        var inSetClause = false
+        lines.forEachIndexed { idx, line ->
+            val trimmed = line.trim()
+            val lineTokens = lex(trimmed)
+            val firstTok = lineTokens.firstOrNull()
+            if (firstTok != null && firstTok.first == SqlTokenTypes.KEYWORD) {
+                val upper = firstTok.second.uppercase()
+                when {
+                    upper == "SET" -> inSetClause = true
+                    upper in NEW_LINE_KEYWORDS -> inSetClause = false
+                }
+            }
+            var lineOut = line
+            if (inSetClause && trimmed.isNotEmpty() && !trimmed.startsWith("--")) {
+                val eqIdx = lineTokens.indexOfFirst { it.first == SqlTokenTypes.OPERATOR && it.second == "=" }
+                if (eqIdx > 0) {
+                    val col = concatTokenText(lineTokens.subList(0, eqIdx))
+                    val assignment = assignments.firstOrNull { it.column == col }
+                    if (assignment != null && col !in annotatedCols) {
+                        annotatedCols += col
+                        lineOut = line.trimEnd() + "  -- " + col + " (new) = " + assignment.expression
+                    }
+                }
+            }
+            if (idx > 0) out.append('\n')
+            out.append(lineOut)
+        }
+        return out.toString()
+    }
+
+    /** 提取行内已有 `(new)` 标注的列名（`-- col (new) = ...`；无标注返回 null）。 */
+    private fun existingNewColumnAnnotation(trimmed: String): String? {
+        val idx = trimmed.lastIndexOf("--")
+        if (idx < 0) return null
+        val comment = trimmed.substring(idx + 2).trim()
+        val newIdx = comment.indexOf("(new)")
+        if (newIdx <= 0) return null
+        return comment.substring(0, newIdx).trim()
     }
 
     /**

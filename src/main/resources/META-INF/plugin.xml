@@ -24,11 +24,12 @@
     <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
     <description><![CDATA[
         <p><b>See the exact SQL your code will run — before the server starts.</b> SQL Visualizer turns MyBatis-Plus Wrapper chains, XML mappers, annotation SQL, JPA/Hibernate queries and JdbcTemplate string SQL into readable, executable SQL with real parameter values, right inside IntelliJ IDEA.</p>
+        <p>Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line — continuously adapted.</p>
         <h3>Highlights</h3>
         <ul>
             <li><b>All SQL sources covered</b>: Lambda / Query / Update / Delete Wrappers &amp; service chains, MPJ join wrappers, mapper XML dynamic tags (if / foreach / choose ...), <code>@Select</code> annotation SQL, Spring Data <code>findByXxx</code>, CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate &amp; custom-DAO string SQL</li>
             <li><b>Real parameters, one click</b>: <code>?</code> placeholders replaced with actual values (LIKE auto-wildcard, type-aware quoting); OGNL condition checkboxes; auto formatting for 9 database dialects</li>
-            <li><b>Live SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering, per-statement color marks and precise jump-to-source</li>
+            <li><b>Live MyBatis SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering, per-statement color marks and precise jump-to-source</li>
             <li><b>SQL → Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD &amp; joins)</li>
             <li><b>JOIN diagram &amp; execution</b>: native IDE ER diagram with PNG / SVG export; execute SQL and one-click EXPLAIN plans in an embedded native Database console (Ultimate)</li>
             <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
@@ -39,11 +40,12 @@
         <p>Found an issue? Please report it at the <a href="https://sql-visualizer.jvtools.cn/about/feedback">Feedback Pool</a>.</p>
         <hr/>
         <p><b>服务未启，SQL 先知</b>——SQL Visualizer 在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填。</p>
+        <p>支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x），持续适配。</p>
         <h3>核心能力</h3>
         <ul>
             <li><b>SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose 等）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>
             <li><b>真实参数一键回填</b>：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；OGNL 条件勾选模拟；9 种数据库方言自动格式化</li>
-            <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、按语句类型着色标记、精确跳转源码</li>
+            <li><b>MyBatis SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种控制台日志格式，去重过滤、按语句类型着色标记、精确跳转源码</li>
             <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL 与一键执行计划 EXPLAIN（Ultimate）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
@@ -78,6 +80,12 @@
          与 database 同为可选依赖；diagram-optional.xml 注册 diagram.Provider（SqlJoinDiagramProvider），
          Community / Diagrams 缺席时经 NativeJoinDiagramSupport 门面降级回自绘 DiagramPanel -->
     <depends optional="true" config-file="diagram-optional.xml">com.intellij.diagram</depends>
+
+    <!-- T-McpToolset MCP 能力一期：com.intellij.mcpServer（平台内置 MCP Server 插件，253+/262 内置，
+         243 不支持——旧 EP 形态适配成本>收益，见 CHANGELOG）——mcp-optional.xml 注册
+         mcpServer.mcpToolset（SqlVisualizerToolset 三只读工具）。未装该插件的环境整文件不加载，
+         插件其余功能零影响；编译期类型来自 mcpStub 桩源集（本机构建辅助，见 build.gradle.kts 注释） -->
+    <depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
@@ -202,9 +210,11 @@
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor"/>
 
-        <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
-             仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
-             （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
+        <!-- M28 插件更新：启动自动检查（开关默认关——稳定版更新由 JetBrains Marketplace 推送，
+             State.autoCheckUpdate=false，PluginSettings.kt 为权威；勾选「抢先体验」后静默检查
+             Gitee 通道，仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；
+             分组显示名走 bundle（NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：
+             bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.updates"
@@ -228,6 +238,9 @@
 
         <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.log.LogStartupCapture"/>
+
+        <!-- T-PreviewUx-Pack #3：快捷模板默认键位冲突检测（应用级单次——冲突换绑备选键位 + 通知提示） -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.actions.SqlTemplateShortcutConflictCheck"/>
 
         <!-- T-M31 日志还原：MyBatis SQL 日志工具窗口（自动监听运行控制台 Preparing/Parameters
              → 还原可执行 SQL；交互参考 MybatisCodeHelperPro「MyBatis Log」面板）
@@ -293,6 +306,41 @@
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
+
+        <!-- T-PreviewUx-Pack #3：${table} 快捷模板三动作（选中表名一键 EXPLAIN / COUNT / 抽样 10 行；
+             三动作共享一个 group 注册 EditorPopupMenu，与「生成 CRUD SQL」入口并存不合并菜单；
+             执行走既有内嵌控制台链路（DataSourceSelector + SqlExecutor），凭证不出 IDE；
+             默认键位冲突由 SqlTemplateShortcutConflictCheck 启动检测并换绑备选键位 + 提示） -->
+        <group id="cn.song.mybatisplus.visualizer.SqlTemplateGroup"
+               popup="true"
+               text="action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.text"
+               description="action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.description">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <action id="cn.song.mybatisplus.visualizer.ExplainSelectedTable"
+                    class="cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction"
+                    text="action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text"
+                    description="action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.description"
+                    icon="/icons/sqlGutter.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift E"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift E"/>
+            </action>
+            <action id="cn.song.mybatisplus.visualizer.CountSelectedTable"
+                    class="cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction"
+                    text="action.cn.song.mybatisplus.visualizer.CountSelectedTable.text"
+                    description="action.cn.song.mybatisplus.visualizer.CountSelectedTable.description"
+                    icon="/icons/sqlGutter.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift C"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift C"/>
+            </action>
+            <action id="cn.song.mybatisplus.visualizer.SampleSelectedTable"
+                    class="cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction"
+                    text="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text"
+                    description="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.description"
+                    icon="/icons/sqlGutter.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift T"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift T"/>
+            </action>
+        </group>
 
         <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
              对话框底部提供带 source/ideVersion/pluginVersion 参数的浏览器兜底链接） -->

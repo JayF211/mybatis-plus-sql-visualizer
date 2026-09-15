@@ -257,6 +257,10 @@ object SqlGenerator {
      * `DELETE t, t1 FROM 表名 t`（主表别名拼在 FROM 后）+ joins + WHERE——
      * `DELETE t,t1 FROM user t LEFT JOIN address t1 ON (t1.user_id = t.id) WHERE (t.id = ?)`。
      * deleteTargets 为空（单表删除）走既有 `DELETE FROM 表名` 形态，回归不变。
+     *
+     * O-8（缺陷 C）：`last("LIMIT n")` 尾段渲染于语句末尾（MP 语义 MySQL `DELETE ... LIMIT n`）——
+     * 仅 [Dialect.supportsDeleteLimit] 为 true 的方言（MySQL 语法族）输出，
+     * PostgreSQL/Oracle 等不支持的方言静默省略（与分页子句方言策略一致）。
      */
     private fun generateDelete(
         statement: DeleteStatement,
@@ -279,6 +283,9 @@ object SqlGenerator {
             sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds, dialect))
         }
         appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table, dialect)
+        statement.limit?.takeIf { dialect.supportsDeleteLimit }?.let { limit ->
+            sb.append(nl).append(dialect.renderLimit(limit))
+        }
         return sb.toString()
     }
 

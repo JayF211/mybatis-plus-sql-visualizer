@@ -2,6 +2,21 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+### Added
+
+- **SQL 预览一键生成回滚 SQL（T-RollbackSql，r2 分支合流）**：预览面板按钮行新增「回滚」按钮（执行计划之后、刷新之前），对当前预览的 INSERT / UPDATE / DELETE 生成对应逆向 SQL（INSERT→DELETE 按主键、UPDATE→SET 还原原值、DELETE→按 WHERE 重插），弹窗展示并一键复制；快照存取 `RollbackSnapshotStore` 纯逻辑可测
+
+- **预览交互吸收包四件套（T-PreviewUx-Pack，DBX 精华吸收 #1~#4）**：① UPDATE 预览 (new) 列——竖排模式 SET 各项行尾追加「列名 (new) = 表达式」行尾标注（表达式原样搬，自引用 `a = a + 1` 原样即新值；T-VPairAnno 同款范式不破坏 SQL 可执行性）；② 诚实降级横幅——预览面板/日志转 SQL 面板内嵌非模态提示（渲染警示、日志还原失败、T-PreviewExecDs 降级链层级三触发面，文案三要素：哪段没还原/为什么/能做什么，绝不静默）；③ `${table}` 快捷模板——mapper/预览编辑器选中文本一键 EXPLAIN / COUNT / 抽样 10 行（右键菜单 SQL 快捷模板组 + Alt+Shift+E/C/T，默认键位冲突自动换绑备选键位并提示；走原生 Database 控制台链路）；④ 多语句执行确认——日志转 SQL 产物一键执行，单条直通、多条弹候选勾选浮层（T-CrudSql 原生形态：无按钮/Enter/双击/速度搜索）
+
+- **注册进平台 MCP Server 的三只读工具（T-McpToolset，MCP 能力一期）**：`<depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>` 注册 `mcpServer.mcpToolset`，`SqlVisualizerToolset` 三工具面向外部 agent（Claude Code / Cursor / AI Assistant / Junie 经 `use_idea_mcp` 等）暴露——`mpsv_render_sql`（文件+行号或 mapper XML 片段 → 13 类触发面渲染链的真实可执行 SQL，参数回填+降级说明）、`mpsv_schema_context`（表名白名单 → 数据源真实表列注释紧凑上下文，max_tables 默认 8 上限 20 DBX 口径）、`mpsv_explain`（单条 SELECT → 七方言 EXPLAIN 计划文本，headless 同步建连通道）。全部只读三 hint 显式声明（readOnly/idempotent=TRUE、destructive=FALSE），SELECT 白名单 fail closed（JSqlParser 结构判定+关键字粗扫双保险，剥离字面量防误杀），零弹窗（拒绝走 `McpExpectedError`、建连 `setAskPassword(false)`），每次调用 idea.log `[MCP-AUDIT]` 审计。`isExperimental` 显式 false 进稳定工具集；编译期经 `src/mcpStub` 桩源集（262 mcpserver.jar v69 类文件 JDK17 读不了，桩签名逐条 javap 对齐且不进插件 jar）；新反射建连链全入口登记 `McpDbSignatureCrossVersionTest` 跨版本签名护栏。243 明确不支持（旧 EP 形态适配成本>收益），MCP 面需 IDEA 2025.2+（内置）；未装 MCP Server 插件的环境整份 optional 文件不加载零影响。i18n 零新键（agent 文案为英文常量不进 bundle）。verifyPlugin 三目标门禁定案：253 版 McpToolset 接口缺两默认方法 → 桩改抽象钩子强字面量覆写（跨版本桩按最小公共接口面建模）；243 永不可达缺类（mcpserver 类型 + K2 SpillingKt）经 ignored-problems 豁免留痕 + McpScopeSourceScanTest 作用域守卫。全量 **4204/0/0/6** 绿
+
+### Changed
+
+- **插件描述兼容承诺与 Log Free 迁移文案回补（N-6/N-7，r2 分支合流）**：插件描述（en/zh）补「Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line / 支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x）」兼容句；README 增「从 MyBatis Log Free 迁移？」段、理由升级为四条、Gitee 内测通道补 Marketplace 评分与一次性迁移指引；marketplace 页 FAQ 首条补适配承诺（新版 IDEA 正式版 5 个工作日内完成适配，Windows 计划任务每周自动 verifyPlugin 三目标兜底）
+
+- **性能长尾三项治理（T-PerfTail，性能调研报告 §9 发现点全收口）**：① WrapperCache 容量上限 512 + LRU 淘汰（accessOrder LinkedHashMap），编辑器关闭主动清理该文件条目（FileEditorManagerListener.fileClosed），三维修失效与「清除缓存」行为不变，极端长会话条目数有界；② 预览面板预热等待异步化——新增 PrewarmAwait（CompletableFuture + completeOnTimeout 超时预算等价），消除 EDT sleep-poll 形态，回调 invokeLater 回 EDT 装配，超时/失败走既有三级降级链；③ 重放守卫行 0 读取零拷贝——getCharsSequence 视图 subSequence 提取首行替代全文档拷贝（64MB 控制台文档混合态窗口风险收口）；④ plugin.xml 更新检查注释修正（默认关——稳定版由 Marketplace 推送，代码为权威）
 ## [2026.9.14] - 2026-09-14
 
 > 正式版：合并内测版 beta.1（Gitee 抢先体验通道已发行）、beta.2（仅提交未发行，内容直接并入本版）与 09-14 当日全部交付链。dev 分支回合条目（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等）此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 v2026.9.11 的用户可见增量。

@@ -102,4 +102,24 @@ master 已在 v2026.9.10 下线「生成测试」按钮（M37.4：静态骨架�
 4. m56 两分支不在本轮：agent 字节码增强合入前需按性能报告 §2 做独立评估，届时另立计划。
 5. 并行会话铁律：跑 Gradle 前查测试沙盒共享登记表（M26.1 台账）；占用默认沙盒时用 `-PparallelSandbox` 独立沙盒（T-PreviewExecDs 先例）。
 
+## 八、实施记录（2026-09-15 交付回填）
+
+**合流提交**：`4b5b964`（分支 `t-fourplans-20260914`，独立工作树 mpsv-fourplans；本轮四计划共采一集成链——T-MergeR2IntoMaster 先行，T-McpToolset / T-PreviewUx-Pack / T-PerfTail 三分支子工作树并行开发后逐个合入）。
+
+**冲突 9 文件**（merge-tree 预演与实际一致，计划预估 8 文件中 SqlPreviewPanel.kt 与双语 bundle 实际自动合并）：
+
+- WrapperSearchService.kt / WrapperSearchServiceTest.kt（delete/modify）：按 §3.1 保持 master 删除，`git rm`；O-6 增强废弃随本计划留档
+- Dialect.kt（计划未预料的新冲突——master 侧 T-ExplainDbl 在分叉后也改了该文件）：两侧接口尾部新增成员共存——master `renderExplainStatementIdempotent` + r2 `supportsDeleteLimit`（基类默认 false + MySQL 族三 override + SqlGenerator 消费链全在位）
+- plugin.xml：按 §3.3 以 master 9.14 重写描述为基，回补 r2 三处——en/zh 兼容承诺句 + 「MyBatis SQL log」搜索短语（EN Highlights 与 ZH 核心能力日志 bullet 内嵌）；r2 侧 `idea-plugin` 无 url 属性系分叉早于 master 加点，取 master
+- marketplace-custom-page.html：按 §3.5 名义执行但两处前提证伪——①hero「别的插件给你文本」三理由段 master 现行版 TAGLINE 区逐字在位，无回退可修；②「Log Free 迁移 FAQ」不在 r2 的 HTML（全树 grep 实证），实为 r2 README.md 的「## 从 MyBatis Log Free 迁移？」段。实际并入：FAQ 首条回补 r2 适配承诺段（5 工作日适配 + Windows 计划任务每周 verifyPlugin 三目标兜底），r2 旧 14 条 FAQ 形态不回潮（master 7 条精简定稿保持）
+- README.md：更新检查 bullet 取 master 热替换新版（T-DynUpdate 晚于分叉），回补 r2 独有 Marketplace 评分/一次性迁移指引 bullet；r2 四理由与兼容句块已被 master 现行版覆盖
+- CHANGELOG.md：取 master [2026.9.14] 块；r2 对 CHANGELOG 仅一行改动且系把 [Unreleased] 误改名 [2026.9.10]（63 提交交付物无条目）——弃该行，新增 [Unreleased] 块收录合流交付物（回滚 SQL 按钮 + 兼容承诺/Log Free 迁移文案回补）
+- docs/变更记录.md / docs/MEMORY.md：表格并集——r2 侧 T-RollbackSql 与 T-MergeDevR2Round3 两行按日期插回 09-12 组首位，master 09-14 全链行保持
+
+**语义终审**：SqlPreviewPanel.kt 按钮行自动合并落点与 §3.2 不符（回滚按钮在刷新之后），已手正为执行计划之后、刷新之前；预热三级降级链原样在位；特征符号八项核对全过（X1~X7 矩阵测试 45 处命中 / X8 / ci-verify.ps1 / 弹窗红线 / rollback 全链 / WrapperSearchService 仅存于历史计划文档、源码零残留 / rollback.* 31/31 parity / N-10 Ultra 报告随 20 个新文件带入——实际落 docs/开发计划/ 非本计划所述调研报告/，内容无损）。
+
+**验证**：全量 `./gradlew test` **4167/0/0/6 绿**（6m07s，独立工作树；1 例 CopyFeedbackUiTest 剪贴板竞争 flake 单类重跑绿，回归假失败清单在案）。verifyPlugin 三目标 + buildPlugin 留集成链终验（本轮四计划合并状态统一跑一次）。
+
+**附加交付**：ci-verify Windows 计划任务 `MPSqlVisualizer-WeeklyVerify` 本机重注册确认（-Force，Ready，每周三 03:00，下次 2026-09-16，任务体指向 dev 工作树路径与脚本注释一致）。O-6/N-9 状态标注随本节与 CHANGELOG [Unreleased] 落档。
+
 ## 八、实施记录（交付后回填）

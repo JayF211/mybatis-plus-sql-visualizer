@@ -62,6 +62,7 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
 
     fun testMapParamPrefixFallback() {
         // Map 入参：键 = @Param 值，任意属性前缀命中（面板兜底引号）
+        // T-GoldenDefense：@Param("map") 命名形态与同 FQN 双实体场景已锁定为金样 X8（下方两条）
         addSourceFile(
             "MapMapper.java",
             """
@@ -75,6 +76,45 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         )
         val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.MapMapper", "statistics")
         assertEquals(true, quotes["p"])
+    }
+
+    /** X8-1（T-GoldenDefense）：`@Param("map")` Map 参数 → 键 = 参数名（@Param 值）且值为引号。 */
+    fun testMapParamKeyEqualsParamNameWithQuote() {
+        addSourceFile(
+            "MapParamMapper.java",
+            """
+            package com.example;
+
+            public interface MapParamMapper {
+                java.util.Map<String, Object> queryByMap(
+                    @org.apache.ibatis.annotations.Param("map") java.util.Map<String, Object> map);
+            }
+            """.trimIndent(),
+        )
+        val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.MapParamMapper", "queryByMap")
+        assertEquals("X8-1: Map 参数键 = 参数名且值为引号", mapOf("map" to true), quotes)
+    }
+
+    /** X8-2（T-GoldenDefense）：同 FQN 双实体共存（多模块同名实体竞品翻车形态）——
+     *  resolveQuotes 不抛错，`map` 键存在且无实体字段混入（Map 参数不展开实体，命中顺序不锁定）。 */
+    fun testDuplicateFqnEntitiesLeaveMapQuotesIntact() {
+        addSourceFile("User.java", "package com.example;\n\npublic class User {\n    private Long id;\n}")
+        // 同 FQN 复制一份（不同文件同包同类名，字段不同）
+        addSourceFile("UserDup.java", "package com.example;\n\npublic class User {\n    private String name;\n}")
+        addSourceFile(
+            "DupFqnMapMapper.java",
+            """
+            package com.example;
+
+            public interface DupFqnMapMapper {
+                java.util.Map<String, Object> queryByMap(
+                    @org.apache.ibatis.annotations.Param("map") java.util.Map<String, Object> map);
+            }
+            """.trimIndent(),
+        )
+        val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.DupFqnMapMapper", "queryByMap")
+        assertEquals("X8-2: map 键存在且值为引号", true, quotes["map"])
+        assertEquals("X8-2: 同名实体不影响 Map 键（无字段混入）", mapOf("map" to true), quotes)
     }
 
     fun testNestedDtoAndNoParamAndPrimitive() {

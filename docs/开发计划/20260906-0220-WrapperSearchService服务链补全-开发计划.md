@@ -1,5 +1,7 @@
 # WrapperSearchService 服务链搜索补全（回退跳转覆盖 IService 链形态） 开发计划
 
+> **状态（2026-09-15 T-MergeR2IntoMaster 合流定案）**：**已随 T-JumpCapture 路线收敛，O-6 增强废弃**——master 侧用户定性「按表名搜 Wrapper 定位」不可用（同表名≠同调用点，命中即误导），WrapperSearchService 整族已删除、跳转仅依赖拦截器捕获位置 + 缺失三按钮引导；本文档随 r2 分支合流入库留档，不再实施。
+
 - **任务ID**：T-ServiceChainSearch
 - **立项时间**：2026-09-06 02:20
 - **分支**：`dev`
@@ -83,3 +85,4 @@
 ## 变更记录
 
 - 2026-09-06 T-ServiceChainSearch 立项：O-6 WrapperSearchService 服务链补全（IService 无参链起点 ReferencesSearch 复用 locateWithTable 判定 + 静态工厂简名→FQN 修复 + 候选上限）。
+- 2026-09-06 T-ServiceChainSearch 交付：§1 附加发现「简名 findClass 恒空」复现实证（heavy 集成用例：静态工厂/服务链代码在场均 0 候选，4 用例失败留证）后随本任务修复；服务链通道（IService 无参链起点，方法名过滤复用 serviceChainMethodNames）+ 简名→FQN 对照（五类全部本地 jar javap 实证）+ MAX_CANDIDATES=50 截断；测试基类由计划的 BasePlatformTestCase + myFixture.addClass 调整为 HeavyPlatformTestCase + 磁盘源码注入（本环境 myFixture.addClass 不可解析、Light 跨文件 resolve M27 已实证不可用，沿 InvocationMpjHeavyTest 先例），定向 12/12 绿、全量回归绿；README:76 与 docs/变更记录.md 同步。

@@ -48,6 +48,10 @@ data class SetClause(
  *                   单表删除为 null）
  * @param joins 联表子句（T-M21-08：DeleteJoinWrapper 渲染于 FROM 之后、WHERE 之前，
  *              `DELETE t,t1 FROM user t LEFT JOIN address t1 ON (...) WHERE ...`）
+ * @param limit 尾段（O-8 缺陷 C，T-StrWrapperDeleteWhere）：删除 wrapper 上 `last("LIMIT n")` 的
+ *              parseLimit 产物——MP 语义 MySQL `DELETE ... LIMIT n`；渲染与否由方言
+ *              （[cn.song.mybatisplus.visualizer.sql.Dialect.supportsDeleteLimit]）决定，
+ *              不支持的方言静默省略（与分页方言策略一致）
  */
 data class DeleteStatement(
     override val table: TableInfo,
@@ -55,4 +59,5 @@ data class DeleteStatement(
     val deleteTargets: List<String> = emptyList(),
     val tableAlias: String? = null,
     val joins: List<JoinClause> = emptyList(),
+    val limit: LimitClause? = null,
 ) : SqlStatement()

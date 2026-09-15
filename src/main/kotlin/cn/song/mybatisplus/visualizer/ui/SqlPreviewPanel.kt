@@ -183,6 +183,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
+
+    /**
+     * T-PerfTail #2：预热产物异步载体（消除 EDT sleep-poll）——prewarmPreviewTempFile 每次
+     * 预热新建（clear 重预热随之更新），createEditor 热态同步消费、冷态注册回调回 EDT 装配。
+     */
+    @Volatile
+    private var prewarmAwait: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>? = null
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     private var prewarmFailed = false
@@ -290,6 +297,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
 
+    // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
+    // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
+    private val degradationBanner = DegradationBanner()
+
     // P-05：参数历史缓存 + debounce 写回
     private val paramHistoryCache = ParamHistoryCache()
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
@@ -338,7 +349,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // M36.5：收边距与原生工具行对齐（上 6→4，右 8→8 保留）
             border = JBUI.Borders.empty(4, 8, 2, 8)
         }
-        add(topRow, BorderLayout.NORTH)
+        // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——渲染警示 /
+        // T-PreviewExecDs 降级链层级提示统一收口（触发即显示、恢复即隐藏，不占高度）
+        val northHost = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            isOpaque = false
+            add(topRow, BorderLayout.NORTH)
+            add(degradationBanner, BorderLayout.SOUTH)
+        }
+        add(northHost, BorderLayout.NORTH)
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
         topRow.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
@@ -389,14 +407,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private fun prewarmPreviewTempFile() {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+        // T-PerfTail #2：预热线程产出 PrewarmAwait 完成态（成功 complete / 失败 fail）——
+        // 消费侧（createEditor）不再 EDT sleep-poll
+        val await = PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>(PREWARM_WAIT_MS) { runnable ->
+            ApplicationManager.getApplication().invokeLater(runnable, com.intellij.openapi.application.ModalityState.any())
+        }
+        prewarmAwait = await
         ApplicationManager.getApplication().executeOnPooledThread {
-            if (previewTempFile != null || previewDisposed) return@executeOnPooledThread
+            if (previewTempFile != null || previewDisposed) {
+                await.fail(IllegalStateException("prewarm skipped: disposed or already prepared"))
+                return@executeOnPooledThread
+            }
             runCatching {
                 // T-PreviewExecDs-01a：预览临时文件迁项目内 .idea/sql-visualizer/preview/
                 // ——系统 Temp 不在数据源关联范围，Database 插件不解析（M36.5.12 exec 同教训，
                 // 预览路径此前未跟进；旧实现 09:34:40 起持续预热失败后回退裸文档，补全/注释全灭）。
                 val io = projectPreviewFile() ?: run {
                     prewarmFailed = true
+                    await.fail(IllegalStateException("project preview file unavailable"))
                     LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)")
                     return@executeOnPooledThread
                 }
@@ -413,11 +441,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
                 if (vf == null) {
                     prewarmFailed = true
+                    await.fail(IllegalStateException("VFS refresh null after ${retries + 1} tries"))
                     LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                     return@executeOnPooledThread
                 }
                 if (previewDisposed) {
                     java.io.File(vf.path).delete()
+                    await.fail(IllegalStateException("disposed during prewarm"))
                     return@executeOnPooledThread
                 }
                 val proj = project ?: return@executeOnPooledThread
@@ -428,13 +458,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
                 } ?: run {
                     prewarmFailed = true
+                    await.fail(IllegalStateException("PsiManager.findFile null for ${vf.name}"))
                     LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
                 prewarmedTempFile = vf to psi
+                await.complete(vf to psi)
             }.onFailure { e ->
                 prewarmFailed = true
+                await.fail(e)
                 LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             }
         }
@@ -498,25 +531,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
-     * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
-     * T-GifRerecord：预热线程已判定失败时立即返回 null（快速降级），不再空等 2s 预算。
+     * T-PerfTail #2：预热产物消费决策（替代原 `awaitPrewarmedTempFile` 的 EDT sleep-poll）。
+     *
+     *  - **热态（结果已出）**：同步取产物装配——主路径（成功）或快速降级（失败，原 prewarmFailed
+     *    快速返回语义），EDT 零等待；
+     *  - **冷态（预热线程未完成）**：`scheduleOnce` 注册完成回调，超时预算语义保留
+     *    （PrewarmAwait 内 completeOnTimeout，预算=PREWARM_WAIT_MS），回调统一回 EDT 装配——
+     *    EDT 零阻塞，超时/失败走降级链（T-PreviewExecDs 三级降级语义保留）；
+     *  - **单元测试模式**：无真实 EDT 泵，为保留既有测试「showResult 返回时编辑器即就绪」语义，
+     *    退回同步有界等待（awaitOrNullForTest，生产路径不走）。
+     *
+     * @return 产物（热态主路径非 null）；null = 本调用不装配（回调挂起中）或快速降级。
+     *         消费装配由调用方按 `assembled` 标志区分。
      */
-    private fun awaitPrewarmedTempFile(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
-        var waited = 0L
-        while (true) {
-            val ready = prewarmedTempFile?.also { prewarmedTempFile = null }
-            if (ready != null) return ready
-            if (prewarmFailed) return null
-            if (waited >= PREWARM_WAIT_MS) return null
-            try {
-                Thread.sleep(PREWARM_POLL_MS)
-                waited += PREWARM_POLL_MS
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return null
-            }
+    private fun resolvePreviewEditorSource(sql: String): Pair<Boolean, Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?> {
+        val await = prewarmAwait
+        if (await == null) return true to null
+        if (await.isDone()) return true to await.joinOrNull()
+        if (ApplicationManager.getApplication()?.isUnitTestMode == true) {
+            return true to await.awaitOrNullForTest()
         }
+        // 冷态：注册回调（幂等），本次渲染不装配（编辑器挂起至回调完成，≤ 超时预算）
+        await.scheduleOnce(
+            onReady = { pair ->
+                if (!previewDisposed) assemblePreviewEditor(sql, pair)
+            },
+            onFallback = {
+                if (!previewDisposed) assemblePreviewEditor(sql, null)
+            },
+        )
+        return false to null
     }
 
     /** T-DarkTheme：主题变更回调——重绘面板（命名色已自动更新，仅需触发 UI 刷新）。 */
@@ -578,6 +622,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
         // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
         add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })
+        // T-RollbackSql：回滚 SQL（预览窗口直达按钮——计划 F3 定案「分享之前」的原直达锚点
+        // 已随 T-PreviewTopOverlap F2 折叠进「更多」，按计划意图保持一键直达形态；
+        // T-MergeR2IntoMaster §3.2 定案：按钮行以 master 为基，回滚按钮插在执行计划之后、刷新之前）
+        add(smallButton(MpSqlVisualizerBundle.message("panel.rollbackSql")) { showRollbackSql() })
         add(smallButton(MpSqlVisualizerBundle.message("panel.refresh")) { refreshView() })
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         add(smallButton(MpSqlVisualizerBundle.message("panel.more")) { showMoreActionsPopup() })
@@ -615,6 +663,137 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
 
     /**
+     * T-RollbackSql：回滚 SQL 视图入口（面板【回滚SQL】按钮）。
+     *
+     * 生成结果分层（计划 §2.2）：Complete/Partial 打开 [RollbackSqlDialog]；可解析的
+     * UPDATE/DELETE（Unable 但有快照工作流）同样进视图——人工恢复指引 + 粘贴快照生成回滚；
+     * 完全不可推导（解析失败/MERGE/DDL/SELECT）不弹视图，仅消息框说明原因与人工恢复路径。
+     */
+    internal fun showRollbackSql() {
+        val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+        val kind = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+        val result = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(sql)
+        val entry = project?.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
+            ?.findBySql(sql)
+        if (result.rating == cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.Rating.UNABLE &&
+            result.snapshotSelectSql == null
+        ) {
+            val proj = project ?: return
+            val reasons = result.warnings.joinToString("\n") { warning ->
+                if (warning.messageArgs.isEmpty()) MpSqlVisualizerBundle.message(warning.messageKey)
+                else MpSqlVisualizerBundle.message(warning.messageKey, *warning.messageArgs.toTypedArray())
+            }
+            Messages.showInfoMessage(
+                proj,
+                reasons,
+                MpSqlVisualizerBundle.message("rollback.dialog.title"),
+            )
+            return
+        }
+        RollbackSqlDialog(project, this, result, kind, entry).show()
+    }
+
+    /**
+     * T-RollbackSql F4：临时 SQL 执行（回滚弹窗专用）——复用 [executeSql] 的既有管线
+     * （分类 → DML 二次确认 → isPrepared 快路径/全链），T-RefreshDbSteal F4 所有权卫队
+     * 对这条路径天然生效；执行完毕结果反馈走既有 [resultPanel]。
+     *
+     * 刻意不走 [cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute] 从弹窗直调全链：
+     * 全链建临时 .sql 并 attachConsole，可能把正嵌在预览面板里的共享控制台偷走。
+     *
+     * @param dmlConfirmed    DML 二次确认豁免（回滚弹窗「执行回滚」已过用户显式确认链）
+     * @param rollbackOfEntry 本次执行本身是回滚语句时指向被回滚的原快照条目（F6 留痕链）
+     */
+    internal fun executeAdhocSql(
+        sql: String,
+        dmlConfirmed: Boolean = false,
+        rollbackOfEntry: cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry? = null,
+    ) {
+        val proj = project ?: return
+        if (sql.isBlank()) return
+        val isQuery = SqlTypeClassifier.isQuery(sql)
+        if (!isQuery && !dmlConfirmed) {
+            val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+            val confirm = Messages.showYesNoDialog(
+                proj,
+                MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                Messages.getWarningIcon(),
+            )
+            if (confirm != Messages.YES) return
+        }
+        // P2-F5/F6：经执行按钮执行的 UPDATE/DELETE 执行前登记快照条目（回滚语句登记留痕链）
+        registerRollbackSnapshotIfNeeded(sql, rollbackOfEntry)
+
+        resultPanel.showLoading()
+        if (SqlExecutor.isPrepared()) {
+            if (!consoleAttachedToMe()) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[TRollbackSql] executeAdhocSql: prepared console detached → recover before execute")
+                recoverConsole(sql)
+                if (SqlExecutor.isPrepared() && !consoleAttachedToMe()) {
+                    SqlExecutor.execute(
+                        proj, sql, null, isQuery,
+                        onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+                        onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    )
+                    return
+                }
+            }
+            // 快路径同步执行 SQL 进控制台文档（executePrepared 执行的就是控制台文档；
+            // 回滚执行后下一次 renderSql 会按预览 SQL 同步回来）
+            nativeEditorDoc?.let { doc ->
+                if (doc.text != sql) {
+                    WriteCommandAction.runWriteCommandAction(proj) { doc.setText(sql) }
+                }
+            }
+            val executed = SqlExecutor.executePrepared(
+                proj,
+                onResultsReady = { fullConsole -> embedConsole(fullConsole) },
+                onError = { errorMsg -> resultPanel.showError(errorMsg) },
+            )
+            if (executed) return
+        }
+        SqlExecutor.execute(
+            proj, sql, null, isQuery,
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+            onError = { errorMsg -> resultPanel.showError(errorMsg) },
+        )
+    }
+
+    /**
+     * T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（内存 store，LogSqlEntry 不动字段）。
+     * 回滚语句（rollbackOfEntry 非 null）也登记——parentExecutionId 指向被回滚的原执行，
+     * 形成 dbx `rollback_of` 语义的留痕链；仅登记可解析到目标表的语句（解析失败登记无意义）。
+     */
+    private fun registerRollbackSnapshotIfNeeded(
+        sql: String,
+        rollbackOfEntry: cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry?,
+    ) {
+        val proj = project ?: return
+        val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: return
+        if (keyword != "UPDATE" && keyword != "DELETE") return
+        val store = proj.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
+        if (rollbackOfEntry != null) {
+            store.register(
+                sql, rollbackOfEntry.targetTable, null,
+                parentExecutionId = rollbackOfEntry.executionId,
+            )
+            return
+        }
+        val analyzed = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))
+        val table = analyzed.targetTable ?: return
+        store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns)
+    }
+
+    /** 当前编辑器 SQL 文本（原生编辑器文档优先，兜底自研编辑器；两处皆空 null）。 */
+    private fun currentEditorSql(): String? =
+        nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+
+    /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
      *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
@@ -648,6 +827,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             )
             if (confirm != Messages.YES) return
         }
+        // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
+        registerRollbackSnapshotIfNeeded(sql, null)
 
         // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
         //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
@@ -1734,59 +1915,75 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M36] createEditor: len=${sql.length}, nativeDoc=${nativeEditorDoc != null}, embedded=${System.identityHashCode(embeddedConsole)}", Throwable("createEditor path"))
         val proj = project
+        if (proj == null) {
+            assemblePreviewEditor(sql, null)
+            return
+        }
+        // T-PerfTail #2：预热产物消费决策——热态同步装配（主路径/快速降级，EDT 零等待）、
+        // 冷态注册回调回 EDT 装配（超时预算语义保留，EDT 零阻塞）、单元测试模式同步有界等待
+        val (resolved, prewarmed) = resolvePreviewEditorSource(sql)
+        if (!resolved) return   // 回调挂起中——装配延后至回调（超时/失败走降级链）
+        assemblePreviewEditor(sql, prewarmed)
+    }
+
+    /**
+     * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
+     *
+     * @param prewarmed 预热产物（项目内文件 + PSI）；null → 降级链（内存 PSI → 裸 document，
+     *   T-PreviewExecDs 降级顺序与诚实降级横幅层级提示保留）。主路径对 `prewarmedTempFile`
+     *   做**一次性消费**（同引用校验）——releaseEditor 后二次 createEditor 时产物已被消费，
+     *   与原 await 一次性语义一致地走降级。
+     */
+    private fun assemblePreviewEditor(sql: String, prewarmed: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?) {
+        val proj = project
         val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
             .getStdFileType("SQL")
-        val created = if (proj != null) {
-            // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
+        val doc = if (proj != null) {
+            // T-PreviewFlash：createTempFile + refresh + findFile 全在后台线程，
             // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
-            // T-PreviewDocLock2 F3：临时文件支链从「必得」改「尽力」——awaitPrewarmedTempFile 超时/拿不到
-            // 产物、或 releaseEditor 后未经 clear() 二次 createEditor 时（prewarmedTempFile 一次性、已置 null），
-            // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
-            // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
-            // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
-            // （dev 侧 T-GifRerecord 同题降级版无 ReadAction 包裹，按超集原则整取 master 版。）
-            // T-PreviewExecDs-01d：降级链第二级 = 内存 PSI（PsiFileFactory.createFileFromText，
-            // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
-            // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
-            val fallbackDoc = { msg: String ->
-                createInMemoryPreviewPsi(sql) ?: run {
-                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-                        .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
-                    psiFile = null
-                    EditorFactory.getInstance().createDocument(sql)
-                }
-            }
-            val doc = runCatching {
-                val (vFile, psi) = awaitPrewarmedTempFile()
-                    ?: throw IllegalStateException("无法创建 SQL 预览临时文件")
-                previewTempFile = vFile
-                psiFile = psi
-                // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
-                // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
-                // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
-                //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
-                // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
-                // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
-                // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
-                // 且 UsefulTestCase 模式下直接抛 AssertionError（平台抬版跑测试即红）。处置同 T-M42（同文件
-                // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
-                // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
-                // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
-                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-                val d = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
-                    com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
-                } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
-                // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
-                //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
-                if (d.text != sql) {
-                    com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
-                        d.setText(sql)
-                        com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(d)
+            // T-PreviewDocLock2 F3：临时文件支链「尽力」——产物缺失（预热超时/失败/已消费）时
+            // 降级到内存 PSI → 裸文档（功能降级优于硬失败——主路径行为逐字节不变）。
+            if (prewarmed != null && prewarmedTempFile === prewarmed) {
+                prewarmedTempFile = null
+                runCatching {
+                    val (vFile, psi) = prewarmed
+                    // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
+                    degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
+                    previewTempFile = vFile
+                    psiFile = psi
+                    // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
+                    // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
+                    // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
+                    //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
+                    // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
+                    // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
+                    // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
+                    // 且 UsefulTestCase 模式下直接抛 AssertionError（平台抬版跑测试即红）。处置同 T-M42（同文件
+                    // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
+                    // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
+                    // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
+                    @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                    val d = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
+                        com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
+                    } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
+                    // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+                    //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+                    if (d.text != sql) {
+                        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(proj) {
+                            d.setText(sql)
+                            com.intellij.psi.PsiDocumentManager.getInstance(proj).commitDocument(d)
+                        }
                     }
-                }
-                d
-            }.getOrElse { fallbackDoc(it.message ?: it.javaClass.simpleName) }
+                    d
+                }.getOrElse { fallbackPreviewDocument(sql, it.message ?: it.javaClass.simpleName) }
+            } else {
+                fallbackPreviewDocument(sql, "prewarmed product unavailable (timeout/failed/consumed)")
+            }
+        } else {
+            null
+        }
+        val created = if (proj != null && doc != null) {
             EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false)
         } else {
             EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql))
@@ -1830,6 +2027,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
+    }
+
+    /**
+     * T-PreviewExecDs-01d / T-PerfTail #2：预览文档降级链（第二级 → 第三级）——
+     * 第二级 = 内存 PSI（PsiFileFactory.createFileFromText，无 VFS 文件但保留补全上下文载体）；
+     * 第三级（兜底）= 纯内存文档编辑器（无 PSI，补全/注释灭）。
+     * T-PreviewUx-Pack #2：降级链层级横幅——触发时明示当前层级与恢复指引（不破坏降级顺序）。
+     */
+    private fun fallbackPreviewDocument(sql: String, msg: String): com.intellij.openapi.editor.Document {
+        // 第二级：内存 PSI（保留补全上下文载体）
+        createInMemoryPreviewPsi(sql)?.let { memoryPsiDoc ->
+            degradationBanner.show(
+                DegradationBanner.Kind.DEGRADED,
+                MpSqlVisualizerBundle.message("panel.banner.degradedPsi"),
+            )
+            return memoryPsiDoc
+        }
+        // 第三级：裸 document（内存 PSI 也失败）
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
+        psiFile = null
+        degradationBanner.show(
+            DegradationBanner.Kind.DEGRADED,
+            MpSqlVisualizerBundle.message("panel.banner.degradedPlain"),
+        )
+        return EditorFactory.getInstance().createDocument(sql)
     }
 
     /**
@@ -2798,6 +3021,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-M25.3：错误复制按钮随警示可见
         errorCopyButton?.isVisible = currentWarning != null
+        // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
+        // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
+        if (currentWarning != null) {
+            degradationBanner.show(
+                DegradationBanner.Kind.RENDER_WARNING,
+                MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning ?: ""),
+            )
+        } else {
+            degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING)
+        }
         // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
         lastMetaBudget = -1
         applyMetaTruncation()
@@ -2961,6 +3194,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun detachConsoleForTest() = detachConsole()
     /** T-RefreshDbSteal F4：所有权判定（卫队断言用，见 RefreshDbStealTest）。 */
     internal fun consoleAttachedToMeForTest(): Boolean = consoleAttachedToMe()
+    /** T-RollbackSql：执行状态面板（executeAdhocSql 结果反馈断言用）。 */
+    internal fun resultPanelForTest(): SqlResultPanel = resultPanel
     /** T-RefreshDbSteal F3：当前挂接的 rehost 监听是否仍在组件上（解绑断言用）。 */
     internal fun rehostListenerAttachedForTest(): Boolean {
         val console = embeddedConsole ?: return false
@@ -3064,6 +3299,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun importParamsForTest(params: Map<String, String>) = importParams(params)
     /** P-05：参数历史缓存（大小断言用）。 */
     internal fun paramHistoryCacheForTest(): ParamHistoryCache = paramHistoryCache
+
+    /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案/类别断言用）。 */
+    internal fun degradationBannerForTest(): DegradationBanner = degradationBanner
     /** P-05：当前 paramValues 快照（断言用）。 */
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */

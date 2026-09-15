@@ -113,6 +113,14 @@ interface Dialect {
         if (startsWithExplainKeyword(trimmed)) return trimmed
         return renderExplainStatement(trimmed)
     }
+
+    /**
+     * DELETE 语句是否支持 `LIMIT n` 尾段（O-8 缺陷 C）：MySQL 语法族支持
+     * （`DELETE FROM t WHERE ... LIMIT n`），PostgreSQL/Oracle/SQL Server 等不支持——
+     * DELETE 的 `last("LIMIT n")` 尾段仅在本方言为 true 时渲染，否则静默省略
+     * （与分页子句的方言渲染策略一致）。
+     */
+    val supportsDeleteLimit: Boolean get() = false
 }
 
 /**
@@ -174,6 +182,8 @@ object MySqlDialect : Dialect {
     override val name: String = "MySQL"
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override val supportsDeleteLimit: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 
@@ -313,6 +323,8 @@ object MariaDbDialect : Dialect {
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
+    override val supportsDeleteLimit: Boolean = true
+
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 
     override val reservedWords: Set<String> = MARIA_RESERVED
@@ -340,6 +352,8 @@ object DmDialect : Dialect {
     override val name: String = "DM（达梦）"
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override val supportsDeleteLimit: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 

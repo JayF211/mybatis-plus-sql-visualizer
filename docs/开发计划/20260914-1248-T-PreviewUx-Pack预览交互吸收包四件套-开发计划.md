@@ -66,3 +66,16 @@
 - UPDATE (new) 列不做「按行查出旧值再代入」——仅表达式层展示，不发起查询
 
 ## 五、实施记录（交付后回填）
+## 五、实施记录（交付后回填）
+
+- 交付日期：2026-09-14（分支 `t-previewux-pack`，代码提交 7c77640 + 文档提交）
+- 实施顺序：#2 诚实降级横幅 → #1 UPDATE (new) 列 → #4 多语句执行确认 → #3 ${table} 快捷模板（按计划执行）
+- 交付明细：
+  - #2：新增 `ui/DegradationBanner`（面板内嵌非模态单行提示，不算弹窗——弹窗克制红线口径零新增弹窗；`RENDER_WARNING`/`DEGRADED` 双类别，降级提示挂起期间渲染警示不覆盖不清除）。触发面三类接线：`SqlPreviewPanel.updateMeta` 渲染警示（有则显示、恢复即清除）；`createEditor` 降级链层级提示（第二级内存 PSI / 第三级裸 document，不破坏 T-PreviewExecDs 降级顺序与快速降级语义，主路径成功时清除）；`LogToSqlPanel` 转换区（未识别到条目 / 还原不完整）。文案三要素（哪段没还原/为什么/能做什么）en/zh 双语键同步。
+  - #1：`SqlFormatter` 新增 `parseUpdateSetAssignments` 纯函数（UPDATE 后首个顶层 SET 定位防表名误匹配、顶层逗号切分、嵌套括号内逗号不切、首个顶层 `=` 分离列名/表达式）+ `annotateUpdateNewColumns`（UPDATE 竖排产物 SET 各项行尾追加「列名 (new) = 表达式」，T-VPairAnno 行尾注释同款范式不破坏可执行性；两遍扫描先收集已有标注防重复，重输入幂等收敛；开关复用 verticalPairAnnotation）。自引用 `a = a + 1` 按 DBX 口径原样搬表达式。禁止 PSI，headless 可测。
+  - #4：`LogToSqlPanel` 结果工具栏新增「执行」动作——`splitSqlStatements`（字符串/行注释/块注释内分号不切、无分号残余段容错）拆分；单条直通不弹；多条弹 JBPopup 候选勾选浮层（CrudSqlPreviewFlow 同款范式：无按钮/Enter/双击确认/ESC 关闭/速度搜索，条目=摘要行「SQL #N · 关键字」+完整语句详情行）；选中项 invokeLater 经 SqlTypeClassifier 分类 + DML 二次确认后送 SqlExecutor 原生控制台链路。
+  - #3：`actions/SelectedTableSqlTemplateActions` 抽象基类 + 三动作（EXPLAIN/COUNT/LIMIT 10，update 无选中即禁用，产物皆查询类免 DML 确认）；plugin.xml group(popup) 注册 EditorPopupMenu 与「生成 CRUD SQL」入口并存；`SqlTemplateShortcutConflictCheck`（ProjectActivity 应用级单次）默认键位 Alt+Shift+E/C/T 冲突检测——占用即追加备选键位 Ctrl+Alt+Shift+同字母（addShortcut 只加不改，不摘任何既有绑定）并弹通知，改绑失败（scheme 不可写）降级为手动改键指引；纯逻辑经动态代理桩 Keymap 覆盖测试。
+- 测试：新增 4 个测试类（SqlFormatterUpdateNewColumnsTest / LogToSqlPanelExecuteTest / DegradationBannerTest / SqlTemplateShortcutConflictCheckTest）；既有同步：SqlFormatterTest UPDATE 竖排期望更新（标注为计划内行为变化）、SqlPreviewTopRowLayoutTest 布局链适配（topRow 外包 northHost 横幅宿主，逐层 doLayout）。i18n 新增 16 键 en/zh 同步。
+- 门禁：全量 `./gradlew test` 4193/0/6 绿（独立沙盒 build/test-sandbox-previewux，并行表登记 t-previewux；SqlDifferTest 性能用例首跑 107ms 超阈值为本机并行负载 flake，单类重跑通过）。
+- verifyPlugin 与真机走查按用户定案留主会话统一执行（暗色主题横幅视觉 / XML 编辑器选中表名三动作 / 多语句日志还原勾选流）。
+- 偏离点：#1 标注形态按 T-VPairAnno 先例取行尾注释（`-- 列名 (new) = 表达式`）而非 SET 清单追加伪列项——伪列（`col (new) = expr`）非合法 SQL 会破坏可编辑文档的可执行性，行尾注释零副作用且与既有竖排标注范式一致；#3 备选键位采用「追加不摘除」而非抢占（与设置页「强制使用」路径区分，避免不可逆污染用户 keymap），计划文本「换备选键位并提示」语义保留。
