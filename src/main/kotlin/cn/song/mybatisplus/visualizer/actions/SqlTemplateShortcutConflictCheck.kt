@@ -7,6 +7,7 @@ import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import java.awt.event.InputEvent
+import javax.swing.KeyStroke
 
 /**
  * 快捷模板快捷键冲突检测（T-PreviewUx-Pack #3，吸收 DBX sqlShortcutActions 冲突检测思路）：
@@ -24,12 +25,19 @@ class SqlTemplateShortcutConflictCheck : ProjectActivity {
         if (alreadyChecked) return
         alreadyChecked = true
         val keymap = runCatching { KeymapManager.getInstance().activeKeymap }.getOrNull() ?: return
+        // T-ShortcutSettings：仅检测「当前键位 == plugin.xml 默认值」的动作（用户已通过设置页自定义的跳过，不覆盖）
         val actionIds = listOf(
-            "cn.song.mybatisplus.visualizer.ExplainSelectedTable",
-            "cn.song.mybatisplus.visualizer.CountSelectedTable",
-            "cn.song.mybatisplus.visualizer.SampleSelectedTable",
+            "cn.song.mybatisplus.visualizer.ExplainSelectedTable" to DEFAULT_KEYSTROKES[0],
+            "cn.song.mybatisplus.visualizer.CountSelectedTable" to DEFAULT_KEYSTROKES[1],
+            "cn.song.mybatisplus.visualizer.SampleSelectedTable" to DEFAULT_KEYSTROKES[2],
         )
-        val lines = actionIds.mapNotNull { actionId -> resolveConflictLine(keymap, actionId) }
+        val lines = actionIds.mapNotNull { (actionId, defaultKeystroke) ->
+            val current = runCatching {
+                keymap.getShortcuts(actionId).filterIsInstance<KeyboardShortcut>().firstOrNull()?.firstKeyStroke
+            }.getOrNull()
+            // 当前键位 == 默认值 → 用户未配置，走既有冲突检测；否则跳过
+            if (current != null && current == defaultKeystroke) resolveConflictLine(keymap, actionId) else null
+        }
         if (lines.isEmpty()) return
         if (project.isDisposed) return
         com.intellij.notification.NotificationGroupManager.getInstance()
@@ -48,6 +56,13 @@ class SqlTemplateShortcutConflictCheck : ProjectActivity {
         @Volatile
         var alreadyChecked = false
             private set
+
+        /** 三动作在 plugin.xml 注册的默认键位（Alt+Shift+E/C/T），用于判定用户是否已自定义。 */
+        private val DEFAULT_KEYSTROKES = listOf(
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_E, InputEvent.ALT_DOWN_MASK or InputEvent.SHIFT_DOWN_MASK),
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_C, InputEvent.ALT_DOWN_MASK or InputEvent.SHIFT_DOWN_MASK),
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_T, InputEvent.ALT_DOWN_MASK or InputEvent.SHIFT_DOWN_MASK),
+        )
 
         /**
          * 单动作冲突处理（纯逻辑 + 受控副作用）：默认键位无冲突返回 null；有冲突则尝试追加

@@ -107,7 +107,7 @@
              自然比较兜底；不设 weight 时 displayName 比较会随插件语言变化导致中英文子项顺序不一致
              （中文按码点序重排），故显式声明与声明序一致的递减 weight（ui=50 → about=10）。
              新增子页面时按区间插值取 weight，保持英文版既定顺序。 -->
-        <!-- 界面与操作（gutter图标/语言/快捷键） -->
+        <!-- 界面与操作（gutter图标/语言；快捷键已独立为快捷键子页） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.ui"
                                  groupWeight="50"
@@ -146,6 +146,14 @@
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
+
+        <!-- T-ShortcutSettings：快捷键统一管理（5 个动作快捷键内嵌录制编辑） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.shortcuts"
+                                 groupWeight="45"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.shortcuts"
+                                 instance="cn.song.mybatisplus.visualizer.config.ShortcutsConfigurable"/>
 
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"

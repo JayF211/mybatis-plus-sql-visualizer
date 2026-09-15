@@ -68,16 +68,29 @@ abstract class SelectedTableSqlTemplateAction(
 class ExplainSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text",
     { selected -> "EXPLAIN SELECT * FROM $selected" },
-)
+) {
+    companion object {
+        /** 动作 ID（plugin.xml 注册 id 与设置页 ShortcutEditor 共用）。 */
+        const val ACTION_ID = "cn.song.mybatisplus.visualizer.ExplainSelectedTable"
+    }
+}
 
 /** 行数统计：`SELECT COUNT(*) FROM <选中表>`。 */
 class CountSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.CountSelectedTable.text",
     { selected -> "SELECT COUNT(*) FROM $selected" },
-)
+) {
+    companion object {
+        const val ACTION_ID = "cn.song.mybatisplus.visualizer.CountSelectedTable"
+    }
+}
 
 /** 抽样 10 行：`SELECT * FROM <选中表> LIMIT 10`。 */
 class SampleSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text",
     { selected -> "SELECT * FROM $selected LIMIT 10" },
-)
+) {
+    companion object {
+        const val ACTION_ID = "cn.song.mybatisplus.visualizer.SampleSelectedTable"
+    }
+}

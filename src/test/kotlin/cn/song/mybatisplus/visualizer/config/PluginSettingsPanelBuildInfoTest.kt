@@ -86,10 +86,12 @@ class PluginSettingsPanelBuildInfoTest : BasePlatformTestCase() {
             // F-44-7：源码位置捕获子组（T-SqlDuration 会话同步 + joinfw 分支合并共同确认）
             "settings.log.tab.sourceCapture",
             "settings.section.ui",
+            // T-ShortcutSettings：快捷键统一管理节（5 个动作快捷键内嵌录制编辑）
+            "settings.section.shortcuts",
             "settings.section.updateDiagnostics",
         ).map { MpSqlVisualizerBundle.message(it) }
         assertEquals(
-            "11 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/列表显示/CRUD 颜色标记/ORM 框架/自动保存/源码位置捕获 6 子组）",
+            "12 个分组标题按高频→低频顺序（SQL 日志组拆 MyBatis 核心/列表显示/CRUD 颜色标记/ORM 框架/自动保存/源码位置捕获 6 子组 + 快捷键节）",
             expected, separators,
         )
     }

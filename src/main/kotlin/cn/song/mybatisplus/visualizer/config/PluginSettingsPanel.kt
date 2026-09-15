@@ -2,6 +2,9 @@ package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
+import cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction
+import cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction
+import cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction
 import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
@@ -76,7 +79,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
         const val SECTION_SQL_LOG = "sqlLog"
         const val SECTION_UI = "ui"
         const val SECTION_UPDATE_DIAGNOSTICS = "updateDiagnostics"
-        val SECTION_ALL = setOf(SECTION_PREVIEW, SECTION_TABLE_MAPPING, SECTION_CODE_GEN, SECTION_SQL_LOG, SECTION_UI, SECTION_UPDATE_DIAGNOSTICS)
+        /** T-ShortcutSettings：插件快捷键统一管理节（5 个动作快捷键内嵌录制编辑）。 */
+        const val SECTION_SHORTCUTS = "shortcuts"
+        val SECTION_ALL = setOf(SECTION_PREVIEW, SECTION_TABLE_MAPPING, SECTION_CODE_GEN, SECTION_SQL_LOG, SECTION_UI, SECTION_UPDATE_DIAGNOSTICS, SECTION_SHORTCUTS)
     }
 
     /**
@@ -322,6 +327,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** T-M41：SQL→Java 快捷键内嵌编辑（同款录制式，目标 action = ConvertSqlToJava）。 */
     private val reverseShortcutEditor = ShortcutEditor(ConvertSqlToJavaAction.ACTION_ID)
+
+    /** T-ShortcutSettings：${table} 快捷模板三动作快捷键内嵌编辑（Explain / Count / Sample）。 */
+    private val explainShortcutEditor = ShortcutEditor(ExplainSelectedTableAction.ACTION_ID)
+    private val countShortcutEditor = ShortcutEditor(CountSelectedTableAction.ACTION_ID)
+    private val sampleShortcutEditor = ShortcutEditor(SampleSelectedTableAction.ACTION_ID)
 
     /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
     private val updateSection = UpdateSection(settings)
@@ -678,8 +688,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
                         ?: languageOptions().first()
                 })
+            }
+        }
+
+        // 组 5.5：快捷键（T-ShortcutSettings：插件 5 个动作快捷键统一管理；独立节便于搜索定位）
+        if (SECTION_SHORTCUTS in sections) {
+            sectionGroup("settings.section.shortcuts") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sqlToJava"), reverseShortcutEditor.apply { updateTexts() })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.explain"), explainShortcutEditor.apply { updateTexts() })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.count"), countShortcutEditor.apply { updateTexts() })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sample"), sampleShortcutEditor.apply { updateTexts() })
             }
         }
 
@@ -730,6 +749,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         })
                     }, BorderLayout.CENTER)
                     add(statusLabel, BorderLayout.EAST)
+                })
+                // T-ShortcutSettings：MCP 工具跳转（指向平台 MCP Server 设置）
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.mcp.title"), JPanel(BorderLayout(8, 0)).apply {
+                    isOpaque = false
+                    add(JButton(MpSqlVisualizerBundle.message("settings.mcp.open")).apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.mcp.desc")
+                        addActionListener { openMcpServerSettings() }
+                    }, BorderLayout.WEST)
                 })
             }
         }
@@ -914,6 +941,29 @@ class PluginSettingsPanel @JvmOverloads constructor(
     }
 
     /**
+     * T-ShortcutSettings：打开平台 MCP Server 设置（定位到 SQL Visualizer 工具）。
+     * MCP Server 插件未安装时（243 / 未启用）提示并返回；平台 Configurable 类名以本地 javap 常量为权威。
+     */
+    private fun openMcpServerSettings() {
+        val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
+        val configurableClass = runCatching {
+            Class.forName("com.intellij.mcpServer.McpServerConfigurable") as? Class<out com.intellij.openapi.options.Configurable>
+        }.getOrNull()
+        if (configurableClass == null) {
+            com.intellij.openapi.ui.Messages.showWarningDialog(
+                project,
+                MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
+                MpSqlVisualizerBundle.message("settings.mcp.title"),
+            )
+            return
+        }
+        runCatching<Unit> {
+            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                .showSettingsDialog(project, configurableClass)
+        }
+    }
+
+    /**
      * 语言切换后重建表单（设置页自身文案即时刷新；控件值从配置回读）。
      */
     fun rebuild() {
@@ -1059,6 +1109,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || (SECTION_CODE_GEN in sections && isModifiedCodeGen(s))
             || (SECTION_SQL_LOG in sections && isModifiedSqlLog(s))
             || (SECTION_UI in sections && isModifiedUi(s))
+            || (SECTION_SHORTCUTS in sections && isModifiedShortcuts())
             || (SECTION_UPDATE_DIAGNOSTICS in sections && updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate)
     }
 
@@ -1130,8 +1181,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
         gutterIconCheck.isSelected != s.showGutterIcon
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
-            || shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)
+
+    /** T-ShortcutSettings：5 个动作快捷键任一变更即为 modified。 */
+    private fun isModifiedShortcuts(): Boolean =
+        shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)
             || reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
+            || explainShortcutEditor.shortcut != currentShortcut(ExplainSelectedTableAction.ACTION_ID)
+            || countShortcutEditor.shortcut != currentShortcut(CountSelectedTableAction.ACTION_ID)
+            || sampleShortcutEditor.shortcut != currentShortcut(SampleSelectedTableAction.ACTION_ID)
 
     /**
      * 将表单值写回配置（Settings 点击 OK/Apply 时调用）；快捷键变化时写入 Keymap。
@@ -1214,11 +1271,23 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.showGutterIcon = gutterIconCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
+        }
+        // T-ShortcutSettings：5 个动作快捷键写入 Keymap（仅在变更时 apply）
+        if (SECTION_SHORTCUTS in sections) {
             if (shortcutEditor.shortcut != currentShortcut(ConvertToSqlAction.ACTION_ID)) {
                 applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID)
             }
             if (reverseShortcutEditor.shortcut != currentShortcut(ConvertSqlToJavaAction.ACTION_ID)) {
                 applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID)
+            }
+            if (explainShortcutEditor.shortcut != currentShortcut(ExplainSelectedTableAction.ACTION_ID)) {
+                applyShortcut(explainShortcutEditor, ExplainSelectedTableAction.ACTION_ID)
+            }
+            if (countShortcutEditor.shortcut != currentShortcut(CountSelectedTableAction.ACTION_ID)) {
+                applyShortcut(countShortcutEditor, CountSelectedTableAction.ACTION_ID)
+            }
+            if (sampleShortcutEditor.shortcut != currentShortcut(SampleSelectedTableAction.ACTION_ID)) {
+                applyShortcut(sampleShortcutEditor, SampleSelectedTableAction.ACTION_ID)
             }
         }
         if (SECTION_UPDATE_DIAGNOSTICS in sections) {
@@ -1278,8 +1347,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterIconCheck.isSelected = s.showGutterIcon
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
+        }
+        // T-ShortcutSettings：5 个动作快捷键从 Keymap 回读当前值
+        if (SECTION_SHORTCUTS in sections) {
             shortcutEditor.shortcut = currentShortcut(ConvertToSqlAction.ACTION_ID)
             reverseShortcutEditor.shortcut = currentShortcut(ConvertSqlToJavaAction.ACTION_ID)
+            explainShortcutEditor.shortcut = currentShortcut(ExplainSelectedTableAction.ACTION_ID)
+            countShortcutEditor.shortcut = currentShortcut(CountSelectedTableAction.ACTION_ID)
+            sampleShortcutEditor.shortcut = currentShortcut(SampleSelectedTableAction.ACTION_ID)
         }
         if (SECTION_UPDATE_DIAGNOSTICS in sections) {
             updateSection.resetState()

@@ -102,3 +102,9 @@ class AboutConfigurable : SectionConfigurable(
     setOf(PluginSettingsPanel.SECTION_UPDATE_DIAGNOSTICS),
     "settings.section.about"
 )
+
+/** T-ShortcutSettings：快捷键统一管理子页面（5 个动作快捷键内嵌录制编辑） */
+class ShortcutsConfigurable : SectionConfigurable(
+    setOf(PluginSettingsPanel.SECTION_SHORTCUTS),
+    "settings.section.shortcuts"
+)
