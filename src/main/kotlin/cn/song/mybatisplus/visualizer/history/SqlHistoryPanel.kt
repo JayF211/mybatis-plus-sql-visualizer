@@ -207,7 +207,13 @@ class SqlHistoryPanel(
             val entry = value as? SqlHistoryEntry
             text = null
             if (entry != null) {
-                val ts = SimpleDateFormat("HH:mm:ss").format(Date(entry.timestamp))
+                // T-JdbcThreadBucket F3：时间戳跟随设置（对齐日志页/历史页 formatTimestampFragment），
+                // 死代码面板（T-Perf-24 未注册）顺手对齐防复活分叉
+                val ts = try {
+                    SimpleDateFormat(PluginSettings.getInstance().state.logTimestampFormat).format(Date(entry.timestamp))
+                } catch (_: IllegalArgumentException) {
+                    SimpleDateFormat("HH:mm:ss").format(Date(entry.timestamp))
+                }
                 val summary = withTerminator(entry.summary())
                 val source = entry.sourceLabel()
                 val durationColor = when (SlowQueryDetector.level(entry.executionTimeMs)) {

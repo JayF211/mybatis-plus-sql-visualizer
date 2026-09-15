@@ -30,8 +30,6 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.border.Border
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
@@ -665,7 +663,10 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
+            // T-JdbcThreadBucket F3：时间戳跟随设置（对齐日志页 formatTimestampFragment），
+            // 含非法 pattern 回退默认与显示开关语义；硬编码 yyyy-MM-dd HH:mm:ss 已移除
+            val timestampFragment = formatTimestampFragment(entry.timestamp)
+            val timestamp = timestampFragment?.first ?: ""
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = when {
                 SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
@@ -682,7 +683,7 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
                 metaLine.append("#${entry.sequenceNumber} ", HISTORY_META_GRAY)
             }
             metaLine.append("[$duration] ", HISTORY_META_GRAY)
-            metaLine.append("[$timestamp] ", HISTORY_META_GRAY)
+            if (timestamp.isNotEmpty()) metaLine.append(timestamp, HISTORY_META_GRAY)
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {

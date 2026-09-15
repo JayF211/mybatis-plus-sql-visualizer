@@ -158,9 +158,16 @@ internal fun LogSqlEntry.toPreviewResult(
         tableName = null,
         // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
         // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
+        // T-JdbcThreadBucket F2：零参数时按来源分流——JdbcTemplate 引导开 org.springframework.jdbc.core，
+        // Hibernate 引导开 type.descriptor.sql（避免把 JDBC 条目误导向 Hibernate 配置）
         warning = if (countPlaceholders(restoredSql) > 0) {
+            val noBindingKey = if (source == SqlSource.JDBC) {
+                "log.preview.unresolvedNoBinding.jdbc"
+            } else {
+                "log.preview.unresolvedNoBinding"
+            }
             MpSqlVisualizerBundle.message(
-                if (params.isEmpty()) "log.preview.unresolvedNoBinding"
+                if (params.isEmpty()) noBindingKey
                 else "log.preview.unresolvedWarning",
             )
         } else {
