@@ -276,6 +276,11 @@ class LogToSqlPanel(
                     executeStatement(selected.sql)
                 }
             }
+            .apply {
+                // T-BatchInMerge（O-14）：同表等值批删的合并参考行——浮层原生单行提示位
+                // （adText），零新弹窗零新组件形态；执行文本与复制行为零改动
+                buildMergeAdText(statements)?.let { setAdText(it) }
+            }
             .createPopup()
             .showInFocusCenter()
     }
@@ -611,6 +616,48 @@ class LogToSqlPanel(
          */
         internal fun splitSqlStatements(sql: String): List<String> =
             cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(sql)
+
+        /**
+         * T-BatchInMerge（O-14）：批量等值谓词合并参考文案（纯函数可测；null = 无合并集）。
+         * 异构语句在场时按「N/M 条」披露（不静默丢）；展示预算截值清单时**计数后缀恒可见**
+         * （先裁值再拼「…等 N 条」，N = 行数/字节超限 + 展示裁掉的值数之和——绝不无计数截断）。
+         */
+        internal fun buildMergeAdText(statements: List<String>): String? {
+            val preview = cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.mergePreview(statements) ?: return null
+            val prefix = "DELETE FROM ${preview.table} WHERE ${preview.column} IN ("
+            // 展示预算：前缀 + 值清单 + 收括号 ≤ 上限；后缀占位先扣（保证计数可见）
+            val budget = MERGE_HINT_SQL_DISPLAY_LIMIT - prefix.length - 1
+            val joined = ArrayList<String>()
+            var used = 0
+            var dropped = 0
+            for ((index, value) in preview.values.withIndex()) {
+                val cost = value.length + if (index > 0) 2 else 0
+                if (used > 0 && used + cost > budget - MERGE_MORE_RESERVE) {
+                    dropped = preview.values.size - joined.size
+                    break
+                }
+                used += cost
+                joined += value
+            }
+            val hidden = preview.hiddenValues + dropped
+            val moreText = if (hidden > 0) MpSqlVisualizerBundle.message("logToSql.execute.mergeMore", hidden) else ""
+            val inner = joined.joinToString(", ") + if (moreText.isNotEmpty()) ", $moreText" else ""
+            val displaySql = "$prefix$inner)"
+            return if (preview.coveredCount == preview.totalStatements) {
+                MpSqlVisualizerBundle.message("logToSql.execute.mergeHint", preview.coveredCount, displaySql)
+            } else {
+                MpSqlVisualizerBundle.message(
+                    "logToSql.execute.mergeHintSubset",
+                    preview.totalStatements, preview.coveredCount, displaySql,
+                )
+            }
+        }
+
+        /** T-BatchInMerge：合并参考行里的 SQL 展示截断（防浮层单行撑爆）。 */
+        private const val MERGE_HINT_SQL_DISPLAY_LIMIT = 160
+
+        /** T-BatchInMerge：「…等 N 条」后缀的展示预算预留（截值不截计数）。 */
+        private const val MERGE_MORE_RESERVE = 24
 
         /** T-Perf-14：大日志后台转换阈值——字符数（约 1MB）。 */
         private const val HEAVY_INPUT_CHARS = 1_000_000
