@@ -665,7 +665,6 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = when {
                 SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
@@ -682,7 +681,7 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
                 metaLine.append("#${entry.sequenceNumber} ", HISTORY_META_GRAY)
             }
             metaLine.append("[$duration] ", HISTORY_META_GRAY)
-            metaLine.append("[$timestamp] ", HISTORY_META_GRAY)
+            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {

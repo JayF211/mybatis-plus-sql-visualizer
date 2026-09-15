@@ -31,6 +31,7 @@ class MyBatisLogParser(
 
     private val entries = mutableListOf<LogSqlEntry>()
     private var pendingSql: String? = null
+    private var pendingLogLine: String? = null
     private val pendingParams = mutableListOf<LogSqlParam>()
     /**
      * 前缀独占一行兼容（T-M31.xx）：`Preparing:` 行 remainder 为空时置 true，
@@ -50,6 +51,7 @@ class MyBatisLogParser(
         if (sql != null) {
             closePending() // 上一条未闭合先闭合（无 Parameters 或异常日志）
             pendingSql = sql.take(maxParseLength)
+            pendingLogLine = line
             pendingParams.clear()
             prefixMatched = false
             return
@@ -101,6 +103,7 @@ class MyBatisLogParser(
                 return // 不重置 prefixMatched，继续等 MyBatis SQL
             }
             pendingSql = line.trim().take(maxParseLength)
+            pendingLogLine = line
             prefixMatched = false
             return
         }
@@ -112,11 +115,14 @@ class MyBatisLogParser(
     fun closePending(): LogSqlEntry? {
         val sql = pendingSql ?: return null
         pendingSql = null
+        val logTs = pendingLogLine?.let { LogTimestampParser.parse(it) }
+        pendingLogLine = null
         val entry = LogSqlEntry(
             rawSql = sql,
             restoredSql = restorer.restore(sql, pendingParams),
             params = pendingParams.toList(),
             source = SqlSource.MYBATIS,
+            logTimestamp = logTs,
         )
         entries += entry
         pendingParams.clear()

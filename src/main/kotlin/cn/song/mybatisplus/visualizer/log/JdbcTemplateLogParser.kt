@@ -36,6 +36,7 @@ class JdbcTemplateLogParser(
 
     private val entries = mutableListOf<LogSqlEntry>()
     private var pendingSql: String? = null
+    private var pendingLogLine: String? = null
     private val pendingParams = mutableListOf<IndexedParam>()
 
     // ----- 多行收集态（T-JdbcMultiline：`[...]` 跨行语句首行进入，`]` 闭合/边界行/超限/closePending 离开） -----
@@ -89,6 +90,7 @@ class JdbcTemplateLogParser(
                 pendingParams.clear()
                 if (probe.closeIdx >= 0) {
                     pendingSql = line.substring(openIdx + 1, probe.closeIdx).take(maxParseLength)
+                    pendingLogLine = line
                 } else {
                     collecting = true
                     multilineBuffer.setLength(0)
@@ -131,6 +133,8 @@ class JdbcTemplateLogParser(
         }
         val sql = pendingSql ?: return null
         pendingSql = null
+        val logTs = pendingLogLine?.let { LogTimestampParser.parse(it) }
+        pendingLogLine = null
         // 按 column index 升序排列（1-based → 0-based 由 restorer 按序处理）
         val sortedParams = pendingParams.sortedBy { it.index }
             .map { LogSqlParam(it.value, it.mappedType) }
@@ -139,6 +143,7 @@ class JdbcTemplateLogParser(
             restoredSql = restorer.restore(sql, sortedParams),
             params = sortedParams,
             source = SqlSource.JDBC,
+            logTimestamp = logTs,
         )
         entries += entry
         pendingParams.clear()
@@ -177,6 +182,7 @@ class JdbcTemplateLogParser(
             restoredSql = restoredSql,
             params = params,
             source = SqlSource.JDBC,
+            logTimestamp = LogTimestampParser.parse(line),
         )
     }
 
