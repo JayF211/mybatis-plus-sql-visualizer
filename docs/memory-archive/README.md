@@ -3,17 +3,33 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（85 个通用文件）
-> **项目记忆**：保留 20 个核心文件 + MEMORY.md 索引（第八次精简后）
+> **项目记忆**：保留 27 个核心文件 + MEMORY.md 索引（第九次精简后）
 
 ---
 
-## 已修复 Bug（123 个）
+## 已修复 Bug（139 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [t-testperf2.md](bug-fixes/t-testperf2.md) | T-TestPerf2 全量测试一命令并行提速（merge 9e4a314，20260915，4081 绿）：testShards 一命令 3 片真并行 4m47s→2m05s 零用例改动；三大沉淀=build cache 用户级属性优先级覆盖项目（关闭落 settings buildCache.local 才生效）、分片类发现文件名≠类名改内容提取、剪贴板机器级互斥源码扫描亲和同片 |
+| [t-marketinternal.md](bug-fixes/t-marketinternal.md) | T-MarketInternal 插件市场内部API整改（merge 700cf0b，20260915，4081 绿）：262 Internal 6→0 与 for-removal 3→0 双清零；MessagePool 标注 262 才有（243 verifySmoke 盲区）、错误池候选整链删除、findElement 直取链尾 DbModelRegistry |
+| [t-competitive-round4.md](bug-fixes/t-competitive-round4.md) | 第四轮竞品对比（20260915-0123 报告）：N-12 MCP 三工具/N-13 四件套/r2 合流在 t-fourplans 集成链、「竞品 MCP 全空」失效（CodeHelperPro 校验我渲染）、DBX 增量 #14~#18（structuredContent 必须对象）、新建议 N-15/N-16+O-12~O-14 |
+| [t-competitive-round3.md](bug-fixes/t-competitive-round3.md) | 第三轮竞品对比：Marketplace 三连发过审下载翻倍、MCP 规划 N-12 主轨改平台 MCP Server 体系、N-14 平台 LLM API 已证伪、Analyzer 威胁低、评论新端点 comments；r2 分支债清账、t-m56-00/01 待合跟踪 |
+| [t-preview-exec-ds.md](bug-fixes/t-preview-exec-ds.md) | T-PreviewExecDs 预览补全/跨项目数据源（20260914，3978 绿）：Temp 预览文件+预热静默失败、cachedTempPsiFile 跨项目泄漏、console 被清扫 dispose 三根因与 F1~F5+P1-1~4 修复（预览文件迁项目内+内存 PSI 降级链）；P1-5 留二期 |
+| [t-feedbackerr.md](bug-fixes/t-feedbackerr.md) | T-FeedbackErr 上报失败可见性+T-FeedbackBatch 批量限流规避三轮（0f305b4/ed2f92e/4fd5ce4，4083 绿，20260914）：errorStream+服务端 message 优先、gzip 假失败根治（myGzip 默认 true）、2~5 条合并一帖+每 12 分钟错峰补发、附件 charset+BOM 双保险与乱码定性法、D1 诊断法；遗留=附件上传未端到端验证、FR-0023 测试帖待清 |
+| [t-feedbackdlg.md](bug-fixes/t-feedbackdlg.md) | T-FeedbackDlg 报告对话框缺陷三波（8ccb0ac/af01346/0b8c293，4025 绿，20260914）：堆栈勾选跳动 weighty 行须 toggleResizeDelta 高度补偿、手动形态堆栈自主输入+错误池按包名导入；红线=反馈 UI 别替用户自动决定 |
+| [t-explain-dbl.md](bug-fixes/t-explain-dbl.md) | T-ExplainDbl 执行计划 EXPLAIN 前缀双加 1064（merge 18b3f03，3980 绿，20260914）：执行链回写控制台文档后二次包装；Dialect 幂等包装 renderExplainStatementIdempotent；教训=包装 SQL 的按钮须幂等 |
+| [t-exec-slowops.md](bug-fixes/t-exec-slowops.md) | T-ExecSlowOps 线程化双 SEVERE（merge e2a7419，4028 绿，20260914）：DialectPreMapping 两段式映射单入口（BGT 读探测/首见 EDT+latch）+prewarmExecTempFile 挂 previewAsync+四缓存 @Volatile；守卫=setMapping 字面量单文件收口 |
+| [t-intrupg.md](bug-fixes/t-intrupg.md) | T-IntrUpg 旧拦截器自位污染防线与升级（9d09e56，4012 绿，20260914）：isInterceptorSelfPath 解析防线+needsInterceptorUpgrade 三条件纯函数+注入链升级执行；用户恢复=重新注入+应用重启 |
+| [t-jumppath.md](bug-fixes/t-jumppath.md) | T-JumpPath 多模块跳转三缺陷（merge 50a9cc7，4002 绿，20260914）：isSelf 运行时比对封自位污染、Resolver 三级解析补 sourceRoots、sameFile 段对齐封反查恒空、逐模块注入 successMulti |
+| [t-jumpcapture.md](bug-fixes/t-jumpcapture.md) | T-JumpCapture 跳转仅依赖捕获位置（merge 609a90d，3975 绿，20260914）：Wrapper 表名回退链整体删、缺位置 SourceCaptureGuide 三按钮引导弹框 |
+| [t-loghistoryrow-no-plan.md](bug-fixes/t-loghistoryrow-no-plan.md) | T-LogHistoryRowNo SQL 历史列表行号（master dee44ae，4020 绿，20260914）：parseContent 读取层注入文件内顺序号、HistoryCellRenderer 复用 #N 片段 |
+| [t-mergefollowup.md](bug-fixes/t-mergefollowup.md) | T-MergeFollowup 合并反馈四缺陷三轮（806b887~a7bb545，20260914）：243 gutter 右键基类恒 null 须匿名 LineMarkerInfo 覆写 createGutterRenderer、BasicListUI cellHeights 缓存唯一可靠失效=list.updateUI()、下拉按钮与 SQL类型 同构 JButton+ArrowDown+JPopupMenu |
+| [t-listpreviewcopy.md](bug-fixes/t-listpreviewcopy.md) | T-ListPreviewCopy 预览格式化+多选防误弹+批量复制（merge 412a762，4039 绿，20260914）：预览跟随「预览时格式化还原SQL」设置、batchCopySql 与内置 Ctrl+C 逐字节同构；坑=测试挂起定时器真弹浮窗致 Editor 泄漏（finally dispose 停表） |
+| [t-explainfirstnative.md](bug-fixes/t-explainfirstnative.md) | T-ExplainFirstNative 首点结果缺失+EXPLAIN 对齐原生（master，4081 绿，20260914）：DBN 空名占位结果 Tab 被当新结果第 1 拍强制换入；EXPLAIN=原生 MySQL 家族裸 EXPLAIN 表格行；教训=换入去重只认实例身份会漏「实例未变内容已变」 |
 | [t-rollbacksql-plan.md](bug-fixes/t-rollbacksql-plan.md) | 预览回滚 SQL 按钮交付（r2 分支，F1~F6）：262 连接 API 不可达走快照粘贴半自动降级、JSqlParser 5.3 四坑、整行谓词恒 Partial；分支债归第三轮竞品对比跟踪 |
 | [t-crudcolor-plan.md](bug-fixes/t-crudcolor-plan.md) | SQL 日志/历史列表 CRUD 类型颜色标记（44 例，2026-09-13 合入 master）：色条/整行淡背景/关闭三选一 + 四色自定义 + 2px 描边选中态 |
 | [t-mergedevcrudcolor-delivery.md](bug-fixes/t-mergedevcrudcolor-delivery.md) | dev 与 t-crudcolor 两步真 merge master（a5d9307+8d2c919）：master 吸收 dev 全部 119 提交成全功能超集、渲染器组件池×色条融合四定式 |
@@ -301,13 +317,15 @@
 
 **第八次精简升级（2026-09-14，共 9 个）**：pitfall-wira-not-in-readaction（ReadAction 内开 WIRA 硬抛、WIRA-in-WIRA 合法）/ pitfall-workbuddy-ai-sandbox-eats-nested-refs（WorkBuddy AI 沙盒吞嵌套 ref 事故与恢复法）/ verify-capability-before-claiming（能力验证对照实验，文档站）/ win32-shell-cjk-mojibake、win32-tsx-file-url-import（本机命令行与 TS 验证环境坑，管理后台）/ glm-relay-api-test、zcode-model-config-location、aliyun-token-plan-provider、dots-nova-relay-lines（中转线路与模型配置，管理后台）
 
+**第九次精简升级（2026-09-15，1 个）**：pitfall-edt-slowops-coldpath（SlowOperations 断言仅 EDT 生效、allowSlowOperations 逃生舱 243+262 双重证伪禁再试、线程归位两段式）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 21（含 MEMORY.md） |
+| 项目 memory（保留） | 27（含 MEMORY.md） |
 | 全局记忆 global/ | 85 |
-| 归档 archive/ | 180（bug-fixes 123 + pitfalls 54 + methodology 1 + user-context 1 + README） |
-| **合计** | **286** |
+| 归档 archive/ | 196（bug-fixes 139 + pitfalls 54 + methodology 1 + user-context 1 + README） |
+| **合计** | **308** |
