@@ -2,6 +2,23 @@
 
 # SQL Visualizer Changelog
 
+## [Unreleased]
+
+> feature/t-m56-01-agent-base 分支增量（未发行；T-AgentDialectLoop）。
+
+### Added
+
+- **增强捕获条目显示目标库与日志原始时间（T-AgentDialectLoop）**：字节码增强（M56）事件全链透传连接 URL，面板日志页/历史页元信息行新增目标库角标（如 `[MySQL]`、`[DM（达梦）]`，由 JDBC URL 子协议推断，覆盖全部 9 种方言数据库及 openGauss/GBASE）；agent 在线接管期间控制台日志不再整链短路——后台嗅探日志行原始时间并按同指纹回填到增强条目，「日志时间」在增强模式下照常显示（可关，关闭零成本）；SQL 执行耗时（毫秒级精确）与影响行数、报错信息在增强条目上齐备，与控制台通道同口径去重
+
+### Fixed
+
+- **驱动私有类型参数不再渲染为 `类名@哈希` 垃圾值**：`setObject` 直传未覆写 `toString` 的驱动类型（如 Oracle `oracle.sql.Datum` 族）时降级为 `<类名>` 形态标注
+- **历史文件「日志时间」读回恒丢失修复**：头部正则毫秒分数为嵌套捕获组占位第 4 组，`logTime` 实际在第 5 组——51eb01a 引入的读回断链修复，并支持 `| db:` 字段持久化读回
+
+### Changed
+
+- **JdbcTemplate 日志解析热点收口**：线程 token 提取的级别正则从每行现场编译提为常量（喂行热路径，增强嗅探模式同样受益）；`DriverRegistry` 补 `org.opengauss.Driver`（openGauss 3.x）
+
 ## [2026.9.18-beta.1] - 2026-09-15
 
 > 内测版（Gitee 抢先体验通道）：基线 v2026.9.14 正式版，本版增量仅 T-ListParamCollect 一项修复——该修复交付于 2026.9.14 发行提交之后，未入该版发行包，随本内测版发出。
