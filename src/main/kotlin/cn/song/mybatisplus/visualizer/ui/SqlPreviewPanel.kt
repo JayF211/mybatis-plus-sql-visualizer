@@ -28,6 +28,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
@@ -2884,7 +2885,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val prefix = if (isError) "⚠ " else "ℹ "
             MetaPerfSegment(
                 text = prefix + localizeWarning(warning),
-                color = if (isError) "#E05555" else "#3B82F6",
+                // T-UN-13（T-UiNative）：HTML 段色写死 hex → namedColor 取主题色再注入（亮值不变，
+                // HTML 结构与截断逻辑不动）
+                color = MpvsUiColors.htmlHex(if (isError) MpvsUiColors.PERF_ERROR_TEXT else MpvsUiColors.PERF_INFO_TEXT),
             )
         }
     }

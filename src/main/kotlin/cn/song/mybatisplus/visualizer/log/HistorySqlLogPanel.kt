@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -609,8 +610,8 @@ data class HistoryFileEntry(
     val sizeBytes: Long get() = file.length()
 }
 
-/** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。 */
-private val HISTORY_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, java.awt.Color(0x9E9E9E))
+/** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
+private val HISTORY_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.HISTORY_META_GRAY)
 
 /**
  * 一级文件列表单元格渲染器（F-44-3；T-LogListFreeze-04 弃 HTML 通道）：

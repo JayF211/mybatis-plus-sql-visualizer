@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -575,7 +576,8 @@ class SqlLogPanel(
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
-            foreground = Color(0xD32F2F) // 红色
+            // T-UN-13（T-UiNative）：写死红 → namedColor（亮值不变，主题可覆写）
+            foreground = MpvsUiColors.SLOW_RED
             font = font.deriveFont(Font.BOLD)
             isVisible = false // 默认隐藏，有慢查询时显示
         }
@@ -1471,8 +1473,8 @@ class SqlLogPanel(
 
 // =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
 
-/** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。 */
-private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0x9E9E9E))
+/** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
+private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
 
 /**
  * T-CrudColor：按标记形态应用「色条 / 整行淡背景」——**两个列表渲染器共用**（§1.2.1）。
@@ -1573,11 +1575,12 @@ internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTex
 internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String, SimpleTextAttributes> {
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
-        isSelected -> Color(0xFFFFFF)
-        ms == null -> Color(0x9E9E9E)          // 灰：无耗时
-        ms >= threshold -> Color(0xD32F2F)     // 红：慢查询
-        ms >= threshold / 2 -> Color(0xE67E22) // 橙：偏慢
-        else -> Color(0x4CAF50)                // 绿：正常
+        // T-UN-13（T-UiNative）：五档写死色 → namedColor（亮值不变）
+        isSelected -> MpvsUiColors.DURATION_SELECTED
+        ms == null -> MpvsUiColors.DURATION_NONE   // 灰：无耗时
+        ms >= threshold -> MpvsUiColors.DURATION_SLOW // 红：慢查询
+        ms >= threshold / 2 -> MpvsUiColors.DURATION_WARN // 橙：偏慢
+        else -> MpvsUiColors.DURATION_OK           // 绿：正常
     }
     val text = ms?.let { "${it}ms" } ?: "—"
     return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)

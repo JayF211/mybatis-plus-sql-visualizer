@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log
 
-import cn.song.mybatisplus.visualizer.history.SqlHistoryPanel
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -317,21 +316,6 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val panel = HistorySqlLogPanel(project)
         try {
             val cp = panel.sqlClickPreviewForTest
-            cp.onClick(1, Point(5, 5))
-            assertFalse(cp.isScheduled)
-            assertNull(cp.currentPopup)
-            cp.onClick(2, Point(5, 5))
-            assertFalse(cp.isScheduled)
-            assertNull(cp.currentPopup)
-        } finally {
-            panel.dispose()
-        }
-    }
-
-    fun testSqlHistoryPanel空列表单击不排程_双击关预览() {
-        val panel = SqlHistoryPanel(project)
-        try {
-            val cp = panel.clickPreviewForTest
             cp.onClick(1, Point(5, 5))
             assertFalse(cp.isScheduled)
             assertNull(cp.currentPopup)

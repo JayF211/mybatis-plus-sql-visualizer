@@ -1,13 +1,13 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import com.intellij.icons.AllIcons
 import com.intellij.ide.DataManager
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.options.ex.Settings
 import com.intellij.openapi.project.ProjectManager
-import com.intellij.ui.JBColor
 import com.intellij.ui.DoubleClickListener
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBLabel
@@ -240,12 +240,13 @@ class PluginSettingsFolderConfigurable : Configurable {
         val originalOpaque = comp.isOpaque
         val originalBorder = comp.border
         comp.isOpaque = true
-        comp.border = javax.swing.BorderFactory.createLineBorder(JBColor(0xE6C068, 0x6B5B2E), 2)
+        // T-UN-13（T-UiNative）：闪黄两色 → namedColor（亮/暗值均原样平移）
+        comp.border = javax.swing.BorderFactory.createLineBorder(MpvsUiColors.HIGHLIGHT_BORDER, 2)
         var count = 0
         val timer = javax.swing.Timer(250) {
             count++
             if (count % 2 == 1) {
-                comp.background = JBColor(0xFFFAE6, 0x3A3320)
+                comp.background = MpvsUiColors.HIGHLIGHT_BACKGROUND
             } else {
                 comp.background = originalBg
             }

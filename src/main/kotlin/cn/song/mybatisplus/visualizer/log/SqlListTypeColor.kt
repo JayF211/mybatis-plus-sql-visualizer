@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import java.awt.Color
 
 /**
@@ -44,11 +45,13 @@ object SqlListTypeColor {
     const val DEFAULT_UPDATE = "#E67E22"
     const val DEFAULT_DELETE = "#D32F2F"
 
-    // 默认色实例（预建，避免 defaultOf 每次解析/分配）
-    private val COLOR_SELECT: Color = Color(0x4A86E8)
-    private val COLOR_INSERT: Color = Color(0x4CAF50)
-    private val COLOR_UPDATE: Color = Color(0xE67E22)
-    private val COLOR_DELETE: Color = Color(0xD32F2F)
+    // 默认色实例（预建，避免 defaultOf 每次解析/分配）。
+    // T-UN-13（T-UiNative）：写死兜底色 → namedColor（亮值不变；仅兜底实例收口，
+    // 用户配置链 hexOf/parseHex 原样——设置页 hex 串默认值即上方 DEFAULT_* 常量）。
+    private val COLOR_SELECT: Color = MpvsUiColors.CRUD_SELECT
+    private val COLOR_INSERT: Color = MpvsUiColors.CRUD_INSERT
+    private val COLOR_UPDATE: Color = MpvsUiColors.CRUD_UPDATE
+    private val COLOR_DELETE: Color = MpvsUiColors.CRUD_DELETE
 
     /**
      * 解析结果缓存（每类型至多 1 条，共 ≤ 4 条）。

@@ -246,10 +246,8 @@
         <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
                     icon="/icons/sqlLog.svg"
                     factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
-        <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册
-        <toolWindow id="cn.song.mybatisplus.visualizer.history" anchor="right"
-                    icon="/icons/sqlGutter.svg"
-                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/> -->
+        <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册；
+             T-UN-12（T-UiNative）：独立历史 ToolWindow 工厂类已删除 -->
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
