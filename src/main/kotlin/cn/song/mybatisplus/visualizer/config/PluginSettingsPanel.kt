@@ -750,14 +750,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     }, BorderLayout.CENTER)
                     add(statusLabel, BorderLayout.EAST)
                 })
-                // T-ShortcutSettings：MCP 工具跳转（指向平台 MCP Server 设置）
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.mcp.title"), JPanel(BorderLayout(8, 0)).apply {
-                    isOpaque = false
-                    add(JButton(MpSqlVisualizerBundle.message("settings.mcp.open")).apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.mcp.desc")
-                        addActionListener { openMcpServerSettings() }
-                    }, BorderLayout.WEST)
-                })
             }
         }
 
@@ -942,12 +934,15 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /**
      * T-ShortcutSettings：打开平台 MCP Server 设置（定位到 SQL Visualizer 工具）。
-     * MCP Server 插件未安装时（243 / 未启用）提示并返回；平台 Configurable 类名以本地 javap 常量为权威。
+     * 平台 Configurable 类名 = com.intellij.mcpserver.settings.McpServerSettingsConfigurable
+     * （262 mcpserver.jar 常量池实证；注意包名 mcpserver 全小写）。
+     * MCP Server 插件未安装时（243 / 未启用）提示并返回。
      */
     private fun openMcpServerSettings() {
         val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return
         val configurableClass = runCatching {
-            Class.forName("com.intellij.mcpServer.McpServerConfigurable") as? Class<out com.intellij.openapi.options.Configurable>
+            Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")
+                as? Class<out com.intellij.openapi.options.Configurable>
         }.getOrNull()
         if (configurableClass == null) {
             com.intellij.openapi.ui.Messages.showWarningDialog(

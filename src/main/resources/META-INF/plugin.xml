@@ -155,6 +155,14 @@
                                  key="settings.section.shortcuts"
                                  instance="cn.song.mybatisplus.visualizer.config.ShortcutsConfigurable"/>
 
+        <!-- T-ShortcutSettings：MCP 工具（跳转平台 MCP Server 设置 + 三工具说明） -->
+        <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
+                                 id="cn.song.mybatisplus.visualizer.settings.mcp"
+                                 groupWeight="5"
+                                 bundle="messages.MpSqlVisualizerBundle"
+                                 key="settings.section.mcp"
+                                 instance="cn.song.mybatisplus.visualizer.config.McpConfigurable"/>
+
         <!-- M10 gutter 预览图标：Wrapper 锚点行显示预览 SQL 图标（快速路径单元素 O(1) 判定，见 M10 开发计划 §2.4） -->
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.SqlGutterLineMarkerProvider"/>
