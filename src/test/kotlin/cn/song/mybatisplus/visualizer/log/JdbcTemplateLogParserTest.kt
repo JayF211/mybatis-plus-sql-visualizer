@@ -403,6 +403,74 @@ class JdbcTemplateLogParserTest {
         assertTrue(entries[1].rawSql.contains("t2"))
     }
 
+    // ========== T-ListParamCollect：IN 集合值（用户真机日志） ==========
+
+    @Test
+    fun `NamedParameter 用户真机样例_集合值方括号不落进SQL`() {
+        val entries = feedAll(
+            parser(),
+            "2026-09-15 10:20:04.176 [TID: null] [cache-preheat-1] TRACE com.AAA.BBB.CCC.orm.impl.dml.DDDObjectRepositoryJdbcImpl Line:260 - " +
+                "sql = SELECT COUNT(*) as count FROM tableA  WHERE ( (\"deleted\" = :param1) AND ((\"deleted\" = :param2) AND (\"id\" IN (:param3))) ) " +
+                ", parameters = {param1=0, param2=0, param3=[6b31d693xxxxx7f4979b]}",
+        )
+        assertEquals(1, entries.size)
+        val restored = entries[0].restoredSql
+        assertTrue("IN 列表元素应独立引号", restored.contains("""IN ('6b31d693xxxxx7f4979b')"""))
+        assertFalse("方括号不得落进 SQL", restored.contains('[') || restored.contains(']'))
+        // 落盘载荷与列表展示的数据源保持原始日志值（未被改写）
+        assertEquals(listOf("0", "0", "[6b31d693xxxxx7f4979b]"), entries[0].params.map { it.value })
+    }
+
+    @Test
+    fun `NamedParameter 集合值多元素_逐元素引号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:ids) , parameters = {ids=[a, b]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN ('a', 'b')"))
+    }
+
+    @Test
+    fun `NamedParameter 空集合_渲染为NULL且无方括号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:ids) , parameters = {ids=[]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN (NULL)"))
+    }
+
+    @Test
+    fun `NamedParameter 非IN位置形如方括号的值_原样保留`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE tag = :tag , parameters = {tag=[a]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue("非 IN 位置不得剥括号", entries[0].restoredSql.contains("tag = '[a]'"))
+    }
+
+    @Test
+    fun `NamedParameter IN位置单值非集合_与既有行为一致`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:id) , parameters = {id=42}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN (42)"))
+    }
+
+    @Test
+    fun `NamedParameter 数值集合_裸渲染不加引号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:ids) , parameters = {ids=[1, 2]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN (1, 2)"))
+    }
+
     // ========== T-LogDedupeMpMark：双路日志同语句副本（用户控制台序列回放） ==========
 
     @Test
