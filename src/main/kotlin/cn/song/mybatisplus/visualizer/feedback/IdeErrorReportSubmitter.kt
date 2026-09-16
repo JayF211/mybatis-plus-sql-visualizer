@@ -106,7 +106,7 @@ class IdeErrorReportSubmitter : ErrorReportSubmitter() {
         return true
     }
 
-    /** 入队并重排去抖 flush（debounce：窗口自**最后一次**调用起算；超 [MAX_WAIT_MS] 立即触发）。 */
+    /** 入队并重排去抖 flush（debounce：窗口自**最后一次**调用起算；超 [MAX_WAIT_MS] 或队列达上限立即触发）。 */
     private fun enqueue(call: PendingCall) {
         var delayMs = DEBOUNCE_MS
         val scheduleExecutor = scheduler ?: AppExecutorUtil.getAppScheduledExecutorService()
@@ -114,7 +114,10 @@ class IdeErrorReportSubmitter : ErrorReportSubmitter() {
             if (pendingCalls.isEmpty()) firstPendingAt = clock()
             pendingCalls.addLast(call)
             flushFuture?.cancel(false)
-            if (clock() - firstPendingAt >= MAX_WAIT_MS) delayMs = 0
+            // T-PerfSweep3 #2：队列达上限立即排 0ms flush——平台「报告全部」逐簇循环的理论次数无上界，
+            // 队列不跟着无界；语义是「提前合并落框」而非丢弃（第 65 条起仍全部进 flush，只是不等窗口；
+            // 64 条内维持去抖窗口语义不变）
+            if (pendingCalls.size > MAX_PENDING_CALLS || clock() - firstPendingAt >= MAX_WAIT_MS) delayMs = 0
             flushFuture = scheduleExecutor.schedule({ flush() }, delayMs, TimeUnit.MILLISECONDS)
         }
     }
@@ -209,5 +212,11 @@ class IdeErrorReportSubmitter : ErrorReportSubmitter() {
 
         /** 强制落框兜底：自首个待处理条目起超过此时长不再顺延（防逐簇间隔波动致弹窗无限推迟）。 */
         internal const val MAX_WAIT_MS = 3_000L
+
+        /**
+         * T-PerfSweep3 #2：去抖队列长度上限。64 与平台「报告全部」的现实簇数量级（个位数）
+         * 之间留足裕量，正常使用永远触不到；触发即整波提前落框、零丢弃。
+         */
+        internal const val MAX_PENDING_CALLS = 64
     }
 }

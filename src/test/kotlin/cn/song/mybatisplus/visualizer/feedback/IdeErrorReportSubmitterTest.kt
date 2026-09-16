@@ -232,6 +232,25 @@ class IdeErrorReportSubmitterTest {
     }
 
     @Test
+    fun `队列达上限_第65条起即时flush且零丢弃`() {
+        // T-PerfSweep3 #2：队列上界封死理论边界——第 65 条仍会被 flush（提前合并落框），不是丢弃
+        val scheduler = FakeScheduler()
+        val submitter = submitterWith(scheduler)
+        var flowCount = 0
+        var capturedBatch: List<BatchSubmitter.BatchItem>? = null
+        submitter.openReportFlow = { _, _, _, batch, _ -> flowCount++; capturedBatch = batch }
+        repeat(IdeErrorReportSubmitter.MAX_PENDING_CALLS) {
+            submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
+        }
+        assertEquals("64 条（上限内）仍走去抖窗口", IdeErrorReportSubmitter.DEBOUNCE_MS, scheduler.lastDelayMs)
+        submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
+        assertEquals("第 65 条达上限，排 0ms 即时落框", 0L, scheduler.lastDelayMs)
+        scheduler.runPendingTask()
+        assertEquals("上限触发的 flush 正常落框", 1, flowCount)
+        assertEquals("第 65 条零丢弃：65 条全数进同一批", IdeErrorReportSubmitter.MAX_PENDING_CALLS + 1, capturedBatch?.size)
+    }
+
+    @Test
     fun `空队列flush为无操作`() {
         val submitter = submitterWith()
         var flowCalled = false

@@ -1687,6 +1687,22 @@ private fun setOpaqueIfChanged(target: JPanel, opaque: Boolean) {
 }
 
 
+// ----------
+// T-PerfSweep3 #3：SimpleDateFormat 复用——[formatTimestampFragment] 是「每可见单元格渲染 +
+// 每条目搜索匹配/批量复制」的双热路径（SqlLogPanel 与 HistorySqlLogPanel 两面板共用本单点），
+// 此前每次调用新建 SimpleDateFormat。SimpleDateFormat 非线程安全，照 SqlLogAutoSaver 的
+// T-Perf-12 先例做 ThreadLocal + 格式串键缓存：键=格式串天然跟随设置变更（换格式=新条目，
+// 无需失效钩子）；消费形态是 EDT 渲染/搜索与右键菜单，ThreadLocal 在覆盖多线程的同时免同步。
+// format(Date) 每次完整重置内部 calendar，复用同一实例输出与逐次新建逐字节一致；
+// 缓存规模上界=用户可配置的格式串种类数（个位数量级），非法格式串构造即抛不进缓存、
+// 每次重试构造（与逐次新建同语义，仍由调用处 catch 回落默认格式）。
+// ----------
+private val timestampFormatterCache =
+    ThreadLocal.withInitial<HashMap<String, SimpleDateFormat>> { HashMap() }
+
+private fun timestampFormatter(formatStr: String): SimpleDateFormat =
+    timestampFormatterCache.get().getOrPut(formatStr) { SimpleDateFormat(formatStr) }
+
 /** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML `<span>` 尾空格语义）。 */
 internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
     val state = PluginSettings.getInstance().state
@@ -1696,9 +1712,9 @@ internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTex
         else -> entry.timestamp
     }
     val formatted = try {
-        SimpleDateFormat(state.logTimestampFormat).format(Date(ts))
+        timestampFormatter(state.logTimestampFormat).format(Date(ts))
     } catch (_: IllegalArgumentException) {
-        SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(ts))
+        timestampFormatter(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(ts))
     }
     return "[$formatted] " to LIST_META_GRAY
 }
